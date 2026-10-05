@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { apiClient, apiData } from './client';
+import { previewKeys } from './queryKeys';
 
 interface SourceQuery {
 	pid: string;
@@ -14,7 +15,7 @@ function useSourceRefsQuery(
 ) {
 	const debounced = useDebouncedValue(query, 200);
 	const result = useQuery({
-		queryKey: ['source-refs', pid, nid, type, debounced],
+		queryKey: previewKeys.sourceRefs(pid, nid, type, debounced),
 		queryFn: ({ signal }) =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/source/refs', {

@@ -134,6 +134,34 @@ export const jobKeys = {
 		[...jobKeys.all, 'run-logs', { projectId, notebookId, jobId, runId }] as const,
 };
 
+export const previewKeys = {
+	all: ['previews'] as const,
+	list: (projectId: string, notebookId: string) =>
+		[...previewKeys.all, 'list', { projectId, notebookId }] as const,
+	detail: (projectId: string, notebookId: string, previewId: string) =>
+		[...previewKeys.all, 'detail', { projectId, notebookId, previewId }] as const,
+	sourceRefs: (projectId: string, notebookId: string, type: 'branch' | 'commit', query: string) =>
+		[...previewKeys.all, 'source-refs', { projectId, notebookId, type, query }] as const,
+	sessions: () => [...previewKeys.all, 'session'] as const,
+	session: (
+		userId: string,
+		projectId: string,
+		previewId: string,
+		runtime?: { notebookId: string; sessionId: string; visitId?: string },
+	) =>
+		[
+			...previewKeys.sessions(),
+			{
+				userId,
+				projectId,
+				previewId,
+				notebookId: runtime?.notebookId ?? null,
+				sessionId: runtime?.sessionId ?? null,
+				visitId: runtime?.visitId ?? null,
+			},
+		] as const,
+};
+
 export const systemKeys = {
 	all: ['system'] as const,
 	version: () => [...systemKeys.all, 'version'] as const,

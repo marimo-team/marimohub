@@ -13,8 +13,8 @@ MARIMOHUB_COMPUTE_DOCKER_BIND_HOST=127.0.0.1    # keep kernel ports on loopback
 # MARIMOHUB_COMPUTE_DOCKER_NETWORK=marimo         # optional network to attach kernels to
 ```
 
-If hubs share a Docker daemon, set a distinct, stable `MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY`
-for each hub. The default, `marimohub.sandbox`, does not isolate cleanup.
+If hubs share a Docker daemon, set a distinct, stable `MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG`
+on every hub. An untagged hub discovers and cleans up every hub's sandboxes.
 See [Multiple hubs on one host](/deploying/single-instance#multiple-hubs-on-one-host)
 for examples and migration steps.
 

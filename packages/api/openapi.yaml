@@ -890,7 +890,6 @@ components:
                     type: string
                   preview_id:
                     type: string
-                    pattern: ^[a-f0-9]{32}$
                   revision_id:
                     type: string
                   commit:
@@ -937,7 +936,6 @@ components:
                           type: string
                         preview_id:
                           type: string
-                          pattern: ^[a-f0-9]{32}$
                         revision_id:
                           type: string
                         commit:
@@ -1094,7 +1092,6 @@ components:
                     type: string
                   preview_id:
                     type: string
-                    pattern: ^[a-f0-9]{32}$
                   revision_id:
                     type: string
                   commit:
@@ -2840,15 +2837,9 @@ components:
       properties:
         id:
           type: string
-          pattern: ^[a-f0-9]{32}$
+          pattern: ^prev-[0-9a-z]{16}$
         name:
           type: string
-        state:
-          type: string
-          enum:
-            - active
-            - deleting
-            - deleted
         preparation:
           type: string
           enum:
@@ -2856,11 +2847,19 @@ components:
             - preparing
             - ready
             - failed
+            - unknown
+          description: 'Known values: pending, preparing, ready, failed. Unrecognized
+            values normalize to unknown.'
+          example: ready
         source_type:
           type: string
           enum:
             - branch
             - commit
+            - unknown
+          description: 'Known values: branch, commit. Unrecognized values normalize to
+            unknown.'
+          example: branch
         source:
           oneOf:
             - type: object
@@ -2898,10 +2897,20 @@ components:
           type: string
         error:
           type: string
+        pull_request:
+          type: integer
+          exclusiveMinimum: 0
         expires_at:
           type: string
+          format: date-time
         created_at:
           type: string
+          format: date-time
+        created_by:
+          type: string
+        checked_at:
+          type: string
+          format: date-time
         compute_profile:
           type: string
         url:
@@ -2922,11 +2931,11 @@ components:
       required:
         - id
         - name
-        - state
         - preparation
         - source_type
         - expires_at
         - created_at
+        - created_by
         - url
         - can
     NotebookPreviewPage:
@@ -2943,7 +2952,7 @@ components:
       required:
         - items
         - next_cursor
-    PreviewSessionCreateResult:
+    SessionCreateResult:
       allOf:
         - $ref: '#/components/schemas/Session'
         - type: object
@@ -3033,7 +3042,6 @@ components:
               type: string
             preview_id:
               type: string
-              pattern: ^[a-f0-9]{32}$
             revision_id:
               type: string
             commit:
@@ -3416,46 +3424,6 @@ components:
         - expected_holder_session_id
         - expected_activity
         - acknowledge_disruption
-    SessionCreateResult:
-      allOf:
-        - $ref: '#/components/schemas/Session'
-        - type: object
-          properties:
-            app_assignment:
-              type: object
-              properties:
-                visit_id:
-                  type: string
-                  minLength: 1
-                  maxLength: 128
-                generation:
-                  type: string
-                  minLength: 1
-                  maxLength: 128
-              required:
-                - visit_id
-                - generation
-            reused:
-              type: boolean
-            editor_session:
-              type: object
-              properties:
-                sharing:
-                  type: string
-                  enum:
-                    - shared
-                    - exclusive
-                access:
-                  type: string
-                  enum:
-                    - shared
-                    - owner
-                    - temporary
-              required:
-                - sharing
-                - access
-          required:
-            - reused
     SessionCreateBody:
       type: object
       properties:
@@ -4920,15 +4888,13 @@ paths:
                   data:
                     type: object
                     properties:
-                      force_mode:
-                        type:
-                          - string
-                          - 'null'
+                      color_mode:
+                        type: string
                         enum:
+                          - user
                           - light
                           - dark
-                          - null
-                        default: null
+                        default: user
                       name:
                         type: string
                         minLength: 1
@@ -12769,7 +12735,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}:
+  /api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}:
     get:
       operationId: notebooks.previews.get
       tags:
@@ -12792,9 +12758,10 @@ paths:
           in: path
         - schema:
             type: string
-            pattern: ^[a-f0-9]{32}$
+            pattern: ^prev-[0-9a-z]{16}$
+            example: prev-7h2k9qm4xz7rp3w8
           required: true
-          name: preview_id
+          name: prid
           in: path
       responses:
         '200':
@@ -12911,9 +12878,10 @@ paths:
           in: path
         - schema:
             type: string
-            pattern: ^[a-f0-9]{32}$
+            pattern: ^prev-[0-9a-z]{16}$
+            example: prev-7h2k9qm4xz7rp3w8
           required: true
-          name: preview_id
+          name: prid
           in: path
       responses:
         '202':
@@ -12921,17 +12889,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    enum:
-                      - true
-                  data:
-                    type: 'null'
-                required:
-                  - success
-                  - data
+                $ref: '#/components/schemas/SuccessResponse'
         '400':
           description: Bad request
           content:
@@ -13008,7 +12966,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}/sessions:
+  /api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}/sessions:
     post:
       operationId: notebooks.previews.sessions.create
       tags:
@@ -13031,9 +12989,10 @@ paths:
           in: path
         - schema:
             type: string
-            pattern: ^[a-f0-9]{32}$
+            pattern: ^prev-[0-9a-z]{16}$
+            example: prev-7h2k9qm4xz7rp3w8
           required: true
-          name: preview_id
+          name: prid
           in: path
       requestBody:
         required: true
@@ -13045,8 +13004,8 @@ paths:
                 mode:
                   type: string
                   enum:
-                    - app
                     - edit
+                    - app
                 app_visit_id:
                   type: string
                   minLength: 1
@@ -13067,7 +13026,7 @@ paths:
                     enum:
                       - true
                   data:
-                    $ref: '#/components/schemas/PreviewSessionCreateResult'
+                    $ref: '#/components/schemas/SessionCreateResult'
                 required:
                   - success
                   - data
@@ -13155,7 +13114,7 @@ paths:
       summary: Suggest GitHub branches or recent commits
       description: Returns at most 30 matches from the first 100 branches or recent
         commits. Manual values remain supported. Providers without suggestion
-        support return 422; explicit resolution remains available.
+        support return 422.
       parameters:
         - schema:
             type: string
@@ -13185,14 +13144,6 @@ paths:
             default: ''
           required: false
           name: query
-          in: query
-        - schema:
-            type: string
-            enum:
-              - 'true'
-              - 'false'
-          required: false
-          name: resolve
           in: query
       responses:
         '200':

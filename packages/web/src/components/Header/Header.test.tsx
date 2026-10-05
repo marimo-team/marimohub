@@ -3,9 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useLocation } from 'react-router-dom';
 import { AuthProvider } from '@/context/AuthContext';
-import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
-import { BrandingContext } from '@/context/BrandingContext';
-import type { Theme } from '@/context/ThemeContext';
+import type { ColorMode } from '@marimo-hub/core/theme';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { installMatchMedia, jsonOk, renderWithClient } from '@/test/render';
 import { Header } from './Header';
@@ -26,7 +24,7 @@ function setup(
 	writeText: (value: string) => Promise<void> = () => Promise.resolve(),
 	me: Record<string, unknown> = USER,
 	mcpAvailable = false,
-	forceMode: Theme | null = null,
+	colorMode: ColorMode = 'user',
 ) {
 	installMatchMedia(false);
 	vi.stubGlobal(
@@ -67,17 +65,15 @@ function setup(
 		configurable: true,
 	});
 	const rendered = renderWithClient(
-		<BrandingContext value={{ ...DEFAULT_THEME_CONFIG, force_mode: forceMode }}>
-			<ThemeProvider>
-				<AuthProvider>
-					<>
-						<Header />
-						<LocationProbe />
-					</>
-				</AuthProvider>
-			</ThemeProvider>
-		</BrandingContext>,
-		{ route: '/' },
+		<ThemeProvider>
+			<AuthProvider>
+				<>
+					<Header />
+					<LocationProbe />
+				</>
+			</AuthProvider>
+		</ThemeProvider>,
+		{ route: '/', branding: { color_mode: colorMode } },
 	);
 	return { user, clipboard, ...rendered };
 }

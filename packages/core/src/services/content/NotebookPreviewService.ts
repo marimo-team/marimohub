@@ -2,10 +2,11 @@ import { withAbortSignal } from '../../async';
 import { logOperationalError } from '../../operationalLog';
 import type { Bucket } from '../../ports/bucket';
 import type { SourceControlReader, SourceControlRegistry } from '../../ports/sourceControl';
-import type { NotebookId, ProjectId, SessionId, UserId } from '../../ids';
-import { MAX_WORKSPACE_BYTES } from '../../constants';
+import type { NotebookId, PreviewId, ProjectId, SessionId, UserId } from '../../ids';
+import { BUCKET_SCAN_CONCURRENCY, MAX_WORKSPACE_BYTES } from '../../constants';
+import { mapWithConcurrency } from '../../concurrency';
 import { PreviewStore, PREVIEW_LIMITS } from './PreviewStore';
-import { createNotebookId, createVersionId } from '../../ids';
+import { createNotebookId, createPreviewId, createVersionId } from '../../ids';
 import {
 	BadRequestError,
 	ConflictError,
@@ -42,7 +43,7 @@ export class NotebookPreviewService {
 		this.store = new PreviewStore(bucket);
 	}
 
-	async get(pid: ProjectId, nid: NotebookId, id: string): Promise<NotebookPreview> {
+	async get(pid: ProjectId, nid: NotebookId, id: PreviewId): Promise<NotebookPreview> {
 		if (
 			!(await this.store.project(pid)).entries.some(
 				(entry) =>
@@ -61,23 +62,26 @@ export class NotebookPreviewService {
 	private async materialize(intent: NotebookPreview): Promise<NotebookPreview> {
 		if (intent.state === 'deleted') return intent;
 		const key = previewKey(intent.project_id, intent.notebook_id, intent.id);
-		if (!(await this.bucket.head(key))) {
+		let object = await this.bucket.get(key);
+		if (!object) {
 			try {
 				await this.bucket.put(key, JSON.stringify(intent), { onlyIfNotExists: true });
 			} catch (error) {
 				if (!(error instanceof PreconditionFailedError)) throw error;
 			}
+			object = await this.bucket.get(key);
+			if (!object) throw new NotFoundError('Preview not found');
 		}
-		return this.get(intent.project_id, intent.notebook_id, intent.id);
+		return readStored(PreviewRecordSchema, object, key);
 	}
 
 	async projectRecords(pid: ProjectId, nid?: NotebookId): Promise<NotebookPreview[]> {
 		const entries = (await this.store.project(pid)).entries.filter(
 			(entry) => !nid || entry.intent.notebook_id === nid,
 		);
-		const records: NotebookPreview[] = [];
-		for (const entry of entries) records.push(await this.materialize(entry.intent));
-		return records;
+		return mapWithConcurrency(entries, BUCKET_SCAN_CONCURRENCY, (entry) =>
+			this.materialize(entry.intent),
+		);
 	}
 
 	async list(pid: ProjectId, nid: NotebookId): Promise<NotebookPreview[]> {
@@ -112,6 +116,7 @@ export class NotebookPreviewService {
 			key,
 			(raw) => parseStored(PreviewRecordSchema, raw, key),
 			update,
+			{ notFound: () => new NotFoundError('Preview not found') },
 		);
 	}
 
@@ -139,7 +144,9 @@ export class NotebookPreviewService {
 	): Promise<NotebookPreview> {
 		const { source } = await this.source(pid, nid, registry);
 		const now = Date.now();
-		const expires = input.expires_at ? Date.parse(input.expires_at) : now + 7 * 24 * 60 * 60_000;
+		const expires = input.expires_at
+			? Date.parse(input.expires_at)
+			: now + PREVIEW_LIMITS.defaultExpiryMs;
 		if (expires <= now || expires > now + PREVIEW_MAX_AGE_MS)
 			throw new BadRequestError('Preview expiry must be within the next 30 days');
 		const fingerprint = JSON.stringify(input);
@@ -150,7 +157,7 @@ export class NotebookPreviewService {
 					fingerprint,
 				)
 			: undefined;
-		const id = receipt?.id ?? crypto.randomUUID().replaceAll('-', '');
+		const id = receipt?.id ?? createPreviewId();
 		const record: NotebookPreview = {
 			schema_version: 1,
 			id,
@@ -171,7 +178,9 @@ export class NotebookPreviewService {
 			admissions: [],
 		};
 		const intent = await this.store.reserve(record, now + PREVIEW_LIMITS.creationMs);
-		const saved = await this.materialize(intent);
+		await this.materialize(intent);
+		// Re-check membership: cleanup may have forgotten the preview after reservation.
+		const saved = await this.get(pid, nid, intent.id);
 		if (saved.state !== 'active') throw new ConflictError('This preview has been deleted');
 		return saved;
 	}
@@ -297,7 +306,7 @@ export class NotebookPreviewService {
 					{
 						notebook_id: runtimeId,
 						state: 'preparing',
-						cleanup_after: Date.now() + 900_000,
+						cleanup_after: Date.now() + PREVIEW_LIMITS.cleanupGraceMs,
 					},
 				],
 			}));
@@ -488,7 +497,7 @@ export class NotebookPreviewService {
 					{
 						session_id: sid,
 						notebook_id: nid,
-						expires_at: Date.now() + 600_000,
+						expires_at: Date.now() + PREVIEW_LIMITS.admissionMs,
 						committed: false,
 					},
 				],
@@ -526,7 +535,10 @@ export class NotebookPreviewService {
 				? {
 						...current,
 						state: 'deleting',
-						cleanup_after: Math.max(Date.now() + 900_000, current.lease?.expires_at ?? 0),
+						cleanup_after: Math.max(
+							Date.now() + PREVIEW_LIMITS.cleanupGraceMs,
+							current.lease?.expires_at ?? 0,
+						),
 						lease: undefined,
 					}
 				: null,

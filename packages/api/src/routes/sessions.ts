@@ -11,6 +11,7 @@ import type {
 	EditorClaim,
 	EditorSandboxSharing,
 	NotebookId,
+	PreviewId,
 	Project,
 	ProjectId,
 	MarimoConfigContributor,
@@ -1209,7 +1210,7 @@ export async function startNotebookSession(input: {
 	pid: ProjectId;
 	nid: NotebookId;
 	body: SessionCreateBody | undefined;
-	preview?: { id: string; notebook_id: NotebookId };
+	preview?: { id: PreviewId; notebook_id: NotebookId };
 	request: {
 		requestId?: string;
 		method: string;

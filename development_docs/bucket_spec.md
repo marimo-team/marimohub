@@ -980,7 +980,7 @@ before it deletes local indexes.
 
 ## 5. ID Scheme
 
-Resource IDs (`proj-`, `nb-`, `snap-`, `sess-`, `job-`) are a short prefix plus a 16-character lowercase base32 random body — **subdomain-safe and unguessable, but NOT time-sortable** (see `packages/core/src/ids.ts` / `schema.ts`). Version IDs (`ver_`) and job run IDs (`run_`) use uppercase ULIDs because their lexicographic order is load-bearing for version pruning and newest-first run history. The examples below are illustrative; the regex in `ids.ts` is authoritative.
+Resource IDs (`proj-`, `nb-`, `snap-`, `sess-`, `job-`, `prev-`) are a short prefix plus a 16-character lowercase base32 random body — **subdomain-safe and unguessable, but NOT time-sortable** (see `packages/core/src/ids.ts` / `schema.ts`). Version IDs (`ver_`) and job run IDs (`run_`) use uppercase ULIDs because their lexicographic order is load-bearing for version pruning and newest-first run history. The examples below are illustrative; the regex in `ids.ts` is authoritative.
 
 > **Do not infer recency from snapshot key order.** Because snapshot IDs are random, listing `_system/snapshots/` does **not** return entries in creation order. The current snapshot is always the one named by `catalog.json` — never the "last" key. Where chronological order is needed (retention, recovery), use each object's storage timestamp (`uploaded` / `LastModified`) or the snapshot's `created_at` field, not the ID.
 
@@ -998,6 +998,7 @@ Resource IDs (`proj-`, `nb-`, `snap-`, `sess-`, `job-`) are a short prefix plus 
 | opaque string | User/actor — the authentication provider supplies this value           |
 | `intg-{rand}` | Integration — random 16-character body                                 |
 | `sb-{rand}`   | Sandbox — random 16-character body                                     |
+| `prev-{rand}` | Notebook preview — random 16-character body                            |
 
 ---
 

@@ -78,8 +78,8 @@ describe('theme bootstrap', () => {
 		jsonOk([]),
 		jsonOk({ ...DEFAULT_THEME_CONFIG, name: '   ' }),
 		jsonOk({ ...DEFAULT_THEME_CONFIG, name: 42 }),
-		...['system', '', 'Light', false, 0, ['light'], { mode: 'light' }].map((force_mode) =>
-			jsonOk({ ...DEFAULT_THEME_CONFIG, force_mode }),
+		...['system', '', 'Light', null, false, 0, ['light'], { mode: 'light' }].map((color_mode) =>
+			jsonOk({ ...DEFAULT_THEME_CONFIG, color_mode }),
 		),
 		jsonOk({ ...DEFAULT_THEME_CONFIG, favicon: '//example.com/icon.svg' }),
 		jsonOk({ ...DEFAULT_THEME_CONFIG, logo_dark: 'data:image/svg+xml,<svg/>' }),
@@ -203,7 +203,7 @@ describe('theme bootstrap', () => {
 		await vi.advanceTimersByTimeAsync(1);
 		expect(await pending).toEqual(DEFAULT_THEME_CONFIG);
 		expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(true);
-		late.resolve(jsonOk({ ...DEFAULT_THEME_CONFIG, name: 'Late hub', force_mode: 'dark' }));
+		late.resolve(jsonOk({ ...DEFAULT_THEME_CONFIG, name: 'Late hub', color_mode: 'dark' }));
 		expect(await pending).toEqual(DEFAULT_THEME_CONFIG);
 		expect((await loadThemeConfig()).name).toBe('Recovered hub');
 		expect(vi.getTimerCount()).toBe(0);
@@ -216,8 +216,8 @@ describe('theme bootstrap', () => {
 		vi.stubGlobal('fetch', fetchMock);
 		const pending = loadThemeConfig();
 		await vi.advanceTimersByTimeAsync(1999);
-		deferred.resolve(jsonOk({ ...DEFAULT_THEME_CONFIG, name: 'On time', force_mode: 'light' }));
-		expect(await pending).toMatchObject({ name: 'On time', force_mode: 'light' });
+		deferred.resolve(jsonOk({ ...DEFAULT_THEME_CONFIG, name: 'On time', color_mode: 'light' }));
+		expect(await pending).toMatchObject({ name: 'On time', color_mode: 'light' });
 		await vi.advanceTimersByTimeAsync(2000);
 		expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(false);
 		expect(vi.getTimerCount()).toBe(0);

@@ -5,17 +5,21 @@ import { parseTheme } from './theme';
 import { createFromEnv } from './index';
 
 describe('deployment theme configuration', () => {
-	it.each(['light', 'dark'] as const)('accepts forced %s mode', (mode) => {
-		expect(parseTheme({ MARIMOHUB_THEME_FORCE_MODE: ` ${mode} ` }).force_mode).toBe(mode);
+	it.each(['user', 'light', 'dark'] as const)('accepts color mode %s', (mode) => {
+		expect(parseTheme({ MARIMOHUB_THEME_COLOR_MODE: ` ${mode} ` }).color_mode).toBe(mode);
 	});
 
-	it.each(['', '  ', '\t\n'])('leaves theme selection unlocked for %j', (value) => {
-		expect(parseTheme({ MARIMOHUB_THEME_FORCE_MODE: value }).force_mode).toBeNull();
+	it.each(['', '  ', '\t\n'])('defaults to user color mode for %j', (value) => {
+		expect(parseTheme({ MARIMOHUB_THEME_COLOR_MODE: value }).color_mode).toBe('user');
 	});
 
-	it.each(['system', 'auto', 'true', 'Light'])('rejects invalid forced mode %s', (value) => {
-		expect(() => parseTheme({ MARIMOHUB_THEME_FORCE_MODE: value })).toThrow(
-			'MARIMOHUB_THEME_FORCE_MODE',
+	it('defaults to user color mode when unset', () => {
+		expect(parseTheme({}).color_mode).toBe('user');
+	});
+
+	it.each(['system', 'auto', 'true', 'Light', 'User'])('rejects invalid color mode %s', (value) => {
+		expect(() => parseTheme({ MARIMOHUB_THEME_COLOR_MODE: value })).toThrow(
+			'MARIMOHUB_THEME_COLOR_MODE',
 		);
 	});
 
@@ -97,7 +101,7 @@ describe('deployment theme configuration', () => {
 			MARIMOHUB_COMPUTE_BACKEND: 'none',
 			MARIMOHUB_AUTH_BACKEND: 'dev',
 			MARIMOHUB_THEME_NAME: 'Research Hub',
-			MARIMOHUB_THEME_FORCE_MODE: 'light',
+			MARIMOHUB_THEME_COLOR_MODE: 'light',
 			MARIMOHUB_THEME_LOGO_DARK: '/logo-dark.svg',
 			MARIMOHUB_THEME_PWA_ICON_192: '/brand/192.png',
 			MARIMOHUB_THEME_PWA_ICON_512: '/brand/512.png',
@@ -106,7 +110,7 @@ describe('deployment theme configuration', () => {
 		expect(deps.theme).toEqual({
 			...DEFAULT_THEME_CONFIG,
 			name: 'Research Hub',
-			force_mode: 'light',
+			color_mode: 'light',
 			logo_dark: '/logo-dark.svg',
 			pwa_icon_192: '/brand/192.png',
 			pwa_icon_512: '/brand/512.png',
@@ -133,7 +137,7 @@ describe('deployment theme configuration', () => {
 		['MARIMOHUB_THEME_FAVICON', '//example.com/favicon.ico'],
 		['MARIMOHUB_THEME_PRIMARY_COLOR', '#abcd'],
 		['MARIMOHUB_THEME_SECONDARY_COLOR', 'transparent'],
-		['MARIMOHUB_THEME_FORCE_MODE', 'invalid-mode'],
+		['MARIMOHUB_THEME_COLOR_MODE', 'invalid-mode'],
 	])('reports actionable errors for %s without echoing its value', (variable, value) => {
 		let error: unknown;
 		try {
@@ -183,7 +187,7 @@ describe('deployment theme configuration', () => {
 
 	it.each([
 		['MARIMOHUB_THEME_PRIMARY_COLOR', 'red'],
-		['MARIMOHUB_THEME_FORCE_MODE', 'system'],
+		['MARIMOHUB_THEME_COLOR_MODE', 'system'],
 	])('rejects invalid %s before initializing adapters', (variable, value) => {
 		expect(() => createFromEnv({ [variable]: value })).toThrow(variable);
 	});

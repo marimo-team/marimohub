@@ -2,25 +2,18 @@ import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { sourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import { GitHubAppPublisher } from './index';
+import { parseApiRequest, response, testPrivateKey } from './testing/fakeGitHub';
 
 const ORIGINS = ['https://github.com', 'https://git.acme.corp'];
-
-const PRIVATE_KEY = generateKeyPairSync('rsa', { modulusLength: 2048 })
-	.privateKey.export({ type: 'pkcs8', format: 'pem' })
-	.toString();
-
-function response(value: unknown, status = 200): Response {
-	return new Response(JSON.stringify(value), {
-		status,
-		headers: { 'content-type': 'application/json' },
-	});
-}
 
 function publisher(
 	fetcher: (url: string, init?: RequestInit) => Promise<Response>,
 	{ now, url }: { now?: () => number; url?: string } = {},
 ) {
-	return new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY, url }, { fetcher, now });
+	return new GitHubAppPublisher(
+		{ appId: '123', privateKey: testPrivateKey(), url },
+		{ fetcher, now },
+	);
 }
 
 const input = {
@@ -115,22 +108,6 @@ function updateInputFor(origin: string) {
 		repository: `${origin}/owner/repo`,
 		changeRequest: { ...updateInput.changeRequest, url: `${origin}/owner/repo/pull/17` },
 	};
-}
-
-function parseApiRequest(url: string, origin: string): URL {
-	const parsed = new URL(url);
-	expect(parsed.origin).toBe(origin === 'https://github.com' ? 'https://api.github.com' : origin);
-	if (origin !== 'https://github.com') {
-		if (parsed.pathname.endsWith('/graphql')) {
-			expect(parsed.pathname).toBe('/api/graphql');
-		} else {
-			expect(parsed.pathname.startsWith('/api/v3/')).toBe(true);
-		}
-		parsed.pathname = parsed.pathname
-			.replace(/^\/api\/v3/, '')
-			.replace(/^\/api\/graphql$/, '/graphql');
-	}
-	return parsed;
 }
 
 describe('GitHubAppPublisher', () => {
@@ -895,7 +872,7 @@ describe('GitHubAppPublisher', () => {
 			{
 				appId: '123',
 				url: origin,
-				privateKey: PRIVATE_KEY,
+				privateKey: testPrivateKey(),
 			},
 			{
 				fetcher,
@@ -1116,7 +1093,7 @@ describe('GitHubAppPublisher', () => {
 		const publisher = new GitHubAppPublisher(
 			{
 				appId: '123',
-				privateKey: PRIVATE_KEY,
+				privateKey: testPrivateKey(),
 			},
 			{
 				fetcher,
@@ -1348,7 +1325,7 @@ describe('GitHubAppPublisher', () => {
 		const publisher = new GitHubAppPublisher(
 			{
 				appId: '123',
-				privateKey: PRIVATE_KEY,
+				privateKey: testPrivateKey(),
 			},
 			{
 				fetcher,
@@ -1366,7 +1343,7 @@ describe('GitHubAppPublisher', () => {
 		const publisher = new GitHubAppPublisher(
 			{
 				appId: '123',
-				privateKey: PRIVATE_KEY,
+				privateKey: testPrivateKey(),
 			},
 			{
 				fetcher,
@@ -1407,15 +1384,15 @@ describe('GitHubAppPublisher', () => {
 	});
 
 	it('rejects a non-numeric app id at construction', () => {
-		expect(() => new GitHubAppPublisher({ appId: 'not-an-id', privateKey: PRIVATE_KEY })).toThrow(
-			'must be a positive integer',
-		);
+		expect(
+			() => new GitHubAppPublisher({ appId: 'not-an-id', privateKey: testPrivateKey() }),
+		).toThrow('must be a positive integer');
 	});
 
 	it('rejects path-like repository owners before making a request', async () => {
 		const fetcher = vi.fn();
 		const publisher = new GitHubAppPublisher(
-			{ appId: '123', privateKey: PRIVATE_KEY },
+			{ appId: '123', privateKey: testPrivateKey() },
 			{ fetcher },
 		);
 
@@ -1713,7 +1690,7 @@ describe('GitHubAppPublisher', () => {
 	});
 
 	it('rejects zero as an app id', () => {
-		expect(() => new GitHubAppPublisher({ appId: '0', privateKey: PRIVATE_KEY })).toThrow(
+		expect(() => new GitHubAppPublisher({ appId: '0', privateKey: testPrivateKey() })).toThrow(
 			'positive integer',
 		);
 	});
@@ -1723,7 +1700,7 @@ describe('GitHubAppPublisher', () => {
 			() =>
 				new GitHubAppPublisher({
 					appId: '123',
-					privateKey: Buffer.from(PRIVATE_KEY).toString('base64'),
+					privateKey: Buffer.from(testPrivateKey()).toString('base64'),
 				}),
 		).not.toThrow();
 	});

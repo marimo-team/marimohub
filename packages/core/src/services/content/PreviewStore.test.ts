@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryBucket } from '../../testing/MemoryBucket';
-import { createNotebookId, createProjectId } from '../../ids';
+import { createNotebookId, createPreviewId, createProjectId, PreviewId } from '../../ids';
 import { ACTOR } from '../../testing/fixtures';
 import { ConflictError, NotFoundError, ResourceExhaustedError } from '../../errors';
 import {
@@ -10,6 +10,7 @@ import {
 	previewReceiptsKey,
 	previewActiveProjectPrefix,
 	previewActiveProjectKey,
+	previewCleanupCursorKey,
 } from './PreviewStore';
 import { PreviewRecordSchema } from './notebookPreviews';
 
@@ -17,7 +18,7 @@ function fixture() {
 	const bucket = new MemoryBucket();
 	const store = new PreviewStore(bucket);
 	const pid = createProjectId();
-	const intent = (id = crypto.randomUUID().replaceAll('-', '')) =>
+	const intent = (id = createPreviewId()) =>
 		PreviewRecordSchema.parse({
 			schema_version: 1,
 			id,
@@ -327,9 +328,9 @@ describe('PreviewStore scheduling', () => {
 
 	it('enforces global and per-project concurrency, recovers leases, and fences stale releases', async () => {
 		const { store, pid } = fixture();
-		const id = 'a'.repeat(32);
+		const id = PreviewId.parse(`prev-${'a'.repeat(16)}`);
 		const first = (await store.claim(pid, id))!;
-		expect(await store.claim(pid, 'b'.repeat(32))).toBeUndefined();
+		expect(await store.claim(pid, PreviewId.parse(`prev-${'b'.repeat(16)}`))).toBeUndefined();
 		for (let i = 1; i < PREVIEW_LIMITS.concurrency; i++)
 			expect(await store.claim(createProjectId(), id)).toBeDefined();
 		expect(await store.claim(createProjectId(), id)).toBeUndefined();
@@ -355,6 +356,55 @@ describe('PreviewStore scheduling', () => {
 		const second = await store.nextProjects('prepare');
 		expect([...first, ...second].sort()).toEqual(projects.sort());
 		expect(await store.nextProjects('prepare')).toEqual(first);
+	});
+});
+
+describe('PreviewStore no-op mutations', () => {
+	it('skips writes when membership, receipts, or claims are unchanged', async () => {
+		const { store, bucket, pid, intent } = fixture();
+		const record = await store.reserve(intent());
+		await store.receipt(pid, 'key', 'one');
+		const nid = createNotebookId();
+		await store.reserveArtifact(record, nid, 1);
+		const claim = (await store.claim(pid, record.id))!;
+		const writes = vi.spyOn(bucket, 'put');
+		await store.reserve(record);
+		await store.reserveArtifact(record, nid, 1);
+		await store.releaseArtifact(record, createNotebookId());
+		await store.pruneReceipts(pid);
+		await store.pruneReceipts(createProjectId());
+		expect(await store.claim(pid, record.id)).toBeUndefined();
+		await store.release('unknown-token');
+		expect(writes).not.toHaveBeenCalled();
+		await store.release(claim.token);
+		expect(writes).toHaveBeenCalledOnce();
+	});
+
+	it('advances scheduling cursors only when they move and never seeds claims into cleanup', async () => {
+		const { store, bucket, intent } = fixture();
+		await store.reserve(intent());
+		const writes = vi.spyOn(bucket, 'put');
+		await store.nextProjects('cleanup');
+		await store.nextProjects('prepare');
+		expect(writes).not.toHaveBeenCalled();
+		expect(await bucket.head(previewCleanupCursorKey)).toBeNull();
+		for (let i = 0; i < PREVIEW_LIMITS.projectsPerTick; i++)
+			await store.reserve({ ...intent(), project_id: createProjectId() });
+		await store.nextProjects('cleanup');
+		expect(await (await bucket.get(previewCleanupCursorKey))!.json()).toEqual({
+			cursor: expect.any(String),
+		});
+	});
+
+	it('still fences a pending publication when removing inactive work', async () => {
+		const { store, bucket, pid, intent } = fixture();
+		const record = await store.reserve(intent());
+		const workId = (await store.project(pid)).work_id!;
+		await store.forget(record);
+		const before = (await store.project(pid)).revision;
+		await bucket.put(previewActiveProjectKey(pid, workId), '{}');
+		expect(await store.nextProjects('cleanup')).toEqual([]);
+		expect((await store.project(pid)).revision).not.toBe(before);
 	});
 });
 

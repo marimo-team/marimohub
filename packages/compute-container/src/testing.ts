@@ -119,52 +119,6 @@ export function containerCliContract(
 			},
 		);
 
-		it.each([
-			[undefined, 'marimohub.sandbox.prod'],
-			['', 'marimohub.sandbox.prod'],
-			['marimohub.sandbox.dev', 'marimohub.sandbox.dev.extra'],
-		])(
-			'isolates discovery for label keys %j and %j across restarts',
-			async (firstKey, secondKey) => {
-				const containers = new Map<string, string>();
-				const { runner } = createRecordingContainerRunner((args) => {
-					if (args[0] === 'run') {
-						containers.set(args[args.indexOf('--name') + 1], args[args.indexOf('--label') + 1]);
-					}
-					if (args[0] === 'ps') {
-						const filter = args[args.indexOf('--filter') + 1];
-						return {
-							stdout: [...containers]
-								.filter(([, label]) => `label=${label.split('=')[0]}` === filter)
-								.map(([name]) => name)
-								.join('\n'),
-							stderr: '',
-							exitCode: 0,
-						};
-					}
-					return defaultContainerCliHandler(args);
-				});
-				const first = makeProvider({ labelKey: firstKey }, runner);
-				const second = makeProvider({ labelKey: secondKey }, runner);
-				const secondId = 'sb-bbbbbbbbbbbbbbbb' as SandboxId;
-				await first.create(SANDBOX_ID).exec('true');
-				await expect(second.listActive?.()).resolves.toEqual([]);
-				await second.create(secondId).exec('true');
-
-				await expect(first.listActive?.()).resolves.toEqual([{ id: SANDBOX_ID }]);
-				await expect(second.listActive?.()).resolves.toEqual([{ id: secondId }]);
-				await expect(makeProvider({ labelKey: firstKey }, runner).listActive?.()).resolves.toEqual([
-					{ id: SANDBOX_ID },
-				]);
-				await expect(makeProvider({ labelKey: secondKey }, runner).listActive?.()).resolves.toEqual(
-					[{ id: secondId }],
-				);
-				await expect(
-					makeProvider({ labelKey: 'marimohub.sandbox.changed' }, runner).listActive?.(),
-				).resolves.toEqual([]);
-			},
-		);
-
 		it('creates a labelled container with a random loopback port and optional network', async () => {
 			const { runner, calls } = createRecordingContainerRunner(defaultContainerCliHandler);
 			const provider = makeProvider(
@@ -265,25 +219,99 @@ export function containerCliContract(
 			]);
 		});
 
-		it('lists only valid labelled sandbox container names', async () => {
-			const { runner, calls } = createRecordingContainerRunner((args) => {
+		it.each([
+			[undefined, [], []],
+			['', [], []],
+			[
+				'hub-prod_1.a',
+				['--label', 'marimohub.owner=hub-prod_1.a'],
+				['--filter', 'label=marimohub.owner=hub-prod_1.a'],
+			],
+		])(
+			'labels and lists only valid sandbox containers with owner tag %j',
+			async (ownerTag, ownerLabel, ownerFilter) => {
+				const { runner, calls } = createRecordingContainerRunner((args) => {
+					if (args[0] === 'ps') {
+						return {
+							stdout: `${CONTAINER_NAME}\nmarimohub-sbx-invalid\nother\n`,
+							stderr: '',
+							exitCode: 0,
+						};
+					}
+					return defaultContainerCliHandler(args);
+				});
+				const provider = makeProvider({ image: 'sandbox-image', ownerTag }, runner);
+
+				await provider.create(SANDBOX_ID).exec('true');
+				await expect(provider.listActive?.()).resolves.toEqual([{ id: SANDBOX_ID }]);
+				expect(calls.find((call) => call.args[0] === 'run')?.args).toEqual([
+					'run',
+					'-d',
+					'--name',
+					CONTAINER_NAME,
+					'--label',
+					`marimohub.sandbox=${SANDBOX_ID}`,
+					...ownerLabel,
+					'-p',
+					'127.0.0.1::2718',
+					'sandbox-image',
+					'sleep',
+					'infinity',
+				]);
+				expect(calls.find((call) => call.args[0] === 'ps')?.args).toEqual([
+					'ps',
+					'--filter',
+					'label=marimohub.sandbox',
+					...ownerFilter,
+					'--format',
+					'{{.Names}}',
+				]);
+			},
+		);
+
+		it('scopes discovery to the owner tag on a shared engine', async () => {
+			const containers = new Map<string, string[]>();
+			const { runner } = createRecordingContainerRunner((args) => {
+				if (args[0] === 'run') {
+					containers.set(
+						args[args.indexOf('--name') + 1],
+						args.filter((_, i) => args[i - 1] === '--label'),
+					);
+				}
 				if (args[0] === 'ps') {
+					const filters = args
+						.filter((_, i) => args[i - 1] === '--filter')
+						.map((filter) => filter.slice('label='.length));
 					return {
-						stdout: `${CONTAINER_NAME}\nmarimohub-sbx-invalid\nother\n`,
+						stdout: [...containers]
+							.filter(([, labels]) =>
+								filters.every((filter) =>
+									labels.some((label) => label === filter || label.startsWith(`${filter}=`)),
+								),
+							)
+							.map(([name]) => name)
+							.join('\n'),
 						stderr: '',
 						exitCode: 0,
 					};
 				}
 				return defaultContainerCliHandler(args);
 			});
+			const otherId = 'sb-bbbbbbbbbbbbbbbb' as SandboxId;
+			await makeProvider({ ownerTag: 'hub-a' }, runner).create(SANDBOX_ID).exec('true');
+			await makeProvider({ ownerTag: 'hub-b' }, runner).create(otherId).exec('true');
 
-			await expect(makeProvider({}, runner).listActive?.()).resolves.toEqual([{ id: SANDBOX_ID }]);
-			expect(calls.find((call) => call.args[0] === 'ps')?.args).toEqual([
-				'ps',
-				'--filter',
-				'label=marimohub.sandbox',
-				'--format',
-				'{{.Names}}',
+			await expect(makeProvider({ ownerTag: 'hub-a' }, runner).listActive?.()).resolves.toEqual([
+				{ id: SANDBOX_ID },
+			]);
+			await expect(makeProvider({ ownerTag: 'hub-b' }, runner).listActive?.()).resolves.toEqual([
+				{ id: otherId },
+			]);
+			await expect(makeProvider({ ownerTag: 'hub-c' }, runner).listActive?.()).resolves.toEqual([]);
+			// An untagged hub on a shared engine still sees every owner's sandboxes.
+			await expect(makeProvider({}, runner).listActive?.()).resolves.toEqual([
+				{ id: SANDBOX_ID },
+				{ id: otherId },
 			]);
 		});
 

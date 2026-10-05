@@ -14,8 +14,8 @@ MARIMOHUB_COMPUTE_PODMAN_BIND_HOST=127.0.0.1    # keep kernel ports on loopback
 # MARIMOHUB_COMPUTE_PODMAN_NETWORK=marimohub      # optional network to attach kernels to
 ```
 
-If hubs share a Podman container store, set a distinct, stable `MARIMOHUB_COMPUTE_PODMAN_LABEL_KEY`
-for each hub. The default, `marimohub.sandbox`, does not isolate cleanup.
+If hubs share a Podman container store, set a distinct, stable `MARIMOHUB_COMPUTE_PODMAN_OWNER_TAG`
+on every hub. An untagged hub discovers and cleans up every hub's sandboxes.
 See [Multiple hubs on one host](/deploying/single-instance#multiple-hubs-on-one-host)
 for examples and migration steps.
 

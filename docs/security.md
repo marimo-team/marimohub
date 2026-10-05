@@ -342,3 +342,23 @@ available.
 
 Use a separate data bucket for ambient browsing. Restrict hub storage credentials
 to hub storage.
+
+## Previews
+
+A [notebook preview](notebook-previews.md) runs the code at the chosen branch or
+commit with the parent notebook's integrations and secrets.
+Configuring the [GitHub App](configuration.md#github-app) enables previews.
+
+- Only managers and admins can create or delete previews.
+- Viewers and app users who can open the notebook can open its previews, within
+  their usual runtime modes.
+- A branch preview republishes on every push. After a manager creates it, anyone
+  who can push to that branch can run code with the notebook's credentials.
+- A pinned commit preview runs one SHA. marimohub checks only that the
+  notebook's repository resolves the SHA, so review the commit before you pin it.
+- With pull request tracking, preparation fails if the PR's head branch is not in
+  the notebook's repository. Fork PRs are not supported.
+
+Protect previewed branches with GitHub branch protection or rulesets, so that only
+trusted people can push to them. Restrict the App's repositories with
+[GitHub project policies](syncing.md#github-project-policies).

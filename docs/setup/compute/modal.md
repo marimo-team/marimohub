@@ -24,8 +24,10 @@ published with `image.publish()`, prefix the name with `modal://`:
 MARIMOHUB_COMPUTE_IMAGE=modal://marimo-sandbox:v1
 ```
 
-The tag defaults to `latest`. Names resolve in `MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT`,
-or the workspace default when unset. The configured token must have access to the image.
+The tag defaults to `latest`. Unqualified names resolve in `MARIMOHUB_COMPUTE_MODAL_ENVIRONMENT`,
+or the workspace default when unset. A name that contains `/`, such as
+`modal://my-workspace/notebooks/marimo-sandbox:v1`, names its own namespace and ignores
+that variable. The configured token must have access to the image.
 Registry images and named Modal images can share a
 [comma-separated image list](/sandbox-image#multiple-images).
 

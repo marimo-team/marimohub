@@ -84,7 +84,7 @@ Install the app only on repositories marimohub may publish to or sync from. Conf
 GitHub source control. If only one variable is set, startup fails. The key can be PEM or a
 single-line base64 encoding of the PEM. No GitHub App webhook is required.
 
-For GHES, set `MARIMOHUB_SOURCE_CONTROL_GITHUB_URL` to the instance's HTTPS origin.
+For GHES, set `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL` to the instance's HTTPS origin.
 REST uses `/api/v3`, GraphQL uses `/api/graphql`, and Git and PR links use the web origin.
 See [GHES setup](../docs/syncing.md#github-enterprise-server) for App, network, and TLS configuration.
 

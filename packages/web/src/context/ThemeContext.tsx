@@ -16,10 +16,10 @@ interface ThemeContextValue {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-	const { force_mode: forcedTheme } = useBranding();
+	const { color_mode: colorMode } = useBranding();
 	const [preferredTheme, setPreferredTheme] = useState<Theme>(getInitialTheme);
-	const theme = forcedTheme ?? preferredTheme;
-	const isThemeForced = forcedTheme !== null;
+	const isThemeForced = colorMode !== 'user';
+	const theme = isThemeForced ? colorMode : preferredTheme;
 
 	useEffect(() => {
 		applyThemeMode(theme);

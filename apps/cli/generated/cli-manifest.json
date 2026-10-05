@@ -3394,7 +3394,7 @@
 			"id": "notebooks.previews.delete",
 			"command": ["notebooks", "previews", "delete"],
 			"method": "DELETE",
-			"path": "/api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}",
 			"summary": "Delete a preview and retire its compute",
 			"parameters": [
 				{
@@ -3414,8 +3414,8 @@
 					"repeatable": false
 				},
 				{
-					"name": "preview_id",
-					"cli_name": "preview-id",
+					"name": "prid",
+					"cli_name": "prid",
 					"in": "path",
 					"required": true,
 					"value_type": "string",
@@ -3432,7 +3432,7 @@
 			"id": "notebooks.previews.get",
 			"command": ["notebooks", "previews", "get"],
 			"method": "GET",
-			"path": "/api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}",
 			"summary": "Get a notebook preview",
 			"parameters": [
 				{
@@ -3452,8 +3452,8 @@
 					"repeatable": false
 				},
 				{
-					"name": "preview_id",
-					"cli_name": "preview-id",
+					"name": "prid",
+					"cli_name": "prid",
 					"in": "path",
 					"required": true,
 					"value_type": "string",
@@ -3516,7 +3516,7 @@
 			"id": "notebooks.previews.sessions.create",
 			"command": ["notebooks", "previews", "sessions", "create"],
 			"method": "POST",
-			"path": "/api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}/sessions",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}/sessions",
 			"summary": "Run a preview app or temporary editor",
 			"parameters": [
 				{
@@ -3536,8 +3536,8 @@
 					"repeatable": false
 				},
 				{
-					"name": "preview_id",
-					"cli_name": "preview-id",
+					"name": "prid",
+					"cli_name": "prid",
 					"in": "path",
 					"required": true,
 					"value_type": "string",
@@ -3636,7 +3636,7 @@
 			"method": "GET",
 			"path": "/api/v1/projects/{pid}/notebooks/{nid}/source/refs",
 			"summary": "Suggest GitHub branches or recent commits",
-			"description": "Returns at most 30 matches from the first 100 branches or recent commits. Manual values remain supported. Providers without suggestion support return 422; explicit resolution remains available.",
+			"description": "Returns at most 30 matches from the first 100 branches or recent commits. Manual values remain supported. Providers without suggestion support return 422.",
 			"parameters": [
 				{
 					"name": "nid",
@@ -3657,14 +3657,6 @@
 				{
 					"name": "query",
 					"cli_name": "query",
-					"in": "query",
-					"required": false,
-					"value_type": "string",
-					"repeatable": false
-				},
-				{
-					"name": "resolve",
-					"cli_name": "resolve",
 					"in": "query",
 					"required": false,
 					"value_type": "string",

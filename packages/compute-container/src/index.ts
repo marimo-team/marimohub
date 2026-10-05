@@ -56,7 +56,8 @@ import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/
 /** marimo's kernel port (matches SandboxProvisioner's MARIMO_PORT). */
 const KERNEL_PORT = 2718;
 const NAME_PREFIX = 'marimohub-sbx-';
-const DEFAULT_LABEL_KEY = 'marimohub.sandbox';
+const SANDBOX_LABEL = 'marimohub.sandbox';
+const OWNER_LABEL = 'marimohub.owner';
 const DEFAULT_IMAGE = 'ghcr.io/marimo-team/marimo:latest';
 const EXEC_TIMEOUT_GRACE_MS = 100;
 const EXEC_TIMEOUT_SUPERVISOR = `import os, signal, subprocess, sys
@@ -172,12 +173,16 @@ export interface ContainerConfig {
 	bindHost?: string;
 	/** Optional container network to attach sandboxes to. */
 	network?: string;
-	/** Label key used to tag + enumerate our containers. Default `marimohub.sandbox`. */
-	labelKey?: string;
+	/**
+	 * Labels containers `marimohub.owner=<tag>` and scopes discovery to it, so hubs
+	 * sharing a daemon never reap each other's sandboxes. Unset keeps the untagged
+	 * pre-owner behaviour, which sees every hub's sandboxes.
+	 */
+	ownerTag?: string;
 }
 
-type ResolvedConfig = Required<Omit<ContainerConfig, 'network'>> &
-	Pick<ContainerConfig, 'network'> & { engine: string };
+type ResolvedConfig = Required<Omit<ContainerConfig, 'network' | 'ownerTag'>> &
+	Pick<ContainerConfig, 'network' | 'ownerTag'> & { engine: string };
 
 export function containerResourceArgs(resources: ComputeResources = {}): string[] {
 	return [
@@ -221,7 +226,8 @@ class ContainerSandboxInstance implements SandboxInstance {
 			'--name',
 			this.name,
 			'--label',
-			`${this.config.labelKey}=${this.id}`,
+			`${SANDBOX_LABEL}=${this.id}`,
+			...(this.config.ownerTag ? ['--label', `${OWNER_LABEL}=${this.config.ownerTag}`] : []),
 			// Publish the kernel port to an OS-assigned host port on bindHost.
 			'-p',
 			`${this.config.bindHost}::${KERNEL_PORT}`,
@@ -546,8 +552,8 @@ export class ContainerCompute implements SandboxProvider {
 			image: config.image || DEFAULT_IMAGE,
 			host: config.host || 'localhost',
 			bindHost: config.bindHost || '127.0.0.1',
-			labelKey: config.labelKey || DEFAULT_LABEL_KEY,
 			network: config.network,
+			ownerTag: config.ownerTag || undefined,
 		};
 	}
 
@@ -582,7 +588,8 @@ export class ContainerCompute implements SandboxProvider {
 		const res = await this.runner.run([
 			'ps',
 			'--filter',
-			`label=${this.config.labelKey}`,
+			`label=${SANDBOX_LABEL}`,
+			...(this.config.ownerTag ? ['--filter', `label=${OWNER_LABEL}=${this.config.ownerTag}`] : []),
 			'--format',
 			'{{.Names}}',
 		]);

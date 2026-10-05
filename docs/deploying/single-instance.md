@@ -210,30 +210,29 @@ single replica means a few seconds of downtime; data on the volume is untouched.
 
 ## Multiple hubs on one host
 
-Hubs sharing a Docker daemon or Podman container store need distinct sandbox
-label keys. The default, `marimohub.sandbox`, does **not** isolate hubs: their
-cleanup tasks can delete each other's running kernels.
+Hubs sharing a Docker daemon or Podman container store need distinct owner
+tags. Set `MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG` for Docker or
+`MARIMOHUB_COMPUTE_PODMAN_OWNER_TAG` for Podman on **every** hub:
 
-Set `MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY` for Docker or
-`MARIMOHUB_COMPUTE_PODMAN_LABEL_KEY` for Podman in each hub's environment:
+| Hub         | Example owner tag |
+| ----------- | ----------------- |
+| Development | `hub-dev`         |
+| Production  | `hub-prod`        |
 
-| Hub         | Example label key        |
-| ----------- | ------------------------ |
-| Development | `marimohub.dev.sandbox`  |
-| Production  | `marimohub.prod.sandbox` |
+A tagged hub labels its sandbox containers `marimohub.owner=<tag>` and only
+discovers and cleans up containers with its own tag. An untagged hub sees every
+hub's sandboxes, so its cleanup can delete their running kernels. Separate
+storage roots or container networks do not isolate cleanup. Keep each tag
+unchanged across restarts. Each hub also needs its own storage root, port, and
+session secret.
 
-Keep the key unchanged across restarts. Each hub also needs its own storage root,
-port, and session secret. Separate storage roots or container networks alone do
-not isolate cleanup.
+A tagged hub ignores containers created before it had a tag. To adopt tags:
 
-Existing containers keep their original labels. A shared key cannot identify
-which hub owns a container. Changing the key also excludes existing containers
-from cleanup. Coordinate migration across **all hubs sharing the old key**:
-
-1. Save notebooks and stop sessions and jobs in all affected hubs.
-2. Stop all affected hubs to prevent new sandbox creation.
-3. Remove their remaining sandbox containers with the old key, including idle pool containers.
-4. Set a distinct key for each hub, then restart the hubs.
+1. Save notebooks and stop sessions and jobs in all hubs on the daemon.
+2. Stop all hubs to prevent new sandbox creation.
+3. Remove their remaining sandbox containers, including idle pool containers
+   (`docker ps -a --filter label=marimohub.sandbox`, or the same with `podman`).
+4. Set a distinct tag for each hub, then restart the hubs.
 
 ## Production cautions
 

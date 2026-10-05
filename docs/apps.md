@@ -137,7 +137,7 @@ For these links, `mo.query_params()["id"]` returns `"123"`.
   Theme changes and stripped parameters do not trigger reloads.
 
 The bridge installs automatically when an app or editor session starts. Existing sessions need a restart.
-It supports marimo 0.23.10 and 0.24.2 without proxy exposure or an image rebuild.
+It works without proxy exposure or an image rebuild and depends on marimo's lifespan and HTML-head contracts.
 Unsupported runtimes continue without synchronization. Static outputs and scheduled jobs receive no bridge configuration.
 A fresh app initializes from its query parameters. An editor reconnect can retain existing Python state.
 The bridge does not provide full two-way Python history restoration.

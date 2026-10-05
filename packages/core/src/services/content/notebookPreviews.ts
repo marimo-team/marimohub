@@ -7,7 +7,7 @@ import {
 	UserIdSchema,
 	VersionIdSchema,
 } from '../../schema';
-import type { NotebookId, ProjectId } from '../../ids';
+import { paths } from '../../paths';
 
 export { PreviewIdSchema } from '../../schema';
 export const PreviewSourceSchema = z.discriminatedUnion('type', [
@@ -24,6 +24,7 @@ export const PreviewSourceSchema = z.discriminatedUnion('type', [
 	}),
 	z.strictObject({ type: z.literal('commit'), commit: z.string().regex(/^[a-fA-F0-9]{40}$/) }),
 ]);
+export const PREVIEW_PREPARATIONS = ['pending', 'preparing', 'ready', 'failed'] as const;
 export const PreviewCreateSchema = z.strictObject({
 	name: z.string().trim().min(1).max(100),
 	source: PreviewSourceSchema,
@@ -48,7 +49,7 @@ export const PreviewRecordSchema = z.object({
 	created_at: z.iso.datetime(),
 	request_fingerprint: z.string(),
 	state: z.enum(['active', 'deleting', 'deleted']),
-	preparation: z.enum(['pending', 'preparing', 'ready', 'failed']),
+	preparation: z.enum(PREVIEW_PREPARATIONS),
 	checked_at: z.iso.datetime().optional(),
 	next_attempt_at: z.number().optional(),
 	preparation_failures: z.number().int().nonnegative().default(0),
@@ -88,9 +89,7 @@ export const PreviewRecordSchema = z.object({
 });
 export type NotebookPreview = z.infer<typeof PreviewRecordSchema>;
 export type PreviewCreate = z.infer<typeof PreviewCreateSchema>;
-export const previewPrefix = (pid: ProjectId, nid: NotebookId) => `_system/previews/${pid}/${nid}/`;
-export const previewKey = (pid: ProjectId, nid: NotebookId, id: string) =>
-	`${previewPrefix(pid, nid)}${id}.json`;
+export const previewKey = paths.preview;
 export const PREVIEW_POLL_MS = 60_000;
 export const PREVIEW_IDLE_MS = 5 * 60_000;
 export const PREVIEW_MAX_AGE_MS = 30 * 24 * 60 * 60_000;

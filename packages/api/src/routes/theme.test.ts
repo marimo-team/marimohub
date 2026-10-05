@@ -18,17 +18,20 @@ describe('GET /api/v1/theme', () => {
 		await expectError(await request('GET', '/capabilities'), 401, 'UNAUTHORIZED');
 	});
 
-	it.each(['light', 'dark'] as const)('serves forced %s mode before sign-in', async (mode) => {
-		const authenticate = vi.fn(async () => null);
-		const { request } = createTestApi({
-			deps: {
-				authenticator: { authenticate },
-				theme: { ...DEFAULT_THEME_CONFIG, force_mode: mode },
-			},
-		});
-		expect(await expectOk(await request('GET', '/theme'))).toMatchObject({ force_mode: mode });
-		expect(authenticate).not.toHaveBeenCalled();
-	});
+	it.each(['user', 'light', 'dark'] as const)(
+		'serves the %s color mode before sign-in',
+		async (mode) => {
+			const authenticate = vi.fn(async () => null);
+			const { request } = createTestApi({
+				deps: {
+					authenticator: { authenticate },
+					theme: { ...DEFAULT_THEME_CONFIG, color_mode: mode },
+				},
+			});
+			expect(await expectOk(await request('GET', '/theme'))).toMatchObject({ color_mode: mode });
+			expect(authenticate).not.toHaveBeenCalled();
+		},
+	);
 
 	it('only exposes the public theme fields', async () => {
 		const theme = {

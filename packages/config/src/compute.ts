@@ -81,16 +81,20 @@ const computeVar = (env: Env, key: string, backend: string) =>
 		docs: 'docs/configuration.md#compute',
 	});
 
-function containerLabelKey(env: Env, key: string): string | undefined {
+function containerOwnerTag(env: Env, key: string): string | undefined {
 	const value = env[key]?.trim();
-	if (value === undefined) return undefined;
-	if (!/^[A-Za-z0-9_.-]+$/.test(value)) {
-		throw new ConfigError(`Invalid ${key}: expected a non-empty sandbox label key`, {
-			variable: key,
-			remediation:
-				'Use only letters, digits, underscores, dots, and hyphens, or unset the variable to use the default.',
-			docs: 'docs/configuration.md#compute',
-		});
+	if (!value) return undefined;
+	// Must stay safe both as a label value and inside `--filter label=key=value`.
+	if (!/^[A-Za-z0-9_.-]{1,63}$/.test(value)) {
+		throw new ConfigError(
+			`Invalid ${key}: ${JSON.stringify(value)} is not a valid sandbox owner tag`,
+			{
+				variable: key,
+				remediation:
+					'Use 1-63 letters, digits, underscores, dots, and hyphens, or unset the variable.',
+				docs: 'docs/configuration.md#compute',
+			},
+		);
 	}
 	return value;
 }
@@ -195,7 +199,8 @@ export function resolveLifetimeBackstop(
  * backends with no image concept (local/none/noop).
  */
 export function resolveSandboxImages(env: Env): string[] {
-	switch (computeBackend(env)) {
+	const backend = computeBackend(env);
+	switch (backend) {
 		case undefined:
 		case 'local':
 		case 'none':
@@ -203,15 +208,43 @@ export function resolveSandboxImages(env: Env): string[] {
 			return [];
 		case 'fargate':
 			return [];
-		case 'e2b':
-			return (
-				parseList(env.MARIMOHUB_COMPUTE_E2B_TEMPLATE) ??
-				parseList(env.MARIMOHUB_COMPUTE_IMAGE) ??
-				[]
+		case 'e2b': {
+			const templates = parseList(env.MARIMOHUB_COMPUTE_E2B_TEMPLATE);
+			if (templates)
+				return rejectModalImageRefs(backend, 'MARIMOHUB_COMPUTE_E2B_TEMPLATE', templates);
+			return rejectModalImageRefs(
+				backend,
+				'MARIMOHUB_COMPUTE_IMAGE',
+				parseList(env.MARIMOHUB_COMPUTE_IMAGE) ?? [],
 			);
-		default:
+		}
+		// Modal resolves `modal://` itself; a library adapter owns its own image syntax.
+		case 'modal':
+		case 'library':
 			return parseList(env.MARIMOHUB_COMPUTE_IMAGE) ?? [];
+		default:
+			return rejectModalImageRefs(
+				backend,
+				'MARIMOHUB_COMPUTE_IMAGE',
+				parseList(env.MARIMOHUB_COMPUTE_IMAGE) ?? [],
+			);
 	}
+}
+
+function rejectModalImageRefs(backend: string, variable: string, images: string[]): string[] {
+	const modalImage = images.find((image) => image.startsWith('modal://'));
+	if (modalImage !== undefined) {
+		throw new ConfigError(
+			`${variable} entry ${JSON.stringify(modalImage)} is a Modal image reference, which the ${backend} compute backend cannot pull`,
+			{
+				variable,
+				remediation:
+					'Replace modal:// entries with container registry references, or set MARIMOHUB_COMPUTE_BACKEND=modal.',
+				docs: 'docs/configuration.md#compute',
+			},
+		);
+	}
+	return images;
 }
 
 /**
@@ -492,7 +525,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				host: env.MARIMOHUB_COMPUTE_DOCKER_HOST,
 				bindHost: env.MARIMOHUB_COMPUTE_DOCKER_BIND_HOST,
 				network: env.MARIMOHUB_COMPUTE_DOCKER_NETWORK,
-				labelKey: containerLabelKey(env, 'MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY'),
+				ownerTag: containerOwnerTag(env, 'MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG'),
 			});
 		case 'podman':
 			return new PodmanCompute({
@@ -500,7 +533,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				host: env.MARIMOHUB_COMPUTE_PODMAN_HOST,
 				bindHost: env.MARIMOHUB_COMPUTE_PODMAN_BIND_HOST,
 				network: env.MARIMOHUB_COMPUTE_PODMAN_NETWORK,
-				labelKey: containerLabelKey(env, 'MARIMOHUB_COMPUTE_PODMAN_LABEL_KEY'),
+				ownerTag: containerOwnerTag(env, 'MARIMOHUB_COMPUTE_PODMAN_OWNER_TAG'),
 			});
 		case 'e2b':
 			// E2B sandboxes (e2b.dev): per-session sandbox with a public per-port URL

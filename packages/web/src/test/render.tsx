@@ -7,7 +7,10 @@ import type { QueryClient } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { vi } from 'vitest';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
+import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { ErrorBoundary } from '@/components/ui';
+import { BrandingContext } from '@/context/BrandingContext';
 import { createQueryClient } from '@/api/queryClient';
 
 export function createTestQueryClient(): QueryClient {
@@ -29,6 +32,7 @@ interface ProviderOptions {
 	toaster?: boolean;
 	suspenseFallback?: ReactNode;
 	errorBoundary?: boolean;
+	branding?: Partial<ThemeConfig>;
 }
 
 function createWrapper({
@@ -37,7 +41,9 @@ function createWrapper({
 	toaster = true,
 	suspenseFallback = null,
 	errorBoundary = false,
+	branding,
 }: ProviderOptions) {
+	const brandingValue = branding && { ...DEFAULT_THEME_CONFIG, ...branding };
 	return function TestWrapper({ children }: { children: ReactNode }) {
 		const content = errorBoundary ? (
 			<ErrorBoundary fallback={<div>Request failed</div>}>{children}</ErrorBoundary>
@@ -50,6 +56,9 @@ function createWrapper({
 				{toaster && <Toaster />}
 			</QueryClientProvider>
 		);
+		if (brandingValue) {
+			tree = <BrandingContext value={brandingValue}>{tree}</BrandingContext>;
+		}
 		if (route) {
 			tree = (
 				<MemoryRouter initialEntries={Array.isArray(route) ? route : [route]}>{tree}</MemoryRouter>
@@ -69,13 +78,21 @@ export function renderWithClient(
 		toaster,
 		suspenseFallback,
 		errorBoundary,
+		branding,
 		...renderOptions
 	} = options;
 	return {
 		client,
 		...render(ui, {
 			...renderOptions,
-			wrapper: createWrapper({ client, route, toaster, suspenseFallback, errorBoundary }),
+			wrapper: createWrapper({
+				client,
+				route,
+				toaster,
+				suspenseFallback,
+				errorBoundary,
+				branding,
+			}),
 		}),
 	};
 }
@@ -90,13 +107,21 @@ export function renderHookWithClient<Result, Props>(
 		toaster,
 		suspenseFallback,
 		errorBoundary,
+		branding,
 		...hookOptions
 	} = options;
 	return {
 		client,
 		...renderHook(callback, {
 			...hookOptions,
-			wrapper: createWrapper({ client, route, toaster, suspenseFallback, errorBoundary }),
+			wrapper: createWrapper({
+				client,
+				route,
+				toaster,
+				suspenseFallback,
+				errorBoundary,
+				branding,
+			}),
 		}),
 	};
 }

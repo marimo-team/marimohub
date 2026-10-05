@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createNotebookId, createVersionId } from './ids';
+import { createNotebookId, createVersionId, PreviewId } from './ids';
 import { makeSession } from './testing/fixtures';
 import { sessionResourceNotebookId, sessionResourcePath } from './sessionOrigin';
 
@@ -15,7 +15,7 @@ describe('session resource identity', () => {
 		const origin = {
 			type: 'preview' as const,
 			notebook_id: createNotebookId(),
-			preview_id: 'a'.repeat(32),
+			preview_id: PreviewId.parse(`prev-${'a'.repeat(16)}`),
 			revision_id: createVersionId(),
 			commit: 'b'.repeat(40),
 		};

@@ -1,15 +1,14 @@
 import { Suspense } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
-import { BrandingContext } from '@/context/BrandingContext';
+import { QueryClient } from '@tanstack/react-query';
+import { Route, Routes } from 'react-router-dom';
 import type { Theme } from '@/context/ThemeContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { projectKeys } from '@/api/queryKeys';
+import { renderWithClient } from '@/test/render';
 import { AppsPage, ProjectEntryPage } from './AppsPage';
 import { AppEntryPage } from './AppEntryPage';
 import {
@@ -34,7 +33,7 @@ function setup(
 	entry = '/apps',
 	items = [app],
 	options: Partial<Parameters<typeof makeFetch>[0]> & {
-		forceMode?: Theme;
+		colorMode?: Theme;
 		appStatus?: number;
 		projectStatus?: number;
 		projectReload?: Promise<void>;
@@ -84,28 +83,25 @@ function setup(
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 	});
-	const result = render(
-		<QueryClientProvider client={client}>
-			<MemoryRouter initialEntries={[entry]}>
-				<BrandingContext value={{ ...DEFAULT_THEME_CONFIG, force_mode: options.forceMode ?? null }}>
-					<ThemeProvider>
-						<Suspense fallback={<p>Loading…</p>}>
-							<Routes>
-								<Route path="/apps" element={<AppsPage />} />
-								<Route path="/projects/:pid" element={<ProjectEntryPage />} />
-								<Route
-									path="/projects/:pid/notebooks/:nid"
-									element={<AppEntryPage variant="edit" />}
-								/>
-								<Route path="/projects/:pid/notebooks/:nid/app" element={<AppEntryPage />} />
-							</Routes>
-						</Suspense>
-					</ThemeProvider>
-				</BrandingContext>
-			</MemoryRouter>
-		</QueryClientProvider>,
+	const result = renderWithClient(
+		<ThemeProvider>
+			<Suspense fallback={<p>Loading…</p>}>
+				<Routes>
+					<Route path="/apps" element={<AppsPage />} />
+					<Route path="/projects/:pid" element={<ProjectEntryPage />} />
+					<Route path="/projects/:pid/notebooks/:nid" element={<AppEntryPage variant="edit" />} />
+					<Route path="/projects/:pid/notebooks/:nid/app" element={<AppEntryPage />} />
+				</Routes>
+			</Suspense>
+		</ThemeProvider>,
+		{
+			client,
+			route: entry,
+			toaster: false,
+			branding: { color_mode: options.colorMode ?? 'user' },
+		},
 	);
-	return { ...result, fetch, existing, client };
+	return { ...result, fetch, existing };
 }
 
 describe('stakeholder apps', () => {
@@ -379,7 +375,7 @@ describe('stakeholder apps', () => {
 			const preferred = mode === 'light' ? 'dark' : 'light';
 			localStorage.setItem('marimohub-theme', preferred);
 			try {
-				const { container } = setup(`${app.url}?theme=${preferred}`, [app], { forceMode: mode });
+				const { container } = setup(`${app.url}?theme=${preferred}`, [app], { colorMode: mode });
 				await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 				const src = container.querySelector('iframe')!.getAttribute('src')!;
 				expect(new URL(src).searchParams.get('theme')).toBe(mode);

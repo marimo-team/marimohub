@@ -2069,7 +2069,6 @@ components:
           const: 1
         id:
           type: string
-          pattern: ^[a-f0-9]{32}$
         project_id:
           type: string
         notebook_id:
@@ -2257,7 +2256,6 @@ components:
                     const: 1
                   id:
                     type: string
-                    pattern: ^[a-f0-9]{32}$
                   project_id:
                     type: string
                   notebook_id:
@@ -2468,7 +2466,6 @@ components:
                 type: string
               id:
                 type: string
-                pattern: ^[a-f0-9]{32}$
               created_at:
                 type: string
                 format: date-time
@@ -2501,7 +2498,6 @@ components:
                 type: string
               preview_id:
                 type: string
-                pattern: ^[a-f0-9]{32}$
               token:
                 type: string
               expires_at:
@@ -3156,7 +3152,6 @@ components:
               type: string
             preview_id:
               type: string
-              pattern: ^[a-f0-9]{32}$
           required:
             - notebook_id
             - preview_id
@@ -3248,7 +3243,6 @@ components:
               type: string
             preview_id:
               type: string
-              pattern: ^[a-f0-9]{32}$
           required:
             - notebook_id
             - preview_id
@@ -4105,7 +4099,6 @@ components:
               type: string
             preview_id:
               type: string
-              pattern: ^[a-f0-9]{32}$
             revision_id:
               type: string
             commit:

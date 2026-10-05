@@ -151,7 +151,7 @@ describe('config -> code generators', () => {
 	}
 
 	it('requires an explicit GitHub Enterprise origin when resolving optional config', () => {
-		const variable = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_URL';
+		const variable = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL';
 		const unsetValues: Record<string, string>[] = [{}, { [variable]: '' }, { [variable]: '   ' }];
 		for (const values of unsetValues) {
 			expect(resolveValue(variable, values)).toBe('');
@@ -176,9 +176,9 @@ describe('config -> code generators', () => {
 	);
 
 	it.each(['docker', 'podman'])(
-		'includes %s label keys only when explicitly configured',
+		'includes %s owner tags only when explicitly configured',
 		(compute) => {
-			const key = `MARIMOHUB_COMPUTE_${compute.toUpperCase()}_LABEL_KEY`;
+			const key = `MARIMOHUB_COMPUTE_${compute.toUpperCase()}_OWNER_TAG`;
 			const selection = { storage: 'fs', compute, auth: 'dev', ai: 'none' };
 			for (const generate of [generateEnv, generateHelm, generateCompose]) {
 				for (const value of [undefined, '', '   ']) {
@@ -187,41 +187,40 @@ describe('config -> code generators', () => {
 				}
 				const configured = generate({
 					...selection,
-					values: { [key]: ' marimohub.dev.sandbox ' },
+					values: { [key]: ' hub-dev ' },
 				});
 				expect(configured).toContain(key);
-				expect(configured).toContain('marimohub.dev.sandbox');
-				expect(configured).not.toContain('marimohub.prod.sandbox');
+				expect(configured).toContain('hub-dev');
+				expect(configured).not.toContain('hub-prod');
 			}
 		},
 	);
 
 	it.each(['docker', 'podman'])(
-		'passes %s label keys to the generated Library constructor',
+		'passes %s owner tags to the generated Library constructor',
 		(compute) => {
-			const key = `MARIMOHUB_COMPUTE_${compute.toUpperCase()}_LABEL_KEY`;
-			const otherKey = `MARIMOHUB_COMPUTE_${compute === 'docker' ? 'PODMAN' : 'DOCKER'}_LABEL_KEY`;
+			const key = `MARIMOHUB_COMPUTE_${compute.toUpperCase()}_OWNER_TAG`;
+			const otherKey = `MARIMOHUB_COMPUTE_${compute === 'docker' ? 'PODMAN' : 'DOCKER'}_OWNER_TAG`;
 			const selection = { storage: 'fs', compute, auth: 'dev', ai: 'none' };
 			for (const value of [undefined, '', '   ']) {
 				const values = {
-					[otherKey]: 'marimohub.other.sandbox',
+					[otherKey]: 'hub-other',
 					...(value === undefined ? {} : { [key]: value }),
 				};
-				expect(containerLibraryConfig({ ...selection, values }).labelKey).toBeUndefined();
+				expect(containerLibraryConfig({ ...selection, values }).ownerTag).toBeUndefined();
 				expect(
-					containerLibraryConfig({ ...selection, values }, { [key]: 'marimohub.env.sandbox' })
-						.labelKey,
-				).toBe('marimohub.env.sandbox');
+					containerLibraryConfig({ ...selection, values }, { [key]: 'hub-env' }).ownerTag,
+				).toBe('hub-env');
 			}
 			expect(
 				containerLibraryConfig(
 					{
 						...selection,
-						values: { [key]: ' marimohub.dev.sandbox ', [otherKey]: 'marimohub.other.sandbox' },
+						values: { [key]: ' hub-dev ', [otherKey]: 'hub-other' },
 					},
-					{ [key]: 'marimohub.env.sandbox' },
-				).labelKey,
-			).toBe('marimohub.dev.sandbox');
+					{ [key]: 'hub-env' },
+				).ownerTag,
+			).toBe('hub-dev');
 		},
 	);
 

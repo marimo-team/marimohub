@@ -250,7 +250,7 @@ describe('GitHub Enterprise configuration', () => {
 	it.each([undefined, '', '   '])('defaults to github.com when the URL is %j', (url) => {
 		const { sourceControl } = makeSourceControl({
 			...credentials,
-			MARIMOHUB_SOURCE_CONTROL_GITHUB_URL: url,
+			MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL: url,
 		});
 		expect(sourceControl?.repositoryHosts).toEqual({ 'github.com': 'github' });
 		const reader = sourceControl!.getReader('github')!;
@@ -276,7 +276,7 @@ describe('GitHub Enterprise configuration', () => {
 		const project = ProjectId.parse('proj-0000000000000000');
 		const { sourceControl } = makeSourceControl({
 			...credentials,
-			MARIMOHUB_SOURCE_CONTROL_GITHUB_URL: 'https://git.acme.corp/',
+			MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL: 'https://git.acme.corp/',
 			MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES: JSON.stringify([
 				{ resource: 'https://git.acme.corp/Team/Repo.git', projects: [project] },
 			]),
@@ -298,7 +298,7 @@ describe('GitHub Enterprise configuration', () => {
 		expect(() =>
 			makeSourceControl({
 				...credentials,
-				MARIMOHUB_SOURCE_CONTROL_GITHUB_URL: 'https://git.acme.corp',
+				MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL: 'https://git.acme.corp',
 				MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES: JSON.stringify([
 					{ resource: 'https://github.com/team/repo', projects: '*' },
 				]),
@@ -314,7 +314,7 @@ describe('GitHub Enterprise configuration', () => {
 		'invalid',
 	])('rejects invalid GitHub URL %s', (url) => {
 		expect(() =>
-			makeSourceControl({ ...credentials, MARIMOHUB_SOURCE_CONTROL_GITHUB_URL: url }),
-		).toThrow('MARIMOHUB_SOURCE_CONTROL_GITHUB_URL');
+			makeSourceControl({ ...credentials, MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL: url }),
+		).toThrow('MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL');
 	});
 });

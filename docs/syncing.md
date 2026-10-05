@@ -23,6 +23,8 @@ Each successful sync creates an immutable version of the repository files under
 `root_path`. Each session starts with a fresh copy of the latest version. Optional
 [source-control publishing](configuration.md#source-control-publishing) can send
 session edits to the provider without changing these stored versions.
+With the GitHub App configured, managers can also publish a branch or commit as a
+[notebook preview](notebook-previews.md) without changing the synced versions.
 
 ## How it works
 
@@ -481,15 +483,27 @@ A deployment connects to github.com (default) or one GitHub Enterprise Server (G
 4. Set these variables on the marimohub server, then restart it:
 
 ```bash
-MARIMOHUB_SOURCE_CONTROL_GITHUB_URL=https://git.acme.corp
+MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL=https://git.acme.corp
 MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID=123
 MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY='<PEM or base64-encoded PEM>'
 MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES='[{"resource":"https://git.acme.corp/team/notebooks","projects":["proj-0000000000000000"]}]'
 ```
 
+`MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL` is the GHES web origin, not the API URL.
 Use full HTTPS URLs for GHES sources and allowlist rules. The configured host
 supplies the `github` provider automatically. On creation, `owner/repo` still
 means github.com; when editing a source, shorthand keeps its current host.
+[Notebook previews](notebook-previews.md) use the same host.
+
+::: warning Set a repository policy
+Without `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES`, every project can
+reach every repository the App installation can access. An App installed across a
+whole GHES organization or instance therefore exposes all of those repositories.
+Set [GitHub project policies](#github-project-policies) to limit each project.
+:::
+
+marimohub sends REST requests to `{origin}/api/v3` for any host other than
+github.com. GHE.com data-residency tenants are not supported yet.
 
 The server needs HTTPS access to GHES and, with subdomain isolation enabled,
 its `codeload.` subdomain. Archive downloads retain their size limits and do
@@ -515,8 +529,8 @@ MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES='[{"resource":"team/noteboo
   permits any repository for the listed projects.
 - `projects` lists project IDs. `"*"` shares the repository across projects.
 
-Rules cover branch checks, workspace and Git downloads, and pull request creation
-and updates. The App installation must also allow the repository. The policy does not restrict
+Rules cover branch checks, workspace and Git downloads, preview source reads, and
+pull request creation and updates. The App installation must also allow the repository. The policy does not restrict
 user-supplied credentials.
 
 Restart the hub to apply policy changes.

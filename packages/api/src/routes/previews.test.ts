@@ -9,6 +9,7 @@ import {
 	ResourceExhaustedError,
 	paths,
 	PreviewCreateSchema,
+	PreviewId,
 	sessionPersistsEdits,
 	NotebookMetaSchema,
 	readStored,
@@ -101,12 +102,15 @@ beforeEach(async () => {
 	});
 	base = `/projects/${pid}/notebooks/${nid}/previews`;
 });
-async function create(input = body) {
-	const result = await expectOk<{ id: string }>(await api.request('POST', base, input), 202);
+async function prepare(id: string) {
 	return api.deps.services.previews.prepare(
-		await api.deps.services.previews.get(pid, nid, result.id),
+		await api.deps.services.previews.get(pid, nid, PreviewId.parse(id)),
 		api.deps.sourceControl,
 	);
+}
+async function create(input = body) {
+	const result = await expectOk<{ id: string }>(await api.request('POST', base, input), 202);
+	return prepare(result.id);
 }
 async function userApi(role: 'app-user' | 'viewer' | 'editor' | 'manager', name: string = role) {
 	await api.deps.services.projects.addMember(pid, { user_id: uid(name) }, role, ACTOR);
@@ -119,20 +123,13 @@ async function userApi(role: 'app-user' | 'viewer' | 'editor' | 'manager', name:
 }
 
 describe('Notebook previews', () => {
-	it.each(['branch', 'commit'] as const)(
-		'reports unsupported %s suggestions while allowing manual resolution',
-		async (type) => {
-			delete reader.listBranches;
-			delete reader.listCommits;
-			const url = `/projects/${pid}/notebooks/${nid}/source/refs?type=${type}`;
-			const error = await expectError(await api.request('GET', url), 422);
-			expect(error.message).toBe(`Source provider does not support ${type} suggestions`);
-			const query = type === 'branch' ? 'prototype' : SHA;
-			expect(
-				await expectOk(await api.request('GET', `${url}&resolve=true&query=${query}`)),
-			).toEqual([{ value: query, label: query, commit: SHA }]);
-		},
-	);
+	it.each(['branch', 'commit'] as const)('reports unsupported %s suggestions', async (type) => {
+		delete reader.listBranches;
+		delete reader.listCommits;
+		const url = `/projects/${pid}/notebooks/${nid}/source/refs?type=${type}`;
+		const error = await expectError(await api.request('GET', url), 422);
+		expect(error.message).toBe(`Source provider does not support ${type} suggestions`);
+	});
 
 	it.each(['branch', 'commit'] as const)('caps %s suggestions at 30', async (type) => {
 		const suggestions = Array.from({ length: 45 }, (_, index) => ({
@@ -200,10 +197,7 @@ describe('Notebook previews', () => {
 				items: [expect.objectContaining({ url })],
 				next_cursor: null,
 			});
-			await api.deps.services.previews.prepare(
-				await api.deps.services.previews.get(pid, nid, record.id),
-				api.deps.sourceControl,
-			);
+			await prepare(record.id);
 			const session = await expectOk<Session>(
 				await api.request('POST', `${base}/${record.id}/sessions`, { mode: 'app' }),
 			);
@@ -260,7 +254,7 @@ describe('Notebook previews', () => {
 				`/projects/${pid}/notebooks/${child}${suffix}`,
 				input,
 			);
-			expect(response.status).toBeGreaterThanOrEqual(400);
+			expect(response.status).toBe(404);
 		}
 		await expect(
 			api.deps.services.notebooks.commitSession(pid, child, { code: 'changed' }, ACTOR),
@@ -505,6 +499,31 @@ describe('Notebook previews', () => {
 		).rejects.toThrow('deleted');
 	});
 
+	it('replays Idempotency-Key creates over HTTP and rejects a changed body', async () => {
+		const headers = { 'Idempotency-Key': 'ci-run-42' };
+		const tracked = { ...body, pull_request: 1 };
+		const first = await expectOk<{ id: string }>(
+			await api.request('POST', base, tracked, headers),
+			202,
+		);
+		expect(first).toMatchObject({ pull_request: 1, created_by: ACTOR });
+		expect(first).not.toHaveProperty('state');
+		const replay = await expectOk<{ id: string }>(
+			await api.request('POST', base, tracked, headers),
+			202,
+		);
+		expect(replay.id).toBe(first.id);
+		await expectError(
+			await api.request('POST', base, { ...tracked, name: 'Different' }, headers),
+			409,
+		);
+		const removed = await api.request('DELETE', `${base}/${first.id}`);
+		expect(removed.status).toBe(202);
+		expect(await removed.json()).toEqual({ success: true });
+		await expectError(await api.request('POST', base, tracked, headers), 409);
+		expect(await api.deps.services.previews.list(pid, nid)).toHaveLength(0);
+	});
+
 	it('waits for the preparation grace period before deleting artifacts during an upload', async () => {
 		const service = api.deps.services.previews;
 		const record = await service.create(pid, nid, body, ACTOR, api.deps.sourceControl);
@@ -723,7 +742,7 @@ describe('Notebook previews', () => {
 		expect((await api.deps.services.previews.get(pid, nid, record.id)).state).toBe('deleting');
 		expect(calls.destroy).toBe(0);
 		proceed.resolve();
-		expect((await starting).status).toBeGreaterThanOrEqual(400);
+		expect((await starting).status).toBe(404);
 		await sweepPreviews(api.deps);
 		expect((await api.deps.services.previews.get(pid, nid, record.id)).state).toBe('deleting');
 		instance.destroy = destroy;
@@ -1063,10 +1082,7 @@ describe('Preview failure recovery and boundaries', () => {
 			await api.request('POST', base, { ...body, expires_at: new Date(expires).toISOString() }),
 			202,
 		);
-		await api.deps.services.previews.prepare(
-			await api.deps.services.previews.get(pid, nid, created.id),
-			api.deps.sourceControl,
-		);
+		await prepare(created.id);
 		const session = await expectOk<Session>(
 			await api.request('POST', `${base}/${created.id}/sessions`, { mode: 'edit' }),
 		);
@@ -1088,7 +1104,9 @@ describe('Preview failure recovery and boundaries', () => {
 			404,
 		);
 		await sweepPreviews(api.deps);
-		expect((await api.deps.services.previews.get(pid, nid, created.id)).state).toBe('deleted');
+		expect(
+			(await api.deps.services.previews.get(pid, nid, PreviewId.parse(created.id))).state,
+		).toBe('deleted');
 		expect(
 			(await api.deps.services.sessions.getSession(pid, session.session_id)).sandbox_reclaimed_at,
 		).toBeDefined();
@@ -1419,10 +1437,7 @@ describe('Preview source and compute boundaries', () => {
 				}),
 				202,
 			);
-			const record = await api.deps.services.previews.prepare(
-				await api.deps.services.previews.get(pid, nid, result.id),
-				api.deps.sourceControl,
-			);
+			const record = await prepare(result.id);
 			const method =
 				operation === 'branch'
 					? reader.getBranchHead
@@ -1464,10 +1479,7 @@ describe('Preview source and compute boundaries', () => {
 			}),
 			202,
 		);
-		const record = await api.deps.services.previews.prepare(
-			await api.deps.services.previews.get(pid, nid, result.id),
-			api.deps.sourceControl,
-		);
+		const record = await prepare(result.id);
 		expect(record).toMatchObject({ state: 'active', preparation: 'failed' });
 		expect(record.current).toBeUndefined();
 		await expectError(
@@ -1545,10 +1557,7 @@ describe('Preview source and compute boundaries', () => {
 				}),
 				202,
 			);
-			const record = await api.deps.services.previews.prepare(
-				await api.deps.services.previews.get(pid, nid, result.id),
-				api.deps.sourceControl,
-			);
+			const record = await prepare(result.id);
 			expect(record.compute_profile).toBe(stored);
 			for (const mode of ['edit', 'app'] as const) {
 				const session = await expectOk<Session>(
@@ -2098,32 +2107,11 @@ it('pins session provenance to the loaded runtime when the branch advances durin
 	expect(session.origin).toMatchObject({ revision_id: record.current!.version_id, commit: SHA });
 });
 
-describe('source discovery validation and cancellation', () => {
-	it.each(['branch', 'commit'] as const)(
-		'rejects blank %s resolution queries before provider calls',
-		async (type) => {
-			for (const query of ['', '&query=', '&query=%20%09']) {
-				await expectError(
-					await api.request(
-						'GET',
-						`/projects/${pid}/notebooks/${nid}/source/refs?type=${type}&resolve=true${query}`,
-					),
-					422,
-				);
-			}
-			expect(reader.getBranchHead).not.toHaveBeenCalled();
-			expect(reader.resolveCommit).not.toHaveBeenCalled();
-			expect(reader.listBranches).not.toHaveBeenCalled();
-			expect(reader.listCommits).not.toHaveBeenCalled();
-		},
-	);
-
+describe('source discovery cancellation', () => {
 	it.each([
-		{ type: 'branch', resolve: false, method: 'listBranches' },
-		{ type: 'commit', resolve: false, method: 'listCommits' },
-		{ type: 'branch', resolve: true, method: 'getBranchHead' },
-		{ type: 'commit', resolve: true, method: 'resolveCommit' },
-	] as const)('forwards cancellation to $method', async ({ type, resolve, method }) => {
+		{ type: 'branch', method: 'listBranches' },
+		{ type: 'commit', method: 'listCommits' },
+	] as const)('forwards cancellation to $method', async ({ type, method }) => {
 		const controller = new AbortController();
 		const reason = new Error('Discovery request disconnected');
 		const called = Promise.withResolvers<AbortSignal>();
@@ -2133,19 +2121,12 @@ describe('source discovery validation and cancellation', () => {
 			called.resolve(options!.signal!);
 			await proceed.promise;
 		};
-		if (method === 'listBranches' || method === 'listCommits') {
-			vi.mocked(reader[method]!).mockImplementation(async (_repo, _query, options) => {
-				await waitForCancellation(options);
-				return [];
-			});
-		} else {
-			vi.mocked(reader[method]!).mockImplementation(async (_repo, _query, options) => {
-				await waitForCancellation(options);
-				return { commit: SHA };
-			});
-		}
+		vi.mocked(reader[method]!).mockImplementation(async (_repo, _query, options) => {
+			await waitForCancellation(options);
+			return [];
+		});
 		const request = api.app.request(
-			`/api/v1/projects/${pid}/notebooks/${nid}/source/refs?type=${type}&resolve=${resolve}&query=${SHA}`,
+			`/api/v1/projects/${pid}/notebooks/${nid}/source/refs?type=${type}&query=${SHA}`,
 			{ signal: controller.signal },
 		);
 		const signal = await called.promise;

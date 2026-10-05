@@ -23,6 +23,7 @@ import {
 	AlertDestinationId,
 	JobId,
 	RunId,
+	PreviewId,
 	UserId,
 } from './ids';
 
@@ -147,12 +148,11 @@ export const IntegrationIdSchema = z.string().refine(IntegrationId.is);
 export const AlertDestinationIdSchema = z.string().refine(AlertDestinationId.is);
 export const JobIdSchema = z.string().refine(JobId.is);
 export const RunIdSchema = z.string().refine(RunId.is);
+export const PreviewIdSchema = z.string().refine(PreviewId.is);
 // User ids (`author`/`owner`/`user_id`/`actor` foreign keys) are the opaque auth
 // `sub`. UserId.is only checks non-empty, so this brands without imposing a
 // format the identity provider doesn't guarantee.
 export const UserIdSchema = z.string().refine(UserId.is);
-
-export const PreviewIdSchema = z.string().regex(/^[a-f0-9]{32}$/);
 
 // --- Catalog ---
 

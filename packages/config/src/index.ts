@@ -645,16 +645,16 @@ export function createFromEnv(
 	const computeProfileOverride = parseComputeProfileOverride(
 		env.MARIMOHUB_COMPUTE_PROFILE_OVERRIDE,
 	);
-	const previewComputeProfile = env.MARIMOHUB_PREVIEW_COMPUTE_PROFILE?.trim() || undefined;
+	const previewComputeProfile = env.MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE?.trim() || undefined;
 	if (
 		previewComputeProfile &&
 		(!profilesSupported ||
 			!appliedComputeProfiles.profiles.some((profile) => profile.name === previewComputeProfile))
 	)
 		throw new ConfigError(
-			'MARIMOHUB_PREVIEW_COMPUTE_PROFILE must name an available compute profile',
+			'MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE must name an available compute profile',
 			{
-				variable: 'MARIMOHUB_PREVIEW_COMPUTE_PROFILE',
+				variable: 'MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE',
 				docs: 'docs/configuration.md#compute',
 			},
 		);

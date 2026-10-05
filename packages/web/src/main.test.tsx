@@ -22,7 +22,7 @@ beforeEach(() => {
 			const branding = useBranding();
 			return (
 				<div>
-					{branding.name}:{branding.force_mode ?? 'unlocked'}
+					{branding.name}:{branding.color_mode}
 				</div>
 			);
 		}
@@ -51,33 +51,41 @@ describe('app bootstrap', () => {
 		);
 		await import('./main');
 		expect(render).not.toHaveBeenCalled();
-		expect(theme.applyThemeMode).not.toHaveBeenCalled();
+		expect(theme.applyThemeMode).toHaveBeenCalledExactlyOnceWith('dark');
+		expect(theme.applyThemeMode).toHaveBeenCalledBefore(theme.loadThemeConfig);
 		resolve(config);
 		await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
 		expect(theme.applyThemeConfig).toHaveBeenCalledExactlyOnceWith(config);
 		expect(theme.applyThemeConfig).toHaveBeenCalledBefore(render);
-		expect(theme.applyThemeMode).toHaveBeenCalledWith('dark');
+		expect(theme.applyThemeMode).toHaveBeenCalledExactlyOnceWith('dark');
 		expect(renderToStaticMarkup(render.mock.calls[0][0])).toContain('Research Hub');
 	});
 
-	it.each(['light', 'dark'] as const)('applies forced %s mode before rendering', async (mode) => {
-		theme.loadThemeConfig.mockResolvedValue({ ...DEFAULT_THEME_CONFIG, force_mode: mode });
-		await import('./main');
-		await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
-		expect(theme.applyThemeMode).toHaveBeenCalledExactlyOnceWith(mode);
-		expect(theme.applyThemeMode).toHaveBeenCalledBefore(render);
-		expect(theme.getInitialTheme).not.toHaveBeenCalled();
-	});
+	it.each([
+		['light', 'dark'],
+		['dark', 'light'],
+	] as const)(
+		'overrides the preferred mode with the %s color mode before rendering',
+		async (mode, preferred) => {
+			theme.getInitialTheme.mockReturnValue(preferred);
+			theme.loadThemeConfig.mockResolvedValue({ ...DEFAULT_THEME_CONFIG, color_mode: mode });
+			await import('./main');
+			await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
+			expect(theme.applyThemeMode.mock.calls).toEqual([[preferred], [mode]]);
+			expect(theme.applyThemeMode).toHaveBeenCalledBefore(theme.loadThemeConfig);
+			expect(theme.applyThemeMode).toHaveBeenCalledBefore(render);
+		},
+	);
 
-	it('preserves forced mode when applying branding fails', async () => {
-		theme.loadThemeConfig.mockResolvedValue({ ...DEFAULT_THEME_CONFIG, force_mode: 'light' });
+	it('preserves the forced color mode when applying branding fails', async () => {
+		theme.loadThemeConfig.mockResolvedValue({ ...DEFAULT_THEME_CONFIG, color_mode: 'light' });
 		theme.applyThemeConfig.mockImplementationOnce(() => {
 			throw new Error('Branding failed');
 		});
 		await import('./main');
 		await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
 		expect(renderToStaticMarkup(render.mock.calls[0][0])).toContain('marimohub:light');
-		expect(theme.applyThemeMode).toHaveBeenCalledExactlyOnceWith('light');
+		expect(theme.applyThemeMode).toHaveBeenLastCalledWith('light');
 	});
 
 	it.each(['light', 'dark'] as const)(
@@ -90,7 +98,7 @@ describe('app bootstrap', () => {
 			await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
 			expect(theme.applyThemeMode).toHaveBeenCalledExactlyOnceWith(mode);
 			expect(theme.applyThemeMode).toHaveBeenCalledBefore(render);
-			expect(renderToStaticMarkup(render.mock.calls[0][0])).toContain('marimohub:unlocked');
+			expect(renderToStaticMarkup(render.mock.calls[0][0])).toContain('marimohub:user');
 			expect(console.warn).toHaveBeenCalledWith(
 				'Could not load the deployment theme. Using defaults.',
 				error,
@@ -98,17 +106,48 @@ describe('app bootstrap', () => {
 		},
 	);
 
-	it.each(['getInitialTheme', 'applyThemeMode', 'applyThemeConfig'] as const)(
-		'renders with the available configuration when %s fails unexpectedly',
+	it.each(['getInitialTheme', 'applyThemeMode'] as const)(
+		'still loads the deployment theme when %s fails unexpectedly',
 		async (operation) => {
-			const error = new Error('Theme initialization failed');
+			const error = new Error('Preferred mode failed');
 			theme.loadThemeConfig.mockResolvedValue({ ...DEFAULT_THEME_CONFIG, name: 'Research Hub' });
 			theme[operation].mockImplementationOnce(() => {
 				throw error;
 			});
 			await import('./main');
 			await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
-			expect(renderToStaticMarkup(render.mock.calls[0][0])).toContain('Research Hub:unlocked');
+			expect(theme.applyThemeConfig).toHaveBeenCalledOnce();
+			expect(renderToStaticMarkup(render.mock.calls[0][0])).toContain('Research Hub:user');
+			expect(console.warn).toHaveBeenCalledWith('Could not apply the preferred color mode.', error);
+		},
+	);
+
+	it.each([
+		['applyThemeMode', 'dark'],
+		['applyThemeConfig', 'user'],
+	] as const)(
+		'renders with the available configuration when %s fails after loading',
+		async (operation, color_mode) => {
+			const error = new Error('Theme initialization failed');
+			theme.loadThemeConfig.mockResolvedValue({
+				...DEFAULT_THEME_CONFIG,
+				name: 'Research Hub',
+				color_mode,
+			});
+			if (operation === 'applyThemeMode') {
+				theme.applyThemeMode
+					.mockImplementationOnce(() => {})
+					.mockImplementationOnce(() => {
+						throw error;
+					});
+			} else {
+				theme.applyThemeConfig.mockImplementationOnce(() => {
+					throw error;
+				});
+			}
+			await import('./main');
+			await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
+			expect(renderToStaticMarkup(render.mock.calls[0][0])).toContain(`Research Hub:${color_mode}`);
 			expect(console.warn).toHaveBeenCalledWith(
 				'Could not fully initialize the deployment theme.',
 				error,

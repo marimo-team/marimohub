@@ -3,10 +3,9 @@ import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { installMatchMedia, renderWithClient } from '@/test/render';
 import { THEME_STORAGE_KEY as STORAGE_KEY } from '@/lib/theme';
-import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
-import { BrandingContext } from './BrandingContext';
 import { ThemeProvider, useTheme } from './ThemeContext';
 import type { Theme } from './ThemeContext';
+import type { ColorMode } from '@marimo-hub/core/theme';
 
 function Probe() {
 	const { theme, isThemeForced, toggleTheme, setTheme } = useTheme();
@@ -27,14 +26,12 @@ function Probe() {
 	);
 }
 
-function renderTheme(forceMode: Theme | null = null) {
+function renderTheme(colorMode: ColorMode = 'user') {
 	return renderWithClient(
-		<BrandingContext value={{ ...DEFAULT_THEME_CONFIG, force_mode: forceMode }}>
-			<ThemeProvider>
-				<Probe />
-			</ThemeProvider>
-		</BrandingContext>,
-		{ toaster: false },
+		<ThemeProvider>
+			<Probe />
+		</ThemeProvider>,
+		{ toaster: false, branding: { color_mode: colorMode } },
 	);
 }
 
