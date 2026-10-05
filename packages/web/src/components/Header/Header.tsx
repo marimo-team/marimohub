@@ -17,7 +17,7 @@ export function Header() {
 	const { name } = useBranding();
 	const navigate = useNavigate();
 	const { user, signOut } = useAuth();
-	const { theme, toggleTheme } = useTheme();
+	const { theme, isThemeForced, toggleTheme } = useTheme();
 	const tokensDialog = useDisclosure();
 	const mcpDialog = useDisclosure();
 	const { data: capabilities } = useCapabilitiesQuery(!!user);
@@ -45,13 +45,15 @@ export function Header() {
 						Create a project
 					</Link>
 				) : null}
-				<Button
-					onPress={toggleTheme}
-					aria-label="Toggle theme"
-					className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-				>
-					{theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
-				</Button>
+				{!isThemeForced && (
+					<Button
+						onPress={toggleTheme}
+						aria-label="Toggle theme"
+						className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+					>
+						{theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
+					</Button>
+				)}
 
 				{user ? (
 					<MenuTrigger>

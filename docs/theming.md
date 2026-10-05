@@ -5,7 +5,7 @@ description: Configure the hub name, logos, favicon, and automatic light and dar
 # Customize the hub theme
 
 Customize the hub, sign-in screen, navigation, and browser titles without a frontend rebuild.
-Notebook editors and published notebooks keep their own themes.
+Notebook editors and published notebooks keep their own color palettes and receive the selected light or dark mode.
 All theme configuration is public before sign-in.
 
 ## Set a primary color
@@ -23,6 +23,20 @@ Colors accept opaque `#RGB` or `#RRGGBB` values.
 Quote hex values in environment files and YAML to avoid comment parsing.
 Blank values use defaults. Invalid values stop Node server startup with the variable name and a correction.
 On Workers, deployment succeeds, but requests return HTTP 500 with `CONFIG_ERROR` until you correct the configuration.
+
+## Force light or dark mode
+
+Set the server environment variable to `light` or `dark`:
+
+```dotenv
+MARIMOHUB_THEME_FORCE_MODE="light"
+```
+
+The forced mode applies to sign-in, hub pages, and embedded notebooks and apps for every role.
+It overrides saved and operating-system preferences and hides the header theme toggle.
+
+To restore user theme selection, unset the variable or leave it blank. Saved preferences remain unchanged.
+After changing the variable, restart the server and reload the page.
 
 ## Use two brand colors
 
@@ -135,12 +149,13 @@ The reference Worker and Node server use the same configuration parser.
 ## Check the result
 
 1. Open the sign-in screen and a project page.
-2. Switch between light and dark mode.
+2. Switch between light and dark mode, or check that the forced mode hides the theme toggle.
 3. Check logos, favicon, titles, buttons, and keyboard focus rings on desktop and mobile.
 
 The public `GET /api/v1/theme` endpoint returns normalized configuration in the standard API envelope.
 The browser requests it once per page load, before displaying the UI.
 If the response fails, is invalid, or takes over two seconds, the browser uses defaults until the next page load.
+This fallback uses the saved or operating-system mode, without a theme override.
 
 For deployments under a URL prefix, include that prefix before `/api/v1/theme`.
 

@@ -22,12 +22,15 @@ const ReactQueryDevtools = import.meta.env.DEV
 async function bootstrap() {
 	let branding = DEFAULT_THEME_CONFIG;
 	try {
-		applyThemeMode(getInitialTheme());
-		const config = await loadThemeConfig();
-		applyThemeConfig(config);
-		branding = config;
+		branding = await loadThemeConfig();
 	} catch (error) {
-		console.warn('Could not initialize the deployment theme. Using defaults.', error);
+		console.warn('Could not load the deployment theme. Using defaults.', error);
+	}
+	try {
+		applyThemeMode(branding.force_mode ?? getInitialTheme());
+		applyThemeConfig(branding);
+	} catch (error) {
+		console.warn('Could not fully initialize the deployment theme.', error);
 	}
 	createRoot(document.getElementById('root')!).render(
 		<StrictMode>

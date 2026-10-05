@@ -22,6 +22,7 @@ Deployment branding for the hub UI. All values are public. See the [theming guid
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
+| `MARIMOHUB_THEME_FORCE_MODE` | Force light or dark mode for all roles and hide the theme toggle. Unset or blank uses saved or operating-system preferences. | — | — | `light` |
 | `MARIMOHUB_THEME_NAME` | Display name, browser-title suffix, and installed app name. | — | `marimohub` | `Research Hub` |
 | `MARIMOHUB_THEME_FAVICON` | SVG, PNG, or ICO favicon. Use an HTTPS URL or root-relative same-origin path. Falls back to the 192px app icon, then 512px, then the built-in favicon. | — | — | `https://hub.example.com/brand/favicon.svg` |
 | `MARIMOHUB_THEME_LOGO` | SVG or PNG logo that replaces the full icon and wordmark. Use an HTTPS URL or root-relative same-origin path. | — | — | `https://hub.example.com/brand/logo.svg` |
