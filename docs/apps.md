@@ -51,6 +51,45 @@ Start an app from **Open → Run as app** in the notebook header, or via the API
 `{"mode": "app", "app_visit_id": "<unique-visit-id>"}`. The router assigns a new visit to the latest committed version.
 Reuse `app_visit_id` when retrying admission. Use the returned `app_assignment` for heartbeats and departure.
 
+## Use marimo-studio
+
+marimo-studio adds custom views to a notebook. You can edit a view beside the
+notebook and serve the default view through **Run as app**.
+
+1. Configure the deployment to save view files between sessions:
+
+   ```bash
+   MARIMOHUB_PERSIST_WORKSPACE=workspace
+   ```
+
+   The default, `source`, saves only `notebook.py` and `pyproject.toml`.
+   See the [configuration reference](./configuration.md).
+
+2. Stop the editor session. Open **Browse files** and edit `notebook.py`.
+   Add this metadata, or merge it into the existing script header:
+
+   ```python
+   # /// script
+   # dependencies = ["marimo-studio>=0.2.3"]
+   #
+   # [tool.marimo-studio]
+   # default = "dashboard"
+   # view_root = "studio"
+   # ///
+   ```
+
+   Save the file. For Git-synced notebooks, edit the repository and sync again.
+   The next sandbox start [installs the dependency](./sandbox-image.md#inline-dependencies).
+
+3. Open the notebook and run its cells. Select **Add view**, keep `dashboard`,
+   choose **HTML document**, and select **Create view**.
+
+4. Stop the session to save the view files under `studio/dashboard/`.
+   Select **Open → Run as app** to serve the default view.
+
+The [marimo-studio guide for marimohub](https://marimo-team.github.io/marimo-studio/guide/marimohub)
+covers supported marimo versions, other starters, storage limits, and troubleshooting.
+
 ## Copy app and snapshot URLs
 
 From an app, select **Share app → Copy URL** to copy its current URL.
