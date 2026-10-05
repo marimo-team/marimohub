@@ -56,7 +56,14 @@ Reuse `app_visit_id` when retrying admission. Use the returned `app_assignment` 
 marimo-studio adds custom views to a notebook. You can edit a view beside the
 notebook and serve the default view through **Run as app**.
 
-1. Configure the deployment to save view files between sessions:
+::: warning Workspace files are shared
+Workspace persistence includes hidden files such as `.env` and `.git/`.
+Any project member with read access can retrieve these files.
+Keep credentials out of workspace files. Use [integration secrets](./integration-secrets.md)
+for credentials. See [secrets handling](./security.md#secrets-handling).
+:::
+
+1. For local notebooks, configure the deployment to save view files between sessions:
 
    ```bash
    MARIMOHUB_PERSIST_WORKSPACE=workspace
@@ -84,8 +91,15 @@ notebook and serve the default view through **Run as app**.
 3. Open the notebook and run its cells. Select **Add view**, keep `dashboard`,
    choose **HTML document**, and select **Create view**.
 
-4. Stop the session to save the view files under `studio/dashboard/`.
-   Select **Open → Run as app** to serve the default view.
+4. Save the notebook and view files:
+   - **Local notebooks:** Stop the session to save the view files under `studio/dashboard/`.
+   - **Git-synced notebooks:** Before stopping the session, save the updated notebook and `studio/` files to the repository.
+     Commit and push them to the tracked branch, or
+     [publish a pull request](./syncing.md#publishing-edits-back-to-the-repository) and merge it into that branch.
+     Publishing view files requires a synced version that [includes `.git`](./syncing.md#include-git-for-multi-file-publishing).
+     Then sync the notebook again. Git-synced sessions discard edits at teardown, even with workspace persistence enabled.
+
+5. Select **Open → Run as app** to serve the saved default view.
 
 The [marimo-studio guide for marimohub](https://marimo-team.github.io/marimo-studio/guide/marimohub)
 covers supported marimo versions, other starters, storage limits, and troubleshooting.
