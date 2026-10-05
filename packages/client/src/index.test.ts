@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { apiClient, apiData, ApiRequestError, createApiClient } from './index';
 import type { components } from './schema';
 
@@ -17,6 +17,7 @@ function stubFetch(impl: (input: RequestInfo | URL, init?: RequestInit) => Promi
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+	vi.useRealTimers();
 });
 
 describe('ApiRequestError', () => {
@@ -29,7 +30,28 @@ describe('ApiRequestError', () => {
 	});
 });
 
-describe('apiData', () => {
+describe.each([
+	{ nativeAny: true, nativeTimeout: true },
+	{ nativeAny: false, nativeTimeout: true },
+	{ nativeAny: true, nativeTimeout: false },
+	{ nativeAny: false, nativeTimeout: false },
+])('apiData (any: $nativeAny, timeout: $nativeTimeout)', ({ nativeAny, nativeTimeout }) => {
+	beforeEach(() => {
+		if (!nativeTimeout) vi.useFakeTimers();
+		if (!nativeAny || !nativeTimeout) {
+			vi.stubGlobal(
+				'AbortSignal',
+				new Proxy(AbortSignal, {
+					get(target, property, receiver) {
+						if (property === 'any' && !nativeAny) return;
+						if (property === 'timeout' && !nativeTimeout) return;
+						return Reflect.get(target, property, receiver);
+					},
+				}),
+			);
+		}
+	});
+
 	it('unwraps the { success, data } envelope on success', async () => {
 		stubFetch(async () => jsonResponse({ success: true, data: { id: 'proj-1', name: 'X' } }));
 
@@ -172,7 +194,7 @@ describe('apiData', () => {
 	});
 
 	it('throws NETWORK_ERROR when the request times out', async () => {
-		stubFetch(
+		const fn = stubFetch(
 			(_input, init) =>
 				new Promise<Response>((_resolve, reject) => {
 					init?.signal?.addEventListener('abort', () =>
@@ -180,9 +202,39 @@ describe('apiData', () => {
 					);
 				}),
 		);
-		await expect(apiData(apiClient.GET('/api/v1/me', { timeout: 5 }))).rejects.toMatchObject({
+		const assertion = expect(
+			apiData(apiClient.GET('/api/v1/me', { timeout: 5 })),
+		).rejects.toMatchObject({
 			code: 'NETWORK_ERROR',
 		});
+		if (!nativeTimeout) await vi.advanceTimersByTimeAsync(5);
+		await assertion;
+		expect(fn).toHaveBeenCalledOnce();
+		expect(fn.mock.calls[0]?.[1]?.signal?.reason).toMatchObject({ name: 'TimeoutError' });
+		if (!nativeTimeout) expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it.each([true, false])('preserves caller cancellation (already aborted: %s)', async (aborted) => {
+		const controller = new AbortController();
+		const reason = new DOMException('Cancelled by caller', 'AbortError');
+		if (aborted) controller.abort(reason);
+		const fn = stubFetch(
+			(_input, init) =>
+				new Promise<Response>((_resolve, reject) => {
+					const signal = init?.signal;
+					if (signal?.aborted) {
+						reject(reason);
+						return;
+					}
+					signal?.addEventListener('abort', () => reject(reason), { once: true });
+					controller.abort(reason);
+				}),
+		);
+
+		await expect(apiClient.GET('/api/v1/me', { signal: controller.signal })).rejects.toBe(reason);
+		expect(fn).toHaveBeenCalledOnce();
+		expect(fn.mock.calls[0]?.[1]?.signal?.reason).toBe(reason);
+		if (!nativeTimeout) expect(vi.getTimerCount()).toBe(0);
 	});
 
 	it.each([null, [1, 2], 'plain', 42])(
