@@ -159,6 +159,27 @@ function combineSignals(signals: AbortSignal[]): AbortSignal {
 	return controller.signal;
 }
 
+function withTimeout(signal: AbortSignal, timeout: number): AbortSignal {
+	if (typeof AbortSignal.timeout === 'function') {
+		return combineSignals([signal, AbortSignal.timeout(timeout)]);
+	}
+	const controller = new AbortController();
+	if (signal.aborted) {
+		controller.abort(signal.reason);
+		return controller.signal;
+	}
+	const onAbort = () => {
+		clearTimeout(timer);
+		controller.abort(signal.reason);
+	};
+	const timer = setTimeout(() => {
+		signal.removeEventListener('abort', onAbort);
+		controller.abort(new DOMException('The operation timed out', 'TimeoutError'));
+	}, timeout);
+	signal.addEventListener('abort', onAbort, { once: true });
+	return controller.signal;
+}
+
 const timeoutMiddleware: Middleware = {
 	onRequest({ request }) {
 		const requestedTimeout = (request as RequestWithTimeout).timeout;
@@ -169,7 +190,7 @@ const timeoutMiddleware: Middleware = {
 				? requestedTimeout
 				: DEFAULT_TIMEOUT_MS;
 		return new Request(request, {
-			signal: combineSignals([request.signal, AbortSignal.timeout(timeout)]),
+			signal: withTimeout(request.signal, timeout),
 		});
 	},
 };
