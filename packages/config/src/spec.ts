@@ -786,6 +786,15 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description: 'Optional Docker network to attach sandboxes to.',
 						example: 'marimohub',
 					},
+					{
+						id: 'MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY',
+						name: 'Docker sandbox label key',
+						description:
+							'Label key used to create and discover sandbox containers for cleanup. Use a distinct, stable key for each hub sharing a Docker daemon.',
+						default: 'marimohub.sandbox',
+						example: 'marimohub.prod.sandbox',
+						optIn: true,
+					},
 				],
 			},
 			{
@@ -812,6 +821,15 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						name: 'Podman network',
 						description: 'Optional Podman network to attach sandboxes to.',
 						example: 'marimohub',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_PODMAN_LABEL_KEY',
+						name: 'Podman sandbox label key',
+						description:
+							'Label key used to create and discover sandbox containers for cleanup. Use a distinct, stable key for each hub sharing a Podman container store.',
+						default: 'marimohub.sandbox',
+						example: 'marimohub.prod.sandbox',
+						optIn: true,
 					},
 				],
 			},

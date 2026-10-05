@@ -44,6 +44,7 @@ const configOf = (provider: unknown) =>
 				host?: string;
 				bindHost?: string;
 				network?: string;
+				labelKey?: string;
 				idleFallbackMs?: number;
 				ingressAnnotations?: Record<string, string>;
 				ingressTlsMode?: string;
@@ -219,6 +220,37 @@ describe('makeCompute backend selection', () => {
 
 	it('selects podman', () => {
 		expect(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'podman' })).toBeInstanceOf(PodmanCompute);
+	});
+
+	it.each(['docker', 'podman'])('configures the %s sandbox label key', (backend) => {
+		const key = `MARIMOHUB_COMPUTE_${backend.toUpperCase()}_LABEL_KEY`;
+		for (const labelKey of [undefined, '', 'marimohub.dev.sandbox', 'marimohub.prod.sandbox']) {
+			const provider = makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: backend,
+				[key]: labelKey,
+			});
+			expect(configOf(provider).labelKey).toBe(labelKey || 'marimohub.sandbox');
+		}
+	});
+
+	it.each(['docker', 'podman'])("ignores the other backend's label key for %s", (backend) => {
+		const otherKey =
+			backend === 'docker'
+				? 'MARIMOHUB_COMPUTE_PODMAN_LABEL_KEY'
+				: 'MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY';
+		const env = {
+			MARIMOHUB_COMPUTE_BACKEND: backend,
+			[otherKey]: 'marimohub.other.sandbox',
+		};
+		expect(configOf(makeCompute(env)).labelKey).toBe('marimohub.sandbox');
+		expect(
+			configOf(
+				makeCompute({
+					...env,
+					[`MARIMOHUB_COMPUTE_${backend.toUpperCase()}_LABEL_KEY`]: 'marimohub.own.sandbox',
+				}),
+			).labelKey,
+		).toBe('marimohub.own.sandbox');
 	});
 
 	it('forwards Podman-specific connection and network settings', () => {

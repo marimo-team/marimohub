@@ -119,6 +119,52 @@ export function containerCliContract(
 			},
 		);
 
+		it.each([
+			[undefined, 'marimohub.sandbox.prod'],
+			['', 'marimohub.sandbox.prod'],
+			['marimohub.sandbox.dev', 'marimohub.sandbox.dev.extra'],
+		])(
+			'isolates discovery for label keys %j and %j across restarts',
+			async (firstKey, secondKey) => {
+				const containers = new Map<string, string>();
+				const { runner } = createRecordingContainerRunner((args) => {
+					if (args[0] === 'run') {
+						containers.set(args[args.indexOf('--name') + 1], args[args.indexOf('--label') + 1]);
+					}
+					if (args[0] === 'ps') {
+						const filter = args[args.indexOf('--filter') + 1];
+						return {
+							stdout: [...containers]
+								.filter(([, label]) => `label=${label.split('=')[0]}` === filter)
+								.map(([name]) => name)
+								.join('\n'),
+							stderr: '',
+							exitCode: 0,
+						};
+					}
+					return defaultContainerCliHandler(args);
+				});
+				const first = makeProvider({ labelKey: firstKey }, runner);
+				const second = makeProvider({ labelKey: secondKey }, runner);
+				const secondId = 'sb-bbbbbbbbbbbbbbbb' as SandboxId;
+				await first.create(SANDBOX_ID).exec('true');
+				await expect(second.listActive?.()).resolves.toEqual([]);
+				await second.create(secondId).exec('true');
+
+				await expect(first.listActive?.()).resolves.toEqual([{ id: SANDBOX_ID }]);
+				await expect(second.listActive?.()).resolves.toEqual([{ id: secondId }]);
+				await expect(makeProvider({ labelKey: firstKey }, runner).listActive?.()).resolves.toEqual([
+					{ id: SANDBOX_ID },
+				]);
+				await expect(makeProvider({ labelKey: secondKey }, runner).listActive?.()).resolves.toEqual(
+					[{ id: secondId }],
+				);
+				await expect(
+					makeProvider({ labelKey: 'marimohub.sandbox.changed' }, runner).listActive?.(),
+				).resolves.toEqual([]);
+			},
+		);
+
 		it('creates a labelled container with a random loopback port and optional network', async () => {
 			const { runner, calls } = createRecordingContainerRunner(defaultContainerCliHandler);
 			const provider = makeProvider(

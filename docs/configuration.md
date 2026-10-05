@@ -216,6 +216,7 @@ Runs each kernel in a container on a Docker daemon (local socket or remote `DOCK
 | `MARIMOHUB_COMPUTE_DOCKER_HOST` | Hostname the returned kernel URL points at (what the browser hits). | — | `localhost` | — |
 | `MARIMOHUB_COMPUTE_DOCKER_BIND_HOST` | Host interface the container port is published on. | — | `127.0.0.1` | — |
 | `MARIMOHUB_COMPUTE_DOCKER_NETWORK` | Optional Docker network to attach sandboxes to. | — | — | `marimohub` |
+| `MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY` | Label key used to create and discover sandbox containers for cleanup. Use a distinct, stable key for each hub sharing a Docker daemon. | — | `marimohub.sandbox` | `marimohub.prod.sandbox` |
 
 ### Podman
 
@@ -228,6 +229,7 @@ Runs each kernel in a container through the Podman CLI. Supports local, rootless
 | `MARIMOHUB_COMPUTE_PODMAN_HOST` | Hostname the returned kernel URL points at (what the browser hits). | — | `localhost` | — |
 | `MARIMOHUB_COMPUTE_PODMAN_BIND_HOST` | Host interface the container port is published on. | — | `127.0.0.1` | — |
 | `MARIMOHUB_COMPUTE_PODMAN_NETWORK` | Optional Podman network to attach sandboxes to. | — | — | `marimohub` |
+| `MARIMOHUB_COMPUTE_PODMAN_LABEL_KEY` | Label key used to create and discover sandbox containers for cleanup. Use a distinct, stable key for each hub sharing a Podman container store. | — | `marimohub.sandbox` | `marimohub.prod.sandbox` |
 
 ### E2B
 

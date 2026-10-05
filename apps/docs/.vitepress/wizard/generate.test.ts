@@ -157,6 +157,27 @@ describe('config -> code generators', () => {
 		},
 	);
 
+	it.each(['docker', 'podman'])(
+		'includes %s label keys only when explicitly configured',
+		(compute) => {
+			const key = `MARIMOHUB_COMPUTE_${compute.toUpperCase()}_LABEL_KEY`;
+			const selection = { storage: 'fs', compute, auth: 'dev', ai: 'none' };
+			for (const generate of [generateEnv, generateHelm, generateCompose]) {
+				for (const value of [undefined, '', '   ']) {
+					const values = value === undefined ? {} : { [key]: value };
+					expect(generate({ ...selection, values })).not.toContain(key);
+				}
+				const configured = generate({
+					...selection,
+					values: { [key]: ' marimohub.dev.sandbox ' },
+				});
+				expect(configured).toContain(key);
+				expect(configured).toContain('marimohub.dev.sandbox');
+				expect(configured).not.toContain('marimohub.prod.sandbox');
+			}
+		},
+	);
+
 	it('marks unresolved required values and retains useful examples as comments', () => {
 		const env = generateEnv(CASES['default-prod (s3 + modal + oidc)']);
 		expect(env).toContain('MARIMOHUB_STORAGE_S3_BUCKET=_replace_me_  # e.g. orgname-marimohub');

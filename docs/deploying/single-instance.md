@@ -208,6 +208,32 @@ single replica means a few seconds of downtime; data on the volume is untouched.
    files.
 6. Restart the hub container and confirm the notebook survives.
 
+## Multiple hubs on one host
+
+Hubs sharing a Docker daemon or Podman container store need distinct sandbox
+label keys. The default, `marimohub.sandbox`, does **not** isolate hubs: their
+cleanup tasks can delete each other's running kernels.
+
+Set `MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY` for Docker or
+`MARIMOHUB_COMPUTE_PODMAN_LABEL_KEY` for Podman in each hub's environment:
+
+| Hub         | Example label key        |
+| ----------- | ------------------------ |
+| Development | `marimohub.dev.sandbox`  |
+| Production  | `marimohub.prod.sandbox` |
+
+Keep the key unchanged across restarts. Each hub also needs its own storage root,
+port, and session secret. Separate storage roots or container networks alone do
+not isolate cleanup.
+
+Existing containers keep their original labels. Changing the key excludes those
+containers from cleanup. Before changing an existing hub's key:
+
+1. Save notebooks and stop the hub's sessions and jobs.
+2. Stop the hub to prevent new sandbox creation.
+3. Remove only that hub's remaining sandbox containers, including idle pool containers.
+4. Set the new key and restart the hub.
+
 ## Production cautions
 
 - **Never run a second hub replica** (or a second compose stack) against the
