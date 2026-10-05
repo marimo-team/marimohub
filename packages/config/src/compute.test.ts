@@ -44,6 +44,7 @@ const configOf = (provider: unknown) =>
 				host?: string;
 				bindHost?: string;
 				network?: string;
+				labelKey?: string;
 				idleFallbackMs?: number;
 				ingressAnnotations?: Record<string, string>;
 				ingressTlsMode?: string;
@@ -219,6 +220,57 @@ describe('makeCompute backend selection', () => {
 
 	it('selects podman', () => {
 		expect(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'podman' })).toBeInstanceOf(PodmanCompute);
+	});
+
+	it.each(['docker', 'podman'])('configures the %s sandbox label key', (backend) => {
+		const key = `MARIMOHUB_COMPUTE_${backend.toUpperCase()}_LABEL_KEY`;
+		for (const labelKey of [undefined, 'marimohub.dev.sandbox', '  Hub_1.prod-sandbox\t']) {
+			const provider = makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: backend,
+				[key]: labelKey,
+			});
+			expect(configOf(provider).labelKey).toBe(labelKey?.trim() ?? 'marimohub.sandbox');
+		}
+	});
+
+	it.each(['docker', 'podman'])('rejects invalid %s sandbox label keys at startup', (backend) => {
+		const key = `MARIMOHUB_COMPUTE_${backend.toUpperCase()}_LABEL_KEY`;
+		for (const value of [
+			'',
+			'   ',
+			'\t\n',
+			'team=prod',
+			'team prod',
+			'team\nprod',
+			'team/prod',
+			'é',
+		]) {
+			const error = getConfigError(() =>
+				makeCompute({ MARIMOHUB_COMPUTE_BACKEND: backend, [key]: value }),
+			);
+			expect(error.opts.variable).toBe(key);
+			expect(error.opts.remediation).toContain('letters, digits, underscores, dots, and hyphens');
+		}
+	});
+
+	it.each(['docker', 'podman'])("ignores the other backend's label key for %s", (backend) => {
+		const otherKey =
+			backend === 'docker'
+				? 'MARIMOHUB_COMPUTE_PODMAN_LABEL_KEY'
+				: 'MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY';
+		const env = {
+			MARIMOHUB_COMPUTE_BACKEND: backend,
+			[otherKey]: 'invalid=other',
+		};
+		expect(configOf(makeCompute(env)).labelKey).toBe('marimohub.sandbox');
+		expect(
+			configOf(
+				makeCompute({
+					...env,
+					[`MARIMOHUB_COMPUTE_${backend.toUpperCase()}_LABEL_KEY`]: 'marimohub.own.sandbox',
+				}),
+			).labelKey,
+		).toBe('marimohub.own.sandbox');
 	});
 
 	it('forwards Podman-specific connection and network settings', () => {

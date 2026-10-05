@@ -81,6 +81,20 @@ const computeVar = (env: Env, key: string, backend: string) =>
 		docs: 'docs/configuration.md#compute',
 	});
 
+function containerLabelKey(env: Env, key: string): string | undefined {
+	const value = env[key]?.trim();
+	if (value === undefined) return undefined;
+	if (!/^[A-Za-z0-9_.-]+$/.test(value)) {
+		throw new ConfigError(`Invalid ${key}: expected a non-empty sandbox label key`, {
+			variable: key,
+			remediation:
+				'Use only letters, digits, underscores, dots, and hyphens, or unset the variable to use the default.',
+			docs: 'docs/configuration.md#compute',
+		});
+	}
+	return value;
+}
+
 function kubernetesIngressAnnotations(env: Env, key: string): Record<string, string> | undefined {
 	try {
 		return parseIngressAnnotations(env[key]);
@@ -478,6 +492,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				host: env.MARIMOHUB_COMPUTE_DOCKER_HOST,
 				bindHost: env.MARIMOHUB_COMPUTE_DOCKER_BIND_HOST,
 				network: env.MARIMOHUB_COMPUTE_DOCKER_NETWORK,
+				labelKey: containerLabelKey(env, 'MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY'),
 			});
 		case 'podman':
 			return new PodmanCompute({
@@ -485,6 +500,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				host: env.MARIMOHUB_COMPUTE_PODMAN_HOST,
 				bindHost: env.MARIMOHUB_COMPUTE_PODMAN_BIND_HOST,
 				network: env.MARIMOHUB_COMPUTE_PODMAN_NETWORK,
+				labelKey: containerLabelKey(env, 'MARIMOHUB_COMPUTE_PODMAN_LABEL_KEY'),
 			});
 		case 'e2b':
 			// E2B sandboxes (e2b.dev): per-session sandbox with a public per-port URL

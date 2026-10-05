@@ -471,6 +471,7 @@ const compute = new DockerCompute({
 	image: process.env.MARIMOHUB_COMPUTE_IMAGE,
 	host: "localhost",
 	bindHost: "127.0.0.1",
+	labelKey: process.env.MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY,
 });
 
 const { authenticator, routes: authRoutes } = createOidcAuth({
@@ -616,6 +617,7 @@ const compute = new PodmanCompute({
 	host: "localhost",
 	bindHost: "127.0.0.1",
 	network: "marimohub",
+	labelKey: process.env.MARIMOHUB_COMPUTE_PODMAN_LABEL_KEY,
 });
 
 const { authenticator, routes: authRoutes } = createOidcAuth({
@@ -1270,6 +1272,7 @@ const compute = new DockerCompute({
 	image: process.env.MARIMOHUB_COMPUTE_IMAGE,
 	host: "localhost",
 	bindHost: "127.0.0.1",
+	labelKey: process.env.MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY,
 });
 
 const authenticator = new DevAuthenticator({
@@ -1408,6 +1411,7 @@ const compute = new DockerCompute({
 	image: process.env.MARIMOHUB_COMPUTE_IMAGE,
 	host: "localhost",
 	bindHost: "127.0.0.1",
+	labelKey: process.env.MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY,
 });
 
 const authenticator = (() => {
