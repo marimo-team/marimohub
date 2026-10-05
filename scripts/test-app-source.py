@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.13"
-# dependencies = ["marimo==0.25.0", "websockets>=15,<17"]
+# dependencies = ["marimo==0.25.1", "websockets>=15,<17"]
 # ///
 """Run with `uv run scripts/test-app-source.py`. Uses a real marimo app kernel."""
 
