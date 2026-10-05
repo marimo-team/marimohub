@@ -740,6 +740,26 @@ describe('GitHub Enterprise reader', () => {
 		await expect(github.getBranchHead(repository, 'main')).resolves.toEqual({ commit });
 	});
 
+	it('reads preview pull requests on the configured host', async () => {
+		const github = enterpriseReader((url) => {
+			expect(url.pathname).toBe('/api/v3/repos/owner/repo/pulls/42');
+			return response({
+				state: 'open',
+				head: { ref: 'feature', sha: commit, repo: { full_name: 'OWNER/Repo' } },
+			});
+		});
+		await expect(github.getPullRequest(repository, 42)).resolves.toEqual({
+			number: 42,
+			state: 'open',
+			branch: 'feature',
+			commit,
+			sameRepository: true,
+		});
+		await expect(github.getPullRequest('https://github.com/owner/repo', 42)).rejects.toThrow(
+			ValidationError,
+		);
+	});
+
 	it.each([
 		`/_codeload/owner/repo/tar.gz/${commit}`,
 		`${origin}/_codeload/owner/repo/tar.gz/${commit}`,

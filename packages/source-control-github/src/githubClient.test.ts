@@ -44,8 +44,28 @@ describe('GitHub archive redirects', () => {
 			expect(cancel).toHaveBeenCalledOnce();
 			expect(fetcher).toHaveBeenLastCalledWith(archiveUrl, {
 				redirect: 'manual',
+				signal: undefined,
 				headers: { authorization: 'Bearer token' },
 			});
+		},
+	);
+
+	it.each(['response', 'failure'])(
+		'preserves cancellation during a redirected archive %s',
+		async (outcome) => {
+			const controller = new AbortController();
+			const reason = new DOMException('Preview stopped', 'AbortError');
+			const fetcher = vi.fn<GitHubFetch>(async (url, init) => {
+				expect(init?.signal).toBe(controller.signal);
+				if (url !== archiveUrl) return redirect(archiveUrl);
+				controller.abort(reason);
+				if (outcome === 'failure') throw new TypeError('Request cancelled');
+				return new Response('archive');
+			});
+			await expect(client(fetcher).tarball(archivePath, 'token', controller.signal)).rejects.toBe(
+				reason,
+			);
+			expect(fetcher).toHaveBeenCalledTimes(2);
 		},
 	);
 
@@ -90,11 +110,15 @@ describe('GitHub archive redirects', () => {
 			.mockResolvedValueOnce(redirect('../archive?signature=abc', 307))
 			.mockResolvedValueOnce(new Response('archive'));
 		await expect(client(fetcher).tarball(archivePath, 'token')).resolves.toBeInstanceOf(Response);
-		expect(fetcher).toHaveBeenNthCalledWith(2, codeload, { redirect: 'manual', headers: {} });
+		expect(fetcher).toHaveBeenNthCalledWith(2, codeload, {
+			redirect: 'manual',
+			signal: undefined,
+			headers: {},
+		});
 		expect(fetcher).toHaveBeenNthCalledWith(
 			3,
 			'https://codeload.git.acme.corp:8443/owner/archive?signature=abc',
-			{ redirect: 'manual', headers: {} },
+			{ redirect: 'manual', signal: undefined, headers: {} },
 		);
 	});
 
