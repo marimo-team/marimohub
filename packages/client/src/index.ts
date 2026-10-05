@@ -139,6 +139,26 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 
 type RequestWithTimeout = Request & { timeout?: unknown };
 
+function combineSignals(signals: AbortSignal[]): AbortSignal {
+	if (typeof AbortSignal.any === 'function') return AbortSignal.any(signals);
+
+	// Older browsers support timeout() but not any().
+	const controller = new AbortController();
+	const onAbort = () => {
+		const aborted = signals.find((signal) => signal.aborted);
+		if (!aborted) return;
+		for (const signal of signals) {
+			signal.removeEventListener('abort', onAbort);
+		}
+		controller.abort(aborted.reason);
+	};
+	for (const signal of signals) {
+		signal.addEventListener('abort', onAbort, { once: true });
+	}
+	onAbort();
+	return controller.signal;
+}
+
 const timeoutMiddleware: Middleware = {
 	onRequest({ request }) {
 		const requestedTimeout = (request as RequestWithTimeout).timeout;
@@ -149,7 +169,7 @@ const timeoutMiddleware: Middleware = {
 				? requestedTimeout
 				: DEFAULT_TIMEOUT_MS;
 		return new Request(request, {
-			signal: AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]),
+			signal: combineSignals([request.signal, AbortSignal.timeout(timeout)]),
 		});
 	},
 };

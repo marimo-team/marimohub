@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { apiClient, apiData, ApiRequestError, createApiClient } from './index';
 import type { components } from './schema';
 
@@ -29,7 +29,20 @@ describe('ApiRequestError', () => {
 	});
 });
 
-describe('apiData', () => {
+describe.each([true, false])('apiData (native AbortSignal.any: %s)', (nativeAny) => {
+	beforeEach(() => {
+		if (!nativeAny) {
+			vi.stubGlobal(
+				'AbortSignal',
+				new Proxy(AbortSignal, {
+					get(target, property, receiver) {
+						return property === 'any' ? undefined : Reflect.get(target, property, receiver);
+					},
+				}),
+			);
+		}
+	});
+
 	it('unwraps the { success, data } envelope on success', async () => {
 		stubFetch(async () => jsonResponse({ success: true, data: { id: 'proj-1', name: 'X' } }));
 
@@ -172,7 +185,7 @@ describe('apiData', () => {
 	});
 
 	it('throws NETWORK_ERROR when the request times out', async () => {
-		stubFetch(
+		const fn = stubFetch(
 			(_input, init) =>
 				new Promise<Response>((_resolve, reject) => {
 					init?.signal?.addEventListener('abort', () =>
@@ -183,6 +196,30 @@ describe('apiData', () => {
 		await expect(apiData(apiClient.GET('/api/v1/me', { timeout: 5 }))).rejects.toMatchObject({
 			code: 'NETWORK_ERROR',
 		});
+		expect(fn).toHaveBeenCalledOnce();
+		expect(fn.mock.calls[0]?.[1]?.signal?.reason).toMatchObject({ name: 'TimeoutError' });
+	});
+
+	it.each([true, false])('preserves caller cancellation (already aborted: %s)', async (aborted) => {
+		const controller = new AbortController();
+		const reason = new DOMException('Cancelled by caller', 'AbortError');
+		if (aborted) controller.abort(reason);
+		const fn = stubFetch(
+			(_input, init) =>
+				new Promise<Response>((_resolve, reject) => {
+					const signal = init?.signal;
+					if (signal?.aborted) {
+						reject(reason);
+						return;
+					}
+					signal?.addEventListener('abort', () => reject(reason), { once: true });
+					controller.abort(reason);
+				}),
+		);
+
+		await expect(apiClient.GET('/api/v1/me', { signal: controller.signal })).rejects.toBe(reason);
+		expect(fn).toHaveBeenCalledOnce();
+		expect(fn.mock.calls[0]?.[1]?.signal?.reason).toBe(reason);
 	});
 
 	it.each([null, [1, 2], 'plain', 42])(
