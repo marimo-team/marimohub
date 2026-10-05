@@ -42,9 +42,10 @@ another surface.
 
 ## Availability
 
-Secondary surfaces require a multi-port adapter: `local`, `docker`, `podman`,
-`e2b`, `cloudflare`, `coreweave`, or `kubernetes`. Configuration fails for other
-adapters.
+Secondary surfaces require an adapter with `multiPort: true`. Supported built-in
+adapters are `local`, `docker`, `podman`, `e2b`, `cloudflare`, `coreweave`, and
+`kubernetes`. Compatible external `library` adapters can also support surfaces.
+Configuration fails when the adapter does not advertise this capability.
 
 Docker and Podman publish each enabled surface on a separate host port at
 container creation. Port changes require new containers.
@@ -132,8 +133,10 @@ In `subdomain` mode, only authorized editors receive direct surface URLs.
 Cloud adapters use high-entropy URLs as access capabilities. Keep sandbox
 domains isolated and URLs private.
 
-Docker and Podman return `http://<HOST>:<port>` URLs without that protection.
-Browsers must reach these ports through a trusted, isolated network. See the
+In `subdomain` mode, Docker and Podman return `http://<HOST>:<port>` URLs without
+that protection. Browsers must reach these ports through a trusted, isolated
+network. In `proxy` mode, only the hub needs access to the published ports.
+Browsers connect to VS Code through the hub. See the
 [Docker](./compute.md#docker) and [Podman](./compute.md#podman) setup guides.
 
 See [Configuration](./configuration.md#compute) for all surface configuration and

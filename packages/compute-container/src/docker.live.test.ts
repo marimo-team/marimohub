@@ -3,6 +3,58 @@ import { SandboxId } from '@marimo-hub/core/ids';
 import { expectExecResult } from '@marimo-hub/core/testing/result-assertions';
 import { DockerCompute } from './docker';
 
+it
+	.skipIf(process.env.MARIMOHUB_TEST_DOCKER !== '1')
+	.each(['TERM', 'TERM then KILL', 'natural exit'])(
+	'reaps background descendants and their supervisor after %s',
+	async (exit) => {
+		const sandbox = new DockerCompute({
+			image: process.env.MARIMOHUB_TEST_DOCKER_IMAGE ?? 'python:3.12-slim',
+			ownerTag: 'process-cleanup-live-test',
+		}).create(SandboxId.create());
+		try {
+			await sandbox.writeFiles([
+				{
+					path: '/tmp/background.py',
+					content: `import http.server, os, signal
+${exit === 'TERM then KILL' ? 'signal.signal(signal.SIGTERM, signal.SIG_IGN)' : ''}
+with open('/tmp/background.pid', 'w') as record:
+    record.write(str(os.getpid()))
+with open('/tmp/supervisor.pid', 'w') as record:
+    record.write(str(os.getpgrp()))
+server = http.server.HTTPServer(('127.0.0.1', 4096), http.server.SimpleHTTPRequestHandler)
+server.timeout = 0.1
+while not os.path.exists('/tmp/exit'):
+    server.handle_request()
+`,
+				},
+			]);
+			const background = await sandbox.startProcess(
+				'python3 /tmp/background.py & echo $$ > /tmp/leader.pid',
+			);
+			await background.waitForPort(4096, { timeout: 10_000 });
+			const exited = async (record: string) =>
+				(await sandbox.exec(`test ! -d "/proc/$(cat ${record})"`)).success;
+			await expect.poll(() => exited('/tmp/leader.pid'), { timeout: 5_000 }).toBe(true);
+			if (exit === 'natural exit') {
+				expectExecResult(await sandbox.exec('touch /tmp/exit'), { success: true });
+			} else {
+				await background.kill();
+				if (exit === 'TERM then KILL') {
+					expect(await exited('/tmp/background.pid')).toBe(false);
+					await background.kill('SIGKILL');
+				}
+			}
+			await expect.poll(() => exited('/tmp/background.pid'), { timeout: 5_000 }).toBe(true);
+			await expect.poll(() => exited('/tmp/supervisor.pid'), { timeout: 5_000 }).toBe(true);
+			await background.kill();
+		} finally {
+			await sandbox.destroy();
+		}
+	},
+	30_000,
+);
+
 it.skipIf(process.env.MARIMOHUB_TEST_DOCKER !== '1')(
 	'serves multiple ports and reaps a stopped surface without disrupting the kernel',
 	async () => {
