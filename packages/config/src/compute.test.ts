@@ -222,6 +222,40 @@ describe('makeCompute backend selection', () => {
 		expect(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'podman' })).toBeInstanceOf(PodmanCompute);
 	});
 
+	it.each(['docker', 'podman'])('reserves configured surface ports for %s', (backend) => {
+		const surfaces = surfacesFromEnv({
+			MARIMOHUB_SURFACES: 'marimo,vscode,opencode',
+			MARIMOHUB_SURFACE_VSCODE_PORT: '9443',
+			MARIMOHUB_SURFACE_OPENCODE_PORT: '5096',
+		});
+		const provider = makeCompute({ MARIMOHUB_COMPUTE_BACKEND: backend }, { surfaces });
+		expect(provider.capabilities?.multiPort).toBe(true);
+		expect(configOf(provider).surfacePorts).toEqual([9443, 5096]);
+		const defaultProvider = makeCompute({ MARIMOHUB_COMPUTE_BACKEND: backend });
+		expect(defaultProvider.capabilities?.multiPort).toBe(false);
+		expect(configOf(defaultProvider).surfacePorts).toEqual([]);
+	});
+
+	it.each(['docker', 'podman'])(
+		'uses only the selected %s engine connection settings',
+		(backend) => {
+			const provider = makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: backend,
+				MARIMOHUB_COMPUTE_DOCKER_HOST: 'docker.test',
+				MARIMOHUB_COMPUTE_DOCKER_BIND_HOST: '127.0.0.2',
+				MARIMOHUB_COMPUTE_DOCKER_NETWORK: 'docker-network',
+				MARIMOHUB_COMPUTE_PODMAN_HOST: 'podman.test',
+				MARIMOHUB_COMPUTE_PODMAN_BIND_HOST: '127.0.0.3',
+				MARIMOHUB_COMPUTE_PODMAN_NETWORK: 'podman-network',
+			});
+			expect(configOf(provider)).toMatchObject({
+				host: `${backend}.test`,
+				bindHost: backend === 'docker' ? '127.0.0.2' : '127.0.0.3',
+				network: `${backend}-network`,
+			});
+		},
+	);
+
 	it.each(['docker', 'podman'])('configures the %s sandbox owner tag', (backend) => {
 		const key = `MARIMOHUB_COMPUTE_${backend.toUpperCase()}_OWNER_TAG`;
 		for (const ownerTag of [undefined, 'hub-prod', '  Hub_1.prod-a\t', 'a'.repeat(63)]) {
