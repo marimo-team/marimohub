@@ -14,19 +14,29 @@ const OPTIONS: Option[] = [
 	{ id: 'grace', textValue: 'Grace', label: 'Grace Hopper' },
 ];
 
-function Harness({ onSelect }: { onSelect: (id: string) => void }) {
+function Harness({
+	onSelect,
+	retainSelection = false,
+}: {
+	onSelect: (id: string) => void;
+	retainSelection?: boolean;
+}) {
 	const [query, setQuery] = useState('');
 	const options = OPTIONS.filter((o) =>
 		o.textValue.toLowerCase().includes(query.trim().toLowerCase()),
 	);
 	return (
 		<ComboBox
+			retainSelection={retainSelection}
 			aria-label="People"
 			placeholder="Search people"
 			inputValue={query}
 			onInputChange={setQuery}
 			options={options}
-			onSelect={onSelect}
+			onSelect={(id) => {
+				onSelect(id);
+				if (retainSelection) setQuery(OPTIONS.find((option) => option.id === id)!.textValue);
+			}}
 			renderOption={(o) => <span>{o.label}</span>}
 			emptyState="No matches"
 		/>
@@ -43,6 +53,23 @@ describe('ComboBox', () => {
 		expect(screen.queryByRole('option', { name: 'Ada Lovelace' })).not.toBeInTheDocument();
 
 		await user.click(screen.getByRole('option', { name: 'Grace Hopper' }));
+		expect(onSelect).toHaveBeenCalledWith('grace');
+	});
+
+	it('retains a selected option when its key differs from its text', async () => {
+		const user = userEvent.setup();
+		const onSelect = vi.fn();
+		render(<Harness onSelect={onSelect} retainSelection />);
+		await user.type(screen.getByRole('combobox'), 'gra');
+		await user.click(screen.getByRole('option', { name: 'Grace Hopper' }));
+		await user.tab();
+		expect(screen.getByRole('combobox')).toHaveValue('Grace');
+		await user.click(screen.getByRole('combobox'));
+		await user.keyboard('{ArrowDown}');
+		expect(screen.getByRole('option', { name: 'Grace Hopper' })).toHaveAttribute(
+			'aria-selected',
+			'true',
+		);
 		expect(onSelect).toHaveBeenCalledWith('grace');
 	});
 

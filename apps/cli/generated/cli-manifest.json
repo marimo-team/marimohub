@@ -3311,6 +3311,265 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "notebooks.previews.create",
+			"command": ["notebooks", "previews", "create"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/previews",
+			"summary": "Create a notebook preview",
+			"description": "Creation persists intent and returns immediately; preparation runs asynchronously. Idempotency keys are retained for seven days from creation. Branch previews automatically publish future branch commits. Commit previews remain pinned. Previews inherit notebook access, integrations, and secrets. Editors are temporary and never write back.",
+			"parameters": [
+				{
+					"name": "idempotency-key",
+					"cli_name": "idempotency-key",
+					"in": "header",
+					"required": false,
+					"description": "Stable client-generated key reused for retries of the same operation.",
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "compute_profile",
+						"cli_name": "compute-profile",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "expires_at",
+						"cli_name": "expires-at",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "name",
+						"cli_name": "name",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "pull_request",
+						"cli_name": "pull-request",
+						"required": false,
+						"value_type": "integer",
+						"repeatable": false
+					},
+					{
+						"name": "source",
+						"cli_name": "source",
+						"required": true,
+						"value_type": "object",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": true
+		},
+		{
+			"id": "notebooks.previews.delete",
+			"command": ["notebooks", "previews", "delete"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}",
+			"summary": "Delete a preview and retire its compute",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "preview_id",
+					"cli_name": "preview-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.previews.get",
+			"command": ["notebooks", "previews", "get"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}",
+			"summary": "Get a notebook preview",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "preview_id",
+					"cli_name": "preview-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.previews.list",
+			"command": ["notebooks", "previews", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/previews",
+			"summary": "List notebook previews",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "cursor",
+					"cli_name": "cursor",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": true,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.previews.sessions.create",
+			"command": ["notebooks", "previews", "sessions", "create"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}/sessions",
+			"summary": "Run a preview app or temporary editor",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "preview_id",
+					"cli_name": "preview-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "app_visit_id",
+						"cli_name": "app-visit-id",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "mode",
+						"cli_name": "mode",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "notebooks.rotate-sync-token",
 			"command": ["notebooks", "rotate-sync-token"],
 			"method": "POST",
@@ -3360,6 +3619,61 @@
 					"name": "pid",
 					"cli_name": "pid",
 					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.source.refs",
+			"command": ["notebooks", "source", "refs"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/source/refs",
+			"summary": "Suggest GitHub branches or recent commits",
+			"description": "Returns at most 30 matches from the first 100 branches or recent commits. Manual values remain supported. Providers without suggestion support return 422; explicit resolution remains available.",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "query",
+					"cli_name": "query",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "resolve",
+					"cli_name": "resolve",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "type",
+					"cli_name": "type",
+					"in": "query",
 					"required": true,
 					"value_type": "string",
 					"repeatable": false

@@ -5,6 +5,7 @@ import {
 	AUTHORIZATION_ACTIONS,
 	createProjectId,
 	NotebookId,
+	sessionResourceNotebookId,
 	ProjectId,
 	ProjectSchema,
 	NotFoundError,
@@ -104,6 +105,7 @@ const AnalysisResourceSchema = z
 			.strictObject({
 				mode: z.enum(SESSION_MODES).optional(),
 				ephemeral: z.boolean().optional(),
+				restricted_viewer_credentials: z.boolean().optional(),
 				user_id: z.string().min(1),
 				editor_sandbox_sharing: z.enum(['shared', 'exclusive']).optional(),
 			})
@@ -417,13 +419,16 @@ async function storedResource(
 			project.id,
 			SessionId.parse(input.session_id),
 		);
-		if (input.notebook_id && NotebookId.parse(input.notebook_id) !== session.notebook_id) {
+		if (
+			input.notebook_id &&
+			NotebookId.parse(input.notebook_id) !== sessionResourceNotebookId(session)
+		) {
 			throw new Error('stored_notebook_session_mismatch');
 		}
 		const notebook = await loadAuthorizedNotebook(
 			deps,
 			project,
-			session.notebook_id,
+			sessionResourceNotebookId(session),
 			caller,
 			'project.read',
 		);

@@ -1,3 +1,4 @@
+import { retireNotebookPreviews } from '../previews';
 import { notificationRouter } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, NotebookId, Project } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
@@ -36,6 +37,7 @@ export async function deleteNotebookAndRetire(
 				}),
 		);
 	}
+	await retireNotebookPreviews(deps, project.id, notebookId);
 	await retireLiveApps(deps, project.id, (session) => session.notebook_id === notebookId);
 	await cancelJobRuns(deps, project.id, user.id, notebookId);
 }

@@ -111,6 +111,45 @@ afterEach(() => {
 });
 
 describe('AdminRuntimePage', () => {
+	it('preserves ordinary app cards when their deployment changes', async () => {
+		const data = structuredClone(fixture);
+		const { client } = setup(data);
+		const card = await screen.findByRole('region', { name: 'Sales dashboard pool' });
+		data.apps[0].current_version_id = 'version-three';
+		data.apps[0].notebook_title = 'Updated sales';
+		await act(async () => {
+			await client.invalidateQueries({ queryKey: ['admin', 'runtime'] });
+		});
+		expect(await screen.findByRole('region', { name: 'Updated sales pool' })).toBe(card);
+	});
+
+	it('keeps separate cards for preview revisions that share a resource link', async () => {
+		const data = structuredClone(fixture);
+		data.apps = ['one', 'two'].map((revision) => ({
+			...fixture.apps[0],
+			notebook_title: `Revision ${revision}`,
+			resource_path: '/projects/analytics/notebooks/sales/previews/review',
+			origin: {
+				type: 'preview',
+				notebook_id: 'sales',
+				preview_id: 'review',
+				revision_id: revision,
+				commit: 'a'.repeat(40),
+			},
+			current_version_id: null,
+		}));
+		const { client } = setup(data);
+		const second = await screen.findByRole('region', { name: 'Revision two pool' });
+		data.apps.shift();
+		await act(async () => {
+			await client.invalidateQueries({ queryKey: ['admin', 'runtime'] });
+		});
+		await waitFor(() =>
+			expect(screen.queryByRole('region', { name: 'Revision one pool' })).not.toBeInTheDocument(),
+		);
+		expect(screen.getByRole('region', { name: 'Revision two pool' })).toBe(second);
+	});
+
 	it('shows version groups, occupancy, and lazy account details', async () => {
 		const { fetcher, user } = setup();
 		await screen.findByRole('region', { name: 'Sales dashboard pool' });
@@ -131,6 +170,23 @@ describe('AdminRuntimePage', () => {
 		expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 		await waitFor(() =>
 			expect(screen.getByRole('button', { name: 'Inspect sandbox sandbox-a' })).toHaveFocus(),
+		);
+	});
+
+	it('links preview sessions to their preview resource', async () => {
+		const data = structuredClone(fixture);
+		data.apps[0].origin = {
+			type: 'preview',
+			notebook_id: data.apps[0].notebook_id,
+			preview_id: 'preview',
+			revision_id: 'revision',
+			commit: 'a'.repeat(40),
+		};
+		data.apps[0].resource_path = '/projects/analytics/notebooks/sales/previews/preview';
+		setup(data);
+		expect(await screen.findByRole('link', { name: 'Sales dashboard · Preview' })).toHaveAttribute(
+			'href',
+			data.apps[0].resource_path,
 		);
 	});
 

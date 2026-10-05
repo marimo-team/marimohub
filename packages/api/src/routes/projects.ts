@@ -1,3 +1,4 @@
+import { retireNotebookPreviews } from '../previews';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	ASSIGNABLE_ROLES,
@@ -476,6 +477,7 @@ app.openapi(deleteProject, async (c) => {
 			}),
 		);
 	}
+	await retireNotebookPreviews(deps, pid);
 	await retireLiveApps(deps, pid);
 	await cancelJobRuns(deps, pid, user.id);
 	return c.json({ success: true }, 200);

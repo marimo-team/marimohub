@@ -1,5 +1,11 @@
 import os from 'node:os';
-import { resolveJobSandboxEnv, scheduleProjectAlert, sweepAppPools } from '@marimo-hub/api';
+import {
+	resolveJobSandboxEnv,
+	scheduleProjectAlert,
+	sweepAppPools,
+	sweepPreviews,
+	preparePreviews,
+} from '@marimo-hub/api';
 import type { ApiDeps, JobsConfig } from '@marimo-hub/api';
 import {
 	MaintenanceLock,
@@ -77,20 +83,24 @@ async function scheduleUnavailableAppAlerts(
 /**
  * Node-side maintenance loop — the replacement for the Cloudflare Workers
  * `scheduled()` cron. Each run, in order:
- *  1. `expireStale()`     — flip sessions with stale heartbeats to `expired`.
- *  2. `reconcile()`       — cross-check records against the compute provider:
+ *  1. `sweepAppPools()` — reconcile app assignments and retire idle pool members.
+ *  2. `sweepPreviews()` — expire previews and reclaim revisions.
+ *  3. `expireStale()` — flip sessions with stale heartbeats to `expired`.
+ *  4. `reconcile()` — cross-check records against the compute provider:
  *     tear down sandboxes left running by terminal records (the billing leak),
  *     mark records whose sandbox has vanished as terminated, reap orphans.
- *  3. `reapTerminated()`  — delete terminal records past their retention window.
- *  4. `expireSnapshots()` — prune catalog snapshots past retention (keeping
+ *  5. `reapTerminated()` — delete terminal records past their retention window.
+ *  6. `expireSnapshots()` — prune catalog snapshots past retention (keeping
  *     current/previous + a recent floor) so the bucket doesn't grow unbounded.
- *  5. `pruneEvents()`     — drop event-day folders past retention.
- *  6. `pruneExpiredPayloads()` — delete expired proposal change bytes while
+ *  7. `pruneEvents()` / `idempotency.prune()` — drop expired events and request records.
+ *  8. `pruneExpiredPayloads()` — delete expired proposal change bytes while
  *     retaining proposal and publication metadata.
- *  7. `claimPendingInvites()` — replace resolvable email invites with user ids.
- *  8. `sweepDeletedProjects()` / `sweepDeletedNotebooks()` — purge the storage of
+ *  9. `claimPendingInvites()` — replace resolvable email invites with user ids.
+ * 10. `sweepDeletedProjects()` / `sweepDeletedNotebooks()` — purge the storage of
  *     soft-deleted projects/notebooks past their grace period. Projects first, so
  *     a deleted project's notebooks are reclaimed by the project subtree wipe.
+ * 11. `jobs.prune()` — prune retained job runs and their maintenance markers.
+ * 12. `reapFilesystemSnapshots()` — reclaim snapshots orphaned by notebook deletion.
  *
  * All operations are idempotent. The deployment runs this on a single replica
  * (a dedicated `replicas: 1` Deployment, gated by MARIMOHUB_RUN_MAINTENANCE),
@@ -138,6 +148,7 @@ export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () =
 			}
 			try {
 				await sweepAppPools(deps);
+				await sweepPreviews(deps);
 				const sessionsExpired = await sessions.expireStale();
 				const reconcile = await reconciler.reconcile();
 				await scheduleUnavailableAppAlerts(deps, reconcile.markedDeadSessions);
@@ -421,4 +432,31 @@ export function startWarmPools(deps: ApiDeps): JobSchedulerHandle | undefined {
 	const interval = setInterval(run, service.config.enabled ? 5_000 : FIVE_MINUTES_MS);
 	run();
 	return { stop: () => clearInterval(interval), drain: () => current };
+}
+
+export function startPreviewPreparation(deps: ApiDeps): (() => void) | undefined {
+	if (!deps.sourceControl) return;
+	const controller = new AbortController();
+	let running = false;
+	const run = async () => {
+		if (running || controller.signal.aborted) return;
+		running = true;
+		try {
+			await preparePreviews(deps, controller.signal);
+		} catch (error) {
+			logEvent({
+				level: 'error',
+				event: 'preview_preparation_failed',
+				error: error instanceof Error ? error.message : String(error),
+			});
+		} finally {
+			running = false;
+		}
+	};
+	void run();
+	const interval = setInterval(() => void run(), 15_000);
+	return () => {
+		clearInterval(interval);
+		controller.abort();
+	};
 }

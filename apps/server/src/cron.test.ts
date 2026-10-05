@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createInitializedBucket, makeTestDeps } from '@marimo-hub/api/testing';
+import { createInitializedBucket, makeTestDeps, stubSourceControl } from '@marimo-hub/api/testing';
 import type { ApiDeps, SessionLifetimeConfig } from '@marimo-hub/api';
 import type * as CoreModule from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
@@ -17,7 +17,13 @@ import {
 import { JobScheduler } from '@marimo-hub/core/jobs';
 import type { SweepResult } from '@marimo-hub/core';
 import { ACTOR, makeNotebookMeta, makeProject, makeSession } from '@marimo-hub/core/testing';
-import { startJobScheduler, startMaintenance, startSessionLifecycle, startWarmPools } from './cron';
+import {
+	startPreviewPreparation,
+	startJobScheduler,
+	startMaintenance,
+	startSessionLifecycle,
+	startWarmPools,
+} from './cron';
 import { WideEventMetrics } from './metrics';
 
 vi.mock('@marimo-hub/core', async (importOriginal) => {
@@ -74,6 +80,16 @@ describe('startMaintenance', () => {
 			notebooks_swept: 0,
 			'counter.sessions_created': 1,
 		});
+	});
+
+	it('sweeps previews before expiring session startup records', async () => {
+		const previews = vi.spyOn(deps.services.previews, 'cleanupCandidates');
+		const expire = vi.spyOn(deps.services.sessions, 'expireStale');
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+		expect(previews).toHaveBeenCalledOnce();
+		expect(expire).toHaveBeenCalledOnce();
+		expect(previews.mock.invocationCallOrder[0]).toBeLessThan(expire.mock.invocationCallOrder[0]);
 	});
 
 	it('prunes job history in the maintenance cycle and reports the counts', async () => {
@@ -758,5 +774,65 @@ describe('startWarmPools', () => {
 		await handle.drain();
 		await vi.advanceTimersByTimeAsync(10_000);
 		expect(sweep).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe('startPreviewPreparation', () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		vi.useRealTimers();
+	});
+	it('requires a source-control registry', async () => {
+		expect(startPreviewPreparation(makeTestDeps(await createInitializedBucket()))).toBeUndefined();
+	});
+
+	it('does not overlap ticks, does not block maintenance, and cancels on shutdown', async () => {
+		vi.useFakeTimers();
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+		const deps = makeTestDeps(await createInitializedBucket());
+		deps.sourceControl = stubSourceControl();
+		const done = Promise.withResolvers<void>();
+		let signal: AbortSignal | undefined;
+		const prepare = vi
+			.spyOn(deps.services.previews, 'preparePending')
+			.mockImplementation(async (_registry, incoming) => {
+				signal = incoming;
+				await done.promise;
+			});
+		const stop = startPreviewPreparation(deps)!;
+		const expired = vi.spyOn(deps.services.sessions, 'expireStale');
+		const stopMaintenance = startMaintenance(deps, new WideEventMetrics());
+		try {
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(prepare).toHaveBeenCalledOnce();
+			expect(expired).toHaveBeenCalledOnce();
+			stop();
+			expect(signal?.aborted).toBe(true);
+			done.resolve();
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(prepare).toHaveBeenCalledOnce();
+		} finally {
+			stop();
+			stopMaintenance();
+			done.resolve();
+		}
+	});
+
+	it('retries a failed tick on the next interval', async () => {
+		vi.useFakeTimers();
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+		const deps = makeTestDeps(await createInitializedBucket());
+		deps.sourceControl = stubSourceControl();
+		const prepare = vi
+			.spyOn(deps.services.previews, 'preparePending')
+			.mockRejectedValueOnce(new Error('storage unavailable'))
+			.mockResolvedValue(undefined);
+		const stop = startPreviewPreparation(deps)!;
+		try {
+			await vi.advanceTimersByTimeAsync(15_000);
+			expect(prepare).toHaveBeenCalledTimes(2);
+		} finally {
+			stop();
+		}
 	});
 });

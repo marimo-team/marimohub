@@ -10,6 +10,7 @@ import {
 	fakeComputeFrom,
 	makeFakeSandbox,
 	makeLocalSource,
+	makeNotebookMeta,
 	makeSession,
 	makeVersion,
 	MemoryBucket,
@@ -51,11 +52,17 @@ describe('SessionRetirer', () => {
 	const projectId = createProjectId();
 	const notebookId = createNotebookId();
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		bucket = new MemoryBucket();
 		sessions = new SessionService(bucket);
 		notebooks = new NotebookService(bucket, new CatalogService(bucket));
-		vi.spyOn(notebooks, 'getNotebook').mockResolvedValue({ source: makeLocalSource() } as never);
+		const meta = makeNotebookMeta({ id: notebookId, project_id: projectId });
+		await bucket.put(paths.project(projectId).notebook(notebookId).meta, JSON.stringify(meta));
+		vi.spyOn(notebooks, 'getNotebook').mockResolvedValue({
+			meta,
+			source: makeLocalSource(),
+			readme: null,
+		});
 		vi.spyOn(notebooks, 'commitSession').mockResolvedValue(null);
 	});
 

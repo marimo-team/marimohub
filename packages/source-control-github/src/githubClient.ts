@@ -86,6 +86,7 @@ export class GitHubClient {
 		init: RequestInit = {},
 		allowedStatuses: readonly number[] = [],
 	): Promise<Response> {
+		init.signal?.throwIfAborted();
 		let response: Response;
 		try {
 			const headers = new Headers(init.headers);
@@ -98,19 +99,28 @@ export class GitHubClient {
 				headers,
 			});
 		} catch (error) {
+			init.signal?.throwIfAborted();
 			throw new UnavailableError('GitHub is unavailable', { cause: error });
 		}
+		init.signal?.throwIfAborted();
 		if (!response.ok && !allowedStatuses.includes(response.status)) {
 			throw githubRequestError(response);
 		}
 		return response;
 	}
 
-	async installationToken(owner: string, repo: string, access: 'read' | 'write'): Promise<string> {
+	async installationToken(
+		owner: string,
+		repo: string,
+		access: 'read' | 'write' | 'preview',
+		signal?: AbortSignal,
+	): Promise<string> {
+		signal?.throwIfAborted();
 		let jwt: string;
 		try {
 			jwt = this.appJwt();
 		} catch (error) {
+			signal?.throwIfAborted();
 			throw markSourceControlPublishFailure(error, { provider: 'github', stage: 'auth' });
 		}
 		let installationResponse: Response;
@@ -118,10 +128,11 @@ export class GitHubClient {
 			installationResponse = await this.request(
 				`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/installation`,
 				jwt,
-				{},
+				{ signal },
 				[404],
 			);
 		} catch (error) {
+			signal?.throwIfAborted();
 			throw markSourceControlPublishFailure(error, {
 				provider: 'github',
 				stage: 'installation',
@@ -134,7 +145,7 @@ export class GitHubClient {
 				{ provider: 'github', stage: 'installation', status: 404 },
 			);
 		}
-		const installationId = numberField(await responseJson(installationResponse), 'id');
+		const installationId = numberField(await responseJson(installationResponse, signal), 'id');
 		let tokenResponse: Response;
 		try {
 			tokenResponse = await this.request(
@@ -142,22 +153,26 @@ export class GitHubClient {
 				jwt,
 				{
 					method: 'POST',
+					signal,
 					body: JSON.stringify({
 						repositories: [repo],
 						permissions:
-							access === 'read'
-								? { contents: 'read' }
-								: { contents: 'write', pull_requests: 'write' },
+							access === 'preview'
+								? { contents: 'read', pull_requests: 'read' }
+								: access === 'read'
+									? { contents: 'read' }
+									: { contents: 'write', pull_requests: 'write' },
 					}),
 				},
 			);
 		} catch (error) {
+			signal?.throwIfAborted();
 			throw markSourceControlPublishFailure(error, {
 				provider: 'github',
 				stage: 'auth',
 				status: error instanceof GitHubRequestError ? error.providerStatus : undefined,
 			});
 		}
-		return stringField(await responseJson(tokenResponse), 'token');
+		return stringField(await responseJson(tokenResponse, signal), 'token');
 	}
 }

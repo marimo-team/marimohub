@@ -11,12 +11,46 @@ function LocationState() {
 }
 
 describe('Notebook header', () => {
-	it('renders a plain title when an app viewer has no notebook actions', async () => {
+	it('lets app viewers discover previews through the notebook menu', async () => {
+		const user = userEvent.setup();
+		makeFetch({
+			role: 'viewer',
+			previewProviders: ['github'],
+			sourceType: 'git',
+			session: runningSession({ mode: 'app' }),
+		});
+		renderPage('app');
+		await screen.findByRole('button', { name: /Session Running/ });
+		expect(screen.getByText('Forecast')).toBeVisible();
+		await user.click(screen.getByRole('button', { name: 'Forecast — notebook menu' }));
+		expect(screen.getByRole('menuitem', { name: 'Previews' })).toHaveAttribute(
+			'href',
+			'/projects/proj-x/notebooks/nb-1/previews',
+		);
+	});
+
+	it('hides previews for local notebooks even when GitHub previews are available', async () => {
+		makeFetch({
+			role: 'viewer',
+			sourceType: 'local',
+			previewProviders: ['github'],
+			session: runningSession({ mode: 'app' }),
+		});
+		renderPage('app');
+		await screen.findByRole('button', { name: /Session Running/ });
+		expect(
+			screen.queryByRole('button', { name: 'Forecast — notebook menu' }),
+		).not.toBeInTheDocument();
+	});
+
+	it('shows a plain app title when previews are unavailable', async () => {
 		makeFetch({ role: 'viewer', session: runningSession({ mode: 'app' }) });
 		renderPage('app');
 		await screen.findByRole('button', { name: /Session Running/ });
 		expect(screen.getByText('Forecast')).toBeVisible();
-		expect(screen.queryByRole('button', { name: 'Forecast — notebook menu' })).toBeNull();
+		expect(
+			screen.queryByRole('button', { name: 'Forecast — notebook menu' }),
+		).not.toBeInTheDocument();
 	});
 
 	it('preserves the notebook title when following the Jobs link', async () => {

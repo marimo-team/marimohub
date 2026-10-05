@@ -1278,7 +1278,8 @@ async function mutateNotebookSecurityLabels(
 	}
 	const project = await deps.services.projects.getProject(pid);
 	const existing = await deps.services.notebooks.getNotebook(pid, nid);
-	if (existing.meta.status === 'deleted') throw new NotFoundError(`Notebook ${nid} not found`);
+	if (existing.meta.preview || existing.meta.status === 'deleted')
+		throw new NotFoundError(`Notebook ${nid} not found`);
 	const previous = existing.meta.security_labels;
 	const action =
 		previous === undefined

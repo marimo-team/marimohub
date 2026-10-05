@@ -6,10 +6,17 @@ import { ConfigError } from '@marimo-hub/config';
 import { ProxyExposure, SubdomainExposure } from '@marimo-hub/core';
 import { bootstrap } from './bootstrap';
 import type { BootstrapOverrides } from './bootstrap';
-import { startJobScheduler, startMaintenance, startSessionLifecycle, startWarmPools } from './cron';
+import {
+	startJobScheduler,
+	startMaintenance,
+	startPreviewPreparation,
+	startSessionLifecycle,
+	startWarmPools,
+} from './cron';
 import type { OtelHandle } from './otel';
 
 vi.mock('./cron', () => ({
+	startPreviewPreparation: vi.fn(() => vi.fn()),
 	startMaintenance: vi.fn(() => vi.fn()),
 	startWarmPools: vi.fn(),
 	startSessionLifecycle: vi.fn(() => vi.fn()),
@@ -67,6 +74,7 @@ describe('bootstrap', () => {
 		vi.spyOn(console, 'log').mockImplementation(() => {});
 		vi.spyOn(console, 'error').mockImplementation(() => {});
 		vi.mocked(startMaintenance).mockImplementation(() => vi.fn());
+		vi.mocked(startPreviewPreparation).mockImplementation(() => vi.fn());
 		vi.mocked(startSessionLifecycle).mockImplementation(() => vi.fn());
 	});
 
@@ -452,6 +460,7 @@ describe('bootstrap', () => {
 
 		expect(startMaintenance).toHaveBeenCalledTimes(calls);
 		expect(startWarmPools).toHaveBeenCalledTimes(calls);
+		expect(startPreviewPreparation).toHaveBeenCalledTimes(calls);
 		expect(startSessionLifecycle).toHaveBeenCalledTimes(calls);
 	});
 
@@ -476,18 +485,21 @@ describe('bootstrap', () => {
 	it('cancels maintenance loops before draining connections', async () => {
 		const stopMaintenance = vi.fn();
 		const stopLifecycle = vi.fn();
+		const stopPreviews = vi.fn();
 		vi.mocked(startMaintenance).mockReturnValueOnce(stopMaintenance);
 		vi.mocked(startSessionLifecycle).mockReturnValueOnce(stopLifecycle);
+		vi.mocked(startPreviewPreparation).mockReturnValueOnce(stopPreviews);
 		const harness = makeHarness(deps);
 		await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
 
 		harness.signals.get('SIGTERM')?.();
 
-		expect(stopMaintenance).toHaveBeenCalledOnce();
-		expect(stopLifecycle).toHaveBeenCalledOnce();
-		expect(stopMaintenance.mock.invocationCallOrder[0]).toBeLessThan(
-			harness.close.mock.invocationCallOrder[0],
-		);
+		for (const stop of [stopMaintenance, stopLifecycle, stopPreviews]) {
+			expect(stop).toHaveBeenCalledOnce();
+			expect(stop.mock.invocationCallOrder[0]).toBeLessThan(
+				harness.close.mock.invocationCallOrder[0],
+			);
+		}
 	});
 
 	it.each([

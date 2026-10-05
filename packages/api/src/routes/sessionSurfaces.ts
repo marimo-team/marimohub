@@ -11,6 +11,7 @@ import type {
 } from '@marimo-hub/core';
 import {
 	joinUrlPath,
+	sessionResourceNotebookId,
 	marimoSurface,
 	mintAiSessionToken,
 	NotFoundError,
@@ -295,7 +296,7 @@ export async function loadSurfaceSession(
 ) {
 	const project = await loadVisibleProject(deps.services.projects, params.pid, user, deps);
 	const session = await deps.services.sessions.getSession(params.pid, params.sid);
-	if (session.notebook_id !== params.nid) {
+	if (sessionResourceNotebookId(session) !== params.nid) {
 		throw new NotFoundError(`Session ${params.sid} not found`);
 	}
 	const labels = await assertSessionNotebookVisible(deps, project, session, user);

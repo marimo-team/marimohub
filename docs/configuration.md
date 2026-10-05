@@ -133,6 +133,7 @@ Read regardless of the selected compute backend.
 | `MARIMOHUB_COMPUTE_WARM_POOL_ENABLED` | Keep unassigned CoreWeave or Kubernetes sandboxes ready for editor and app sessions. Requires a maintenance replica. Jobs, sandbox startup diagnostics, personal-home mounts, snapshot restores, and non-default images use cold creation. Idle sandboxes consume compute. | — | `false` | — |
 | `MARIMOHUB_COMPUTE_WARM_POOL_SIZE` | Positive integer target of idle sandboxes per selected profile, shared across all server replicas. Used only when warm pools are enabled. | — | `1` | — |
 | `MARIMOHUB_COMPUTE_WARM_POOL_PROFILES` | `default` warms the first compute profile; `all` warms every configured profile. With no profiles, warms adapter defaults. Each pool uses only the default image. | — | `default` | — |
+| `MARIMOHUB_PREVIEW_COMPUTE_PROFILE` | Default compute profile for notebook previews. Must name an available profile. Unset uses the deployment default. | — | — | — |
 | `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE` | Whether editors may choose a non-default compute profile per notebook (`none` or `editors`). | — | `none` | `editors` |
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` | Public hostname used to expose kernel ports. | — | `'' (empty)` | `hub.example.com` |
 | `MARIMOHUB_COMPUTE_WORKDIR` | Working directory inside the sandbox where notebook files land and marimo runs. | — | `/workspace` | — |

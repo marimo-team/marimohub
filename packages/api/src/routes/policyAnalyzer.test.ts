@@ -478,6 +478,50 @@ describe('policy analyzer routes', () => {
 		);
 	});
 
+	it.each([true, false, undefined])(
+		'analyzes viewer attachment with credential restriction %s',
+		async (restricted) => {
+			const { request } = createTestApi({
+				deps: { policy: { superAdmins: [ACTOR], viewerMode: 'ephemeral-sandbox' } },
+			});
+			const data = await expectOk<{
+				cases: { authorization: { decision: { allowed: boolean } } }[];
+			}>(
+				await request('POST', '/admin/policy-analyzer/evaluate', {
+					schema_version: 1,
+					cases: [
+						authorizationCase({
+							subject: {
+								id: 'viewer',
+								email: 'viewer@example.com',
+								entitlement_source: 'explicit',
+								entitlements: [],
+							},
+							action: 'session.attach',
+							resource: {
+								source: 'synthetic',
+								kind: 'session',
+								project: {
+									owner: ACTOR,
+									members: [{ user_id: 'viewer', role: 'viewer' }],
+									status: 'active',
+								},
+								session: {
+									mode: 'edit',
+									ephemeral: true,
+									user_id: 'viewer',
+									restricted_viewer_credentials: restricted,
+								},
+							},
+							expected: { allowed: restricted === true },
+						}),
+					],
+				}),
+			);
+			expect(data.cases[0].authorization.decision.allowed).toBe(restricted === true);
+		},
+	);
+
 	it('checks the actual notebook labels before analyzing a stored session', async () => {
 		const bucket = await createInitializedBucket();
 		const setup = createTestApi({ bucket });

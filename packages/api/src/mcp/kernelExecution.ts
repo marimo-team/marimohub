@@ -1,5 +1,8 @@
 import {
 	executeInActiveKernel,
+	sessionResourceNotebookId,
+	sessionResourcePath,
+	joinUrlPath,
 	kernelBaseUrl,
 	KernelDiscoveryTimeoutError,
 	withAbortSignal,
@@ -59,7 +62,7 @@ export async function executeMcpCode(
 				code: 'NO_KERNEL_SESSION',
 				message:
 					'The live kernel is missing and its state may be lost. Call start_session for this notebook before retrying execute_code.',
-				notebook_url: `${options.appBaseUrl}/projects/${session.project_id}/notebooks/${session.notebook_id}`,
+				notebook_url: joinUrlPath(options.appBaseUrl, sessionResourcePath(session)),
 			});
 		}
 		const { sessionId, executed } = active;
@@ -67,7 +70,7 @@ export async function executeMcpCode(
 			...result(
 				{
 					project_id: session.project_id,
-					notebook_id: session.notebook_id,
+					notebook_id: sessionResourceNotebookId(session),
 					session_id: session.session_id,
 					kernel_session_id: sessionId,
 					...executed,

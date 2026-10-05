@@ -52,7 +52,10 @@ export function canStartSessionMode(
 export function sessionCan(
 	action: SessionAction,
 	actor: SessionActor,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
+	session: Pick<
+		Session,
+		'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing' | 'restricted_viewer_credentials'
+	>,
 ): boolean {
 	if (action === 'surface') {
 		if (!roleAtLeast(actor.role, 'editor') || sessionMode(session) !== 'edit') return false;
@@ -73,7 +76,11 @@ export function sessionCan(
 		// The owner may always stop their own throwaway; `attach` additionally
 		// requires the tier to still grant the mode, so a VIEWER_MODE downgrade
 		// cuts a live viewer kernel immediately instead of waiting out the session.
-		return action === 'stop' || viewerSessionModes(actor.viewerMode).includes(sessionMode(session));
+		return (
+			action === 'stop' ||
+			((sessionMode(session) !== 'edit' || session.restricted_viewer_credentials === true) &&
+				viewerSessionModes(actor.viewerMode).includes(sessionMode(session)))
+		);
 	}
 	if (action === 'stop') return false;
 	const mode = sessionMode(session);
@@ -86,7 +93,10 @@ export function sessionCan(
 /** Both grants at once — the `can` object shipped on every session response. */
 export function sessionGrants(
 	actor: SessionActor,
-	session: Pick<Session, 'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'>,
+	session: Pick<
+		Session,
+		'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing' | 'restricted_viewer_credentials'
+	>,
 ): { attach: boolean; stop: boolean; surface: boolean } {
 	return {
 		attach: sessionCan('attach', actor, session),

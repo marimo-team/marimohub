@@ -1,6 +1,7 @@
 // Domain model
 export * from './constants';
 export * from './schema';
+export * from './sessionOrigin';
 export * from './ids';
 export * from './errors';
 export * from './operationalLog';

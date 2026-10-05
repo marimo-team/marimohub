@@ -1,9 +1,11 @@
 import { ConflictError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
 import { markSourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import type {
+	SourceReadOptions,
 	OpenChangeRequestInput,
 	OpenChangeRequestResult,
 	SourceBranchHead,
+	SourcePullRequest,
 	SourceControlPublisher,
 	SourceControlPublishStage,
 	SourceControlReader,
@@ -15,7 +17,7 @@ import type { GitHubAppPublisherOptions, GitHubAppPublisherRuntime } from './git
 import { GitHubPullRequests } from './githubPullRequests';
 import type { PullRequestCandidate } from './githubPullRequests';
 import { GitHubRepositoryWriter } from './githubRepository';
-import { nestedString, responseJson } from './githubResponses';
+import { nestedString, responseJson, stringField, isRecord } from './githubResponses';
 import {
 	parseRepository,
 	refPath,
@@ -36,6 +38,7 @@ interface GitHubPublicationContext {
 
 export class GitHubAppPublisher implements SourceControlPublisher, SourceControlReader {
 	readonly provider = 'github' as const;
+	readonly previews = true;
 	private readonly client: GitHubClient;
 	private readonly fetcher: NonNullable<GitHubAppPublisherRuntime['fetcher']>;
 
@@ -66,11 +69,14 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 	}
 
 	/** Repo API prefix + short-lived installation token, shared by the reader methods. */
-	private async readContext(repository: string): Promise<{ base: string; token: string }> {
+	private async readContext(
+		repository: string,
+		options?: SourceReadOptions,
+	): Promise<{ base: string; token: string }> {
 		const { owner, repo } = parseRepository(repository);
 		return {
 			base: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
-			token: await this.client.installationToken(owner, repo, 'read'),
+			token: await this.client.installationToken(owner, repo, 'read', options?.signal),
 		};
 	}
 
@@ -83,34 +89,155 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 		}
 	}
 
-	async getBranchHead(repository: string, branch: string): Promise<SourceBranchHead> {
+	async getBranchHead(
+		repository: string,
+		branch: string,
+		options?: SourceReadOptions,
+	): Promise<SourceBranchHead> {
 		validateBranch(branch);
-		const { base, token } = await this.readContext(repository);
+		const { base, token } = await this.readContext(repository, options);
 		const response = await this.client.request(
 			`${base}/branches/${refPath(branch)}`,
 			token,
-			{},
+			{ signal: options?.signal },
 			[404],
 		);
 		if (response.status === 404) {
 			throw new ValidationError(`GitHub branch not found: ${branch}`);
 		}
-		return { commit: nestedString(await responseJson(response), 'commit', 'sha') };
+		return { commit: nestedString(await responseJson(response, options?.signal), 'commit', 'sha') };
+	}
+
+	async resolveCommit(
+		repository: string,
+		commit: string,
+		options?: SourceReadOptions,
+	): Promise<SourceBranchHead> {
+		const head = await this.findCommit(repository, commit, options);
+		if (!head) throw new ValidationError('Commit not found in the configured repository');
+		return head;
+	}
+
+	private async findCommit(
+		repository: string,
+		commit: string,
+		options?: SourceReadOptions,
+	): Promise<SourceBranchHead | undefined> {
+		validateCommit(commit);
+		const { base, token } = await this.readContext(repository, options);
+		const response = await this.client.request(
+			`${base}/commits/${encodeURIComponent(commit)}`,
+			token,
+			{ signal: options?.signal },
+			[404, 422],
+		);
+		if (!response.ok) return undefined;
+		return { commit: stringField(await responseJson(response, options?.signal), 'sha') };
+	}
+
+	async listBranches(repository: string, query: string, options?: SourceReadOptions) {
+		const { base, token } = await this.readContext(repository, options);
+		const data = await responseJson(
+			await this.client.request(`${base}/branches?per_page=100`, token, {
+				signal: options?.signal,
+			}),
+			options?.signal,
+		);
+		if (!Array.isArray(data)) throw new UnavailableError('Invalid GitHub branch response');
+		return data
+			.map((item) => ({
+				value: stringField(item, 'name'),
+				label: stringField(item, 'name'),
+				commit: nestedString(item, 'commit', 'sha'),
+			}))
+			.filter((item) => item.value.toLowerCase().includes(query.toLowerCase()))
+			.slice(0, 30);
+	}
+
+	async listCommits(repository: string, query: string, options?: SourceReadOptions) {
+		if (/^[a-f0-9]{40}$/i.test(query)) {
+			const head = await this.findCommit(repository, query, options);
+			return head
+				? [{ value: head.commit, commit: head.commit, label: head.commit.slice(0, 12) }]
+				: [];
+		}
+		const { base, token } = await this.readContext(repository, options);
+		const data = await responseJson(
+			await this.client.request(`${base}/commits?per_page=100`, token, { signal: options?.signal }),
+			options?.signal,
+		);
+		if (!Array.isArray(data)) throw new UnavailableError('Invalid GitHub commit response');
+		return data
+			.map((item) => {
+				const commit = stringField(item, 'sha');
+				return {
+					value: commit,
+					commit,
+					label: `${commit.slice(0, 12)} ${nestedString(item, 'commit', 'message').split('\n')[0]}`,
+				};
+			})
+			.filter(
+				(item) =>
+					item.label.toLowerCase().includes(query.toLowerCase()) ||
+					item.commit.toLowerCase().startsWith(query.toLowerCase()),
+			)
+			.slice(0, 30);
+	}
+
+	async getPullRequest(
+		repository: string,
+		number: number,
+		options?: SourceReadOptions,
+	): Promise<SourcePullRequest> {
+		const { owner, repo } = parseRepository(repository);
+		const token = await this.client.installationToken(owner, repo, 'preview', options?.signal);
+		const data = await responseJson(
+			await this.client.request(
+				`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}`,
+				token,
+				{ signal: options?.signal },
+			),
+			options?.signal,
+		);
+		if (!isRecord(data) || !isRecord(data.head))
+			throw new UnavailableError('Invalid GitHub pull request response');
+		const state = stringField(data, 'state');
+		if (state !== 'open' && state !== 'closed')
+			throw new UnavailableError('Invalid GitHub pull request state');
+		const head = data.head;
+		return {
+			number,
+			state,
+			branch: stringField(head, 'ref'),
+			commit: stringField(head, 'sha'),
+			sameRepository:
+				isRecord(head.repo) &&
+				stringField(head.repo, 'full_name').toLowerCase() === `${owner}/${repo}`.toLowerCase(),
+		};
 	}
 
 	async fetchWorkspace(
 		repository: string,
 		commit: string,
 		rootPath: string,
+		options?: SourceReadOptions,
 	): Promise<SourceWorkspaceFile[]> {
 		validateCommit(commit);
 		validateRootPath(rootPath);
-		const { base, token } = await this.readContext(repository);
+		const { base, token } = await this.readContext(repository, options);
 		const response = await this.client.request(
 			`${base}/tarball/${encodeURIComponent(commit)}`,
 			token,
+			{ signal: options?.signal },
 		);
-		return collectTarballWorkspace(response, rootPath);
+		try {
+			const workspace = await collectTarballWorkspace(response, rootPath);
+			options?.signal?.throwIfAborted();
+			return workspace;
+		} catch (error) {
+			options?.signal?.throwIfAborted();
+			throw error;
+		}
 	}
 
 	async fetchGitDirectory(

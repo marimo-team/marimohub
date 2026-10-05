@@ -1,3 +1,4 @@
+import { sessionResourceNotebookId, sessionResourcePath } from '../../sessionOrigin';
 import { z } from 'zod';
 import { StaleWhileRevalidateCache } from '../../cache';
 import { BUCKET_SCAN_CONCURRENCY, SESSION_STATUSES } from '../../constants';
@@ -6,11 +7,12 @@ import type { NotebookId, ProjectId, SessionId, UserId } from '../../ids';
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import type { Bucket } from '../../ports/bucket';
-import { SourceSchema } from '../../schema';
+import { PreviewSessionOriginSchema, SourceSchema } from '../../schema';
 import type { Session } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import { AppPoolStore } from './AppPoolStore';
 import { readForInspection } from './inspection';
+import { previewKey, PreviewRecordSchema } from '../content/notebookPreviews';
 import { appOccupancyBySession, appPresenceExpiresAt, expireAppPresence } from './AppPoolRouter';
 import type { AppPool, AppPoolMember } from './AppPoolRouter';
 import type { SessionService } from './SessionService';
@@ -24,6 +26,7 @@ const RuntimeAssignmentSchema = z.object({
 });
 
 const RuntimeSessionSchema = z.object({
+	origin: PreviewSessionOriginSchema.optional(),
 	session_id: z.string(),
 	sandbox_id: z.string().nullable(),
 	user_id: z.string(),
@@ -37,6 +40,8 @@ const RuntimeSessionSchema = z.object({
 });
 
 const RuntimeLocationSchema = z.object({
+	origin: PreviewSessionOriginSchema.optional(),
+	resource_path: z.string().optional(),
 	project_id: z.string(),
 	project_name: z.string(),
 	notebook_id: z.string(),
@@ -95,6 +100,7 @@ function sessionSummary(
 	const identity = session ?? member;
 	return {
 		session_id: identity.session_id,
+		origin: session?.origin,
 		sandbox_id: session?.sandbox_id ?? member?.sandbox_id ?? null,
 		user_id: identity.user_id,
 		status: session?.status ?? null,
@@ -180,7 +186,8 @@ export class RuntimeInspectionService {
 				groupFor(session.project_id, session.notebook_id).sessions.push(session);
 			} else {
 				editors.push({
-					...location(session.project_id, session.notebook_id),
+					...location(session.project_id, sessionResourceNotebookId(session)),
+					resource_path: sessionResourcePath(session),
 					...sessionSummary({ session }),
 				});
 			}
@@ -189,13 +196,28 @@ export class RuntimeInspectionService {
 			[...groups.values()],
 			BUCKET_SCAN_CONCURRENCY,
 			async (group): Promise<RuntimeApp> => {
-				const source = await readForInspection(
-					this.bucket,
-					paths.project(group.projectId).notebook(group.notebookId).source,
-					SourceSchema,
-					'runtime.source',
-				);
-				const head = source?.current_version_id ?? null;
+				const owner =
+					group.sessions[0] ??
+					group.pool?.members.map((member) => allSessions.get(member.session_id)).find(Boolean);
+				const origin = owner?.origin;
+				const source = origin
+					? await readForInspection(
+							this.bucket,
+							previewKey(group.projectId, origin.notebook_id, origin.preview_id),
+							PreviewRecordSchema,
+							'runtime.preview',
+						)
+					: await readForInspection(
+							this.bucket,
+							paths.project(group.projectId).notebook(group.notebookId).source,
+							SourceSchema,
+							'runtime.source',
+						);
+				const head = source
+					? 'current_version_id' in source
+						? source.current_version_id
+						: (source.current?.version_id ?? null)
+					: null;
 				if (!source) group.incomplete = true;
 				const pool = group.pool ? structuredClone(group.pool) : null;
 				const knownIdle = new Set([
@@ -269,7 +291,9 @@ export class RuntimeInspectionService {
 							a.started_at.localeCompare(b.started_at) || a.session_id.localeCompare(b.session_id),
 					);
 				return {
-					...location(group.projectId, group.notebookId),
+					...location(group.projectId, owner ? sessionResourceNotebookId(owner) : group.notebookId),
+					origin: owner?.origin,
+					resource_path: owner ? sessionResourcePath(owner) : undefined,
 					current_version_id: head,
 					current_version_members:
 						!head || group.incomplete

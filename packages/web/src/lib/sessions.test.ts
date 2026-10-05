@@ -120,3 +120,20 @@ describe('sessionsByNotebook', () => {
 		expect(map.get('nb-a')?.app?.session_id).toBe('app-one');
 	});
 });
+
+it('keeps preview apps and editors out of the parent notebook session controls', () => {
+	const origin = {
+		type: 'preview' as const,
+		notebook_id: 'parent',
+		preview_id: 'preview',
+		revision_id: 'revision',
+		commit: 'a'.repeat(40),
+	};
+	const ordinary = session('parent', 'running');
+	const previews = ['edit', 'app'].map((mode) => ({
+		...session('parent', 'running', `preview-${mode}`, mode as Session['mode']),
+		origin,
+	}));
+	expect(sessionsByNotebook(previews).size).toBe(0);
+	expect(sessionsByNotebook([ordinary, ...previews]).get('parent')?.edit).toEqual(ordinary);
+});

@@ -43,6 +43,7 @@ export interface NotebookPaths {
 	/** Base directory: `projects/{pid}/notebooks/{nid}` */
 	base: string;
 	meta: string;
+	previewMeta: string;
 	readme: string;
 	source: string;
 	integrationSyncToken: string;
@@ -201,6 +202,7 @@ function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 			`${base}/thumbnail-attempts/${encodeURIComponent(sandboxId)}.json`,
 		thumbnailImage: (id: string) => `${base}/thumbnails/${id}.png`,
 		meta: `${base}/meta.json`,
+		previewMeta: `${base}/preview-runtime.json`,
 		readme: `${base}/README.md`,
 		source: `${base}/source.json`,
 		integrationSyncToken: `${base}/integration_sync_token.json`,

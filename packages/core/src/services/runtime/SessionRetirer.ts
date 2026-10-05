@@ -1,3 +1,4 @@
+import { sessionResourceNotebookId } from '../../sessionOrigin';
 import { captureThumbnail } from './captureThumbnail';
 import type { Bucket } from '../../ports/bucket';
 import type { SandboxProvider } from '../../ports/sandbox';
@@ -339,7 +340,8 @@ export class SessionRetirer {
 					{
 						operation: 'session_retire.capture_session',
 						project_id: session.project_id,
-						notebook_id: session.notebook_id,
+						notebook_id: sessionResourceNotebookId(session),
+						origin: session.origin,
 						session_id: session.session_id,
 					},
 					err,
@@ -356,7 +358,8 @@ export class SessionRetirer {
 				{
 					operation: 'session_retire.destroy',
 					project_id: session.project_id,
-					notebook_id: session.notebook_id,
+					notebook_id: sessionResourceNotebookId(session),
+					origin: session.origin,
 					session_id: session.session_id,
 				},
 				err,
