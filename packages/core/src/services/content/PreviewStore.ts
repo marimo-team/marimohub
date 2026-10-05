@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
-import type { NotebookId, ProjectId } from '../../ids';
+import type { NotebookId, PreviewId, ProjectId } from '../../ids';
+import { createPreviewId } from '../../ids';
 import { ConflictError, NotFoundError, ResourceExhaustedError } from '../../errors';
 import { readStored, ProjectIdSchema, NotebookIdSchema } from '../../schema';
 import { withCasRetry } from '../catalog/cas';
 import { logOperationalError } from '../../operationalLog';
+import { paths } from '../../paths';
 import { PreviewRecordSchema, PreviewIdSchema } from './notebookPreviews';
 import type { NotebookPreview } from './notebookPreviews';
 
@@ -20,6 +22,9 @@ export const PREVIEW_LIMITS = {
 	concurrencyPerProject: 1,
 	attemptMs: 120_000,
 	idempotencyMs: 7 * 86_400_000,
+	defaultExpiryMs: 7 * 86_400_000,
+	cleanupGraceMs: 900_000,
+	admissionMs: 600_000,
 } as const;
 const Epoch = z.number().describe('Milliseconds since the Unix epoch.');
 export const PreviewProjectSchema = z.object({
@@ -57,18 +62,17 @@ export const PreviewWorkSchema = z.object({
 		}),
 	),
 });
-export const previewProjectPrefix = '_system/preview-projects/';
-export const previewProjectKey = (pid: ProjectId) => `${previewProjectPrefix}${pid}.json`;
-export const previewActiveProjectPrefix = '_system/preview-active-projects/';
-export const previewActiveProjectKey = (pid: ProjectId, workId: string) =>
-	`${previewActiveProjectPrefix}${pid}/${workId}.json`;
+export const previewProjectPrefix = paths.previewProjectsPrefix;
+export const previewProjectKey = paths.previewProject;
+export const previewActiveProjectPrefix = paths.previewActiveProjectsPrefix;
+export const previewActiveProjectKey = paths.previewActiveProject;
 export const PreviewActiveProjectSchema = z.object({
 	project_id: ProjectIdSchema,
 	work_id: z.string(),
 });
-export const previewReceiptsKey = (pid: ProjectId) => `_system/preview-receipts/${pid}.json`;
-export const previewWorkKey = '_system/preview-work.json';
-export const previewCleanupCursorKey = '_system/preview-cleanup-cursor.json';
+export const previewReceiptsKey = paths.previewReceipts;
+export const previewWorkKey = paths.previewWork;
+export const previewCleanupCursorKey = paths.previewCleanupCursor;
 export const PreviewCursorSchema = z.object({ cursor: z.string().optional() });
 
 export class PreviewStore {
@@ -83,10 +87,13 @@ export class PreviewStore {
 		return withCasRetry(this.bucket, async (cas) => {
 			const object = await this.bucket.get(key);
 			const value = object ? await readStored(schema, object, key) : structuredClone(initial);
+			const before = JSON.stringify(value);
 			const result = await apply(value);
+			const serialized = JSON.stringify(value);
+			if (serialized === before) return result;
 			await cas.put(
 				key,
-				JSON.stringify(value),
+				serialized,
 				object ? { onlyIfEtagMatches: object.etag } : { onlyIfNotExists: true },
 			);
 			return result;
@@ -96,6 +103,7 @@ export class PreviewStore {
 	private changeProject<R>(
 		pid: ProjectId,
 		apply: (project: z.infer<typeof PreviewProjectSchema>) => R,
+		{ fence = false } = {},
 	) {
 		return this.change(
 			previewProjectKey(pid),
@@ -103,7 +111,14 @@ export class PreviewStore {
 			{ entries: [] },
 			async (project) => {
 				const wasEmpty = project.entries.length === 0;
+				const before = JSON.stringify(project);
 				const result = apply(project);
+				if (
+					!fence &&
+					JSON.stringify(project) === before &&
+					(project.entries.length === 0 || project.work_id)
+				)
+					return result;
 				// A fresh revision also fences writers when membership returns to the same empty value.
 				project.revision = crypto.randomUUID();
 				if (project.entries.length > 0 && (wasEmpty || !project.work_id)) {
@@ -127,6 +142,7 @@ export class PreviewStore {
 		const removed = await this.changeProject(
 			pid,
 			(project) => project.entries.length === 0 || project.work_id !== workId,
+			{ fence: true },
 		);
 		// The CAS fences a pending publication before its marker is removed. Tokens are never reused.
 		if (removed) await this.bucket.delete(previewActiveProjectKey(pid, workId));
@@ -158,7 +174,7 @@ export class PreviewStore {
 				const entry = {
 					key,
 					fingerprint,
-					id: crypto.randomUUID().replaceAll('-', ''),
+					id: createPreviewId(),
 					created_at: new Date().toISOString(),
 					expires_at: Date.now() + PREVIEW_LIMITS.idempotencyMs,
 					deleted: false,
@@ -169,7 +185,7 @@ export class PreviewStore {
 		);
 	}
 
-	async pruneReceipts(pid: ProjectId, deletedId?: string) {
+	async pruneReceipts(pid: ProjectId, deletedId?: PreviewId) {
 		await this.change(previewReceiptsKey(pid), PreviewReceiptsSchema, { entries: [] }, (record) => {
 			record.entries = record.entries.filter((entry) => entry.expires_at > Date.now());
 			for (const entry of record.entries) if (entry.id === deletedId) entry.deleted = true;
@@ -180,19 +196,24 @@ export class PreviewStore {
 		intent: NotebookPreview,
 		creationDeadline = Date.now() + PREVIEW_LIMITS.creationMs,
 	): Promise<NotebookPreview> {
-		return this.changeProject(intent.project_id, (record) => {
-			const existing = record.entries.find((entry) => entry.intent.id === intent.id);
-			if (existing) return existing.intent;
-			// A delayed create must not restore membership after deletion and cleanup.
-			if (Date.now() >= creationDeadline)
-				throw new ConflictError('Preview creation attempt expired; retry the request');
-			if (record.entries.length >= PREVIEW_LIMITS.perProject)
-				throw new ResourceExhaustedError(
-					'Project preview limit reached, including previews awaiting cleanup',
-				);
-			record.entries.push({ intent, artifacts: [] });
-			return intent;
-		});
+		return this.changeProject(
+			intent.project_id,
+			(record) => {
+				const existing = record.entries.find((entry) => entry.intent.id === intent.id);
+				if (existing) return existing.intent;
+				// A delayed create must not restore membership after deletion and cleanup.
+				if (Date.now() >= creationDeadline)
+					throw new ConflictError('Preview creation attempt expired; retry the request');
+				if (record.entries.length >= PREVIEW_LIMITS.perProject)
+					throw new ResourceExhaustedError(
+						'Project preview limit reached, including previews awaiting cleanup',
+					);
+				record.entries.push({ intent, artifacts: [] });
+				return intent;
+			},
+			// An idempotent replay must still serialize with cleanup before the record is materialized.
+			{ fence: true },
+		);
 	}
 
 	async reserveArtifact(
@@ -284,24 +305,17 @@ export class PreviewStore {
 	}
 
 	async nextProjects(lane: 'prepare' | 'cleanup'): Promise<ProjectId[]> {
-		const key = lane === 'prepare' ? previewWorkKey : previewCleanupCursorKey;
-		return withCasRetry(this.bucket, async (cas) => {
-			const object = await this.bucket.get(key);
-			const schema = lane === 'prepare' ? PreviewWorkSchema : PreviewCursorSchema;
-			const record = object
-				? await readStored(schema, object, key)
-				: { cursor: undefined, claims: [] };
+		const advance = async (record: { cursor?: string }) => {
 			const page = await this.projectPage(record.cursor);
-			await cas.put(
-				key,
-				JSON.stringify({ ...record, cursor: page.cursor }),
-				object ? { onlyIfEtagMatches: object.etag } : { onlyIfNotExists: true },
-			);
+			record.cursor = page.cursor;
 			return page.projects;
-		});
+		};
+		return lane === 'prepare'
+			? this.change(previewWorkKey, PreviewWorkSchema, { claims: [] }, advance)
+			: this.change(previewCleanupCursorKey, PreviewCursorSchema, {}, advance);
 	}
 
-	async claim(pid: ProjectId, id: string) {
+	async claim(pid: ProjectId, id: PreviewId) {
 		return this.change(previewWorkKey, PreviewWorkSchema, { claims: [] }, (record) => {
 			record.claims = record.claims.filter((entry) => entry.expires_at > Date.now());
 			if (

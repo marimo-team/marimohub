@@ -1025,7 +1025,7 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}': {
+	'/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -1043,7 +1043,7 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}/sessions': {
+	'/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}/sessions': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -1069,7 +1069,7 @@ export interface paths {
 		};
 		/**
 		 * Suggest GitHub branches or recent commits
-		 * @description Returns at most 30 matches from the first 100 branches or recent commits. Manual values remain supported. Providers without suggestion support return 422; explicit resolution remains available.
+		 * @description Returns at most 30 matches from the first 100 branches or recent commits. Manual values remain supported. Providers without suggestion support return 422.
 		 */
 		get: operations['notebooks.source.refs'];
 		put?: never;
@@ -3343,12 +3343,18 @@ export interface components {
 		NotebookPreview: {
 			id: string;
 			name: string;
-			/** @enum {string} */
-			state: 'active' | 'deleting' | 'deleted';
-			/** @enum {string} */
-			preparation: 'pending' | 'preparing' | 'ready' | 'failed';
-			/** @enum {string} */
-			source_type: 'branch' | 'commit';
+			/**
+			 * @description Known values: pending, preparing, ready, failed. Unrecognized values normalize to unknown.
+			 * @example ready
+			 * @enum {string}
+			 */
+			preparation: 'pending' | 'preparing' | 'ready' | 'failed' | 'unknown';
+			/**
+			 * @description Known values: branch, commit. Unrecognized values normalize to unknown.
+			 * @example branch
+			 * @enum {string}
+			 */
+			source_type: 'branch' | 'commit' | 'unknown';
 			source?:
 				| {
 						/** @enum {string} */
@@ -3364,8 +3370,14 @@ export interface components {
 			commit?: string;
 			version_id?: string;
 			error?: string;
+			pull_request?: number;
+			/** Format: date-time */
 			expires_at: string;
+			/** Format: date-time */
 			created_at: string;
+			created_by: string;
+			/** Format: date-time */
+			checked_at?: string;
 			compute_profile?: string;
 			url: string;
 			can: {
@@ -3378,7 +3390,7 @@ export interface components {
 			items: components['schemas']['NotebookPreview'][];
 			next_cursor: string | null;
 		};
-		PreviewSessionCreateResult: components['schemas']['Session'] & {
+		SessionCreateResult: components['schemas']['Session'] & {
 			app_assignment?: {
 				visit_id: string;
 				generation: string;
@@ -3575,19 +3587,6 @@ export interface components {
 			expected_activity: 'active' | 'idle' | 'unknown' | 'starting';
 			/** @enum {boolean} */
 			acknowledge_disruption: true;
-		};
-		SessionCreateResult: components['schemas']['Session'] & {
-			app_assignment?: {
-				visit_id: string;
-				generation: string;
-			};
-			reused: boolean;
-			editor_session?: {
-				/** @enum {string} */
-				sharing: 'shared' | 'exclusive';
-				/** @enum {string} */
-				access: 'shared' | 'owner' | 'temporary';
-			};
 		};
 		SessionCreateBody: {
 			/** @enum {string} */
@@ -4225,10 +4224,10 @@ export interface operations {
 						success: true;
 						data: {
 							/**
-							 * @default null
-							 * @enum {string|null}
+							 * @default user
+							 * @enum {string}
 							 */
-							force_mode: 'light' | 'dark' | null;
+							color_mode: 'user' | 'light' | 'dark';
 							name: string;
 							favicon: string | null;
 							logo: string | null;
@@ -11740,7 +11739,7 @@ export interface operations {
 			path: {
 				pid: string;
 				nid: string;
-				preview_id: string;
+				prid: string;
 			};
 			cookie?: never;
 		};
@@ -11862,7 +11861,7 @@ export interface operations {
 			path: {
 				pid: string;
 				nid: string;
-				preview_id: string;
+				prid: string;
 			};
 			cookie?: never;
 		};
@@ -11874,11 +11873,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': {
-						/** @enum {boolean} */
-						success: true;
-						data: null;
-					};
+					'application/json': components['schemas']['SuccessResponse'];
 				};
 			};
 			/** @description Bad request */
@@ -11984,7 +11979,7 @@ export interface operations {
 			path: {
 				pid: string;
 				nid: string;
-				preview_id: string;
+				prid: string;
 			};
 			cookie?: never;
 		};
@@ -11992,7 +11987,7 @@ export interface operations {
 			content: {
 				'application/json': {
 					/** @enum {string} */
-					mode: 'app' | 'edit';
+					mode: 'edit' | 'app';
 					app_visit_id?: string;
 				};
 			};
@@ -12007,7 +12002,7 @@ export interface operations {
 					'application/json': {
 						/** @enum {boolean} */
 						success: true;
-						data: components['schemas']['PreviewSessionCreateResult'];
+						data: components['schemas']['SessionCreateResult'];
 					};
 				};
 			};
@@ -12112,7 +12107,6 @@ export interface operations {
 			query: {
 				type: 'branch' | 'commit';
 				query?: string;
-				resolve?: 'true' | 'false';
 			};
 			header?: never;
 			path: {

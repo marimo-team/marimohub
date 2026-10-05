@@ -3,10 +3,20 @@
 A preview publishes GitHub code through an existing notebook, with a stable share URL and separate, disposable compute.
 Managers and admins can create and delete previews. Sharing a URL does not grant notebook access.
 
+::: warning Previews run branch code with the notebook's credentials
+A preview runs the code at the chosen branch or commit with the parent notebook's integrations and secrets.
+A branch preview publishes every new push, so anyone who can push to that branch can run code with those credentials after a manager creates the preview.
+Protect previewed branches, or pin a reviewed commit. See [Security model → Previews](security.md#previews).
+:::
+
 ## Create a preview
 
 Open **Previews** from the notebook menu. Select **Create preview**.
-Previews require a GitHub App connection with access to the notebook's configured repository.
+Previews require a [Git-synced notebook](syncing.md) and a [GitHub App connection](syncing.md#pull-mode-connect-a-github-repository) with access to the notebook's configured repository.
+Configuring the [GitHub App](configuration.md#github-app) enables previews.
+Previews use the deployment's GitHub host, including a [GitHub Enterprise Server](syncing.md#github-enterprise-server) instance.
+[GitHub project policies](syncing.md#github-project-policies) apply to preview reads.
+Pull request tracking also needs the App's Pull requests read permission, in addition to Contents read.
 
 - **Follow a branch** publishes the current commit and follows new pushes.
 - **Pin to a commit** publishes a full, 40-character SHA. Future pushes do not change it.
@@ -14,7 +24,7 @@ Previews require a GitHub App connection with access to the notebook's configure
 GitHub suggestions show up to 30 matches from the first 100 branches or recent commits.
 You can enter a branch or full SHA manually, including when suggestions fail.
 
-Previews inherit integrations and secrets, including credential rotation. Existing restrictions on temporary viewer editors still apply.
+Previews inherit integrations and secrets, including credential rotation. Existing restrictions on [temporary viewer editors](apps.md#who-can-do-what) still apply.
 Pinning freezes code only.
 
 ## Run and share
@@ -22,8 +32,8 @@ Pinning freezes code only.
 Copy the link from the preview list or header. Existing notebook permissions determine access:
 
 - App-users can run apps.
-- Viewers can use modes allowed by the deployment's viewer configuration.
-- Editors, managers, and admins can open personal temporary editors.
+- Viewers can use modes allowed by the deployment's [viewer configuration](apps.md#who-can-do-what).
+- Editors, managers, and admins can open personal [temporary editors](editor-sessions.md#exclusive-mode).
 
 Temporary edits stay in the sandbox. They never update notebook history, workspace storage, GitHub, or the published preview.
 Preview editors have no persistent personal home. Authorized integrations still permit access to external systems.
@@ -50,6 +60,8 @@ Create, list, get, delete, and session creation endpoints use this base path:
 /api/v1/projects/{pid}/notebooks/{nid}/previews
 ```
 
+Get, delete, and session creation address one preview at `…/previews/{prid}`. Preview IDs use the `prev-` prefix, for example `prev-7h2k9qm4xz7rp3w8`.
+
 Source suggestions use `GET /api/v1/projects/{pid}/notebooks/{nid}/source/refs`.
 The `type` parameter accepts `branch` or `commit`. The optional `query` parameter filters suggestions and defaults to an empty string.
 For example, `?type=branch&query=feature` returns matching branches:
@@ -67,9 +79,7 @@ For example, `?type=branch&query=feature` returns matching branches:
 }
 ```
 
-With `resolve=true`, the endpoint resolves one reference instead of searching for suggestions. This requires a nonblank `query` and returns the same response shape.
-
-The generated CLI exposes the same operations:
+The generated [CLI](cli.md#use-the-cli) exposes the same operations:
 
 ```sh
 mohub notebooks previews create --pid "$PROJECT" --nid "$NOTEBOOK" \
@@ -80,7 +90,7 @@ mohub notebooks previews create --pid "$PROJECT" --nid "$NOTEBOOK" \
   --name 'Release review' --source '{"type":"commit","commit":"0123456789abcdef0123456789abcdef01234567"}'
 
 mohub notebooks previews delete --pid "$PROJECT" --nid "$NOTEBOOK" \
-  --preview-id "$PREVIEW" --yes
+  --prid "$PREVIEW" --yes
 ```
 
 Creation returns `202` with a pending preview and its share URL. Poll the get endpoint until a revision is prepared.
@@ -94,7 +104,7 @@ API tokens need the corresponding project grants and actions. Management and sou
 Session creation accepts a mode without a ref override.
 
 Optional `pull_request` tracking retires a preview after its PR closes or merges. Branch previews must select the PR's head branch.
-Fork PRs and automatic label triggers are unsupported. CI can use the API or CLI to create and delete previews on label changes.
+Fork PRs and automatic label triggers are unsupported. Preparation fails if a tracked PR's head branch is not in the notebook's repository. CI can use the API or CLI to create and delete previews on label changes.
 
 ## Operation and limits
 
@@ -115,11 +125,11 @@ Previews expire after seven days by default, with an API maximum of 30 days.
 Deletion immediately blocks access. Cleanup waits for starting sessions and retries failed destruction.
 Deleting a parent notebook or project also retires its previews.
 
-`MARIMOHUB_PREVIEW_COMPUTE_PROFILE` sets the default profile for all preview modes.
+`MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE` sets the default [compute profile](configuration.md#compute) for all preview modes.
 If unset, previews use the deployment default, ignoring the notebook's compute profile.
 If deployment configuration permits overrides, managers can select another allowed profile.
 
-Each preview permits ten active sessions across users and revisions, with at most two app replicas per revision.
+Each preview permits ten active sessions across users and revisions, with at most two [app replicas](app-pools.md) per revision.
 Lower deployment limits still apply. Idle retirement uses five minutes, subject to active connections and app visits.
 Cleanup removes unused revisions after reclaiming their sessions.
 

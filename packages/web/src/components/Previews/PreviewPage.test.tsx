@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Route, Routes } from 'react-router-dom';
 import { apiClient } from '@/api/client';
 import { SESSION_LIFECYCLE_TIMEOUT_MS } from '@/api/hooks';
-import { userKeys } from '@/api/queryKeys';
+import { previewKeys, userKeys } from '@/api/queryKeys';
 import { AuthProvider } from '@/context/AuthContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
@@ -60,7 +60,6 @@ function setup({
 				return jsonOk({
 					id: 'preview',
 					name: 'Review preview',
-					state: 'active',
 					preparation: pending ? 'pending' : 'ready',
 					source_type: 'branch',
 					commit: pending ? null : version === 'first-version' ? 'a'.repeat(40) : 'b'.repeat(40),
@@ -138,7 +137,7 @@ function setup({
 		async refetchHeartbeat(next: HeartbeatResponse) {
 			heartbeatResponse = next;
 			await act(async () => {
-				await view.client.invalidateQueries({ queryKey: ['preview-session'] });
+				await view.client.invalidateQueries({ queryKey: previewKeys.sessions() });
 			});
 		},
 		async signIn(next: string | null) {
@@ -154,7 +153,7 @@ function setup({
 			version = 'second-version';
 			await act(async () => {
 				await view.client.invalidateQueries({
-					queryKey: ['preview', 'project', 'notebook', 'preview'],
+					queryKey: previewKeys.detail('project', 'notebook', 'preview'),
 				});
 			});
 		},
@@ -188,7 +187,7 @@ describe('PreviewPage', () => {
 			expect(calls).toContainEqual({ url: `${endpoint}/sessions`, method: 'POST' }),
 		);
 		expect(post).toHaveBeenCalledWith(
-			'/api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}/sessions',
+			'/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}/sessions',
 			expect.objectContaining({ timeout: SESSION_LIFECYCLE_TIMEOUT_MS }),
 		);
 		expect(remove).toHaveBeenCalledWith(
@@ -537,7 +536,7 @@ describe('PreviewPage', () => {
 		const user = userEvent.setup();
 		await user.click(await screen.findByRole('button', { name: 'Open app' }));
 		await waitFor(() =>
-			expect(client.getQueriesData({ queryKey: ['preview-session'] })[0]?.[1]).toMatchObject({
+			expect(client.getQueriesData({ queryKey: previewKeys.sessions() })[0]?.[1]).toMatchObject({
 				status: 'starting',
 			}),
 		);

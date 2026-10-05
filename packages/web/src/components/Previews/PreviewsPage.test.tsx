@@ -121,7 +121,6 @@ describe('preview deletion', () => {
 				id: 'preview-1',
 				name: 'Review build',
 				preparation: 'ready',
-				state: 'active',
 				can: { manage: true },
 				source_type: 'branch',
 			} as PreviewsApi.NotebookPreview,

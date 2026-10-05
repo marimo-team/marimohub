@@ -12,6 +12,7 @@ import {
 	createProjectId,
 	createProposalId,
 	createRunId,
+	PreviewId,
 } from './ids';
 import type { UserId } from './ids';
 import { createServices } from './services';
@@ -142,7 +143,7 @@ describe('createServices tracing option', () => {
 		const services = createServices(new MemoryBucket(), undefined, { tracing: true });
 		const pid = createProjectId();
 		const nid = createNotebookId();
-		const id = 'a'.repeat(32);
+		const id = PreviewId.parse(`prev-${'a'.repeat(16)}`);
 		await expect(services.previews.get(pid, nid, id)).rejects.toThrow(NotFoundError);
 		const spans = exporter.getFinishedSpans();
 		const preview = spans.find((span) => span.name === 'NotebookPreviewService.get');
@@ -163,7 +164,7 @@ describe('createServices tracing option', () => {
 		const services = createServices(new MemoryBucket(), undefined, { tracing: true });
 		const record = PreviewRecordSchema.parse({
 			schema_version: 1,
-			id: 'a'.repeat(32),
+			id: PreviewId.parse(`prev-${'a'.repeat(16)}`),
 			project_id: createProjectId(),
 			notebook_id: createNotebookId(),
 			name: 'private title',

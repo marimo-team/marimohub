@@ -3,8 +3,6 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useLocation } from 'react-router-dom';
 import { AuthProvider } from '@/context/AuthContext';
-import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
-import { BrandingContext } from '@/context/BrandingContext';
 import { jsonOk, renderWithClient } from '@/test/render';
 import { Footer } from './Footer';
 
@@ -33,12 +31,10 @@ function setup({
 	const user = userEvent.setup();
 	renderWithClient(
 		<AuthProvider>
-			<BrandingContext value={{ ...DEFAULT_THEME_CONFIG, name }}>
-				<Footer />
-			</BrandingContext>
+			<Footer />
 			<LocationProbe />
 		</AuthProvider>,
-		{ route: '/' },
+		{ route: '/', branding: { name } },
 	);
 	return { user, capabilitiesFetch };
 }

@@ -18,7 +18,7 @@ export interface PodmanConfig {
 	host?: string;
 	bindHost?: string;
 	network?: string;
-	labelKey?: string;
+	ownerTag?: string;
 }
 
 export function spawnPodmanRunner(bin = 'podman'): PodmanRunner {

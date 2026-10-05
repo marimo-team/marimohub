@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { components } from '@marimo-hub/client';
 import { apiClient, apiData } from './client';
+import { previewKeys } from './queryKeys';
 
 export type NotebookPreview = components['schemas']['NotebookPreview'];
 export function hasNotebookPreviews(
@@ -17,7 +18,7 @@ export type PreviewInput = {
 };
 export function usePreviewsQuery(pid: string, nid: string) {
 	return useQuery({
-		queryKey: ['previews', pid, nid],
+		queryKey: previewKeys.list(pid, nid),
 		queryFn: async ({ signal }) =>
 			(
 				await apiData(
@@ -31,13 +32,13 @@ export function usePreviewsQuery(pid: string, nid: string) {
 		gcTime: 0,
 	});
 }
-export function usePreviewQuery(pid: string, nid: string, preview_id: string) {
+export function usePreviewQuery(pid: string, nid: string, prid: string) {
 	return useQuery({
-		queryKey: ['preview', pid, nid, preview_id],
+		queryKey: previewKeys.detail(pid, nid, prid),
 		queryFn: ({ signal }) =>
 			apiData(
-				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}', {
-					params: { path: { pid, nid, preview_id } },
+				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}', {
+					params: { path: { pid, nid, prid } },
 					signal,
 				}),
 			),
@@ -59,18 +60,22 @@ export function useCreatePreview(pid: string, nid: string) {
 				}),
 			);
 		},
-		onSuccess: () => client.invalidateQueries({ queryKey: ['previews', pid, nid] }),
+		onSuccess: () => client.invalidateQueries({ queryKey: previewKeys.list(pid, nid) }),
 	});
 }
 export function useDeletePreview(pid: string, nid: string) {
 	const client = useQueryClient();
 	return useMutation({
-		mutationFn: (preview_id: string) =>
+		mutationFn: (prid: string) =>
 			apiData(
-				apiClient.DELETE('/api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}', {
-					params: { path: { pid, nid, preview_id } },
+				apiClient.DELETE('/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}', {
+					params: { path: { pid, nid, prid } },
 				}),
 			),
-		onSuccess: () => client.invalidateQueries({ queryKey: ['previews', pid, nid] }),
+		onSuccess: (_data, prid) =>
+			Promise.all([
+				client.invalidateQueries({ queryKey: previewKeys.list(pid, nid) }),
+				client.invalidateQueries({ queryKey: previewKeys.detail(pid, nid, prid) }),
+			]),
 	});
 }

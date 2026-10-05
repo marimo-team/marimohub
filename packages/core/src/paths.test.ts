@@ -38,6 +38,20 @@ describe('paths', () => {
 		expect(paths.eventIdempotency('2025-03-05', 'run/a')).toBe(
 			'_system/events/2025-03-05/_idempotency/run%2Fa.json',
 		);
+		expect(paths.preview(pid, nid, 'abc')).toBe(
+			'_system/previews/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/abc.json',
+		);
+		expect(paths.previewProject(pid)).toBe(
+			'_system/preview-projects/proj_01HXY11111ABCDEFGHJKMN.json',
+		);
+		expect(paths.previewActiveProject(pid, 'work')).toBe(
+			'_system/preview-active-projects/proj_01HXY11111ABCDEFGHJKMN/work.json',
+		);
+		expect(paths.previewReceipts(pid)).toBe(
+			'_system/preview-receipts/proj_01HXY11111ABCDEFGHJKMN.json',
+		);
+		expect(paths.previewWork).toBe('_system/preview-work.json');
+		expect(paths.previewCleanupCursor).toBe('_system/preview-cleanup-cursor.json');
 		expect(paths.jobOperationClaim(pid, nid, 'job-0123456789abcdef' as JobId)).toBe(
 			'_system/job-operations/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/job-0123456789abcdef.json',
 		);

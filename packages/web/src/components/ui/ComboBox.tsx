@@ -35,6 +35,16 @@ export interface ComboBoxProps<T extends ComboBoxOption> {
 	className?: string;
 }
 
+/**
+ * A searchable option picker over react-aria-components' ComboBox, styled to
+ * match {@link TextField}/{@link DropdownMenu}. Free text is allowed — the
+ * caller owns the input value and typically mixes async search results with
+ * synthetic options derived from the raw text. By default selection is
+ * momentary: picking an option fires `onSelect` and nothing is held selected,
+ * so it behaves like a command palette rather than a form select. With
+ * `retainSelection`, the option whose text matches the input stays selected,
+ * so a form field shows its chosen value as checked.
+ */
 export function ComboBox<T extends ComboBoxOption>({
 	retainSelection = false,
 	label,

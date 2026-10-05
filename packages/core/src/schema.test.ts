@@ -7,6 +7,7 @@ import {
 	createSessionId,
 	createSnapshotId,
 	createVersionId,
+	PreviewId,
 } from './ids';
 import { z } from 'zod';
 import {
@@ -59,25 +60,36 @@ describe('preview metadata schemas', () => {
 		expect(
 			PreviewRuntimeMetaSchema.safeParse({
 				...meta,
-				preview: { notebook_id: createNotebookId(), preview_id: 'a'.repeat(32) },
+				preview: {
+					notebook_id: createNotebookId(),
+					preview_id: PreviewId.parse(`prev-${'a'.repeat(16)}`),
+				},
 			}).success,
 		).toBe(true);
 	});
 
-	it.each(['', 'arbitrary-preview', 'a'.repeat(31), 'g'.repeat(32)])(
-		'rejects malformed preview IDs: %s',
-		(preview_id) => {
-			expect(
-				NotebookMetaSchema.safeParse(
-					makeNotebookMeta({ preview: { notebook_id: createNotebookId(), preview_id } }),
-				).success,
-			).toBe(false);
-		},
-	);
+	it.each([
+		'',
+		'arbitrary-preview',
+		'a'.repeat(32),
+		`prev-${'a'.repeat(15)}`,
+		`prev-${'A'.repeat(16)}`,
+	])('rejects malformed preview IDs: %s', (preview_id) => {
+		expect(
+			NotebookMetaSchema.safeParse(
+				makeNotebookMeta({
+					preview: { notebook_id: createNotebookId(), preview_id: preview_id as PreviewId },
+				}),
+			).success,
+		).toBe(false);
+	});
 
 	it('accepts a valid preview ID', () => {
 		const meta = makeNotebookMeta({
-			preview: { notebook_id: createNotebookId(), preview_id: 'a'.repeat(32) },
+			preview: {
+				notebook_id: createNotebookId(),
+				preview_id: PreviewId.parse(`prev-${'a'.repeat(16)}`),
+			},
 		});
 		expect(NotebookMetaSchema.parse(meta)).toEqual(meta);
 	});
@@ -88,7 +100,7 @@ describe('preview metadata schemas', () => {
 			const origin = {
 				type: 'preview',
 				notebook_id: createNotebookId(),
-				preview_id: 'a'.repeat(32),
+				preview_id: PreviewId.parse(`prev-${'a'.repeat(16)}`),
 				revision_id: createVersionId(),
 				commit,
 			};

@@ -26,16 +26,16 @@ On Workers, deployment succeeds, but requests return HTTP 500 with `CONFIG_ERROR
 
 ## Force light or dark mode
 
-Set the server environment variable to `light` or `dark`:
+Set `MARIMOHUB_THEME_COLOR_MODE` to `light` or `dark`:
 
 ```dotenv
-MARIMOHUB_THEME_FORCE_MODE="light"
+MARIMOHUB_THEME_COLOR_MODE="light"
 ```
 
 The forced mode applies to sign-in, hub pages, and embedded notebooks and apps for every role.
 It overrides saved and operating-system preferences and hides the header theme toggle.
 
-To restore user theme selection, unset the variable or leave it blank. Saved preferences remain unchanged.
+To restore user theme selection, set the variable to `user` (the default), or unset it or leave it blank. Saved preferences remain unchanged.
 After changing the variable, restart the server and reload the page.
 
 ## Use two brand colors

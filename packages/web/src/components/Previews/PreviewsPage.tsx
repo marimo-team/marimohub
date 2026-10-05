@@ -17,7 +17,11 @@ import { SourceRefInput } from './SourceRefInput';
 export function PreviewBadge({ preview }: { preview: NotebookPreview }) {
 	return (
 		<span className="rounded border px-2 py-0.5 text-xs">
-			{preview.source_type === 'branch' ? 'Following branch' : 'Pinned commit'}
+			{preview.source_type === 'branch'
+				? 'Following branch'
+				: preview.source_type === 'commit'
+					? 'Pinned commit'
+					: 'Preview'}
 		</span>
 	);
 }

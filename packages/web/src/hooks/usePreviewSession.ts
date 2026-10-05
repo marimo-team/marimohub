@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { apiClient, apiData, ApiRequestError } from '@/api/client';
 import { usePreviewQuery } from '@/api/previews';
+import { previewKeys } from '@/api/queryKeys';
 import { SESSION_LIFECYCLE_TIMEOUT_MS, useCapabilitiesQuery } from '@/api/hooks';
 import { leaveAppVisit } from '@/api/sessionVisits';
 import {
@@ -77,8 +78,8 @@ export function usePreviewSession(pid: string, nid: string, previewId: string, u
 				});
 
 			return apiData(
-				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/previews/{preview_id}/sessions', {
-					params: { path: { pid, nid, preview_id: previewId } },
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}/sessions', {
+					params: { path: { pid, nid, prid: previewId } },
 					body: { mode, ...(mode === 'app' ? { app_visit_id: crypto.randomUUID() } : {}) },
 					timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
 				}),
@@ -95,20 +96,27 @@ export function usePreviewSession(pid: string, nid: string, previewId: string, u
 				assignment: session.app_assignment,
 			};
 			setRuntime(next);
-			if (mode === 'edit') sessionStorage.setItem(storageKey, JSON.stringify(next));
-			else sessionStorage.removeItem(storageKey);
+			try {
+				if (mode === 'edit') sessionStorage.setItem(storageKey, JSON.stringify(next));
+				else sessionStorage.removeItem(storageKey);
+			} catch {
+				// Storage can be unavailable or full; the session still runs without resume support.
+			}
 		},
 	});
 	const session = useQuery({
-		queryKey: [
-			'preview-session',
+		queryKey: previewKeys.session(
 			userId,
 			pid,
 			previewId,
-			runtime?.nid,
-			runtime?.sid,
-			runtime?.assignment?.visit_id,
-		],
+			runtime
+				? {
+						notebookId: runtime.nid,
+						sessionId: runtime.sid,
+						visitId: runtime.assignment?.visit_id,
+					}
+				: undefined,
+		),
 		queryFn: async () => {
 			const params = { path: { pid, nid: runtime!.nid, sid: runtime!.sid } };
 			if (

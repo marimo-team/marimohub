@@ -28,6 +28,14 @@ export function githubOrigin(value = 'https://github.com'): string {
 	) {
 		throw new ValidationError('GitHub URL must be an HTTPS origin');
 	}
+	// Any origin other than github.com is treated as GitHub Enterprise Server, so
+	// these near-misses would otherwise silently route API calls to /api/v3.
+	if (url.hostname === 'api.github.com' || url.hostname === 'www.github.com') {
+		throw new ValidationError('Use https://github.com as the GitHub URL');
+	}
+	if (url.hostname.endsWith('.')) {
+		throw new ValidationError('GitHub URL hostname must not end with a dot');
+	}
 	return url.origin;
 }
 

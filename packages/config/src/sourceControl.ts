@@ -40,7 +40,7 @@ export function makeSourceControl(env: Env): SourceControlConfig {
 		);
 	}
 
-	const urlVariable = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_URL';
+	const urlVariable = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL';
 	let url: string;
 	try {
 		url = githubOrigin(env[urlVariable]?.trim() || undefined);

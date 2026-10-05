@@ -4,7 +4,8 @@ import {
 	ValidationError,
 	NotFoundError,
 	PreviewCreateSchema,
-	PreviewIdSchema,
+	PREVIEW_PREPARATIONS,
+	PreviewId,
 	PreviewSourceSchema,
 } from '@marimo-hub/core';
 import type { NotebookPreview, NotebookId, ProjectId } from '@marimo-hub/core';
@@ -17,6 +18,7 @@ import {
 	commonErrors,
 	createApp,
 	errorResponses,
+	extensibleResponseEnum,
 	IdempotencyKeyHeader,
 	jsonBody,
 	jsonContent,
@@ -24,29 +26,39 @@ import {
 	loadSessionProject,
 	NotebookIdParam,
 	resolvePublicBaseUrl,
+	SuccessResponseSchema,
 } from '../shared';
 import {
 	authorizeSessionStart,
+	SessionCreateBodySchema,
 	SessionCreateResponseSchema,
 	startNotebookSession,
 } from './sessions';
 
 const base = '/projects/{pid}/notebooks/{nid}/previews';
-const Params = NotebookIdParam.extend({ preview_id: PreviewIdSchema });
+const Params = NotebookIdParam.extend({
+	prid: z
+		.string()
+		.regex(PreviewId.regex)
+		.refine(PreviewId.is)
+		.openapi({ param: { name: 'prid', in: 'path' }, example: 'prev-7h2k9qm4xz7rp3w8' }),
+});
 const PublicPreview = z
 	.object({
-		id: PreviewIdSchema,
+		id: z.string().regex(PreviewId.regex),
 		name: z.string(),
-		state: z.enum(['active', 'deleting', 'deleted']),
-		preparation: z.enum(['pending', 'preparing', 'ready', 'failed']),
-		source_type: z.enum(['branch', 'commit']),
+		preparation: extensibleResponseEnum(PREVIEW_PREPARATIONS, 'ready'),
+		source_type: extensibleResponseEnum(['branch', 'commit'], 'branch'),
 		source: PreviewSourceSchema.optional(),
 		repository: z.string().optional(),
 		commit: z.string().optional(),
 		version_id: z.string().optional(),
 		error: z.string().optional(),
-		expires_at: z.string(),
-		created_at: z.string(),
+		pull_request: z.number().int().positive().optional(),
+		expires_at: z.iso.datetime(),
+		created_at: z.iso.datetime(),
+		created_by: z.string(),
+		checked_at: z.iso.datetime().optional(),
 		compute_profile: z.string().optional(),
 		url: z.string(),
 		can: z.object({ manage: z.boolean(), app: z.boolean(), edit: z.boolean() }),
@@ -89,7 +101,7 @@ const list = createRoute({
 });
 const get = createRoute({
 	method: 'get',
-	path: `${base}/{preview_id}`,
+	path: `${base}/{prid}`,
 	operationId: 'notebooks.previews.get',
 	tags: ['Previews'],
 	summary: 'Get a notebook preview',
@@ -98,39 +110,33 @@ const get = createRoute({
 });
 const remove = createRoute({
 	method: 'delete',
-	path: `${base}/{preview_id}`,
+	path: `${base}/{prid}`,
 	operationId: 'notebooks.previews.delete',
 	tags: ['Previews'],
 	summary: 'Delete a preview and retire its compute',
 	request: { params: Params },
 	responses: {
-		202: jsonContent(
-			z.object({ success: z.literal(true), data: z.null() }),
-			'Preview revoked; cleanup pending',
-		),
+		202: jsonContent(SuccessResponseSchema, 'Preview revoked; cleanup pending'),
 		...errors,
 	},
 });
 const launch = createRoute({
 	method: 'post',
-	path: `${base}/{preview_id}/sessions`,
+	path: `${base}/{prid}/sessions`,
 	operationId: 'notebooks.previews.sessions.create',
 	tags: ['Previews'],
 	summary: 'Run a preview app or temporary editor',
 	request: {
 		params: Params,
 		body: jsonBody(
-			z.strictObject({
-				mode: z.enum(['app', 'edit']),
-				app_visit_id: z.string().min(1).max(128).optional(),
-			}),
+			SessionCreateBodySchema.pick({ mode: true, app_visit_id: true }).required({ mode: true }),
 		),
 	},
 	responses: {
 		200: jsonContent(
 			z.object({
 				success: z.literal(true),
-				data: SessionCreateResponseSchema.openapi('PreviewSessionCreateResult'),
+				data: SessionCreateResponseSchema,
 			}),
 			'Preview session',
 		),
@@ -144,13 +150,12 @@ const discover = createRoute({
 	tags: ['Previews'],
 	summary: 'Suggest GitHub branches or recent commits',
 	description:
-		'Returns at most 30 matches from the first 100 branches or recent commits. Manual values remain supported. Providers without suggestion support return 422; explicit resolution remains available.',
+		'Returns at most 30 matches from the first 100 branches or recent commits. Manual values remain supported. Providers without suggestion support return 422.',
 	request: {
 		params: NotebookIdParam,
 		query: z.object({
 			type: z.enum(['branch', 'commit']),
 			query: z.string().max(250).default(''),
-			resolve: z.enum(['true', 'false']).optional(),
 		}),
 	},
 	responses: {
@@ -208,7 +213,6 @@ function present(
 	return {
 		id: record.id,
 		name: record.name,
-		state: record.state,
 		preparation: record.preparation,
 		source_type: record.source.type,
 		...(can.manage
@@ -216,6 +220,7 @@ function present(
 					source: record.source,
 					repository: record.repository,
 					compute_profile: record.compute_profile,
+					pull_request: record.pull_request,
 				}
 			: {}),
 		commit: record.current?.commit,
@@ -223,6 +228,8 @@ function present(
 		error: record.error,
 		expires_at: record.expires_at,
 		created_at: record.created_at,
+		created_by: record.created_by,
+		checked_at: record.checked_at,
 		url: `${baseUrl}/projects/${record.project_id}/notebooks/${record.notebook_id}/previews/${record.id}`,
 		can,
 	};
@@ -255,14 +262,13 @@ app.openapi(create, async (c) => {
 	const { pid, nid } = c.req.valid('param');
 	const access = await manageable(deps, pid, nid, user);
 	const input = c.req.valid('json');
-	if (input.compute_profile) {
-		checkComputeProfile(deps.sandbox, input.compute_profile);
-		if (
-			input.compute_profile === 'default' &&
-			!deps.sandbox.computeProfiles?.some((profile) => profile.name === 'default')
-		)
-			input.compute_profile = undefined;
-	}
+	if (
+		input.compute_profile &&
+		checkComputeProfile(deps.sandbox, input.compute_profile) === null &&
+		// The first profile is the notebook default, not the preview default, so keep it explicit.
+		input.compute_profile !== deps.sandbox.computeProfiles?.[0]?.name
+	)
+		input.compute_profile = undefined;
 	const record = await deps.services.previews.create(
 		pid,
 		nid,
@@ -304,10 +310,10 @@ app.openapi(list, async (c) => {
 });
 app.openapi(get, async (c) => {
 	const deps = c.get('deps');
-	const { pid, nid, preview_id } = c.req.valid('param');
+	const { pid, nid, prid } = c.req.valid('param');
 	const user = c.get('user');
 	const can = await grants(deps, user, await visible(deps, pid, nid, user));
-	const record = await deps.services.previews.get(pid, nid, preview_id);
+	const record = await deps.services.previews.get(pid, nid, prid);
 	if (record.state !== 'active' || Date.parse(record.expires_at) <= Date.now())
 		throw new NotFoundError('Preview not found');
 	return c.json(
@@ -321,15 +327,15 @@ app.openapi(get, async (c) => {
 app.openapi(remove, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
-	const { pid, nid, preview_id } = c.req.valid('param');
+	const { pid, nid, prid } = c.req.valid('param');
 	await manageable(deps, pid, nid, user);
-	await deps.services.previews.retire(await deps.services.previews.get(pid, nid, preview_id));
-	return c.json({ success: true as const, data: null }, 202);
+	await deps.services.previews.retire(await deps.services.previews.get(pid, nid, prid));
+	return c.json({ success: true as const }, 202);
 });
 app.openapi(launch, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
-	const { pid, nid, preview_id } = c.req.valid('param');
+	const { pid, nid, prid } = c.req.valid('param');
 	const { project, notebook } = await visible(deps, pid, nid, user);
 	await authorizeSessionStart(
 		project,
@@ -338,7 +344,7 @@ app.openapi(launch, async (c) => {
 		deps,
 		notebook.meta.security_labels ?? null,
 	);
-	const record = await deps.services.previews.get(pid, nid, preview_id);
+	const record = await deps.services.previews.get(pid, nid, prid);
 	if (record.state !== 'active' || Date.parse(record.expires_at) <= Date.now())
 		throw new NotFoundError('Preview not found');
 	if (!record.current) throw new PreviewNotReadyError();
@@ -347,7 +353,7 @@ app.openapi(launch, async (c) => {
 		user,
 		pid,
 		nid: record.current.notebook_id,
-		preview: { id: preview_id, notebook_id: nid },
+		preview: { id: prid, notebook_id: nid },
 		body: c.req.valid('json'),
 		request: {
 			method: c.req.method,
@@ -364,31 +370,15 @@ app.openapi(discover, async (c) => {
 	const { pid, nid } = c.req.valid('param');
 	await manageable(deps, pid, nid, user);
 	const query = c.req.valid('query');
-	if (query.resolve === 'true' && !query.query.trim()) {
-		throw new ValidationError('A nonblank query is required to resolve a source reference');
-	}
 	const { source, reader } = await deps.services.previews.source(pid, nid, deps.sourceControl);
 	const options = { signal: c.req.raw.signal };
-	if (
-		query.resolve !== 'true' &&
-		!(query.type === 'branch' ? reader.listBranches : reader.listCommits)
-	) {
+	if (!(query.type === 'branch' ? reader.listBranches : reader.listCommits)) {
 		throw new ValidationError(`Source provider does not support ${query.type} suggestions`);
 	}
 	const data =
-		query.resolve === 'true'
-			? [
-					{
-						value: query.query,
-						label: query.query,
-						...(query.type === 'branch'
-							? await reader.getBranchHead(source.repo, query.query, options)
-							: await reader.resolveCommit!(source.repo, query.query, options)),
-					},
-				]
-			: query.type === 'branch'
-				? await reader.listBranches!(source.repo, query.query, options)
-				: await reader.listCommits!(source.repo, query.query, options);
+		query.type === 'branch'
+			? await reader.listBranches!(source.repo, query.query, options)
+			: await reader.listCommits!(source.repo, query.query, options);
 	return c.json({ success: true as const, data: data.slice(0, 30) }, 200);
 });
 export default app;

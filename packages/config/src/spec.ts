@@ -110,12 +110,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				name: 'Branding',
 				vars: [
 					{
-						id: 'MARIMOHUB_THEME_FORCE_MODE',
-						name: 'Forced color mode',
+						id: 'MARIMOHUB_THEME_COLOR_MODE',
+						name: 'Color mode',
 						description:
-							'Force light or dark mode for all roles and hide the theme toggle. Unset or blank uses saved or operating-system preferences.',
+							'`user` lets each user choose and uses saved or operating-system preferences. `light` or `dark` forces that mode for all roles and hides the theme toggle.',
 						example: 'light',
 						optIn: true,
+						default: 'user',
 					},
 					{
 						id: 'MARIMOHUB_THEME_NAME',
@@ -386,7 +387,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_IMAGE',
 						name: 'Sandbox image',
 						description:
-							'Image containing marimo, uv, and Python, or a comma-separated list (first is the default). Remaining images are selectable per notebook. Required for `modal`, which also accepts `modal://<name>[:<tag>]` for named images (tag defaults to `latest`). Recommended for `coreweave`.',
+							'Image containing marimo, uv, and Python, or a comma-separated list (first is the default). Remaining images are selectable per notebook. Required for `modal`, which also accepts `modal://<name>[:<tag>]` for named images (tag defaults to `latest`). Other backends that pull container images reject `modal://` entries at startup. Recommended for `coreweave`.',
 						example: 'ghcr.io/orgname/marimo-sandbox:latest',
 					},
 					{
@@ -422,7 +423,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
-						id: 'MARIMOHUB_PREVIEW_COMPUTE_PROFILE',
+						id: 'MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE',
 						name: 'Preview compute profile',
 						description:
 							'Default compute profile for notebook previews. Must name an available profile. Unset uses the deployment default.',
@@ -787,12 +788,11 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						example: 'marimohub',
 					},
 					{
-						id: 'MARIMOHUB_COMPUTE_DOCKER_LABEL_KEY',
-						name: 'Docker sandbox label key',
+						id: 'MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG',
+						name: 'Docker owner tag',
 						description:
-							'Label key used to create and discover sandbox containers for cleanup. Use a distinct, stable key for each hub sharing a Docker daemon. Surrounding whitespace is trimmed. Set a non-empty key using only ASCII letters, digits, underscores, dots, and hyphens, or leave the variable unset.',
-						default: 'marimohub.sandbox',
-						example: 'marimohub.prod.sandbox',
+							'Tag applied to owned sandboxes for discovery and cleanup. Set a distinct, stable tag on every hub sharing a Docker daemon; an untagged hub discovers and cleans up every hub’s sandboxes. Use 1–63 ASCII letters, digits, underscores, dots, and hyphens.',
+						example: 'hub-prod',
 						optIn: true,
 					},
 				],
@@ -823,12 +823,11 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						example: 'marimohub',
 					},
 					{
-						id: 'MARIMOHUB_COMPUTE_PODMAN_LABEL_KEY',
-						name: 'Podman sandbox label key',
+						id: 'MARIMOHUB_COMPUTE_PODMAN_OWNER_TAG',
+						name: 'Podman owner tag',
 						description:
-							'Label key used to create and discover sandbox containers for cleanup. Use a distinct, stable key for each hub sharing a Podman container store. Surrounding whitespace is trimmed. Set a non-empty key using only ASCII letters, digits, underscores, dots, and hyphens, or leave the variable unset.',
-						default: 'marimohub.sandbox',
-						example: 'marimohub.prod.sandbox',
+							'Tag applied to owned sandboxes for discovery and cleanup. Set a distinct, stable tag on every hub sharing a Podman container store; an untagged hub discovers and cleans up every hub’s sandboxes. Use 1–63 ASCII letters, digits, underscores, dots, and hyphens.',
+						example: 'hub-prod',
 						optIn: true,
 					},
 				],
@@ -1842,10 +1841,10 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					'Create a GitHub App with Contents and Pull requests read/write permissions. Install it on the allowed repositories, then set its numeric id and private key below. No webhook is required. For GHES, follow [Enterprise setup](syncing.md#github-enterprise-server).',
 				vars: [
 					{
-						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_URL',
-						name: 'GitHub URL',
+						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL',
+						name: 'GitHub server URL',
 						description:
-							'GitHub HTTPS origin, without a path. GHES sources and allowlist rules require full repository URLs; `owner/repo` still means github.com.',
+							'GitHub web origin without a path, such as `https://github.example.com`, not the API URL. GHES sources and allowlist rules require full repository URLs; `owner/repo` still means github.com.',
 						default: 'https://github.com',
 						example: 'https://git.acme.corp',
 						optIn: true,
@@ -1870,7 +1869,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES',
 						name: 'GitHub repository project policy',
 						description:
-							'Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax.',
+							'Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax.',
 						example: '[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]',
 						optIn: true,
 					},

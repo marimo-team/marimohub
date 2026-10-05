@@ -13,6 +13,7 @@ import {
 	createSandboxId,
 	createSessionId,
 	createVersionId,
+	PreviewId,
 	UserId,
 } from '../../ids';
 import { paths } from '../../paths';
@@ -101,7 +102,7 @@ describe('runtime inspection', () => {
 			const origin = {
 				type: 'preview' as const,
 				notebook_id: nid,
-				preview_id: 'a'.repeat(32),
+				preview_id: PreviewId.parse(`prev-${'a'.repeat(16)}`),
 				revision_id: v1,
 				commit: 'b'.repeat(40),
 			};

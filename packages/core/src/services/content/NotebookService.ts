@@ -245,14 +245,9 @@ export class NotebookService {
 
 	async getNotebook(projectId: ProjectId, notebookId: NotebookId): Promise<NotebookDetail> {
 		const nb = paths.project(projectId).notebook(notebookId);
-		const metaPromise = this.readNotebookMeta(projectId, notebookId);
-		const [storedMeta, readmeObj, sourceObj] = await Promise.all([
-			metaPromise,
-			metaPromise.then((meta) =>
-				this.bucket.get(
-					paths.project(projectId).notebook(meta.preview?.notebook_id ?? notebookId).readme,
-				),
-			),
+		const [storedMeta, ownReadmeObj, sourceObj] = await Promise.all([
+			this.readNotebookMeta(projectId, notebookId),
+			this.bucket.get(nb.readme),
 			this.bucket.get(nb.source),
 		]);
 
@@ -260,7 +255,13 @@ export class NotebookService {
 			throw new NotFoundError(`Notebook ${notebookId} not found`);
 		}
 
-		const meta = await this.resolvePreviewMeta(projectId, storedMeta);
+		// Preview runtimes have no README of their own; they show the parent's.
+		const [meta, readmeObj] = await Promise.all([
+			this.resolvePreviewMeta(projectId, storedMeta),
+			storedMeta.preview
+				? this.bucket.get(paths.project(projectId).notebook(storedMeta.preview.notebook_id).readme)
+				: ownReadmeObj,
+		]);
 		const source = await readStored(SourceSchema, sourceObj, nb.source);
 		const readme = readmeObj ? await readmeObj.text() : null;
 

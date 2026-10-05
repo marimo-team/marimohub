@@ -1,17 +1,15 @@
-import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { UnavailableError, ValidationError } from '@marimo-hub/core/errors';
 import { sourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import { GitHubClient } from './githubClient';
 import type { GitHubFetch } from './githubClient';
 import { GitHubAppPublisher } from './index';
+import { testPrivateKey } from './testing/fakeGitHub';
 
 const origin = 'https://git.acme.corp:8443';
 const options = {
 	appId: '123',
-	privateKey: generateKeyPairSync('rsa', { modulusLength: 2048 })
-		.privateKey.export({ type: 'pkcs8', format: 'pem' })
-		.toString(),
+	privateKey: testPrivateKey(),
 	url: origin,
 };
 const archivePath = '/repos/owner/repo/tarball/abc1234';
@@ -160,6 +158,71 @@ describe('GitHub archive redirects', () => {
 			message: 'GitHub archive is unavailable',
 		});
 		expect(fetcher).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe('github.com archive redirects', () => {
+	const github = (fetcher: GitHubFetch) =>
+		new GitHubClient({ ...options, url: undefined }, { fetcher });
+
+	it('follows a renamed-repository redirect through api.github.com before codeload', async () => {
+		const moved = 'https://api.github.com/repositories/987/tarball/abc1234';
+		const codeload = 'https://codeload.github.com/owner/renamed/legacy.tar.gz/abc1234';
+		const archive = new Response('archive');
+		const fetcher = vi
+			.fn<GitHubFetch>()
+			.mockResolvedValueOnce(redirect(moved, 301))
+			.mockResolvedValueOnce(redirect(codeload))
+			.mockResolvedValueOnce(archive);
+		await expect(github(fetcher).tarball(archivePath, 'token')).resolves.toBe(archive);
+		expect(fetcher).toHaveBeenCalledTimes(3);
+		const [first, second, third] = fetcher.mock.calls;
+		expect(first?.[0]).toBe(`https://api.github.com${archivePath}`);
+		expect(new Headers(first?.[1]?.headers).get('authorization')).toBe('Bearer token');
+		expect(second).toEqual([
+			moved,
+			{ redirect: 'manual', signal: undefined, headers: { authorization: 'Bearer token' } },
+		]);
+		expect(third).toEqual([codeload, { redirect: 'manual', signal: undefined, headers: {} }]);
+	});
+
+	it.each([
+		'https://api.github.com.evil.example/repositories/987/tarball/abc1234',
+		'https://codeload.github.com.evil.example/owner/repo/tar.gz/abc1234',
+		'http://api.github.com/repositories/987/tarball/abc1234',
+		'https://api.github.com:8443/repositories/987/tarball/abc1234',
+	])('rejects a misleading redirect to %s', async (location) => {
+		const fetcher = vi.fn<GitHubFetch>().mockResolvedValue(redirect(location));
+		await expect(github(fetcher).tarball(archivePath, 'token')).rejects.toThrow(
+			'Unexpected GitHub archive redirect',
+		);
+		expect(fetcher).toHaveBeenCalledOnce();
+	});
+});
+
+describe('GitHub URL validation', () => {
+	it.each(['https://api.github.com', 'https://www.github.com', 'https://API.GitHub.com'])(
+		'rejects %s and points at https://github.com',
+		(url) => {
+			expect(() => new GitHubClient({ ...options, url })).toThrow(
+				new ValidationError('Use https://github.com as the GitHub URL'),
+			);
+		},
+	);
+
+	it.each(['https://github.com.', 'https://git.acme.corp.', 'https://git.acme.corp.:8443'])(
+		'rejects the trailing-dot hostname %s',
+		(url) => {
+			expect(() => new GitHubClient({ ...options, url })).toThrow(ValidationError);
+		},
+	);
+
+	it.each([
+		[undefined, 'https://github.com'],
+		['https://github.com', 'https://github.com'],
+		['https://git.acme.corp:8443/', 'https://git.acme.corp:8443'],
+	])('accepts %s as %s', (url, expected) => {
+		expect(new GitHubClient({ ...options, url }).origin).toBe(expected);
 	});
 });
 

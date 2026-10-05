@@ -1,4 +1,3 @@
-import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { gzipSync } from 'fflate';
 import { BadRequestError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
@@ -6,19 +5,9 @@ import { sourceControlPublishFailure } from '@marimo-hub/core/ports/source-contr
 import { GitHubAppPublisher } from './index';
 import { GitHubClient } from './githubClient';
 import { collectTarballWorkspace, tarballPathMapper } from './githubWorkspace';
-
-const PRIVATE_KEY = generateKeyPairSync('rsa', { modulusLength: 2048 })
-	.privateKey.export({ type: 'pkcs8', format: 'pem' })
-	.toString();
+import { response, testPrivateKey } from './testing/fakeGitHub';
 
 const encode = (s: string) => new TextEncoder().encode(s);
-
-function response(value: unknown, status = 200): Response {
-	return new Response(JSON.stringify(value), {
-		status,
-		headers: { 'content-type': 'application/json' },
-	});
-}
 
 function tarEntry(name: string, body: Uint8Array, typeFlag = '0'): Uint8Array[] {
 	const header = new Uint8Array(512);
@@ -69,7 +58,7 @@ function reader(
 		if (!matched) throw new Error(`Unexpected GitHub request: ${url.pathname}`);
 		return matched;
 	};
-	return new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY }, { fetcher });
+	return new GitHubAppPublisher({ appId: '123', privateKey: testPrivateKey() }, { fetcher });
 }
 
 describe('GitHubAppPublisher reader', () => {
@@ -244,7 +233,10 @@ describe('GitHubAppPublisher reader', () => {
 			if (url.pathname === '/repos/owner/repo/installation') return response({}, 404);
 			throw new Error(`Unexpected GitHub request: ${url.pathname}`);
 		};
-		const github = new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY }, { fetcher });
+		const github = new GitHubAppPublisher(
+			{ appId: '123', privateKey: testPrivateKey() },
+			{ fetcher },
+		);
 		await expect(github.getBranchHead('owner/repo', 'main')).rejects.toThrow(
 			/not installed for owner\/repo/,
 		);
@@ -539,7 +531,10 @@ describe('GitHub preview cancellation', () => {
 		const reason = new DOMException('Worker stopped', 'AbortError');
 		controller.abort(reason);
 		const fetcher = vi.fn();
-		const github = new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY }, { fetcher });
+		const github = new GitHubAppPublisher(
+			{ appId: '123', privateKey: testPrivateKey() },
+			{ fetcher },
+		);
 		await expect(
 			github.getBranchHead('owner/repo', 'main', { signal: controller.signal }),
 		).rejects.toBe(reason);
@@ -560,7 +555,10 @@ describe('GitHub preview cancellation', () => {
 				if (url.endsWith('/installation')) return response({ id: 42 });
 				return response({ token: 'token' });
 			});
-			const github = new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY }, { fetcher });
+			const github = new GitHubAppPublisher(
+				{ appId: '123', privateKey: testPrivateKey() },
+				{ fetcher },
+			);
 			await expect(
 				github.getBranchHead('owner/repo', 'main', { signal: controller.signal }),
 			).rejects.toBe(reason);
@@ -590,7 +588,10 @@ describe('GitHub preview cancellation', () => {
 				if (url.endsWith('/installation')) return response({ id: 42 });
 				return response({ token: 'token' });
 			};
-			const github = new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY }, { fetcher });
+			const github = new GitHubAppPublisher(
+				{ appId: '123', privateKey: testPrivateKey() },
+				{ fetcher },
+			);
 			await expect(
 				path === 'tarball'
 					? github.fetchWorkspace('owner/repo', 'a'.repeat(40), '', { signal: controller.signal })
@@ -608,7 +609,10 @@ describe('GitHub preview cancellation', () => {
 			if (url.endsWith('/access_tokens')) return response({ token: 'token' });
 			return new Response(tarball({ 'app.py': 'import marimo' }));
 		});
-		const github = new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY }, { fetcher });
+		const github = new GitHubAppPublisher(
+			{ appId: '123', privateKey: testPrivateKey() },
+			{ fetcher },
+		);
 		await github.fetchWorkspace('owner/repo', 'a'.repeat(40), '', { signal: controller.signal });
 		expect(fetcher).toHaveBeenCalledTimes(3);
 	});
@@ -619,7 +623,10 @@ describe('GitHub preview cancellation', () => {
 			controller.abort();
 			return response({ id: 42 });
 		});
-		const github = new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY }, { fetcher });
+		const github = new GitHubAppPublisher(
+			{ appId: '123', privateKey: testPrivateKey() },
+			{ fetcher },
+		);
 		await expect(
 			github.getBranchHead('owner/repo', 'main', { signal: controller.signal }),
 		).rejects.toBe(controller.signal.reason);
@@ -650,7 +657,10 @@ describe('GitHub source suggestion cancellation', () => {
 				if (url.endsWith('/access_tokens')) return response({ token: 'token' });
 				return response(payload);
 			});
-			const github = new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY }, { fetcher });
+			const github = new GitHubAppPublisher(
+				{ appId: '123', privateKey: testPrivateKey() },
+				{ fetcher },
+			);
 			await github[method]('owner/repo', query, { signal: controller.signal });
 			expect(fetcher).toHaveBeenCalledTimes(3);
 		},
@@ -676,7 +686,10 @@ describe('GitHub source suggestion cancellation', () => {
 					),
 				);
 			};
-			const github = new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY }, { fetcher });
+			const github = new GitHubAppPublisher(
+				{ appId: '123', privateKey: testPrivateKey() },
+				{ fetcher },
+			);
 			await expect(github[method]('owner/repo', query, { signal: controller.signal })).rejects.toBe(
 				reason,
 			);
@@ -689,7 +702,10 @@ describe('GitHub source suggestion cancellation', () => {
 			const controller = new AbortController();
 			controller.abort();
 			const fetcher = vi.fn();
-			const github = new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY }, { fetcher });
+			const github = new GitHubAppPublisher(
+				{ appId: '123', privateKey: testPrivateKey() },
+				{ fetcher },
+			);
 			await expect(github[method]('owner/repo', query, { signal: controller.signal })).rejects.toBe(
 				controller.signal.reason,
 			);
@@ -705,7 +721,7 @@ describe('GitHub Enterprise reader', () => {
 
 	function enterpriseReader(archive: (url: URL, init?: RequestInit) => Response) {
 		return new GitHubAppPublisher(
-			{ appId: '123', privateKey: PRIVATE_KEY, url: origin },
+			{ appId: '123', privateKey: testPrivateKey(), url: origin },
 			{
 				fetcher: async (input, init) => {
 					const url = new URL(input);
@@ -756,6 +772,70 @@ describe('GitHub Enterprise reader', () => {
 			sameRepository: true,
 		});
 		await expect(github.getPullRequest('https://github.com/owner/repo', 42)).rejects.toThrow(
+			ValidationError,
+		);
+	});
+
+	it('reads a preview pull request without consulting html_url', async () => {
+		const github = enterpriseReader(() =>
+			response({
+				html_url: 'https://evil.example/owner/repo/pull/42',
+				state: 'closed',
+				head: { ref: 'feature', sha: commit, repo: { full_name: 'fork/repo' } },
+			}),
+		);
+		await expect(github.getPullRequest(repository, 42)).resolves.toEqual({
+			number: 42,
+			state: 'closed',
+			branch: 'feature',
+			commit,
+			sameRepository: false,
+		});
+	});
+
+	it('lists branches and commits through /api/v3', async () => {
+		const requested: string[] = [];
+		const github = enterpriseReader((url) => {
+			requested.push(`${url.pathname}${url.search}`);
+			if (url.pathname === '/api/v3/repos/owner/repo/branches') {
+				return response([{ name: 'main', commit: { sha: commit } }]);
+			}
+			if (url.pathname === '/api/v3/repos/owner/repo/commits') {
+				return response([{ sha: commit, commit: { message: 'Initial\n\nbody' } }]);
+			}
+			throw new Error(`Unexpected request: ${url.href}`);
+		});
+		await expect(github.listBranches(repository, '')).resolves.toEqual([
+			{ value: 'main', label: 'main', commit },
+		]);
+		await expect(github.listCommits(repository, '')).resolves.toEqual([
+			{ value: commit, commit, label: `${commit.slice(0, 12)} Initial` },
+		]);
+		expect(requested).toEqual([
+			'/api/v3/repos/owner/repo/branches?per_page=100',
+			'/api/v3/repos/owner/repo/commits?per_page=100',
+		]);
+	});
+
+	it('resolves a commit through /api/v3 and reports a missing one', async () => {
+		const missing = 'b'.repeat(40);
+		const github = enterpriseReader((url) => {
+			if (url.pathname === `/api/v3/repos/owner/repo/commits/${commit}`) {
+				return response({ sha: commit });
+			}
+			if (url.pathname === `/api/v3/repos/owner/repo/commits/${missing}`) {
+				return response({ message: 'Not Found' }, 404);
+			}
+			throw new Error(`Unexpected request: ${url.href}`);
+		});
+		await expect(github.resolveCommit(repository, commit)).resolves.toEqual({ commit });
+		await expect(github.listCommits(repository, commit)).resolves.toEqual([
+			{ value: commit, commit, label: commit.slice(0, 12) },
+		]);
+		await expect(github.resolveCommit(repository, missing)).rejects.toThrow(
+			'Commit not found in the configured repository',
+		);
+		await expect(github.resolveCommit('https://github.com/owner/repo', commit)).rejects.toThrow(
 			ValidationError,
 		);
 	});
@@ -811,7 +891,7 @@ describe('GitHub Enterprise reader', () => {
 
 	it('enforces the streamed download limit after a redirect', async () => {
 		const client = new GitHubClient(
-			{ appId: '123', privateKey: PRIVATE_KEY, url: origin },
+			{ appId: '123', privateKey: testPrivateKey(), url: origin },
 			{
 				fetcher: async (url) =>
 					url.includes('/api/v3/')

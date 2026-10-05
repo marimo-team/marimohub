@@ -20,6 +20,13 @@ const ReactQueryDevtools = import.meta.env.DEV
 	: () => null;
 
 async function bootstrap() {
+	// Apply the stored preference before awaiting the theme request so a
+	// dark-mode user does not see a light page while it is in flight.
+	try {
+		applyThemeMode(getInitialTheme());
+	} catch (error) {
+		console.warn('Could not apply the preferred color mode.', error);
+	}
 	let branding = DEFAULT_THEME_CONFIG;
 	try {
 		branding = await loadThemeConfig();
@@ -27,7 +34,7 @@ async function bootstrap() {
 		console.warn('Could not load the deployment theme. Using defaults.', error);
 	}
 	try {
-		applyThemeMode(branding.force_mode ?? getInitialTheme());
+		if (branding.color_mode !== 'user') applyThemeMode(branding.color_mode);
 		applyThemeConfig(branding);
 	} catch (error) {
 		console.warn('Could not fully initialize the deployment theme.', error);

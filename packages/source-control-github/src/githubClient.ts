@@ -125,6 +125,9 @@ export class GitHubClient {
 		let response = await this.request(path, token, { redirect: 'manual', signal }, redirects);
 		let previous = `${this.apiBaseUrl}${path}`;
 		const origin = new URL(this.origin);
+		// github.com answers renamed or transferred repositories with a redirect to
+		// api.github.com/repositories/{id}/..., which still needs the installation token.
+		const trustedOrigins = new Set([this.origin, new URL(this.apiBaseUrl).origin]);
 		const codeloadHost =
 			this.origin === 'https://github.com' ? 'codeload.github.com' : `codeload.${origin.hostname}`;
 		for (let count = 0; redirects.includes(response.status); count++) {
@@ -143,7 +146,7 @@ export class GitHubClient {
 				target.username ||
 				target.password ||
 				target.hash ||
-				(target.origin !== this.origin &&
+				(!trustedOrigins.has(target.origin) &&
 					!(target.hostname === codeloadHost && target.port === origin.port))
 			) {
 				throw new UnavailableError('Unexpected GitHub archive redirect');
@@ -153,7 +156,7 @@ export class GitHubClient {
 					redirect: 'manual',
 					signal,
 					// Installation credentials must not cross to the codeload origin.
-					headers: target.origin === this.origin ? { authorization: `Bearer ${token}` } : {},
+					headers: trustedOrigins.has(target.origin) ? { authorization: `Bearer ${token}` } : {},
 				});
 			} catch (error) {
 				signal?.throwIfAborted();

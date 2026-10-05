@@ -3,7 +3,7 @@ import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { ConfigError } from './errors';
 
 const THEME_VARIABLES = {
-	force_mode: 'MARIMOHUB_THEME_FORCE_MODE',
+	color_mode: 'MARIMOHUB_THEME_COLOR_MODE',
 	name: 'MARIMOHUB_THEME_NAME',
 	favicon: 'MARIMOHUB_THEME_FAVICON',
 	logo: 'MARIMOHUB_THEME_LOGO',
@@ -32,8 +32,8 @@ export function parseTheme(env: ThemeEnv): ThemeConfig {
 		throw new ConfigError(`Invalid ${variable}: ${issue.message}`, {
 			variable,
 			remediation:
-				variable === 'MARIMOHUB_THEME_FORCE_MODE'
-					? 'Use light or dark, or unset or blank the variable to allow user preferences.'
+				variable === 'MARIMOHUB_THEME_COLOR_MODE'
+					? 'Use user, light, or dark. Unset or blank means user.'
 					: 'Use an HTTPS URL, a root-relative asset path, or an opaque hex color as appropriate.',
 			docs: 'docs/theming.md',
 		});
