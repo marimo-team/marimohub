@@ -62,15 +62,15 @@ export class NotebookPreviewService {
 	private async materialize(intent: NotebookPreview): Promise<NotebookPreview> {
 		if (intent.state === 'deleted') return intent;
 		const key = previewKey(intent.project_id, intent.notebook_id, intent.id);
-		let object = await this.bucket.get(key);
+		const object = await this.bucket.get(key);
 		if (!object) {
 			try {
 				await this.bucket.put(key, JSON.stringify(intent), { onlyIfNotExists: true });
 			} catch (error) {
 				if (!(error instanceof PreconditionFailedError)) throw error;
 			}
-			object = await this.bucket.get(key);
-			if (!object) throw new NotFoundError('Preview not found');
+			// Cleanup may have forgotten the preview since the caller read its membership.
+			return this.get(intent.project_id, intent.notebook_id, intent.id);
 		}
 		return readStored(PreviewRecordSchema, object, key);
 	}

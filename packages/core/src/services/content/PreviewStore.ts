@@ -196,19 +196,24 @@ export class PreviewStore {
 		intent: NotebookPreview,
 		creationDeadline = Date.now() + PREVIEW_LIMITS.creationMs,
 	): Promise<NotebookPreview> {
-		return this.changeProject(intent.project_id, (record) => {
-			const existing = record.entries.find((entry) => entry.intent.id === intent.id);
-			if (existing) return existing.intent;
-			// A delayed create must not restore membership after deletion and cleanup.
-			if (Date.now() >= creationDeadline)
-				throw new ConflictError('Preview creation attempt expired; retry the request');
-			if (record.entries.length >= PREVIEW_LIMITS.perProject)
-				throw new ResourceExhaustedError(
-					'Project preview limit reached, including previews awaiting cleanup',
-				);
-			record.entries.push({ intent, artifacts: [] });
-			return intent;
-		});
+		return this.changeProject(
+			intent.project_id,
+			(record) => {
+				const existing = record.entries.find((entry) => entry.intent.id === intent.id);
+				if (existing) return existing.intent;
+				// A delayed create must not restore membership after deletion and cleanup.
+				if (Date.now() >= creationDeadline)
+					throw new ConflictError('Preview creation attempt expired; retry the request');
+				if (record.entries.length >= PREVIEW_LIMITS.perProject)
+					throw new ResourceExhaustedError(
+						'Project preview limit reached, including previews awaiting cleanup',
+					);
+				record.entries.push({ intent, artifacts: [] });
+				return intent;
+			},
+			// An idempotent replay must still serialize with cleanup before the record is materialized.
+			{ fence: true },
+		);
 	}
 
 	async reserveArtifact(

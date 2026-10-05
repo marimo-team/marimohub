@@ -352,8 +352,6 @@ export const paths = {
 		`_system/job-deletions/${projectId}/${notebookId}/`,
 	jobDeletionClaim: (projectId: ProjectId, notebookId: NotebookId, jobId: JobId) =>
 		`_system/job-deletions/${projectId}/${notebookId}/${jobId}.json`,
-	previewsForNotebook: (projectId: ProjectId, notebookId: NotebookId) =>
-		`_system/previews/${projectId}/${notebookId}/`,
 	preview: (projectId: ProjectId, notebookId: NotebookId, previewId: string) =>
 		`_system/previews/${projectId}/${notebookId}/${previewId}.json`,
 	previewProjectsPrefix: '_system/preview-projects/',

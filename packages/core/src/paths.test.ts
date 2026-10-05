@@ -41,9 +41,6 @@ describe('paths', () => {
 		expect(paths.preview(pid, nid, 'abc')).toBe(
 			'_system/previews/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/abc.json',
 		);
-		expect(paths.previewsForNotebook(pid, nid)).toBe(
-			'_system/previews/proj_01HXY11111ABCDEFGHJKMN/nb_01HXYZ22222PQRSTUVWXYZ/',
-		);
 		expect(paths.previewProject(pid)).toBe(
 			'_system/preview-projects/proj_01HXY11111ABCDEFGHJKMN.json',
 		);

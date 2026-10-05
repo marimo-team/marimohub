@@ -72,6 +72,10 @@ export function useDeletePreview(pid: string, nid: string) {
 					params: { path: { pid, nid, prid } },
 				}),
 			),
-		onSuccess: () => client.invalidateQueries({ queryKey: previewKeys.list(pid, nid) }),
+		onSuccess: (_data, prid) =>
+			Promise.all([
+				client.invalidateQueries({ queryKey: previewKeys.list(pid, nid) }),
+				client.invalidateQueries({ queryKey: previewKeys.detail(pid, nid, prid) }),
+			]),
 	});
 }

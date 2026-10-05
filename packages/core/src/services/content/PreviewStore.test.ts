@@ -368,7 +368,6 @@ describe('PreviewStore no-op mutations', () => {
 		await store.reserveArtifact(record, nid, 1);
 		const claim = (await store.claim(pid, record.id))!;
 		const writes = vi.spyOn(bucket, 'put');
-		await store.reserve(record);
 		await store.reserveArtifact(record, nid, 1);
 		await store.releaseArtifact(record, createNotebookId());
 		await store.pruneReceipts(pid);
@@ -378,6 +377,14 @@ describe('PreviewStore no-op mutations', () => {
 		expect(writes).not.toHaveBeenCalled();
 		await store.release(claim.token);
 		expect(writes).toHaveBeenCalledOnce();
+	});
+
+	it('fences an idempotent reservation replay against concurrent cleanup', async () => {
+		const { store, pid, intent } = fixture();
+		const record = await store.reserve(intent());
+		const { revision } = await store.project(pid);
+		expect(await store.reserve(record)).toEqual(record);
+		expect((await store.project(pid)).revision).not.toBe(revision);
 	});
 
 	it('advances scheduling cursors only when they move and never seeds claims into cleanup', async () => {

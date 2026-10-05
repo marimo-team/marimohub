@@ -231,7 +231,8 @@ A tagged hub ignores containers created before it had a tag. To adopt tags:
 1. Save notebooks and stop sessions and jobs in all hubs on the daemon.
 2. Stop all hubs to prevent new sandbox creation.
 3. Remove their remaining sandbox containers, including idle pool containers
-   (`docker ps -a --filter label=marimohub.sandbox`, or the same with `podman`).
+   (`docker rm -f $(docker ps -aq --filter label=marimohub.sandbox)`, or the
+   same with `podman`).
 4. Set a distinct tag for each hub, then restart the hubs.
 
 ## Production cautions

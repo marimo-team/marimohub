@@ -239,7 +239,9 @@ function rejectModalImageRefs(backend: string, variable: string, images: string[
 			{
 				variable,
 				remediation:
-					'Replace modal:// entries with container registry references, or set MARIMOHUB_COMPUTE_BACKEND=modal.',
+					variable === 'MARIMOHUB_COMPUTE_E2B_TEMPLATE'
+						? 'Replace modal:// entries with E2B template IDs, or set MARIMOHUB_COMPUTE_BACKEND=modal.'
+						: 'Replace modal:// entries with container registry references, or set MARIMOHUB_COMPUTE_BACKEND=modal.',
 				docs: 'docs/configuration.md#compute',
 			},
 		);
