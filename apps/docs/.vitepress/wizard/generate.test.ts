@@ -5,6 +5,7 @@ import {
 	generateEnv,
 	generateHelm,
 	generateLibrary,
+	resolveValue,
 	validateSelection,
 } from './generate';
 import type { WizardSelection } from './generate';
@@ -130,6 +131,17 @@ describe('config -> code generators', () => {
 			it('library', () => expect(generateLibrary(sel)).toMatchSnapshot());
 		});
 	}
+
+	it('requires an explicit GitHub Enterprise origin when resolving optional config', () => {
+		const variable = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_URL';
+		const unsetValues: Record<string, string>[] = [{}, { [variable]: '' }, { [variable]: '   ' }];
+		for (const values of unsetValues) {
+			expect(resolveValue(variable, values)).toBe('');
+		}
+		expect(resolveValue(variable, { [variable]: ' https://github.enterprise.example ' })).toBe(
+			'https://github.enterprise.example',
+		);
+	});
 
 	it.each([generateEnv, generateHelm, generateCompose])(
 		'includes Modal secrets only when explicitly configured in %s',

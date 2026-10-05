@@ -17,6 +17,7 @@ export class ConfiguredSourceControlRegistry implements SourceControlRegistry {
 		publishers: readonly SourceControlPublisher[],
 		readers: readonly SourceControlReader[],
 		private readonly authorize?: AuthorizeRepository,
+		readonly repositoryHosts?: SourceControlRegistry['repositoryHosts'],
 	) {
 		this.publishers = new Map(publishers.map((publisher) => [publisher.provider, publisher]));
 		this.readers = new Map(readers.map((reader) => [reader.provider, reader]));

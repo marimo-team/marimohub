@@ -118,3 +118,14 @@ describe('GitHub pull request URLs', () => {
 		expect(() => pullRequestUrl({ html_url: htmlUrl }, 'owner', 'repo', 17)).toThrow(message);
 	});
 });
+
+it('validates enterprise pull request URLs against the configured origin', () => {
+	const origin = 'https://git.acme.corp';
+	const html_url = `${origin}/owner/repo/pull/17`;
+	expect(pullRequestUrl({ html_url }, 'owner', 'repo', 17, origin)).toBe(html_url);
+	for (const other of ['https://github.com', 'https://other.corp', 'https://git.acme.corp:8443']) {
+		expect(() =>
+			pullRequestUrl({ html_url: `${other}/owner/repo/pull/17` }, 'owner', 'repo', 17, origin),
+		).toThrow('unexpected pull request URL');
+	}
+});

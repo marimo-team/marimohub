@@ -1816,13 +1816,22 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Source control publishing',
 		description:
-			'Connect Git-synced notebooks to GitHub through the server. Editors can create pull sources without a CI workflow. They can also compare and sync either source mode with **Sync now**. Managers can publish session edits as draft pull requests.\n\nThe server stores credential-free Git metadata for pull sources. Provider credentials never enter a notebook sandbox. GitHub.com is the only supported provider in this release. See [Syncing from external sources](./syncing.md) for source modes and limits.',
+			'Connect to github.com or one GitHub Enterprise Server host per deployment. Editors can create pull sources and use **Sync now**. Managers can publish session edits as draft PRs. Provider credentials stay on the server. See [Syncing from external sources](./syncing.md) for modes and limits.',
 		backends: [
 			{
 				name: 'GitHub App',
 				description:
-					'Create a GitHub App with Contents (read and write) and Pull requests (read and write) repository permissions. Install it only on repositories that marimohub can sync from or publish to. Then set both variables below. The integration does not require a webhook. Marimohub creates short-lived installation tokens for drift checks, syncs, and pull-request publishing.',
+					'Create a GitHub App with Contents and Pull requests read/write permissions. Install it on the allowed repositories, then set its numeric id and private key below. No webhook is required. For GHES, follow [Enterprise setup](syncing.md#github-enterprise-server).',
 				vars: [
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_URL',
+						name: 'GitHub URL',
+						description:
+							'GitHub HTTPS origin, without a path. GHES sources and allowlist rules require full repository URLs; `owner/repo` still means github.com.',
+						default: 'https://github.com',
+						example: 'https://git.acme.corp',
+						optIn: true,
+					},
 					{
 						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID',
 						name: 'GitHub App id',
@@ -1843,7 +1852,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES',
 						name: 'GitHub repository project policy',
 						description:
-							'Optional JSON array of `{resource, projects}` rules. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax.',
+							'Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax.',
 						example: '[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]',
 						optIn: true,
 					},

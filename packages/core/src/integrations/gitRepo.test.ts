@@ -113,6 +113,13 @@ describe('detectProvider', () => {
 		expect(detectProvider('acme/analytics')).toBe('github');
 	});
 
+	it('uses exact configured hosts without inherited object properties', () => {
+		const hosts = { 'git.acme.corp': 'github' as const };
+		expect(detectProvider('https://git.acme.corp/acme/analytics', hosts)).toBe('github');
+		expect(detectProvider('https://other.corp/acme/analytics', hosts)).toBeNull();
+		expect(detectProvider('https://constructor/acme/analytics', hosts)).toBeNull();
+	});
+
 	it('recognizes github and gitlab hosts, including self-hosted names', () => {
 		expect(detectProvider('https://github.com/acme/analytics')).toBe('github');
 		expect(detectProvider('https://www.github.com/acme/analytics')).toBe('github');
@@ -171,6 +178,24 @@ describe('reposMatch', () => {
 		expect(reposMatch('https://gitlab.com/group/repo', 'https://gitlab.com:8443/group/repo')).toBe(
 			false,
 		);
+	});
+
+	it.each([
+		['https://git.acme.corp/Team/Repo', 'team/repo', true],
+		['https://git.acme.corp/Team/Repo', 'https://git.acme.corp/team/repo.git', true],
+		['https://git.acme.corp/Team/Repo', 'https://other.corp/team/repo', false],
+		['https://git.acme.corp/Team/Repo', 'https://git.acme.corp:8443/team/repo', false],
+		['https://git.acme.corp:8443/Team/Repo', 'team/repo', false],
+		['https://gitlab.com/Team/Repo', 'team/repo', false],
+		['https://git.internal/Team/Repo', 'team/repo', false],
+		['https://unknown.corp/Team/Repo', 'team/repo', false],
+	])('matches %s against %s using configured hosts: %s', (expected, received, matches) => {
+		expect(
+			reposMatch(expected, received, {
+				'git.acme.corp': 'github',
+				'git.internal': 'gitlab',
+			}),
+		).toBe(matches);
 	});
 
 	it('rejects different repositories', () => {

@@ -97,6 +97,8 @@ afterEach(async () => {
 	);
 });
 
+const ORIGINS = ['https://github.com', 'https://git.acme.corp'];
+
 // Git subprocess tests; need headroom when the whole suite shares the CPU.
 describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 	it('caps the combined bytes from all smart-HTTP responses', () => {
@@ -107,7 +109,7 @@ describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 		);
 	});
 
-	it('preserves an exact signed commit and produces a clean credential-free working tree', async () => {
+	it.each(ORIGINS)('restores a signed, credential-free Git tree from %s', async (origin) => {
 		const source = await temporaryDirectory('marimohub-git-source-');
 		git(source, ['init', '-b', 'main']);
 		await writeFile(join(source, 'app.py'), 'print("signed")\n');
@@ -128,19 +130,23 @@ describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 		git(source, ['update-ref', 'refs/heads/main', commit]);
 
 		const files = await materializeGitDirectory({
-			repository: 'owner/repo',
+			repository: `${origin}/owner/repo`,
+			origin,
 			owner: 'owner',
 			repo: 'repo',
 			commit,
 			branch: 'main',
 			token: 'installation-secret',
-			fetcher: uploadPackFetcher(source),
+			fetcher: async (url, init) => {
+				expect(url.startsWith(`${origin}/owner/repo.git/`)).toBe(true);
+				return uploadPackFetcher(source)(url, init);
+			},
 		});
 		expect(files.map((file) => file.path)).toEqual(
 			expect.arrayContaining(['HEAD', 'config', 'index', 'shallow']),
 		);
 		const config = new TextDecoder().decode(files.find((file) => file.path === 'config')?.bytes);
-		expect(config).toContain('https://github.com/owner/repo.git');
+		expect(config).toContain(`${origin}/owner/repo.git`);
 		expect(config).not.toContain('installation-secret');
 
 		const restored = await temporaryDirectory('marimohub-git-restored-');

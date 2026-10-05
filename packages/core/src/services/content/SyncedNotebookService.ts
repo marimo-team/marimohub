@@ -1,3 +1,4 @@
+import type { GitProviderHosts } from '../../integrations/gitRepo';
 import type { Bucket } from '../../ports/bucket';
 import { BadRequestError, ConflictError, NotFoundError } from '../../errors';
 import { createNotebookId, createVersionId, SYSTEM_ACTOR } from '../../ids';
@@ -41,6 +42,7 @@ import {
 } from '../../integrations/packedWorkspace';
 
 interface SyncedNotebookServiceHooks {
+	repositoryHosts?: GitProviderHosts;
 	getNotebook: (
 		projectId: ProjectId,
 		notebookId: NotebookId,
@@ -70,7 +72,7 @@ export class SyncedNotebookService {
 	): Promise<{ meta: NotebookMeta; sync_token?: string }> {
 		const notebookId = createNotebookId();
 		const now = new Date().toISOString();
-		const source = createGitSource(input);
+		const source = createGitSource(input, this.hooks.repositoryHosts);
 		const syncToken = source.sync_mode === 'push' ? createSyncToken() : undefined;
 
 		const meta = buildNotebookMeta({
@@ -164,7 +166,7 @@ export class SyncedNotebookService {
 			this.bucket,
 			nb.source,
 			(raw) => assertSyncedSource(parseStored(SourceSchema, raw, nb.source)),
-			(current) => applyGitSourceUpdate(current, input),
+			(current) => applyGitSourceUpdate(current, input, this.hooks.repositoryHosts),
 		);
 		const now = new Date().toISOString();
 		await mutateObject(
@@ -223,7 +225,7 @@ export class SyncedNotebookService {
 			throw new NotFoundError(`Notebook ${notebookId} not found`);
 		}
 		const syncedSource = assertSyncedSource(source);
-		const prepared = prepareSync(syncedSource, input);
+		const prepared = prepareSync(syncedSource, input, this.hooks.repositoryHosts);
 		if (input.git_files) assertGitDirectoryLimits(input.git_files);
 		const gitFiles = input.git_files ? toSyncedWorkspaceFileMap(input.git_files) : undefined;
 		if (syncedSource.sync_mode === 'pull' && !gitFiles) {
@@ -280,7 +282,7 @@ export class SyncedNotebookService {
 			commit: prepared.commit,
 		});
 		version.git_source = {
-			provider: providerForRepo(syncedSource, prepared.config.repo),
+			provider: providerForRepo(syncedSource, prepared.config.repo, this.hooks.repositoryHosts),
 			...prepared.config,
 			commit: prepared.commit,
 		};
@@ -341,7 +343,7 @@ export class SyncedNotebookService {
 					(raw) => parseStored(SourceSchema, raw, nb.source),
 					(current) => {
 						const git = assertSyncedSource(current);
-						const currentPrepared = prepareSync(git, input);
+						const currentPrepared = prepareSync(git, input, this.hooks.repositoryHosts);
 						if (isAtBranchHead(git, currentPrepared.commit)) return null;
 						// A pull that resolved its head against an older source state must
 						// not regress a pointer another sync advanced meanwhile. Failing
@@ -351,7 +353,11 @@ export class SyncedNotebookService {
 						return {
 							...withoutPending,
 							...currentPrepared.config,
-							provider: providerForRepo(git, currentPrepared.config.repo),
+							provider: providerForRepo(
+								git,
+								currentPrepared.config.repo,
+								this.hooks.repositoryHosts,
+							),
 							current_version_id: versionId,
 							commit: currentPrepared.commit,
 							last_synced_at: now,
