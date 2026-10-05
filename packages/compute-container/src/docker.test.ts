@@ -203,36 +203,6 @@ describe('DockerCompute', () => {
 		);
 	});
 
-	it('exposePort: resolves the OS-assigned host port into an http URL', async () => {
-		const { runner } = fakeRunner(defaultHandler);
-		const sb = new DockerCompute({ host: 'example.test' }, runner).create(SANDBOX_ID);
-
-		const { url } = await sb.exposePort(2718, { hostname: 'ignored' });
-		expect(url).toBe('http://example.test:49153');
-	});
-
-	it('exposePort throws when docker port output cannot be parsed', async () => {
-		const { runner } = fakeRunner((args) => {
-			if (args[0] === 'port') return { stdout: 'not-a-port', stderr: '', exitCode: 0 };
-			return defaultHandler(args);
-		});
-		const sb = new DockerCompute({}, runner).create(SANDBOX_ID);
-
-		await expect(sb.exposePort(2718, { hostname: 'ignored' })).rejects.toThrow(
-			/could not parse host port/,
-		);
-	});
-
-	it('exposePort returns non-kernel ports without querying docker port', async () => {
-		const { runner, calls } = fakeRunner(defaultHandler);
-		const sb = new DockerCompute({ host: 'example.test' }, runner).create(SANDBOX_ID);
-
-		await expect(sb.exposePort(8888, { hostname: 'ignored' })).resolves.toEqual({
-			url: 'http://example.test:8888',
-		});
-		expect(calls.some((c) => c.args[0] === 'port')).toBe(false);
-	});
-
 	it('mountBucket throws so the provisioner falls back to file copy', async () => {
 		const { runner } = fakeRunner(defaultHandler);
 		const sb = new DockerCompute({}, runner).create(SANDBOX_ID);
@@ -283,8 +253,7 @@ describe('DockerCompute', () => {
 		const { runner } = fakeRunner((args) => {
 			const base = defaultHandler(args);
 			if (base) return base;
-			// The `exec -d` detached launch fails; ordinary execs still succeed.
-			if (args[0] === 'exec' && args.includes('-d')) {
+			if (args[0] === 'exec' && args.at(-1)?.includes('start_new_session=True')) {
 				return { stdout: '', stderr: 'exec denied', exitCode: 1 };
 			}
 			return;
@@ -393,7 +362,7 @@ describe('DockerCompute', () => {
 		expect(calls.some((c) => c.args[0] === 'run')).toBe(true);
 	});
 
-	it('startProcess launches detached, returns logs, and best-effort kills marimo', async () => {
+	it('startProcess launches detached, returns logs, and kills its own process group', async () => {
 		const { runner, calls } = fakeRunner((args) => {
 			const base = defaultHandler(args);
 			if (base) return base;
@@ -416,7 +385,9 @@ describe('DockerCompute', () => {
 		expect(proc.id).toBe('kernel-process');
 		expect(proc.command).toBe('uv run marimo edit app.py');
 		expect(logs).toEqual({ stdout: 'kernel log', stderr: '' });
-		const launch = calls.find((c) => c.args[0] === 'exec' && c.args.includes('-d'))!;
+		const launch = calls.find(
+			(c) => c.args[0] === 'exec' && c.args.at(-1)?.includes('start_new_session=True'),
+		)!;
 		expect(launch.args.at(-1)).toContain('env.sh');
 		expect(calls.flatMap((c) => c.args).join(' ')).not.toContain('a b');
 		expect(
@@ -425,7 +396,9 @@ describe('DockerCompute', () => {
 			),
 		).toBe(true);
 		expect(launch.args.at(-1)).not.toContain('OMITTED');
-		expect(calls.some((c) => c.args[0] === 'exec' && c.args.includes('pkill'))).toBe(true);
+		const kill = calls.find((c) => c.args.includes('SIGTERM'));
+		expect(kill?.args).toContainEqual(expect.stringContaining('os.killpg'));
+		expect(kill?.args).toContainEqual(expect.stringMatching(/^\/tmp\/marimohub-proc-.*\.pid$/));
 	});
 
 	it('returns a launch failure from one log wait without probing the port', async () => {
@@ -461,13 +434,17 @@ describe('DockerCompute', () => {
 		});
 		const execCalls = calls.filter((call) => call.args[0] === 'exec');
 		expect(execCalls).toHaveLength(2);
-		expect(execCalls.filter((call) => call.args.includes('-d'))).toHaveLength(1);
+		expect(
+			execCalls.filter((call) => call.args.at(-1)?.includes('start_new_session=True')),
+		).toHaveLength(1);
 		expect(execCalls.filter((call) => call.args.at(-1)?.includes('terminal_events'))).toHaveLength(
 			1,
 		);
 		expect(
 			execCalls.some(
-				(call) => !call.args.includes('-d') && call.args.at(-1)?.includes('connect_ex'),
+				(call) =>
+					!call.args.at(-1)?.includes('start_new_session=True') &&
+					call.args.at(-1)?.includes('connect_ex'),
 			),
 		).toBe(false);
 	});

@@ -519,24 +519,31 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				),
 			});
 		case 'docker':
-			// Each kernel runs in a container on a Docker daemon (local socket or a
-			// remote DOCKER_HOST), reached directly at http://<host>:<published-port>.
-			// Good for single-host self-hosting; `proxy()` is a no-op like local.
-			return new DockerCompute({
+		case 'podman': {
+			const Container = backend === 'docker' ? DockerCompute : PodmanCompute;
+			const variables =
+				backend === 'docker'
+					? {
+							host: 'MARIMOHUB_COMPUTE_DOCKER_HOST',
+							bindHost: 'MARIMOHUB_COMPUTE_DOCKER_BIND_HOST',
+							network: 'MARIMOHUB_COMPUTE_DOCKER_NETWORK',
+							ownerTag: 'MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG',
+						}
+					: {
+							host: 'MARIMOHUB_COMPUTE_PODMAN_HOST',
+							bindHost: 'MARIMOHUB_COMPUTE_PODMAN_BIND_HOST',
+							network: 'MARIMOHUB_COMPUTE_PODMAN_NETWORK',
+							ownerTag: 'MARIMOHUB_COMPUTE_PODMAN_OWNER_TAG',
+						};
+			return new Container({
 				image: defaultImage,
-				host: env.MARIMOHUB_COMPUTE_DOCKER_HOST,
-				bindHost: env.MARIMOHUB_COMPUTE_DOCKER_BIND_HOST,
-				network: env.MARIMOHUB_COMPUTE_DOCKER_NETWORK,
-				ownerTag: containerOwnerTag(env, 'MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG'),
+				host: env[variables.host],
+				bindHost: env[variables.bindHost],
+				network: env[variables.network],
+				ownerTag: containerOwnerTag(env, variables.ownerTag),
+				surfacePorts: surfacePorts(opts?.surfaces),
 			});
-		case 'podman':
-			return new PodmanCompute({
-				image: defaultImage,
-				host: env.MARIMOHUB_COMPUTE_PODMAN_HOST,
-				bindHost: env.MARIMOHUB_COMPUTE_PODMAN_BIND_HOST,
-				network: env.MARIMOHUB_COMPUTE_PODMAN_NETWORK,
-				ownerTag: containerOwnerTag(env, 'MARIMOHUB_COMPUTE_PODMAN_OWNER_TAG'),
-			});
+		}
 		case 'e2b':
 			// E2B sandboxes (e2b.dev): per-session sandbox with a public per-port URL
 			// (https://<port>-<id>.e2b.app). The `e2b` SDK is an optional, bring-your-own
