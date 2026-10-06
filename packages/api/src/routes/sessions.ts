@@ -65,6 +65,7 @@ import {
 	SubdomainExposure,
 	UnavailableError,
 	EditSessionOwnedError,
+	EditSessionRetiringError,
 	EditSessionChangedError,
 	ForbiddenError,
 	TakeoverInProgressError,
@@ -1374,7 +1375,7 @@ export async function startNotebookSession(input: {
 	const revalidateEditorReuse = async (session: Session) => {
 		const current = await sessions.getReusableEditor(pid, session.session_id);
 		if (!current) {
-			throw new ConflictError('The previous editor session is still shutting down. Retry shortly.');
+			throw new EditSessionRetiringError();
 		}
 		if (isPastAuthorizationDeadline(current, Date.now())) {
 			throw new ConflictError('The editor session authorization expired. Retry shortly.');
@@ -1583,6 +1584,22 @@ export async function startNotebookSession(input: {
 		await retireSelectedSession(deps, reusable);
 		if (mode === 'app') {
 			throw new ConflictError('The app session ended. Retry shortly.');
+		}
+	}
+
+	if (mode === 'edit' && !ephemeral) {
+		const claim = await sessions.getEditorClaim(pid, nid);
+		if (
+			claim?.session_id &&
+			(await sessions.holdsLiveEditor(pid, nid, claim.session_id)) &&
+			!(await sessions.getReusableEditor(pid, claim.session_id))
+		) {
+			deps.metrics?.increment('sessions.editor_claim.lost', 1, {
+				project_id: pid,
+				notebook_id: nid,
+				phase: 'preflight',
+			});
+			throw new EditSessionRetiringError();
 		}
 	}
 
@@ -2083,6 +2100,11 @@ export async function startNotebookSession(input: {
 			await deps.services.previews.releaseAdmission(previewRecord, sessionId).catch(() => {});
 
 		if (err instanceof EditorClaimLostError) {
+			deps.metrics?.increment('sessions.editor_claim.lost', 1, {
+				project_id: pid,
+				notebook_id: nid,
+				phase: 'claim',
+			});
 			observer.tag('editor_claim_lost', true);
 			if (session) await sessions.markTerminated(pid, session.session_id).catch(() => {});
 			const winnerCandidate = await sessions.getSession(pid, err.holder).catch(() => null);

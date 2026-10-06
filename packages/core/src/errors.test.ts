@@ -3,6 +3,7 @@ import {
 	assertVersionMatch,
 	BadRequestError,
 	ConflictError,
+	EditSessionRetiringError,
 	ForbiddenError,
 	NotFoundError,
 	NotInitializedError,
@@ -26,6 +27,12 @@ const CASES = [
 		def: 'Precondition failed',
 	},
 	{ Err: NotFoundError, status: 404, name: 'NotFoundError', def: 'Not found' },
+	{
+		Err: EditSessionRetiringError,
+		status: 409,
+		name: 'EditSessionRetiringError',
+		def: 'The previous editor session is still shutting down. Retry shortly.',
+	},
 	{ Err: ConflictError, status: 409, name: 'ConflictError', def: 'Conflict' },
 	{
 		Err: ProposalRetryRequiredError,

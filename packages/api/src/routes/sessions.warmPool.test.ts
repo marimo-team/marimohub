@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	AppPoolService,
 	createNotebookId,
+	createSandboxId,
 	createServices,
 	WarmPoolService,
 	WarmPoolStore,
@@ -9,9 +10,9 @@ import {
 	paths,
 } from '@marimo-hub/core';
 import type { SandboxProvider, Session } from '@marimo-hub/core';
-import { ACTOR, makeFakeSandbox } from '@marimo-hub/core/testing';
+import { ACTOR, makeFakeSandbox, makeSession } from '@marimo-hub/core/testing';
 import type { FakeSandboxOptions } from '@marimo-hub/core/testing';
-import { createInitializedBucket, createTestApi, expectOk } from '../testing';
+import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 
 async function setup(options: FakeSandboxOptions = {}, providerLifetimeMs?: number) {
 	const bucket = await createInitializedBucket();
@@ -85,6 +86,153 @@ describe('session warm sandbox assignment', () => {
 			else expect(stored.sandbox_id).toBe(original.sandbox_id);
 		},
 	);
+
+	it.each(
+		(['shared', 'exclusive'] as const).flatMap((sharing) =>
+			(['expired', 'terminating', 'terminated', 'failed'] as const).flatMap((status) =>
+				[false, true].map((warm) => ({ sharing, status, warm })),
+			),
+		),
+	)(
+		'rejects a $status $sharing holder before allocation (warm=$warm)',
+		async ({ sharing, status, warm }) => {
+			const w = await setup();
+			if (warm) await w.warmPool.sweep();
+			const poolBefore = await w.warmPool.store.read();
+			const holder = makeSession({
+				project_id: w.project.id,
+				notebook_id: w.notebook.id,
+				status,
+				sandbox_id: createSandboxId(),
+				editor_sandbox_sharing: sharing,
+			});
+			await w.bucket.put(paths.session(w.project.id, holder.session_id), JSON.stringify(holder));
+			await w.bucket.put(
+				paths.editorClaim(w.project.id, w.notebook.id),
+				JSON.stringify({
+					session_id: holder.session_id,
+					sharing,
+					claimed_at: holder.started_at,
+				}),
+			);
+			const metrics = { increment: vi.fn(), gauge: vi.fn() };
+			const api = createTestApi({
+				bucket: w.bucket,
+				compute: w.compute,
+				deps: {
+					warmPool: warm ? w.warmPool : undefined,
+					policy: { editorSandboxSharing: sharing },
+					metrics,
+				},
+			});
+			const claim = vi.spyOn(w.warmPool, 'claim');
+			w.create.mockClear();
+			await expectError(await api.request('POST', w.path), 409, 'EDIT_SESSION_RETIRING');
+			expect(claim).not.toHaveBeenCalled();
+			expect(w.create).not.toHaveBeenCalled();
+			expect(await w.warmPool.store.read()).toEqual(poolBefore);
+			expect(await w.services.sessions.listSessions()).toHaveLength(1);
+			expect(metrics.increment).toHaveBeenCalledWith('sessions.editor_claim.lost', 1, {
+				project_id: w.project.id,
+				notebook_id: w.notebook.id,
+				phase: 'preflight',
+			});
+		},
+	);
+
+	it.each(['reclaimed', 'missing-sandbox', 'temporary'] as const)(
+		'allows a new editor when the old claim does not block it: %s',
+		async (scenario) => {
+			const w = await setup();
+			const holder = makeSession({
+				project_id: w.project.id,
+				notebook_id: w.notebook.id,
+				status: 'expired',
+				sandbox_id: scenario === 'missing-sandbox' ? undefined : createSandboxId(),
+				sandbox_reclaimed_at: scenario === 'reclaimed' ? new Date().toISOString() : undefined,
+				editor_sandbox_sharing: 'exclusive',
+			});
+			await w.bucket.put(paths.session(w.project.id, holder.session_id), JSON.stringify(holder));
+			await w.bucket.put(
+				paths.editorClaim(w.project.id, w.notebook.id),
+				JSON.stringify({
+					session_id: holder.session_id,
+					sharing: 'exclusive',
+					claimed_at: holder.started_at,
+				}),
+			);
+			const api = createTestApi({
+				bucket: w.bucket,
+				compute: w.compute,
+				deps: {
+					policy: { editorSandboxSharing: 'exclusive' },
+				},
+			});
+			const started = await expectOk<Session>(
+				await api.request(
+					'POST',
+					w.path,
+					scenario === 'temporary' ? { edit_intent: 'temporary' } : undefined,
+				),
+			);
+			expect(started.session_id).not.toBe(holder.session_id);
+			expect(started.status).toBe('running');
+			expect(
+				(await w.services.sessions.getEditorClaim(w.project.id, w.notebook.id))?.session_id,
+			).toBe(scenario === 'temporary' ? holder.session_id : started.session_id);
+		},
+	);
+
+	it.each([-1, 0, 1])(
+		'honors the provider claim deadline before taking warm capacity (%s ms)',
+		async (offset) => {
+			const now = Date.now();
+			vi.spyOn(Date, 'now').mockReturnValue(now);
+			const w = await setup();
+			await w.warmPool.sweep();
+			const holder = makeSession({
+				project_id: w.project.id,
+				notebook_id: w.notebook.id,
+				status: 'expired',
+				sandbox_id: createSandboxId(),
+				sandbox_deadline_at: new Date(now + offset).toISOString(),
+			});
+			await w.bucket.put(paths.session(w.project.id, holder.session_id), JSON.stringify(holder));
+			await w.bucket.put(
+				paths.editorClaim(w.project.id, w.notebook.id),
+				JSON.stringify({
+					session_id: holder.session_id,
+					sharing: 'shared',
+					claimed_at: holder.started_at,
+				}),
+			);
+			const claim = vi.spyOn(w.warmPool, 'claim');
+			const response = await w.api.request('POST', w.path);
+			if (offset > 0) {
+				await expectError(response, 409, 'EDIT_SESSION_RETIRING');
+				expect(claim).not.toHaveBeenCalled();
+			} else {
+				const started = await expectOk<Session>(response);
+				expect(started.status).toBe('running');
+				expect(started.session_id).not.toBe(holder.session_id);
+				expect(claim).toHaveBeenCalledOnce();
+			}
+		},
+	);
+
+	it('does not allocate when the holder cannot be read', async () => {
+		const w = await setup();
+		const started = await expectOk<Session>(await w.api.request('POST', w.path));
+		await w.services.sessions.markTerminated(w.project.id, started.session_id);
+		vi.spyOn(w.api.deps.services.sessions, 'holdsLiveEditor').mockRejectedValueOnce(
+			new Error('storage unavailable'),
+		);
+		const claim = vi.spyOn(w.warmPool, 'claim');
+		w.create.mockClear();
+		expect((await w.api.request('POST', w.path)).status).toBe(500);
+		expect(claim).not.toHaveBeenCalled();
+		expect(w.create).not.toHaveBeenCalled();
+	});
 
 	it.each(['edit', 'app'])(
 		'uses the warm sandbox for %s and keeps reuse ahead of warm allocation',

@@ -865,6 +865,11 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 			{error && !ended && (
 				<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
 					<p className="max-w-md text-sm text-destructive">{error.message}</p>
+					{error.code === 'EDIT_SESSION_RETIRING' && (
+						<p className="max-w-md text-sm text-muted-foreground">
+							Wait for cleanup to finish, then select Retry to start editing.
+						</p>
+					)}
 					{showProfileSizeHint && (
 						<p className="max-w-md text-xs text-muted-foreground">
 							This notebook uses profile {selectedComputeProfile?.name} — a larger profile may be

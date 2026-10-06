@@ -11,6 +11,7 @@ export const DOMAIN_ERROR_CODES = [
 	'PREVIEW_NOT_READY',
 	'PROPOSAL_RETRY_REQUIRED',
 	'EDIT_SESSION_OWNED',
+	'EDIT_SESSION_RETIRING',
 	'EDIT_SESSION_CHANGED',
 	'TAKEOVER_IN_PROGRESS',
 	'FORBIDDEN',
@@ -94,6 +95,15 @@ export class EditSessionOwnedError extends DomainError {
 	constructor(message = 'Another editor owns the persistent editing session') {
 		super(message);
 		this.name = 'EditSessionOwnedError';
+	}
+}
+
+export class EditSessionRetiringError extends DomainError {
+	readonly code = 'EDIT_SESSION_RETIRING';
+	readonly status = 409;
+	constructor(message = 'The previous editor session is still shutting down. Retry shortly.') {
+		super(message);
+		this.name = 'EditSessionRetiringError';
 	}
 }
 

@@ -2177,6 +2177,7 @@ export interface components {
 					| 'PREVIEW_NOT_READY'
 					| 'PROPOSAL_RETRY_REQUIRED'
 					| 'EDIT_SESSION_OWNED'
+					| 'EDIT_SESSION_RETIRING'
 					| 'EDIT_SESSION_CHANGED'
 					| 'TAKEOVER_IN_PROGRESS'
 					| 'FORBIDDEN'

@@ -1061,7 +1061,7 @@ export class SessionService {
 		return claim;
 	}
 
-	private async holdsLiveEditor(
+	async holdsLiveEditor(
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		holder: SessionId,
