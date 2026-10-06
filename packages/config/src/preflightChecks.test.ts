@@ -358,6 +358,7 @@ describe('wif check', () => {
 	it('fatal when the signing key is invalid', async () => {
 		const deps = makeDeps({
 			wif: {
+				defaultEnabled: false,
 				issuer: {
 					jwks: async () => {
 						throw new Error('not a PKCS8 key');

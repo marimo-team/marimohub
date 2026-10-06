@@ -14,6 +14,7 @@ const authed: Authenticator = {
 
 /** A minimal stub of the WIF issuer — capabilities only checks for its presence. */
 const stubWif = {
+	defaultEnabled: false,
 	mint: async () => 'jwt',
 	jwks: async () => ({ keys: [] }),
 } as unknown as NonNullable<Parameters<typeof makeTestDeps>[1]>['wif'];
@@ -30,7 +31,9 @@ describe('GET /api/v1/capabilities', () => {
 	it('reports federation available when WIF is configured', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed, wif: stubWif });
 		const res = await createApi(deps).request('/api/v1/capabilities');
-		expect(await expectOk(res)).toMatchObject({ federation: { available: true } });
+		expect(await expectOk(res)).toMatchObject({
+			federation: { available: true, defaultEnabled: false },
+		});
 	});
 
 	it('reports the deployment federation default', async () => {
@@ -46,7 +49,9 @@ describe('GET /api/v1/capabilities', () => {
 	it('reports federation unavailable when WIF is not configured', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed });
 		const res = await createApi(deps).request('/api/v1/capabilities');
-		expect(await expectOk(res)).toMatchObject({ federation: { available: false } });
+		expect(await expectOk(res)).toMatchObject({
+			federation: { available: false, defaultEnabled: false },
+		});
 	});
 
 	it('reports the configured viewer mode and its evaluated admission row, defaulting to static', async () => {

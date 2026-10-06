@@ -169,7 +169,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 				} as Session,
 			],
 			capabilities: {
-				federation: { available: false },
+				federation: { available: false, defaultEnabled: false },
 				viewer_mode: 'applications',
 				viewer_session_modes: ['app'],
 			},
@@ -186,7 +186,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 		makeFetch({
 			role: 'viewer',
 			capabilities: {
-				federation: { available: false },
+				federation: { available: false, defaultEnabled: false },
 				viewer_mode: 'applications',
 				viewer_session_modes: ['app'],
 			},
@@ -210,7 +210,7 @@ describe('Project — Notebook Actions: files and sessions', () => {
 				} as Session,
 			],
 			capabilities: {
-				federation: { available: false },
+				federation: { available: false, defaultEnabled: false },
 				viewer_mode: 'static',
 				viewer_session_modes: [],
 			},

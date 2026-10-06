@@ -2128,7 +2128,7 @@ export interface components {
 		Capabilities: {
 			federation: {
 				available: boolean;
-				defaultEnabled?: boolean;
+				defaultEnabled: boolean;
 			};
 			integrations: {
 				available: boolean;

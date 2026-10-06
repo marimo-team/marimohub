@@ -2780,6 +2780,7 @@ describe('Session routes', () => {
 		const wifDeps = (exchange: () => Promise<unknown>) =>
 			({
 				wif: {
+					defaultEnabled: false,
 					issuer: { mint: async () => 'jwt.value', jwks: async () => ({ keys: [] }) },
 					issuerUrl: 'https://hub.example.com',
 					target: {

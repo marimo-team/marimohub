@@ -1,4 +1,3 @@
-import { projectFederationEnabled } from './federation';
 import { exchangeFederatedStorageEnv, UnavailableError, ValidationError } from '@marimo-hub/core';
 import type {
 	Project,
@@ -9,6 +8,7 @@ import type {
 	WorkloadRef,
 } from '@marimo-hub/core';
 import type { JobRunContext } from '@marimo-hub/core/jobs';
+import { projectFederationEnabled } from './federation';
 import type { ApiDeps } from './context';
 import { errorMetadata, logEvent } from './log';
 

@@ -5,5 +5,5 @@ export function projectFederationEnabled(
 	project: Pick<Project, 'federation'>,
 	wif: WifConfig | undefined,
 ): boolean {
-	return Boolean(wif && (project.federation?.enabled ?? wif.defaultEnabled ?? false));
+	return Boolean(wif && (project.federation?.enabled ?? wif.defaultEnabled));
 }

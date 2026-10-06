@@ -15,8 +15,8 @@ export interface ProjectEnvironmentDialogProps {
 	onClose: () => void;
 	project: ProjectDetail;
 	integrationsAvailable: boolean;
-	cloudAccessAvailable: boolean;
-	cloudAccessDefaultEnabled?: boolean;
+	cloudAccessAvailable: boolean | undefined;
+	cloudAccessDefaultEnabled: boolean | undefined;
 	onSaveCloudAccess: (enabled: boolean | null) => Promise<void>;
 	isPending?: boolean;
 }
@@ -27,11 +27,22 @@ export function ProjectEnvironmentDialog({
 	project,
 	integrationsAvailable,
 	cloudAccessAvailable,
-	cloudAccessDefaultEnabled = false,
+	cloudAccessDefaultEnabled,
 	onSaveCloudAccess,
 	isPending = false,
 }: ProjectEnvironmentDialogProps) {
 	const [area, setArea] = useState<Area>('overview');
+	const cloudAccessLoading =
+		cloudAccessAvailable === undefined || cloudAccessDefaultEnabled === undefined;
+	let cloudAccessStatus = 'Loading cloud access…';
+	if (!cloudAccessLoading) {
+		const enabled = project.federation?.enabled ?? cloudAccessDefaultEnabled;
+		const source = project.federation === undefined ? 'by deployment default' : 'for this project';
+		cloudAccessStatus = cloudAccessAvailable
+			? `${enabled ? 'Enabled' : 'Disabled'} ${source}`
+			: 'Not configured for this deployment';
+	}
+
 	const close = () => {
 		setArea('overview');
 		onClose();
@@ -52,22 +63,14 @@ export function ProjectEnvironmentDialog({
 						icon={Cloud}
 						title="Cloud access"
 						description="Short-lived federated credentials without a stored cloud key. This does not control project roles or permissions."
-						status={
-							cloudAccessAvailable
-								? (project.federation?.enabled ?? cloudAccessDefaultEnabled)
-									? project.federation === undefined
-										? 'Enabled by deployment default'
-										: 'Enabled for this project'
-									: project.federation === undefined
-										? 'Disabled by deployment default'
-										: 'Disabled for this project'
-								: 'Not configured for this deployment'
-						}
+						status={cloudAccessStatus}
 						onPress={() => setArea('cloud')}
 					/>
 				</div>
 			) : area === 'integrations' ? (
 				<ProjectIntegrationsPanel project={project} onBack={() => setArea('overview')} />
+			) : cloudAccessLoading ? (
+				<output>Loading cloud access…</output>
 			) : (
 				<CloudAccessPanel
 					isOpen={isOpen}

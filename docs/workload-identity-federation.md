@@ -106,7 +106,11 @@ Changes affect newly started sessions and jobs; restart existing kernels to
 pick up changes. Disabling access does not revoke already-issued STS credentials.
 
 Only enable this default where projects are intended to share the deployment's
-cloud access. Cloud IAM policy still determines which resources are accessible.
+cloud access. Enabling the default lets anyone who can create a project obtain
+cloud credentials if the cloud IAM trust accepts its subject. Restrict trust to
+exact project `sub` values rather than wildcards; otherwise, creating a project
+also grants access to the cloud role. Cloud IAM policy still determines which
+resources are accessible.
 
 ## What the notebook receives
 

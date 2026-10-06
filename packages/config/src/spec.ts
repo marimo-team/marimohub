@@ -1848,7 +1848,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_WIF_DEFAULT_ENABLED',
 						name: 'Federation enabled by default',
 						description:
-							'Enable WIF for projects without an explicit federation setting. Explicit project settings take precedence. Requires configured WIF; applies to new sessions and jobs, and data browsing.',
+							'Enable WIF for projects without an explicit federation setting. Explicit project settings take precedence. Requires configured WIF; applies to new sessions and jobs, and data browsing. Enabling this default lets anyone who can create a project obtain cloud credentials if the cloud IAM trust accepts its subject. Restrict cloud IAM trust to exact project `sub` values, not wildcards, so creating a project does not automatically grant access to the cloud role.',
 						default: 'false',
 					},
 					{

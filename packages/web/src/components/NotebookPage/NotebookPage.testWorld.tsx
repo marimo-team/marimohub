@@ -273,7 +273,7 @@ export function makeFetch(opts: FetchOptions) {
 		if (url.includes('/capabilities')) {
 			const viewerMode = opts.viewerMode ?? 'static';
 			return ok({
-				federation: { available: false },
+				federation: { available: false, defaultEnabled: false },
 				jobs: { available: true },
 				...(opts.omitSourceControlCapability
 					? {}

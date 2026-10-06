@@ -1,4 +1,3 @@
-import { projectFederationEnabled } from '../federation';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	IntegrationId,
@@ -30,6 +29,7 @@ import {
 	ProjectIdParam,
 } from '../shared';
 import type { ApiDeps } from '../shared';
+import { projectFederationEnabled } from '../federation';
 import { appendAudit, logEvent } from '../log';
 import { objectContentDisposition } from '../contentDisposition';
 import {

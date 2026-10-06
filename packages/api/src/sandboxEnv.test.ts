@@ -48,6 +48,7 @@ function wif(exchange = vi.fn(async () => ({ accessKeyId: 'AK', secretAccessKey:
 	return {
 		exchange,
 		config: {
+			defaultEnabled: false,
 			issuer: { mint: vi.fn(async () => 'jwt'), jwks: async () => ({ keys: [] }) },
 			issuerUrl: 'https://hub.example',
 			target: {

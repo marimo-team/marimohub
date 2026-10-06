@@ -159,6 +159,7 @@ components:
               type: boolean
           required:
             - available
+            - defaultEnabled
         integrations:
           type: object
           properties:

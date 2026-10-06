@@ -420,7 +420,7 @@ function useProjectContent() {
 		});
 		toast.success(
 			enabled === null
-				? 'Federated cloud access uses deployment default'
+				? `Federated cloud access uses deployment default (${capabilities?.federation.defaultEnabled ? 'enabled' : 'disabled'})`
 				: enabled
 					? 'Federated cloud access enabled'
 					: 'Federated cloud access disabled',
@@ -1193,8 +1193,8 @@ function useProjectContent() {
 					onClose={environmentModal.close}
 					project={project}
 					integrationsAvailable={capabilities?.integrations?.available ?? false}
-					cloudAccessAvailable={capabilities?.federation.available ?? false}
-					cloudAccessDefaultEnabled={capabilities?.federation.defaultEnabled ?? false}
+					cloudAccessAvailable={capabilities?.federation.available}
+					cloudAccessDefaultEnabled={capabilities?.federation.defaultEnabled}
 					isPending={updateProject.isPending}
 					onSaveCloudAccess={handleSaveCloudAccess}
 				/>

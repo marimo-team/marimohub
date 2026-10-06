@@ -32,6 +32,7 @@ describe('ProjectEnvironmentDialog', () => {
 				integrationsAvailable={false}
 				cloudAccessAvailable={false}
 				onSaveCloudAccess={() => Promise.resolve()}
+				cloudAccessDefaultEnabled={false}
 			/>,
 		);
 		expect(screen.getByRole('heading', { name: 'Environment & cloud access' })).toBeInTheDocument();
@@ -53,6 +54,7 @@ describe('ProjectEnvironmentDialog', () => {
 				integrationsAvailable
 				cloudAccessAvailable
 				onSaveCloudAccess={onSave}
+				cloudAccessDefaultEnabled={false}
 			/>,
 		);
 		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
@@ -75,6 +77,7 @@ describe('ProjectEnvironmentDialog', () => {
 				integrationsAvailable
 				cloudAccessAvailable
 				onSaveCloudAccess={() => Promise.resolve()}
+				cloudAccessDefaultEnabled={false}
 			/>,
 		);
 		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
@@ -91,6 +94,7 @@ describe('ProjectEnvironmentDialog', () => {
 				integrationsAvailable
 				cloudAccessAvailable
 				onSaveCloudAccess={() => Promise.resolve()}
+				cloudAccessDefaultEnabled={false}
 			/>,
 		);
 		expect(screen.getByText('Enabled for this project')).toBeInTheDocument();
@@ -110,6 +114,7 @@ describe('ProjectEnvironmentDialog', () => {
 				integrationsAvailable
 				cloudAccessAvailable
 				onSaveCloudAccess={onSave}
+				cloudAccessDefaultEnabled={false}
 			/>,
 		);
 		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
@@ -122,45 +127,75 @@ describe('ProjectEnvironmentDialog', () => {
 		await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
 		await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled());
 	});
-});
 
-it('shows inherited access and lets a manager opt out', async () => {
-	const user = userEvent.setup();
-	const onSave = vi.fn(async () => {});
-	render(
-		<ProjectEnvironmentDialog
-			isOpen
-			onClose={() => {}}
-			project={{ ...project(), federation: undefined }}
-			integrationsAvailable
-			cloudAccessAvailable
-			cloudAccessDefaultEnabled
-			onSaveCloudAccess={onSave}
-		/>,
-	);
-	expect(screen.getByText('Enabled by deployment default')).toBeInTheDocument();
-	await user.click(screen.getByRole('button', { name: /Cloud access/ }));
-	expect(screen.getByRole('radio', { name: /Use deployment default/ })).toBeChecked();
-	await user.click(screen.getByRole('radio', { name: 'Disabled' }));
-	await user.click(screen.getByRole('button', { name: 'Save' }));
-	expect(onSave).toHaveBeenCalledWith(false);
-});
-it('clears an explicit override to restore inheritance', async () => {
-	const user = userEvent.setup();
-	const onSave = vi.fn(async () => {});
-	render(
-		<ProjectEnvironmentDialog
-			isOpen
-			onClose={() => {}}
-			project={project()}
-			integrationsAvailable
-			cloudAccessAvailable
-			cloudAccessDefaultEnabled
-			onSaveCloudAccess={onSave}
-		/>,
-	);
-	await user.click(screen.getByRole('button', { name: /Cloud access/ }));
-	await user.click(screen.getByRole('radio', { name: /Use deployment default/ }));
-	await user.click(screen.getByRole('button', { name: 'Save' }));
-	expect(onSave).toHaveBeenCalledWith(null);
+	it('shows inherited access and lets a manager opt out', async () => {
+		const user = userEvent.setup();
+		const onSave = vi.fn(async () => {});
+		render(
+			<ProjectEnvironmentDialog
+				isOpen
+				onClose={() => {}}
+				project={{ ...project(), federation: undefined }}
+				integrationsAvailable
+				cloudAccessAvailable
+				cloudAccessDefaultEnabled
+				onSaveCloudAccess={onSave}
+			/>,
+		);
+		expect(screen.getByText('Enabled by deployment default')).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
+		expect(screen.getByRole('radio', { name: /Use deployment default/ })).toBeChecked();
+		await user.click(screen.getByRole('radio', { name: 'Disabled' }));
+		await user.click(screen.getByRole('button', { name: 'Save' }));
+		expect(onSave).toHaveBeenCalledWith(false);
+	});
+	it('clears an explicit override to restore inheritance', async () => {
+		const user = userEvent.setup();
+		const onSave = vi.fn(async () => {});
+		render(
+			<ProjectEnvironmentDialog
+				isOpen
+				onClose={() => {}}
+				project={project()}
+				integrationsAvailable
+				cloudAccessAvailable
+				cloudAccessDefaultEnabled
+				onSaveCloudAccess={onSave}
+			/>,
+		);
+		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
+		await user.click(screen.getByRole('radio', { name: /Use deployment default/ }));
+		await user.click(screen.getByRole('button', { name: 'Save' }));
+		expect(onSave).toHaveBeenCalledWith(null);
+	});
+
+	it('waits for capabilities before showing or editing inherited cloud access', async () => {
+		const user = userEvent.setup();
+		const onSave = vi.fn(async () => {});
+		const props = {
+			isOpen: true,
+			onClose: () => {},
+			project: { ...project(), federation: undefined },
+			integrationsAvailable: false,
+			onSaveCloudAccess: onSave,
+		};
+		const { rerender } = render(
+			<ProjectEnvironmentDialog
+				{...props}
+				cloudAccessAvailable={undefined}
+				cloudAccessDefaultEnabled={undefined}
+			/>,
+		);
+		expect(screen.getByText('Loading cloud access…')).toBeInTheDocument();
+		expect(screen.queryByText('Disabled by deployment default')).not.toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
+		expect(screen.getByRole('status')).toHaveTextContent('Loading cloud access…');
+		expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+		expect(onSave).not.toHaveBeenCalled();
+		rerender(
+			<ProjectEnvironmentDialog {...props} cloudAccessAvailable cloudAccessDefaultEnabled />,
+		);
+		expect(screen.getByRole('radio', { name: /Use deployment default/ })).toBeChecked();
+		expect(screen.getByText('Currently enabled')).toBeInTheDocument();
+	});
 });

@@ -1724,6 +1724,7 @@ describe('Data browser routes', () => {
 			deps: {
 				...browserDeps(bucket),
 				wif: {
+					defaultEnabled: false,
 					issuer: { mint, jwks: async () => ({ keys: [] }) } as never,
 					issuerUrl: 'https://hub.example.com',
 					target: {

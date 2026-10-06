@@ -241,7 +241,12 @@ describe('Project — Notebook Actions: configuration', () => {
 
 	it('hides "Jobs & schedules" when the deployment has jobs off', async () => {
 		const user = userEvent.setup();
-		makeFetch({ capabilities: { federation: { available: false }, jobs: { available: false } } });
+		makeFetch({
+			capabilities: {
+				federation: { available: false, defaultEnabled: false },
+				jobs: { available: false },
+			},
+		});
 		await renderProject();
 
 		await user.click(await screen.findByRole('button', { name: /Notebook actions for/ }));
@@ -257,7 +262,7 @@ describe('Project — Notebook Actions: configuration', () => {
 		const user = userEvent.setup();
 		makeFetch({
 			capabilities: {
-				federation: { available: false },
+				federation: { available: false, defaultEnabled: false },
 				sandbox_images: ['img-a', 'img-b'],
 			},
 		});
@@ -274,7 +279,10 @@ describe('Project — Notebook Actions: configuration', () => {
 	it('hides "Change base image" when only one image is configured', async () => {
 		const user = userEvent.setup();
 		makeFetch({
-			capabilities: { federation: { available: false }, sandbox_images: ['img-a'] },
+			capabilities: {
+				federation: { available: false, defaultEnabled: false },
+				sandbox_images: ['img-a'],
+			},
 		});
 		await renderProject();
 
@@ -286,7 +294,7 @@ describe('Project — Notebook Actions: configuration', () => {
 	it('does not clutter the notebook list when there is only one compute profile', async () => {
 		makeFetch({
 			capabilities: {
-				federation: { available: false },
+				federation: { available: false, defaultEnabled: false },
 				compute_profiles: [{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 }],
 				compute_profile_override: 'editors',
 			},
@@ -301,7 +309,7 @@ describe('Project — Notebook Actions: configuration', () => {
 		const calls = makeFetch({
 			role: 'editor',
 			capabilities: {
-				federation: { available: false },
+				federation: { available: false, defaultEnabled: false },
 				compute_profiles: [
 					{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 },
 					{ name: 'large', cpu: 8, memory_bytes: 32 * 1024 ** 3 },
@@ -349,7 +357,7 @@ describe('Project — Notebook Actions: configuration', () => {
 				} as Session,
 			],
 			capabilities: {
-				federation: { available: false },
+				federation: { available: false, defaultEnabled: false },
 				compute_profiles: [
 					{ name: 'small', cpu: 1 },
 					{ name: 'large', cpu: 8 },
@@ -512,7 +520,7 @@ describe('Project — Notebook Actions: configuration', () => {
 				} as Session,
 			],
 			capabilities: {
-				federation: { available: false },
+				federation: { available: false, defaultEnabled: false },
 				compute_profiles: [{ name: 'small' }, { name: 'large' }],
 				compute_profile_override: 'editors',
 			},
@@ -537,7 +545,7 @@ describe('Project — Notebook Actions: configuration', () => {
 		const user = userEvent.setup();
 		makeFetch({
 			capabilities: {
-				federation: { available: false },
+				federation: { available: false, defaultEnabled: false },
 				compute_profiles: [{ name: 'small' }, { name: 'large' }],
 				compute_profile_override: 'none',
 			},

@@ -1,4 +1,3 @@
-import { projectFederationEnabled } from '../federation';
 import { HTTPException } from 'hono/http-exception';
 import {
 	createSessionId,
@@ -21,6 +20,7 @@ import type {
 	Project,
 	TempS3Creds,
 } from '@marimo-hub/core';
+import { projectFederationEnabled } from '../federation';
 import type { ApiDeps } from '../context';
 
 const CACHE_REFRESH_SKEW_MS = 5 * 60 * 1000;

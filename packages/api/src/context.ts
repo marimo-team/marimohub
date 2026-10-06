@@ -46,7 +46,7 @@ export type Services = ReturnType<typeof createServices>;
  * One target per deployment for now — promote to a keyed map when a second is real.
  */
 export interface WifConfig {
-	defaultEnabled?: boolean;
+	defaultEnabled: boolean;
 	issuer: WorkloadIdentityIssuer;
 	/** Public issuer URL: the token `iss` and the OIDC discovery `issuer`. */
 	issuerUrl: string;

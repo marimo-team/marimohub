@@ -526,7 +526,7 @@ Optional: let a notebook reach cloud resources (object storage, and for AWS any 
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_WIF_DEFAULT_ENABLED` | Enable WIF for projects without an explicit federation setting. Explicit project settings take precedence. Requires configured WIF; applies to new sessions and jobs, and data browsing. | — | `false` | — |
+| `MARIMOHUB_WIF_DEFAULT_ENABLED` | Enable WIF for projects without an explicit federation setting. Explicit project settings take precedence. Requires configured WIF; applies to new sessions and jobs, and data browsing. Enabling this default lets anyone who can create a project obtain cloud credentials if the cloud IAM trust accepts its subject. Restrict cloud IAM trust to exact project `sub` values, not wildcards, so creating a project does not automatically grant access to the cloud role. | — | `false` | — |
 | `MARIMOHUB_WIF_SIGNING_KEY` 🔒 | RSA private key (PKCS8 PEM) the hub signs federation JWTs with — or its single-line base64 encoding, for secret stores synced as an env-file (e.g. Doppler → k8s Secret). The matching public key is published at /.well-known/jwks.json for the cloud to validate tokens. | — | — | `-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----` |
 | `MARIMOHUB_WIF_KID` | Key id surfaced in the JWT header and the published JWKS. | — | — | `wif-2026-06` |
 | `MARIMOHUB_WIF_ISSUER_URL` | The hub's public origin, used as the token `iss` and the OIDC discovery `issuer`. Must match the Issuer URL configured in the cloud's WIF config. | — | — | `https://hub.example.com` |
