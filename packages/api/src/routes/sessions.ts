@@ -94,6 +94,7 @@ import {
 	assertSessionNotebookVisible,
 	assertSessionPreviewActive,
 	authorizationService,
+	authMethodFor,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -1623,6 +1624,12 @@ export async function startNotebookSession(input: {
 	let originUrl: string | undefined;
 	const observer = logObserver({
 		event: 'session_provision',
+		client:
+			request.path === '/mcp'
+				? 'mcp'
+				: authMethodFor(user.credential.kind) === 'pat'
+					? 'cli'
+					: 'web',
 		origin,
 		sandbox_id: sandboxId,
 		image,
