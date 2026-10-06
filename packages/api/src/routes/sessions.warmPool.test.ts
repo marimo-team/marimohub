@@ -49,6 +49,18 @@ async function setup(options: FakeSandboxOptions = {}, providerLifetimeMs?: numb
 	return { bucket, services, project, notebook, fake, create, compute, warmPool, api, path };
 }
 
+async function seedRetiringHolder(w: Awaited<ReturnType<typeof setup>>) {
+	const holder = makeSession({
+		project_id: w.project.id,
+		notebook_id: w.notebook.id,
+		status: 'expired',
+		sandbox_id: createSandboxId(),
+	});
+	await w.bucket.put(paths.session(w.project.id, holder.session_id), JSON.stringify(holder));
+	await w.services.sessions.claimEditor(w.project.id, w.notebook.id, holder.session_id, 'shared');
+	return holder;
+}
+
 afterEach(() => vi.restoreAllMocks());
 
 describe('session warm sandbox assignment', () => {
@@ -219,6 +231,93 @@ describe('session warm sandbox assignment', () => {
 			}
 		},
 	);
+
+	it.each([false, true])(
+		'cleans up a warm claim lost after preflight (destroy fails=%s)',
+		async (destroyFails) => {
+			const w = await setup();
+			await w.warmPool.sweep();
+			const warmId = (await w.warmPool.store.read()).pools[0].members[0].sandbox_id;
+			const writes = [...w.fake.calls.writeFiles];
+			let holder: Session | undefined;
+			const claim = w.warmPool.claim.bind(w.warmPool);
+			vi.spyOn(w.warmPool, 'claim').mockImplementationOnce(async (request) => {
+				const result = await claim(request);
+				holder = await seedRetiringHolder(w);
+				return result;
+			});
+			if (destroyFails)
+				vi.spyOn(w.fake.instance, 'destroy').mockRejectedValueOnce(
+					new Error('provider unavailable'),
+				);
+			await expectError(await w.api.request('POST', w.path), 409, 'EDIT_SESSION_RETIRING');
+			expect(holder).toBeDefined();
+			expect(
+				(await w.services.sessions.getEditorClaim(w.project.id, w.notebook.id))?.session_id,
+			).toBe(holder!.session_id);
+			expect(w.fake.calls.writeFiles).toEqual(writes);
+			const rejected = (await w.services.sessions.listSessions()).filter(
+				(session) => session.session_id !== holder!.session_id,
+			);
+			expect(rejected).toHaveLength(1);
+			expect(rejected[0].status).toBe('terminated');
+			expect(!!rejected[0].sandbox_reclaimed_at).toBe(!destroyFails);
+			expect(
+				(await w.warmPool.store.read()).pools[0].members
+					.filter((member) => member.sandbox_id === warmId)
+					.map((member) => member.state),
+			).toEqual(destroyFails ? ['retiring'] : []);
+			if (destroyFails) {
+				await w.warmPool.sweep();
+				expect(
+					(await w.warmPool.store.read()).pools[0].members.some(
+						(member) => member.sandbox_id === warmId,
+					),
+				).toBe(false);
+				expect(
+					(await w.services.sessions.getSession(w.project.id, rejected[0].session_id))
+						.sandbox_reclaimed_at,
+				).toBeDefined();
+			}
+		},
+	);
+
+	it.each(['claim', 'holder'] as const)(
+		'does not take warm capacity when the stored %s is corrupt',
+		async (record) => {
+			const w = await setup();
+			await w.warmPool.sweep();
+			const holder = await seedRetiringHolder(w);
+			const before = await w.warmPool.store.read();
+			await w.bucket.put(
+				record === 'claim'
+					? paths.editorClaim(w.project.id, w.notebook.id)
+					: paths.session(w.project.id, holder.session_id),
+				'{invalid JSON',
+			);
+			const claim = vi.spyOn(w.warmPool, 'claim');
+			w.create.mockClear();
+			const response = await w.api.request('POST', w.path);
+			expect(response.headers.get('Retry-After')).toBe('2');
+			await expectError(response, 503, 'SERVICE_UNAVAILABLE');
+			expect(claim).not.toHaveBeenCalled();
+			expect(w.create).not.toHaveBeenCalled();
+			expect(await w.warmPool.store.read()).toEqual(before);
+		},
+	);
+
+	it('can replace a dangling claim whose holder record has disappeared', async () => {
+		const w = await setup();
+		await w.warmPool.sweep();
+		const holder = await seedRetiringHolder(w);
+		await w.bucket.delete(paths.session(w.project.id, holder.session_id));
+		const started = await expectOk<Session>(await w.api.request('POST', w.path));
+		expect(started.status).toBe('running');
+		expect(started.session_id).not.toBe(holder.session_id);
+		expect(
+			(await w.services.sessions.getEditorClaim(w.project.id, w.notebook.id))?.session_id,
+		).toBe(started.session_id);
+	});
 
 	it('does not allocate when the holder cannot be read', async () => {
 		const w = await setup();

@@ -40,9 +40,15 @@ describe('NotebookPage viewer modes', () => {
 		).toBeVisible();
 		expect(screen.queryByTitle('Forecast')).toBeNull();
 		expect(sessionPosts(impl)).toHaveLength(1);
+		await user.click(screen.getByRole('button', { name: 'Retry' }));
+		expect(
+			await screen.findByText('The previous editor session is still shutting down. Retry shortly.'),
+		).toBeVisible();
+		expect(sessionPosts(impl)).toHaveLength(2);
+		expect(screen.queryByTitle('Forecast')).toBeNull();
 		options.createError = undefined;
 		await user.click(screen.getByRole('button', { name: 'Retry' }));
-		await waitFor(() => expect(sessionPosts(impl)).toHaveLength(2));
+		await waitFor(() => expect(sessionPosts(impl)).toHaveLength(3));
 		expect(await screen.findByTitle('Forecast')).toBeVisible();
 		expect(
 			screen.queryByText('Wait for cleanup to finish, then select Retry to start editing.'),
