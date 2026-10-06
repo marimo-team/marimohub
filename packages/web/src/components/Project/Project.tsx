@@ -304,7 +304,7 @@ function useProjectContent() {
 	const downloadWorkspace = useDownloadWorkspace(pid!);
 	const updateProject = useUpdateProject();
 	const deleteProject = useDeleteProject();
-	const { data: capabilities } = useCapabilitiesQuery();
+	const { data: capabilities, isError: capabilitiesError } = useCapabilitiesQuery();
 	const canManage = canManageProject(project.your_role);
 	const canOperateSource = project.your_role !== null && canEditProject(project.your_role);
 	const sandboxImages = capabilities?.sandbox_images ?? [];
@@ -414,9 +414,18 @@ function useProjectContent() {
 		computeProfile: DEFAULT_COMPUTE_PROFILE,
 	});
 
-	const handleSaveCloudAccess = async (enabled: boolean) => {
-		await updateProject.mutateAsync({ projectId: pid!, federation: { enabled } });
-		toast.success(enabled ? 'Federated cloud access enabled' : 'Federated cloud access disabled');
+	const handleSaveCloudAccess = async (enabled: boolean | null) => {
+		await updateProject.mutateAsync({
+			projectId: pid!,
+			federation: enabled === null ? null : { ...project?.federation, enabled },
+		});
+		toast.success(
+			enabled === null
+				? `Federated cloud access uses deployment default (${capabilities?.federation.defaultEnabled ? 'enabled' : 'disabled'})`
+				: enabled
+					? 'Federated cloud access enabled'
+					: 'Federated cloud access disabled',
+		);
 	};
 
 	// Map each notebook to its "most alive" session so a row shows the strongest state.
@@ -1190,7 +1199,10 @@ function useProjectContent() {
 					onClose={environmentModal.close}
 					project={project}
 					integrationsAvailable={capabilities?.integrations?.available ?? false}
-					cloudAccessAvailable={capabilities?.federation.available ?? false}
+					cloudAccessAvailable={capabilitiesError ? false : capabilities?.federation.available}
+					cloudAccessDefaultEnabled={
+						capabilitiesError ? false : capabilities?.federation.defaultEnabled
+					}
 					isPending={updateProject.isPending}
 					onSaveCloudAccess={handleSaveCloudAccess}
 				/>

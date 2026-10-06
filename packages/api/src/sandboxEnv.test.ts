@@ -48,6 +48,7 @@ function wif(exchange = vi.fn(async () => ({ accessKeyId: 'AK', secretAccessKey:
 	return {
 		exchange,
 		config: {
+			defaultEnabled: false,
 			issuer: { mint: vi.fn(async () => 'jwt'), jwks: async () => ({ keys: [] }) },
 			issuerUrl: 'https://hub.example',
 			target: {
@@ -318,5 +319,42 @@ describe('resolveJobSandboxEnv', () => {
 		await expect(
 			resolveJobSandboxEnv({ ...deps, integrations: service }, context()),
 		).rejects.toBeInstanceOf(UnavailableError);
+	});
+});
+
+describe('inherited federation', () => {
+	it.each([
+		[true, undefined, false, true],
+		[true, false, false, false],
+		[false, true, false, true],
+		[false, undefined, false, false],
+		[true, undefined, true, false],
+	] as const)(
+		'default=%s override=%s restricted=%s exchanges=%s',
+		async (defaultEnabled, enabled, restricted, expected) => {
+			const { config, exchange } = wif();
+			config!.defaultEnabled = defaultEnabled;
+			const result = await resolveFederatedVars(
+				{ wif: config },
+				{
+					project: makeProject({ federation: enabled === undefined ? undefined : { enabled } }),
+					workload: { kind: 'job-run', id: createRunId() },
+					restricted,
+				},
+			);
+			expect(exchange).toHaveBeenCalledTimes(expected ? 1 : 0);
+			expect(Boolean(result)).toBe(expected);
+		},
+	);
+	it('gives a scheduled job inherited credentials', async () => {
+		const { config } = wif();
+		config!.defaultEnabled = true;
+		const bucket = await createInitializedBucket();
+		const deps = makeTestDeps(bucket);
+		const env = await resolveJobSandboxEnv(
+			{ ...deps, wif: config },
+			context({ project: makeProject() }),
+		);
+		expect(env?.vars?.AWS_ACCESS_KEY_ID).toBe('AK');
 	});
 });

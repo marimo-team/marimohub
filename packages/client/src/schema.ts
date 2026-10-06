@@ -2205,6 +2205,7 @@ export interface components {
 		Capabilities: {
 			federation: {
 				available: boolean;
+				defaultEnabled: boolean;
 			};
 			integrations: {
 				available: boolean;
@@ -5181,7 +5182,7 @@ export interface operations {
 					name?: string;
 					description?: string;
 					tags?: string[];
-					federation?: components['schemas']['ProjectFederationInput'];
+					federation?: components['schemas']['ProjectFederationInput'] | null;
 				};
 			};
 		};

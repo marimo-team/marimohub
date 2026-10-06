@@ -61,7 +61,7 @@ export function makeFetch(
 	const notebooks = options.notebooks ?? [notebook()];
 	const sessions = options.sessions ?? [];
 	const capabilities = options.capabilities ?? {
-		federation: { available: false },
+		federation: { available: false, defaultEnabled: false },
 		jobs: { available: true },
 	};
 	const proj = { ...project(), ...(options.role ? { your_role: options.role } : {}) };

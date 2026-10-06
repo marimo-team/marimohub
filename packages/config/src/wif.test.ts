@@ -130,3 +130,23 @@ describe('makeWif aws broker', () => {
 		expect(() => makeWif(env)).toThrow(/MARIMOHUB_WIF_AWS_ROLE_ARN/);
 	});
 });
+
+describe('deployment federation default', () => {
+	it.each([
+		['true', true],
+		['false', false],
+		[undefined, false],
+	] as const)('parses %s as %s', (value, expected) => {
+		expect(makeWif({ ...fullEnv, MARIMOHUB_WIF_DEFAULT_ENABLED: value }).wif?.defaultEnabled).toBe(
+			expected,
+		);
+	});
+	it.each(['yes', '1'])('rejects invalid default %s when WIF is configured', (value) => {
+		expect(() => makeWif({ ...fullEnv, MARIMOHUB_WIF_DEFAULT_ENABLED: value })).toThrow(
+			/MARIMOHUB_WIF_DEFAULT_ENABLED/,
+		);
+	});
+	it.each(['true', 'false', '1'])('ignores default %s when WIF is not configured', (value) => {
+		expect(makeWif({ MARIMOHUB_WIF_DEFAULT_ENABLED: value })).toEqual({});
+	});
+});

@@ -228,6 +228,24 @@ describe('Project routes', () => {
 		await expectError(res, 422);
 	});
 
+	it('clears a federation override while omitted updates preserve it', async () => {
+		const created = await expectOk<any>(
+			await request('POST', '/projects', { name: 'Inherited', description: 'd' }),
+			201,
+		);
+		expect(created.federation).toBeUndefined();
+		await expectOk(
+			await request('PATCH', `/projects/${created.id}`, { federation: { enabled: false } }),
+		);
+		const renamed = await expectOk<any>(
+			await request('PATCH', `/projects/${created.id}`, { name: 'Renamed' }),
+		);
+		expect(renamed.federation).toEqual({ enabled: false });
+		await expectOk(await request('PATCH', `/projects/${created.id}`, { federation: null }));
+		const reread = await expectOk<any>(await request('GET', `/projects/${created.id}`));
+		expect(reread.federation).toBeUndefined();
+	});
+
 	it('GET /projects/{pid} returns the project', async () => {
 		const created = await expectOk<any>(
 			await request('POST', '/projects', { name: 'P1', description: 'd' }),

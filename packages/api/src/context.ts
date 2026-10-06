@@ -42,10 +42,11 @@ export type Services = ReturnType<typeof createServices>;
 /**
  * Workload Identity Federation capability, consolidated so it is
  * all-present-or-absent. The hub mints project-scoped OIDC tokens with `issuer`
- * and exchanges them via `target`; a project opts in via `ProjectFederationSchema`.
+ * and exchanges them via `target`. Projects may override the deployment default.
  * One target per deployment for now — promote to a keyed map when a second is real.
  */
 export interface WifConfig {
+	defaultEnabled: boolean;
 	issuer: WorkloadIdentityIssuer;
 	/** Public issuer URL: the token `iss` and the OIDC discovery `issuer`. */
 	issuerUrl: string;
@@ -449,7 +450,7 @@ export interface ApiDeps {
 	/**
 	 * Workload Identity Federation: the hub-as-OIDC-issuer + its exchange target.
 	 * Absent disables WIF (discovery/JWKS routes 404, no credentials injected).
-	 * Present is a deployment capability only; a project still opts in per `federation`.
+	 * Projects inherit the deployment default unless they override `federation`.
 	 */
 	wif?: WifConfig;
 	/**

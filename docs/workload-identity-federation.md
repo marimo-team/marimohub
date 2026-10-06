@@ -26,9 +26,9 @@ GCP is planned — see [the GCP example](#example-gcp-gcs-bigquery).
    URL must be reachable by the cloud so it can fetch the JWKS to validate
    tokens.
 2. The deployment configures WIF (issuer + a **federation target**); each
-   **project opts in** by setting its `federation` (see "Enable it for a
+   **project inherits the deployment default or overrides it** with its `federation` (see "Enable it for a
    project").
-3. On each session for an opted-in project `pid`, the hub mints a JWT with
+3. On each session for a federation-enabled project `pid`, the hub mints a JWT with
    `sub = <pid>` (the project id) and a short expiry, signed with its WIF key.
 4. The broker exchanges that JWT with the cloud (authenticated **by the JWT
    alone** — no caller credential) for temporary credentials.
@@ -61,9 +61,10 @@ example below; the full reference is
 
 ## Enable it for a project
 
-WIF is a deployment capability. A project receives no credentials until an
-manager enables it. Select **Environment & cloud access**, **Cloud access**, and
-**Federated cloud access**.
+WIF is a deployment capability. By default, a manager must enable it for each
+project. Deployments can instead enable the inherited default described below.
+Select **Environment & cloud access**, **Cloud access**, and **Federated cloud access**
+to set a project override.
 
 For an API update, get the project and save its `ETag` response header. Then
 send a guarded update:
@@ -84,6 +85,32 @@ client from overwriting a concurrent update.
 
 If the target is not registered, the session starts without credentials and
 logs the error. The cloud policy for the project `sub` controls resource access.
+
+## Deployment default
+
+Set `MARIMOHUB_WIF_DEFAULT_ENABLED=true` alongside the existing WIF configuration
+for projects to inherit federated cloud access. It defaults to `false`; setting
+it alone does not configure an issuer or broker. Sandbox-native object storage
+continues to take precedence over hub-minted WIF.
+
+Both new and existing projects without a `federation` setting inherit this
+value. Explicit `enabled: true` or `enabled: false` overrides it. No project
+records are rewritten. Managers can select **Use deployment default**,
+**Enabled**, or **Disabled** in **Environment & cloud access → Cloud access**.
+To clear an override through the API, send a guarded project update with
+`{ "federation": null }`. Omitting the field leaves the override unchanged.
+
+The effective setting applies to notebook sessions, jobs, and integration/object
+browsing. Restricted viewer sandboxes still receive no federated credentials.
+Changes affect newly started sessions and jobs; restart existing kernels to
+pick up changes. Disabling access does not revoke already-issued STS credentials.
+
+Only enable this default where projects are intended to share the deployment's
+cloud access. Enabling the default lets anyone who can create a project obtain
+cloud credentials if the cloud IAM trust accepts its subject. Restrict trust to
+exact project `sub` values rather than wildcards; otherwise, creating a project
+also grants access to the cloud role. Cloud IAM policy still determines which
+resources are accessible.
 
 ## What the notebook receives
 

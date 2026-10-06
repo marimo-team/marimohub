@@ -8,6 +8,7 @@ import type {
 	WorkloadRef,
 } from '@marimo-hub/core';
 import type { JobRunContext } from '@marimo-hub/core/jobs';
+import { projectFederationEnabled } from './federation';
 import type { ApiDeps } from './context';
 import { errorMetadata, logEvent } from './log';
 
@@ -42,7 +43,8 @@ export async function resolveFederatedVars(
 	deps: Pick<ApiDeps, 'wif'>,
 	options: FederatedVarsOptions,
 ): Promise<Record<string, string> | undefined> {
-	if (!(deps.wif && options.project.federation?.enabled && !options.restricted)) return;
+	if (!(deps.wif && projectFederationEnabled(options.project, deps.wif) && !options.restricted))
+		return;
 	try {
 		return await exchangeFederatedStorageEnv(
 			deps.wif.issuer,

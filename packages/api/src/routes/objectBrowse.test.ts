@@ -24,6 +24,7 @@ beforeEach(() => clearObjectCredentialCacheForTests());
 function wifDeps(exchange: () => Promise<TempS3Creds>): ApiDeps {
 	return {
 		wif: {
+			defaultEnabled: false,
 			issuer: { mint: vi.fn(async () => 'jwt') } as never,
 			issuerUrl: 'https://hub.example.com',
 			target: {
@@ -45,6 +46,43 @@ function wifDeps(exchange: () => Promise<TempS3Creds>): ApiDeps {
 }
 
 describe('object browse credentials', () => {
+	it('does not federate projects without an override when the deployment default is off', async () => {
+		const exchange = vi.fn(async () => ({
+			accessKeyId: 'temporary',
+			secretAccessKey: 'secret',
+		}));
+		const context = await makeObjectBrowseContext(
+			wifDeps(exchange),
+			{ ...project, federation: undefined },
+			user,
+		);
+		expect(context.federation).toBeUndefined();
+		expect(exchange).not.toHaveBeenCalled();
+	});
+
+	it('uses the deployment default but stops vending cached credentials after opt-out', async () => {
+		const exchange = vi.fn(async () => ({
+			accessKeyId: 'temporary',
+			secretAccessKey: 'secret',
+			expiration: new Date(Date.now() + 3600000).toISOString(),
+		}));
+		const deps = wifDeps(exchange);
+		deps.wif!.defaultEnabled = true;
+		const inherited = await makeObjectBrowseContext(
+			deps,
+			{ ...project, federation: undefined },
+			user,
+		);
+		expect(inherited.federation?.credentials.accessKeyId).toBe('temporary');
+		const excluded = await makeObjectBrowseContext(
+			deps,
+			{ ...project, federation: { enabled: false } },
+			user,
+		);
+		expect(excluded.federation).toBeUndefined();
+		expect(exchange).toHaveBeenCalledTimes(1);
+	});
+
 	it('single-flights and caches credentials with a usable expiry', async () => {
 		const exchange = vi.fn(async () => {
 			await new Promise((resolve) => setTimeout(resolve, 5));

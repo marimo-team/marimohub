@@ -107,7 +107,10 @@ app.openapi(capabilitiesRoute, (c) => {
 	const deps = c.get('deps');
 	const previewReader = deps.sourceControl?.getReader('github');
 	return ok(c, {
-		federation: { available: Boolean(deps.wif) },
+		federation: {
+			available: Boolean(deps.wif),
+			defaultEnabled: deps.wif ? deps.wif.defaultEnabled : false,
+		},
 		integrations: { available: Boolean(deps.integrations) },
 		source_control: {
 			preview_providers: previewReader?.previews && previewReader.resolveCommit ? ['github'] : [],

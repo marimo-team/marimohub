@@ -46,7 +46,7 @@ const OWNER_USER: User = {
 let currentTestUser = OWNER_USER;
 
 const CAPABILITIES = {
-	federation: { available: false },
+	federation: { available: false, defaultEnabled: false },
 	viewer_mode: 'static',
 	default_role: null,
 } as unknown as Capabilities;

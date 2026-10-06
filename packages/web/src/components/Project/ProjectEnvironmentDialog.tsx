@@ -15,8 +15,9 @@ export interface ProjectEnvironmentDialogProps {
 	onClose: () => void;
 	project: ProjectDetail;
 	integrationsAvailable: boolean;
-	cloudAccessAvailable: boolean;
-	onSaveCloudAccess: (enabled: boolean) => Promise<void>;
+	cloudAccessAvailable: boolean | undefined;
+	cloudAccessDefaultEnabled: boolean | undefined;
+	onSaveCloudAccess: (enabled: boolean | null) => Promise<void>;
 	isPending?: boolean;
 }
 
@@ -26,10 +27,22 @@ export function ProjectEnvironmentDialog({
 	project,
 	integrationsAvailable,
 	cloudAccessAvailable,
+	cloudAccessDefaultEnabled,
 	onSaveCloudAccess,
 	isPending = false,
 }: ProjectEnvironmentDialogProps) {
 	const [area, setArea] = useState<Area>('overview');
+	const cloudAccessLoading =
+		cloudAccessAvailable === undefined || cloudAccessDefaultEnabled === undefined;
+	let cloudAccessStatus = 'Loading cloud access…';
+	if (!cloudAccessLoading) {
+		const enabled = project.federation?.enabled ?? cloudAccessDefaultEnabled;
+		const source = project.federation === undefined ? 'by deployment default' : 'for this project';
+		cloudAccessStatus = cloudAccessAvailable
+			? `${enabled ? 'Enabled' : 'Disabled'} ${source}`
+			: 'Not configured for this deployment';
+	}
+
 	const close = () => {
 		setArea('overview');
 		onClose();
@@ -50,23 +63,20 @@ export function ProjectEnvironmentDialog({
 						icon={Cloud}
 						title="Cloud access"
 						description="Short-lived federated credentials without a stored cloud key. This does not control project roles or permissions."
-						status={
-							cloudAccessAvailable
-								? project.federation?.enabled
-									? 'Enabled for this project'
-									: 'Disabled for this project'
-								: 'Not configured for this deployment'
-						}
+						status={cloudAccessStatus}
 						onPress={() => setArea('cloud')}
 					/>
 				</div>
 			) : area === 'integrations' ? (
 				<ProjectIntegrationsPanel project={project} onBack={() => setArea('overview')} />
+			) : cloudAccessLoading ? (
+				<output>Loading cloud access…</output>
 			) : (
 				<CloudAccessPanel
 					isOpen={isOpen}
 					project={project}
 					available={cloudAccessAvailable}
+					defaultEnabled={cloudAccessDefaultEnabled}
 					onBack={() => setArea('overview')}
 					onSave={onSaveCloudAccess}
 					isPending={isPending}
@@ -107,6 +117,7 @@ function CloudAccessPanel({
 	isOpen,
 	project,
 	available,
+	defaultEnabled,
 	onBack,
 	onSave,
 	isPending,
@@ -114,24 +125,31 @@ function CloudAccessPanel({
 	isOpen: boolean;
 	project: ProjectDetail;
 	available: boolean;
+	defaultEnabled: boolean;
 	onBack: () => void;
-	onSave: (enabled: boolean) => Promise<void>;
+	onSave: (enabled: boolean | null) => Promise<void>;
 	isPending: boolean;
 }) {
-	const current = project.federation?.enabled ?? false;
+	const current = project.federation?.enabled ?? defaultEnabled;
+	const setting =
+		project.federation === undefined
+			? 'inherit'
+			: project.federation.enabled
+				? 'enabled'
+				: 'disabled';
 	const canManage = canManageProject(project.your_role);
 	const form = useAppForm({
-		defaultValues: { enabled: current },
+		defaultValues: { setting },
 		onSubmit: async ({ value }) => {
 			try {
-				await onSave(value.enabled);
-				form.reset({ enabled: value.enabled });
+				await onSave(value.setting === 'inherit' ? null : value.setting === 'enabled');
+				form.reset({ setting: value.setting });
 			} catch {
 				// Keep the draft for retry; the global mutation handler reports the error.
 			}
 		},
 	});
-	useSeedOnOpen(form, isOpen, { enabled: current });
+	useSeedOnOpen(form, isOpen, { setting });
 	const isDirty = useSelector(form.store, (state) => state.isDirty);
 
 	return (
@@ -180,18 +198,26 @@ function CloudAccessPanel({
 					<p className="text-muted-foreground">
 						Sessions receive short-lived credentials as standard cloud environment variables.
 					</p>
-					<form.AppField name="enabled">
+					<form.AppField name="setting">
 						{(field) => (
-							<field.SwitchField>
-								{(selected) => (
-									<span className="flex items-center gap-1.5 text-sm font-medium">
-										<KeyRound className="size-4" />
-										Federated cloud access {selected ? 'enabled' : 'disabled'}
-									</span>
-								)}
-							</field.SwitchField>
+							<field.RadioGroupField
+								label="Federated cloud access"
+								options={[
+									{
+										value: 'inherit',
+										label: 'Use deployment default',
+										description: defaultEnabled ? 'Currently enabled' : 'Currently disabled',
+									},
+									{ value: 'enabled', label: 'Enabled' },
+									{ value: 'disabled', label: 'Disabled' },
+								]}
+								isDisabled={isPending}
+							/>
 						)}
 					</form.AppField>
+					<p className="text-muted-foreground">
+						Changes apply to new sessions and jobs. Restart running kernels to use the new setting.
+					</p>
 					<div className="flex justify-end">
 						<Button type="submit" variant="primary" isDisabled={isPending || !isDirty}>
 							{isPending ? 'Saving…' : 'Save'}

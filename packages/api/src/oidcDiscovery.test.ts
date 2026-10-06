@@ -6,6 +6,7 @@ import { makeTestDeps } from './testing';
 
 /** A minimal WIF config stub — only the issuer's `jwks()` is exercised here. */
 const stubWif = {
+	defaultEnabled: false,
 	issuerUrl: 'https://hub.example.com',
 	targets: {},
 	issuer: {

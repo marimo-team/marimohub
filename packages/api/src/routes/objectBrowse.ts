@@ -20,6 +20,7 @@ import type {
 	Project,
 	TempS3Creds,
 } from '@marimo-hub/core';
+import { projectFederationEnabled } from '../federation';
 import type { ApiDeps } from '../context';
 
 const CACHE_REFRESH_SKEW_MS = 5 * 60 * 1000;
@@ -66,7 +67,9 @@ export async function makeObjectBrowseContext(
 ): Promise<ObjectBrowseContext> {
 	const browser = deps.dataBrowser?.objectBrowser;
 	const wif =
-		options.includeFederated !== false && project.federation?.enabled ? deps.wif : undefined;
+		options.includeFederated !== false && projectFederationEnabled(project, deps.wif)
+			? deps.wif
+			: undefined;
 	const context: ObjectBrowseContext = {
 		project_id: project.id,
 		user_id: user.id,

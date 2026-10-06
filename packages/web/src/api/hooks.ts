@@ -455,7 +455,7 @@ export function useUpdateProject() {
 			name?: string;
 			description?: string;
 			tags?: string[];
-			federation?: ProjectFederation;
+			federation?: ProjectFederation | null;
 		}) =>
 			apiData(
 				apiClient.PATCH('/api/v1/projects/{pid}', {

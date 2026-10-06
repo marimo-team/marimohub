@@ -2780,6 +2780,7 @@ describe('Session routes', () => {
 		const wifDeps = (exchange: () => Promise<unknown>) =>
 			({
 				wif: {
+					defaultEnabled: false,
 					issuer: { mint: async () => 'jwt.value', jwks: async () => ({ keys: [] }) },
 					issuerUrl: 'https://hub.example.com',
 					target: {
@@ -2821,6 +2822,32 @@ describe('Session routes', () => {
 				AWS_REGION: 'us-east-1',
 			});
 		});
+
+		it.each([undefined, false] as const)(
+			'resolves the deployment default for override %s on the first session',
+			async (enabled) => {
+				if (enabled !== undefined)
+					await createServices(bucket).projects.updateProject(
+						pid,
+						{ federation: { enabled } },
+						ACTOR,
+					);
+				const { instance, calls } = makeFakeSandbox();
+				const deps = wifDeps(goodExchange);
+				deps.wif!.defaultEnabled = true;
+				const req = createTestApi({
+					bucket,
+					userId: ACTOR,
+					compute: fakeComputeFrom(instance),
+					deps,
+				}).request;
+				const data = await expectOk<ApiSession>(await req('POST', sessionsPath()));
+				expect(data.status).toBe('running');
+				expect(calls.setEnvVars.some((vars) => vars.AWS_ACCESS_KEY_ID === 'CWAK')).toBe(
+					enabled === undefined,
+				);
+			},
+		);
 
 		it('does NOT inject when WIF is on but the project did not opt in', async () => {
 			const { instance, calls } = makeFakeSandbox();

@@ -29,6 +29,7 @@ import {
 	ProjectIdParam,
 } from '../shared';
 import type { ApiDeps } from '../shared';
+import { projectFederationEnabled } from '../federation';
 import { appendAudit, logEvent } from '../log';
 import { objectContentDisposition } from '../contentDisposition';
 import {
@@ -977,7 +978,7 @@ async function resolveObjectAccess(
 	iid: IntegrationId,
 	signal?: AbortSignal,
 ) {
-	const wifEligible = Boolean(deps.wif && project.federation?.enabled);
+	const wifEligible = projectFederationEnabled(project, deps.wif);
 	const base = await makeObjectBrowseContext(deps, project, user, signal, {
 		integrationId: iid,
 		includeFederated: false,
@@ -1386,7 +1387,7 @@ app.openapi(browseTablePreview, async (c) => {
 		namespace,
 		table,
 		{ limit, query_user: user.email, signal: c.req.raw.signal },
-		wif && project.federation?.enabled
+		wif && projectFederationEnabled(project, deps.wif)
 			? () =>
 					exchangeFederatedStorageEnv(wif.issuer, wif.issuerUrl, wif.target, pid, {
 						kind: 'session',

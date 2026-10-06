@@ -156,8 +156,11 @@ components:
           properties:
             available:
               type: boolean
+            defaultEnabled:
+              type: boolean
           required:
             - available
+            - defaultEnabled
         integrations:
           type: object
           properties:
@@ -5890,7 +5893,9 @@ paths:
                   items:
                     type: string
                 federation:
-                  $ref: '#/components/schemas/ProjectFederationInput'
+                  anyOf:
+                    - $ref: '#/components/schemas/ProjectFederationInput'
+                    - type: 'null'
       responses:
         '200':
           description: Project updated
