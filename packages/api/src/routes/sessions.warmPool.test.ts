@@ -49,15 +49,26 @@ async function setup(options: FakeSandboxOptions = {}, providerLifetimeMs?: numb
 	return { bucket, services, project, notebook, fake, create, compute, warmPool, api, path };
 }
 
-async function seedRetiringHolder(w: Awaited<ReturnType<typeof setup>>) {
+async function seedEditorClaim(
+	w: Awaited<ReturnType<typeof setup>>,
+	overrides: Partial<Session> = {},
+) {
 	const holder = makeSession({
 		project_id: w.project.id,
 		notebook_id: w.notebook.id,
 		status: 'expired',
 		sandbox_id: createSandboxId(),
+		...overrides,
 	});
 	await w.bucket.put(paths.session(w.project.id, holder.session_id), JSON.stringify(holder));
-	await w.services.sessions.claimEditor(w.project.id, w.notebook.id, holder.session_id, 'shared');
+	await w.bucket.put(
+		paths.editorClaim(w.project.id, w.notebook.id),
+		JSON.stringify({
+			session_id: holder.session_id,
+			sharing: holder.editor_sandbox_sharing ?? 'shared',
+			claimed_at: holder.started_at,
+		}),
+	);
 	return holder;
 }
 
@@ -111,22 +122,7 @@ describe('session warm sandbox assignment', () => {
 			const w = await setup();
 			if (warm) await w.warmPool.sweep();
 			const poolBefore = await w.warmPool.store.read();
-			const holder = makeSession({
-				project_id: w.project.id,
-				notebook_id: w.notebook.id,
-				status,
-				sandbox_id: createSandboxId(),
-				editor_sandbox_sharing: sharing,
-			});
-			await w.bucket.put(paths.session(w.project.id, holder.session_id), JSON.stringify(holder));
-			await w.bucket.put(
-				paths.editorClaim(w.project.id, w.notebook.id),
-				JSON.stringify({
-					session_id: holder.session_id,
-					sharing,
-					claimed_at: holder.started_at,
-				}),
-			);
+			await seedEditorClaim(w, { status, editor_sandbox_sharing: sharing });
 			const metrics = { increment: vi.fn(), gauge: vi.fn() };
 			const api = createTestApi({
 				bucket: w.bucket,
@@ -156,23 +152,11 @@ describe('session warm sandbox assignment', () => {
 		'allows a new editor when the old claim does not block it: %s',
 		async (scenario) => {
 			const w = await setup();
-			const holder = makeSession({
-				project_id: w.project.id,
-				notebook_id: w.notebook.id,
-				status: 'expired',
+			const holder = await seedEditorClaim(w, {
 				sandbox_id: scenario === 'missing-sandbox' ? undefined : createSandboxId(),
 				sandbox_reclaimed_at: scenario === 'reclaimed' ? new Date().toISOString() : undefined,
 				editor_sandbox_sharing: 'exclusive',
 			});
-			await w.bucket.put(paths.session(w.project.id, holder.session_id), JSON.stringify(holder));
-			await w.bucket.put(
-				paths.editorClaim(w.project.id, w.notebook.id),
-				JSON.stringify({
-					session_id: holder.session_id,
-					sharing: 'exclusive',
-					claimed_at: holder.started_at,
-				}),
-			);
 			const api = createTestApi({
 				bucket: w.bucket,
 				compute: w.compute,
@@ -202,22 +186,9 @@ describe('session warm sandbox assignment', () => {
 			vi.spyOn(Date, 'now').mockReturnValue(now);
 			const w = await setup();
 			await w.warmPool.sweep();
-			const holder = makeSession({
-				project_id: w.project.id,
-				notebook_id: w.notebook.id,
-				status: 'expired',
-				sandbox_id: createSandboxId(),
+			const holder = await seedEditorClaim(w, {
 				sandbox_deadline_at: new Date(now + offset).toISOString(),
 			});
-			await w.bucket.put(paths.session(w.project.id, holder.session_id), JSON.stringify(holder));
-			await w.bucket.put(
-				paths.editorClaim(w.project.id, w.notebook.id),
-				JSON.stringify({
-					session_id: holder.session_id,
-					sharing: 'shared',
-					claimed_at: holder.started_at,
-				}),
-			);
 			const claim = vi.spyOn(w.warmPool, 'claim');
 			const response = await w.api.request('POST', w.path);
 			if (offset > 0) {
@@ -243,7 +214,7 @@ describe('session warm sandbox assignment', () => {
 			const claim = w.warmPool.claim.bind(w.warmPool);
 			vi.spyOn(w.warmPool, 'claim').mockImplementationOnce(async (request) => {
 				const result = await claim(request);
-				holder = await seedRetiringHolder(w);
+				holder = await seedEditorClaim(w);
 				return result;
 			});
 			if (destroyFails)
@@ -287,7 +258,7 @@ describe('session warm sandbox assignment', () => {
 		async (record) => {
 			const w = await setup();
 			await w.warmPool.sweep();
-			const holder = await seedRetiringHolder(w);
+			const holder = await seedEditorClaim(w);
 			const before = await w.warmPool.store.read();
 			await w.bucket.put(
 				record === 'claim'
@@ -309,7 +280,7 @@ describe('session warm sandbox assignment', () => {
 	it('can replace a dangling claim whose holder record has disappeared', async () => {
 		const w = await setup();
 		await w.warmPool.sweep();
-		const holder = await seedRetiringHolder(w);
+		const holder = await seedEditorClaim(w);
 		await w.bucket.delete(paths.session(w.project.id, holder.session_id));
 		const started = await expectOk<Session>(await w.api.request('POST', w.path));
 		expect(started.status).toBe('running');
