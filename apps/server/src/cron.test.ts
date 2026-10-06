@@ -873,3 +873,106 @@ describe('startPreviewPreparation', () => {
 		}
 	});
 });
+
+describe('background loop deadline recovery', () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		vi.useRealTimers();
+	});
+
+	it.each([
+		'maintenance',
+		'session_lifecycle',
+		'job_scheduler',
+		'warm_pool',
+		'preview_preparation',
+	] as const)('%s retries hung work and ignores its late completion', async (name) => {
+		vi.useFakeTimers();
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+		const deps = makeTestDeps(await createInitializedBucket());
+		const loops = new BackgroundLoops();
+		const metrics = new WideEventMetrics();
+		const late = Promise.withResolvers<void>();
+		const work = vi.fn().mockReturnValueOnce(late.promise).mockResolvedValue(undefined);
+		let stop: () => void;
+		switch (name) {
+			case 'maintenance':
+				vi.spyOn(deps.services.sessions, 'expireStale').mockImplementation(async () => {
+					await work();
+					return 0;
+				});
+				stop = startMaintenance(deps, metrics, loops);
+				break;
+			case 'session_lifecycle':
+				deps.sandbox.sessionLifetime = makeSessionLifetime();
+				vi.spyOn(SessionLifecycleService.prototype, 'sweep').mockImplementation(async () => {
+					await work();
+					return ZERO_SWEEP;
+				});
+				stop = startSessionLifecycle(deps, loops)!;
+				break;
+			case 'job_scheduler':
+				vi.spyOn(JobScheduler.prototype, 'tick').mockImplementation(async () => {
+					await work();
+					return {
+						fired: 0,
+						repaired: 0,
+						skipped: 0,
+						dispatched: 0,
+						timedOut: 0,
+						markersPruned: 0,
+						errors: 0,
+					};
+				});
+				stop = startJobScheduler(deps, metrics, loops).stop;
+				break;
+			case 'warm_pool':
+				deps.warmPool = new WarmPoolService(
+					new WarmPoolStore(deps.bucket, 'kubernetes'),
+					deps.compute,
+					deps.services.sessions,
+					{
+						enabled: true,
+						size: 1,
+						profiles: [],
+						creationTimeoutMs: 300_000,
+						minimumRemainingMs: 60_000,
+					},
+				);
+				vi.spyOn(deps.warmPool, 'sweep').mockImplementation(work);
+				stop = startWarmPools(deps, loops)!.stop;
+				break;
+			case 'preview_preparation':
+				deps.sourceControl = stubSourceControl();
+				vi.spyOn(deps.services.previews, 'preparePending').mockImplementation(work);
+				stop = startPreviewPreparation(deps, loops)!;
+		}
+		try {
+			await flushRun();
+			const initial = loops.health().loops[name];
+			expect(work).toHaveBeenCalledOnce();
+			await vi.advanceTimersByTimeAsync(initial.deadline_ms - 1);
+			expect(work).toHaveBeenCalledOnce();
+			await vi.advanceTimersByTimeAsync(1 + initial.interval_ms);
+			expect(work.mock.calls.length).toBeGreaterThan(1);
+			expect(loops.health().loops[name]).toMatchObject({
+				timeouts: 1,
+				stale: false,
+				running: false,
+			});
+			const recovered = loops.health();
+			const logged = vi.mocked(console.log).mock.calls.length;
+			if (name === 'preview_preparation') {
+				expect(work.mock.calls[0][1].aborted).toBe(true);
+				expect(work.mock.calls[1][1].aborted).toBe(false);
+			}
+			late.resolve();
+			await flushRun();
+			expect(loops.health()).toEqual(recovered);
+			expect(console.log).toHaveBeenCalledTimes(logged);
+		} finally {
+			stop();
+			late.resolve();
+		}
+	});
+});

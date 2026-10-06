@@ -128,7 +128,7 @@ compare-and-swap primitive as the catalog (`onlyIfNotExists` to claim,
 `onlyIfEtagMatches` to steal an expired lease) — **no etcd, no `Lease`, nothing
 to provision.** If a misconfiguration or a bad rollout ever runs two reapers,
 only the lease holder starts a sweep. Each Node loop attempt uses a unique holder
-and a lease TTL equal to its deadline. The default lease TTL outside the Node
+and a lease that expires at the attempt deadline. The default lease TTL outside the Node
 loop runner remains 10 minutes.
 
 > We deliberately avoid a Kubernetes `Lease`/leader-election primitive: it would

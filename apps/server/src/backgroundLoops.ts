@@ -119,7 +119,9 @@ export class BackgroundLoops {
 					if (options.shouldRun && !(await context.step(options.shouldRun))) return;
 					if (
 						options.lock &&
-						!(await context.step(() => options.lock!.acquire(holder, deadlineMs)))
+						!(await context.step(() =>
+							options.lock!.acquire(holder, Math.max(1, deadlineMs - (Date.now() - started))),
+						))
 					) {
 						if (options.notLeaderEvent)
 							logEvent({ level: 'debug', event: options.notLeaderEvent, holder });
