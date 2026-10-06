@@ -2,6 +2,7 @@ import { serve } from '@hono/node-server';
 import type { ServerType } from '@hono/node-server';
 import { httpInstrumentationMiddleware } from '@hono/otel';
 import { secureHeaders } from 'hono/secure-headers';
+import { Hono } from 'hono';
 import type { ApiDeps } from '@marimo-hub/api';
 import { createApi } from '@marimo-hub/api';
 import { createFromEnvAsync, isConfigError } from '@marimo-hub/config';
@@ -14,6 +15,7 @@ import {
 	startWarmPools,
 } from './cron';
 import { validateServerEnv } from './env';
+import { BackgroundLoops } from './backgroundLoops';
 import { logEvent } from './log';
 import { fanoutMetrics, OtelMetrics, WideEventMetrics } from './metrics';
 import { startOtel } from './otel';
@@ -98,6 +100,26 @@ export async function bootstrap(
 	if (otel)
 		deps.tracingMiddleware = httpInstrumentationMiddleware({ disableTracing: !otel.tracing });
 	const app = createApi(deps);
+	const serverApp = new Hono();
+	const loops = new BackgroundLoops();
+	serverApp.get('/api/health/maintenance', (c) => {
+		const health = loops.health();
+		return health.ok
+			? c.json({ success: true, data: health })
+			: c.json(
+					{
+						success: false,
+						error: {
+							code: 'MAINTENANCE_STALE',
+							message: 'Background loop progress is stale',
+							details: health,
+						},
+					},
+					503,
+				);
+	});
+
+	serverApp.mount('/', app.fetch, { replaceRequest: false });
 
 	// Boot preflight: probe downstream deps (storage conditional-writes, OIDC
 	// discovery, WIF key, compute). Log each non-ok check, but DO NOT exit on a
@@ -165,18 +187,18 @@ export async function bootstrap(
 	let drainJobRuns: () => Promise<void> = () => Promise.resolve();
 	let drainWarmPools: () => Promise<void> = () => Promise.resolve();
 	if (validatedEnv.MARIMOHUB_RUN_MAINTENANCE === 'true') {
-		const warmPools = startWarmPools(deps);
+		const warmPools = startWarmPools(deps, loops);
 		if (warmPools) {
 			stops.push(warmPools.stop);
 			drainWarmPools = warmPools.drain;
 		}
-		stops.push(startMaintenance(deps, wideEvents));
-		const stopPreviews = startPreviewPreparation(deps);
+		stops.push(startMaintenance(deps, wideEvents, loops));
+		const stopPreviews = startPreviewPreparation(deps, loops);
 		if (stopPreviews) stops.push(stopPreviews);
-		const stopLifecycle = startSessionLifecycle(deps);
+		const stopLifecycle = startSessionLifecycle(deps, loops);
 		if (stopLifecycle) stops.push(stopLifecycle);
 		if (deps.jobs) {
-			const jobScheduler = startJobScheduler(deps, wideEvents);
+			const jobScheduler = startJobScheduler(deps, wideEvents, loops);
 			stops.push(jobScheduler.stop);
 			drainJobRuns = jobScheduler.drain;
 		}
@@ -186,7 +208,7 @@ export async function bootstrap(
 	// Unset listens on every interface, which a container needs to publish the port.
 	const hostname = overrides.hostname ?? validatedEnv.MARIMOHUB_BIND_HOST;
 	const serverOptions = {
-		fetch: app.fetch,
+		fetch: serverApp.fetch,
 		port,
 		...(hostname ? { hostname } : {}),
 	};
