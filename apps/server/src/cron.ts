@@ -127,6 +127,12 @@ export function startMaintenance(
 			await step(() => sweepPreviews(deps));
 			const sessionsExpired = await step(() => sessions.expireStale());
 			const reconcile = await step(() => reconciler.reconcile());
+			const domainMetrics = deps.metrics ?? metrics;
+			domainMetrics.gauge('sessions.unreclaimed_terminal', reconcile.unreclaimedTerminal);
+			domainMetrics.gauge(
+				'sessions.unreclaimed_terminal.oldest_age_ms',
+				reconcile.oldestUnreclaimedAgeMs ?? 0,
+			);
 			await step(() => scheduleUnavailableAppAlerts(deps, reconcile.markedDeadSessions));
 			if (!reconcile.skipped && reconcile.orphanSandboxIds.length > 0) {
 				logEvent({

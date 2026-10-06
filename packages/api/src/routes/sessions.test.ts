@@ -2208,11 +2208,13 @@ describe('Session routes', () => {
 			}),
 		);
 		const deadline = new Date(Date.now() + Millis.minutes(15)).toISOString();
+		const increment = vi.fn();
 		const groupApi = createTestApi({
 			bucket,
 			userId: STRANGER,
 			compute: makeFakeCompute(),
 			deps: {
+				metrics: { increment, gauge: vi.fn() },
 				authenticator: {
 					authenticate: async () => ({
 						credential: { kind: 'development' },
@@ -2234,6 +2236,14 @@ describe('Session routes', () => {
 
 		expect(attached.session_id).toBe(winner.session_id);
 		expect(attached.reused).toBe(true);
+		expect(increment).toHaveBeenCalledWith('sessions.editor_claim.lost');
+		expect(
+			increment.mock.calls.filter(([name]) => name === 'sessions.editor_claim.lost'),
+		).toHaveLength(1);
+		await expectOk<ApiSession>(await groupEditor('POST', sessionsPath()));
+		expect(
+			increment.mock.calls.filter(([name]) => name === 'sessions.editor_claim.lost'),
+		).toHaveLength(1);
 		expect(
 			(await createServices(bucket).sessions.getSession(pid, winner.session_id))
 				.authorization_expires_at,

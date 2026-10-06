@@ -24,7 +24,7 @@ import {
 	startSessionLifecycle,
 	startWarmPools,
 } from './cron';
-import { WideEventMetrics } from './metrics';
+import { fanoutMetrics, WideEventMetrics } from './metrics';
 import { BackgroundLoops } from './backgroundLoops';
 
 vi.mock('@marimo-hub/core', async (importOriginal) => {
@@ -80,6 +80,43 @@ describe('startMaintenance', () => {
 			projects_swept: 0,
 			notebooks_swept: 0,
 			'counter.sessions_created': 1,
+		});
+	});
+
+	it('publishes unreclaimed terminal gauges to the metrics port and resets them after recovery', async () => {
+		const gauge = vi.fn();
+		deps.metrics = fanoutMetrics(metrics, { gauge, increment: vi.fn() });
+		const result = {
+			skipped: true,
+			reclaimed: 0,
+			unreclaimedTerminal: 2,
+			oldestUnreclaimedAgeMs: 60_000,
+			markedDead: 0,
+			orphansReaped: 0,
+			orphanSandboxIds: [],
+			markedDeadSessions: [],
+		};
+		vi.spyOn(ReconciliationService.prototype, 'reconcile')
+			.mockResolvedValueOnce(result)
+			.mockResolvedValue({ ...result, unreclaimedTerminal: 0, oldestUnreclaimedAgeMs: null });
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+		expect(gauge).toHaveBeenCalledWith('sessions.unreclaimed_terminal', 2, undefined);
+		expect(gauge).toHaveBeenCalledWith(
+			'sessions.unreclaimed_terminal.oldest_age_ms',
+			60_000,
+			undefined,
+		);
+		expect(parseLoggedEvents(logSpy).at(-1)).toMatchObject({
+			'gauge.sessions.unreclaimed_terminal': 2,
+			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 60_000,
+		});
+		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+		expect(gauge).toHaveBeenCalledWith('sessions.unreclaimed_terminal', 0, undefined);
+		expect(gauge).toHaveBeenCalledWith('sessions.unreclaimed_terminal.oldest_age_ms', 0, undefined);
+		expect(parseLoggedEvents(logSpy).at(-1)).toMatchObject({
+			'gauge.sessions.unreclaimed_terminal': 0,
+			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 0,
 		});
 	});
 
