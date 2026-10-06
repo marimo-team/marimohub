@@ -2321,9 +2321,9 @@ describe('Session routes', () => {
 		return holder;
 	};
 
-	it('rejects a wedged starting holder before claiming the editor', async () => {
+	it('does not reuse a wedged starting holder after losing the editor claim', async () => {
 		const startedAt = new Date(Date.now() - Millis.minutes(6)).toISOString();
-		await seedEditorHolder({
+		const holder = await seedEditorHolder({
 			user_id: ACTOR,
 			status: 'starting',
 			sandbox_url: undefined,
@@ -2337,14 +2337,16 @@ describe('Session routes', () => {
 			compute: makeFakeCompute(),
 			deps: { metrics: { increment, gauge: vi.fn() } },
 		});
-		const claimEditor = vi.spyOn(api.deps.services.sessions, 'claimEditor');
+		vi.spyOn(api.deps.services.sessions, 'claimEditor').mockResolvedValueOnce({
+			claimed: false,
+			claim: { session_id: holder.session_id, sharing: 'shared', claimed_at: startedAt },
+		});
 
 		const res = await api.request('POST', sessionsPath());
 
 		await expectError(res, 409, 'EDIT_SESSION_RETIRING');
-		expect(claimEditor).not.toHaveBeenCalled();
 		expect(increment.mock.calls.filter(([name]) => name === 'sessions.editor_claim.lost')).toEqual([
-			['sessions.editor_claim.lost', 1, { project_id: pid, notebook_id: nid, phase: 'preflight' }],
+			['sessions.editor_claim.lost', 1, { project_id: pid, notebook_id: nid, phase: 'claim' }],
 		]);
 	});
 

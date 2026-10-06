@@ -244,17 +244,18 @@ Any other `OTEL_METRICS_EXPORTER` value disables metrics;
 
 ### Session cleanup signals
 
-| Metric                                        | Type    | Meaning                                                                                    |
-| --------------------------------------------- | ------- | ------------------------------------------------------------------------------------------ |
-| `sessions.unreclaimed_terminal`               | Gauge   | Terminal or terminating sessions whose sandboxes remain unreclaimed after reconciliation.  |
-| `sessions.unreclaimed_terminal.oldest_age_ms` | Gauge   | Time since the oldest unreclaimed session heartbeat, in milliseconds.                      |
-| `sessions.editor_claim.lost`                  | Counter | Editor claim races lost during startup, including requests that reuse the winning session. |
+| Metric                                        | Type    | Meaning                                                                                      |
+| --------------------------------------------- | ------- | -------------------------------------------------------------------------------------------- |
+| `sessions.unreclaimed_terminal`               | Gauge   | Terminal or terminating sessions whose sandboxes remain unreclaimed after reconciliation.    |
+| `sessions.unreclaimed_terminal.oldest_age_ms` | Gauge   | Time since the oldest unreclaimed session heartbeat, in milliseconds.                        |
+| `sessions.editor_claim.lost`                  | Counter | Editor starts blocked by retiring claims or lost claim races, including reuse of the winner. |
 
 Completed reconciliation updates both gauges, even when provider enumeration is unavailable.
 An empty result sets both to zero. Failed or timed-out reconciliation leaves the previous values unchanged.
 Late results from a timed-out run cannot replace newer values.
 
 The `maintenance_cycle` event includes these signals with `gauge.` and `counter.` prefixes.
+The editor claim counter includes `phase=preflight` for retiring claims and `phase=claim` for lost races.
 Each process counts editor claim losses separately. With OTEL metrics disabled,
 request-replica counters remain local and do not appear in the maintenance replica logs.
 
