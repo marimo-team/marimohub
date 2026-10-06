@@ -54,6 +54,7 @@ import {
 	ResourceExhaustedError,
 	saga,
 	MODE_POLICY,
+	isTerminal,
 	isPastAuthorizationDeadline,
 	SandboxProvisioner,
 	SESSION_MODES,
@@ -794,7 +795,7 @@ async function retireSelectedSession(deps: ApiDeps, selected: Session): Promise<
 		// Reconciliation can recover the pool from the terminal session if invalidation fails.
 		if (
 			!transitioned &&
-			['expired', 'terminated', 'failed'].includes(session.status) &&
+			isTerminal(session.status) &&
 			session.sandbox_id &&
 			!session.sandbox_reclaimed_at
 		) {

@@ -277,8 +277,10 @@ export class SessionRetirer {
 			return true;
 		}
 		const now = Date.now();
+		const stopping = session.status === 'terminating' || !!session.terminating_at;
+		const ready = session.surfaces?.marimo?.status === 'ready';
 		if (
-			(session.status === 'terminating' || !!session.terminating_at) &&
+			stopping &&
 			now - Date.parse(session.terminating_at ?? session.last_heartbeat) <
 				RECLAIM_PROVISION_GRACE_MS
 		)
@@ -289,17 +291,14 @@ export class SessionRetirer {
 		if (
 			session.status === 'expired' &&
 			authorized &&
-			session.surfaces?.marimo?.status !== 'ready' &&
+			!ready &&
 			now - Date.parse(session.started_at) < RECLAIM_PROVISION_GRACE_MS
 		)
 			return false;
 		let capture =
-			(save ??
-				(session.status === 'expired' ||
-					session.status === 'terminating' ||
-					!!session.terminating_at)) &&
+			(save ?? (session.status === 'expired' || stopping)) &&
 			session.status !== 'failed' &&
-			(session.surfaces?.marimo?.status === 'ready' || !!session.sandbox_url) &&
+			(ready || !!session.sandbox_url) &&
 			authorized &&
 			sessionPersistsEdits(session);
 		if (capture) {
@@ -330,11 +329,10 @@ export class SessionRetirer {
 				);
 			}
 		}
-		if (existing) {
-			if (!(await this.teardownSandbox(session, true, thumbnailDeadlineAt, existing))) return false;
-		} else if (!(await this.destroySandbox(session))) {
-			return false;
-		}
+		const destroyed = existing
+			? await this.teardownSandbox(session, true, thumbnailDeadlineAt, existing)
+			: await this.destroySandbox(session);
+		if (!destroyed) return false;
 		await this.finishReclaim(session);
 		return true;
 	}
