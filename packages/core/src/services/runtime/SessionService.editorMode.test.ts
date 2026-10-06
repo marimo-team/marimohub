@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import type { UserId } from '../../ids';
 import { paths } from '../../paths';
-import { MemoryBucket, uid } from '../../testing';
+import { makeSession, MemoryBucket, uid } from '../../testing';
 import { SessionService } from './SessionService';
 
 const USER_A = uid('user_a');
@@ -361,6 +361,87 @@ describe('SessionService editor claims', () => {
 		);
 		expect(completed.session_id).toBe(replacement.session_id);
 	});
+
+	it.each(['live', 'retiring', 'reclaimed', 'deadline', 'missing', 'unreserved'] as const)(
+		'preflight and acquisition use the ready transfer replacement: %s',
+		async (state) => {
+			const displaced = makeSession({
+				project_id: projectId,
+				notebook_id: notebookId,
+				user_id: USER_A,
+				status: 'expired',
+				sandbox_id: createSandboxId(),
+			});
+			await bucket.put(paths.session(projectId, displaced.session_id), JSON.stringify(displaced));
+			await sessions.claimEditor(projectId, notebookId, displaced.session_id, 'exclusive', USER_A);
+			await sessions.reserveTakeover(projectId, notebookId, {
+				takeoverId: 'replacement-test',
+				requestedBy: USER_B,
+				expectedHolder: displaced.session_id,
+				expectedActivity: 'idle',
+			});
+			const reserved = makeSession({
+				project_id: projectId,
+				notebook_id: notebookId,
+				user_id: USER_B,
+				status: state === 'live' ? 'running' : 'expired',
+				sandbox_url: 'https://reserved.example',
+				sandbox_id: createSandboxId(),
+				sandbox_reclaimed_at: state === 'reclaimed' ? new Date().toISOString() : undefined,
+				sandbox_deadline_at:
+					state === 'deadline' ? new Date(Date.now() - 1).toISOString() : undefined,
+			});
+			if (state !== 'missing')
+				await bucket.put(paths.session(projectId, reserved.session_id), JSON.stringify(reserved));
+			await sessions.setTakeoverPhase(
+				projectId,
+				notebookId,
+				'replacement-test',
+				'ready',
+				state === 'unreserved' ? undefined : reserved.session_id,
+			);
+			const before = await sessions.getEditorClaim(projectId, notebookId);
+			expect(await sessions.isClaimRetiring(projectId, notebookId, USER_B)).toBe(
+				state === 'retiring',
+			);
+			expect(await sessions.getEditorClaim(projectId, notebookId)).toEqual(before);
+			const candidate = await running(USER_B);
+			const result = await sessions.claimEditor(
+				projectId,
+				notebookId,
+				candidate.session_id,
+				'exclusive',
+				USER_B,
+			);
+			const blocked = state === 'live' || state === 'retiring';
+			expect(result.claimed).toBe(!blocked);
+			if (blocked) expect(result.claim.session_id).toBe(reserved.session_id);
+			else expect(result.claim.transfer?.replacement_session_id).toBe(candidate.session_id);
+		},
+	);
+
+	it.each(['requested', 'draining', 'ready'] as const)(
+		'preflight and acquisition enforce takeover ownership in %s',
+		async (phase) => {
+			const owner = await running(USER_A);
+			await sessions.claimEditor(projectId, notebookId, owner.session_id, 'exclusive', USER_A);
+			await sessions.reserveTakeover(projectId, notebookId, {
+				takeoverId: 'owned-transfer',
+				requestedBy: USER_B,
+				expectedHolder: owner.session_id,
+				expectedActivity: 'idle',
+			});
+			if (phase !== 'requested')
+				await sessions.setTakeoverPhase(projectId, notebookId, 'owned-transfer', phase);
+			const candidate = await running(USER_A);
+			await expect(sessions.isClaimRetiring(projectId, notebookId, USER_A)).rejects.toMatchObject({
+				code: 'TAKEOVER_IN_PROGRESS',
+			});
+			await expect(
+				sessions.claimEditor(projectId, notebookId, candidate.session_id, 'exclusive', USER_A),
+			).rejects.toMatchObject({ code: 'TAKEOVER_IN_PROGRESS' });
+		},
+	);
 
 	it('grants only one drain lease and releases it only for its owner', async () => {
 		const owner = await running(USER_A);

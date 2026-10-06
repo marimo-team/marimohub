@@ -2279,7 +2279,7 @@ describe('Session routes', () => {
 				});
 			}
 
-			await expectError(await api.request('POST', sessionsPath()), 409, 'CONFLICT');
+			await expectError(await api.request('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
 			expect((await sessions.getSession(pid, first.session_id)).status).toBe('terminating');
 			expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBe(first.session_id);
 		},
@@ -2324,7 +2324,7 @@ describe('Session routes', () => {
 
 		const res = await api.request('POST', sessionsPath());
 
-		await expectError(res, 409, 'CONFLICT');
+		await expectError(res, 409, 'EDIT_SESSION_RETIRING');
 	});
 
 	describe('exclusive claim-lost path', () => {
@@ -2338,6 +2338,7 @@ describe('Session routes', () => {
 			vi.spyOn(api.deps.services.sessions, 'findReusableEditor').mockResolvedValueOnce({
 				sharing: 'exclusive',
 			});
+			vi.spyOn(api.deps.services.sessions, 'isClaimRetiring').mockResolvedValueOnce(false);
 			return api.request;
 		};
 
@@ -2348,7 +2349,7 @@ describe('Session routes', () => {
 				editor_sandbox_sharing: 'exclusive',
 			});
 
-			await expectError(await exclusive()('POST', sessionsPath()), 409, 'CONFLICT');
+			await expectError(await exclusive()('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
 		});
 
 		it("reports ownership when another user's holder is live", async () => {
@@ -2404,7 +2405,7 @@ describe('Session routes', () => {
 		const post = createTestApi({ bucket, userId: ACTOR, compute: makeFakeCompute() }).request;
 		const services = createServices(bucket);
 
-		await expectError(await post('POST', sessionsPath()), 409, 'CONFLICT');
+		await expectError(await post('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
 		expect((await services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(stale.session_id);
 
 		await expectOk(await post('DELETE', sessionsPath(`/${stale.session_id}`)));

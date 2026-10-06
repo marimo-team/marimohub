@@ -20,6 +20,41 @@ async function chooseSurfaceAction(
 }
 
 describe('NotebookPage viewer modes', () => {
+	it('explains pending editor cleanup and waits for a manual retry', async () => {
+		const user = userEvent.setup();
+		const options: Parameters<typeof makeFetch>[0] = {
+			role: 'editor',
+			createError: {
+				code: 'EDIT_SESSION_RETIRING',
+				message: 'The previous editor session is still shutting down. Retry shortly.',
+				status: 409,
+			},
+		};
+		const impl = makeFetch(options);
+		renderPage('edit');
+		expect(
+			await screen.findByText('The previous editor session is still shutting down. Retry shortly.'),
+		).toBeVisible();
+		expect(
+			screen.getByText('Wait for cleanup to finish, then select Retry to start editing.'),
+		).toBeVisible();
+		expect(screen.queryByTitle('Forecast')).toBeNull();
+		expect(sessionPosts(impl)).toHaveLength(1);
+		await user.click(screen.getByRole('button', { name: 'Retry' }));
+		expect(
+			await screen.findByText('The previous editor session is still shutting down. Retry shortly.'),
+		).toBeVisible();
+		expect(sessionPosts(impl)).toHaveLength(2);
+		expect(screen.queryByTitle('Forecast')).toBeNull();
+		options.createError = undefined;
+		await user.click(screen.getByRole('button', { name: 'Retry' }));
+		await waitFor(() => expect(sessionPosts(impl)).toHaveLength(3));
+		expect(await screen.findByTitle('Forecast')).toBeVisible();
+		expect(
+			screen.queryByText('Wait for cleanup to finish, then select Retry to start editing.'),
+		).toBeNull();
+	});
+
 	it.each(['edit', 'app'] as const)('offers recovery for a stalled %s kernel', async (variant) => {
 		const setTimeout = globalThis.setTimeout;
 		vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) =>
