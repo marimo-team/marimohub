@@ -1,3 +1,7 @@
+import { NotebookPreviewService } from './content/NotebookPreviewService';
+import { previewKey } from './content/notebookPreviews';
+import type { NotebookPreview } from './content/notebookPreviews';
+import type { GitProviderHosts } from '../integrations/gitRepo';
 import type { Bucket } from '../ports/bucket';
 import { noopMetrics } from '../ports/metrics';
 import type { Metrics } from '../ports/metrics';
@@ -425,6 +429,13 @@ const proposal = (projectId: ProjectId, notebookId: NotebookId, proposalId: Prop
 	...notebook(projectId, notebookId),
 	'marimohub.proposal_id': proposalId,
 });
+const preview = (pid: ProjectId, nid: NotebookId, id: string) => ({
+	...notebook(pid, nid),
+	'marimohub.preview_id': id,
+	'bucket.key': previewKey(pid, nid, id),
+});
+const previewRecord = (record: NotebookPreview) =>
+	preview(record.project_id, record.notebook_id, record.id);
 const session = (projectId: ProjectId, id: SessionId) => ({
 	...project(projectId),
 	'marimohub.session_id': id,
@@ -441,6 +452,7 @@ const bucketAttrs: AttrExtractors<Bucket> = {
 };
 
 export interface CreateServicesOptions {
+	repositoryHosts?: GitProviderHosts;
 	/**
 	 * Wrap the bucket and every service in OTEL spans (one per method call).
 	 * Enable only when a global tracer provider is registered — otherwise the
@@ -527,7 +539,7 @@ export function createServices(
 	);
 	const notebooks = wrap(
 		'NotebookService',
-		new NotebookService(bucket, catalog, metrics, sessions, deepLinks),
+		new NotebookService(bucket, catalog, metrics, sessions, deepLinks, options?.repositoryHosts),
 		{
 			listNotebooks: project,
 			createNotebook: project,
@@ -594,6 +606,21 @@ export function createServices(
 		projects,
 		notebooks,
 		proposals,
+		previews: wrap('NotebookPreviewService', new NotebookPreviewService(bucket, notebooks), {
+			get: preview,
+			projectRecords: (pid, nid) => (nid ? notebook(pid, nid) : project(pid)),
+			list: notebook,
+			source: notebook,
+			create: notebook,
+			prepare: previewRecord,
+			reapAdmissions: previewRecord,
+			reserveAdmission: previewRecord,
+			releaseAdmission: previewRecord,
+			commitAdmission: previewRecord,
+			retire: previewRecord,
+			cleanup: previewRecord,
+			prune: previewRecord,
+		}),
 		sessions,
 		runtimeInspection,
 		jobs,
@@ -678,3 +705,6 @@ export {
 	WARM_POOL_MAX_IDLE_MS,
 } from './runtime/WarmPoolService';
 export type { WarmPoolConfig, WarmPoolClaim, WarmPoolProfile } from './runtime/WarmPoolService';
+
+export { NotebookPreviewService } from './content/NotebookPreviewService';
+export * from './content/notebookPreviews';

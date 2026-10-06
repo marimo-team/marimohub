@@ -1,5 +1,14 @@
 import type { Session } from '@/types';
 
+export const EDITOR_HEARTBEAT_INTERVAL_MS = 120_000;
+export const SESSION_STATUS_INTERVAL_MS = 30_000;
+export const SESSION_START_POLL_INTERVAL_MS = 2_000;
+
+export function sessionStartupDeadlineMs(timeoutSeconds = 120): number {
+	// Allow the server time to report its own startup failure before giving up locally.
+	return timeoutSeconds * 1000 + 30_000;
+}
+
 // Liveliness ordering for a notebook's runtime: a notebook may have several
 // sessions, and the row should reflect its strongest live state.
 // running > starting > terminating; anything else (terminal/unknown) ranks lowest.
@@ -55,6 +64,7 @@ export function sessionConnectionHint(session: Session | undefined): string {
 }
 
 /**
+ * Preview runtimes have separate controls and are excluded from parent notebook controls.
  * Reduce a flat list of sessions to the "most alive" session per notebook and
  * per mode, keyed by `notebook_id`. A persistent edit sandbox, a caller-owned
  * temporary sandbox, and the shared app can coexist. At the same liveness rank,
@@ -65,6 +75,7 @@ export function sessionsByNotebook(
 ): Map<string, NotebookSessions> {
 	const map = new Map<string, NotebookSessions>();
 	for (const s of sessions ?? []) {
+		if (s.origin?.type === 'preview') continue;
 		const entry = map.get(s.notebook_id) ?? {};
 		const key = s.mode === 'app' ? 'app' : 'edit';
 		if (key === 'app' && rankSession(s.status) > 0) (entry.apps ??= []).push(s);

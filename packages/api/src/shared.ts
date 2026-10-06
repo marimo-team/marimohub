@@ -23,6 +23,8 @@ import {
 	SandboxId,
 	SESSION_MODES,
 	SESSION_STATUSES,
+	PreviewSessionOriginSchema,
+	sessionResourceNotebookId,
 	SessionId,
 	sessionPersistsEdits,
 	sessionCan,
@@ -218,12 +220,15 @@ export async function loadAuthorizedNotebook(
 	action: ProjectAction,
 ): Promise<NotebookDetail> {
 	const detail = await deps.services.notebooks.getNotebook(project.id, nid);
+	if (detail.meta.preview) throw new NotFoundError('Notebook not found');
 	if (detail.meta.status === 'deleted') {
 		throw new NotFoundError(`Notebook ${nid} not found`);
 	}
 	if (detail.meta.security_labels !== undefined) {
 		const actions: ProjectAction[] =
-			action === 'project.read' || action === 'app.read' ? [action] : ['project.read', action];
+			action === 'project.read' || action === 'app.read' || action === 'preview.manage'
+				? [action]
+				: ['project.read', action];
 		for (const requestedAction of actions) {
 			const decision = await authorizationService(deps).authorize(subject, requestedAction, {
 				kind: 'project',
@@ -238,6 +243,28 @@ export async function loadAuthorizedNotebook(
 	return detail;
 }
 
+export async function assertSessionPreviewActive(
+	deps: Pick<ApiDeps, 'services'>,
+	projectId: ProjectId,
+	session: Pick<Session, 'notebook_id' | 'origin'>,
+): Promise<void> {
+	if (!session.origin) return;
+	const origin = session.origin;
+	const preview = await deps.services.previews.get(
+		projectId,
+		origin.notebook_id,
+		origin.preview_id,
+	);
+	if (
+		preview.state !== 'active' ||
+		Date.parse(preview.expires_at) <= Date.now() ||
+		!preview.revisions.some(
+			(revision) => revision.notebook_id === session.notebook_id && revision.state === 'ready',
+		)
+	)
+		throw new NotFoundError('Preview not found');
+}
+
 /**
  * Mask-before-gate for session routes: a session whose notebook's security-label
  * override the caller does not satisfy is nonexistent to them, and the 404 must
@@ -247,8 +274,9 @@ export async function loadAuthorizedNotebook(
 export async function assertSessionNotebookVisible(
 	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity'>,
 	project: Project,
-	session: SessionAdmissionRecord & { notebook_id: NotebookId },
+	session: SessionAdmissionRecord & Pick<Session, 'notebook_id' | 'origin'>,
 	subject: AuthSubject,
+	options: { requireActivePreview?: boolean } = {},
 ): Promise<ResourceSecurityLabels | null> {
 	const authz = authorizationService(deps);
 	const role = authz.role(subject, project);
@@ -260,7 +288,12 @@ export async function assertSessionNotebookVisible(
 	if (session.mode !== 'app') {
 		await assertProjectActionOn(project, subject, readAction, deps);
 	}
-	const labels = await deps.services.notebooks.getSecurityLabels(project.id, session.notebook_id);
+	const labels = await deps.services.notebooks.getSecurityLabels(
+		project.id,
+		sessionResourceNotebookId(session),
+	);
+	if (options.requireActivePreview !== false)
+		await assertSessionPreviewActive(deps, project.id, session);
 	if (labels !== null) {
 		const decision = await authorizationService(deps).authorize(subject, readAction, {
 			kind: 'project',
@@ -1255,6 +1288,8 @@ export function toComputeResourcesResponse(
 
 export const SessionResponseSchema = z
 	.object({
+		origin: PreviewSessionOriginSchema.optional(),
+		resource_path: z.string().optional(),
 		app_assignment: z.object({ visit_id: z.string(), generation: z.string() }).optional(),
 		app_pool: z
 			.object({
@@ -1477,6 +1512,10 @@ export const CapabilitiesResponseSchema = z
 		federation: z.object({ available: z.boolean(), defaultEnabled: z.boolean() }),
 		integrations: z.object({ available: z.boolean() }),
 		source_control: z.object({
+			preview_providers: z.array(z.string()).openapi({
+				description: 'Provider ids configured to publish notebook previews through a GitHub App.',
+				example: ['github'],
+			}),
 			change_request_providers: z.array(z.string()).openapi({
 				description:
 					'Provider ids configured to publish pull requests, merge requests, or equivalents from notebook sessions.',

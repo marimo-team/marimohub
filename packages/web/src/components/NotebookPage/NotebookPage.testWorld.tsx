@@ -67,6 +67,7 @@ interface FetchOptions {
 	editorStateFailOn?: number[];
 	meFailures?: number;
 	sourceControlProviders?: string[];
+	previewProviders?: string[];
 	vscode?: { embed: 'tab' | 'iframe' };
 	opencode?: { embed: 'tab' | 'iframe' };
 	vscodeStartError?: { code: string; message: string; status: number };
@@ -280,6 +281,7 @@ export function makeFetch(opts: FetchOptions) {
 					: {
 							source_control: {
 								change_request_providers: opts.sourceControlProviders ?? [],
+								preview_providers: opts.previewProviders ?? [],
 							},
 						}),
 				viewer_mode: viewerMode,

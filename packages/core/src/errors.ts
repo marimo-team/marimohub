@@ -8,6 +8,7 @@ export const DOMAIN_ERROR_CODES = [
 	'PRECONDITION_FAILED',
 	'NOT_FOUND',
 	'CONFLICT',
+	'PREVIEW_NOT_READY',
 	'PROPOSAL_RETRY_REQUIRED',
 	'EDIT_SESSION_OWNED',
 	'EDIT_SESSION_CHANGED',
@@ -257,5 +258,14 @@ export function assertVersionMatch(current: string, expected: string | undefined
 		throw new PreconditionFailedError(
 			'Resource was modified since it was last read (If-Match precondition failed)',
 		);
+	}
+}
+
+export class PreviewNotReadyError extends DomainError {
+	readonly code = 'PREVIEW_NOT_READY';
+	readonly status = 409;
+	constructor() {
+		super('Preview is not ready');
+		this.name = 'PreviewNotReadyError';
 	}
 }

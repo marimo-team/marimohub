@@ -133,9 +133,9 @@ API key. Project configuration and bring-your-own-key providers can override it.
   start rather than silently falling back to the `dev` bypass.
 - OIDC requires `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS`. Set explicit domains or
   `*` to allow all. This prevents accidental access for every IdP account.
-- OIDC requires boolean `email_verified=true` by default. `trusted-issuer`
-  permits omission only. Other present values are invalid. UserInfo must have
-  the same `sub` as the ID token.
+- OIDC requires email verification by default. Each present `email_verified`
+  claim must be boolean `true` or the exact string `"true"`. `trusted-issuer`
+  permits missing claims only. UserInfo must have the same `sub` as the ID token.
 - Group policy accepts at most 200 group IDs and stores only mapped entitlements.
   Group sessions and kernels expire with the entitlement credential. Active
   connections cannot extend this deadline.
@@ -342,3 +342,23 @@ available.
 
 Use a separate data bucket for ambient browsing. Restrict hub storage credentials
 to hub storage.
+
+## Previews
+
+A [notebook preview](notebook-previews.md) runs the code at the chosen branch or
+commit with the parent notebook's integrations and secrets.
+Configuring the [GitHub App](configuration.md#github-app) enables previews.
+
+- Only managers and admins can create or delete previews.
+- Viewers and app users who can open the notebook can open its previews, within
+  their usual runtime modes.
+- A branch preview republishes on every push. After a manager creates it, anyone
+  who can push to that branch can run code with the notebook's credentials.
+- A pinned commit preview runs one SHA. marimohub checks only that the
+  notebook's repository resolves the SHA, so review the commit before you pin it.
+- With pull request tracking, preparation fails if the PR's head branch is not in
+  the notebook's repository. Fork PRs are not supported.
+
+Protect previewed branches with GitHub branch protection or rulesets, so that only
+trusted people can push to them. Restrict the App's repositories with
+[GitHub project policies](syncing.md#github-project-policies).

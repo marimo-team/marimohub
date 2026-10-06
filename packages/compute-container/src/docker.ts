@@ -1,32 +1,18 @@
 import { ContainerCompute, spawnContainerRunner } from './index';
+import type { ContainerConfig, ContainerRunner } from './index';
 
-export interface DockerRunResult {
-	stdout: string;
-	stderr: string;
-	exitCode: number;
-}
+export type {
+	ContainerConfig as DockerConfig,
+	ContainerRunner as DockerRunner,
+	ContainerRunResult as DockerRunResult,
+} from './index';
 
-export interface DockerRunner {
-	run(
-		args: string[],
-		options?: { stdin?: string | Uint8Array; timeout?: number },
-	): Promise<DockerRunResult>;
-}
-
-export interface DockerConfig {
-	image?: string;
-	host?: string;
-	bindHost?: string;
-	network?: string;
-	labelKey?: string;
-}
-
-export function spawnDockerRunner(bin = 'docker'): DockerRunner {
+export function spawnDockerRunner(bin = 'docker'): ContainerRunner {
 	return spawnContainerRunner(bin);
 }
 
 export class DockerCompute extends ContainerCompute {
-	constructor(config: DockerConfig = {}, runner: DockerRunner = spawnDockerRunner()) {
+	constructor(config: ContainerConfig = {}, runner: ContainerRunner = spawnDockerRunner()) {
 		super('docker', config, runner);
 	}
 }

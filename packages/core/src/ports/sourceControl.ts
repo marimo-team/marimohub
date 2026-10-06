@@ -1,5 +1,6 @@
 import { MAX_WORKSPACE_FILE_BYTES } from '../constants';
 import { BadRequestError } from '../errors';
+import type { GitProviderHosts } from '../integrations/gitRepo';
 import type { ProjectId } from '../ids';
 
 export interface SourceControlContentChange {
@@ -172,19 +173,63 @@ export function assertGitDirectoryLimits(files: readonly SourceWorkspaceFile[]):
 	for (const file of files) limits.add(file.path, file.bytes.byteLength);
 }
 
+export interface SourceRefSuggestion {
+	value: string;
+	commit: string;
+	label: string;
+}
+
+export interface SourcePullRequest {
+	number: number;
+	state: 'open' | 'closed';
+	branch: string;
+	commit: string;
+	sameRepository: boolean;
+}
+
 /** The read side of a provider: resolve branch heads and fetch workspace trees. */
+export interface SourceReadOptions {
+	signal?: AbortSignal;
+}
+
 export interface SourceControlReader {
 	/** Same id namespace as `SourceControlPublisher` (`github`, `gitlab`, …). */
 	readonly provider: string;
 	/**
 	 * Whether this reader can serve the repository coordinate. Provider ids are
 	 * host-detected, so a provider match is not enough — e.g. the GitHub App
-	 * serves github.com only, while a GitHub Enterprise repository carries the
+	 * serves a configured host, while another GitHub Enterprise repository carries the
 	 * same `github` id. Unsupported repositories stay push-only.
 	 */
 	supportsRepository(repository: string): boolean;
+	/** GitHub App readers expose this capability; other Git readers cannot publish previews. */
+	readonly previews?: boolean;
+	listBranches?(
+		repository: string,
+		query: string,
+		options?: SourceReadOptions,
+	): Promise<SourceRefSuggestion[]>;
+	listCommits?(
+		repository: string,
+		query: string,
+		options?: SourceReadOptions,
+	): Promise<SourceRefSuggestion[]>;
+	resolveCommit?(
+		repository: string,
+		commit: string,
+		options?: SourceReadOptions,
+	): Promise<SourceBranchHead>;
+	getPullRequest?(
+		repository: string,
+		number: number,
+		options?: SourceReadOptions,
+	): Promise<SourcePullRequest>;
 	/** Resolve the current tip of a branch. */
-	getBranchHead(repository: string, branch: string): Promise<SourceBranchHead>;
+	getBranchHead(
+		repository: string,
+		branch: string,
+		options?: SourceReadOptions,
+	): Promise<SourceBranchHead>;
 	/**
 	 * Fetch the tree under `rootPath` at `commit` as workspace files.
 	 * Implementations MUST enforce the same caps as archive ingest (file count,
@@ -195,6 +240,7 @@ export interface SourceControlReader {
 		repository: string,
 		commit: string,
 		rootPath: string,
+		options?: SourceReadOptions,
 	): Promise<SourceWorkspaceFile[]>;
 	/**
 	 * Materialize a credential-free Git directory for the exact commit. Paths
@@ -214,6 +260,7 @@ export interface SourceControlReader {
 
 /** Server-side source-control capabilities configured for this deployment. */
 export interface SourceControlRegistry {
+	readonly repositoryHosts?: GitProviderHosts;
 	getPublisher(provider: string, projectId?: ProjectId): SourceControlPublisher | undefined;
 	getReader(provider: string, projectId?: ProjectId): SourceControlReader | undefined;
 	/** Provider ids that can publish change requests. */

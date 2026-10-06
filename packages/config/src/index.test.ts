@@ -68,6 +68,31 @@ describe('createFromEnv auth backend selection', () => {
 		).toThrow(/unknown key.*"small"/);
 	});
 
+	it.each(['none', 'docker'])(
+		'identifies invalid preview profiles on %s in startup diagnostics',
+		(backend) => {
+			expect(() =>
+				createFromEnv({
+					...baseEnv,
+					MARIMOHUB_AUTH_BACKEND: 'dev',
+					MARIMOHUB_COMPUTE_BACKEND: backend,
+					MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE: 'unknown',
+					MARIMOHUB_COMPUTE_PROFILES: 'small:cpu=1',
+				}),
+			).toThrow(
+				expect.objectContaining({
+					name: 'ConfigError',
+					message:
+						'MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE must name an available compute profile',
+					opts: {
+						variable: 'MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE',
+						docs: 'docs/configuration.md#compute',
+					},
+				}),
+			);
+		},
+	);
+
 	it('wires the first compute profile into sandbox configuration', () => {
 		const deps = createFromEnv({
 			...baseEnv,
@@ -1065,17 +1090,45 @@ describe('createFromEnv sandbox exposure mode', () => {
 		expect(config.exposureMode).toBe('proxy');
 	});
 
-	it('rejects OpenCode in proxy exposure mode', () => {
-		expect(() =>
-			createFromEnv({
-				...baseEnv,
-				MARIMOHUB_SURFACES: 'marimo,opencode',
-				MARIMOHUB_SANDBOX_EXPOSURE: 'proxy',
-				MARIMOHUB_SANDBOX_PROXY_ACK_UNTRUSTED: 'true',
-				MARIMOHUB_AUTH_SESSION_SECRET: 'x'.repeat(48),
-			}),
-		).toThrow(/OpenCode does not support proxy/);
+	it.each(['docker', 'podman'])('enables OpenCode with %s and subdomain exposure', (backend) => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_COMPUTE_BACKEND: backend,
+			MARIMOHUB_SURFACES: 'marimo,opencode',
+			MARIMOHUB_SANDBOX_EXPOSURE: 'subdomain',
+		});
+		expect(deps.compute.capabilities?.multiPort).toBe(true);
+		expect(deps.sandbox.surfaces?.opencode?.port).toBe(4096);
 	});
+
+	it.each(['docker', 'podman'])('enables VS Code with %s and proxy exposure', (backend) => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_COMPUTE_BACKEND: backend,
+			MARIMOHUB_SURFACES: 'marimo,vscode',
+			MARIMOHUB_SANDBOX_EXPOSURE: 'proxy',
+			MARIMOHUB_SANDBOX_PROXY_ACK_UNTRUSTED: 'true',
+			MARIMOHUB_AUTH_SESSION_SECRET: 'x'.repeat(48),
+		});
+		expect(deps.compute.capabilities?.multiPort).toBe(true);
+		expect(deps.sandbox.surfaces?.vscode?.port).toBe(8443);
+	});
+
+	it.each(['none', 'docker', 'podman'])(
+		'rejects OpenCode with %s in proxy exposure mode',
+		(backend) => {
+			expect(() =>
+				createFromEnv({
+					...baseEnv,
+					MARIMOHUB_COMPUTE_BACKEND: backend,
+					MARIMOHUB_SURFACES: 'marimo,opencode',
+					MARIMOHUB_SANDBOX_EXPOSURE: 'proxy',
+					MARIMOHUB_SANDBOX_PROXY_ACK_UNTRUSTED: 'true',
+					MARIMOHUB_AUTH_SESSION_SECRET: 'x'.repeat(48),
+				}),
+			).toThrow(/OpenCode does not support proxy/);
+		},
+	);
 
 	it('rejects OpenCode when the compute backend cannot expose another port', () => {
 		expect(() =>

@@ -980,7 +980,7 @@ before it deletes local indexes.
 
 ## 5. ID Scheme
 
-Resource IDs (`proj-`, `nb-`, `snap-`, `sess-`, `job-`) are a short prefix plus a 16-character lowercase base32 random body — **subdomain-safe and unguessable, but NOT time-sortable** (see `packages/core/src/ids.ts` / `schema.ts`). Version IDs (`ver_`) and job run IDs (`run_`) use uppercase ULIDs because their lexicographic order is load-bearing for version pruning and newest-first run history. The examples below are illustrative; the regex in `ids.ts` is authoritative.
+Resource IDs (`proj-`, `nb-`, `snap-`, `sess-`, `job-`, `prev-`) are a short prefix plus a 16-character lowercase base32 random body — **subdomain-safe and unguessable, but NOT time-sortable** (see `packages/core/src/ids.ts` / `schema.ts`). Version IDs (`ver_`) and job run IDs (`run_`) use uppercase ULIDs because their lexicographic order is load-bearing for version pruning and newest-first run history. The examples below are illustrative; the regex in `ids.ts` is authoritative.
 
 > **Do not infer recency from snapshot key order.** Because snapshot IDs are random, listing `_system/snapshots/` does **not** return entries in creation order. The current snapshot is always the one named by `catalog.json` — never the "last" key. Where chronological order is needed (retention, recovery), use each object's storage timestamp (`uploaded` / `LastModified`) or the snapshot's `created_at` field, not the ID.
 
@@ -998,6 +998,7 @@ Resource IDs (`proj-`, `nb-`, `snap-`, `sess-`, `job-`) are a short prefix plus 
 | opaque string | User/actor — the authentication provider supplies this value           |
 | `intg-{rand}` | Integration — random 16-character body                                 |
 | `sb-{rand}`   | Sandbox — random 16-character body                                     |
+| `prev-{rand}` | Notebook preview — random 16-character body                            |
 
 ---
 
@@ -1556,3 +1557,55 @@ Pool cleanup uses recorded sandbox IDs and does not require provider enumeration
 
 The maintenance replica uses `_system/_warm_pool.lock` as its advisory lease.
 Pool CAS transitions remain authoritative when maintenance passes overlap.
+
+## Notebook preview records
+
+`NotebookPreviewService` owns each CAS record at `_system/previews/{pid}/{nid}/{preview-id}.json`.
+Records hold the source, prepared revision, runtime ownership ledger, and session admission reservations.
+
+`PreviewStore` owns these CAS records:
+
+- `_system/preview-projects/{pid}.json`: bounded membership, recovery intents, and artifact reservations.
+- `_system/preview-receipts/{pid}.json`: bounded idempotency receipts, valid for seven days from creation.
+- `_system/preview-work.json`: rotating project cursor and deployment-wide preparation leases.
+- `_system/preview-cleanup-cursor.json`: independent rotating cleanup cursor.
+
+A one-minute deadline fences each creation attempt, independently of the receipt’s seven-day deduplication window.
+A rejected capacity reservation can retry with the same key and a fresh attempt deadline. Deleted receipts still reject retries.
+Expired receipts are pruned on project activity; idle receipt heads hold at most 1,000 entries and do not participate in scheduling.
+
+Creation reserves membership before writing the preview record. Workers can materialize interrupted writes from the stored intent.
+Listing reads only this bounded membership; it never scans historical preview records or receipts.
+Deletion closes the receipt immediately. After reclamation and a 15-minute grace period, cleanup marks the membership terminal,
+deletes the preview record, and removes membership. Terminal intents prevent interrupted cleanup from recreating active records.
+Empty project CAS heads remain to fence concurrent writers; individual preview records do not remain permanently.
+Workers page through removable `_system/preview-active-projects/{pid}/{work_id}.json` markers instead of retained heads.
+Each activation uses a new work ID. Its marker is written before membership, and project mutations write a fresh revision.
+Removing a stale marker first CAS-updates the project head to fence pending publications. Interrupted writes leave discoverable orphan markers.
+Each pass selects up to four active projects and scans at most sixteen marker pages, reclaiming orphans as it goes.
+Empty historical heads do not add scheduling latency; rotation time depends on projects with outstanding preview work.
+Runtime access requires live membership and an active preview record.
+
+Preparation runs independently of launches and maintenance. Leases fence publication; deadlines abort provider reads and stop workspace writes.
+Project reservations bound both revision counts and aggregate workspace bytes before archive download.
+Cleanup retires compute immediately and retains artifacts, ownership, and reservations through the cleanup grace period. This lets in-flight preparation uploads settle before artifact deletion.
+
+Each revision has a unique internal notebook ID, immutable workspace, and `preview` ownership marker in `preview-runtime.json`.
+Ordinary `meta.json` is absent, preventing older replicas from rewriting metadata without preview protections.
+These notebooks never enter catalog snapshots or share pools, source artifacts, or editors with the parent.
+Metadata reads require a published revision, use current parent labels and configuration, and reject inactive owners.
+Normal notebook APIs reject internal IDs. Session APIs allow authorized access to running preview sessions.
+
+Reconciliation retains revisions with unreclaimed sessions. Each entry in `revisions` records its runtime notebook ID, state (`preparing`, `ready`, or `retiring`), and cleanup deadline. Reconciliation marks unused revisions as `retiring` before deleting their artifacts.
+Admission reservations and pruning share the preview CAS record, so admitted revisions cannot be pruned before session creation.
+Committed reservations remain until sandbox reclamation; abandoned reservations without sessions expire after ten minutes.
+Late admissions fail the ownership check. Cleanup defers fresh starting sessions and retries failed destruction without capturing edits.
+App pool tombstones remain under their normal owner.
+
+Preview sessions persist immutable `origin` provenance at creation: parent notebook, preview, prepared version, and commit.
+The stored session's `notebook_id` remains the internal workspace identity used by compute, pools, and cleanup.
+`sessionResourceNotebookId` resolves the public parent identity; API projections never return the hidden workspace ID.
+`sessionResourcePath` provides the notebook or preview navigation target without reading runtime metadata.
+Session controls accept the public parent notebook ID, then resolve their workspace and pool from the stored session.
+History reads authorize against current parent labels; live operations additionally validate preview ownership and expiry.
+Runtime cleanup does not erase provenance from retained sessions or audit events.

@@ -13,7 +13,12 @@ const actor = (over: Partial<SessionActor>): SessionActor => ({
 	...over,
 });
 
-const ownEphemeral = { mode: undefined, ephemeral: true, user_id: ME };
+const ownEphemeral = {
+	mode: undefined,
+	ephemeral: true,
+	restricted_viewer_credentials: true,
+	user_id: ME,
+};
 const otherEdit = { mode: 'edit' as const, ephemeral: undefined, user_id: OTHER };
 const otherEphemeral = { mode: 'edit' as const, ephemeral: true, user_id: OTHER };
 const app = { mode: 'app' as const, ephemeral: undefined, user_id: OTHER };
@@ -83,6 +88,16 @@ describe('sessionCan', () => {
 		expect(sessionCan('stop', actor({ viewerMode: 'ephemeral-sandbox' }), ownEphemeral)).toBe(true);
 	});
 
+	it.each([false, undefined])(
+		'denies viewer attachment to editors with restriction %s',
+		(restricted) => {
+			const session = { ...ownEphemeral, restricted_viewer_credentials: restricted };
+			const viewer = actor({ viewerMode: 'ephemeral-sandbox' });
+			expect(sessionCan('attach', viewer, session)).toBe(false);
+			expect(sessionCan('stop', viewer, session)).toBe(true);
+		},
+	);
+
 	it('a VIEWER_MODE downgrade cuts attach to an existing ephemeral session; stop stays', () => {
 		expect(sessionCan('attach', actor({ viewerMode: 'static' }), ownEphemeral)).toBe(false);
 		expect(sessionCan('attach', actor({ viewerMode: 'applications' }), ownEphemeral)).toBe(false);
@@ -147,7 +162,7 @@ describe('app users', () => {
 				ownEphemeral,
 				otherEdit,
 				otherEphemeral,
-				{ ...app, ephemeral: true, user_id: ME },
+				{ ...app, ephemeral: true, restricted_viewer_credentials: true, user_id: ME },
 			]) {
 				expect(sessionGrants(user, session)).toEqual({
 					attach: false,

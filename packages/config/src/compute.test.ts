@@ -44,6 +44,7 @@ const configOf = (provider: unknown) =>
 				host?: string;
 				bindHost?: string;
 				network?: string;
+				ownerTag?: string;
 				idleFallbackMs?: number;
 				ingressAnnotations?: Record<string, string>;
 				ingressTlsMode?: string;
@@ -219,6 +220,97 @@ describe('makeCompute backend selection', () => {
 
 	it('selects podman', () => {
 		expect(makeCompute({ MARIMOHUB_COMPUTE_BACKEND: 'podman' })).toBeInstanceOf(PodmanCompute);
+	});
+
+	it.each(['docker', 'podman'])('reserves configured surface ports for %s', (backend) => {
+		const surfaces = surfacesFromEnv({
+			MARIMOHUB_SURFACES: 'marimo,vscode,opencode',
+			MARIMOHUB_SURFACE_VSCODE_PORT: '9443',
+			MARIMOHUB_SURFACE_OPENCODE_PORT: '5096',
+		});
+		const provider = makeCompute({ MARIMOHUB_COMPUTE_BACKEND: backend }, { surfaces });
+		expect(provider.capabilities?.multiPort).toBe(true);
+		expect(configOf(provider).surfacePorts).toEqual([9443, 5096]);
+		const defaultProvider = makeCompute({ MARIMOHUB_COMPUTE_BACKEND: backend });
+		expect(defaultProvider.capabilities?.multiPort).toBe(false);
+		expect(configOf(defaultProvider).surfacePorts).toEqual([]);
+	});
+
+	it.each(['docker', 'podman'])(
+		'uses only the selected %s engine connection settings',
+		(backend) => {
+			const provider = makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: backend,
+				MARIMOHUB_COMPUTE_DOCKER_HOST: 'docker.test',
+				MARIMOHUB_COMPUTE_DOCKER_BIND_HOST: '127.0.0.2',
+				MARIMOHUB_COMPUTE_DOCKER_NETWORK: 'docker-network',
+				MARIMOHUB_COMPUTE_PODMAN_HOST: 'podman.test',
+				MARIMOHUB_COMPUTE_PODMAN_BIND_HOST: '127.0.0.3',
+				MARIMOHUB_COMPUTE_PODMAN_NETWORK: 'podman-network',
+			});
+			expect(configOf(provider)).toMatchObject({
+				host: `${backend}.test`,
+				bindHost: backend === 'docker' ? '127.0.0.2' : '127.0.0.3',
+				network: `${backend}-network`,
+			});
+		},
+	);
+
+	it.each(['docker', 'podman'])('configures the %s sandbox owner tag', (backend) => {
+		const key = `MARIMOHUB_COMPUTE_${backend.toUpperCase()}_OWNER_TAG`;
+		for (const ownerTag of [undefined, 'hub-prod', '  Hub_1.prod-a\t', 'a'.repeat(63)]) {
+			const provider = makeCompute({
+				MARIMOHUB_COMPUTE_BACKEND: backend,
+				[key]: ownerTag,
+			});
+			expect(configOf(provider).ownerTag).toBe(ownerTag?.trim());
+		}
+	});
+
+	it.each(['docker', 'podman'])('treats a blank %s owner tag as unset', (backend) => {
+		const key = `MARIMOHUB_COMPUTE_${backend.toUpperCase()}_OWNER_TAG`;
+		for (const value of ['', '   ', '\t\n']) {
+			const provider = makeCompute({ MARIMOHUB_COMPUTE_BACKEND: backend, [key]: value });
+			expect(configOf(provider).ownerTag).toBeUndefined();
+		}
+	});
+
+	it.each(['docker', 'podman'])('rejects invalid %s owner tags at startup', (backend) => {
+		const key = `MARIMOHUB_COMPUTE_${backend.toUpperCase()}_OWNER_TAG`;
+		for (const value of [
+			'team=prod',
+			'team prod',
+			'team\nprod',
+			'team/prod',
+			'é',
+			'a'.repeat(64),
+		]) {
+			const error = getConfigError(() =>
+				makeCompute({ MARIMOHUB_COMPUTE_BACKEND: backend, [key]: value }),
+			);
+			expect(error.opts.variable).toBe(key);
+			expect(error.opts.remediation).toContain('letters, digits, underscores, dots, and hyphens');
+		}
+	});
+
+	it.each(['docker', 'podman'])("ignores the other backend's owner tag for %s", (backend) => {
+		const otherKey =
+			backend === 'docker'
+				? 'MARIMOHUB_COMPUTE_PODMAN_OWNER_TAG'
+				: 'MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG';
+		const env = {
+			MARIMOHUB_COMPUTE_BACKEND: backend,
+			[otherKey]: 'invalid=other',
+		};
+		expect(configOf(makeCompute(env)).ownerTag).toBeUndefined();
+		expect(
+			configOf(
+				makeCompute({
+					...env,
+					[`MARIMOHUB_COMPUTE_${backend.toUpperCase()}_OWNER_TAG`]: 'hub-own',
+				}),
+			).ownerTag,
+		).toBe('hub-own');
 	});
 
 	it('forwards Podman-specific connection and network settings', () => {
@@ -870,6 +962,65 @@ describe('sandbox image list', () => {
 				MARIMOHUB_COMPUTE_IMAGE: 'img-a,img-b',
 			}),
 		).toEqual(['img-a', 'img-b']);
+	});
+
+	it('preserves named Modal references in a mixed image list', () => {
+		const env = {
+			...modalEnv,
+			MARIMOHUB_COMPUTE_IMAGE: 'modal://marimo-sandbox:v1, ghcr.io/acme/marimo:latest',
+		};
+
+		expect(configOf(makeCompute(env)).image).toBe('modal://marimo-sandbox:v1');
+		expect(resolveSandboxImages(env)).toEqual([
+			'modal://marimo-sandbox:v1',
+			'ghcr.io/acme/marimo:latest',
+		]);
+	});
+
+	it.each(['docker', 'podman', 'kubernetes', 'coreweave', 'wandb', 'e2b', 'cloudflare'])(
+		'rejects modal:// image references for %s at startup',
+		(backend) => {
+			const error = getConfigError(() =>
+				resolveSandboxImages({
+					MARIMOHUB_COMPUTE_BACKEND: backend,
+					MARIMOHUB_COMPUTE_IMAGE: 'ghcr.io/acme/marimo:latest, modal://marimo-sandbox:v1',
+				}),
+			);
+			expect(error.message).toContain('modal://marimo-sandbox:v1');
+			expect(error.message).toContain(backend);
+			expect(error.opts).toMatchObject({
+				variable: 'MARIMOHUB_COMPUTE_IMAGE',
+				docs: 'docs/configuration.md#compute',
+			});
+			expect(error.opts.remediation).toContain('MARIMOHUB_COMPUTE_BACKEND=modal');
+		},
+	);
+
+	it('rejects modal:// e2b template references against the template variable', () => {
+		const error = getConfigError(() =>
+			resolveSandboxImages({
+				MARIMOHUB_COMPUTE_BACKEND: 'e2b',
+				MARIMOHUB_COMPUTE_E2B_TEMPLATE: 'modal://tpl',
+				MARIMOHUB_COMPUTE_IMAGE: 'img-a',
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_COMPUTE_E2B_TEMPLATE');
+		expect(
+			resolveSandboxImages({
+				MARIMOHUB_COMPUTE_BACKEND: 'e2b',
+				MARIMOHUB_COMPUTE_E2B_TEMPLATE: 'tpl-a',
+				MARIMOHUB_COMPUTE_IMAGE: 'modal://ignored',
+			}),
+		).toEqual(['tpl-a']);
+	});
+
+	it.each(['modal', 'library', 'local'])('accepts modal:// image entries for %s', (backend) => {
+		expect(() =>
+			resolveSandboxImages({
+				MARIMOHUB_COMPUTE_BACKEND: backend,
+				MARIMOHUB_COMPUTE_IMAGE: 'modal://marimo-sandbox:v1',
+			}),
+		).not.toThrow();
 	});
 
 	it('constructs providers with the first image as their default', () => {

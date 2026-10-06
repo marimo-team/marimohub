@@ -645,6 +645,19 @@ export function createFromEnv(
 	const computeProfileOverride = parseComputeProfileOverride(
 		env.MARIMOHUB_COMPUTE_PROFILE_OVERRIDE,
 	);
+	const previewComputeProfile = env.MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE?.trim() || undefined;
+	if (
+		previewComputeProfile &&
+		(!profilesSupported ||
+			!appliedComputeProfiles.profiles.some((profile) => profile.name === previewComputeProfile))
+	)
+		throw new ConfigError(
+			'MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE must name an available compute profile',
+			{
+				variable: 'MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE',
+				docs: 'docs/configuration.md#compute',
+			},
+		);
 	const editorSandboxSharing = parseEditorSandboxSharing(env);
 	const userHome = makeSandboxUserHome(env, editorSandboxSharing);
 	const profileNotice = unsupportedBackendNotice(
@@ -657,7 +670,11 @@ export function createFromEnv(
 		console.warn(profileNotice);
 		warnedUnsupportedProfileBackends.add(computeBackendValue);
 	}
-	const services = createServices(bucket, metrics, { tracing: options?.tracing });
+	const sourceControlConfig = makeSourceControl(env);
+	const services = createServices(bucket, metrics, {
+		tracing: options?.tracing,
+		repositoryHosts: sourceControlConfig.sourceControl?.repositoryHosts,
+	});
 	const projectAlerts = makeProjectAlerts(env, bucket, metrics);
 	const surfaces = surfacesFromEnv(env);
 	const compute = makeCompute(env, {
@@ -750,6 +767,7 @@ export function createFromEnv(
 			resources: computeResources,
 			computeProfile: profilesSupported ? appliedComputeProfiles.defaultProfile?.name : undefined,
 			computeProfiles: profilesSupported ? [...appliedComputeProfiles.profiles] : [],
+			previewComputeProfile,
 			computeProfileOverride: profilesSupported ? computeProfileOverride : 'none',
 			userHome,
 			surfaces,
@@ -801,7 +819,7 @@ export function createFromEnv(
 		...makeWif(env),
 		// Managed AI proxy (no-op unless MARIMOHUB_AI_BACKEND is configured).
 		...makeAi(env),
-		...makeSourceControl(env),
+		...sourceControlConfig,
 		...makeIntegrations(env, bucket, metrics, dataPreview, dataQuery),
 		// Deployment metadata surfaced read-only via GET /api/v1/version (UI footer).
 		// MARIMOHUB_VERSION / MARIMOHUB_IMAGE are baked into the image at build time

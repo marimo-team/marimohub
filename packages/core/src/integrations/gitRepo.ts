@@ -6,6 +6,7 @@
 import { parseHttpUrl } from '../url';
 
 export type GitProvider = 'github' | 'gitlab';
+export type GitProviderHosts = Readonly<Record<string, GitProvider>>;
 
 // Plain `owner/repo` coordinates — not a clone URL or `git@` remote (a bare
 // "anything/anything" check would admit both). Owners cannot contain dots,
@@ -70,10 +71,12 @@ export function normalizeRepo(input: string): string | null {
  * self-hosted instances like `gitlab.my-company.org`. Null means links
  * cannot be built safely.
  */
-export function detectProvider(repo: string): GitProvider | null {
+export function detectProvider(repo: string, hosts?: GitProviderHosts): GitProvider | null {
 	if (OWNER_REPO_PATTERN.test(repo)) return 'github';
 	const url = parseRepoUrl(repo);
 	if (!url) return null;
+	const configured = hosts && Object.hasOwn(hosts, url.host) ? hosts[url.host] : undefined;
+	if (configured) return configured;
 	const host = url.hostname.toLowerCase();
 	if (host.includes('github')) return 'github';
 	if (host.includes('gitlab')) return 'gitlab';
@@ -106,14 +109,15 @@ export function repoOrigin(repo: string): string | null {
  * URL must be on the stored host. Case folds only on GitHub, whose paths are
  * case-insensitive.
  */
-export function reposMatch(expected: string, received: string): boolean {
+export function reposMatch(expected: string, received: string, hosts?: GitProviderHosts): boolean {
 	const a = normalizeRepo(expected) ?? expected.trim();
 	const b = normalizeRepo(received) ?? received.trim();
 	if (a.length === 0 || b.length === 0) return false;
 	if (a === b) return true;
 	const receivedHost = parseRepoUrl(b)?.host ?? null;
 	if (receivedHost && receivedHost !== repoHost(a)) return false;
-	const fold = (path: string) => (detectProvider(a) === 'github' ? path.toLowerCase() : path);
+	const fold = (path: string) =>
+		detectProvider(a, hosts) === 'github' ? path.toLowerCase() : path;
 	const pathA = fold(repoPath(a));
 	return pathA.length > 0 && pathA === fold(repoPath(b));
 }

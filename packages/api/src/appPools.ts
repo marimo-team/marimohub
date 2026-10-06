@@ -4,12 +4,18 @@ import {
 	kernelActiveConnections,
 	kernelBasePathFromUrl,
 	NotebookId,
+	NotebookMetaSchema,
+	PreviewRuntimeMetaSchema,
+	StoredObjectError,
+	readStored,
+	paths,
 	NotFoundError,
 	ProjectId,
 	SessionRetirer,
 	sessionOwner,
 } from '@marimo-hub/core';
 import type { ApiDeps } from './context';
+import { previewAppPoolPolicy } from './previewPolicy';
 
 export async function sweepAppPools(
 	deps: Pick<ApiDeps, 'bucket' | 'services' | 'compute' | 'policy' | 'metrics'> & {
@@ -17,7 +23,7 @@ export async function sweepAppPools(
 	},
 ): Promise<void> {
 	const { sessions } = deps.services;
-	const pool = new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics);
+
 	const retirer = new SessionRetirer({
 		...deps,
 		...deps.services,
@@ -32,8 +38,35 @@ export async function sweepAppPools(
 			if (!match || !ProjectId.is(match[1]) || !NotebookId.is(match[2])) continue;
 			const pid = match[1];
 			const nid = match[2];
-			await pool
-				.reconcile(pid, nid, {
+			try {
+				const notebook = paths.project(pid).notebook(nid);
+				let metaKey = notebook.meta;
+				let metaObject = await deps.bucket.get(metaKey);
+				if (!metaObject) {
+					metaKey = notebook.previewMeta;
+					metaObject = await deps.bucket.get(metaKey);
+				}
+				const isRuntime = metaKey === notebook.previewMeta && !!metaObject;
+				const meta = metaObject
+					? await readStored(
+							isRuntime ? PreviewRuntimeMetaSchema : NotebookMetaSchema,
+							metaObject,
+							metaKey,
+						).catch((error) => {
+							if (!(error instanceof StoredObjectError)) throw error;
+							logOperationalError(
+								'app_pool_metadata_unreadable',
+								{ operation: 'app_pool.sweep', project_id: pid, notebook_id: nid },
+								error,
+							);
+							return null;
+						})
+					: null;
+				// A corrupt runtime must retain preview bounds and startup protection.
+				const isPreview = isRuntime || !!meta?.preview;
+				const policy = isPreview ? previewAppPoolPolicy(deps.policy.appPool) : deps.policy.appPool;
+				const pool = new AppPoolService(deps.bucket, sessions, policy, deps.metrics);
+				await pool.reconcile(pid, nid, {
 					probe: async (member) => {
 						const session = await sessions.getSession(pid, member.session_id).catch((error) => {
 							if (error instanceof NotFoundError) return null;
@@ -56,6 +89,12 @@ export async function sweepAppPools(
 							: connections;
 					},
 					retire: async (member, session) => {
+						if (
+							isPreview &&
+							session?.status === 'starting' &&
+							member.operation_expires_at > Date.now()
+						)
+							return false;
 						if (!session) {
 							await deps.compute
 								.create(member.sandbox_id, { owner: { projectId: pid, userId: member.user_id } })
@@ -69,14 +108,14 @@ export async function sweepAppPools(
 						await retirer.retire(result.session, { captureBeforeDestroy: false });
 						return !!(await sessions.getSession(pid, session.session_id)).sandbox_reclaimed_at;
 					},
-				})
-				.catch((error) => {
-					logOperationalError(
-						'app_pool_sweep_failed',
-						{ operation: 'app_pool.sweep', project_id: pid, notebook_id: nid },
-						error,
-					);
 				});
+			} catch (error) {
+				logOperationalError(
+					'app_pool_sweep_failed',
+					{ operation: 'app_pool.sweep', project_id: pid, notebook_id: nid },
+					error,
+				);
+			}
 		}
 		cursor = page.truncated ? page.cursor : undefined;
 	} while (cursor);

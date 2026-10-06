@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useLocation } from 'react-router-dom';
 import { AuthProvider } from '@/context/AuthContext';
+import type { ColorMode } from '@marimo-hub/core/theme';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { installMatchMedia, jsonOk, renderWithClient } from '@/test/render';
 import { Header } from './Header';
@@ -23,6 +24,7 @@ function setup(
 	writeText: (value: string) => Promise<void> = () => Promise.resolve(),
 	me: Record<string, unknown> = USER,
 	mcpAvailable = false,
+	colorMode: ColorMode = 'user',
 ) {
 	installMatchMedia(false);
 	vi.stubGlobal(
@@ -71,7 +73,7 @@ function setup(
 				</>
 			</AuthProvider>
 		</ThemeProvider>,
-		{ route: '/' },
+		{ route: '/', branding: { color_mode: colorMode } },
 	);
 	return { user, clipboard, ...rendered };
 }
@@ -192,6 +194,19 @@ describe('Header', () => {
 		await openUserMenu(user);
 		expect(screen.queryByRole('menuitem', { name: 'MCP' })).not.toBeInTheDocument();
 	});
+
+	it.each([
+		['member', USER],
+		['app user', { ...USER, app_only: true }],
+		['admin', { ...USER, is_super_admin: true }],
+	] as const)(
+		'hides the theme toggle for a %s when the deployment forces a mode',
+		async (_role, account) => {
+			setup(undefined, account, false, 'light');
+			await screen.findByRole('button', { name: 'User menu' });
+			expect(screen.queryByRole('button', { name: 'Toggle theme' })).not.toBeInTheDocument();
+		},
+	);
 
 	it('toggles the theme', async () => {
 		const { user } = setup();

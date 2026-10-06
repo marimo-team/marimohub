@@ -208,6 +208,33 @@ single replica means a few seconds of downtime; data on the volume is untouched.
    files.
 6. Restart the hub container and confirm the notebook survives.
 
+## Multiple hubs on one host
+
+Hubs sharing a Docker daemon or Podman container store need distinct owner
+tags. Set `MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG` for Docker or
+`MARIMOHUB_COMPUTE_PODMAN_OWNER_TAG` for Podman on **every** hub:
+
+| Hub         | Example owner tag |
+| ----------- | ----------------- |
+| Development | `hub-dev`         |
+| Production  | `hub-prod`        |
+
+A tagged hub labels its sandbox containers `marimohub.owner=<tag>` and only
+discovers and cleans up containers with its own tag. An untagged hub sees every
+hub's sandboxes, so its cleanup can delete their running kernels. Separate
+storage roots or container networks do not isolate cleanup. Keep each tag
+unchanged across restarts. Each hub also needs its own storage root, port, and
+session secret.
+
+A tagged hub ignores containers created before it had a tag. To adopt tags:
+
+1. Save notebooks and stop sessions and jobs in all hubs on the daemon.
+2. Stop all hubs to prevent new sandbox creation.
+3. Remove their remaining sandbox containers, including idle pool containers
+   (`docker rm -f $(docker ps -aq --filter label=marimohub.sandbox)`, or the
+   same with `podman`).
+4. Set a distinct tag for each hub, then restart the hubs.
+
 ## Production cautions
 
 - **Never run a second hub replica** (or a second compose stack) against the

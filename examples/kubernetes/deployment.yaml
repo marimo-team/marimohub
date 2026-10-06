@@ -62,6 +62,10 @@ spec:
           env:
             - name: MARIMOHUB_RUN_MAINTENANCE
               value: 'true'
+          livenessProbe:
+            httpGet: { path: /api/health/maintenance, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
 ---
 apiVersion: v1
 kind: Service

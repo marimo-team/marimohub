@@ -1,6 +1,7 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { all } from 'better-all';
 import type {
+	Millis,
 	SecondarySurfaceId,
 	WarmPoolClaim,
 	ResourceSecurityLabels,
@@ -10,6 +11,7 @@ import type {
 	EditorClaim,
 	EditorSandboxSharing,
 	NotebookId,
+	PreviewId,
 	Project,
 	ProjectId,
 	MarimoConfigContributor,
@@ -21,6 +23,9 @@ import type {
 } from '@marimo-hub/core';
 import {
 	AppPoolService,
+	sessionResourceNotebookId,
+	sessionResourcePath,
+	PREVIEW_IDLE_MS,
 	AppVisitSchema,
 	sleep,
 	BadRequestError,
@@ -70,6 +75,7 @@ import {
 	SurfaceForbiddenError,
 	workspaceSourcePolicy,
 } from '@marimo-hub/core';
+import { previewAppPoolPolicy, previewIdleTimeout, PREVIEW_MAX_SESSIONS } from '../previewPolicy';
 import { checkComputeProfile } from '../computeProfile';
 import { logObserver } from '../saga';
 import { appendAudit, errorMetadata, logEvent } from '../log';
@@ -85,6 +91,7 @@ import {
 	assertSessionAccess,
 	assertSessionControl,
 	assertSessionNotebookVisible,
+	assertSessionPreviewActive,
 	authorizationService,
 	commonErrors,
 	createApp,
@@ -490,7 +497,9 @@ export function toSessionResponse(s: Session, can: Awaited<ReturnType<typeof ses
 	const { appReadOnly } = can;
 	return {
 		session_id: s.session_id,
-		notebook_id: s.notebook_id,
+		notebook_id: sessionResourceNotebookId(s),
+		origin: s.origin,
+		resource_path: sessionResourcePath(s),
 		project_id: s.project_id,
 		user_id: appReadOnly ? undefined : s.user_id,
 		status: s.status,
@@ -510,7 +519,7 @@ export function toSessionResponse(s: Session, can: Awaited<ReturnType<typeof ses
 		// Defaulted in the projection so clients never see `undefined` (stored
 		// records predating the field omit it).
 		mode: sessionMode(s),
-		source_version_id: appReadOnly ? undefined : s.source_version_id,
+		source_version_id: appReadOnly || s.origin ? undefined : s.source_version_id,
 		active_connections: appReadOnly ? undefined : s.active_connections,
 		connections_checked_at: appReadOnly ? undefined : s.connections_checked_at,
 		compute_profile: appReadOnly ? undefined : s.compute_profile,
@@ -807,11 +816,20 @@ async function presentSession(
 	user: AuthUser,
 	session: Session,
 	grants: Awaited<ReturnType<typeof sessionGrantsFor>>,
-	poolView?: Promise<Awaited<ReturnType<AppPoolService['view']>>>,
+	poolView?: () => ReturnType<AppPoolService['view']> | undefined,
 ) {
 	const response = toSessionResponse(session, grants);
+	try {
+		await assertSessionPreviewActive(deps, session.project_id, session);
+	} catch (error) {
+		if (!(error instanceof NotFoundError)) throw error;
+		return {
+			...withoutConnectionUrls(response),
+			can: { attach: false, stop: false, surfaces: surfaceGrants(false) },
+		};
+	}
 	if (sessionMode(session) !== 'app') return response;
-	const view = await (poolView ??
+	const view = await (poolView?.() ??
 		new AppPoolService(deps.bucket, deps.services.sessions, deps.policy.appPool, deps.metrics).view(
 			session.project_id,
 			session.notebook_id,
@@ -841,9 +859,9 @@ app.openapi(listSessions, async (c) => {
 		deps,
 		user,
 		project,
-		active.map((s) => s.notebook_id),
+		active.map(sessionResourceNotebookId),
 	);
-	const visible = active.filter((s) => admitted.has(s.notebook_id));
+	const visible = active.filter((s) => admitted.has(sessionResourceNotebookId(s)));
 	const pools = new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics);
 	const poolViews = new Map<NotebookId, ReturnType<AppPoolService['view']>>();
 	const viewFor = (session: Session) => {
@@ -866,9 +884,9 @@ app.openapi(listSessions, async (c) => {
 					user,
 					session,
 					deps,
-					admitted.get(session.notebook_id) ?? null,
+					admitted.get(sessionResourceNotebookId(session)) ?? null,
 				),
-				viewFor(session),
+				() => viewFor(session),
 			),
 		),
 	);
@@ -887,11 +905,13 @@ app.openapi(getSession, async (c) => {
 	// The project-scoped key masks cross-project IDs; also reject other notebooks.
 	const project = await loadSessionProject(projects, pid, user, deps);
 	const session = await sessions.getSession(pid, sid);
-	if (session.notebook_id !== nid) {
+	if (sessionResourceNotebookId(session) !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
 	const appUser = authorizationService(deps).role(user, project) === 'app-user';
-	const labels = await assertSessionNotebookVisible(deps, project, session, user);
+	const labels = await assertSessionNotebookVisible(deps, project, session, user, {
+		requireActivePreview: false,
+	});
 	if (appUser) await assertSessionAccess(project, session, user, deps, labels);
 	return c.json(
 		{
@@ -1190,6 +1210,7 @@ export async function startNotebookSession(input: {
 	pid: ProjectId;
 	nid: NotebookId;
 	body: SessionCreateBody | undefined;
+	preview?: { id: PreviewId; notebook_id: NotebookId };
 	request: {
 		requestId?: string;
 		method: string;
@@ -1236,6 +1257,13 @@ export async function startNotebookSession(input: {
 	// claim that deleteNotebook just cleaned up, permanently (its cleanup never
 	// runs again).
 	const notebook = await notebooks.getNotebook(pid, nid);
+	if (
+		notebook.meta.preview &&
+		(input.preview?.id !== notebook.meta.preview.preview_id ||
+			input.preview?.notebook_id !== notebook.meta.preview.notebook_id)
+	)
+		throw new NotFoundError('Notebook not found');
+	const isPreview = !!notebook.meta.preview;
 	if (notebook.meta.status === 'deleted') {
 		throw new NotFoundError(`Notebook ${nid} not found`);
 	}
@@ -1254,12 +1282,26 @@ export async function startNotebookSession(input: {
 	// The session deadline is the earliest of the entitlement credential expiry
 	// and the subject security context expiry that satisfied any labels — an
 	// active session must not outlive either.
+	const previewRecord = isPreview
+		? await deps.services.previews.get(
+				pid,
+				notebook.meta.preview!.notebook_id,
+				notebook.meta.preview!.preview_id,
+			)
+		: undefined;
+	if (
+		previewRecord &&
+		(previewRecord.state !== 'active' || Date.parse(previewRecord.expires_at) <= Date.now())
+	)
+		throw new NotFoundError('Preview not found');
 	const authorizationExpiresAt = earliestDeadline(
 		entitlementAuthorizationDeadline(user),
-		authorization.subjectContextExpiresAt,
+		earliestDeadline(authorization.subjectContextExpiresAt, previewRecord?.expires_at),
 	);
 	const existingEditorClaim = mode === 'edit' ? await sessions.getEditorClaim(pid, nid) : undefined;
-	const sharing = effectiveEditorSharing(existingEditorClaim, deps.policy.editorSandboxSharing);
+	const sharing = isPreview
+		? 'exclusive'
+		: effectiveEditorSharing(existingEditorClaim, deps.policy.editorSandboxSharing);
 	const replacingAfterTakeover =
 		existingEditorClaim?.transfer?.phase === 'ready' &&
 		existingEditorClaim.transfer.requested_by === user.id;
@@ -1273,7 +1315,7 @@ export async function startNotebookSession(input: {
 	if (editorTemporary && sharing === 'shared') {
 		throw new BadRequestError('Temporary editor sessions are only available in exclusive mode');
 	}
-	const ephemeral = authorization.ephemeral || editorTemporary;
+	const ephemeral = authorization.ephemeral || editorTemporary || (isPreview && mode === 'edit');
 	const surfaceGrant = (
 		await sessionGrantsFor(
 			project,
@@ -1299,7 +1341,10 @@ export async function startNotebookSession(input: {
 		surfaceConfig(deps, id);
 	}
 	const userHome =
-		mode === 'edit' && sharing === 'exclusive' && roleAtLeast(authorization.role, 'editor')
+		!isPreview &&
+		mode === 'edit' &&
+		sharing === 'exclusive' &&
+		roleAtLeast(authorization.role, 'editor')
 			? deps.sandbox.userHome?.resolve(user)
 			: undefined;
 	const profileOverrideEligible = authorization.profileOverrideEligible;
@@ -1346,6 +1391,17 @@ export async function startNotebookSession(input: {
 		(MODE_POLICY[mode].persistsEdits
 			? undefined
 			: (notebook.source.current_version_id ?? undefined));
+	const origin: Session['origin'] =
+		previewRecord && sourceVersionId && notebook.source.type === 'git' && notebook.source.commit
+			? {
+					type: 'preview',
+					notebook_id: previewRecord.notebook_id,
+					preview_id: previewRecord.id,
+					revision_id: sourceVersionId,
+					commit: notebook.source.commit,
+				}
+			: undefined;
+	if (isPreview && !origin) throw new ConflictError('Preview revision provenance is unavailable');
 	const launchSource = resolveNotebookLaunchSource({
 		entryNotebook: workspacePolicy.entryNotebook,
 		workspacePrefix: workspacePrefix ?? notebookPaths.workspacePrefix,
@@ -1374,7 +1430,8 @@ export async function startNotebookSession(input: {
 		logStoredConfigFallback('base_image'),
 	);
 	const retryWithDefault = mode === 'edit' && body?.compute_profile === 'default';
-	let selectedComputeProfile = notebook.meta.compute_profile;
+	let selectedComputeProfile =
+		notebook.meta.compute_profile ?? (isPreview ? sandbox.previewComputeProfile : undefined);
 	if (body?.compute_profile !== undefined && body.compute_profile !== 'default') {
 		if (mode !== 'edit' || !profileOverrideEligible) {
 			throw new ForbiddenError('Compute profile selection requires a persistent edit session');
@@ -1384,7 +1441,7 @@ export async function startNotebookSession(input: {
 	const requestedComputeProfile = resolveComputeProfile(
 		sandbox,
 		retryWithDefault ? undefined : selectedComputeProfile,
-		sandbox.computeProfileOverride === 'editors' && profileOverrideEligible,
+		isPreview || (sandbox.computeProfileOverride === 'editors' && profileOverrideEligible),
 		() => logStoredConfigFallback('compute_profile'),
 	);
 	const provisioner = new SandboxProvisioner(compute);
@@ -1399,7 +1456,12 @@ export async function startNotebookSession(input: {
 			`Editing is currently owned by ${editorReuse.ownedByOther.user_id}`,
 		);
 	}
-	const appPool = new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics);
+	const appPool = new AppPoolService(
+		deps.bucket,
+		sessions,
+		isPreview ? previewAppPoolPolicy(deps.policy.appPool) : deps.policy.appPool,
+		deps.metrics,
+	);
 	if (mode === 'app' && !sourceVersionId)
 		throw new ConflictError('The app has no committed version');
 
@@ -1446,11 +1508,11 @@ export async function startNotebookSession(input: {
 	if (reusableCandidate) {
 		let reusable = await tightenAuthorizationDeadline(reusableCandidate);
 		const authorizationExpired = isPastAuthorizationDeadline(reusable, Date.now());
-		// A role change flips the session class the caller is entitled to (a demoted
-		// editor must not keep a persisting, WIF-holding kernel; a promoted viewer's
-		// edits must stop being discarded). A stale-class session is retired below
-		// like a dead kernel instead of reused.
-		const classMismatch = !!reusable.ephemeral !== ephemeral;
+		// Role changes must not reuse a kernel with the previous credential policy.
+		const classMismatch =
+			!!reusable.ephemeral !== ephemeral ||
+			(mode === 'edit' &&
+				(reusable.restricted_viewer_credentials === true) !== restrictedViewerCredentials);
 		// Reuse does not grant control: a failed probe must not let a viewer
 		// tear down another caller's app.
 		const reusableGrants = await grants(reusable);
@@ -1545,11 +1607,12 @@ export async function startNotebookSession(input: {
 	let originUrl: string | undefined;
 	const observer = logObserver({
 		event: 'session_provision',
+		origin,
 		sandbox_id: sandboxId,
 		image,
 		compute_profile: requestedComputeProfile.name,
 		project_id: pid,
-		notebook_id: nid,
+		notebook_id: origin?.notebook_id ?? nid,
 		user_id: user.id,
 		mode,
 	});
@@ -1578,6 +1641,23 @@ export async function startNotebookSession(input: {
 				};
 		observer.tag('compute_profile', appliedComputeProfile.name);
 		await saga(observer)
+			.step('preview_admission', async () => {
+				if (!previewRecord) return;
+				const record = await deps.services.previews.get(
+					pid,
+					previewRecord.notebook_id,
+					previewRecord.id,
+				);
+				const reaped = await deps.services.previews.reapAdmissions(record, async (id) => {
+					try {
+						return !(await sessions.getSession(pid, id)).sandbox_reclaimed_at;
+					} catch (error) {
+						if (error instanceof NotFoundError) return;
+						throw error;
+					}
+				});
+				await deps.services.previews.reserveAdmission(reaped, nid, sessionId, PREVIEW_MAX_SESSIONS);
+			})
 			.step('capacity', () =>
 				enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id),
 			)
@@ -1611,6 +1691,7 @@ export async function startNotebookSession(input: {
 						session_id: sessionId,
 						...(admission ? { app_pool: true as const } : {}),
 						notebook_id: nid,
+						origin,
 						project_id: pid,
 						user_id: user.id,
 						sandbox_id: sandboxId,
@@ -1619,6 +1700,8 @@ export async function startNotebookSession(input: {
 						compute_resources: appliedComputeProfile.resources,
 						compute_from_snapshot: restoreFilesystemSnapshot !== undefined,
 						ephemeral,
+						restricted_viewer_credentials: restrictedViewerCredentials,
+						idle_timeout_ms: isPreview ? PREVIEW_IDLE_MS : undefined,
 						mode,
 						source_version_id: sourceVersionId,
 						editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
@@ -1649,6 +1732,9 @@ export async function startNotebookSession(input: {
 					temporaryToRetire?.session_id,
 				),
 			)
+			.step('preview_admission_commit', async () => {
+				if (previewRecord) await deps.services.previews.commitAdmission(previewRecord, sessionId);
+			})
 			.step('editor_claim', {
 				do: async () => {
 					if (mode !== 'edit' || ephemeral) return;
@@ -1849,7 +1935,11 @@ export async function startNotebookSession(input: {
 								image,
 								resources: requestedComputeProfile.resources,
 								userHome,
-								sessionIdleTimeoutMs: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
+								sessionIdleTimeoutMs: isPreview
+									? (previewIdleTimeout(
+											sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
+										) as Millis)
+									: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
 								sessionEnv: this.$.sessionEnv,
 								entryNotebook: workspacePolicy.entryNotebook,
 								launchStrategy: launchStrategy.strategy,
@@ -1967,6 +2057,8 @@ export async function startNotebookSession(input: {
 			).catch(() => {});
 		}
 		if (!sandboxMayExist) await recordSandboxCleanup().catch(() => {});
+		if (previewRecord && !sessionRecordAttempted)
+			await deps.services.previews.releaseAdmission(previewRecord, sessionId).catch(() => {});
 
 		if (err instanceof EditorClaimLostError) {
 			observer.tag('editor_claim_lost', true);
@@ -2070,7 +2162,8 @@ export async function startNotebookSession(input: {
 				event: 'app.start',
 				actor: user.id,
 				project_id: pid,
-				notebook_id: nid,
+				notebook_id: origin?.notebook_id ?? nid,
+				origin,
 				session_id: session!.session_id,
 			}),
 		);
@@ -2131,7 +2224,7 @@ app.openapi(deleteSession, async (c) => {
 	// Scope-check: the project-scoped key 404s a cross-project id; the notebook
 	// check keeps a same-project/other-notebook id out of scope.
 	const existing = await sessions.getSession(pid, sid);
-	if (existing.notebook_id !== nid) {
+	if (sessionResourceNotebookId(existing) !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
 
@@ -2158,7 +2251,7 @@ app.openapi(heartbeatSession, async (c) => {
 	// Scope-check: the project-scoped key 404s a cross-project id; the notebook
 	// check keeps a same-project/other-notebook id out of scope.
 	const existing = await sessions.getSession(pid, sid);
-	if (existing.notebook_id !== nid) {
+	if (sessionResourceNotebookId(existing) !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
 
@@ -2173,9 +2266,17 @@ app.openapi(heartbeatSession, async (c) => {
 		(existing.status === 'running' || existing.status === 'starting')
 	) {
 		const pool = new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics);
-		if (!existing.app_pool) await pool.synchronize(pid, nid, [existing]);
+		if (!existing.app_pool) await pool.synchronize(pid, existing.notebook_id, [existing]);
 		const visit = c.req.valid('json');
-		if (!(await pool.heartbeat(pid, nid, user.id, sid, visit?.visit_id ? visit : undefined))) {
+		if (
+			!(await pool.heartbeat(
+				pid,
+				existing.notebook_id,
+				user.id,
+				sid,
+				visit?.visit_id ? visit : undefined,
+			))
+		) {
 			throw new ConflictError('The app assignment expired. Open the app again.');
 		}
 	}
@@ -2199,7 +2300,7 @@ app.openapi(leaveAppVisit, async (c) => {
 	const user = c.get('user');
 	const project = await loadSessionProject(deps.services.projects, pid, user, deps);
 	const session = await deps.services.sessions.getSession(pid, sid);
-	if (session.notebook_id !== nid || sessionMode(session) !== 'app')
+	if (sessionResourceNotebookId(session) !== nid || sessionMode(session) !== 'app')
 		throw new NotFoundError('App session not found');
 	const labels = await assertSessionNotebookVisible(deps, project, session, user);
 	await assertSessionAccess(project, session, user, deps, labels);
@@ -2208,7 +2309,7 @@ app.openapi(leaveAppVisit, async (c) => {
 		deps.services.sessions,
 		deps.policy.appPool,
 		deps.metrics,
-	).leave(pid, nid, user.id, sid, c.req.valid('json'));
+	).leave(pid, session.notebook_id, user.id, sid, c.req.valid('json'));
 	return c.json({ success: true as const }, 200);
 });
 

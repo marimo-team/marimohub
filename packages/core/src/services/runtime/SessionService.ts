@@ -51,6 +51,8 @@ import { AppPoolStore } from './AppPoolStore';
 import { pullSourceRootPath, sandboxWorkspaceLayout } from './workspaceLayout';
 
 export interface CreateSessionInput {
+	origin?: Session['origin'];
+	idle_timeout_ms?: number;
 	notebook_id: NotebookId;
 	project_id: ProjectId;
 	user_id: UserId;
@@ -63,6 +65,7 @@ export interface CreateSessionInput {
 	compute_from_snapshot?: boolean;
 	/** Discard-only session whose edits are never persisted (see SessionSchema). */
 	ephemeral?: boolean;
+	restricted_viewer_credentials?: boolean;
 	/** `edit` (default) or `app` (a shared pool member; see SessionSchema). */
 	mode?: SessionMode;
 	/** Immutable notebook version used to start this session. */
@@ -187,6 +190,8 @@ export class SessionService {
 		const now = new Date().toISOString();
 
 		const session: Session = {
+			...(input.origin ? { origin: input.origin } : {}),
+			...(input.idle_timeout_ms ? { idle_timeout_ms: input.idle_timeout_ms } : {}),
 			session_id: sessionId,
 			notebook_id: input.notebook_id,
 			project_id: input.project_id,
@@ -195,6 +200,9 @@ export class SessionService {
 			started_at: now,
 			last_heartbeat: now,
 			...(input.ephemeral ? { ephemeral: true } : {}),
+			...(input.restricted_viewer_credentials !== undefined
+				? { restricted_viewer_credentials: input.restricted_viewer_credentials }
+				: {}),
 			...(input.app_pool ? { app_pool: true as const } : {}),
 			...(input.mode && input.mode !== 'edit' ? { mode: input.mode } : {}),
 			...(input.source_version_id ? { source_version_id: input.source_version_id } : {}),
@@ -752,6 +760,16 @@ export class SessionService {
 	async listSessions(notebookId?: NotebookId): Promise<Session[]> {
 		const sessions = await this.scanSessions((session) => session);
 		return notebookId ? sessions.filter((s) => s.notebook_id === notebookId) : sessions;
+	}
+
+	async listByProject(projectId: ProjectId, notebookId?: NotebookId): Promise<Session[]> {
+		// Cleanup cannot prove reclamation when a session record is unreadable.
+		const sessions = await this.scanPrefix(
+			paths.sessionsForProject(projectId),
+			(session) => session,
+			'throw',
+		);
+		return notebookId ? sessions.filter((session) => session.notebook_id === notebookId) : sessions;
 	}
 
 	/**

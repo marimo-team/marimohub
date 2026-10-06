@@ -23,6 +23,7 @@ import {
 	AlertDestinationId,
 	JobId,
 	RunId,
+	PreviewId,
 	UserId,
 } from './ids';
 
@@ -147,6 +148,7 @@ export const IntegrationIdSchema = z.string().refine(IntegrationId.is);
 export const AlertDestinationIdSchema = z.string().refine(AlertDestinationId.is);
 export const JobIdSchema = z.string().refine(JobId.is);
 export const RunIdSchema = z.string().refine(RunId.is);
+export const PreviewIdSchema = z.string().refine(PreviewId.is);
 // User ids (`author`/`owner`/`user_id`/`actor` foreign keys) are the opaque auth
 // `sub`. UserId.is only checks non-empty, so this brands without imposing a
 // format the identity provider doesn't guarantee.
@@ -464,6 +466,7 @@ export const RuntimeSchema = z.object({
 export type Runtime = z.infer<typeof RuntimeSchema>;
 
 export const NotebookMetaSchema = z.object({
+	preview: z.object({ notebook_id: NotebookIdSchema, preview_id: PreviewIdSchema }).optional(),
 	schema_version: SchemaVersionSchema,
 	id: NotebookIdSchema,
 	project_id: ProjectIdSchema,
@@ -494,9 +497,13 @@ export const NotebookMetaSchema = z.object({
 
 export type NotebookMeta = z.infer<typeof NotebookMetaSchema>;
 
-export type PublicNotebookMeta = Omit<NotebookMeta, 'schema_version'>;
+export const PreviewRuntimeMetaSchema = NotebookMetaSchema.extend({
+	preview: NotebookMetaSchema.shape.preview.unwrap(),
+});
+
+export type PublicNotebookMeta = Omit<NotebookMeta, 'schema_version' | 'preview'>;
 export function toPublicNotebookMeta(meta: NotebookMeta): PublicNotebookMeta {
-	const { schema_version: _schema_version, ...rest } = meta;
+	const { schema_version: _schema_version, preview: _preview, ...rest } = meta;
 	return rest;
 }
 
@@ -772,6 +779,14 @@ export const SurfaceStateSchema = z.looseObject({
 
 export type SurfaceState = z.infer<typeof SurfaceStateSchema>;
 
+export const PreviewSessionOriginSchema = z.object({
+	type: z.literal('preview'),
+	notebook_id: NotebookIdSchema,
+	preview_id: PreviewIdSchema,
+	revision_id: VersionIdSchema,
+	commit: z.string().regex(/^[a-fA-F0-9]{40}$/),
+});
+
 // `looseObject` for the same rolling-deploy reason as TokenSchema: every status
 // change is a CAS read-modify-write of the whole record, so a strict parse on an
 // older replica would strip fields a newer replica wrote (e.g. the `integrations`
@@ -779,7 +794,11 @@ export type SurfaceState = z.infer<typeof SurfaceStateSchema>;
 // The API projection (`toSessionResponse` in routes/sessions.ts) is an explicit
 // pick, so preserved unknown keys never leak into a response.
 export const SessionSchema = z.looseObject({
+	/** Immutable resource attribution; survives runtime artifact cleanup. */
+	origin: PreviewSessionOriginSchema.optional(),
+	idle_timeout_ms: z.number().int().positive().optional(),
 	session_id: SessionIdSchema,
+	/** Internal workspace identity. Public notebook identity comes from sessionResourceNotebookId. */
 	notebook_id: NotebookIdSchema,
 	project_id: ProjectIdSchema,
 	user_id: UserIdSchema,
@@ -820,6 +839,8 @@ export const SessionSchema = z.looseObject({
 	 * session can persist if its mode and editor claim permit it.
 	 */
 	ephemeral: z.boolean().optional(),
+	/** Only an explicitly restricted editor kernel is safe for viewer attachment. */
+	restricted_viewer_credentials: z.boolean().optional(),
 	editor_sandbox_sharing: z.enum(['shared', 'exclusive']).optional(),
 	ended_reason: z.enum(['takeover']).optional(),
 	ended_by_user_id: UserIdSchema.optional(),

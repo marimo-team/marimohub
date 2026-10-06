@@ -33,10 +33,14 @@ export function nestedString(value: unknown, parent: string, field: string): str
 	return stringField(value[parent], field);
 }
 
-export async function responseJson(response: Response): Promise<unknown> {
+export async function responseJson(response: Response, signal?: AbortSignal): Promise<unknown> {
+	signal?.throwIfAborted();
 	try {
-		return await response.json();
+		const data: unknown = await response.json();
+		signal?.throwIfAborted();
+		return data;
 	} catch (error) {
+		signal?.throwIfAborted();
 		throw new UnavailableError('GitHub returned invalid JSON', { cause: error });
 	}
 }
@@ -69,6 +73,7 @@ export function pullRequestUrl(
 	owner: string,
 	repo: string,
 	number: number,
+	origin = 'https://github.com',
 ): string {
 	const raw = stringField(value, 'html_url');
 	let url: URL;
@@ -80,8 +85,7 @@ export function pullRequestUrl(
 	const expectedPath = `/${owner}/${repo}/pull/${number}`.toLowerCase();
 	if (
 		url.protocol !== 'https:' ||
-		url.hostname.toLowerCase() !== 'github.com' ||
-		url.port ||
+		url.origin !== origin ||
 		url.username ||
 		url.password ||
 		url.search ||

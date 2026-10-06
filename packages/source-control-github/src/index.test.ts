@@ -2,23 +2,18 @@ import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { sourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import { GitHubAppPublisher } from './index';
+import { parseApiRequest, response, testPrivateKey } from './testing/fakeGitHub';
 
-const PRIVATE_KEY = generateKeyPairSync('rsa', { modulusLength: 2048 })
-	.privateKey.export({ type: 'pkcs8', format: 'pem' })
-	.toString();
-
-function response(value: unknown, status = 200): Response {
-	return new Response(JSON.stringify(value), {
-		status,
-		headers: { 'content-type': 'application/json' },
-	});
-}
+const ORIGINS = ['https://github.com', 'https://git.acme.corp'];
 
 function publisher(
 	fetcher: (url: string, init?: RequestInit) => Promise<Response>,
-	now?: () => number,
+	{ now, url }: { now?: () => number; url?: string } = {},
 ) {
-	return new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY }, { fetcher, now });
+	return new GitHubAppPublisher(
+		{ appId: '123', privateKey: testPrivateKey(), url },
+		{ fetcher, now },
+	);
 }
 
 const input = {
@@ -86,32 +81,42 @@ function pullRequestMetadataResponse(
 	parsed: URL,
 	init: RequestInit | undefined,
 	headCommit: string,
+	request = updateInput,
 ): Response | null {
 	if (
-		parsed.pathname !== `/repos/owner/repo/pulls/${updateInput.changeRequest.number}` ||
+		parsed.pathname !== `/repos/owner/repo/pulls/${request.changeRequest.number}` ||
 		init?.method !== 'PATCH'
 	) {
 		return null;
 	}
 	expect(JSON.parse(String(init.body))).toEqual({
-		title: updateInput.title,
-		body: updateInput.body,
+		title: request.title,
+		body: request.body,
 	});
 	return response({
-		number: updateInput.changeRequest.number,
-		html_url: updateInput.changeRequest.url,
-		title: updateInput.title,
-		body: updateInput.body,
+		number: request.changeRequest.number,
+		html_url: request.changeRequest.url,
+		title: request.title,
+		body: request.body,
 		head: { sha: headCommit },
 	});
 }
 
+function updateInputFor(origin: string) {
+	return {
+		...updateInput,
+		repository: `${origin}/owner/repo`,
+		changeRequest: { ...updateInput.changeRequest, url: `${origin}/owner/repo/pull/17` },
+	};
+}
+
 describe('GitHubAppPublisher', () => {
-	it('appends a commit to an existing open pull request', async () => {
+	it.each(ORIGINS)('appends a PR commit on %s', async (origin) => {
+		const request = updateInputFor(origin);
 		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-			const parsed = new URL(url);
+			const parsed = parseApiRequest(url, origin);
 			const method = init?.method ?? 'GET';
-			const metadataResponse = pullRequestMetadataResponse(parsed, init, 'appended-head');
+			const metadataResponse = pullRequestMetadataResponse(parsed, init, 'appended-head', request);
 			if (metadataResponse) return metadataResponse;
 			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
 			if (parsed.pathname.endsWith('/access_tokens')) {
@@ -122,7 +127,7 @@ describe('GitHubAppPublisher', () => {
 					{
 						number: 17,
 						state: 'open',
-						html_url: updateInput.changeRequest.url,
+						html_url: request.changeRequest.url,
 						head: { sha: 'existing-head' },
 					},
 				]);
@@ -167,10 +172,12 @@ describe('GitHubAppPublisher', () => {
 			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
 		});
 
-		await expect(publisher(fetcher).updateChangeRequest(updateInput)).resolves.toEqual({
-			...updateInput.changeRequest,
-			headCommit: 'appended-head',
-		});
+		await expect(publisher(fetcher, { url: origin }).updateChangeRequest(request)).resolves.toEqual(
+			{
+				...request.changeRequest,
+				headCommit: 'appended-head',
+			},
+		);
 		expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/graphql'))).toBe(false);
 	});
 
@@ -263,12 +270,18 @@ describe('GitHubAppPublisher', () => {
 		expect(metadataPatchCount).toBe(2);
 	});
 
-	it('force-replaces an owned branch when its current tree cannot accept the update', async () => {
+	it.each(ORIGINS)('conditionally replaces a PR branch on %s', async (origin) => {
+		const request = updateInputFor(origin);
 		let ref = 'existing-head';
 		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-			const parsed = new URL(url);
+			const parsed = parseApiRequest(url, origin);
 			const method = init?.method ?? 'GET';
-			const metadataResponse = pullRequestMetadataResponse(parsed, init, 'replacement-head');
+			const metadataResponse = pullRequestMetadataResponse(
+				parsed,
+				init,
+				'replacement-head',
+				request,
+			);
 			if (metadataResponse) return metadataResponse;
 			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
 			if (parsed.pathname.endsWith('/access_tokens')) {
@@ -279,7 +292,7 @@ describe('GitHubAppPublisher', () => {
 					{
 						number: 17,
 						state: 'open',
-						html_url: updateInput.changeRequest.url,
+						html_url: request.changeRequest.url,
 						head: { sha: ref },
 					},
 				]);
@@ -340,10 +353,12 @@ describe('GitHubAppPublisher', () => {
 			throw new Error(`unexpected request: ${method} ${parsed.pathname}`);
 		});
 
-		await expect(publisher(fetcher).updateChangeRequest(updateInput)).resolves.toEqual({
-			...updateInput.changeRequest,
-			headCommit: 'replacement-head',
-		});
+		await expect(publisher(fetcher, { url: origin }).updateChangeRequest(request)).resolves.toEqual(
+			{
+				...request.changeRequest,
+				headCommit: 'replacement-head',
+			},
+		);
 	});
 
 	it('does not report success when the conditional force update loses its race', async () => {
@@ -806,9 +821,9 @@ describe('GitHubAppPublisher', () => {
 		},
 	);
 
-	it('preserves executable mode while creating a draft pull request', async () => {
+	it.each(ORIGINS)('creates a draft PR preserving file mode on %s', async (origin) => {
 		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-			const parsed = new URL(url);
+			const parsed = parseApiRequest(url, origin);
 			const method = init?.method ?? 'GET';
 			if (parsed.pathname.endsWith('/installation')) return response({ id: 42 });
 			if (parsed.pathname.endsWith('/access_tokens'))
@@ -845,7 +860,7 @@ describe('GitHubAppPublisher', () => {
 				return response(
 					{
 						number: 17,
-						html_url: 'https://github.com/owner/repo/pull/17',
+						html_url: `${origin}/owner/repo/pull/17`,
 						head: { sha: 'head-sha' },
 					},
 					201,
@@ -856,7 +871,8 @@ describe('GitHubAppPublisher', () => {
 		const publisher = new GitHubAppPublisher(
 			{
 				appId: '123',
-				privateKey: PRIVATE_KEY,
+				url: origin,
+				privateKey: testPrivateKey(),
 			},
 			{
 				fetcher,
@@ -864,9 +880,11 @@ describe('GitHubAppPublisher', () => {
 			},
 		);
 
-		await expect(publisher.openChangeRequest(input)).resolves.toEqual({
+		await expect(
+			publisher.openChangeRequest({ ...input, repository: `${origin}/owner/repo` }),
+		).resolves.toEqual({
 			number: 17,
-			url: 'https://github.com/owner/repo/pull/17',
+			url: `${origin}/owner/repo/pull/17`,
 			headBranch: input.headBranch,
 			headCommit: 'head-sha',
 		});
@@ -1075,7 +1093,7 @@ describe('GitHubAppPublisher', () => {
 		const publisher = new GitHubAppPublisher(
 			{
 				appId: '123',
-				privateKey: PRIVATE_KEY,
+				privateKey: testPrivateKey(),
 			},
 			{
 				fetcher,
@@ -1307,7 +1325,7 @@ describe('GitHubAppPublisher', () => {
 		const publisher = new GitHubAppPublisher(
 			{
 				appId: '123',
-				privateKey: PRIVATE_KEY,
+				privateKey: testPrivateKey(),
 			},
 			{
 				fetcher,
@@ -1325,7 +1343,7 @@ describe('GitHubAppPublisher', () => {
 		const publisher = new GitHubAppPublisher(
 			{
 				appId: '123',
-				privateKey: PRIVATE_KEY,
+				privateKey: testPrivateKey(),
 			},
 			{
 				fetcher,
@@ -1366,15 +1384,15 @@ describe('GitHubAppPublisher', () => {
 	});
 
 	it('rejects a non-numeric app id at construction', () => {
-		expect(() => new GitHubAppPublisher({ appId: 'not-an-id', privateKey: PRIVATE_KEY })).toThrow(
-			'must be a positive integer',
-		);
+		expect(
+			() => new GitHubAppPublisher({ appId: 'not-an-id', privateKey: testPrivateKey() }),
+		).toThrow('must be a positive integer');
 	});
 
 	it('rejects path-like repository owners before making a request', async () => {
 		const fetcher = vi.fn();
 		const publisher = new GitHubAppPublisher(
-			{ appId: '123', privateKey: PRIVATE_KEY },
+			{ appId: '123', privateKey: testPrivateKey() },
 			{ fetcher },
 		);
 
@@ -1620,9 +1638,9 @@ describe('GitHubAppPublisher', () => {
 
 	it('rejects an invalid injected clock before network access', async () => {
 		const fetcher = vi.fn();
-		await expect(publisher(fetcher, () => Number.NaN).openChangeRequest(input)).rejects.toThrow(
-			'clock is invalid',
-		);
+		await expect(
+			publisher(fetcher, { now: () => Number.NaN }).openChangeRequest(input),
+		).rejects.toThrow('clock is invalid');
 		expect(fetcher).not.toHaveBeenCalled();
 	});
 
@@ -1672,7 +1690,7 @@ describe('GitHubAppPublisher', () => {
 	});
 
 	it('rejects zero as an app id', () => {
-		expect(() => new GitHubAppPublisher({ appId: '0', privateKey: PRIVATE_KEY })).toThrow(
+		expect(() => new GitHubAppPublisher({ appId: '0', privateKey: testPrivateKey() })).toThrow(
 			'positive integer',
 		);
 	});
@@ -1682,7 +1700,7 @@ describe('GitHubAppPublisher', () => {
 			() =>
 				new GitHubAppPublisher({
 					appId: '123',
-					privateKey: Buffer.from(PRIVATE_KEY).toString('base64'),
+					privateKey: Buffer.from(testPrivateKey()).toString('base64'),
 				}),
 		).not.toThrow();
 	});

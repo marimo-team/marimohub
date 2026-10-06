@@ -21,6 +21,7 @@ export type IntegrationId = string & { __brand: 'IntegrationId' };
 export type AlertDestinationId = string & { __brand: 'AlertDestinationId' };
 export type JobId = string & { __brand: 'JobId' };
 export type RunId = string & { __brand: 'RunId' };
+export type PreviewId = string & { __brand: 'PreviewId' };
 
 // A user id is the opaque auth `sub` (OIDC / Cloudflare Access / dev). We do not
 // mint or format it, so unlike the ids above it is a *nominal* brand only — it
@@ -183,6 +184,11 @@ export const RunId = defineId<RunId>(
 	/^run_[0-9A-HJKMNP-TV-Z]{26}$/,
 	() => `run_${nextRunUlid()}`,
 );
+export const PreviewId = defineId<PreviewId>(
+	'PreviewId',
+	/^prev-[0-9a-z]{16}$/,
+	() => `prev-${randomBody()}`,
+);
 
 // A brand with no format/generator — `is` only checks "non-empty string". Used
 // for opaque provider ids (see UserId). `parse` brands a trusted value (e.g. an
@@ -235,6 +241,7 @@ export const createIntegrationId = IntegrationId.create;
 export const createAlertDestinationId = AlertDestinationId.create;
 export const createJobId = JobId.create;
 export const createRunId = RunId.create;
+export const createPreviewId = PreviewId.create;
 
 /** Derive a stable proposal id from an already-scoped idempotency seed. */
 export async function deriveProposalId(seed: string): Promise<ProposalId> {

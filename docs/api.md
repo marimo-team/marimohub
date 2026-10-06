@@ -75,6 +75,10 @@ Resource groups:
   [Secondary surfaces](/surfaces) provide VS Code and OpenCode access within edit sessions.
 - **Workspace files** — browse, read, upload, copy, move, and delete notebook files
   under `/projects/{pid}/notebooks/{nid}/workspace`.
+- **Previews** — create, list, get, and delete [notebook previews](/notebook-previews),
+  and start preview sessions under `/projects/{pid}/notebooks/{nid}/previews`.
+  `GET /projects/{pid}/notebooks/{nid}/source/refs` suggests GitHub branches and
+  commits.
 - **Jobs** — manage [job definitions](/jobs), trigger or cancel runs, and read
   run history, HTML output, and logs under `/projects/{pid}/notebooks/{nid}/jobs`.
 - **Integrations** — discover integration kinds and manage project or
@@ -91,7 +95,7 @@ endpoints. These endpoints follow MCP and OAuth protocols rather than the JSON A
 ## Pagination
 
 The project, notebook, notebook-version, project-session, integration-instance,
-integration-version, job, job-run, and deployment-audit list endpoints return this page shape:
+integration-version, job, job-run, preview, and deployment-audit list endpoints return this page shape:
 
 ```jsonc
 {

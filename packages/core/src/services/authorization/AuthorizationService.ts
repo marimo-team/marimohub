@@ -77,7 +77,7 @@ export type AuthorizationSubject = AuthSubject | AuthenticatedPrincipal;
 /** The session fields admission decisions read. */
 export type SessionAdmissionRecord = Pick<
 	Session,
-	'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing'
+	'mode' | 'ephemeral' | 'user_id' | 'editor_sandbox_sharing' | 'restricted_viewer_credentials'
 >;
 
 /**

@@ -3,6 +3,7 @@ import { sourceControlPublishFailure } from '@marimo-hub/core/ports/source-contr
 import type { GitHubClient } from './githubClient';
 import { GitHubPullRequests } from './githubPullRequests';
 import type { GitHubRepositoryWriter } from './githubRepository';
+import { response } from './testing/fakeGitHub';
 
 const changeRequest = {
 	number: 17,
@@ -26,13 +27,6 @@ const updateInput = {
 		},
 	],
 };
-
-function response(value: unknown): Response {
-	return new Response(JSON.stringify(value), {
-		status: 200,
-		headers: { 'content-type': 'application/json' },
-	});
-}
 
 function pullRequests(value: unknown) {
 	const request = vi.fn().mockResolvedValue(response(value));

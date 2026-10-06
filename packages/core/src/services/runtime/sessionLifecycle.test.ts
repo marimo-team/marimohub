@@ -264,6 +264,19 @@ describe('SessionLifecycleService', () => {
 		});
 	});
 
+	it('honors a shorter per-session idle deadline for disposable previews', async () => {
+		const session = await putSession({
+			ephemeral: true,
+			idle_timeout_ms: 300_000,
+			last_heartbeat: iso(-301_000),
+			expires_at: iso(3_600_000),
+		});
+		const result = await makeService().sweep(now);
+		expect(result.reapedIdle).toBe(1);
+		expect((await getStored(session)).sandbox_reclaimed_at).toBeDefined();
+		expect(notebooks.commitSession).not.toHaveBeenCalled();
+	});
+
 	describe('idle reaping', () => {
 		it('reaps a stale-heartbeat session with no editors', async () => {
 			const s = await putSession({

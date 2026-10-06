@@ -2025,7 +2025,7 @@ export function useProjectSessionsQuery(projectId: string, enabled = true) {
  * synchronously with no server-side budget bounding it — so both override the
  * client's default 20s timeout. Must exceed the provisioner's waitForPort budget.
  */
-const SESSION_LIFECYCLE_TIMEOUT_MS = 150_000; // 2.5 minutes
+export const SESSION_LIFECYCLE_TIMEOUT_MS = 150_000; // 2.5 minutes
 
 /**
  * Plain edit creates have no body for compatibility. App mode, profile fallback,

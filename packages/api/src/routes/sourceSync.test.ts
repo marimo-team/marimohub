@@ -90,6 +90,81 @@ describe('Source drift and sync-now routes', () => {
 		return data.notebook.id;
 	}
 
+	async function createEnterpriseNotebook() {
+		const repository = 'https://git.acme.corp/org/repo';
+		const repositoryHosts = { 'git.acme.corp': 'github' as const };
+		const reader = stubReader({
+			supportsRepository: (repo) => repo === repository,
+			getBranchHead: vi.fn(async () => ({ commit: HEAD })),
+			fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('ref: refs/heads/main\n') }],
+		});
+		const services = createServices(bucket, undefined, { repositoryHosts });
+		const { request } = createTestApi({
+			bucket,
+			deps: {
+				services,
+				sourceControl: { ...stubSourceControl({ reader }), repositoryHosts },
+			},
+		});
+		const created = await expectOk<{ notebook: { id: NotebookId }; sync_error?: unknown }>(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Enterprise notebook',
+				description: '',
+				repo: repository,
+				branch: 'main',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			}),
+			201,
+		);
+		expect(created.sync_error).toBeUndefined();
+		return { request, services, reader, nid: created.notebook.id, repository };
+	}
+
+	it('creates, checks drift, and syncs an enterprise source without a provider hint', async () => {
+		const { request, services, reader, nid, repository } = await createEnterpriseNotebook();
+		expect((await services.notebooks.getNotebook(projectId, nid)).source).toMatchObject({
+			provider: 'github',
+			repo: repository,
+			commit: HEAD,
+		});
+		const head = 'b'.repeat(40);
+		vi.mocked(reader.getBranchHead).mockResolvedValue({ commit: head });
+		const drift = await expectOk<{ in_sync: boolean; remote_commit: string }>(
+			await request('GET', `/projects/${projectId}/notebooks/${nid}/source/drift`),
+		);
+		expect(drift).toMatchObject({ in_sync: false, remote_commit: head });
+		await expectOk(await request('POST', `/projects/${projectId}/notebooks/${nid}/source/sync`));
+		expect((await services.notebooks.getNotebook(projectId, nid)).source).toMatchObject({
+			provider: 'github',
+			commit: head,
+		});
+		expect(reader.getBranchHead).toHaveBeenCalledWith(repository, 'main');
+	});
+
+	it.each([
+		['drift', 'GET', 'getBranchHead'],
+		['sync', 'POST', 'getBranchHead'],
+		['sync', 'POST', 'fetchWorkspace'],
+		['sync', 'POST', 'fetchGitDirectory'],
+	] as const)('preserves the source after %s: %s %s fails', async (action, method, operation) => {
+		const { request, services, reader, nid } = await createEnterpriseNotebook();
+		const before = await services.notebooks.getNotebook(projectId, nid);
+		const versions = await services.notebooks.listVersions(projectId, nid);
+		vi.mocked(reader.getBranchHead).mockResolvedValue({ commit: 'b'.repeat(40) });
+		reader[operation] = vi
+			.fn()
+			.mockRejectedValue(new UnavailableError('Enterprise server unavailable'));
+		await expectError(
+			await request(method, `/projects/${projectId}/notebooks/${nid}/source/${action}`),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+		expect((await services.notebooks.getNotebook(projectId, nid)).source).toEqual(before.source);
+		expect(await services.notebooks.listVersions(projectId, nid)).toEqual(versions);
+		expect(reader[operation]).toHaveBeenCalledOnce();
+	});
+
 	it('passes project identity to readers for pull creation and subsequent sync', async () => {
 		const reader = stubReader({
 			fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('ref: refs/heads/main\n') }],

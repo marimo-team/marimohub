@@ -1,32 +1,18 @@
 import { ContainerCompute, spawnContainerRunner } from './index';
+import type { ContainerConfig, ContainerRunner } from './index';
 
-export interface PodmanRunResult {
-	stdout: string;
-	stderr: string;
-	exitCode: number;
-}
+export type {
+	ContainerConfig as PodmanConfig,
+	ContainerRunner as PodmanRunner,
+	ContainerRunResult as PodmanRunResult,
+} from './index';
 
-export interface PodmanRunner {
-	run(
-		args: string[],
-		options?: { stdin?: string | Uint8Array; timeout?: number },
-	): Promise<PodmanRunResult>;
-}
-
-export interface PodmanConfig {
-	image?: string;
-	host?: string;
-	bindHost?: string;
-	network?: string;
-	labelKey?: string;
-}
-
-export function spawnPodmanRunner(bin = 'podman'): PodmanRunner {
+export function spawnPodmanRunner(bin = 'podman'): ContainerRunner {
 	return spawnContainerRunner(bin);
 }
 
 export class PodmanCompute extends ContainerCompute {
-	constructor(config: PodmanConfig = {}, runner: PodmanRunner = spawnPodmanRunner()) {
+	constructor(config: ContainerConfig = {}, runner: ContainerRunner = spawnPodmanRunner()) {
 		super('podman', config, runner);
 	}
 }

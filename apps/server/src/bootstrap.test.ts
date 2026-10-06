@@ -6,10 +6,17 @@ import { ConfigError } from '@marimo-hub/config';
 import { ProxyExposure, SubdomainExposure } from '@marimo-hub/core';
 import { bootstrap } from './bootstrap';
 import type { BootstrapOverrides } from './bootstrap';
-import { startJobScheduler, startMaintenance, startSessionLifecycle, startWarmPools } from './cron';
+import {
+	startJobScheduler,
+	startMaintenance,
+	startPreviewPreparation,
+	startSessionLifecycle,
+	startWarmPools,
+} from './cron';
 import type { OtelHandle } from './otel';
 
 vi.mock('./cron', () => ({
+	startPreviewPreparation: vi.fn(() => vi.fn()),
 	startMaintenance: vi.fn(() => vi.fn()),
 	startWarmPools: vi.fn(),
 	startSessionLifecycle: vi.fn(() => vi.fn()),
@@ -67,12 +74,85 @@ describe('bootstrap', () => {
 		vi.spyOn(console, 'log').mockImplementation(() => {});
 		vi.spyOn(console, 'error').mockImplementation(() => {});
 		vi.mocked(startMaintenance).mockImplementation(() => vi.fn());
+		vi.mocked(startPreviewPreparation).mockImplementation(() => vi.fn());
 		vi.mocked(startSessionLifecycle).mockImplementation(() => vi.fn());
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
 		vi.useRealTimers();
+	});
+
+	it('serves maintenance health without authentication or downstream I/O when loops are disabled', async () => {
+		const harness = makeHarness(deps);
+		await bootstrap(BASE_ENV, harness.overrides);
+		vi.spyOn(deps.authenticator, 'authenticate').mockImplementation(() => {
+			throw new Error('must not authenticate');
+		});
+		vi.spyOn(deps.compute, 'proxy').mockImplementation(() => {
+			throw new Error('must not proxy');
+		});
+		const fetch = harness.serveFn.mock.calls[0][0].fetch;
+		const res = (await fetch(
+			new Request('http://localhost/api/health/maintenance'),
+			{} as never,
+		)) as Response;
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ success: true, data: { ok: true, loops: {} } });
+	});
+
+	it('preserves API fallback responses behind the maintenance probe', async () => {
+		const harness = makeHarness(deps);
+		await bootstrap(BASE_ENV, harness.overrides);
+		const fetch = harness.serveFn.mock.calls[0][0].fetch;
+		const res = (await fetch(
+			new Request('http://localhost/missing', { method: 'POST' }),
+			{} as never,
+		)) as Response;
+		expect(res.status).toBe(404);
+		expect(await res.json()).toEqual({
+			success: false,
+			error: { code: 'NOT_FOUND', message: 'Route not found' },
+		});
+	});
+
+	it('returns 503 for stalled enabled loops and returns 200 after recovery', async () => {
+		const run = vi.fn(() => new Promise<void>(() => {}));
+		vi.mocked(startMaintenance).mockImplementation(
+			(_deps, _metrics, loops) =>
+				loops!.start({
+					name: 'maintenance',
+					intervalMs: 100,
+					deadlineMs: 250,
+					run,
+				}).stop,
+		);
+		const harness = makeHarness(deps);
+		const handle = await bootstrap(
+			{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' },
+			harness.overrides,
+		);
+		const fetch = harness.serveFn.mock.calls[0][0].fetch;
+		const health = async () =>
+			(await fetch(
+				new Request('http://localhost/api/health/maintenance'),
+				{} as never,
+			)) as Response;
+		expect((await health()).status).toBe(200);
+		await vi.advanceTimersByTimeAsync(350);
+		const res = await health();
+		expect(res.status).toBe(503);
+		expect(await res.json()).toMatchObject({
+			success: false,
+			error: {
+				code: 'MAINTENANCE_STALE',
+				details: { loops: { maintenance: { stale: true, timeouts: 1, last_success_at: null } } },
+			},
+		});
+		run.mockResolvedValue(undefined);
+		await vi.advanceTimersByTimeAsync(250);
+		expect((await health()).status).toBe(200);
+		await handle?.drain();
 	});
 
 	it('adds report-only CSP to SPA responses without changing API policies', async () => {
@@ -452,6 +532,7 @@ describe('bootstrap', () => {
 
 		expect(startMaintenance).toHaveBeenCalledTimes(calls);
 		expect(startWarmPools).toHaveBeenCalledTimes(calls);
+		expect(startPreviewPreparation).toHaveBeenCalledTimes(calls);
 		expect(startSessionLifecycle).toHaveBeenCalledTimes(calls);
 	});
 
@@ -476,18 +557,21 @@ describe('bootstrap', () => {
 	it('cancels maintenance loops before draining connections', async () => {
 		const stopMaintenance = vi.fn();
 		const stopLifecycle = vi.fn();
+		const stopPreviews = vi.fn();
 		vi.mocked(startMaintenance).mockReturnValueOnce(stopMaintenance);
 		vi.mocked(startSessionLifecycle).mockReturnValueOnce(stopLifecycle);
+		vi.mocked(startPreviewPreparation).mockReturnValueOnce(stopPreviews);
 		const harness = makeHarness(deps);
 		await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
 
 		harness.signals.get('SIGTERM')?.();
 
-		expect(stopMaintenance).toHaveBeenCalledOnce();
-		expect(stopLifecycle).toHaveBeenCalledOnce();
-		expect(stopMaintenance.mock.invocationCallOrder[0]).toBeLessThan(
-			harness.close.mock.invocationCallOrder[0],
-		);
+		for (const stop of [stopMaintenance, stopLifecycle, stopPreviews]) {
+			expect(stop).toHaveBeenCalledOnce();
+			expect(stop.mock.invocationCallOrder[0]).toBeLessThan(
+				harness.close.mock.invocationCallOrder[0],
+			);
+		}
 	});
 
 	it.each([

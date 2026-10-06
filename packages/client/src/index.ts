@@ -78,6 +78,7 @@ const KNOWN_SERVER_ERROR_CODES = {
 	FORBIDDEN: true,
 	NOT_FOUND: true,
 	CONFLICT: true,
+	PREVIEW_NOT_READY: true,
 	PROPOSAL_RETRY_REQUIRED: true,
 	EDIT_SESSION_OWNED: true,
 	EDIT_SESSION_CHANGED: true,
@@ -138,6 +139,47 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 
 type RequestWithTimeout = Request & { timeout?: unknown };
 
+function combineSignals(signals: AbortSignal[]): AbortSignal {
+	if (typeof AbortSignal.any === 'function') return AbortSignal.any(signals);
+
+	// Older browsers support timeout() but not any().
+	const controller = new AbortController();
+	const onAbort = () => {
+		const aborted = signals.find((signal) => signal.aborted);
+		if (!aborted) return;
+		for (const signal of signals) {
+			signal.removeEventListener('abort', onAbort);
+		}
+		controller.abort(aborted.reason);
+	};
+	for (const signal of signals) {
+		signal.addEventListener('abort', onAbort, { once: true });
+	}
+	onAbort();
+	return controller.signal;
+}
+
+function withTimeout(signal: AbortSignal, timeout: number): AbortSignal {
+	if (typeof AbortSignal.timeout === 'function') {
+		return combineSignals([signal, AbortSignal.timeout(timeout)]);
+	}
+	const controller = new AbortController();
+	if (signal.aborted) {
+		controller.abort(signal.reason);
+		return controller.signal;
+	}
+	const onAbort = () => {
+		clearTimeout(timer);
+		controller.abort(signal.reason);
+	};
+	const timer = setTimeout(() => {
+		signal.removeEventListener('abort', onAbort);
+		controller.abort(new DOMException('The operation timed out', 'TimeoutError'));
+	}, timeout);
+	signal.addEventListener('abort', onAbort, { once: true });
+	return controller.signal;
+}
+
 const timeoutMiddleware: Middleware = {
 	onRequest({ request }) {
 		const requestedTimeout = (request as RequestWithTimeout).timeout;
@@ -148,7 +190,7 @@ const timeoutMiddleware: Middleware = {
 				? requestedTimeout
 				: DEFAULT_TIMEOUT_MS;
 		return new Request(request, {
-			signal: AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]),
+			signal: withTimeout(request.signal, timeout),
 		});
 	},
 };

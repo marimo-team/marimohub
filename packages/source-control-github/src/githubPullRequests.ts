@@ -54,7 +54,7 @@ export class GitHubPullRequests {
 				}
 				return {
 					number,
-					url: pullRequestUrl(pull, this.owner, this.repo, number),
+					url: pullRequestUrl(pull, this.owner, this.repo, number, this.client.origin),
 					headBranch: branch,
 					headCommit: nestedString(pull, 'head', 'sha'),
 					state,
@@ -143,7 +143,7 @@ export class GitHubPullRequests {
 		}
 		return {
 			number,
-			url: pullRequestUrl(pull, this.owner, this.repo, number),
+			url: pullRequestUrl(pull, this.owner, this.repo, number, this.client.origin),
 			headBranch: input.headBranch,
 			headCommit: publishedHead,
 		};
@@ -163,7 +163,7 @@ export class GitHubPullRequests {
 		);
 		const pull = await responseJson(response);
 		const number = numberField(pull, 'number');
-		const url = pullRequestUrl(pull, this.owner, this.repo, number);
+		const url = pullRequestUrl(pull, this.owner, this.repo, number, this.client.origin);
 		if (number !== input.changeRequest.number || url !== input.changeRequest.url) {
 			throw new UnavailableError('GitHub returned an unexpected updated pull request');
 		}

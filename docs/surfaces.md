@@ -42,11 +42,13 @@ another surface.
 
 ## Availability
 
-The compute adapter must expose multiple ports from one sandbox. The `local`,
-`e2b`, `cloudflare`, `coreweave`, and `kubernetes` adapters support this feature.
-Configuration fails for other adapters. Docker, Podman, and Modal need create-time
-port reservation support. W&B runs on the CoreWeave adapter but is not yet wired
-to reserve surface ports.
+Secondary surfaces require an adapter with `multiPort: true`. Supported built-in
+adapters are `local`, `docker`, `podman`, `e2b`, `cloudflare`, `coreweave`, and
+`kubernetes`. Compatible external `library` adapters can also support surfaces.
+Configuration fails when the adapter does not advertise this capability.
+
+Docker and Podman publish each enabled surface on a separate host port at
+container creation. Port changes require new containers.
 
 On kubernetes with subdomain exposure each port gets its own `{id}-{port}.{host}`
 Ingress host, so the `*.{host}` wildcard DNS record and TLS certificate must cover
@@ -127,9 +129,15 @@ OpenCode supports only `subdomain` mode because its client uses root-relative
 paths. Configuration fails when OpenCode and
 `MARIMOHUB_SANDBOX_EXPOSURE=proxy` are both enabled.
 
-In `subdomain` mode, each surface has a direct, high-entropy URL. The URL is an
-access capability, so the hub returns it only to authorized editors. Keep the
-sandbox domain isolated. Do not publish these URLs.
+In `subdomain` mode, only authorized editors receive direct surface URLs.
+Cloud adapters use high-entropy URLs as access capabilities. Keep sandbox
+domains isolated and URLs private.
+
+In `subdomain` mode, Docker and Podman return `http://<HOST>:<port>` URLs without
+that protection. Browsers must reach these ports through a trusted, isolated
+network. In `proxy` mode, only the hub needs access to the published ports.
+Browsers connect to VS Code through the hub. See the
+[Docker](./compute.md#docker) and [Podman](./compute.md#podman) setup guides.
 
 See [Configuration](./configuration.md#compute) for all surface configuration and
 [Security](./security.md#secondary-editor-surfaces) for the trust boundary.

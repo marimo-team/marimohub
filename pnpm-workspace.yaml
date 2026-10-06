@@ -96,7 +96,7 @@ catalog:
   react-doctor: 0.9.12
   react-image-crop: ^11.1.2
   simple-icons: ^16.27.0
-  smol-toml: ^1.7.1
+  smol-toml: ^1.9.0
   sonner: ^2.0.7
   sql-formatter: ^15.8.2
   tailwind-merge: ^3.6.0
@@ -129,9 +129,6 @@ minimumReleaseAgeExclude:
   - '@coreweave/cwsandbox'
   # Security fixes take precedence over the release-age cooldown.
   - '@grpc/grpc-js@1.14.5'
-  - '@modelcontextprotocol/sdk@1.31.0'
-  - proxy-addr@2.0.8
-  - source-map-js@1.2.2
   - brace-expansion
   # Renovate security update: fast-uri@3.1.8
   - fast-uri@3.1.6 || 3.1.8
@@ -145,17 +142,20 @@ minimumReleaseAgeExclude:
   - linkify-it@5.0.2
   - postcss
   - protobufjs@7.6.5
+  - proxy-addr@2.0.8
+  - source-map-js@1.2.2
   - react-router@7.18.2
   - react-router-dom@7.18.2
-  - shell-quote@1.9.0
+  # Renovate security update: shell-quote@1.11.0
+  - shell-quote@1.9.0 || 1.11.0
   - tar
   - undici
   - vite@6.4.3
-  # Renovate security update: smol-toml@1.7.1
-  - smol-toml@1.7.1
+  - smol-toml@1.9.0
   # Renovate security update: csv-parse@7.0.2
   - csv-parse@7.0.2
   - markdown-it@14.3.1
+  - '@modelcontextprotocol/sdk@1.31.0'
 
 onlyBuiltDependencies: []
 

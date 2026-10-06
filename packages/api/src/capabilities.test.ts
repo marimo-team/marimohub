@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { MemoryBucket, uid } from '@marimo-hub/core/testing';
+import { DEFAULT_APP_POOL_POLICY } from '@marimo-hub/core';
 import type { Authenticator } from '@marimo-hub/core';
 import { createApi } from './createApi';
 import { expectError, expectOk, makeTestDeps, stubSourceControl } from './testing';
@@ -27,6 +28,23 @@ describe('GET /api/v1/capabilities', () => {
 		);
 		expect(data.app_pool).toEqual({ heartbeat_interval_seconds: 30 });
 	});
+
+	it.each([
+		[8_000, 2],
+		[1_000, 0.25],
+		[240_000, 30],
+	])(
+		'advertises safe heartbeats for a %i ms visit lease',
+		async (userLeaseMs, heartbeatSeconds) => {
+			const deps = makeTestDeps(new MemoryBucket(), {
+				authenticator: authed,
+				policy: { appPool: { ...DEFAULT_APP_POOL_POLICY, userLeaseMs } },
+			});
+			expect(await expectOk(await createApi(deps).request('/api/v1/capabilities'))).toMatchObject({
+				app_pool: { heartbeat_interval_seconds: heartbeatSeconds },
+			});
+		},
+	);
 
 	it('reports federation available when WIF is configured', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed, wif: stubWif });
@@ -100,6 +118,7 @@ describe('GET /api/v1/capabilities', () => {
 		const none = makeTestDeps(new MemoryBucket(), { authenticator: authed });
 		expect(await expectOk(await createApi(none).request('/api/v1/capabilities'))).toMatchObject({
 			source_control: {
+				preview_providers: [],
 				change_request_providers: [],
 				sync_providers: [],
 				pull_source_providers: [],
@@ -123,12 +142,40 @@ describe('GET /api/v1/capabilities', () => {
 			await expectOk(await createApi(configured).request('/api/v1/capabilities')),
 		).toMatchObject({
 			source_control: {
+				preview_providers: [],
 				change_request_providers: ['github'],
 				sync_providers: ['github'],
 				pull_source_providers: ['github'],
 			},
 		});
 	});
+
+	it.each([
+		{ previews: undefined, resolveCommit: vi.fn(), expected: [] },
+		{ previews: false, resolveCommit: vi.fn(), expected: [] },
+		{ previews: true, resolveCommit: undefined, expected: [] },
+		{ previews: true, resolveCommit: vi.fn(), expected: ['github'] },
+	])(
+		'advertises preview providers only for capable GitHub App readers: $expected',
+		async ({ previews, resolveCommit, expected }) => {
+			const deps = makeTestDeps(new MemoryBucket(), {
+				authenticator: authed,
+				sourceControl: stubSourceControl({
+					reader: {
+						provider: 'github',
+						previews,
+						resolveCommit,
+						supportsRepository: () => true,
+						getBranchHead: vi.fn(),
+						fetchWorkspace: vi.fn(),
+					},
+				}),
+			});
+			expect(await expectOk(await createApi(deps).request('/api/v1/capabilities'))).toMatchObject({
+				source_control: { preview_providers: expected },
+			});
+		},
+	);
 
 	it('reports the role derived from the current OIDC session', async () => {
 		const authenticator: Authenticator = {

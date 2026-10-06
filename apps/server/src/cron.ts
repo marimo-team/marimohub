@@ -1,5 +1,10 @@
-import os from 'node:os';
-import { resolveJobSandboxEnv, scheduleProjectAlert, sweepAppPools } from '@marimo-hub/api';
+import {
+	resolveJobSandboxEnv,
+	scheduleProjectAlert,
+	sweepAppPools,
+	sweepPreviews,
+	preparePreviews,
+} from '@marimo-hub/api';
 import type { ApiDeps, JobsConfig } from '@marimo-hub/api';
 import {
 	MaintenanceLock,
@@ -14,6 +19,7 @@ import {
 } from '@marimo-hub/core';
 import { JobRunner, JobScheduler } from '@marimo-hub/core/jobs';
 import { logEvent } from './log';
+import { BackgroundLoops } from './backgroundLoops';
 import type { WideEventMetrics } from './metrics';
 
 const FIVE_MINUTES_MS = Millis.minutes(5);
@@ -75,31 +81,14 @@ async function scheduleUnavailableAppAlerts(
 }
 
 /**
- * Node-side maintenance loop — the replacement for the Cloudflare Workers
- * `scheduled()` cron. Each run, in order:
- *  1. `expireStale()`     — flip sessions with stale heartbeats to `expired`.
- *  2. `reconcile()`       — cross-check records against the compute provider:
- *     tear down sandboxes left running by terminal records (the billing leak),
- *     mark records whose sandbox has vanished as terminated, reap orphans.
- *  3. `reapTerminated()`  — delete terminal records past their retention window.
- *  4. `expireSnapshots()` — prune catalog snapshots past retention (keeping
- *     current/previous + a recent floor) so the bucket doesn't grow unbounded.
- *  5. `pruneEvents()`     — drop event-day folders past retention.
- *  6. `pruneExpiredPayloads()` — delete expired proposal change bytes while
- *     retaining proposal and publication metadata.
- *  7. `claimPendingInvites()` — replace resolvable email invites with user ids.
- *  8. `sweepDeletedProjects()` / `sweepDeletedNotebooks()` — purge the storage of
- *     soft-deleted projects/notebooks past their grace period. Projects first, so
- *     a deleted project's notebooks are reclaimed by the project subtree wipe.
- *
- * All operations are idempotent. The deployment runs this on a single replica
- * (a dedicated `replicas: 1` Deployment, gated by MARIMOHUB_RUN_MAINTENANCE),
- * and the bucket-CAS advisory lease below is defense-in-depth: if two replicas
- * ever run it, only the lease holder sweeps, so deletes never race. Each cycle
- * emits one wide event (`maintenance_cycle`) carrying this-cycle counts plus the
- * cumulative metric totals/gauges an operator needs.
+ * Run on the dedicated maintenance replica; the bucket lease guards against
+ * accidental duplicate replicas. Each cycle emits counts and loop heartbeats.
  */
-export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () => void {
+export function startMaintenance(
+	deps: ApiDeps,
+	metrics: WideEventMetrics,
+	loops = new BackgroundLoops(),
+): () => void {
 	const { sessions, maintenance, projects, notebooks, proposals, idempotency } = deps.services;
 	const reconciler = new ReconciliationService(
 		sessions,
@@ -117,108 +106,83 @@ export function startMaintenance(deps: ApiDeps, metrics: WideEventMetrics): () =
 	);
 	const jobs = deps.jobs ? createJobScheduler(deps, metrics, deps.jobs) : undefined;
 	const lock = new MaintenanceLock(deps.bucket);
-	const holder = `${os.hostname()}:${process.pid}`;
-
-	// In-flight guard (same hazard as startSessionLifecycle): a cycle that outlives
-	// the 5-minute interval must not overlap the next tick — the lease would happily
-	// renew for the same holder, and the first finisher's release would drop it
-	// mid-run for the second.
-	let running = false;
-	const run = async () => {
-		if (running) {
-			logEvent({ level: 'debug', event: 'maintenance_cycle_overlap_skipped', holder });
-			return;
-		}
-		running = true;
-		try {
-			// Defense-in-depth: only the lease holder sweeps. Skip quietly otherwise.
-			if (!(await lock.acquire(holder).catch(() => false))) {
-				logEvent({ level: 'debug', event: 'maintenance_skipped_not_leader', holder });
-				return;
-			}
-			try {
-				await sweepAppPools(deps);
-				const sessionsExpired = await sessions.expireStale();
-				const reconcile = await reconciler.reconcile();
-				await scheduleUnavailableAppAlerts(deps, reconcile.markedDeadSessions);
-				if (!reconcile.skipped && reconcile.orphanSandboxIds.length > 0) {
-					logEvent({
-						level: 'warn',
-						event: 'orphan_sandboxes_reaped',
-						count: reconcile.orphansReaped,
-						sandbox_ids: reconcile.orphanSandboxIds.join(','),
-					});
-				}
-				const sessionsReaped = await sessions.reapTerminated();
-				const snapshotsPruned = await maintenance.expireSnapshots();
-				const eventsPruned = await maintenance.pruneEvents();
-				const idempotencyPruned = await idempotency.prune();
-				const proposalPayloadsPruned = await proposals.pruneExpiredPayloads();
-				const inviteRowsClaimed = await projects.claimPendingInvites();
-				// Projects before notebooks: a swept project wipes its whole subtree, so
-				// its soft-deleted notebooks are reclaimed without per-notebook work.
-				const projectsSwept = await projects.sweepDeletedProjects();
-				const notebooksSwept = await notebooks.sweepDeletedNotebooks();
-				const jobsPruned = jobs
-					? await jobs.prune(deps.jobs!.runRetentionMs)
-					: { runsPruned: 0, markersPruned: 0 };
-
-				// The purged notebooks' snapshot ids live in CoreWeave, not the bucket, so
-				// the subtree wipe above can't free them — reclaim them here.
-				const snapshotsReaped = await reapFilesystemSnapshots(
-					deps.compute,
-					notebooksSwept.orphanedSnapshots,
-				);
-
+	return loops.start({
+		name: 'maintenance',
+		intervalMs: FIVE_MINUTES_MS,
+		lock,
+		overlapEvent: 'maintenance_cycle_overlap_skipped',
+		notLeaderEvent: 'maintenance_skipped_not_leader',
+		run: async ({ holder, step }) => {
+			await step(() => sweepAppPools(deps));
+			await step(() => sweepPreviews(deps));
+			const sessionsExpired = await step(() => sessions.expireStale());
+			const reconcile = await step(() => reconciler.reconcile());
+			await step(() => scheduleUnavailableAppAlerts(deps, reconcile.markedDeadSessions));
+			if (!reconcile.skipped && reconcile.orphanSandboxIds.length > 0) {
 				logEvent({
-					level: 'info',
-					event: 'maintenance_cycle',
-					holder,
-					sessions_expired: sessionsExpired,
-					sessions_reaped: sessionsReaped,
-					snapshots_pruned: snapshotsPruned,
-					events_pruned: eventsPruned,
-					idempotency_pruned: idempotencyPruned,
-					proposal_payloads_pruned: proposalPayloadsPruned,
-					invite_rows_claimed: inviteRowsClaimed,
-					projects_swept: projectsSwept,
-					notebooks_swept: notebooksSwept.purged,
-					job_runs_pruned: jobsPruned.runsPruned,
-					job_run_markers_pruned: jobsPruned.markersPruned,
-					snapshots_reaped: snapshotsReaped,
-					orphans_reaped: reconcile.skipped ? null : reconcile.orphansReaped,
-					...metrics.collect(),
+					level: 'warn',
+					event: 'orphan_sandboxes_reaped',
+					count: reconcile.orphansReaped,
+					sandbox_ids: reconcile.orphanSandboxIds.join(','),
 				});
-			} catch (err) {
-				logEvent({
-					level: 'error',
-					event: 'maintenance_failed',
-					error: err instanceof Error ? err.message : String(err),
-					name: err instanceof Error ? err.name : undefined,
-				});
-			} finally {
-				await lock.release(holder).catch(() => {});
 			}
-		} finally {
-			running = false;
-		}
-	};
-	void run();
-	const handle = setInterval(() => void run(), FIVE_MINUTES_MS);
-	return () => clearInterval(handle);
+			const sessionsReaped = await step(() => sessions.reapTerminated());
+			const snapshotsPruned = await step(() => maintenance.expireSnapshots());
+			const eventsPruned = await step(() => maintenance.pruneEvents());
+			const idempotencyPruned = await step(() => idempotency.prune());
+			const proposalPayloadsPruned = await step(() => proposals.pruneExpiredPayloads());
+			const inviteRowsClaimed = await step(() => projects.claimPendingInvites());
+			// Projects before notebooks: a swept project wipes its whole subtree, so
+			// its soft-deleted notebooks are reclaimed without per-notebook work.
+			const projectsSwept = await step(() => projects.sweepDeletedProjects());
+			const notebooksSwept = await step(() => notebooks.sweepDeletedNotebooks());
+			const jobsPruned = jobs
+				? await step(() => jobs.prune(deps.jobs!.runRetentionMs))
+				: { runsPruned: 0, markersPruned: 0 };
+
+			// The purged notebooks' snapshot ids live in CoreWeave, not the bucket, so
+			// the subtree wipe above can't free them — reclaim them here.
+			const snapshotsReaped = await step(() =>
+				reapFilesystemSnapshots(deps.compute, notebooksSwept.orphanedSnapshots),
+			);
+
+			return {
+				holder,
+				sessions_expired: sessionsExpired,
+				sessions_reaped: sessionsReaped,
+				snapshots_pruned: snapshotsPruned,
+				events_pruned: eventsPruned,
+				idempotency_pruned: idempotencyPruned,
+				proposal_payloads_pruned: proposalPayloadsPruned,
+				invite_rows_claimed: inviteRowsClaimed,
+				projects_swept: projectsSwept,
+				notebooks_swept: notebooksSwept.purged,
+				job_runs_pruned: jobsPruned.runsPruned,
+				job_run_markers_pruned: jobsPruned.markersPruned,
+				snapshots_reaped: snapshotsReaped,
+				orphans_reaped: reconcile.skipped ? null : reconcile.orphansReaped,
+			};
+		},
+		onSuccess: (counts) => {
+			logEvent({
+				level: 'info',
+				event: 'maintenance_cycle',
+				...counts,
+				...metrics.collect(),
+				...loops.collect(),
+			});
+		},
+	}).stop;
 }
 
 /**
- * Session-lifecycle sweep — a second, faster loop beside `startMaintenance`
- * (same replica, gated by MARIMOHUB_RUN_MAINTENANCE) so the snapshot cadence is
- * not coupled to the heavy 5-minute prune cycle. Each run: gracefully tear down
- * sessions past `expires_at` or idle (extending instead when editors are still
- * connected), reclaim lingering sandboxes of already-`expired` records, and save
- * live notebooks on the periodic snapshot interval. Leader-gated by its own
- * bucket-CAS lease (a separate key from the maintenance lease, so the two loops
- * never release each other's hold).
+ * Keep session teardown and snapshot cadence independent of the heavier prune
+ * cycle. A separate lease lets both loops run on the maintenance replica.
  */
-export function startSessionLifecycle(deps: ApiDeps): (() => void) | undefined {
+export function startSessionLifecycle(
+	deps: ApiDeps,
+	loops = new BackgroundLoops(),
+): (() => void) | undefined {
 	const lifetime = deps.sandbox.sessionLifetime;
 	if (!lifetime) return undefined;
 
@@ -231,40 +195,18 @@ export function startSessionLifecycle(deps: ApiDeps): (() => void) | undefined {
 		workdir: deps.sandbox.workdir,
 	});
 	const lock = new MaintenanceLock(deps.bucket, paths.sessionLifecycleLock);
-	const holder = `${os.hostname()}:${process.pid}`;
-
-	// In-flight guard: a sweep that outlives the interval must not overlap the next
-	// tick — the lease would happily renew for the same holder, and the first
-	// finisher's release would drop it mid-run for the second.
-	let running = false;
-	const run = async () => {
-		if (running) return;
-		running = true;
-		try {
-			if (!(await lock.acquire(holder).catch(() => false))) return; // not leader
-			try {
-				await sweepAppPools(deps);
-				const r = await svc.sweep();
-				if (Object.values(r).some((n) => n > 0)) {
-					logEvent({ level: 'info', event: 'session_lifecycle_sweep', holder, ...r });
-				}
-			} catch (err) {
-				logEvent({
-					level: 'error',
-					event: 'session_lifecycle_failed',
-					error: err instanceof Error ? err.message : String(err),
-					name: err instanceof Error ? err.name : undefined,
-				});
-			} finally {
-				await lock.release(holder).catch(() => {});
+	return loops.start({
+		name: 'session_lifecycle',
+		intervalMs: lifetime.sweepIntervalMs,
+		lock,
+		run: async ({ holder, step }) => {
+			await step(() => sweepAppPools(deps));
+			const r = await step(() => svc.sweep());
+			if (Object.values(r).some((n) => n > 0)) {
+				logEvent({ level: 'info', event: 'session_lifecycle_sweep', holder, ...r });
 			}
-		} finally {
-			running = false;
-		}
-	};
-	void run();
-	const handle = setInterval(() => void run(), lifetime.sweepIntervalMs);
-	return () => clearInterval(handle);
+		},
+	}).stop;
 }
 
 function createJobScheduler(
@@ -322,103 +264,71 @@ export interface JobSchedulerHandle {
 }
 
 /**
- * Job scheduler tick — a third loop beside `startMaintenance` and
- * `startSessionLifecycle` (same replica, same gate), on its own interval
- * (MARIMOHUB_JOBS_TICK_SECONDS) and its own lease key. Each tick fires due
- * occurrences, dispatches queued runs under the concurrency caps, and reclaims
- * runs past their deadline; the executions themselves run in this process
- * between ticks. Without a maintenance replica jobs are accepted but never
- * dispatched — see docs/jobs.md.
+ * Job executions continue between ticks. Shutdown drains the current tick before
+ * those executions so it also waits for jobs dispatched by that tick.
  */
-export function startJobScheduler(deps: ApiDeps, metrics: WideEventMetrics): JobSchedulerHandle {
+export function startJobScheduler(
+	deps: ApiDeps,
+	metrics: WideEventMetrics,
+	loops = new BackgroundLoops(),
+): JobSchedulerHandle {
 	if (!deps.jobs) throw new Error('startJobScheduler: notebook jobs are off (MARIMOHUB_JOBS)');
 	const scheduler = createJobScheduler(deps, metrics, deps.jobs);
 	const tickMs = deps.jobs.tickMs;
 	const lock = new MaintenanceLock(deps.bucket, paths.jobSchedulerLock);
-	const holder = `${os.hostname()}:${process.pid}`;
-
-	// In-flight guard, as for the sibling loops: a slow tick must not overlap the
-	// next one under the same lease.
-	let running = false;
-	let currentTick = Promise.resolve();
-	const run = (): Promise<void> => {
-		if (running) return currentTick;
-		running = true;
-		currentTick = (async () => {
-			try {
-				if (!(await lock.acquire(holder).catch(() => false))) return; // not leader
-				try {
-					const r = await scheduler.tick();
-					if (Object.values(r).some((n) => n > 0) || scheduler.inFlightCount > 0) {
-						logEvent({
-							level: 'info',
-							event: 'job_scheduler_tick',
-							holder,
-							...r,
-							in_flight: scheduler.inFlightCount,
-						});
-					}
-				} catch (err) {
-					logEvent({
-						level: 'error',
-						event: 'job_scheduler_failed',
-						error: err instanceof Error ? err.message : String(err),
-						name: err instanceof Error ? err.name : undefined,
-					});
-				} finally {
-					await lock.release(holder).catch(() => {});
-				}
-			} finally {
-				running = false;
+	const loop = loops.start({
+		name: 'job_scheduler',
+		intervalMs: tickMs,
+		lock,
+		run: async ({ holder, step }) => {
+			const r = await step(() => scheduler.tick());
+			if (Object.values(r).some((n) => n > 0) || scheduler.inFlightCount > 0) {
+				logEvent({
+					level: 'info',
+					event: 'job_scheduler_tick',
+					holder,
+					...r,
+					in_flight: scheduler.inFlightCount,
+				});
 			}
-		})();
-		return currentTick;
-	};
-	void run();
-	const handle = setInterval(() => void run(), tickMs);
+		},
+	});
 	return {
-		stop: () => clearInterval(handle),
+		stop: loop.stop,
 		drain: async () => {
-			await currentTick;
+			await loop.drain();
 			await scheduler.drain();
 		},
 	};
 }
 
-export function startWarmPools(deps: ApiDeps): JobSchedulerHandle | undefined {
+export function startWarmPools(
+	deps: ApiDeps,
+	loops = new BackgroundLoops(),
+): JobSchedulerHandle | undefined {
 	const service = deps.warmPool;
 	if (!service) return;
-	const lock = new MaintenanceLock(deps.bucket, paths.warmPoolLock);
-	const holder = `${os.hostname()}:${process.pid}:warm-pools`;
-	let running = false;
-	let current = Promise.resolve();
-	const run = () => {
-		if (running) return;
-		running = true;
-		current = (async () => {
-			try {
-				if (!service.config.enabled && (await service.store.ownedSandboxIds()).size === 0) {
-					return;
-				}
-				if (!(await lock.acquire(holder))) return;
-				try {
-					await service.sweep();
-				} finally {
-					await lock.release(holder);
-				}
-			} catch (error) {
-				logEvent({
-					level: 'error',
-					event: 'warm_pool_sweep_failed',
-					error: error instanceof Error ? error.message : String(error),
-				});
-			} finally {
-				running = false;
-			}
-		})();
-	};
-	// Timed-out creates and draining replicas can publish cleanup records after an empty sweep.
-	const interval = setInterval(run, service.config.enabled ? 5_000 : FIVE_MINUTES_MS);
-	run();
-	return { stop: () => clearInterval(interval), drain: () => current };
+	return loops.start({
+		name: 'warm_pool',
+		failureEvent: 'warm_pool_sweep_failed',
+		// Late creates can publish cleanup records after an empty disabled sweep.
+		intervalMs: service.config.enabled ? 5_000 : FIVE_MINUTES_MS,
+		lock: new MaintenanceLock(deps.bucket, paths.warmPoolLock),
+		shouldRun: async () =>
+			service.config.enabled || (await service.store.ownedSandboxIds()).size > 0,
+		run: () => service.sweep(),
+	});
+}
+
+export function startPreviewPreparation(
+	deps: ApiDeps,
+	loops = new BackgroundLoops(),
+): (() => void) | undefined {
+	if (!deps.sourceControl) return;
+	return loops.start({
+		name: 'preview_preparation',
+		abortOnStop: true,
+		intervalMs: 15_000,
+		run: ({ signal }) => preparePreviews(deps, signal),
+	}).stop;
 }

@@ -110,6 +110,15 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				name: 'Branding',
 				vars: [
 					{
+						id: 'MARIMOHUB_THEME_COLOR_MODE',
+						name: 'Color mode',
+						description:
+							'`user` lets each user choose and uses saved or operating-system preferences. `light` or `dark` forces that mode for all roles and hides the theme toggle.',
+						example: 'light',
+						optIn: true,
+						default: 'user',
+					},
+					{
 						id: 'MARIMOHUB_THEME_NAME',
 						name: 'Display name',
 						description: 'Display name, browser-title suffix, and installed app name.',
@@ -378,7 +387,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_IMAGE',
 						name: 'Sandbox image',
 						description:
-							'Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`.',
+							'Image containing marimo, uv, and Python, or a comma-separated list (first is the default). Remaining images are selectable per notebook. Required for `modal`, which also accepts `modal://<name>[:<tag>]` for named images (tag defaults to `latest`). Other backends that pull container images reject `modal://` entries at startup. Recommended for `coreweave`.',
 						example: 'ghcr.io/orgname/marimo-sandbox:latest',
 					},
 					{
@@ -411,6 +420,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'`default` warms the first compute profile; `all` warms every configured profile. With no profiles, warms adapter defaults. Each pool uses only the default image.',
 						default: 'default',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE',
+						name: 'Preview compute profile',
+						description:
+							'Default compute profile for notebook previews. Must name an available profile. Unset uses the deployment default.',
 						optIn: true,
 					},
 					{
@@ -771,6 +787,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description: 'Optional Docker network to attach sandboxes to.',
 						example: 'marimohub',
 					},
+					{
+						id: 'MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG',
+						name: 'Docker owner tag',
+						description:
+							'Tag applied to owned sandboxes for discovery and cleanup. Set a distinct, stable tag on every hub sharing a Docker daemon; an untagged hub discovers and cleans up every hub’s sandboxes. Use 1–63 ASCII letters, digits, underscores, dots, and hyphens.',
+						example: 'hub-prod',
+						optIn: true,
+					},
 				],
 			},
 			{
@@ -797,6 +821,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						name: 'Podman network',
 						description: 'Optional Podman network to attach sandboxes to.',
 						example: 'marimohub',
+					},
+					{
+						id: 'MARIMOHUB_COMPUTE_PODMAN_OWNER_TAG',
+						name: 'Podman owner tag',
+						description:
+							'Tag applied to owned sandboxes for discovery and cleanup. Set a distinct, stable tag on every hub sharing a Podman container store; an untagged hub discovers and cleans up every hub’s sandboxes. Use 1–63 ASCII letters, digits, underscores, dots, and hyphens.',
+						example: 'hub-prod',
+						optIn: true,
 					},
 				],
 			},
@@ -1245,7 +1277,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION',
 						name: 'Email verification policy',
 						description:
-							'Requires boolean `email_verified=true` by default. If a trusted issuer omits the claim, use `trusted-issuer`. Other present values are invalid.',
+							'Each present `email_verified` claim must be boolean `true` or the exact string `"true"`. `required` also requires the claim from the email source. `trusted-issuer` permits missing claims only.',
 						default: 'required',
 						example: 'trusted-issuer',
 						optIn: true,
@@ -1801,13 +1833,22 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Source control publishing',
 		description:
-			'Connect Git-synced notebooks to GitHub through the server. Editors can create pull sources without a CI workflow. They can also compare and sync either source mode with **Sync now**. Managers can publish session edits as draft pull requests.\n\nThe server stores credential-free Git metadata for pull sources. Provider credentials never enter a notebook sandbox. GitHub.com is the only supported provider in this release. See [Syncing from external sources](./syncing.md) for source modes and limits.',
+			'Connect to github.com or one GitHub Enterprise Server host per deployment. Editors can create pull sources and use **Sync now**. Managers can publish session edits as draft PRs. Provider credentials stay on the server. See [Syncing from external sources](./syncing.md) for modes and limits.',
 		backends: [
 			{
 				name: 'GitHub App',
 				description:
-					'Create a GitHub App with Contents (read and write) and Pull requests (read and write) repository permissions. Install it only on repositories that marimohub can sync from or publish to. Then set both variables below. The integration does not require a webhook. Marimohub creates short-lived installation tokens for drift checks, syncs, and pull-request publishing.',
+					'Create a GitHub App with Contents and Pull requests read/write permissions. Install it on the allowed repositories, then set its numeric id and private key below. No webhook is required. For GHES, follow [Enterprise setup](syncing.md#github-enterprise-server).',
 				vars: [
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL',
+						name: 'GitHub server URL',
+						description:
+							'GitHub web origin without a path, such as `https://github.example.com`, not the API URL. GHES sources and allowlist rules require full repository URLs; `owner/repo` still means github.com.',
+						default: 'https://github.com',
+						example: 'https://git.acme.corp',
+						optIn: true,
+					},
 					{
 						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID',
 						name: 'GitHub App id',
@@ -1828,7 +1869,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES',
 						name: 'GitHub repository project policy',
 						description:
-							'Optional JSON array of `{resource, projects}` rules. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax.',
+							'Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax.',
 						example: '[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]',
 						optIn: true,
 					},

@@ -13,6 +13,7 @@ import {
 	createSandboxId,
 	createSessionId,
 	createVersionId,
+	PreviewId,
 	UserId,
 } from '../../ids';
 import { paths } from '../../paths';
@@ -23,6 +24,7 @@ import { AppPoolService } from './AppPoolService';
 import { DEFAULT_APP_POOL_POLICY } from './AppPoolRouter';
 import type { AppPool, AppPoolMember } from './AppPoolRouter';
 import { RuntimeInspectionService } from './RuntimeInspectionService';
+import { PreviewRecordSchema, previewKey } from '../content/notebookPreviews';
 
 describe('runtime inspection', () => {
 	const pid = createProjectId();
@@ -92,6 +94,61 @@ describe('runtime inspection', () => {
 		await bucket.put(paths.session(pid, m.session_id), JSON.stringify(session));
 		return session;
 	}
+
+	it.each(['app', 'edit'] as const)(
+		'attributes %s previews after hidden runtime metadata disappears',
+		async (mode) => {
+			const runtime = createNotebookId();
+			const origin = {
+				type: 'preview' as const,
+				notebook_id: nid,
+				preview_id: PreviewId.parse(`prev-${'a'.repeat(16)}`),
+				revision_id: v1,
+				commit: 'b'.repeat(40),
+			};
+			const preview = PreviewRecordSchema.parse({
+				schema_version: 1,
+				id: origin.preview_id,
+				project_id: pid,
+				notebook_id: nid,
+				name: 'Preview',
+				source: { type: 'branch', branch: 'feature' },
+				repository: 'owner/repo',
+				root_path: '',
+				entry_notebook: 'notebook.py',
+				expires_at: new Date(now + 60_000).toISOString(),
+				created_by: ACTOR,
+				created_at: new Date(now).toISOString(),
+				request_fingerprint: 'request',
+				state: 'active',
+				preparation: 'ready',
+				revisions: [],
+				current: { notebook_id: createNotebookId(), version_id: v2, commit: 'c'.repeat(40) },
+			});
+			await bucket.put(previewKey(pid, nid, origin.preview_id), JSON.stringify(preview));
+			const m = member();
+			await saveSession(m, { notebook_id: runtime, mode, origin });
+			if (mode === 'app')
+				await store.mutate(pid, runtime, () => ({
+					pool: { schema_version: 1, latest_version_id: v1, members: [m], assignments: [] },
+					value: undefined,
+				}));
+			const data = await inspection.inspect();
+			expect(data.incomplete).toBe(false);
+			if (mode === 'app') {
+				expect(data.apps[0]).toMatchObject({ incomplete: false, current_version_id: v2 });
+				expect(data.apps[0].sandboxes[0]).toMatchObject({ version_status: 'old' });
+			}
+			const row = mode === 'app' ? data.apps[0] : data.editors[0];
+			expect(row).toMatchObject({
+				notebook_id: nid,
+				notebook_title: 'Sales',
+				origin,
+				resource_path: `/projects/${pid}/notebooks/${nid}/previews/${origin.preview_id}`,
+			});
+			expect(JSON.stringify(data)).not.toContain(runtime);
+		},
+	);
 
 	it('shows packing and rollover without moving existing accounts', async () => {
 		const pool = new AppPoolService(

@@ -4,6 +4,8 @@
  * and teardown continues to work across server restarts.
  */
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { START_PROCESS, KILL_PROCESS } from './process';
 import {
 	readBoundedFile,
 	buildFindFilesCommand,
@@ -56,7 +58,8 @@ import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/
 /** marimo's kernel port (matches SandboxProvisioner's MARIMO_PORT). */
 const KERNEL_PORT = 2718;
 const NAME_PREFIX = 'marimohub-sbx-';
-const DEFAULT_LABEL_KEY = 'marimohub.sandbox';
+const SANDBOX_LABEL = 'marimohub.sandbox';
+const OWNER_LABEL = 'marimohub.owner';
 const DEFAULT_IMAGE = 'ghcr.io/marimo-team/marimo:latest';
 const EXEC_TIMEOUT_GRACE_MS = 100;
 const EXEC_TIMEOUT_SUPERVISOR = `import os, signal, subprocess, sys
@@ -172,12 +175,18 @@ export interface ContainerConfig {
 	bindHost?: string;
 	/** Optional container network to attach sandboxes to. */
 	network?: string;
-	/** Label key used to tag + enumerate our containers. Default `marimohub.sandbox`. */
-	labelKey?: string;
+	/** Secondary ports to publish when creating each container. */
+	surfacePorts?: readonly number[];
+	/**
+	 * Labels containers `marimohub.owner=<tag>` and scopes discovery to it, so hubs
+	 * sharing a daemon never reap each other's sandboxes. Unset keeps the untagged
+	 * pre-owner behaviour, which sees every hub's sandboxes.
+	 */
+	ownerTag?: string;
 }
 
-type ResolvedConfig = Required<Omit<ContainerConfig, 'network'>> &
-	Pick<ContainerConfig, 'network'> & { engine: string };
+type ResolvedConfig = Required<Omit<ContainerConfig, 'network' | 'ownerTag'>> &
+	Pick<ContainerConfig, 'network' | 'ownerTag'> & { engine: string };
 
 export function containerResourceArgs(resources: ComputeResources = {}): string[] {
 	return [
@@ -186,13 +195,16 @@ export function containerResourceArgs(resources: ComputeResources = {}): string[
 	];
 }
 
+function isTcpPort(port: number): boolean {
+	return Number.isInteger(port) && port >= 1 && port <= 65_535;
+}
+
 let procSeq = 0;
 
 class ContainerSandboxInstance implements SandboxInstance {
 	readonly supportsBucketMount = false;
 	private readonly name: string;
-	/** Cached host port for the published kernel port, once known. */
-	private hostPort?: number;
+	private readonly hostPorts = new Map<number, number>();
 
 	constructor(
 		private readonly id: SandboxId,
@@ -209,6 +221,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 		if (inspect.exitCode === 0 && inspect.stdout.trim() === 'true') return;
 
 		this.environment.invalidate();
+		this.hostPorts.clear();
 
 		// A stopped container with our name would make `run --name` fail — clear it.
 		if (inspect.exitCode === 0) {
@@ -218,13 +231,17 @@ class ContainerSandboxInstance implements SandboxInstance {
 		const args = [
 			'run',
 			'-d',
+			// Reap detached editor processes so surface stop checks do not see zombies.
+			'--init',
 			'--name',
 			this.name,
 			'--label',
-			`${this.config.labelKey}=${this.id}`,
-			// Publish the kernel port to an OS-assigned host port on bindHost.
-			'-p',
-			`${this.config.bindHost}::${KERNEL_PORT}`,
+			`${SANDBOX_LABEL}=${this.id}`,
+			...(this.config.ownerTag ? ['--label', `${OWNER_LABEL}=${this.config.ownerTag}`] : []),
+			...[KERNEL_PORT, ...this.config.surfacePorts].flatMap((port) => [
+				'-p',
+				`${this.config.bindHost}::${port}`,
+			]),
 		];
 		args.push(...containerResourceArgs(this.resources));
 		if (this.config.network) args.push('--network', this.config.network);
@@ -347,10 +364,10 @@ class ContainerSandboxInstance implements SandboxInstance {
 		// No-op: nothing was mounted.
 	}
 
-	/** Read the OS-assigned host port mapped to the container's kernel port. */
-	private async resolveHostPort(): Promise<number> {
-		if (this.hostPort) return this.hostPort;
-		const res = await this.runner.run(['port', this.name, `${KERNEL_PORT}/tcp`]);
+	private async resolveHostPort(port: number): Promise<number> {
+		const cached = this.hostPorts.get(port);
+		if (cached !== undefined) return cached;
+		const res = await this.runner.run(['port', this.name, `${port}/tcp`]);
 		if (res.exitCode !== 0) {
 			throw new Error(
 				`${this.config.engine} port failed for ${this.name}: ${res.stderr || res.stdout}`,
@@ -358,9 +375,10 @@ class ContainerSandboxInstance implements SandboxInstance {
 		}
 		// Output lines look like `0.0.0.0:49153` / `[::]:49153`; take the first port.
 		const match = res.stdout.match(/:(\d+)\s*$/m);
-		if (!match) throw new Error(`could not parse host port from: ${res.stdout}`);
-		this.hostPort = Number(match[1]);
-		return this.hostPort;
+		const hostPort = Number(match?.[1]);
+		if (!isTcpPort(hostPort)) throw new Error(`could not parse host port from: ${res.stdout}`);
+		this.hostPorts.set(port, hostPort);
+		return hostPort;
 	}
 
 	/** True once a process inside the container is listening on 127.0.0.1:port. */
@@ -375,17 +393,15 @@ class ContainerSandboxInstance implements SandboxInstance {
 
 	async startProcess(cmd: string, options?: StartProcessOptions): Promise<ContainerSandboxProcess> {
 		await this.ensure();
-		const logPath = `/tmp/marimohub-proc-${++procSeq}.log`;
-		// Run detached inside the container; redirect to a log file we can tail.
-		// `sh -lc` has no cwd flag, so cd into the working dir first when requested.
+		const processPath = `/tmp/marimohub-proc-${randomUUID()}`;
+		const logPath = `${processPath}.log`;
+		const pidPath = `${processPath}.pid`;
 		const prefix = options?.cwd ? `cd ${shellQuote(options.cwd)} && ` : '';
 		const processCommand = await this.environment.command(cmd, removeUndefined(options?.env ?? {}));
-		const res = await this.dexec(
-			`${prefix}${processCommand} > ${logPath} 2>&1 &`,
-			['-d'],
-			undefined,
-			true,
-		);
+		const launch = ['python3', '-c', START_PROCESS, pidPath, logPath, `${prefix}${processCommand}`]
+			.map(shellQuote)
+			.join(' ');
+		const res = await this.dexec(launch, [], undefined, true);
 		if (res.exitCode !== 0) {
 			throw new Error(`startProcess failed: ${res.stderr || res.stdout}`);
 		}
@@ -404,16 +420,26 @@ class ContainerSandboxInstance implements SandboxInstance {
 					.map(shellQuote)
 					.join(' '),
 			);
-		const id = options?.processId ?? `${this.config.engine}-proc-${procSeq}`;
+		const id = options?.processId ?? `${this.config.engine}-proc-${++procSeq}`;
 		const containerName = this.name;
 		const runner = this.runner;
 
 		return {
 			id,
 			command: cmd,
-			async kill(_signal?: string): Promise<void> {
-				// No tracked PID for a detached exec; best-effort kill of the kernel.
-				await runner.run(['exec', containerName, 'pkill', '-f', 'marimo']).catch(() => {});
+			async kill(signal = 'SIGTERM'): Promise<void> {
+				const result = await runner.run([
+					'exec',
+					containerName,
+					'python3',
+					'-c',
+					KILL_PROCESS,
+					pidPath,
+					signal,
+				]);
+				if (result.exitCode !== 0) {
+					throw new Error(`Could not stop sandbox process: ${result.stderr || result.stdout}`);
+				}
 			},
 			async waitForPort(port: number, opts?: WaitForPortOptions): Promise<void> {
 				const timeout = opts?.timeout ?? 30_000;
@@ -522,18 +548,21 @@ class ContainerSandboxInstance implements SandboxInstance {
 	}
 
 	async exposePort(port: number, _options: ExposePortOptions): Promise<ExposePortResult> {
-		const hostPort = port === KERNEL_PORT ? await this.resolveHostPort() : port;
+		if (port !== KERNEL_PORT && !this.config.surfacePorts.includes(port)) {
+			throw new Error(`${this.config.engine} sandbox port ${port} was not reserved at creation`);
+		}
+		const hostPort = await this.resolveHostPort(port);
 		return { url: `http://${this.config.host}:${hostPort}` };
 	}
 
 	async destroy(): Promise<void> {
 		await this.runner.run(['rm', '-f', '-v', this.name]);
-		this.hostPort = undefined;
+		this.hostPorts.clear();
 	}
 }
 
 export class ContainerCompute implements SandboxProvider {
-	readonly capabilities = { multiPort: false } as const;
+	readonly capabilities: { multiPort: boolean };
 	private readonly config: ResolvedConfig;
 
 	constructor(
@@ -541,13 +570,23 @@ export class ContainerCompute implements SandboxProvider {
 		config: ContainerConfig = {},
 		private readonly runner: ContainerRunner = spawnContainerRunner(engine),
 	) {
+		const surfacePorts = [...new Set(config.surfacePorts ?? [])].filter(
+			(port) => port !== KERNEL_PORT,
+		);
+		for (const port of surfacePorts) {
+			if (!isTcpPort(port)) {
+				throw new Error(`Invalid ${engine} surface port: ${port}`);
+			}
+		}
+		this.capabilities = { multiPort: surfacePorts.length > 0 };
 		this.config = {
 			engine,
 			image: config.image || DEFAULT_IMAGE,
 			host: config.host || 'localhost',
 			bindHost: config.bindHost || '127.0.0.1',
-			labelKey: config.labelKey || DEFAULT_LABEL_KEY,
 			network: config.network,
+			surfacePorts,
+			ownerTag: config.ownerTag || undefined,
 		};
 	}
 
@@ -582,7 +621,8 @@ export class ContainerCompute implements SandboxProvider {
 		const res = await this.runner.run([
 			'ps',
 			'--filter',
-			`label=${this.config.labelKey}`,
+			`label=${SANDBOX_LABEL}`,
+			...(this.config.ownerTag ? ['--filter', `label=${OWNER_LABEL}=${this.config.ownerTag}`] : []),
 			'--format',
 			'{{.Names}}',
 		]);

@@ -22,6 +22,7 @@ Deployment branding for the hub UI. All values are public. See the [theming guid
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
+| `MARIMOHUB_THEME_COLOR_MODE` | `user` lets each user choose and uses saved or operating-system preferences. `light` or `dark` forces that mode for all roles and hides the theme toggle. | — | `user` | `light` |
 | `MARIMOHUB_THEME_NAME` | Display name, browser-title suffix, and installed app name. | — | `marimohub` | `Research Hub` |
 | `MARIMOHUB_THEME_FAVICON` | SVG, PNG, or ICO favicon. Use an HTTPS URL or root-relative same-origin path. Falls back to the 192px app icon, then 512px, then the built-in favicon. | — | — | `https://hub.example.com/brand/favicon.svg` |
 | `MARIMOHUB_THEME_LOGO` | SVG or PNG logo that replaces the full icon and wordmark. Use an HTTPS URL or root-relative same-origin path. | — | — | `https://hub.example.com/brand/logo.svg` |
@@ -128,11 +129,12 @@ Read regardless of the selected compute backend.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_COMPUTE_IMAGE` | Container image with marimo + uv + python, or a comma-separated list of such images: the first is the default and the rest are selectable per notebook as base images. Required by the `modal` backend; recommended for `coreweave`. | — | — | `ghcr.io/orgname/marimo-sandbox:latest` |
+| `MARIMOHUB_COMPUTE_IMAGE` | Image containing marimo, uv, and Python, or a comma-separated list (first is the default). Remaining images are selectable per notebook. Required for `modal`, which also accepts `modal://<name>[:<tag>]` for named images (tag defaults to `latest`). Other backends that pull container images reject `modal://` entries at startup. Recommended for `coreweave`. | — | — | `ghcr.io/orgname/marimo-sandbox:latest` |
 | `MARIMOHUB_COMPUTE_PROFILES` | Ordered named CPU, memory, and optional GPU profiles. Use `name:cpu=<cores>;mem=<Mi\|Gi\|Ti>;gpu=<type>[:<count>]`. The maximum GPU count is 8. The first profile is the default. Supported backends apply the selected profile when overrides are enabled. The Modal backend, and library adapters that declare `gpuProfiles`, apply GPU requests. Other backends ignore GPU values and log a startup warning. | — | — | `small:cpu=1;mem=2Gi,gpu-large:cpu=8;mem=32Gi;gpu=A100` |
 | `MARIMOHUB_COMPUTE_WARM_POOL_ENABLED` | Keep unassigned CoreWeave or Kubernetes sandboxes ready for editor and app sessions. Requires a maintenance replica. Jobs, sandbox startup diagnostics, personal-home mounts, snapshot restores, and non-default images use cold creation. Idle sandboxes consume compute. | — | `false` | — |
 | `MARIMOHUB_COMPUTE_WARM_POOL_SIZE` | Positive integer target of idle sandboxes per selected profile, shared across all server replicas. Used only when warm pools are enabled. | — | `1` | — |
 | `MARIMOHUB_COMPUTE_WARM_POOL_PROFILES` | `default` warms the first compute profile; `all` warms every configured profile. With no profiles, warms adapter defaults. Each pool uses only the default image. | — | `default` | — |
+| `MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE` | Default compute profile for notebook previews. Must name an available profile. Unset uses the deployment default. | — | — | — |
 | `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE` | Whether editors may choose a non-default compute profile per notebook (`none` or `editors`). | — | `none` | `editors` |
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` | Public hostname used to expose kernel ports. | — | `'' (empty)` | `hub.example.com` |
 | `MARIMOHUB_COMPUTE_WORKDIR` | Working directory inside the sandbox where notebook files land and marimo runs. | — | `/workspace` | — |
@@ -214,6 +216,7 @@ Runs each kernel in a container on a Docker daemon (local socket or remote `DOCK
 | `MARIMOHUB_COMPUTE_DOCKER_HOST` | Hostname the returned kernel URL points at (what the browser hits). | — | `localhost` | — |
 | `MARIMOHUB_COMPUTE_DOCKER_BIND_HOST` | Host interface the container port is published on. | — | `127.0.0.1` | — |
 | `MARIMOHUB_COMPUTE_DOCKER_NETWORK` | Optional Docker network to attach sandboxes to. | — | — | `marimohub` |
+| `MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG` | Tag applied to owned sandboxes for discovery and cleanup. Set a distinct, stable tag on every hub sharing a Docker daemon; an untagged hub discovers and cleans up every hub’s sandboxes. Use 1–63 ASCII letters, digits, underscores, dots, and hyphens. | — | — | `hub-prod` |
 
 ### Podman
 
@@ -226,6 +229,7 @@ Runs each kernel in a container through the Podman CLI. Supports local, rootless
 | `MARIMOHUB_COMPUTE_PODMAN_HOST` | Hostname the returned kernel URL points at (what the browser hits). | — | `localhost` | — |
 | `MARIMOHUB_COMPUTE_PODMAN_BIND_HOST` | Host interface the container port is published on. | — | `127.0.0.1` | — |
 | `MARIMOHUB_COMPUTE_PODMAN_NETWORK` | Optional Podman network to attach sandboxes to. | — | — | `marimohub` |
+| `MARIMOHUB_COMPUTE_PODMAN_OWNER_TAG` | Tag applied to owned sandboxes for discovery and cleanup. Set a distinct, stable tag on every hub sharing a Podman container store; an untagged hub discovers and cleans up every hub’s sandboxes. Use 1–63 ASCII letters, digits, underscores, dots, and hyphens. | — | — | `hub-prod` |
 
 ### E2B
 
@@ -373,7 +377,7 @@ App-native OpenID Connect (the production backend). If the allowlist contains on
 | `MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL` | Optional HTTPS signing-key endpoint. Defaults to the JWKS URL discovered from the OIDC issuer. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_PROMPT` | OAuth `prompt` value. `select_account` displays the account chooser. Use `consent` to display consent again. Space-separated combinations are valid. | — | `select_account` | `consent` |
 | `MARIMOHUB_AUTH_OIDC_SCOPES` | Space-separated scopes. Must include `openid` and `email`. Add only scopes that the provider requires for group claims. `offline_access` is invalid because marimohub stores no refresh tokens. | — | `openid email profile` | — |
-| `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION` | Requires boolean `email_verified=true` by default. If a trusted issuer omits the claim, use `trusted-issuer`. Other present values are invalid. | — | `required` | `trusted-issuer` |
+| `MARIMOHUB_AUTH_OIDC_EMAIL_VERIFICATION` | Each present `email_verified` claim must be boolean `true` or the exact string `"true"`. `required` also requires the claim from the email source. `trusted-issuer` permits missing claims only. | — | `required` | `trusted-issuer` |
 | `MARIMOHUB_AUTH_SESSION_SECRET` 🔒 | Secret that signs the session cookie (HS256; ≥32 bytes). | Yes | — | — |
 | `MARIMOHUB_AUTH_SESSION_TTL_SECONDS` | Signed browser-session lifetime, from 300 to 86400 seconds. | — | `28800` | — |
 | `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` | Comma-separated email-domain allowlist. Set `*` to allow all domains. | Yes | — | `example.com,example.org` |
@@ -504,19 +508,18 @@ Headless notebook runs on a cron schedule or on demand, with a durable run histo
 
 ## Source control publishing
 
-Connect Git-synced notebooks to GitHub through the server. Editors can create pull sources without a CI workflow. They can also compare and sync either source mode with **Sync now**. Managers can publish session edits as draft pull requests.
-
-The server stores credential-free Git metadata for pull sources. Provider credentials never enter a notebook sandbox. GitHub.com is the only supported provider in this release. See [Syncing from external sources](./syncing.md) for source modes and limits.
+Connect to github.com or one GitHub Enterprise Server host per deployment. Editors can create pull sources and use **Sync now**. Managers can publish session edits as draft PRs. Provider credentials stay on the server. See [Syncing from external sources](./syncing.md) for modes and limits.
 
 ### GitHub App
 
-Create a GitHub App with Contents (read and write) and Pull requests (read and write) repository permissions. Install it only on repositories that marimohub can sync from or publish to. Then set both variables below. The integration does not require a webhook. Marimohub creates short-lived installation tokens for drift checks, syncs, and pull-request publishing.
+Create a GitHub App with Contents and Pull requests read/write permissions. Install it on the allowed repositories, then set its numeric id and private key below. No webhook is required. For GHES, follow [Enterprise setup](syncing.md#github-enterprise-server).
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
+| `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL` | GitHub web origin without a path, such as `https://github.example.com`, not the API URL. GHES sources and allowlist rules require full repository URLs; `owner/repo` still means github.com. | — | `https://github.com` | `https://git.acme.corp` |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID` | Numeric app id from the GitHub App settings page. | — | — | `123456` |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY` 🔒 | PKCS8 or PKCS1 PEM private key downloaded for the GitHub App, or its single-line base64 encoding. Held by the server and never injected into notebook sandboxes. | — | — | `-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----` |
-| `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` | Optional JSON array of `{resource, projects}` rules. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax. | — | — | `[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]` |
+| `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` | Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax. | — | — | `[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]` |
 
 ## Workload Identity Federation
 

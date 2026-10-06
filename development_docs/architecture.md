@@ -373,6 +373,11 @@ business logic and depend only on interfaces:
 - **DataQueryService** — runs user SQL through a fresh, disposable executor with
   separate limits. It does not reuse trusted preview programs.
 - **ProjectAlertStore** — owns the CAS-managed project alert configuration.
+- **NotebookPreviewService** — creates, prepares, and retires notebook
+  previews: one CAS record per preview and hidden immutable runtime notebooks
+  that never enter the catalog.
+- **PreviewStore** — owns the bounded per-project preview membership, artifact
+  reservations, idempotency receipts, and deployment-wide preparation leases.
 
 `createServices(bucket)` composes them; nothing here imports a vendor SDK.
 

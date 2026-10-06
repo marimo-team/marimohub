@@ -17,6 +17,7 @@ export interface ComboBoxOption {
 }
 
 export interface ComboBoxProps<T extends ComboBoxOption> {
+	retainSelection?: boolean;
 	label?: string;
 	'aria-label'?: string;
 	placeholder?: string;
@@ -38,11 +39,14 @@ export interface ComboBoxProps<T extends ComboBoxOption> {
  * A searchable option picker over react-aria-components' ComboBox, styled to
  * match {@link TextField}/{@link DropdownMenu}. Free text is allowed — the
  * caller owns the input value and typically mixes async search results with
- * synthetic options derived from the raw text. Selection is momentary: picking
- * an option fires `onSelect` and nothing is held selected, so it behaves like
- * a command palette rather than a form select.
+ * synthetic options derived from the raw text. By default selection is
+ * momentary: picking an option fires `onSelect` and nothing is held selected,
+ * so it behaves like a command palette rather than a form select. With
+ * `retainSelection`, the option whose text matches the input stays selected,
+ * so a form field shows its chosen value as checked.
  */
 export function ComboBox<T extends ComboBoxOption>({
+	retainSelection = false,
 	label,
 	'aria-label': ariaLabel,
 	placeholder,
@@ -61,7 +65,11 @@ export function ComboBox<T extends ComboBoxOption>({
 			aria-label={ariaLabel}
 			inputValue={inputValue}
 			onInputChange={onInputChange}
-			value={null}
+			value={
+				retainSelection
+					? (options.find((option) => option.textValue === inputValue)?.id ?? null)
+					: null
+			}
 			onChange={(key) => {
 				if (typeof key === 'string') onSelect(key);
 			}}

@@ -43,6 +43,7 @@ export interface NotebookPaths {
 	/** Base directory: `projects/{pid}/notebooks/{nid}` */
 	base: string;
 	meta: string;
+	previewMeta: string;
 	readme: string;
 	source: string;
 	integrationSyncToken: string;
@@ -201,6 +202,7 @@ function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 			`${base}/thumbnail-attempts/${encodeURIComponent(sandboxId)}.json`,
 		thumbnailImage: (id: string) => `${base}/thumbnails/${id}.png`,
 		meta: `${base}/meta.json`,
+		previewMeta: `${base}/preview-runtime.json`,
 		readme: `${base}/README.md`,
 		source: `${base}/source.json`,
 		integrationSyncToken: `${base}/integration_sync_token.json`,
@@ -350,6 +352,16 @@ export const paths = {
 		`_system/job-deletions/${projectId}/${notebookId}/`,
 	jobDeletionClaim: (projectId: ProjectId, notebookId: NotebookId, jobId: JobId) =>
 		`_system/job-deletions/${projectId}/${notebookId}/${jobId}.json`,
+	preview: (projectId: ProjectId, notebookId: NotebookId, previewId: string) =>
+		`_system/previews/${projectId}/${notebookId}/${previewId}.json`,
+	previewProjectsPrefix: '_system/preview-projects/',
+	previewProject: (projectId: ProjectId) => `_system/preview-projects/${projectId}.json`,
+	previewActiveProjectsPrefix: '_system/preview-active-projects/',
+	previewActiveProject: (projectId: ProjectId, workId: string) =>
+		`_system/preview-active-projects/${projectId}/${workId}.json`,
+	previewReceipts: (projectId: ProjectId) => `_system/preview-receipts/${projectId}.json`,
+	previewWork: '_system/preview-work.json',
+	previewCleanupCursor: '_system/preview-cleanup-cursor.json',
 	/** Advisory lease guarding the single-writer maintenance sweep (see MaintenanceLock). */
 	maintenanceLock: '_system/_maintenance.lock',
 	/** Advisory lease for the session-lifecycle sweep — its own key, so the two loops

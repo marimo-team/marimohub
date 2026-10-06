@@ -32,15 +32,19 @@ const shortId = (id: string) => `…${id.slice(-8)}`;
 function LocationLinks({
 	item,
 }: {
-	item: Pick<RuntimeApp, 'project_id' | 'project_name' | 'notebook_id' | 'notebook_title'>;
+	item: Pick<
+		RuntimeApp,
+		'project_id' | 'project_name' | 'notebook_id' | 'notebook_title' | 'resource_path' | 'origin'
+	>;
 }) {
 	return (
 		<div className="min-w-0">
 			<Link
 				className="break-words font-medium hover:underline"
-				to={`/projects/${item.project_id}/notebooks/${item.notebook_id}`}
+				to={item.resource_path ?? `/projects/${item.project_id}/notebooks/${item.notebook_id}`}
 			>
 				{item.notebook_title}
+				{item.origin && ' · Preview'}
 			</Link>
 			<Link
 				className="mt-0.5 block text-xs text-muted-foreground hover:underline"
@@ -558,7 +562,7 @@ export default function AdminRuntimePage() {
 						<div className="space-y-5">
 							{apps.map((app) => (
 								<AppCard
-									key={`${app.project_id}/${app.notebook_id}`}
+									key={`${app.resource_path ?? `${app.project_id}/${app.notebook_id}`}/${app.origin?.revision_id ?? ''}`}
 									app={app}
 									limits={data.limits}
 									now={now}

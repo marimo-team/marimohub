@@ -78,7 +78,7 @@ uv run --no-sync marimo --quiet edit notebook.py --headless --token --token-pass
 The provisioner creates the password file after it writes other session
 credentials. The file is outside `/workspace`, so workspace snapshots cannot
 capture it. Custom images must use a marimo version that supports
-`--token-password-file`. The supported 0.23.10 and 0.24.x images provide it.
+`--token-password-file`.
 
 During the sync, `--no-install-package marimo` keeps the image's pinned marimo
 version even if the notebook declares another version.
@@ -234,13 +234,13 @@ libraries, edit `warm/pyproject.toml`; add system libraries with extra
 
 ## Private registries
 
-| Backend    | How to authenticate the pull                                                                   |
-| ---------- | ---------------------------------------------------------------------------------------------- |
-| Kubernetes | Create an image pull secret; set `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET` to its name. |
-| Docker     | `docker login` on the server's Docker daemon — its credentials pull the image.                 |
-| Podman     | `podman login` for the server user or configured remote connection.                            |
-| Modal      | Configure registry credentials in Modal; pass the image reference.                             |
-| CoreWeave  | Configure registry credentials in CoreWeave; pass the image reference.                         |
+| Backend    | How to authenticate the pull                                                                                |
+| ---------- | ----------------------------------------------------------------------------------------------------------- |
+| Kubernetes | Create an image pull secret; set `MARIMOHUB_COMPUTE_KUBERNETES_IMAGE_PULL_SECRET` to its name.              |
+| Docker     | `docker login` on the server's Docker daemon — its credentials pull the image.                              |
+| Podman     | `podman login` for the server user or configured remote connection.                                         |
+| Modal      | Configure registry credentials in Modal, or use a [named image](./compute.md#modal) (`modal://name[:tag]`). |
+| CoreWeave  | Configure registry credentials in CoreWeave; pass the image reference.                                      |
 
 ## Custom PyPI index (private packages)
 
@@ -292,8 +292,8 @@ The wheel and launcher live outside captured notebook files. An artifact identit
 prevents repeat installation. New environments and changed artifacts trigger installation again.
 Installation failures preserve the normal launch behavior.
 
-No image change is required for marimo 0.23.10 or 0.24.2. The environment must permit
-local wheel installation. See the [bridge package guide](https://github.com/marimo-team/marimohub/blob/main/packages/notebook-bridge/README.md)
+No image change is required. The environment must permit local wheel installation.
+See the [bridge package guide](https://github.com/marimo-team/marimohub/blob/main/packages/notebook-bridge/README.md)
 for timeout, fallback, and compatibility details.
 
 ## Build the maintained image

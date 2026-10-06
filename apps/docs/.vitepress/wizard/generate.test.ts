@@ -5,6 +5,7 @@ import {
 	generateEnv,
 	generateHelm,
 	generateLibrary,
+	resolveValue,
 	validateSelection,
 } from './generate';
 import type { WizardSelection } from './generate';
@@ -12,6 +13,24 @@ import { AUTH_WIRING } from './spec';
 
 class StubProxyHeaderAuthenticator {
 	constructor(readonly config: Record<string, unknown>) {}
+}
+
+class StubContainerCompute {
+	constructor(readonly config: Record<string, unknown>) {}
+}
+
+function containerLibraryConfig(
+	selection: WizardSelection,
+	env: Record<string, string | undefined> = {},
+): Record<string, unknown> {
+	const source = generateLibrary(selection).match(/const compute = ([\s\S]*?);\n/)?.[1];
+	if (!source) throw new Error('Missing compute Library wiring.');
+	const compute = runInNewContext(`(${source})`, {
+		process: { env },
+		DockerCompute: StubContainerCompute,
+		PodmanCompute: StubContainerCompute,
+	}) as StubContainerCompute;
+	return compute.config;
 }
 
 function proxyHeaderLibraryConfig(
@@ -131,6 +150,17 @@ describe('config -> code generators', () => {
 		});
 	}
 
+	it('requires an explicit GitHub Enterprise origin when resolving optional config', () => {
+		const variable = 'MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL';
+		const unsetValues: Record<string, string>[] = [{}, { [variable]: '' }, { [variable]: '   ' }];
+		for (const values of unsetValues) {
+			expect(resolveValue(variable, values)).toBe('');
+		}
+		expect(resolveValue(variable, { [variable]: ' https://github.enterprise.example ' })).toBe(
+			'https://github.enterprise.example',
+		);
+	});
+
 	it.each([generateEnv, generateHelm, generateCompose])(
 		'includes Modal secrets only when explicitly configured in %s',
 		(generate) => {
@@ -142,6 +172,55 @@ describe('config -> code generators', () => {
 			});
 			expect(configured).toContain('MARIMOHUB_COMPUTE_MODAL_SECRETS');
 			expect(configured).toContain('shared-credentials,huggingface');
+		},
+	);
+
+	it.each(['docker', 'podman'])(
+		'includes %s owner tags only when explicitly configured',
+		(compute) => {
+			const key = `MARIMOHUB_COMPUTE_${compute.toUpperCase()}_OWNER_TAG`;
+			const selection = { storage: 'fs', compute, auth: 'dev', ai: 'none' };
+			for (const generate of [generateEnv, generateHelm, generateCompose]) {
+				for (const value of [undefined, '', '   ']) {
+					const values = value === undefined ? {} : { [key]: value };
+					expect(generate({ ...selection, values })).not.toContain(key);
+				}
+				const configured = generate({
+					...selection,
+					values: { [key]: ' hub-dev ' },
+				});
+				expect(configured).toContain(key);
+				expect(configured).toContain('hub-dev');
+				expect(configured).not.toContain('hub-prod');
+			}
+		},
+	);
+
+	it.each(['docker', 'podman'])(
+		'passes %s owner tags to the generated Library constructor',
+		(compute) => {
+			const key = `MARIMOHUB_COMPUTE_${compute.toUpperCase()}_OWNER_TAG`;
+			const otherKey = `MARIMOHUB_COMPUTE_${compute === 'docker' ? 'PODMAN' : 'DOCKER'}_OWNER_TAG`;
+			const selection = { storage: 'fs', compute, auth: 'dev', ai: 'none' };
+			for (const value of [undefined, '', '   ']) {
+				const values = {
+					[otherKey]: 'hub-other',
+					...(value === undefined ? {} : { [key]: value }),
+				};
+				expect(containerLibraryConfig({ ...selection, values }).ownerTag).toBeUndefined();
+				expect(
+					containerLibraryConfig({ ...selection, values }, { [key]: 'hub-env' }).ownerTag,
+				).toBe('hub-env');
+			}
+			expect(
+				containerLibraryConfig(
+					{
+						...selection,
+						values: { [key]: ' hub-dev ', [otherKey]: 'hub-other' },
+					},
+					{ [key]: 'hub-env' },
+				).ownerTag,
+			).toBe('hub-dev');
 		},
 	);
 

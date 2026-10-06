@@ -81,6 +81,24 @@ const computeVar = (env: Env, key: string, backend: string) =>
 		docs: 'docs/configuration.md#compute',
 	});
 
+function containerOwnerTag(env: Env, key: string): string | undefined {
+	const value = env[key]?.trim();
+	if (!value) return undefined;
+	// Must stay safe both as a label value and inside `--filter label=key=value`.
+	if (!/^[A-Za-z0-9_.-]{1,63}$/.test(value)) {
+		throw new ConfigError(
+			`Invalid ${key}: ${JSON.stringify(value)} is not a valid sandbox owner tag`,
+			{
+				variable: key,
+				remediation:
+					'Use 1-63 letters, digits, underscores, dots, and hyphens, or unset the variable.',
+				docs: 'docs/configuration.md#compute',
+			},
+		);
+	}
+	return value;
+}
+
 function kubernetesIngressAnnotations(env: Env, key: string): Record<string, string> | undefined {
 	try {
 		return parseIngressAnnotations(env[key]);
@@ -181,7 +199,8 @@ export function resolveLifetimeBackstop(
  * backends with no image concept (local/none/noop).
  */
 export function resolveSandboxImages(env: Env): string[] {
-	switch (computeBackend(env)) {
+	const backend = computeBackend(env);
+	switch (backend) {
 		case undefined:
 		case 'local':
 		case 'none':
@@ -189,15 +208,45 @@ export function resolveSandboxImages(env: Env): string[] {
 			return [];
 		case 'fargate':
 			return [];
-		case 'e2b':
-			return (
-				parseList(env.MARIMOHUB_COMPUTE_E2B_TEMPLATE) ??
-				parseList(env.MARIMOHUB_COMPUTE_IMAGE) ??
-				[]
+		case 'e2b': {
+			const templates = parseList(env.MARIMOHUB_COMPUTE_E2B_TEMPLATE);
+			if (templates)
+				return rejectModalImageRefs(backend, 'MARIMOHUB_COMPUTE_E2B_TEMPLATE', templates);
+			return rejectModalImageRefs(
+				backend,
+				'MARIMOHUB_COMPUTE_IMAGE',
+				parseList(env.MARIMOHUB_COMPUTE_IMAGE) ?? [],
 			);
-		default:
+		}
+		// Modal resolves `modal://` itself; a library adapter owns its own image syntax.
+		case 'modal':
+		case 'library':
 			return parseList(env.MARIMOHUB_COMPUTE_IMAGE) ?? [];
+		default:
+			return rejectModalImageRefs(
+				backend,
+				'MARIMOHUB_COMPUTE_IMAGE',
+				parseList(env.MARIMOHUB_COMPUTE_IMAGE) ?? [],
+			);
 	}
+}
+
+function rejectModalImageRefs(backend: string, variable: string, images: string[]): string[] {
+	const modalImage = images.find((image) => image.startsWith('modal://'));
+	if (modalImage !== undefined) {
+		throw new ConfigError(
+			`${variable} entry ${JSON.stringify(modalImage)} is a Modal image reference, which the ${backend} compute backend cannot pull`,
+			{
+				variable,
+				remediation:
+					variable === 'MARIMOHUB_COMPUTE_E2B_TEMPLATE'
+						? 'Replace modal:// entries with E2B template IDs, or set MARIMOHUB_COMPUTE_BACKEND=modal.'
+						: 'Replace modal:// entries with container registry references, or set MARIMOHUB_COMPUTE_BACKEND=modal.',
+				docs: 'docs/configuration.md#compute',
+			},
+		);
+	}
+	return images;
 }
 
 /**
@@ -470,22 +519,31 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 				),
 			});
 		case 'docker':
-			// Each kernel runs in a container on a Docker daemon (local socket or a
-			// remote DOCKER_HOST), reached directly at http://<host>:<published-port>.
-			// Good for single-host self-hosting; `proxy()` is a no-op like local.
-			return new DockerCompute({
+		case 'podman': {
+			const Container = backend === 'docker' ? DockerCompute : PodmanCompute;
+			const variables =
+				backend === 'docker'
+					? {
+							host: 'MARIMOHUB_COMPUTE_DOCKER_HOST',
+							bindHost: 'MARIMOHUB_COMPUTE_DOCKER_BIND_HOST',
+							network: 'MARIMOHUB_COMPUTE_DOCKER_NETWORK',
+							ownerTag: 'MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG',
+						}
+					: {
+							host: 'MARIMOHUB_COMPUTE_PODMAN_HOST',
+							bindHost: 'MARIMOHUB_COMPUTE_PODMAN_BIND_HOST',
+							network: 'MARIMOHUB_COMPUTE_PODMAN_NETWORK',
+							ownerTag: 'MARIMOHUB_COMPUTE_PODMAN_OWNER_TAG',
+						};
+			return new Container({
 				image: defaultImage,
-				host: env.MARIMOHUB_COMPUTE_DOCKER_HOST,
-				bindHost: env.MARIMOHUB_COMPUTE_DOCKER_BIND_HOST,
-				network: env.MARIMOHUB_COMPUTE_DOCKER_NETWORK,
+				host: env[variables.host],
+				bindHost: env[variables.bindHost],
+				network: env[variables.network],
+				ownerTag: containerOwnerTag(env, variables.ownerTag),
+				surfacePorts: surfacePorts(opts?.surfaces),
 			});
-		case 'podman':
-			return new PodmanCompute({
-				image: defaultImage,
-				host: env.MARIMOHUB_COMPUTE_PODMAN_HOST,
-				bindHost: env.MARIMOHUB_COMPUTE_PODMAN_BIND_HOST,
-				network: env.MARIMOHUB_COMPUTE_PODMAN_NETWORK,
-			});
+		}
 		case 'e2b':
 			// E2B sandboxes (e2b.dev): per-session sandbox with a public per-port URL
 			// (https://<port>-<id>.e2b.app). The `e2b` SDK is an optional, bring-your-own

@@ -4,6 +4,7 @@ import { Readable } from 'node:stream';
 import {
 	App,
 	Image,
+	InvalidError,
 	ModalClient,
 	NotFoundError,
 	Sandbox,
@@ -181,7 +182,7 @@ class FakeSandbox extends Sandbox {
 	}
 }
 
-function makeWorld() {
+function makeWorld(client = makeClient()) {
 	const existing = new Map<string, FakeSandbox>();
 	const listed: FakeSandbox[] = [];
 	const created: {
@@ -193,7 +194,6 @@ function makeWorld() {
 	const appCalls: { name: string; options?: AppFromNameParams }[] = [];
 	const imageCalls: string[] = [];
 
-	const client = makeClient();
 	vi.spyOn(client.apps, 'fromName').mockImplementation(async (name, options) => {
 		appCalls.push({ name, options });
 		return new App(`ap-${name}`);
@@ -203,6 +203,8 @@ function makeWorld() {
 		imageCalls.push(image);
 		return fromRegistry(image);
 	});
+	vi.spyOn(client.cpClient, 'imageGetByTag').mockResolvedValue({ imageId: 'im-published' });
+	vi.spyOn(client.images, 'fromName');
 	vi.spyOn(client.secrets, 'fromName').mockImplementation(async (name) => new Secret(`st-${name}`));
 	vi.spyOn(client.sandboxes, 'create').mockImplementation(async (app, image, options = {}) => {
 		if (!options.name) throw new Error('Sandbox name is required by the test fixture');
@@ -235,6 +237,19 @@ function makeCompute(world: ReturnType<typeof makeWorld>, overrides = {}) {
 		},
 		world.client,
 	);
+}
+
+function deferLookups(world: ReturnType<typeof makeWorld>) {
+	const app = Promise.withResolvers<App>();
+	const image = Promise.withResolvers<Image>();
+	const firstSecret = Promise.withResolvers<Secret>();
+	const secondSecret = Promise.withResolvers<Secret>();
+	vi.mocked(world.client.apps.fromName).mockReturnValue(app.promise);
+	vi.mocked(world.client.images.fromName).mockReturnValue(image.promise);
+	vi.mocked(world.client.secrets.fromName)
+		.mockReturnValueOnce(firstSecret.promise)
+		.mockReturnValueOnce(secondSecret.promise);
+	return { app, image, firstSecret, secondSecret };
 }
 
 describe('ModalCompute', () => {
@@ -275,8 +290,100 @@ describe('ModalCompute', () => {
 			},
 		});
 		expect(world.imageCalls).toEqual(['ghcr.io/acme/marimo:latest']);
+		expect(world.client.images.fromName).not.toHaveBeenCalled();
 		expect(world.created[0].sandbox.execCalls[0].command).toEqual(['sh', '-lc', 'true']);
 	});
+
+	it.each([
+		{ name: 'marimo-sandbox:v1', reuse: false },
+		{ name: 'marimo-sandbox:v1', reuse: true },
+		{ name: 'marimo-sandbox', reuse: false },
+		{ name: 'workspace/notebooks/marimo-sandbox:v1.2.3', reuse: false },
+	])('creates a sandbox from a published Modal image: %j', async ({ name, reuse }) => {
+		const compute = new ModalCompute({
+			tokenId: 'token-id',
+			tokenSecret: 'token-secret',
+			image: `modal://${name}`,
+			environment: 'notebooks',
+		});
+		const world = makeWorld(Reflect.get(compute, 'client') as ModalClient);
+		await compute.create(SANDBOX_ID, { reuse }).exec('true');
+
+		expect(world.client.images.fromName).toHaveBeenCalledExactlyOnceWith(name);
+		expect(world.client.images.fromRegistry).not.toHaveBeenCalled();
+		expect(world.client.cpClient.imageGetByTag).toHaveBeenCalledExactlyOnceWith({
+			environmentName: name.includes('/') ? '' : 'notebooks',
+			tag: name.includes(':') ? name : `${name}:latest`,
+		});
+		expect(world.created).toHaveLength(1);
+		expect(world.created[0].image.imageId).toBe('im-published');
+	});
+
+	it.each([
+		'modal://',
+		'modal://:v1',
+		'modal://marimo-sandbox:',
+		'modal://marimo-sandbox:v1:extra',
+		'modal://bad name:v1',
+		'modal://marimo-sandbox:bad tag',
+		'modal:///marimo-sandbox:v1',
+		'modal://workspace/:v1',
+	])('rejects an invalid named image without provisioning: %s', async (image) => {
+		const world = makeWorld();
+
+		await expect(
+			makeCompute(world, { image }).create(SANDBOX_ID, { reuse: false }).exec('true'),
+		).rejects.toBeInstanceOf(InvalidError);
+
+		expect(world.client.cpClient.imageGetByTag).not.toHaveBeenCalled();
+		expect(world.client.sandboxes.create).not.toHaveBeenCalled();
+		expect(world.client.images.fromRegistry).not.toHaveBeenCalled();
+	});
+
+	it.each([false, true])(
+		'overrides the image for one sandbox (named default: %s)',
+		async (namedDefault) => {
+			const world = makeWorld();
+			const registry = 'registry.example.com:5000/marimo:v2';
+			const named = 'modal://marimo-sandbox:v1';
+			const compute = makeCompute(world, { image: namedDefault ? named : registry });
+			await compute
+				.create(SANDBOX_ID, { reuse: false, image: namedDefault ? registry : named })
+				.exec('true');
+			await compute.create('sb-default' as SandboxId, { reuse: false }).exec('true');
+
+			expect(world.client.images.fromName).toHaveBeenCalledExactlyOnceWith('marimo-sandbox:v1');
+			expect(world.imageCalls).toEqual([registry]);
+			expect(world.created.map(({ image }) => image.imageId)).toEqual(
+				namedDefault ? ['', 'im-published'] : ['im-published', ''],
+			);
+		},
+	);
+
+	it.each(
+		[false, true].flatMap((reuse) =>
+			[
+				new NotFoundError('Image not found'),
+				new Error('Permission denied'),
+				new Error('Connection timed out'),
+			].map((error) => ({ reuse, error })),
+		),
+	)(
+		'does not create a sandbox if a named image lookup fails: $error.message (reuse: $reuse)',
+		async ({ reuse, error }) => {
+			const world = makeWorld();
+			vi.mocked(world.client.images.fromName).mockRejectedValue(error);
+
+			await expect(
+				makeCompute(world, { image: 'modal://missing:v1' })
+					.create(SANDBOX_ID, { reuse })
+					.exec('true'),
+			).rejects.toBe(error);
+
+			expect(world.client.sandboxes.create).not.toHaveBeenCalled();
+			expect(world.client.images.fromRegistry).not.toHaveBeenCalled();
+		},
+	);
 
 	it('pins an idle main process so the image entrypoint cannot boot its own marimo', async () => {
 		const world = makeWorld();
@@ -306,21 +413,18 @@ describe('ModalCompute', () => {
 		},
 	);
 
-	it('starts app and secret lookups concurrently before creating the sandbox', async () => {
+	it('waits for the named image after app and secret lookups finish', async () => {
 		const world = makeWorld();
-		const app = Promise.withResolvers<App>();
-		const firstSecret = Promise.withResolvers<Secret>();
-		const secondSecret = Promise.withResolvers<Secret>();
-		vi.spyOn(world.client.apps, 'fromName').mockReturnValue(app.promise);
-		vi.mocked(world.client.secrets.fromName)
-			.mockReturnValueOnce(firstSecret.promise)
-			.mockReturnValueOnce(secondSecret.promise);
-		const started = makeCompute(world, { secretNames: ['first', 'second'] })
-			.create(SANDBOX_ID, { reuse: false })
-			.exec('true');
+		const { app, image, firstSecret, secondSecret } = deferLookups(world);
+		const sandbox = makeCompute(world, {
+			image: 'modal://marimo-sandbox:v1',
+			secretNames: ['first', 'second'],
+		}).create(SANDBOX_ID, { reuse: false });
+		const started = Promise.all([sandbox.exec('true'), sandbox.exec('true')]);
 
 		await vi.waitFor(() => {
 			expect(world.client.apps.fromName).toHaveBeenCalledOnce();
+			expect(world.client.images.fromName).toHaveBeenCalledOnce();
 			expect(world.client.secrets.fromName).toHaveBeenCalledTimes(2);
 		});
 		expect(world.created).toHaveLength(0);
@@ -328,9 +432,14 @@ describe('ModalCompute', () => {
 		secondSecret.resolve(new Secret('st-second'));
 		firstSecret.resolve(new Secret('st-first'));
 		app.resolve(new App('ap-hub-app'));
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(world.created).toHaveLength(0);
+		const published = new Image(world.client, 'im-published', '');
+		image.resolve(published);
 		await started;
 
 		expect(world.created).toHaveLength(1);
+		expect(world.created[0].image).toBe(published);
 		expect(world.created[0]).toMatchObject({
 			app: { appId: 'ap-hub-app' },
 			options: { secrets: [{ secretId: 'st-first' }, { secretId: 'st-second' }] },
@@ -342,40 +451,45 @@ describe('ModalCompute', () => {
 		['app', 'reject'],
 		['secret', 'resolve'],
 		['secret', 'reject'],
-	])(
+		['image', 'resolve'],
+		['image', 'reject'],
+	] as const)(
 		'preserves the %s lookup failure when pending lookups later %s',
 		async (failedLookup, lateOutcome) => {
 			const world = makeWorld();
-			const app = Promise.withResolvers<App>();
-			const firstSecret = Promise.withResolvers<Secret>();
-			const secondSecret = Promise.withResolvers<Secret>();
-			vi.spyOn(world.client.apps, 'fromName').mockReturnValue(app.promise);
-			vi.mocked(world.client.secrets.fromName)
-				.mockReturnValueOnce(firstSecret.promise)
-				.mockReturnValueOnce(secondSecret.promise);
+			const { app, image, firstSecret, secondSecret } = deferLookups(world);
 			const create = vi.spyOn(world.client.sandboxes, 'create');
 			const error = new Error(`${failedLookup} lookup failed`);
-			const started = makeCompute(world, { secretNames: ['first', 'second'] })
+			const started = makeCompute(world, {
+				image: 'modal://marimo-sandbox:v1',
+				secretNames: ['first', 'second'],
+			})
 				.create(SANDBOX_ID, { reuse: false })
 				.exec('true');
-			const expected = failedLookup === 'app' ? error : expect.objectContaining({ cause: error });
+			const expected =
+				failedLookup === 'secret' ? expect.objectContaining({ cause: error }) : error;
 			const failure = expect(started).rejects.toEqual(expected);
 
 			await vi.waitFor(() => {
 				expect(world.client.apps.fromName).toHaveBeenCalledOnce();
+				expect(world.client.images.fromName).toHaveBeenCalledOnce();
 				expect(world.client.secrets.fromName).toHaveBeenCalledTimes(2);
 			});
-			(failedLookup === 'app' ? app : firstSecret).reject(error);
+			const failed = { app, image, secret: firstSecret }[failedLookup];
+			failed.reject(error);
 			await failure;
 			expect(create).not.toHaveBeenCalled();
 
 			if (lateOutcome === 'reject') {
 				const lateError = new Error('Late lookup failure');
-				(failedLookup === 'app' ? firstSecret : app).reject(lateError);
+				app.reject(lateError);
+				image.reject(lateError);
+				firstSecret.reject(lateError);
 				secondSecret.reject(lateError);
 			} else {
-				if (failedLookup === 'app') firstSecret.resolve(new Secret('st-first'));
-				else app.resolve(new App('ap-hub-app'));
+				firstSecret.resolve(new Secret('st-first'));
+				app.resolve(new App('ap-hub-app'));
+				image.resolve(new Image(world.client, 'im-published', ''));
 				secondSecret.resolve(new Secret('st-second'));
 			}
 			await new Promise<void>((resolve) => setImmediate(resolve));
@@ -385,23 +499,26 @@ describe('ModalCompute', () => {
 		},
 	);
 
-	it('propagates sandbox creation failures after resolving app and secrets', async () => {
-		const world = makeWorld();
-		const error = new Error('Sandbox quota exceeded');
-		const create = vi.spyOn(world.client.sandboxes, 'create').mockRejectedValue(error);
+	it.each(['ghcr.io/acme/marimo:latest', 'modal://marimo-sandbox:v1'])(
+		'propagates sandbox creation failures after resolving %s',
+		async (image) => {
+			const world = makeWorld();
+			const error = new Error('Sandbox quota exceeded');
+			const create = vi.spyOn(world.client.sandboxes, 'create').mockRejectedValue(error);
 
-		await expect(
-			makeCompute(world, { secretNames: ['shared-credentials'] })
-				.create(SANDBOX_ID, { reuse: false })
-				.exec('true'),
-		).rejects.toBe(error);
+			await expect(
+				makeCompute(world, { image, secretNames: ['shared-credentials'] })
+					.create(SANDBOX_ID, { reuse: false })
+					.exec('true'),
+			).rejects.toBe(error);
 
-		expect(create).toHaveBeenCalledExactlyOnceWith(
-			new App('ap-hub-app'),
-			expect.any(Image),
-			expect.objectContaining({ secrets: [new Secret('st-shared-credentials')] }),
-		);
-	});
+			expect(create).toHaveBeenCalledExactlyOnceWith(
+				new App('ap-hub-app'),
+				expect.any(Image),
+				expect.objectContaining({ secrets: [new Secret('st-shared-credentials')] }),
+			);
+		},
+	);
 
 	it.each([undefined, []])('omits secrets when none are configured: %j', async (secretNames) => {
 		const world = makeWorld();
@@ -521,12 +638,17 @@ describe('ModalCompute', () => {
 		const existing = new FakeSandbox();
 		world.existing.set(SANDBOX_ID, existing);
 
-		await makeCompute(world, { secretNames: ['shared-credentials'] })
+		await makeCompute(world, {
+			secretNames: ['shared-credentials'],
+			image: 'modal://marimo-sandbox:v1',
+		})
 			.create(SANDBOX_ID)
 			.exec('echo hi');
 
 		expect(world.created).toHaveLength(0);
 		expect(world.client.secrets.fromName).not.toHaveBeenCalled();
+		expect(world.client.images.fromName).not.toHaveBeenCalled();
+		expect(world.client.images.fromRegistry).not.toHaveBeenCalled();
 		expect(existing.execCalls[0].command).toEqual(['sh', '-lc', 'echo hi']);
 	});
 

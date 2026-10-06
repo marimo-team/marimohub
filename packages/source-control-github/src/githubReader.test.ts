@@ -1,22 +1,13 @@
-import { generateKeyPairSync } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { gzipSync } from 'fflate';
 import { BadRequestError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
+import { sourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import { GitHubAppPublisher } from './index';
+import { GitHubClient } from './githubClient';
 import { collectTarballWorkspace, tarballPathMapper } from './githubWorkspace';
-
-const PRIVATE_KEY = generateKeyPairSync('rsa', { modulusLength: 2048 })
-	.privateKey.export({ type: 'pkcs8', format: 'pem' })
-	.toString();
+import { response, testPrivateKey } from './testing/fakeGitHub';
 
 const encode = (s: string) => new TextEncoder().encode(s);
-
-function response(value: unknown, status = 200): Response {
-	return new Response(JSON.stringify(value), {
-		status,
-		headers: { 'content-type': 'application/json' },
-	});
-}
 
 function tarEntry(name: string, body: Uint8Array, typeFlag = '0'): Uint8Array[] {
 	const header = new Uint8Array(512);
@@ -48,14 +39,18 @@ function tarball(files: Record<string, string>, extra: Uint8Array[] = []): Uint8
 	return body;
 }
 
-function reader(routes: (url: URL, init?: RequestInit) => Response | null) {
+function reader(
+	routes: (url: URL, init?: RequestInit) => Response | null,
+	access: 'read' | 'preview' = 'read',
+) {
 	const fetcher = async (input: string, init?: RequestInit) => {
 		const url = new URL(input);
 		if (url.pathname === '/repos/owner/repo/installation') return response({ id: 42 });
 		if (url.pathname === '/app/installations/42/access_tokens') {
 			expect(JSON.parse(String(init?.body))).toEqual({
 				repositories: ['repo'],
-				permissions: { contents: 'read' },
+				permissions:
+					access === 'preview' ? { contents: 'read', pull_requests: 'read' } : { contents: 'read' },
 			});
 			return response({ token: 'installation-token' });
 		}
@@ -63,10 +58,86 @@ function reader(routes: (url: URL, init?: RequestInit) => Response | null) {
 		if (!matched) throw new Error(`Unexpected GitHub request: ${url.pathname}`);
 		return matched;
 	};
-	return new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY }, { fetcher });
+	return new GitHubAppPublisher({ appId: '123', privateKey: testPrivateKey() }, { fetcher });
 }
 
 describe('GitHubAppPublisher reader', () => {
+	it('bounds branch completion and rejects non-SHA commit references', async () => {
+		const sha = 'a'.repeat(40);
+		const github = reader((url) => {
+			if (url.pathname === '/repos/owner/repo/branches') {
+				expect(url.searchParams.get('per_page')).toBe('100');
+				return response(
+					Array.from({ length: 100 }, (_, i) => ({ name: `feature/${i}`, commit: { sha } })),
+				);
+			}
+			if (url.pathname === `/repos/owner/repo/commits/${sha}`) return response({ sha });
+			return null;
+		});
+		expect(await github.listBranches('owner/repo', 'feature/')).toHaveLength(30);
+		expect(await github.resolveCommit('owner/repo', sha)).toEqual({ commit: sha });
+		await expect(github.resolveCommit('owner/repo', 'main')).rejects.toThrow(ValidationError);
+	});
+
+	it.each([7, 39, 40])(
+		'resolves a %i-character commit reference to its canonical SHA',
+		async (length) => {
+			const sha = 'abcdef0123456789abcdef0123456789abcdef0123';
+			const ref = sha.slice(0, length);
+			const github = reader((url) =>
+				url.pathname === `/repos/owner/repo/commits/${ref}` ? response({ sha }) : null,
+			);
+			expect(await github.resolveCommit('owner/repo', ref)).toEqual({ commit: sha });
+		},
+	);
+
+	it('matches recent commit subjects and returns canonical SHA values', async () => {
+		const sha = 'a'.repeat(40);
+		const github = reader((url) =>
+			url.pathname === '/repos/owner/repo/commits'
+				? response([{ sha, commit: { message: 'Chart prototype\nLong description' } }])
+				: null,
+		);
+		expect(await github.listCommits('owner/repo', 'chart')).toEqual([
+			{ value: sha, commit: sha, label: `${sha.slice(0, 12)} Chart prototype` },
+		]);
+	});
+
+	it.each([13, 25, 39])(
+		'matches %i-character SHA prefixes against the full commit',
+		async (length) => {
+			const sha = 'abcdef0123456789abcdef0123456789abcdef0123';
+			const github = reader((url) =>
+				url.pathname === '/repos/owner/repo/commits'
+					? response([
+							{ sha, commit: { message: 'Prototype' } },
+							{ sha: 'b'.repeat(40), commit: { message: 'Unrelated' } },
+						])
+					: null,
+			);
+			expect(await github.listCommits('owner/repo', sha.slice(0, length).toUpperCase())).toEqual([
+				{ value: sha, commit: sha, label: `${sha.slice(0, 12)} Prototype` },
+			]);
+		},
+	);
+
+	it('follows github.com archive redirects without forwarding installation credentials', async () => {
+		const github = reader((url, init) => {
+			expect(init?.redirect).toBe('manual');
+			if (url.hostname === 'api.github.com')
+				return new Response(null, {
+					status: 302,
+					headers: { location: 'https://codeload.github.com/owner/repo/tar.gz/abc1234' },
+				});
+			expect(url.hostname).toBe('codeload.github.com');
+			expect(new Headers(init?.headers).has('authorization')).toBe(false);
+			return new Response(tarball({ 'app.py': 'print(1)' }));
+		});
+		await expect(github.fetchWorkspace('owner/repo', 'abc1234', '')).resolves.toEqual([
+			{ path: 'app.py', bytes: encode('print(1)') },
+		]);
+	});
+
 	it('resolves a branch head', async () => {
 		const github = reader((url) =>
 			url.pathname === '/repos/owner/repo/branches/main'
@@ -162,7 +233,10 @@ describe('GitHubAppPublisher reader', () => {
 			if (url.pathname === '/repos/owner/repo/installation') return response({}, 404);
 			throw new Error(`Unexpected GitHub request: ${url.pathname}`);
 		};
-		const github = new GitHubAppPublisher({ appId: '123', privateKey: PRIVATE_KEY }, { fetcher });
+		const github = new GitHubAppPublisher(
+			{ appId: '123', privateKey: testPrivateKey() },
+			{ fetcher },
+		);
 		await expect(github.getBranchHead('owner/repo', 'main')).rejects.toThrow(
 			/not installed for owner\/repo/,
 		);
@@ -325,5 +399,512 @@ describe('collectTarballWorkspace', () => {
 		await expect(
 			collectTarballWorkspace(new Response(Uint8Array.from(GZIP_HEADER)), ''),
 		).rejects.toThrow(/missing end-of-archive marker/);
+	});
+});
+
+describe('GitHub preview source failures', () => {
+	it.each([404, 422])(
+		'rejects an unavailable pinned commit (%i) without exposing provider messages',
+		async (status) => {
+			const github = reader((url) =>
+				url.pathname.includes('/commits/')
+					? response({ message: 'provider-secret-must-not-leak' }, status)
+					: null,
+			);
+			await expect(github.resolveCommit('owner/repo', 'a'.repeat(40))).rejects.toThrow(
+				new ValidationError('Commit not found in the configured repository'),
+			);
+		},
+	);
+
+	it.each([404, 422])('returns no suggestions for a missing exact SHA (%i)', async (status) => {
+		const github = reader((url) =>
+			url.pathname.includes('/commits/') ? response({}, status) : null,
+		);
+		await expect(github.listCommits('owner/repo', 'a'.repeat(40))).resolves.toEqual([]);
+	});
+
+	it.each([403, 429, 503])('preserves exact-SHA discovery failures (%i)', async (status) => {
+		const github = reader((url) =>
+			url.pathname.includes('/commits/') ? response({}, status) : null,
+		);
+		await expect(github.listCommits('owner/repo', 'a'.repeat(40))).rejects.toThrow(
+			UnavailableError,
+		);
+	});
+
+	it('returns a matching exact SHA without searching recent commits', async () => {
+		const sha = 'a'.repeat(40);
+		const github = reader((url) =>
+			url.pathname.endsWith(`/commits/${sha}`) ? response({ sha }) : null,
+		);
+		await expect(github.listCommits('owner/repo', sha)).resolves.toEqual([
+			{ value: sha, commit: sha, label: sha.slice(0, 12) },
+		]);
+	});
+
+	it.each([403, 429, 503])(
+		'surfaces discovery HTTP %i instead of treating failure as an empty result',
+		async (status) => {
+			const github = reader((url) =>
+				url.pathname.endsWith('/branches')
+					? response({ message: 'provider-secret-must-not-leak' }, status)
+					: null,
+			);
+			const result = github.listBranches('owner/repo', '');
+			await expect(result).rejects.toThrow(UnavailableError);
+			await expect(result).rejects.toMatchObject({
+				message: `GitHub request failed with status ${status}`,
+			});
+		},
+	);
+
+	it.each([
+		{ name: 'non-array branches', type: 'branch', payload: {} },
+		{ name: 'branch missing name', type: 'branch', payload: [{ commit: { sha: 'a'.repeat(40) } }] },
+		{ name: 'branch missing SHA', type: 'branch', payload: [{ name: 'main', commit: {} }] },
+		{ name: 'non-array commits', type: 'commit', payload: null },
+		{ name: 'commit missing SHA', type: 'commit', payload: [{ commit: { message: 'Message' } }] },
+		{
+			name: 'commit missing subject',
+			type: 'commit',
+			payload: [{ sha: 'a'.repeat(40), commit: {} }],
+		},
+	])('rejects malformed suggestions: $name', async ({ type, payload }) => {
+		const github = reader((url) =>
+			/\/(branches|commits)$/.test(url.pathname) ? response(payload) : null,
+		);
+		await expect(
+			type === 'branch'
+				? github.listBranches('owner/repo', '')
+				: github.listCommits('owner/repo', ''),
+		).rejects.toThrow(UnavailableError);
+	});
+
+	it.each([
+		{ name: 'deleted head repository', repo: null, sameRepository: false },
+		{ name: 'fork repository', repo: { full_name: 'contributor/fork' }, sameRepository: false },
+		{
+			name: 'repository with different casing',
+			repo: { full_name: 'OWNER/Repo' },
+			sameRepository: true,
+		},
+	])(
+		'classifies a PR with a $name using read-only permissions',
+		async ({ repo, sameRepository }) => {
+			const github = reader(
+				(url) =>
+					url.pathname.endsWith('/pulls/42')
+						? response({ state: 'open', head: { ref: 'feature/chart', sha: 'a'.repeat(40), repo } })
+						: null,
+				'preview',
+			);
+			await expect(github.getPullRequest('owner/repo', 42)).resolves.toEqual({
+				number: 42,
+				state: 'open',
+				branch: 'feature/chart',
+				commit: 'a'.repeat(40),
+				sameRepository,
+			});
+		},
+	);
+
+	it.each([
+		{ state: 'open', head: null },
+		{
+			state: 'merged',
+			head: { ref: 'main', sha: 'a'.repeat(40), repo: { full_name: 'owner/repo' } },
+		},
+		{ state: 'open', head: { ref: 'main', repo: { full_name: 'owner/repo' } } },
+	])('rejects malformed PR metadata: %j', async (payload) => {
+		const github = reader(
+			(url) => (url.pathname.endsWith('/pulls/42') ? response(payload) : null),
+			'preview',
+		);
+		await expect(github.getPullRequest('owner/repo', 42)).rejects.toThrow(UnavailableError);
+	});
+});
+
+describe('GitHub preview cancellation', () => {
+	it('preserves a pre-flight cancellation without failure metadata or requests', async () => {
+		const controller = new AbortController();
+		const reason = new DOMException('Worker stopped', 'AbortError');
+		controller.abort(reason);
+		const fetcher = vi.fn();
+		const github = new GitHubAppPublisher(
+			{ appId: '123', privateKey: testPrivateKey() },
+			{ fetcher },
+		);
+		await expect(
+			github.getBranchHead('owner/repo', 'main', { signal: controller.signal }),
+		).rejects.toBe(reason);
+		expect(sourceControlPublishFailure(reason)).toBeUndefined();
+		expect(fetcher).not.toHaveBeenCalled();
+	});
+
+	it.each(['installation', 'access_tokens', 'branches/main'])(
+		'preserves cancellation during %s without publication failure metadata',
+		async (path) => {
+			const controller = new AbortController();
+			const reason = new DOMException('Worker stopped', 'AbortError');
+			const fetcher = vi.fn(async (url: string) => {
+				if (url.endsWith(`/${path}`)) {
+					controller.abort(reason);
+					throw new TypeError('Network request cancelled');
+				}
+				if (url.endsWith('/installation')) return response({ id: 42 });
+				return response({ token: 'token' });
+			});
+			const github = new GitHubAppPublisher(
+				{ appId: '123', privateKey: testPrivateKey() },
+				{ fetcher },
+			);
+			await expect(
+				github.getBranchHead('owner/repo', 'main', { signal: controller.signal }),
+			).rejects.toBe(reason);
+			expect(sourceControlPublishFailure(reason)).toBeUndefined();
+		},
+	);
+
+	it.each(['installation', 'access_tokens', 'branches/main', 'tarball'])(
+		'preserves cancellation while reading the %s response body',
+		async (path) => {
+			const controller = new AbortController();
+			const reason = new DOMException('Worker stopped', 'AbortError');
+			const fetcher = async (url: string) => {
+				if (url.includes(`/${path}`)) {
+					return new Response(
+						new ReadableStream(
+							{
+								pull(stream) {
+									controller.abort(reason);
+									stream.error(new TypeError('Body cancelled'));
+								},
+							},
+							{ highWaterMark: 0 },
+						),
+					);
+				}
+				if (url.endsWith('/installation')) return response({ id: 42 });
+				return response({ token: 'token' });
+			};
+			const github = new GitHubAppPublisher(
+				{ appId: '123', privateKey: testPrivateKey() },
+				{ fetcher },
+			);
+			await expect(
+				path === 'tarball'
+					? github.fetchWorkspace('owner/repo', 'a'.repeat(40), '', { signal: controller.signal })
+					: github.getBranchHead('owner/repo', 'main', { signal: controller.signal }),
+			).rejects.toBe(reason);
+			expect(sourceControlPublishFailure(reason)).toBeUndefined();
+		},
+	);
+
+	it('passes the same cancellation signal through authentication and archive fetch', async () => {
+		const controller = new AbortController();
+		const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+			expect(init?.signal).toBe(controller.signal);
+			if (url.endsWith('/installation')) return response({ id: 42 });
+			if (url.endsWith('/access_tokens')) return response({ token: 'token' });
+			return new Response(tarball({ 'app.py': 'import marimo' }));
+		});
+		const github = new GitHubAppPublisher(
+			{ appId: '123', privateKey: testPrivateKey() },
+			{ fetcher },
+		);
+		await github.fetchWorkspace('owner/repo', 'a'.repeat(40), '', { signal: controller.signal });
+		expect(fetcher).toHaveBeenCalledTimes(3);
+	});
+
+	it('does not continue authentication after cancellation', async () => {
+		const controller = new AbortController();
+		const fetcher = vi.fn(async () => {
+			controller.abort();
+			return response({ id: 42 });
+		});
+		const github = new GitHubAppPublisher(
+			{ appId: '123', privateKey: testPrivateKey() },
+			{ fetcher },
+		);
+		await expect(
+			github.getBranchHead('owner/repo', 'main', { signal: controller.signal }),
+		).rejects.toBe(controller.signal.reason);
+		expect(sourceControlPublishFailure(controller.signal.reason)).toBeUndefined();
+		expect(fetcher).toHaveBeenCalledOnce();
+	});
+});
+
+describe('GitHub source suggestion cancellation', () => {
+	const cases = [
+		{ method: 'listBranches', query: '', path: '/branches?per_page=100', payload: [] },
+		{ method: 'listCommits', query: '', path: '/commits?per_page=100', payload: [] },
+		{
+			method: 'listCommits',
+			query: 'a'.repeat(40),
+			path: `/commits/${'a'.repeat(40)}`,
+			payload: { sha: 'a'.repeat(40) },
+		},
+	] as const;
+
+	it.each(cases)(
+		'passes cancellation through authentication and $path',
+		async ({ method, query, payload }) => {
+			const controller = new AbortController();
+			const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+				expect(init?.signal).toBe(controller.signal);
+				if (url.endsWith('/installation')) return response({ id: 42 });
+				if (url.endsWith('/access_tokens')) return response({ token: 'token' });
+				return response(payload);
+			});
+			const github = new GitHubAppPublisher(
+				{ appId: '123', privateKey: testPrivateKey() },
+				{ fetcher },
+			);
+			await github[method]('owner/repo', query, { signal: controller.signal });
+			expect(fetcher).toHaveBeenCalledTimes(3);
+		},
+	);
+
+	it.each(cases)(
+		'preserves cancellation during the $path response body',
+		async ({ method, query }) => {
+			const controller = new AbortController();
+			const reason = new DOMException('Discovery cancelled', 'AbortError');
+			const fetcher = async (url: string) => {
+				if (url.endsWith('/installation')) return response({ id: 42 });
+				if (url.endsWith('/access_tokens')) return response({ token: 'token' });
+				return new Response(
+					new ReadableStream(
+						{
+							pull(stream) {
+								controller.abort(reason);
+								stream.error(new TypeError('Body cancelled'));
+							},
+						},
+						{ highWaterMark: 0 },
+					),
+				);
+			};
+			const github = new GitHubAppPublisher(
+				{ appId: '123', privateKey: testPrivateKey() },
+				{ fetcher },
+			);
+			await expect(github[method]('owner/repo', query, { signal: controller.signal })).rejects.toBe(
+				reason,
+			);
+		},
+	);
+
+	it.each(cases)(
+		'stops pre-aborted $path discovery before authentication',
+		async ({ method, query }) => {
+			const controller = new AbortController();
+			controller.abort();
+			const fetcher = vi.fn();
+			const github = new GitHubAppPublisher(
+				{ appId: '123', privateKey: testPrivateKey() },
+				{ fetcher },
+			);
+			await expect(github[method]('owner/repo', query, { signal: controller.signal })).rejects.toBe(
+				controller.signal.reason,
+			);
+			expect(fetcher).not.toHaveBeenCalled();
+		},
+	);
+});
+
+describe('GitHub Enterprise reader', () => {
+	const origin = 'https://git.acme.corp';
+	const repository = `${origin}/owner/repo`;
+	const commit = 'a'.repeat(40);
+
+	function enterpriseReader(archive: (url: URL, init?: RequestInit) => Response) {
+		return new GitHubAppPublisher(
+			{ appId: '123', privateKey: testPrivateKey(), url: origin },
+			{
+				fetcher: async (input, init) => {
+					const url = new URL(input);
+					if (url.pathname.startsWith('/api/v3/')) {
+						expect(url.origin).toBe(origin);
+						expect(new Headers(init?.headers).get('authorization')).toMatch(/^Bearer /);
+					}
+					if (url.pathname === '/api/v3/repos/owner/repo/installation') return response({ id: 42 });
+					if (url.pathname === '/api/v3/app/installations/42/access_tokens')
+						return response({ token: 'installation-token' });
+					if (url.pathname === '/api/v3/repos/owner/repo/branches/main')
+						return response({ commit: { sha: commit } });
+					return archive(url, init);
+				},
+			},
+		);
+	}
+
+	it('resolves only repositories on the configured host through /api/v3', async () => {
+		const github = enterpriseReader(() => {
+			throw new Error('Unexpected request');
+		});
+		expect(github.supportsRepository(repository)).toBe(true);
+		for (const other of [
+			'owner/repo',
+			'https://github.com/owner/repo',
+			'https://other.corp/owner/repo',
+		]) {
+			expect(github.supportsRepository(other)).toBe(false);
+			await expect(github.getBranchHead(other, 'main')).rejects.toThrow(ValidationError);
+		}
+		await expect(github.getBranchHead(repository, 'main')).resolves.toEqual({ commit });
+	});
+
+	it('reads preview pull requests on the configured host', async () => {
+		const github = enterpriseReader((url) => {
+			expect(url.pathname).toBe('/api/v3/repos/owner/repo/pulls/42');
+			return response({
+				state: 'open',
+				head: { ref: 'feature', sha: commit, repo: { full_name: 'OWNER/Repo' } },
+			});
+		});
+		await expect(github.getPullRequest(repository, 42)).resolves.toEqual({
+			number: 42,
+			state: 'open',
+			branch: 'feature',
+			commit,
+			sameRepository: true,
+		});
+		await expect(github.getPullRequest('https://github.com/owner/repo', 42)).rejects.toThrow(
+			ValidationError,
+		);
+	});
+
+	it('reads a preview pull request without consulting html_url', async () => {
+		const github = enterpriseReader(() =>
+			response({
+				html_url: 'https://evil.example/owner/repo/pull/42',
+				state: 'closed',
+				head: { ref: 'feature', sha: commit, repo: { full_name: 'fork/repo' } },
+			}),
+		);
+		await expect(github.getPullRequest(repository, 42)).resolves.toEqual({
+			number: 42,
+			state: 'closed',
+			branch: 'feature',
+			commit,
+			sameRepository: false,
+		});
+	});
+
+	it('lists branches and commits through /api/v3', async () => {
+		const requested: string[] = [];
+		const github = enterpriseReader((url) => {
+			requested.push(`${url.pathname}${url.search}`);
+			if (url.pathname === '/api/v3/repos/owner/repo/branches') {
+				return response([{ name: 'main', commit: { sha: commit } }]);
+			}
+			if (url.pathname === '/api/v3/repos/owner/repo/commits') {
+				return response([{ sha: commit, commit: { message: 'Initial\n\nbody' } }]);
+			}
+			throw new Error(`Unexpected request: ${url.href}`);
+		});
+		await expect(github.listBranches(repository, '')).resolves.toEqual([
+			{ value: 'main', label: 'main', commit },
+		]);
+		await expect(github.listCommits(repository, '')).resolves.toEqual([
+			{ value: commit, commit, label: `${commit.slice(0, 12)} Initial` },
+		]);
+		expect(requested).toEqual([
+			'/api/v3/repos/owner/repo/branches?per_page=100',
+			'/api/v3/repos/owner/repo/commits?per_page=100',
+		]);
+	});
+
+	it('resolves a commit through /api/v3 and reports a missing one', async () => {
+		const missing = 'b'.repeat(40);
+		const github = enterpriseReader((url) => {
+			if (url.pathname === `/api/v3/repos/owner/repo/commits/${commit}`) {
+				return response({ sha: commit });
+			}
+			if (url.pathname === `/api/v3/repos/owner/repo/commits/${missing}`) {
+				return response({ message: 'Not Found' }, 404);
+			}
+			throw new Error(`Unexpected request: ${url.href}`);
+		});
+		await expect(github.resolveCommit(repository, commit)).resolves.toEqual({ commit });
+		await expect(github.listCommits(repository, commit)).resolves.toEqual([
+			{ value: commit, commit, label: commit.slice(0, 12) },
+		]);
+		await expect(github.resolveCommit(repository, missing)).rejects.toThrow(
+			'Commit not found in the configured repository',
+		);
+		await expect(github.resolveCommit('https://github.com/owner/repo', commit)).rejects.toThrow(
+			ValidationError,
+		);
+	});
+
+	it.each([
+		`/_codeload/owner/repo/tar.gz/${commit}`,
+		`${origin}/_codeload/owner/repo/tar.gz/${commit}`,
+		`https://codeload.git.acme.corp/owner/repo/tar.gz/${commit}`,
+	])('downloads an archive via %s', async (location) => {
+		const github = enterpriseReader((url, init) => {
+			expect(init?.redirect).toBe('manual');
+			if (url.pathname.startsWith('/api/v3/repos/owner/repo/tarball/')) {
+				return new Response(null, { status: 302, headers: { location } });
+			}
+			expect(url.href).toBe(new URL(location, origin).href);
+			expect(new Headers(init?.headers).get('authorization')).toBe(
+				url.origin === origin ? 'Bearer installation-token' : null,
+			);
+			return new Response(tarball({ 'app.py': 'print(1)' }));
+		});
+		await expect(github.fetchWorkspace(repository, commit, '')).resolves.toEqual([
+			{ path: 'app.py', bytes: encode('print(1)') },
+		]);
+	});
+
+	it.each([
+		'https://evil.example/archive',
+		'http://git.acme.corp/archive',
+		'https://user:password@git.acme.corp/archive',
+	])('rejects an archive redirect to %s', async (location) => {
+		let calls = 0;
+		const github = enterpriseReader(() => {
+			calls++;
+			return new Response(null, { status: 302, headers: { location } });
+		});
+		await expect(github.fetchWorkspace(repository, commit, '')).rejects.toThrow(
+			'Unexpected GitHub archive redirect',
+		);
+		expect(calls).toBe(1);
+	});
+
+	it('bounds redirect loops', async () => {
+		let calls = 0;
+		const github = enterpriseReader(() => {
+			calls++;
+			return new Response(null, { status: 302, headers: { location: `${origin}/_codeload/loop` } });
+		});
+		await expect(github.fetchWorkspace(repository, commit, '')).rejects.toThrow(
+			'Invalid GitHub archive redirect',
+		);
+		expect(calls).toBe(6);
+	});
+
+	it('enforces the streamed download limit after a redirect', async () => {
+		const client = new GitHubClient(
+			{ appId: '123', privateKey: testPrivateKey(), url: origin },
+			{
+				fetcher: async (url) =>
+					url.includes('/api/v3/')
+						? new Response(null, {
+								status: 302,
+								headers: { location: `${origin}/_codeload/archive` },
+							})
+						: new Response(tarball({ 'app.py': 'print(1)' })),
+			},
+		);
+		const archive = await client.tarball('/repos/owner/repo/tarball/abc1234', 'token');
+		await expect(collectTarballWorkspace(archive, '', { maxCompressedBytes: 1 })).rejects.toThrow(
+			'size limit',
+		);
 	});
 });

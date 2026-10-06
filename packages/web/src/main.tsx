@@ -20,14 +20,24 @@ const ReactQueryDevtools = import.meta.env.DEV
 	: () => null;
 
 async function bootstrap() {
-	let branding = DEFAULT_THEME_CONFIG;
+	// Apply the stored preference before awaiting the theme request so a
+	// dark-mode user does not see a light page while it is in flight.
 	try {
 		applyThemeMode(getInitialTheme());
-		const config = await loadThemeConfig();
-		applyThemeConfig(config);
-		branding = config;
 	} catch (error) {
-		console.warn('Could not initialize the deployment theme. Using defaults.', error);
+		console.warn('Could not apply the preferred color mode.', error);
+	}
+	let branding = DEFAULT_THEME_CONFIG;
+	try {
+		branding = await loadThemeConfig();
+	} catch (error) {
+		console.warn('Could not load the deployment theme. Using defaults.', error);
+	}
+	try {
+		if (branding.color_mode !== 'user') applyThemeMode(branding.color_mode);
+		applyThemeConfig(branding);
+	} catch (error) {
+		console.warn('Could not fully initialize the deployment theme.', error);
 	}
 	createRoot(document.getElementById('root')!).render(
 		<StrictMode>

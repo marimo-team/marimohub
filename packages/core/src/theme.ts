@@ -17,7 +17,11 @@ const color = z.string().regex(/^#(?:[\da-fA-F]{3}|[\da-fA-F]{6})$/, 'Expected #
 
 export const DEFAULT_PWA_THEME_COLOR = '#0d9488';
 
+export const ColorModeSchema = z.enum(['user', 'light', 'dark']);
+export type ColorMode = z.infer<typeof ColorModeSchema>;
+
 export const ThemeConfigSchema = z.object({
+	color_mode: ColorModeSchema.default('user'),
 	name: z.string().trim().min(1),
 	favicon: assetUrl.nullable(),
 	logo: assetUrl.nullable(),
@@ -37,6 +41,7 @@ export const ThemeResponseSchema = z.object({
 });
 
 export const DEFAULT_THEME_CONFIG: ThemeConfig = {
+	color_mode: 'user',
 	name: 'marimohub',
 	favicon: null,
 	logo: null,

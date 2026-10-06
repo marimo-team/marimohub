@@ -13,6 +13,11 @@ MARIMOHUB_COMPUTE_DOCKER_BIND_HOST=127.0.0.1    # keep kernel ports on loopback
 # MARIMOHUB_COMPUTE_DOCKER_NETWORK=marimo         # optional network to attach kernels to
 ```
 
+If hubs share a Docker daemon, set a distinct, stable `MARIMOHUB_COMPUTE_DOCKER_OWNER_TAG`
+on every hub. An untagged hub discovers and cleans up every hub's sandboxes.
+See [Multiple hubs on one host](/deploying/single-instance#multiple-hubs-on-one-host)
+for examples and migration steps.
+
 At boot the server shells out `docker info` as a preflight: a missing CLI
 (`spawn docker ENOENT`) or an unreachable daemon is reported as a **non-fatal**
 `preflight_check` log line with the fix, before anyone opens a notebook.

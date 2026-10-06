@@ -147,6 +147,17 @@ These CAS-managed records also have one writer each:
   `_system/apps/{pid}/{nid}.json`.
 - `SessionService` owns each monotonic version-prune cutoff at
   `_system/version-prune-cutoffs/{pid}/{nid}.json`.
+- `NotebookPreviewService` owns each preview CAS record at
+  `_system/previews/{pid}/{nid}/{preview-id}.json`, and hidden immutable runtime notebooks. Admission reservations and pruning share this
+  CAS record. Runtime metadata uses `preview-runtime.json`, never `meta.json`.
+  Deletion records remain until cleanup and grace complete. Runtime notebooks
+  never enter the catalog and inherit live parent authorization.
+- `PreviewStore` owns the bounded project membership and artifact reservations at
+  `_system/preview-projects/{pid}.json`, seven-day receipts at `_system/preview-receipts/{pid}.json`,
+  preparation claims at `_system/preview-work.json`, and `_system/preview-cleanup-cursor.json`.
+  It also owns removable active-project markers at `_system/preview-active-projects/{pid}/{work_id}.json`.
+  Marker removal must CAS-fence the project head first; each activation uses a new work ID.
+  Retain these CAS heads; remove individual preview records after confirmed cleanup.
 - `NotebookProposalService` owns each proposal publication at
   `projects/{pid}/notebooks/{nid}/proposals/{proposal-id}/publication.json`.
 - `ProjectIntegrationsStore` owns each project integration head at
@@ -177,7 +188,8 @@ its `integrations/_names/{name}.json` uniqueness claim. Version writes use
 create-if-absent. Name claims use the same pattern as app claims.
 
 Deleting a notebook or project can delete its subordinate claims and objects as
-cleanup, except app pool records: retain their deletion tombstones and members awaiting reclamation.
+cleanup, except app pool records (retain their deletion tombstones and members awaiting reclamation)
+and `PreviewStore` records (retain project heads and unexpired idempotency receipts).
 Everything else is immutable, append-only, or an operational record,
 such as a session, identity, token, or secret. Do not bypass the owners listed
 above.

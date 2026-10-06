@@ -203,11 +203,13 @@ spec:
         httpGet: { path: /api/health, port: {{ $v.containerPort }} }
         initialDelaySeconds: 5
         periodSeconds: 10
+      {{- end }}
       livenessProbe:
-        httpGet: { path: /api/health, port: {{ $v.containerPort }} }
+        httpGet:
+          path: {{ if .maintenance }}/api/health/maintenance{{ else }}/api/health{{ end }}
+          port: {{ $v.containerPort }}
         initialDelaySeconds: 10
         periodSeconds: 20
-      {{- end }}
       resources:
         {{- toYaml $res | nindent 8 }}
       # readOnlyRootFilesystem is on; give Node a writable /tmp for any library

@@ -6,6 +6,7 @@ import type { Session } from '@/types';
 import {
 	chooseNotebookAction,
 	makeFetch,
+	notebook,
 	renderProject,
 	runningSession,
 } from './Project.testWorld';
@@ -39,6 +40,27 @@ describe('Project — Notebook Actions: configuration', () => {
 			'Delete',
 		]);
 	});
+
+	it.each([
+		['git', false],
+		['git', true],
+		['local', true],
+	] as const)(
+		'offers previews for %s notebooks with the integration enabled: %s',
+		async (sourceType, enabled) => {
+			const user = userEvent.setup();
+			makeFetch({
+				notebooks: [{ ...notebook(), source_type: sourceType }],
+				capabilities: { source_control: { preview_providers: enabled ? ['github'] : [] } },
+			});
+			await renderProject();
+			await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
+			await screen.findByRole('menu');
+			if (enabled && sourceType === 'git')
+				expect(await screen.findByRole('menuitem', { name: 'Previews' })).toBeInTheDocument();
+			else expect(screen.queryByRole('menuitem', { name: 'Previews' })).not.toBeInTheDocument();
+		},
+	);
 
 	it('opens the persisted workspace browser from the notebook menu', async () => {
 		const user = userEvent.setup();

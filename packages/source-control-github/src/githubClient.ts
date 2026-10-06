@@ -1,6 +1,7 @@
 import { createPrivateKey, createSign } from 'node:crypto';
 import { markSourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import { UnavailableError } from '@marimo-hub/core/errors';
+import { githubOrigin } from './githubValidation';
 import { numberField, responseJson, stringField } from './githubResponses';
 
 export type GitHubFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -8,6 +9,8 @@ export type GitHubFetch = (input: string, init?: RequestInit) => Promise<Respons
 export interface GitHubAppPublisherOptions {
 	/** Numeric id shown on the GitHub App settings page. */
 	appId: string;
+	/** GitHub web origin; GHES REST requests use its /api/v3 endpoint. */
+	url?: string;
 	/** PKCS1/PKCS8 PEM, or a base64 encoding of the PEM. */
 	privateKey: string;
 }
@@ -19,7 +22,6 @@ export interface GitHubAppPublisherRuntime {
 	now?: () => number;
 }
 
-const GITHUB_API_BASE_URL = 'https://api.github.com';
 class GitHubRequestError extends UnavailableError {
 	readonly providerStatus: number;
 
@@ -47,6 +49,8 @@ function privateKeyPem(value: string): string {
 }
 
 export class GitHubClient {
+	readonly origin: string;
+	private readonly apiBaseUrl: string;
 	private readonly appId: string;
 	private readonly fetcher: GitHubFetch;
 	private readonly now: () => number;
@@ -57,6 +61,9 @@ export class GitHubClient {
 			throw new Error('GitHub App id must be a positive integer');
 		}
 		if (!options.privateKey.trim()) throw new Error('GitHub App private key is required');
+		this.origin = githubOrigin(options.url);
+		this.apiBaseUrl =
+			this.origin === 'https://github.com' ? 'https://api.github.com' : `${this.origin}/api/v3`;
 		this.appId = options.appId.trim();
 		this.fetcher = runtime.fetcher ?? fetch;
 		this.now = runtime.now ?? Date.now;
@@ -86,6 +93,7 @@ export class GitHubClient {
 		init: RequestInit = {},
 		allowedStatuses: readonly number[] = [],
 	): Promise<Response> {
+		init.signal?.throwIfAborted();
 		let response: Response;
 		try {
 			const headers = new Headers(init.headers);
@@ -93,24 +101,86 @@ export class GitHubClient {
 			headers.set('authorization', `Bearer ${token}`);
 			headers.set('content-type', 'application/json');
 			headers.set('x-github-api-version', '2022-11-28');
-			response = await this.fetcher(`${GITHUB_API_BASE_URL}${path}`, {
+			const url =
+				path === '/graphql' && this.origin !== 'https://github.com'
+					? `${this.origin}/api/graphql`
+					: `${this.apiBaseUrl}${path}`;
+			response = await this.fetcher(url, {
 				...init,
 				headers,
 			});
 		} catch (error) {
+			init.signal?.throwIfAborted();
 			throw new UnavailableError('GitHub is unavailable', { cause: error });
 		}
+		init.signal?.throwIfAborted();
 		if (!response.ok && !allowedStatuses.includes(response.status)) {
 			throw githubRequestError(response);
 		}
 		return response;
 	}
 
-	async installationToken(owner: string, repo: string, access: 'read' | 'write'): Promise<string> {
+	async tarball(path: string, token: string, signal?: AbortSignal): Promise<Response> {
+		const redirects = [301, 302, 303, 307, 308];
+		let response = await this.request(path, token, { redirect: 'manual', signal }, redirects);
+		let previous = `${this.apiBaseUrl}${path}`;
+		const origin = new URL(this.origin);
+		// github.com answers renamed or transferred repositories with a redirect to
+		// api.github.com/repositories/{id}/..., which still needs the installation token.
+		const trustedOrigins = new Set([this.origin, new URL(this.apiBaseUrl).origin]);
+		const codeloadHost =
+			this.origin === 'https://github.com' ? 'codeload.github.com' : `codeload.${origin.hostname}`;
+		for (let count = 0; redirects.includes(response.status); count++) {
+			const location = response.headers.get('location');
+			await response.body?.cancel();
+			signal?.throwIfAborted();
+			if (!location || count >= 5) throw new UnavailableError('Invalid GitHub archive redirect');
+			let target: URL;
+			try {
+				target = new URL(location, previous);
+			} catch {
+				throw new UnavailableError('Invalid GitHub archive redirect');
+			}
+			if (
+				target.protocol !== 'https:' ||
+				target.username ||
+				target.password ||
+				target.hash ||
+				(!trustedOrigins.has(target.origin) &&
+					!(target.hostname === codeloadHost && target.port === origin.port))
+			) {
+				throw new UnavailableError('Unexpected GitHub archive redirect');
+			}
+			try {
+				response = await this.fetcher(target.href, {
+					redirect: 'manual',
+					signal,
+					// Installation credentials must not cross to the codeload origin.
+					headers: trustedOrigins.has(target.origin) ? { authorization: `Bearer ${token}` } : {},
+				});
+			} catch (error) {
+				signal?.throwIfAborted();
+				throw new UnavailableError('GitHub archive is unavailable', { cause: error });
+			}
+			signal?.throwIfAborted();
+			previous = target.href;
+		}
+		if (!response.ok) throw githubRequestError(response);
+		return response;
+	}
+
+	async installationToken(
+		owner: string,
+		repo: string,
+		access: 'read' | 'write' | 'preview',
+		signal?: AbortSignal,
+	): Promise<string> {
+		signal?.throwIfAborted();
 		let jwt: string;
 		try {
 			jwt = this.appJwt();
 		} catch (error) {
+			signal?.throwIfAborted();
 			throw markSourceControlPublishFailure(error, { provider: 'github', stage: 'auth' });
 		}
 		let installationResponse: Response;
@@ -118,10 +188,11 @@ export class GitHubClient {
 			installationResponse = await this.request(
 				`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/installation`,
 				jwt,
-				{},
+				{ signal },
 				[404],
 			);
 		} catch (error) {
+			signal?.throwIfAborted();
 			throw markSourceControlPublishFailure(error, {
 				provider: 'github',
 				stage: 'installation',
@@ -134,7 +205,7 @@ export class GitHubClient {
 				{ provider: 'github', stage: 'installation', status: 404 },
 			);
 		}
-		const installationId = numberField(await responseJson(installationResponse), 'id');
+		const installationId = numberField(await responseJson(installationResponse, signal), 'id');
 		let tokenResponse: Response;
 		try {
 			tokenResponse = await this.request(
@@ -142,22 +213,26 @@ export class GitHubClient {
 				jwt,
 				{
 					method: 'POST',
+					signal,
 					body: JSON.stringify({
 						repositories: [repo],
 						permissions:
-							access === 'read'
-								? { contents: 'read' }
-								: { contents: 'write', pull_requests: 'write' },
+							access === 'preview'
+								? { contents: 'read', pull_requests: 'read' }
+								: access === 'read'
+									? { contents: 'read' }
+									: { contents: 'write', pull_requests: 'write' },
 					}),
 				},
 			);
 		} catch (error) {
+			signal?.throwIfAborted();
 			throw markSourceControlPublishFailure(error, {
 				provider: 'github',
 				stage: 'auth',
 				status: error instanceof GitHubRequestError ? error.providerStatus : undefined,
 			});
 		}
-		return stringField(await responseJson(tokenResponse), 'token');
+		return stringField(await responseJson(tokenResponse, signal), 'token');
 	}
 }
