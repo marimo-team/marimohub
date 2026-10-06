@@ -83,6 +83,65 @@ describe('startMaintenance', () => {
 		});
 	});
 
+	it('reports the current cycle heartbeat after work and lease release complete', async () => {
+		const started = Date.now();
+		vi.spyOn(MaintenanceLock.prototype, 'acquire').mockResolvedValue(true);
+		vi.spyOn(MaintenanceLock.prototype, 'release').mockImplementation(
+			() => new Promise((resolve) => setTimeout(resolve, 10)),
+		);
+		vi.spyOn(deps.services.sessions, 'expireStale').mockImplementation(
+			() => new Promise((resolve) => setTimeout(() => resolve(0), 40)),
+		);
+		const loops = new BackgroundLoops();
+		stop = startMaintenance(deps, metrics, loops);
+		await vi.advanceTimersByTimeAsync(40);
+		expect(parseLoggedEvents(logSpy)).toEqual([]);
+		await vi.advanceTimersByTimeAsync(10);
+		for (let cycle = 0; cycle < 2; cycle++) {
+			const events = parseLoggedEvents(logSpy);
+			expect(events).toHaveLength(cycle + 1);
+			expect(events[cycle]).toMatchObject({
+				event: 'maintenance_cycle',
+				'gauge.loop.maintenance.last_started_at': started + cycle * FIVE_MINUTES_MS,
+				'gauge.loop.maintenance.last_completed_at': started + cycle * FIVE_MINUTES_MS + 50,
+				'gauge.loop.maintenance.last_success_at': started + cycle * FIVE_MINUTES_MS + 50,
+				'gauge.loop.maintenance.last_duration_ms': 50,
+				'gauge.loop.maintenance.seconds_since_success': 0,
+			});
+			if (cycle === 0) await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+		}
+	});
+
+	it.each([false, true])(
+		'preserves the sweep result when the release read fails (failed: %s)',
+		async (failed) => {
+			const get = bucket.get.bind(bucket);
+			vi.spyOn(bucket, 'get').mockImplementation((key) => {
+				if (key === paths.maintenanceLock) return Promise.reject(new Error('release read failed'));
+				return get(key);
+			});
+			if (failed)
+				vi.spyOn(deps.services.sessions, 'expireStale').mockRejectedValueOnce(
+					new Error('sweep failed'),
+				);
+			const loops = new BackgroundLoops();
+			stop = startMaintenance(deps, metrics, loops);
+			await flushRun();
+			const events = parseLoggedEvents(logSpy);
+			expect(events.map((event) => event.event)).toEqual([
+				'maintenance_release_failed',
+				failed ? 'maintenance_failed' : 'maintenance_cycle',
+			]);
+			expect(events[0].error).toBe('release read failed');
+			if (failed) {
+				expect(events[1].error).toBe('sweep failed');
+				expect(loops.health().loops.maintenance.last_success_at).toBeNull();
+			} else {
+				expect(loops.health().loops.maintenance.last_success_at).toBe(Date.now());
+			}
+		},
+	);
+
 	it('sweeps previews before expiring session startup records', async () => {
 		const previews = vi.spyOn(deps.services.previews, 'cleanupCandidates');
 		const expire = vi.spyOn(deps.services.sessions, 'expireStale');
@@ -660,6 +719,15 @@ describe('startJobScheduler', () => {
 	});
 });
 
+function makeWarmPool(deps: ApiDeps, enabled = true) {
+	return new WarmPoolService(
+		new WarmPoolStore(deps.bucket, 'kubernetes'),
+		deps.compute,
+		deps.services.sessions,
+		{ enabled, size: 1, profiles: [], creationTimeoutMs: 300_000, minimumRemainingMs: 60_000 },
+	);
+}
+
 describe('startWarmPools', () => {
 	let handle: ReturnType<typeof startWarmPools>;
 
@@ -667,12 +735,7 @@ describe('startWarmPools', () => {
 		vi.useFakeTimers();
 		const bucket = await createInitializedBucket();
 		const deps = makeTestDeps(bucket);
-		const service = new WarmPoolService(
-			new WarmPoolStore(bucket, 'kubernetes'),
-			deps.compute,
-			deps.services.sessions,
-			{ enabled, size: 1, profiles: [], creationTimeoutMs: 300_000, minimumRemainingMs: 60_000 },
-		);
+		const service = makeWarmPool(deps, enabled);
 		deps.warmPool = service;
 		const sweep = vi.spyOn(service, 'sweep').mockResolvedValue(undefined);
 		return { bucket, deps, service, sweep };
@@ -764,7 +827,7 @@ describe('startWarmPools', () => {
 			await flushRun();
 			expect(parseLoggedEvents(logs)).toContainEqual(
 				expect.objectContaining({
-					event: 'warm_pool_sweep_failed',
+					event: operation === 'release' ? 'warm_pool_release_failed' : 'warm_pool_sweep_failed',
 					error: 'temporary failure',
 				}),
 			);
@@ -776,23 +839,9 @@ describe('startWarmPools', () => {
 	);
 
 	it('starts immediately, skips overlapping ticks, drains, and stops', async () => {
-		vi.useFakeTimers();
-		const bucket = await createInitializedBucket();
-		const deps = makeTestDeps(bucket);
-		deps.warmPool = new WarmPoolService(
-			new WarmPoolStore(bucket, 'kubernetes'),
-			deps.compute,
-			deps.services.sessions,
-			{
-				enabled: true,
-				size: 1,
-				profiles: [],
-				creationTimeoutMs: 300_000,
-				minimumRemainingMs: 60_000,
-			},
-		);
+		const { deps, sweep } = await setup();
 		let finish!: () => void;
-		const sweep = vi.spyOn(deps.warmPool, 'sweep').mockImplementationOnce(
+		sweep.mockImplementationOnce(
 			() =>
 				new Promise((resolve) => {
 					finish = resolve;
@@ -927,18 +976,7 @@ describe('background loop deadline recovery', () => {
 				stop = startJobScheduler(deps, metrics, loops).stop;
 				break;
 			case 'warm_pool':
-				deps.warmPool = new WarmPoolService(
-					new WarmPoolStore(deps.bucket, 'kubernetes'),
-					deps.compute,
-					deps.services.sessions,
-					{
-						enabled: true,
-						size: 1,
-						profiles: [],
-						creationTimeoutMs: 300_000,
-						minimumRemainingMs: 60_000,
-					},
-				);
+				deps.warmPool = makeWarmPool(deps);
 				vi.spyOn(deps.warmPool, 'sweep').mockImplementation(work);
 				stop = startWarmPools(deps, loops)!.stop;
 				break;

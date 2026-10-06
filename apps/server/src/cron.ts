@@ -81,33 +81,8 @@ async function scheduleUnavailableAppAlerts(
 }
 
 /**
- * Node-side maintenance loop — the replacement for the Cloudflare Workers
- * `scheduled()` cron. Each run, in order:
- *  1. `sweepAppPools()` — reconcile app assignments and retire idle pool members.
- *  2. `sweepPreviews()` — expire previews and reclaim revisions.
- *  3. `expireStale()` — flip sessions with stale heartbeats to `expired`.
- *  4. `reconcile()` — cross-check records against the compute provider:
- *     tear down sandboxes left running by terminal records (the billing leak),
- *     mark records whose sandbox has vanished as terminated, reap orphans.
- *  5. `reapTerminated()` — delete terminal records past their retention window.
- *  6. `expireSnapshots()` — prune catalog snapshots past retention (keeping
- *     current/previous + a recent floor) so the bucket doesn't grow unbounded.
- *  7. `pruneEvents()` / `idempotency.prune()` — drop expired events and request records.
- *  8. `pruneExpiredPayloads()` — delete expired proposal change bytes while
- *     retaining proposal and publication metadata.
- *  9. `claimPendingInvites()` — replace resolvable email invites with user ids.
- * 10. `sweepDeletedProjects()` / `sweepDeletedNotebooks()` — purge the storage of
- *     soft-deleted projects/notebooks past their grace period. Projects first, so
- *     a deleted project's notebooks are reclaimed by the project subtree wipe.
- * 11. `jobs.prune()` — prune retained job runs and their maintenance markers.
- * 12. `reapFilesystemSnapshots()` — reclaim snapshots orphaned by notebook deletion.
- *
- * All operations are idempotent. The deployment runs this on a single replica
- * (a dedicated `replicas: 1` Deployment, gated by MARIMOHUB_RUN_MAINTENANCE),
- * and the bucket-CAS advisory lease below is defense-in-depth: if two replicas
- * ever run it, only the lease holder sweeps, so deletes never race. Each cycle
- * emits one wide event (`maintenance_cycle`) carrying this-cycle counts plus the
- * cumulative metric totals/gauges an operator needs.
+ * Run on the dedicated maintenance replica; the bucket lease guards against
+ * accidental duplicate replicas. Each cycle emits counts and loop heartbeats.
  */
 export function startMaintenance(
 	deps: ApiDeps,
@@ -171,9 +146,7 @@ export function startMaintenance(
 				reapFilesystemSnapshots(deps.compute, notebooksSwept.orphanedSnapshots),
 			);
 
-			logEvent({
-				level: 'info',
-				event: 'maintenance_cycle',
+			return {
 				holder,
 				sessions_expired: sessionsExpired,
 				sessions_reaped: sessionsReaped,
@@ -188,6 +161,13 @@ export function startMaintenance(
 				job_run_markers_pruned: jobsPruned.markersPruned,
 				snapshots_reaped: snapshotsReaped,
 				orphans_reaped: reconcile.skipped ? null : reconcile.orphansReaped,
+			};
+		},
+		onSuccess: (counts) => {
+			logEvent({
+				level: 'info',
+				event: 'maintenance_cycle',
+				...counts,
 				...metrics.collect(),
 				...loops.collect(),
 			});
@@ -196,14 +176,8 @@ export function startMaintenance(
 }
 
 /**
- * Session-lifecycle sweep — a second, faster loop beside `startMaintenance`
- * (same replica, gated by MARIMOHUB_RUN_MAINTENANCE) so the snapshot cadence is
- * not coupled to the heavy 5-minute prune cycle. Each run: gracefully tear down
- * sessions past `expires_at` or idle (extending instead when editors are still
- * connected), reclaim lingering sandboxes of already-`expired` records, and save
- * live notebooks on the periodic snapshot interval. Leader-gated by its own
- * bucket-CAS lease (a separate key from the maintenance lease, so the two loops
- * never release each other's hold).
+ * Keep session teardown and snapshot cadence independent of the heavier prune
+ * cycle. A separate lease lets both loops run on the maintenance replica.
  */
 export function startSessionLifecycle(
 	deps: ApiDeps,
@@ -290,13 +264,8 @@ export interface JobSchedulerHandle {
 }
 
 /**
- * Job scheduler tick — a third loop beside `startMaintenance` and
- * `startSessionLifecycle` (same replica, same gate), on its own interval
- * (MARIMOHUB_JOBS_TICK_SECONDS) and its own lease key. Each tick fires due
- * occurrences, dispatches queued runs under the concurrency caps, and reclaims
- * runs past their deadline; the executions themselves run in this process
- * between ticks. Without a maintenance replica jobs are accepted but never
- * dispatched — see docs/jobs.md.
+ * Job executions continue between ticks. Shutdown drains the current tick before
+ * those executions so it also waits for jobs dispatched by that tick.
  */
 export function startJobScheduler(
 	deps: ApiDeps,
@@ -347,9 +316,7 @@ export function startWarmPools(
 		lock: new MaintenanceLock(deps.bucket, paths.warmPoolLock),
 		shouldRun: async () =>
 			service.config.enabled || (await service.store.ownedSandboxIds()).size > 0,
-		run: async ({ step }) => {
-			await step(() => service.sweep());
-		},
+		run: () => service.sweep(),
 	});
 }
 
@@ -362,8 +329,6 @@ export function startPreviewPreparation(
 		name: 'preview_preparation',
 		abortOnStop: true,
 		intervalMs: 15_000,
-		run: async ({ signal }) => {
-			await preparePreviews(deps, signal);
-		},
+		run: ({ signal }) => preparePreviews(deps, signal),
 	}).stop;
 }

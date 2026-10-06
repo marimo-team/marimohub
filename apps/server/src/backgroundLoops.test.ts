@@ -3,8 +3,11 @@ import { MaintenanceLock } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { BackgroundLoops } from './backgroundLoops';
 
+type LoopOptions = Parameters<BackgroundLoops['start']>[0];
+
 describe('BackgroundLoops', () => {
 	let loops: BackgroundLoops;
+	let lock: MaintenanceLock;
 	let handles: ReturnType<BackgroundLoops['start']>[];
 
 	beforeEach(() => {
@@ -12,6 +15,7 @@ describe('BackgroundLoops', () => {
 		vi.setSystemTime(0);
 		vi.spyOn(console, 'log').mockImplementation(() => {});
 		loops = new BackgroundLoops();
+		lock = new MaintenanceLock(new MemoryBucket());
 		handles = [];
 	});
 
@@ -21,8 +25,8 @@ describe('BackgroundLoops', () => {
 		vi.useRealTimers();
 	});
 
-	function start(run: Parameters<BackgroundLoops['start']>[0]['run'], lock?: MaintenanceLock) {
-		const handle = loops.start({ name: 'test', intervalMs: 100, deadlineMs: 250, run, lock });
+	function start(run: LoopOptions['run'], options: Partial<Omit<LoopOptions, 'run'>> = {}) {
+		const handle = loops.start({ name: 'test', intervalMs: 100, deadlineMs: 250, ...options, run });
 		handles.push(handle);
 		return handle;
 	}
@@ -96,17 +100,19 @@ describe('BackgroundLoops', () => {
 	);
 
 	it('abandons later steps and lease release after a deadline', async () => {
-		const lock = new MaintenanceLock(new MemoryBucket());
 		const acquire = vi.spyOn(lock, 'acquire');
 		const release = vi.spyOn(lock, 'release');
 		const first = Promise.withResolvers<void>();
 		const second = Promise.withResolvers<void>();
 		const nextStep = vi.fn(async () => {});
 		let calls = 0;
-		const handle = start(async ({ step }) => {
-			await step(() => (++calls === 1 ? first.promise : second.promise));
-			await step(nextStep);
-		}, lock);
+		const handle = start(
+			async ({ step }) => {
+				await step(() => (++calls === 1 ? first.promise : second.promise));
+				await step(nextStep);
+			},
+			{ lock },
+		);
 		await vi.advanceTimersByTimeAsync(300);
 		expect(acquire).toHaveBeenCalledTimes(2);
 		expect(acquire.mock.calls[0][0]).not.toBe(acquire.mock.calls[1][0]);
@@ -135,14 +141,11 @@ describe('BackgroundLoops', () => {
 	it('expires the lease at the run deadline after a slow eligibility check', async () => {
 		const eligible = Promise.withResolvers<boolean>();
 		const shouldRun = vi.fn().mockReturnValueOnce(eligible.promise).mockResolvedValue(true);
-		const lock = new MaintenanceLock(new MemoryBucket());
 		const run = vi
 			.fn()
 			.mockImplementationOnce(() => new Promise<void>(() => {}))
 			.mockResolvedValue(undefined);
-		handles.push(
-			loops.start({ name: 'test', intervalMs: 100, deadlineMs: 250, shouldRun, lock, run }),
-		);
+		start(run, { shouldRun, lock });
 		await vi.advanceTimersByTimeAsync(200);
 		eligible.resolve(true);
 		await vi.advanceTimersByTimeAsync(0);
@@ -152,19 +155,16 @@ describe('BackgroundLoops', () => {
 		expect(loops.health().loops.test).toMatchObject({ timeouts: 1, last_success_at: 300 });
 	});
 
-	it.each(['eligibility', 'acquire', 'work', 'release'] as const)(
+	it.each(['eligibility', 'acquire', 'work'] as const)(
 		'counts repeated %s errors as failures and recovers',
 		async (phase) => {
-			const lock = new MaintenanceLock(new MemoryBucket());
 			const shouldRun = vi.fn(async () => true);
 			const acquire = vi.spyOn(lock, 'acquire').mockResolvedValue(true);
 			const release = vi.spyOn(lock, 'release').mockResolvedValue(undefined);
 			const run = vi.fn(async () => {});
 			const operation = { eligibility: shouldRun, acquire, work: run, release }[phase];
 			operation.mockRejectedValue(new Error(`${phase} unavailable`));
-			handles.push(
-				loops.start({ name: 'test', intervalMs: 100, deadlineMs: 250, shouldRun, lock, run }),
-			);
+			start(run, { shouldRun, lock });
 			await vi.advanceTimersByTimeAsync(350);
 			expect(loops.health()).toMatchObject({
 				ok: false,
@@ -186,19 +186,87 @@ describe('BackgroundLoops', () => {
 		},
 	);
 
+	it.each([false, true])(
+		'keeps the sweep outcome when release fails (sweep failed: %s)',
+		async (failed) => {
+			vi.spyOn(lock, 'acquire').mockResolvedValue(true);
+			vi.spyOn(lock, 'release').mockRejectedValue(new Error('release unavailable'));
+			const run = vi.fn(async () => {
+				if (failed) throw new Error('sweep failed');
+			});
+			const onSuccess = vi.fn();
+			start(run, { lock, onSuccess });
+			await vi.advanceTimersByTimeAsync(350);
+			expect(loops.health().loops.test).toMatchObject({
+				stale: failed,
+				running: false,
+				timeouts: 0,
+				last_success_at: failed ? null : 300,
+			});
+			expect(onSuccess).toHaveBeenCalledTimes(failed ? 0 : 4);
+			const events = vi
+				.mocked(console.log)
+				.mock.calls.map(([line]) => JSON.parse(line) as Record<string, unknown>);
+			expect(events.filter((event) => event.event === 'test_release_failed')).toHaveLength(4);
+			const failures = events.filter((event) => event.event === 'test_failed');
+			expect(failures).toHaveLength(failed ? 4 : 0);
+			for (const event of failures) expect(event.error).toBe('sweep failed');
+		},
+	);
+
+	it('reports success only after lease release and ignores a late timed-out result', async () => {
+		const release = Promise.withResolvers<void>();
+		vi.spyOn(lock, 'acquire').mockResolvedValue(true);
+		vi.spyOn(lock, 'release').mockReturnValueOnce(release.promise).mockResolvedValue(undefined);
+		const reports: unknown[] = [];
+		const onSuccess = vi.fn(() => {
+			reports.push(loops.health().loops.test);
+		});
+		start(async () => {}, { lock, onSuccess });
+		await vi.advanceTimersByTimeAsync(249);
+		expect(onSuccess).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(51);
+		expect(onSuccess).toHaveBeenCalledOnce();
+		expect(reports[0]).toMatchObject({
+			last_started_at: 300,
+			last_success_at: 300,
+			last_completed_at: 300,
+			last_duration_ms: 0,
+			running: false,
+		});
+		release.resolve();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(onSuccess).toHaveBeenCalledOnce();
+	});
+
+	it('does not report skipped work or let a report failure wedge the loop', async () => {
+		const shouldRun = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+		const onSuccess = vi.fn(() => {
+			throw new Error('report unavailable');
+		});
+		const handle = start(async () => {}, { shouldRun, onSuccess });
+		await handle.drain();
+		expect(onSuccess).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(200);
+		expect(onSuccess).toHaveBeenCalledTimes(2);
+		expect(loops.health().loops.test).toMatchObject({
+			last_success_at: 200,
+			running: false,
+			timeouts: 0,
+		});
+		expect(console.log).toHaveBeenCalledTimes(2);
+	});
+
 	it.each(['eligibility', 'acquire'] as const)(
 		'does not start work when a timed-out %s resolves late',
 		async (phase) => {
 			const late = Promise.withResolvers<boolean>();
-			const lock = new MaintenanceLock(new MemoryBucket());
 			const acquire = vi.spyOn(lock, 'acquire').mockResolvedValue(true);
 			const release = vi.spyOn(lock, 'release').mockResolvedValue(undefined);
 			const shouldRun = vi.fn(async () => true);
 			(phase === 'eligibility' ? shouldRun : acquire).mockReturnValueOnce(late.promise);
 			const run = vi.fn(async () => {});
-			handles.push(
-				loops.start({ name: 'test', intervalMs: 100, deadlineMs: 250, shouldRun, lock, run }),
-			);
+			start(run, { shouldRun, lock });
 			await vi.advanceTimersByTimeAsync(300);
 			expect(run).toHaveBeenCalledOnce();
 			const recovered = loops.health();
@@ -230,9 +298,7 @@ describe('BackgroundLoops', () => {
 
 	it('reports staleness at the exact grace boundary without healthy loops masking it', async () => {
 		start(() => new Promise<void>(() => {}));
-		handles.push(
-			loops.start({ name: 'healthy', intervalMs: 50, deadlineMs: 250, run: async () => {} }),
-		);
+		start(async () => {}, { name: 'healthy', intervalMs: 50 });
 		await vi.advanceTimersByTimeAsync(349);
 		expect(loops.health().ok).toBe(true);
 		await vi.advanceTimersByTimeAsync(1);
@@ -259,13 +325,12 @@ describe('BackgroundLoops', () => {
 
 	it('lets an in-flight leased run finish during shutdown', async () => {
 		const done = Promise.withResolvers<void>();
-		const lock = new MaintenanceLock(new MemoryBucket());
 		const release = vi.spyOn(lock, 'release');
-		const run = vi.fn<Parameters<BackgroundLoops['start']>[0]['run']>(async ({ signal }) => {
+		const run = vi.fn<LoopOptions['run']>(async ({ signal }) => {
 			await done.promise;
 			expect(signal.aborted).toBe(false);
 		});
-		const handle = start(run, lock);
+		const handle = start(run, { lock });
 		await vi.advanceTimersByTimeAsync(0);
 		handle.stop();
 		let drained = false;
@@ -283,10 +348,9 @@ describe('BackgroundLoops', () => {
 
 	it('treats an empty registry and lease contention as healthy progress', async () => {
 		expect(loops.health()).toEqual({ ok: true, loops: {} });
-		const lock = new MaintenanceLock(new MemoryBucket());
 		vi.spyOn(lock, 'acquire').mockResolvedValue(false);
 		const run = vi.fn();
-		start(run, lock);
+		start(run, { lock });
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(run).not.toHaveBeenCalled();
 		expect(loops.health()).toMatchObject({ ok: true, loops: { test: { last_success_at: 1000 } } });

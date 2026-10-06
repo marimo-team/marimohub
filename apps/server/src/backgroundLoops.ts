@@ -22,7 +22,7 @@ interface LoopContext {
 	step<T>(work: () => Promise<T>): Promise<T>;
 }
 
-interface LoopOptions {
+interface LoopOptions<T> {
 	name: string;
 	intervalMs: number;
 	deadlineMs?: number;
@@ -32,13 +32,15 @@ interface LoopOptions {
 	lock?: MaintenanceLock;
 	notLeaderEvent?: string;
 	shouldRun?: () => Promise<boolean>;
-	run(context: LoopContext): Promise<void>;
+	run(context: LoopContext): Promise<T>;
+	/** Called after the heartbeat is recorded; skipped and timed-out work cannot report success. */
+	onSuccess?(result: T): void;
 }
 
 export class BackgroundLoops {
 	private readonly states = new Map<string, LoopState>();
 
-	start(options: LoopOptions): { stop(): void; drain(): Promise<void> } {
+	start<T>(options: LoopOptions<T>): { stop(): void; drain(): Promise<void> } {
 		// Provisioning and snapshotting can take minutes even on a five-second cadence.
 		const deadlineMs = options.deadlineMs ?? Math.max(3 * options.intervalMs, 10 * 60_000);
 		const state: LoopState = {
@@ -78,10 +80,21 @@ export class BackgroundLoops {
 					return result;
 				},
 			};
+			const logFailure = (event: string, error: unknown, fields: Record<string, unknown> = {}) => {
+				logEvent({
+					level: 'error',
+					event,
+					holder,
+					error:
+						error instanceof Error ? error.message : typeof error === 'string' ? error : undefined,
+					name: error instanceof Error ? error.name : undefined,
+					...fields,
+				});
+			};
 			current = new Promise<void>((resolve) => {
 				let settled = false;
 				const finish = (outcome: 'success' | 'failed' | 'stalled', error?: unknown) => {
-					if (settled) return;
+					if (settled) return false;
 					settled = true;
 					clearTimeout(timer);
 					state.running = false;
@@ -93,25 +106,16 @@ export class BackgroundLoops {
 							state.timeouts++;
 							attempt.abort(new Error(`${options.name} exceeded its deadline`));
 						}
-						logEvent({
-							level: 'error',
-							event:
-								outcome === 'stalled'
-									? `${options.name}_stalled`
-									: (options.failureEvent ?? `${options.name}_failed`),
-							holder,
-							deadline_ms: deadlineMs,
-							duration_ms: state.last_duration_ms,
-							error:
-								error instanceof Error
-									? error.message
-									: typeof error === 'string'
-										? error
-										: undefined,
-							name: error instanceof Error ? error.name : undefined,
-						});
+						logFailure(
+							outcome === 'stalled'
+								? `${options.name}_stalled`
+								: (options.failureEvent ?? `${options.name}_failed`),
+							error,
+							{ deadline_ms: deadlineMs, duration_ms: state.last_duration_ms },
+						);
 					}
 					resolve();
+					return true;
 				};
 				const timer = setTimeout(() => finish('stalled'), deadlineMs);
 				timer.unref();
@@ -128,15 +132,24 @@ export class BackgroundLoops {
 						return;
 					}
 					try {
-						await context.step(() => options.run(context));
+						return { value: await context.step(() => options.run(context)) };
 					} finally {
 						// After a deadline, leave the lease to expire instead of releasing it late.
 						if (options.lock && !attempt.signal.aborted)
-							await options.lock.release(holder, attempt.signal);
+							await options.lock.release(holder, attempt.signal).catch((error: unknown) => {
+								if (!attempt.signal.aborted) logFailure(`${options.name}_release_failed`, error);
+							});
 					}
 				};
 				void work().then(
-					() => finish('success'),
+					(result) => {
+						if (!finish('success') || !result) return;
+						try {
+							options.onSuccess?.(result.value);
+						} catch (error) {
+							logFailure(`${options.name}_report_failed`, error);
+						}
+					},
 					(error: unknown) => finish('failed', error),
 				);
 			});
