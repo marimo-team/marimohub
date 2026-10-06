@@ -222,6 +222,56 @@ describe('startOtel', () => {
 		});
 	});
 
+	it.each([undefined, ''])(
+		'omits an unavailable git revision (%s) and defaults the version',
+		async (revision) => {
+			vi.stubEnv('MARIMOHUB_VERSION', undefined);
+			vi.stubEnv('MARIMOHUB_GIT_SHA', revision);
+			vi.stubEnv('OTEL_RESOURCE_ATTRIBUTES', '');
+			vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
+			vi.stubEnv('OTEL_TRACES_EXPORTER', 'otlp');
+			vi.stubEnv('OTEL_LOGS_EXPORTER', 'none');
+			vi.stubEnv('OTEL_METRICS_EXPORTER', 'none');
+			const logged = vi.spyOn(console, 'log').mockImplementation(() => {});
+			const register = vi
+				.spyOn(NodeTracerProvider.prototype, 'register')
+				.mockImplementation(() => {});
+			const handle = startOtel();
+			const provider = register.mock.instances[0] as NodeTracerProvider;
+			const span = provider.getTracer('test').startSpan('probe') as unknown as ReadableSpan;
+			await span.resource.waitForAsyncAttributes?.();
+			const started = JSON.parse(logged.mock.calls[0][0]);
+			expect(started).toMatchObject({ event: 'otel_started', 'service.version': 'dev' });
+			expect(span.resource.attributes['service.version']).toBe('dev');
+			expect(started).not.toHaveProperty(['vcs.ref.head.revision']);
+			expect(span.resource.attributes).not.toHaveProperty(['vcs.ref.head.revision']);
+			await handle?.shutdown();
+		},
+	);
+
+	it('exports build identity on metrics when tracing and log export are disabled', async () => {
+		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
+		vi.stubEnv('OTEL_TRACES_EXPORTER', 'none');
+		vi.stubEnv('OTEL_LOGS_EXPORTER', 'none');
+		vi.stubEnv('OTEL_METRICS_EXPORTER', 'otlp');
+		vi.stubEnv('OTEL_RESOURCE_ATTRIBUTES', '');
+		const exported: Parameters<typeof OTLPMetricExporter.prototype.export>[0][] = [];
+		vi.spyOn(OTLPMetricExporter.prototype, 'export').mockImplementation((batch, callback) => {
+			exported.push(batch);
+			callback({ code: ExportResultCode.SUCCESS });
+		});
+		const handle = startOtel();
+		expect(handle).toMatchObject({ tracing: false, metrics: true, logs: false });
+		metricsApi.getMeter('test').createCounter('test.counter').add(1);
+		await handle?.shutdown();
+		expect(exported.map((batch) => batch.resource.attributes)).toContainEqual(
+			expect.objectContaining({
+				'service.version': '1.2.3',
+				'vcs.ref.head.revision': 'abcdef123456',
+			}),
+		);
+	});
+
 	it('registers a provider with the env-configured service name when enabled', async () => {
 		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
 		vi.stubEnv('OTEL_SERVICE_NAME', 'marimohub-test');

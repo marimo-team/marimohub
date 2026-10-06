@@ -120,6 +120,64 @@ describe('startMaintenance', () => {
 		});
 	});
 
+	it('keeps the last observed gauges when reconciliation fails, then resets them on recovery', async () => {
+		metrics.gauge('sessions.unreclaimed_terminal', 2);
+		metrics.gauge('sessions.unreclaimed_terminal.oldest_age_ms', 60_000);
+		const reconcile = vi
+			.spyOn(ReconciliationService.prototype, 'reconcile')
+			.mockRejectedValueOnce(new Error('session listing unavailable'));
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+		expect(metrics.collect()).toMatchObject({
+			'gauge.sessions.unreclaimed_terminal': 2,
+			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 60_000,
+		});
+		expect(parseLoggedEvents(logSpy)).toContainEqual(
+			expect.objectContaining({ event: 'maintenance_failed' }),
+		);
+		expect(parseLoggedEvents(logSpy).some((event) => event.event === 'maintenance_cycle')).toBe(
+			false,
+		);
+		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+		expect(reconcile).toHaveBeenCalledTimes(2);
+		expect(parseLoggedEvents(logSpy).at(-1)).toMatchObject({
+			event: 'maintenance_cycle',
+			'gauge.sessions.unreclaimed_terminal': 0,
+			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 0,
+		});
+	});
+
+	it('ignores gauges from a timed-out reconciliation after a newer sweep succeeds', async () => {
+		const late = Promise.withResolvers<Awaited<ReturnType<ReconciliationService['reconcile']>>>();
+		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockReturnValueOnce(late.promise);
+		const loops = new BackgroundLoops();
+		stop = startMaintenance(deps, metrics, loops);
+		await flushRun();
+		await vi.advanceTimersByTimeAsync(
+			loops.health().loops.maintenance.deadline_ms + FIVE_MINUTES_MS,
+		);
+		expect(metrics.collect()).toMatchObject({
+			'gauge.sessions.unreclaimed_terminal': 0,
+			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 0,
+		});
+		const observed = metrics.collect();
+		const events = parseLoggedEvents(logSpy);
+		expect(events).toContainEqual(expect.objectContaining({ event: 'maintenance_stalled' }));
+		late.resolve({
+			skipped: false,
+			reclaimed: 0,
+			unreclaimedTerminal: 7,
+			oldestUnreclaimedAgeMs: 120_000,
+			markedDead: 0,
+			orphansReaped: 0,
+			orphanSandboxIds: [],
+			markedDeadSessions: [],
+		});
+		await flushRun();
+		expect(metrics.collect()).toEqual(observed);
+		expect(parseLoggedEvents(logSpy)).toEqual(events);
+	});
+
 	it('reports the current cycle heartbeat after work and lease release complete', async () => {
 		const started = Date.now();
 		vi.spyOn(MaintenanceLock.prototype, 'acquire').mockResolvedValue(true);

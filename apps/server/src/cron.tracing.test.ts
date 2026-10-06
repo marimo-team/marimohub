@@ -80,6 +80,50 @@ describe('maintenance tracing', () => {
 		},
 	);
 
+	it('does not report lock contention as an error or sweep without the lease', async () => {
+		const deps = makeTestDeps(await createInitializedBucket());
+		await deps.bucket.put(
+			paths.maintenanceLock,
+			JSON.stringify({
+				holder: 'other-replica',
+				expires_at: new Date(Date.now() + Millis.minutes(10)).toISOString(),
+			}),
+		);
+		stop = startMaintenance(deps, new WideEventMetrics());
+		await vi.advanceTimersByTimeAsync(0);
+		const spans = exporter.getFinishedSpans();
+		expect(spans.map((span) => span.name)).toEqual(['MaintenanceLock.acquire']);
+		expect(spans[0].status.code).toBe(SpanStatusCode.UNSET);
+		expect(spans[0].events).toEqual([]);
+		expect(await deps.bucket.head(paths.maintenanceLock)).not.toBeNull();
+	});
+
+	it('records a storage read failure during lease release', async () => {
+		const deps = makeTestDeps(await createInitializedBucket());
+		const get = deps.bucket.get.bind(deps.bucket);
+		vi.spyOn(deps.bucket, 'get').mockImplementation((key) => {
+			if (key === paths.maintenanceLock) return Promise.reject(new Error('lease read failed'));
+			return get(key);
+		});
+		stop = startMaintenance(deps, new WideEventMetrics());
+		await vi.advanceTimersByTimeAsync(0);
+		const span = exporter
+			.getFinishedSpans()
+			.find((span) => span.name === 'MaintenanceLock.release');
+		expect(span?.status.code).toBe(SpanStatusCode.ERROR);
+		expect(span?.attributes).toEqual({ 'marimohub.lock.key': paths.maintenanceLock });
+		expect(span?.events).toContainEqual(
+			expect.objectContaining({
+				name: 'exception',
+				attributes: expect.objectContaining({ 'exception.message': 'lease read failed' }),
+			}),
+		);
+		expect(await deps.bucket.head(paths.maintenanceLock)).not.toBeNull();
+		expect(console.log).toHaveBeenCalledWith(
+			expect.stringContaining('"event":"maintenance_release_failed"'),
+		);
+	});
+
 	it.each(['lock', 'app_pool'] as const)('records failed %s steps as errors', async (step) => {
 		const deps = makeTestDeps(await createInitializedBucket());
 		if (step === 'lock') {
@@ -93,5 +137,16 @@ describe('maintenance tracing', () => {
 		const span = exporter.getFinishedSpans().find((span) => span.name === name);
 		expect(span?.status.code).toBe(SpanStatusCode.ERROR);
 		expect(span?.events.some((event) => event.name === 'exception')).toBe(true);
+		if (step === 'app_pool') {
+			expect(
+				exporter.getFinishedSpans().find((span) => span.name === 'MaintenanceLock.release')?.status
+					.code,
+			).toBe(SpanStatusCode.UNSET);
+			expect(await deps.bucket.head(paths.maintenanceLock)).toBeNull();
+		} else {
+			expect(exporter.getFinishedSpans().map((span) => span.name)).toEqual([
+				'MaintenanceLock.acquire',
+			]);
+		}
 	});
 });

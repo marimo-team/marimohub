@@ -2236,7 +2236,11 @@ describe('Session routes', () => {
 
 		expect(attached.session_id).toBe(winner.session_id);
 		expect(attached.reused).toBe(true);
-		expect(increment).toHaveBeenCalledWith('sessions.editor_claim.lost');
+		expect(increment).toHaveBeenCalledWith('sessions.editor_claim.lost', 1, {
+			project_id: pid,
+			notebook_id: nid,
+			phase: 'claim',
+		});
 		expect(
 			increment.mock.calls.filter(([name]) => name === 'sessions.editor_claim.lost'),
 		).toHaveLength(1);
@@ -2317,24 +2321,31 @@ describe('Session routes', () => {
 		return holder;
 	};
 
-	it('does not reuse a wedged starting holder after losing the editor claim', async () => {
+	it('rejects a wedged starting holder before claiming the editor', async () => {
 		const startedAt = new Date(Date.now() - Millis.minutes(6)).toISOString();
-		const holder = await seedEditorHolder({
+		await seedEditorHolder({
 			user_id: ACTOR,
 			status: 'starting',
 			sandbox_url: undefined,
 			started_at: startedAt,
 			last_heartbeat: startedAt,
 		});
-		const api = createTestApi({ bucket, userId: ACTOR, compute: makeFakeCompute() });
-		vi.spyOn(api.deps.services.sessions, 'claimEditor').mockResolvedValueOnce({
-			claimed: false,
-			claim: { session_id: holder.session_id, sharing: 'shared', claimed_at: startedAt },
+		const increment = vi.fn();
+		const api = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: makeFakeCompute(),
+			deps: { metrics: { increment, gauge: vi.fn() } },
 		});
+		const claimEditor = vi.spyOn(api.deps.services.sessions, 'claimEditor');
 
 		const res = await api.request('POST', sessionsPath());
 
 		await expectError(res, 409, 'EDIT_SESSION_RETIRING');
+		expect(claimEditor).not.toHaveBeenCalled();
+		expect(increment.mock.calls.filter(([name]) => name === 'sessions.editor_claim.lost')).toEqual([
+			['sessions.editor_claim.lost', 1, { project_id: pid, notebook_id: nid, phase: 'preflight' }],
+		]);
 	});
 
 	describe('exclusive claim-lost path', () => {
@@ -2644,12 +2655,14 @@ describe('Session routes', () => {
 
 	it('POST /sessions: when provisioning fails, responds with an error and marks the session failed', async () => {
 		// Owner app backed by a compute whose sandbox reachability check throws.
+		const increment = vi.fn();
 		const deliver = vi.fn(async () => 'delivered' as const);
 		const failOwner = createTestApi({
 			bucket,
 			userId: ACTOR,
 			compute: makeFakeCompute({ failExec: 'true' }),
 			deps: {
+				metrics: { increment, gauge: vi.fn() },
 				projectAlerts: {
 					store: {} as never,
 					dispatcher: { deliver, test: vi.fn() },
@@ -2663,6 +2676,9 @@ describe('Session routes', () => {
 		// onError maps it to 503 SERVICE_UNAVAILABLE, not a success response.
 		expect(res.ok).toBe(false);
 		await expectError(res, 503, 'SERVICE_UNAVAILABLE');
+		expect(
+			increment.mock.calls.filter(([name]) => name === 'sessions.editor_claim.lost'),
+		).toHaveLength(0);
 		// A 503 carries a backoff hint too.
 		expect(res.headers.get('Retry-After')).toBe('2');
 
