@@ -37,6 +37,7 @@ import {
 	withEnvPrefix,
 } from '@marimo-hub/compute-commons';
 import { SandboxId } from '@marimo-hub/core/ids';
+import { NotFoundError } from '@marimo-hub/core/errors';
 import { Seconds } from '@marimo-hub/core/duration';
 import type {
 	BoundedReadOptions,
@@ -173,6 +174,7 @@ export interface E2bConfig {
 interface E2bSandboxState {
 	handlePromise?: Promise<E2bSandboxHandle>;
 	destroyPromise?: Promise<void>;
+	destroyGeneration?: number;
 }
 
 interface E2bSandboxStateEntry {
@@ -185,6 +187,8 @@ class E2bSandboxInstance implements SandboxInstance {
 	readonly supportsBucketMount = false;
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
+	private readonly attachmentState: E2bSandboxState = {};
+	private attachmentGeneration = 0;
 
 	constructor(
 		private readonly id: SandboxId,
@@ -192,6 +196,7 @@ class E2bSandboxInstance implements SandboxInstance {
 		private readonly client: E2bClient,
 		private readonly state: E2bSandboxState,
 		private readonly retainState: () => () => void,
+		private readonly existingOnly = false,
 	) {}
 
 	private get ownerTag(): string {
@@ -206,12 +211,19 @@ class E2bSandboxInstance implements SandboxInstance {
 
 	/** Resolve the live E2B sandbox for our id: cached → reconnect-by-tag → create. */
 	private ensure(): Promise<E2bSandboxHandle> {
-		if (this.state.handlePromise) return this.state.handlePromise;
 		const destroyPromise = this.state.destroyPromise;
+		if (destroyPromise) return destroyPromise.then(() => this.ensure());
+		if (this.attachmentGeneration !== (this.state.destroyGeneration ?? 0)) {
+			this.attachmentState.handlePromise = undefined;
+			this.attachmentGeneration = this.state.destroyGeneration ?? 0;
+		}
+		// Cached create handles may outlive the sandbox or still be provisioning.
+		const state = this.existingOnly ? this.attachmentState : this.state;
+		if (state.handlePromise) return state.handlePromise;
 		const promise = (async () => {
-			if (destroyPromise) await destroyPromise;
 			const existing = (await this.client.list()).find((sandbox) => this.isOwned(sandbox));
 			if (existing) return this.client.connect(existing.sandboxId);
+			if (this.existingOnly) throw new NotFoundError(`Sandbox ${this.id} is no longer available`);
 			return this.client.create({
 				template: this.config.template,
 				metadata: { [ID_META_KEY]: this.id, [OWNER_META_KEY]: this.ownerTag },
@@ -220,10 +232,10 @@ class E2bSandboxInstance implements SandboxInstance {
 					: {}),
 			});
 		})();
-		this.state.handlePromise = promise;
+		state.handlePromise = promise;
 		const releaseState = this.retainState();
 		void promise.then(releaseState, () => {
-			if (this.state.handlePromise === promise) this.state.handlePromise = undefined;
+			if (state.handlePromise === promise) state.handlePromise = undefined;
 			releaseState();
 		});
 		return promise;
@@ -433,21 +445,40 @@ class E2bSandboxInstance implements SandboxInstance {
 		return { url: `https://${sb.getHost(port)}` };
 	}
 
+	private async destroyExisting(id: string, destroy: () => Promise<void>): Promise<void> {
+		try {
+			await destroy();
+		} catch (error) {
+			// A transport failure is safe to ignore only after confirming absence.
+			if ((await this.client.list()).some((sandbox) => sandbox.sandboxId === id)) throw error;
+		}
+	}
+
 	destroy(): Promise<void> {
 		if (this.state.destroyPromise) return this.state.destroyPromise;
+		this.state.destroyGeneration = (this.state.destroyGeneration ?? 0) + 1;
 
 		const pending = this.state.handlePromise;
+		const attached = this.attachmentState.handlePromise;
 		this.state.handlePromise = undefined;
+		this.attachmentState.handlePromise = undefined;
 		const promise = (async () => {
-			if (pending) {
-				const cached = await pending.catch(() => null);
-				if (cached) await cached.kill().catch(() => {});
+			const destroyed = new Set<string>();
+			for (const handle of [pending, attached]) {
+				const cached = await handle?.catch(() => null);
+				if (cached && !destroyed.has(cached.sandboxId)) {
+					await this.destroyExisting(cached.sandboxId, () => cached.kill());
+					destroyed.add(cached.sandboxId);
+				}
 			}
 			// Reap duplicates left by provisioning races from older processes.
 			const matches = (await this.client.list()).filter((sandbox) => this.isOwned(sandbox));
 			for (const match of matches) {
-				const handle = await this.client.connect(match.sandboxId).catch(() => null);
-				if (handle) await handle.kill().catch(() => {});
+				if (destroyed.has(match.sandboxId)) continue;
+				await this.destroyExisting(match.sandboxId, async () => {
+					await (await this.client.connect(match.sandboxId)).kill();
+				});
+				destroyed.add(match.sandboxId);
 			}
 		})();
 		this.state.destroyPromise = promise;
@@ -497,6 +528,18 @@ export class E2bCompute implements SandboxProvider {
 	}
 
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
+		return this.instance(id, options, false);
+	}
+
+	connectExisting(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
+		return this.instance(id, options, true);
+	}
+
+	private instance(
+		id: SandboxId,
+		options: CreateSandboxOptions | undefined,
+		existingOnly: boolean,
+	): SandboxInstance {
 		// For E2B the selectable "image" is a template id.
 		const config = options?.image ? { ...this.config, template: options.image } : this.config;
 		let entry = this.sandboxStates.get(id);
@@ -509,8 +552,13 @@ export class E2bCompute implements SandboxProvider {
 			this.sandboxStateFinalizer.register(state, { id, ref });
 		}
 		const stateEntry = entry;
-		return new E2bSandboxInstance(id, config, this.getClient(), state, () =>
-			this.retainSandboxState(stateEntry, state),
+		return new E2bSandboxInstance(
+			id,
+			config,
+			this.getClient(),
+			state,
+			() => this.retainSandboxState(stateEntry, state),
+			existingOnly,
 		);
 	}
 

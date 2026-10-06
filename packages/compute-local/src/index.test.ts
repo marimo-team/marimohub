@@ -748,6 +748,41 @@ describe('LocalCompute security & limits', () => {
 });
 
 describe('LocalCompute registry & teardown', () => {
+	it('strict attachment rejects missing, never-started, and stopped instances', async () => {
+		const id = `sb-connect-${Math.random().toString(36).slice(2, 10)}` as SandboxId;
+		created.push(id);
+		expect(() => compute.connectExisting(id)).toThrow('not running');
+		const sandbox = compute.create(id);
+		expect(() => compute.connectExisting(id)).toThrow('not running');
+		const process = await sandbox.startProcess('sleep 60');
+		expect(compute.connectExisting(id)).toBe(sandbox);
+		await process.kill();
+		await expect.poll(() => compute.listActive()).toEqual([]);
+		expect(() => compute.connectExisting(id)).toThrow('not running');
+		await sandbox.destroy();
+		await sandbox.destroy();
+		expect(() => compute.connectExisting(id)).toThrow('not running');
+	});
+
+	it('a reconnected instance cannot recreate a removed workspace root', async () => {
+		const id = `sb-connect-root-${Math.random().toString(36).slice(2, 10)}` as SandboxId;
+		created.push(id);
+		const sandbox = compute.create(id);
+		await sandbox.writeFiles([{ path: '/workspace/notebook.py', content: 'saved' }]);
+		await sandbox.startProcess('sleep 60');
+		const connected = compute.connectExisting(id);
+		expect(await connected.readFile('/workspace/notebook.py')).toMatchObject({
+			success: true,
+			content: 'saved',
+		});
+		const root = path.join(os.tmpdir(), `marimohub-sandbox-${id}`);
+		await rm(root, { recursive: true, force: true });
+		await expect(connected.exec('true')).rejects.toThrow();
+		await expect(access(root)).rejects.toThrow();
+		await connected.destroy();
+		await connected.destroy();
+	});
+
 	it('returns the same instance for the same id', () => {
 		const id = `sb-${Math.random().toString(36).slice(2, 10)}` as SandboxId;
 		created.push(id);

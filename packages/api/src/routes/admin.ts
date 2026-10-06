@@ -1,6 +1,10 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	BadRequestError,
+	ConflictError,
+	ProjectId,
+	SessionId,
+	UnavailableError,
 	RuntimeInspectionSchema,
 	DEFAULT_APP_POOL_POLICY,
 	createSandboxId,
@@ -24,6 +28,7 @@ import {
 	extensibleResponseEnum,
 	jsonContent,
 	SESSION_ONLY_SECURITY,
+	sessionRetirer,
 	toComputeResourcesResponse,
 } from '../shared';
 import { appendAudit, errorMetadataChain, logEvent } from '../log';
@@ -465,7 +470,82 @@ const inspectRuntime = createRoute({
 	},
 });
 
+const reclaimRuntimeSession = createRoute({
+	method: 'post',
+	path: '/admin/runtime/projects/{pid}/sessions/{sid}/reclaim',
+	operationId: 'admin.runtime.reclaim',
+	tags: ['Admin'],
+	summary: 'Reclaim an inactive session sandbox',
+	description:
+		'Super-admin and session authentication required. Saving is best effort and only applies when the session still owns its edits. Active sessions must be stopped first.',
+	security: SESSION_ONLY_SECURITY,
+	request: {
+		params: z.object({
+			pid: z.string().refine(ProjectId.is),
+			sid: z.string().refine(SessionId.is),
+		}),
+		body: {
+			content: { 'application/json': { schema: z.object({ save: z.boolean().default(true) }) } },
+			description: 'Optional; omit to attempt saving before destruction.',
+			required: false,
+		},
+	},
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: z.object({ reclaimed: z.literal(true) }) }),
+			'Sandbox reclaimed',
+		),
+		...commonErrors(),
+		...errorResponses(404, 409, 503),
+	},
+});
+
 const app = createApp();
+
+app.openapi(reclaimRuntimeSession, async (c) => {
+	const deps = c.get('deps');
+	const actor = c.get('user');
+	assertSessionAuthenticated(c, 'reclaim sessions');
+	await assertSuperAdmin(actor, deps);
+	const { pid, sid } = c.req.valid('param');
+	const save = c.req.valid('json')?.save ?? true;
+	const session = await deps.services.sessions.getSession(
+		ProjectId.parse(pid),
+		SessionId.parse(sid),
+	);
+	if (session.status === 'starting' || session.status === 'running') {
+		throw new ConflictError('Stop the active session before reclaiming it.');
+	}
+	let reclaimed = false;
+	try {
+		reclaimed = await sessionRetirer(deps).reclaim(session, { save });
+	} finally {
+		deps.services.runtimeInspection.invalidate();
+		await appendAudit(
+			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: actor.id },
+			'session.reclaim',
+			() =>
+				deps.services.events.append({
+					event: 'session.reclaim',
+					actor: actor.id,
+					project_id: pid,
+					notebook_id: session.notebook_id,
+					session_id: sid,
+					sandbox_id: session.sandbox_id,
+					save_requested: save,
+					reclaimed,
+				}),
+		);
+	}
+	if (!reclaimed) {
+		throw new UnavailableError(
+			save
+				? 'The session could not be reclaimed with saving enabled. Retry later or reclaim without saving to discard unsaved edits.'
+				: 'The session could not be reclaimed yet. Retry shortly.',
+		);
+	}
+	return c.json({ success: true, data: { reclaimed: true } }, 200);
+});
 
 app.openapi(inspectRuntime, async (c) => {
 	const deps = c.get('deps');

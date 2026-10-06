@@ -303,6 +303,10 @@ export class WarmPoolService {
 				if (this.isExpired(current)) return false;
 				current.state = 'ready';
 				current.checked_at = this.now();
+				// Readiness bounds provider creation from above; later health checks cannot extend it.
+				if (this.config.providerLifetimeMs !== undefined) {
+					current.sandbox_deadline_at = current.checked_at + this.config.providerLifetimeMs;
+				}
 			});
 			if (!published) {
 				this.metrics.increment('warm_pool.creation_discarded');

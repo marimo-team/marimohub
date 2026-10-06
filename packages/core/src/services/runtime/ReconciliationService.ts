@@ -3,7 +3,8 @@ import { THUMBNAIL_MAINTENANCE_BUDGET_MS } from './captureThumbnail';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
 import { Millis } from '../../duration';
-import type { NotebookId, SandboxId } from '../../ids';
+import { mapWithConcurrency } from '../../concurrency';
+import type { SandboxId } from '../../ids';
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import type { SandboxProvider } from '../../ports/sandbox';
@@ -11,11 +12,10 @@ import { readStored } from '../../schema';
 import type { RunStatus, Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { isTerminalRunStatus } from '../jobs/runState';
-import { SessionRetirer } from './SessionRetirer';
+import { RECLAIM_PROVISION_GRACE_MS, SessionRetirer } from './SessionRetirer';
 import { AppPoolStore } from './AppPoolStore';
 import { SandboxDiagnosticLease } from './SandboxDiagnosticLease';
-import { RECLAIM_PROVISION_GRACE_MS } from './sessionLifecycle';
-import { sessionPersistsEdits } from './sessionState';
+import { isTerminal } from './sessionState';
 import { listAllKeys } from '../catalog/storage';
 import { isPastAuthorizationDeadline } from './SessionService';
 import type { SessionService } from './SessionService';
@@ -41,10 +41,12 @@ export interface ActiveSandboxSource {
 }
 
 export interface ReconcileResult {
-	/** True when the provider can't enumerate (no `listActive`) — nothing reconciled. */
+	/** True when provider enumeration is unavailable; terminal reclaim still runs. */
 	skipped: boolean;
-	/** Rule 1: terminal records whose still-running sandbox was confirmed destroyed. */
+	/** Terminal records whose sandbox was confirmed destroyed. */
 	reclaimed: number;
+	unreclaimedTerminal: number;
+	oldestUnreclaimedAgeMs: number | null;
 	/** Rule 2: live records whose sandbox had vanished, now marked terminated. */
 	markedDead: number;
 	/** Rule 3: live sandboxes with no record at all, destroyed. */
@@ -54,19 +56,7 @@ export interface ReconcileResult {
 	markedDeadSessions: Session[];
 }
 
-/**
- * Reconcile session records against the compute provider's actual state.
- *
- * Sessions and sandboxes drift because provisioning a sandbox (billable) and
- * writing its session record are two non-atomic writes, and because the
- * record-only maintenance sweep (`SessionService.expireStale`/`reapTerminated`)
- * flips/deletes records without ever destroying the sandbox. This service is the
- * provider-truth safety net: it enumerates live sandboxes and cross-checks them
- * against records, in both directions.
- *
- * Depends only on `core` services and the `SandboxProvider` / `Bucket` ports —
- * never a concrete adapter — so it respects the inward dependency rule.
- */
+/** Reclaims terminal sessions even without provider enumeration, then reconciles live sandboxes. */
 export class ReconciliationService {
 	private readonly retirer: SessionRetirer;
 	private readonly diagnosticLeases: SandboxDiagnosticLease;
@@ -75,11 +65,8 @@ export class ReconciliationService {
 		private sessions: SessionService,
 		private notebooks: NotebookService,
 		private compute: SandboxProvider,
-		/** Bucket handle, so save-on-reap can capture the notebook workspace. */
 		private bucket: Bucket,
-		/** Runtime-file persistence mode applied when save-on-reap tears a sandbox down. */
 		private persistWorkspace: 'source' | 'workspace',
-		/** Sandbox working dir, so save-on-reap reads the right path. See ProvisionOptions. */
 		private workdir?: string,
 		/**
 		 * Sandboxes owned by active job runs. A job sandbox has no session record,
@@ -103,14 +90,54 @@ export class ReconciliationService {
 		});
 	}
 
+	async reclaimTerminalSessions(
+		thumbnailDeadlineAt?: number,
+	): Promise<
+		Pick<ReconcileResult, 'reclaimed' | 'unreclaimedTerminal' | 'oldestUnreclaimedAgeMs'>
+	> {
+		let reclaimed = 0;
+		let unreclaimedTerminal = 0;
+		let oldestUnreclaimedAgeMs: number | null = null;
+		await mapWithConcurrency(await this.sessions.listSessions(), 8, async (session) => {
+			if (!session.sandbox_id || (!isTerminal(session.status) && session.status !== 'terminating'))
+				return;
+			const grace =
+				session.status === 'expired' &&
+				!isPastAuthorizationDeadline(session, Date.now()) &&
+				Date.now() - Date.parse(session.started_at) < RECLAIM_PROVISION_GRACE_MS;
+			try {
+				if (
+					(session.sandbox_reclaimed_at || !grace) &&
+					(await this.retirer.reclaim(session, { thumbnailDeadlineAt, requireIdle: true }))
+				) {
+					if (!session.sandbox_reclaimed_at) reclaimed++;
+					return;
+				}
+			} catch (error) {
+				logOperationalError(
+					'session_reclaim_failed',
+					{ operation: 'session.reclaim', session_id: session.session_id },
+					error,
+				);
+			}
+			if (session.sandbox_reclaimed_at) return;
+			unreclaimedTerminal++;
+			oldestUnreclaimedAgeMs = Math.max(
+				oldestUnreclaimedAgeMs ?? 0,
+				Date.now() - Date.parse(session.last_heartbeat),
+			);
+		});
+		return { reclaimed, unreclaimedTerminal, oldestUnreclaimedAgeMs };
+	}
+
 	async reconcile(opts?: { orphanGraceMs?: number }): Promise<ReconcileResult> {
 		const thumbnailDeadlineAt = Date.now() + THUMBNAIL_MAINTENANCE_BUDGET_MS;
-		// No provider truth to reconcile against — leave the bucket sweep to do its
-		// record-only job and report a clean no-op.
+		// Reclaim must run even if provider enumeration is unavailable or stalls.
+		const reclaim = await this.reclaimTerminalSessions(thumbnailDeadlineAt);
 		if (!this.compute.listActive) {
 			return {
 				skipped: true,
-				reclaimed: 0,
+				...reclaim,
 				markedDead: 0,
 				orphansReaped: 0,
 				orphanSandboxIds: [],
@@ -184,20 +211,6 @@ export class ReconciliationService {
 			}
 		}
 
-		// Notebooks that currently have a live PERSISTING session. An older
-		// (terminal) sandbox for one of these must never commit: its content is
-		// stale by definition and would clobber the live session's head version,
-		// mirror-delete the workspace keys the live session wrote, and rewind the
-		// FS-snapshot pointer. Same rule (and reasoning) as the lifecycle sweep.
-		const liveNotebooks = new Set<NotebookId>(
-			sessions
-				.filter(
-					(s) => (s.status === 'running' || s.status === 'starting') && sessionPersistsEdits(s),
-				)
-				.map((s) => s.notebook_id),
-		);
-
-		let reclaimed = 0;
 		let markedDead = 0;
 		let orphansReaped = 0;
 		const orphanSandboxIds: string[] = [];
@@ -210,31 +223,7 @@ export class ReconciliationService {
 
 				const isLive = session.status === 'running' || session.status === 'starting';
 
-				if (!isLive && activeIds.has(sandboxId)) {
-					// Rule 1 — record is terminal OR mid-teardown (`terminating`) but the
-					// sandbox is still alive (and billing). A `terminating` record whose
-					// teardown never finished would otherwise leak the sandbox forever, since
-					// it is neither live (Rule 2) nor an unrecorded orphan (Rule 3). Reclaim
-					// through the one seam: the record is already terminal, so this is a
-					// (save-then-)destroy plus the one-shot `sandbox_reclaimed_at` stamp.
-
-					// `expireStale()` runs immediately before this sweep, so a provision
-					// slower than the heartbeat TTL arrives here `expired` while it is still
-					// restoring files; tearing it down mid-restore mirror-deletes bucket keys.
-					const authorizationExpired = isPastAuthorizationDeadline(session, now);
-					if (
-						session.status === 'expired' &&
-						!authorizationExpired &&
-						now - Date.parse(session.started_at) < RECLAIM_PROVISION_GRACE_MS
-					) {
-						continue;
-					}
-					const save =
-						!authorizationExpired &&
-						!liveNotebooks.has(session.notebook_id) &&
-						sessionPersistsEdits(session);
-					if (await this.retirer.reclaim(session, save, thumbnailDeadlineAt)) reclaimed++;
-				} else if (isLive && !activeIds.has(sandboxId)) {
+				if (isLive && !activeIds.has(sandboxId)) {
 					// Rule 2 — live record, sandbox gone (crashed / idle-timed-out). The
 					// kernel URL is dead; mark the record failed (it didn't stop cleanly) so it
 					// stops being served and gets reaped on schedule.
@@ -326,7 +315,7 @@ export class ReconciliationService {
 
 		return {
 			skipped: false,
-			reclaimed,
+			...reclaim,
 			markedDead,
 			orphansReaped,
 			orphanSandboxIds,

@@ -301,28 +301,43 @@ false`): `commitSession` dedupes unchanged content so idle notebooks cost no
   `MARIMOHUB_PERSIST_WORKSPACE=workspace` mode). Any residual hard kill (the
   backstop, node loss, OOM) loses at most one interval of notebook edits.
 
-The sweep also **reclaims terminal records that still hold a `sandbox_id`** —
-the leak `expireStale` creates on CoreWeave (record flipped, sandbox never
-destroyed, reconcile can't see it). Rules: save first for `expired` records
-(skip the save when a newer live session owns the same notebook — stale content
-must never clobber the new head, and when editors are still connected to the old
-kernel it is spared, not killed); `terminated`/`failed` get a bare
-confirm-destroy. The destroy is re-confirmed (idempotent) before stamping the
-one-shot `sandbox_reclaimed_at` marker, so a failed destroy is retried next
-sweep. `expired` records younger than 15 minutes from `started_at` are left
-alone (a slow provision flipped to `expired` mid-restore must not be torn down
-mid-copy), unless their marimo surface is `ready` and the connection probe
-reports zero connected editors: `ready` is only set after the restore finishes,
-so such a record is reclaimed on the next sweep and releases its editor claim.
-Reconciliation keeps the full 15-minute grace because it cannot probe the
-kernel. `starting` sessions are never touched.
+Terminal sessions hold their editor claim until sandbox destruction succeeds or a
+recorded provider lifetime cap expires. Completed provisions record this cap as
+`sandbox_deadline_at`. Legacy records and providers without a guaranteed cap
+require confirmed destruction. Warm sandboxes retain the deadline recorded at
+initial readiness; time spent idle or launching a session does not extend it.
+Successful destruction stamps `sandbox_reclaimed_at` and releases the claim.
+Maintenance retries failed claim release even after that stamp exists.
 
-Coordination mirrors §3: single replica + its own bucket-CAS lease
-(`_system/_session_lifecycle.lock` — a separate key from the maintenance lease
-so the two loops, which share a holder id, can never release each other's hold),
-plus an in-process guard against a sweep outliving its interval. Races with an
-explicit stop are settled by the `beginTerminating` CAS claim; teardown itself
-is idempotent. Each non-empty sweep emits one `session_lifecycle_sweep` wide
-event (`snapshotted` / `extended` / `reapedExpired` / `reapedIdle` /
-`reclaimed`); watch for it to go missing the same way as `maintenance_cycle`
-(§6).
+Reclaim attempts to save fully provisioned expired or stale stopping editors.
+It skips capture for failed or incomplete provisions, expired authorization, or
+a newer persistent editor. Capture requires strict attachment, which cannot
+create a replacement sandbox. Failed attachment retains the sandbox and claim.
+Providers without this capability retain sessions
+that need a save until an administrator chooses discard. This includes the
+current Cloudflare Sandbox SDK, whose read and exec methods can start a stopped
+container.
+
+The five-minute maintenance cycle reclaims terminal sessions before provider
+enumeration, including providers without `listActive`, such as CoreWeave.
+It gives expired sessions 15 minutes from creation to protect slow workspace
+restores. Expired authorization bypasses this provision grace period. The lifecycle
+sweep can reclaim sooner when marimo is ready and no editors are connected.
+Automatic reclaim requires a confirmed idle kernel for an expired session with
+valid authorization. A failed activity probe retains the sandbox and claim.
+A fresh Stop or takeover has 15 minutes to finish before reclaim can proceed.
+
+Stop also reclaims expired sessions and returns a retryable error if cleanup fails.
+Administrators can use **Runtime → Editors → Reclaim** to attempt a save or discard
+edits. The action records its actor, session, and outcome.
+
+The maintenance event reports `sessions_reclaimed`, `unreclaimed_terminal_sessions`,
+and `oldest_unreclaimed_session_age_ms`. Age is measured from the last heartbeat.
+
+The lifecycle loop uses its own bucket-CAS lease at
+`_system/_session_lifecycle.lock` and an in-process guard against overlapping
+sweeps. Its separate lease prevents maintenance from releasing its hold.
+The `beginTerminating` CAS coordinates explicit Stop requests; teardown is
+idempotent. Each non-empty sweep emits a `session_lifecycle_sweep` event with
+`snapshotted`, `extended`, `reapedExpired`, `reapedIdle`, and `reclaimed` counts.
+Monitor missing events as described for `maintenance_cycle` in §6.

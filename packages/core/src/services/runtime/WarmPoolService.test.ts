@@ -97,6 +97,37 @@ function setup(overrides: Partial<WarmPoolConfig> = {}) {
 afterEach(() => vi.restoreAllMocks());
 
 describe('warm sandbox pools', () => {
+	it('bounds provider lifetime from readiness and does not extend it during health checks', async () => {
+		const lifetime = 60 * 60_000;
+		const w = setup({ providerLifetimeMs: lifetime });
+		const create = w.compute.create.bind(w.compute);
+		vi.spyOn(w.compute, 'create').mockImplementation((...args) => {
+			const instance = create(...args);
+			return {
+				...instance,
+				ready: async () => {
+					w.advance(20_000);
+					await instance.ready?.();
+				},
+			};
+		});
+		await w.service.sweep();
+		const original = (await w.members())[0];
+		expect(original.sandbox_deadline_at).toBe(w.now() + lifetime);
+		expect(original.sandbox_deadline_at).toBeGreaterThan(original.created_at + lifetime);
+		w.advance(60_000);
+		await w.service.sweep();
+		const checked = (await w.members())[0];
+		expect(checked.checked_at).toBe(w.now());
+		expect(checked.sandbox_deadline_at).toBe(original.sandbox_deadline_at);
+	});
+
+	it('does not invent a deadline for an unbounded provider', async () => {
+		const w = setup();
+		await w.service.sweep();
+		expect((await w.members())[0].sandbox_deadline_at).toBeUndefined();
+	});
+
 	it('does no provider or claim work when disabled', async () => {
 		const w = setup({ enabled: false });
 		const get = vi.spyOn(w.bucket, 'get');

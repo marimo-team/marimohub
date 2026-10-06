@@ -158,6 +158,10 @@ class FakeSandbox extends Sandbox {
 		return this.execImpl(command) as ContainerProcess<string>;
 	}
 
+	override async poll(): Promise<number | null> {
+		return this.terminated ? 0 : null;
+	}
+
 	override async getTags(): Promise<Record<string, string>> {
 		return this.tags;
 	}
@@ -253,6 +257,49 @@ function deferLookups(world: ReturnType<typeof makeWorld>) {
 }
 
 describe('ModalCompute', () => {
+	it('strictly reconnects to a running sandbox and destroys it idempotently', async () => {
+		const world = makeWorld();
+		const compute = makeCompute(world);
+		await compute.create(SANDBOX_ID).writeFiles([{ path: '/existing', content: 'saved' }]);
+		const sandbox = compute.connectExisting(SANDBOX_ID, { reuse: false });
+		expect(await sandbox.readFile('/existing')).toMatchObject({ success: true, content: 'saved' });
+		expect(world.created).toHaveLength(1);
+		await sandbox.destroy();
+		await sandbox.destroy();
+		expect(world.created[0].sandbox.terminated).toBe(true);
+	});
+
+	it.each(['missing', 'stopped'] as const)(
+		'never creates a strict connection to a %s sandbox',
+		async (state) => {
+			const world = makeWorld();
+			if (state === 'stopped') {
+				const existing = new FakeSandbox();
+				existing.terminated = true;
+				world.existing.set(SANDBOX_ID, existing);
+			}
+			const sandbox = makeCompute(world).connectExisting(SANDBOX_ID);
+			await expect(sandbox.exec('true')).rejects.toThrow(
+				state === 'missing' ? 'missing' : 'no longer available',
+			);
+			await expect(sandbox.destroy()).resolves.toBeUndefined();
+			expect(world.created).toHaveLength(0);
+			expect(world.appCalls).toHaveLength(0);
+		},
+	);
+
+	it('propagates strict liveness-check failures without creating or executing', async () => {
+		const world = makeWorld();
+		const existing = new FakeSandbox();
+		world.existing.set(SANDBOX_ID, existing);
+		vi.spyOn(existing, 'poll').mockRejectedValueOnce(new Error('provider unavailable'));
+		await expect(makeCompute(world).connectExisting(SANDBOX_ID).exec('true')).rejects.toThrow(
+			'provider unavailable',
+		);
+		expect(existing.execCalls).toHaveLength(0);
+		expect(world.created).toHaveLength(0);
+	});
+
 	it('configures the SDK client for the selected Modal environment', () => {
 		const compute = new ModalCompute({
 			tokenId: 'token-id',

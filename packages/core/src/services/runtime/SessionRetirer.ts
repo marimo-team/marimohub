@@ -1,3 +1,6 @@
+import { kernelActiveConnections } from './kernelActiveConnections';
+import type { ConnectionProbe } from './kernelActiveConnections';
+import { kernelBasePathFromUrl } from './sandboxExposure';
 import { sessionResourceNotebookId } from '../../sessionOrigin';
 import { captureThumbnail } from './captureThumbnail';
 import type { Bucket } from '../../ports/bucket';
@@ -12,11 +15,14 @@ import { logOperationalError } from '../../operationalLog';
 import { captureFilesystemSnapshot } from '../content/filesystemSnapshots';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
-import { sessionPersistsEdits } from './sessionState';
+import { isTerminal, sessionPersistsEdits } from './sessionState';
+import { isPastAuthorizationDeadline } from './SessionService';
 import { pullSourceRootPath, sandboxWorkspaceLayout } from './workspaceLayout';
 import type { SessionService, TakeoverDrainStage } from './SessionService';
 import { stopSurfaceProcessCommand, surfaceCancelFile, surfacePidFile } from './surfaces/state';
 import type { SurfaceId } from './surfaces/types';
+
+export const RECLAIM_PROVISION_GRACE_MS = Millis.minutes(15);
 
 const DEFAULT_WORKDIR = '/workspace';
 const TAKEOVER_DRAIN_LEASE_RENEW_INTERVAL_MS = Millis.minutes(1);
@@ -34,6 +40,7 @@ export interface SessionRetirerDeps {
 	automaticThumbnails?: boolean;
 	thumbnailDeadline?: () => number | undefined;
 	workdir?: string;
+	probe?: ConnectionProbe;
 }
 
 export class TakeoverRetirementError extends Error {
@@ -48,14 +55,7 @@ export class TakeoverRetirementError extends Error {
 	}
 }
 
-/**
- * The one seam through which a session ends. Every path that retires a session
- * — the DELETE route, the create route's dead-kernel retire, the lifecycle
- * reaper, sandbox reclaim, and reconciliation — goes through here, so
- * teardown-time behavior (the save decision via `sessionPersistsEdits`, the
- * terminal mark, the app-claim release) is added ONCE per feature, and
- * "forgot to release the claim on path X" is structurally impossible.
- */
+/** Centralizes capture, destruction, and claim release for session teardown. */
 export class SessionRetirer {
 	private readonly provisioner: SandboxProvisioner;
 
@@ -83,6 +83,7 @@ export class SessionRetirer {
 			thumbnailDeadlineAt?: number;
 		} = {},
 	): Promise<void> {
+		if (opts.teardown === false && session.status === 'terminating') return;
 		const sandboxDestroyed =
 			opts.teardown === false
 				? !session.sandbox_id
@@ -272,24 +273,108 @@ export class SessionRetirer {
 	 * leaves the marker and claims untouched so the next sweep retries. Returns
 	 * whether the sandbox is confirmed gone.
 	 */
-	async reclaim(session: Session, save: boolean, thumbnailDeadlineAt?: number): Promise<boolean> {
-		if (save) {
-			if (!(await this.teardownSandbox(session, true, thumbnailDeadlineAt))) return false;
-		} else if (session.sandbox_id) {
+	async reclaim(
+		selected: Session,
+		{
+			save,
+			thumbnailDeadlineAt,
+			requireIdle = false,
+		}: {
+			save?: boolean;
+			thumbnailDeadlineAt?: number;
+			requireIdle?: boolean;
+		} = {},
+	): Promise<boolean> {
+		const session = await this.deps.sessions.getSession(selected.project_id, selected.session_id);
+		if (!isTerminal(session.status) && session.status !== 'terminating') return false;
+		if (session.sandbox_reclaimed_at) {
+			await this.finishReclaim(session);
+			return true;
+		}
+		const now = Date.now();
+		const stopping = session.status === 'terminating' || !!session.terminating_at;
+		const ready = session.surfaces?.marimo?.status === 'ready';
+		if (
+			stopping &&
+			now - Date.parse(session.terminating_at ?? session.last_heartbeat) <
+				RECLAIM_PROVISION_GRACE_MS
+		)
+			return false;
+		const authorized = !isPastAuthorizationDeadline(session, now);
+		// An expired provision may still be restoring files. Capturing it can delete
+		// workspace files that have not reached the sandbox yet.
+		if (
+			session.status === 'expired' &&
+			authorized &&
+			!ready &&
+			now - Date.parse(session.started_at) < RECLAIM_PROVISION_GRACE_MS
+		)
+			return false;
+		let capture =
+			(save ?? (session.status === 'expired' || stopping)) &&
+			session.status !== 'failed' &&
+			(ready || !!session.sandbox_url) &&
+			authorized &&
+			sessionPersistsEdits(session);
+		if (capture) {
+			const siblings = await this.deps.sessions.listByProject(
+				session.project_id,
+				session.notebook_id,
+			);
+			capture = !siblings.some(
+				(other) =>
+					other.session_id !== session.session_id &&
+					sessionPersistsEdits(other) &&
+					(other.status === 'running' || other.status === 'starting'),
+			);
+		}
+		const mustProbe = requireIdle && session.status === 'expired' && authorized;
+		let existing: ReturnType<SandboxProvider['create']> | undefined;
+		if ((capture || mustProbe) && session.sandbox_id) {
+			// create().read/exec may launch a replacement when the original is gone.
+			if (!this.deps.compute.connectExisting) return false;
 			try {
-				await this.deps.compute
-					.create(session.sandbox_id, { owner: sessionOwner(session) })
-					.destroy();
-			} catch {
+				existing = this.deps.compute.connectExisting(session.sandbox_id, {
+					owner: sessionOwner(session),
+				});
+			} catch (error) {
+				logOperationalError(
+					'session_capture_unavailable',
+					{ operation: 'session.reclaim', session_id: session.session_id },
+					error,
+				);
 				return false;
 			}
 		}
-		await this.deps.sessions
-			.markSandboxReclaimed(session.project_id, session.session_id, new Date().toISOString())
-			.catch(() => {});
+		if (mustProbe && existing) {
+			const active = await (this.deps.probe ?? kernelActiveConnections)(
+				existing,
+				kernelBasePathFromUrl(session.sandbox_url),
+			);
+			if (active !== 0) return false;
+		}
+		const destroyed =
+			capture && existing
+				? await this.teardownSandbox(session, true, thumbnailDeadlineAt, existing)
+				: await this.destroySandbox(session, existing);
+		if (!destroyed) return false;
+		await this.finishReclaim(session);
+		return true;
+	}
+
+	private async finishReclaim(session: Session): Promise<void> {
+		if (session.status === 'terminating' || session.terminating_at) {
+			await this.deps.sessions
+				.markTerminated(session.project_id, session.session_id)
+				.catch(() => {});
+		}
+		if (!session.sandbox_reclaimed_at) {
+			await this.deps.sessions
+				.markSandboxReclaimed(session.project_id, session.session_id, new Date().toISOString())
+				.catch(() => {});
+		}
 		await this.deps.sessions.releaseAppFor(session);
 		await this.deps.sessions.releaseEditorFor(session);
-		return true;
 	}
 
 	/**
@@ -300,9 +385,11 @@ export class SessionRetirer {
 		session: Session,
 		captureBeforeDestroy = true,
 		thumbnailDeadlineAt?: number,
+		existing?: ReturnType<SandboxProvider['create']>,
 	): Promise<boolean> {
 		if (!session.sandbox_id) return true;
-		const sandbox = this.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) });
+		const sandbox =
+			existing ?? this.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) });
 		let canCapture = captureBeforeDestroy;
 		try {
 			await this.stopSecondarySurfaces(sandbox, session);
@@ -349,7 +436,17 @@ export class SessionRetirer {
 			}
 		}
 		if (persisted) await this.captureSavedArtifacts(sandbox, session, thumbnailDeadlineAt);
+		return this.destroySandbox(session, sandbox);
+	}
+
+	private async destroySandbox(
+		session: Session,
+		existing?: ReturnType<SandboxProvider['create']>,
+	): Promise<boolean> {
+		if (!session.sandbox_id) return true;
 		try {
+			const sandbox =
+				existing ?? this.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) });
 			await sandbox.destroy();
 			return true;
 		} catch (err) {

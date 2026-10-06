@@ -318,6 +318,7 @@ export class SessionService {
 		originUrl?: string,
 		expiresAt?: string,
 		integrations?: Session['integrations'],
+		sandboxDeadlineAt?: string,
 	): Promise<Session> {
 		return this.mutate(projectId, id, (session) => {
 			if (isTerminal(session.status) || session.status === 'terminating') return null;
@@ -339,6 +340,7 @@ export class SessionService {
 				sandbox_origin_url: originUrl,
 				used_fallback: usedFallback,
 				...(expiresAt ? { expires_at: expiresAt } : {}),
+				...(sandboxDeadlineAt ? { sandbox_deadline_at: sandboxDeadlineAt } : {}),
 				...(session.integrations === undefined && integrations && integrations.length > 0
 					? { integrations }
 					: {}),
@@ -626,6 +628,7 @@ export class SessionService {
 			return {
 				...current,
 				status: next,
+				terminating_at: now,
 				...(current.surfaces ? { surfaces } : {}),
 				...(attribution
 					? { ended_reason: attribution.reason, ended_by_user_id: attribution.by }
@@ -635,11 +638,16 @@ export class SessionService {
 		return { session, transitioned };
 	}
 
-	/** Mark a session `terminated` (teardown finished). Terminates from any live or
-	 * `terminating` state; no-op once terminal. */
+	/** Finish teardown without changing an existing terminal status. */
 	async markTerminated(projectId: ProjectId, id: SessionId): Promise<Session> {
 		return this.mutate(projectId, id, (session) =>
-			isTerminal(session.status) ? null : { ...session, status: 'terminated' },
+			isTerminal(session.status) && !session.terminating_at
+				? null
+				: {
+						...session,
+						status: isTerminal(session.status) ? session.status : 'terminated',
+						terminating_at: undefined,
+					},
 		);
 	}
 
@@ -1068,10 +1076,11 @@ export class SessionService {
 				return false;
 			}
 			if (isReusableSession(session, Date.now())) return true;
-			// A retired holder keeps the claim until its sandbox is confirmed gone.
+			// Keep ownership until destruction is confirmed or the provider guarantees expiry.
 			return (
 				!!session.sandbox_id &&
 				!session.sandbox_reclaimed_at &&
+				(!session.sandbox_deadline_at || Date.now() < Date.parse(session.sandbox_deadline_at)) &&
 				(session.status === 'terminating' || isTerminal(session.status))
 			);
 		} catch (err) {

@@ -220,6 +220,7 @@ class ModalSandboxInstance implements SandboxInstance {
 		private readonly client: ModalClient,
 		private readonly resources: ReturnType<typeof modalProfileResources>,
 		private readonly reuse: boolean,
+		private readonly existingOnly = false,
 	) {}
 
 	private async createSandbox(): Promise<Sandbox> {
@@ -254,9 +255,10 @@ class ModalSandboxInstance implements SandboxInstance {
 	}
 
 	private getSandbox(createIfMissing = true): Promise<Sandbox> {
+		const mayCreate = createIfMissing && !this.existingOnly;
 		if (this.sandboxPromise) return this.sandboxPromise;
 		if (!this.reuse) {
-			if (!createIfMissing) {
+			if (!mayCreate) {
 				return Promise.reject(new NotFoundError(`Sandbox ${this.id} was not created`));
 			}
 			this.sandboxPromise = this.createSandbox();
@@ -264,10 +266,18 @@ class ModalSandboxInstance implements SandboxInstance {
 		}
 
 		const appName = this.config.appName ?? DEFAULT_APP_NAME;
-		this.sandboxPromise = this.client.sandboxes.fromName(appName, this.id).catch((error) => {
-			if (createIfMissing && isNotFound(error)) return this.createSandbox();
-			throw error;
-		});
+		this.sandboxPromise = this.client.sandboxes
+			.fromName(appName, this.id)
+			.then(async (sandbox) => {
+				if (this.existingOnly && (await sandbox.poll()) !== null) {
+					throw new NotFoundError(`Sandbox ${this.id} is no longer available`);
+				}
+				return sandbox;
+			})
+			.catch((error) => {
+				if (mayCreate && isNotFound(error)) return this.createSandbox();
+				throw error;
+			});
 		return this.sandboxPromise;
 	}
 
@@ -692,6 +702,17 @@ export class ModalCompute implements SandboxProvider {
 			this.client,
 			modalProfileResources(options?.resources),
 			options?.reuse ?? true,
+		);
+	}
+
+	connectExisting(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
+		return new ModalSandboxInstance(
+			id,
+			this.config,
+			this.client,
+			modalProfileResources(options?.resources),
+			true,
+			true,
 		);
 	}
 

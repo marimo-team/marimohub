@@ -54,6 +54,7 @@ import {
 	ResourceExhaustedError,
 	saga,
 	MODE_POLICY,
+	isTerminal,
 	isPastAuthorizationDeadline,
 	SandboxProvisioner,
 	SESSION_MODES,
@@ -782,6 +783,7 @@ async function retireSelectedSession(deps: ApiDeps, selected: Session): Promise<
 	const { project_id: pid, notebook_id: nid, session_id: sid } = selected;
 	// Only the winner of the terminating transition performs teardown.
 	const { session, transitioned } = await sessions.beginTerminating(pid, sid);
+	let reclaimFailed = false;
 	try {
 		if (sessionMode(session) === 'app')
 			await new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics).invalidate(
@@ -791,7 +793,21 @@ async function retireSelectedSession(deps: ApiDeps, selected: Session): Promise<
 			);
 	} finally {
 		// Reconciliation can recover the pool from the terminal session if invalidation fails.
-		await sessionRetirer(deps).retire(session, { teardown: transitioned });
+		if (
+			!transitioned &&
+			isTerminal(session.status) &&
+			session.sandbox_id &&
+			!session.sandbox_reclaimed_at
+		) {
+			reclaimFailed = !(await sessionRetirer(deps)
+				.reclaim(session)
+				.catch(() => false));
+		} else {
+			await sessionRetirer(deps).retire(session, { teardown: transitioned });
+		}
+	}
+	if (reclaimFailed) {
+		throw new UnavailableError('The session is still shutting down. Retry shortly.');
 	}
 }
 
@@ -1988,6 +2004,11 @@ export async function startNotebookSession(input: {
 				// The lifetime clock starts here — when the kernel is live, not at record
 				// creation — so provisioning time never eats into the session TTL.
 				const ttlMs = sandbox.sessionLifetime?.maxLifetimeMs;
+				const providerDeadline =
+					warmClaim?.member.sandbox_deadline_at ??
+					(compute.warmPool?.maxLifetimeMs
+						? (warmClaim?.member.checked_at ?? Date.now()) + compute.warmPool.maxLifetimeMs
+						: undefined);
 				updated = await sessions.setRunning(
 					pid,
 					session!.session_id,
@@ -1996,6 +2017,7 @@ export async function startNotebookSession(input: {
 					originUrl,
 					ttlMs ? new Date(Date.now() + ttlMs).toISOString() : undefined,
 					integrationAttachments,
+					providerDeadline === undefined ? undefined : new Date(providerDeadline).toISOString(),
 				);
 			})
 			.step('editor_claim_recheck', async () => {

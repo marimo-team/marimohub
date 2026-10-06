@@ -328,6 +328,20 @@ export function useAdminRuntimeQuery(paused = false) {
 	});
 }
 
+export function useReclaimRuntimeSession() {
+	return useApiMutation(
+		({ projectId, sessionId, save }: { projectId: string; sessionId: string; save: boolean }) =>
+			apiData(
+				apiClient.POST('/api/v1/admin/runtime/projects/{pid}/sessions/{sid}/reclaim', {
+					params: { path: { pid: projectId, sid: sessionId } },
+					body: { save },
+				}),
+			),
+		() => [adminKeys.runtime()],
+		{ suppressErrorToast: true },
+	);
+}
+
 /** The full user directory (everyone who has signed in at least once), name-sorted. */
 export function useAdminUsersQuery() {
 	return useSuspenseQuery({

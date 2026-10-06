@@ -3,87 +3,32 @@ import { AppPoolStore } from './AppPoolStore';
 import { expireAppPresence, appOccupancy } from './AppPoolRouter';
 import { THUMBNAIL_MAINTENANCE_BUDGET_MS } from './captureThumbnail';
 import type { Bucket } from '../../ports/bucket';
-import { MARIMO_PORT } from '../../constants';
 import type { SessionMode } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
 import type { NotebookId, SessionId } from '../../ids';
-import type { SandboxInstance, SandboxProvider } from '../../ports/sandbox';
+import type { SandboxProvider } from '../../ports/sandbox';
 import { sessionOwner } from './sessionOwner';
 import { createSlidingWindowBudget } from '../../rateLimit';
 import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
-import { SessionRetirer } from './SessionRetirer';
+import { RECLAIM_PROVISION_GRACE_MS, SessionRetirer } from './SessionRetirer';
 import { isTerminal, sessionMode, sessionModePolicy, sessionPersistsEdits } from './sessionState';
 import { isPastAuthorizationDeadline } from './SessionService';
 import type { SessionService } from './SessionService';
-import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { kernelBasePathFromUrl } from './sandboxExposure';
-import { shellQuote } from './shell';
+import { kernelActiveConnections } from './kernelActiveConnections';
+import type { ConnectionProbe } from './kernelActiveConnections';
+export { kernelActiveConnections } from './kernelActiveConnections';
+export type { ConnectionProbe } from './kernelActiveConnections';
 
 const SESSION_SWEEP_CONCURRENCY = 8;
 /** Cadence for informational connection counts; reap decisions always probe immediately. */
 const CONNECTION_COUNT_REFRESH_MS = Millis.minutes(5);
 
-/**
- * How long after `started_at` an `expired` record's sandbox is left alone.
- * A slow provision (cold image, large workspace copy) can outlive the 5-minute
- * heartbeat TTL and be flipped to `expired` while still restoring files; tearing
- * it down mid-restore would mirror-delete not-yet-restored workspace keys from
- * the bucket. Shared with `ReconciliationService`, the other reclaimer, so both
- * hold off for the same window; sized like the reconciler's orphan grace. Only
- * the sweep exempts a fully provisioned record, because only it probes for
- * editors still connected to the expired kernel.
- */
-export const RECLAIM_PROVISION_GRACE_MS = Millis.minutes(15);
+export { RECLAIM_PROVISION_GRACE_MS } from './SessionRetirer';
 
-/**
- * Ask the marimo kernel how many websocket connections (editors) it has, via an
- * `exec` inside the sandbox. The probe reads the session token file when it is
- * present and remains compatible with legacy tokenless kernels.
- *
- * `basePath` is the prefix marimo serves under (its `--base-url`, e.g.
- * `/proxy/<token>` in proxy exposure) — the status endpoint exists ONLY under
- * that prefix, so probing the root there would always 404 into a null.
- *
- * Returns null when the kernel could not be reached or answered garbage —
- * "unknown", which callers treat conservatively: a session with a fresh
- * heartbeat is never reaped on a null probe; only stale AND unreachable
- * (⇒ the kernel is almost certainly dead) is reaped.
- */
-export async function kernelActiveConnections(
-	sandbox: SandboxInstance,
-	basePath = '',
-): Promise<number | null> {
-	try {
-		const url = `http://127.0.0.1:${MARIMO_PORT}${basePath}/api/status/connections`;
-		const script =
-			'import json,pathlib,urllib.request;' +
-			`p=pathlib.Path(${JSON.stringify(KERNEL_AUTH_TOKEN_FILE)});` +
-			'h={"Authorization":"Bearer "+p.read_text().strip()} if p.exists() else {};' +
-			`r=urllib.request.Request(${JSON.stringify(url)},headers=h);` +
-			'print(json.load(urllib.request.urlopen(r,timeout=3))["active"])';
-		const res = await sandbox.exec(`python3 -c ${shellQuote(script)}`);
-		if (!res.success) return null;
-		// Whole output or nothing — `parseInt` would read 2 out of "2garbage", and a
-		// half-parsed answer must count as unknown rather than steer reaping. The
-		// safe-integer check rejects an absurdly long digit run, which would become
-		// `Infinity` and serialize into the session record as a schema-invalid
-		// `null`, making the record unreadable and its sandbox invisible to sweeps.
-		const out = res.stdout.trim();
-		const n = Number(out);
-		return /^\d+$/.test(out) && Number.isSafeInteger(n) ? n : null;
-	} catch {
-		return null;
-	}
-}
-
-/** Injectable probe seam (tests fake the kernel answer without an exec fake). */
-export type ConnectionProbe = (
-	sandbox: SandboxInstance,
-	basePath?: string,
-) => Promise<number | null>;
 export interface SessionLifecycleConfig {
 	/** Reap after a stale heartbeat and no connections. */
 	idleTimeoutMsByMode: Record<SessionMode, number>;
@@ -148,6 +93,7 @@ export class SessionLifecycleService {
 			automaticThumbnails: cfg.automaticThumbnails,
 			thumbnailDeadline: cfg.thumbnailDeadline,
 			workdir: cfg.workdir,
+			probe,
 		});
 	}
 
@@ -192,7 +138,12 @@ export class SessionLifecycleService {
 
 		await mapWithConcurrency(candidates, SESSION_SWEEP_CONCURRENCY, async (s) => {
 			try {
-				const sandbox = this.compute.create(s.sandbox_id!, { owner: sessionOwner(s) });
+				const sandbox =
+					s.status === 'running'
+						? this.compute.create(s.sandbox_id!, { owner: sessionOwner(s) })
+						: s.status === 'expired' && !isPastAuthorizationDeadline(s, now)
+							? this.compute.connectExisting?.(s.sandbox_id!, { owner: sessionOwner(s) })
+							: undefined;
 
 				const pool = sessionMode(s) === 'app' ? await readPool(s.project_id, s.notebook_id) : null;
 				if (pool) expireAppPresence(pool, now);
@@ -222,7 +173,7 @@ export class SessionLifecycleService {
 					this.cfg.connectionAware &&
 					connectionCountCheck &&
 					this.connectionProbeBudget.consume(s.session_id, now);
-				if (this.cfg.connectionAware && (reapCandidate || connectionCountDue)) {
+				if (sandbox && this.cfg.connectionAware && (reapCandidate || connectionCountDue)) {
 					active = await this.probe(sandbox, kernelBasePathFromUrl(s.sandbox_url));
 					// A null probe is "unknown" — leave the last stamp rather than write a
 					// lie. An unchanged count is skipped too: no CAS/ETag churn against
@@ -269,7 +220,11 @@ export class SessionLifecycleService {
 						// Only `expired` reclaims are counted: for terminated/failed records the
 						// confirm-destroy is a routine no-op, not a recovered leak.
 						if (
-							(await this.retirer.reclaim(s, save, thumbnailDeadlineAt)) &&
+							(await this.retirer.reclaim(s, {
+								save,
+								thumbnailDeadlineAt,
+								requireIdle: active !== 0,
+							})) &&
 							s.status === 'expired'
 						) {
 							result.reclaimed++;
@@ -325,7 +280,7 @@ export class SessionLifecycleService {
 					now - Date.parse(s.last_snapshot_at ?? s.started_at) >= this.cfg.snapshotIntervalMs;
 				const snapshotDue =
 					snapshotDueByCadence && (await this.sessions.ownsEditorClaim(s).catch(() => false));
-				if (snapshotDue) {
+				if (snapshotDue && sandbox) {
 					const saved = await this.provisioner
 						.captureSession(
 							sandbox,

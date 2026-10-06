@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
 	BadRequestError,
+	AppPoolService,
+	ConflictError,
+	NotFoundError,
+	SessionRetirer,
 	createNotebookId,
 	createProjectId,
 	createSandboxId,
@@ -2380,7 +2384,7 @@ describe('Session routes', () => {
 		await expectError(await api.request('POST', sessionsPath()), 409, 'CONFLICT');
 	});
 
-	it('refuses to reuse an expired editor until the sweep reclaims its sandbox', async () => {
+	it('Stop reclaims an expired editor and allows a new session', async () => {
 		const startedAt = new Date(Date.now() - Millis.minutes(7)).toISOString();
 		const stale = makeSession({
 			project_id: pid,
@@ -2403,14 +2407,89 @@ describe('Session routes', () => {
 		await expectError(await post('POST', sessionsPath()), 409, 'CONFLICT');
 		expect((await services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(stale.session_id);
 
-		// What the lifecycle sweep's reclaim leaves behind.
-		await services.sessions.markSandboxReclaimed(pid, stale.session_id, new Date().toISOString());
-		await services.sessions.releaseEditorFor(stale);
+		await expectOk(await post('DELETE', sessionsPath(`/${stale.session_id}`)));
+		expect(
+			(await services.sessions.getSession(pid, stale.session_id)).sandbox_reclaimed_at,
+		).toBeDefined();
+		expect((await services.sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
+		await expectOk(await post('DELETE', sessionsPath(`/${stale.session_id}`)));
 
 		const started = await expectOk<ApiSession>(await post('POST', sessionsPath()));
 		expect(started.session_id).not.toBe(stale.session_id);
 		expect(started.reused).not.toBe(true);
 		expect((await services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(started.session_id);
+	});
+
+	it.each([false, true])(
+		'Stop contains reclaim exceptions (invalidation failed=%s)',
+		async (invalidationFailed) => {
+			const stale = makeSession({
+				project_id: pid,
+				notebook_id: nid,
+				user_id: ACTOR,
+				mode: 'app',
+				status: 'expired',
+				sandbox_id: createSandboxId(),
+			});
+			await bucket.put(paths.session(pid, stale.session_id), JSON.stringify(stale));
+			const reclaim = vi
+				.spyOn(SessionRetirer.prototype, 'reclaim')
+				.mockRejectedValueOnce(new NotFoundError('Session was reaped'));
+			const invalidate = vi.spyOn(AppPoolService.prototype, 'invalidate');
+			if (invalidationFailed)
+				invalidate.mockRejectedValueOnce(new ConflictError('Pool changed concurrently'));
+			try {
+				const error = await expectError(
+					await owner('DELETE', sessionsPath(`/${stale.session_id}`)),
+					invalidationFailed ? 409 : 503,
+					invalidationFailed ? 'CONFLICT' : 'SERVICE_UNAVAILABLE',
+				);
+				expect(error.message).toBe(
+					invalidationFailed
+						? 'Pool changed concurrently'
+						: 'The session is still shutting down. Retry shortly.',
+				);
+				expect(reclaim).toHaveBeenCalledOnce();
+			} finally {
+				reclaim.mockRestore();
+				invalidate.mockRestore();
+			}
+		},
+	);
+
+	it('Stop keeps an expired claim on destruction failure and retries successfully', async () => {
+		const { instance } = makeFakeSandbox();
+		const destroy = vi
+			.spyOn(instance, 'destroy')
+			.mockRejectedValueOnce(new Error('provider unavailable'));
+		const services = createServices(bucket);
+		const stale = makeSession({
+			project_id: pid,
+			notebook_id: nid,
+			user_id: ACTOR,
+			status: 'expired',
+			sandbox_id: createSandboxId(),
+			started_at: new Date(Date.now() - Millis.hours(1)).toISOString(),
+		});
+		await bucket.put(paths.session(pid, stale.session_id), JSON.stringify(stale));
+		await services.sessions.claimEditor(pid, nid, stale.session_id, 'shared');
+		const api = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: fakeComputeFrom(instance),
+		}).request;
+		await expectError(
+			await api('DELETE', sessionsPath(`/${stale.session_id}`)),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+		expect((await services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(stale.session_id);
+		expect(
+			(await services.sessions.getSession(pid, stale.session_id)).sandbox_reclaimed_at,
+		).toBeUndefined();
+		await expectOk(await api('DELETE', sessionsPath(`/${stale.session_id}`)));
+		expect(destroy).toHaveBeenCalledTimes(2);
+		expect((await services.sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
 	});
 
 	it('POST /sessions hammered for one notebook reuses one record and never trips the cap', async () => {

@@ -681,16 +681,53 @@ describe('runtime inspection', () => {
 		},
 	);
 
-	it('excludes reclaimed pools and terminal sessions, while treating absent mode as an editor', async () => {
+	it('excludes reclaimed pools and sessions, while treating absent mode as an editor', async () => {
 		await savePool([]);
 		await store.retireForDeletion(pid, nid);
 		await saveSession(member(), { status: 'terminated' });
-		await saveSession(member(), { mode: 'edit', status: 'failed' });
+		await saveSession(member(), {
+			mode: 'edit',
+			status: 'failed',
+			sandbox_reclaimed_at: new Date(now).toISOString(),
+		});
 		const editor = await saveSession(member(), { mode: undefined, app_pool: undefined });
 		const snapshot = await inspection.inspect();
 		expect(snapshot.apps).toEqual([]);
 		expect(snapshot.editors.map((session) => session.session_id)).toEqual([editor.session_id]);
 	});
+	it('shows the unreclaimed editor and its current claim holder without mutating claims', async () => {
+		const expired = await saveSession(member(), {
+			mode: 'edit',
+			app_pool: undefined,
+			status: 'expired',
+			expires_at: new Date(now - 60_000).toISOString(),
+		});
+		await sessions.claimEditor(pid, nid, expired.session_id, 'exclusive');
+		const put = vi.spyOn(bucket, 'put');
+		const snapshot = await inspection.inspect();
+		expect(snapshot.editors[0]).toMatchObject({
+			session_id: expired.session_id,
+			status: 'expired',
+			expires_at: expired.expires_at,
+			claim_holder_id: expired.session_id,
+			claim_holder_status: 'expired',
+			claim_available: true,
+			reclaimable: true,
+		});
+		expect(put).not.toHaveBeenCalled();
+		await sessions.markSandboxReclaimed(pid, expired.session_id, new Date(now).toISOString());
+		inspection.invalidate();
+		expect((await inspection.inspect()).editors).toEqual([]);
+	});
+
+	it('distinguishes an unreadable editor claim from an unclaimed notebook', async () => {
+		await saveSession(member(), { mode: 'edit', app_pool: undefined });
+		await bucket.put(paths.editorClaim(pid, nid), '{');
+		const snapshot = await inspection.inspect();
+		expect(snapshot.incomplete).toBe(true);
+		expect(snapshot.editors[0]).toMatchObject({ claim_holder_id: null, claim_available: false });
+	});
+
 	it.each(['created_at', 'idle_since', 'visit'] as const)(
 		'marks a pool with an invalid %s timestamp incomplete instead of failing the whole snapshot',
 		async (field) => {

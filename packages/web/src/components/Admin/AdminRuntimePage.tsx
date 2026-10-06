@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import { AppWindow, Pause, Play, RefreshCw, Server, Users, GitBranch } from 'lucide-react';
-import { useAdminRuntimeQuery, useUsersQuery } from '@/api/hooks';
+import { useAdminRuntimeQuery, useReclaimRuntimeSession, useUsersQuery } from '@/api/hooks';
 import {
 	Button,
 	Chip,
@@ -327,7 +327,15 @@ function SandboxDetails({
 	);
 }
 
-function EditorsTable({ editors, now }: { editors: Editor[]; now: number }) {
+function EditorsTable({
+	editors,
+	now,
+	onReclaim,
+}: {
+	editors: Editor[];
+	now: number;
+	onReclaim: (editor: Editor) => void;
+}) {
 	const { data: users } = useUsersQuery(editors.map((editor) => editor.user_id));
 	if (editors.length === 0)
 		return (
@@ -347,6 +355,8 @@ function EditorsTable({ editors, now }: { editors: Editor[]; now: number }) {
 							'Notebook / project',
 							'Started by',
 							'Status / age',
+							'Editor claim',
+							'Action',
 							'Last heartbeat',
 							'Connections',
 							'Compute',
@@ -380,6 +390,30 @@ function EditorsTable({ editors, now }: { editors: Editor[]; now: number }) {
 								</span>
 							</td>
 							<td className="px-4 py-3 text-xs">
+								{!editor.claim_available ? (
+									'Unavailable'
+								) : editor.claim_holder_id ? (
+									<>
+										<code title={editor.claim_holder_id}>{shortId(editor.claim_holder_id)}</code>
+										<span className="block capitalize">
+											{editor.claim_holder_status ?? 'Unknown status'}
+										</span>
+									</>
+								) : (
+									'Unclaimed'
+								)}
+								{editor.expires_at && Date.parse(editor.expires_at) <= now && (
+									<span className="block whitespace-nowrap">
+										Expired {formatDuration(editor.expires_at, now)} ago
+									</span>
+								)}
+							</td>
+							<td className="px-4 py-3">
+								{editor.reclaimable && (
+									<Button onPress={() => onReclaim(editor)}>Reclaim session</Button>
+								)}
+							</td>
+							<td className="px-4 py-3 text-xs">
 								{formatAbsolute(editor.last_heartbeat ?? undefined)}
 							</td>
 							<td className="px-4 py-3">
@@ -399,8 +433,68 @@ function EditorsTable({ editors, now }: { editors: Editor[]; now: number }) {
 	);
 }
 
+function ReclaimSessionDialog({ editor, onClose }: { editor: Editor; onClose: () => void }) {
+	const [save, setSave] = useState(true);
+	const reclaim = useReclaimRuntimeSession();
+	return (
+		<DialogModal
+			isOpen
+			onClose={() => {
+				if (!reclaim.isPending) onClose();
+			}}
+			title="Reclaim session"
+			width="md"
+		>
+			<div className="space-y-4">
+				<p className="text-sm">
+					Destroy the inactive sandbox for {editor.notebook_title} and release its editor claim.
+				</p>
+				<CopyField label="Session ID" value={editor.session_id} />
+				<label className="flex items-center gap-2 text-sm">
+					<input
+						type="checkbox"
+						aria-label="Attempt to save before reclaiming"
+						checked={save}
+						disabled={reclaim.isPending}
+						onChange={(event) => setSave(event.target.checked)}
+					/>
+					Attempt to save before reclaiming
+				</label>
+				<p className="text-sm text-muted-foreground">
+					{save
+						? 'Saving is best effort and only applies while this session owns its edits. If we cannot safely connect to the sandbox, reclamation stops and keeps the claim. Uncheck this option to discard unsaved edits. Other save failures do not prevent destruction.'
+						: 'Unsaved edits in this sandbox will be discarded.'}
+				</p>
+				{reclaim.error && (
+					<p role="alert" className="text-sm text-destructive">
+						{reclaim.error.message}
+					</p>
+				)}
+				<div className="flex justify-end gap-2">
+					<Button isDisabled={reclaim.isPending} onPress={onClose}>
+						Cancel
+					</Button>
+					<Button
+						variant="danger"
+						isDisabled={reclaim.isPending}
+						onPress={() =>
+							reclaim.mutate(
+								{ projectId: editor.project_id, sessionId: editor.session_id, save },
+								{ onSuccess: onClose },
+							)
+						}
+					>
+						{reclaim.isPending ? 'Reclaiming…' : save ? 'Save and reclaim' : 'Discard and reclaim'}
+					</Button>
+				</div>
+			</div>
+		</DialogModal>
+	);
+}
+
 export default function AdminRuntimePage() {
 	const [paused, setPaused] = useState(false);
+	const [reclaimEditor, setReclaimEditor] = useState<Editor | null>(null);
 	const [project, setProject] = useState('');
 	const [search, setSearch] = useState('');
 	const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -577,7 +671,7 @@ export default function AdminRuntimePage() {
 						)}
 					</TabPanel>
 					<TabPanel id="editors">
-						<EditorsTable editors={editors} now={now} />
+						<EditorsTable editors={editors} now={now} onReclaim={setReclaimEditor} />
 					</TabPanel>
 				</Tabs>
 			)}
@@ -585,6 +679,9 @@ export default function AdminRuntimePage() {
 				Recorded state, not a live compute health check. Connections are approximate and may include
 				clients outside managed app visits.
 			</p>
+			{reclaimEditor && (
+				<ReclaimSessionDialog editor={reclaimEditor} onClose={() => setReclaimEditor(null)} />
+			)}
 			<DialogModal
 				isOpen={selectedId !== null}
 				onClose={() => setSelectedId(null)}

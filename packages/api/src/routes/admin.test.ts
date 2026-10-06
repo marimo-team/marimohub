@@ -43,6 +43,18 @@ describe('Admin routes', () => {
 			await expectError(await app.request(path), 401, 'UNAUTHORIZED');
 		}
 		await expectError(
+			await app.request(
+				'/api/v1/admin/runtime/projects/proj-aaaaaaaaaaaaaaaa/sessions/sess-aaaaaaaaaaaaaaaa/reclaim',
+				{
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: '{}',
+				},
+			),
+			401,
+			'UNAUTHORIZED',
+		);
+		await expectError(
 			await app.request('/api/v1/admin/debug/sandbox-startup', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
@@ -85,8 +97,9 @@ describe('Admin routes', () => {
 			'/api/v1/admin/runtime',
 			`/api/v1/admin/users/${uid('target')}/suspension`,
 			'/api/v1/admin/debug/sandbox-startup',
+			'/api/v1/admin/runtime/projects/proj-aaaaaaaaaaaaaaaa/sessions/sess-aaaaaaaaaaaaaaaa/reclaim',
 		]) {
-			const debug = path.endsWith('/sandbox-startup');
+			const debug = path.endsWith('/sandbox-startup') || path.endsWith('/reclaim');
 			const res = await composed.request(path, {
 				method: debug ? 'POST' : path.includes('/suspension') ? 'PUT' : 'GET',
 				headers: {
@@ -118,6 +131,9 @@ describe('Admin routes', () => {
 		expect(doc.paths['/api/v1/admin/users'].get.security).toEqual([{ cookieAuth: [] }]);
 		expect(doc.paths['/api/v1/admin/config'].get.security).toEqual([{ cookieAuth: [] }]);
 		expect(doc.paths['/api/v1/admin/runtime'].get.security).toEqual([{ cookieAuth: [] }]);
+		expect(
+			doc.paths['/api/v1/admin/runtime/projects/{pid}/sessions/{sid}/reclaim'].post.security,
+		).toEqual([{ cookieAuth: [] }]);
 		expect(doc.paths['/api/v1/admin/debug/sandbox-startup'].post.security).toEqual([
 			{ cookieAuth: [] },
 		]);
