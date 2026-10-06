@@ -21,11 +21,12 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \
     MARIMOHUB_STATIC_ROOT=./public
-# Build/deploy identity, surfaced read-only by GET /api/version (UI footer). The
-# deploy Makefile passes these as --build-arg; they default to `dev` when unset.
+# CI supplies build identity because the runtime image has no Git checkout.
 ARG MARIMOHUB_VERSION=dev
+ARG MARIMOHUB_GIT_SHA
 ARG MARIMOHUB_IMAGE
 ENV MARIMOHUB_VERSION=$MARIMOHUB_VERSION \
+    MARIMOHUB_GIT_SHA=$MARIMOHUB_GIT_SHA \
     MARIMOHUB_IMAGE=$MARIMOHUB_IMAGE
 # Local compute needs uv and Python 3.11+ for the setup step's tomllib parser.
 # Off by default to keep the production image lean; enabled by examples/docker-compose.

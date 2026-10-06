@@ -1720,9 +1720,16 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_VERSION',
 						name: 'Deployment version',
 						description:
-							'Build/deploy version (usually the short git SHA or release tag) shown in the UI footer and returned by `GET /api/v1/version`. Baked into the image at build time.',
+							'Build/deploy version (usually the short git SHA or release tag) shown in the UI footer and returned by `GET /api/v1/version`. Also sets the `service.version` telemetry resource attribute and appears in boot events. Baked into the image at build time.',
 						example: 'a1b2c3d',
 						default: 'dev',
+					},
+					{
+						id: 'MARIMOHUB_GIT_SHA',
+						name: 'Deployment git revision',
+						description:
+							'Full git commit SHA for the deployed build, included in boot events and the `vcs.ref.head.revision` telemetry resource attribute. Baked into release artifacts at build time.',
+						example: '9d59409acf479dfa0df1aa568182e43e43df8bbe28d60',
 					},
 					{
 						id: 'MARIMOHUB_IMAGE',

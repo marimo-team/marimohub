@@ -17,6 +17,7 @@ import {
 import { validateServerEnv } from './env';
 import { BackgroundLoops } from './backgroundLoops';
 import { logEvent } from './log';
+import { buildIdentity } from './buildIdentity';
 import { fanoutMetrics, OtelMetrics, WideEventMetrics } from './metrics';
 import { startOtel } from './otel';
 import { settleAllWithin } from './promise';
@@ -214,7 +215,12 @@ export async function bootstrap(
 	};
 	const server = serveFn(serverOptions, (info) => {
 		const address = info.address.includes(':') ? `[${info.address}]` : info.address;
-		console.log(`[marimohub] server listening on http://${address}:${info.port}`);
+		logEvent({
+			level: 'info',
+			event: 'server_started',
+			...buildIdentity(validatedEnv),
+			address: `http://${address}:${info.port}`,
+		});
 	});
 
 	// In `proxy` exposure mode, forward `…/proxy/<token>/` WebSocket upgrades to the

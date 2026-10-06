@@ -154,6 +154,8 @@ describe('isLogsEnabled', () => {
 
 describe('startOtel', () => {
 	beforeEach(() => {
+		vi.stubEnv('MARIMOHUB_VERSION', '1.2.3');
+		vi.stubEnv('MARIMOHUB_GIT_SHA', 'abcdef123456');
 		// Any endpoint-set test now also enables logs, so the otel_started event
 		// becomes a log record. Intercept the flush so shutdown never blocks on the
 		// (nonexistent) endpoint — order-independent, unlike a per-test mock.
@@ -203,10 +205,16 @@ describe('startOtel', () => {
 		await handle?.shutdown();
 		const started = exported.find((r) => r.attributes.event === 'otel_started');
 		expect(started).toBeDefined();
+		expect(started?.resource.attributes).toMatchObject({
+			'service.version': '1.2.3',
+			'vcs.ref.head.revision': 'abcdef123456',
+		});
 		expect(started?.body).toBe('otel_started');
 		expect(started?.severityText).toBe('info');
 		expect(started?.attributes).toMatchObject({
 			event: 'otel_started',
+			'service.version': '1.2.3',
+			'vcs.ref.head.revision': 'abcdef123456',
 			tracing: false,
 			metrics: 'off',
 			logs: true,
@@ -234,6 +242,8 @@ describe('startOtel', () => {
 		const resource = (span as unknown as ReadableSpan).resource;
 		await resource.waitForAsyncAttributes?.();
 		expect(resource.attributes['service.name']).toBe('marimohub-test');
+		expect(resource.attributes['service.version']).toBe('1.2.3');
+		expect(resource.attributes['vcs.ref.head.revision']).toBe('abcdef123456');
 		expect(resource.attributes['process.pid']).toBe(process.pid);
 		expect(resource.attributes['host.name']).toBeDefined();
 		expect(resource.attributes['service.instance.id']).toBeDefined();
@@ -259,7 +269,10 @@ describe('startOtel', () => {
 
 	it('lets OTEL_RESOURCE_ATTRIBUTES override detected resource attributes', async () => {
 		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
-		vi.stubEnv('OTEL_RESOURCE_ATTRIBUTES', 'service.instance.id=pod-7');
+		vi.stubEnv(
+			'OTEL_RESOURCE_ATTRIBUTES',
+			'service.instance.id=pod-7,service.version=override,vcs.ref.head.revision=override-sha',
+		);
 		vi.stubEnv('OTEL_METRICS_EXPORTER', 'none');
 		const register = vi
 			.spyOn(NodeTracerProvider.prototype, 'register')
@@ -270,6 +283,8 @@ describe('startOtel', () => {
 		const resource = (span as unknown as ReadableSpan).resource;
 		await resource.waitForAsyncAttributes?.();
 		expect(resource.attributes['service.instance.id']).toBe('pod-7');
+		expect(resource.attributes['service.version']).toBe('override');
+		expect(resource.attributes['vcs.ref.head.revision']).toBe('override-sha');
 		await handle?.shutdown();
 	});
 

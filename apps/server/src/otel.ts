@@ -27,6 +27,7 @@ import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk
 import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { logEvent } from './log';
+import { buildIdentity } from './buildIdentity';
 
 export interface OtelHandle {
 	/** True when the request middleware should create SERVER spans. */
@@ -112,7 +113,7 @@ export function startOtel(): OtelHandle | null {
 	// detectors so envDetector still overrides it, but an unset OTEL_SERVICE_NAME
 	// yields `marimohub` instead of the SDK's `unknown_service:node`.
 	const resource = defaultResource()
-		.merge(resourceFromAttributes({ 'service.name': 'marimohub' }))
+		.merge(resourceFromAttributes({ 'service.name': 'marimohub', ...buildIdentity() }))
 		.merge(
 			detectResources({
 				detectors: [hostDetector, processDetector, serviceInstanceIdDetector, envDetector],
@@ -158,6 +159,7 @@ export function startOtel(): OtelHandle | null {
 	logEvent({
 		level: 'info',
 		event: 'otel_started',
+		...buildIdentity(),
 		tracing,
 		metrics: metricsKind ?? 'off',
 		logs: logsEnabled,

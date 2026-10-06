@@ -197,6 +197,7 @@ if (!fs.existsSync(readyMarker)) {
 
 process.env.MARIMOHUB_STATIC_ROOT ??= path.join(payloadDir, 'public');
 process.env.MARIMOHUB_VERSION ??= manifest.version;
+if (manifest.gitSha) process.env.MARIMOHUB_GIT_SHA ??= manifest.gitSha;
 
 // `import()` here would be resolved by the SEA loader, which only knows
 // built-in specifiers (Node 26 rejects a file URL outright), so the dynamic
