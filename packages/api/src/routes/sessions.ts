@@ -1587,20 +1587,13 @@ export async function startNotebookSession(input: {
 		}
 	}
 
-	if (mode === 'edit' && !ephemeral) {
-		const claim = await sessions.getEditorClaim(pid, nid);
-		if (
-			claim?.session_id &&
-			(await sessions.holdsLiveEditor(pid, nid, claim.session_id)) &&
-			!(await sessions.getReusableEditor(pid, claim.session_id))
-		) {
-			deps.metrics?.increment('sessions.editor_claim.lost', 1, {
-				project_id: pid,
-				notebook_id: nid,
-				phase: 'preflight',
-			});
-			throw new EditSessionRetiringError();
-		}
+	if (mode === 'edit' && !ephemeral && (await sessions.isClaimRetiring(pid, nid, user.id))) {
+		deps.metrics?.increment('sessions.editor_claim.lost', 1, {
+			project_id: pid,
+			notebook_id: nid,
+			phase: 'preflight',
+		});
+		throw new EditSessionRetiringError();
 	}
 
 	const temporaryToRetire = replacingAfterTakeover

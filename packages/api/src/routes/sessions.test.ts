@@ -2338,7 +2338,7 @@ describe('Session routes', () => {
 			vi.spyOn(api.deps.services.sessions, 'findReusableEditor').mockResolvedValueOnce({
 				sharing: 'exclusive',
 			});
-			vi.spyOn(api.deps.services.sessions, 'holdsLiveEditor').mockResolvedValueOnce(false);
+			vi.spyOn(api.deps.services.sessions, 'isClaimRetiring').mockResolvedValueOnce(false);
 			return api.request;
 		};
 

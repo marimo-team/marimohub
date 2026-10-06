@@ -1061,11 +1061,39 @@ export class SessionService {
 		return claim;
 	}
 
-	async holdsLiveEditor(
+	private editorClaimHolder(
+		claim: EditorClaim,
+		requestedBy?: UserId,
+	): SessionId | null | undefined {
+		if (!claim.transfer) return claim.session_id;
+		if (claim.transfer.phase !== 'ready' || claim.transfer.requested_by !== requestedBy) {
+			throw new TakeoverInProgressError();
+		}
+		// The displaced holder stays in session_id until takeover completes.
+		return claim.transfer.replacement_session_id;
+	}
+
+	async isClaimRetiring(
 		projectId: ProjectId,
 		notebookId: NotebookId,
-		holder: SessionId,
+		requestedBy: UserId,
 	): Promise<boolean> {
+		const claim = await this.getEditorClaim(projectId, notebookId);
+		if (!claim) return false;
+		const holder = await this.getLiveEditorHolder(
+			projectId,
+			notebookId,
+			this.editorClaimHolder(claim, requestedBy),
+		);
+		return !!holder && !isReusableSession(holder, Date.now());
+	}
+
+	private async getLiveEditorHolder(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		holder: SessionId | null | undefined,
+	): Promise<Session | undefined> {
+		if (!holder) return undefined;
 		try {
 			const session = await this.getSession(projectId, holder);
 			if (
@@ -1073,18 +1101,18 @@ export class SessionService {
 				sessionMode(session) !== 'edit' ||
 				session.ephemeral
 			) {
-				return false;
+				return undefined;
 			}
-			if (isReusableSession(session, Date.now())) return true;
+			if (isReusableSession(session, Date.now())) return session;
 			// Keep ownership until destruction is confirmed or the provider guarantees expiry.
-			return (
+			const retiring =
 				!!session.sandbox_id &&
 				!session.sandbox_reclaimed_at &&
 				(!session.sandbox_deadline_at || Date.now() < Date.parse(session.sandbox_deadline_at)) &&
-				(session.status === 'terminating' || isTerminal(session.status))
-			);
+				(session.status === 'terminating' || isTerminal(session.status));
+			return retiring ? session : undefined;
 		} catch (err) {
-			if (err instanceof NotFoundError) return false;
+			if (err instanceof NotFoundError) return undefined;
 			throw err;
 		}
 	}
@@ -1113,18 +1141,13 @@ export class SessionService {
 				}
 				const current = await readStored(EditorClaimSchema, obj, key);
 				if (current.session_id === sessionId) return { claimed: true, claim: current };
+				const holder = this.editorClaimHolder(current, requestedBy);
+				if (holder === sessionId) return { claimed: true, claim: current };
+				const liveHolder = await this.getLiveEditorHolder(projectId, notebookId, holder);
+				if (liveHolder) {
+					return { claimed: false, claim: { ...current, session_id: liveHolder.session_id } };
+				}
 				if (current.transfer) {
-					if (current.transfer.phase !== 'ready' || current.transfer.requested_by !== requestedBy) {
-						throw new TakeoverInProgressError();
-					}
-					const reserved = current.transfer.replacement_session_id;
-					if (reserved === sessionId) return { claimed: true, claim: current };
-					if (reserved && (await this.holdsLiveEditor(projectId, notebookId, reserved))) {
-						return {
-							claimed: false,
-							claim: { ...current, session_id: reserved },
-						};
-					}
 					const reservedClaim: EditorClaim = {
 						...current,
 						transfer: { ...current.transfer, replacement_session_id: sessionId },
@@ -1133,12 +1156,6 @@ export class SessionService {
 						onlyIfEtagMatches: obj.etag,
 					});
 					return { claimed: true, claim: reservedClaim };
-				}
-				if (
-					current.session_id &&
-					(await this.holdsLiveEditor(projectId, notebookId, current.session_id))
-				) {
-					return { claimed: false, claim: current };
 				}
 				const replacement = { ...current, ...next, transfer: undefined };
 				await cas.put(key, JSON.stringify(replacement), {
