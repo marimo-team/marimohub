@@ -83,6 +83,16 @@ describe('bootstrap', () => {
 		vi.useRealTimers();
 	});
 
+	it('logs the build version at boot when telemetry export is disabled', async () => {
+		const harness = makeHarness(deps);
+		await bootstrap({ ...BASE_ENV, MARIMOHUB_VERSION: '1.2.3' }, harness.overrides);
+		harness.serveFn.mock.calls[0][1]!({ address: '127.0.0.1', port: 3000, family: 'IPv4' });
+		expect(JSON.parse(vi.mocked(console.log).mock.calls.at(-1)![0])).toMatchObject({
+			event: 'server_started',
+			'service.version': '1.2.3',
+		});
+	});
+
 	it('serves maintenance health without authentication or downstream I/O when loops are disabled', async () => {
 		const harness = makeHarness(deps);
 		await bootstrap(BASE_ENV, harness.overrides);
@@ -284,7 +294,11 @@ describe('bootstrap', () => {
 		const onListening = harness.serveFn.mock.calls[0][1];
 		onListening?.(address);
 
-		expect(console.log).toHaveBeenCalledWith(`[marimohub] server listening on ${expected}`);
+		expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"event":"server_started"'));
+		expect(JSON.parse(vi.mocked(console.log).mock.calls.at(-1)![0])).toMatchObject({
+			address: expected,
+			'service.version': 'dev',
+		});
 	});
 
 	it('prepares dependencies before preflight and serving', async () => {

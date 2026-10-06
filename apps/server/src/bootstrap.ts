@@ -214,7 +214,12 @@ export async function bootstrap(
 	};
 	const server = serveFn(serverOptions, (info) => {
 		const address = info.address.includes(':') ? `[${info.address}]` : info.address;
-		console.log(`[marimohub] server listening on http://${address}:${info.port}`);
+		logEvent({
+			level: 'info',
+			event: 'server_started',
+			'service.version': validatedEnv.MARIMOHUB_VERSION ?? 'dev',
+			address: `http://${address}:${info.port}`,
+		});
 	});
 
 	// In `proxy` exposure mode, forward `…/proxy/<token>/` WebSocket upgrades to the

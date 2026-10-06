@@ -24,7 +24,7 @@ import {
 	startSessionLifecycle,
 	startWarmPools,
 } from './cron';
-import { WideEventMetrics } from './metrics';
+import { fanoutMetrics, WideEventMetrics } from './metrics';
 import { BackgroundLoops } from './backgroundLoops';
 
 vi.mock('@marimo-hub/core', async (importOriginal) => {
@@ -43,6 +43,22 @@ function parseLoggedEvents(logSpy: { mock: { calls: unknown[][] } }): Record<str
 	return logSpy.mock.calls.map(
 		(call: unknown[]) => JSON.parse(call[0] as string) as Record<string, unknown>,
 	);
+}
+
+type ReconcileResult = Awaited<ReturnType<ReconciliationService['reconcile']>>;
+
+function makeReconcileResult(overrides: Partial<ReconcileResult> = {}): ReconcileResult {
+	return {
+		skipped: false,
+		reclaimed: 0,
+		unreclaimedTerminal: 0,
+		oldestUnreclaimedAgeMs: null,
+		markedDead: 0,
+		orphansReaped: 0,
+		orphanSandboxIds: [],
+		markedDeadSessions: [],
+		...overrides,
+	};
 }
 
 describe('startMaintenance', () => {
@@ -81,6 +97,92 @@ describe('startMaintenance', () => {
 			notebooks_swept: 0,
 			'counter.sessions_created': 1,
 		});
+	});
+
+	it('publishes unreclaimed terminal gauges to the metrics port and resets them after recovery', async () => {
+		const gauge = vi.fn();
+		deps.metrics = fanoutMetrics(metrics, { gauge, increment: vi.fn() });
+		const result = makeReconcileResult({
+			skipped: true,
+			unreclaimedTerminal: 2,
+			oldestUnreclaimedAgeMs: 60_000,
+		});
+		vi.spyOn(ReconciliationService.prototype, 'reconcile')
+			.mockResolvedValueOnce(result)
+			.mockResolvedValue(makeReconcileResult({ skipped: true }));
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+		expect(gauge).toHaveBeenCalledWith('sessions.unreclaimed_terminal', 2, undefined);
+		expect(gauge).toHaveBeenCalledWith(
+			'sessions.unreclaimed_terminal.oldest_age_ms',
+			60_000,
+			undefined,
+		);
+		expect(parseLoggedEvents(logSpy).at(-1)).toMatchObject({
+			'gauge.sessions.unreclaimed_terminal': 2,
+			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 60_000,
+		});
+		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+		expect(gauge).toHaveBeenCalledWith('sessions.unreclaimed_terminal', 0, undefined);
+		expect(gauge).toHaveBeenCalledWith('sessions.unreclaimed_terminal.oldest_age_ms', 0, undefined);
+		expect(parseLoggedEvents(logSpy).at(-1)).toMatchObject({
+			'gauge.sessions.unreclaimed_terminal': 0,
+			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 0,
+		});
+	});
+
+	it('keeps the last observed gauges when reconciliation fails, then resets them on recovery', async () => {
+		metrics.gauge('sessions.unreclaimed_terminal', 2);
+		metrics.gauge('sessions.unreclaimed_terminal.oldest_age_ms', 60_000);
+		const reconcile = vi
+			.spyOn(ReconciliationService.prototype, 'reconcile')
+			.mockRejectedValueOnce(new Error('session listing unavailable'));
+		stop = startMaintenance(deps, metrics);
+		await flushRun();
+		expect(metrics.collect()).toMatchObject({
+			'gauge.sessions.unreclaimed_terminal': 2,
+			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 60_000,
+		});
+		expect(parseLoggedEvents(logSpy)).toContainEqual(
+			expect.objectContaining({ event: 'maintenance_failed' }),
+		);
+		expect(parseLoggedEvents(logSpy).some((event) => event.event === 'maintenance_cycle')).toBe(
+			false,
+		);
+		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+		expect(reconcile).toHaveBeenCalledTimes(2);
+		expect(parseLoggedEvents(logSpy).at(-1)).toMatchObject({
+			event: 'maintenance_cycle',
+			'gauge.sessions.unreclaimed_terminal': 0,
+			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 0,
+		});
+	});
+
+	it('ignores gauges from a timed-out reconciliation after a newer sweep succeeds', async () => {
+		const late = Promise.withResolvers<ReconcileResult>();
+		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockReturnValueOnce(late.promise);
+		const loops = new BackgroundLoops();
+		stop = startMaintenance(deps, metrics, loops);
+		await flushRun();
+		await vi.advanceTimersByTimeAsync(
+			loops.health().loops.maintenance.deadline_ms + FIVE_MINUTES_MS,
+		);
+		expect(metrics.collect()).toMatchObject({
+			'gauge.sessions.unreclaimed_terminal': 0,
+			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 0,
+		});
+		const observed = metrics.collect();
+		const events = parseLoggedEvents(logSpy);
+		expect(events).toContainEqual(expect.objectContaining({ event: 'maintenance_stalled' }));
+		late.resolve(
+			makeReconcileResult({
+				unreclaimedTerminal: 7,
+				oldestUnreclaimedAgeMs: 120_000,
+			}),
+		);
+		await flushRun();
+		expect(metrics.collect()).toEqual(observed);
+		expect(parseLoggedEvents(logSpy)).toEqual(events);
 	});
 
 	it('reports the current cycle heartbeat after work and lease release complete', async () => {
@@ -318,16 +420,12 @@ describe('startMaintenance', () => {
 			project_id: session.project_id,
 			title: 'Shared app',
 		});
-		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue({
-			skipped: false,
-			reclaimed: 0,
-			markedDead: 1,
-			orphansReaped: 0,
-			orphanSandboxIds: [],
-			unreclaimedTerminal: 0,
-			oldestUnreclaimedAgeMs: null,
-			markedDeadSessions: [session],
-		});
+		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue(
+			makeReconcileResult({
+				markedDead: 1,
+				markedDeadSessions: [session],
+			}),
+		);
 		vi.spyOn(deps.services.projects, 'getProject').mockResolvedValue(project);
 		vi.spyOn(deps.services.notebooks, 'getNotebook').mockResolvedValue({ meta: notebook } as never);
 		const deliver = vi.fn(async () => 'delivered' as const);
@@ -358,16 +456,12 @@ describe('startMaintenance', () => {
 			project_id: session.project_id,
 			title: 'Shared app',
 		});
-		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue({
-			skipped: false,
-			reclaimed: 0,
-			markedDead: 1,
-			orphansReaped: 0,
-			orphanSandboxIds: [],
-			unreclaimedTerminal: 0,
-			oldestUnreclaimedAgeMs: null,
-			markedDeadSessions: [session],
-		});
+		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue(
+			makeReconcileResult({
+				markedDead: 1,
+				markedDeadSessions: [session],
+			}),
+		);
 		const getProject = vi
 			.spyOn(deps.services.projects, 'getProject')
 			.mockRejectedValueOnce(new Error('temporary read failure'))
@@ -390,16 +484,12 @@ describe('startMaintenance', () => {
 		const sessions = Array.from({ length: 9 }, () =>
 			makeSession({ mode: 'app', sandbox_id: createSandboxId() }),
 		);
-		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue({
-			skipped: false,
-			reclaimed: 0,
-			markedDead: sessions.length,
-			orphansReaped: 0,
-			orphanSandboxIds: [],
-			unreclaimedTerminal: 0,
-			oldestUnreclaimedAgeMs: null,
-			markedDeadSessions: sessions,
-		});
+		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue(
+			makeReconcileResult({
+				markedDead: sessions.length,
+				markedDeadSessions: sessions,
+			}),
+		);
 		const releases: (() => void)[] = [];
 		const getProject = vi.spyOn(deps.services.projects, 'getProject').mockImplementation(
 			(projectId) =>
@@ -430,16 +520,12 @@ describe('startMaintenance', () => {
 			status: 'starting',
 			sandbox_id: createSandboxId(),
 		});
-		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue({
-			skipped: false,
-			reclaimed: 0,
-			markedDead: 2,
-			orphansReaped: 0,
-			orphanSandboxIds: [],
-			unreclaimedTerminal: 0,
-			oldestUnreclaimedAgeMs: null,
-			markedDeadSessions: [editor, startingApp],
-		});
+		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue(
+			makeReconcileResult({
+				markedDead: 2,
+				markedDeadSessions: [editor, startingApp],
+			}),
+		);
 		const deliver = vi.fn(async () => 'delivered' as const);
 		deps.projectAlerts = {
 			store: {} as never,

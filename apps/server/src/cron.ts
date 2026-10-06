@@ -16,6 +16,7 @@ import {
 	ReconciliationService,
 	sessionModePolicy,
 	SessionLifecycleService,
+	traced,
 } from '@marimo-hub/core';
 import { JobRunner, JobScheduler } from '@marimo-hub/core/jobs';
 import { logEvent } from './log';
@@ -24,6 +25,14 @@ import type { WideEventMetrics } from './metrics';
 
 const FIVE_MINUTES_MS = Millis.minutes(5);
 const APP_ALERT_CONTEXT_CONCURRENCY = 8;
+
+function maintenanceLock(deps: ApiDeps, key: string = paths.maintenanceLock): MaintenanceLock {
+	const attributes = () => ({ 'marimohub.lock.key': key });
+	return traced('MaintenanceLock', new MaintenanceLock(deps.bucket, key), {
+		acquire: attributes,
+		release: attributes,
+	});
+}
 
 async function retryMetadataRead<T>(read: () => Promise<T>): Promise<T> {
 	try {
@@ -89,6 +98,7 @@ export function startMaintenance(
 	metrics: WideEventMetrics,
 	loops = new BackgroundLoops(),
 ): () => void {
+	const maintenanceSteps = traced('Maintenance', { sweepAppPools });
 	const { sessions, maintenance, projects, notebooks, proposals, idempotency } = deps.services;
 	const reconciler = new ReconciliationService(
 		sessions,
@@ -105,7 +115,7 @@ export function startMaintenance(
 		},
 	);
 	const jobs = deps.jobs ? createJobScheduler(deps, metrics, deps.jobs) : undefined;
-	const lock = new MaintenanceLock(deps.bucket);
+	const lock = maintenanceLock(deps);
 	return loops.start({
 		name: 'maintenance',
 		intervalMs: FIVE_MINUTES_MS,
@@ -113,10 +123,16 @@ export function startMaintenance(
 		overlapEvent: 'maintenance_cycle_overlap_skipped',
 		notLeaderEvent: 'maintenance_skipped_not_leader',
 		run: async ({ holder, step }) => {
-			await step(() => sweepAppPools(deps));
+			await step(() => maintenanceSteps.sweepAppPools(deps));
 			await step(() => sweepPreviews(deps));
 			const sessionsExpired = await step(() => sessions.expireStale());
 			const reconcile = await step(() => reconciler.reconcile());
+			const domainMetrics = deps.metrics ?? metrics;
+			domainMetrics.gauge('sessions.unreclaimed_terminal', reconcile.unreclaimedTerminal);
+			domainMetrics.gauge(
+				'sessions.unreclaimed_terminal.oldest_age_ms',
+				reconcile.oldestUnreclaimedAgeMs ?? 0,
+			);
 			await step(() => scheduleUnavailableAppAlerts(deps, reconcile.markedDeadSessions));
 			if (!reconcile.skipped && reconcile.orphanSandboxIds.length > 0) {
 				logEvent({
@@ -189,6 +205,7 @@ export function startSessionLifecycle(
 	const lifetime = deps.sandbox.sessionLifetime;
 	if (!lifetime) return undefined;
 
+	const maintenanceSteps = traced('Maintenance', { sweepAppPools });
 	const { sessions, notebooks } = deps.services;
 	const svc = new SessionLifecycleService(sessions, notebooks, deps.compute, deps.bucket, {
 		...lifetime,
@@ -197,13 +214,13 @@ export function startSessionLifecycle(
 		thumbnailDeadline: deps.sandbox.thumbnailDeadline,
 		workdir: deps.sandbox.workdir,
 	});
-	const lock = new MaintenanceLock(deps.bucket, paths.sessionLifecycleLock);
+	const lock = maintenanceLock(deps, paths.sessionLifecycleLock);
 	return loops.start({
 		name: 'session_lifecycle',
 		intervalMs: lifetime.sweepIntervalMs,
 		lock,
 		run: async ({ holder, step }) => {
-			await step(() => sweepAppPools(deps));
+			await step(() => maintenanceSteps.sweepAppPools(deps));
 			const r = await step(() => svc.sweep());
 			if (Object.values(r).some((n) => n > 0)) {
 				logEvent({ level: 'info', event: 'session_lifecycle_sweep', holder, ...r });
@@ -278,7 +295,7 @@ export function startJobScheduler(
 	if (!deps.jobs) throw new Error('startJobScheduler: notebook jobs are off (MARIMOHUB_JOBS)');
 	const scheduler = createJobScheduler(deps, metrics, deps.jobs);
 	const tickMs = deps.jobs.tickMs;
-	const lock = new MaintenanceLock(deps.bucket, paths.jobSchedulerLock);
+	const lock = maintenanceLock(deps, paths.jobSchedulerLock);
 	const loop = loops.start({
 		name: 'job_scheduler',
 		intervalMs: tickMs,
@@ -316,7 +333,7 @@ export function startWarmPools(
 		failureEvent: 'warm_pool_sweep_failed',
 		// Late creates can publish cleanup records after an empty disabled sweep.
 		intervalMs: service.config.enabled ? 5_000 : FIVE_MINUTES_MS,
-		lock: new MaintenanceLock(deps.bucket, paths.warmPoolLock),
+		lock: maintenanceLock(deps, paths.warmPoolLock),
 		shouldRun: async () =>
 			service.config.enabled || (await service.store.ownedSandboxIds()).size > 0,
 		run: () => service.sweep(),

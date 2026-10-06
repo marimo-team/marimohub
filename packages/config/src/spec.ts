@@ -1720,7 +1720,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_VERSION',
 						name: 'Deployment version',
 						description:
-							'Build/deploy version (usually the short git SHA or release tag) shown in the UI footer and returned by `GET /api/v1/version`. Baked into the image at build time.',
+							'Build version shown in the UI footer, `GET /api/v1/version`, and boot events. Sets the default `service.version` telemetry attribute. Release artifacts include this value.',
 						example: 'a1b2c3d',
 						default: 'dev',
 					},

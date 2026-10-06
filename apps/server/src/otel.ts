@@ -1,10 +1,6 @@
 /**
- * OpenTelemetry tracing + metrics, driven entirely by standard OTEL_* env vars:
- * each pillar is enabled iff its exporter has somewhere to send data. Sampling
- * and exporter endpoint/headers come from the SDK's own env handling; the
- * resource from env/host/process detectors. Manual setup only —
- * auto-instrumentation patches modules via require/import hooks, which cannot
- * work in the single-file bundle (no node_modules at runtime).
+ * Manual instrumentation avoids module hooks, which do not work in the server bundle.
+ * Standard OTEL_* variables control exporters and sampling.
  */
 import { metrics as metricsApi } from '@opentelemetry/api';
 import { logs as logsApi } from '@opentelemetry/api-logs';
@@ -105,14 +101,10 @@ export function startOtel(): OtelHandle | null {
 	const logsEnabled = isLogsEnabled();
 	if (!tracing && !metricsKind && !logsEnabled) return null;
 
-	// Only envDetector reads OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES
-	// (defaultResource() ignores them). Later detectors win on merge, so it goes
-	// last: operator-set attributes override detected ones like the random-UUID
-	// service.instance.id. The fallback service.name is merged before the
-	// detectors so envDetector still overrides it, but an unset OTEL_SERVICE_NAME
-	// yields `marimohub` instead of the SDK's `unknown_service:node`.
+	// Merge envDetector last so explicit OTEL attributes override detected and build defaults.
+	const version = process.env.MARIMOHUB_VERSION ?? 'dev';
 	const resource = defaultResource()
-		.merge(resourceFromAttributes({ 'service.name': 'marimohub' }))
+		.merge(resourceFromAttributes({ 'service.name': 'marimohub', 'service.version': version }))
 		.merge(
 			detectResources({
 				detectors: [hostDetector, processDetector, serviceInstanceIdDetector, envDetector],
@@ -158,6 +150,7 @@ export function startOtel(): OtelHandle | null {
 	logEvent({
 		level: 'info',
 		event: 'otel_started',
+		'service.version': version,
 		tracing,
 		metrics: metricsKind ?? 'off',
 		logs: logsEnabled,

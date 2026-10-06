@@ -55,8 +55,8 @@ export {
 } from './integrations/workspaceArchive';
 export type { ArchiveFile, ParseWorkspaceArchiveOptions } from './integrations/workspaceArchive';
 
-// Trace↔log correlation (the `traced` span wrapper stays internal to createServices)
-export { traceContext } from './tracing';
+// Public span wrapper and trace-log correlation helpers.
+export { traceContext, traced } from './tracing';
 
 // OTEL logs bridge — makes stdout wide-events durable when an entrypoint wires a provider
 export { emitLogRecord, logEvent } from './logs';

@@ -21,8 +21,7 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \
     MARIMOHUB_STATIC_ROOT=./public
-# Build/deploy identity, surfaced read-only by GET /api/version (UI footer). The
-# deploy Makefile passes these as --build-arg; they default to `dev` when unset.
+# CI supplies build identity because the runtime image has no Git checkout.
 ARG MARIMOHUB_VERSION=dev
 ARG MARIMOHUB_IMAGE
 ENV MARIMOHUB_VERSION=$MARIMOHUB_VERSION \
