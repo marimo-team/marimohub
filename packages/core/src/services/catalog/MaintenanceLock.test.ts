@@ -52,6 +52,22 @@ describe('MaintenanceLock', () => {
 		expect(await lock.acquire('B', 10_000)).toBe(true);
 	});
 
+	it('does not release a successor after an aborted lease read resumes', async () => {
+		await lock.acquire('A', 1000);
+		const oldRecord = await bucket.get(paths.maintenanceLock);
+		const read = Promise.withResolvers<typeof oldRecord>();
+		vi.spyOn(bucket, 'get').mockReturnValueOnce(read.promise);
+		const controller = new AbortController();
+		const releasing = lock.release('A', controller.signal);
+		controller.abort();
+		clock.set(2000);
+		expect(await lock.acquire('B', 1000)).toBe(true);
+		read.resolve(oldRecord);
+		await releasing;
+		const current = await bucket.get(paths.maintenanceLock);
+		expect(await current!.json()).toMatchObject({ holder: 'B' });
+	});
+
 	it('release by a non-holder is a no-op', async () => {
 		expect(await lock.acquire('A', 10_000)).toBe(true);
 		await lock.release('B'); // not the holder

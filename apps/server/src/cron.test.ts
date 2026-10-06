@@ -25,6 +25,7 @@ import {
 	startWarmPools,
 } from './cron';
 import { WideEventMetrics } from './metrics';
+import { BackgroundLoops } from './backgroundLoops';
 
 vi.mock('@marimo-hub/core', async (importOriginal) => {
 	const actual = await importOriginal<typeof CoreModule>();
@@ -440,6 +441,42 @@ describe('startSessionLifecycle', () => {
 		expect(sweepSpy).not.toHaveBeenCalled();
 	});
 
+	it.each(['acquire', 'release'] as const)(
+		'recovers when bucket.get hangs during %s',
+		async (phase) => {
+			if (phase === 'acquire') {
+				await bucket.put(
+					paths.sessionLifecycleLock,
+					JSON.stringify({ holder: 'expired', expires_at: new Date(0).toISOString() }),
+				);
+			}
+			const get = bucket.get.bind(bucket);
+			let hung = false;
+			vi.spyOn(bucket, 'get').mockImplementation((key) => {
+				if (key === paths.sessionLifecycleLock && !hung) {
+					hung = true;
+					return new Promise(() => {});
+				}
+				return get(key);
+			});
+			const loops = new BackgroundLoops();
+			stop = startSessionLifecycle(deps, loops);
+			await flushRun();
+			expect(sweepSpy).toHaveBeenCalledTimes(phase === 'acquire' ? 0 : 1);
+			await vi.advanceTimersByTimeAsync(10 * 60_000 + SESSION_SWEEP_INTERVAL_MS);
+			expect(sweepSpy.mock.calls.length).toBeGreaterThan(phase === 'acquire' ? 0 : 1);
+			expect(loops.health().loops.session_lifecycle).toMatchObject({
+				timeouts: 1,
+				stale: false,
+				running: false,
+			});
+			expect(loops.health().loops.session_lifecycle.last_success_at).not.toBeNull();
+			expect(parseLoggedEvents(logSpy)).toContainEqual(
+				expect.objectContaining({ event: 'session_lifecycle_stalled' }),
+			);
+		},
+	);
+
 	it('leases its own key, separate from the maintenance lock', async () => {
 		const putSpy = vi.spyOn(bucket, 'put');
 		stop = startSessionLifecycle(deps);
@@ -732,7 +769,7 @@ describe('startWarmPools', () => {
 				}),
 			);
 			w.sweep.mockClear();
-			await vi.advanceTimersByTimeAsync(5_000);
+			await vi.advanceTimersByTimeAsync(operation === 'release' ? 10 * 60_000 : 5_000);
 			expect(w.sweep).toHaveBeenCalledOnce();
 			expect(await w.bucket.head(paths.warmPoolLock)).toBeNull();
 		},

@@ -127,8 +127,9 @@ acquired before any delete and released after. It is built on the _same_
 compare-and-swap primitive as the catalog (`onlyIfNotExists` to claim,
 `onlyIfEtagMatches` to steal an expired lease) — **no etcd, no `Lease`, nothing
 to provision.** If a misconfiguration or a bad rollout ever runs two reapers,
-only the lease holder proceeds, so deletes never race. The lease has a 10-minute
-TTL (comfortably longer than one 5-minute cycle) and the same holder renews it.
+only the lease holder starts a sweep. Each Node loop attempt uses a unique holder
+and a lease TTL equal to its deadline. The default lease TTL outside the Node
+loop runner remains 10 minutes.
 
 > We deliberately avoid a Kubernetes `Lease`/leader-election primitive: it would
 > couple the provider-agnostic core to k8s. The CAS lease works identically on
@@ -137,6 +138,34 @@ TTL (comfortably longer than one 5-minute cycle) and the same holder renews it.
 The same replica runs a second, faster loop — the **session lifecycle sweep**
 (§7) — under its own lease key (`_system/_session_lifecycle.lock`), so the two
 loops never release each other's hold.
+
+The Node runner gives each loop a deadline: three intervals, with a minimum of
+10 minutes. The five-minute maintenance loop therefore has a 15-minute deadline.
+A deadline covers lease acquisition, the sweep, and lease release. On timeout,
+the runner logs `<loop>_stalled`, increments its timeout count, and permits the
+next tick. The old lease expires without renewal. Late results cannot update
+the heartbeat or clear the guard for a newer attempt.
+
+The runner signals cancellation at the deadline and checks it between sweep
+steps. Underlying calls without cancellation support can continue after the
+deadline. Adapter request timeouts remain necessary to bound those calls.
+
+`GET /api/health/maintenance` reads only process memory and requires no
+authentication. It reports each enabled loop's timestamps, last duration,
+timeout count, and staleness. Timestamps use Unix milliseconds. Idle ticks and
+lease contention count as successful ticks. Storage errors and deadlines do not.
+
+The response returns 503 after one deadline plus one interval without success.
+Before the first success, this grace period starts at loop registration.
+
+Loops that do not start do not appear. An API replica with no loops returns 200 with an
+empty loop map.
+
+Every `maintenance_cycle` event includes `gauge.loop.<name>.*` heartbeat fields
+and `counter.loop.<name>.timeouts`. A missing first success appears as `null`.
+The Helm and example Kubernetes maintenance deployments use this endpoint for
+their liveness probes.
+API replicas retain the shallow `/api/health` probe.
 
 ---
 
