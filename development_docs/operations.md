@@ -109,34 +109,36 @@ is the symptom: `catalog.json` names a snapshot that no longer exists.
 
 ## 3. The single-cron guarantee
 
-The maintenance sweep (expire/reap sessions, prune snapshots/events) must run on
-**exactly one** writer — two reapers racing on deletes is a real failure mode.
-Two layers enforce this:
+The maintenance sweep requires a single writer. The dedicated
+`marimohub-maintenance` Deployment uses `replicas: 1` and `strategy: Recreate`.
+API replicas set `MARIMOHUB_RUN_MAINTENANCE=false` and scale independently.
+On Cloudflare, the platform's `scheduled()` trigger owns maintenance.
 
-**Deployment layer (primary).** A dedicated `replicas: 1` Deployment,
-`marimohub-maintenance`, owns the cron; the API Deployment runs with
-`MARIMOHUB_RUN_MAINTENANCE=false` (`apps/server/k8s/deployment.yaml`). It uses
-`strategy: Recreate` (not the default `RollingUpdate`, which can briefly surge to
-two pods). The API tier stays free to scale horizontally. On **Cloudflare**, the
-`scheduled()` trigger is a platform singleton, so no extra coordination is
-needed there.
+`MaintenanceLock` provides an advisory bucket-CAS lease: `onlyIfNotExists` claims
+it, and `onlyIfEtagMatches` replaces an expired lease. Leased Node loops use
+distinct keys and a unique holder for each attempt. Each lease expires at the
+attempt deadline. Outside the Node runner, the default lease TTL is 10 minutes.
 
-**Application layer (defense-in-depth).** Inside the sweep, a bucket-CAS advisory
-lease (`MaintenanceLock`, `packages/core/src/services/catalog/MaintenanceLock.ts`) is
-acquired before any delete and released after. It is built on the _same_
-compare-and-swap primitive as the catalog (`onlyIfNotExists` to claim,
-`onlyIfEtagMatches` to steal an expired lease) — **no etcd, no `Lease`, nothing
-to provision.** If a misconfiguration or a bad rollout ever runs two reapers,
-only the lease holder proceeds, so deletes never race. The lease has a 10-minute
-TTL (comfortably longer than one 5-minute cycle) and the same holder renews it.
+Node loop deadlines cover eligibility checks, lease acquisition, work, and lease
+release. The limit is three intervals with a 10-minute minimum: 15 minutes for
+maintenance. On timeout, the runner logs `<loop>_stalled`, increments its timeout
+count, and permits the next tick. Late results cannot update a newer attempt's
+guard or heartbeat. Cancellation checks run between sweep steps. Underlying
+calls without cancellation support still require adapter request timeouts.
 
-> We deliberately avoid a Kubernetes `Lease`/leader-election primitive: it would
-> couple the provider-agnostic core to k8s. The CAS lease works identically on
-> Cloudflare, Docker, and k8s.
+Lease-release errors log separately and preserve the sweep outcome.
 
-The same replica runs a second, faster loop — the **session lifecycle sweep**
-(§7) — under its own lease key (`_system/_session_lifecycle.lock`), so the two
-loops never release each other's hold.
+`GET /api/health/maintenance` is public and reads only process memory. It reports
+per-loop start, completion, and success timestamps (Unix milliseconds), duration,
+timeout count, and staleness. Idle ticks and lease contention count as success,
+but failed or timed-out attempts do not. It returns 503 after one deadline plus one interval
+without success, measured from registration before the first success.
+Loops that do not start are absent. Replicas without loops return 200.
+
+Each `maintenance_cycle` event includes `gauge.loop.<name>.*` heartbeats and
+`counter.loop.<name>.timeouts`. A missing first success is `null`.
+Helm and example Kubernetes maintenance deployments probe this endpoint.
+API replicas use `/api/health`.
 
 ---
 

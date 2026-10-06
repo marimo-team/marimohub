@@ -52,6 +52,36 @@ describe('MaintenanceLock', () => {
 		expect(await lock.acquire('B', 10_000)).toBe(true);
 	});
 
+	it.each(['get', 'body'] as const)(
+		'does not release a successor after an aborted %s resumes',
+		async (phase) => {
+			await lock.acquire('A', 1000);
+			const oldRecord = (await bucket.get(paths.maintenanceLock))!;
+			const read = Promise.withResolvers<void>();
+			vi.spyOn(bucket, 'get').mockImplementationOnce(async () => {
+				if (phase === 'get') await read.promise;
+				return {
+					...oldRecord,
+					text: async () => {
+						await read.promise;
+						return oldRecord.text();
+					},
+				};
+			});
+			const controller = new AbortController();
+			const releasing = lock.release('A', controller.signal);
+			await Promise.resolve();
+			controller.abort();
+			clock.set(2000);
+			expect(await lock.acquire('B', 1000)).toBe(true);
+			read.resolve();
+			await releasing;
+			expect(await (await bucket.get(paths.maintenanceLock))!.json()).toMatchObject({
+				holder: 'B',
+			});
+		},
+	);
+
 	it('release by a non-holder is a no-op', async () => {
 		expect(await lock.acquire('A', 10_000)).toBe(true);
 		await lock.release('B'); // not the holder

@@ -83,6 +83,78 @@ describe('bootstrap', () => {
 		vi.useRealTimers();
 	});
 
+	it('serves maintenance health without authentication or downstream I/O when loops are disabled', async () => {
+		const harness = makeHarness(deps);
+		await bootstrap(BASE_ENV, harness.overrides);
+		vi.spyOn(deps.authenticator, 'authenticate').mockImplementation(() => {
+			throw new Error('must not authenticate');
+		});
+		vi.spyOn(deps.compute, 'proxy').mockImplementation(() => {
+			throw new Error('must not proxy');
+		});
+		const fetch = harness.serveFn.mock.calls[0][0].fetch;
+		const res = (await fetch(
+			new Request('http://localhost/api/health/maintenance'),
+			{} as never,
+		)) as Response;
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ success: true, data: { ok: true, loops: {} } });
+	});
+
+	it('preserves API fallback responses behind the maintenance probe', async () => {
+		const harness = makeHarness(deps);
+		await bootstrap(BASE_ENV, harness.overrides);
+		const fetch = harness.serveFn.mock.calls[0][0].fetch;
+		const res = (await fetch(
+			new Request('http://localhost/missing', { method: 'POST' }),
+			{} as never,
+		)) as Response;
+		expect(res.status).toBe(404);
+		expect(await res.json()).toEqual({
+			success: false,
+			error: { code: 'NOT_FOUND', message: 'Route not found' },
+		});
+	});
+
+	it('returns 503 for stalled enabled loops and returns 200 after recovery', async () => {
+		const run = vi.fn(() => new Promise<void>(() => {}));
+		vi.mocked(startMaintenance).mockImplementation(
+			(_deps, _metrics, loops) =>
+				loops!.start({
+					name: 'maintenance',
+					intervalMs: 100,
+					deadlineMs: 250,
+					run,
+				}).stop,
+		);
+		const harness = makeHarness(deps);
+		const handle = await bootstrap(
+			{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' },
+			harness.overrides,
+		);
+		const fetch = harness.serveFn.mock.calls[0][0].fetch;
+		const health = async () =>
+			(await fetch(
+				new Request('http://localhost/api/health/maintenance'),
+				{} as never,
+			)) as Response;
+		expect((await health()).status).toBe(200);
+		await vi.advanceTimersByTimeAsync(350);
+		const res = await health();
+		expect(res.status).toBe(503);
+		expect(await res.json()).toMatchObject({
+			success: false,
+			error: {
+				code: 'MAINTENANCE_STALE',
+				details: { loops: { maintenance: { stale: true, timeouts: 1, last_success_at: null } } },
+			},
+		});
+		run.mockResolvedValue(undefined);
+		await vi.advanceTimersByTimeAsync(250);
+		expect((await health()).status).toBe(200);
+		await handle?.drain();
+	});
+
 	it('adds report-only CSP to SPA responses without changing API policies', async () => {
 		const harness = makeHarness(deps);
 		await bootstrap(BASE_ENV, harness.overrides);

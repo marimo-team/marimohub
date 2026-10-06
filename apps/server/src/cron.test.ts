@@ -25,6 +25,7 @@ import {
 	startWarmPools,
 } from './cron';
 import { WideEventMetrics } from './metrics';
+import { BackgroundLoops } from './backgroundLoops';
 
 vi.mock('@marimo-hub/core', async (importOriginal) => {
 	const actual = await importOriginal<typeof CoreModule>();
@@ -81,6 +82,65 @@ describe('startMaintenance', () => {
 			'counter.sessions_created': 1,
 		});
 	});
+
+	it('reports the current cycle heartbeat after work and lease release complete', async () => {
+		const started = Date.now();
+		vi.spyOn(MaintenanceLock.prototype, 'acquire').mockResolvedValue(true);
+		vi.spyOn(MaintenanceLock.prototype, 'release').mockImplementation(
+			() => new Promise((resolve) => setTimeout(resolve, 10)),
+		);
+		vi.spyOn(deps.services.sessions, 'expireStale').mockImplementation(
+			() => new Promise((resolve) => setTimeout(() => resolve(0), 40)),
+		);
+		const loops = new BackgroundLoops();
+		stop = startMaintenance(deps, metrics, loops);
+		await vi.advanceTimersByTimeAsync(40);
+		expect(parseLoggedEvents(logSpy)).toEqual([]);
+		await vi.advanceTimersByTimeAsync(10);
+		for (let cycle = 0; cycle < 2; cycle++) {
+			const events = parseLoggedEvents(logSpy);
+			expect(events).toHaveLength(cycle + 1);
+			expect(events[cycle]).toMatchObject({
+				event: 'maintenance_cycle',
+				'gauge.loop.maintenance.last_started_at': started + cycle * FIVE_MINUTES_MS,
+				'gauge.loop.maintenance.last_completed_at': started + cycle * FIVE_MINUTES_MS + 50,
+				'gauge.loop.maintenance.last_success_at': started + cycle * FIVE_MINUTES_MS + 50,
+				'gauge.loop.maintenance.last_duration_ms': 50,
+				'gauge.loop.maintenance.seconds_since_success': 0,
+			});
+			if (cycle === 0) await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+		}
+	});
+
+	it.each([false, true])(
+		'preserves the sweep result when the release read fails (failed: %s)',
+		async (failed) => {
+			const get = bucket.get.bind(bucket);
+			vi.spyOn(bucket, 'get').mockImplementation((key) => {
+				if (key === paths.maintenanceLock) return Promise.reject(new Error('release read failed'));
+				return get(key);
+			});
+			if (failed)
+				vi.spyOn(deps.services.sessions, 'expireStale').mockRejectedValueOnce(
+					new Error('sweep failed'),
+				);
+			const loops = new BackgroundLoops();
+			stop = startMaintenance(deps, metrics, loops);
+			await flushRun();
+			const events = parseLoggedEvents(logSpy);
+			expect(events.map((event) => event.event)).toEqual([
+				'maintenance_release_failed',
+				failed ? 'maintenance_failed' : 'maintenance_cycle',
+			]);
+			expect(events[0].error).toBe('release read failed');
+			if (failed) {
+				expect(events[1].error).toBe('sweep failed');
+				expect(loops.health().loops.maintenance.last_success_at).toBeNull();
+			} else {
+				expect(loops.health().loops.maintenance.last_success_at).toBe(Date.now());
+			}
+		},
+	);
 
 	it('sweeps previews before expiring session startup records', async () => {
 		const previews = vi.spyOn(deps.services.previews, 'cleanupCandidates');
@@ -440,6 +500,42 @@ describe('startSessionLifecycle', () => {
 		expect(sweepSpy).not.toHaveBeenCalled();
 	});
 
+	it.each(['acquire', 'release'] as const)(
+		'recovers when bucket.get hangs during %s',
+		async (phase) => {
+			if (phase === 'acquire') {
+				await bucket.put(
+					paths.sessionLifecycleLock,
+					JSON.stringify({ holder: 'expired', expires_at: new Date(0).toISOString() }),
+				);
+			}
+			const get = bucket.get.bind(bucket);
+			let hung = false;
+			vi.spyOn(bucket, 'get').mockImplementation((key) => {
+				if (key === paths.sessionLifecycleLock && !hung) {
+					hung = true;
+					return new Promise(() => {});
+				}
+				return get(key);
+			});
+			const loops = new BackgroundLoops();
+			stop = startSessionLifecycle(deps, loops);
+			await flushRun();
+			expect(sweepSpy).toHaveBeenCalledTimes(phase === 'acquire' ? 0 : 1);
+			await vi.advanceTimersByTimeAsync(10 * 60_000 + SESSION_SWEEP_INTERVAL_MS);
+			expect(sweepSpy.mock.calls.length).toBeGreaterThan(phase === 'acquire' ? 0 : 1);
+			expect(loops.health().loops.session_lifecycle).toMatchObject({
+				timeouts: 1,
+				stale: false,
+				running: false,
+			});
+			expect(loops.health().loops.session_lifecycle.last_success_at).not.toBeNull();
+			expect(parseLoggedEvents(logSpy)).toContainEqual(
+				expect.objectContaining({ event: 'session_lifecycle_stalled' }),
+			);
+		},
+	);
+
 	it('leases its own key, separate from the maintenance lock', async () => {
 		const putSpy = vi.spyOn(bucket, 'put');
 		stop = startSessionLifecycle(deps);
@@ -623,6 +719,15 @@ describe('startJobScheduler', () => {
 	});
 });
 
+function makeWarmPool(deps: ApiDeps, enabled = true) {
+	return new WarmPoolService(
+		new WarmPoolStore(deps.bucket, 'kubernetes'),
+		deps.compute,
+		deps.services.sessions,
+		{ enabled, size: 1, profiles: [], creationTimeoutMs: 300_000, minimumRemainingMs: 60_000 },
+	);
+}
+
 describe('startWarmPools', () => {
 	let handle: ReturnType<typeof startWarmPools>;
 
@@ -630,12 +735,7 @@ describe('startWarmPools', () => {
 		vi.useFakeTimers();
 		const bucket = await createInitializedBucket();
 		const deps = makeTestDeps(bucket);
-		const service = new WarmPoolService(
-			new WarmPoolStore(bucket, 'kubernetes'),
-			deps.compute,
-			deps.services.sessions,
-			{ enabled, size: 1, profiles: [], creationTimeoutMs: 300_000, minimumRemainingMs: 60_000 },
-		);
+		const service = makeWarmPool(deps, enabled);
 		deps.warmPool = service;
 		const sweep = vi.spyOn(service, 'sweep').mockResolvedValue(undefined);
 		return { bucket, deps, service, sweep };
@@ -727,35 +827,21 @@ describe('startWarmPools', () => {
 			await flushRun();
 			expect(parseLoggedEvents(logs)).toContainEqual(
 				expect.objectContaining({
-					event: 'warm_pool_sweep_failed',
+					event: operation === 'release' ? 'warm_pool_release_failed' : 'warm_pool_sweep_failed',
 					error: 'temporary failure',
 				}),
 			);
 			w.sweep.mockClear();
-			await vi.advanceTimersByTimeAsync(5_000);
+			await vi.advanceTimersByTimeAsync(operation === 'release' ? 10 * 60_000 : 5_000);
 			expect(w.sweep).toHaveBeenCalledOnce();
 			expect(await w.bucket.head(paths.warmPoolLock)).toBeNull();
 		},
 	);
 
 	it('starts immediately, skips overlapping ticks, drains, and stops', async () => {
-		vi.useFakeTimers();
-		const bucket = await createInitializedBucket();
-		const deps = makeTestDeps(bucket);
-		deps.warmPool = new WarmPoolService(
-			new WarmPoolStore(bucket, 'kubernetes'),
-			deps.compute,
-			deps.services.sessions,
-			{
-				enabled: true,
-				size: 1,
-				profiles: [],
-				creationTimeoutMs: 300_000,
-				minimumRemainingMs: 60_000,
-			},
-		);
+		const { deps, sweep } = await setup();
 		let finish!: () => void;
-		const sweep = vi.spyOn(deps.warmPool, 'sweep').mockImplementationOnce(
+		sweep.mockImplementationOnce(
 			() =>
 				new Promise((resolve) => {
 					finish = resolve;
@@ -833,6 +919,98 @@ describe('startPreviewPreparation', () => {
 			expect(prepare).toHaveBeenCalledTimes(2);
 		} finally {
 			stop();
+		}
+	});
+});
+
+describe('background loop deadline recovery', () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		vi.useRealTimers();
+	});
+
+	it.each([
+		'maintenance',
+		'session_lifecycle',
+		'job_scheduler',
+		'warm_pool',
+		'preview_preparation',
+	] as const)('%s retries hung work and ignores its late completion', async (name) => {
+		vi.useFakeTimers();
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+		const deps = makeTestDeps(await createInitializedBucket());
+		const loops = new BackgroundLoops();
+		const metrics = new WideEventMetrics();
+		const late = Promise.withResolvers<void>();
+		const work = vi.fn().mockReturnValueOnce(late.promise).mockResolvedValue(undefined);
+		let stop: () => void;
+		switch (name) {
+			case 'maintenance':
+				vi.spyOn(deps.services.sessions, 'expireStale').mockImplementation(async () => {
+					await work();
+					return 0;
+				});
+				stop = startMaintenance(deps, metrics, loops);
+				break;
+			case 'session_lifecycle':
+				deps.sandbox.sessionLifetime = makeSessionLifetime();
+				vi.spyOn(SessionLifecycleService.prototype, 'sweep').mockImplementation(async () => {
+					await work();
+					return ZERO_SWEEP;
+				});
+				stop = startSessionLifecycle(deps, loops)!;
+				break;
+			case 'job_scheduler':
+				vi.spyOn(JobScheduler.prototype, 'tick').mockImplementation(async () => {
+					await work();
+					return {
+						fired: 0,
+						repaired: 0,
+						skipped: 0,
+						dispatched: 0,
+						timedOut: 0,
+						markersPruned: 0,
+						errors: 0,
+					};
+				});
+				stop = startJobScheduler(deps, metrics, loops).stop;
+				break;
+			case 'warm_pool':
+				deps.warmPool = makeWarmPool(deps);
+				vi.spyOn(deps.warmPool, 'sweep').mockImplementation(work);
+				stop = startWarmPools(deps, loops)!.stop;
+				break;
+			case 'preview_preparation':
+				deps.sourceControl = stubSourceControl();
+				vi.spyOn(deps.services.previews, 'preparePending').mockImplementation(work);
+				stop = startPreviewPreparation(deps, loops)!;
+		}
+		try {
+			await flushRun();
+			const initial = loops.health().loops[name];
+			expect(work).toHaveBeenCalledOnce();
+			await vi.advanceTimersByTimeAsync(initial.deadline_ms - 1);
+			expect(work).toHaveBeenCalledOnce();
+			await vi.advanceTimersByTimeAsync(1 + initial.interval_ms);
+			expect(work.mock.calls.length).toBeGreaterThan(1);
+			expect(loops.health().loops[name]).toMatchObject({
+				timeouts: 1,
+				stale: false,
+				running: false,
+			});
+			const recovered = loops.health();
+			const logged = vi.mocked(console.log).mock.calls.length;
+			if (name === 'preview_preparation') {
+				expect(work.mock.calls[0][1].aborted).toBe(true);
+				expect(work.mock.calls[1][1].aborted).toBe(false);
+			}
+			late.resolve();
+			await flushRun();
+			expect(loops.health()).toEqual(recovered);
+			expect(console.log).toHaveBeenCalledTimes(logged);
+		} finally {
+			stop();
+			late.resolve();
 		}
 	});
 });

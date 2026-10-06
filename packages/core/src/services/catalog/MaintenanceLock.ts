@@ -76,11 +76,11 @@ export class MaintenanceLock {
 	 * so a sweep that overran its TTL doesn't delete a lease another replica has
 	 * since acquired. The TTL is the real safety net; this just frees it sooner.
 	 */
-	async release(holder: string): Promise<void> {
+	async release(holder: string, signal?: AbortSignal): Promise<void> {
 		const existing = await this.bucket.get(this.key);
 		if (!existing) return;
 		const current = this.parse(await existing.text(), 'maintenance_lock.release');
-		if (!current || current.holder !== holder) return;
+		if (signal?.aborted || !current || current.holder !== holder) return;
 		await this.bucket.delete(this.key).catch((err) => {
 			logOperationalError(
 				'maintenance_lock_release_failed',
