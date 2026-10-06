@@ -158,7 +158,7 @@ the image pull. If starts are slow:
 
 ### Where the time went
 
-Every session start logs a `session_provision` event on the server. Key tags:
+The [session provision event](../operations.md#session-provision-events) records startup timings. Key tags:
 
 | Tag                                 | Meaning                              |
 | ----------------------------------- | ------------------------------------ |

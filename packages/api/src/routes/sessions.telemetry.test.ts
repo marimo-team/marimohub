@@ -32,15 +32,18 @@ async function setup(credential: AuthCredential) {
 		{ title: 'Notebook', description: '', code: 'import marimo as mo' },
 		ACTOR,
 	);
-	const path = `/projects/${project.id}/notebooks/${notebook.id}/sessions`;
 	const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+	const events = () =>
+		log.mock.calls
+			.filter(([line]) => typeof line === 'string' && line.startsWith('{'))
+			.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+			.filter((event) => event.event === 'session_provision');
 	return {
 		deps,
-		compute,
-		project,
+		create: vi.spyOn(compute, 'create'),
 		notebook,
-		request,
-		start: () => request('POST', path),
+		start: (nid = notebook.id) =>
+			request('POST', `/projects/${project.id}/notebooks/${nid}/sessions`),
 		startMcp: async () => {
 			const client = await connectMcpClient(deps, principal);
 			return client.callTool({
@@ -48,11 +51,15 @@ async function setup(credential: AuthCredential) {
 				arguments: { project: project.id, notebook: notebook.id, wait_seconds: 0 },
 			});
 		},
-		events: () =>
-			log.mock.calls
-				.filter(([line]) => typeof line === 'string' && line.startsWith('{'))
-				.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
-				.filter((event) => event.event === 'session_provision'),
+		events,
+		expectProvision: (fields: Record<string, unknown>) =>
+			expect(events()).toEqual([
+				expect.objectContaining({
+					project_id: project.id,
+					notebook_id: notebook.id,
+					...fields,
+				}),
+			]),
 	};
 }
 
@@ -65,14 +72,7 @@ describe('Session provision client telemetry', () => {
 	] as const)('groups REST requests using $kind as $client', async ({ kind, client }) => {
 		const env = await setup({ kind });
 		const session = await expectOk<SessionCreateResult>(await env.start());
-		expect(env.events()).toEqual([
-			expect.objectContaining({
-				client,
-				session_id: session.session_id,
-				project_id: env.project.id,
-				notebook_id: env.notebook.id,
-			}),
-		]);
+		env.expectProvision({ client, session_id: session.session_id });
 	});
 
 	it.each(['development', 'personal-access-token', 'external-access-token'] as const)(
@@ -82,12 +82,7 @@ describe('Session provision client telemetry', () => {
 			const result = await env.startMcp();
 			expect(result.isError).not.toBe(true);
 			const session = result.structuredContent as { session_id: string };
-			expect(env.events()).toEqual([
-				expect.objectContaining({
-					client: 'mcp',
-					session_id: session.session_id,
-				}),
-			]);
+			env.expectProvision({ client: 'mcp', session_id: session.session_id });
 		},
 	);
 
@@ -97,7 +92,7 @@ describe('Session provision client telemetry', () => {
 		{ kind: 'personal-access-token', client: 'mcp' },
 	] as const)('retains $client attribution when provisioning fails', async ({ kind, client }) => {
 		const env = await setup({ kind });
-		vi.spyOn(env.compute, 'create').mockImplementation(() => {
+		env.create.mockImplementation(() => {
 			throw new Error('provider unavailable');
 		});
 		if (client === 'mcp') {
@@ -111,13 +106,11 @@ describe('Session provision client telemetry', () => {
 		const sessions = await env.deps.services.sessions.listSessions(env.notebook.id);
 		expect(sessions).toHaveLength(1);
 		expect(sessions[0].status).toBe('failed');
-		expect(env.events()).toEqual([
-			expect.objectContaining({
-				client,
-				session_id: sessions[0].session_id,
-				provision_error_code: 'PROVISION_FAILED',
-			}),
-		]);
+		env.expectProvision({
+			client,
+			session_id: sessions[0].session_id,
+			provision_error_code: 'PROVISION_FAILED',
+		});
 	});
 
 	it('does not count a reused session as another provision', async () => {
@@ -125,31 +118,20 @@ describe('Session provision client telemetry', () => {
 		const created = await expectOk<SessionCreateResult>(await env.start());
 		const reused = await expectOk<SessionCreateResult>(await env.start());
 		expect(reused).toMatchObject({ session_id: created.session_id, reused: true });
-		expect(env.events()).toEqual([
-			expect.objectContaining({ client: 'cli', session_id: created.session_id }),
-		]);
+		env.expectProvision({ client: 'cli', session_id: created.session_id });
 	});
 
-	it('does not emit a provision event for a missing notebook', async () => {
-		const env = await setup({ kind: 'sso' });
-		const create = vi.spyOn(env.compute, 'create');
+	it.each([
+		{ reason: 'missing notebook', kind: 'sso', missing: true },
+		{ reason: 'service account access denied', kind: 'service-account', missing: false },
+	] as const)('does not emit a provision event for $reason', async ({ kind, missing }) => {
+		const env = await setup({ kind });
 		await expectError(
-			await env.request(
-				'POST',
-				`/projects/${env.project.id}/notebooks/${createNotebookId()}/sessions`,
-			),
+			await env.start(missing ? createNotebookId() : env.notebook.id),
 			404,
 			'NOT_FOUND',
 		);
-		expect(create).not.toHaveBeenCalled();
-		expect(env.events()).toEqual([]);
-	});
-
-	it('does not emit a provision event when a service account is denied notebook access', async () => {
-		const env = await setup({ kind: 'service-account' });
-		const create = vi.spyOn(env.compute, 'create');
-		await expectError(await env.start(), 404, 'NOT_FOUND');
-		expect(create).not.toHaveBeenCalled();
+		expect(env.create).not.toHaveBeenCalled();
 		expect(env.events()).toEqual([]);
 	});
 });
