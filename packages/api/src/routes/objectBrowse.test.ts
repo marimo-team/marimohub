@@ -46,6 +46,20 @@ function wifDeps(exchange: () => Promise<TempS3Creds>): ApiDeps {
 }
 
 describe('object browse credentials', () => {
+	it('does not federate projects without an override when the deployment default is off', async () => {
+		const exchange = vi.fn(async () => ({
+			accessKeyId: 'temporary',
+			secretAccessKey: 'secret',
+		}));
+		const context = await makeObjectBrowseContext(
+			wifDeps(exchange),
+			{ ...project, federation: undefined },
+			user,
+		);
+		expect(context.federation).toBeUndefined();
+		expect(exchange).not.toHaveBeenCalled();
+	});
+
 	it('uses the deployment default but stops vending cached credentials after opt-out', async () => {
 		const exchange = vi.fn(async () => ({
 			accessKeyId: 'temporary',

@@ -39,7 +39,6 @@ function makeWifBroker(env: Env): CredentialBroker {
  * is selected by `MARIMOHUB_WIF_BROKER`; projects may override the default.
  */
 export function makeWif(env: Env): Pick<ApiDeps, 'wif'> {
-	const defaultEnabled = parseBool(env, 'MARIMOHUB_WIF_DEFAULT_ENABLED');
 	const requiredKeys = [
 		'MARIMOHUB_WIF_SIGNING_KEY',
 		'MARIMOHUB_WIF_KID',
@@ -110,7 +109,7 @@ export function makeWif(env: Env): Pick<ApiDeps, 'wif'> {
 
 	return {
 		wif: {
-			defaultEnabled,
+			defaultEnabled: parseBool(env, 'MARIMOHUB_WIF_DEFAULT_ENABLED'),
 			issuer: new WorkloadIdentityIssuer(signingKey, required(env, 'MARIMOHUB_WIF_KID')),
 			// Strip any trailing slash so the token `iss` and the derived `jwks_uri`
 			// are canonical (`<url>/.well-known/...`, never `<url>//.well-known/...`).

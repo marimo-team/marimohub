@@ -303,7 +303,7 @@ function useProjectContent() {
 	const downloadWorkspace = useDownloadWorkspace(pid!);
 	const updateProject = useUpdateProject();
 	const deleteProject = useDeleteProject();
-	const { data: capabilities } = useCapabilitiesQuery();
+	const { data: capabilities, isError: capabilitiesError } = useCapabilitiesQuery();
 	const canManage = canManageProject(project.your_role);
 	const canOperateSource = project.your_role !== null && canEditProject(project.your_role);
 	const sandboxImages = capabilities?.sandbox_images ?? [];
@@ -1193,8 +1193,10 @@ function useProjectContent() {
 					onClose={environmentModal.close}
 					project={project}
 					integrationsAvailable={capabilities?.integrations?.available ?? false}
-					cloudAccessAvailable={capabilities?.federation.available}
-					cloudAccessDefaultEnabled={capabilities?.federation.defaultEnabled}
+					cloudAccessAvailable={capabilitiesError ? false : capabilities?.federation.available}
+					cloudAccessDefaultEnabled={
+						capabilitiesError ? false : capabilities?.federation.defaultEnabled
+					}
 					isPending={updateProject.isPending}
 					onSaveCloudAccess={handleSaveCloudAccess}
 				/>

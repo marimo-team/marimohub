@@ -46,6 +46,29 @@ function setup(respond?: (url: URL) => Response | Promise<Response> | undefined)
 }
 
 describe('project loading', () => {
+	it('shows cloud access guidance after a pending capabilities request fails', async () => {
+		const capabilities = deferredResponse();
+		setup((url) => {
+			if (url.pathname === '/api/v1/capabilities') return capabilities.promise;
+		});
+		await screen.findByRole('heading', { name: 'Sales' });
+		fireEvent.click(screen.getByRole('button', { name: 'Environment & cloud access' }));
+		fireEvent.click(screen.getByRole('button', { name: /Cloud access/ }));
+		expect(screen.getByText('Loading cloud access…')).toBeVisible();
+		expect(screen.queryByRole('link', { name: 'How to enable it' })).not.toBeInTheDocument();
+
+		await act(async () => {
+			capabilities.resolve(jsonError('UNAVAILABLE', 'Temporarily unavailable', 503));
+		});
+
+		expect(
+			await screen.findByText(/This deployment has not configured federated cloud access/),
+		).toBeVisible();
+		expect(screen.getByRole('link', { name: 'How to enable it' })).toBeVisible();
+		expect(screen.queryByText('Loading cloud access…')).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+	});
+
 	it('shares one fallback until access, project details, and notebooks are ready', async () => {
 		const access = deferredResponse();
 		const details = deferredResponse();

@@ -12,7 +12,7 @@ const authed: Authenticator = {
 	}),
 };
 
-/** A minimal stub of the WIF issuer — capabilities only checks for its presence. */
+// Capabilities only needs WIF presence and its federation default.
 const stubWif = {
 	defaultEnabled: false,
 	mint: async () => 'jwt',
