@@ -13,7 +13,7 @@ import { ACTOR, makeFakeSandbox } from '@marimo-hub/core/testing';
 import type { FakeSandboxOptions } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectOk } from '../testing';
 
-async function setup(options: FakeSandboxOptions = {}) {
+async function setup(options: FakeSandboxOptions = {}, providerLifetimeMs?: number) {
 	const bucket = await createInitializedBucket();
 	const services = createServices(bucket);
 	const project = await services.projects.createProject({ name: 'Warm', description: '' }, ACTOR);
@@ -25,6 +25,7 @@ async function setup(options: FakeSandboxOptions = {}) {
 	const fake = makeFakeSandbox(options);
 	const create = vi.fn(() => fake.instance);
 	const compute: SandboxProvider = {
+		warmPool: providerLifetimeMs === undefined ? undefined : { maxLifetimeMs: providerLifetimeMs },
 		create,
 		connectExisting: () => fake.instance,
 		proxy: async () => null,
@@ -39,6 +40,7 @@ async function setup(options: FakeSandboxOptions = {}) {
 			profiles: [{ key: 'default', resources: {} }],
 			creationTimeoutMs: 300_000,
 			minimumRemainingMs: 60_000,
+			providerLifetimeMs,
 		},
 	);
 	const api = createTestApi({ bucket, compute, deps: { warmPool } });
@@ -49,6 +51,41 @@ async function setup(options: FakeSandboxOptions = {}) {
 afterEach(() => vi.restoreAllMocks());
 
 describe('session warm sandbox assignment', () => {
+	it.each(['warm', 'legacy-warm', 'cold-fallback'] as const)(
+		'preserves the provider lifetime boundary after idle and provisioning time: %s',
+		async (scenario) => {
+			let now = Date.now();
+			vi.spyOn(Date, 'now').mockImplementation(() => now);
+			const lifetime = 60 * 60_000;
+			const w = await setup({}, lifetime);
+			await w.warmPool.sweep();
+			const original = (await w.warmPool.store.read()).pools[0].members[0];
+			expect(original.sandbox_deadline_at).toBe(original.checked_at + lifetime);
+			if (scenario === 'legacy-warm') {
+				await w.warmPool.store.mutate((record) => {
+					delete record.pools[0].members[0].sandbox_deadline_at;
+				});
+			} else if (scenario === 'cold-fallback') {
+				vi.spyOn(w.warmPool, 'handoff').mockRejectedValueOnce(new WarmPoolClaimExpiredError());
+			}
+			now += 10 * 60_000;
+			const start = w.fake.instance.startProcess.bind(w.fake.instance);
+			vi.spyOn(w.fake.instance, 'startProcess').mockImplementation(async (...args) => {
+				now += 2 * 60_000;
+				return start(...args);
+			});
+			const response = await expectOk<Session>(await w.api.request('POST', w.path));
+			const stored = await w.services.sessions.getSession(w.project.id, response.session_id);
+			expect(stored.sandbox_deadline_at).toBe(
+				new Date(
+					scenario === 'cold-fallback' ? now + lifetime : original.checked_at + lifetime,
+				).toISOString(),
+			);
+			if (scenario === 'cold-fallback') expect(stored.sandbox_id).not.toBe(original.sandbox_id);
+			else expect(stored.sandbox_id).toBe(original.sandbox_id);
+		},
+	);
+
 	it.each(['edit', 'app'])(
 		'uses the warm sandbox for %s and keeps reuse ahead of warm allocation',
 		async (mode) => {

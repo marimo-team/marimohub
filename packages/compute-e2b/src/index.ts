@@ -174,6 +174,7 @@ export interface E2bConfig {
 interface E2bSandboxState {
 	handlePromise?: Promise<E2bSandboxHandle>;
 	destroyPromise?: Promise<void>;
+	destroyGeneration?: number;
 }
 
 interface E2bSandboxStateEntry {
@@ -187,6 +188,7 @@ class E2bSandboxInstance implements SandboxInstance {
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
 	private readonly attachmentState: E2bSandboxState = {};
+	private attachmentGeneration = 0;
 
 	constructor(
 		private readonly id: SandboxId,
@@ -209,12 +211,16 @@ class E2bSandboxInstance implements SandboxInstance {
 
 	/** Resolve the live E2B sandbox for our id: cached → reconnect-by-tag → create. */
 	private ensure(): Promise<E2bSandboxHandle> {
+		const destroyPromise = this.state.destroyPromise;
+		if (destroyPromise) return destroyPromise.then(() => this.ensure());
+		if (this.attachmentGeneration !== (this.state.destroyGeneration ?? 0)) {
+			this.attachmentState.handlePromise = undefined;
+			this.attachmentGeneration = this.state.destroyGeneration ?? 0;
+		}
 		// Cached create handles may outlive the sandbox or still be provisioning.
 		const state = this.existingOnly ? this.attachmentState : this.state;
 		if (state.handlePromise) return state.handlePromise;
-		const destroyPromise = this.state.destroyPromise;
 		const promise = (async () => {
-			if (destroyPromise) await destroyPromise;
 			const existing = (await this.client.list()).find((sandbox) => this.isOwned(sandbox));
 			if (existing) return this.client.connect(existing.sandboxId);
 			if (this.existingOnly) throw new NotFoundError(`Sandbox ${this.id} is no longer available`);
@@ -450,6 +456,7 @@ class E2bSandboxInstance implements SandboxInstance {
 
 	destroy(): Promise<void> {
 		if (this.state.destroyPromise) return this.state.destroyPromise;
+		this.state.destroyGeneration = (this.state.destroyGeneration ?? 0) + 1;
 
 		const pending = this.state.handlePromise;
 		const attached = this.attachmentState.handlePromise;
@@ -467,9 +474,11 @@ class E2bSandboxInstance implements SandboxInstance {
 			// Reap duplicates left by provisioning races from older processes.
 			const matches = (await this.client.list()).filter((sandbox) => this.isOwned(sandbox));
 			for (const match of matches) {
+				if (destroyed.has(match.sandboxId)) continue;
 				await this.destroyExisting(match.sandboxId, async () => {
 					await (await this.client.connect(match.sandboxId)).kill();
 				});
+				destroyed.add(match.sandboxId);
 			}
 		})();
 		this.state.destroyPromise = promise;

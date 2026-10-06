@@ -99,19 +99,18 @@ export class ReconciliationService {
 		let unreclaimedTerminal = 0;
 		let oldestUnreclaimedAgeMs: number | null = null;
 		await mapWithConcurrency(await this.sessions.listSessions(), 8, async (session) => {
-			if (
-				!session.sandbox_id ||
-				session.sandbox_reclaimed_at ||
-				(!isTerminal(session.status) && session.status !== 'terminating')
-			)
+			if (!session.sandbox_id || (!isTerminal(session.status) && session.status !== 'terminating'))
 				return;
 			const grace =
 				session.status === 'expired' &&
 				!isPastAuthorizationDeadline(session, Date.now()) &&
 				Date.now() - Date.parse(session.started_at) < RECLAIM_PROVISION_GRACE_MS;
 			try {
-				if (!grace && (await this.retirer.reclaim(session, undefined, thumbnailDeadlineAt))) {
-					reclaimed++;
+				if (
+					(session.sandbox_reclaimed_at || !grace) &&
+					(await this.retirer.reclaim(session, { thumbnailDeadlineAt, requireIdle: true }))
+				) {
+					if (!session.sandbox_reclaimed_at) reclaimed++;
 					return;
 				}
 			} catch (error) {
@@ -121,6 +120,7 @@ export class ReconciliationService {
 					error,
 				);
 			}
+			if (session.sandbox_reclaimed_at) return;
 			unreclaimedTerminal++;
 			oldestUnreclaimedAgeMs = Math.max(
 				oldestUnreclaimedAgeMs ?? 0,

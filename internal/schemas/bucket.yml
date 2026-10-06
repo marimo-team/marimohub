@@ -4386,6 +4386,10 @@ components:
                       type: integer
                       minimum: 0
                       maximum: 9007199254740991
+                    sandbox_deadline_at:
+                      type: integer
+                      minimum: 0
+                      maximum: 9007199254740991
                     destination:
                       type: object
                       properties:

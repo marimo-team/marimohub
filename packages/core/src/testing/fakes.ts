@@ -1,5 +1,6 @@
 import { vi } from 'vitest';
 import { MAX_REQUEST_BYTES } from '../constants';
+import { NotFoundError } from '../errors';
 import type { SandboxId } from '../ids';
 import type {
 	BoundedReadOptions,
@@ -475,6 +476,11 @@ export class RecordingCompute implements SandboxProvider {
 		// before destroying it; the fake reports no files so `commitSession` runs
 		// with empty artifacts. `destroy()` records the teardown.
 		return {
+			async exec(command: string) {
+				return command.includes('/api/status/connections')
+					? execResult(true, '0', '')
+					: execResult(false, '', 'Unsupported fake command');
+			},
 			async readFile() {
 				return readFileFailure('NOT_FOUND');
 			},
@@ -492,6 +498,9 @@ export class RecordingCompute implements SandboxProvider {
 	}
 
 	connectExisting(id: SandboxId): SandboxInstance {
+		if (!this.active.some((sandbox) => sandbox.id === id)) {
+			throw new NotFoundError(`Sandbox ${id} is no longer available`);
+		}
 		return this.create(id);
 	}
 

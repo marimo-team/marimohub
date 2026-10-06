@@ -462,7 +462,7 @@ function ReclaimSessionDialog({ editor, onClose }: { editor: Editor; onClose: ()
 				</label>
 				<p className="text-sm text-muted-foreground">
 					{save
-						? 'Saving is best effort. The sandbox is destroyed even if saving fails. Edits are only saved while this session still owns them.'
+						? 'Saving is best effort and only applies while this session owns its edits. If we cannot safely connect to the sandbox, reclamation stops and keeps the claim. Uncheck this option to discard unsaved edits. Other save failures do not prevent destruction.'
 						: 'Unsaved edits in this sandbox will be discarded.'}
 				</p>
 				{reclaim.error && (

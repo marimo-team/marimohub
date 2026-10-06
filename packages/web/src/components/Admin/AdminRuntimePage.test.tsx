@@ -1,5 +1,6 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { focusManager } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { jsonError, jsonOk, renderHookWithClient, renderWithClient } from '@/test/render';
@@ -120,15 +121,19 @@ describe('AdminRuntimePage', () => {
 		'confirms reclaim with save=%s, refreshes on success, and hides actions for active sessions',
 		async (save) => {
 			const data = structuredClone(fixture);
+			const { user, fetcher, client } = setup(data);
+			await user.click(await screen.findByRole('tab', { name: 'Editors' }));
+			expect(screen.queryByRole('button', { name: 'Reclaim session' })).not.toBeInTheDocument();
 			Object.assign(data.editors[0], {
 				status: 'expired',
 				claim_holder_status: 'expired',
 				expires_at: at,
 				reclaimable: true,
 			});
-			const { user, fetcher } = setup(data);
-			await user.click(await screen.findByRole('tab', { name: 'Editors' }));
-			expect(screen.getByText(/Expired .* ago/)).toBeInTheDocument();
+			await act(async () => {
+				await client.invalidateQueries({ queryKey: ['admin', 'runtime'] });
+			});
+			expect(await screen.findByText(/Expired .* ago/)).toBeInTheDocument();
 			await user.click(screen.getByRole('button', { name: 'Reclaim session' }));
 			if (!save)
 				await user.click(
@@ -158,11 +163,18 @@ describe('AdminRuntimePage', () => {
 		const { user, fetcher } = setup(data);
 		await user.click(await screen.findByRole('tab', { name: 'Editors' }));
 		await user.click(screen.getByRole('button', { name: 'Reclaim session' }));
+		expect(
+			screen.getByText(
+				/reclamation stops and keeps the claim. Uncheck this option to discard unsaved edits/,
+			),
+		).toBeInTheDocument();
+		const toastError = vi.spyOn(toast, 'error');
 		fetcher.mockImplementationOnce(async () =>
 			jsonError('SERVICE_UNAVAILABLE', 'Retry shortly', 503),
 		);
 		await user.click(screen.getByRole('button', { name: 'Save and reclaim' }));
 		expect(await screen.findByRole('alert')).toHaveTextContent('Retry shortly');
+		expect(toastError).not.toHaveBeenCalled();
 		expect(screen.getByRole('button', { name: 'Save and reclaim' })).toBeEnabled();
 	});
 

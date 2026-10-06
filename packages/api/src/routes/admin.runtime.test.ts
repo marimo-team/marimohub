@@ -234,18 +234,60 @@ describe('POST /admin/runtime/projects/{pid}/sessions/{sid}/reclaim', () => {
 		expect(sandbox.destroy).toHaveBeenCalledOnce();
 	});
 
-	it('defaults to saving through the shared reclaim policy', async () => {
+	it.each([undefined, {}])('defaults to saving with body %j', async (body) => {
 		const { request, path, session } = await setup();
 		const reclaim = vi.spyOn(SessionRetirer.prototype, 'reclaim').mockResolvedValueOnce(true);
 		try {
-			await expectOk(await request('POST', path, {}));
+			await expectOk(await request('POST', path, body));
 			expect(reclaim).toHaveBeenCalledWith(
 				expect.objectContaining({ session_id: session.session_id }),
-				true,
+				{ save: true },
 			);
 		} finally {
 			reclaim.mockRestore();
 		}
+	});
+
+	it.each(['project', 'session'] as const)(
+		'rejects a malformed %s ID before session lookup',
+		async (field) => {
+			const { request, deps, session, sandbox } = await setup();
+			const read = vi.spyOn(deps.services.sessions, 'getSession');
+			const pid = field === 'project' ? 'invalid-project' : session.project_id;
+			const sid = field === 'session' ? 'invalid-session' : session.session_id;
+			await expectError(
+				await request('POST', `/admin/runtime/projects/${pid}/sessions/${sid}/reclaim`, {
+					save: false,
+				}),
+				422,
+				'VALIDATION_ERROR',
+			);
+			expect(read).not.toHaveBeenCalled();
+			expect(sandbox.destroy).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([null, 'true', 1])('rejects a non-boolean save choice: %j', async (save) => {
+		const { request, path, sandbox } = await setup();
+		await expectError(await request('POST', path, { save }), 422, 'VALIDATION_ERROR');
+		expect(sandbox.destroy).not.toHaveBeenCalled();
+	});
+
+	it('directs unsupported safe attachment to explicit discard while retaining the claim', async () => {
+		const { request, deps, bucket, path, session, sandbox } = await setup();
+		delete deps.compute.connectExisting;
+		await bucket.put(
+			paths.session(session.project_id, session.session_id),
+			JSON.stringify({ ...session, sandbox_url: 'https://sandbox.example.com' }),
+		);
+		const error = await expectError(await request('POST', path), 503, 'SERVICE_UNAVAILABLE');
+		expect(error.message).toContain('reclaim without saving to discard unsaved edits');
+		expect(sandbox.destroy).not.toHaveBeenCalled();
+		expect(
+			await deps.services.sessions.getEditorClaim(session.project_id, session.notebook_id),
+		).toMatchObject({ session_id: session.session_id });
+		await expectOk(await request('POST', path, { save: false }));
+		expect(sandbox.destroy).toHaveBeenCalledOnce();
 	});
 
 	it('retains the claim and reports a retryable failure when destruction fails', async () => {

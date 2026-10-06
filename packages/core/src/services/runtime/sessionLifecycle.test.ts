@@ -112,7 +112,10 @@ describe('SessionLifecycleService', () => {
 		const reclaim = vi.spyOn(SessionRetirer.prototype, 'reclaim').mockResolvedValue(true);
 		await makeService().sweep(now);
 		expect(reclaim).toHaveBeenCalledTimes(2);
-		expect(reclaim.mock.calls.map((call) => call[2])).toEqual([started + 3000, started + 3000]);
+		expect(reclaim.mock.calls.map((call) => call[1]?.thumbnailDeadlineAt)).toEqual([
+			started + 3000,
+			started + 3000,
+		]);
 	});
 
 	describe('lifetime deadline', () => {
@@ -349,6 +352,58 @@ describe('SessionLifecycleService', () => {
 	});
 
 	describe('terminal-record reclaim', () => {
+		it.each(['unsupported', 'unavailable'])(
+			'does not allocate a replacement when strict attachment is %s',
+			async (attachment) => {
+				const create = vi.spyOn(compute, 'create');
+				compute.connectExisting =
+					attachment === 'unsupported'
+						? undefined
+						: () => {
+								throw new Error('Sandbox unavailable');
+							};
+				const session = await putSession({
+					status: 'expired',
+					sandbox_url: 'https://kernel.example',
+					last_heartbeat: iso(-(RECLAIM_PROVISION_GRACE_MS + 1)),
+				});
+
+				const result = await makeService().sweep(now);
+
+				expect(create).not.toHaveBeenCalled();
+				expect(probe).not.toHaveBeenCalled();
+				expect(result.reclaimed).toBe(0);
+				expect(sandboxCalls.destroy).toBe(0);
+				expect(notebooks.commitSession).not.toHaveBeenCalled();
+				expect((await getStored(session)).sandbox_reclaimed_at).toBeUndefined();
+			},
+		);
+
+		it.each([
+			{ connectionAware: true, active: null },
+			{ connectionAware: true, active: 2 },
+			{ connectionAware: false, active: null },
+			{ connectionAware: false, active: 2 },
+		])(
+			'retains an expired sandbox after provision grace when active=$active and connectionAware=$connectionAware',
+			async ({ connectionAware, active }) => {
+				probe.mockResolvedValue(active);
+				const session = await putSession({
+					status: 'expired',
+					started_at: iso(-(RECLAIM_PROVISION_GRACE_MS + 1)),
+					last_heartbeat: iso(-(RECLAIM_PROVISION_GRACE_MS + 1)),
+				});
+
+				const result = await makeService({ connectionAware, snapshotIntervalMs: 0 }).sweep(now);
+
+				expect(probe).toHaveBeenCalled();
+				expect(result.reclaimed).toBe(0);
+				expect(sandboxCalls.destroy).toBe(0);
+				expect(notebooks.commitSession).not.toHaveBeenCalled();
+				expect((await getStored(session)).sandbox_reclaimed_at).toBeUndefined();
+			},
+		);
+
 		it('saves + destroys the lingering sandbox of an expired record, exactly once', async () => {
 			const s = await putSession({
 				status: 'expired',
@@ -759,13 +814,15 @@ describe('SessionLifecycleService', () => {
 			const goodId = createSandboxId();
 			const bad = makeFakeSandbox({
 				execResult: execResult(false, '', 'sandbox unavailable', 'BACKEND_ERROR'),
-			}).instance;
+			});
 			const good = makeFakeSandbox();
+			const connectExisting: SandboxProvider['create'] = (id) => {
+				if (id === badId && failure === 'sandbox handle') throw new Error('Sandbox unavailable');
+				return id === badId ? bad.instance : good.instance;
+			};
 			const compute: SandboxProvider = {
-				create: (id) => {
-					if (id === badId && failure === 'sandbox handle') throw new Error('Sandbox unavailable');
-					return id === badId ? bad : good.instance;
-				},
+				create: connectExisting,
+				connectExisting,
 				proxy: async () => null,
 			};
 
@@ -773,6 +830,7 @@ describe('SessionLifecycleService', () => {
 				status: 'expired',
 				last_heartbeat: iso(-10 * 60 * 1000),
 				sandbox_id: badId,
+				sandbox_url: 'https://kernel.example',
 				surfaces: {
 					vscode: {
 						status: 'ready',
@@ -788,16 +846,23 @@ describe('SessionLifecycleService', () => {
 				sandbox_id: goodId,
 			});
 
-			const svc = new SessionLifecycleService(sessions, notebooks, compute, bucket, {
-				...CFG,
-				snapshotIntervalMs: 0,
-				connectionAware: false,
-			});
+			const svc = new SessionLifecycleService(
+				sessions,
+				notebooks,
+				compute,
+				bucket,
+				{ ...CFG, snapshotIntervalMs: 0, connectionAware: false },
+				async () => 0,
+			);
 
 			await expect(svc.sweep(now)).resolves.toMatchObject({
 				reclaimed: failure === 'sandbox handle' ? 1 : 2,
 			});
 			expect(good.calls.destroy).toBe(1);
+			if (failure === 'surface stop') {
+				expect(bad.calls.exec.length).toBeGreaterThan(0);
+				expect(bad.calls.destroy).toBe(1);
+			}
 			expect(
 				(await sessions.getSession(projectId, healthy.session_id)).sandbox_reclaimed_at,
 			).toBeDefined();

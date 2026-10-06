@@ -6827,7 +6827,7 @@ export interface operations {
 			};
 			cookie?: never;
 		};
-		/** @description Whether to attempt saving before destruction */
+		/** @description Optional; omit to attempt saving before destruction. */
 		requestBody?: {
 			content: {
 				'application/json': {

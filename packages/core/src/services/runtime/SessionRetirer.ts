@@ -1,3 +1,6 @@
+import { kernelActiveConnections } from './kernelActiveConnections';
+import type { ConnectionProbe } from './kernelActiveConnections';
+import { kernelBasePathFromUrl } from './sandboxExposure';
 import { sessionResourceNotebookId } from '../../sessionOrigin';
 import { captureThumbnail } from './captureThumbnail';
 import type { Bucket } from '../../ports/bucket';
@@ -37,6 +40,7 @@ export interface SessionRetirerDeps {
 	automaticThumbnails?: boolean;
 	thumbnailDeadline?: () => number | undefined;
 	workdir?: string;
+	probe?: ConnectionProbe;
 }
 
 export class TakeoverRetirementError extends Error {
@@ -269,7 +273,18 @@ export class SessionRetirer {
 	 * leaves the marker and claims untouched so the next sweep retries. Returns
 	 * whether the sandbox is confirmed gone.
 	 */
-	async reclaim(selected: Session, save?: boolean, thumbnailDeadlineAt?: number): Promise<boolean> {
+	async reclaim(
+		selected: Session,
+		{
+			save,
+			thumbnailDeadlineAt,
+			requireIdle = false,
+		}: {
+			save?: boolean;
+			thumbnailDeadlineAt?: number;
+			requireIdle?: boolean;
+		} = {},
+	): Promise<boolean> {
 		const session = await this.deps.sessions.getSession(selected.project_id, selected.session_id);
 		if (!isTerminal(session.status) && session.status !== 'terminating') return false;
 		if (session.sandbox_reclaimed_at) {
@@ -313,8 +328,9 @@ export class SessionRetirer {
 					(other.status === 'running' || other.status === 'starting'),
 			);
 		}
+		const mustProbe = requireIdle && session.status === 'expired' && authorized;
 		let existing: ReturnType<SandboxProvider['create']> | undefined;
-		if (capture && session.sandbox_id) {
+		if ((capture || mustProbe) && session.sandbox_id) {
 			// create().read/exec may launch a replacement when the original is gone.
 			if (!this.deps.compute.connectExisting) return false;
 			try {
@@ -327,11 +343,20 @@ export class SessionRetirer {
 					{ operation: 'session.reclaim', session_id: session.session_id },
 					error,
 				);
+				return false;
 			}
 		}
-		const destroyed = existing
-			? await this.teardownSandbox(session, true, thumbnailDeadlineAt, existing)
-			: await this.destroySandbox(session);
+		if (mustProbe && existing) {
+			const active = await (this.deps.probe ?? kernelActiveConnections)(
+				existing,
+				kernelBasePathFromUrl(session.sandbox_url),
+			);
+			if (active !== 0) return false;
+		}
+		const destroyed =
+			capture && existing
+				? await this.teardownSandbox(session, true, thumbnailDeadlineAt, existing)
+				: await this.destroySandbox(session, existing);
 		if (!destroyed) return false;
 		await this.finishReclaim(session);
 		return true;

@@ -1,6 +1,49 @@
 import { describe, expect, it, vi } from 'vitest';
+import { NotFoundError } from '../errors';
+import { createSandboxId } from '../ids';
 import { listFilesFailure } from '../ports/sandbox';
-import { makeFakeSandbox, makeFsSandbox } from './fakes';
+import { makeFakeSandbox, makeFsSandbox, RecordingCompute } from './fakes';
+import { expectExecResult } from './resultAssertions';
+
+describe('RecordingCompute', () => {
+	it('refuses to attach to a missing or stopped sandbox without creating one', () => {
+		const compute = new RecordingCompute();
+		const id = createSandboxId();
+		compute.active = [{ id }];
+		const create = vi.spyOn(compute, 'create');
+		expect(() => compute.connectExisting(createSandboxId())).toThrow(NotFoundError);
+		compute.active = [];
+		expect(() => compute.connectExisting(id)).toThrow(NotFoundError);
+		expect(create).not.toHaveBeenCalled();
+		expect(compute.destroyed).toEqual([]);
+	});
+
+	it('attaches to an active sandbox and retains idempotent teardown for missing IDs', async () => {
+		const compute = new RecordingCompute();
+		const id = createSandboxId();
+		compute.active = [{ id }];
+		await expect(compute.connectExisting(id).readFile('/missing')).resolves.toMatchObject({
+			success: false,
+			error: { code: 'NOT_FOUND' },
+		});
+		compute.active = [];
+		await compute.create(id).destroy();
+		await compute.create(id).destroy();
+		expect(compute.destroyed).toEqual([id, id]);
+	});
+
+	it('reports an idle kernel for the activity probe and rejects other commands', async () => {
+		const compute = new RecordingCompute();
+		const id = createSandboxId();
+		compute.active = [{ id }];
+		const sandbox = compute.connectExisting(id);
+		expectExecResult(await sandbox.exec('curl http://localhost/api/status/connections'), {
+			success: true,
+			stdout: '0',
+		});
+		expectExecResult(await sandbox.exec('unhandled command'), { success: false });
+	});
+});
 
 describe('makeFsSandbox', () => {
 	it('returns NOT_A_DIRECTORY when listFiles receives a file path', async () => {

@@ -7706,7 +7706,8 @@ paths:
           name: sid
           in: path
       requestBody:
-        description: Whether to attempt saving before destruction
+        description: Optional; omit to attempt saving before destruction.
+        required: false
         content:
           application/json:
             schema:

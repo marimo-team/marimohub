@@ -304,13 +304,16 @@ false`): `commitSession` dedupes unchanged content so idle notebooks cost no
 Terminal sessions hold their editor claim until sandbox destruction succeeds or a
 recorded provider lifetime cap expires. Completed provisions record this cap as
 `sandbox_deadline_at`. Legacy records and providers without a guaranteed cap
-require confirmed destruction. Successful destruction stamps
-`sandbox_reclaimed_at` and releases the claim; failures leave it for a retry.
+require confirmed destruction. Warm sandboxes retain the deadline recorded at
+initial readiness; time spent idle or launching a session does not extend it.
+Successful destruction stamps `sandbox_reclaimed_at` and releases the claim.
+Maintenance retries failed claim release even after that stamp exists.
 
 Reclaim attempts to save fully provisioned expired or stale stopping editors.
 It skips capture for failed or incomplete provisions, expired authorization, or
 a newer persistent editor. Capture requires strict attachment, which cannot
-create a replacement sandbox. Providers without this capability retain sessions
+create a replacement sandbox. Failed attachment retains the sandbox and claim.
+Providers without this capability retain sessions
 that need a save until an administrator chooses discard. This includes the
 current Cloudflare Sandbox SDK, whose read and exec methods can start a stopped
 container.
@@ -320,6 +323,8 @@ enumeration, including providers without `listActive`, such as CoreWeave.
 It gives expired sessions 15 minutes from creation to protect slow workspace
 restores. Expired authorization bypasses this provision grace period. The lifecycle
 sweep can reclaim sooner when marimo is ready and no editors are connected.
+Automatic reclaim requires a confirmed idle kernel for an expired session with
+valid authorization. A failed activity probe retains the sandbox and claim.
 A fresh Stop or takeover has 15 minutes to finish before reclaim can proceed.
 
 Stop also reclaims expired sessions and returns a retryable error if cleanup fails.

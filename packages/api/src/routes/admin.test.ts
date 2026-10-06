@@ -43,11 +43,14 @@ describe('Admin routes', () => {
 			await expectError(await app.request(path), 401, 'UNAUTHORIZED');
 		}
 		await expectError(
-			await app.request('/api/v1/admin/runtime/projects/project/sessions/session/reclaim', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: '{}',
-			}),
+			await app.request(
+				'/api/v1/admin/runtime/projects/proj-aaaaaaaaaaaaaaaa/sessions/sess-aaaaaaaaaaaaaaaa/reclaim',
+				{
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: '{}',
+				},
+			),
 			401,
 			'UNAUTHORIZED',
 		);
@@ -94,7 +97,7 @@ describe('Admin routes', () => {
 			'/api/v1/admin/runtime',
 			`/api/v1/admin/users/${uid('target')}/suspension`,
 			'/api/v1/admin/debug/sandbox-startup',
-			'/api/v1/admin/runtime/projects/project/sessions/session/reclaim',
+			'/api/v1/admin/runtime/projects/proj-aaaaaaaaaaaaaaaa/sessions/sess-aaaaaaaaaaaaaaaa/reclaim',
 		]) {
 			const debug = path.endsWith('/sandbox-startup') || path.endsWith('/reclaim');
 			const res = await composed.request(path, {

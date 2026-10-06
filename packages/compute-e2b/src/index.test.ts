@@ -223,6 +223,82 @@ describe('E2bCompute', () => {
 		expect(fake.createCalls).toHaveLength(1);
 	});
 
+	it.each([false, true])(
+		'waits for shared teardown before using a cached strict attachment (kill fails: %s)',
+		async (failKill) => {
+			const started = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const fake = new FakeE2b({
+				beforeKill: async (sandbox) => {
+					started.resolve();
+					await release.promise;
+					if (failKill) {
+						sandbox.killed = false;
+						throw new Error('kill unavailable');
+					}
+				},
+			});
+			const compute = new E2bCompute(baseConfig, fake);
+			await compute.create(SANDBOX_ID).exec('created');
+			const attached = compute.connectExisting(SANDBOX_ID);
+			await attached.exec('attached');
+			const destroying = compute.create(SANDBOX_ID).destroy();
+			const destroyed = failKill
+				? expect(destroying).rejects.toThrow('kill unavailable')
+				: expect(destroying).resolves.toBeUndefined();
+			await started.promise;
+			const operation = expect(attached.exec('during teardown')).rejects.toThrow(
+				failKill ? 'kill unavailable' : 'no longer available',
+			);
+			try {
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				expect(fake.runCalls).toEqual(['created', 'attached']);
+			} finally {
+				release.resolve();
+				await Promise.all([destroyed, operation]);
+			}
+			if (failKill) {
+				await attached.exec('retry');
+				expect(fake.connectCalls).toEqual(['e2b-1', 'e2b-1']);
+			}
+			expect(fake.createCalls).toHaveLength(1);
+		},
+	);
+
+	it('invalidates cached strict attachments after another instance completes teardown', async () => {
+		const fake = new FakeE2b();
+		const compute = new E2bCompute(baseConfig, fake);
+		await compute.create(SANDBOX_ID).exec('created');
+		const attached = compute.connectExisting(SANDBOX_ID);
+		await attached.exec('attached');
+		await compute.create(SANDBOX_ID).destroy();
+		await expect(attached.exec('after teardown')).rejects.toThrow('no longer available');
+		expect(fake.runCalls).toEqual(['created', 'attached']);
+		expect(fake.createCalls).toHaveLength(1);
+	});
+
+	it('does not kill cached handles twice when discovery returns stale or duplicate entries', async () => {
+		const kills: string[] = [];
+		const fake = new FakeE2b({
+			beforeKill: async (sandbox) => {
+				if (kills.includes(sandbox.info.sandboxId)) throw new Error('already killed');
+				kills.push(sandbox.info.sandboxId);
+			},
+		});
+		const compute = new E2bCompute(baseConfig, fake);
+		await compute.create(SANDBOX_ID).exec('created');
+		const attached = compute.connectExisting(SANDBOX_ID);
+		await attached.exec('attached');
+		await fake.create({
+			metadata: { 'mh-sandbox-id': SANDBOX_ID, 'mh-owner': 'marimohub' },
+		});
+		const stale = await fake.list();
+		vi.spyOn(fake, 'list').mockResolvedValue([...stale, ...stale]);
+		await expect(attached.destroy()).resolves.toBeUndefined();
+		expect(kills).toEqual(['e2b-1', 'e2b-2']);
+		expect(fake.connectCalls).toEqual(['e2b-1', 'e2b-2']);
+	});
+
 	it('propagates strict reconnect failures without falling back to create', async () => {
 		const fake = new FakeE2b();
 		const compute = new E2bCompute(baseConfig, fake);

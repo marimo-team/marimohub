@@ -480,11 +480,15 @@ const reclaimRuntimeSession = createRoute({
 		'Super-admin and session authentication required. Saving is best effort and only applies when the session still owns its edits. Active sessions must be stopped first.',
 	security: SESSION_ONLY_SECURITY,
 	request: {
-		params: z.object({ pid: z.string(), sid: z.string() }),
-		body: jsonContent(
-			z.object({ save: z.boolean().default(true) }),
-			'Whether to attempt saving before destruction',
-		),
+		params: z.object({
+			pid: z.string().refine(ProjectId.is),
+			sid: z.string().refine(SessionId.is),
+		}),
+		body: {
+			content: { 'application/json': { schema: z.object({ save: z.boolean().default(true) }) } },
+			description: 'Optional; omit to attempt saving before destruction.',
+			required: false,
+		},
 	},
 	responses: {
 		200: jsonContent(
@@ -504,7 +508,7 @@ app.openapi(reclaimRuntimeSession, async (c) => {
 	assertSessionAuthenticated(c, 'reclaim sessions');
 	await assertSuperAdmin(actor, deps);
 	const { pid, sid } = c.req.valid('param');
-	const { save } = c.req.valid('json');
+	const save = c.req.valid('json')?.save ?? true;
 	const session = await deps.services.sessions.getSession(
 		ProjectId.parse(pid),
 		SessionId.parse(sid),
@@ -514,7 +518,7 @@ app.openapi(reclaimRuntimeSession, async (c) => {
 	}
 	let reclaimed = false;
 	try {
-		reclaimed = await sessionRetirer(deps).reclaim(session, save);
+		reclaimed = await sessionRetirer(deps).reclaim(session, { save });
 	} finally {
 		deps.services.runtimeInspection.invalidate();
 		await appendAudit(
@@ -534,7 +538,11 @@ app.openapi(reclaimRuntimeSession, async (c) => {
 		);
 	}
 	if (!reclaimed) {
-		throw new UnavailableError('The session could not be reclaimed yet. Retry shortly.');
+		throw new UnavailableError(
+			save
+				? 'The session could not be reclaimed with saving enabled. Retry later or reclaim without saving to discard unsaved edits.'
+				: 'The session could not be reclaimed yet. Retry shortly.',
+		);
 	}
 	return c.json({ success: true, data: { reclaimed: true } }, 200);
 });

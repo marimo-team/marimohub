@@ -799,7 +799,9 @@ async function retireSelectedSession(deps: ApiDeps, selected: Session): Promise<
 			session.sandbox_id &&
 			!session.sandbox_reclaimed_at
 		) {
-			reclaimFailed = !(await sessionRetirer(deps).reclaim(session));
+			reclaimFailed = !(await sessionRetirer(deps)
+				.reclaim(session)
+				.catch(() => false));
 		} else {
 			await sessionRetirer(deps).retire(session, { teardown: transitioned });
 		}
@@ -2002,6 +2004,11 @@ export async function startNotebookSession(input: {
 				// The lifetime clock starts here — when the kernel is live, not at record
 				// creation — so provisioning time never eats into the session TTL.
 				const ttlMs = sandbox.sessionLifetime?.maxLifetimeMs;
+				const providerDeadline =
+					warmClaim?.member.sandbox_deadline_at ??
+					(compute.warmPool?.maxLifetimeMs
+						? (warmClaim?.member.checked_at ?? Date.now()) + compute.warmPool.maxLifetimeMs
+						: undefined);
 				updated = await sessions.setRunning(
 					pid,
 					session!.session_id,
@@ -2010,9 +2017,7 @@ export async function startNotebookSession(input: {
 					originUrl,
 					ttlMs ? new Date(Date.now() + ttlMs).toISOString() : undefined,
 					integrationAttachments,
-					compute.warmPool?.maxLifetimeMs
-						? new Date(Date.now() + compute.warmPool.maxLifetimeMs).toISOString()
-						: undefined,
+					providerDeadline === undefined ? undefined : new Date(providerDeadline).toISOString(),
 				);
 			})
 			.step('editor_claim_recheck', async () => {

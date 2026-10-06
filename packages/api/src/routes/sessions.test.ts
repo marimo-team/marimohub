@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
 	BadRequestError,
+	AppPoolService,
+	ConflictError,
+	NotFoundError,
+	SessionRetirer,
 	createNotebookId,
 	createProjectId,
 	createSandboxId,
@@ -2415,6 +2419,43 @@ describe('Session routes', () => {
 		expect(started.reused).not.toBe(true);
 		expect((await services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(started.session_id);
 	});
+
+	it.each([false, true])(
+		'Stop contains reclaim exceptions (invalidation failed=%s)',
+		async (invalidationFailed) => {
+			const stale = makeSession({
+				project_id: pid,
+				notebook_id: nid,
+				user_id: ACTOR,
+				mode: 'app',
+				status: 'expired',
+				sandbox_id: createSandboxId(),
+			});
+			await bucket.put(paths.session(pid, stale.session_id), JSON.stringify(stale));
+			const reclaim = vi
+				.spyOn(SessionRetirer.prototype, 'reclaim')
+				.mockRejectedValueOnce(new NotFoundError('Session was reaped'));
+			const invalidate = vi.spyOn(AppPoolService.prototype, 'invalidate');
+			if (invalidationFailed)
+				invalidate.mockRejectedValueOnce(new ConflictError('Pool changed concurrently'));
+			try {
+				const error = await expectError(
+					await owner('DELETE', sessionsPath(`/${stale.session_id}`)),
+					invalidationFailed ? 409 : 503,
+					invalidationFailed ? 'CONFLICT' : 'SERVICE_UNAVAILABLE',
+				);
+				expect(error.message).toBe(
+					invalidationFailed
+						? 'Pool changed concurrently'
+						: 'The session is still shutting down. Retry shortly.',
+				);
+				expect(reclaim).toHaveBeenCalledOnce();
+			} finally {
+				reclaim.mockRestore();
+				invalidate.mockRestore();
+			}
+		},
+	);
 
 	it('Stop keeps an expired claim on destruction failure and retries successfully', async () => {
 		const { instance } = makeFakeSandbox();

@@ -292,7 +292,7 @@ describe('ReconciliationService', () => {
 	});
 
 	it.each([false, true])(
-		'reclaims an expired claim with listActive=%s and no listed sandbox',
+		'reclaims an idle expired claim with listActive=%s and no listed sandbox',
 		async (enumerates) => {
 			const session = await putSession({
 				status: 'expired',
@@ -301,7 +301,9 @@ describe('ReconciliationService', () => {
 				last_heartbeat: iso(-60 * 60_000),
 			});
 			await sessions.claimEditor(projectId, notebookId, session.session_id, 'shared');
+			compute.active = [{ id: terminalId }];
 			const provider: SandboxProvider = {
+				connectExisting: compute.connectExisting.bind(compute),
 				create: compute.create.bind(compute),
 				proxy: async () => null,
 				...(enumerates ? { listActive: async () => [] } : {}),
@@ -329,12 +331,12 @@ describe('ReconciliationService', () => {
 			last_heartbeat: iso(-60 * 60_000),
 		});
 		await sessions.claimEditor(projectId, notebookId, session.session_id, 'shared');
-		const { instance } = makeFakeSandbox();
+		const { instance } = makeFakeSandbox({ execResult: execResult(true, '0', '') });
 		const destroy = vi.spyOn(instance, 'destroy').mockRejectedValueOnce(new Error('provider down'));
 		const service = new ReconciliationService(
 			sessions,
 			notebooks,
-			{ create: () => instance, proxy: async () => null },
+			{ create: () => instance, connectExisting: () => instance, proxy: async () => null },
 			bucket,
 			'source',
 		);
@@ -352,6 +354,59 @@ describe('ReconciliationService', () => {
 		expect((await service.reconcile()).reclaimed).toBe(1);
 		expect(destroy).toHaveBeenCalledTimes(2);
 	});
+
+	it('retries a failed claim release after the sandbox is marked reclaimed', async () => {
+		const session = await putSession({ status: 'terminated', sandbox_id: terminalId });
+		await sessions.claimEditor(projectId, notebookId, session.session_id, 'shared');
+		const put = bucket.put.bind(bucket);
+		const claimKey = paths.editorClaim(projectId, notebookId);
+		let failRelease = true;
+		vi.spyOn(bucket, 'put').mockImplementation((key, ...args) => {
+			if (key === claimKey && failRelease) {
+				failRelease = false;
+				throw new Error('claim write unavailable');
+			}
+			return put(key, ...args);
+		});
+		expect((await reconciler.reclaimTerminalSessions()).reclaimed).toBe(1);
+		expect(
+			(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
+		).toBeDefined();
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
+			session.session_id,
+		);
+		expect(await reconciler.reclaimTerminalSessions()).toEqual({
+			reclaimed: 0,
+			unreclaimedTerminal: 0,
+			oldestUnreclaimedAgeMs: null,
+		});
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBeNull();
+		expect(compute.destroyed).toEqual([terminalId]);
+	});
+
+	it.each(['2', '', '0'])(
+		'maintenance requires a confirmed idle expired kernel: %j',
+		async (output) => {
+			const session = await putSession({
+				status: 'expired',
+				sandbox_id: terminalId,
+				started_at: iso(-60 * 60_000),
+			});
+			await sessions.claimEditor(projectId, notebookId, session.session_id, 'shared');
+			const { instance, calls } = makeFakeSandbox({ execResult: execResult(true, output, '') });
+			const provider = {
+				create: () => instance,
+				connectExisting: () => instance,
+				proxy: async () => null,
+			};
+			const service = new ReconciliationService(sessions, notebooks, provider, bucket, 'source');
+			expect((await service.reclaimTerminalSessions()).reclaimed).toBe(output === '0' ? 1 : 0);
+			expect(calls.destroy).toBe(output === '0' ? 1 : 0);
+			expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
+				output === '0' ? null : session.session_id,
+			);
+		},
+	);
 
 	it('counts only pending terminal work and reports the oldest retained heartbeat', async () => {
 		const now = Date.now();
@@ -437,6 +492,7 @@ describe('ReconciliationService', () => {
 			sandbox_id: terminalId,
 			started_at: iso(-60 * 60_000),
 		});
+		compute.active = [{ id: terminalId }];
 		vi.spyOn(compute, 'listActive').mockRejectedValue(new Error('list failed'));
 		await expect(reconciler.reconcile()).rejects.toThrow('list failed');
 		expect(
@@ -458,7 +514,10 @@ describe('ReconciliationService', () => {
 		});
 		await reconciler.reconcile();
 		expect(reclaim).toHaveBeenCalledTimes(2);
-		expect(reclaim.mock.calls.map((call) => call[2])).toEqual([started + 3000, started + 3000]);
+		expect(reclaim.mock.calls.map((call) => call[1]?.thumbnailDeadlineAt)).toEqual([
+			started + 3000,
+			started + 3000,
+		]);
 	});
 
 	it('Rule 1: tears down a still-running sandbox behind a terminal record', async () => {
@@ -939,9 +998,12 @@ describe('ReconciliationService', () => {
 			const goodId = createSandboxId();
 			const orphanId = createSandboxId();
 			const destroyed: string[] = [];
-			const bad = makeFakeSandbox({
-				execResult: execResult(false, '', 'sandbox unavailable', 'BACKEND_ERROR'),
-			}).instance;
+			const bad = makeFakeSandbox().instance;
+			vi.spyOn(bad, 'exec').mockImplementation(async (cmd) =>
+				cmd.includes('/api/status/connections')
+					? execResult(true, '0', '')
+					: execResult(false, '', 'sandbox unavailable', 'BACKEND_ERROR'),
+			);
 			bad.destroy = async () => {
 				destroyed.push(badId);
 			};
@@ -950,7 +1012,7 @@ describe('ReconciliationService', () => {
 					if (failure === 'sandbox handle') throw new Error('Sandbox unavailable');
 					return bad;
 				}
-				const { instance } = makeFakeSandbox();
+				const { instance } = makeFakeSandbox({ execResult: execResult(true, '0', '') });
 				instance.destroy = async () => {
 					destroyed.push(id);
 				};
@@ -958,6 +1020,7 @@ describe('ReconciliationService', () => {
 			};
 			const compute: SandboxProvider = {
 				create: (id) => instanceFor(id),
+				connectExisting: (id) => instanceFor(id),
 				proxy: async () => null,
 				listActive: async () => [
 					{ id: badId, createdAt: iso(-60 * 60 * 1000) },
@@ -970,6 +1033,7 @@ describe('ReconciliationService', () => {
 			const [first, second] = ['sess-00000000000000aa', 'sess-00000000000000bb'] as const;
 			const failing = await putSession({
 				status: 'expired',
+				sandbox_url: 'https://kernel.example',
 				started_at: iso(-60 * 60 * 1000),
 				last_heartbeat: iso(-30 * 60 * 1000),
 				session_id: first as Session['session_id'],
