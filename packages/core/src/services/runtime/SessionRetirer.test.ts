@@ -84,6 +84,15 @@ describe('SessionRetirer', () => {
 		return session;
 	}
 
+	function expiredEditor(overrides: Partial<Session> = {}) {
+		return persistentSession({
+			status: 'expired',
+			sandbox_url: 'https://kernel.example',
+			started_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+			...overrides,
+		});
+	}
+
 	function retirer(compute: SandboxProvider): SessionRetirer {
 		return new SessionRetirer({
 			sessions,
@@ -318,10 +327,7 @@ describe('SessionRetirer', () => {
 
 	it('does not save an expired sandbox over a newer persistent editor', async () => {
 		const { instance, calls } = makeFakeSandbox();
-		const session = await persistentSession({
-			status: 'expired',
-			started_at: new Date(Date.now() - 60 * 60_000).toISOString(),
-		});
+		const session = await expiredEditor();
 		await sessions.createSession({
 			project_id: projectId,
 			notebook_id: notebookId,
@@ -388,6 +394,156 @@ describe('SessionRetirer', () => {
 		);
 		expect(await service.reclaim(session, false)).toBe(true);
 		expect(calls.destroy).toBe(1);
+	});
+
+	it.each(['record', 'siblings'] as const)(
+		'does not reclaim when the %s read fails',
+		async (read) => {
+			const session = await expiredEditor();
+			const { instance, calls } = makeFakeSandbox();
+			const provider = fakeComputeFrom(instance);
+			const connect = vi.spyOn(provider, 'connectExisting');
+			if (read === 'record')
+				vi.spyOn(sessions, 'getSession').mockRejectedValueOnce(new Error('storage unavailable'));
+			else
+				vi.spyOn(sessions, 'listByProject').mockRejectedValueOnce(new Error('storage unavailable'));
+			await expect(retirer(provider).reclaim(session)).rejects.toThrow('storage unavailable');
+			expect(connect).not.toHaveBeenCalled();
+			expect(calls.destroy).toBe(0);
+			expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
+				session.session_id,
+			);
+			expect(
+				(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
+			).toBeUndefined();
+		},
+	);
+
+	it('retries a failed reclaimed stamp after confirmed destruction', async () => {
+		const session = await expiredEditor();
+		const { instance, calls } = makeFakeSandbox();
+		vi.spyOn(sessions, 'markSandboxReclaimed').mockRejectedValueOnce(
+			new Error('write unavailable'),
+		);
+		const service = retirer(fakeComputeFrom(instance));
+		expect(await service.reclaim(session, false)).toBe(true);
+		expect(
+			(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
+		).toBeUndefined();
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBeNull();
+		expect(await service.reclaim(session, false)).toBe(true);
+		expect(
+			(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
+		).toBeDefined();
+		expect(calls.destroy).toBe(2);
+	});
+
+	it('retries a failed claim release without destroying an already reclaimed sandbox again', async () => {
+		const session = await expiredEditor();
+		const { instance, calls } = makeFakeSandbox();
+		const put = bucket.put.bind(bucket);
+		let failRelease = true;
+		vi.spyOn(bucket, 'put').mockImplementation((key, body, options) => {
+			if (failRelease && key === paths.editorClaim(projectId, notebookId)) {
+				failRelease = false;
+				throw new Error('claim storage unavailable');
+			}
+			return put(key, body, options);
+		});
+		const service = retirer(fakeComputeFrom(instance));
+		expect(await service.reclaim(session, false)).toBe(true);
+		expect(
+			(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
+		).toBeDefined();
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
+			session.session_id,
+		);
+		expect(await service.reclaim(session, false)).toBe(true);
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBeNull();
+		expect(calls.destroy).toBe(1);
+	});
+
+	it('does not release a replacement claim when an older destruction completes late', async () => {
+		const session = await expiredEditor();
+		const { instance } = makeFakeSandbox();
+		const entered = Promise.withResolvers<void>();
+		const finish = Promise.withResolvers<void>();
+		vi.spyOn(instance, 'destroy').mockImplementation(async () => {
+			entered.resolve();
+			await finish.promise;
+		});
+		const reclaim = retirer(fakeComputeFrom(instance)).reclaim(session, false);
+		await entered.promise;
+		let replacement: Session;
+		try {
+			await sessions.markSandboxReclaimed(projectId, session.session_id, new Date().toISOString());
+			replacement = await sessions.createSession({
+				project_id: projectId,
+				notebook_id: notebookId,
+				user_id: ACTOR,
+			});
+			expect(
+				(await sessions.claimEditor(projectId, notebookId, replacement.session_id, 'exclusive'))
+					.claimed,
+			).toBe(true);
+		} finally {
+			finish.resolve();
+		}
+		expect(await reclaim).toBe(true);
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
+			replacement.session_id,
+		);
+	});
+
+	it.each(['expired', 'terminating'] as const)(
+		'honors the exact reclaim grace boundary for %s',
+		async (status) => {
+			const now = Date.now();
+			const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+			const { instance, calls } = makeFakeSandbox();
+			const session = await expiredEditor({
+				status,
+				sandbox_url: undefined,
+				started_at: new Date(now).toISOString(),
+				...(status === 'terminating' ? { terminating_at: new Date(now).toISOString() } : {}),
+			});
+			const service = retirer(fakeComputeFrom(instance));
+			clock.mockReturnValue(now + 15 * 60_000 - 1);
+			expect(await service.reclaim(session, false)).toBe(false);
+			expect(calls.destroy).toBe(0);
+			clock.mockReturnValue(now + 15 * 60_000);
+			expect(await service.reclaim(session, false)).toBe(true);
+			expect(calls.destroy).toBe(1);
+		},
+	);
+
+	it('skips save at the authorization boundary even during provision grace', async () => {
+		const now = Date.now();
+		vi.spyOn(Date, 'now').mockReturnValue(now);
+		const session = await expiredEditor({
+			started_at: new Date(now).toISOString(),
+			authorization_expires_at: new Date(now).toISOString(),
+		});
+		const { instance, calls } = makeFakeSandbox();
+		const provider = fakeComputeFrom(instance);
+		const connect = vi.spyOn(provider, 'connectExisting');
+		expect(await retirer(provider).reclaim(session, true)).toBe(true);
+		expect(connect).not.toHaveBeenCalled();
+		expect(notebooks.commitSession).not.toHaveBeenCalled();
+		expect(calls.destroy).toBe(1);
+	});
+
+	it('destroys after a capture failure without publishing a saved-artifact snapshot', async () => {
+		const session = await expiredEditor();
+		const { instance, calls } = makeFakeSandbox();
+		const provider = { ...snapshotProvider(instance), connectExisting: () => instance };
+		const capture = vi.spyOn(provider, 'captureSnapshot');
+		vi.spyOn(notebooks, 'commitSession').mockRejectedValueOnce(new Error('commit unavailable'));
+		expect(await retirer(provider).reclaim(session)).toBe(true);
+		expect(notebooks.commitSession).toHaveBeenCalledOnce();
+		expect(capture).not.toHaveBeenCalled();
+		expect(calls.destroy).toBe(1);
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBeNull();
 	});
 
 	it('can destroy immediately without capturing after an authorization deadline', async () => {

@@ -353,6 +353,84 @@ describe('ReconciliationService', () => {
 		expect(destroy).toHaveBeenCalledTimes(2);
 	});
 
+	it('counts only pending terminal work and reports the oldest retained heartbeat', async () => {
+		const now = Date.now();
+		vi.spyOn(Date, 'now').mockReturnValue(now);
+		const failed = await putSession({
+			status: 'failed',
+			sandbox_id: terminalId,
+			last_heartbeat: new Date(now - 60 * 60_000).toISOString(),
+		});
+		await putSession({
+			status: 'expired',
+			sandbox_id: goneId,
+			started_at: new Date(now - 60_000).toISOString(),
+			last_heartbeat: new Date(now - 60_000).toISOString(),
+		});
+		await putSession({ status: 'terminated', sandbox_id: healthyId });
+		await putSession({ status: 'running', sandbox_id: createSandboxId() });
+		await putSession({
+			status: 'failed',
+			sandbox_id: createSandboxId(),
+			sandbox_reclaimed_at: new Date(now).toISOString(),
+		});
+		const { instance } = makeFakeSandbox();
+		const destroy = vi.spyOn(instance, 'destroy');
+		const provider: SandboxProvider = {
+			proxy: async () => null,
+			create: (id) => {
+				if (id === failed.sandbox_id) throw new Error('compute unavailable');
+				return instance;
+			},
+		};
+		const service = new ReconciliationService(sessions, notebooks, provider, bucket, 'source');
+		expect(await service.reclaimTerminalSessions()).toEqual({
+			reclaimed: 1,
+			unreclaimedTerminal: 2,
+			oldestUnreclaimedAgeMs: 60 * 60_000,
+		});
+		expect(destroy).toHaveBeenCalledOnce();
+	});
+
+	it('reclaims healthy sessions while another sandbox destruction is stalled', async () => {
+		const stalled = await putSession({ status: 'terminated', sandbox_id: terminalId });
+		const healthy = await putSession({ status: 'terminated', sandbox_id: healthyId });
+		const entered = Promise.withResolvers<void>();
+		const finish = Promise.withResolvers<void>();
+		const provider: SandboxProvider = {
+			proxy: async () => null,
+			create: (id) => {
+				const { instance } = makeFakeSandbox();
+				if (id === terminalId)
+					instance.destroy = async () => {
+						entered.resolve();
+						await finish.promise;
+					};
+				return instance;
+			},
+		};
+		const service = new ReconciliationService(sessions, notebooks, provider, bucket, 'source');
+		const pending = service.reclaimTerminalSessions();
+		try {
+			await entered.promise;
+			await vi.waitFor(async () => {
+				expect(
+					(await sessions.getSession(projectId, healthy.session_id)).sandbox_reclaimed_at,
+				).toBeDefined();
+			});
+			expect(
+				(await sessions.getSession(projectId, stalled.session_id)).sandbox_reclaimed_at,
+			).toBeUndefined();
+		} finally {
+			finish.resolve();
+		}
+		expect(await pending).toEqual({
+			reclaimed: 2,
+			unreclaimedTerminal: 0,
+			oldestUnreclaimedAgeMs: null,
+		});
+	});
+
 	it('reclaims before a failed provider enumeration', async () => {
 		const session = await putSession({
 			status: 'expired',
