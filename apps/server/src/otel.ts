@@ -23,7 +23,6 @@ import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk
 import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { logEvent } from './log';
-import { buildIdentity } from './buildIdentity';
 
 export interface OtelHandle {
 	/** True when the request middleware should create SERVER spans. */
@@ -103,9 +102,9 @@ export function startOtel(): OtelHandle | null {
 	if (!tracing && !metricsKind && !logsEnabled) return null;
 
 	// Merge envDetector last so explicit OTEL attributes override detected and build defaults.
-	const identity = buildIdentity();
+	const version = process.env.MARIMOHUB_VERSION ?? 'dev';
 	const resource = defaultResource()
-		.merge(resourceFromAttributes({ 'service.name': 'marimohub', ...identity }))
+		.merge(resourceFromAttributes({ 'service.name': 'marimohub', 'service.version': version }))
 		.merge(
 			detectResources({
 				detectors: [hostDetector, processDetector, serviceInstanceIdDetector, envDetector],
@@ -151,7 +150,7 @@ export function startOtel(): OtelHandle | null {
 	logEvent({
 		level: 'info',
 		event: 'otel_started',
-		...identity,
+		'service.version': version,
 		tracing,
 		metrics: metricsKind ?? 'off',
 		logs: logsEnabled,

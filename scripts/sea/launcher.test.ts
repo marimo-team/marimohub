@@ -30,10 +30,9 @@ const ENTRY_SOURCE = `console.log(JSON.stringify({
 	loaded: import.meta.url,
 	staticRoot: process.env.MARIMOHUB_STATIC_ROOT,
 	version: process.env.MARIMOHUB_VERSION,
-	gitSha: process.env.MARIMOHUB_GIT_SHA,
 }));`;
 const STUB_SOURCE = `const Module = require('node:module');
-const manifest = ${JSON.stringify({ buildId: BUILD_ID, version: '0.0.0-test', gitSha: 'abcdef123456', files: [ENTRY, 'public/index.html', SHIM] })};
+const manifest = ${JSON.stringify({ buildId: BUILD_ID, version: '0.0.0-test', files: [ENTRY, 'public/index.html', SHIM] })};
 const assets = {
 	[${JSON.stringify(ENTRY)}]: ${JSON.stringify(ENTRY_SOURCE)},
 	'public/index.html': '<div id="root"></div>',
@@ -88,12 +87,7 @@ const runLauncher = (
 const loadedPayload = (run: Run) => {
 	expect(run.stderr).toBe('');
 	expect(run.code).toBe(0);
-	return JSON.parse(run.stdout) as {
-		loaded: string;
-		staticRoot: string;
-		version: string;
-		gitSha: string;
-	};
+	return JSON.parse(run.stdout) as { loaded: string; staticRoot: string; version: string };
 };
 
 const freshCache = (name: string) => join(mkdtempSync(join(scratch, `${name}-`)), 'cache');
@@ -118,7 +112,6 @@ describe.skipIf(process.platform === 'win32')('SEA launcher', () => {
 		expect(first.loaded).toBe(`file://${join(payloadDir, ENTRY)}`);
 		expect(first.staticRoot).toBe(join(payloadDir, 'public'));
 		expect(first.version).toBe('0.0.0-test');
-		expect(first.gitSha).toBe('abcdef123456');
 		expect(existsSync(join(payloadDir, '.ready'))).toBe(true);
 		expect(existsSync(join(payloadDir, 'public/index.html'))).toBe(true);
 		expect(readdirSync(cache)).toEqual([BUILD_ID]);

@@ -17,7 +17,6 @@ import {
 import { validateServerEnv } from './env';
 import { BackgroundLoops } from './backgroundLoops';
 import { logEvent } from './log';
-import { buildIdentity } from './buildIdentity';
 import { fanoutMetrics, OtelMetrics, WideEventMetrics } from './metrics';
 import { startOtel } from './otel';
 import { settleAllWithin } from './promise';
@@ -218,7 +217,7 @@ export async function bootstrap(
 		logEvent({
 			level: 'info',
 			event: 'server_started',
-			...buildIdentity(validatedEnv),
+			'service.version': validatedEnv.MARIMOHUB_VERSION ?? 'dev',
 			address: `http://${address}:${info.port}`,
 		});
 	});

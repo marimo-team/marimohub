@@ -193,15 +193,14 @@ The middleware traces every request, including static assets; use
 Spans, metrics, and logs share one resource. It includes host and process
 attributes, a generated `service.instance.id`, and these resource defaults:
 
-| Attribute               | Source              | Default                     |
-| ----------------------- | ------------------- | --------------------------- |
-| `service.name`          | `OTEL_SERVICE_NAME` | `marimohub`                 |
-| `service.version`       | `MARIMOHUB_VERSION` | `dev`                       |
-| `vcs.ref.head.revision` | `MARIMOHUB_GIT_SHA` | Omitted when unset or empty |
+| Attribute         | Source              | Default     |
+| ----------------- | ------------------- | ----------- |
+| `service.name`    | `OTEL_SERVICE_NAME` | `marimohub` |
+| `service.version` | `MARIMOHUB_VERSION` | `dev`       |
 
 `OTEL_RESOURCE_ATTRIBUTES` can override resource defaults, including the instance ID.
-Release images and standalone executables include the build version and Git SHA.
-The `server_started` event records these build values even when telemetry export is disabled.
+Release images and standalone executables include the build version.
+The `server_started` event records the build version even when telemetry export is disabled.
 
 While tracing is enabled, every log line emitted inside a traced request also
 carries `trace_id` / `span_id`, so your log pipeline can pivot from a line

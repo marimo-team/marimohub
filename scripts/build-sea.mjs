@@ -10,7 +10,7 @@
 // cross-building, so run this on the target OS and architecture. Releases only
 // ship marimohub-linux-x64; macOS is for local testing. Windows is refused
 // below.
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
@@ -78,10 +78,7 @@ const { assets, buildId } = collectPayload({
 mkdirSync(outDir, { recursive: true });
 
 const version = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).version;
-const revision = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
-const gitSha =
-	process.env.MARIMOHUB_GIT_SHA ?? (revision.status === 0 ? revision.stdout.trim() : undefined);
-const manifest = { version, gitSha, buildId, files: Object.keys(assets) };
+const manifest = { version, buildId, files: Object.keys(assets) };
 const manifestPath = join(outDir, 'manifest.json');
 writeFileSync(manifestPath, JSON.stringify(manifest));
 assets['manifest.json'] = manifestPath;

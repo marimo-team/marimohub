@@ -155,7 +155,6 @@ describe('isLogsEnabled', () => {
 describe('startOtel', () => {
 	beforeEach(() => {
 		vi.stubEnv('MARIMOHUB_VERSION', '1.2.3');
-		vi.stubEnv('MARIMOHUB_GIT_SHA', 'abcdef123456');
 		// Any endpoint-set test now also enables logs, so the otel_started event
 		// becomes a log record. Intercept the flush so shutdown never blocks on the
 		// (nonexistent) endpoint — order-independent, unlike a per-test mock.
@@ -221,14 +220,12 @@ describe('startOtel', () => {
 		expect(started).toBeDefined();
 		expect(started?.resource.attributes).toMatchObject({
 			'service.version': '1.2.3',
-			'vcs.ref.head.revision': 'abcdef123456',
 		});
 		expect(started?.body).toBe('otel_started');
 		expect(started?.severityText).toBe('info');
 		expect(started?.attributes).toMatchObject({
 			event: 'otel_started',
 			'service.version': '1.2.3',
-			'vcs.ref.head.revision': 'abcdef123456',
 			tracing: false,
 			metrics: 'off',
 			logs: true,
@@ -236,28 +233,22 @@ describe('startOtel', () => {
 		});
 	});
 
-	it.each([undefined, ''])(
-		'omits an unavailable git revision (%s) and defaults the version',
-		async (revision) => {
-			vi.stubEnv('MARIMOHUB_VERSION', undefined);
-			vi.stubEnv('MARIMOHUB_GIT_SHA', revision);
-			vi.stubEnv('OTEL_RESOURCE_ATTRIBUTES', '');
-			vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
-			vi.stubEnv('OTEL_TRACES_EXPORTER', 'otlp');
-			vi.stubEnv('OTEL_LOGS_EXPORTER', 'none');
-			vi.stubEnv('OTEL_METRICS_EXPORTER', 'none');
-			const logged = vi.spyOn(console, 'log').mockImplementation(() => {});
-			const { handle, attributes } = await startTraceProbe();
-			const started = JSON.parse(logged.mock.calls[0][0]);
-			expect(started).toMatchObject({ event: 'otel_started', 'service.version': 'dev' });
-			expect(attributes['service.version']).toBe('dev');
-			expect(started).not.toHaveProperty(['vcs.ref.head.revision']);
-			expect(attributes).not.toHaveProperty(['vcs.ref.head.revision']);
-			await handle?.shutdown();
-		},
-	);
+	it('defaults the telemetry and boot version to dev when unset', async () => {
+		vi.stubEnv('MARIMOHUB_VERSION', undefined);
+		vi.stubEnv('OTEL_RESOURCE_ATTRIBUTES', '');
+		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
+		vi.stubEnv('OTEL_TRACES_EXPORTER', 'otlp');
+		vi.stubEnv('OTEL_LOGS_EXPORTER', 'none');
+		vi.stubEnv('OTEL_METRICS_EXPORTER', 'none');
+		const logged = vi.spyOn(console, 'log').mockImplementation(() => {});
+		const { handle, attributes } = await startTraceProbe();
+		const started = JSON.parse(logged.mock.calls[0][0]);
+		expect(started).toMatchObject({ event: 'otel_started', 'service.version': 'dev' });
+		expect(attributes['service.version']).toBe('dev');
+		await handle?.shutdown();
+	});
 
-	it('exports build identity on metrics when tracing and log export are disabled', async () => {
+	it('exports the build version on metrics when tracing and log export are disabled', async () => {
 		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
 		vi.stubEnv('OTEL_TRACES_EXPORTER', 'none');
 		vi.stubEnv('OTEL_LOGS_EXPORTER', 'none');
@@ -275,7 +266,6 @@ describe('startOtel', () => {
 		expect(exported.map((batch) => batch.resource.attributes)).toContainEqual(
 			expect.objectContaining({
 				'service.version': '1.2.3',
-				'vcs.ref.head.revision': 'abcdef123456',
 			}),
 		);
 	});
@@ -290,7 +280,6 @@ describe('startOtel', () => {
 		expect(handle?.metrics).toBe(false);
 		expect(attributes['service.name']).toBe('marimohub-test');
 		expect(attributes['service.version']).toBe('1.2.3');
-		expect(attributes['vcs.ref.head.revision']).toBe('abcdef123456');
 		expect(attributes['process.pid']).toBe(process.pid);
 		expect(attributes['host.name']).toBeDefined();
 		expect(attributes['service.instance.id']).toBeDefined();
@@ -309,15 +298,11 @@ describe('startOtel', () => {
 
 	it('lets OTEL_RESOURCE_ATTRIBUTES override detected resource attributes', async () => {
 		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
-		vi.stubEnv(
-			'OTEL_RESOURCE_ATTRIBUTES',
-			'service.instance.id=pod-7,service.version=override,vcs.ref.head.revision=override-sha',
-		);
+		vi.stubEnv('OTEL_RESOURCE_ATTRIBUTES', 'service.instance.id=pod-7,service.version=override');
 		vi.stubEnv('OTEL_METRICS_EXPORTER', 'none');
 		const { handle, attributes } = await startTraceProbe();
 		expect(attributes['service.instance.id']).toBe('pod-7');
 		expect(attributes['service.version']).toBe('override');
-		expect(attributes['vcs.ref.head.revision']).toBe('override-sha');
 		await handle?.shutdown();
 	});
 

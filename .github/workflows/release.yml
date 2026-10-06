@@ -289,7 +289,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             MARIMOHUB_VERSION=${{ steps.v.outputs.version }}
-            MARIMOHUB_GIT_SHA=${{ github.sha }}
             MARIMOHUB_IMAGE=${{ env.IMAGE }}:${{ steps.v.outputs.version }}
             MARIMOHUB_BUILD_TIME=${{ steps.v.outputs.build_time }}
 

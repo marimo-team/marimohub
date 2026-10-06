@@ -1725,13 +1725,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: 'dev',
 					},
 					{
-						id: 'MARIMOHUB_GIT_SHA',
-						name: 'Deployment git revision',
-						description:
-							'Full Git commit SHA in boot events and the default `vcs.ref.head.revision` telemetry attribute. Release artifacts include this value. An unset or empty value omits the revision.',
-						example: '9d59409acf479dfa0df1aa568182e43e43df8bbe28d60',
-					},
-					{
 						id: 'MARIMOHUB_IMAGE',
 						name: 'Deployment image',
 						description:
