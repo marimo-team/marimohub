@@ -150,8 +150,7 @@ minimumReleaseAgeExclude:
   - tar
   - undici
   - vite@6.4.3
-  # Renovate security update: smol-toml@1.7.1 || 1.9.0
-  - smol-toml@1.7.1 || 1.9.0
+  - smol-toml@1.9.0
   # Renovate security update: csv-parse@7.0.2
   - csv-parse@7.0.2
   - markdown-it@14.3.1

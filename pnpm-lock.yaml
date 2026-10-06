@@ -329,7 +329,7 @@ overrides:
   proxy-addr@<2.0.8: 2.0.8
   qs@<6.16.0: 6.16.0
   shell-quote@<=1.8.4: 1.9.0
-  smol-toml@<1.7.1: 1.7.1
+  smol-toml@<1.9.0: 1.9.0
   source-map-js@<1.2.2: 1.2.2
   tar: 7.5.21
   undici@>=7.0.0 <7.29.1: 7.29.1
@@ -7644,10 +7644,6 @@ packages:
     resolution: {integrity: sha512-94hK0Hh8rPqQl2xXc3HsaBoOXKV20MToPkcXvwbISWLEs+64sBq5kFgn2kJDHb1Pry9yrP0dxrCI9RRci7RXKg==}
     engines: {node: '>= 6.0.0', npm: '>= 3.0.0'}
 
-  smol-toml@1.7.1:
-    resolution: {integrity: sha512-PPlsspAZ4jbMBu5DMFhfUGDQLu/vrL4SyBROVS37x8ynnVmFIs1VPBz1Co8Xks3TvpIaZXmU85y4DrQ+UyVFoQ==}
-    engines: {node: '>= 18'}
-
   smol-toml@1.9.0:
     resolution: {integrity: sha512-hpd+HLON7HdZXqYchMM/+LaTTbdK0AU3NngIJ4KVyWbY9bfQqdL9cD+4yf6dUoU2Ap4VsU0JkQi6FxAI1B2mXQ==}
     engines: {node: '>= 18'}
@@ -13287,7 +13283,7 @@ snapshots:
       long: 5.3.2
       nice-grpc: 2.1.16
       protobufjs: 7.6.5
-      smol-toml: 1.7.1
+      smol-toml: 1.9.0
       uuid: 11.1.1
 
   module-details-from-path@1.0.4: {}
@@ -14265,8 +14261,6 @@ snapshots:
   sisteransi@1.0.5: {}
 
   smart-buffer@4.2.0: {}
-
-  smol-toml@1.7.1: {}
 
   smol-toml@1.9.0: {}
 
