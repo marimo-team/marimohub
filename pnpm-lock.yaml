@@ -91,8 +91,8 @@ catalogs:
       specifier: ^0.1.0
       version: 0.1.0
     '@modelcontextprotocol/sdk':
-      specifier: ^1.30.0
-      version: 1.30.0
+      specifier: ^1.31.0
+      version: 1.31.0
     '@opentelemetry/api':
       specifier: ^1.9.0
       version: 1.9.1
@@ -604,7 +604,7 @@ importers:
     dependencies:
       '@hono/mcp':
         specifier: 'catalog:'
-        version: 0.3.2(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(hono-rate-limiter@0.5.3(hono@4.13.7))(hono@4.13.7)(zod@4.4.3)
+        version: 0.3.2(@modelcontextprotocol/sdk@1.31.0(zod@4.4.3))(hono-rate-limiter@0.5.3(hono@4.13.7))(hono@4.13.7)(zod@4.4.3)
       '@hono/zod-openapi':
         specifier: 'catalog:'
         version: 1.4.0(hono@4.13.7)(zod@4.4.3)
@@ -613,7 +613,7 @@ importers:
         version: link:../core
       '@modelcontextprotocol/sdk':
         specifier: 'catalog:'
-        version: 1.30.0(zod@4.4.3)
+        version: 1.31.0(zod@4.4.3)
       better-all:
         specifier: 'catalog:'
         version: 0.0.7
@@ -3145,8 +3145,8 @@ packages:
       '@aws-sdk/client-s3':
         optional: true
 
-  '@modelcontextprotocol/sdk@1.30.0':
-    resolution: {integrity: sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA==}
+  '@modelcontextprotocol/sdk@1.31.0':
+    resolution: {integrity: sha512-UvTMgnNlnIBO/22ob2RcVGDlcvOslQs8T59+FTGdA0L27a39fdGF/EDETNtDVK4DZGpwomlsYpRdA8UXcVL/pw==}
     engines: {node: '>=18'}
     peerDependencies:
       '@cfworker/json-schema': ^4.1.1
@@ -9636,9 +9636,9 @@ snapshots:
       protobufjs: 7.6.5
       yargs: 17.7.2
 
-  '@hono/mcp@0.3.2(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(hono-rate-limiter@0.5.3(hono@4.13.7))(hono@4.13.7)(zod@4.4.3)':
+  '@hono/mcp@0.3.2(@modelcontextprotocol/sdk@1.31.0(zod@4.4.3))(hono-rate-limiter@0.5.3(hono@4.13.7))(hono@4.13.7)(zod@4.4.3)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.30.0(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.31.0(zod@4.4.3)
       hono: 4.13.7
       hono-rate-limiter: 0.5.3(hono@4.13.7)
       pkce-challenge: 5.0.1
@@ -9798,7 +9798,7 @@ snapshots:
       - immer
       - use-sync-external-store
 
-  '@modelcontextprotocol/sdk@1.30.0(zod@4.4.3)':
+  '@modelcontextprotocol/sdk@1.31.0(zod@4.4.3)':
     dependencies:
       '@hono/node-server': 2.0.10(hono@4.13.7)
       ajv: 8.20.0
