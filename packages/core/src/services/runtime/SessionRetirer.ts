@@ -332,14 +332,8 @@ export class SessionRetirer {
 		}
 		if (existing) {
 			if (!(await this.teardownSandbox(session, true, thumbnailDeadlineAt, existing))) return false;
-		} else if (session.sandbox_id) {
-			try {
-				await this.deps.compute
-					.create(session.sandbox_id, { owner: sessionOwner(session) })
-					.destroy();
-			} catch {
-				return false;
-			}
+		} else if (!(await this.destroySandbox(session))) {
+			return false;
 		}
 		await this.finishReclaim(session);
 		return true;
@@ -419,7 +413,17 @@ export class SessionRetirer {
 			}
 		}
 		if (persisted) await this.captureSavedArtifacts(sandbox, session, thumbnailDeadlineAt);
+		return this.destroySandbox(session, sandbox);
+	}
+
+	private async destroySandbox(
+		session: Session,
+		existing?: ReturnType<SandboxProvider['create']>,
+	): Promise<boolean> {
+		if (!session.sandbox_id) return true;
 		try {
+			const sandbox =
+				existing ?? this.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) });
 			await sandbox.destroy();
 			return true;
 		} catch (err) {

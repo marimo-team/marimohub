@@ -358,11 +358,7 @@ describe('SessionRetirer', () => {
 
 	it('never allocates compute when capturing a missing sandbox', async () => {
 		const { instance, calls } = makeFakeSandbox();
-		const session = await persistentSession({
-			status: 'expired',
-			sandbox_url: 'https://kernel.example',
-			started_at: new Date(Date.now() - 60 * 60_000).toISOString(),
-		});
+		const session = await expiredEditor();
 		const connectExisting = vi.fn(() => {
 			throw new NotFoundError('Sandbox missing');
 		});
@@ -381,11 +377,7 @@ describe('SessionRetirer', () => {
 
 	it('requires strict attach for saving but permits explicit discard without it', async () => {
 		const { instance, calls } = makeFakeSandbox();
-		const session = await persistentSession({
-			status: 'expired',
-			sandbox_url: 'https://kernel.example',
-			started_at: new Date(Date.now() - 60 * 60_000).toISOString(),
-		});
+		const session = await expiredEditor();
 		const service = retirer({ create: () => instance, proxy: async () => null });
 		expect(await service.reclaim(session)).toBe(false);
 		expect(calls.destroy).toBe(0);

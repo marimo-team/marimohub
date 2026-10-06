@@ -56,19 +56,7 @@ export interface ReconcileResult {
 	markedDeadSessions: Session[];
 }
 
-/**
- * Reconcile session records against the compute provider's actual state.
- *
- * Sessions and sandboxes drift because provisioning a sandbox (billable) and
- * writing its session record are two non-atomic writes, and because the
- * record-only maintenance sweep (`SessionService.expireStale`/`reapTerminated`)
- * flips/deletes records without ever destroying the sandbox. This service is the
- * provider-truth safety net: it enumerates live sandboxes and cross-checks them
- * against records, in both directions.
- *
- * Depends only on `core` services and the `SandboxProvider` / `Bucket` ports —
- * never a concrete adapter — so it respects the inward dependency rule.
- */
+/** Reclaims terminal sessions even without provider enumeration, then reconciles live sandboxes. */
 export class ReconciliationService {
 	private readonly retirer: SessionRetirer;
 	private readonly diagnosticLeases: SandboxDiagnosticLease;
@@ -77,11 +65,8 @@ export class ReconciliationService {
 		private sessions: SessionService,
 		private notebooks: NotebookService,
 		private compute: SandboxProvider,
-		/** Bucket handle, so save-on-reap can capture the notebook workspace. */
 		private bucket: Bucket,
-		/** Runtime-file persistence mode applied when save-on-reap tears a sandbox down. */
 		private persistWorkspace: 'source' | 'workspace',
-		/** Sandbox working dir, so save-on-reap reads the right path. See ProvisionOptions. */
 		private workdir?: string,
 		/**
 		 * Sandboxes owned by active job runs. A job sandbox has no session record,
