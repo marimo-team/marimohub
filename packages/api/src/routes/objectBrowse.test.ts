@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Millis, ObjectBrowseError, ResourceExhaustedError, UserId } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
+import { makeTestWif } from '../testing';
 import type { ObjectBody, Project, TempS3Creds } from '@marimo-hub/core';
 import {
 	acquireDownload,
@@ -21,18 +22,9 @@ const user = { id: UserId.parse('user-object-test'), email: 'object@example.com'
 
 beforeEach(() => clearObjectCredentialCacheForTests());
 
-function wifDeps(exchange: () => Promise<TempS3Creds>): ApiDeps {
+function wifDeps(exchange: () => Promise<TempS3Creds>, defaultEnabled = false): ApiDeps {
 	return {
-		wif: {
-			defaultEnabled: false,
-			issuer: { mint: vi.fn(async () => 'jwt') } as never,
-			issuerUrl: 'https://hub.example.com',
-			target: {
-				audience: 'storage',
-				storage: { endpoint: 'https://s3.example.com', region: 'us-east-1' },
-				broker: { exchange },
-			},
-		},
+		wif: makeTestWif({ exchange, defaultEnabled }),
 		dataBrowser: {
 			preview: true,
 			objectBrowser: {
@@ -66,8 +58,7 @@ describe('object browse credentials', () => {
 			secretAccessKey: 'secret',
 			expiration: new Date(Date.now() + 3600000).toISOString(),
 		}));
-		const deps = wifDeps(exchange);
-		deps.wif!.defaultEnabled = true;
+		const deps = wifDeps(exchange, true);
 		const inherited = await makeObjectBrowseContext(
 			deps,
 			{ ...project, federation: undefined },

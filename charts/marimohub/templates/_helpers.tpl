@@ -210,6 +210,8 @@ spec:
           port: {{ $v.containerPort }}
         initialDelaySeconds: 10
         periodSeconds: 20
+        timeoutSeconds: 5
+        failureThreshold: 3
       resources:
         {{- toYaml $res | nindent 8 }}
       # readOnlyRootFilesystem is on; give Node a writable /tmp for any library

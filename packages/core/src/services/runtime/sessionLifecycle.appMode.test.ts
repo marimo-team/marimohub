@@ -15,7 +15,8 @@ import {
 import type { SandboxCalls } from '../../testing';
 import { CatalogService } from '../catalog/CatalogService';
 import { NotebookService } from '../content/NotebookService';
-import { kernelActiveConnections, SessionLifecycleService } from './sessionLifecycle';
+import { kernelActiveConnections } from './kernelActiveConnections';
+import { SessionLifecycleService } from './sessionLifecycle';
 import type { SessionLifecycleConfig } from './sessionLifecycle';
 import { SessionService } from './SessionService';
 

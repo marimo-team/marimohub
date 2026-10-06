@@ -6,14 +6,17 @@ import { makeFakeSandbox, makeFsSandbox, RecordingCompute } from './fakes';
 import { expectExecResult } from './resultAssertions';
 
 describe('RecordingCompute', () => {
-	it('refuses to attach to a missing or stopped sandbox without creating one', () => {
+	it('fails a missing or stopped sandbox on first use without creating one', async () => {
 		const compute = new RecordingCompute();
 		const id = createSandboxId();
 		compute.active = [{ id }];
 		const create = vi.spyOn(compute, 'create');
-		expect(() => compute.connectExisting(createSandboxId())).toThrow(NotFoundError);
+		const missing = compute.connectExisting(createSandboxId());
+		await expect(missing.exec('true')).rejects.toThrow(NotFoundError);
+		const stopped = compute.connectExisting(id);
 		compute.active = [];
-		expect(() => compute.connectExisting(id)).toThrow(NotFoundError);
+		await expect(stopped.readFile('/workspace/notebook.py')).rejects.toThrow(NotFoundError);
+		await expect(stopped.listFiles('/workspace')).rejects.toThrow(NotFoundError);
 		expect(create).not.toHaveBeenCalled();
 		expect(compute.destroyed).toEqual([]);
 	});

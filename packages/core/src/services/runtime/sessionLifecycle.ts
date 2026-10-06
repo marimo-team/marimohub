@@ -6,28 +6,24 @@ import type { Bucket } from '../../ports/bucket';
 import type { SessionMode } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
-import type { NotebookId, SessionId } from '../../ids';
+import type { SessionId } from '../../ids';
 import type { SandboxProvider } from '../../ports/sandbox';
 import { sessionOwner } from './sessionOwner';
 import { createSlidingWindowBudget } from '../../rateLimit';
 import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
-import { RECLAIM_PROVISION_GRACE_MS, SessionRetirer } from './SessionRetirer';
+import { SessionRetirer } from './SessionRetirer';
 import { isTerminal, sessionMode, sessionModePolicy, sessionPersistsEdits } from './sessionState';
 import { isPastAuthorizationDeadline } from './SessionService';
 import type { SessionService } from './SessionService';
 import { kernelBasePathFromUrl } from './sandboxExposure';
 import { kernelActiveConnections } from './kernelActiveConnections';
 import type { ConnectionProbe } from './kernelActiveConnections';
-export { kernelActiveConnections } from './kernelActiveConnections';
-export type { ConnectionProbe } from './kernelActiveConnections';
 
 const SESSION_SWEEP_CONCURRENCY = 8;
 /** Cadence for informational connection counts; reap decisions always probe immediately. */
 const CONNECTION_COUNT_REFRESH_MS = Millis.minutes(5);
-
-export { RECLAIM_PROVISION_GRACE_MS } from './SessionRetirer';
 
 export interface SessionLifecycleConfig {
 	/** Reap after a stale heartbeat and no connections. */
@@ -115,19 +111,6 @@ export class SessionLifecycleService {
 				s.sandbox_id &&
 				(s.status === 'running' || (isTerminal(s.status) && !s.sandbox_reclaimed_at)),
 		);
-		// Notebooks that currently have a live PERSISTING session. An older (expired)
-		// sandbox for one of these must never commit: its content is stale by
-		// definition and would clobber the live session's head version. App sessions
-		// never write back, so they must not count — a long-lived shared app must
-		// not suppress the save of an expired edit session on its notebook.
-		const liveNotebooks = new Set<NotebookId>(
-			sessions
-				.filter(
-					(s) => (s.status === 'running' || s.status === 'starting') && sessionPersistsEdits(s),
-				)
-				.map((s) => s.notebook_id),
-		);
-
 		const result: SweepResult = {
 			snapshotted: 0,
 			extended: 0,
@@ -187,48 +170,20 @@ export class SessionLifecycleService {
 				const hasEditors = (active ?? 0) > 0;
 
 				if (isTerminal(s.status)) {
-					const superseded = liveNotebooks.has(s.notebook_id);
-					if (s.status === 'expired' && hasEditors && !pastAuthorizationDeadline) {
-						// Editors can still be connected to an `expired` record's kernel —
-						// heartbeats travel browser→API while the websocket goes browser→kernel
-						// directly, so an API-path outage or a throttled background tab stalls
-						// heartbeats without ending the session. Keep the kernel alive for them
-						// (the snapshot below bounds loss) and reclaim once they disconnect —
-						// but never snapshot once a newer live session owns the notebook.
-						if (superseded) return;
-					} else {
-						// A provision that outlived the heartbeat TTL can be flipped `expired`
-						// while still restoring files — leave it alone until safely past the
-						// provision window (a teardown mid-restore mirror-deletes bucket keys).
-						// A `ready` marimo surface is only set after restore completes, so a
-						// record that reached it and has no connected editors can go now:
-						// otherwise it keeps the editor claim and blocks reopening the notebook.
-						const idleAfterProvision = s.surfaces?.marimo?.status === 'ready' && active === 0;
-						if (
-							s.status === 'expired' &&
-							!pastAuthorizationDeadline &&
-							!idleAfterProvision &&
-							now - Date.parse(s.started_at) < RECLAIM_PROVISION_GRACE_MS
-						) {
-							return;
-						}
-						const save =
-							s.status === 'expired' &&
-							!pastAuthorizationDeadline &&
-							!superseded &&
-							sessionPersistsEdits(s);
+					// Editors can still be connected to an `expired` record's kernel —
+					// heartbeats travel browser→API while the websocket goes browser→kernel
+					// directly, so an API-path outage or a throttled background tab stalls
+					// heartbeats without ending the session. Keep the kernel alive for them
+					// (the claim-gated snapshot below bounds loss) and reclaim once they
+					// disconnect.
+					if (!(s.status === 'expired' && hasEditors && !pastAuthorizationDeadline)) {
+						const outcome = await this.retirer.reclaim(s, {
+							thumbnailDeadlineAt,
+							requireIdle: active !== 0,
+						});
 						// Only `expired` reclaims are counted: for terminated/failed records the
 						// confirm-destroy is a routine no-op, not a recovered leak.
-						if (
-							(await this.retirer.reclaim(s, {
-								save,
-								thumbnailDeadlineAt,
-								requireIdle: active !== 0,
-							})) &&
-							s.status === 'expired'
-						) {
-							result.reclaimed++;
-						}
+						if (outcome.reclaimed && s.status === 'expired') result.reclaimed++;
 						return;
 					}
 				} else {

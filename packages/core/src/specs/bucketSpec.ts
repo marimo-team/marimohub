@@ -209,7 +209,7 @@ const OBJECTS: BucketObject[] = [
 		name: 'Project',
 		key: project.meta,
 		schema: ProjectSchema,
-		summary: 'Project record: members, federation opt-in, status.',
+		summary: 'Project record: members, federation override, status.',
 		mutability: 'last-writer-wins',
 		tag: 'project',
 	},

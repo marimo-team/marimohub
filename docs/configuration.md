@@ -523,19 +523,19 @@ Create a GitHub App with Contents and Pull requests read/write permissions. Inst
 
 ## Workload Identity Federation
 
-Optional: let a notebook reach cloud resources (object storage, and for AWS any API the role allows) with NO long-lived key. The hub becomes an OIDC issuer and, per session, mints a short-lived project-scoped JWT and exchanges it server-side (via the selected broker) for temporary credentials, which it injects into the sandbox — the JWT itself never reaches the sandbox. Deployment-wide capability; projects inherit `MARIMOHUB_WIF_DEFAULT_ENABLED` unless they set an explicit `federation` override. All-or-nothing on the generic vars: set them to enable, or none to disable. See docs/workload-identity-federation.md.
+Optional: let a notebook reach cloud resources (object storage, and for AWS any API the role allows) with NO long-lived key. The hub becomes an OIDC issuer and, per session, mints a short-lived project-scoped JWT and exchanges it server-side (via the selected broker) for temporary credentials, which it injects into the sandbox — the JWT itself never reaches the sandbox. Deployment-wide capability; projects inherit `MARIMOHUB_WIF_DEFAULT_ENABLED` unless they set an explicit `federation` override. All-or-nothing on the required generic vars (MARIMOHUB_WIF_DEFAULT_ENABLED is optional): set them to enable, or none to disable. See docs/workload-identity-federation.md.
 
 ### Issuer + target (generic)
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_WIF_DEFAULT_ENABLED` | Enable WIF for projects without an explicit federation setting. Explicit project settings take precedence. Requires configured WIF; applies to new sessions and jobs, and data browsing. Enabling this default lets anyone who can create a project obtain cloud credentials if the cloud IAM trust accepts its subject. Restrict cloud IAM trust to exact project `sub` values, not wildcards, so creating a project does not automatically grant access to the cloud role. | — | `false` | — |
 | `MARIMOHUB_WIF_SIGNING_KEY` 🔒 | RSA private key (PKCS8 PEM) the hub signs federation JWTs with — or its single-line base64 encoding, for secret stores synced as an env-file (e.g. Doppler → k8s Secret). The matching public key is published at /.well-known/jwks.json for the cloud to validate tokens. | — | — | `-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----` |
 | `MARIMOHUB_WIF_KID` | Key id surfaced in the JWT header and the published JWKS. | — | — | `wif-2026-06` |
 | `MARIMOHUB_WIF_ISSUER_URL` | The hub's public origin, used as the token `iss` and the OIDC discovery `issuer`. Must match the Issuer URL configured in the cloud's WIF config. | — | — | `https://hub.example.com` |
 | `MARIMOHUB_WIF_AUDIENCE` | Audience (`aud`) claim the consuming cloud expects; must match the Client ID / Audience in the cloud's WIF config. | — | — | `coreweave-object-storage` |
 | `MARIMOHUB_WIF_STORAGE_ENDPOINT` | S3 endpoint for the federated bucket, injected as AWS_ENDPOINT_URL_S3. Set it for a non-AWS store (e.g. CoreWeave `cwobject.com`); omit for AWS S3. No fallback to MARIMOHUB_STORAGE_S3_ENDPOINT. | — | — | `https://cwobject.com` |
 | `MARIMOHUB_WIF_STORAGE_REGION` | Region injected into the sandbox as AWS_REGION. Set explicitly (no fallback to MARIMOHUB_STORAGE_S3_REGION). | — | — | `us-east-1` |
+| `MARIMOHUB_WIF_DEFAULT_ENABLED` | Enable WIF for projects without an explicit federation setting. Explicit project settings take precedence. Requires the WIF vars (setting it `true` without them is a startup error); applies to new sessions, jobs, and data browsing. Turning it on retroactively grants credentials to EXISTING projects that never opted in, including their scheduled jobs — audit projects and set explicit Disabled overrides first. It also lets anyone who can create a project obtain cloud credentials if the cloud IAM trust accepts its subject, so restrict the trust to exact project `sub` values, not wildcards. | — | `false` | — |
 
 ### Broker
 

@@ -128,12 +128,6 @@ replacement. If destruction fails, the editor claim remains protected and no
 replacement starts. Retry the same takeover request to continue the drain.
 Reconciliation can also destroy the old sandbox before the retry.
 
-If you reopen a notebook right after its editor session expires, the request
-can return `409` "still shutting down" until the next session sweep reclaims
-the old sandbox. The sweep runs every
-`MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS` (default 60). Retry after that
-interval.
-
 Only one retry can drain the old sandbox at a time. A recovery attempt renews
 its lease every minute while it works. Concurrent requests must retry later. A
 lease expires after ten minutes without a successful renewal, and an expired
@@ -155,6 +149,26 @@ Provider filesystem snapshots are owner-scoped in exclusive mode. A new owner
 does not restore the previous owner's snapshot. Exclusive mode also ignores
 legacy snapshots that do not identify an owner. Shared mode can restore the
 latest snapshot regardless of who created it.
+
+### Session cleanup
+
+If you open a notebook while its previous editor session is still being cleaned
+up, the request returns `409 EDIT_SESSION_RETIRING` and the notebook shows a
+cleanup message with a **Retry** button. The session lifecycle sweep, the
+5-minute maintenance cycle, **Stop**, or an administrator finishes the cleanup.
+Cleanup waits for:
+
+- **Provisioning grace.** A session that expired while provisioning gets
+  15 minutes from creation, unless its kernel is already ready.
+- **Teardown grace.** A fresh Stop or takeover gets 15 minutes to finish.
+- **Idle kernel.** marimohub must confirm that no editors are connected.
+- **Attachment.** To save edits, the compute provider must attach to the
+  existing sandbox. If the sandbox is gone, the claim is released; any other
+  attachment error keeps the sandbox and the claim.
+
+Providers that cannot attach (currently Cloudflare) keep sessions that may hold
+unsaved edits until a super admin reclaims them without saving. See
+[Reclaim a stuck editor sandbox](./operations.md#reclaim-a-stuck-editor-sandbox).
 
 ## Changing the sharing mode
 

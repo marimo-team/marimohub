@@ -20,7 +20,7 @@ import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isLogsEnabled, isTracingEnabled, metricsExporter, startOtel } from './otel';
+import { buildVersion, isLogsEnabled, isTracingEnabled, metricsExporter, startOtel } from './otel';
 
 describe('isTracingEnabled', () => {
 	it('is off without an OTLP endpoint', () => {
@@ -152,9 +152,18 @@ describe('isLogsEnabled', () => {
 	});
 });
 
+describe('buildVersion', () => {
+	it.each([
+		['1.2.3', '1.2.3'],
+		[undefined, 'dev'],
+		['', 'dev'],
+	])('maps MARIMOHUB_VERSION=%j to %j', (value, expected) => {
+		expect(buildVersion({ MARIMOHUB_VERSION: value })).toBe(expected);
+	});
+});
+
 describe('startOtel', () => {
 	beforeEach(() => {
-		vi.stubEnv('MARIMOHUB_VERSION', '1.2.3');
 		// Any endpoint-set test now also enables logs, so the otel_started event
 		// becomes a log record. Intercept the flush so shutdown never blocks on the
 		// (nonexistent) endpoint — order-independent, unlike a per-test mock.
@@ -169,11 +178,11 @@ describe('startOtel', () => {
 		logsApi.disable();
 	});
 
-	async function startTraceProbe() {
+	async function startTraceProbe(version = '1.2.3') {
 		const register = vi
 			.spyOn(NodeTracerProvider.prototype, 'register')
 			.mockImplementation(() => {});
-		const handle = startOtel();
+		const handle = startOtel(version);
 		expect(register).toHaveBeenCalledOnce();
 		const provider = register.mock.instances[0] as NodeTracerProvider;
 		// An ended span would flush to the nonexistent OTLP endpoint during shutdown.
@@ -189,7 +198,7 @@ describe('startOtel', () => {
 		vi.stubEnv('OTEL_EXPORTER_OTLP_METRICS_ENDPOINT', '');
 		vi.stubEnv('OTEL_EXPORTER_OTLP_LOGS_ENDPOINT', '');
 		const register = vi.spyOn(NodeTracerProvider.prototype, 'register');
-		expect(startOtel()).toBeNull();
+		expect(startOtel('1.2.3')).toBeNull();
 		expect(register).not.toHaveBeenCalled();
 	});
 
@@ -207,7 +216,7 @@ describe('startOtel', () => {
 			callback({ code: ExportResultCode.SUCCESS });
 		});
 
-		const handle = startOtel();
+		const handle = startOtel('1.2.3');
 		expect(handle?.tracing).toBe(false);
 		expect(handle?.metrics).toBe(false);
 		expect(handle?.logs).toBe(true);
@@ -233,15 +242,14 @@ describe('startOtel', () => {
 		});
 	});
 
-	it('defaults the telemetry and boot version to dev when unset', async () => {
-		vi.stubEnv('MARIMOHUB_VERSION', undefined);
+	it('reports the given build version on the resource and boot event', async () => {
 		vi.stubEnv('OTEL_RESOURCE_ATTRIBUTES', '');
 		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
 		vi.stubEnv('OTEL_TRACES_EXPORTER', 'otlp');
 		vi.stubEnv('OTEL_LOGS_EXPORTER', 'none');
 		vi.stubEnv('OTEL_METRICS_EXPORTER', 'none');
 		const logged = vi.spyOn(console, 'log').mockImplementation(() => {});
-		const { handle, attributes } = await startTraceProbe();
+		const { handle, attributes } = await startTraceProbe('dev');
 		const started = JSON.parse(logged.mock.calls[0][0]);
 		expect(started).toMatchObject({ event: 'otel_started', 'service.version': 'dev' });
 		expect(attributes['service.version']).toBe('dev');
@@ -259,7 +267,7 @@ describe('startOtel', () => {
 			exported.push(batch);
 			callback({ code: ExportResultCode.SUCCESS });
 		});
-		const handle = startOtel();
+		const handle = startOtel('1.2.3');
 		expect(handle).toMatchObject({ tracing: false, metrics: true, logs: false });
 		metricsApi.getMeter('test').createCounter('test.counter').add(1);
 		await handle?.shutdown();
@@ -314,7 +322,7 @@ describe('startOtel', () => {
 		vi.spyOn(OTLPMetricExporter.prototype, 'export').mockImplementation((_metrics, callback) => {
 			callback({ code: ExportResultCode.SUCCESS });
 		});
-		const handle = startOtel();
+		const handle = startOtel('1.2.3');
 		expect(handle).not.toBeNull();
 		await handle?.shutdown();
 	});
@@ -329,7 +337,7 @@ describe('startOtel', () => {
 			.mockResolvedValue(undefined);
 		const register = vi.spyOn(NodeTracerProvider.prototype, 'register');
 		const setGlobal = vi.spyOn(metricsApi, 'setGlobalMeterProvider');
-		const handle = startOtel();
+		const handle = startOtel('1.2.3');
 		expect(handle).not.toBeNull();
 		expect(handle?.tracing).toBe(false);
 		expect(handle?.metrics).toBe(true);

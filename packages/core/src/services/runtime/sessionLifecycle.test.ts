@@ -17,14 +17,11 @@ import type { SandboxCalls } from '../../testing';
 import { CatalogService } from '../catalog/CatalogService';
 import { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
-import {
-	kernelActiveConnections,
-	RECLAIM_PROVISION_GRACE_MS,
-	SessionLifecycleService,
-} from './sessionLifecycle';
+import { kernelActiveConnections } from './kernelActiveConnections';
+import { SessionLifecycleService } from './sessionLifecycle';
 import type { SessionLifecycleConfig } from './sessionLifecycle';
 import { SessionService } from './SessionService';
-import { SessionRetirer } from './SessionRetirer';
+import { RECLAIM_PROVISION_GRACE_MS, SessionRetirer } from './SessionRetirer';
 import * as thumbnailCapture from './captureThumbnail';
 
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -109,7 +106,9 @@ describe('SessionLifecycleService', () => {
 		await putSession({ status: 'expired', sandbox_id: createSandboxId() });
 		const started = Date.now();
 		vi.spyOn(Date, 'now').mockReturnValue(started);
-		const reclaim = vi.spyOn(SessionRetirer.prototype, 'reclaim').mockResolvedValue(true);
+		const reclaim = vi
+			.spyOn(SessionRetirer.prototype, 'reclaim')
+			.mockResolvedValue({ reclaimed: true, saved: false });
 		await makeService().sweep(now);
 		expect(reclaim).toHaveBeenCalledTimes(2);
 		expect(reclaim.mock.calls.map((call) => call[1]?.thumbnailDeadlineAt)).toEqual([
@@ -520,7 +519,8 @@ describe('SessionLifecycleService', () => {
 			expect((await getStored(s)).sandbox_reclaimed_at).toBeDefined();
 		});
 
-		it('keeps the provision grace for a provisioned record when connection-aware reaping is off', async () => {
+		it('still requires a confirmed idle kernel within the provision grace when connection-aware reaping is off', async () => {
+			probe.mockResolvedValue(1);
 			const started = iso(-6 * 60 * 1000);
 			const s = await putSession({
 				status: 'expired',
@@ -531,7 +531,7 @@ describe('SessionLifecycleService', () => {
 
 			const result = await makeService({ connectionAware: false }).sweep(now);
 
-			expect(probe).not.toHaveBeenCalled();
+			expect(probe).toHaveBeenCalledOnce();
 			expect(result.reclaimed).toBe(0);
 			expect(sandboxCalls.destroy).toBe(0);
 			expect((await getStored(s)).sandbox_reclaimed_at).toBeUndefined();
@@ -541,6 +541,7 @@ describe('SessionLifecycleService', () => {
 			{ age: RECLAIM_PROVISION_GRACE_MS - 1, reclaimed: 0 },
 			{ age: RECLAIM_PROVISION_GRACE_MS, reclaimed: 1 },
 		])('ends the provision grace exactly $age ms after start', async ({ age, reclaimed }) => {
+			vi.spyOn(Date, 'now').mockReturnValue(now);
 			await putSession({
 				status: 'expired',
 				started_at: iso(-age),

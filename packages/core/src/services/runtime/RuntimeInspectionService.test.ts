@@ -713,11 +713,50 @@ describe('runtime inspection', () => {
 			claim_holder_status: 'expired',
 			claim_available: true,
 			reclaimable: true,
+			reclaim_blocked_reason: null,
 		});
 		expect(put).not.toHaveBeenCalled();
 		await sessions.markSandboxReclaimed(pid, expired.session_id, new Date(now).toISOString());
 		inspection.invalidate();
 		expect((await inspection.inspect()).editors).toEqual([]);
+	});
+
+	it('explains from recorded state why an editor cannot be reclaimed yet', async () => {
+		const editor = { mode: 'edit' as const, app_pool: undefined };
+		// Ephemeral, so it does not supersede the expired editors' captures.
+		const running = await saveSession(member(), { ...editor, ephemeral: true });
+		const provisioning = await saveSession(member(), {
+			...editor,
+			status: 'expired',
+			started_at: new Date(now - 60_000).toISOString(),
+		});
+		const stopping = await saveSession(member(), {
+			...editor,
+			status: 'terminating',
+			terminating_at: new Date(now - 60_000).toISOString(),
+		});
+		const unattachable = await saveSession(member(), {
+			...editor,
+			status: 'expired',
+			sandbox_url: 'https://kernel.example.test',
+		});
+		const reasons = async (attachmentSupported: boolean) =>
+			Object.fromEntries(
+				(await inspection.inspect({ attachmentSupported })).editors.map((row) => [
+					row.session_id,
+					[row.reclaimable, row.reclaim_blocked_reason],
+				]),
+			);
+		expect(await reasons(false)).toEqual({
+			[running.session_id]: [false, 'not_terminal'],
+			[provisioning.session_id]: [false, 'provision_grace'],
+			[stopping.session_id]: [false, 'teardown_grace'],
+			[unattachable.session_id]: [false, 'attachment_unsupported'],
+		});
+		expect((await reasons(true))[unattachable.session_id]).toEqual([true, null]);
+		await saveSession(member(), editor);
+		inspection.invalidate();
+		expect((await reasons(false))[unattachable.session_id]).toEqual([true, null]);
 	});
 
 	it('distinguishes an unreadable editor claim from an unclaimed notebook', async () => {

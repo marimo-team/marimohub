@@ -2,15 +2,18 @@ import { expect } from 'vitest';
 import { CatalogService, createServices } from '@marimo-hub/core';
 import type {
 	Authenticator,
+	CredentialBroker,
+	FederationTarget,
 	SandboxProvider,
 	SourceControlPublisher,
 	SourceControlReader,
 	SourceControlRegistry,
 	UserId,
+	WorkloadIdentityIssuer,
 } from '@marimo-hub/core';
 import { ACTOR, MemoryBucket, noopCompute } from '@marimo-hub/core/testing';
 import { DEFAULT_JOBS_CONFIG } from '../context';
-import type { ApiDeps } from '../context';
+import type { ApiDeps, WifConfig } from '../context';
 import { createApi } from '../createApi';
 
 /**
@@ -36,6 +39,35 @@ export function makeTestDeps(bucket: MemoryBucket, overrides: Partial<ApiDeps> =
 		// On in tests; pass `jobs: undefined` for the off-deployment paths.
 		jobs: { ...DEFAULT_JOBS_CONFIG },
 		...overrides,
+	};
+}
+
+export interface TestWifOptions {
+	defaultEnabled?: boolean;
+	exchange?: CredentialBroker['exchange'];
+	mint?: () => Promise<string>;
+	jwks?: () => Promise<unknown>;
+	issuerUrl?: string;
+	audience?: string;
+	storage?: FederationTarget['storage'];
+}
+
+/** A fresh `WifConfig` per call; the issuer is a stub exposing only `mint` and `jwks`. */
+export function makeTestWif(options: TestWifOptions = {}): WifConfig {
+	return {
+		defaultEnabled: options.defaultEnabled ?? false,
+		issuer: {
+			mint: options.mint ?? (async () => 'jwt'),
+			jwks: options.jwks ?? (async () => ({ keys: [] })),
+		} as unknown as WorkloadIdentityIssuer,
+		issuerUrl: options.issuerUrl ?? 'https://hub.example.com',
+		target: {
+			broker: {
+				exchange: options.exchange ?? (async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK' })),
+			},
+			audience: options.audience ?? 'aud',
+			storage: options.storage ?? { endpoint: 'https://s3.example.com', region: 'us-east-1' },
+		},
 	};
 }
 

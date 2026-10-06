@@ -1,3 +1,4 @@
+import { trace } from '@opentelemetry/api';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
 import { Millis } from '../../duration';
@@ -18,7 +19,9 @@ import { putIfAbsent } from './cas';
  * holder proceeds, so two sweeps can't race on deletes. It is NOT a
  * general-purpose distributed lock.
  */
-const DEFAULT_TTL_MS = Millis.minutes(10); // comfortably > one sweep
+// The server passes each attempt's remaining deadline; this only covers callers
+// without one, such as the Cloudflare worker's scheduled sweep.
+const DEFAULT_TTL_MS = Millis.minutes(10);
 
 const LockRecordSchema = z.object({
 	holder: z.string(),
@@ -39,6 +42,13 @@ export class MaintenanceLock {
 	 * callers can never both win.
 	 */
 	async acquire(holder: string, ttlMs: number = DEFAULT_TTL_MS): Promise<boolean> {
+		const acquired = await this.tryAcquire(holder, ttlMs);
+		// Contention is not an error, so surface it as an attribute on the caller's span.
+		trace.getActiveSpan()?.setAttribute('marimohub.lock.acquired', acquired);
+		return acquired;
+	}
+
+	private async tryAcquire(holder: string, ttlMs: number): Promise<boolean> {
 		const now = Date.now();
 		const record: LockRecord = { holder, expires_at: new Date(now + ttlMs).toISOString() };
 		const body = JSON.stringify(record);
@@ -72,22 +82,26 @@ export class MaintenanceLock {
 	}
 
 	/**
-	 * Release the lease (best-effort). Only deletes if this holder still owns it,
-	 * so a sweep that overran its TTL doesn't delete a lease another replica has
-	 * since acquired. The TTL is the real safety net; this just frees it sooner.
+	 * Release the lease (best-effort) by expiring it in place. The write is CAS on
+	 * the ETag read here, so a lease another replica stole after this holder's TTL
+	 * lapsed is never clobbered. The TTL is the real safety net; this frees it sooner.
 	 */
 	async release(holder: string, signal?: AbortSignal): Promise<void> {
 		const existing = await this.bucket.get(this.key);
 		if (!existing) return;
 		const current = this.parse(await existing.text(), 'maintenance_lock.release');
 		if (signal?.aborted || !current || current.holder !== holder) return;
-		await this.bucket.delete(this.key).catch((err) => {
-			logOperationalError(
-				'maintenance_lock_release_failed',
-				{ operation: 'maintenance_lock.release', object: this.key },
-				err,
-			);
-		});
+		const expired: LockRecord = { holder, expires_at: new Date(Date.now()).toISOString() };
+		await this.bucket
+			.put(this.key, JSON.stringify(expired), { onlyIfEtagMatches: existing.etag })
+			.catch((err) => {
+				if (err instanceof PreconditionFailedError) return;
+				logOperationalError(
+					'maintenance_lock_release_failed',
+					{ operation: 'maintenance_lock.release', object: this.key },
+					err,
+				);
+			});
 	}
 
 	private tryCreate(body: string): Promise<boolean> {

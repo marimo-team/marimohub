@@ -1066,6 +1066,17 @@ export const ProjectFederationResponseSchema = z
 	})
 	.openapi('ProjectFederation');
 
+/** Server-resolved so clients never re-derive the override-vs-default policy. */
+export const ProjectFederationEffectiveSchema = z
+	.object({
+		enabled: z.boolean(),
+		source: z.enum(['project', 'deployment', 'unavailable']).openapi({
+			description:
+				'`project` when a stored override applies, `deployment` when the deployment default applies, `unavailable` when the deployment has no workload identity federation.',
+		}),
+	})
+	.openapi('ProjectFederationEffective');
+
 /**
  * Resource security labels on a project or notebook. Only visible to callers
  * who already satisfied them (or hold the label-management standing), so the
@@ -1097,6 +1108,7 @@ export const ProjectResponseSchema = z
 		updated_at: dt(),
 		tags: z.array(z.string()),
 		federation: ProjectFederationResponseSchema.optional(),
+		federation_effective: ProjectFederationEffectiveSchema,
 		security_labels: SecurityLabelsResponseSchema.optional(),
 		/** The requesting user's effective role on this project, or null if none. */
 		your_role: z.enum(ROLES).nullable(),
@@ -1509,7 +1521,7 @@ export const DeploymentInfoResponseSchema = z
  */
 export const CapabilitiesResponseSchema = z
 	.object({
-		federation: z.object({ available: z.boolean(), defaultEnabled: z.boolean() }),
+		federation: z.object({ available: z.boolean(), default_enabled: z.boolean() }),
 		integrations: z.object({ available: z.boolean() }),
 		source_control: z.object({
 			preview_providers: z.array(z.string()).openapi({

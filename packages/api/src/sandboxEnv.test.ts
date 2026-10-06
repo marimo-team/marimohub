@@ -11,7 +11,7 @@ import type { JobRunContext } from '@marimo-hub/core/jobs';
 import { ACTOR, makeProject, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { resolveFederatedVars, resolveIntegrationRender, resolveJobSandboxEnv } from './sandboxEnv';
-import { createInitializedBucket, makeTestDeps } from './testing';
+import { createInitializedBucket, makeTestDeps, makeTestWif } from './testing';
 import type { ApiDeps } from './context';
 
 const AUTHOR = uid('author-1');
@@ -44,19 +44,17 @@ function context(overrides: { project?: Project; run?: Partial<JobRun> } = {}): 
 	};
 }
 
-function wif(exchange = vi.fn(async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK' }))) {
+function wif(
+	exchange = vi.fn(async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK' })),
+	defaultEnabled = false,
+) {
 	return {
 		exchange,
-		config: {
-			defaultEnabled: false,
-			issuer: { mint: vi.fn(async () => 'jwt'), jwks: async () => ({ keys: [] }) },
-			issuerUrl: 'https://hub.example',
-			target: {
-				broker: { exchange },
-				audience: 'aud',
-				storage: { endpoint: 'https://s3.example', region: 'eu' },
-			},
-		} as unknown as ApiDeps['wif'],
+		config: makeTestWif({
+			exchange,
+			defaultEnabled,
+			storage: { endpoint: 'https://s3.example', region: 'eu' },
+		}),
 	};
 }
 
@@ -324,16 +322,23 @@ describe('resolveJobSandboxEnv', () => {
 
 describe('inherited federation', () => {
 	it.each([
-		[true, undefined, false, true],
-		[true, false, false, false],
-		[false, true, false, true],
+		// default, override, restricted, exchanges
 		[false, undefined, false, false],
+		[false, true, false, true],
+		[false, false, false, false],
+		[true, undefined, false, true],
+		[true, true, false, true],
+		[true, false, false, false],
+		[false, undefined, true, false],
+		[false, true, true, false],
+		[false, false, true, false],
 		[true, undefined, true, false],
+		[true, true, true, false],
+		[true, false, true, false],
 	] as const)(
 		'default=%s override=%s restricted=%s exchanges=%s',
 		async (defaultEnabled, enabled, restricted, expected) => {
-			const { config, exchange } = wif();
-			config!.defaultEnabled = defaultEnabled;
+			const { config, exchange } = wif(undefined, defaultEnabled);
 			const result = await resolveFederatedVars(
 				{ wif: config },
 				{
@@ -346,9 +351,24 @@ describe('inherited federation', () => {
 			expect(Boolean(result)).toBe(expected);
 		},
 	);
+
+	it.each([undefined, true, false] as const)(
+		'never federates without WIF (override=%s)',
+		async (enabled) => {
+			const result = await resolveFederatedVars(
+				{ wif: undefined },
+				{
+					project: makeProject({ federation: enabled === undefined ? undefined : { enabled } }),
+					workload: { kind: 'job-run', id: createRunId() },
+					restricted: false,
+				},
+			);
+			expect(result).toBeUndefined();
+		},
+	);
+
 	it('gives a scheduled job inherited credentials', async () => {
-		const { config } = wif();
-		config!.defaultEnabled = true;
+		const { config } = wif(undefined, true);
 		const bucket = await createInitializedBucket();
 		const deps = makeTestDeps(bucket);
 		const env = await resolveJobSandboxEnv(

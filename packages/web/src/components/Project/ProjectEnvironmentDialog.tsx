@@ -10,14 +10,17 @@ import { ProjectIntegrationsPanel } from './ProjectIntegrationsDialog';
 
 type Area = 'overview' | 'integrations' | 'cloud';
 
+export type CloudAccessSetting = 'inherit' | 'enabled' | 'disabled';
+
 export interface ProjectEnvironmentDialogProps {
 	isOpen: boolean;
 	onClose: () => void;
 	project: ProjectDetail;
 	integrationsAvailable: boolean;
-	cloudAccessAvailable: boolean | undefined;
-	cloudAccessDefaultEnabled: boolean | undefined;
-	onSaveCloudAccess: (enabled: boolean | null) => Promise<void>;
+	cloudAccessLoading: boolean;
+	cloudAccessAvailable: boolean;
+	cloudAccessDefaultEnabled: boolean;
+	onSaveCloudAccess: (setting: CloudAccessSetting) => Promise<void>;
 	isPending?: boolean;
 }
 
@@ -26,20 +29,17 @@ export function ProjectEnvironmentDialog({
 	onClose,
 	project,
 	integrationsAvailable,
+	cloudAccessLoading,
 	cloudAccessAvailable,
 	cloudAccessDefaultEnabled,
 	onSaveCloudAccess,
 	isPending = false,
 }: ProjectEnvironmentDialogProps) {
 	const [area, setArea] = useState<Area>('overview');
-	const cloudAccessLoading =
-		cloudAccessAvailable === undefined || cloudAccessDefaultEnabled === undefined;
 	let cloudAccessStatus = 'Loading cloud access…';
 	if (!cloudAccessLoading) {
-		const enabled = project.federation?.enabled ?? cloudAccessDefaultEnabled;
-		const source = project.federation === undefined ? 'by deployment default' : 'for this project';
 		cloudAccessStatus = cloudAccessAvailable
-			? `${enabled ? 'Enabled' : 'Disabled'} ${source}`
+			? effectiveCloudAccessLabel(project)
 			: 'Not configured for this deployment';
 	}
 
@@ -86,6 +86,12 @@ export function ProjectEnvironmentDialog({
 	);
 }
 
+function effectiveCloudAccessLabel(project: ProjectDetail): string {
+	const { enabled, source } = project.federation_effective;
+	if (source === 'unavailable') return 'Not configured for this deployment';
+	return `${enabled ? 'Enabled' : 'Disabled'} ${source === 'deployment' ? 'by deployment default' : 'for this project'}`;
+}
+
 function AreaCard({
 	icon: Icon,
 	title,
@@ -127,14 +133,13 @@ function CloudAccessPanel({
 	available: boolean;
 	defaultEnabled: boolean;
 	onBack: () => void;
-	onSave: (enabled: boolean | null) => Promise<void>;
+	onSave: (setting: CloudAccessSetting) => Promise<void>;
 	isPending: boolean;
 }) {
-	const current = project.federation?.enabled ?? defaultEnabled;
-	const setting =
-		project.federation === undefined
+	const setting: CloudAccessSetting =
+		project.federation_effective.source !== 'project'
 			? 'inherit'
-			: project.federation.enabled
+			: project.federation_effective.enabled
 				? 'enabled'
 				: 'disabled';
 	const canManage = canManageProject(project.your_role);
@@ -142,7 +147,7 @@ function CloudAccessPanel({
 		defaultValues: { setting },
 		onSubmit: async ({ value }) => {
 			try {
-				await onSave(value.setting === 'inherit' ? null : value.setting === 'enabled');
+				await onSave(value.setting);
 				form.reset({ setting: value.setting });
 			} catch {
 				// Keep the draft for retry; the global mutation handler reports the error.
@@ -185,7 +190,7 @@ function CloudAccessPanel({
 			) : !canManage ? (
 				<div className="flex items-center gap-2 rounded-md border border-input p-3">
 					<KeyRound className="size-4" aria-hidden />
-					Federated cloud access is {current ? 'enabled' : 'disabled'}.
+					Federated cloud access is {effectiveCloudAccessLabel(project).toLowerCase()}.
 				</div>
 			) : (
 				<form

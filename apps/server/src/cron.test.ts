@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInitializedBucket, makeTestDeps, stubSourceControl } from '@marimo-hub/api/testing';
-import type { ApiDeps, SessionLifetimeConfig } from '@marimo-hub/api';
+import type { ApiDeps } from '@marimo-hub/api';
 import type * as CoreModule from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import {
@@ -8,7 +8,6 @@ import {
 	MaintenanceLock,
 	WarmPoolService,
 	WarmPoolStore,
-	Millis,
 	paths,
 	reapFilesystemSnapshots,
 	ReconciliationService,
@@ -26,6 +25,12 @@ import {
 } from './cron';
 import { fanoutMetrics, WideEventMetrics } from './metrics';
 import { BackgroundLoops } from './backgroundLoops';
+import {
+	flushRun,
+	makeSessionLifetime,
+	SESSION_SWEEP_INTERVAL_MS,
+	useLoopHarness,
+} from './test/loopHarness';
 
 vi.mock('@marimo-hub/core', async (importOriginal) => {
 	const actual = await importOriginal<typeof CoreModule>();
@@ -33,17 +38,6 @@ vi.mock('@marimo-hub/core', async (importOriginal) => {
 });
 
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
-
-/** Flush the initial (non-timer) `void run()` call, whose awaits are microtasks. */
-async function flushRun() {
-	await vi.advanceTimersByTimeAsync(0);
-}
-
-function parseLoggedEvents(logSpy: { mock: { calls: unknown[][] } }): Record<string, unknown>[] {
-	return logSpy.mock.calls.map(
-		(call: unknown[]) => JSON.parse(call[0] as string) as Record<string, unknown>,
-	);
-}
 
 type ReconcileResult = Awaited<ReturnType<ReconciliationService['reconcile']>>;
 
@@ -61,33 +55,51 @@ function makeReconcileResult(overrides: Partial<ReconcileResult> = {}): Reconcil
 	};
 }
 
+const ZERO_SWEEP: SweepResult = {
+	snapshotted: 0,
+	extended: 0,
+	reapedExpired: 0,
+	reapedIdle: 0,
+	reclaimed: 0,
+};
+
+const ZERO_TICK: Awaited<ReturnType<JobScheduler['tick']>> = {
+	fired: 0,
+	repaired: 0,
+	skipped: 0,
+	dispatched: 0,
+	timedOut: 0,
+	markersPruned: 0,
+	errors: 0,
+};
+
+function makeWarmPool(deps: ApiDeps, enabled = true) {
+	return new WarmPoolService(
+		new WarmPoolStore(deps.bucket, 'kubernetes'),
+		deps.compute,
+		deps.services.sessions,
+		{ enabled, size: 1, profiles: [], creationTimeoutMs: 300_000, minimumRemainingMs: 60_000 },
+	);
+}
+
 describe('startMaintenance', () => {
+	const h = useLoopHarness();
 	let bucket: MemoryBucket;
 	let deps: ApiDeps;
 	let metrics: WideEventMetrics;
-	let stop: () => void;
-	let logSpy: ReturnType<typeof vi.spyOn>;
 
 	beforeEach(async () => {
-		vi.useFakeTimers();
 		bucket = await createInitializedBucket();
 		deps = makeTestDeps(bucket);
 		metrics = new WideEventMetrics();
-		logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-	});
-
-	afterEach(() => {
-		stop?.();
-		vi.restoreAllMocks();
-		vi.useRealTimers();
 	});
 
 	it('emits exactly one maintenance_cycle wide event per run', async () => {
 		metrics.increment('sessions_created');
-		stop = startMaintenance(deps, metrics);
+		h.track(startMaintenance(deps, metrics));
 		await flushRun();
 
-		const events = parseLoggedEvents(logSpy);
+		const events = h.events();
 		expect(events).toHaveLength(1);
 		expect(events[0]).toMatchObject({
 			event: 'maintenance_cycle',
@@ -95,8 +107,11 @@ describe('startMaintenance', () => {
 			invite_rows_claimed: 0,
 			projects_swept: 0,
 			notebooks_swept: 0,
+			sessions_reclaimed: 0,
 			'counter.sessions_created': 1,
 		});
+		expect(events[0]).not.toHaveProperty('unreclaimed_terminal_sessions');
+		expect(events[0]).not.toHaveProperty('oldest_unreclaimed_session_age_ms');
 	});
 
 	it('publishes unreclaimed terminal gauges to the metrics port and resets them after recovery', async () => {
@@ -110,50 +125,46 @@ describe('startMaintenance', () => {
 		vi.spyOn(ReconciliationService.prototype, 'reconcile')
 			.mockResolvedValueOnce(result)
 			.mockResolvedValue(makeReconcileResult({ skipped: true }));
-		stop = startMaintenance(deps, metrics);
+		h.track(startMaintenance(deps, metrics));
 		await flushRun();
-		expect(gauge).toHaveBeenCalledWith('sessions.unreclaimed_terminal', 2, undefined);
+		expect(gauge).toHaveBeenCalledWith('sessions.unreclaimed_terminal.count', 2, undefined);
 		expect(gauge).toHaveBeenCalledWith(
 			'sessions.unreclaimed_terminal.oldest_age_ms',
 			60_000,
 			undefined,
 		);
-		expect(parseLoggedEvents(logSpy).at(-1)).toMatchObject({
-			'gauge.sessions.unreclaimed_terminal': 2,
+		expect(h.events().at(-1)).toMatchObject({
+			'gauge.sessions.unreclaimed_terminal.count': 2,
 			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 60_000,
 		});
 		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
-		expect(gauge).toHaveBeenCalledWith('sessions.unreclaimed_terminal', 0, undefined);
+		expect(gauge).toHaveBeenCalledWith('sessions.unreclaimed_terminal.count', 0, undefined);
 		expect(gauge).toHaveBeenCalledWith('sessions.unreclaimed_terminal.oldest_age_ms', 0, undefined);
-		expect(parseLoggedEvents(logSpy).at(-1)).toMatchObject({
-			'gauge.sessions.unreclaimed_terminal': 0,
+		expect(h.events().at(-1)).toMatchObject({
+			'gauge.sessions.unreclaimed_terminal.count': 0,
 			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 0,
 		});
 	});
 
 	it('keeps the last observed gauges when reconciliation fails, then resets them on recovery', async () => {
-		metrics.gauge('sessions.unreclaimed_terminal', 2);
+		metrics.gauge('sessions.unreclaimed_terminal.count', 2);
 		metrics.gauge('sessions.unreclaimed_terminal.oldest_age_ms', 60_000);
 		const reconcile = vi
 			.spyOn(ReconciliationService.prototype, 'reconcile')
 			.mockRejectedValueOnce(new Error('session listing unavailable'));
-		stop = startMaintenance(deps, metrics);
+		h.track(startMaintenance(deps, metrics));
 		await flushRun();
 		expect(metrics.collect()).toMatchObject({
-			'gauge.sessions.unreclaimed_terminal': 2,
+			'gauge.sessions.unreclaimed_terminal.count': 2,
 			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 60_000,
 		});
-		expect(parseLoggedEvents(logSpy)).toContainEqual(
-			expect.objectContaining({ event: 'maintenance_failed' }),
-		);
-		expect(parseLoggedEvents(logSpy).some((event) => event.event === 'maintenance_cycle')).toBe(
-			false,
-		);
+		expect(h.events()).toContainEqual(expect.objectContaining({ event: 'maintenance_failed' }));
+		expect(h.events().some((event) => event.event === 'maintenance_cycle')).toBe(false);
 		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
 		expect(reconcile).toHaveBeenCalledTimes(2);
-		expect(parseLoggedEvents(logSpy).at(-1)).toMatchObject({
+		expect(h.events().at(-1)).toMatchObject({
 			event: 'maintenance_cycle',
-			'gauge.sessions.unreclaimed_terminal': 0,
+			'gauge.sessions.unreclaimed_terminal.count': 0,
 			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 0,
 		});
 	});
@@ -162,18 +173,12 @@ describe('startMaintenance', () => {
 		const late = Promise.withResolvers<ReconcileResult>();
 		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockReturnValueOnce(late.promise);
 		const loops = new BackgroundLoops();
-		stop = startMaintenance(deps, metrics, loops);
+		h.track(startMaintenance(deps, metrics, loops));
 		await flushRun();
 		await vi.advanceTimersByTimeAsync(
 			loops.health().loops.maintenance.deadline_ms + FIVE_MINUTES_MS,
 		);
-		expect(metrics.collect()).toMatchObject({
-			'gauge.sessions.unreclaimed_terminal': 0,
-			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 0,
-		});
-		const observed = metrics.collect();
-		const events = parseLoggedEvents(logSpy);
-		expect(events).toContainEqual(expect.objectContaining({ event: 'maintenance_stalled' }));
+		expect(h.events()).toContainEqual(expect.objectContaining({ event: 'maintenance_stalled' }));
 		late.resolve(
 			makeReconcileResult({
 				unreclaimedTerminal: 7,
@@ -181,12 +186,18 @@ describe('startMaintenance', () => {
 			}),
 		);
 		await flushRun();
-		expect(metrics.collect()).toEqual(observed);
-		expect(parseLoggedEvents(logSpy)).toEqual(events);
+		expect(metrics.collect()).not.toHaveProperty('gauge.sessions.unreclaimed_terminal.count');
+		expect(h.events().some((event) => event.event === 'maintenance_cycle')).toBe(false);
+
+		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
+		expect(h.events().at(-1)).toMatchObject({
+			event: 'maintenance_cycle',
+			'gauge.sessions.unreclaimed_terminal.count': 0,
+			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 0,
+		});
 	});
 
-	it('reports the current cycle heartbeat after work and lease release complete', async () => {
-		const started = Date.now();
+	it('reports loop heartbeat gauges after work and lease release complete', async () => {
 		vi.spyOn(MaintenanceLock.prototype, 'acquire').mockResolvedValue(true);
 		vi.spyOn(MaintenanceLock.prototype, 'release').mockImplementation(
 			() => new Promise((resolve) => setTimeout(resolve, 10)),
@@ -194,24 +205,26 @@ describe('startMaintenance', () => {
 		vi.spyOn(deps.services.sessions, 'expireStale').mockImplementation(
 			() => new Promise((resolve) => setTimeout(() => resolve(0), 40)),
 		);
-		const loops = new BackgroundLoops();
-		stop = startMaintenance(deps, metrics, loops);
+		h.track(startMaintenance(deps, metrics, new BackgroundLoops()));
 		await vi.advanceTimersByTimeAsync(40);
-		expect(parseLoggedEvents(logSpy)).toEqual([]);
+		expect(h.events()).toEqual([]);
 		await vi.advanceTimersByTimeAsync(10);
-		for (let cycle = 0; cycle < 2; cycle++) {
-			const events = parseLoggedEvents(logSpy);
-			expect(events).toHaveLength(cycle + 1);
-			expect(events[cycle]).toMatchObject({
-				event: 'maintenance_cycle',
-				'gauge.loop.maintenance.last_started_at': started + cycle * FIVE_MINUTES_MS,
-				'gauge.loop.maintenance.last_completed_at': started + cycle * FIVE_MINUTES_MS + 50,
-				'gauge.loop.maintenance.last_success_at': started + cycle * FIVE_MINUTES_MS + 50,
-				'gauge.loop.maintenance.last_duration_ms': 50,
-				'gauge.loop.maintenance.seconds_since_success': 0,
-			});
-			if (cycle === 0) await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
-		}
+		const [cycle] = h.events();
+		expect(Object.keys(cycle).filter((key) => key.includes('.loop.'))).toEqual([
+			'gauge.loop.maintenance.seconds_since_success',
+			'gauge.loop.maintenance.last_duration_ms',
+			'gauge.loop.maintenance.consecutive_failures',
+			'gauge.loop.maintenance.stalled',
+			'counter.loop.maintenance.timeouts',
+		]);
+		expect(cycle).toMatchObject({
+			event: 'maintenance_cycle',
+			'gauge.loop.maintenance.seconds_since_success': 0,
+			'gauge.loop.maintenance.last_duration_ms': 50,
+			'gauge.loop.maintenance.consecutive_failures': 0,
+			'gauge.loop.maintenance.stalled': 0,
+			'counter.loop.maintenance.timeouts': 0,
+		});
 	});
 
 	it.each([false, true])(
@@ -227,9 +240,9 @@ describe('startMaintenance', () => {
 					new Error('sweep failed'),
 				);
 			const loops = new BackgroundLoops();
-			stop = startMaintenance(deps, metrics, loops);
+			h.track(startMaintenance(deps, metrics, loops));
 			await flushRun();
-			const events = parseLoggedEvents(logSpy);
+			const events = h.events();
 			expect(events.map((event) => event.event)).toEqual([
 				'maintenance_release_failed',
 				failed ? 'maintenance_failed' : 'maintenance_cycle',
@@ -247,7 +260,7 @@ describe('startMaintenance', () => {
 	it('sweeps previews before expiring session startup records', async () => {
 		const previews = vi.spyOn(deps.services.previews, 'cleanupCandidates');
 		const expire = vi.spyOn(deps.services.sessions, 'expireStale');
-		stop = startMaintenance(deps, metrics);
+		h.track(startMaintenance(deps, metrics));
 		await flushRun();
 		expect(previews).toHaveBeenCalledOnce();
 		expect(expire).toHaveBeenCalledOnce();
@@ -271,10 +284,10 @@ describe('startMaintenance', () => {
 		}));
 		await deps.services.jobRuns.deleteMarker(old);
 
-		stop = startMaintenance(deps, metrics);
+		h.track(startMaintenance(deps, metrics));
 		await flushRun();
 
-		expect(parseLoggedEvents(logSpy)[0]).toMatchObject({
+		expect(h.events()[0]).toMatchObject({
 			event: 'maintenance_cycle',
 			job_runs_pruned: 1,
 			job_run_markers_pruned: 0,
@@ -284,11 +297,11 @@ describe('startMaintenance', () => {
 
 	it('skips job pruning when jobs are off', async () => {
 		const prune = vi.spyOn(deps.services.jobRuns, 'pruneJob');
-		stop = startMaintenance({ ...deps, jobs: undefined }, metrics);
+		h.track(startMaintenance({ ...deps, jobs: undefined }, metrics));
 		await flushRun();
 
 		expect(prune).not.toHaveBeenCalled();
-		expect(parseLoggedEvents(logSpy)[0]).toMatchObject({
+		expect(h.events()[0]).toMatchObject({
 			event: 'maintenance_cycle',
 			job_runs_pruned: 0,
 			job_run_markers_pruned: 0,
@@ -298,18 +311,18 @@ describe('startMaintenance', () => {
 	it('claims pending invite rows during the maintenance cycle', async () => {
 		const claimSpy = vi.spyOn(deps.services.projects, 'claimPendingInvites').mockResolvedValue(2);
 
-		stop = startMaintenance(deps, metrics);
+		h.track(startMaintenance(deps, metrics));
 		await flushRun();
 
 		expect(claimSpy).toHaveBeenCalledOnce();
-		expect(parseLoggedEvents(logSpy)[0]).toMatchObject({ invite_rows_claimed: 2 });
+		expect(h.events()[0]).toMatchObject({ invite_rows_claimed: 2 });
 	});
 
 	it('sweeps projects before notebooks (a deleted project reclaims its own notebooks)', async () => {
 		const projectsSpy = vi.spyOn(deps.services.projects, 'sweepDeletedProjects');
 		const notebooksSpy = vi.spyOn(deps.services.notebooks, 'sweepDeletedNotebooks');
 
-		stop = startMaintenance(deps, metrics);
+		h.track(startMaintenance(deps, metrics));
 		await flushRun();
 
 		expect(projectsSpy).toHaveBeenCalledOnce();
@@ -317,83 +330,6 @@ describe('startMaintenance', () => {
 		expect(projectsSpy.mock.invocationCallOrder[0]).toBeLessThan(
 			notebooksSpy.mock.invocationCallOrder[0],
 		);
-	});
-
-	it('contains a cycle failure and keeps the interval alive for the next cycle', async () => {
-		const expireStale = vi.spyOn(deps.services.sessions, 'expireStale');
-		expireStale.mockRejectedValueOnce(new Error('bucket unavailable'));
-
-		stop = startMaintenance(deps, metrics);
-		await flushRun();
-
-		let events = parseLoggedEvents(logSpy);
-		expect(events).toHaveLength(1);
-		expect(events[0]).toMatchObject({ event: 'maintenance_failed', error: 'bucket unavailable' });
-
-		logSpy.mockClear();
-		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
-
-		events = parseLoggedEvents(logSpy);
-		expect(events).toHaveLength(1);
-		expect(events[0]).toMatchObject({ event: 'maintenance_cycle' });
-		expect(expireStale).toHaveBeenCalledTimes(2);
-	});
-
-	it('releases the lock after a failed cycle so the next cycle is not blocked', async () => {
-		vi.spyOn(deps.services.sessions, 'expireStale').mockRejectedValueOnce(new Error('boom'));
-
-		stop = startMaintenance(deps, metrics);
-		await flushRun();
-		logSpy.mockClear();
-		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
-
-		const events = parseLoggedEvents(logSpy);
-		// Reaching `maintenance_cycle` (not `maintenance_skipped_not_leader`) proves
-		// the failed cycle's `finally` released the lease.
-		expect(events.map((e) => e.event)).toEqual(['maintenance_cycle']);
-	});
-
-	it('skips the cycle quietly when this replica is not the lease holder', async () => {
-		vi.spyOn(MaintenanceLock.prototype, 'acquire').mockResolvedValue(false);
-		const expireStale = vi.spyOn(deps.services.sessions, 'expireStale');
-
-		stop = startMaintenance(deps, metrics);
-		await flushRun();
-
-		expect(expireStale).not.toHaveBeenCalled();
-		const events = parseLoggedEvents(logSpy);
-		expect(events).toEqual([expect.objectContaining({ event: 'maintenance_skipped_not_leader' })]);
-	});
-
-	it('guards against overlap: a hung cycle is not re-entered on the next tick', async () => {
-		const acquireSpy = vi.spyOn(MaintenanceLock.prototype, 'acquire');
-		const releaseSpy = vi.spyOn(MaintenanceLock.prototype, 'release');
-		let resolveExpire!: (n: number) => void;
-		const expireStale = vi.spyOn(deps.services.sessions, 'expireStale').mockImplementation(
-			() =>
-				new Promise((resolve) => {
-					resolveExpire = resolve;
-				}),
-		);
-
-		stop = startMaintenance(deps, metrics);
-		await flushRun();
-		expect(expireStale).toHaveBeenCalledTimes(1);
-
-		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS * 2);
-		// Still hung: the overlap guard held — no second acquire, and crucially no
-		// release while the first cycle is mid-run.
-		expect(expireStale).toHaveBeenCalledTimes(1);
-		expect(acquireSpy).toHaveBeenCalledTimes(1);
-		expect(releaseSpy).not.toHaveBeenCalled();
-		expect(
-			parseLoggedEvents(logSpy).filter((e) => e.event === 'maintenance_cycle_overlap_skipped'),
-		).toHaveLength(2);
-
-		resolveExpire(0);
-		await flushRun();
-		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
-		expect(expireStale).toHaveBeenCalledTimes(2);
 	});
 
 	it('forwards orphaned notebook snapshots to reapFilesystemSnapshots', async () => {
@@ -404,11 +340,11 @@ describe('startMaintenance', () => {
 		});
 		vi.mocked(reapFilesystemSnapshots).mockResolvedValueOnce(1);
 
-		stop = startMaintenance(deps, metrics);
+		h.track(startMaintenance(deps, metrics));
 		await flushRun();
 
 		expect(reapFilesystemSnapshots).toHaveBeenCalledWith(deps.compute, orphaned);
-		const events = parseLoggedEvents(logSpy);
+		const events = h.events();
 		expect(events[0]).toMatchObject({ notebooks_swept: 1, snapshots_reaped: 1 });
 	});
 
@@ -435,7 +371,7 @@ describe('startMaintenance', () => {
 			maxDestinations: 10,
 		};
 
-		stop = startMaintenance(deps, metrics);
+		h.track(startMaintenance(deps, metrics));
 		await flushRun();
 		await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
 		expect(deliver).toHaveBeenCalledWith(
@@ -474,7 +410,7 @@ describe('startMaintenance', () => {
 			maxDestinations: 10,
 		};
 
-		stop = startMaintenance(deps, metrics);
+		h.track(startMaintenance(deps, metrics));
 		await flushRun();
 		await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
 		expect(getProject).toHaveBeenCalledTimes(2);
@@ -504,7 +440,7 @@ describe('startMaintenance', () => {
 				}) as never,
 		);
 
-		stop = startMaintenance(deps, metrics);
+		h.track(startMaintenance(deps, metrics));
 		await flushRun();
 		expect(getProject).toHaveBeenCalledTimes(8);
 		for (const release of releases.splice(0)) release();
@@ -533,63 +469,27 @@ describe('startMaintenance', () => {
 			maxDestinations: 10,
 		};
 
-		stop = startMaintenance(deps, metrics);
+		h.track(startMaintenance(deps, metrics));
 		await flushRun();
 		expect(deliver).not.toHaveBeenCalled();
 	});
 });
 
-const SESSION_SWEEP_INTERVAL_MS = Millis.seconds(60);
-
-const ZERO_SWEEP: SweepResult = {
-	snapshotted: 0,
-	extended: 0,
-	reapedExpired: 0,
-	reapedIdle: 0,
-	reclaimed: 0,
-};
-
-function makeSessionLifetime(
-	overrides: Partial<SessionLifetimeConfig> = {},
-): SessionLifetimeConfig {
-	return {
-		maxLifetimeMs: Millis.hours(4),
-		idleTimeoutMsByMode: { edit: Millis.minutes(30), app: Millis.minutes(30) },
-		snapshotIntervalMs: Millis.minutes(2),
-		extensionMs: Millis.minutes(30),
-		connectionAware: false,
-		sweepIntervalMs: SESSION_SWEEP_INTERVAL_MS,
-		...overrides,
-	};
-}
-
 describe('startSessionLifecycle', () => {
+	const h = useLoopHarness();
 	let bucket: MemoryBucket;
 	let deps: ApiDeps;
-	let stop: (() => void) | undefined;
-	let logSpy: ReturnType<typeof vi.spyOn>;
 	let sweepSpy: ReturnType<typeof vi.spyOn>;
 
 	beforeEach(async () => {
-		vi.useFakeTimers();
 		bucket = await createInitializedBucket();
 		const base = makeTestDeps(bucket);
 		deps = { ...base, sandbox: { ...base.sandbox, sessionLifetime: makeSessionLifetime() } };
-		logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 		sweepSpy = vi.spyOn(SessionLifecycleService.prototype, 'sweep').mockResolvedValue(ZERO_SWEEP);
 	});
 
-	afterEach(() => {
-		stop?.();
-		vi.restoreAllMocks();
-		vi.useRealTimers();
-	});
-
 	it('is disabled (no interval) when sandbox.sessionLifetime is unset', async () => {
-		const disabledDeps = makeTestDeps(bucket);
-		const handle = startSessionLifecycle(disabledDeps);
-		expect(handle).toBeUndefined();
-
+		expect(startSessionLifecycle(makeTestDeps(bucket))).toBeUndefined();
 		await vi.advanceTimersByTimeAsync(SESSION_SWEEP_INTERVAL_MS * 3);
 		expect(sweepSpy).not.toHaveBeenCalled();
 	});
@@ -604,90 +504,45 @@ describe('startSessionLifecycle', () => {
 				);
 			}
 			const get = bucket.get.bind(bucket);
+			const unhang = Promise.withResolvers<void>();
 			let hung = false;
 			vi.spyOn(bucket, 'get').mockImplementation((key) => {
 				if (key === paths.sessionLifecycleLock && !hung) {
 					hung = true;
-					return new Promise(() => {});
+					return unhang.promise.then(() => get(key));
 				}
 				return get(key);
 			});
 			const loops = new BackgroundLoops();
-			stop = startSessionLifecycle(deps, loops);
+			h.track(startSessionLifecycle(deps, loops));
 			await flushRun();
 			expect(sweepSpy).toHaveBeenCalledTimes(phase === 'acquire' ? 0 : 1);
 			await vi.advanceTimersByTimeAsync(10 * 60_000 + SESSION_SWEEP_INTERVAL_MS);
+			if (phase === 'acquire') {
+				// The guard holds until the hung acquire settles; release is abandoned at the deadline.
+				expect(sweepSpy).not.toHaveBeenCalled();
+				expect(loops.health().loops.session_lifecycle.status).toBe('stalled');
+				unhang.resolve();
+				await vi.advanceTimersByTimeAsync(SESSION_SWEEP_INTERVAL_MS);
+			}
 			expect(sweepSpy.mock.calls.length).toBeGreaterThan(phase === 'acquire' ? 0 : 1);
-			expect(loops.health().loops.session_lifecycle).toMatchObject({
-				timeouts: 1,
-				stale: false,
-				running: false,
-			});
-			expect(loops.health().loops.session_lifecycle.last_success_at).not.toBeNull();
-			expect(parseLoggedEvents(logSpy)).toContainEqual(
+			expect(loops.health().loops.session_lifecycle).toMatchObject({ status: 'ok', timeouts: 1 });
+			expect(h.events()).toContainEqual(
 				expect.objectContaining({ event: 'session_lifecycle_stalled' }),
 			);
 		},
 	);
 
-	it('leases its own key, separate from the maintenance lock', async () => {
-		const putSpy = vi.spyOn(bucket, 'put');
-		stop = startSessionLifecycle(deps);
-		await flushRun();
-
-		expect(sweepSpy).toHaveBeenCalledOnce();
-		expect(putSpy.mock.calls.some(([key]) => key === paths.sessionLifecycleLock)).toBe(true);
-	});
-
-	it('guards against overlap: a hung sweep is not re-entered on the next tick', async () => {
-		let resolveSweep!: (r: SweepResult) => void;
-		sweepSpy.mockImplementation(
-			() =>
-				new Promise((resolve) => {
-					resolveSweep = resolve;
-				}),
-		);
-
-		stop = startSessionLifecycle(deps);
-		await flushRun();
-		expect(sweepSpy).toHaveBeenCalledTimes(1);
-
-		await vi.advanceTimersByTimeAsync(SESSION_SWEEP_INTERVAL_MS * 2);
-		expect(sweepSpy).toHaveBeenCalledTimes(1); // still hung — the overlap guard held
-
-		resolveSweep(ZERO_SWEEP);
-		await flushRun();
-		await vi.advanceTimersByTimeAsync(SESSION_SWEEP_INTERVAL_MS);
-		expect(sweepSpy).toHaveBeenCalledTimes(2);
-	});
-
-	it('contains a sweep failure and releases the lease for the next tick', async () => {
-		const releaseSpy = vi.spyOn(MaintenanceLock.prototype, 'release');
-		sweepSpy.mockRejectedValueOnce(new Error('boom'));
-
-		stop = startSessionLifecycle(deps);
-		await flushRun();
-
-		const events = parseLoggedEvents(logSpy);
-		expect(events).toEqual([
-			expect.objectContaining({ event: 'session_lifecycle_failed', error: 'boom' }),
-		]);
-		expect(releaseSpy).toHaveBeenCalledOnce();
-
-		await vi.advanceTimersByTimeAsync(SESSION_SWEEP_INTERVAL_MS);
-		expect(sweepSpy).toHaveBeenCalledTimes(2);
-	});
-
 	it('logs session_lifecycle_sweep only when the result is non-zero', async () => {
-		stop = startSessionLifecycle(deps);
+		h.track(startSessionLifecycle(deps));
 		await flushRun();
-		expect(parseLoggedEvents(logSpy)).toEqual([]);
+		expect(h.events()).toEqual([]);
 
-		logSpy.mockClear();
+		h.logSpy.mockClear();
 		sweepSpy.mockResolvedValueOnce({ ...ZERO_SWEEP, reapedExpired: 1 });
 		await vi.advanceTimersByTimeAsync(SESSION_SWEEP_INTERVAL_MS);
 
-		const events = parseLoggedEvents(logSpy);
+		const events = h.events();
 		expect(events).toEqual([
 			expect.objectContaining({ event: 'session_lifecycle_sweep', reapedExpired: 1 }),
 		]);
@@ -695,24 +550,13 @@ describe('startSessionLifecycle', () => {
 });
 
 describe('startJobScheduler', () => {
-	let bucket: MemoryBucket;
+	const h = useLoopHarness();
 	let deps: ApiDeps;
 	let metrics: WideEventMetrics;
-	let handle: ReturnType<typeof startJobScheduler> | undefined;
-	let logSpy: ReturnType<typeof vi.spyOn>;
 
 	beforeEach(async () => {
-		vi.useFakeTimers();
-		bucket = await createInitializedBucket();
-		deps = makeTestDeps(bucket);
+		deps = makeTestDeps(await createInitializedBucket());
 		metrics = new WideEventMetrics();
-		logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-	});
-
-	afterEach(() => {
-		handle?.stop();
-		vi.restoreAllMocks();
-		vi.useRealTimers();
 	});
 
 	it('refuses to start when jobs are off', () => {
@@ -721,13 +565,10 @@ describe('startJobScheduler', () => {
 		);
 	});
 
-	it('runs a tick under its own lease and stays quiet when nothing happened', async () => {
-		const putSpy = vi.spyOn(bucket, 'put');
-		handle = startJobScheduler(deps, metrics);
+	it('stays quiet when a tick did nothing', async () => {
+		h.track(startJobScheduler(deps, metrics));
 		await flushRun();
-		expect(parseLoggedEvents(logSpy)).toEqual([]);
-		expect(putSpy.mock.calls.some(([key]) => key === paths.jobSchedulerLock)).toBe(true);
-		expect(await bucket.head(paths.jobSchedulerLock)).toBeNull();
+		expect(h.events()).toEqual([]);
 	});
 
 	it('waits for the current tick before draining executions', async () => {
@@ -739,22 +580,14 @@ describe('startJobScheduler', () => {
 				}),
 		);
 		const drain = vi.spyOn(JobScheduler.prototype, 'drain').mockResolvedValue(undefined);
-		handle = startJobScheduler(deps, metrics);
+		const handle = h.track(startJobScheduler(deps, metrics));
 		await flushRun();
 
 		const draining = handle.drain();
 		await Promise.resolve();
 		expect(drain).not.toHaveBeenCalled();
 
-		finishTick({
-			fired: 0,
-			repaired: 0,
-			skipped: 0,
-			dispatched: 0,
-			timedOut: 0,
-			markersPruned: 0,
-			errors: 0,
-		});
+		finishTick(ZERO_TICK);
 		await draining;
 		expect(drain).toHaveBeenCalledOnce();
 	});
@@ -775,11 +608,11 @@ describe('startJobScheduler', () => {
 			{ name: 'every minute', schedule: { cron: '* * * * *', timezone: 'UTC' } },
 			ACTOR,
 		);
-		handle = startJobScheduler(deps, metrics);
+		const handle = h.track(startJobScheduler(deps, metrics));
 		await flushRun();
 		await handle.drain();
 
-		const tick = parseLoggedEvents(logSpy).find((e) => e.event === 'job_scheduler_tick');
+		const tick = h.events().find((e) => e.event === 'job_scheduler_tick');
 		expect(tick).toMatchObject({ fired: 1, dispatched: 1 });
 		const runs = await deps.services.jobRuns.listRuns(project.id, notebook.id, job.id);
 		expect(runs).toHaveLength(1);
@@ -787,46 +620,12 @@ describe('startJobScheduler', () => {
 		// point here is the loop wiring, not the execution.
 		expect(runs[0].status).toBe('failed');
 	});
-
-	it('skips the tick when this replica is not the lease holder', async () => {
-		const acquire = vi.spyOn(MaintenanceLock.prototype, 'acquire').mockResolvedValue(false);
-		const tickSpy = vi.spyOn(deps.services.jobRuns, 'listActive');
-		handle = startJobScheduler(deps, metrics);
-		await flushRun();
-		expect(acquire).toHaveBeenCalledOnce();
-		expect(tickSpy).not.toHaveBeenCalled();
-	});
-
-	it('logs a failed tick and keeps the interval alive', async () => {
-		vi.spyOn(deps.services.catalog, 'getCurrentSnapshot').mockRejectedValueOnce(
-			new Error('bucket down'),
-		);
-		handle = startJobScheduler(deps, metrics);
-		await flushRun();
-		expect(parseLoggedEvents(logSpy)[0]).toMatchObject({
-			event: 'job_scheduler_failed',
-			error: 'bucket down',
-		});
-		logSpy.mockClear();
-		await vi.advanceTimersByTimeAsync(60_000);
-		expect(parseLoggedEvents(logSpy)).toEqual([]);
-	});
 });
 
-function makeWarmPool(deps: ApiDeps, enabled = true) {
-	return new WarmPoolService(
-		new WarmPoolStore(deps.bucket, 'kubernetes'),
-		deps.compute,
-		deps.services.sessions,
-		{ enabled, size: 1, profiles: [], creationTimeoutMs: 300_000, minimumRemainingMs: 60_000 },
-	);
-}
-
 describe('startWarmPools', () => {
-	let handle: ReturnType<typeof startWarmPools>;
+	const h = useLoopHarness();
 
 	async function setup(enabled = true) {
-		vi.useFakeTimers();
 		const bucket = await createInitializedBucket();
 		const deps = makeTestDeps(bucket);
 		const service = makeWarmPool(deps, enabled);
@@ -835,14 +634,7 @@ describe('startWarmPools', () => {
 		return { bucket, deps, service, sweep };
 	}
 
-	afterEach(() => {
-		handle?.stop();
-		vi.restoreAllMocks();
-		vi.useRealTimers();
-	});
-
 	it('does not start a timer when no warm pool service is configured', async () => {
-		vi.useFakeTimers();
 		const deps = makeTestDeps(await createInitializedBucket());
 		expect(startWarmPools(deps)).toBeUndefined();
 		expect(vi.getTimerCount()).toBe(0);
@@ -852,7 +644,7 @@ describe('startWarmPools', () => {
 		const w = await setup(false);
 		const acquire = vi.spyOn(MaintenanceLock.prototype, 'acquire');
 		const owned = vi.spyOn(w.service.store, 'ownedSandboxIds').mockResolvedValue(new Set());
-		handle = startWarmPools(w.deps);
+		h.track(startWarmPools(w.deps));
 		await flushRun();
 		expect(acquire).not.toHaveBeenCalled();
 		expect(w.sweep).not.toHaveBeenCalled();
@@ -871,7 +663,7 @@ describe('startWarmPools', () => {
 			.mockResolvedValueOnce(new Set(['pending-cleanup']))
 			.mockResolvedValueOnce(new Set(['pending-cleanup']))
 			.mockResolvedValue(new Set());
-		handle = startWarmPools(w.deps);
+		h.track(startWarmPools(w.deps));
 		await flushRun();
 		await vi.advanceTimersByTimeAsync(2 * FIVE_MINUTES_MS);
 		expect(w.sweep).toHaveBeenCalledTimes(2);
@@ -883,92 +675,27 @@ describe('startWarmPools', () => {
 
 	it('retries unreadable disabled ownership instead of treating it as empty', async () => {
 		const w = await setup(false);
-		vi.spyOn(console, 'log').mockImplementation(() => {});
 		const owned = vi
 			.spyOn(w.service.store, 'ownedSandboxIds')
 			.mockRejectedValueOnce(new Error('bucket unavailable'))
 			.mockResolvedValue(new Set(['pending-cleanup']));
-		handle = startWarmPools(w.deps);
+		h.track(startWarmPools(w.deps));
 		await flushRun();
 		expect(w.sweep).not.toHaveBeenCalled();
 		await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS);
 		expect(owned).toHaveBeenCalledTimes(2);
 		expect(w.sweep).toHaveBeenCalledOnce();
 	});
-
-	it('skips work while another replica holds the lease and retries next tick', async () => {
-		const w = await setup();
-		vi.spyOn(MaintenanceLock.prototype, 'acquire').mockResolvedValueOnce(false);
-		handle = startWarmPools(w.deps);
-		await flushRun();
-		expect(w.sweep).not.toHaveBeenCalled();
-		await vi.advanceTimersByTimeAsync(5_000);
-		expect(w.sweep).toHaveBeenCalledOnce();
-		expect(await w.bucket.head(paths.warmPoolLock)).toBeNull();
-	});
-
-	it.each(['acquire', 'sweep', 'release'] as const)(
-		'recovers after a failed %s without keeping the overlap guard locked',
-		async (operation) => {
-			const w = await setup();
-			const logs = vi.spyOn(console, 'log').mockImplementation(() => {});
-			if (operation === 'sweep') w.sweep.mockRejectedValueOnce(new Error('temporary failure'));
-			else
-				vi.spyOn(MaintenanceLock.prototype, operation).mockRejectedValueOnce(
-					new Error('temporary failure'),
-				);
-			handle = startWarmPools(w.deps);
-			await flushRun();
-			expect(parseLoggedEvents(logs)).toContainEqual(
-				expect.objectContaining({
-					event: operation === 'release' ? 'warm_pool_release_failed' : 'warm_pool_sweep_failed',
-					error: 'temporary failure',
-				}),
-			);
-			w.sweep.mockClear();
-			await vi.advanceTimersByTimeAsync(operation === 'release' ? 10 * 60_000 : 5_000);
-			expect(w.sweep).toHaveBeenCalledOnce();
-			expect(await w.bucket.head(paths.warmPoolLock)).toBeNull();
-		},
-	);
-
-	it('starts immediately, skips overlapping ticks, drains, and stops', async () => {
-		const { deps, sweep } = await setup();
-		let finish!: () => void;
-		sweep.mockImplementationOnce(
-			() =>
-				new Promise((resolve) => {
-					finish = resolve;
-				}),
-		);
-		const handle = startWarmPools(deps)!;
-		await flushRun();
-		expect(sweep).toHaveBeenCalledTimes(1);
-		await vi.advanceTimersByTimeAsync(5_000);
-		expect(sweep).toHaveBeenCalledTimes(1);
-		finish();
-		await handle.drain();
-		await vi.advanceTimersByTimeAsync(5_000);
-		expect(sweep).toHaveBeenCalledTimes(2);
-		handle.stop();
-		await handle.drain();
-		await vi.advanceTimersByTimeAsync(10_000);
-		expect(sweep).toHaveBeenCalledTimes(2);
-	});
 });
 
 describe('startPreviewPreparation', () => {
-	afterEach(() => {
-		vi.restoreAllMocks();
-		vi.useRealTimers();
-	});
+	const h = useLoopHarness();
+
 	it('requires a source-control registry', async () => {
 		expect(startPreviewPreparation(makeTestDeps(await createInitializedBucket()))).toBeUndefined();
 	});
 
 	it('does not overlap ticks, does not block maintenance, and cancels on shutdown', async () => {
-		vi.useFakeTimers();
-		vi.spyOn(console, 'log').mockImplementation(() => {});
 		const deps = makeTestDeps(await createInitializedBucket());
 		deps.sourceControl = stubSourceControl();
 		const done = Promise.withResolvers<void>();
@@ -979,9 +706,9 @@ describe('startPreviewPreparation', () => {
 				signal = incoming;
 				await done.promise;
 			});
-		const stop = startPreviewPreparation(deps)!;
+		const stop = h.track(startPreviewPreparation(deps)!);
 		const expired = vi.spyOn(deps.services.sessions, 'expireStale');
-		const stopMaintenance = startMaintenance(deps, new WideEventMetrics());
+		h.track(startMaintenance(deps, new WideEventMetrics()));
 		try {
 			await vi.advanceTimersByTimeAsync(30_000);
 			expect(prepare).toHaveBeenCalledOnce();
@@ -992,119 +719,189 @@ describe('startPreviewPreparation', () => {
 			await vi.advanceTimersByTimeAsync(30_000);
 			expect(prepare).toHaveBeenCalledOnce();
 		} finally {
-			stop();
-			stopMaintenance();
 			done.resolve();
-		}
-	});
-
-	it('retries a failed tick on the next interval', async () => {
-		vi.useFakeTimers();
-		vi.spyOn(console, 'log').mockImplementation(() => {});
-		const deps = makeTestDeps(await createInitializedBucket());
-		deps.sourceControl = stubSourceControl();
-		const prepare = vi
-			.spyOn(deps.services.previews, 'preparePending')
-			.mockRejectedValueOnce(new Error('storage unavailable'))
-			.mockResolvedValue(undefined);
-		const stop = startPreviewPreparation(deps)!;
-		try {
-			await vi.advanceTimersByTimeAsync(15_000);
-			expect(prepare).toHaveBeenCalledTimes(2);
-		} finally {
-			stop();
 		}
 	});
 });
 
-describe('background loop deadline recovery', () => {
-	afterEach(() => {
-		vi.restoreAllMocks();
-		vi.useRealTimers();
+type LoopWork = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<void>>>;
+
+interface LoopCase {
+	name: string;
+	lockKey?: string;
+	intervalMs: number;
+	failureEvent: string;
+	overlapEvent?: string;
+	notLeaderEvent?: string;
+	start(deps: ApiDeps, loops: BackgroundLoops, work: LoopWork): () => void;
+}
+
+const LOOPS: LoopCase[] = [
+	{
+		name: 'maintenance',
+		lockKey: paths.maintenanceLock,
+		intervalMs: FIVE_MINUTES_MS,
+		failureEvent: 'maintenance_failed',
+		overlapEvent: 'maintenance_cycle_overlap_skipped',
+		notLeaderEvent: 'maintenance_skipped_not_leader',
+		start(deps, loops, work) {
+			vi.spyOn(deps.services.sessions, 'expireStale').mockImplementation(async () => {
+				await work();
+				return 0;
+			});
+			return startMaintenance(deps, new WideEventMetrics(), loops);
+		},
+	},
+	{
+		name: 'session_lifecycle',
+		lockKey: paths.sessionLifecycleLock,
+		intervalMs: SESSION_SWEEP_INTERVAL_MS,
+		failureEvent: 'session_lifecycle_failed',
+		start(deps, loops, work) {
+			deps.sandbox.sessionLifetime = makeSessionLifetime();
+			vi.spyOn(SessionLifecycleService.prototype, 'sweep').mockImplementation(async () => {
+				await work();
+				return ZERO_SWEEP;
+			});
+			return startSessionLifecycle(deps, loops)!;
+		},
+	},
+	{
+		name: 'job_scheduler',
+		lockKey: paths.jobSchedulerLock,
+		intervalMs: 60_000,
+		failureEvent: 'job_scheduler_failed',
+		start(deps, loops, work) {
+			vi.spyOn(JobScheduler.prototype, 'tick').mockImplementation(async () => {
+				await work();
+				return ZERO_TICK;
+			});
+			return startJobScheduler(deps, new WideEventMetrics(), loops).stop;
+		},
+	},
+	{
+		name: 'warm_pool',
+		lockKey: paths.warmPoolLock,
+		intervalMs: 5_000,
+		failureEvent: 'warm_pool_sweep_failed',
+		start(deps, loops, work) {
+			deps.warmPool = makeWarmPool(deps);
+			vi.spyOn(deps.warmPool, 'sweep').mockImplementation(() => work());
+			return startWarmPools(deps, loops)!.stop;
+		},
+	},
+	{
+		name: 'preview_preparation',
+		intervalMs: 15_000,
+		failureEvent: 'preview_preparation_failed',
+		start(deps, loops, work) {
+			deps.sourceControl = stubSourceControl();
+			vi.spyOn(deps.services.previews, 'preparePending').mockImplementation((...args) =>
+				work(...args),
+			);
+			return startPreviewPreparation(deps, loops)!;
+		},
+	},
+];
+
+const LOCK_KEYS = new Set(LOOPS.flatMap((loop) => (loop.lockKey ? [loop.lockKey] : [])));
+
+describe('background loop wiring', () => {
+	const h = useLoopHarness();
+	let bucket: MemoryBucket;
+	let deps: ApiDeps;
+	let loops: BackgroundLoops;
+
+	beforeEach(async () => {
+		bucket = await createInitializedBucket();
+		deps = makeTestDeps(bucket);
+		loops = new BackgroundLoops();
 	});
 
-	it.each([
-		'maintenance',
-		'session_lifecycle',
-		'job_scheduler',
-		'warm_pool',
-		'preview_preparation',
-	] as const)('%s retries hung work and ignores its late completion', async (name) => {
-		vi.useFakeTimers();
-		vi.spyOn(console, 'log').mockImplementation(() => {});
-		const deps = makeTestDeps(await createInitializedBucket());
-		const loops = new BackgroundLoops();
-		const metrics = new WideEventMetrics();
-		const late = Promise.withResolvers<void>();
-		const work = vi.fn().mockReturnValueOnce(late.promise).mockResolvedValue(undefined);
-		let stop: () => void;
-		switch (name) {
-			case 'maintenance':
-				vi.spyOn(deps.services.sessions, 'expireStale').mockImplementation(async () => {
-					await work();
-					return 0;
-				});
-				stop = startMaintenance(deps, metrics, loops);
-				break;
-			case 'session_lifecycle':
-				deps.sandbox.sessionLifetime = makeSessionLifetime();
-				vi.spyOn(SessionLifecycleService.prototype, 'sweep').mockImplementation(async () => {
-					await work();
-					return ZERO_SWEEP;
-				});
-				stop = startSessionLifecycle(deps, loops)!;
-				break;
-			case 'job_scheduler':
-				vi.spyOn(JobScheduler.prototype, 'tick').mockImplementation(async () => {
-					await work();
-					return {
-						fired: 0,
-						repaired: 0,
-						skipped: 0,
-						dispatched: 0,
-						timedOut: 0,
-						markersPruned: 0,
-						errors: 0,
-					};
-				});
-				stop = startJobScheduler(deps, metrics, loops).stop;
-				break;
-			case 'warm_pool':
-				deps.warmPool = makeWarmPool(deps);
-				vi.spyOn(deps.warmPool, 'sweep').mockImplementation(work);
-				stop = startWarmPools(deps, loops)!.stop;
-				break;
-			case 'preview_preparation':
-				deps.sourceControl = stubSourceControl();
-				vi.spyOn(deps.services.previews, 'preparePending').mockImplementation(work);
-				stop = startPreviewPreparation(deps, loops)!;
-		}
-		try {
+	it.each(LOOPS)(
+		'$name runs at once, leases its own key, and retries a failure after $intervalMs ms',
+		async (loop) => {
+			const put = vi.spyOn(bucket, 'put');
+			const work: LoopWork = vi
+				.fn<(...args: unknown[]) => Promise<void>>()
+				.mockRejectedValueOnce(new Error('boom'))
+				.mockResolvedValue(undefined);
+			h.track(loop.start(deps, loops, work));
 			await flushRun();
-			const initial = loops.health().loops[name];
 			expect(work).toHaveBeenCalledOnce();
-			await vi.advanceTimersByTimeAsync(initial.deadline_ms - 1);
-			expect(work).toHaveBeenCalledOnce();
-			await vi.advanceTimersByTimeAsync(1 + initial.interval_ms);
-			expect(work.mock.calls.length).toBeGreaterThan(1);
-			expect(loops.health().loops[name]).toMatchObject({
-				timeouts: 1,
-				stale: false,
-				running: false,
-			});
-			const recovered = loops.health();
-			const logged = vi.mocked(console.log).mock.calls.length;
-			if (name === 'preview_preparation') {
-				expect(work.mock.calls[0][1].aborted).toBe(true);
-				expect(work.mock.calls[1][1].aborted).toBe(false);
+			expect(h.events()).toContainEqual(
+				expect.objectContaining({ event: loop.failureEvent, error: 'boom' }),
+			);
+			expect(loops.health().loops[loop.name].interval_ms).toBe(loop.intervalMs);
+			const leased = new Set(
+				put.mock.calls.map(([key]) => key).filter((key) => LOCK_KEYS.has(key)),
+			);
+			expect([...leased]).toEqual(loop.lockKey ? [loop.lockKey] : []);
+
+			// A fresh holder can only lease again if the failed attempt released.
+			await vi.advanceTimersByTimeAsync(loop.intervalMs);
+			expect(work).toHaveBeenCalledTimes(2);
+			expect(loops.health().loops[loop.name].status).toBe('ok');
+		},
+	);
+
+	it.each(LOOPS.filter((loop) => loop.lockKey))(
+		'$name skips work while another replica holds the lease',
+		async (loop) => {
+			vi.spyOn(MaintenanceLock.prototype, 'acquire').mockResolvedValue(false);
+			const work: LoopWork = vi.fn<(...args: unknown[]) => Promise<void>>();
+			h.track(loop.start(deps, loops, work));
+			await flushRun();
+			expect(work).not.toHaveBeenCalled();
+			if (loop.notLeaderEvent)
+				expect(h.events()).toEqual([expect.objectContaining({ event: loop.notLeaderEvent })]);
+		},
+	);
+
+	it.each(LOOPS)(
+		'$name holds hung work past its deadline and ignores its late completion',
+		async (loop) => {
+			const late = Promise.withResolvers<void>();
+			const work: LoopWork = vi
+				.fn<(...args: unknown[]) => Promise<void>>()
+				.mockReturnValueOnce(late.promise)
+				.mockResolvedValue(undefined);
+			h.track(loop.start(deps, loops, work));
+			try {
+				await flushRun();
+				const { deadline_ms, interval_ms } = loops.health().loops[loop.name];
+				await vi.advanceTimersByTimeAsync(deadline_ms + interval_ms);
+				expect(work).toHaveBeenCalledOnce();
+				if (loop.overlapEvent)
+					expect(h.events()).toContainEqual(expect.objectContaining({ event: loop.overlapEvent }));
+				expect(h.events()).toContainEqual(
+					expect.objectContaining({ event: `${loop.name}_stalled` }),
+				);
+				expect(loops.health().loops[loop.name].status).toBe('stalled');
+				if (loop.name === 'preview_preparation') {
+					expect((work.mock.calls[0][1] as AbortSignal).aborted).toBe(true);
+				}
+
+				late.resolve();
+				await flushRun();
+				expect(h.events()).toContainEqual(
+					expect.objectContaining({ event: `${loop.name}_recovered` }),
+				);
+				expect(loops.health().loops[loop.name]).toMatchObject({
+					last_success_at: null,
+					consecutive_failures: 1,
+				});
+
+				await vi.advanceTimersByTimeAsync(interval_ms);
+				expect(work).toHaveBeenCalledTimes(2);
+				expect(loops.health().loops[loop.name]).toMatchObject({
+					status: 'ok',
+					timeouts: 1,
+					consecutive_failures: 0,
+				});
+			} finally {
+				late.resolve();
 			}
-			late.resolve();
-			await flushRun();
-			expect(loops.health()).toEqual(recovered);
-			expect(console.log).toHaveBeenCalledTimes(logged);
-		} finally {
-			stop();
-			late.resolve();
-		}
-	});
+		},
+	);
 });

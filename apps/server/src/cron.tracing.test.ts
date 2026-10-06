@@ -3,39 +3,57 @@ import { InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-tr
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import type { ApiDeps } from '@marimo-hub/api';
 import { createInitializedBucket, makeTestDeps } from '@marimo-hub/api/testing';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import { MaintenanceLock, Millis, paths, WarmPoolService, WarmPoolStore } from '@marimo-hub/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startJobScheduler, startMaintenance, startSessionLifecycle, startWarmPools } from './cron';
 import { WideEventMetrics } from './metrics';
 import { BackgroundLoops } from './backgroundLoops';
+import { flushRun, makeSessionLifetime, useLoopHarness } from './test/loopHarness';
+
+async function storedLease(deps: ApiDeps, key: string) {
+	const lease = await (await deps.bucket.get(key))!.json<{ expires_at: string }>();
+	return Date.parse(lease.expires_at);
+}
+
+function span(spans: ReadableSpan[], name: string): ReadableSpan {
+	const found = spans.find((span) => span.name === name);
+	expect(found, name).toBeDefined();
+	return found!;
+}
+
+function expectChildOf(child: ReadableSpan, parent: ReadableSpan) {
+	expect(child.spanContext().traceId).toBe(parent.spanContext().traceId);
+	expect(child.parentSpanContext?.spanId).toBe(parent.spanContext().spanId);
+}
 
 describe('maintenance tracing', () => {
+	const h = useLoopHarness();
 	let deps: ApiDeps;
 	let exporter: InMemorySpanExporter;
 	let provider: NodeTracerProvider;
-	let stop: (() => void) | undefined;
 
 	beforeEach(async () => {
 		deps = makeTestDeps(await createInitializedBucket());
-		vi.useFakeTimers();
-		vi.spyOn(console, 'log').mockImplementation(() => {});
 		exporter = new InMemorySpanExporter();
 		provider = new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
 		provider.register();
 	});
 
 	afterEach(async () => {
-		stop?.();
 		await provider.shutdown();
 		trace.disable();
 		context.disable();
-		vi.restoreAllMocks();
-		vi.useRealTimers();
 	});
 
-	it.each(['maintenance', 'sessionLifecycle', 'jobScheduler', 'warmPool'] as const)(
-		'traces %s lock acquisition and release with the lock key',
-		async (loop) => {
+	it.each([
+		['maintenance', 'maintenance'],
+		['sessionLifecycle', 'session_lifecycle'],
+		['jobScheduler', 'job_scheduler'],
+		['warmPool', 'warm_pool'],
+	] as const)(
+		'traces %s lock acquisition and release under the loop span',
+		async (loop, loopName) => {
 			const metrics = new WideEventMetrics();
 			const loops = new BackgroundLoops();
 			const run = vi.fn(async () => {});
@@ -45,21 +63,14 @@ describe('maintenance tracing', () => {
 			);
 			switch (loop) {
 				case 'maintenance':
-					stop = startMaintenance(deps, metrics, loops);
+					h.track(startMaintenance(deps, metrics, loops));
 					break;
 				case 'sessionLifecycle':
-					deps.sandbox.sessionLifetime = {
-						maxLifetimeMs: Millis.minutes(1),
-						idleTimeoutMsByMode: { edit: Millis.seconds(30), app: Millis.seconds(30) },
-						extensionMs: Millis.seconds(30),
-						connectionAware: false,
-						snapshotIntervalMs: Millis.seconds(30),
-						sweepIntervalMs: Millis.seconds(5),
-					};
-					stop = startSessionLifecycle(deps, loops);
+					deps.sandbox.sessionLifetime = makeSessionLifetime();
+					h.track(startSessionLifecycle(deps, loops));
 					break;
 				case 'jobScheduler':
-					stop = startJobScheduler(deps, metrics, loops).stop;
+					h.track(startJobScheduler(deps, metrics, loops));
 					break;
 				case 'warmPool':
 					deps.warmPool = new WarmPoolService(
@@ -74,19 +85,19 @@ describe('maintenance tracing', () => {
 							minimumRemainingMs: 60_000,
 						},
 					);
-					stop = startWarmPools(deps, loops)!.stop;
+					h.track(startWarmPools(deps, loops));
 			}
-			await vi.advanceTimersByTimeAsync(0);
+			await flushRun();
 			const spans = exporter.getFinishedSpans();
 			expect(run).toHaveBeenCalledOnce();
-			expect(spans.map((span) => span.name)).toEqual([
-				'MaintenanceLock.acquire',
-				'MaintenanceLock.release',
-			]);
-			for (const phase of ['acquire', 'release']) {
-				const span = spans.find((span) => span.name === `MaintenanceLock.${phase}`);
-				expect(span?.attributes).toEqual({ 'marimohub.lock.key': paths[`${loop}Lock`] });
-			}
+			const parent = span(spans, `loop.${loopName}`);
+			const acquire = span(spans, 'MaintenanceLock.acquire');
+			const release = span(spans, 'MaintenanceLock.release');
+			expectChildOf(acquire, parent);
+			expectChildOf(release, parent);
+			const key = paths[`${loop}Lock`];
+			expect(acquire.attributes).toEqual({ 'bucket.key': key, 'marimohub.lock.acquired': true });
+			expect(release.attributes).toEqual({ 'bucket.key': key });
 		},
 	);
 
@@ -98,13 +109,19 @@ describe('maintenance tracing', () => {
 				expires_at: new Date(Date.now() + Millis.minutes(10)).toISOString(),
 			}),
 		);
-		stop = startMaintenance(deps, new WideEventMetrics());
-		await vi.advanceTimersByTimeAsync(0);
+		h.track(startMaintenance(deps, new WideEventMetrics()));
+		await flushRun();
 		const spans = exporter.getFinishedSpans();
-		expect(spans.map((span) => span.name)).toEqual(['MaintenanceLock.acquire']);
-		expect(spans[0].status.code).toBe(SpanStatusCode.UNSET);
-		expect(spans[0].events).toEqual([]);
-		expect(await deps.bucket.head(paths.maintenanceLock)).not.toBeNull();
+		expect(spans.map((span) => span.name).sort()).toEqual([
+			'MaintenanceLock.acquire',
+			'loop.maintenance',
+		]);
+		const acquire = span(spans, 'MaintenanceLock.acquire');
+		expect(acquire.attributes['marimohub.lock.acquired']).toBe(false);
+		expect(acquire.status.code).toBe(SpanStatusCode.UNSET);
+		expect(acquire.events).toEqual([]);
+		expect(span(spans, 'loop.maintenance').status.code).toBe(SpanStatusCode.UNSET);
+		expect(await storedLease(deps, paths.maintenanceLock)).toBeGreaterThan(Date.now());
 	});
 
 	it('records a storage read failure during lease release', async () => {
@@ -113,20 +130,19 @@ describe('maintenance tracing', () => {
 			if (key === paths.maintenanceLock) return Promise.reject(new Error('lease read failed'));
 			return get(key);
 		});
-		stop = startMaintenance(deps, new WideEventMetrics());
-		await vi.advanceTimersByTimeAsync(0);
-		const span = exporter
-			.getFinishedSpans()
-			.find((span) => span.name === 'MaintenanceLock.release');
-		expect(span?.status.code).toBe(SpanStatusCode.ERROR);
-		expect(span?.attributes).toEqual({ 'marimohub.lock.key': paths.maintenanceLock });
-		expect(span?.events).toContainEqual(
+		h.track(startMaintenance(deps, new WideEventMetrics()));
+		await flushRun();
+		const release = span(exporter.getFinishedSpans(), 'MaintenanceLock.release');
+		expect(release.status.code).toBe(SpanStatusCode.ERROR);
+		expect(release.attributes).toEqual({ 'bucket.key': paths.maintenanceLock });
+		expect(release.events).toContainEqual(
 			expect.objectContaining({
 				name: 'exception',
 				attributes: expect.objectContaining({ 'exception.message': 'lease read failed' }),
 			}),
 		);
-		expect(await deps.bucket.head(paths.maintenanceLock)).not.toBeNull();
+		vi.mocked(deps.bucket.get).mockRestore();
+		expect(await storedLease(deps, paths.maintenanceLock)).toBeGreaterThan(Date.now());
 		expect(console.log).toHaveBeenCalledWith(
 			expect.stringContaining('"event":"maintenance_release_failed"'),
 		);
@@ -138,21 +154,23 @@ describe('maintenance tracing', () => {
 		} else {
 			vi.spyOn(deps.bucket, 'list').mockRejectedValue(new Error('bucket down'));
 		}
-		stop = startMaintenance(deps, new WideEventMetrics());
-		await vi.advanceTimersByTimeAsync(0);
+		h.track(startMaintenance(deps, new WideEventMetrics()));
+		await flushRun();
+		const spans = exporter.getFinishedSpans();
 		const name = step === 'lock' ? 'MaintenanceLock.acquire' : 'Maintenance.sweepAppPools';
-		const span = exporter.getFinishedSpans().find((span) => span.name === name);
-		expect(span?.status.code).toBe(SpanStatusCode.ERROR);
-		expect(span?.events.some((event) => event.name === 'exception')).toBe(true);
+		const failed = span(spans, name);
+		expect(failed.status.code).toBe(SpanStatusCode.ERROR);
+		expect(failed.events.some((event) => event.name === 'exception')).toBe(true);
+		const parent = span(spans, 'loop.maintenance');
+		expectChildOf(failed, parent);
+		expect(parent.status.code).toBe(SpanStatusCode.ERROR);
 		if (step === 'app_pool') {
-			expect(
-				exporter.getFinishedSpans().find((span) => span.name === 'MaintenanceLock.release')?.status
-					.code,
-			).toBe(SpanStatusCode.UNSET);
-			expect(await deps.bucket.head(paths.maintenanceLock)).toBeNull();
+			expect(span(spans, 'MaintenanceLock.release').status.code).toBe(SpanStatusCode.UNSET);
+			expect(await storedLease(deps, paths.maintenanceLock)).toBeLessThanOrEqual(Date.now());
 		} else {
-			expect(exporter.getFinishedSpans().map((span) => span.name)).toEqual([
+			expect(spans.map((span) => span.name).sort()).toEqual([
 				'MaintenanceLock.acquire',
+				'loop.maintenance',
 			]);
 		}
 	});

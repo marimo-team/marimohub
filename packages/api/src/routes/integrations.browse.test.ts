@@ -23,7 +23,13 @@ import type {
 } from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
-import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
+import {
+	createInitializedBucket,
+	createTestApi,
+	expectError,
+	expectOk,
+	makeTestWif,
+} from '../testing';
 import { clearObjectCredentialCacheForTests } from './objectBrowse';
 import { clearIntegrationBrowseStateForTests } from './integrations';
 
@@ -1542,22 +1548,15 @@ describe('Data browser routes', () => {
 				userId: ACTOR,
 				deps: {
 					...browserDeps(bucket, dataPreview),
-					wif: {
+					wif: makeTestWif({
 						defaultEnabled: inherited,
-						issuer: { mint: async () => 'jwt', jwks: async () => ({ keys: [] }) } as never,
-						issuerUrl: 'https://hub.example.com',
-						target: {
-							broker: {
-								exchange: async () => ({
-									accessKeyId: 'temporary-key',
-									secretAccessKey: 'temporary-secret',
-									sessionToken: 'temporary-token',
-								}),
-							},
-							storage: { region: 'us-east-1' },
-							audience: 'storage',
-						},
-					},
+						exchange: async () => ({
+							accessKeyId: 'temporary-key',
+							secretAccessKey: 'temporary-secret',
+							sessionToken: 'temporary-token',
+						}),
+						storage: { region: 'us-east-1' },
+					}),
 					dataBrowser: { preview: true },
 				},
 			}).request;
@@ -1601,26 +1600,19 @@ describe('Data browser routes', () => {
 				userId: ACTOR,
 				deps: {
 					...deps,
-					wif: {
+					wif: makeTestWif({
 						defaultEnabled: inherited,
-						issuer: { mint: async () => 'jwt', jwks: async () => ({ keys: [] }) } as never,
-						issuerUrl: 'https://hub.example.com',
-						target: {
-							broker: {
-								exchange: async () => {
-									exchanges += 1;
-									await new Promise((resolve) => setTimeout(resolve, 10));
-									return {
-										accessKeyId: 'temporary-key',
-										secretAccessKey: 'temporary-secret',
-										expiration: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-									};
-								},
-							},
-							storage: { region: 'us-east-1' },
-							audience: 'storage',
+						exchange: async () => {
+							exchanges += 1;
+							await new Promise((resolve) => setTimeout(resolve, 10));
+							return {
+								accessKeyId: 'temporary-key',
+								secretAccessKey: 'temporary-secret',
+								expiration: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+							};
 						},
-					},
+						storage: { region: 'us-east-1' },
+					}),
 				},
 			}).request;
 			await expectOk(await wifApi('GET', `/projects/${pid}/integrations/${staticStore.id}/browse`));
@@ -1681,20 +1673,13 @@ describe('Data browser routes', () => {
 				userId: ACTOR,
 				deps: {
 					...deps,
-					wif: {
+					wif: makeTestWif({
 						defaultEnabled: inherited,
-						issuer: { mint: async () => 'jwt', jwks: async () => ({ keys: [] }) } as never,
-						issuerUrl: 'https://hub.example.com',
-						target: {
-							broker: {
-								exchange: async () => {
-									throw new Error('broker unavailable');
-								},
-							},
-							storage: { region: 'us-east-1' },
-							audience: 'storage',
+						exchange: async () => {
+							throw new Error('broker unavailable');
 						},
-					},
+						storage: { region: 'us-east-1' },
+					}),
 				},
 			}).request;
 
@@ -1723,16 +1708,7 @@ describe('Data browser routes', () => {
 			userId: ACTOR,
 			deps: {
 				...browserDeps(bucket),
-				wif: {
-					defaultEnabled: false,
-					issuer: { mint, jwks: async () => ({ keys: [] }) } as never,
-					issuerUrl: 'https://hub.example.com',
-					target: {
-						broker: { exchange },
-						storage: { region: 'us-east-1' },
-						audience: 'storage',
-					},
-				},
+				wif: makeTestWif({ mint, exchange, storage: { region: 'us-east-1' } }),
 				dataBrowser: { preview: true },
 			},
 		}).request;

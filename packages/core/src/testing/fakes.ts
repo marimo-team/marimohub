@@ -471,6 +471,10 @@ export class RecordingCompute implements SandboxProvider {
 	active: ActiveSandbox[] = [];
 
 	create(id: SandboxId): SandboxInstance {
+		return this.instance(id);
+	}
+
+	private instance(id: SandboxId): SandboxInstance {
 		const destroyed = this.destroyed;
 		// The reconciler's save-on-reap reads session artifacts off the sandbox
 		// before destroying it; the fake reports no files so `commitSession` runs
@@ -498,10 +502,19 @@ export class RecordingCompute implements SandboxProvider {
 	}
 
 	connectExisting(id: SandboxId): SandboxInstance {
-		if (!this.active.some((sandbox) => sandbox.id === id)) {
-			throw new NotFoundError(`Sandbox ${id} is no longer available`);
-		}
-		return this.create(id);
+		// Attachment itself never fails: like real providers, a missing sandbox fails on first use.
+		const attached = this.instance(id);
+		const missing = () => !this.active.some((sandbox) => sandbox.id === id);
+		const gone = () => Promise.reject(new NotFoundError(`Sandbox ${id} is no longer available`));
+		return {
+			...attached,
+			exec: (...args: Parameters<SandboxInstance['exec']>) =>
+				missing() ? gone() : attached.exec(...args),
+			readFile: (...args: Parameters<SandboxInstance['readFile']>) =>
+				missing() ? gone() : attached.readFile(...args),
+			listFiles: (...args: Parameters<SandboxInstance['listFiles']>) =>
+				missing() ? gone() : attached.listFiles(...args),
+		};
 	}
 
 	async listActive(): Promise<ActiveSandbox[]> {

@@ -119,7 +119,7 @@ export async function startMcpSession(input: {
 			pid: project.id,
 			nid: notebookId,
 			body: { mode, compute_profile: computeProfile },
-			request,
+			request: { ...request, via: 'mcp' },
 		}),
 		request.signal,
 	);

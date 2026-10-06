@@ -379,6 +379,28 @@ export interface McpConfig {
 	externalAuthorizationServer?: string;
 }
 
+export interface LoopHealth {
+	/**
+	 * `failing`: the last completed attempt failed. `stalled`: an attempt outlived its
+	 * deadline, or nothing completed within deadline + interval.
+	 */
+	status: 'ok' | 'failing' | 'stalled' | 'stopping';
+	last_started_at: number | null;
+	last_completed_at: number | null;
+	last_success_at: number | null;
+	last_duration_ms: number | null;
+	seconds_since_success: number | null;
+	consecutive_failures: number;
+	timeouts: number;
+	interval_ms: number;
+	deadline_ms: number;
+}
+
+export interface LoopHealthReport {
+	status: 'ok' | 'degraded' | 'stalled';
+	loops: Record<string, LoopHealth>;
+}
+
 /**
  * Everything the API needs, injected at composition time. This replaces the
  * Cloudflare-specific `Bindings: Env` coupling — routes read it from the Hono
@@ -447,6 +469,11 @@ export interface ApiDeps {
 	 * Absent in library/Workers wiring, where the deep probe reports "unavailable".
 	 */
 	preflight?: () => Promise<PreflightReport>;
+	/**
+	 * In-memory background-loop progress served by `GET /api/health/maintenance`.
+	 * Must not perform I/O: it backs a liveness probe.
+	 */
+	loopHealth?: () => LoopHealthReport;
 	/**
 	 * Workload Identity Federation: the hub-as-OIDC-issuer + its exchange target.
 	 * Absent disables WIF (discovery/JWKS routes 404, no credentials injected).

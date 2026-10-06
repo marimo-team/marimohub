@@ -106,11 +106,14 @@ Changes affect newly started sessions and jobs; restart existing kernels to
 pick up changes. Disabling access does not revoke already-issued STS credentials.
 
 Only enable this default where projects are intended to share the deployment's
-cloud access. Enabling the default lets anyone who can create a project obtain
-cloud credentials if the cloud IAM trust accepts its subject. Restrict trust to
-exact project `sub` values rather than wildcards; otherwise, creating a project
-also grants access to the cloud role. Cloud IAM policy still determines which
-resources are accessible.
+cloud access. Enabling it applies retroactively: every existing project without
+an explicit override starts receiving credentials, including its scheduled jobs.
+Audit projects and set explicit **Disabled** overrides before flipping the
+default. It also lets anyone who can create a project obtain cloud credentials
+if the cloud IAM trust accepts its subject. Restrict trust to exact project
+`sub` values rather than wildcards; otherwise, creating a project also grants
+access to the cloud role. Cloud IAM policy still determines which resources are
+accessible.
 
 ## What the notebook receives
 
@@ -568,11 +571,17 @@ notebook can call **any AWS API that role's policies allow**, not only S3.
    }
    ```
 
+   ::: warning Wildcard trust with the deployment default
+   With `MARIMOHUB_WIF_DEFAULT_ENABLED=true`, a `StringLike` `proj-*` trust
+   grants the role to every current and future project. List exact project ids
+   instead.
+   :::
+
    ::: tip One role for the whole deployment
-   The hub exposes a single role today, so every opted-in project receives the
-   **same** permissions. Use the trust-policy `sub` condition to limit which
-   projects can assume it — a project outside the condition starts without
-   credentials (non-fatal).
+   The hub exposes a single role today, so every federation-enabled project
+   receives the **same** permissions. Use the trust-policy `sub` condition to
+   limit which projects can assume it — a project outside the condition starts
+   without credentials (non-fatal).
    :::
 
 3. **Attach permission policies** for what notebooks may do. For S3 + Athena:

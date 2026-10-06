@@ -3,7 +3,7 @@ import { MemoryBucket, uid } from '@marimo-hub/core/testing';
 import { DEFAULT_APP_POOL_POLICY } from '@marimo-hub/core';
 import type { Authenticator } from '@marimo-hub/core';
 import { createApi } from './createApi';
-import { expectError, expectOk, makeTestDeps, stubSourceControl } from './testing';
+import { expectError, expectOk, makeTestDeps, makeTestWif, stubSourceControl } from './testing';
 
 const authed: Authenticator = {
 	authenticate: async () => ({
@@ -12,13 +12,6 @@ const authed: Authenticator = {
 		credential: { kind: 'development' },
 	}),
 };
-
-// Capabilities only needs WIF presence and its federation default.
-const stubWif = {
-	defaultEnabled: false,
-	mint: async () => 'jwt',
-	jwks: async () => ({ keys: [] }),
-} as unknown as NonNullable<Parameters<typeof makeTestDeps>[1]>['wif'];
 
 describe('GET /api/v1/capabilities', () => {
 	it('exposes app heartbeat cadence without internal presence or retirement timers', async () => {
@@ -47,20 +40,20 @@ describe('GET /api/v1/capabilities', () => {
 	);
 
 	it('reports federation available when WIF is configured', async () => {
-		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed, wif: stubWif });
+		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed, wif: makeTestWif() });
 		const res = await createApi(deps).request('/api/v1/capabilities');
 		expect(await expectOk(res)).toMatchObject({
-			federation: { available: true, defaultEnabled: false },
+			federation: { available: true, default_enabled: false },
 		});
 	});
 
 	it('reports the deployment federation default', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), {
 			authenticator: authed,
-			wif: { ...stubWif!, defaultEnabled: true },
+			wif: makeTestWif({ defaultEnabled: true }),
 		});
 		expect(await expectOk(await createApi(deps).request('/api/v1/capabilities'))).toMatchObject({
-			federation: { available: true, defaultEnabled: true },
+			federation: { available: true, default_enabled: true },
 		});
 	});
 
@@ -68,7 +61,7 @@ describe('GET /api/v1/capabilities', () => {
 		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed });
 		const res = await createApi(deps).request('/api/v1/capabilities');
 		expect(await expectOk(res)).toMatchObject({
-			federation: { available: false, defaultEnabled: false },
+			federation: { available: false, default_enabled: false },
 		});
 	});
 
@@ -324,7 +317,7 @@ describe('GET /api/v1/capabilities', () => {
 	});
 
 	it('requires authentication (not a public endpoint)', async () => {
-		const deps = makeTestDeps(new MemoryBucket(), { wif: stubWif });
+		const deps = makeTestDeps(new MemoryBucket(), { wif: makeTestWif() });
 		const res = await createApi(deps).request('/api/v1/capabilities');
 		await expectError(res, 401, 'UNAUTHORIZED');
 	});

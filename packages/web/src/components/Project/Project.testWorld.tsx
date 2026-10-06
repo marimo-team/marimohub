@@ -15,6 +15,7 @@ export const project = (): ProjectDetail =>
 		name: 'Sales',
 		description: 'revenue',
 		federation: { enabled: false },
+		federation_effective: { enabled: false, source: 'project' },
 		your_role: 'manager',
 	}) as ProjectDetail;
 
@@ -54,6 +55,7 @@ export function makeFetch(
 		sessions?: Session[];
 		capabilities?: unknown;
 		role?: ProjectDetail['your_role'];
+		project?: Partial<ProjectDetail>;
 		sessionDeleteError?: boolean;
 		workspaceEntries?: Record<string, WorkspaceItem[]>;
 	} = {},
@@ -61,10 +63,14 @@ export function makeFetch(
 	const notebooks = options.notebooks ?? [notebook()];
 	const sessions = options.sessions ?? [];
 	const capabilities = options.capabilities ?? {
-		federation: { available: false, defaultEnabled: false },
+		federation: { available: false, default_enabled: false },
 		jobs: { available: true },
 	};
-	const proj = { ...project(), ...(options.role ? { your_role: options.role } : {}) };
+	const proj = {
+		...project(),
+		...options.project,
+		...(options.role ? { your_role: options.role } : {}),
+	};
 	const calls: { url: string; method: string; body: unknown }[] = [];
 	const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);

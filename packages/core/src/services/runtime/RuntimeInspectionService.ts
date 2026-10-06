@@ -21,7 +21,12 @@ import { previewKey, PreviewRecordSchema } from '../content/notebookPreviews';
 import { appOccupancyBySession, appPresenceExpiresAt, expireAppPresence } from './AppPoolRouter';
 import type { AppPool, AppPoolMember } from './AppPoolRouter';
 import type { SessionService } from './SessionService';
-import { isTerminal, PRESENT_STATUSES, sessionMode } from './sessionState';
+import { PRESENT_STATUSES, sessionMode } from './sessionState';
+import {
+	isLivePersistingEditor,
+	RECLAIM_BLOCKED_REASONS,
+	reclaimBlockedReason,
+} from './SessionRetirer';
 
 const RuntimeAssignmentSchema = z.object({
 	user_id: z.string(),
@@ -81,6 +86,12 @@ export const RuntimeEditorSchema = RuntimeLocationSchema.extend(RuntimeSessionSc
 	claim_holder_status: z.enum(SESSION_STATUSES).nullable(),
 	claim_available: z.boolean(),
 	reclaimable: z.boolean(),
+	reclaim_blocked_reason: z
+		.enum(RECLAIM_BLOCKED_REASONS)
+		.nullable()
+		.describe(
+			'Why an admin reclaim would be refused now, from recorded state only; null when reclaimable. Kernel activity and provider failures are only known when reclaim runs.',
+		),
 });
 
 export const RuntimeInspectionSchema = z.object({
@@ -93,6 +104,9 @@ export const RuntimeInspectionSchema = z.object({
 export type RuntimeInspection = z.infer<typeof RuntimeInspectionSchema>;
 export type RuntimeApp = z.infer<typeof RuntimeAppSchema>;
 export type RuntimeSandbox = z.infer<typeof RuntimeSandboxSchema>;
+
+const ATTACHMENT_SUPPORTED = 'runtime';
+const ATTACHMENT_UNSUPPORTED = 'runtime:no-attach';
 
 type Group = {
 	projectId: ProjectId;
@@ -136,22 +150,30 @@ export class RuntimeInspectionService {
 	) {
 		this.pools = new AppPoolStore(bucket);
 		this.cache = new StaleWhileRevalidateCache({
-			load: () => this.load(),
+			load: (key) => this.load({ attachmentSupported: key === ATTACHMENT_SUPPORTED }),
 			ttl: () => ({ freshForMs: 30_000, staleForMs: 0 }),
-			maxSize: 1,
+			maxSize: 2,
 			now,
 		});
 	}
 
-	inspect(): Promise<RuntimeInspection> {
-		return this.cache.get('runtime');
+	/** `attachmentSupported` mirrors whether the reclaiming provider implements `connectExisting`. */
+	inspect({
+		attachmentSupported = true,
+	}: { attachmentSupported?: boolean } = {}): Promise<RuntimeInspection> {
+		return this.cache.get(attachmentSupported ? ATTACHMENT_SUPPORTED : ATTACHMENT_UNSUPPORTED);
 	}
 
 	invalidate(): void {
-		this.cache.delete('runtime');
+		this.cache.delete(ATTACHMENT_SUPPORTED);
+		this.cache.delete(ATTACHMENT_UNSUPPORTED);
 	}
 
-	private async load(): Promise<RuntimeInspection> {
+	private async load({
+		attachmentSupported,
+	}: {
+		attachmentSupported: boolean;
+	}): Promise<RuntimeInspection> {
 		const [sessionScan, poolScan, catalogResult] = await Promise.all([
 			this.sessions.inspectSessions(),
 			this.pools.inspectAll(),
@@ -200,6 +222,11 @@ export class RuntimeInspectionService {
 			}
 			return present || (!!session.sandbox_id && !session.sandbox_reclaimed_at);
 		});
+		const liveEditorNotebooks = new Set(
+			sessionScan.sessions
+				.filter(isLivePersistingEditor)
+				.map((session) => `${session.project_id}/${session.notebook_id}`),
+		);
 		const claims = new Map<string, Promise<{ holder: SessionId | null; available: boolean }>>();
 		const editors = await mapWithConcurrency(
 			editorSessions,
@@ -221,6 +248,14 @@ export class RuntimeInspectionService {
 					claims.set(key, claim);
 				}
 				const { holder, available } = await claim;
+				// Mirrors the admin route's default `save: true` request.
+				const reclaimBlocked = reclaimBlockedReason(session, now, {
+					attachmentSupported,
+					save: true,
+					superseded:
+						liveEditorNotebooks.has(`${session.project_id}/${session.notebook_id}`) &&
+						!isLivePersistingEditor(session),
+				});
 				return {
 					...location(session.project_id, sessionResourceNotebookId(session)),
 					resource_path: sessionResourcePath(session),
@@ -229,9 +264,8 @@ export class RuntimeInspectionService {
 					claim_holder_id: holder,
 					claim_holder_status: holder ? (allSessions.get(holder)?.status ?? null) : null,
 					claim_available: available,
-					reclaimable:
-						!session.sandbox_reclaimed_at &&
-						(isTerminal(session.status) || session.status === 'terminating'),
+					reclaimable: reclaimBlocked === null,
+					reclaim_blocked_reason: reclaimBlocked,
 				};
 			},
 		);

@@ -29,7 +29,7 @@ import {
 	ProjectIdParam,
 } from '../shared';
 import type { ApiDeps } from '../shared';
-import { projectFederationEnabled } from '../federation';
+import { federationFor } from '../federation';
 import { appendAudit, logEvent } from '../log';
 import { objectContentDisposition } from '../contentDisposition';
 import {
@@ -978,7 +978,7 @@ async function resolveObjectAccess(
 	iid: IntegrationId,
 	signal?: AbortSignal,
 ) {
-	const wifEligible = projectFederationEnabled(project, deps.wif);
+	const wifEligible = federationFor(project, deps.wif) !== undefined;
 	const base = await makeObjectBrowseContext(deps, project, user, signal, {
 		integrationId: iid,
 		includeFederated: false,
@@ -1371,7 +1371,7 @@ app.openapi(browseTablePreview, async (c) => {
 		'integration.use',
 		deps,
 	);
-	const wif = deps.wif;
+	const wif = federationFor(project, deps.wif);
 	if (!preview) throw new NotFoundError('Row preview is not enabled on this deployment');
 	assertIntegrationBudget(deps, 'browse', user.id);
 	const capability = await integrations.browseCapability(pid, iid);
@@ -1387,7 +1387,7 @@ app.openapi(browseTablePreview, async (c) => {
 		namespace,
 		table,
 		{ limit, query_user: user.email, signal: c.req.raw.signal },
-		wif && projectFederationEnabled(project, deps.wif)
+		wif
 			? () =>
 					exchangeFederatedStorageEnv(wif.issuer, wif.issuerUrl, wif.target, pid, {
 						kind: 'session',

@@ -510,7 +510,7 @@ describe('ReconciliationService', () => {
 		const clock = vi.spyOn(Date, 'now').mockReturnValue(started);
 		const reclaim = vi.spyOn(SessionRetirer.prototype, 'reclaim').mockImplementation(async () => {
 			clock.mockReturnValue(started + 4000);
-			return true;
+			return { reclaimed: true, saved: false };
 		});
 		await reconciler.reconcile();
 		expect(reclaim).toHaveBeenCalledTimes(2);
@@ -592,7 +592,7 @@ describe('ReconciliationService', () => {
 		expect(stored.sandbox_reclaimed_at).toBeUndefined();
 	});
 
-	it('Rule 1: keeps the provision grace for a provisioned record (it cannot probe for editors)', async () => {
+	it('Rule 1: a ready record skips the provision grace once its kernel is confirmed idle', async () => {
 		const started = iso(-6 * 60_000);
 		const session = await putSession({
 			status: 'expired',
@@ -604,10 +604,23 @@ describe('ReconciliationService', () => {
 
 		const result = await reconciler.reconcile();
 
-		expect(result.reclaimed).toBe(0);
-		expect(compute.destroyed).toEqual([]);
+		expect(result.reclaimed).toBe(1);
+		expect(compute.destroyed).toEqual([terminalId]);
 		const stored = await sessions.getSession(projectId, session.session_id);
-		expect(stored.sandbox_reclaimed_at).toBeUndefined();
+		expect(stored.sandbox_reclaimed_at).toBeDefined();
+	});
+
+	it('Rule 1: counts a reclaim that exceeds its budget as unreclaimed', async () => {
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		await putSession({ status: 'terminated', sandbox_id: terminalId });
+		vi.spyOn(SessionRetirer.prototype, 'reclaim').mockReturnValue(new Promise(() => {}));
+		try {
+			const pending = reconciler.reclaimTerminalSessions();
+			await vi.advanceTimersByTimeAsync(60_000);
+			await expect(pending).resolves.toMatchObject({ reclaimed: 0, unreclaimedTerminal: 1 });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('Rule 1: expireStale cannot make reconciliation commit after authorization expiry', async () => {

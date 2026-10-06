@@ -4880,6 +4880,7 @@
 						"name": "federation",
 						"cli_name": "federation",
 						"required": false,
+						"description": "`null` clears the project override so the deployment default applies.",
 						"value_type": "object",
 						"repeatable": false
 					},

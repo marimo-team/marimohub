@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import { AppWindow, Pause, Play, RefreshCw, Server, Users, GitBranch } from 'lucide-react';
+import { toast } from 'sonner';
 import { useAdminRuntimeQuery, useReclaimRuntimeSession, useUsersQuery } from '@/api/hooks';
 import {
 	Button,
@@ -21,6 +22,19 @@ import type { RuntimeDashboard } from '@/types';
 type RuntimeApp = RuntimeDashboard['apps'][number];
 type Sandbox = RuntimeApp['sandboxes'][number];
 type Editor = RuntimeDashboard['editors'][number];
+type ReclaimBlockedReason = NonNullable<Editor['reclaim_blocked_reason']>;
+
+const reclaimBlockedLabels: Record<ReclaimBlockedReason, string> = {
+	not_terminal: 'Stop the session first',
+	provision_grace: 'Provisioning grace period',
+	teardown_grace: 'Teardown grace period',
+	attachment_unsupported: 'Provider cannot save; reclaim without saving to discard edits',
+	attachment_failed: 'Could not attach to the sandbox',
+	kernel_active: 'Kernel is still active',
+	kernel_unreachable: 'Kernel is unreachable',
+	destroy_failed: 'Sandbox destroy failed',
+	timeout: 'Reclaim timed out',
+};
 
 const versionLabels = {
 	current: 'Current version',
@@ -409,8 +423,19 @@ function EditorsTable({
 								)}
 							</td>
 							<td className="px-4 py-3">
-								{editor.reclaimable && (
-									<Button onPress={() => onReclaim(editor)}>Reclaim session</Button>
+								<Button
+									isDisabled={
+										editor.reclaim_blocked_reason !== null &&
+										editor.reclaim_blocked_reason !== 'attachment_unsupported'
+									}
+									onPress={() => onReclaim(editor)}
+								>
+									Reclaim session
+								</Button>
+								{editor.reclaim_blocked_reason && (
+									<span className="mt-1 block max-w-48 text-xs text-muted-foreground">
+										{reclaimBlockedLabels[editor.reclaim_blocked_reason]}
+									</span>
 								)}
 							</td>
 							<td className="px-4 py-3 text-xs">
@@ -434,7 +459,8 @@ function EditorsTable({
 }
 
 function ReclaimSessionDialog({ editor, onClose }: { editor: Editor; onClose: () => void }) {
-	const [save, setSave] = useState(true);
+	// The provider cannot attach to save, so only a discarding reclaim can succeed.
+	const [save, setSave] = useState(editor.reclaim_blocked_reason !== 'attachment_unsupported');
 	const reclaim = useReclaimRuntimeSession();
 	return (
 		<DialogModal
@@ -480,7 +506,12 @@ function ReclaimSessionDialog({ editor, onClose }: { editor: Editor; onClose: ()
 						onPress={() =>
 							reclaim.mutate(
 								{ projectId: editor.project_id, sessionId: editor.session_id, save },
-								{ onSuccess: onClose },
+								{
+									onSuccess: ({ saved }) => {
+										toast.success(saved ? 'Reclaimed and saved' : 'Reclaimed without saving');
+										onClose();
+									},
+								},
 							)
 						}
 					>

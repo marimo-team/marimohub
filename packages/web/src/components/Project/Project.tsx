@@ -87,6 +87,7 @@ import { supportsIntegrationDataPage } from '@/lib/integrationNotebook';
 import { AppSessionIndicator } from './AppSessionIndicator';
 import { NotebookTags } from './NotebookTags';
 import { ProjectMembersDialog } from './ProjectMembersDialog';
+import type { CloudAccessSetting } from './ProjectEnvironmentDialog';
 import { ProjectEnvironmentDialog } from './ProjectEnvironmentDialog';
 import { ProjectAlertsDialog } from './ProjectAlertsDialog';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
@@ -414,17 +415,16 @@ function useProjectContent() {
 		computeProfile: DEFAULT_COMPUTE_PROFILE,
 	});
 
-	const handleSaveCloudAccess = async (enabled: boolean | null) => {
+	const handleSaveCloudAccess = async (setting: CloudAccessSetting) => {
 		await updateProject.mutateAsync({
 			projectId: pid!,
-			federation: enabled === null ? null : { ...project?.federation, enabled },
+			federation:
+				setting === 'inherit' ? null : { ...project.federation, enabled: setting === 'enabled' },
 		});
 		toast.success(
-			enabled === null
-				? `Federated cloud access uses deployment default (${capabilities?.federation.defaultEnabled ? 'enabled' : 'disabled'})`
-				: enabled
-					? 'Federated cloud access enabled'
-					: 'Federated cloud access disabled',
+			setting === 'inherit'
+				? `Federated cloud access uses deployment default (${capabilities?.federation.default_enabled ? 'enabled' : 'disabled'})`
+				: `Federated cloud access ${setting}`,
 		);
 	};
 
@@ -1199,10 +1199,9 @@ function useProjectContent() {
 					onClose={environmentModal.close}
 					project={project}
 					integrationsAvailable={capabilities?.integrations?.available ?? false}
-					cloudAccessAvailable={capabilitiesError ? false : capabilities?.federation.available}
-					cloudAccessDefaultEnabled={
-						capabilitiesError ? false : capabilities?.federation.defaultEnabled
-					}
+					cloudAccessLoading={!capabilities && !capabilitiesError}
+					cloudAccessAvailable={capabilities?.federation.available ?? false}
+					cloudAccessDefaultEnabled={capabilities?.federation.default_enabled ?? false}
 					isPending={updateProject.isPending}
 					onSaveCloudAccess={handleSaveCloudAccess}
 				/>

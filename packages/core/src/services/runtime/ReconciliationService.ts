@@ -2,6 +2,7 @@ import { WarmPoolStore } from './WarmPoolStore';
 import { THUMBNAIL_MAINTENANCE_BUDGET_MS } from './captureThumbnail';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
+import { withDeadline } from '../../async';
 import { Millis } from '../../duration';
 import { mapWithConcurrency } from '../../concurrency';
 import type { SandboxId } from '../../ids';
@@ -13,11 +14,11 @@ import type { RunStatus, Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { isTerminalRunStatus } from '../jobs/runState';
 import { RECLAIM_PROVISION_GRACE_MS, SessionRetirer } from './SessionRetirer';
+import type { ReclaimOutcome } from './SessionRetirer';
 import { AppPoolStore } from './AppPoolStore';
 import { SandboxDiagnosticLease } from './SandboxDiagnosticLease';
 import { isTerminal } from './sessionState';
 import { listAllKeys } from '../catalog/storage';
-import { isPastAuthorizationDeadline } from './SessionService';
 import type { SessionService } from './SessionService';
 
 /**
@@ -27,6 +28,16 @@ import type { SessionService } from './SessionService';
  * is a belt-and-suspenders guard against reaping an in-flight provision.
  */
 const DEFAULT_ORPHAN_GRACE_MS = Millis.minutes(15);
+
+/** Bounds one session's provider calls so a hung sandbox cannot stall the whole sweep. */
+const RECLAIM_SESSION_BUDGET_MS = Millis.seconds(60);
+
+class ReclaimTimeoutError extends Error {
+	override readonly name = 'ReclaimTimeoutError';
+	constructor() {
+		super('Session reclaim timed out');
+	}
+}
 
 const OrphanMarkerSchema = z.object({ first_seen: z.number() });
 
@@ -98,18 +109,28 @@ export class ReconciliationService {
 		let reclaimed = 0;
 		let unreclaimedTerminal = 0;
 		let oldestUnreclaimedAgeMs: number | null = null;
-		await mapWithConcurrency(await this.sessions.listSessions(), 8, async (session) => {
-			if (!session.sandbox_id || (!isTerminal(session.status) && session.status !== 'terminating'))
-				return;
-			const grace =
-				session.status === 'expired' &&
-				!isPastAuthorizationDeadline(session, Date.now()) &&
-				Date.now() - Date.parse(session.started_at) < RECLAIM_PROVISION_GRACE_MS;
+		const candidates = (await this.sessions.listSessions()).filter(
+			(session) =>
+				session.sandbox_id && (isTerminal(session.status) || session.status === 'terminating'),
+		);
+		await mapWithConcurrency(candidates, 8, async (session) => {
 			try {
-				if (
-					(session.sandbox_reclaimed_at || !grace) &&
-					(await this.retirer.reclaim(session, { thumbnailDeadlineAt, requireIdle: true }))
-				) {
+				const outcome = await withDeadline(
+					this.retirer.reclaim(session, { thumbnailDeadlineAt, requireIdle: true }),
+					{
+						timeoutMs: RECLAIM_SESSION_BUDGET_MS,
+						timeoutError: () => new ReclaimTimeoutError(),
+					},
+				).catch((error: unknown): ReclaimOutcome => {
+					if (!(error instanceof ReclaimTimeoutError)) throw error;
+					logOperationalError(
+						'session_reclaim_timeout',
+						{ operation: 'session.reclaim', session_id: session.session_id },
+						error,
+					);
+					return { reclaimed: false, reason: 'timeout' };
+				});
+				if (outcome.reclaimed) {
 					if (!session.sandbox_reclaimed_at) reclaimed++;
 					return;
 				}

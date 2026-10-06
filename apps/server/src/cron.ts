@@ -25,9 +25,12 @@ import type { WideEventMetrics } from './metrics';
 
 const FIVE_MINUTES_MS = Millis.minutes(5);
 const APP_ALERT_CONTEXT_CONCURRENCY = 8;
+// Built per loop rather than at import: the wrapper's tracer pins the first
+// provider it resolves, which would outlive a re-registered provider.
+const tracedMaintenanceSteps = () => traced('Maintenance', { sweepAppPools });
 
 function maintenanceLock(deps: ApiDeps, key: string = paths.maintenanceLock): MaintenanceLock {
-	const attributes = () => ({ 'marimohub.lock.key': key });
+	const attributes = () => ({ 'bucket.key': key });
 	return traced('MaintenanceLock', new MaintenanceLock(deps.bucket, key), {
 		acquire: attributes,
 		release: attributes,
@@ -98,7 +101,7 @@ export function startMaintenance(
 	metrics: WideEventMetrics,
 	loops = new BackgroundLoops(),
 ): () => void {
-	const maintenanceSteps = traced('Maintenance', { sweepAppPools });
+	const maintenanceSteps = tracedMaintenanceSteps();
 	const { sessions, maintenance, projects, notebooks, proposals, idempotency } = deps.services;
 	const reconciler = new ReconciliationService(
 		sessions,
@@ -127,8 +130,9 @@ export function startMaintenance(
 			await step(() => sweepPreviews(deps));
 			const sessionsExpired = await step(() => sessions.expireStale());
 			const reconcile = await step(() => reconciler.reconcile());
+			// deps.metrics wraps `metrics` (plus OTEL when enabled); bare test deps omit it.
 			const domainMetrics = deps.metrics ?? metrics;
-			domainMetrics.gauge('sessions.unreclaimed_terminal', reconcile.unreclaimedTerminal);
+			domainMetrics.gauge('sessions.unreclaimed_terminal.count', reconcile.unreclaimedTerminal);
 			domainMetrics.gauge(
 				'sessions.unreclaimed_terminal.oldest_age_ms',
 				reconcile.oldestUnreclaimedAgeMs ?? 0,
@@ -167,8 +171,6 @@ export function startMaintenance(
 				sessions_expired: sessionsExpired,
 				sessions_reaped: sessionsReaped,
 				sessions_reclaimed: reconcile.reclaimed,
-				unreclaimed_terminal_sessions: reconcile.unreclaimedTerminal,
-				oldest_unreclaimed_session_age_ms: reconcile.oldestUnreclaimedAgeMs,
 				snapshots_pruned: snapshotsPruned,
 				events_pruned: eventsPruned,
 				idempotency_pruned: idempotencyPruned,
@@ -205,7 +207,7 @@ export function startSessionLifecycle(
 	const lifetime = deps.sandbox.sessionLifetime;
 	if (!lifetime) return undefined;
 
-	const maintenanceSteps = traced('Maintenance', { sweepAppPools });
+	const maintenanceSteps = tracedMaintenanceSteps();
 	const { sessions, notebooks } = deps.services;
 	const svc = new SessionLifecycleService(sessions, notebooks, deps.compute, deps.bucket, {
 		...lifetime,

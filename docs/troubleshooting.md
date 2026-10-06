@@ -10,6 +10,11 @@ Common failures and what they mean. Most startup refusals are marimohub failing
 For `EDIT_SESSION_OWNED`, `EDIT_SESSION_CHANGED`, or a takeover that remains in
 the `draining` state, see [Editor sessions](/editor-sessions#takeover-safety).
 
+`EDIT_SESSION_RETIRING` means the notebook's previous editor session is still
+being cleaned up. Retry in a few minutes; if it persists, a super admin can
+[reclaim the sandbox](/operations#reclaim-a-stuck-editor-sandbox). See
+[Session cleanup](/editor-sessions#session-cleanup).
+
 ## The server refuses to start
 
 ### "MARIMOHUB_AUTH_BACKEND must be set"

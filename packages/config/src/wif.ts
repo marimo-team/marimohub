@@ -46,7 +46,20 @@ export function makeWif(env: Env): Pick<ApiDeps, 'wif'> {
 		'MARIMOHUB_WIF_AUDIENCE',
 		'MARIMOHUB_WIF_BROKER',
 	] as const;
-	if (!requiredKeys.some((k) => env[k])) return {}; // WIF disabled.
+	const defaultEnabled = parseBool(env, 'MARIMOHUB_WIF_DEFAULT_ENABLED');
+	if (!requiredKeys.some((k) => env[k])) {
+		if (defaultEnabled) {
+			throw new ConfigError(
+				'MARIMOHUB_WIF_DEFAULT_ENABLED=true has no effect: Workload Identity Federation is not configured.',
+				{
+					variable: 'MARIMOHUB_WIF_DEFAULT_ENABLED',
+					remediation: 'Set the WIF vars, or unset MARIMOHUB_WIF_DEFAULT_ENABLED.',
+					docs: 'docs/workload-identity-federation.md',
+				},
+			);
+		}
+		return {};
+	}
 
 	// Sandbox-native CAIOS auth wins over hub-minted WIF: the hub's static
 	// `AWS_ACCESS_KEY_ID` env would shadow the sidecar's auto-refreshing creds in
@@ -56,10 +69,14 @@ export function makeWif(env: Env): Pick<ApiDeps, 'wif'> {
 			JSON.stringify({
 				ts: new Date().toISOString(),
 				event: 'wif_disabled_sandbox_native_storage',
-				message:
-					'MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS is set; hub-minted WIF is disabled ' +
-					'so its static AWS_* env cannot shadow the sandbox credential-vending sidecar. ' +
+				message: [
+					'MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS is set; hub-minted WIF is disabled',
+					'so its static AWS_* env cannot shadow the sandbox credential-vending sidecar.',
+					defaultEnabled ? 'MARIMOHUB_WIF_DEFAULT_ENABLED=true is ignored too.' : '',
 					'Unset the WIF env vars (or the bucket list) to silence this warning.',
+				]
+					.filter(Boolean)
+					.join(' '),
 			}),
 		);
 		return {};
@@ -109,7 +126,7 @@ export function makeWif(env: Env): Pick<ApiDeps, 'wif'> {
 
 	return {
 		wif: {
-			defaultEnabled: parseBool(env, 'MARIMOHUB_WIF_DEFAULT_ENABLED'),
+			defaultEnabled,
 			issuer: new WorkloadIdentityIssuer(signingKey, required(env, 'MARIMOHUB_WIF_KID')),
 			// Strip any trailing slash so the token `iss` and the derived `jwks_uri`
 			// are canonical (`<url>/.well-known/...`, never `<url>//.well-known/...`).

@@ -407,7 +407,7 @@ paths:
         '204':
           description: Stored.
   /projects/{pid}/project.json:
-    summary: 'Project record: members, federation opt-in, status.'
+    summary: 'Project record: members, federation override, status.'
     parameters:
       - name: pid
         in: path

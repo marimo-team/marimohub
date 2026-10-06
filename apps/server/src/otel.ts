@@ -91,18 +91,22 @@ function otlpMetricReader(): PeriodicExportingMetricReader {
 	});
 }
 
+/** `||`, not `??`: an empty `MARIMOHUB_VERSION=` build arg still means an unversioned build. */
+export function buildVersion(env: Record<string, string | undefined>): string {
+	return env.MARIMOHUB_VERSION || 'dev';
+}
+
 /**
- * Reads process.env only — the exporters and resource detectors do their own
- * env reading, so an injectable env here would be misleading.
+ * Reads OTEL_* from process.env — the exporters and resource detectors do their
+ * own env reading, so an injectable env here would be misleading.
  */
-export function startOtel(): OtelHandle | null {
+export function startOtel(version: string): OtelHandle | null {
 	const tracing = isTracingEnabled();
 	const metricsKind = metricsExporter();
 	const logsEnabled = isLogsEnabled();
 	if (!tracing && !metricsKind && !logsEnabled) return null;
 
 	// Merge envDetector last so explicit OTEL attributes override detected and build defaults.
-	const version = process.env.MARIMOHUB_VERSION ?? 'dev';
 	const resource = defaultResource()
 		.merge(resourceFromAttributes({ 'service.name': 'marimohub', 'service.version': version }))
 		.merge(
