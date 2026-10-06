@@ -7,6 +7,7 @@ import { MaintenanceLock, Millis, paths, WarmPoolService, WarmPoolStore } from '
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startJobScheduler, startMaintenance, startSessionLifecycle, startWarmPools } from './cron';
 import { WideEventMetrics } from './metrics';
+import { BackgroundLoops } from './backgroundLoops';
 
 describe('maintenance tracing', () => {
 	let deps: ApiDeps;
@@ -36,9 +37,15 @@ describe('maintenance tracing', () => {
 		'traces %s lock acquisition and release with the lock key',
 		async (loop) => {
 			const metrics = new WideEventMetrics();
+			const loops = new BackgroundLoops();
+			const run = vi.fn(async () => {});
+			const start = loops.start.bind(loops);
+			vi.spyOn(loops, 'start').mockImplementation((options) =>
+				start({ ...options, run, onSuccess: undefined }),
+			);
 			switch (loop) {
 				case 'maintenance':
-					stop = startMaintenance(deps, metrics);
+					stop = startMaintenance(deps, metrics, loops);
 					break;
 				case 'sessionLifecycle':
 					deps.sandbox.sessionLifetime = {
@@ -49,10 +56,10 @@ describe('maintenance tracing', () => {
 						snapshotIntervalMs: Millis.seconds(30),
 						sweepIntervalMs: Millis.seconds(5),
 					};
-					stop = startSessionLifecycle(deps);
+					stop = startSessionLifecycle(deps, loops);
 					break;
 				case 'jobScheduler':
-					stop = startJobScheduler(deps, metrics).stop;
+					stop = startJobScheduler(deps, metrics, loops).stop;
 					break;
 				case 'warmPool':
 					deps.warmPool = new WarmPoolService(
@@ -67,17 +74,18 @@ describe('maintenance tracing', () => {
 							minimumRemainingMs: 60_000,
 						},
 					);
-					vi.spyOn(deps.warmPool, 'sweep').mockResolvedValue(undefined);
-					stop = startWarmPools(deps)!.stop;
+					stop = startWarmPools(deps, loops)!.stop;
 			}
 			await vi.advanceTimersByTimeAsync(0);
 			const spans = exporter.getFinishedSpans();
+			expect(run).toHaveBeenCalledOnce();
+			expect(spans.map((span) => span.name)).toEqual([
+				'MaintenanceLock.acquire',
+				'MaintenanceLock.release',
+			]);
 			for (const phase of ['acquire', 'release']) {
 				const span = spans.find((span) => span.name === `MaintenanceLock.${phase}`);
 				expect(span?.attributes).toEqual({ 'marimohub.lock.key': paths[`${loop}Lock`] });
-			}
-			if (loop === 'maintenance' || loop === 'sessionLifecycle') {
-				expect(spans.some((span) => span.name === 'Maintenance.sweepAppPools')).toBe(true);
 			}
 		},
 	);
