@@ -146,6 +146,20 @@ trailing stderr. Ship stdout to your log pipeline and alert on
 endpoint (see [Logs](#logs-opentelemetry) below) to also ship these lines over
 OpenTelemetry, so they outlive the pod after a redeploy.
 
+### Session provision events
+
+The server emits `session_provision` when a provisioning attempt finishes, including failed attempts.
+Requests that reuse an existing session or fail before provisioning do not emit this event.
+The `client` field groups requests by route and authentication:
+
+| `client` | Meaning                                                                                 |
+| -------- | --------------------------------------------------------------------------------------- |
+| `mcp`    | Requests through `/mcp`, regardless of credential type.                                 |
+| `web`    | REST requests with SSO or development authentication.                                   |
+| `cli`    | REST requests with token authentication, including API scripts and other token callers. |
+
+When present, `session_id` identifies the session record and `provision_error_code` identifies a provisioning failure.
+
 ### Tracing (OpenTelemetry)
 
 Set the standard `OTEL_EXPORTER_OTLP_ENDPOINT` (OTLP over HTTP) to enable

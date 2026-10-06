@@ -798,12 +798,18 @@ rolling the hub.
 
 ## Troubleshooting
 
-Where to look first: the hub's API logs carry one `session_provision` event per
-kernel start (`provision_error_code` and the CoreWeave `reason` on failure) —
-`kubectl -n marimohub logs deploy/marimohub | grep session_provision`; the
-sandbox namespace shows what the runner made —
-`kubectl -n org-ns-<ORG-ID> get pods,svc,ingress,networkpolicy` and
-`kubectl -n org-ns-<ORG-ID> describe pod <pod>` for events.
+Read the API logs for [session provision events](../operations.md#session-provision-events), including `provision_error_code` and the CoreWeave `reason` on failure:
+
+```bash
+kubectl -n marimohub logs deploy/marimohub | grep session_provision
+```
+
+Inspect the sandbox resources and Pod events:
+
+```bash
+kubectl -n org-ns-<ORG-ID> get pods,svc,ingress,networkpolicy
+kubectl -n org-ns-<ORG-ID> describe pod <pod>
+```
 
 ::: details Kernel won't start or isn't reachable
 
