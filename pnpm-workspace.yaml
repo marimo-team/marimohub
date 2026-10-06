@@ -37,7 +37,7 @@ catalog:
   '@kubernetes/client-node': ^1.4.0
   '@marimo-team/codemirror-sql': ^0.3.0
   '@marimo-team/react-finder': ^0.1.0
-  '@modelcontextprotocol/sdk': ^1.30.0
+  '@modelcontextprotocol/sdk': ^1.31.0
   '@opentelemetry/api': ^1.9.0
   '@opentelemetry/api-logs': ^0.220.0
   '@opentelemetry/context-async-hooks': ^2.9.0
@@ -155,6 +155,7 @@ minimumReleaseAgeExclude:
   # Renovate security update: csv-parse@7.0.2
   - csv-parse@7.0.2
   - markdown-it@14.3.1
+  - '@modelcontextprotocol/sdk@1.31.0'
 
 onlyBuiltDependencies: []
 
