@@ -1511,115 +1511,129 @@ describe('Data browser routes', () => {
 		expect(availabilityChecks).toBeGreaterThanOrEqual(2);
 	});
 
-	it('injects project WIF credentials into sandbox previews', async () => {
-		const pid = await createProject();
-		await expectOk(await request('PATCH', `/projects/${pid}`, { federation: { enabled: true } }));
-		const selected = await expectOk<{ id: string }>(
-			await request('POST', `/projects/${pid}/integrations`, {
-				kind: 'sandbox_browsy',
-				name: 'selected-wif',
-				config: {},
-			}),
-			201,
-		);
-		const calls: PythonPreviewProgram[] = [];
-		let credentialVars: Record<string, string> | undefined;
-		const dataPreview = previewService(async (program) => {
-			calls.push(program);
-			credentialVars =
-				typeof program.credentialVars === 'function'
-					? await program.credentialVars()
-					: program.credentialVars;
-			return { columns: [], rows: [] };
-		});
-		const full = createTestApi({
-			bucket,
-			userId: ACTOR,
-			deps: {
-				...browserDeps(bucket, dataPreview),
-				wif: {
-					issuer: { mint: async () => 'jwt', jwks: async () => ({ keys: [] }) } as never,
-					issuerUrl: 'https://hub.example.com',
-					target: {
-						broker: {
-							exchange: async () => ({
-								accessKeyId: 'temporary-key',
-								secretAccessKey: 'temporary-secret',
-								sessionToken: 'temporary-token',
-							}),
-						},
-						storage: { region: 'us-east-1' },
-						audience: 'storage',
-					},
-				},
-				dataBrowser: { preview: true },
-			},
-		}).request;
-
-		await expectOk(
-			await full('POST', `/projects/${pid}/integrations/${selected.id}/browse/preview`, {
-				namespace: ['sales'],
-				table: 'orders',
-			}),
-		);
-		expect(calls[0]?.credentialVars).toBeTypeOf('function');
-		expect(credentialVars).toEqual({
-			AWS_ACCESS_KEY_ID: 'temporary-key',
-			AWS_SECRET_ACCESS_KEY: 'temporary-secret',
-			AWS_SESSION_TOKEN: 'temporary-token',
-			AWS_REGION: 'us-east-1',
-		});
-	});
-
-	it('single-flights expiring WIF credentials for ambient object browsing', async () => {
-		const pid = await createProject();
-		await expectOk(await request('PATCH', `/projects/${pid}`, { federation: { enabled: true } }));
-		const staticStore = await createObjectStore(pid, 'static-with-wif');
-		const ambient = await expectOk<{ id: string }>(
-			await request('POST', `/projects/${pid}/integrations`, {
-				kind: 's3',
-				name: 'ambient-objects',
-				config: { bucket: 'lake', auth: { method: 'ambient' } },
-			}),
-			201,
-		);
-		let exchanges = 0;
-		const wifApi = createTestApi({
-			bucket,
-			userId: ACTOR,
-			deps: {
-				...deps,
-				wif: {
-					issuer: { mint: async () => 'jwt', jwks: async () => ({ keys: [] }) } as never,
-					issuerUrl: 'https://hub.example.com',
-					target: {
-						broker: {
-							exchange: async () => {
-								exchanges += 1;
-								await new Promise((resolve) => setTimeout(resolve, 10));
-								return {
+	it.each([false, true])(
+		'injects project WIF credentials into sandbox previews (inherited=%s)',
+		async (inherited) => {
+			const pid = await createProject();
+			if (!inherited)
+				await expectOk(
+					await request('PATCH', `/projects/${pid}`, { federation: { enabled: true } }),
+				);
+			const selected = await expectOk<{ id: string }>(
+				await request('POST', `/projects/${pid}/integrations`, {
+					kind: 'sandbox_browsy',
+					name: 'selected-wif',
+					config: {},
+				}),
+				201,
+			);
+			const calls: PythonPreviewProgram[] = [];
+			let credentialVars: Record<string, string> | undefined;
+			const dataPreview = previewService(async (program) => {
+				calls.push(program);
+				credentialVars =
+					typeof program.credentialVars === 'function'
+						? await program.credentialVars()
+						: program.credentialVars;
+				return { columns: [], rows: [] };
+			});
+			const full = createTestApi({
+				bucket,
+				userId: ACTOR,
+				deps: {
+					...browserDeps(bucket, dataPreview),
+					wif: {
+						defaultEnabled: inherited,
+						issuer: { mint: async () => 'jwt', jwks: async () => ({ keys: [] }) } as never,
+						issuerUrl: 'https://hub.example.com',
+						target: {
+							broker: {
+								exchange: async () => ({
 									accessKeyId: 'temporary-key',
 									secretAccessKey: 'temporary-secret',
-									expiration: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-								};
+									sessionToken: 'temporary-token',
+								}),
 							},
+							storage: { region: 'us-east-1' },
+							audience: 'storage',
 						},
-						storage: { region: 'us-east-1' },
-						audience: 'storage',
+					},
+					dataBrowser: { preview: true },
+				},
+			}).request;
+
+			await expectOk(
+				await full('POST', `/projects/${pid}/integrations/${selected.id}/browse/preview`, {
+					namespace: ['sales'],
+					table: 'orders',
+				}),
+			);
+			expect(calls[0]?.credentialVars).toBeTypeOf('function');
+			expect(credentialVars).toEqual({
+				AWS_ACCESS_KEY_ID: 'temporary-key',
+				AWS_SECRET_ACCESS_KEY: 'temporary-secret',
+				AWS_SESSION_TOKEN: 'temporary-token',
+				AWS_REGION: 'us-east-1',
+			});
+		},
+	);
+
+	it.each([false, true])(
+		'single-flights expiring WIF credentials for ambient object browsing (inherited=%s)',
+		async (inherited) => {
+			const pid = await createProject();
+			if (!inherited)
+				await expectOk(
+					await request('PATCH', `/projects/${pid}`, { federation: { enabled: true } }),
+				);
+			const staticStore = await createObjectStore(pid, 'static-with-wif');
+			const ambient = await expectOk<{ id: string }>(
+				await request('POST', `/projects/${pid}/integrations`, {
+					kind: 's3',
+					name: 'ambient-objects',
+					config: { bucket: 'lake', auth: { method: 'ambient' } },
+				}),
+				201,
+			);
+			let exchanges = 0;
+			const wifApi = createTestApi({
+				bucket,
+				userId: ACTOR,
+				deps: {
+					...deps,
+					wif: {
+						defaultEnabled: inherited,
+						issuer: { mint: async () => 'jwt', jwks: async () => ({ keys: [] }) } as never,
+						issuerUrl: 'https://hub.example.com',
+						target: {
+							broker: {
+								exchange: async () => {
+									exchanges += 1;
+									await new Promise((resolve) => setTimeout(resolve, 10));
+									return {
+										accessKeyId: 'temporary-key',
+										secretAccessKey: 'temporary-secret',
+										expiration: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+									};
+								},
+							},
+							storage: { region: 'us-east-1' },
+							audience: 'storage',
+						},
 					},
 				},
-			},
-		}).request;
-		await expectOk(await wifApi('GET', `/projects/${pid}/integrations/${staticStore.id}/browse`));
-		expect(exchanges).toBe(0);
-		const url = `/projects/${pid}/integrations/${ambient.id}/browse`;
-		const responses = await Promise.all([wifApi('GET', url), wifApi('GET', url)]);
-		const results = await Promise.all(
-			responses.map((response) => expectOk<Record<string, unknown>>(response)),
-		);
-		expect(results).toHaveLength(2);
-		expect(exchanges).toBe(1);
-	});
+			}).request;
+			await expectOk(await wifApi('GET', `/projects/${pid}/integrations/${staticStore.id}/browse`));
+			expect(exchanges).toBe(0);
+			const url = `/projects/${pid}/integrations/${ambient.id}/browse`;
+			const responses = await Promise.all([wifApi('GET', url), wifApi('GET', url)]);
+			const results = await Promise.all(
+				responses.map((response) => expectOk<Record<string, unknown>>(response)),
+			);
+			expect(results).toHaveLength(2);
+			expect(exchanges).toBe(1);
+		},
+	);
 
 	it('keeps ambient object browsing unavailable without WIF or explicit server opt-in', async () => {
 		const pid = await createProject();
@@ -1645,47 +1659,54 @@ describe('Data browser routes', () => {
 		);
 	});
 
-	it('does not fall through to ambient server credentials when WIF exchange fails', async () => {
-		const pid = await createProject();
-		await expectOk(await request('PATCH', `/projects/${pid}`, { federation: { enabled: true } }));
-		const ambient = await expectOk<{ id: string }>(
-			await request('POST', `/projects/${pid}/integrations`, {
-				kind: 's3',
-				name: 'federated-objects',
-				config: { bucket: 'lake', auth: { method: 'ambient' } },
-			}),
-			201,
-		);
-		deps.dataBrowser.objectBrowser.allowServerAmbientCredentials = true;
-		const federatedApi = createTestApi({
-			bucket,
-			userId: ACTOR,
-			deps: {
-				...deps,
-				wif: {
-					issuer: { mint: async () => 'jwt', jwks: async () => ({ keys: [] }) } as never,
-					issuerUrl: 'https://hub.example.com',
-					target: {
-						broker: {
-							exchange: async () => {
-								throw new Error('broker unavailable');
+	it.each([false, true])(
+		'does not fall through to ambient server credentials when WIF exchange fails (inherited=%s)',
+		async (inherited) => {
+			const pid = await createProject();
+			if (!inherited)
+				await expectOk(
+					await request('PATCH', `/projects/${pid}`, { federation: { enabled: true } }),
+				);
+			const ambient = await expectOk<{ id: string }>(
+				await request('POST', `/projects/${pid}/integrations`, {
+					kind: 's3',
+					name: 'federated-objects',
+					config: { bucket: 'lake', auth: { method: 'ambient' } },
+				}),
+				201,
+			);
+			deps.dataBrowser.objectBrowser.allowServerAmbientCredentials = true;
+			const federatedApi = createTestApi({
+				bucket,
+				userId: ACTOR,
+				deps: {
+					...deps,
+					wif: {
+						defaultEnabled: inherited,
+						issuer: { mint: async () => 'jwt', jwks: async () => ({ keys: [] }) } as never,
+						issuerUrl: 'https://hub.example.com',
+						target: {
+							broker: {
+								exchange: async () => {
+									throw new Error('broker unavailable');
+								},
 							},
+							storage: { region: 'us-east-1' },
+							audience: 'storage',
 						},
-						storage: { region: 'us-east-1' },
-						audience: 'storage',
 					},
 				},
-			},
-		}).request;
+			}).request;
 
-		const capability = await expectOk<{
-			surfaces: { objects: { available: boolean; reason?: string } };
-		}>(await federatedApi('GET', `/projects/${pid}/integrations/${ambient.id}/browse`));
-		expect(capability.surfaces.objects).toMatchObject({
-			available: false,
-			reason: 'No object-store credentials are available.',
-		});
-	});
+			const capability = await expectOk<{
+				surfaces: { objects: { available: boolean; reason?: string } };
+			}>(await federatedApi('GET', `/projects/${pid}/integrations/${ambient.id}/browse`));
+			expect(capability.surfaces.objects).toMatchObject({
+				available: false,
+				reason: 'No object-store credentials are available.',
+			});
+		},
+	);
 
 	it('does not exchange project WIF credentials for native previews', async () => {
 		const pid = await createProject();

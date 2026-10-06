@@ -56,7 +56,7 @@ describe('ProjectEnvironmentDialog', () => {
 			/>,
 		);
 		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
-		await user.click(screen.getByRole('switch', { name: /Federated cloud access disabled/ }));
+		await user.click(screen.getByRole('radio', { name: 'Enabled' }));
 		await user.click(screen.getByRole('button', { name: 'Save' }));
 		expect(onSave).toHaveBeenCalledWith(true);
 		expect(onClose).not.toHaveBeenCalled();
@@ -79,7 +79,7 @@ describe('ProjectEnvironmentDialog', () => {
 		);
 		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
 		expect(screen.getByText(/Federated cloud access is disabled/)).toBeInTheDocument();
-		expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+		expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
 	});
 
 	it('shows the project cloud-access state in the overview', () => {
@@ -113,7 +113,7 @@ describe('ProjectEnvironmentDialog', () => {
 			/>,
 		);
 		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
-		await user.click(screen.getByRole('switch', { name: /Federated cloud access disabled/ }));
+		await user.click(screen.getByRole('radio', { name: 'Enabled' }));
 		await user.click(screen.getByRole('button', { name: 'Save' }));
 		await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
 		expect(onSave).toHaveBeenCalledTimes(1);
@@ -122,4 +122,45 @@ describe('ProjectEnvironmentDialog', () => {
 		await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
 		await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled());
 	});
+});
+
+it('shows inherited access and lets a manager opt out', async () => {
+	const user = userEvent.setup();
+	const onSave = vi.fn(async () => {});
+	render(
+		<ProjectEnvironmentDialog
+			isOpen
+			onClose={() => {}}
+			project={{ ...project(), federation: undefined }}
+			integrationsAvailable
+			cloudAccessAvailable
+			cloudAccessDefaultEnabled
+			onSaveCloudAccess={onSave}
+		/>,
+	);
+	expect(screen.getByText('Enabled by deployment default')).toBeInTheDocument();
+	await user.click(screen.getByRole('button', { name: /Cloud access/ }));
+	expect(screen.getByRole('radio', { name: /Use deployment default/ })).toBeChecked();
+	await user.click(screen.getByRole('radio', { name: 'Disabled' }));
+	await user.click(screen.getByRole('button', { name: 'Save' }));
+	expect(onSave).toHaveBeenCalledWith(false);
+});
+it('clears an explicit override to restore inheritance', async () => {
+	const user = userEvent.setup();
+	const onSave = vi.fn(async () => {});
+	render(
+		<ProjectEnvironmentDialog
+			isOpen
+			onClose={() => {}}
+			project={project()}
+			integrationsAvailable
+			cloudAccessAvailable
+			cloudAccessDefaultEnabled
+			onSaveCloudAccess={onSave}
+		/>,
+	);
+	await user.click(screen.getByRole('button', { name: /Cloud access/ }));
+	await user.click(screen.getByRole('radio', { name: /Use deployment default/ }));
+	await user.click(screen.getByRole('button', { name: 'Save' }));
+	expect(onSave).toHaveBeenCalledWith(null);
 });

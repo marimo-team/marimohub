@@ -105,7 +105,7 @@ const capabilitiesRoute = createRoute({
 app.openapi(capabilitiesRoute, (c) => {
 	const deps = c.get('deps');
 	return ok(c, {
-		federation: { available: Boolean(deps.wif) },
+		federation: { available: Boolean(deps.wif), defaultEnabled: deps.wif?.defaultEnabled ?? false },
 		integrations: { available: Boolean(deps.integrations) },
 		source_control: {
 			change_request_providers: [...(deps.sourceControl?.publisherProviders() ?? [])],

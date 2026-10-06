@@ -4,7 +4,7 @@ import { AwsStsWifBroker } from '@marimo-hub/credentials-aws';
 import { CoreWeaveWifBroker } from '@marimo-hub/credentials-coreweave';
 import type { ApiDeps } from '@marimo-hub/api';
 import { usesSandboxNativeObjectStorage } from './compute';
-import { required } from './env';
+import { parseBool, required } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 
@@ -36,9 +36,10 @@ function makeWifBroker(env: Env): CredentialBroker {
 /**
  * Wire the hub-as-OIDC-issuer + its federation target. All-or-nothing: set the
  * required vars to enable, or none to disable (a half-config throws). The broker
- * is selected by `MARIMOHUB_WIF_BROKER`; a project opts in per `federation`.
+ * is selected by `MARIMOHUB_WIF_BROKER`; projects may override the default.
  */
 export function makeWif(env: Env): Pick<ApiDeps, 'wif'> {
+	const defaultEnabled = parseBool(env, 'MARIMOHUB_WIF_DEFAULT_ENABLED');
 	const requiredKeys = [
 		'MARIMOHUB_WIF_SIGNING_KEY',
 		'MARIMOHUB_WIF_KID',
@@ -109,6 +110,7 @@ export function makeWif(env: Env): Pick<ApiDeps, 'wif'> {
 
 	return {
 		wif: {
+			defaultEnabled,
 			issuer: new WorkloadIdentityIssuer(signingKey, required(env, 'MARIMOHUB_WIF_KID')),
 			// Strip any trailing slash so the token `iss` and the derived `jwks_uri`
 			// are canonical (`<url>/.well-known/...`, never `<url>//.well-known/...`).

@@ -65,7 +65,7 @@ export interface UpdateProjectInput {
 	name?: string;
 	description?: string;
 	tags?: string[];
-	federation?: ProjectFederation;
+	federation?: ProjectFederation | null;
 }
 
 /**
@@ -419,7 +419,8 @@ export class ProjectService {
 					name: name ?? current.name,
 					description: input.description ?? current.description,
 					tags: input.tags ?? current.tags,
-					federation: input.federation ?? current.federation,
+					federation:
+						input.federation === undefined ? current.federation : (input.federation ?? undefined),
 					updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),
 				};
 			},

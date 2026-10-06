@@ -413,9 +413,18 @@ function useProjectContent() {
 		computeProfile: DEFAULT_COMPUTE_PROFILE,
 	});
 
-	const handleSaveCloudAccess = async (enabled: boolean) => {
-		await updateProject.mutateAsync({ projectId: pid!, federation: { enabled } });
-		toast.success(enabled ? 'Federated cloud access enabled' : 'Federated cloud access disabled');
+	const handleSaveCloudAccess = async (enabled: boolean | null) => {
+		await updateProject.mutateAsync({
+			projectId: pid!,
+			federation: enabled === null ? null : { ...project?.federation, enabled },
+		});
+		toast.success(
+			enabled === null
+				? 'Federated cloud access uses deployment default'
+				: enabled
+					? 'Federated cloud access enabled'
+					: 'Federated cloud access disabled',
+		);
 	};
 
 	// Map each notebook to its "most alive" session so a row shows the strongest state.
@@ -1185,6 +1194,7 @@ function useProjectContent() {
 					project={project}
 					integrationsAvailable={capabilities?.integrations?.available ?? false}
 					cloudAccessAvailable={capabilities?.federation.available ?? false}
+					cloudAccessDefaultEnabled={capabilities?.federation.defaultEnabled ?? false}
 					isPending={updateProject.isPending}
 					onSaveCloudAccess={handleSaveCloudAccess}
 				/>

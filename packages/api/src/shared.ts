@@ -1474,7 +1474,7 @@ export const DeploymentInfoResponseSchema = z
  */
 export const CapabilitiesResponseSchema = z
 	.object({
-		federation: z.object({ available: z.boolean() }),
+		federation: z.object({ available: z.boolean(), defaultEnabled: z.boolean().optional() }),
 		integrations: z.object({ available: z.boolean() }),
 		source_control: z.object({
 			change_request_providers: z.array(z.string()).openapi({

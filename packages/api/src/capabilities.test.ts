@@ -33,6 +33,16 @@ describe('GET /api/v1/capabilities', () => {
 		expect(await expectOk(res)).toMatchObject({ federation: { available: true } });
 	});
 
+	it('reports the deployment federation default', async () => {
+		const deps = makeTestDeps(new MemoryBucket(), {
+			authenticator: authed,
+			wif: { ...stubWif!, defaultEnabled: true },
+		});
+		expect(await expectOk(await createApi(deps).request('/api/v1/capabilities'))).toMatchObject({
+			federation: { available: true, defaultEnabled: true },
+		});
+	});
+
 	it('reports federation unavailable when WIF is not configured', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed });
 		const res = await createApi(deps).request('/api/v1/capabilities');

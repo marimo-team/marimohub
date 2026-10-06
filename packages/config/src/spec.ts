@@ -1839,11 +1839,18 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Workload Identity Federation',
 		description:
-			'Optional: let a notebook reach cloud resources (object storage, and for AWS any API the role allows) with NO long-lived key. The hub becomes an OIDC issuer and, per session, mints a short-lived project-scoped JWT and exchanges it server-side (via the selected broker) for temporary credentials, which it injects into the sandbox — the JWT itself never reaches the sandbox. Deployment-wide capability; each project opts in via its `federation` setting. All-or-nothing on the generic vars: set them to enable, or none to disable. See docs/workload-identity-federation.md.',
+			'Optional: let a notebook reach cloud resources (object storage, and for AWS any API the role allows) with NO long-lived key. The hub becomes an OIDC issuer and, per session, mints a short-lived project-scoped JWT and exchanges it server-side (via the selected broker) for temporary credentials, which it injects into the sandbox — the JWT itself never reaches the sandbox. Deployment-wide capability; projects inherit `MARIMOHUB_WIF_DEFAULT_ENABLED` unless they set an explicit `federation` override. All-or-nothing on the generic vars: set them to enable, or none to disable. See docs/workload-identity-federation.md.',
 		backends: [
 			{
 				name: 'Issuer + target (generic)',
 				vars: [
+					{
+						id: 'MARIMOHUB_WIF_DEFAULT_ENABLED',
+						name: 'Federation enabled by default',
+						description:
+							'Enable WIF for projects without an explicit federation setting. Explicit project settings take precedence. Requires configured WIF; applies to new sessions and jobs, and data browsing.',
+						default: 'false',
+					},
 					{
 						id: 'MARIMOHUB_WIF_SIGNING_KEY',
 						name: 'WIF signing key',

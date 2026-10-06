@@ -403,9 +403,9 @@ export type ProjectMember = z.infer<typeof ProjectMemberSchema>;
 /**
  * Per-project workload-identity federation: whether this project's sandboxes
  * receive federated storage credentials ("when"), and which deployment-registered
- * federation target to use ("for what"). Absent/`enabled: false` = no federated
- * credentials, even when the deployment has WIF configured. The deployment owns
- * the capability (issuer + targets); a project manager opts in here.
+ * federation target to use ("for what"). Absent inherits the deployment default.
+ * Explicit `enabled: false` disables federated credentials. The deployment owns
+ * the capability (issuer + targets); a project manager overrides the default here.
  */
 export const ProjectFederationSchema = z.object({
 	enabled: z.boolean(),
@@ -426,7 +426,7 @@ export const ProjectSchema = z.object({
 	description: z.string(),
 	owner: UserIdSchema,
 	members: z.array(ProjectMemberSchema),
-	/** Optional WIF opt-in; see ProjectFederationSchema. */
+	/** Optional WIF override; see ProjectFederationSchema. */
 	federation: ProjectFederationSchema.optional(),
 	// Defaulted for backward compatibility: project.json written before this
 	// field existed omits it and reads back as 'active'. See the matching field

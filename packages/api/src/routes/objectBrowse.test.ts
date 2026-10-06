@@ -433,3 +433,26 @@ function body(stream: ReadableStream<Uint8Array>, close: () => void): ObjectBody
 		close,
 	};
 }
+
+it('uses the deployment default but stops vending cached credentials after opt-out', async () => {
+	const exchange = vi.fn(async () => ({
+		accessKeyId: 'temporary',
+		secretAccessKey: 'secret',
+		expiration: new Date(Date.now() + 3600000).toISOString(),
+	}));
+	const deps = wifDeps(exchange);
+	deps.wif!.defaultEnabled = true;
+	const inherited = await makeObjectBrowseContext(
+		deps,
+		{ ...project, federation: undefined },
+		user,
+	);
+	expect(inherited.federation?.credentials.accessKeyId).toBe('temporary');
+	const excluded = await makeObjectBrowseContext(
+		deps,
+		{ ...project, federation: { enabled: false } },
+		user,
+	);
+	expect(excluded.federation).toBeUndefined();
+	expect(exchange).toHaveBeenCalledTimes(1);
+});

@@ -55,7 +55,7 @@ import {
 
 // --- Request body schemas ---
 
-// Per-project workload-identity federation opt-in (see ProjectFederationSchema in
+// Per-project workload-identity federation override (see ProjectFederationSchema in
 // @marimo-hub/core). `enabled` is "when"; `target` is "for what" (which
 // deployment-registered federation target). Inert unless the deployment configures WIF.
 const FederationBody = z
@@ -79,7 +79,7 @@ const UpdateProjectBody = z.object({
 	name: z.string().min(1).optional().openapi({ example: 'ML Pipeline' }),
 	description: z.string().optional(),
 	tags: z.array(z.string()).optional(),
-	federation: FederationBody.optional(),
+	federation: z.union([FederationBody, z.null()]).optional(),
 });
 
 const AssignableRoleSchema = z.enum(ASSIGNABLE_ROLES).openapi('AssignableRole');
