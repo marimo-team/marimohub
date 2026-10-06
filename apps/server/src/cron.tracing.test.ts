@@ -1,6 +1,7 @@
 import { context, SpanStatusCode, trace } from '@opentelemetry/api';
 import { InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+import type { ApiDeps } from '@marimo-hub/api';
 import { createInitializedBucket, makeTestDeps } from '@marimo-hub/api/testing';
 import { MaintenanceLock, Millis, paths, WarmPoolService, WarmPoolStore } from '@marimo-hub/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,11 +9,13 @@ import { startJobScheduler, startMaintenance, startSessionLifecycle, startWarmPo
 import { WideEventMetrics } from './metrics';
 
 describe('maintenance tracing', () => {
+	let deps: ApiDeps;
 	let exporter: InMemorySpanExporter;
 	let provider: NodeTracerProvider;
 	let stop: (() => void) | undefined;
 
-	beforeEach(() => {
+	beforeEach(async () => {
+		deps = makeTestDeps(await createInitializedBucket());
 		vi.useFakeTimers();
 		vi.spyOn(console, 'log').mockImplementation(() => {});
 		exporter = new InMemorySpanExporter();
@@ -32,7 +35,6 @@ describe('maintenance tracing', () => {
 	it.each(['maintenance', 'sessionLifecycle', 'jobScheduler', 'warmPool'] as const)(
 		'traces %s lock acquisition and release with the lock key',
 		async (loop) => {
-			const deps = makeTestDeps(await createInitializedBucket());
 			const metrics = new WideEventMetrics();
 			switch (loop) {
 				case 'maintenance':
@@ -81,7 +83,6 @@ describe('maintenance tracing', () => {
 	);
 
 	it('does not report lock contention as an error or sweep without the lease', async () => {
-		const deps = makeTestDeps(await createInitializedBucket());
 		await deps.bucket.put(
 			paths.maintenanceLock,
 			JSON.stringify({
@@ -99,7 +100,6 @@ describe('maintenance tracing', () => {
 	});
 
 	it('records a storage read failure during lease release', async () => {
-		const deps = makeTestDeps(await createInitializedBucket());
 		const get = deps.bucket.get.bind(deps.bucket);
 		vi.spyOn(deps.bucket, 'get').mockImplementation((key) => {
 			if (key === paths.maintenanceLock) return Promise.reject(new Error('lease read failed'));
@@ -125,7 +125,6 @@ describe('maintenance tracing', () => {
 	});
 
 	it.each(['lock', 'app_pool'] as const)('records failed %s steps as errors', async (step) => {
-		const deps = makeTestDeps(await createInitializedBucket());
 		if (step === 'lock') {
 			vi.spyOn(MaintenanceLock.prototype, 'acquire').mockRejectedValue(new Error('bucket down'));
 		} else {

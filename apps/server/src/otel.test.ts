@@ -170,6 +170,20 @@ describe('startOtel', () => {
 		logsApi.disable();
 	});
 
+	async function startTraceProbe() {
+		const register = vi
+			.spyOn(NodeTracerProvider.prototype, 'register')
+			.mockImplementation(() => {});
+		const handle = startOtel();
+		expect(register).toHaveBeenCalledOnce();
+		const provider = register.mock.instances[0] as NodeTracerProvider;
+		// An ended span would flush to the nonexistent OTLP endpoint during shutdown.
+		const resource = (provider.getTracer('test').startSpan('probe') as unknown as ReadableSpan)
+			.resource;
+		await resource.waitForAsyncAttributes?.();
+		return { handle, attributes: resource.attributes };
+	}
+
 	it('returns null and registers nothing when disabled', () => {
 		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', '');
 		vi.stubEnv('OTEL_EXPORTER_OTLP_TRACES_ENDPOINT', '');
@@ -233,18 +247,12 @@ describe('startOtel', () => {
 			vi.stubEnv('OTEL_LOGS_EXPORTER', 'none');
 			vi.stubEnv('OTEL_METRICS_EXPORTER', 'none');
 			const logged = vi.spyOn(console, 'log').mockImplementation(() => {});
-			const register = vi
-				.spyOn(NodeTracerProvider.prototype, 'register')
-				.mockImplementation(() => {});
-			const handle = startOtel();
-			const provider = register.mock.instances[0] as NodeTracerProvider;
-			const span = provider.getTracer('test').startSpan('probe') as unknown as ReadableSpan;
-			await span.resource.waitForAsyncAttributes?.();
+			const { handle, attributes } = await startTraceProbe();
 			const started = JSON.parse(logged.mock.calls[0][0]);
 			expect(started).toMatchObject({ event: 'otel_started', 'service.version': 'dev' });
-			expect(span.resource.attributes['service.version']).toBe('dev');
+			expect(attributes['service.version']).toBe('dev');
 			expect(started).not.toHaveProperty(['vcs.ref.head.revision']);
-			expect(span.resource.attributes).not.toHaveProperty(['vcs.ref.head.revision']);
+			expect(attributes).not.toHaveProperty(['vcs.ref.head.revision']);
 			await handle?.shutdown();
 		},
 	);
@@ -276,27 +284,16 @@ describe('startOtel', () => {
 		vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318');
 		vi.stubEnv('OTEL_SERVICE_NAME', 'marimohub-test');
 		vi.stubEnv('OTEL_METRICS_EXPORTER', 'none');
-		// Stubbed so the test never mutates the process-wide tracer provider.
-		const register = vi
-			.spyOn(NodeTracerProvider.prototype, 'register')
-			.mockImplementation(() => {});
-		const handle = startOtel();
+		const { handle, attributes } = await startTraceProbe();
 		expect(handle).not.toBeNull();
 		expect(handle?.tracing).toBe(true);
 		expect(handle?.metrics).toBe(false);
-		expect(register).toHaveBeenCalledOnce();
-		const provider = register.mock.instances[0] as NodeTracerProvider;
-		// Never ended — an ended span would enter the batch exporter and make
-		// shutdown() block on flushing to the (nonexistent) endpoint.
-		const span = provider.getTracer('test').startSpan('probe');
-		const resource = (span as unknown as ReadableSpan).resource;
-		await resource.waitForAsyncAttributes?.();
-		expect(resource.attributes['service.name']).toBe('marimohub-test');
-		expect(resource.attributes['service.version']).toBe('1.2.3');
-		expect(resource.attributes['vcs.ref.head.revision']).toBe('abcdef123456');
-		expect(resource.attributes['process.pid']).toBe(process.pid);
-		expect(resource.attributes['host.name']).toBeDefined();
-		expect(resource.attributes['service.instance.id']).toBeDefined();
+		expect(attributes['service.name']).toBe('marimohub-test');
+		expect(attributes['service.version']).toBe('1.2.3');
+		expect(attributes['vcs.ref.head.revision']).toBe('abcdef123456');
+		expect(attributes['process.pid']).toBe(process.pid);
+		expect(attributes['host.name']).toBeDefined();
+		expect(attributes['service.instance.id']).toBeDefined();
 		await handle?.shutdown();
 	});
 
@@ -305,15 +302,8 @@ describe('startOtel', () => {
 		vi.stubEnv('OTEL_SERVICE_NAME', '');
 		vi.stubEnv('OTEL_RESOURCE_ATTRIBUTES', '');
 		vi.stubEnv('OTEL_METRICS_EXPORTER', 'none');
-		const register = vi
-			.spyOn(NodeTracerProvider.prototype, 'register')
-			.mockImplementation(() => {});
-		const handle = startOtel();
-		const provider = register.mock.instances[0] as NodeTracerProvider;
-		const span = provider.getTracer('test').startSpan('probe');
-		const resource = (span as unknown as ReadableSpan).resource;
-		await resource.waitForAsyncAttributes?.();
-		expect(resource.attributes['service.name']).toBe('marimohub');
+		const { handle, attributes } = await startTraceProbe();
+		expect(attributes['service.name']).toBe('marimohub');
 		await handle?.shutdown();
 	});
 
@@ -324,17 +314,10 @@ describe('startOtel', () => {
 			'service.instance.id=pod-7,service.version=override,vcs.ref.head.revision=override-sha',
 		);
 		vi.stubEnv('OTEL_METRICS_EXPORTER', 'none');
-		const register = vi
-			.spyOn(NodeTracerProvider.prototype, 'register')
-			.mockImplementation(() => {});
-		const handle = startOtel();
-		const provider = register.mock.instances[0] as NodeTracerProvider;
-		const span = provider.getTracer('test').startSpan('probe');
-		const resource = (span as unknown as ReadableSpan).resource;
-		await resource.waitForAsyncAttributes?.();
-		expect(resource.attributes['service.instance.id']).toBe('pod-7');
-		expect(resource.attributes['service.version']).toBe('override');
-		expect(resource.attributes['vcs.ref.head.revision']).toBe('override-sha');
+		const { handle, attributes } = await startTraceProbe();
+		expect(attributes['service.instance.id']).toBe('pod-7');
+		expect(attributes['service.version']).toBe('override');
+		expect(attributes['vcs.ref.head.revision']).toBe('override-sha');
 		await handle?.shutdown();
 	});
 

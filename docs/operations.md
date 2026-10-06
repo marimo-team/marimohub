@@ -172,12 +172,17 @@ such as `sandbox.reachable`, `sandbox.files`, `sandbox.setup`, and
 `sandbox.waitport`. The CoreWeave compute adapter emits a CLIENT span for each
 gateway request. These spans contain only endpoint, method, timing, and sandbox
 ID attributes. They never contain request payloads or credentials.
+
+Maintenance adds `MaintenanceLock.acquire`, `MaintenanceLock.release`, and
+`Maintenance.sweepAppPools` spans. Lock spans include the bucket key as
+`marimohub.lock.key`. Lock contention does not mark the acquisition span as an error.
+
 `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER` /
 `OTEL_TRACES_SAMPLER_ARG`, `OTEL_EXPORTER_OTLP_HEADERS`, and
 `OTEL_SDK_DISABLED` behave per the [OTEL spec](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/).
 Only the OTLP exporter (the spec default) is implemented; any other
-`OTEL_TRACES_EXPORTER` value disables tracing. Unset, tracing is fully
-disabled with no overhead. These are standard `OTEL_*`
+`OTEL_TRACES_EXPORTER` value disables tracing. Without an OTLP endpoint, the
+server does not export traces. These are standard `OTEL_*`
 variables, so they are intentionally absent from the
 [Configuration reference](/configuration).
 
@@ -185,12 +190,18 @@ The middleware traces every request, including static assets; use
 `OTEL_TRACES_SAMPLER=parentbased_traceidratio` with a ratio in
 `OTEL_TRACES_SAMPLER_ARG` to reduce span volume.
 
-Spans, metrics, and logs share one resource: `service.name` and
-`OTEL_RESOURCE_ATTRIBUTES` from env, plus detected host and process attributes
-and a random `service.instance.id` (override it per pod via
-`OTEL_RESOURCE_ATTRIBUTES`, e.g. from the Kubernetes Downward API).
-`service.name` defaults to `marimohub` when `OTEL_SERVICE_NAME` is unset,
-rather than the SDK's `unknown_service:node`.
+Spans, metrics, and logs share one resource. It includes host and process
+attributes, a generated `service.instance.id`, and these resource defaults:
+
+| Attribute               | Source              | Default                     |
+| ----------------------- | ------------------- | --------------------------- |
+| `service.name`          | `OTEL_SERVICE_NAME` | `marimohub`                 |
+| `service.version`       | `MARIMOHUB_VERSION` | `dev`                       |
+| `vcs.ref.head.revision` | `MARIMOHUB_GIT_SHA` | Omitted when unset or empty |
+
+`OTEL_RESOURCE_ATTRIBUTES` can override resource defaults, including the instance ID.
+Release images and standalone executables include the build version and Git SHA.
+The `server_started` event records these build values even when telemetry export is disabled.
 
 While tracing is enabled, every log line emitted inside a traced request also
 carries `trace_id` / `span_id`, so your log pipeline can pivot from a line
@@ -231,6 +242,22 @@ the mode:
 
 Any other `OTEL_METRICS_EXPORTER` value disables metrics;
 `OTEL_SDK_DISABLED=true` turns everything off.
+
+### Session cleanup signals
+
+| Metric                                        | Type    | Meaning                                                                                    |
+| --------------------------------------------- | ------- | ------------------------------------------------------------------------------------------ |
+| `sessions.unreclaimed_terminal`               | Gauge   | Terminal or terminating sessions whose sandboxes remain unreclaimed after reconciliation.  |
+| `sessions.unreclaimed_terminal.oldest_age_ms` | Gauge   | Time since the oldest unreclaimed session heartbeat, in milliseconds.                      |
+| `sessions.editor_claim.lost`                  | Counter | Editor claim races lost during startup, including requests that reuse the winning session. |
+
+Completed reconciliation updates both gauges, even when provider enumeration is unavailable.
+An empty result sets both to zero. Failed or timed-out reconciliation leaves the previous values unchanged.
+Late results from a timed-out run cannot replace newer values.
+
+The `maintenance_cycle` event includes these signals with `gauge.` and `counter.` prefixes.
+Each process counts editor claim losses separately. With OTEL metrics disabled,
+request-replica counters remain local and do not appear in the maintenance replica logs.
 
 ### Logs (OpenTelemetry)
 

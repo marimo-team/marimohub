@@ -45,6 +45,22 @@ function parseLoggedEvents(logSpy: { mock: { calls: unknown[][] } }): Record<str
 	);
 }
 
+type ReconcileResult = Awaited<ReturnType<ReconciliationService['reconcile']>>;
+
+function makeReconcileResult(overrides: Partial<ReconcileResult> = {}): ReconcileResult {
+	return {
+		skipped: false,
+		reclaimed: 0,
+		unreclaimedTerminal: 0,
+		oldestUnreclaimedAgeMs: null,
+		markedDead: 0,
+		orphansReaped: 0,
+		orphanSandboxIds: [],
+		markedDeadSessions: [],
+		...overrides,
+	};
+}
+
 describe('startMaintenance', () => {
 	let bucket: MemoryBucket;
 	let deps: ApiDeps;
@@ -86,19 +102,14 @@ describe('startMaintenance', () => {
 	it('publishes unreclaimed terminal gauges to the metrics port and resets them after recovery', async () => {
 		const gauge = vi.fn();
 		deps.metrics = fanoutMetrics(metrics, { gauge, increment: vi.fn() });
-		const result = {
+		const result = makeReconcileResult({
 			skipped: true,
-			reclaimed: 0,
 			unreclaimedTerminal: 2,
 			oldestUnreclaimedAgeMs: 60_000,
-			markedDead: 0,
-			orphansReaped: 0,
-			orphanSandboxIds: [],
-			markedDeadSessions: [],
-		};
+		});
 		vi.spyOn(ReconciliationService.prototype, 'reconcile')
 			.mockResolvedValueOnce(result)
-			.mockResolvedValue({ ...result, unreclaimedTerminal: 0, oldestUnreclaimedAgeMs: null });
+			.mockResolvedValue(makeReconcileResult({ skipped: true }));
 		stop = startMaintenance(deps, metrics);
 		await flushRun();
 		expect(gauge).toHaveBeenCalledWith('sessions.unreclaimed_terminal', 2, undefined);
@@ -148,7 +159,7 @@ describe('startMaintenance', () => {
 	});
 
 	it('ignores gauges from a timed-out reconciliation after a newer sweep succeeds', async () => {
-		const late = Promise.withResolvers<Awaited<ReturnType<ReconciliationService['reconcile']>>>();
+		const late = Promise.withResolvers<ReconcileResult>();
 		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockReturnValueOnce(late.promise);
 		const loops = new BackgroundLoops();
 		stop = startMaintenance(deps, metrics, loops);
@@ -163,16 +174,12 @@ describe('startMaintenance', () => {
 		const observed = metrics.collect();
 		const events = parseLoggedEvents(logSpy);
 		expect(events).toContainEqual(expect.objectContaining({ event: 'maintenance_stalled' }));
-		late.resolve({
-			skipped: false,
-			reclaimed: 0,
-			unreclaimedTerminal: 7,
-			oldestUnreclaimedAgeMs: 120_000,
-			markedDead: 0,
-			orphansReaped: 0,
-			orphanSandboxIds: [],
-			markedDeadSessions: [],
-		});
+		late.resolve(
+			makeReconcileResult({
+				unreclaimedTerminal: 7,
+				oldestUnreclaimedAgeMs: 120_000,
+			}),
+		);
 		await flushRun();
 		expect(metrics.collect()).toEqual(observed);
 		expect(parseLoggedEvents(logSpy)).toEqual(events);
@@ -413,16 +420,12 @@ describe('startMaintenance', () => {
 			project_id: session.project_id,
 			title: 'Shared app',
 		});
-		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue({
-			skipped: false,
-			reclaimed: 0,
-			markedDead: 1,
-			orphansReaped: 0,
-			orphanSandboxIds: [],
-			unreclaimedTerminal: 0,
-			oldestUnreclaimedAgeMs: null,
-			markedDeadSessions: [session],
-		});
+		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue(
+			makeReconcileResult({
+				markedDead: 1,
+				markedDeadSessions: [session],
+			}),
+		);
 		vi.spyOn(deps.services.projects, 'getProject').mockResolvedValue(project);
 		vi.spyOn(deps.services.notebooks, 'getNotebook').mockResolvedValue({ meta: notebook } as never);
 		const deliver = vi.fn(async () => 'delivered' as const);
@@ -453,16 +456,12 @@ describe('startMaintenance', () => {
 			project_id: session.project_id,
 			title: 'Shared app',
 		});
-		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue({
-			skipped: false,
-			reclaimed: 0,
-			markedDead: 1,
-			orphansReaped: 0,
-			orphanSandboxIds: [],
-			unreclaimedTerminal: 0,
-			oldestUnreclaimedAgeMs: null,
-			markedDeadSessions: [session],
-		});
+		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue(
+			makeReconcileResult({
+				markedDead: 1,
+				markedDeadSessions: [session],
+			}),
+		);
 		const getProject = vi
 			.spyOn(deps.services.projects, 'getProject')
 			.mockRejectedValueOnce(new Error('temporary read failure'))
@@ -485,16 +484,12 @@ describe('startMaintenance', () => {
 		const sessions = Array.from({ length: 9 }, () =>
 			makeSession({ mode: 'app', sandbox_id: createSandboxId() }),
 		);
-		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue({
-			skipped: false,
-			reclaimed: 0,
-			markedDead: sessions.length,
-			orphansReaped: 0,
-			orphanSandboxIds: [],
-			unreclaimedTerminal: 0,
-			oldestUnreclaimedAgeMs: null,
-			markedDeadSessions: sessions,
-		});
+		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue(
+			makeReconcileResult({
+				markedDead: sessions.length,
+				markedDeadSessions: sessions,
+			}),
+		);
 		const releases: (() => void)[] = [];
 		const getProject = vi.spyOn(deps.services.projects, 'getProject').mockImplementation(
 			(projectId) =>
@@ -525,16 +520,12 @@ describe('startMaintenance', () => {
 			status: 'starting',
 			sandbox_id: createSandboxId(),
 		});
-		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue({
-			skipped: false,
-			reclaimed: 0,
-			markedDead: 2,
-			orphansReaped: 0,
-			orphanSandboxIds: [],
-			unreclaimedTerminal: 0,
-			oldestUnreclaimedAgeMs: null,
-			markedDeadSessions: [editor, startingApp],
-		});
+		vi.spyOn(ReconciliationService.prototype, 'reconcile').mockResolvedValue(
+			makeReconcileResult({
+				markedDead: 2,
+				markedDeadSessions: [editor, startingApp],
+			}),
+		);
 		const deliver = vi.fn(async () => 'delivered' as const);
 		deps.projectAlerts = {
 			store: {} as never,
