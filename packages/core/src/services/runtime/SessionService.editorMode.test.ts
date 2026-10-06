@@ -141,6 +141,39 @@ describe('SessionService editor claims', () => {
 		).toBe(true);
 	});
 
+	it.each([undefined, -1, 0, 1])(
+		'bounds a terminal claim only at a guaranteed sandbox deadline (%s)',
+		async (offset) => {
+			vi.useFakeTimers();
+			const owner = await sessions.createSession({
+				project_id: projectId,
+				notebook_id: notebookId,
+				user_id: USER_A,
+				sandbox_id: createSandboxId(),
+			});
+			await sessions.setRunning(
+				projectId,
+				owner.session_id,
+				'https://kernel.example',
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				offset === undefined ? undefined : new Date(Date.now() + offset).toISOString(),
+			);
+			await sessions.claimEditor(projectId, notebookId, owner.session_id, 'shared');
+			await sessions.terminate(projectId, owner.session_id);
+			const replacement = await running(USER_B);
+			const result = await sessions.claimEditor(
+				projectId,
+				notebookId,
+				replacement.session_id,
+				'shared',
+			);
+			expect(result.claimed).toBe(offset !== undefined && offset <= 0);
+		},
+	);
+
 	it('preserves unknown editor claim and transfer fields during CAS mutations', async () => {
 		const owner = await running(USER_A);
 		const key = paths.editorClaim(projectId, notebookId);

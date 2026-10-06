@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SandboxId } from '@marimo-hub/core/ids';
+import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing/result-assertions';
 import {
 	computeContract,
 	CONTRACT_HIDDEN_FILE,
@@ -684,6 +685,94 @@ describe('FargateCompute', () => {
 		const arn = client.runInputs.length === 1 ? [...client.tasks.keys()][0] : undefined;
 		if (arn) client.tasks.delete(arn);
 		await expect(instance.destroy()).resolves.toBeUndefined();
+	});
+});
+
+describe('Fargate strict reconnect', () => {
+	it('attaches to the existing task even when reuse is false', async () => {
+		const client = new FakeEcs();
+		await makeCompute(client).create(ID).ready!();
+		const resolve = vi.fn();
+		const sandbox = makeCompute(client, { resolver: { resolve } }).connectExisting(ID, {
+			reuse: false,
+			image: 'unused-image',
+		});
+		expectExecResult(await sandbox.exec('true'), { success: true });
+		expect(client.runInputs).toHaveLength(1);
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
+	it('fails missing-sandbox reads and commands without provisioning, including retries', async () => {
+		const client = new FakeEcs();
+		const sandbox = makeCompute(client).connectExisting(ID);
+		await expect(sandbox.ready!()).rejects.toThrow(/missing or stopped/);
+		expectExecResult(await sandbox.exec('true'), {
+			success: false,
+			error: { code: 'BACKEND_ERROR' },
+		});
+		expectFileResult(await sandbox.readFile('/workspace/notebook.py'), {
+			success: false,
+			error: { code: 'BACKEND_ERROR' },
+		});
+		expect(client.runInputs).toEqual([]);
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it.each(['missing', 'stopped'] as const)(
+		'revalidates a cached task that is %s even if the old agent address responds',
+		async (state) => {
+			const client = new FakeEcs();
+			const compute = makeCompute(client);
+			await compute.create(ID).ready!();
+			if (state === 'missing') client.tasks.clear();
+			else client.stopBeforeReady = true;
+			vi.mocked(fetch).mockClear();
+			await expect(compute.connectExisting(ID).ready!()).rejects.toThrow(/stopped/);
+			expect(client.runInputs).toHaveLength(1);
+			expect(fetch).not.toHaveBeenCalled();
+		},
+	);
+
+	it('propagates lookup failures without starting a replacement', async () => {
+		const client = new FakeEcs();
+		await makeCompute(client).create(ID).ready!();
+		client.describeThrows = 1;
+		await expect(makeCompute(client).connectExisting(ID).ready!()).rejects.toThrow(
+			/eventual consistency/,
+		);
+		expect(client.runInputs).toHaveLength(1);
+	});
+
+	it('rejects ambiguous matches without choosing or starting a task', async () => {
+		const client = new FakeEcs();
+		await makeCompute(client).create(ID, { reuse: false }).ready!();
+		await makeCompute(client).create(ID, { reuse: false }).ready!();
+		await expect(makeCompute(client).connectExisting(ID).ready!()).rejects.toThrow(
+			/Multiple live ECS tasks/,
+		);
+		expect(client.runInputs).toHaveLength(2);
+	});
+
+	it('does not provision when an attached task becomes unreachable', async () => {
+		const client = new FakeEcs();
+		await makeCompute(client).create(ID).ready!();
+		const sandbox = makeCompute(client).connectExisting(ID);
+		await sandbox.ready!();
+		vi.mocked(fetch).mockRejectedValue(new Error('task stopped'));
+		expectExecResult(await sandbox.exec('true'), {
+			success: false,
+			error: { code: 'BACKEND_ERROR' },
+		});
+		expect(client.runInputs).toHaveLength(1);
+	});
+
+	it('keeps destruction idempotent without provisioning', async () => {
+		const client = new FakeEcs();
+		const sandbox = makeCompute(client).connectExisting(ID);
+		await sandbox.destroy();
+		await sandbox.destroy();
+		expect(client.runInputs).toEqual([]);
+		expect(client.stopped).toEqual([]);
 	});
 });
 

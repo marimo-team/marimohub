@@ -177,6 +177,7 @@ interface FargateSandboxOptions {
 	resources?: ComputeResources;
 	reuse: boolean;
 	imageKey?: string;
+	connectExisting?: boolean;
 }
 
 type FargateTaskCache = Map<string, FargateTaskHandle>;
@@ -286,7 +287,7 @@ class FargateSandboxInstance implements SandboxInstance {
 		let reconnecting = false;
 		let containerName = this.config.containerName ?? DEFAULT_CONTAINER_NAME;
 		let imageKey = this.options.imageKey ?? this.config.imageKey ?? DEFAULT_IMAGE_KEY;
-		if (this.options.reuse) {
+		if (this.options.reuse && !this.options.connectExisting) {
 			const cached = this.cache.get(String(this.id));
 			if (cached) {
 				try {
@@ -315,6 +316,9 @@ class FargateSandboxInstance implements SandboxInstance {
 			if (task) imageKey = tagMap(task.tags).get(IMAGE_KEY_TAG) ?? imageKey;
 		}
 		if (!task) {
+			if (this.options.connectExisting) {
+				throw new Error(`Fargate sandbox ${this.id} is missing or stopped`);
+			}
 			const resolved = await this.resolver.resolve(this.options.imageKey ?? this.config.imageKey);
 			containerName = resolved.containerName;
 			imageKey = resolved.imageKey;
@@ -843,6 +847,18 @@ export class FargateCompute implements SandboxProvider {
 	}
 
 	create(id: SandboxId, options?: FargateCreateOptions): SandboxInstance {
+		return this.instance(id, options, false);
+	}
+
+	connectExisting(id: SandboxId, options?: FargateCreateOptions): SandboxInstance {
+		return this.instance(id, options, true);
+	}
+
+	private instance(
+		id: SandboxId,
+		options: FargateCreateOptions | undefined,
+		connectExisting: boolean,
+	): SandboxInstance {
 		return new FargateSandboxInstance(
 			id,
 			this.config,
@@ -850,9 +866,10 @@ export class FargateCompute implements SandboxProvider {
 			this.resolver,
 			(taskDefinition, containerName) => this.checkTaskDefinition(taskDefinition, containerName),
 			{
-				reuse: options?.reuse ?? true,
+				reuse: connectExisting || (options?.reuse ?? true),
 				resources: options?.resources,
 				imageKey: options?.image,
+				connectExisting,
 			},
 			this.cache,
 		);

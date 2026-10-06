@@ -67,6 +67,38 @@ export function containerCliContract(
 	spawnRunner: (bin?: string) => ContainerRunner,
 ): void {
 	describe(`Container CLI contract: ${name}`, () => {
+		it.each(['missing', 'stopped', 'unavailable'])(
+			'strict attachment never creates or replaces a %s container',
+			async (state) => {
+				const { runner, calls } = createRecordingContainerRunner((args) => {
+					if (args[0] === 'inspect')
+						return {
+							stdout: state === 'stopped' ? 'false' : '',
+							stderr: state === 'unavailable' ? 'daemon unavailable' : 'not found',
+							exitCode: state === 'stopped' ? 0 : 1,
+						};
+				});
+				const sandbox = makeProvider({}, runner).connectExisting!(SANDBOX_ID);
+				await expect(sandbox.exec('true')).rejects.toThrow('not running');
+				expect(calls.map((call) => call.args[0])).toEqual(['inspect']);
+				await sandbox.destroy();
+				await sandbox.destroy();
+				expect(calls.map((call) => call.args[0])).toEqual(['inspect', 'rm', 'rm']);
+			},
+		);
+
+		it('strict attachment reconnects and refuses to restart a container that later stops', async () => {
+			let running = true;
+			const { runner, calls } = createRecordingContainerRunner((args) => {
+				if (args[0] === 'inspect') return { stdout: String(running), stderr: '', exitCode: 0 };
+			});
+			const sandbox = makeProvider({}, runner).connectExisting!(SANDBOX_ID);
+			expect((await sandbox.exec('true')).success).toBe(true);
+			running = false;
+			await expect(sandbox.exec('true')).rejects.toThrow('not running');
+			expect(calls.some((call) => call.args[0] === 'run' || call.args[0] === 'rm')).toBe(false);
+		});
+
 		it.each(['', 'not-a-port', '127.0.0.1:0', '127.0.0.1:65536', '127.0.0.1:1.5'])(
 			'rejects malformed published ports and retries after output %j',
 			async (stdout) => {
@@ -554,7 +586,7 @@ export function containerCliContract(
 					removals++;
 					return {
 						stdout: '',
-						stderr: removals > 1 ? 'not found' : '',
+						stderr: removals > 1 ? 'no such container' : '',
 						exitCode: removals > 1 ? 1 : 0,
 					};
 				}
@@ -568,6 +600,18 @@ export function containerCliContract(
 				['rm', '-f', '-v', CONTAINER_NAME],
 				['rm', '-f', '-v', CONTAINER_NAME],
 			]);
+		});
+
+		it('does not report successful deletion when the engine is unavailable', async () => {
+			const { runner, calls } = createRecordingContainerRunner(() => ({
+				stdout: '',
+				stderr: 'daemon unavailable',
+				exitCode: 1,
+			}));
+			await expect(makeProvider({}, runner).create(SANDBOX_ID).destroy()).rejects.toThrow(
+				'daemon unavailable',
+			);
+			expect(calls.map((call) => call.args[0])).toEqual(['rm']);
 		});
 
 		it('uses the engine name in process ids and failures', async () => {

@@ -324,6 +324,8 @@ describe('startMaintenance', () => {
 			markedDead: 1,
 			orphansReaped: 0,
 			orphanSandboxIds: [],
+			unreclaimedTerminal: 0,
+			oldestUnreclaimedAgeMs: null,
 			markedDeadSessions: [session],
 		});
 		vi.spyOn(deps.services.projects, 'getProject').mockResolvedValue(project);
@@ -362,6 +364,8 @@ describe('startMaintenance', () => {
 			markedDead: 1,
 			orphansReaped: 0,
 			orphanSandboxIds: [],
+			unreclaimedTerminal: 0,
+			oldestUnreclaimedAgeMs: null,
 			markedDeadSessions: [session],
 		});
 		const getProject = vi
@@ -392,6 +396,8 @@ describe('startMaintenance', () => {
 			markedDead: sessions.length,
 			orphansReaped: 0,
 			orphanSandboxIds: [],
+			unreclaimedTerminal: 0,
+			oldestUnreclaimedAgeMs: null,
 			markedDeadSessions: sessions,
 		});
 		const releases: (() => void)[] = [];
@@ -430,6 +436,8 @@ describe('startMaintenance', () => {
 			markedDead: 2,
 			orphansReaped: 0,
 			orphanSandboxIds: [],
+			unreclaimedTerminal: 0,
+			oldestUnreclaimedAgeMs: null,
 			markedDeadSessions: [editor, startingApp],
 		});
 		const deliver = vi.fn(async () => 'delivered' as const);

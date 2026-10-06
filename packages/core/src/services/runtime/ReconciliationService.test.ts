@@ -282,11 +282,88 @@ describe('ReconciliationService', () => {
 		expect(result).toEqual({
 			skipped: true,
 			reclaimed: 0,
+			unreclaimedTerminal: 0,
+			oldestUnreclaimedAgeMs: null,
 			markedDead: 0,
 			orphansReaped: 0,
 			orphanSandboxIds: [],
 			markedDeadSessions: [],
 		});
+	});
+
+	it.each([false, true])(
+		'reclaims an expired claim with listActive=%s and no listed sandbox',
+		async (enumerates) => {
+			const session = await putSession({
+				status: 'expired',
+				sandbox_id: terminalId,
+				started_at: iso(-60 * 60_000),
+				last_heartbeat: iso(-60 * 60_000),
+			});
+			await sessions.claimEditor(projectId, notebookId, session.session_id, 'shared');
+			const provider: SandboxProvider = {
+				create: compute.create.bind(compute),
+				proxy: async () => null,
+				...(enumerates ? { listActive: async () => [] } : {}),
+			};
+			const service = new ReconciliationService(sessions, notebooks, provider, bucket, 'source');
+			const result = await service.reconcile();
+			expect(result).toMatchObject({
+				reclaimed: 1,
+				unreclaimedTerminal: 0,
+				oldestUnreclaimedAgeMs: null,
+			});
+			expect(
+				(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
+			).toBeDefined();
+			expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBeNull();
+			expect((await service.reconcile()).reclaimed).toBe(0);
+		},
+	);
+
+	it('retries failed terminal destruction and reports the retained claim', async () => {
+		const session = await putSession({
+			status: 'expired',
+			sandbox_id: terminalId,
+			started_at: iso(-60 * 60_000),
+			last_heartbeat: iso(-60 * 60_000),
+		});
+		await sessions.claimEditor(projectId, notebookId, session.session_id, 'shared');
+		const { instance } = makeFakeSandbox();
+		const destroy = vi.spyOn(instance, 'destroy').mockRejectedValueOnce(new Error('provider down'));
+		const service = new ReconciliationService(
+			sessions,
+			notebooks,
+			{ create: () => instance, proxy: async () => null },
+			bucket,
+			'source',
+		);
+		expect(await service.reconcile()).toMatchObject({
+			reclaimed: 0,
+			unreclaimedTerminal: 1,
+			oldestUnreclaimedAgeMs: expect.any(Number),
+		});
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
+			session.session_id,
+		);
+		expect(
+			(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
+		).toBeUndefined();
+		expect((await service.reconcile()).reclaimed).toBe(1);
+		expect(destroy).toHaveBeenCalledTimes(2);
+	});
+
+	it('reclaims before a failed provider enumeration', async () => {
+		const session = await putSession({
+			status: 'expired',
+			sandbox_id: terminalId,
+			started_at: iso(-60 * 60_000),
+		});
+		vi.spyOn(compute, 'listActive').mockRejectedValue(new Error('list failed'));
+		await expect(reconciler.reconcile()).rejects.toThrow('list failed');
+		expect(
+			(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
+		).toBeDefined();
 	});
 
 	it('shares one short thumbnail deadline across a reconciliation burst', async () => {
@@ -321,9 +398,13 @@ describe('ReconciliationService', () => {
 		expect(stored.sandbox_reclaimed_at).toBeDefined();
 	});
 
-	it('Rule 1: commits the session (with the right actor) before destroying', async () => {
-		const session = await createSession(terminalId);
-		await sessions.terminate(projectId, session.session_id);
+	it('Rule 1: commits the expired session with the right actor before destroying', async () => {
+		await putSession({
+			status: 'expired',
+			sandbox_id: terminalId,
+			sandbox_url: 'https://kernel.example',
+			started_at: iso(-60 * 60_000),
+		});
 		compute.active = [{ id: terminalId }];
 
 		await reconciler.reconcile();
@@ -690,7 +771,8 @@ describe('ReconciliationService', () => {
 	it('Rule 1: reclaims a lingering sandbox behind a terminating record', async () => {
 		const session = await createSession(goneId);
 		await sessions.setRunning(projectId, session.session_id, 'https://kernel.example');
-		await sessions.beginTerminating(projectId, session.session_id); // -> terminating
+		await sessions.beginTerminating(projectId, session.session_id);
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 16 * 60_000);
 		// Teardown stalled/crashed: the sandbox is still live and billing while the
 		// record sits in `terminating`. The provider-truth net must destroy it.
 		compute.active = [{ id: goneId }];
@@ -699,6 +781,7 @@ describe('ReconciliationService', () => {
 
 		expect(result.reclaimed).toBe(1);
 		expect(compute.destroyed).toContain(goneId);
+		expect((await sessions.getSession(projectId, session.session_id)).status).toBe('terminated');
 	});
 
 	it('Rule 2 does not misfire on a terminating record whose sandbox vanished', async () => {
@@ -833,8 +916,8 @@ describe('ReconciliationService', () => {
 			const reconciler = new ReconciliationService(sessions, notebooks, compute, bucket, 'source');
 
 			await expect(reconciler.reconcile()).resolves.toMatchObject({ orphansReaped: 1 });
-			expect(destroyed).toEqual(
-				failure === 'surface stop' ? [badId, goodId, orphanId] : [goodId, orphanId],
+			expect(destroyed.toSorted()).toEqual(
+				(failure === 'surface stop' ? [badId, goodId, orphanId] : [goodId, orphanId]).toSorted(),
 			);
 			const failedSession = await sessions.getSession(projectId, failing.session_id);
 			if (failure === 'surface stop') {

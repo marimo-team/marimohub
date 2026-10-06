@@ -301,25 +301,39 @@ false`): `commitSession` dedupes unchanged content so idle notebooks cost no
   `MARIMOHUB_PERSIST_WORKSPACE=workspace` mode). Any residual hard kill (the
   backstop, node loss, OOM) loses at most one interval of notebook edits.
 
-The sweep also **reclaims terminal records that still hold a `sandbox_id`** —
-the leak `expireStale` creates on CoreWeave (record flipped, sandbox never
-destroyed, reconcile can't see it). Rules: save first for `expired` records
-(skip the save when a newer live session owns the same notebook — stale content
-must never clobber the new head, and when editors are still connected to the old
-kernel it is spared, not killed); `terminated`/`failed` get a bare
-confirm-destroy. The destroy is re-confirmed (idempotent) before stamping the
-one-shot `sandbox_reclaimed_at` marker, so a failed destroy is retried next
-sweep. `expired` records younger than 15 minutes from `started_at` are left
-alone (a slow provision flipped to `expired` mid-restore must not be torn down
-mid-copy), unless their marimo surface is `ready` and the connection probe
-reports zero connected editors: `ready` is only set after the restore finishes,
-so such a record is reclaimed on the next sweep and releases its editor claim.
-Reconciliation keeps the full 15-minute grace because it cannot probe the
-kernel. `starting` sessions are never touched.
+Terminal sessions keep their editor claim until sandbox destruction succeeds.
+The lifecycle sweep saves fully provisioned expired editors before destruction, unless authorization
+has expired or a newer persistent editor owns the notebook. Failed destruction
+retains the claim for a later retry. Successful destruction stamps
+`sandbox_reclaimed_at` and releases the claim.
+
+The five-minute maintenance cycle also reclaims terminal sessions, before provider
+enumeration. This fallback works without `listActive`, including on CoreWeave.
+It waits 15 minutes from session creation before reclaiming expired sessions.
+This protects slow workspace restores. The lifecycle sweep can reclaim sooner
+when the marimo surface is ready and no editors are connected. Fresh `terminating`
+sessions get 15 minutes for Stop or takeover to finish.
+
+Stop also reclaims an expired session. A failed reclaim returns a retryable error.
+Administrators can use **Runtime → Editors → Reclaim** to attempt a save or discard
+edits before destruction. The action records its actor, session, and outcome.
+
+For providers with a guaranteed lifetime cap, completed provisions store
+`sandbox_deadline_at`. A terminal holder cannot block a replacement past that
+boundary. Legacy records and providers without a cap still require confirmed
+destruction. The maintenance event includes `sessions_reclaimed`,
+`unreclaimed_terminal_sessions`, and `oldest_unreclaimed_session_age_ms`.
+The age is measured from the last heartbeat.
+
+Reclaim capture uses strict attachment so it cannot create a replacement sandbox.
+Failed and incomplete provisions are destroyed without capture. Providers without
+strict attachment support retain a save-eligible session until an administrator
+chooses discard. This includes the current Cloudflare Sandbox SDK; its read and
+exec methods can start a stopped container.
 
 Coordination mirrors §3: single replica + its own bucket-CAS lease
 (`_system/_session_lifecycle.lock` — a separate key from the maintenance lease
-so the two loops, which share a holder id, can never release each other's hold),
+so the two loops cannot release each other's hold),
 plus an in-process guard against a sweep outliving its interval. Races with an
 explicit stop are settled by the `beginTerminating` CAS claim; teardown itself
 is idempotent. Each non-empty sweep emits one `session_lifecycle_sweep` wide

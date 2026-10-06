@@ -273,6 +273,7 @@ class LocalSandboxInstance implements SandboxInstance {
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
 	private destroyPromise?: Promise<void>;
+	private initialized = false;
 	/** ISO timestamp the instance was constructed — surfaced via listActive(). */
 	readonly createdAt = new Date().toISOString();
 
@@ -343,7 +344,11 @@ class LocalSandboxInstance implements SandboxInstance {
 
 	private async ensureRoot(): Promise<void> {
 		this.assertActive();
-		await mkdir(this.root, { recursive: true });
+		if (this.initialized) await stat(this.root);
+		else {
+			await mkdir(this.root, { recursive: true });
+			this.initialized = true;
+		}
 		this.assertActive();
 	}
 
@@ -725,6 +730,13 @@ export class LocalCompute implements SandboxProvider {
 			instance = next;
 			this.instances.set(id, instance);
 		}
+		return instance;
+	}
+
+	connectExisting(id: SandboxId): SandboxInstance {
+		if (this.disposePromise) throw new Error('local compute has been disposed');
+		const instance = this.instances.get(id);
+		if (!instance?.hasLiveChildren()) throw new Error(`Existing sandbox ${id} is not running`);
 		return instance;
 	}
 

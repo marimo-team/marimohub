@@ -7,7 +7,12 @@ import type { NotebookId, ProjectId, SessionId, UserId } from '../../ids';
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import type { Bucket } from '../../ports/bucket';
-import { PreviewSessionOriginSchema, SourceSchema } from '../../schema';
+import {
+	EditorClaimSchema,
+	PreviewSessionOriginSchema,
+	readStored,
+	SourceSchema,
+} from '../../schema';
 import type { Session } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import { AppPoolStore } from './AppPoolStore';
@@ -16,7 +21,7 @@ import { previewKey, PreviewRecordSchema } from '../content/notebookPreviews';
 import { appOccupancyBySession, appPresenceExpiresAt, expireAppPresence } from './AppPoolRouter';
 import type { AppPool, AppPoolMember } from './AppPoolRouter';
 import type { SessionService } from './SessionService';
-import { PRESENT_STATUSES, sessionMode } from './sessionState';
+import { isTerminal, PRESENT_STATUSES, sessionMode } from './sessionState';
 
 const RuntimeAssignmentSchema = z.object({
 	user_id: z.string(),
@@ -70,7 +75,13 @@ export const RuntimeAppSchema = RuntimeLocationSchema.extend({
 	incomplete: z.boolean(),
 });
 
-export const RuntimeEditorSchema = RuntimeLocationSchema.extend(RuntimeSessionSchema.shape);
+export const RuntimeEditorSchema = RuntimeLocationSchema.extend(RuntimeSessionSchema.shape).extend({
+	expires_at: z.iso.datetime().nullable(),
+	claim_holder_id: z.string().nullable(),
+	claim_holder_status: z.enum(SESSION_STATUSES).nullable(),
+	claim_available: z.boolean(),
+	reclaimable: z.boolean(),
+});
 
 export const RuntimeInspectionSchema = z.object({
 	observed_at: z.iso.datetime(),
@@ -136,6 +147,10 @@ export class RuntimeInspectionService {
 		return this.cache.get('runtime');
 	}
 
+	invalidate(): void {
+		this.cache.delete('runtime');
+	}
+
 	private async load(): Promise<RuntimeInspection> {
 		const [sessionScan, poolScan, catalogResult] = await Promise.all([
 			this.sessions.inspectSessions(),
@@ -177,21 +192,49 @@ export class RuntimeInspectionService {
 		const allSessions = new Map(
 			sessionScan.sessions.map((session) => [session.session_id, session]),
 		);
-		const present = sessionScan.sessions.filter((session) =>
-			(PRESENT_STATUSES as readonly string[]).includes(session.status),
-		);
-		const editors: RuntimeInspection['editors'] = [];
-		for (const session of present) {
+		const editorSessions = sessionScan.sessions.filter((session) => {
+			const present = (PRESENT_STATUSES as readonly string[]).includes(session.status);
 			if (sessionMode(session) === 'app') {
-				groupFor(session.project_id, session.notebook_id).sessions.push(session);
-			} else {
-				editors.push({
+				if (present) groupFor(session.project_id, session.notebook_id).sessions.push(session);
+				return false;
+			}
+			return present || (!!session.sandbox_id && !session.sandbox_reclaimed_at);
+		});
+		const claims = new Map<string, Promise<{ holder: SessionId | null; available: boolean }>>();
+		const editors = await mapWithConcurrency(
+			editorSessions,
+			BUCKET_SCAN_CONCURRENCY,
+			async (session) => {
+				const key = paths.editorClaim(session.project_id, session.notebook_id);
+				let claim = claims.get(key);
+				if (!claim) {
+					claim = (async () => {
+						try {
+							const object = await this.bucket.get(key);
+							const record = object ? await readStored(EditorClaimSchema, object, key) : null;
+							return { holder: record?.session_id ?? null, available: true };
+						} catch (error) {
+							logOperationalError('runtime_editor_claim_unavailable', { object: key }, error);
+							return { holder: null, available: false };
+						}
+					})();
+					claims.set(key, claim);
+				}
+				const { holder, available } = await claim;
+				return {
 					...location(session.project_id, sessionResourceNotebookId(session)),
 					resource_path: sessionResourcePath(session),
 					...sessionSummary({ session }),
-				});
-			}
-		}
+					expires_at: session.expires_at ?? null,
+					claim_holder_id: holder,
+					claim_holder_status: holder ? (allSessions.get(holder)?.status ?? null) : null,
+					claim_available: available,
+					reclaimable:
+						!session.sandbox_reclaimed_at &&
+						(isTerminal(session.status) || session.status === 'terminating'),
+				};
+			},
+		);
 		const apps = await mapWithConcurrency(
 			[...groups.values()],
 			BUCKET_SCAN_CONCURRENCY,
@@ -329,7 +372,8 @@ export class RuntimeInspectionService {
 				sessionScan.incomplete ||
 				poolScan.incomplete ||
 				!catalogResult ||
-				apps.some((app) => app.incomplete),
+				apps.some((app) => app.incomplete) ||
+				editors.some((editor) => !editor.claim_available),
 		};
 	}
 }

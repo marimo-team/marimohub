@@ -354,6 +354,26 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/admin/runtime/projects/{pid}/sessions/{sid}/reclaim': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Reclaim an inactive session sandbox
+		 * @description Super-admin and session authentication required. Saving is best effort and only applies when the session still owns its edits. Active sessions must be stopped first.
+		 */
+		post: operations['admin.runtime.reclaim'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/admin/runtime': {
 		parameters: {
 			query?: never;
@@ -2609,6 +2629,20 @@ export interface components {
 				active_connections: number | null;
 				/** Format: date-time */
 				connections_checked_at: string | null;
+				/** Format: date-time */
+				expires_at: string | null;
+				claim_holder_id: string | null;
+				/** @enum {string|null} */
+				claim_holder_status:
+					| 'starting'
+					| 'running'
+					| 'terminating'
+					| 'terminated'
+					| 'failed'
+					| 'expired'
+					| null;
+				claim_available: boolean;
+				reclaimable: boolean;
 			}[];
 			incomplete: boolean;
 			limits: {
@@ -6736,6 +6770,118 @@ export interface operations {
 			};
 			/** @description Not found */
 			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'admin.runtime.reclaim': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				sid: string;
+			};
+			cookie?: never;
+		};
+		/** @description Whether to attempt saving before destruction */
+		requestBody?: {
+			content: {
+				'application/json': {
+					/** @default true */
+					save?: boolean;
+				};
+			};
+		};
+		responses: {
+			/** @description Sandbox reclaimed */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							/** @enum {boolean} */
+							reclaimed: true;
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
 				headers: {
 					[name: string]: unknown;
 				};

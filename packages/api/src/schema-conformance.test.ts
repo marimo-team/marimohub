@@ -160,6 +160,8 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 			'authorization_expires_at',
 			'last_snapshot_at',
 			'sandbox_reclaimed_at',
+			'sandbox_deadline_at',
+			'terminating_at',
 			'takeover_capture_completed_at',
 		];
 		// `can` is response-only: the caller's evaluated grants, computed per

@@ -211,6 +211,7 @@ class ContainerSandboxInstance implements SandboxInstance {
 		private readonly config: ResolvedConfig,
 		private readonly runner: ContainerRunner,
 		private readonly resources: ComputeResources,
+		private readonly existingOnly = false,
 	) {
 		this.name = `${NAME_PREFIX}${id}`;
 	}
@@ -219,6 +220,9 @@ class ContainerSandboxInstance implements SandboxInstance {
 	private async ensure(): Promise<void> {
 		const inspect = await this.runner.run(['inspect', '-f', '{{.State.Running}}', this.name]);
 		if (inspect.exitCode === 0 && inspect.stdout.trim() === 'true') return;
+		if (this.existingOnly) {
+			throw new Error(`Existing sandbox ${this.id} is not running or cannot be inspected`);
+		}
 
 		this.environment.invalidate();
 		this.hostPorts.clear();
@@ -556,7 +560,12 @@ class ContainerSandboxInstance implements SandboxInstance {
 	}
 
 	async destroy(): Promise<void> {
-		await this.runner.run(['rm', '-f', '-v', this.name]);
+		const result = await this.runner.run(['rm', '-f', '-v', this.name]);
+		if (result.exitCode !== 0 && !/\bno such container\b/i.test(result.stderr)) {
+			throw new Error(
+				`${this.config.engine} remove failed for sandbox ${this.id}: ${result.stderr || result.stdout}`,
+			);
+		}
 		this.hostPorts.clear();
 	}
 }
@@ -593,6 +602,16 @@ export class ContainerCompute implements SandboxProvider {
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
 		const config = options?.image ? { ...this.config, image: options.image } : this.config;
 		return new ContainerSandboxInstance(id, config, this.runner, options?.resources ?? {});
+	}
+
+	connectExisting(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
+		return new ContainerSandboxInstance(
+			id,
+			this.config,
+			this.runner,
+			options?.resources ?? {},
+			true,
+		);
 	}
 
 	async proxy(_request: Request): Promise<Response | null> {

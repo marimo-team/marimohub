@@ -433,6 +433,7 @@ export function fakeComputeFrom(
 			provider.lastCreateOptions = createOptions;
 			return instance;
 		},
+		connectExisting: () => instance,
 		proxy: async () => null,
 	};
 	return provider;
@@ -488,6 +489,10 @@ export class RecordingCompute implements SandboxProvider {
 
 	async proxy(): Promise<Response | null> {
 		return null;
+	}
+
+	connectExisting(id: SandboxId): SandboxInstance {
+		return this.create(id);
 	}
 
 	async listActive(): Promise<ActiveSandbox[]> {

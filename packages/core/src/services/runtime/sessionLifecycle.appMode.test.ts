@@ -289,6 +289,7 @@ describe('SessionLifecycleService (app sessions)', () => {
 			mode: 'edit',
 			sandbox_id: createSandboxId(),
 			status: 'expired',
+			sandbox_url: 'https://kernel.example',
 			started_at: iso(-60 * 60 * 1000),
 			last_heartbeat: iso(-60 * 60 * 1000),
 		});

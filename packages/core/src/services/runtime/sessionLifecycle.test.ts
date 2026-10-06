@@ -350,7 +350,11 @@ describe('SessionLifecycleService', () => {
 
 	describe('terminal-record reclaim', () => {
 		it('saves + destroys the lingering sandbox of an expired record, exactly once', async () => {
-			const s = await putSession({ status: 'expired', last_heartbeat: iso(-10 * 60 * 1000) });
+			const s = await putSession({
+				status: 'expired',
+				sandbox_url: 'https://kernel.example',
+				last_heartbeat: iso(-10 * 60 * 1000),
+			});
 			const svc = makeService();
 
 			const first = await svc.sweep(now);

@@ -163,6 +163,77 @@ function stubClearedWeakRefs(): () => void {
 }
 
 describe('E2bCompute', () => {
+	it('strictly reconnects to an owned sandbox without creating', async () => {
+		const fake = new FakeE2b();
+		const compute = new E2bCompute(baseConfig, fake);
+		await compute.create(SANDBOX_ID).writeFiles([{ path: '/existing', content: 'saved' }]);
+		const sandbox = compute.connectExisting(SANDBOX_ID, { reuse: false });
+		expect(await sandbox.readFile('/existing')).toMatchObject({ success: true, content: 'saved' });
+		expect(fake.connectCalls).toEqual(['e2b-1']);
+		expect(fake.createCalls).toHaveLength(1);
+		await sandbox.destroy();
+		await sandbox.destroy();
+		expect([...fake.sandboxes.values()][0].killed).toBe(true);
+	});
+
+	it.each(['missing', 'stopped', 'foreign'] as const)(
+		'never creates a strict connection to a %s sandbox',
+		async (state) => {
+			const fake = new FakeE2b();
+			const compute = new E2bCompute(baseConfig, fake);
+			if (state === 'stopped') {
+				await compute.create(SANDBOX_ID).exec('true');
+				[...fake.sandboxes.values()][0].killed = true;
+			} else if (state === 'foreign') {
+				await fake.create({ metadata: { 'mh-sandbox-id': SANDBOX_ID, 'mh-owner': 'other' } });
+			}
+			const count = fake.createCalls.length;
+			const sandbox = compute.connectExisting(SANDBOX_ID);
+			await expect(sandbox.exec('true')).rejects.toThrow('no longer available');
+			await expect(sandbox.destroy()).resolves.toBeUndefined();
+			expect(fake.createCalls).toHaveLength(count);
+			expect(fake.runCalls).toHaveLength(state === 'stopped' ? 1 : 0);
+		},
+	);
+
+	it('invalidates cached create handles when a strict connection destroys the sandbox', async () => {
+		const fake = new FakeE2b();
+		const compute = new E2bCompute(baseConfig, fake);
+		await compute.create(SANDBOX_ID).exec('true');
+		await compute.connectExisting(SANDBOX_ID).destroy();
+		await compute.create(SANDBOX_ID).exec('true');
+		expect(fake.createCalls).toHaveLength(2);
+		expect([...fake.sandboxes.values()].map((sandbox) => sandbox.killed)).toEqual([true, false]);
+	});
+
+	it('does not borrow an in-flight create promise for a strict connection', async () => {
+		const pending = Promise.withResolvers<void>();
+		const fake = new FakeE2b({ beforeCreate: () => pending.promise });
+		const compute = new E2bCompute(baseConfig, fake);
+		const creating = compute.create(SANDBOX_ID).exec('true');
+		try {
+			await expect(compute.connectExisting(SANDBOX_ID).exec('true')).rejects.toThrow(
+				'no longer available',
+			);
+			expect(fake.createCalls).toHaveLength(0);
+		} finally {
+			pending.resolve();
+			await creating;
+		}
+		expect(fake.createCalls).toHaveLength(1);
+	});
+
+	it('propagates strict reconnect failures without falling back to create', async () => {
+		const fake = new FakeE2b();
+		const compute = new E2bCompute(baseConfig, fake);
+		await compute.create(SANDBOX_ID).exec('true');
+		vi.spyOn(fake, 'connect').mockRejectedValueOnce(new Error('connection refused'));
+		await expect(compute.connectExisting(SANDBOX_ID).exec('true')).rejects.toThrow(
+			'connection refused',
+		);
+		expect(fake.createCalls).toHaveLength(1);
+	});
+
 	it('create stamps our SandboxId + owner tag in metadata', async () => {
 		const fake = new FakeE2b();
 		const sb = new E2bCompute(baseConfig, fake).create(SANDBOX_ID);
@@ -298,6 +369,69 @@ describe('E2bCompute', () => {
 		const sb = new E2bCompute(baseConfig, fake).create(SANDBOX_ID);
 		await expect(sb.destroy()).resolves.toBeUndefined();
 		expect([...fake.sandboxes.values()].some((s) => s.killed)).toBe(false);
+	});
+
+	it.each(['cached', 'reconnected'] as const)(
+		'propagates failed destruction of a %s sandbox and permits retry',
+		async (kind) => {
+			const fake = new FakeE2b();
+			const compute = new E2bCompute(baseConfig, fake);
+			const sandbox = new E2bCompute(baseConfig, fake).create(SANDBOX_ID);
+			await sandbox.exec('true');
+			const native = [...fake.sandboxes.values()][0];
+			const handle = await fake.connect(native.info.sandboxId);
+			const kill = vi.spyOn(handle, 'kill').mockRejectedValueOnce(new Error('kill unavailable'));
+			if (kind === 'cached') {
+				vi.spyOn(fake, 'connect').mockResolvedValue(handle);
+				const attached = compute.connectExisting(SANDBOX_ID);
+				await attached.exec('true');
+				await expect(attached.destroy()).rejects.toThrow('kill unavailable');
+				await attached.destroy();
+			} else {
+				vi.spyOn(fake, 'connect').mockResolvedValue(handle);
+				const attached = new E2bCompute(baseConfig, fake).connectExisting(SANDBOX_ID);
+				await expect(attached.destroy()).rejects.toThrow('kill unavailable');
+				await attached.destroy();
+			}
+			expect(kill).toHaveBeenCalledTimes(2);
+			expect(native.killed).toBe(true);
+		},
+	);
+
+	it('propagates a failed destruction lookup while the sandbox remains listed', async () => {
+		const fake = new FakeE2b();
+		const compute = new E2bCompute(baseConfig, fake);
+		await new E2bCompute(baseConfig, fake).create(SANDBOX_ID).exec('true');
+		vi.spyOn(fake, 'connect').mockRejectedValueOnce(new Error('connect unavailable'));
+		const sandbox = compute.connectExisting(SANDBOX_ID);
+		await expect(sandbox.destroy()).rejects.toThrow('connect unavailable');
+		expect([...fake.sandboxes.values()][0].killed).toBe(false);
+		await sandbox.destroy();
+		expect([...fake.sandboxes.values()][0].killed).toBe(true);
+	});
+
+	it('tolerates a raced disappearance only after confirming the sandbox is absent', async () => {
+		const fake = new FakeE2b();
+		const compute = new E2bCompute(baseConfig, fake);
+		await new E2bCompute(baseConfig, fake).create(SANDBOX_ID).exec('true');
+		vi.spyOn(fake, 'connect').mockImplementationOnce(async () => {
+			[...fake.sandboxes.values()][0].killed = true;
+			throw new Error('sandbox no longer exists');
+		});
+		await expect(compute.connectExisting(SANDBOX_ID).destroy()).resolves.toBeUndefined();
+		expect(fake.createCalls).toHaveLength(1);
+	});
+
+	it('propagates failed confirmation of a kill rather than assuming absence', async () => {
+		const fake = new FakeE2b();
+		const compute = new E2bCompute(baseConfig, fake);
+		await new E2bCompute(baseConfig, fake).create(SANDBOX_ID).exec('true');
+		const originalList = fake.list.bind(fake);
+		vi.spyOn(fake, 'list')
+			.mockImplementationOnce(originalList)
+			.mockRejectedValueOnce(new Error('list unavailable'));
+		vi.spyOn(fake, 'connect').mockRejectedValueOnce(new Error('connect unavailable'));
+		await expect(compute.connectExisting(SANDBOX_ID).destroy()).rejects.toThrow('list unavailable');
 	});
 
 	it('destroy kills the sandbox', async () => {

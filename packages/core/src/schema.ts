@@ -826,6 +826,9 @@ export const SessionSchema = z.looseObject({
 	 * from sandboxes that are already gone.
 	 */
 	sandbox_reclaimed_at: z.iso.datetime().optional(),
+	/** Provider-guaranteed upper bound, recorded after provisioning completes. */
+	sandbox_deadline_at: z.iso.datetime().optional(),
+	terminating_at: z.iso.datetime().optional(),
 	/**
 	 * Durable takeover checkpoint written after the strict source/workspace capture
 	 * and before sandbox destruction. A draining retry can safely skip a second

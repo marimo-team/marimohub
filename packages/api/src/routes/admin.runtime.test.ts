@@ -8,8 +8,15 @@ import {
 	paths,
 	AppPoolStore,
 	RuntimeInspectionSchema,
+	SessionRetirer,
 } from '@marimo-hub/core';
-import { ACTOR, makeLocalSource, makeSession } from '@marimo-hub/core/testing';
+import {
+	ACTOR,
+	makeLocalSource,
+	makeSession,
+	makeFakeSandbox,
+	fakeComputeFrom,
+} from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectOk, expectError } from '../testing';
 
 async function runtimeApi(superAdmin = true) {
@@ -159,5 +166,140 @@ describe('GET /admin/runtime', () => {
 		);
 		const data = await expectOk(await request('GET', '/admin/runtime'));
 		expect(data).toMatchObject({ apps: [], editors: [], incomplete: true });
+	});
+});
+
+describe('POST /admin/runtime/projects/{pid}/sessions/{sid}/reclaim', () => {
+	async function setup(
+		status: 'expired' | 'running' | 'starting' | 'terminating' = 'expired',
+		superAdmin = true,
+	) {
+		const bucket = await createInitializedBucket();
+		const session = makeSession({
+			status,
+			sandbox_id: createSandboxId(),
+			started_at: new Date(Date.now() - 3_600_000).toISOString(),
+			last_heartbeat: new Date(Date.now() - 3_600_000).toISOString(),
+			editor_sandbox_sharing: 'exclusive',
+		});
+		await bucket.put(
+			paths.session(session.project_id, session.session_id),
+			JSON.stringify(session),
+		);
+		const { instance: sandbox } = makeFakeSandbox();
+		vi.spyOn(sandbox, 'destroy');
+		vi.spyOn(sandbox, 'exec');
+		const api = createTestApi({
+			bucket,
+			userId: ACTOR,
+			deps: {
+				compute: fakeComputeFrom(sandbox),
+				policy: { superAdmins: superAdmin ? [ACTOR] : [] },
+			},
+		});
+		await api.deps.services.sessions.claimEditor(
+			session.project_id,
+			session.notebook_id,
+			session.session_id,
+			'exclusive',
+		);
+		const path = `/admin/runtime/projects/${session.project_id}/sessions/${session.session_id}/reclaim`;
+		return { ...api, bucket, session, sandbox, path };
+	}
+
+	it('discards one expired sandbox, releases its claim, refreshes inspection, and audits the action', async () => {
+		const { request, deps, session, sandbox, path } = await setup();
+		await expectOk(await request('GET', '/admin/runtime'));
+		const append = vi.spyOn(deps.services.events, 'append');
+		await expectOk(await request('POST', path, { save: false }));
+		expect(sandbox.destroy).toHaveBeenCalledOnce();
+		expect(sandbox.exec).not.toHaveBeenCalled();
+		expect(
+			await deps.services.sessions.getEditorClaim(session.project_id, session.notebook_id),
+		).toMatchObject({ session_id: null });
+		expect(
+			await deps.services.sessions.getSession(session.project_id, session.session_id),
+		).toHaveProperty('sandbox_reclaimed_at');
+		expect(append).toHaveBeenCalledWith(
+			expect.objectContaining({
+				event: 'session.reclaim',
+				actor: ACTOR,
+				session_id: session.session_id,
+				save_requested: false,
+				reclaimed: true,
+			}),
+		);
+		expect(await expectOk(await request('GET', '/admin/runtime'))).toMatchObject({ editors: [] });
+		await expectOk(await request('POST', path, { save: false }));
+		expect(sandbox.destroy).toHaveBeenCalledOnce();
+	});
+
+	it('defaults to saving through the shared reclaim policy', async () => {
+		const { request, path, session } = await setup();
+		const reclaim = vi.spyOn(SessionRetirer.prototype, 'reclaim').mockResolvedValueOnce(true);
+		try {
+			await expectOk(await request('POST', path, {}));
+			expect(reclaim).toHaveBeenCalledWith(
+				expect.objectContaining({ session_id: session.session_id }),
+				true,
+			);
+		} finally {
+			reclaim.mockRestore();
+		}
+	});
+
+	it('retains the claim and reports a retryable failure when destruction fails', async () => {
+		const { request, deps, session, sandbox, path } = await setup();
+		vi.mocked(sandbox.destroy).mockRejectedValueOnce(new Error('compute unavailable'));
+		const append = vi.spyOn(deps.services.events, 'append');
+		const response = await request('POST', path, { save: false });
+		expect(response.headers.get('retry-after')).toBe('2');
+		await expectError(response, 503, 'SERVICE_UNAVAILABLE');
+		expect(
+			await deps.services.sessions.getEditorClaim(session.project_id, session.notebook_id),
+		).toMatchObject({ session_id: session.session_id });
+		expect(append).toHaveBeenCalledWith(expect.objectContaining({ reclaimed: false }));
+		await expectOk(await request('POST', path, { save: false }));
+	});
+
+	it.each(['running', 'starting'] as const)(
+		'rejects a %s session without touching compute',
+		async (status) => {
+			const { request, sandbox, path } = await setup(status);
+			await expectError(await request('POST', path, { save: false }), 409, 'CONFLICT');
+			expect(sandbox.destroy).not.toHaveBeenCalled();
+		},
+	);
+
+	it('rejects a fresh teardown without racing its sandbox destruction', async () => {
+		const { request, bucket, session, sandbox, path } = await setup('terminating');
+		await bucket.put(
+			paths.session(session.project_id, session.session_id),
+			JSON.stringify({ ...session, terminating_at: new Date().toISOString() }),
+		);
+		await expectError(await request('POST', path, { save: false }), 503, 'SERVICE_UNAVAILABLE');
+		expect(sandbox.destroy).not.toHaveBeenCalled();
+	});
+
+	it('does not reclaim a session through another project', async () => {
+		const { request, session, sandbox } = await setup();
+		await expectError(
+			await request(
+				'POST',
+				`/admin/runtime/projects/${createProjectId()}/sessions/${session.session_id}/reclaim`,
+				{ save: false },
+			),
+			404,
+			'NOT_FOUND',
+		);
+		expect(sandbox.destroy).not.toHaveBeenCalled();
+	});
+
+	it('authorizes before reading the session or touching compute', async () => {
+		const { request, deps, sandbox, path } = await setup('expired', false);
+		const read = vi.spyOn(deps.services.sessions, 'getSession');
+		await expectError(await request('POST', path, { save: false }), 403, 'FORBIDDEN');
+		expect(read).not.toHaveBeenCalled();
+		expect(sandbox.destroy).not.toHaveBeenCalled();
 	});
 });

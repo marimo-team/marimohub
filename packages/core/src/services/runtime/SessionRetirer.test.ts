@@ -289,6 +289,107 @@ describe('SessionRetirer', () => {
 		});
 	});
 
+	it('rereads stale terminal input and refuses to reclaim a running session', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession();
+		expect(
+			await retirer(fakeComputeFrom(instance)).reclaim({ ...session, status: 'expired' }, true),
+		).toBe(false);
+		expect(calls.destroy).toBe(0);
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
+			session.session_id,
+		);
+	});
+
+	it('waits for a fresh Stop even if the stale reaper expires its record', async () => {
+		vi.useFakeTimers();
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession({
+			started_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+		});
+		await sessions.beginTerminating(projectId, session.session_id);
+		vi.setSystemTime(Date.now() + 6 * 60_000);
+		await sessions.expireStale();
+		expect(await retirer(fakeComputeFrom(instance)).reclaim(session)).toBe(false);
+		expect(calls.destroy).toBe(0);
+		vi.setSystemTime(Date.now() + 9 * 60_000);
+		expect(await retirer(fakeComputeFrom(instance)).reclaim(session)).toBe(true);
+	});
+
+	it('does not save an expired sandbox over a newer persistent editor', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession({
+			status: 'expired',
+			started_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+		});
+		await sessions.createSession({
+			project_id: projectId,
+			notebook_id: notebookId,
+			user_id: ACTOR,
+		});
+		expect(await retirer(fakeComputeFrom(instance)).reclaim(session, true)).toBe(true);
+		expect(calls.destroy).toBe(1);
+		expect(notebooks.commitSession).not.toHaveBeenCalled();
+	});
+
+	it.each(['failed', 'expired'] as const)(
+		'never captures an incomplete %s provision',
+		async (status) => {
+			const { instance, calls } = makeFakeSandbox();
+			const connectExisting = vi.fn(() => instance);
+			const session = await persistentSession({
+				status,
+				started_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+			});
+			expect(
+				await retirer({ ...fakeComputeFrom(instance), connectExisting }).reclaim(session, true),
+			).toBe(true);
+			expect(connectExisting).not.toHaveBeenCalled();
+			expect(notebooks.commitSession).not.toHaveBeenCalled();
+			expect(calls.destroy).toBe(1);
+		},
+	);
+
+	it('never allocates compute when capturing a missing sandbox', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession({
+			status: 'expired',
+			sandbox_url: 'https://kernel.example',
+			started_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+		});
+		const connectExisting = vi.fn(() => {
+			throw new NotFoundError('Sandbox missing');
+		});
+		const create = vi.fn(() => instance);
+		expect(
+			await retirer({ create, connectExisting, proxy: async () => null }).reclaim(session),
+		).toBe(true);
+		expect(connectExisting).toHaveBeenCalledOnce();
+		expect(calls.exec).toEqual([]);
+		expect(calls.destroy).toBe(1);
+		expect(notebooks.commitSession).not.toHaveBeenCalled();
+		expect(
+			(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
+		).toBeDefined();
+	});
+
+	it('requires strict attach for saving but permits explicit discard without it', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const session = await persistentSession({
+			status: 'expired',
+			sandbox_url: 'https://kernel.example',
+			started_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+		});
+		const service = retirer({ create: () => instance, proxy: async () => null });
+		expect(await service.reclaim(session)).toBe(false);
+		expect(calls.destroy).toBe(0);
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
+			session.session_id,
+		);
+		expect(await service.reclaim(session, false)).toBe(true);
+		expect(calls.destroy).toBe(1);
+	});
+
 	it('can destroy immediately without capturing after an authorization deadline', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const session = await persistentSession();

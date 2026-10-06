@@ -14,7 +14,7 @@ import { createSlidingWindowBudget } from '../../rateLimit';
 import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
-import { SessionRetirer } from './SessionRetirer';
+import { RECLAIM_PROVISION_GRACE_MS, SessionRetirer } from './SessionRetirer';
 import { isTerminal, sessionMode, sessionModePolicy, sessionPersistsEdits } from './sessionState';
 import { isPastAuthorizationDeadline } from './SessionService';
 import type { SessionService } from './SessionService';
@@ -26,17 +26,7 @@ const SESSION_SWEEP_CONCURRENCY = 8;
 /** Cadence for informational connection counts; reap decisions always probe immediately. */
 const CONNECTION_COUNT_REFRESH_MS = Millis.minutes(5);
 
-/**
- * How long after `started_at` an `expired` record's sandbox is left alone.
- * A slow provision (cold image, large workspace copy) can outlive the 5-minute
- * heartbeat TTL and be flipped to `expired` while still restoring files; tearing
- * it down mid-restore would mirror-delete not-yet-restored workspace keys from
- * the bucket. Shared with `ReconciliationService`, the other reclaimer, so both
- * hold off for the same window; sized like the reconciler's orphan grace. Only
- * the sweep exempts a fully provisioned record, because only it probes for
- * editors still connected to the expired kernel.
- */
-export const RECLAIM_PROVISION_GRACE_MS = Millis.minutes(15);
+export { RECLAIM_PROVISION_GRACE_MS } from './SessionRetirer';
 
 /**
  * Ask the marimo kernel how many websocket connections (editors) it has, via an
