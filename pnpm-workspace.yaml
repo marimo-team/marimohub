@@ -37,7 +37,7 @@ catalog:
   '@kubernetes/client-node': ^1.4.0
   '@marimo-team/codemirror-sql': ^0.3.0
   '@marimo-team/react-finder': ^0.1.0
-  '@modelcontextprotocol/sdk': ^1.30.0
+  '@modelcontextprotocol/sdk': ^1.31.0
   '@opentelemetry/api': ^1.9.0
   '@opentelemetry/api-logs': ^0.220.0
   '@opentelemetry/context-async-hooks': ^2.9.0
@@ -129,6 +129,9 @@ minimumReleaseAgeExclude:
   - '@coreweave/cwsandbox'
   # Security fixes take precedence over the release-age cooldown.
   - '@grpc/grpc-js@1.14.5'
+  - '@modelcontextprotocol/sdk@1.31.0'
+  - proxy-addr@2.0.8
+  - source-map-js@1.2.2
   - brace-expansion
   # Renovate security update: fast-uri@3.1.8
   - fast-uri@3.1.6 || 3.1.8
