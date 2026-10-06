@@ -50,7 +50,7 @@ mdurl==0.1.2
     # via markdown-it-py
 mmh3==5.2.1
     # via pyiceberg
-multidict==6.7.1
+multidict==6.9.1
     # via
     #   aiobotocore
     #   aiohttp
