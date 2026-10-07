@@ -134,7 +134,8 @@ environment variables instead. The bundle is placed under
 
 Static Python indexes share `definePythonIndex` in `kinds/pythonPackageIndexes.ts`.
 Each definition supplies its schema and a pure URL/credentials mapping.
-The helper validates that mapping for rendering and connection tests through `IntegrationProbe`.
+The helper validates that mapping locally before rendering or testing a connection.
+Connection tests make network requests only through `IntegrationProbe`.
 Static credentials require no credential adapter.
 
 Kinds that acquire credentials declare `packageRegistry` with a credential source and index URL.

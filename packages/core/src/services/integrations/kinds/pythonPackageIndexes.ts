@@ -2,10 +2,11 @@ import { z } from 'zod';
 import { ValidationError } from '../../../errors';
 import { hasControlCharacter } from '../../../internal/validation';
 import type { PackageRegistryCredentials } from '../../../ports/packageRegistry';
+import { joinUrlPath } from '../../../url';
 import { basicAuthHeader, defineIntegration, envSegment } from '../sdk';
 import type { IntegrationDefinition } from '../sdk';
 import { zSecret } from '../secretFields';
-import { serviceUrl, serviceUrlField } from './common';
+import { serviceUrlField } from './common';
 
 const indexUrlField = () =>
 	serviceUrlField()
@@ -150,7 +151,7 @@ export const artifactory = definePythonIndex({
 		repository: { group: 'Repository', order: 2 },
 	},
 	connection: (config) => ({
-		url: serviceUrl(config.url, `api/pypi/${encodeURIComponent(config.repository)}/simple/`),
+		url: joinUrlPath(config.url, `api/pypi/${encodeURIComponent(config.repository)}/simple/`),
 		credentials:
 			config.auth.method === 'token' ? { username: '', password: config.auth.token } : config.auth,
 	}),
@@ -216,7 +217,7 @@ export const gitlabPackages = definePythonIndex({
 		const path =
 			config.scope === 'group' ? `groups/${config.scope_id}/-` : `projects/${config.scope_id}`;
 		return {
-			url: serviceUrl(config.url, `api/v4/${path}/packages/pypi/simple/`),
+			url: joinUrlPath(config.url, `api/v4/${path}/packages/pypi/simple/`),
 			credentials: { username: config.auth.username, password: config.auth.token },
 		};
 	},

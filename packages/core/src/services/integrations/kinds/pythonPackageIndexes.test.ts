@@ -432,6 +432,45 @@ describe('Python package index configuration', () => {
 		expect(s.fetch.mock.calls[0][0]).toBe(url);
 	});
 
+	describe.each([
+		{
+			kind: 'jfrog_artifactory',
+			base: 'https://packages.example',
+			path: '/api/pypi/python/simple/',
+		},
+		{
+			kind: 'jfrog_artifactory',
+			base: 'https://packages.example/custom/artifactory',
+			path: '/api/pypi/python/simple/',
+		},
+		{
+			kind: 'gitlab_packages',
+			base: 'https://gitlab.example',
+			path: '/api/v4/projects/123/packages/pypi/simple/',
+		},
+		{
+			kind: 'gitlab_packages',
+			base: 'https://gitlab.example/custom/gitlab',
+			path: '/api/v4/projects/123/packages/pypi/simple/',
+		},
+	])('$kind base URL $base', ({ kind, base, path }) => {
+		it.each(['', '/', '///'])(
+			'normalizes the trailing suffix %j for rendering and probes',
+			async (suffix) => {
+				const s = setup();
+				const config = { ...fixture(kind), url: `${base}${suffix}` };
+				const entry = await s.project.create(s.projectId, { kind, name: 'private', config }, actor);
+				expect((await s.project.resolveForSession(s.projectId, context))?.vars.UV_INDEX).toBe(
+					`private=${base}${path}`,
+				);
+				expect(await s.project.test(s.projectId, { source: 'stored', id: entry.id })).toMatchObject(
+					{ ok: true },
+				);
+				expect(s.fetch.mock.calls[0][0]).toBe(`${base}${path}`);
+			},
+		);
+	});
+
 	it.each(['python_package_index', 'jfrog_artifactory'])(
 		'supports UTF-8 basic credentials for %s',
 		async (kind) => {
