@@ -1,9 +1,9 @@
 # Notebook bridge
 
-`@marimo-hub/notebook-bridge` mirrors notebook query parameters and routes app
-links through Hub. Query updates preserve the mounted iframe and kernel connection.
+`@marimo-hub/notebook-bridge` mirrors notebook paths and query parameters and routes
+app links through Hub. Location updates preserve the mounted iframe and kernel connection.
 Same-tab app navigation opens the target through the Hub router.
-Both features work across origins without proxy exposure.
+The bridge works across origins without proxy exposure.
 
 ## Query mirroring API
 
@@ -182,17 +182,32 @@ npm/PyPI publication is required.
 
 ## URL behavior
 
-Notebook changes replace the current Hub query without a frame reload. The route,
-deployment prefix, fragment, and Hub-owned query state remain intact. Copy URL
-and application links use the current query.
+Notebook updates replace the Hub query without reloading the iframe. The Hub route,
+deployment prefix, fragment, and other Hub-owned parameters stay intact.
+Copy URL, Run as app, and named app links retain the notebook path and query.
+Explicit Hub navigation reloads the iframe. Load, retry, and restart resolve the
+saved path against the current sandbox base and credentials.
 
-Explicit Hub query navigation retains the existing iframe reload behavior.
-Retry and restart use the current shareable parameters and current sandbox credentials.
+### Path capability
 
-Query mirroring runs from notebook to Hub. It does not restore Python state
-from browser Back/Forward navigation. A fresh app initializes from its query.
-An editor reconnect can retain the existing kernel state. Full two-way Python
-history restoration requires a separate protocol capability.
+The host's `sandboxUrl` option enables negotiation of `location-path.v1` and its
+trusted `sandboxBasePath`. The optional `QuerySnapshot.path` is relative to that
+base and shares a revision with the query. An empty path clears the saved path.
+An absent path leaves it unchanged. Older peers retain query mirroring.
+
+Hub stores the path as `__mh_path`, for example
+`/app/sales?__mh_path=studio%2Fdata%2F`. This metadata never enters the notebook
+query or includes a session-specific proxy prefix. Cross-app bridge links retain
+explicit `__mh_path` values only with the negotiated capability.
+
+Paths are limited to 4,096 characters after URL encoding. Validation rejects
+absolute URLs or paths, dot segments, backslashes, controls, encoded path
+separators, and nested percent escapes. Invalid or duplicate metadata is ignored.
+
+The sandbox server must serve deep routes directly. The bridge adds no server
+routes and restores no state outside the URL. It supports marimo edit and app
+frames, not the separate VS Code surface. Editor reconnects can retain kernel
+state. Two-way Python history restoration requires a separate capability.
 
 ## Generation and tests
 

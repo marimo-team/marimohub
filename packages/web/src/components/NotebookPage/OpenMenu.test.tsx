@@ -102,12 +102,12 @@ describe('OpenMenu', () => {
 	});
 
 	it.each([
-		['Run as app', '/app?id=123&tag=one&tag=two&empty='],
+		['Run as app', '/app?id=123&tag=one&tag=two&empty=&__mh_path=studio%2Fdata%2F'],
 		['View static outputs', '/snapshot'],
 	])('handles query parameters for %s', async (action, suffix) => {
 		const user = userEvent.setup();
 		renderMenu({
-			path: '/projects/proj-1/notebooks/nb-1?id=123&tag=one&tag=two&empty=&access_token=evil&file=other.py',
+			path: '/projects/proj-1/notebooks/nb-1?id=123&tag=one&tag=two&empty=&access_token=evil&file=other.py&__mh_path=studio%2Fdata%2F',
 		});
 		await user.click(screen.getByRole('button', { name: 'Open' }));
 		await user.click(screen.getByRole('menuitem', { name: action }));

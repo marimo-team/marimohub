@@ -102,3 +102,13 @@ it.each([
 ])('rejects ambiguous destination %j', (href) => {
 	expect(appNavigation(href, base, [])).toBeUndefined();
 });
+
+it('preserves validated app path metadata only when enabled', () => {
+	const href = '/app/team/match?id=1&__mh_path=studio%2Fdata%2F&access_token=secret';
+	expect(appNavigation(href, base, [])?.entries).toEqual([['id', '1']]);
+	expect(appNavigation(href, base, [], true)?.entries).toEqual([
+		['id', '1'],
+		['__mh_path', 'studio/data/'],
+	]);
+	expect(appNavigation('/app/match?__mh_path=..%2Fadmin', base, [], true)?.entries).toEqual([]);
+});

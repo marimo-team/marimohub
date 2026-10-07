@@ -64,6 +64,7 @@ function FrameAttempt({
 			bridge = createHostBridge({
 				iframe,
 				origin: new URL(launchSrc).origin,
+				sandboxUrl: trusted.href,
 				excludedKeys: [...trusted.searchParams.keys()],
 				appBaseUrl,
 				onNavigateApp: (destination) => {

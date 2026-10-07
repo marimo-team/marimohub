@@ -135,3 +135,79 @@ describe('notebook URLs', () => {
 		expect(url.searchParams.has('access_token')).toBe(false);
 	});
 });
+
+it.each([false, true])('restores a path below the current sandbox base (app: %s)', (isApp) => {
+	const url = new URL(
+		notebookFrameUrl(
+			'/hub/proxy/current/?access_token=current',
+			'?__mh_path=studio%2Fdata%2F&id=1',
+			'light',
+			isApp,
+		),
+	);
+	expect(url.pathname).toBe('/hub/proxy/current/studio/data/');
+	expect(url.searchParams.get('access_token')).toBe('current');
+	expect(url.searchParams.get('id')).toBe('1');
+	expect(url.searchParams.has('__mh_path')).toBe(false);
+});
+it.each(['../admin', '//evil.example/', '%2e%2e/admin', 'a'.repeat(4097)])(
+	'ignores invalid saved paths: %s',
+	(path) => {
+		const url = new URL(
+			notebookFrameUrl(
+				'https://sandbox.example/proxy/current/',
+				new URLSearchParams({ __mh_path: path }).toString(),
+				'light',
+				false,
+			),
+		);
+		expect(url.pathname).toBe('/proxy/current/');
+		expect(url.searchParams.has('__mh_path')).toBe(false);
+	},
+);
+
+it.each([
+	'__mh_path=studio%2Fone%2F&__mh_path=studio%2Ftwo%2F',
+	'__mh_path=studio%2Fone%2F&%5f_mh_path=studio%2Ftwo%2F',
+	'__mh_path=studio%2Fone%2F&__mh_path=',
+])('ignores ambiguous path metadata without dropping application parameters (%s)', (search) => {
+	const url = new URL(
+		notebookFrameUrl(
+			'https://sandbox.example/hub/proxy/current/?provider=trusted',
+			`?${search}&tag=one&tag=two&provider=evil`,
+			'dark',
+			false,
+		),
+	);
+	expect(url.pathname).toBe('/hub/proxy/current/');
+	expect([...url.searchParams]).toEqual([
+		['provider', 'trusted'],
+		['tag', 'one'],
+		['tag', 'two'],
+		['theme', 'dark'],
+	]);
+});
+
+it.each(['files/a%20b.py', 'files/a%23b%3Fc.py', 'files/100%25.py', 'café/'])(
+	'round-trips encoded path data without turning it into URL structure: %s',
+	(path) => {
+		const search = new URLSearchParams({ __mh_path: path, id: 'one' }).toString();
+		const url = new URL(
+			notebookFrameUrl(
+				'https://sandbox.example/hub/proxy/current/?access_token=trusted#cell',
+				search,
+				'light',
+				false,
+			),
+		);
+		expect(url.pathname).toBe(
+			new URL(`https://sandbox.example/hub/proxy/current/${path}`).pathname,
+		);
+		expect([...url.searchParams]).toEqual([
+			['access_token', 'trusted'],
+			['id', 'one'],
+			['theme', 'light'],
+		]);
+		expect(url.hash).toBe('#cell');
+	},
+);

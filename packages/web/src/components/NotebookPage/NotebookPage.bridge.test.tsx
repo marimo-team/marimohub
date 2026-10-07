@@ -31,6 +31,14 @@ function Controls() {
 			</output>
 			<button onClick={() => void navigate('?id=external')}>External query</button>
 			<button onClick={() => void navigate('?id=123')}>Original query</button>
+			<button onClick={() => void navigate('?id=123&__mh_path=..%2Fadmin')}>Invalid path</button>
+			<button
+				onClick={() =>
+					void navigate('?id=123&__mh_path=studio%2Fone%2F&%5f_mh_path=studio%2Ftwo%2F')
+				}
+			>
+				Duplicate path
+			</button>
 			<button onClick={() => void navigate(-1)}>Go back</button>
 			<button onClick={() => void navigate(1)}>Go forward</button>
 			<button
@@ -146,6 +154,7 @@ describe('notebook URL mirroring', () => {
 			act(() => {
 				connection.options.onQuery({
 					revision: 1,
+					path: 'studio/retry/',
 					entries: [
 						['id', 'new'],
 						['theme', 'evil'],
@@ -154,11 +163,15 @@ describe('notebook URL mirroring', () => {
 					],
 				});
 			});
-			expect(screen.getByTestId('url')).toHaveTextContent('?theme=dark&id=new');
+			expect(screen.getByTestId('url')).toHaveTextContent(
+				'?theme=dark&id=new&__mh_path=studio%2Fretry%2F',
+			);
 			await act(() => vi.advanceTimersByTimeAsync(15_000));
 			fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 			expect(screen.getByTitle('Forecast')).not.toBe(initial);
-			expect(screen.getByTitle('Forecast').getAttribute('src')).toContain('id=new');
+			expect(screen.getByTitle('Forecast').getAttribute('src')).toContain(
+				'/studio/retry/?provider=private&id=new',
+			);
 			expect(connection.dispose).toHaveBeenCalledOnce();
 		} finally {
 			vi.useRealTimers();
@@ -200,18 +213,26 @@ describe('notebook URL mirroring', () => {
 		fireEvent.click(screen.getByText('Set Hub state'));
 		const connection = connections.at(-1)!;
 		act(() => {
-			connection.options.onQuery({ revision: 1, entries: [['id', 'mirrored']] });
+			connection.options.onQuery({
+				revision: 1,
+				entries: [['id', 'mirrored']],
+				path: 'studio/back/',
+			});
 		});
 		expect(screen.getByTestId('router-state')).toHaveTextContent('"panel":"kept"');
 		expect(screen.getByTitle('Forecast')).toBe(original);
 		fireEvent.click(screen.getByText('External query'));
 		const external = screen.getByTitle('Forecast');
 		fireEvent.click(screen.getByText('Go back'));
-		await waitFor(() => expect(screen.getByTestId('url')).toHaveTextContent('?id=mirrored#anchor'));
+		await waitFor(() =>
+			expect(screen.getByTestId('url')).toHaveTextContent(
+				'?id=mirrored&__mh_path=studio%2Fback%2F#anchor',
+			),
+		);
 		const back = screen.getByTitle('Forecast');
 		expect(back).not.toBe(original);
 		expect(back).not.toBe(external);
-		expect(back.getAttribute('src')).toContain('id=mirrored');
+		expect(back.getAttribute('src')).toContain('/studio/back/?id=mirrored');
 		fireEvent.click(screen.getByText('Go forward'));
 		await waitFor(() => expect(screen.getByTestId('url')).toHaveTextContent('?id=external'));
 		expect(screen.getByTitle('Forecast')).not.toBe(back);
@@ -237,6 +258,7 @@ describe('notebook URL mirroring', () => {
 			act(() => {
 				connection.options.onQuery({
 					revision: 1,
+					path: 'studio/latest/',
 					entries: [
 						['id', 'latest'],
 						['tag', 'one'],
@@ -272,6 +294,8 @@ describe('notebook URL mirroring', () => {
 			expect(replacement).not.toBe(initial);
 			const url = new URL(replacement.getAttribute('src')!);
 			expect(url.origin).toBe('https://new.example');
+			expect(url.pathname).toBe('/studio/latest/');
+			expect(url.searchParams.has('__mh_path')).toBe(false);
 			expect(url.searchParams.get('access_token')).toBe('new');
 			expect(url.searchParams.get('provider')).toBe('new');
 			expect(url.searchParams.get('id')).toBe('latest');
@@ -284,3 +308,68 @@ describe('notebook URL mirroring', () => {
 		}
 	});
 });
+
+it.each(['app', 'edit'] as const)(
+	'restores, mirrors, and shares paths without reloading the %s frame',
+	async (variant) => {
+		const user = userEvent.setup();
+		const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
+		makeFetch({
+			role: 'editor',
+			session: runningSession({
+				mode: variant,
+				sandbox_url: 'https://sandbox.example/hub/proxy/current/?access_token=current',
+			}),
+		});
+		renderPage(variant, { search: '?id=1&__mh_path=studio%2Fdata%2F', controls: <Controls /> });
+		const initial = await screen.findByTitle('Forecast');
+		const connection = connections.at(-1)!;
+		expect(new URL(initial.getAttribute('src')!).pathname).toBe('/hub/proxy/current/studio/data/');
+		expect(connection.options.sandboxUrl).toBe(
+			'https://sandbox.example/hub/proxy/current/?access_token=current',
+		);
+		expect(new URL(initial.getAttribute('src')!).searchParams.has('__mh_path')).toBe(false);
+		act(() => {
+			connection.options.onQuery({ revision: 1, entries: [['id', '1']], path: 'studio/settings/' });
+		});
+		expect(screen.getByTitle('Forecast')).toBe(initial);
+		expect(screen.getByTestId('url')).toHaveTextContent('__mh_path=studio%2Fsettings%2F');
+		await user.click(
+			screen.getByRole('button', { name: variant === 'app' ? 'Share app' : 'Share notebook' }),
+		);
+		await user.click(screen.getByRole('menuitem', { name: 'Copy URL' }));
+		const copied = new URL(writeText.mock.calls.at(-1)![0]);
+		expect(copied.searchParams.get('__mh_path')).toBe('studio/settings/');
+		expect(copied.href).not.toContain('/proxy/');
+		expect(copied.searchParams.has('access_token')).toBe(false);
+		act(() => {
+			connection.options.onQuery({ revision: 2, entries: [], path: '' });
+		});
+		expect(screen.getByTestId('url').textContent).not.toContain('?');
+		expect(screen.getByTitle('Forecast')).toBe(initial);
+	},
+);
+
+it.each(['app', 'edit'] as const)(
+	'keeps the %s frame mounted and strips invalid paths from shared links',
+	async (variant) => {
+		const user = userEvent.setup();
+		const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
+		makeFetch({ role: 'editor', session: runningSession({ mode: variant }) });
+		renderPage(variant, { search: '?id=123', controls: <Controls /> });
+		const initial = await screen.findByTitle('Forecast');
+		const connection = connections.at(-1)!;
+		const source = initial.getAttribute('src');
+		for (const action of ['Invalid path', 'Duplicate path']) {
+			await user.click(screen.getByRole('button', { name: action }));
+			expect(screen.getByTitle('Forecast')).toBe(initial);
+			expect(initial.getAttribute('src')).toBe(source);
+			expect(connection.dispose).not.toHaveBeenCalled();
+			await user.click(
+				screen.getByRole('button', { name: variant === 'app' ? 'Share app' : 'Share notebook' }),
+			);
+			await user.click(screen.getByRole('menuitem', { name: 'Copy URL' }));
+			expect(new URL(writeText.mock.calls.at(-1)![0]).search).toBe('?id=123');
+		}
+	},
+);

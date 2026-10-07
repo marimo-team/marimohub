@@ -10,6 +10,7 @@
 		"./protocol": "./src/protocol.ts",
 		"./navigation": "./src/navigation.ts",
 		"./query": "./src/query.ts",
+		"./path": "./src/path.ts",
 		"./runtime": "./src/runtime.ts"
 	},
 	"scripts": {

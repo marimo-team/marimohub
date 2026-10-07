@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from 'react-router-dom';
-import { notebookQueryParams } from '@/lib/notebookUrls';
+import { shareableNotebookQuery } from '@/lib/notebookUrls';
 import { Bot, Camera, Code2, PanelsTopLeft, Play, Square } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { useSurfaceActions } from '@/api/surfaces';
@@ -175,7 +175,7 @@ export function OpenMenu({
 			return;
 		}
 		if (action === 'run-app') {
-			const search = notebookQueryParams(location.search).toString();
+			const search = shareableNotebookQuery(location.search).toString();
 			void navigate(`${notebookPath}/app${search ? `?${search}` : ''}`, { state: { title } });
 			return;
 		}

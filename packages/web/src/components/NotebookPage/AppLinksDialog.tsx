@@ -6,7 +6,7 @@ import { useDeepLinksQuery, useRegisterDeepLink, useReleaseDeepLink } from '@/ap
 import { Button, DialogModal, IconButton, TextField } from '@/components/ui';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { withBasePath } from '@/lib/basePath';
-import { notebookQueryParams } from '@/lib/notebookUrls';
+import { shareableNotebookQuery } from '@/lib/notebookUrls';
 
 interface AppLinksDialogProps {
 	projectId: string;
@@ -23,7 +23,7 @@ export function AppLinksDialog({
 	search = '',
 	onClose,
 }: AppLinksDialogProps) {
-	const query = notebookQueryParams(search).toString();
+	const query = shareableNotebookQuery(search).toString();
 	const pathFor = (slug: string) => withBasePath(`/app/${slug}${query ? `?${query}` : ''}`);
 	const urlFor = (slug: string) => new URL(pathFor(slug), window.location.origin).toString();
 	const links = useDeepLinksQuery(projectId, notebookId);

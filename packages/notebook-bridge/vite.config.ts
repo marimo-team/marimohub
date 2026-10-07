@@ -6,6 +6,7 @@ export default defineConfig({
 			'src/notebook.ts',
 			'src/protocol.ts',
 			'src/query.ts',
+			'src/path.ts',
 			'src/navigation.ts',
 			'src/runtime.ts',
 		],
