@@ -368,6 +368,43 @@ describe('packed workspace extractor', () => {
 });
 
 describe('restorePackedWorkspace', () => {
+	it.each(['ready', 'failed'] as const)(
+		'waits for readiness before archive-error cleanup (boot: %s)',
+		async (boot) => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucket = new MemoryBucket();
+			const storageError = new Error('archive read failed');
+			vi.spyOn(bucket, 'get').mockRejectedValue(storageError);
+			const ready = Promise.withResolvers<void>();
+			const waiting = Promise.withResolvers<void>();
+			const restored = restorePackedWorkspace(
+				instance,
+				bucket,
+				'workspace.zip',
+				'/workspace',
+				false,
+				'',
+				() => {
+					waiting.resolve();
+					return ready.promise;
+				},
+			);
+			const completion =
+				boot === 'failed'
+					? expect(restored).rejects.toThrow('pod unavailable')
+					: expect(restored).resolves.toEqual({ status: 'failed', error: storageError });
+			await waiting.promise;
+			expect(calls.exec).toHaveLength(0);
+			expect(calls.writeFiles).toHaveLength(0);
+			if (boot === 'failed') ready.reject(new Error('pod unavailable'));
+			else ready.resolve();
+			await completion;
+			expect(calls.exec).toHaveLength(boot === 'failed' ? 0 : 1);
+			if (boot === 'ready') expect(calls.exec[0]).toContain('rm -rf --');
+			expect(calls.writeFiles).toHaveLength(0);
+		},
+	);
+
 	it('returns missing without creating temporary sandbox files', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const result = await restorePackedWorkspace(

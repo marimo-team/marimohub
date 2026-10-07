@@ -173,6 +173,7 @@ export async function restorePackedWorkspace(
 	workingDir: string,
 	requireGit: boolean,
 	workspaceSubdirectory = '',
+	waitUntilReady?: () => Promise<void>,
 ): Promise<PackedWorkspaceRestoreResult> {
 	let cleanup: (() => Promise<unknown>) | undefined;
 	try {
@@ -193,6 +194,7 @@ export async function restorePackedWorkspace(
 		if (archive.byteLength !== object.size) {
 			throw new Error('Packed workspace archive size changed while reading');
 		}
+		await waitUntilReady?.();
 		await sandbox.writeFiles([
 			{ path: archivePath, content: archive },
 			{ path: scriptPath, content: EXTRACT_PACKED_WORKSPACE },
@@ -210,6 +212,7 @@ export async function restorePackedWorkspace(
 		}
 		return { status: 'restored', archiveBytes: archive.byteLength };
 	} catch (error) {
+		await waitUntilReady?.();
 		await cleanup?.().catch(() => {});
 		return { status: 'failed', error };
 	}

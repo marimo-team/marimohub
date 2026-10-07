@@ -160,13 +160,17 @@ the image pull. If starts are slow:
 
 The [session provision event](../operations.md#session-provision-events) records startup timings. Key tags:
 
-| Tag                                 | Meaning                              |
-| ----------------------------------- | ------------------------------------ |
-| `provision_reachable_schedule_ms`   | Pod created → scheduled              |
-| `provision_reachable_image_pull_ms` | image pull (`0` = cached)            |
-| `provision_reachable_pod_ready_ms`  | Pod created → ready                  |
-| `provision_files_ms`                | workspace copy into the sandbox      |
-| `provision_waitport_ms`             | marimo launch until its port answers |
+| Tag                                 | Meaning                                   |
+| ----------------------------------- | ----------------------------------------- |
+| `provision_reachable_schedule_ms`   | Pod created → scheduled                   |
+| `provision_reachable_image_pull_ms` | image pull (`0` = cached)                 |
+| `provision_reachable_pod_ready_ms`  | Pod created → ready                       |
+| `provision_files_ms`                | workspace reads, readiness wait, and copy |
+| `provision_waitport_ms`             | marimo launch until its port answers      |
+
+Workspace reads overlap pod boot, and `files` includes readiness waits.
+Compare the `sandbox.files` and `sandbox.reachable` trace spans to distinguish
+boot time from transfer time. Do not sum their durations.
 
 Each boot also logs one `k8s_ensure` line with the cluster-side rows (create,
 boot, schedule, image pull, pod ready); `files` and `waitport` appear only on

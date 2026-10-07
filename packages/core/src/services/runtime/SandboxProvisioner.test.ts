@@ -157,6 +157,156 @@ describe('SandboxProvisioner', () => {
 		},
 	);
 
+	describe('workspace prefetch', () => {
+		function fixture() {
+			const sandbox = makeFakeSandbox();
+			const started = deferred<void>();
+			const ready = deferred<void>();
+			sandbox.instance.ready = () => {
+				started.resolve();
+				return ready.promise;
+			};
+			const bucketHandle = new MemoryBucket();
+			const options = {
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+			};
+			return { ...sandbox, started, ready, bucketHandle, options };
+		}
+
+		it.each(['provision', 'prepare'] as const)(
+			'%s never attempts mounting or fallback when boot fails',
+			async (operation) => {
+				const { instance, calls, started, ready, bucketHandle, options } = fixture();
+				const list = vi.spyOn(bucketHandle, 'list');
+				const pending = new SandboxProvisioner(
+					fakeComputeFrom({ ...instance, supportsBucketMount: true }),
+				)[operation](options);
+				const rejected = expect(pending).rejects.toThrow(
+					'Sandbox compute backend is not available',
+				);
+				await started.promise;
+				expect(calls.mountBucket).toHaveLength(0);
+				ready.reject(new Error('pod failed'));
+				await rejected;
+				expect(calls.mountBucket).toHaveLength(0);
+				expect(calls.writeFiles).toHaveLength(0);
+				expect(calls.exec).toHaveLength(0);
+				expect(list).not.toHaveBeenCalled();
+				expect(calls.destroy).toBe(1);
+			},
+		);
+
+		it.each(['objects', 'archive', 'missing archive'] as const)(
+			'reads %s during boot but waits before touching the sandbox',
+			async (source) => {
+				const { instance, calls, ready, bucketHandle, options } = fixture();
+				const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+				await bucketHandle.put(version.workspaceFile('app.py'), 'print(1)');
+				await bucketHandle.put(version.gitFile('HEAD'), 'ref: refs/heads/main');
+				if (source === 'archive') {
+					await bucketHandle.put(version.workspaceArchive, new Uint8Array([80, 75, 3, 4]));
+				}
+				const get = vi.spyOn(bucketHandle, 'get');
+				const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					...options,
+					workspaceLoadMode: 'copy-only',
+					workspacePrefix: version.workspacePrefix,
+					gitPrefix: version.gitPrefix,
+					workspaceArchive: source === 'objects' ? undefined : version.workspaceArchive,
+					sessionEnv: { files: [{ path: '/credentials', content: 'secret' }] },
+				});
+				await vi.waitFor(() => {
+					expect(get).toHaveBeenCalledWith(
+						source === 'archive' ? version.workspaceArchive : version.workspaceFile('app.py'),
+					);
+				});
+				if (source !== 'archive') expect(get).toHaveBeenCalledWith(version.gitFile('HEAD'));
+				expect(calls.writeFiles).toHaveLength(0);
+				expect(calls.exec).toHaveLength(0);
+				expect(calls.mountBucket).toHaveLength(0);
+				expect(calls.setEnvVars).toHaveLength(0);
+				ready.resolve();
+				await provision;
+				expect(calls.writeFiles.length).toBeGreaterThan(0);
+				expect(calls.startProcess).toHaveLength(1);
+			},
+		);
+
+		it('keeps injected strategies behind readiness', async () => {
+			const { instance, calls, ready, options } = fixture();
+			const load = vi.fn(async () => ({ usedFallback: false }));
+			const provision = new SandboxProvisioner(fakeComputeFrom(instance), {
+				copyOnly: { load },
+				mountOrCopy: { load },
+			}).provision(options);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(load).not.toHaveBeenCalled();
+			expect(calls.exec).toHaveLength(0);
+			ready.resolve();
+			await provision;
+			expect(load).toHaveBeenCalledOnce();
+		});
+
+		it('waits for boot before reporting a prefetch failure and destroying the sandbox', async () => {
+			const { instance, calls, ready, bucketHandle, options } = fixture();
+			const list = vi
+				.spyOn(bucketHandle, 'list')
+				.mockRejectedValue(new Error('storage unavailable'));
+			const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...options,
+				workspaceLoadMode: 'copy-only',
+			});
+			const rejected = expect(provision).rejects.toThrow('restoring the notebook workspace');
+			await vi.waitFor(() => expect(list).toHaveBeenCalled());
+			expect(calls.destroy).toBe(0);
+			ready.resolve();
+			await rejected;
+			expect(calls.destroy).toBe(1);
+			expect(calls.writeFiles).toHaveLength(0);
+		});
+
+		it.each(['objects', 'archive'] as const)(
+			'never writes prefetched %s when readiness fails during a storage read',
+			async (source) => {
+				const { instance, calls, ready, bucketHandle, options } = fixture();
+				const read = deferred<void>();
+				const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+				const key =
+					source === 'archive' ? version.workspaceArchive : version.workspaceFile('app.py');
+				await bucketHandle.put(key, 'content');
+				const originalGet = bucketHandle.get.bind(bucketHandle);
+				const get = vi.spyOn(bucketHandle, 'get').mockImplementation(async (key) => {
+					await read.promise;
+					return originalGet(key);
+				});
+				const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					...options,
+					workspaceLoadMode: 'copy-only',
+					workspacePrefix: version.workspacePrefix,
+					workspaceArchive: source === 'archive' ? key : undefined,
+				});
+				const rejected = expect(provision).rejects.toThrow(
+					'Sandbox compute backend is not available',
+				);
+				await vi.waitFor(() => expect(get).toHaveBeenCalledWith(key));
+				ready.reject(new Error('pod failed'));
+				await rejected;
+				read.resolve();
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				expect(calls.writeFiles).toHaveLength(0);
+				expect(calls.exec).toHaveLength(0);
+				expect(calls.startProcess).toHaveLength(0);
+				expect(calls.destroy).toBe(1);
+				expect(get).toHaveBeenCalledTimes(1);
+			},
+		);
+	});
+
 	describe.each(['provision', 'prepare'] as const)('%s handle creation', (operation) => {
 		it.each([
 			{ restore: false, markerFails: false },

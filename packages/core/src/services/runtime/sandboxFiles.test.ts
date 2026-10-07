@@ -59,6 +59,55 @@ class VanishingObjectBucket extends MemoryBucket {
 }
 
 describe('restoreWorkspace', () => {
+	it('prefetches only one byte-bounded batch and gates directories and writes on readiness', async () => {
+		const { nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile('a.bin'), bytesOfSize(5 * 1024 * 1024));
+		await bucket.put(nb.workspaceFile('b.bin'), bytesOfSize(5 * 1024 * 1024));
+		await bucket.put(nb.workspaceFile(workspaceDirectoryMarkerPath('empty')), '');
+		const get = vi.spyOn(bucket, 'get');
+		const { instance, calls } = makeFakeSandbox();
+		const ready = Promise.withResolvers<void>();
+		const entered = Promise.withResolvers<void>();
+		const restore = restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
+			waitUntilReady: () => {
+				entered.resolve();
+				return ready.promise;
+			},
+		});
+		await entered.promise;
+		expect(get).toHaveBeenCalledExactlyOnceWith(nb.workspaceFile('a.bin'));
+		expect(calls.exec).toHaveLength(0);
+		expect(calls.writeFiles).toHaveLength(0);
+		ready.resolve();
+		await expect(restore).resolves.toEqual({ objectCount: 2, bytes: 10 * 1024 * 1024 });
+		expect(calls.exec).toHaveLength(1);
+		expect(calls.writeFiles).toHaveLength(2);
+	});
+
+	it.each([false, true])(
+		'gates an empty workspace mkdir (directory marker: %s)',
+		async (hasMarker) => {
+			const { nb } = nbCtx();
+			const bucket = new MemoryBucket();
+			if (hasMarker) await bucket.put(nb.workspaceFile(workspaceDirectoryMarkerPath('empty')), '');
+			const { instance, calls } = makeFakeSandbox();
+			const ready = Promise.withResolvers<void>();
+			const entered = Promise.withResolvers<void>();
+			const restore = restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
+				waitUntilReady: () => {
+					entered.resolve();
+					return ready.promise;
+				},
+			});
+			await entered.promise;
+			expect(calls.exec).toHaveLength(0);
+			ready.resolve();
+			await restore;
+			expect(calls.exec).toHaveLength(1);
+		},
+	);
+
 	it('restores every workspace key without spending a mkdir exec', async () => {
 		const { nb } = nbCtx();
 		const bucket = new MemoryBucket();

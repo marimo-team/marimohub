@@ -178,6 +178,8 @@ export interface WorkspaceRestoreStats {
 
 export interface WorkspaceRestoreOptions {
 	requireComplete?: boolean;
+	/** Storage reads may precede readiness; sandbox mutations must wait. */
+	waitUntilReady?: () => Promise<void>;
 	/** Relative path roots owned by another restore and therefore skipped. */
 	excludeRelativeRoots?: readonly string[];
 }
@@ -262,11 +264,9 @@ export async function restoreWorkspace(
 	// `writeFiles` creates parent directories (port contract), so the only case
 	// still needing an explicit mkdir is an empty workspace — nothing gets written,
 	// yet marimo still needs the cwd it runs in to exist.
-	if (directories.length > 0) await createSandboxDirectories(sandbox, directories);
 	if (wanted.length === 0) {
-		if (directories.length === 0) {
-			await createSandboxDirectories(sandbox, [workingDir]);
-		}
+		await options.waitUntilReady?.();
+		await createSandboxDirectories(sandbox, directories.length > 0 ? directories : [workingDir]);
 		return { objectCount: 0, bytes: 0 };
 	}
 
@@ -287,6 +287,11 @@ export async function restoreWorkspace(
 			return { path: f.dest, content: await body.bytes() };
 		});
 		const files = fetched.filter((f) => f !== undefined);
+		await options.waitUntilReady?.();
+		if (directories.length > 0) {
+			await createSandboxDirectories(sandbox, directories);
+			directories.length = 0;
+		}
 		if (files.length > 0) await withRetry(() => sandbox.writeFiles(files));
 		objectCount += files.length;
 		for (const f of files) bytes += f.content.byteLength;
