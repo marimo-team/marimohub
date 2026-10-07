@@ -1012,7 +1012,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_POD_TEMPLATE_FILE',
 						name: 'Kubernetes pod template file',
 						description:
-							'Path to a YAML or JSON partial Pod manifest, read at startup for new kernel Pods. Explicit configuration overrides template values. See [pod templates](./setup/compute/kubernetes.md#pod-templates) for an example, precedence, and compatibility limits.',
+							'Path to a YAML or JSON partial Pod manifest, read at startup for new kernel Pods. Explicit configuration overrides template values. See [pod templates](./compute.md#pod-templates) for an example, precedence, and compatibility limits.',
 						example: '/etc/marimohub/kernel-pod.yaml',
 						optIn: true,
 					},
