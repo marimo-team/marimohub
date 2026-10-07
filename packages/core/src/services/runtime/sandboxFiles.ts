@@ -145,10 +145,8 @@ export function sharedWorkspaceListing(
 }
 
 /** `commitSession` owns these; capture never uploads or mirror-deletes them. */
-const ROOT_SOURCE_FILES = new Set(['notebook.py', 'pyproject.toml']);
-
-function isRootSourceFile(rel: string): boolean {
-	return ROOT_SOURCE_FILES.has(rel);
+function isRootSourceFile(rel: string, entryNotebook = 'notebook.py'): boolean {
+	return rel === entryNotebook || rel === 'pyproject.toml';
 }
 
 // Hooks are executable code; restoring them would run user-supplied scripts on
@@ -158,15 +156,15 @@ function isGitHooksPath(rel: string): boolean {
 	return segments.some((segment, index) => segment === '.git' && segments[index + 1] === 'hooks');
 }
 
-function isCaptureExcluded(rel: string): boolean {
-	return isMirrorProtected(rel) || isGitHooksPath(rel);
+function isCaptureExcluded(rel: string, entryNotebook = 'notebook.py'): boolean {
+	return isMirrorProtected(rel, entryNotebook) || isGitHooksPath(rel);
 }
 
 /**
  * The files API can store regenerable paths. Capture does not own those copies.
  */
-function isMirrorProtected(rel: string): boolean {
-	return isRootSourceFile(rel) || isRegenerableArtifactPath(rel);
+function isMirrorProtected(rel: string, entryNotebook = 'notebook.py'): boolean {
+	return isRootSourceFile(rel, entryNotebook) || isRegenerableArtifactPath(rel);
 }
 
 function parentDirectory(rel: string): string {
@@ -359,8 +357,8 @@ function taggedCaches(listed: readonly FileInfo[]) {
 }
 
 /**
- * Save runtime files to `workspace/` on teardown. `commitSession` owns the root
- * source files. Capture preserves stored source files and regenerable caches.
+ * Save runtime files to `workspace/` on teardown. `commitSession` owns the entry
+ * notebook and `pyproject.toml`. Capture preserves stored source files and regenerable caches.
  * A regular `CACHEDIR.TAG` file excludes its directory and descendants from
  * uploads. Detection uses file presence, not contents.
  *
@@ -386,6 +384,7 @@ export async function captureWorkspace(
 	workingDir: string,
 	mode: 'source' | 'workspace',
 	listing: WorkspaceListing = sharedWorkspaceListing(sandbox, workingDir),
+	entryNotebook = 'notebook.py',
 ): Promise<void> {
 	if (!supportsBoundedReads(sandbox)) return;
 	const nb = paths.project(projectId).notebook(notebookId);
@@ -397,7 +396,7 @@ export async function captureWorkspace(
 	if (mode === 'source') {
 		const deletable = (await listAllKeys(bucket, nb.workspacePrefix)).filter((key) => {
 			const rel = key.slice(nb.workspacePrefix.length);
-			return rel !== '' && !isMirrorProtected(rel);
+			return rel !== '' && !isMirrorProtected(rel, entryNotebook);
 		});
 		if (deletable.length === 0) return;
 		const listed = await listing().catch(() => listFilesFailure('BACKEND_ERROR'));
@@ -448,7 +447,7 @@ export async function captureWorkspace(
 	};
 	for (const file of files) {
 		const rel = file.relativePath;
-		if (isCaptureExcluded(rel) || isTaggedCache(rel)) continue;
+		if (isCaptureExcluded(rel, entryNotebook) || isTaggedCache(rel)) continue;
 		const group = gitGroupOf(rel);
 		if (file.type === 'directory') {
 			(group === null ? directoryMarkers : gitGroupFor(group).directoryMarkers).push(
@@ -540,7 +539,7 @@ export async function captureWorkspace(
 	const existingKeys = await listAllKeys(bucket, nb.workspacePrefix);
 	const staleKeys = existingKeys.filter((key) => {
 		const rel = key.slice(nb.workspacePrefix.length);
-		if (!rel || isMirrorProtected(rel)) return false;
+		if (!rel || isMirrorProtected(rel, entryNotebook)) return false;
 		if (isGitHooksPath(rel)) return true;
 		const group = gitGroupOf(rel);
 		if (group !== null && retainedGitGroups.has(group)) return false;
@@ -551,30 +550,24 @@ export async function captureWorkspace(
 	}
 }
 
-/**
- * Read a session's final artifacts back from the sandbox workspace on teardown:
- * the notebook code/deps plus marimo's optional `__marimo__/notebook.html` and
- * `__marimo__/session/notebook.py.json`. Optional artifacts may be omitted, but
- * notebook read failures other than NOT_FOUND reject capture so callers can retry.
- * `NotebookService.commitSession` cuts a version and attaches the snapshots.
- *
- * The session file is keyed by the notebook filename, which is always
- * `notebook.py` in the sandbox (see `SandboxProvisioner.provision`), so the path
- * is deterministic.
- */
 export async function readSessionArtifacts(
 	sandbox: SandboxInstance,
 	mountPath: string,
 	listing: WorkspaceListing = sharedWorkspaceListing(sandbox, mountPath),
+	entryNotebook = 'notebook.py',
 ): Promise<CommitSessionInput> {
 	if (!supportsBoundedReads(sandbox)) return {};
 	const sizes = await fileSizes(listing);
 	const read = (path: string) => readCappedFile(sandbox, path, sizes);
+	const separator = entryNotebook.lastIndexOf('/');
+	const directory = entryNotebook.slice(0, separator + 1);
+	const filename = entryNotebook.slice(separator + 1);
+	const artifactRoot = `${mountPath}/${directory}__marimo__`;
 	const [code, deps, html, session] = await Promise.all([
-		readNotebookCode(sandbox, `${mountPath}/notebook.py`, sizes),
+		readNotebookCode(sandbox, `${mountPath}/${entryNotebook}`, sizes, entryNotebook),
 		read(`${mountPath}/pyproject.toml`),
-		read(`${mountPath}/__marimo__/notebook.html`),
-		read(`${mountPath}/__marimo__/session/notebook.py.json`),
+		read(`${artifactRoot}/${filename.replace(/\.[^.]+$/, '')}.html`),
+		read(`${artifactRoot}/session/${filename}.json`),
 	]);
 
 	return { code, deps, html, session };
@@ -584,14 +577,15 @@ async function readNotebookCode(
 	sandbox: SandboxInstance,
 	absolutePath: string,
 	sizes: ReadonlyMap<string, number>,
+	entryNotebook: string,
 ): Promise<string | undefined> {
 	const result = await readCappedBytes(sandbox, absolutePath, sizes);
 	if (result?.success) return new TextDecoder().decode(result.bytes);
 	const code = result?.error.code ?? 'READ_FAILED';
-	const error = Object.assign(new Error(`Could not read notebook.py: ${code}`), {
+	const error = Object.assign(new Error(`Could not read ${entryNotebook}: ${code}`), {
 		code,
 		operation: 'sandbox.read_session_artifacts',
-		object: 'notebook.py',
+		object: entryNotebook,
 	});
 	if (code !== 'NOT_FOUND') throw error;
 	logOperationalError('session_notebook_missing', { operation: error.operation }, error);
@@ -621,6 +615,7 @@ export async function readCappedFile(
 	sandbox: SandboxInstance,
 	absolutePath: string,
 	sizes: ReadonlyMap<string, number>,
+	entryNotebook: string,
 ): Promise<string | undefined> {
 	const result = await readCappedBytes(sandbox, absolutePath, sizes);
 	return result?.success ? new TextDecoder().decode(result.bytes) : undefined;

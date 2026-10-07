@@ -66,7 +66,7 @@ interface WorkspaceServiceOwner {
 	saveSourceFile(
 		projectId: ProjectId,
 		notebookId: NotebookId,
-		path: 'notebook.py' | 'pyproject.toml',
+		path: string,
 		content: string,
 		actor: UserId,
 		assertWritable: () => Promise<void>,
@@ -327,7 +327,10 @@ export class NotebookWorkspaceService {
 			bytes.byteLength - (existing?.size ?? 0),
 		);
 
-		if (relative === 'notebook.py' || relative === 'pyproject.toml') {
+		if (
+			relative === workspaceSourcePolicy(context.detail.source).entryNotebook ||
+			relative === 'pyproject.toml'
+		) {
 			await this.owner.saveSourceFile(
 				projectId,
 				notebookId,

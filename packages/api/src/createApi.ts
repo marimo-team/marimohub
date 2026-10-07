@@ -9,6 +9,7 @@ import {
 	IntegrationId,
 	MAX_REQUEST_BYTES,
 	MAX_WORKSPACE_FILE_BYTES,
+	MAX_WORKSPACE_BYTES,
 	NotebookId,
 	noopNotifier,
 	probeKernelLiveness,
@@ -315,7 +316,13 @@ export function createApi(rawDeps: ApiDeps) {
 				413,
 			),
 	});
+	const importBodyLimit = bodyLimit({
+		maxSize: MAX_WORKSPACE_BYTES + 1024 * 1024,
+		onError: (c) => fail(c, 'PAYLOAD_TOO_LARGE', 'Folder upload exceeds 101 MiB', 413),
+	});
 	app.use(`${API_PREFIX}/*`, (c, next) => {
+		if (c.req.method === 'POST' && /\/projects\/[^/]+\/notebook-imports$/.test(c.req.path))
+			return importBodyLimit(c, next);
 		const isWorkspaceFilePut =
 			c.req.method === 'PUT' &&
 			/\/projects\/[^/]+\/notebooks\/[^/]+\/workspace\/files$/.test(c.req.path);

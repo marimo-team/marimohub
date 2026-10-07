@@ -255,27 +255,34 @@ describe('NotebookPage viewer modes', () => {
 		).toBe(true);
 	});
 
-	it('opens the configured entry notebook for a synced source', async () => {
-		const user = userEvent.setup();
-		const fetch = makeFetch({
-			role: 'editor',
-			sourceType: 'git',
-			entryNotebook: 'apps/main.py',
-			vscode: { embed: 'iframe' },
-			session: runningSession({
-				can: { attach: true, stop: true, surfaces: { vscode: true, opencode: false } },
-			}),
-		});
-		renderPage();
+	it.each([
+		['git', 'apps/main.py', 'apps/main.py'],
+		['local', 'reports/revenue.py', 'reports/revenue.py'],
+		['local', undefined, 'notebook.py'],
+	] as const)(
+		'opens the entry notebook for %s source %s in VS Code',
+		async (sourceType, entryNotebook, expectedPath) => {
+			const user = userEvent.setup();
+			const fetch = makeFetch({
+				role: 'editor',
+				sourceType,
+				entryNotebook,
+				vscode: { embed: 'iframe' },
+				session: runningSession({
+					can: { attach: true, stop: true, surfaces: { vscode: true, opencode: false } },
+				}),
+			});
+			renderPage();
 
-		await chooseSurfaceAction(user, 'Start VS Code');
-		await waitFor(() => {
-			const call = fetch.mock.calls.find(
-				([url, init]) => String(url).endsWith('/surfaces/vscode') && init?.method === 'POST',
-			);
-			expect(JSON.parse(String(call?.[1]?.body))).toEqual({ open: 'apps/main.py' });
-		});
-	});
+			await chooseSurfaceAction(user, 'Start VS Code');
+			await waitFor(() => {
+				const call = fetch.mock.calls.find(
+					([url, init]) => String(url).endsWith('/surfaces/vscode') && init?.method === 'POST',
+				);
+				expect(JSON.parse(String(call?.[1]?.body))).toEqual({ open: expectedPath });
+			});
+		},
+	);
 
 	it('disables VS Code start until synced notebook metadata is available', async () => {
 		let releaseNotebook!: () => void;

@@ -21,6 +21,11 @@ export const WORKSPACE_LIMITS = {
 	maxFiles: MAX_WORKSPACE_FILES,
 } as const;
 
+export function folderImportFileLimit(files: readonly { path: string }[]): number {
+	// Local creation adds an empty root pyproject.toml when the upload omits it.
+	return WORKSPACE_LIMITS.maxFiles - (files.some((file) => file.path === 'pyproject.toml') ? 0 : 1);
+}
+
 export interface WorkspacePathRule {
 	path: string;
 	deniedOperations: readonly WorkspaceOperation[];
@@ -50,11 +55,6 @@ export interface WorkspaceSourcePolicy {
 	allowedOperations: readonly WorkspaceOperation[];
 	protectedPaths: readonly WorkspacePathRule[];
 }
-
-const LOCAL_PROTECTED_PATHS: readonly WorkspacePathRule[] = [
-	{ path: 'notebook.py', deniedOperations: ['move', 'delete'] },
-	{ path: 'pyproject.toml', deniedOperations: ['move', 'delete'] },
-];
 
 export function isSafeWorkspacePath(path: string, allowEmpty = false): boolean {
 	if (path === '') return allowEmpty;
@@ -166,14 +166,17 @@ export function toSyncedWorkspaceFileMap(files: SyncedWorkspaceFile[]): SyncedWo
 const WORKSPACE_SOURCE_POLICIES: {
 	[K in Source['type']]: (source: Extract<Source, { type: K }>) => WorkspaceSourcePolicy;
 } = {
-	local: () => ({
-		entryNotebook: 'notebook.py',
+	local: (source) => ({
+		entryNotebook: source.entry_notebook ?? 'notebook.py',
 		loadMode: 'mount-or-copy',
 		persistSessionEdits: true,
 		restoreFilesystemSnapshot: true,
 		workspaceWritable: true,
 		allowedOperations: WORKSPACE_OPERATIONS,
-		protectedPaths: LOCAL_PROTECTED_PATHS,
+		protectedPaths: [
+			{ path: source.entry_notebook ?? 'notebook.py', deniedOperations: ['move', 'delete'] },
+			{ path: 'pyproject.toml', deniedOperations: ['move', 'delete'] },
+		],
 	}),
 	git: (source) => ({
 		entryNotebook: source.entry_notebook,
@@ -199,17 +202,20 @@ export function workspaceOperationDenied(
 	const policy = workspaceSourcePolicy(source);
 	if (!policy.allowedOperations.includes(operation)) return true;
 	return policy.protectedPaths.some(
-		(rule) => rule.path === path && rule.deniedOperations.includes(operation),
+		(rule) =>
+			(rule.path === path || rule.path.startsWith(`${path}/`)) &&
+			rule.deniedOperations.includes(operation),
 	);
 }
 
 /**
- * Whether `path` is a protected root anchor (`notebook.py`, `pyproject.toml`
- * for local sources). Such paths may only be written through the source owner,
- * so they are refused as the *target* of a copy or directory creation too.
+ * Source files belong to their owner, including when used as a copy target.
+ * Directory creation must not replace them either.
  */
 export function isProtectedWorkspacePath(source: Source, path: string): boolean {
-	return workspaceSourcePolicy(source).protectedPaths.some((rule) => rule.path === path);
+	return workspaceSourcePolicy(source).protectedPaths.some(
+		(rule) => rule.path === path || rule.path.startsWith(`${path}/`),
+	);
 }
 
 /**

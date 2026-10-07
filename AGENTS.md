@@ -166,6 +166,11 @@ These CAS-managed records also have one writer each:
   `_system/integrations/{iid}/integration.json`.
 - `SandboxDiagnosticLease` owns each per-admin diagnostic lease at
   `_system/sandbox-diagnostics/{user-id}.json`.
+- `NotebookImportService` owns the CAS item receipts at
+  `projects/{pid}/imports/{import-id}/items/{encoded-entrypoint}.json`.
+  Its preparation record and uploaded snapshot are immutable. Attempts use distinct
+  notebook IDs. Only a fenced `publishing` receipt can publish through `NotebookService`.
+  Retain receipts after snapshot expiry for reconciliation and late-attempt cleanup.
 - `NotebookWorkspaceService` owns each short-lived workspace mutation claim at
   `projects/{pid}/notebooks/{nid}/workspace_mutation_claim.json`.
 - `JobsService` owns each job definition head at

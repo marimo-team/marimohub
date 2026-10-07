@@ -1,4 +1,9 @@
 import {
+	NotebookImportPreparationSchema,
+	NotebookImportItemSchema,
+	notebookImportPrefix,
+} from '../services/content/NotebookImportService';
+import {
 	PreviewProjectSchema,
 	PreviewReceiptsSchema,
 	PreviewWorkSchema,
@@ -425,6 +430,25 @@ const OBJECTS: BucketObject[] = [
 		mutability: 'cas',
 		owner: 'SessionService',
 		tag: 'session',
+	},
+	{
+		name: 'NotebookImportPreparation',
+		key: `${notebookImportPrefix(PID, '{import_id}')}preparation.json`,
+		schema: NotebookImportPreparationSchema,
+		summary: 'Actor and expiry for an immutable uploaded folder snapshot.',
+		mutability: 'immutable',
+		owner: 'NotebookImportService',
+		tag: 'notebook',
+	},
+	{
+		name: 'NotebookImportItem',
+		key: `${notebookImportPrefix(PID, '{import_id}')}items/{encoded_entrypoint}.json`,
+		schema: NotebookImportItemSchema,
+		summary:
+			'Fenced preparation attempts and retained publication receipt for one imported notebook.',
+		mutability: 'cas',
+		owner: 'NotebookImportService',
+		tag: 'notebook',
 	},
 	{
 		name: 'WorkspaceMutationClaim',

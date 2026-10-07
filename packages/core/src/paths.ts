@@ -209,8 +209,8 @@ function notebookPaths(projectBase: string, nid: NotebookId): NotebookPaths {
 		fsSnapshot: `${base}/fs_snapshot.json`,
 		workspaceMutationClaim: `${base}/workspace_mutation_claim.json`,
 		// workspace/ = latest-only mirror of the sandbox working dir.
-		// notebook.py + pyproject.toml are the always-present source files;
-		// everything else is present only under PERSIST_WORKSPACE=workspace.
+		// Imported local sources name their entrypoint in source.json. Legacy
+		// local sources use notebook.py; deps always live at pyproject.toml.
 		workspacePrefix: `${workspace}/`,
 		workspaceFile: (rel: string) => `${workspace}/${rel}`,
 		code: `${workspace}/notebook.py`,

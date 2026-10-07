@@ -10,6 +10,7 @@ import {
 	DomainError,
 	joinUrlPath,
 	NotebookId,
+	ImportNotebookInputSchema,
 	NotFoundError,
 	MAX_WORKSPACE_FILE_BYTES,
 	ProjectId,
@@ -264,6 +265,72 @@ const createNotebook = createRoute({
 		),
 		...commonErrors(),
 		...errorResponses(403, 404),
+	},
+});
+
+const importEnvelope = <T extends z.ZodType>(data: T) =>
+	z.object({ success: z.literal(true), data });
+const ImportParams = ProjectIdParam.extend({ import_id: z.uuid() });
+const prepareImport = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/notebook-imports',
+	operationId: 'notebookImports.prepare',
+	tags: ['Notebooks'],
+	summary: 'Prepare a folder snapshot for notebook import',
+	request: {
+		params: ProjectIdParam,
+		body: {
+			required: true,
+			content: { 'application/zip': { schema: z.string().openapi({ format: 'binary' }) } },
+		},
+	},
+	responses: {
+		201: jsonContent(
+			importEnvelope(
+				z.object({
+					id: z.string(),
+					expires_at: z.string(),
+					files: z.array(z.object({ path: z.string(), size: z.number() })),
+				}),
+			),
+			'Prepared workspace',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 413),
+	},
+});
+const publishImport = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/notebook-imports/{import_id}/notebooks',
+	operationId: 'notebookImports.publish',
+	tags: ['Notebooks'],
+	summary: 'Import a notebook from a prepared folder',
+	request: { params: ImportParams, body: jsonBody(ImportNotebookInputSchema) },
+	responses: {
+		201: jsonContent(importEnvelope(NotebookMetaResponseSchema), 'Notebook imported'),
+		...commonErrors(),
+		...errorResponses(403, 404, 409),
+	},
+});
+const importStatus = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/notebook-imports/{import_id}/notebooks',
+	operationId: 'notebookImports.status',
+	tags: ['Notebooks'],
+	summary: 'Reconcile a notebook import outcome',
+	request: { params: ImportParams, query: z.object({ entry_notebook: z.string().min(1) }) },
+	responses: {
+		200: jsonContent(
+			importEnvelope(
+				z.object({
+					state: z.enum(['pending', 'preparing', 'publishing', 'complete', 'expired']),
+					notebook: NotebookMetaResponseSchema.optional(),
+				}),
+			),
+			'Import status',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 409),
 	},
 });
 
@@ -1071,6 +1138,57 @@ app.openapi(listNotebooks, async (c) => {
 		tiebreak: (n) => n.id,
 	});
 	return c.json({ success: true, data }, 200);
+});
+
+app.openapi(prepareImport, async (c) => {
+	const deps = c.get('deps');
+	const { pid } = c.req.valid('param');
+	const user = c.get('user');
+	await assertProjectRole(deps.services.projects, pid, user, 'notebook.write', deps);
+	const data = await deps.services.notebooks.imports.prepare(
+		pid,
+		new Uint8Array(await c.req.arrayBuffer()),
+		user.id,
+	);
+	return c.json({ success: true, data }, 201);
+});
+
+app.openapi(publishImport, async (c) => {
+	const deps = c.get('deps');
+	const { pid, import_id } = c.req.valid('param');
+	const user = c.get('user');
+	await assertProjectRole(deps.services.projects, pid, user, 'notebook.write', deps);
+	const body = c.req.valid('json');
+	const meta = await deps.services.notebooks.imports.publish(pid, import_id, body, user.id, () => ({
+		base_image: checkBaseImage(deps.sandbox.images, body.base_image) ?? undefined,
+		compute_profile: checkComputeProfile(deps.sandbox, body.compute_profile) ?? undefined,
+	}));
+	return c.json({ success: true, data: toPublicNotebookMeta(meta) }, 201);
+});
+
+app.openapi(importStatus, async (c) => {
+	const deps = c.get('deps');
+	const { pid, import_id } = c.req.valid('param');
+	const user = c.get('user');
+	await assertProjectRole(deps.services.projects, pid, user, 'notebook.write', deps);
+	const result = await deps.services.notebooks.imports.status(
+		pid,
+		import_id,
+		c.req.valid('query').entry_notebook,
+		user.id,
+	);
+	return c.json(
+		{
+			success: true,
+			data: {
+				state: result.state,
+				...('notebook' in result && result.notebook
+					? { notebook: toPublicNotebookMeta(result.notebook) }
+					: {}),
+			},
+		},
+		200,
+	);
 });
 
 app.openapi(createNotebook, async (c) => {

@@ -204,6 +204,9 @@ catalogs:
     csv-parse:
       specifier: ^7.0.2
       version: 7.0.2
+    fflate:
+      specifier: ^0.8.3
+      version: 0.8.3
     google-auth-library:
       specifier: ^11.0.0
       version: 11.0.0
@@ -1883,6 +1886,9 @@ importers:
       colorjs.io:
         specifier: 'catalog:'
         version: 0.7.1
+      fflate:
+        specifier: 'catalog:'
+        version: 0.8.3
       lucide-react:
         specifier: 'catalog:'
         version: 1.17.0(react@19.2.7)

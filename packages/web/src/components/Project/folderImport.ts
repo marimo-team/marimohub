@@ -1,0 +1,116 @@
+import {
+	folderImportFileLimit,
+	isNotebookFilePath,
+	isSafeWorkspacePath,
+	WORKSPACE_LIMITS,
+} from '@marimo-hub/core/remote-workspace';
+import { isFolderImportExcludedPath } from '@marimo-hub/core/workspace-ignore';
+import { zip } from 'fflate';
+
+export interface FolderFile {
+	file: File;
+	path: string;
+	included: boolean;
+	exclusion?: 'generated' | 'sensitive';
+	error?: string;
+	candidate: boolean;
+	selected: boolean;
+	title: string;
+}
+
+export async function inspectFolder(files: File[]): Promise<{ root: string; files: FolderFile[] }> {
+	const root = files[0]?.webkitRelativePath.split('/')[0] ?? '';
+	if (!root) throw new Error('Choose a folder so relative paths can be preserved.');
+	const paths = new Set<string>();
+	const result: FolderFile[] = [];
+	for (const file of files) {
+		const relative = file.webkitRelativePath;
+		const path = relative.slice(root.length + 1);
+		const error =
+			!relative.startsWith(`${root}/`) || !isSafeWorkspacePath(path) || paths.has(path)
+				? 'Invalid or duplicate folder path'
+				: undefined;
+		paths.add(path);
+		const name = path.split('/').at(-1) ?? '';
+		const generated = isFolderImportExcludedPath(path);
+		const sensitive =
+			/^\.env(?:\.|$)/.test(name) ||
+			/\.(pem|key|p12|pfx)$/i.test(name) ||
+			/^id_(rsa|ed25519|ecdsa|dsa)(?:$|\.)/.test(name);
+		const exclusion = generated ? 'generated' : sensitive ? 'sensitive' : undefined;
+		const candidate = isNotebookFilePath(path) && !generated;
+		let selected = false;
+		let readError = error;
+		if (candidate && !exclusion && !error && file.size <= WORKSPACE_LIMITS.maxFileBytes) {
+			try {
+				const text = await file.slice(0, 64 * 1024).text();
+				selected = /(?:import marimo|from marimo import|marimo-version:)/.test(text);
+			} catch {
+				readError = 'File could not be read';
+			}
+		}
+		result.push({
+			file,
+			path,
+			included: !exclusion,
+			exclusion,
+			error: readError,
+			candidate,
+			selected,
+			title: name.replace(/\.[^.]+$/, ''),
+		});
+	}
+	return { root, files: result.sort((a, b) => a.path.localeCompare(b.path)) };
+}
+
+export function folderProblems(files: FolderFile[]): string[] {
+	const included = files.filter((file) => file.included);
+	const problems = files.flatMap((file) =>
+		file.error && (file.included || file.error === 'Invalid or duplicate folder path')
+			? [`${file.path}: ${file.error}`]
+			: [],
+	);
+	const fileLimit = folderImportFileLimit(included);
+	if (included.length > fileLimit)
+		problems.push(
+			`Include at most ${fileLimit} files.${fileLimit < WORKSPACE_LIMITS.maxFiles ? ' One slot is reserved for generated pyproject.toml.' : ''}`,
+		);
+	if (included.reduce((sum, file) => sum + file.file.size, 0) > WORKSPACE_LIMITS.maxTotalBytes)
+		problems.push('Included files exceed 100 MiB.');
+	for (const file of included) {
+		if (file.file.size > WORKSPACE_LIMITS.maxFileBytes)
+			problems.push(`${file.path} exceeds 25 MiB.`);
+		if (file.selected && !file.title.trim()) problems.push(`${file.path} needs a notebook name.`);
+	}
+	return problems;
+}
+
+export async function packFolder(files: FolderFile[]): Promise<Uint8Array<ArrayBuffer>> {
+	const entries: Record<string, Uint8Array> = Object.create(null);
+	for (const { path, file } of files.filter((file) => file.included)) {
+		try {
+			entries[path] = new Uint8Array(await file.arrayBuffer());
+		} catch {
+			throw new Error(`Could not read ${path}. Choose the folder again.`);
+		}
+	}
+	return new Promise((resolve, reject) => {
+		zip(entries, { level: 0 }, (error, bytes) => {
+			if (error) reject(error);
+			else resolve(new Uint8Array(bytes));
+		});
+	});
+}
+
+export function assertPreparedManifest(
+	files: { path: string; size: number }[],
+	included: FolderFile[],
+) {
+	const expected = new Map(included.map(({ path, file }) => [path, file.size]));
+	if (
+		files.length !== expected.size ||
+		!files.every((file) => expected.get(file.path) === file.size && expected.delete(file.path))
+	) {
+		throw new Error('Uploaded files differ from your selection. Choose the folder again.');
+	}
+}

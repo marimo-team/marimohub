@@ -22,3 +22,10 @@ export function isRegenerableArtifactPath(path: string): boolean {
 		REGENERABLE_FILE_NAMES.has(segments.at(-1) ?? '')
 	);
 }
+
+export function isFolderImportExcludedPath(path: string): boolean {
+	return (
+		isRegenerableArtifactPath(path) ||
+		path.split('/').some((segment) => segment.toLowerCase() === '.git')
+	);
+}

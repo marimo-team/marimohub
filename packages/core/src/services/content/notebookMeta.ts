@@ -71,8 +71,13 @@ export function buildVersion(args: BuildVersionArgs): Version {
 }
 
 /** The `source.json` for a local notebook pointing at its current version. */
-export function localSource(versionId: VersionId): Source {
-	return { schema_version: 1, type: 'local', current_version_id: versionId };
+export function localSource(versionId: VersionId, entryNotebook?: string): Source {
+	return {
+		schema_version: 1,
+		type: 'local',
+		current_version_id: versionId,
+		...(entryNotebook ? { entry_notebook: entryNotebook } : {}),
+	};
 }
 
 /**

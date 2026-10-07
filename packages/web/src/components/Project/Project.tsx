@@ -114,6 +114,7 @@ import { canEditProject, canManageProject } from '@/lib/roles';
 import type { DropdownMenuOption } from '@/components/ui';
 import type { NotebookEntry, ResolvedUser, Session } from '@/types';
 
+const ImportNotebooksDialog = lazy(() => import('./ImportNotebooksDialog'));
 const WorkspaceBrowserDialog = lazy(
 	() => import('@/components/WorkspaceBrowser/WorkspaceBrowserDialog'),
 );
@@ -256,6 +257,7 @@ function useProjectContent() {
 
 	// Dialogs acting on a row use useDialogTarget; plain ones use useDisclosure.
 	const uploadModal = useDisclosure();
+	const importModal = useDisclosure();
 	const thumbnailModal = useDialogTarget<NotebookEntry>();
 	const [gallery, setGallery] = useState(() => {
 		try {
@@ -704,6 +706,12 @@ function useProjectContent() {
 								<span className="max-sm:hidden">Browse data</span>
 							</LinkButton>
 						)}
+						{canEditProject(project.your_role) && (
+							<Button aria-label="Import notebooks" onPress={importModal.open}>
+								<Upload className="size-4" />
+								<span className="max-sm:hidden">Import notebooks</span>
+							</Button>
+						)}
 						<Button variant="primary" onPress={uploadModal.open}>
 							<Plus className="size-4" />
 							New Notebook
@@ -829,12 +837,20 @@ function useProjectContent() {
 					<EmptyState
 						icon={<FileText />}
 						message="No notebooks yet"
-						description="Create a notebook from scratch or upload an existing .py file."
+						description="Create a notebook, upload a .py file, or import a folder with supporting files."
 						action={
-							<Button variant="default" onPress={uploadModal.open}>
-								<Plus className="size-4" />
-								Create your first notebook
-							</Button>
+							<div className="flex flex-wrap justify-center gap-2">
+								<Button variant="default" onPress={uploadModal.open}>
+									<Plus className="size-4" />
+									Create your first notebook
+								</Button>
+								{canEditProject(project.your_role) && (
+									<Button onPress={importModal.open}>
+										<Upload className="size-4" />
+										Import a folder
+									</Button>
+								)}
+							</div>
 						}
 					/>
 				}
@@ -1004,6 +1020,15 @@ function useProjectContent() {
 				})}
 			</ListResults>
 
+			{importModal.isOpen && (
+				<Suspense fallback={null}>
+					<ImportNotebooksDialog
+						projectId={pid!}
+						projectName={project.name}
+						onClose={importModal.close}
+					/>
+				</Suspense>
+			)}
 			<FormDialog
 				form={createNotebookForm}
 				isPending={createNotebook.isPending}

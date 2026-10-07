@@ -639,6 +639,9 @@ describe('SandboxProvisioner', () => {
 			expect(cmd).not.toContain('MARIMOHUB_MARIMO_VERSION');
 			expect(cmd).not.toContain('marimo==');
 			expect(calls.startProcess[0].cmd).toContain("marimo --quiet edit 'apps/dash.py'");
+			expect(calls.startProcess[0].cmd).toContain(
+				'export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" && ',
+			);
 			expect(calls.startProcess[0].cmd).not.toContain('uv sync');
 		});
 
