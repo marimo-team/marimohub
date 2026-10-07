@@ -127,6 +127,27 @@ export const SAMPLE_CONFIGS: Record<string, unknown> = {
 	},
 	wandb: { api_key: 'wandb-key', entity: 'marimo', project: 'hub' },
 	huggingface: { token: 'hf-token' },
+	python_package_index: {
+		url: 'https://packages.example.test/simple/',
+		auth: { method: 'basic', username: 'reader', password: 'index-password' },
+	},
+	jfrog_artifactory: {
+		url: 'https://company.jfrog.io/artifactory',
+		repository: 'python',
+		auth: { method: 'token', token: 'artifactory-token' },
+	},
+	azure_artifacts: {
+		organization: 'company',
+		project: 'analytics',
+		feed: 'python',
+		auth: { method: 'token', token: 'azure-pat' },
+	},
+	gitlab_packages: {
+		url: 'https://gitlab.com',
+		scope: 'project',
+		scope_id: '123',
+		auth: { method: 'token', username: 'gitlab+deploy-token-1', token: 'gitlab-token' },
+	},
 	aws_codeartifact: {
 		domain: 'company',
 		domain_owner: '123456789012',
