@@ -173,3 +173,46 @@ it.each([403, 404, 503])(
 		);
 	},
 );
+
+const renderAt = (entry: string) =>
+	render(
+		<MemoryRouter initialEntries={[entry]}>
+			<Location />
+			<NotebookFrame
+				title="Notebook"
+				src="https://sandbox.example/studio/missing/"
+				sandboxUrl="https://sandbox.example/"
+			/>
+		</MemoryRouter>,
+	);
+
+it('offers the notebook home when a loaded saved path never connects', () => {
+	renderAt('/notebook?__mh_path=studio%2Fmissing%2F&id=1#cell');
+	fireEvent.load(screen.getByTitle('Notebook'));
+	expect(screen.queryByText(/Notebook not visible/)).not.toBeInTheDocument();
+	act(() => connections.at(-1)!.options.onStatus!('unavailable'));
+	expect(screen.getByText(/Notebook not visible/).parentElement).toHaveTextContent(
+		'The saved notebook page did not connect.',
+	);
+	fireEvent.click(screen.getByRole('button', { name: 'Open notebook home' }));
+	expect(screen.getByTestId('location')).toHaveTextContent('/notebook?id=1#cell');
+	expect(screen.queryByText(/Notebook not visible/)).not.toBeInTheDocument();
+});
+
+it('keeps loaded notebooks without a saved path free of recovery help', () => {
+	renderAt('/notebook?id=1');
+	fireEvent.load(screen.getByTitle('Notebook'));
+	act(() => connections.at(-1)!.options.onStatus!('unavailable'));
+	expect(screen.queryByText(/Notebook not visible/)).not.toBeInTheDocument();
+});
+
+it('lets the saved-path help be dismissed', () => {
+	renderAt('/notebook?__mh_path=studio%2Fmissing%2F');
+	fireEvent.load(screen.getByTitle('Notebook'));
+	act(() => connections.at(-1)!.options.onStatus!('unavailable'));
+	fireEvent.click(screen.getByRole('button', { name: 'Dismiss notebook help' }));
+	expect(screen.queryByText(/Notebook not visible/)).not.toBeInTheDocument();
+	expect(screen.getByTestId('location')).toHaveTextContent(
+		'/notebook?__mh_path=studio%2Fmissing%2F',
+	);
+});

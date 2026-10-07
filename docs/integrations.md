@@ -459,8 +459,8 @@ Each kind documents its sandbox contract — the env vars and files it renders �
 in its section below and in the add-integration form. `<NAME>` is the
 integration's instance name upper-cased with `-` → `_` (`prod` → `PROD`).
 
-Every session also gets `MARIMOHUB_INTEGRATIONS_DIR` (default
-`/tmp/marimohub-integrations`) containing each integration's rendered files and
+Every session with an enabled integration also gets `MARIMOHUB_INTEGRATIONS_DIR` (default
+`/tmp/marimohub-integrations`; restricted viewer sandboxes get none) containing each integration's rendered files and
 a `manifest.json` naming the instances, kinds, and config versions in play. The
 directory sits outside the workspace, so rendered config is never captured back
 into the notebook's files.

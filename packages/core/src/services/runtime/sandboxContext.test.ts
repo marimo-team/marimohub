@@ -7,11 +7,18 @@ import { describe, expect, it, vi } from 'vitest';
 import type { TestContext } from 'vitest';
 import { createSandboxId } from '../../ids';
 import { makeFakeSandbox } from '../../testing/fakes';
-import { sandboxContextFile, sandboxContextPath, writeSandboxContext } from './sandboxContext';
+import {
+	buildSandboxContext,
+	SANDBOX_CONTEXT_COMMAND_MARKER,
+	sandboxContextFile,
+	sandboxContextPath,
+	writeSandboxContext,
+} from './sandboxContext';
 import type { SandboxContext } from './sandboxContext';
 
 const exec = promisify(execCallback);
 const context: SandboxContext = {
+	schema_version: 1,
 	public_url: 'https://user:password@sandbox.example/view/?access_token=secret#fragment',
 	notebook_url: 'https://hub.example/projects/p/notebooks/n',
 	exposure_mode: 'subdomain',
@@ -19,7 +26,10 @@ const context: SandboxContext = {
 	session_mode: 'edit',
 };
 
-async function filesystemSandbox(onTestFinished: TestContext['onTestFinished']) {
+async function filesystemSandbox(
+	onTestFinished: TestContext['onTestFinished'],
+	options: { cwd?: string } = {},
+) {
 	const root = await mkdtemp(join(tmpdir(), "workspace's root "));
 	onTestFinished(() => rm(root, { recursive: true, force: true }));
 	const { instance, calls } = makeFakeSandbox();
@@ -28,7 +38,9 @@ async function filesystemSandbox(onTestFinished: TestContext['onTestFinished']) 
 		try {
 			return {
 				success: true,
-				...(await exec(command.replaceAll('/workspace', '/rewritten-workspace'))),
+				...(await exec(command.replaceAll('/workspace', '/rewritten-workspace'), {
+					cwd: options.cwd,
+				})),
 			};
 		} catch {
 			return { success: false, stdout: '', stderr: '', error: { code: 'COMMAND_FAILED' } };
@@ -37,6 +49,43 @@ async function filesystemSandbox(onTestFinished: TestContext['onTestFinished']) 
 	const id = createSandboxId();
 	return { instance, calls, run, id, path: instance.resolveProcessPath(sandboxContextPath(id)) };
 }
+
+describe('buildSandboxContext', () => {
+	const session = { project_id: 'p', notebook_id: 'n' } as const;
+
+	it('versions the document and points at the notebook under the app base path', () => {
+		const built = buildSandboxContext({
+			session: session as never,
+			sessionMode: 'app',
+			appBaseUrl: 'https://hub.example/prefix/',
+			publicUrl: 'https://sandbox.example/',
+			exposureMode: 'proxy',
+			persistence: 'none',
+		});
+		expect(built).toEqual({
+			schema_version: 1,
+			public_url: 'https://sandbox.example/',
+			notebook_url: 'https://hub.example/prefix/projects/p/notebooks/n',
+			exposure_mode: 'proxy',
+			persistence_mode: 'none',
+			session_mode: 'app',
+		});
+		const document = JSON.parse(sandboxContextFile(createSandboxId(), built).content) as object;
+		expect(Object.keys(document)[0]).toBe('schema_version');
+	});
+
+	it('points a preview session at its preview resource', () => {
+		const built = buildSandboxContext({
+			session: { ...session, origin: { notebook_id: 'n', preview_id: 'pv' } } as never,
+			sessionMode: 'edit',
+			appBaseUrl: 'https://hub.example',
+			publicUrl: 'https://sandbox.example/',
+			exposureMode: 'subdomain',
+			persistence: 'source',
+		});
+		expect(built.notebook_url).toBe('https://hub.example/projects/p/notebooks/n/previews/pv');
+	});
+});
 
 describe('sandboxContextFile', () => {
 	it.each([
@@ -119,6 +168,34 @@ describe('writeSandboxContext', () => {
 				? `Failed to publish sandbox context: ${detail}`
 				: 'Failed to publish sandbox context',
 		});
+	});
+
+	it('runs Python in isolated mode so workspace modules cannot shadow the standard library', async ({
+		onTestFinished,
+	}) => {
+		// vitest workers cannot chdir, so the shadowing module goes in the exec cwd instead.
+		const workspace = await mkdtemp(join(tmpdir(), 'shadowing-cwd-'));
+		onTestFinished(() => rm(workspace, { recursive: true, force: true }));
+		await writeFile(join(workspace, 'base64.py'), 'raise SystemExit("shadowed")\n');
+		const { instance, run, id, path } = await filesystemSandbox(onTestFinished, { cwd: workspace });
+		await writeSandboxContext(instance, id, context);
+		expect(String(run.mock.calls[0]?.[0])).toMatch(/^python3 -I -c /);
+		expect(String(run.mock.calls[0]?.[0])).toContain(SANDBOX_CONTEXT_COMMAND_MARKER);
+		expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ schema_version: 1 });
+	});
+
+	it('times out a hung publication', async () => {
+		vi.useFakeTimers();
+		try {
+			const { instance } = makeFakeSandbox();
+			vi.spyOn(instance, 'exec').mockReturnValue(new Promise(() => {}));
+			const pending = writeSandboxContext(instance, createSandboxId(), context);
+			const assertion = expect(pending).rejects.toThrow('Publishing sandbox context timed out');
+			await vi.advanceTimersByTimeAsync(15_000);
+			await assertion;
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('preserves transport failures', async () => {

@@ -1,4 +1,4 @@
-import { NOTEBOOK_PATH_PARAM, notebookPath, validNotebookPath } from './path';
+import { NOTEBOOK_PATH_PARAM, notebookPath, resolveNotebookPath, validNotebookPath } from './path';
 
 // Keep aligned with marimo's KnownQueryParams when upgrading supported runtimes.
 export const RESERVED_PARAMS: ReadonlySet<string> = new Set([
@@ -16,6 +16,11 @@ export const RESERVED_PARAMS: ReadonlySet<string> = new Set([
 	'view-as',
 	'show-chrome',
 ]);
+
+/** Keys the sandbox URL already carries; they win over notebook params of the same name. */
+export function sandboxQueryKeys(sandboxUrl: URL): string[] {
+	return [...new Set(sandboxUrl.searchParams.keys())];
+}
 
 export function notebookQueryParams(
 	search: string | [string, string][] | URLSearchParams,
@@ -59,4 +64,15 @@ export function shareableNotebookQuery(
 	const path = includePath ? notebookPath(new URLSearchParams(search)) : undefined;
 	if (path) params.set(NOTEBOOK_PATH_PARAM, path);
 	return params;
+}
+
+/** The inverse of `mergeNotebookQuery`: sandbox keys win and the path resolves under the base. */
+export function notebookFrameUrl(sandboxUrl: URL, search: string): URL {
+	const path = notebookPath(search);
+	const url = new URL(path ? (resolveNotebookPath(sandboxUrl, path) ?? sandboxUrl) : sandboxUrl);
+	const trustedKeys = new Set(sandboxQueryKeys(url));
+	for (const [key, value] of notebookQueryParams(search)) {
+		if (!trustedKeys.has(key)) url.searchParams.append(key, value);
+	}
+	return url;
 }

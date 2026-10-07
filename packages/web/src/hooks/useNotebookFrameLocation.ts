@@ -4,7 +4,7 @@ import { randomIdentifier } from '@marimo-hub/notebook-bridge/protocol';
 import type { QuerySnapshot } from '@marimo-hub/notebook-bridge/protocol';
 import { mergeNotebookQuery } from '@marimo-hub/notebook-bridge/query';
 import type { Theme } from '@/context/ThemeContext';
-import { notebookFrameUrl } from '@/lib/notebookUrls';
+import { notebookFrameUrl, trustedSandboxKeys } from '@/lib/notebookUrls';
 
 export function useNotebookFrameLocation(
 	sandboxUrl: string | undefined,
@@ -56,11 +56,10 @@ export function useNotebookFrameLocation(
 	const onQuery = useCallback(
 		(snapshot: QuerySnapshot): boolean => {
 			if (!sandboxUrl) return false;
-			const trustedKeys = [...new URL(sandboxUrl, window.location.origin).searchParams.keys()];
 			const search = mergeNotebookQuery(
 				location.search,
 				snapshot.entries,
-				trustedKeys,
+				trustedSandboxKeys(sandboxUrl),
 				snapshot.path,
 			);
 			if (search === location.search) return true;

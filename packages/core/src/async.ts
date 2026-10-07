@@ -1,3 +1,5 @@
+import { assertPositiveInteger } from './internal/validation';
+
 export interface DeadlineOptions {
 	timeoutMs: number;
 	timeoutError: () => Error;
@@ -90,4 +92,36 @@ function callErrorFactory(factory: () => Error): Error {
 function errorFromAbortReason(reason: unknown): Error {
 	if (reason instanceof Error) return reason;
 	return new DOMException('The operation was aborted.', 'AbortError');
+}
+
+/**
+ * Run `run` over `items` with at most `concurrency` in flight. After the first
+ * failure no new item starts, and the call rejects with that failure only once
+ * every started item has settled, so a caller can retry or clean up without
+ * racing its own in-flight work.
+ */
+export async function forEachConcurrentUntilFailure<T>({
+	items,
+	concurrency,
+	run,
+}: {
+	items: readonly T[];
+	concurrency: number;
+	run: (item: T, index: number) => Promise<void>;
+}): Promise<void> {
+	assertPositiveInteger('concurrency', concurrency);
+	let failure: { error: unknown } | undefined;
+	let next = 0;
+	const worker = async (): Promise<void> => {
+		while (!failure && next < items.length) {
+			const index = next++;
+			try {
+				await run(items[index], index);
+			} catch (error) {
+				failure ??= { error };
+			}
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+	if (failure) throw failure.error;
 }

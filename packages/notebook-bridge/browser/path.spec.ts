@@ -102,6 +102,30 @@ for (const basePath of ['/', '/hub/proxy/current/']) {
 			await expect(page).toHaveURL(shared);
 		});
 
+		test('clears a restored path when the frame moves to an unrepresentable location', async ({
+			page,
+		}) => {
+			await page.goto(`${server.hostOrigin}/?__mh_path=studio%2Fdata%2F&id=1`);
+			const frame = await connectedFrame(page);
+			expect(new URL(frame.url()).pathname).toBe(`${basePath}studio/data/`);
+			await frame.evaluate(
+				(base) => history.pushState({}, '', `${base}studio%2Fencoded/?id=2`),
+				basePath,
+			);
+			await expect(page).toHaveURL(`${server.hostOrigin}/?id=2`);
+			if (basePath !== '/') {
+				await frame.evaluate(
+					(base) => history.pushState({}, '', `${base}studio/data/?id=3`),
+					basePath,
+				);
+				await expect
+					.poll(() => new URL(page.url()).searchParams.get('__mh_path'))
+					.toBe('studio/data/');
+				await frame.evaluate(() => history.pushState({}, '', '/outside/?id=4'));
+				await expect(page).toHaveURL(`${server.hostOrigin}/?id=4`);
+			}
+		});
+
 		test('ignores unsafe shared paths and snapshots outside the sandbox base', async ({ page }) => {
 			await page.goto(`${server.hostOrigin}/?__mh_path=..%2Fadmin`);
 			const frame = await connectedFrame(page);

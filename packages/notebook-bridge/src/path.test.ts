@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { notebookPath, relativeNotebookPath, resolveNotebookPath, validNotebookPath } from './path';
+import {
+	notebookPath,
+	parseSandboxBasePath,
+	relativeNotebookPath,
+	resolveNotebookPath,
+	validNotebookPath,
+} from './path';
 import { mergeNotebookQuery, notebookQueryParams, shareableNotebookQuery } from './query';
 import { QuerySnapshot } from './protocol';
 
@@ -64,6 +70,24 @@ describe('sandbox-relative paths', () => {
 			relativeNotebookPath('/hub/proxy/token-other/studio/', '/hub/proxy/token/'),
 		).toBeUndefined();
 		expect(relativeNotebookPath('/studio/data/', '/hub/proxy/token/')).toBeUndefined();
+	});
+	it('accepts only a normalized same-origin directory as the sandbox base', () => {
+		const origin = 'https://notebook.example';
+		expect(parseSandboxBasePath('/hub/proxy/token/', origin)).toBe('/hub/proxy/token/');
+		expect(parseSandboxBasePath('/', origin)).toBe('/');
+		for (const candidate of [
+			'/hub/proxy/token',
+			'/hub/../token/',
+			'/hub/%2e%2e/token/',
+			'//evil.example/',
+			'https://evil.example/hub/',
+			'/hub/proxy/token/?secret=1',
+			'/hub/proxy/token/#cell',
+			'hub/proxy/token/',
+			'http://[',
+		]) {
+			expect(parseSandboxBasePath(candidate, origin), candidate).toBeUndefined();
+		}
 	});
 	it('restores under the current base and keeps current credentials', () => {
 		const base = new URL('https://new.example/hub/proxy/new?access_token=current#cell');

@@ -196,12 +196,20 @@ A fresh app initializes from its query parameters. An editor reconnect can retai
 The bridge does not provide full two-way Python history restoration.
 See the [bridge package guide](https://github.com/marimo-team/marimohub/blob/main/packages/notebook-bridge/README.md) for runtime and protocol details.
 
+### Shared URLs keep the notebook path
+
+The hub mirrors the path of the notebook frame into the `__mh_path` query parameter.
+Reload, retry, and restart restore that path, and so do Copy URL, **Run as app**, and app links.
+The sandbox itself must serve deep routes; the hub has no server-side fallback.
+Sessions started on an older sandbox image restore the path but do not report path changes until they restart.
+
 ### Reserved parameters
 
 The hub strips these names from forwarded parameters and copied links, including duplicates and encoded names:
 
 - Authentication and session controls: `access_token`, `refresh_token`, `session_id`, `auth_error`.
 - Display and runtime controls: `theme`, `show-code`, `include-code`, `kiosk`, `vscode`, `file`, `view-as`, `show-chrome`.
+- Hub navigation state: `__mh_path`.
 
 Existing sandbox URL parameters take precedence. The hub then applies its theme and hides code in app mode.
 The iframe omits the referrer header to avoid sending the unfiltered outer URL.
@@ -209,11 +217,14 @@ Query parameters are user input and grant no access to notebooks or data.
 
 ## Published URLs inside the sandbox
 
-Editor and app sessions set `MARIMOHUB_CONTEXT_FILE` to an absolute path outside the workspace.
+Editor, app, and preview sessions set `MARIMOHUB_CONTEXT_FILE` to an absolute path outside the workspace.
+Secondary surfaces in the same sandbox see the same variable.
+See [Sandbox environment](./environment-and-access.md#sandbox-environment) for every variable the hub sets.
 The JSON file contains:
 
 | Field              | Meaning                                                                                                                            |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `schema_version`   | `1`. A breaking change to the document increments it.                                                                              |
 | `public_url`       | The marimo endpoint without credentials, query parameters, or fragments. Deployment prefixes and signed proxy paths remain intact. |
 | `notebook_url`     | The notebook or preview page in the hub. Use this for links to other users.                                                        |
 | `exposure_mode`    | `subdomain` or `proxy`.                                                                                                            |
@@ -222,11 +233,12 @@ The JSON file contains:
 
 For local editors whose edits persist, `persistence_mode` is `source` or `workspace`, as configured by the deployment's `MARIMOHUB_PERSIST_WORKSPACE` setting.
 Apps, temporary editors, viewer sandboxes, previews, and Git-synced notebooks report `none`.
-Studio can use this value to warn before creating view files that will not persist.
+A tool can use this value to warn before it creates files that will not persist.
 
-Proxy context joins the startup file batch. Subdomain context uses one atomic publication command after URL resolution.
-If subdomain publication fails, the session still starts and the hub logs a warning. Consumers must tolerate a missing file, including during startup.
-Scheduled jobs omit the file. Consumers must tolerate an absent variable on older deployments and ignore unknown fields.
+The file can be missing, including during startup. Consumers must tolerate a missing file, an absent variable on older deployments, and unknown fields.
+Scheduled jobs omit the variable.
+In `subdomain` exposure mode, a failed context write does not stop the session; the hub logs a warning.
+In `proxy` exposure mode, the context is written with the other startup files, so a failed write fails the session start.
 
 After the file becomes available:
 
@@ -240,7 +252,9 @@ notebook_link = context["notebook_url"]
 callback_url = context["public_url"].rstrip("/") + "/oauth/callback"
 ```
 
-Sandbox authentication still applies. Signed proxy paths do not bypass hub authorization.
+The context file changes no authentication. Sandbox authentication still applies, and signed proxy paths do not bypass hub authorization.
+When sandbox authentication is off, `public_url` on its own can grant kernel access on some compute backends.
+Share `notebook_url` with people, and send `public_url` only to services that you trust with the kernel.
 Paths and URLs can change after a sandbox restart. The context does not publish extra ports or guarantee a stable OAuth callback.
 
 ## Who can do what

@@ -73,7 +73,13 @@ class PairConnectionTest(unittest.TestCase):
 
         self.addCleanup(stop)
         self.origin = f"http://127.0.0.1:{server.server_port}"
-        root.joinpath("pyproject.toml").write_text('[project]\nname = "pair-test"\nversion = "0.0.0"\n')
+        # /workspace usually has no pyproject, so uv runs in no-project mode via VIRTUAL_ENV.
+        self.cwd = root / "workspace"
+        self.cwd.mkdir()
+        self.project_cwd = root / "project"
+        self.project_cwd.mkdir()
+        self.project_cwd.joinpath("pyproject.toml").write_text(
+            '[project]\nname = "pair-test"\nversion = "0.0.0"\n')
         self.command = SKILL.joinpath("SKILL.md").read_text().split("```bash\n", 1)[1].split("```", 1)[0]
         self.env = {
             **os.environ,
@@ -91,7 +97,7 @@ class PairConnectionTest(unittest.TestCase):
             setup = command.split("uv run --no-sync marimo pair execute", 1)[0]
             command = setup + 'uv run --no-sync marimo pair notebook list "${kernel_args[@]}"'
         result = subprocess.run(
-            ["bash", "-c", command], cwd=self.directory.name,
+            ["bash", "-c", command], cwd=self.cwd,
             env=self.env, text=True, capture_output=True, timeout=15,
         )
         if success:
@@ -106,22 +112,25 @@ class PairConnectionTest(unittest.TestCase):
                          [self.base_path + path for path in paths])
 
     def test_skill_commands_connect_without_a_server_registry(self):
-        for auth in (False, True):
-            for base_path in ("", "/proxy/routing-token"):
-                with self.subTest(auth=auth, base_path=base_path):
-                    self.base_path = base_path
-                    self.expected_token = "Bearer test-kernel-secret" if auth else None
-                    self.env["MARIMOHUB_KERNEL_URL"] = self.origin + base_path + "/"
-                    self.env["MARIMOHUB_KERNEL_TOKEN_FILE"] = str(self.token_file) if auth else ""
-                    listing = json.loads(self.run_pair(listing=True).stdout)
-                    self.assertEqual(listing["warnings"], [])
-                    self.assertEqual(listing["notebooks"][0]["sessions"], [{"id": "session-1"}])
-                    self.assert_requests("/api/sessions")
-                    executed = json.loads(self.run_pair().stdout)
-                    self.assertTrue(executed["success"])
-                    self.assertEqual(executed["stdout"], "42\n")
-                    self.assert_requests("/api/sessions", "/api/kernel/execute")
-                    self.assertTrue(all(auth == self.expected_token for _, auth in self.requests))
+        bare_cwd = self.cwd
+        for project in (False, True):
+            for auth in (False, True):
+                for base_path in ("", "/proxy/routing-token"):
+                    with self.subTest(project=project, auth=auth, base_path=base_path):
+                        self.cwd = self.project_cwd if project else bare_cwd
+                        self.base_path = base_path
+                        self.expected_token = "Bearer test-kernel-secret" if auth else None
+                        self.env["MARIMOHUB_KERNEL_URL"] = self.origin + base_path + "/"
+                        self.env["MARIMOHUB_KERNEL_TOKEN_FILE"] = str(self.token_file) if auth else ""
+                        listing = json.loads(self.run_pair(listing=True).stdout)
+                        self.assertEqual(listing["warnings"], [])
+                        self.assertEqual(listing["notebooks"][0]["sessions"], [{"id": "session-1"}])
+                        self.assert_requests("/api/sessions")
+                        executed = json.loads(self.run_pair().stdout)
+                        self.assertTrue(executed["success"])
+                        self.assertEqual(executed["stdout"], "42\n")
+                        self.assert_requests("/api/sessions", "/api/kernel/execute")
+                        self.assertTrue(all(auth == self.expected_token for _, auth in self.requests))
 
     def test_missing_token_file_fails_before_network(self):
         self.token_file.unlink()

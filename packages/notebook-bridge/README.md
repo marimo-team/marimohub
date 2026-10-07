@@ -10,11 +10,11 @@ The bridge works across origins without proxy exposure.
 ```ts
 import { createHostBridge } from '@marimo-hub/notebook-bridge/host';
 import { startNotebookBridge } from '@marimo-hub/notebook-bridge/notebook';
-import { mergeNotebookQuery } from '@marimo-hub/notebook-bridge/query';
+import { mergeNotebookQuery, sandboxQueryKeys } from '@marimo-hub/notebook-bridge/query';
 
 // In the parent document:
 const notebookUrl = new URL(sandboxUrl, location.origin);
-const excludedKeys = [...notebookUrl.searchParams.keys()];
+const excludedKeys = sandboxQueryKeys(notebookUrl);
 const host = createHostBridge({
 	iframe,
 	origin: notebookUrl.origin,
@@ -192,8 +192,17 @@ saved path against the current sandbox base and credentials.
 
 The host's `sandboxUrl` option enables negotiation of `location-path.v1` and its
 trusted `sandboxBasePath`. The optional `QuerySnapshot.path` is relative to that
-base and shares a revision with the query. An empty path clears the saved path.
-An absent path leaves it unchanged. Older peers retain query mirroring.
+base and shares a revision with the query. An empty path (`''`) clears the saved
+path. After negotiation, the notebook always sends a path. It sends `''` for the
+base itself and for any location it cannot represent, such as a page outside the
+base or a path that fails validation. This prevents a stale `__mh_path` from being
+shared or restored. An absent path leaves the saved path unchanged. Only peers
+without the capability send no path.
+
+Older notebook peers retain query mirroring. Hub still restores a saved
+`__mh_path` into their iframe, but it receives no path updates back. In-frame
+navigation then leaves the old path in the Hub URL until the sandbox session
+restarts and installs the current bridge.
 
 Hub stores the path as `__mh_path`, for example
 `/app/sales?__mh_path=studio%2Fdata%2F`. This metadata never enters the notebook
@@ -206,10 +215,23 @@ Validation rejects absolute URLs or paths, dot segments, backslashes, controls,
 encoded path separators, and nested percent escapes. Invalid or duplicate
 metadata is ignored.
 
-The sandbox server must serve deep routes directly. The bridge adds no server
+The sandbox server must serve deep routes directly. Neither the bridge nor Hub
+has a server-side fallback: a saved path that the sandbox no longer serves loads
+that page as is. When such a frame never connects, Hub offers "Open notebook home",
+which reopens the same Hub URL without `__mh_path`. The bridge adds no server
 routes and restores no state outside the URL. It supports marimo edit and app
 frames, not the separate VS Code surface. Editor reconnects can retain kernel
 state. Two-way Python history restoration requires a separate capability.
+
+### Security
+
+A crafted Hub link can set `__mh_path` to any valid relative path, so the
+viewer's iframe can issue a GET for any route inside the viewer's own sandbox,
+for example a marimo `api/` or `public/` route. This is an accepted choice. The
+host and notebook both reject paths that leave the sandbox origin or the trusted
+base prefix, the request carries only the viewer's own sandbox credentials, and
+marimo's state-changing endpoints use POST or WebSocket. The bridge does not keep
+a route denylist, because it would duplicate marimo's routing and add no boundary.
 
 ## Generation and tests
 

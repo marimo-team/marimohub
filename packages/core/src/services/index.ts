@@ -331,12 +331,17 @@ export type {
 export { signProxyToken, verifyProxyToken } from './runtime/proxyToken';
 export { createKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from './runtime/kernelAuth';
 export {
+	buildSandboxContext,
+	SANDBOX_CONTEXT_COMMAND_MARKER,
 	sandboxContextPath,
 	sandboxContextFile,
 	writeSandboxContext,
 } from './runtime/sandboxContext';
-export type { SandboxContext } from './runtime/sandboxContext';
-export { kernelBasePathFromUrl } from './runtime/sandboxExposure';
+export type { SandboxContext, SandboxContextInput } from './runtime/sandboxContext';
+export { effectivePersistenceMode } from './runtime/sessionPersistence';
+export type { PersistenceMode } from './runtime/sessionPersistence';
+export * from './runtime/sandboxEnvironment';
+export { kernelBasePathFromUrl, localKernelBasePath } from './runtime/sandboxExposure';
 export { resolveBaseImage } from './runtime/resolveBaseImage';
 export { resolveComputeProfile, toComputeResourceRecord } from './runtime/resolveComputeProfile';
 export type { ComputeProfileConfig, ResolvedComputeProfile } from './runtime/resolveComputeProfile';

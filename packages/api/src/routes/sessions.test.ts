@@ -28,7 +28,11 @@ import {
 } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import type { ApiDeps } from '../context';
-import { isSandboxContextCommand, readSandboxContexts } from '../testing/sandboxContext';
+import {
+	failSandboxContextPublication,
+	isSandboxContextCommand,
+	readSandboxContexts,
+} from '../testing/sandboxContext';
 import {
 	createInitializedBucket,
 	createTestApi,
@@ -188,6 +192,7 @@ describe('Session routes', () => {
 				expect.objectContaining({ MARIMOHUB_CONTEXT_FILE: path }),
 			);
 			const expectedContext = {
+				schema_version: 1,
 				public_url: publicUrl.href,
 				notebook_url: `https://hub.example/prefix/projects/${pid}/notebooks/${nid}`,
 				exposure_mode: exposure,
@@ -291,19 +296,7 @@ describe('Session routes', () => {
 		'keeps the session running and logs a warning after context %s',
 		async (stage) => {
 			const { instance, calls } = makeFakeSandbox();
-			const exec = instance.exec;
-			const execSpy = vi.spyOn(instance, 'exec').mockImplementation(async (...args) => {
-				if (isSandboxContextCommand(args[0])) {
-					if (stage === 'command-throw') throw new Error('transport unavailable');
-					return {
-						success: false,
-						stdout: '',
-						stderr: 'permission denied',
-						error: { code: 'COMMAND_FAILED' },
-					};
-				}
-				return exec(...args);
-			});
+			const execSpy = failSandboxContextPublication(instance, stage);
 			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 			try {
 				const request = exclusiveApi(ACTOR, fakeComputeFrom(instance));
@@ -325,6 +318,10 @@ describe('Session routes', () => {
 						stage === 'command-throw' ? 'transport unavailable' : 'permission denied',
 					),
 				});
+				const provision = log.mock.calls.find((call) =>
+					String(call[0]).includes('"session_provision"'),
+				)?.[0];
+				expect(JSON.parse(String(provision))).toMatchObject({ sandbox_context: 'unavailable' });
 				const reused = await expectOk<ApiSession>(await request('POST', sessionsPath()));
 				expect(reused.session_id).toBe(response.session_id);
 				expect(reused.reused).toBe(true);

@@ -2,7 +2,7 @@ import {
 	AppPoolService,
 	logOperationalError,
 	kernelActiveConnections,
-	kernelBasePathFromUrl,
+	localKernelBasePath,
 	NotebookId,
 	NotebookMetaSchema,
 	PreviewRuntimeMetaSchema,
@@ -80,7 +80,7 @@ export async function sweepAppPools(
 							return 0;
 						const connections = await kernelActiveConnections(
 							deps.compute.create(member.sandbox_id, { owner: sessionOwner(session) }),
-							kernelBasePathFromUrl(session.sandbox_url),
+							localKernelBasePath(session),
 						).catch((error: unknown) => {
 							if (error instanceof NotFoundError) return null;
 							throw error;

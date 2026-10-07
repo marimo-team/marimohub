@@ -13,7 +13,7 @@ import type { SandboxProvider, Session } from '@marimo-hub/core';
 import { ACTOR, makeFakeSandbox, makeSession } from '@marimo-hub/core/testing';
 import type { FakeSandboxOptions } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
-import { isSandboxContextCommand } from '../testing/sandboxContext';
+import { failSandboxContextPublication } from '../testing/sandboxContext';
 
 async function setup(options: FakeSandboxOptions = {}, providerLifetimeMs?: number) {
 	const bucket = await createInitializedBucket();
@@ -534,18 +534,7 @@ describe('session warm sandbox assignment', () => {
 		async (mode) => {
 			const w = await setup();
 			await w.warmPool.sweep();
-			const exec = w.fake.instance.exec;
-			vi.spyOn(w.fake.instance, 'exec').mockImplementation(async (...args) => {
-				if (isSandboxContextCommand(args[0])) {
-					return {
-						success: false,
-						stdout: '',
-						stderr: 'permission denied',
-						error: { code: 'COMMAND_FAILED' },
-					};
-				}
-				return exec(...args);
-			});
+			failSandboxContextPublication(w.fake.instance);
 			await expectOk(await w.api.request('POST', w.path, { mode }));
 			expect(w.fake.calls.startProcess).toHaveLength(1);
 			expect(w.fake.calls.destroy).toBe(0);

@@ -316,7 +316,7 @@ describe('KubernetesCompute', () => {
 			expect(world.execCalls.at(-1)?.options).toEqual({ timeout: 300_000 });
 			const command = world.execCalls.at(-1)?.command;
 			expect(command?.slice(0, 2)).toEqual(['sh', '-lc']);
-			expect(command?.[2]).toContain('exec python3 -c ');
+			expect(command?.[2]).toContain('exec python3 -I -c ');
 			expect(command?.[2]).toContain('os.killpg(process.pid, signal.SIGKILL)');
 			expect(command?.[2]).toContain(`${shellQuote('299900')} ${shellQuote('uv sync')}`);
 		});
@@ -453,6 +453,29 @@ describe('KubernetesCompute', () => {
 			expect(world.ensured).toHaveLength(2);
 			expect(world.pods.size).toBe(1);
 			expect(world.execCalls).toHaveLength(1);
+		});
+
+		it('does not hold later callers behind post-boot diagnostics', async () => {
+			const world = makeWorld();
+			const pullRead = Promise.withResolvers<void>();
+			const pullMessage = Promise.withResolvers<string | undefined>();
+			world.client.getImagePullMessage = () => {
+				pullRead.resolve();
+				return pullMessage.promise;
+			};
+			const sandbox = makeCompute(world).create(SANDBOX_ID);
+			let firstSettled = false;
+			const first = sandbox.exec('first').finally(() => {
+				firstSettled = true;
+			});
+			await pullRead.promise;
+
+			await sandbox.exec('second');
+
+			expect(firstSettled).toBe(false);
+			expect(world.execCalls.map(shCmd)).toEqual(['second']);
+			pullMessage.resolve(undefined);
+			await first;
 		});
 
 		it('a re-resolved instance operates on the same Pod name', async () => {

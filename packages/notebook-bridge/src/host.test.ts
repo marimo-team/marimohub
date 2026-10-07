@@ -4,6 +4,7 @@ import { wirePeer } from './testing-peer';
 import { createHostBridge } from './host';
 import type { AppNavigation } from './protocol';
 import { HANDSHAKE_TIMEOUT_MS, NAMESPACE } from './protocol';
+import { mergeNotebookQuery } from './query';
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -489,6 +490,24 @@ describe('path negotiation', () => {
 			await remote.call('replaceQuery', { revision: 3, entries: [], path: '' });
 			expect(onQuery).toHaveBeenLastCalledWith({ revision: 3, entries: [], path: '' });
 		}
+	});
+	it('forwards an empty path so a stale saved path is cleared', async () => {
+		const { negotiate, onQuery } = fixture({ paths: true });
+		let search = '?__mh_path=studio%2Fdata%2F&id=1';
+		onQuery.mockImplementation(((snapshot: { entries: [string, string][]; path?: string }) => {
+			search = mergeNotebookQuery(search, snapshot.entries, ['provider'], snapshot.path);
+			return true;
+		}) as () => boolean);
+		const remote = await negotiate();
+		await expect(
+			remote.call('replaceQuery', { revision: 1, entries: [['id', '1']], path: '' }),
+		).resolves.toEqual({ applied: true });
+		expect(onQuery).toHaveBeenCalledExactlyOnceWith({
+			revision: 1,
+			entries: [['id', '1']],
+			path: '',
+		});
+		expect(search).toBe('?id=1');
 	});
 	it('rejects invalid paths before dispatch without disabling valid updates', async () => {
 		const { negotiate, onQuery } = fixture({ paths: true });

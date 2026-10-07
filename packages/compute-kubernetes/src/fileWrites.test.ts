@@ -74,14 +74,30 @@ describe.skipIf(spawnSync('sh', ['-c', 'python3 -V']).status !== 0)('file batch 
 	afterEach(() => {
 		rmSync(directory, { recursive: true, force: true });
 	});
-	function receive(input: Uint8Array) {
+	function receive(input: Uint8Array, env?: NodeJS.ProcessEnv) {
 		return spawnSync('sh', ['-c', WRITE_BATCH_COMMAND], {
 			cwd: directory,
 			input,
 			encoding: 'utf8',
 			timeout: 10_000,
+			...(env ? { env: { ...process.env, ...env } } : {}),
 		});
 	}
+
+	it('ignores a workspace json.py in the cwd or on PYTHONPATH', () => {
+		const poison = 'raise SystemExit("shadowed stdlib json")\n';
+		writeFileSync(join(directory, 'json.py'), poison);
+		const files = [
+			{ path: join(directory, 'a.txt'), content: 'first' },
+			{ path: join(directory, 'nested/b.txt'), content: 'second' },
+		];
+		const result = receive(encodeFileWriteBatch(files), { PYTHONPATH: directory });
+		expect(result.stderr).toBe('');
+		expect(result.status).toBe(0);
+		expect(readFileSync(files[0].path, 'utf8')).toBe('first');
+		expect(readFileSync(files[1].path, 'utf8')).toBe('second');
+		expect(readFileSync(join(directory, 'json.py'), 'utf8')).toBe(poison);
+	});
 
 	it('writes binary, Unicode, empty files, and shell-sensitive paths verbatim', () => {
 		const files = [

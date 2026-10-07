@@ -247,7 +247,15 @@ describe('path snapshots', () => {
 			await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
 		}
 	});
-	it.each(['/outside/', '//evil.example/', 'http://[', '/hub/../', '/hub/proxy/token/?secret=1'])(
+	it('clears the path when the frame is outside a valid base', async () => {
+		const { negotiatePaths } = fixture();
+		const peer = await negotiatePaths('fresh', '/outside/');
+		await vi.advanceTimersByTimeAsync(100);
+		expect((await peer.nextRequest()).a).toEqual([
+			{ revision: 1, entries: [['early', '1']], path: '' },
+		]);
+	});
+	it.each(['//evil.example/', 'http://[', '/hub/../', '/hub/proxy/token/?secret=1'])(
 		'keeps queries usable with an unusable base %s',
 		async (sandboxBasePath) => {
 			const { negotiatePaths } = fixture();
@@ -306,7 +314,7 @@ describe('path snapshots', () => {
 	});
 
 	it.each(['/outside/view/', `/hub/proxy/token/${'x'.repeat(4097)}`])(
-		'resumes path mirroring after leaving an invalid location (%#)',
+		'clears the path at an invalid location and resumes mirroring after leaving it (%#)',
 		async (pathname) => {
 			const { negotiatePaths, location, change } = fixture();
 			const peer = await negotiatePaths();
@@ -314,7 +322,7 @@ describe('path snapshots', () => {
 			change('?id=outside');
 			await vi.advanceTimersByTimeAsync(100);
 			const invalid = await peer.nextRequest();
-			expect(invalid.a).toEqual([{ revision: 1, entries: [['id', 'outside']] }]);
+			expect(invalid.a).toEqual([{ revision: 1, entries: [['id', 'outside']], path: '' }]);
 			peer.reply(invalid, { applied: true });
 			await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
 			location.pathname = '/hub/proxy/token/studio/valid/';
@@ -325,6 +333,24 @@ describe('path snapshots', () => {
 			]);
 		},
 	);
+
+	it('clears a previously reported path when the frame leaves the sandbox base', async () => {
+		const { negotiatePaths, location, history } = fixture();
+		const peer = await negotiatePaths();
+		location.pathname = '/hub/proxy/token/studio/data/';
+		history.pushState({}, '', location.pathname);
+		await vi.advanceTimersByTimeAsync(100);
+		const data = await peer.nextRequest();
+		expect(data.a).toEqual([{ revision: 1, entries: [['early', '1']], path: 'studio/data/' }]);
+		peer.reply(data, { applied: true });
+		await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+		location.pathname = '/outside/';
+		history.pushState({}, '', location.pathname);
+		await vi.advanceTimersByTimeAsync(100);
+		expect((await peer.nextRequest()).a).toEqual([
+			{ revision: 2, entries: [['early', '1']], path: '' },
+		]);
+	});
 
 	it('stops reporting paths when a replacement host does not negotiate the capability', async () => {
 		const { negotiate, negotiatePaths } = fixture();

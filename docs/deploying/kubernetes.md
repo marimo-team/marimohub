@@ -172,6 +172,11 @@ Workspace reads overlap pod boot, and `files` includes readiness waits.
 Compare the `sandbox.files` and `sandbox.reachable` trace spans to distinguish
 boot time from transfer time. Do not sum their durations.
 
+The API process holds at most 64 MiB of read-ahead workspace bytes across all
+concurrent cold starts. A workspace archive or restore batch that does not fit
+is read after the pod is ready instead, so its read time adds to `files` after
+boot rather than overlapping it.
+
 Each boot also logs one `k8s_ensure` line with the cluster-side rows (create,
 boot, schedule, image pull, pod ready); `files` and `waitport` appear only on
 `session_provision`. From the cluster side:

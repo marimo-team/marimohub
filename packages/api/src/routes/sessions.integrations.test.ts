@@ -7,10 +7,12 @@ import {
 	INTEGRATIONS_DIR_ENV,
 	OrgIntegrationsStore,
 	ProjectIntegrationsStore,
+	projectSessionEnv,
 } from '@marimo-hub/core';
 import type { NotebookId, ProjectId } from '@marimo-hub/core';
 import { ACTOR, fakeComputeFrom, makeFakeSandbox, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
+import { mergeSessionEnv } from '../sandboxEnv';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 
 const codec = new AesGcmSecretCodec({ kek: 'sBN3HR4/RHc81JkWZ794UoUuUnPEHvt7zvkBjjbTWk0=' });
@@ -113,25 +115,41 @@ describe('Session provisioning with integrations', () => {
 		});
 	});
 
-	it('injects marimo extension variables while preserving Hub configuration precedence', async () => {
+	it('applies project marimo settings as defaults the image and Hub can override', async () => {
 		const { request, calls } = await customEnvApi({
-			vars: {
-				MARIMO_STUDIO_TRUSTED_SERVER_RUNTIME: '1',
-				XDG_CONFIG_HOME: '/project-config',
-			},
+			vars: { MARIMO_SQL_DEFAULT_LIMIT: '50', MY_FLAG: 'on' },
 			secrets: [{ name: 'MARIMO_LENS_TOKEN', value: 'lens-token' }],
 			secret_bundles: [
 				{ name: 'MARIMO_SETTINGS', prefix: 'MARIMO_', value: '{"OUTPUT_MAX_BYTES":1000000}' },
 			],
 		});
 		await expectOk(await request('POST', `/projects/${pid}/notebooks/${nid}/sessions`));
-		expect(Object.assign({}, ...calls.setEnvVars)).toMatchObject({
-			MARIMO_STUDIO_TRUSTED_SERVER_RUNTIME: '1',
+		const forced = Object.assign({}, ...calls.setEnvVars);
+		expect(forced).toMatchObject({ MY_FLAG: 'on', XDG_CONFIG_HOME: '/tmp/marimohub-config' });
+		expect(Object.keys(forced).filter((name) => name.startsWith('MARIMO_'))).toEqual([]);
+		expect(Object.assign({}, ...calls.setEnvDefaults)).toMatchObject({
+			MARIMO_SQL_DEFAULT_LIMIT: '50',
 			MARIMO_LENS_TOKEN: 'lens-token',
 			MARIMO_OUTPUT_MAX_BYTES: '1000000',
-			XDG_CONFIG_HOME: '/tmp/marimohub-config',
 		});
 	});
+
+	it('keeps a Hub-set marimo variable forced over the project default', () => {
+		const env = mergeSessionEnv(projectSessionEnv({ vars: { MARIMO_OUTPUT_MAX_BYTES: '1' } }), {
+			vars: { MARIMO_OUTPUT_MAX_BYTES: '2' },
+		});
+		expect(env.vars).toEqual({ MARIMO_OUTPUT_MAX_BYTES: '2' });
+		expect(env.defaults).toEqual({ MARIMO_OUTPUT_MAX_BYTES: '1' });
+	});
+
+	it.each(['XDG_CONFIG_HOME', 'XDG_CACHE_HOME', '_MARIMO_DISABLE_AUTH_ON_VIRTUAL_FILES'])(
+		'rejects a project variable named %s',
+		async (name) => {
+			await expect(customEnvApi({ vars: { [name]: '/project' } })).rejects.toThrow(
+				`Environment variable name "${name}" is reserved.`,
+			);
+		},
+	);
 
 	it('skips disabled integrations', async () => {
 		const store = makeStore();
@@ -205,11 +223,13 @@ describe('Session provisioning with integrations', () => {
 
 	it.each([
 		['MARIMO', 'HUB_SETTING'],
-		['MARIMO_', 'CONFIG_PATH'],
+		['MARIMO_', 'VERSION'],
+		['_MARIMO_', 'DISABLE_AUTH_ON_VIRTUAL_FILES'],
+		['XDG_', 'CONFIG_HOME'],
 		['MARIMO_', 'INVALID-NAME'],
 	])('rejects session creation when a secret bundle expands to %s%s', async (prefix, key) => {
 		const { request, calls } = await customEnvApi({
-			vars: { MARIMO_STUDIO_TRUSTED_SERVER_RUNTIME: '1' },
+			vars: { MARIMO_OUTPUT_MAX_BYTES: '1' },
 			secret_bundles: [
 				{ name: 'SETTINGS', prefix, value: JSON.stringify({ [key]: 'private-value' }) },
 			],

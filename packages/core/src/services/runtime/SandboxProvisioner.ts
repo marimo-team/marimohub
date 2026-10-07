@@ -2,13 +2,14 @@ import { all, allSettled } from 'better-all';
 import type { Attributes, Span as OtelSpan } from '@opentelemetry/api';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { withDeadline } from '../../async';
+import { ByteBudget } from './byteBudget';
 import type { NotebookBridgeRuntime } from '../../ports/notebookBridge';
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
 import { Millis } from '../../duration';
 import { NotFoundError, PythonEnvironmentSetupError, UnavailableError } from '../../errors';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
-import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
+import { effectivePersistenceMode } from './sessionPersistence';
 import type { WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
 import { logEvent } from '../../logs';
 import { paths } from '../../paths';
@@ -31,7 +32,12 @@ import type { MarimoLaunchMode, MarimoLaunchPlan, MarimoLaunchStrategyName } fro
 import { assertValidKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { shellQuote } from './shell';
 import type { NotebookService } from '../content/NotebookService';
-import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
+import {
+	captureWorkspace,
+	readSessionArtifacts,
+	restoreWorkspace,
+	sharedWorkspaceListing,
+} from './sandboxFiles';
 import type { WorkspaceRestoreStats } from './sandboxFiles';
 import { restorePackedWorkspace } from './packedWorkspaceRestore';
 import { sandboxWorkspaceLayout } from './workspaceLayout';
@@ -489,6 +495,7 @@ export interface WorkspaceLoadContext {
 	workspacePrefix: string;
 	excludeRelativeRoots?: readonly string[];
 	waitUntilReady?: () => Promise<void>;
+	prefetchBudget?: ByteBudget;
 }
 
 export interface WorkspaceLoadResult {
@@ -521,6 +528,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		mountPath,
 		excludeRelativeRoots,
 		waitUntilReady,
+		prefetchBudget,
 	}: WorkspaceLoadContext): Promise<WorkspaceLoadResult> {
 		if (!bucketHandle) {
 			throw provisionFailure(
@@ -532,6 +540,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 			const stats = await restoreWorkspace(sandbox, bucketHandle, workspacePrefix, mountPath, {
 				excludeRelativeRoots,
 				waitUntilReady,
+				prefetchBudget,
 			});
 			return { usedFallback: true, stats };
 		} catch (err) {
@@ -620,11 +629,23 @@ async function writeSessionFiles(
 	if (batch.length > 0) await sandbox.writeFiles(batch);
 }
 
+/**
+ * Process-wide cap on workspace bytes fetched before the sandbox is ready. Each
+ * provisioner is per request, so the default is shared; 64 MiB keeps several
+ * concurrent cold starts well inside a small API pod's memory limit.
+ */
+const DEFAULT_PREFETCH_BUDGET = new ByteBudget(64 * 1024 * 1024);
+
 export class SandboxProvisioner {
+	private readonly prefetchBudget: ByteBudget;
+
 	constructor(
 		private provider: SandboxProvider,
 		private workspaceLoadStrategies: WorkspaceLoadStrategies = createWorkspaceLoadStrategies(),
-	) {}
+		options: { prefetchBudget?: ByteBudget } = {},
+	) {
+		this.prefetchBudget = options.prefetchBudget ?? DEFAULT_PREFETCH_BUDGET;
+	}
 
 	async provision(options: ProvisionOptions): Promise<ProvisionResult> {
 		const provisionStart = Date.now();
@@ -978,6 +999,7 @@ export class SandboxProvisioner {
 				Boolean(options.gitPrefix),
 				layout.rootPath,
 				waitUntilReady,
+				this.prefetchBudget,
 			);
 			if (packed.status === 'restored') {
 				return {
@@ -1073,6 +1095,7 @@ export class SandboxProvisioner {
 			mountPath,
 			workspacePrefix,
 			waitUntilReady,
+			prefetchBudget: this.prefetchBudget,
 			...(options.gitPrefix ? { excludeRelativeRoots: ['.git'] } : {}),
 		});
 		if (!options.gitPrefix) return load;
@@ -1087,7 +1110,12 @@ export class SandboxProvisioner {
 					options.bucketHandle,
 					gitPrefix,
 					`${layout.gitRoot}/.git`,
-					{ requireComplete: true, excludeRelativeRoots: ['hooks'], waitUntilReady },
+					{
+						requireComplete: true,
+						excludeRelativeRoots: ['hooks'],
+						waitUntilReady,
+						prefetchBudget: this.prefetchBudget,
+					},
 				);
 				if (stats.objectCount === 0) throw new Error('the stored Git directory is empty');
 				return stats;
@@ -1325,19 +1353,30 @@ export class SandboxProvisioner {
 	): Promise<boolean> {
 		if (opts?.persistEdits === false) return false;
 		const { source } = await notebooks.getNotebook(projectId, notebookId);
-		if (!workspaceSourcePolicy(source).persistSessionEdits) return false;
+		if (effectivePersistenceMode({ persistEdits: true, source, persistWorkspace }) === 'none') {
+			return false;
+		}
 
 		const mountPath = workdir;
+		const listing = sharedWorkspaceListing(sandbox, mountPath);
 		// The commit chain and the workspace mirror are independent best-effort
 		// steps over disjoint bucket keys, so they run concurrently.
 		const { commit, workspace } = await allSettled({
 			async commit() {
-				const artifacts = await readSessionArtifacts(sandbox, mountPath);
+				const artifacts = await readSessionArtifacts(sandbox, mountPath, listing);
 				await notebooks.commitSession(projectId, notebookId, artifacts, actor);
 			},
 			async workspace() {
 				if (opts?.includeWorkspace === false) return;
-				await captureWorkspace(sandbox, bucket, projectId, notebookId, mountPath, persistWorkspace);
+				await captureWorkspace(
+					sandbox,
+					bucket,
+					projectId,
+					notebookId,
+					mountPath,
+					persistWorkspace,
+					listing,
+				);
 			},
 		});
 		const commitError =

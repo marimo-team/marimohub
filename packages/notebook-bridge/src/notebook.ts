@@ -16,7 +16,7 @@ import {
 import type { BridgeHandle, BridgeStatus, HostApi, NotebookApi, StatusOptions } from './protocol';
 import { observeAppLinks } from './navigation';
 import { notebookQueryParams } from './query';
-import { relativeNotebookPath } from './path';
+import { parseSandboxBasePath, relativeNotebookPath } from './path';
 import { createChannelRpc } from './transport';
 import { createHandshakeRetry } from './handshake';
 
@@ -73,7 +73,11 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 		const current = channel;
 		if (status !== 'connected' || !current || navigating || inFlight) return;
 		const params = notebookQueryParams(win.location.search, excludedKeys);
-		const path = basePath ? relativeNotebookPath(win.location.pathname, basePath) : undefined;
+		// Once paths are negotiated, absent means "unchanged" to the host, so an unrepresentable
+		// location must clear the saved path instead of leaving a stale one to be shared or restored.
+		const path = basePath
+			? (relativeNotebookPath(win.location.pathname, basePath) ?? '')
+			: undefined;
 		const search = JSON.stringify([params.toString(), path]);
 		if (search === lastSent) return;
 		const parsed = QuerySnapshot.safeParse({
@@ -149,23 +153,10 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 		clearTimeout(readyTimer);
 		handshake.stop();
 		excludedKeys = parsed.data.excludedKeys;
-		basePath = undefined;
-		if (parsed.data.capabilities.includes(PATH_CAPABILITY) && parsed.data.sandboxBasePath) {
-			try {
-				const candidate = parsed.data.sandboxBasePath;
-				const base = new URL(candidate, win.location.origin);
-				if (
-					base.origin === win.location.origin &&
-					base.pathname === candidate &&
-					candidate.endsWith('/') &&
-					!base.search &&
-					!base.hash
-				)
-					basePath = candidate;
-			} catch {
-				/* An invalid optional base must not break query mirroring. */
-			}
-		}
+		basePath =
+			parsed.data.capabilities.includes(PATH_CAPABILITY) && parsed.data.sandboxBasePath
+				? parseSandboxBasePath(parsed.data.sandboxBasePath, win.location.origin)
+				: undefined;
 		lastSent = undefined;
 		inFlight = false;
 		updateStatus('connecting');

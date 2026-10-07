@@ -1,7 +1,8 @@
 import { sessionOwner } from '../sessionOwner';
 import { MARIMO_PORT } from '../../../constants';
 import { KERNEL_AUTH_TOKEN_FILE } from '../kernelAuth';
-import { kernelBasePathFromUrl } from '../sandboxExposure';
+import { SURFACE_KERNEL_TOKEN_FILE_ENV, SURFACE_KERNEL_URL_ENV } from '../sandboxEnvironment';
+import { localKernelBasePath } from '../sandboxExposure';
 import type { AuthUser } from '../../../ports/auth';
 import type { SandboxProcess, SandboxProvider } from '../../../ports/sandbox';
 import type { Session } from '../../../schema';
@@ -269,18 +270,15 @@ export class SurfaceManager {
 			}
 			const port = options.port ?? spec.defaultPort;
 			const launch = spec.command(context, port);
-			const kernelBasePath = session.sandbox_origin_url
-				? kernelBasePathFromUrl(session.sandbox_url)
-				: '';
-			const kernelUrl = `http://127.0.0.1:${MARIMO_PORT}${kernelBasePath}/`;
+			const kernelUrl = `http://127.0.0.1:${MARIMO_PORT}${localKernelBasePath(session)}/`;
 			process = await instance.startProcess(
 				launchSurfaceProcessCommand(pidFile, cancelFile, commandLine(launch.cmd)),
 				{
 					cwd: context.workspaceDir,
 					env: {
 						...launch.env,
-						MARIMOHUB_KERNEL_URL: instance.resolveProcessUrl?.(kernelUrl) ?? kernelUrl,
-						MARIMOHUB_KERNEL_TOKEN_FILE: session.kernel_auth_token
+						[SURFACE_KERNEL_URL_ENV]: instance.resolveProcessUrl?.(kernelUrl) ?? kernelUrl,
+						[SURFACE_KERNEL_TOKEN_FILE_ENV]: session.kernel_auth_token
 							? (instance.resolveProcessPath?.(KERNEL_AUTH_TOKEN_FILE) ?? KERNEL_AUTH_TOKEN_FILE)
 							: '',
 					},

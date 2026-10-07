@@ -114,15 +114,20 @@ provider uses its own credential.
 
 ## Kernel access
 
-Secondary surfaces and their child agents inherit:
+Secondary surfaces and their child agents inherit the sandbox environment,
+including `MARIMOHUB_CONTEXT_FILE`. See
+[Sandbox environment](./environment-and-access.md#sandbox-environment) for the
+full list. Surfaces also get two kernel variables:
 
-- `MARIMOHUB_KERNEL_URL`: the sandbox-local kernel URL, including any `/proxy/<token>` prefix.
+- `MARIMOHUB_KERNEL_URL`: the sandbox-local kernel URL. In `proxy` mode it keeps the
+  full hub path prefix, for example `/marimohub/proxy/<token>/`.
 - `MARIMOHUB_KERNEL_TOKEN_FILE`: the token file path, or an empty string with native authentication disabled.
 
 The local compute adapter maps both values to the host process.
 OpenCode images include a `marimo-pair` skill that passes these values to
 the built-in `uv run --no-sync marimo pair` CLI through `--url` and `--token-file`.
-Discovery works regardless of authentication or `XDG_STATE_HOME`.
+Because the skill passes the URL explicitly, it does not depend on marimo's server
+registry, so it works regardless of authentication or `XDG_STATE_HOME`.
 
 ## Security and exposure
 
