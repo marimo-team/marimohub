@@ -12,6 +12,13 @@ cleanup() {
 	fi
 	if [ -n "$pid" ]; then
 		kill "$pid" 2>/dev/null || true
+		# Reap the server without letting an ignored SIGTERM stall cleanup.
+		for ((attempt = 0; attempt < 20; attempt++)); do
+			kill -0 "$pid" 2>/dev/null || break
+			sleep 0.1
+		done
+		kill -KILL "$pid" 2>/dev/null || true
+		wait "$pid" 2>/dev/null || true
 	fi
 	rm -f "$log"
 	exit "$status"

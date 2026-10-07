@@ -1,4 +1,5 @@
 import json
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import signal
@@ -70,31 +71,41 @@ class OpenCodeCheckTest(unittest.TestCase):
             self.server.shutdown()
             self.server.server_close()
             thread.join()
-            if self.pid_file.exists():
-                try:
-                    os.kill(int(self.pid_file.read_text()), signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
 
         self.addCleanup(cleanup)
 
+    @contextmanager
     def start_check(self):
-        return subprocess.Popen(
+        process = subprocess.Popen(
             ["bash", str(CHECK), str(self.server.server_port)],
             env=self.env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            start_new_session=True,
         )
+        try:
+            yield process
+        finally:
+            # curl and the fixture can outlive bash or keep its output pipes open.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=5)
+            finally:
+                process.stdout.close()
+                process.stderr.close()
 
     def test_discovers_skill_and_stops_server(self):
         with self.start_check() as process:
             _, stderr = process.communicate(timeout=15)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(self.pid_file.read_text()), 0)
         self.assertEqual(process.returncode, 0, stderr)
         self.assertEqual(self.headers, ["/workspace"])
         self.assertNotIn("fixture server log", stderr)
-        with self.assertRaises(ProcessLookupError):
-            os.kill(int(self.pid_file.read_text()), 0)
 
     def test_missing_skill_fails_with_server_log(self):
         self.skills = []
@@ -102,6 +113,35 @@ class OpenCodeCheckTest(unittest.TestCase):
             _, stderr = process.communicate(timeout=15)
         self.assertNotEqual(process.returncode, 0)
         self.assertIn("fixture server log", stderr)
+
+    def test_unresponsive_server_is_killed_and_reaped(self):
+        opencode = self.root / "opencode"
+        opencode.write_text(opencode.read_text().replace(
+            "#!/bin/sh\n", "#!/bin/sh\ntrap '' TERM\n"
+        ))
+        with self.start_check() as process:
+            _, stderr = process.communicate(timeout=10)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(self.pid_file.read_text()), 0)
+        self.assertEqual(process.returncode, 0, stderr)
+
+    def test_communication_timeout_kills_and_reaps_check(self):
+        self.hang_path = "/global/health"
+        with self.assertRaises(subprocess.TimeoutExpired):
+            with self.start_check() as process:
+                self.assertTrue(self.requested.wait(5))
+                process.communicate(timeout=0.1)
+        self.assertIsNotNone(process.returncode)
+        self.assertTrue(process.stdout.closed)
+        self.assertTrue(process.stderr.closed)
+
+    def test_assertion_failure_kills_and_reaps_check(self):
+        with self.assertRaisesRegex(AssertionError, "fixture assertion"):
+            with self.start_check() as process:
+                raise AssertionError("fixture assertion")
+        self.assertIsNotNone(process.returncode)
+        self.assertTrue(process.stdout.closed)
+        self.assertTrue(process.stderr.closed)
 
     def test_stalled_skill_request_has_deadline(self):
         self.hang_path = "/skill"
