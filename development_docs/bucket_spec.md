@@ -253,7 +253,7 @@ created for combined workspace and Git inputs up to 32 MiB.
 | `projects/{pid}/notebooks/{nid}/proposals/{proposal-id}/publication.json` | JSON     | CAS-managed proposal publication state owned by `NotebookProposalService`. It records either pending state or the durable provider change-request result. For an updated change request, the root proposal's `head_commit` advances as the shared current-head pointer after each child result is durable.                                                                                                                                                                                             |
 | `projects/{pid}/notebooks/{nid}/workspace/notebook.py`                    | Python   | Latest local notebook code. Present only for a `local` source.                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `projects/{pid}/notebooks/{nid}/workspace/pyproject.toml`                 | TOML     | Latest local Python dependency manifest. Present only for a `local` source.                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `projects/{pid}/notebooks/{nid}/workspace/{path}`                         | any      | Runtime files mirrored from a local notebook sandbox. Present only under `MARIMOHUB_PERSIST_WORKSPACE=workspace`. Latest-only and non-versioned.                                                                                                                                                                                                                                                                                                                                                       |
+| `projects/{pid}/notebooks/{nid}/workspace/{path}`                         | any      | Files from an imported folder or a local notebook sandbox. Imported local workspaces always persist these files. Other local notebooks require `MARIMOHUB_PERSIST_WORKSPACE=workspace`. Latest-only and non-versioned.                                                                                                                                                                                                                                                                                 |
 | `projects/{pid}/notebooks/{nid}/workspace/{dir}/.marimohub-directory`     | empty    | Directory marker that keeps an otherwise empty workspace directory listable. Written create-if-absent by `NotebookWorkspaceService.createDirectory`; hidden from listings, search, and sandbox restores; reserved as a path segment.                                                                                                                                                                                                                                                                   |
 | `projects/{pid}/notebooks/{nid}/workspace_mutation_claim.json`            | JSON     | Short-lived lease (`{ holder, expires_at }`) serializing workspace-browser mutations for one notebook. CAS-managed and written only by `NotebookWorkspaceService`; renewed during long copies and deletes, released to `{ holder: null, expires_at: null }`, and replaced in place once expired.                                                                                                                                                                                                       |
 | `projects/{pid}/notebooks/{nid}/versions/{vid}/notebook.py`               | Python   | Immutable version snapshot of the code.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -408,6 +408,31 @@ workspace. A local source uses this shape:
 	"current_version_id": "ver_01ARZ3NDEKTSV4RRFFQ69G5FAV"
 }
 ```
+
+An imported local source also stores `entry_notebook`, relative to its workspace root.
+Legacy local sources omit this field and use `notebook.py`.
+The live entry file keeps its original path. Version snapshots still use `versions/{vid}/notebook.py`.
+The original entry remains protected during workspace moves and deletes.
+
+Folder imports use `projects/{pid}/imports/{import-id}/`:
+
+| Object                            | Owner and lifetime                                                               |
+| --------------------------------- | -------------------------------------------------------------------------------- |
+| `snapshot.zip`                    | Immutable folder bytes; expires after 24 hours, deleted after one hour of grace. |
+| `preparation.json`                | Immutable actor and expiry record; retained until project deletion.              |
+| `items/{encoded-entrypoint}.json` | `NotebookImportService` CAS receipt; retained until project deletion.            |
+
+Each receipt binds the actor and submitted notebook settings to one entrypoint.
+Each attempt gets a separate notebook ID and a ten-minute lease. Retries cannot overwrite another attempt's workspace.
+Runtime settings are resolved for new attempts only. Completed replays return the stored result, even if deployment options change.
+
+After every file exists, CAS advances `preparing` to `publishing`. `NotebookService` then publishes through the catalog owner.
+Maintenance completes interrupted publication and repeatedly removes abandoned attempt prefixes, including late writes.
+It preserves the winning workspace and completed receipts. Replays cannot overwrite edits or recreate a deleted notebook.
+
+Imported local workspaces retain supporting files even under `MARIMOHUB_PERSIST_WORKSPACE=source`.
+The workspace root is the working directory and is added to `PYTHONPATH` for nested entrypoints.
+See [Import notebooks](../docs/importing-notebooks.md) for selection, limits, and browser queue behavior.
 
 A Git source stores `type: "git"`, a provider, `sync_mode: "push" | "pull"`,
 Git coordinates, and sync timestamps. `current_version_id` is `null` before the

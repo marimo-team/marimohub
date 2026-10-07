@@ -1177,6 +1177,7 @@ export const NotebookMetaResponseSchema = z
 
 export const LocalSourceResponseSchema = z.object({
 	type: z.literal('local'),
+	entry_notebook: z.string().optional(),
 	current_version_id: z.string(),
 });
 

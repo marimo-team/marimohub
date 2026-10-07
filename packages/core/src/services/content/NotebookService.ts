@@ -1,3 +1,4 @@
+import { NotebookImportService } from './NotebookImportService';
 import { PreviewStore } from './PreviewStore';
 import { previewKey, PreviewRecordSchema } from './notebookPreviews';
 import type { GitProviderHosts } from '../../integrations/gitRepo';
@@ -17,6 +18,7 @@ import { createNotebookId, createVersionId, SYSTEM_ACTOR, VersionId } from '../.
 import {
 	isWorkspaceDirectoryMarkerPath,
 	remoteWorkspaceEntry,
+	workspaceSourcePolicy,
 } from '../../integrations/remoteWorkspace';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import { noopMetrics } from '../../ports/metrics';
@@ -95,6 +97,9 @@ export interface CreateNotebookInput {
 	runtime?: { python_version?: string; marimo_version?: string };
 	base_image?: string;
 	compute_profile?: string;
+	/** Explicit entrypoints opt local notebooks into full workspace persistence. */
+	entry_notebook?: string;
+	workspaceFiles?: { path: string; bytes: Uint8Array }[];
 }
 
 export interface UpdateNotebookInput {
@@ -148,6 +153,7 @@ export class NotebookService {
 	readonly synced: SyncedNotebookService;
 	readonly thumbnails: ThumbnailService;
 	readonly workspace: NotebookWorkspaceService;
+	readonly imports: NotebookImportService;
 
 	constructor(
 		private bucket: Bucket,
@@ -158,6 +164,7 @@ export class NotebookService {
 		repositoryHosts?: GitProviderHosts,
 	) {
 		this.thumbnails = new ThumbnailService(bucket, this);
+		this.imports = new NotebookImportService(bucket, this);
 		this.synced = new SyncedNotebookService(bucket, catalog, metrics, {
 			repositoryHosts,
 			getNotebook: (projectId, notebookId) => this.getNotebook(projectId, notebookId),
@@ -174,7 +181,7 @@ export class NotebookService {
 	private async saveWorkspaceSourceFile(
 		projectId: ProjectId,
 		notebookId: NotebookId,
-		path: 'notebook.py' | 'pyproject.toml',
+		path: string,
 		content: string,
 		actor: UserId,
 		assertWritable: () => Promise<void>,
@@ -182,7 +189,7 @@ export class NotebookService {
 		const detail = await this.getNotebook(projectId, notebookId);
 		const nb = paths.project(projectId).notebook(notebookId);
 		const [code, deps] = await Promise.all([
-			path === 'notebook.py'
+			path === workspaceSourcePolicy(detail.source).entryNotebook
 				? content
 				: this.getContentForSource(projectId, notebookId, detail.source),
 			path === 'pyproject.toml'
@@ -362,7 +369,9 @@ export class NotebookService {
 		const entryNotebook = remoteWorkspaceEntry(source);
 
 		if (!entryNotebook) {
-			const codeObj = await this.bucket.get(nb.code);
+			const codeObj = await this.bucket.get(
+				nb.workspaceFile(workspaceSourcePolicy(source).entryNotebook),
+			);
 			if (!codeObj) {
 				throw new NotFoundError(`Notebook code for ${notebookId} not found`);
 			}
@@ -441,8 +450,9 @@ export class NotebookService {
 		input: CreateNotebookInput,
 		actor: UserId,
 		securityLabels?: ResourceSecurityLabels,
+		staging?: { notebookId: NotebookId; beforeWrite?: () => Promise<void> },
 	): Promise<NotebookMeta> {
-		const notebookId = createNotebookId();
+		const notebookId = staging?.notebookId ?? createNotebookId();
 		const versionId = createVersionId();
 		const now = new Date().toISOString();
 
@@ -461,7 +471,7 @@ export class NotebookService {
 			securityLabels,
 		});
 
-		const source = localSource(versionId);
+		const source = localSource(versionId, input.entry_notebook);
 
 		const version = buildVersion({
 			versionId,
@@ -474,16 +484,22 @@ export class NotebookService {
 
 		const nb = paths.project(projectId).notebook(notebookId);
 		const ver = nb.version(versionId);
+		const codeKey = nb.workspaceFile(input.entry_notebook ?? 'notebook.py');
+		const workspaceFiles = (input.workspaceFiles ?? []).filter(
+			(file) =>
+				file.path !== (input.entry_notebook ?? 'notebook.py') && file.path !== 'pyproject.toml',
+		);
 		// Every blob this create writes; deleting them unreferences the notebook.
 		const contentKeys = [
 			nb.meta,
 			nb.readme,
 			nb.source,
-			nb.code,
+			codeKey,
 			nb.deps,
 			ver.code,
 			ver.deps,
 			ver.meta,
+			...workspaceFiles.map((file) => nb.workspaceFile(file.path)),
 		];
 
 		// Write the immutable content + version blobs, then record the notebook in the
@@ -494,32 +510,102 @@ export class NotebookService {
 				'write_files',
 				compensableWrite(
 					[
-						() => this.bucket.put(nb.meta, JSON.stringify(meta)),
+						...workspaceFiles.map(
+							(file) => () => this.bucket.put(nb.workspaceFile(file.path), file.bytes),
+						),
 						() =>
 							this.bucket.put(
 								nb.readme,
 								input.readme ?? `# ${input.title}\n\n${input.description}\n`,
 							),
 						() => this.bucket.put(nb.source, JSON.stringify(source)),
-						() => this.bucket.put(nb.code, input.code),
+						() => this.bucket.put(codeKey, input.code),
 						() => this.bucket.put(nb.deps, input.deps ?? ''),
 						() => this.bucket.put(ver.code, input.code),
 						() => this.bucket.put(ver.deps, input.deps ?? ''),
 						() => this.bucket.put(ver.meta, JSON.stringify(version)),
-					],
+					].map((write) => async () => {
+						await staging?.beforeWrite?.();
+						return write();
+					}),
 					() => this.bucket.delete(contentKeys),
 				),
 			)
+			.step('metadata', async () => {
+				await staging?.beforeWrite?.();
+				return this.bucket.put(nb.meta, JSON.stringify(meta));
+			})
 			.step('catalog', () =>
-				this.catalog.appendNotebookEntry(
-					'notebook.create',
-					actor,
-					projectId,
-					buildNotebookEntry(meta, 'local', nb.base, actor),
-				),
+				staging
+					? Promise.resolve()
+					: this.catalog.appendNotebookEntry(
+							'notebook.create',
+							actor,
+							projectId,
+							buildNotebookEntry(meta, 'local', nb.base, actor),
+						),
 			)
 			.run();
 
+		return meta;
+	}
+
+	async stageImportNotebook(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		input: CreateNotebookInput,
+		actor: UserId,
+		beforeWrite?: () => Promise<void>,
+	): Promise<NotebookMeta> {
+		return this.createNotebookWithLabels(projectId, input, actor, undefined, {
+			notebookId,
+			beforeWrite,
+		});
+	}
+
+	async publishImportNotebook(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		actor: UserId,
+	): Promise<NotebookMeta> {
+		const meta = await this.getNotebookMeta(projectId, notebookId);
+		const alreadyPublished = new Error('Already published');
+		try {
+			await this.catalog.mutateSnapshot(
+				'notebook.import',
+				actor,
+				(snapshot) => {
+					const project = snapshot.projects.find((entry) => entry.id === projectId);
+					if (!project || project.status === 'deleted')
+						throw new NotFoundError('Project not found');
+					if (project.notebooks.some((entry) => entry.id === notebookId)) throw alreadyPublished;
+					return {
+						...snapshot,
+						projects: snapshot.projects.map((entry) =>
+							entry.id !== projectId
+								? entry
+								: {
+										...entry,
+										updated_at: meta.updated_at,
+										notebook_count: entry.notebook_count + 1,
+										notebooks: [
+											...entry.notebooks,
+											buildNotebookEntry(
+												meta,
+												'local',
+												paths.project(projectId).notebook(notebookId).base,
+												actor,
+											),
+										],
+									},
+						),
+					};
+				},
+				{ project_id: projectId, notebook_id: notebookId },
+			);
+		} catch (error) {
+			if (error !== alreadyPublished) throw error;
+		}
 		return meta;
 	}
 
@@ -556,6 +642,12 @@ export class NotebookService {
 				runtime: meta.runtime,
 				base_image: meta.base_image,
 				compute_profile: meta.compute_profile,
+				...(source.type === 'local' && source.entry_notebook
+					? {
+							entry_notebook: source.entry_notebook,
+							workspaceFiles: await this.listWorkspaceFiles(projectId, notebookId),
+						}
+					: {}),
 			},
 			actor,
 			meta.security_labels,
@@ -793,12 +885,12 @@ export class NotebookService {
 				parentId: source.current_version_id,
 			});
 
-			const newSource = localSource(versionId);
+			const newSource = localSource(versionId, source.entry_notebook);
 
 			const ver = nb.version(versionId);
 			await assertWritable?.();
 			await Promise.all([
-				this.bucket.put(nb.code, code),
+				this.bucket.put(nb.workspaceFile(workspaceSourcePolicy(source).entryNotebook), code),
 				this.bucket.put(nb.source, JSON.stringify(newSource)),
 				this.bucket.put(nb.deps, deps),
 				this.bucket.put(ver.code, code),
@@ -942,12 +1034,12 @@ export class NotebookService {
 				...(sessionDescriptor ? { session_snapshot: sessionDescriptor } : {}),
 			};
 
-			const newSource = localSource(versionId);
+			const newSource = localSource(versionId, source.entry_notebook);
 
 			const ver = nb.version(versionId);
 			await Promise.all([
 				// Live notebook files reflect the session's final state.
-				this.bucket.put(nb.code, input.code),
+				this.bucket.put(nb.workspaceFile(workspaceSourcePolicy(source).entryNotebook), input.code),
 				this.bucket.put(nb.deps, deps),
 				this.bucket.put(nb.source, JSON.stringify(newSource)),
 				// Immutable version snapshot (version.json already carries any descriptors).
@@ -1415,6 +1507,13 @@ export class NotebookService {
 		const stale: { projectId: ProjectId; notebookId: NotebookId }[] = [];
 		for (const project of snapshot.projects) {
 			if (project.status === 'deleted') continue; // owned by sweepDeletedProjects
+			await this.imports.sweep(project.id).catch((error) => {
+				logOperationalError(
+					'notebook_imports.cleanup_failed',
+					{ operation: 'prune', project_id: project.id },
+					error,
+				);
+			});
 			for (const nb of project.notebooks) {
 				await this.thumbnails.prune(project.id, nb.id).catch((error) => {
 					logOperationalError(

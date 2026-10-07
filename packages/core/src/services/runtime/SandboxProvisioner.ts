@@ -10,6 +10,7 @@ import { Millis } from '../../duration';
 import { NotFoundError, PythonEnvironmentSetupError, UnavailableError } from '../../errors';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { effectivePersistenceMode } from './sessionPersistence';
+import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
 import type { WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
 import { logEvent } from '../../logs';
 import { paths } from '../../paths';
@@ -1182,6 +1183,43 @@ export class SandboxProvisioner {
 		});
 	}
 
+	private async configureWorkspacePythonPath(
+		sandbox: SandboxInstance,
+		mountPath: string,
+		startup: MarimoStartup,
+	): Promise<void> {
+		const timeoutMs =
+			startup.deadline.timeoutMs === 0 ? 10_000 : Math.min(10_000, remainingStartupMs(startup));
+		if (timeoutMs <= 0) throw pythonEnvironmentSetupTimeout(startup.deadline.timeoutMs);
+		try {
+			await withDeadline(
+				(async () => {
+					const result = await sandbox.exec('printf \'%s\' "${PYTHONPATH-}"', {
+						timeout: timeoutMs,
+						maxOutputBytes: 64 * 1024,
+					});
+					if (!result.success || new TextEncoder().encode(result.stdout).byteLength >= 64 * 1024)
+						throw new Error('Could not read the sandbox Python path');
+					const root = sandbox.resolveProcessPath?.(mountPath) ?? mountPath;
+					await sandbox.setEnvVars({
+						PYTHONPATH:
+							result.stdout === root || result.stdout.startsWith(`${root}:`)
+								? result.stdout
+								: result.stdout
+									? `${root}:${result.stdout}`
+									: root,
+					});
+				})(),
+				{
+					timeoutMs,
+					timeoutError: () => new Error('Python path configuration timed out'),
+				},
+			);
+		} catch (error) {
+			throw provisionFailure('configuring the workspace Python path', error);
+		}
+	}
+
 	private async setupEnvironment(
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
@@ -1208,6 +1246,12 @@ export class SandboxProvisioner {
 				timeoutMs: options.startupTimeoutMs ?? DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
 			},
 		};
+		if (options.entryNotebook?.includes('/')) {
+			// marimo adds the entry's directory; other workspace tools also need the shared root.
+			await withSandboxSpan(sw, 'pythonpath', (time) =>
+				time(() => this.configureWorkspacePythonPath(sandbox, mountPath, startup)),
+			);
+		}
 		if (startup.plan.setup.length === 0) return startup;
 
 		const command = `cd ${shellQuote(mountPath)} && ${instrumentSetup(startup.plan.setup)}`;
@@ -1354,9 +1398,9 @@ export class SandboxProvisioner {
 	): Promise<boolean> {
 		if (opts?.persistEdits === false) return false;
 		const { source } = await notebooks.getNotebook(projectId, notebookId);
-		if (effectivePersistenceMode({ persistEdits: true, source, persistWorkspace }) === 'none') {
-			return false;
-		}
+		const policy = workspaceSourcePolicy(source);
+		const captureMode = effectivePersistenceMode({ persistEdits: true, source, persistWorkspace });
+		if (captureMode === 'none') return false;
 
 		const mountPath = workdir;
 		const listing = sharedWorkspaceListing(sandbox, mountPath);
@@ -1364,7 +1408,12 @@ export class SandboxProvisioner {
 		// steps over disjoint bucket keys, so they run concurrently.
 		const { commit, workspace } = await allSettled({
 			async commit() {
-				const artifacts = await readSessionArtifacts(sandbox, mountPath, listing);
+				const artifacts = await readSessionArtifacts(
+					sandbox,
+					mountPath,
+					listing,
+					policy.entryNotebook,
+				);
 				await notebooks.commitSession(projectId, notebookId, artifacts, actor);
 			},
 			async workspace() {
@@ -1375,8 +1424,9 @@ export class SandboxProvisioner {
 					projectId,
 					notebookId,
 					mountPath,
-					persistWorkspace,
+					captureMode,
 					listing,
+					policy.entryNotebook,
 				);
 			},
 		});
@@ -1410,7 +1460,7 @@ export class SandboxProvisioner {
 	 * The read-back is unconditional for local notebooks: interactive edits still
 	 * need an immutable version, even when the sandbox wrote through a mounted
 	 * bucket. `NotebookService.commitSession` owns the source files
-	 * (`workspace/notebook.py` + `workspace/pyproject.toml`) and the immutable
+	 * (the entry notebook and `workspace/pyproject.toml`) and the immutable
 	 * `versions/{vid}/` record; `captureWorkspace` excludes those, so there is no
 	 * double-write. All capture steps are best-effort — failures are logged but
 	 * never block sandbox destruction, since a lingering sandbox is the more

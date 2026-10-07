@@ -15,5 +15,7 @@ export function effectivePersistenceMode(input: {
 }): PersistenceMode {
 	if (!input.persistEdits) return 'none';
 	if (!workspaceSourcePolicy(input.source).persistSessionEdits) return 'none';
+	// Explicit local entrypoints carry imported workspaces, including root notebook.py.
+	if (input.source.type === 'local' && input.source.entry_notebook) return 'workspace';
 	return input.persistWorkspace;
 }

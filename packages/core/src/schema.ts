@@ -514,6 +514,7 @@ export const LocalSourceSchema = z.object({
 	// so loosening schema_version here does not weaken the discriminated union.
 	schema_version: SchemaVersionSchema,
 	type: z.literal('local'),
+	entry_notebook: z.string().optional(),
 	current_version_id: VersionIdSchema,
 });
 

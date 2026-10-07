@@ -6,6 +6,23 @@ import { PID, makeFetch, notebook, renderProject, stoppableSession } from './Pro
 afterEach(() => localStorage.removeItem('notebook-view'));
 
 describe('notebook filters', () => {
+	it.each(['viewer', 'app-user', 'editor', 'manager'] as const)(
+		'only advertises folder import to editors and managers: %s',
+		async (role) => {
+			makeFetch({ notebooks: [], role });
+			await renderProject();
+			await screen.findByText('No notebooks yet');
+			if (role === 'editor' || role === 'manager') {
+				expect(screen.getByText(/import a folder with supporting files/)).toBeInTheDocument();
+			} else {
+				expect(screen.queryByText(/import a folder with supporting files/)).not.toBeInTheDocument();
+				expect(
+					screen.getByText('No notebooks are available in this project yet.'),
+				).toBeInTheDocument();
+			}
+		},
+	);
+
 	it('loads gallery metadata once per project and never in list mode', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch({

@@ -14,6 +14,8 @@ backends, deploy, operate, and troubleshoot the hub.
 - [Deployment options](./deployment-options.md) - config-driven server image vs.
   SDK/library composition.
 
+- [Import notebooks](./importing-notebooks.md) - upload a folder with its modules and data.
+
 ## Configure
 
 Every deployment picks storage, compute, and auth.

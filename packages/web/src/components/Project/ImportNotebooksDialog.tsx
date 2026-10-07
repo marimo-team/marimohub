@@ -1,0 +1,260 @@
+import { useRef, useState } from 'react';
+import { FolderOpen, Upload } from 'lucide-react';
+import { DialogModal, Button, ConfirmDialog } from '@/components/ui';
+import { useCapabilitiesQuery } from '@/api/hooks';
+import { folderProblems, inspectFolder } from './folderImport';
+import { useNotebookImport, importErrorMessage } from './useNotebookImport';
+import { ImportFileReview } from './ImportFileReview';
+import { ImportNotebookSelection } from './ImportNotebookSelection';
+import { ImportResults } from './ImportResults';
+import type { FolderFile } from './folderImport';
+
+export default function ImportNotebooksDialog({
+	projectId,
+	projectName,
+	onClose,
+}: {
+	projectId: string;
+	projectName: string;
+	onClose: () => void;
+}) {
+	const queue = useNotebookImport(projectId);
+	const { rows, error, setError } = queue;
+	const { data: capabilities } = useCapabilitiesQuery();
+	const images = capabilities?.sandbox_images ?? [];
+	const profiles =
+		capabilities?.compute_profile_override === 'editors' ? capabilities.compute_profiles : [];
+	const [files, setFiles] = useState<FolderFile[]>([]);
+	const [{ root, revision }, setFolder] = useState({ root: '', revision: 0 });
+	const [search, setSearch] = useState('');
+	const [page, setPage] = useState(0);
+	const [resultPage, setResultPage] = useState(0);
+	const [confirmClose, setConfirmClose] = useState(false);
+	const [baseImage, setBaseImage] = useState('');
+	const [computeProfile, setComputeProfile] = useState('');
+	const [inspecting, setInspecting] = useState(false);
+	const busy = inspecting || queue.busy;
+	const input = useRef<HTMLInputElement>(null);
+	const problems = folderProblems(files);
+	const included = files.filter((file) => file.included);
+	const selected = files.filter((file) => file.selected);
+	const inProgress = rows.length > 0;
+	const completeCount = rows.filter((row) => row.state === 'imported').length;
+
+	const updateFile = (path: string, patch: Partial<FolderFile>) =>
+		setFiles((current) =>
+			current.map((file) => (file.path === path ? { ...file, ...patch } : file)),
+		);
+
+	async function chooseFolder(fileList: FileList | null) {
+		if (!fileList?.length) return;
+		setInspecting(true);
+		setError(undefined);
+		try {
+			const folder = await inspectFolder([...fileList]);
+			setFolder((current) => ({ root: folder.root, revision: current.revision + 1 }));
+			setSearch('');
+			setPage(0);
+			setFiles(folder.files);
+		} catch (error) {
+			setError(importErrorMessage(error));
+		}
+		setInspecting(false);
+	}
+
+	function run() {
+		if (!inProgress) setResultPage(0);
+		void queue.run(files, {
+			...(baseImage ? { base_image: baseImage } : {}),
+			...(computeProfile ? { compute_profile: computeProfile } : {}),
+		});
+	}
+
+	function requestClose() {
+		if (busy) return;
+		if (queue.canRetry) setConfirmClose(true);
+		else onClose();
+	}
+
+	return (
+		<DialogModal
+			isOpen
+			onClose={requestClose}
+			title="Import notebooks"
+			width="xl"
+			contentClassName="flex min-h-0 flex-col overflow-hidden p-0"
+		>
+			<div className="flex min-h-0 flex-col">
+				<div className="space-y-5 overflow-y-auto p-5">
+					<p className="text-sm text-muted-foreground">
+						{inProgress ? 'Import' : root ? 'Review notebooks and files' : 'Choose source'}{' '}
+						<span aria-hidden="true">·</span> {projectName}
+					</p>
+					{error && (
+						<p
+							role="alert"
+							className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+						>
+							{error}
+						</p>
+					)}
+					{!inProgress && (
+						<>
+							<div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/30 p-4">
+								<div className="min-w-0">
+									<div className="flex items-center gap-2 font-medium">
+										<FolderOpen className="size-4" />
+										{root || 'Import a folder'}
+									</div>
+									<p className="mt-1 text-sm text-muted-foreground">
+										{root
+											? `${files.length} files found`
+											: 'Choose the common parent of your notebooks, Python modules, and data files.'}
+									</p>
+								</div>
+								<input
+									ref={(element) => {
+										input.current = element;
+										element?.setAttribute('webkitdirectory', '');
+									}}
+									type="file"
+									multiple
+									hidden
+									aria-label="Choose folder"
+									onChange={(event) => {
+										void chooseFolder(event.target.files);
+										event.target.value = '';
+									}}
+								/>
+								<Button isDisabled={busy} onPress={() => input.current?.click()}>
+									{inspecting ? 'Reading folder…' : root ? 'Change folder' : 'Choose folder'}
+								</Button>
+							</div>
+							{root && (
+								<>
+									<p className="text-sm text-muted-foreground">
+										Each notebook gets its own copy of the included files. Edits are not shared.
+										Paths stay relative to this folder.
+									</p>
+									<ImportNotebookSelection
+										files={files}
+										onFilesChange={setFiles}
+										onFileChange={updateFile}
+										projectName={projectName}
+										search={search}
+										onSearchChange={setSearch}
+										page={page}
+										onPageChange={setPage}
+									/>
+									<ImportFileReview key={revision} files={files} onChange={updateFile} />
+									{(images.length > 0 || profiles.length > 0) && (
+										<details className="rounded-lg border p-3">
+											<summary className="cursor-pointer text-sm font-medium">
+												Import settings
+											</summary>
+											<div className="mt-3 grid gap-4 sm:grid-cols-2">
+												{images.length > 0 && (
+													<label className="space-y-1 text-sm">
+														<span>Base image</span>
+														<select
+															className="block w-full rounded-md border bg-background p-2"
+															value={baseImage}
+															onChange={(event) => setBaseImage(event.target.value)}
+														>
+															<option value="">Deployment default</option>
+															{images.map((image) => (
+																<option key={image} value={image}>
+																	{image}
+																</option>
+															))}
+														</select>
+													</label>
+												)}
+												{profiles.length > 0 && (
+													<label className="space-y-1 text-sm">
+														<span>Compute profile</span>
+														<select
+															className="block w-full rounded-md border bg-background p-2"
+															value={computeProfile}
+															onChange={(event) => setComputeProfile(event.target.value)}
+														>
+															<option value="">Deployment default</option>
+															{profiles.map((profile) => (
+																<option key={profile.name} value={profile.name}>
+																	{profile.name}
+																</option>
+															))}
+														</select>
+													</label>
+												)}
+											</div>
+										</details>
+									)}
+									{problems.length > 0 && (
+										<ul role="alert" className="list-inside list-disc text-sm text-destructive">
+											{problems.map((problem) => (
+												<li key={problem}>{problem}</li>
+											))}
+										</ul>
+									)}
+								</>
+							)}
+						</>
+					)}
+					{inProgress && (
+						<ImportResults
+							rows={rows}
+							projectId={projectId}
+							phase={queue.phase}
+							stopping={queue.stopping}
+							busy={busy}
+							page={resultPage}
+							onPageChange={setResultPage}
+						/>
+					)}
+				</div>
+				<div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-4">
+					<p className="text-sm text-muted-foreground">
+						{!inProgress && root
+							? `Creates ${selected.length} ${selected.length === 1 ? 'notebook' : 'notebooks'}, each with a copy of these ${included.length} files.`
+							: ''}
+					</p>
+					<div className="flex gap-2">
+						<Button isDisabled={busy} onPress={requestClose}>
+							{inProgress ? (completeCount === rows.length ? 'View notebooks' : 'Close') : 'Cancel'}
+						</Button>
+						{busy && inProgress ? (
+							<Button onPress={queue.stop} isDisabled={queue.stopping}>
+								{queue.stopping ? 'Stopping…' : 'Stop import'}
+							</Button>
+						) : inProgress ? (
+							queue.canRetry && (
+								<Button variant="primary" onPress={run}>
+									{queue.retryLabel}
+								</Button>
+							)
+						) : (
+							<Button
+								variant="primary"
+								isDisabled={busy || selected.length === 0 || problems.length > 0}
+								onPress={run}
+							>
+								<Upload className="size-4" />
+								Import {selected.length > 0 ? selected.length : ''}{' '}
+								{selected.length === 1 ? 'notebook' : 'notebooks'}
+							</Button>
+						)}
+					</div>
+				</div>
+			</div>
+			<ConfirmDialog
+				isOpen={confirmClose}
+				onClose={() => setConfirmClose(false)}
+				title="Leave unfinished import?"
+				description="Imported notebooks will remain, but you cannot resume this import after closing. Check unknown outcomes before starting another import."
+				confirmLabel="Leave import"
+				onConfirm={onClose}
+			/>
+		</DialogModal>
+	);
+}

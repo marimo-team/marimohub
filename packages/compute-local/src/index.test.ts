@@ -84,6 +84,13 @@ const serverCmdOnQuotedOption = (option: '--port' | '--bind-addr', value: string
 const CONTRACT_LAUNCH_LOCAL_PORT = 43119;
 
 describe('prepareMarimoCommand (pure)', () => {
+	it('installs marimo after a workspace Python path prefix', () => {
+		const command =
+			'export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" && uv run --no-sync marimo edit reports/revenue.py';
+		expect(prepareMarimoCommand(command, '127.0.0.1')).toBe(
+			command.replace('uv run ', 'uv run --with marimo '),
+		);
+	});
 	it('passes non-`uv run` commands through untouched', () => {
 		expect(prepareMarimoCommand('echo hi', '0.0.0.0')).toBe('echo hi');
 	});

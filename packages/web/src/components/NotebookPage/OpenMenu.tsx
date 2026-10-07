@@ -32,8 +32,7 @@ const SURFACE_DEFINITIONS = {
 		id: 'vscode',
 		label: SURFACE_LABELS.vscode,
 		icon: Code2,
-		openPath: (notebook) =>
-			notebook.source.type === 'git' ? notebook.source.entry_notebook : 'notebook.py',
+		openPath: (notebook) => notebook.source.entry_notebook ?? 'notebook.py',
 	},
 	opencode: { id: 'opencode', label: SURFACE_LABELS.opencode, icon: Bot },
 } satisfies SurfaceDefinitions;

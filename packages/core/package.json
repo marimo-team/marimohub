@@ -11,6 +11,7 @@
 		".": "./src/index.ts",
 		"./bearer-token": "./src/bearerToken.ts",
 		"./async": "./src/async.ts",
+		"./concurrency": "./src/concurrency.ts",
 		"./constants": "./src/constants.ts",
 		"./data-preview-programs": "./src/services/integrations/data-preview/programs.ts",
 		"./data-query-contracts": "./src/services/integrations/data-query/contracts.ts",
@@ -66,7 +67,8 @@
 		"./workspace-archive": "./src/integrations/workspaceArchive.ts",
 		"./ports/notebook-bridge": "./src/ports/notebookBridge.ts",
 		"./sha256": "./src/internal/sha256.ts",
-		"./host-isolation": "./src/hostIsolation.ts"
+		"./host-isolation": "./src/hostIsolation.ts",
+		"./workspace-ignore": "./src/integrations/workspaceIgnore.ts"
 	},
 	"scripts": {
 		"build": "vp pack",

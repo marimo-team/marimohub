@@ -75,6 +75,7 @@ catalog:
   colorjs.io: ^0.7.1
   croner: ^10.0.1
   csv-parse: ^7.0.2
+  fflate: ^0.8.3
   google-auth-library: ^11.0.0
   hono: ^4.13.7
   hono-rate-limiter: ^0.5.3

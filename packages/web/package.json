@@ -30,6 +30,7 @@
 		"clsx": "catalog:",
 		"codemirror": "catalog:",
 		"colorjs.io": "catalog:",
+		"fflate": "catalog:",
 		"lucide-react": "catalog:",
 		"react": "^19.1.1",
 		"react-aria-components": "catalog:",

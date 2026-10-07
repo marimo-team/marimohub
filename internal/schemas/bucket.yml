@@ -1458,6 +1458,94 @@ paths:
       responses:
         '204':
           description: Stored.
+  /projects/{pid}/imports/{import_id}/preparation.json:
+    summary: Actor and expiry for an immutable uploaded folder snapshot.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: import_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: NotebookImportService
+    get:
+      operationId: read_projects_imports_preparation_json
+      summary: Read NotebookImportPreparation
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotebookImportPreparation'
+    put:
+      operationId: write_projects_imports_preparation_json
+      summary: Write NotebookImportPreparation
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotebookImportPreparation'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/imports/{import_id}/items/{encoded_entrypoint}.json:
+    summary: Fenced preparation attempts and retained publication receipt for one
+      imported notebook.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: import_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: encoded_entrypoint
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: NotebookImportService
+    get:
+      operationId: read_projects_imports_items_json
+      summary: Read NotebookImportItem
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotebookImportItem'
+    put:
+      operationId: write_projects_imports_items_json
+      summary: Write NotebookImportItem
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotebookImportItem'
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/notebooks/{nid}/workspace_mutation_claim.json:
     summary: Short-lived lease serializing workspace file mutations for one notebook.
     parameters:
@@ -1648,6 +1736,50 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/EventIdempotencyMarker'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/imports/{import_id}/snapshot.zip:
+    summary: Uploaded ZIP snapshot reused by notebook import attempts until expiry
+      cleanup.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: import_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: NotebookImportService
+    get:
+      operationId: read_projects_imports_snapshot_zip
+      summary: Read NotebookImportSnapshot
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored artifact.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      operationId: write_projects_imports_snapshot_zip
+      summary: Write NotebookImportSnapshot
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
       responses:
         '204':
           description: Stored.
@@ -3336,6 +3468,8 @@ components:
             type:
               type: string
               const: local
+            entry_notebook:
+              type: string
             current_version_id:
               type: string
           required:
@@ -4596,6 +4730,154 @@ components:
         - sharing
         - claimed_at
       additionalProperties: {}
+    NotebookImportPreparation:
+      type: object
+      properties:
+        actor:
+          type: string
+        created_at:
+          type: number
+        expires_at:
+          type: number
+      required:
+        - actor
+        - created_at
+        - expires_at
+    NotebookImportItem:
+      type: object
+      properties:
+        actor:
+          type: string
+        input:
+          type: object
+          properties:
+            entry_notebook:
+              type: string
+              minLength: 1
+            title:
+              type: string
+              minLength: 1
+              maxLength: 200
+            base_image:
+              type: string
+            compute_profile:
+              type: string
+          required:
+            - entry_notebook
+            - title
+        notebook_id:
+          type: string
+        attempts:
+          type: array
+          items:
+            type: string
+        state:
+          type: string
+          enum:
+            - preparing
+            - publishing
+            - complete
+            - expired
+        notebook:
+          type: object
+          properties:
+            preview:
+              type: object
+              properties:
+                notebook_id:
+                  type: string
+                preview_id:
+                  type: string
+              required:
+                - notebook_id
+                - preview_id
+            schema_version:
+              type: integer
+              exclusiveMinimum: 0
+              maximum: 9007199254740991
+            id:
+              type: string
+            project_id:
+              type: string
+            title:
+              type: string
+            description:
+              type: string
+            status:
+              type: string
+              enum:
+                - draft
+                - active
+                - archived
+                - deleted
+            author:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            updated_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+            last_run_at:
+              anyOf:
+                - type: string
+                  format: date-time
+                  pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                - type: 'null'
+            tags:
+              type: array
+              items:
+                type: string
+            runtime:
+              type: object
+              properties:
+                python_version:
+                  type: string
+                marimo_version:
+                  type: string
+            base_image:
+              type: string
+            compute_profile:
+              type: string
+            security_labels:
+              type: object
+              properties:
+                classification:
+                  type: string
+                  pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+                compartments:
+                  maxItems: 64
+                  type: array
+                  items:
+                    type: string
+                    pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$
+              required:
+                - classification
+                - compartments
+              additionalProperties: false
+          required:
+            - schema_version
+            - id
+            - project_id
+            - title
+            - description
+            - status
+            - author
+            - created_at
+            - updated_at
+            - last_run_at
+            - tags
+        lease_until:
+          type: number
+      required:
+        - actor
+        - input
+        - notebook_id
+        - attempts
+        - state
+        - lease_until
     WorkspaceMutationClaim:
       anyOf:
         - type: object

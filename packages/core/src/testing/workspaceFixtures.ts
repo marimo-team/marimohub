@@ -9,7 +9,7 @@ import { makeLocalSource, makeNotebookMeta } from './fixtures';
 export interface SavedSourceFile {
 	projectId: ProjectId;
 	notebookId: NotebookId;
-	path: 'notebook.py' | 'pyproject.toml';
+	path: string;
 	content: string;
 	actor: UserId;
 }

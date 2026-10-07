@@ -63,6 +63,7 @@ export type {
 export { MaintenanceService } from './catalog/MaintenanceService';
 export type { ExpireSnapshotsOptions, PruneEventsOptions } from './catalog/MaintenanceService';
 export { MaintenanceLock } from './catalog/MaintenanceLock';
+export { ImportNotebookInputSchema } from './content/NotebookImportService';
 export { MAX_VERSIONS, NotebookService } from './content/NotebookService';
 export {
 	MAX_WORKSPACE_SEARCH_RESULTS,

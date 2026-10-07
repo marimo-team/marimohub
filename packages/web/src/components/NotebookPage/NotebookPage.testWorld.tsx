@@ -268,7 +268,11 @@ export function makeFetch(opts: FetchOptions) {
 								last_synced_at: '2026-07-01T10:00:00Z',
 								current_version_id: opts.headVersion ?? 'ver-2',
 							}
-						: { type: 'local', current_version_id: opts.headVersion ?? 'ver-2' },
+						: {
+								type: 'local',
+								current_version_id: opts.headVersion ?? 'ver-2',
+								...(opts.entryNotebook ? { entry_notebook: opts.entryNotebook } : {}),
+							},
 			});
 		}
 		if (url.includes('/capabilities')) {
