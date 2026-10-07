@@ -8,7 +8,7 @@ kernel does not receive this token.
 Start with the required inspection:
 
 ```bash
-bash /absolute/path/to/marimo-pair/scripts/execute-code.sh \
+bash /home/appuser/.agents/skills/marimo-pair/scripts/execute-code.sh \
   -c "import marimo._code_mode as cm; help(cm)"
 ```
 

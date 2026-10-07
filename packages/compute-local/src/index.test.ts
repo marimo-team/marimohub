@@ -64,8 +64,8 @@ afterEach(async () => {
  * A tiny HTTP server that binds whatever `--port` is passed (stands in for the
  * `marimo edit … --port 2718` command, so the adapter's port rewrite applies).
  */
-const serverCmdOn = (port: number) =>
-	`node -e "const i=process.argv.indexOf('--port');const p=+process.argv[i+1];require('http').createServer((_,r)=>r.end('ok')).listen(p,'127.0.0.1')" -- --port ${port}`;
+const serverCmdOn = (port: number, host = '127.0.0.1') =>
+	`node -e "const i=process.argv.indexOf('--port');const p=+process.argv[i+1];require('http').createServer((_,r)=>r.end('ok')).listen(p,'${host}')" -- --port ${port}`;
 const SERVER_CMD = serverCmdOn(2718);
 const serverCmdOnQuotedOption = (option: '--port' | '--bind-addr', value: string) =>
 	`node -e "const i=process.argv.findIndex(v=>v==='--port'||v==='--bind-addr');const v=process.argv[i+1];const p=+v.slice(v.lastIndexOf(':')+1);require('http').createServer((_,r)=>r.end('ok')).listen(p,'127.0.0.1')" -- '${option}' '${value}'`;
@@ -641,6 +641,48 @@ exec "$NODE_BIN" -e 'const p=Number(process.argv[1]);require("http").createServe
 		const res = await fetch(url);
 		expect(await res.text()).toBe('ok');
 	});
+
+	it.each([
+		['127.0.0.1', '127.0.0.1'],
+		['0.0.0.0', '127.0.0.1'],
+		['localhost', 'localhost'],
+		['::1', '[::1]'],
+		['::', '[::1]'],
+		['2001:db8::1', '[2001:db8::1]'],
+	])('resolves process URLs bound to %s through %s', async (bindHost, hostname) => {
+		const local = new LocalCompute({ bindHost });
+		const sb = local.create(`sb-host-${Math.random().toString(36).slice(2, 10)}` as SandboxId);
+		try {
+			expect(
+				sb.resolveProcessUrl?.('http://127.0.0.1:2718/proxy/session/?key=value#fragment'),
+			).toBe(`http://${hostname}:2718/proxy/session/?key=value#fragment`);
+		} finally {
+			await sb.destroy();
+		}
+	});
+
+	it.each(['::1', '::'])(
+		'maps ports and checks readiness for an IPv6 listener on %s',
+		async (bindHost) => {
+			const local = new LocalCompute({ bindHost });
+			const sb = local.create(`sb-ipv6-${Math.random().toString(36).slice(2, 10)}` as SandboxId);
+			try {
+				const proc = await sb.startProcess(serverCmdOn(2718, bindHost), { cwd: '/workspace' });
+				await proc.waitForPort(2718, { timeout: 15_000 });
+				const exposed = await sb.exposePort(2718, { hostname: '' });
+				const processUrl = sb.resolveProcessUrl?.('http://127.0.0.1:2718/proxy/session/');
+				expect(processUrl).toBe(`http://[::1]:${new URL(exposed.url).port}/proxy/session/`);
+				expect(await (await fetch(processUrl!)).text()).toBe('ok');
+				await expect(
+					sb.isPortReady?.(2718, { mode: 'http', path: '/proxy/session/' }),
+				).resolves.toBe(true);
+				await proc.kill();
+				await expect.poll(() => sb.isPortReady?.(2718), { timeout: 5000 }).toBe(false);
+			} finally {
+				await sb.destroy();
+			}
+		},
+	);
 
 	it.each([
 		['--port', serverCmdOnQuotedOption('--port', '2718')],

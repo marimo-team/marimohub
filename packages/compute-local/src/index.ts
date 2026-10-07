@@ -167,7 +167,7 @@ async function allocatePort(host: string, range?: PortRange): Promise<number> {
 }
 
 /** Resolve once a TCP listener accepts a connection on the port, or true/false. */
-function tcpReady(port: number, host = '127.0.0.1'): Promise<boolean> {
+function tcpReady(port: number, host: string): Promise<boolean> {
 	return new Promise((resolve) => {
 		const sock = net.connect({ port, host });
 		sock.once('connect', () => {
@@ -318,9 +318,16 @@ class LocalSandboxInstance implements SandboxInstance {
 		return this.mapPath(p);
 	}
 
+	private get processHost(): string {
+		if (this.bindHost === '0.0.0.0') return '127.0.0.1';
+		if (this.bindHost === '::') return '::1';
+		return this.bindHost;
+	}
+
 	resolveProcessUrl(url: string): string {
 		const resolved = new URL(url);
-		resolved.hostname = this.bindHost === '0.0.0.0' ? '127.0.0.1' : this.bindHost;
+		const host = this.processHost;
+		resolved.hostname = net.isIP(host) === 6 ? `[${host}]` : host;
 		const port = Number(resolved.port || (resolved.protocol === 'https:' ? 443 : 80));
 		resolved.port = String(this.portMap.get(port) ?? port);
 		return resolved.toString();
@@ -621,6 +628,7 @@ class LocalSandboxInstance implements SandboxInstance {
 		});
 
 		const portMap = this.portMap;
+		const processHost = this.processHost;
 		const id = String(child.pid ?? `proc-${this.children.size}`);
 
 		const proc: SandboxProcess = {
@@ -641,7 +649,7 @@ class LocalSandboxInstance implements SandboxInstance {
 								`process exited (code ${exitInfo.code}) before port ${port} was ready.\n${stderr.toString() || stdout.toString()}`,
 							);
 						}
-						return tcpReady(real);
+						return tcpReady(real, processHost);
 					},
 					{
 						timeoutMs: timeout,
