@@ -30,7 +30,7 @@ the image".
 
 | Body                                       | HTTP  | Meaning                                                                                |
 | ------------------------------------------ | ----- | -------------------------------------------------------------------------------------- |
-| `{ "status": "ok", "loops": {…} }`         | `200` | Every loop's last attempt succeeded.                                                   |
+| `{ "status": "ok", "loops": {…} }`         | `200` | No loop is currently `failing` or `stalled`, including before a first attempt ends.    |
 | `{ "status": "degraded", "loops": {…} }`   | `200` | At least one loop is `failing`. A restart would not fix this.                          |
 | `{ "status": "stalled", "loops": {…} }`    | `503` | At least one loop is `stalled`. Restarting the pod can recover.                        |
 | `{ "status": "unavailable", "loops": {} }` | `200` | This process runs no loops (`MARIMOHUB_RUN_MAINTENANCE` is not `true`, e.g. API pods). |
@@ -153,7 +153,9 @@ maintenance cycle, or **Stop** normally finishes the cleanup; see
 Super admins can force it from **Admin → Runtime → Editors → Reclaim session**
 (`POST /api/v1/admin/runtime/projects/{pid}/sessions/{sid}/reclaim`, optional
 body `{ "save": false }`; `save` defaults to `true`). A successful reclaim
-returns `200 { "reclaimed": true, "saved": … }`.
+returns `200` with
+`{ "success": true, "data": { "reclaimed": true, "saved": true } }` (`saved` is
+`false` when nothing was saved).
 
 | Response | Reason                                                                 | Action                                               |
 | -------- | ---------------------------------------------------------------------- | ---------------------------------------------------- |

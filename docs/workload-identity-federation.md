@@ -573,8 +573,9 @@ notebook can call **any AWS API that role's policies allow**, not only S3.
 
    ::: warning Wildcard trust with the deployment default
    With `MARIMOHUB_WIF_DEFAULT_ENABLED=true`, a `StringLike` `proj-*` trust
-   grants the role to every current and future project. List exact project ids
-   instead.
+   lets every current and future project that has federation enabled assume
+   the role. Only a project with an explicit `enabled: false` override gets no
+   token. List exact project ids instead.
    :::
 
    ::: tip One role for the whole deployment

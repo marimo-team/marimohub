@@ -1961,3 +1961,20 @@ describe('createFromEnv boolean knobs', () => {
 		expect(deps.sandbox.automaticThumbnails).toBe(false);
 	});
 });
+
+describe('createFromEnv deployment version', () => {
+	const env = {
+		MARIMOHUB_STORAGE_BACKEND: 'memory',
+		MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+		MARIMOHUB_COMPUTE_BACKEND: 'none',
+		MARIMOHUB_AUTH_BACKEND: 'dev',
+	};
+
+	it.each([undefined, ''])('reports %j as dev', (version) => {
+		expect(createFromEnv({ ...env, MARIMOHUB_VERSION: version }).version?.version).toBe('dev');
+	});
+
+	it('reports the baked-in version', () => {
+		expect(createFromEnv({ ...env, MARIMOHUB_VERSION: '0.4.16' }).version?.version).toBe('0.4.16');
+	});
+});

@@ -132,7 +132,11 @@ release. On timeout the runner aborts the attempt's signal and logs
 not race it, so hung work keeps the attempt, and the in-flight guard, until it
 settles; no loop starts a second attempt over abandoned work. When the work
 settles the runner logs `<loop>_recovered`, discards the late result, and the
-next tick retries. A stalled attempt does not release its lease; the lease
+next tick retries. The guard covers the loop's own work promise only. Inside
+it, the reconciler gives each session reclaim a 60-second budget; a reclaim
+that exceeds it keeps running, so the reconciler records the session and skips
+it (counted as unreclaimed, reason `timeout`) on later cycles until that reclaim
+settles. A stalled attempt does not release its lease; the lease
 expires at the deadline. Another replica can then take the lease while the
 abandoned work is still running, so calls without cancellation support still
 need adapter request timeouts.

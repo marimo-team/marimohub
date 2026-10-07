@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import { paths } from '../../paths';
 import { MAX_ARTIFACT_BYTES } from '../../constants';
+import { NotFoundError } from '../../errors';
 
 import { execResult, listFilesFailure, readFileFailure } from '../../ports/sandbox';
 import type { Session } from '../../schema';
@@ -180,6 +181,17 @@ describe('SessionLifecycleService', () => {
 			expect(result.reapedExpired).toBe(0);
 			expect(sandboxCalls.destroy).toBe(0);
 			expect((await getStored(s)).status).toBe('running');
+		});
+
+		it('reaps rather than extends when the probe finds the sandbox gone', async () => {
+			probe.mockRejectedValue(new NotFoundError('sandbox gone'));
+			const s = await putSession({ expires_at: iso(-1000), last_snapshot_at: iso(0) });
+
+			const result = await makeService().sweep(now);
+
+			expect(result.extended).toBe(0);
+			expect(result.reapedExpired).toBe(1);
+			expect((await getStored(s)).status).toBe('terminated');
 		});
 
 		it('reaps on a null probe once the heartbeat is also stale (kernel dead)', async () => {
@@ -619,6 +631,49 @@ describe('SessionLifecycleService', () => {
 			expect(sandboxCalls.destroy).toBe(0);
 			expect(notebooks.commitSession).not.toHaveBeenCalled();
 			expect((await getStored(s)).sandbox_reclaimed_at).toBeUndefined();
+		});
+
+		it('never snapshots a displaced claim holder while its takeover replacement is live', async () => {
+			probe.mockResolvedValue(1);
+			const s = await putSession({ status: 'expired', last_heartbeat: iso(-10 * 60 * 1000) });
+			const replacement = await putSession({
+				status: 'running',
+				sandbox_id: createSandboxId(),
+				last_snapshot_at: iso(0),
+			});
+			await bucket.put(
+				paths.editorClaim(projectId, notebookId),
+				JSON.stringify({
+					session_id: s.session_id,
+					sharing: 'exclusive',
+					claimed_at: iso(-60 * 60 * 1000),
+					transfer: {
+						takeover_id: 'takeover-1',
+						requested_by: replacement.user_id,
+						expected_activity: 'active',
+						phase: 'ready',
+						requested_at: iso(-60 * 1000),
+						replacement_session_id: replacement.session_id,
+					},
+				}),
+			);
+			expect(await sessions.ownsEditorClaim(s)).toBe(true);
+
+			const result = await makeService().sweep(now);
+
+			expect(result.snapshotted).toBe(0);
+			expect(notebooks.commitSession).not.toHaveBeenCalled();
+			expect((await getStored(s)).last_snapshot_at).toBeUndefined();
+		});
+
+		it('reclaims an expired record whose sandbox vanished instead of failing the pass', async () => {
+			probe.mockRejectedValue(new NotFoundError('sandbox gone'));
+			const s = await putSession({ status: 'expired', last_heartbeat: iso(-10 * 60 * 1000) });
+
+			const result = await makeService().sweep(now);
+
+			expect(result.reclaimed).toBe(1);
+			expect((await getStored(s)).sandbox_reclaimed_at).toBeDefined();
 		});
 
 		it('spares and snapshots an expired record with editors when it still owns the notebook', async () => {

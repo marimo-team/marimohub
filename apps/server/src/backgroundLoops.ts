@@ -164,6 +164,8 @@ export class BackgroundLoops {
 						signal: options.abortOnStop ? stopping.signal : undefined,
 						timeoutError: () =>
 							new LoopDeadlineError(`${name} exceeded its ${deadlineMs} ms deadline`),
+						// An abandoned attempt must not hold the process open after stop().
+						unref: true,
 					});
 					outcome = result ? 'success' : 'skipped';
 				} catch (err) {
@@ -171,33 +173,36 @@ export class BackgroundLoops {
 					outcome = err instanceof LoopDeadlineError ? 'stalled' : 'failed';
 				}
 				const cancelled = outcome === 'failed' && stopping.signal.aborted;
-				try {
-					if (cancelled) outcome = 'skipped';
-					else this.record(name, state, outcome, started, error, lease?.holder);
-					if (outcome === 'stalled' || cancelled) {
-						const settle = () => this.settle(name, state, lease?.holder);
-						void (pending ?? Promise.resolve()).then(settle, settle);
-					} else state.running = false;
-					if (outcome === 'success' && result) {
-						try {
-							options.onSuccess?.(result.value);
-						} catch (err) {
-							logFailure(`${name}_report_failed`, err, { holder: lease?.holder });
-						}
+				if (cancelled) outcome = 'skipped';
+				const report = (fn: () => void) => {
+					try {
+						fn();
+					} catch (err) {
+						logFailure(`${name}_report_failed`, err, { holder: lease?.holder });
 					}
-				} finally {
-					span.setAttributes({
-						'marimohub.loop.name': name,
-						'marimohub.loop.outcome': outcome,
-					});
-					if (outcome === 'failed' || outcome === 'stalled') {
-						span.setStatus({
-							code: SpanStatusCode.ERROR,
-							message: error instanceof Error ? error.message : String(error),
-						});
-					}
-					span.end();
+				};
+				if (!cancelled)
+					report(() => this.record(name, state, outcome, started, error, lease?.holder));
+				// `report` swallows bookkeeping failures so the in-flight guard is always released.
+				if (outcome === 'stalled' || cancelled) {
+					const settle = () => report(() => this.settle(name, state, lease?.holder));
+					void (pending ?? Promise.resolve()).then(settle, settle);
+				} else state.running = false;
+				if (outcome === 'success' && result) {
+					const { value } = result;
+					report(() => options.onSuccess?.(value));
 				}
+				span.setAttributes({
+					'marimohub.loop.name': name,
+					'marimohub.loop.outcome': outcome,
+				});
+				if (outcome === 'failed' || outcome === 'stalled') {
+					span.setStatus({
+						code: SpanStatusCode.ERROR,
+						message: error instanceof Error ? error.message : String(error),
+					});
+				}
+				span.end();
 			});
 
 		let current: Promise<void> = Promise.resolve();

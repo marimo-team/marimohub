@@ -1,3 +1,4 @@
+import { NotFoundError } from '../../errors';
 import { logOperationalError } from '../../operationalLog';
 import { AppPoolStore } from './AppPoolStore';
 import { expireAppPresence, appOccupancy } from './AppPoolRouter';
@@ -6,14 +7,14 @@ import type { Bucket } from '../../ports/bucket';
 import type { SessionMode } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
-import type { SessionId } from '../../ids';
+import type { NotebookId, SessionId } from '../../ids';
 import type { SandboxProvider } from '../../ports/sandbox';
 import { sessionOwner } from './sessionOwner';
 import { createSlidingWindowBudget } from '../../rateLimit';
 import type { Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
-import { SessionRetirer } from './SessionRetirer';
+import { isLivePersistingEditor, SessionRetirer } from './SessionRetirer';
 import { isTerminal, sessionMode, sessionModePolicy, sessionPersistsEdits } from './sessionState';
 import { isPastAuthorizationDeadline } from './SessionService';
 import type { SessionService } from './SessionService';
@@ -111,6 +112,9 @@ export class SessionLifecycleService {
 				s.sandbox_id &&
 				(s.status === 'running' || (isTerminal(s.status) && !s.sandbox_reclaimed_at)),
 		);
+		const liveEditorNotebooks = new Set<NotebookId>(
+			sessions.filter(isLivePersistingEditor).map((s) => s.notebook_id),
+		);
 		const result: SweepResult = {
 			snapshotted: 0,
 			extended: 0,
@@ -145,6 +149,7 @@ export class SessionLifecycleService {
 				// Informational counts for apps/shared editors feed the "~N connected"
 				// stop-confirm hint, but refresh on the slower cadence below.
 				let active: number | null = null;
+				let sandboxGone = false;
 				const reapCandidate =
 					s.status === 'expired' ||
 					(s.status === 'running' && (pastDeadline || pastAuthorizationDeadline || heartbeatStale));
@@ -157,7 +162,14 @@ export class SessionLifecycleService {
 					connectionCountCheck &&
 					this.connectionProbeBudget.consume(s.session_id, now);
 				if (sandbox && this.cfg.connectionAware && (reapCandidate || connectionCountDue)) {
-					active = await this.probe(sandbox, kernelBasePathFromUrl(s.sandbox_url));
+					try {
+						active = await this.probe(sandbox, kernelBasePathFromUrl(s.sandbox_url));
+					} catch (error) {
+						// A vanished sandbox must not fail the pass: reclaim and idle reaping
+						// already handle a missing sandbox.
+						if (!(error instanceof NotFoundError)) throw error;
+						sandboxGone = true;
+					}
 					// A null probe is "unknown" — leave the last stamp rather than write a
 					// lie. An unchanged count is skipped too: no CAS/ETag churn against
 					// heartbeats for the steady state.
@@ -186,6 +198,9 @@ export class SessionLifecycleService {
 						if (outcome.reclaimed && s.status === 'expired') result.reclaimed++;
 						return;
 					}
+					// The takeover replacement can be live while the claim still names this
+					// displaced holder, so `ownsEditorClaim` alone cannot stop a stale save.
+					if (liveEditorNotebooks.has(s.notebook_id)) return;
 				} else {
 					// A null probe is "unknown", not "no editors": with a fresh heartbeat,
 					// extend at the deadline rather than killing a possibly-live editor on a
@@ -194,7 +209,7 @@ export class SessionLifecycleService {
 					const mayHaveEditors =
 						hasEditors ||
 						hasAppUsers ||
-						(this.cfg.connectionAware && active === null && !heartbeatStale);
+						(this.cfg.connectionAware && active === null && !sandboxGone && !heartbeatStale);
 
 					if (pastAuthorizationDeadline) {
 						if (await this.gracefulTeardown(s, false, thumbnailDeadlineAt)) result.reapedExpired++;
@@ -235,7 +250,7 @@ export class SessionLifecycleService {
 					now - Date.parse(s.last_snapshot_at ?? s.started_at) >= this.cfg.snapshotIntervalMs;
 				const snapshotDue =
 					snapshotDueByCadence && (await this.sessions.ownsEditorClaim(s).catch(() => false));
-				if (snapshotDue && sandbox) {
+				if (snapshotDue && sandbox && !sandboxGone) {
 					const saved = await this.provisioner
 						.captureSession(
 							sandbox,

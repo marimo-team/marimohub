@@ -47,6 +47,25 @@ describe('makeWif enablement', () => {
 		}
 	});
 
+	it('tells operators to unset the default-enabled flag along with the WIF vars', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			makeWif({
+				...fullEnv,
+				MARIMOHUB_WIF_DEFAULT_ENABLED: 'true',
+				MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+				MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS: 'org-data',
+			});
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining(
+					'Unset the WIF env vars and MARIMOHUB_WIF_DEFAULT_ENABLED (or the bucket list)',
+				),
+			);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
 	it('keeps hub WIF when the bucket list is set but the backend is not coreweave', () => {
 		const { wif } = makeWif({
 			...fullEnv,

@@ -917,6 +917,21 @@ describe('Session routes', () => {
 		expect(otherCompute.lastCreateOptions?.owner).toEqual({ projectId: pid, userId: ACTOR });
 	});
 
+	it('reports unknown editor activity when the holder sandbox is gone', async () => {
+		const gone = makeFakeSandbox();
+		gone.instance.exec = async () => {
+			throw new NotFoundError('sandbox gone');
+		};
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const exclusiveOther = exclusiveApi(STRANGER, fakeComputeFrom(gone.instance));
+		const session = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
+		expect(state.holder).toMatchObject({
+			session_id: session.session_id,
+			activity: { state: 'unknown' },
+		});
+	});
+
 	it('returns the owner’s editor claim without contacting compute', async () => {
 		const { instance } = makeFakeSandbox();
 		const compute = fakeComputeFrom(instance);

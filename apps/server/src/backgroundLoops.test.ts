@@ -438,6 +438,24 @@ describe('BackgroundLoops', () => {
 		await vi.advanceTimersByTimeAsync(0);
 		expect(metrics.gauge).toHaveBeenLastCalledWith('loop.stalled', 0, tags);
 	});
+
+	it('does not let a metrics failure wedge the loop', async () => {
+		const metrics = {
+			increment: vi.fn(),
+			gauge: vi.fn(() => {
+				throw new Error('meter unavailable');
+			}),
+		} satisfies Metrics;
+		loops = new BackgroundLoops(metrics);
+		const run = vi.fn(async () => {});
+		const handle = start(run, { overlapEvent: 'test_overlap' });
+		await expect(handle.drain()).resolves.toBeUndefined();
+		await vi.advanceTimersByTimeAsync(200);
+		expect(run).toHaveBeenCalledTimes(3);
+		const names = events().map((event) => event.event);
+		expect(names).not.toContain('test_overlap');
+		expect(names.filter((event) => event === 'test_report_failed')).toHaveLength(3);
+	});
 });
 
 describe('BackgroundLoops tracing', () => {

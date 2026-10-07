@@ -161,13 +161,17 @@ Cleanup waits for:
 - **Provisioning grace.** A session that expired while provisioning gets
   15 minutes from creation, unless its kernel is already ready.
 - **Teardown grace.** A fresh Stop or takeover gets 15 minutes to finish.
-- **Idle kernel.** marimohub must confirm that no editors are connected.
+- **Idle kernel.** Before the session's authorization deadline, automatic
+  cleanup must confirm that no editors are connected. After the deadline,
+  automatic cleanup does not check. An administrator reclaim never checks.
 - **Attachment.** To save edits, the compute provider must attach to the
   existing sandbox. If the sandbox is gone, the claim is released; any other
   attachment error keeps the sandbox and the claim.
 
 Providers that cannot attach (currently Cloudflare) keep sessions that may hold
-unsaved edits until a super admin reclaims them without saving. See
+unsaved edits until a super admin reclaims them without saving. This applies only
+before the session's authorization deadline. After it, automatic cleanup destroys the
+sandbox without saving. See
 [Reclaim a stuck editor sandbox](./operations.md#reclaim-a-stuck-editor-sandbox).
 
 ## Changing the sharing mode

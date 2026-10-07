@@ -5,7 +5,7 @@ import type { Bucket } from '../../ports/bucket';
 import { withDeadline } from '../../async';
 import { Millis } from '../../duration';
 import { mapWithConcurrency } from '../../concurrency';
-import type { SandboxId } from '../../ids';
+import type { SandboxId, SessionId } from '../../ids';
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import type { SandboxProvider } from '../../ports/sandbox';
@@ -71,6 +71,12 @@ export interface ReconcileResult {
 export class ReconciliationService {
 	private readonly retirer: SessionRetirer;
 	private readonly diagnosticLeases: SandboxDiagnosticLease;
+	/**
+	 * Reclaims that outlived their budget keep running (the deadline only stops
+	 * waiting), so a later sweep must not start a second capture/destroy for the
+	 * same session until the first settles.
+	 */
+	private readonly timedOutReclaims = new Set<SessionId>();
 
 	constructor(
 		private sessions: SessionService,
@@ -115,21 +121,27 @@ export class ReconciliationService {
 		);
 		await mapWithConcurrency(candidates, 8, async (session) => {
 			try {
-				const outcome = await withDeadline(
-					this.retirer.reclaim(session, { thumbnailDeadlineAt, requireIdle: true }),
-					{
+				let outcome: ReclaimOutcome;
+				if (this.timedOutReclaims.has(session.session_id)) {
+					outcome = { reclaimed: false, reason: 'timeout' };
+				} else {
+					const attempt = this.retirer.reclaim(session, { thumbnailDeadlineAt, requireIdle: true });
+					outcome = await withDeadline(attempt, {
 						timeoutMs: RECLAIM_SESSION_BUDGET_MS,
 						timeoutError: () => new ReclaimTimeoutError(),
-					},
-				).catch((error: unknown): ReclaimOutcome => {
-					if (!(error instanceof ReclaimTimeoutError)) throw error;
-					logOperationalError(
-						'session_reclaim_timeout',
-						{ operation: 'session.reclaim', session_id: session.session_id },
-						error,
-					);
-					return { reclaimed: false, reason: 'timeout' };
-				});
+					}).catch((error: unknown): ReclaimOutcome => {
+						if (!(error instanceof ReclaimTimeoutError)) throw error;
+						logOperationalError(
+							'session_reclaim_timeout',
+							{ operation: 'session.reclaim', session_id: session.session_id },
+							error,
+						);
+						this.timedOutReclaims.add(session.session_id);
+						const settle = () => this.timedOutReclaims.delete(session.session_id);
+						void attempt.then(settle, settle);
+						return { reclaimed: false, reason: 'timeout' };
+					});
+				}
 				if (outcome.reclaimed) {
 					if (!session.sandbox_reclaimed_at) reclaimed++;
 					return;

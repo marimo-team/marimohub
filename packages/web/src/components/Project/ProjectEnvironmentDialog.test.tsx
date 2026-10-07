@@ -209,7 +209,8 @@ describe('ProjectEnvironmentDialog', () => {
 		).toBeInTheDocument();
 	});
 
-	it('reports unavailable federation from the server even when capabilities are stale', () => {
+	it('reports unavailable federation from the server even when capabilities are stale', async () => {
+		const user = userEvent.setup();
 		render(
 			<ProjectEnvironmentDialog
 				isOpen
@@ -226,6 +227,10 @@ describe('ProjectEnvironmentDialog', () => {
 			/>,
 		);
 		expect(screen.getByText('Not configured for this deployment')).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
+		expect(screen.getByRole('link', { name: /How to enable it/ })).toBeInTheDocument();
+		expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
 	});
 
 	it('waits for capabilities before showing or editing inherited cloud access', async () => {

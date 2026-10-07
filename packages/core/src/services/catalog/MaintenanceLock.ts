@@ -67,7 +67,9 @@ export class MaintenanceLock {
 
 		const current = this.parse(await existing.text(), 'maintenance_lock.acquire');
 		const heldByOther = current && current.holder !== holder;
-		if (heldByOther && new Date(current.expires_at).getTime() > now) {
+		// Re-read the clock: a release that landed during the awaits above stamps a
+		// later `expires_at` than the pre-await `now`.
+		if (heldByOther && new Date(current.expires_at).getTime() > Date.now()) {
 			return false; // someone else holds it and it hasn't expired
 		}
 

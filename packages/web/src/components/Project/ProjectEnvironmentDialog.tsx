@@ -36,9 +36,12 @@ export function ProjectEnvironmentDialog({
 	isPending = false,
 }: ProjectEnvironmentDialogProps) {
 	const [area, setArea] = useState<Area>('overview');
+	// The capability flag can be stale; the project's own resolution is authoritative.
+	const cloudAccessConfigured =
+		cloudAccessAvailable && project.federation_effective.source !== 'unavailable';
 	let cloudAccessStatus = 'Loading cloud access…';
 	if (!cloudAccessLoading) {
-		cloudAccessStatus = cloudAccessAvailable
+		cloudAccessStatus = cloudAccessConfigured
 			? effectiveCloudAccessLabel(project)
 			: 'Not configured for this deployment';
 	}
@@ -75,7 +78,7 @@ export function ProjectEnvironmentDialog({
 				<CloudAccessPanel
 					isOpen={isOpen}
 					project={project}
-					available={cloudAccessAvailable}
+					available={cloudAccessConfigured}
 					defaultEnabled={cloudAccessDefaultEnabled}
 					onBack={() => setArea('overview')}
 					onSave={onSaveCloudAccess}

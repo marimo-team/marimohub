@@ -1,7 +1,37 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deadlineSignal, MAX_TIMER_DELAY_MS, withAbortSignal, withDeadline } from '../async';
 
 describe('withDeadline', () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it.each([
+		{ unref: true, expected: false },
+		{ unref: undefined, expected: true },
+	])(
+		'keeps the deadline timer ref-ed unless unref is set ($unref)',
+		async ({ unref, expected }) => {
+			const timers: ReturnType<typeof setTimeout>[] = [];
+			const original = globalThis.setTimeout;
+			vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+				...args: Parameters<typeof setTimeout>
+			) => {
+				const timer = original(...args);
+				timers.push(timer);
+				return timer;
+			}) as typeof setTimeout);
+			let hasRef: boolean | undefined;
+			await withDeadline(
+				async () => {
+					hasRef = timers[0]?.hasRef();
+				},
+				{ timeoutMs: 60_000, timeoutError: () => new Error('late'), unref },
+			);
+			expect(hasRef).toBe(expected);
+		},
+	);
+
 	it('returns work that finishes before the deadline', async () => {
 		await expect(
 			withDeadline(Promise.resolve('done'), {

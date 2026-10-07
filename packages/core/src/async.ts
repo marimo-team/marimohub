@@ -3,6 +3,8 @@ export interface DeadlineOptions {
 	timeoutError: () => Error;
 	signal?: AbortSignal;
 	abortError?: () => Error;
+	/** Let the process exit while the deadline timer is pending (Node only). */
+	unref?: boolean;
 }
 
 export const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -63,6 +65,7 @@ export function withDeadline<T>(
 		() => timeout.abort(new DOMException('The operation timed out.', 'TimeoutError')),
 		options.timeoutMs,
 	);
+	if (options.unref) (timer as { unref?: () => void }).unref?.();
 	const signal = options.signal
 		? AbortSignal.any([options.signal, timeout.signal])
 		: timeout.signal;

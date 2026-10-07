@@ -55,6 +55,22 @@ describe('MaintenanceLock', () => {
 		expect(await lock.acquire('B', 10_000)).toBe(true);
 	});
 
+	it('treats a lease released between the failed create and the read as free', async () => {
+		expect(await lock.acquire('A', 10_000)).toBe(true);
+		const originalGet = bucket.get.bind(bucket);
+		let released = false;
+		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			if (!released) {
+				released = true;
+				clock.set(500);
+				await lock.release('A');
+			}
+			return originalGet(key);
+		});
+
+		expect(await lock.acquire('B', 10_000)).toBe(true);
+	});
+
 	it('release does not clobber a lease stolen between its read and write', async () => {
 		expect(await lock.acquire('A', 1000)).toBe(true);
 		const stale = (await bucket.get(paths.maintenanceLock))!;

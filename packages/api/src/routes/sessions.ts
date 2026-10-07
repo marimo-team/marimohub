@@ -955,7 +955,10 @@ async function inspectEditorActivity(deps: ApiDeps, session: Session) {
 	const active = await kernelActiveConnections(
 		deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) }),
 		basePath,
-	);
+	).catch((error: unknown) => {
+		if (error instanceof NotFoundError) return null;
+		throw error;
+	});
 	const checkedAt = new Date().toISOString();
 	if (active === null) return { state: 'unknown' as const, checked_at: checkedAt };
 	await deps.services.sessions

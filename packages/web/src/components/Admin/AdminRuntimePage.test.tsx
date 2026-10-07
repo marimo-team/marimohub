@@ -201,7 +201,7 @@ describe('AdminRuntimePage', () => {
 		expect(screen.getByText(label)).toBeInTheDocument();
 	});
 
-	it('defaults to discarding when the provider cannot save, and surfaces conflicts', async () => {
+	it('forces discarding when the provider cannot save, and surfaces conflicts', async () => {
 		const data = structuredClone(fixture);
 		Object.assign(data.editors[0], {
 			status: 'expired',
@@ -213,9 +213,9 @@ describe('AdminRuntimePage', () => {
 			screen.getByText('Provider cannot save; reclaim without saving to discard edits'),
 		).toBeInTheDocument();
 		await user.click(screen.getByRole('button', { name: 'Reclaim session' }));
-		expect(
-			screen.getByRole('checkbox', { name: 'Attempt to save before reclaiming' }),
-		).not.toBeChecked();
+		const saveOption = screen.getByRole('checkbox', { name: 'Attempt to save before reclaiming' });
+		expect(saveOption).not.toBeChecked();
+		expect(saveOption).toBeDisabled();
 		fetcher.mockImplementationOnce(async () =>
 			jsonError('CONFLICT', 'Kernel is still running cells', 409),
 		);

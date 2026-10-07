@@ -73,7 +73,10 @@ export function makeWif(env: Env): Pick<ApiDeps, 'wif'> {
 					'MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS is set; hub-minted WIF is disabled',
 					'so its static AWS_* env cannot shadow the sandbox credential-vending sidecar.',
 					defaultEnabled ? 'MARIMOHUB_WIF_DEFAULT_ENABLED=true is ignored too.' : '',
-					'Unset the WIF env vars (or the bucket list) to silence this warning.',
+					// Unsetting only the WIF vars would trip the default-enabled ConfigError above.
+					defaultEnabled
+						? 'Unset the WIF env vars and MARIMOHUB_WIF_DEFAULT_ENABLED (or the bucket list) to silence this warning.'
+						: 'Unset the WIF env vars (or the bucket list) to silence this warning.',
 				]
 					.filter(Boolean)
 					.join(' '),

@@ -81,7 +81,10 @@ export async function sweepAppPools(
 						const connections = await kernelActiveConnections(
 							deps.compute.create(member.sandbox_id, { owner: sessionOwner(session) }),
 							kernelBasePathFromUrl(session.sandbox_url),
-						);
+						).catch((error: unknown) => {
+							if (error instanceof NotFoundError) return null;
+							throw error;
+						});
 						const idleTimeout = pool.policy.idleMs;
 						return connections === null &&
 							Date.now() - Date.parse(session.last_heartbeat) > idleTimeout

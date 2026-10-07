@@ -623,6 +623,34 @@ describe('ReconciliationService', () => {
 		}
 	});
 
+	it('Rule 1: does not re-enter a timed-out reclaim until it settles', async () => {
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		await putSession({ status: 'terminated', sandbox_id: terminalId });
+		const hung = Promise.withResolvers<{ reclaimed: false; reason: 'destroy_failed' }>();
+		const reclaim = vi.spyOn(SessionRetirer.prototype, 'reclaim').mockReturnValue(hung.promise);
+		try {
+			const first = reconciler.reclaimTerminalSessions();
+			await vi.advanceTimersByTimeAsync(60_000);
+			await expect(first).resolves.toMatchObject({ unreclaimedTerminal: 1 });
+
+			await expect(reconciler.reclaimTerminalSessions()).resolves.toMatchObject({
+				unreclaimedTerminal: 1,
+			});
+			expect(reclaim).toHaveBeenCalledOnce();
+
+			hung.resolve({ reclaimed: false, reason: 'destroy_failed' });
+			await vi.advanceTimersByTimeAsync(0);
+			reclaim.mockResolvedValue({ reclaimed: true, saved: false });
+			await expect(reconciler.reclaimTerminalSessions()).resolves.toMatchObject({
+				reclaimed: 1,
+				unreclaimedTerminal: 0,
+			});
+			expect(reclaim).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('Rule 1: expireStale cannot make reconciliation commit after authorization expiry', async () => {
 		const session = await putSession({
 			status: 'running',

@@ -460,7 +460,8 @@ function EditorsTable({
 
 function ReclaimSessionDialog({ editor, onClose }: { editor: Editor; onClose: () => void }) {
 	// The provider cannot attach to save, so only a discarding reclaim can succeed.
-	const [save, setSave] = useState(editor.reclaim_blocked_reason !== 'attachment_unsupported');
+	const saveUnsupported = editor.reclaim_blocked_reason === 'attachment_unsupported';
+	const [save, setSave] = useState(!saveUnsupported);
 	const reclaim = useReclaimRuntimeSession();
 	return (
 		<DialogModal
@@ -481,7 +482,7 @@ function ReclaimSessionDialog({ editor, onClose }: { editor: Editor; onClose: ()
 						type="checkbox"
 						aria-label="Attempt to save before reclaiming"
 						checked={save}
-						disabled={reclaim.isPending}
+						disabled={reclaim.isPending || saveUnsupported}
 						onChange={(event) => setSave(event.target.checked)}
 					/>
 					Attempt to save before reclaiming
