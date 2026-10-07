@@ -135,17 +135,8 @@ RUN case "${TARGETARCH:-amd64}" in \
  && rm -rf /var/lib/apt/lists/*
 
 USER appuser
-ARG SKILLS_CLI_VERSION=1.5.23
-RUN UV_CACHE_DIR=/tmp/marimo-pair-uv-cache \
-    DENO_DIR=/tmp/marimo-pair-deno-cache \
-    uvx deno -A "npm:skills@${SKILLS_CLI_VERSION}" add marimo-team/marimo-pair \
-      --global --agent opencode --skill marimo-pair --yes --copy \
- && test -f /home/appuser/.agents/skills/marimo-pair/SKILL.md \
- && rm -rf /tmp/marimo-pair-uv-cache /tmp/marimo-pair-deno-cache
-
-COPY install-marimo-pair.py /tmp/install-marimo-pair.py
-COPY marimo-pair /tmp/marimo-pair
-RUN python3 /tmp/install-marimo-pair.py /home/appuser/.agents/skills/marimo-pair /tmp/marimo-pair
+COPY --chown=appuser:appuser marimo-pair /home/appuser/.agents/skills/marimo-pair
+RUN marimo pair --help >/dev/null
 
 FROM vscode AS tools
 

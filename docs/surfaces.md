@@ -120,8 +120,9 @@ Secondary surfaces and their child agents inherit:
 - `MARIMOHUB_KERNEL_TOKEN_FILE`: the token file path, or an empty string with native authentication disabled.
 
 The local compute adapter maps both values to the host process.
-OpenCode images bundle `marimo-pair`, which uses these variables instead of
-marimo's server registry. Discovery works regardless of authentication or `XDG_STATE_HOME`.
+OpenCode images include a `marimo-pair` skill that passes these values to
+the built-in `uv run --no-sync marimo pair` CLI through `--url` and `--token-file`.
+Discovery works regardless of authentication or `XDG_STATE_HOME`.
 
 ## Security and exposure
 
