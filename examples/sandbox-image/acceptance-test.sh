@@ -54,14 +54,14 @@ run_detached() { # echoes container id; $@ = args after image
 
 # Poll the kernel's published port (mirrors the provisioner's waitForPort). With
 # a token, probe the authenticated connection endpoint directly. Without one,
-# follow the root redirect and require a final 200. Fails after ~90s.
+# follow the root redirect and require a final 200. Allow 90s for startup.
 wait_http_200() { # $1 = host port; $2 = optional bearer token
-	local port="$1" token="${2:-}" i code
-	for i in $(seq 1 90); do
+	local port="$1" token="${2:-}" code deadline=$((SECONDS + 90))
+	while [ "$SECONDS" -lt "$deadline" ]; do
 		if [ -n "$token" ]; then
-			code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "http://127.0.0.1:${port}/api/status/connections" 2>/dev/null || true)"
+			code="$(curl --connect-timeout 2 --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "http://127.0.0.1:${port}/api/status/connections" 2>/dev/null || true)"
 		else
-			code="$(curl -sSL -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/" 2>/dev/null || true)"
+			code="$(curl --connect-timeout 2 --max-time 5 -sSL -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/" 2>/dev/null || true)"
 		fi
 		[ "$code" = "200" ] && return 0
 		sleep 1
@@ -229,11 +229,11 @@ cid="$(run_detached -p 127.0.0.1:2718:2718 "$IMAGE" sleep infinity)"
 provision_notebook "$cid"
 launch_kernel "$cid"
 wait_http_200 2718 "$KERNEL_TOKEN" || { docker exec "$cid" sh -lc 'tail -20 /tmp/m.log' || true; fail "kernel did not serve authenticated HTTP 200 on 2718"; }
-unauth_code="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:2718/api/status/connections" 2>/dev/null || true)"
+unauth_code="$(curl --connect-timeout 2 --max-time 5 -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:2718/api/status/connections" 2>/dev/null || true)"
 [ "$unauth_code" = "401" ] || fail "kernel accepted an unauthenticated status request (HTTP $unauth_code)"
-wrong_auth_code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $WRONG_KERNEL_TOKEN" "http://127.0.0.1:2718/api/status/connections" 2>/dev/null || true)"
+wrong_auth_code="$(curl --connect-timeout 2 --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $WRONG_KERNEL_TOKEN" "http://127.0.0.1:2718/api/status/connections" 2>/dev/null || true)"
 [ "$wrong_auth_code" = "401" ] || fail "kernel accepted an incorrect bearer token (HTTP $wrong_auth_code)"
-auth_code="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $KERNEL_TOKEN" "http://127.0.0.1:2718/api/status/connections" 2>/dev/null || true)"
+auth_code="$(curl --connect-timeout 2 --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $KERNEL_TOKEN" "http://127.0.0.1:2718/api/status/connections" 2>/dev/null || true)"
 [ "$auth_code" = "200" ] || fail "kernel rejected its configured token (HTTP $auth_code)"
 ok "marimo kernel rejects missing and incorrect credentials and accepts its configured token"
 docker rm -f "$cid" >/dev/null 2>&1

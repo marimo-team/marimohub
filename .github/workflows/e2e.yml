@@ -19,6 +19,13 @@ jobs:
     name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    container:
+      # Match @playwright/test in pnpm-lock.yaml; includes browsers and OS dependencies.
+      image: mcr.microsoft.com/playwright:v1.61.0-noble@sha256:57b65fdc9ceabe0ef613124c7bbe2babcf9362c4d85e382fe3b03604e84b428a
+      options: --init --ipc=host
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -49,20 +56,6 @@ jobs:
           restore-keys: |
             vite-task-e2e-${{ matrix.browser }}-${{ runner.os }}-${{ runner.arch }}-
             vite-task-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ matrix.browser }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            playwright-${{ runner.os }}-${{ matrix.browser }}-
-
-      - if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: pnpm --filter @marimo-hub/e2e exec playwright install --with-deps ${{ matrix.browser }}
-      - if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: pnpm --filter @marimo-hub/e2e exec playwright install-deps ${{ matrix.browser }}
 
       - name: Install uv
         if: matrix.browser == 'chromium'
