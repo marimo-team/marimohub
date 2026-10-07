@@ -124,6 +124,8 @@ jobs:
           name: cli-generated-assets
           path: apps/cli/generated
       - name: Install build tools
+        # dnf and rustup fetch from external mirrors; bound the step instead of the whole job.
+        timeout-minutes: 10
         shell: bash
         run: |
           dnf install -y python3-pip
