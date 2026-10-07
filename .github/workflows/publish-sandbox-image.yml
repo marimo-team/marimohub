@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'images/marimo-sandbox/**'
+      - 'examples/sandbox-image/acceptance-test.sh'
       - 'packages/notebook-bridge/src/runtime.generated.ts'
       # Surface env names are a contract with the bundled marimo-pair skill.
       - 'packages/core/src/services/runtime/surfaces/**'
@@ -12,6 +13,7 @@ on:
   pull_request:
     paths:
       - 'images/marimo-sandbox/**'
+      - 'examples/sandbox-image/acceptance-test.sh'
       - 'packages/notebook-bridge/src/runtime.generated.ts'
       # Surface env names are a contract with the bundled marimo-pair skill.
       - 'packages/core/src/services/runtime/surfaces/**'
@@ -35,6 +37,12 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        id: buildx
+
+      - name: Test OpenCode verification deadlines
+        run: python3 images/marimo-sandbox/test-opencode-check.py
+
       - name: Read marimo version
         id: version
         run: |
@@ -45,8 +53,22 @@ jobs:
           fi
           echo "marimo=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Build and run acceptance tests
+      - name: Build sandbox image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: images/marimo-sandbox
+          build-contexts: notebook_bridge=packages/notebook-bridge
+          target: release
+          platforms: linux/amd64
+          load: true
+          tags: marimo-sandbox:ci
+          cache-from: type=gha,scope=marimo-sandbox
+
+      - name: Run acceptance tests
         run: examples/sandbox-image/acceptance-test.sh marimo-sandbox:ci images/marimo-sandbox
+        env:
+          SKIP_BUILD: '1'
 
       - name: Verify pre-installed bridge identity
         run: |
@@ -62,7 +84,16 @@ jobs:
             marimo-sandbox:ci python < images/marimo-sandbox/test-bridge.py
 
       - name: Build VS Code variant
-        run: docker build --build-context notebook_bridge=packages/notebook-bridge --target vscode -t marimo-sandbox:vscode-ci images/marimo-sandbox
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: images/marimo-sandbox
+          build-contexts: notebook_bridge=packages/notebook-bridge
+          target: vscode
+          platforms: linux/amd64
+          load: true
+          tags: marimo-sandbox:vscode-ci
+          cache-from: type=gha,scope=marimo-sandbox
 
       - name: Verify VS Code variant
         run: |
@@ -75,58 +106,53 @@ jobs:
           '
 
       - name: Build OpenCode variant
-        run: docker build --build-context notebook_bridge=packages/notebook-bridge --target opencode -t marimo-sandbox:opencode-ci images/marimo-sandbox
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: images/marimo-sandbox
+          build-contexts: notebook_bridge=packages/notebook-bridge
+          target: opencode
+          platforms: linux/amd64
+          load: true
+          tags: marimo-sandbox:opencode-ci
+          cache-from: type=gha,scope=marimo-sandbox
 
       - name: Verify OpenCode variant
+        timeout-minutes: 3
         run: |
           docker run --rm marimo-sandbox:opencode-ci opencode --version | grep -F '1.18.17'
           docker run --rm marimo-sandbox:opencode-ci jq --version
           docker run --rm marimo-sandbox:opencode-ci test -f /home/appuser/.agents/skills/marimo-pair/SKILL.md
           docker run --rm -v "$PWD/images/marimo-sandbox/test-marimo-pair.py:/tmp/test-marimo-pair.py:ro" marimo-sandbox:opencode-ci python /tmp/test-marimo-pair.py
-          docker run --rm marimo-sandbox:opencode-ci sh -ec '
-            opencode web --hostname 127.0.0.1 --port 4096 >/tmp/opencode.log 2>&1 &
-            pid=$!
-            trap "kill $pid 2>/dev/null || true" EXIT
-            attempts=0
-            until curl -fsS http://127.0.0.1:4096/global/health; do
-              attempts=$((attempts + 1))
-              if [ "$attempts" -ge 30 ]; then
-                cat /tmp/opencode.log
-                exit 1
-              fi
-              sleep 1
-            done
-            curl -fsS -H "x-opencode-directory: /workspace" http://127.0.0.1:4096/skill \
-              | jq -e ".[] | select(.name == \"marimo-pair\")" >/dev/null
-          '
+          docker run --rm \
+            --mount "type=bind,src=${PWD}/images/marimo-sandbox/check-opencode.sh,dst=/tmp/check-opencode.sh,readonly" \
+            marimo-sandbox:opencode-ci timeout --kill-after=5s 120s bash /tmp/check-opencode.sh
 
-      - name: Build and verify combined tools variant
+      - name: Build combined tools variant
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: images/marimo-sandbox
+          build-contexts: notebook_bridge=packages/notebook-bridge
+          target: tools
+          platforms: linux/amd64
+          load: true
+          tags: marimo-sandbox:tools-ci
+          cache-from: type=gha,scope=marimo-sandbox
+          # The tools target includes the base, VS Code, and OpenCode stages.
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,scope=marimo-sandbox,mode=max,timeout=3m,ignore-error=true' || '' }}
+
+      - name: Verify combined tools variant
+        timeout-minutes: 3
         run: |
-          docker build --build-context notebook_bridge=packages/notebook-bridge --target tools -t marimo-sandbox:tools-ci images/marimo-sandbox
           docker run --rm marimo-sandbox:tools-ci code-server --version
           docker run --rm marimo-sandbox:tools-ci opencode --version | grep -F '1.18.17'
           docker run --rm marimo-sandbox:tools-ci jq --version
           docker run --rm marimo-sandbox:tools-ci test -f /home/appuser/.agents/skills/marimo-pair/SKILL.md
           docker run --rm -v "$PWD/images/marimo-sandbox/test-marimo-pair.py:/tmp/test-marimo-pair.py:ro" marimo-sandbox:tools-ci python /tmp/test-marimo-pair.py
-          docker run --rm marimo-sandbox:tools-ci sh -ec '
-            opencode web --hostname 127.0.0.1 --port 4096 >/tmp/opencode.log 2>&1 &
-            pid=$!
-            trap "kill $pid 2>/dev/null || true" EXIT
-            attempts=0
-            until curl -fsS http://127.0.0.1:4096/global/health; do
-              attempts=$((attempts + 1))
-              if [ "$attempts" -ge 30 ]; then
-                cat /tmp/opencode.log
-                exit 1
-              fi
-              sleep 1
-            done
-            curl -fsS -H "x-opencode-directory: /workspace" http://127.0.0.1:4096/skill \
-              | jq -e ".[] | select(.name == \"marimo-pair\")" >/dev/null
-          '
-
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-        if: github.event_name == 'push'
+          docker run --rm \
+            --mount "type=bind,src=${PWD}/images/marimo-sandbox/check-opencode.sh,dst=/tmp/check-opencode.sh,readonly" \
+            marimo-sandbox:tools-ci timeout --kill-after=5s 120s bash /tmp/check-opencode.sh
 
       - name: Log in to GHCR
         if: github.event_name == 'push'
@@ -140,8 +166,10 @@ jobs:
         if: github.event_name == 'push'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
+          builder: ${{ steps.buildx.outputs.name }}
           context: images/marimo-sandbox
           build-contexts: notebook_bridge=packages/notebook-bridge
+          target: release
           platforms: linux/amd64
           push: true
           tags: |
@@ -153,6 +181,7 @@ jobs:
         if: github.event_name == 'push'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
+          builder: ${{ steps.buildx.outputs.name }}
           context: images/marimo-sandbox
           build-contexts: notebook_bridge=packages/notebook-bridge
           target: vscode
@@ -167,6 +196,7 @@ jobs:
         if: github.event_name == 'push'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
+          builder: ${{ steps.buildx.outputs.name }}
           context: images/marimo-sandbox
           build-contexts: notebook_bridge=packages/notebook-bridge
           target: opencode
@@ -181,6 +211,7 @@ jobs:
         if: github.event_name == 'push'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
+          builder: ${{ steps.buildx.outputs.name }}
           context: images/marimo-sandbox
           build-contexts: notebook_bridge=packages/notebook-bridge
           target: tools
