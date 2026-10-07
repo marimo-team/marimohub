@@ -51,6 +51,12 @@ jobs:
           test -n "$expected"
           test "$actual" = "$expected"
 
+      - name: Verify bridge reinstall and uv cache ownership as sandbox user
+        run: |
+          docker run --rm --network none -i \
+            --mount "type=bind,src=${PWD}/packages/notebook-bridge/src/runtime.generated.ts,dst=/tmp/notebook-bridge.ts,readonly" \
+            marimo-sandbox:ci python < images/marimo-sandbox/test-bridge.py
+
       - name: Build VS Code variant
         run: docker build --build-context notebook_bridge=packages/notebook-bridge --target vscode -t marimo-sandbox:vscode-ci images/marimo-sandbox
 
