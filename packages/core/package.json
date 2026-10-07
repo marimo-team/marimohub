@@ -11,6 +11,7 @@
 		".": "./src/index.ts",
 		"./bearer-token": "./src/bearerToken.ts",
 		"./async": "./src/async.ts",
+		"./concurrency": "./src/concurrency.ts",
 		"./constants": "./src/constants.ts",
 		"./data-preview-programs": "./src/services/integrations/data-preview/programs.ts",
 		"./data-query-contracts": "./src/services/integrations/data-query/contracts.ts",

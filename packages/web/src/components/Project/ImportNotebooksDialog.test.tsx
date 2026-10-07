@@ -423,6 +423,64 @@ describe('folder import review', () => {
 });
 
 describe('folder validation', () => {
+	it.each(['inspect', 'pack'] as const)(
+		'%s bounds concurrent reads and preserves file identities when they finish out of order',
+		async (operation) => {
+			const originals = Array.from({ length: 10 }, (_, index) =>
+				folderFile(`notebook-${index}.py`, `import marimo\nvalue = ${index}`),
+			);
+			const folder = await inspectFolder(originals);
+			const started: number[] = [];
+			let active = 0;
+			let peak = 0;
+			const releases: (() => void)[] = [];
+			for (const [index, file] of originals.entries()) {
+				const gate = new Promise<void>((resolve) => {
+					releases[index] = resolve;
+				});
+				const read = async () => {
+					started.push(index);
+					active++;
+					peak = Math.max(peak, active);
+					await gate;
+					active--;
+					return `import marimo\nvalue = ${index}`;
+				};
+				if (operation === 'inspect') file.slice = () => ({ text: read }) as unknown as Blob;
+				else file.arrayBuffer = async () => new TextEncoder().encode(await read()).buffer;
+			}
+			const pending = operation === 'inspect' ? inspectFolder(originals) : packFolder(folder.files);
+			await waitFor(() => expect(started).toHaveLength(8));
+			releases[7]();
+			await waitFor(() => expect(started).toHaveLength(9));
+			releases[8]();
+			await waitFor(() => expect(started).toHaveLength(10));
+			for (const release of releases) release();
+			const result = await pending;
+			expect(peak).toBe(8);
+			if (result instanceof Uint8Array) {
+				const unpacked = unzipSync(result);
+				for (const [index, file] of folder.files.entries()) {
+					expect(new TextDecoder().decode(unpacked[file.path])).toBe(
+						`import marimo\nvalue = ${index}`,
+					);
+				}
+			} else {
+				expect(result.files.map((file) => file.path)).toEqual(
+					folder.files.map((file) => file.path),
+				);
+				expect(result.files.every((file) => file.selected)).toBe(true);
+			}
+		},
+	);
+
+	it('detects duplicate paths before their concurrent reads finish', async () => {
+		const folder = await inspectFolder([folderFile('same.py'), folderFile('same.py')]);
+		expect(folder.files[0].selected).toBe(true);
+		expect(folder.files[1].error).toBe('Invalid or duplicate folder path');
+		expect(folderProblems(folder.files)).toHaveLength(1);
+	});
+
 	it('counts only an included root pyproject.toml toward the upload allowance', async () => {
 		const supportingFiles = Array.from({ length: 999 }, (_, index) =>
 			folderFile(`data/${index}.txt`, 'x'),

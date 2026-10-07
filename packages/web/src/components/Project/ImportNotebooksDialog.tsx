@@ -1,12 +1,12 @@
 import { useRef, useState } from 'react';
-import { FolderOpen, Upload, Check, LoaderCircle } from 'lucide-react';
-import { Link } from 'react-router-dom';
-import { DialogModal, Button, TextField, ConfirmDialog } from '@/components/ui';
+import { FolderOpen, Upload } from 'lucide-react';
+import { DialogModal, Button, ConfirmDialog } from '@/components/ui';
 import { useCapabilitiesQuery } from '@/api/hooks';
 import { folderProblems, inspectFolder } from './folderImport';
-import { useNotebookImport, importErrorMessage, importStateLabels } from './useNotebookImport';
+import { useNotebookImport, importErrorMessage } from './useNotebookImport';
 import { ImportFileReview } from './ImportFileReview';
-import { ImportPagination, IMPORT_PAGE_SIZE } from './ImportPagination';
+import { ImportNotebookSelection } from './ImportNotebookSelection';
+import { ImportResults } from './ImportResults';
 import type { FolderFile } from './folderImport';
 
 export default function ImportNotebooksDialog({
@@ -38,21 +38,6 @@ export default function ImportNotebooksDialog({
 	const problems = folderProblems(files);
 	const included = files.filter((file) => file.included);
 	const selected = files.filter((file) => file.selected);
-	const candidates = files.filter(
-		(file) => file.candidate && file.path.toLowerCase().includes(search.toLowerCase()),
-	);
-	const currentPage = Math.min(
-		page,
-		Math.max(0, Math.ceil(candidates.length / IMPORT_PAGE_SIZE) - 1),
-	);
-	const visibleCandidates = candidates.slice(
-		currentPage * IMPORT_PAGE_SIZE,
-		(currentPage + 1) * IMPORT_PAGE_SIZE,
-	);
-	const visibleRows = rows.slice(
-		resultPage * IMPORT_PAGE_SIZE,
-		(resultPage + 1) * IMPORT_PAGE_SIZE,
-	);
 	const inProgress = rows.length > 0;
 	const completeCount = rows.filter((row) => row.state === 'imported').length;
 
@@ -151,116 +136,16 @@ export default function ImportNotebooksDialog({
 										Each notebook gets its own copy of the included files. Edits are not shared.
 										Paths stay relative to this folder.
 									</p>
-									<TextField
-										aria-label="Search notebook paths"
-										placeholder="Search notebook paths…"
-										value={search}
-										onChange={(value) => {
-											setSearch(value);
-											setPage(0);
-										}}
-									/>
-									<div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-										<span>
-											{selected.length} selected · {candidates.length} matching notebooks
-										</span>
-										<div className="flex gap-2">
-											<Button
-												size="sm"
-												variant="ghost"
-												isDisabled={!candidates.some((file) => !file.selected && !file.error)}
-												onPress={() => {
-													const paths = new Set(
-														candidates.filter((file) => !file.error).map((file) => file.path),
-													);
-													setFiles((current) =>
-														current.map((file) =>
-															paths.has(file.path)
-																? { ...file, selected: true, included: true }
-																: file,
-														),
-													);
-												}}
-											>
-												Select matching
-											</Button>
-											<Button
-												size="sm"
-												variant="ghost"
-												isDisabled={selected.length === 0}
-												onPress={() =>
-													setFiles((current) =>
-														current.map((file) => ({ ...file, selected: false })),
-													)
-												}
-											>
-												Clear selection
-											</Button>
-										</div>
-									</div>
-									<div className="max-h-72 overflow-auto rounded-lg border">
-										<table className="w-full table-fixed text-left text-sm">
-											<thead className="sticky top-0 bg-muted">
-												<tr>
-													<th className="w-12 p-3">
-														<span className="sr-only">Import</span>
-													</th>
-													<th className="p-3">Notebook path</th>
-													<th className="p-3">Name in {projectName}</th>
-												</tr>
-											</thead>
-											<tbody>
-												{visibleCandidates.map((file) => (
-													<tr key={file.path} className="border-t">
-														<td className="p-3">
-															<input
-																type="checkbox"
-																className="size-4 accent-primary"
-																aria-label={`Import ${file.path}`}
-																checked={file.selected}
-																disabled={!!file.error}
-																onChange={(event) =>
-																	updateFile(file.path, {
-																		selected: event.target.checked,
-																		...(event.target.checked ? { included: true } : {}),
-																	})
-																}
-															/>
-														</td>
-														<td className="break-all p-3 font-mono text-xs">{file.path}</td>
-														<td className="p-3">
-															<TextField
-																aria-label={`Name for ${file.path}`}
-																value={file.title}
-																maxLength={200}
-																isDisabled={!file.selected}
-																onChange={(title) => updateFile(file.path, { title })}
-															/>
-														</td>
-													</tr>
-												))}
-												{candidates.length === 0 && (
-													<tr>
-														<td colSpan={3} className="p-6 text-center text-muted-foreground">
-															{search
-																? 'No notebook paths match your search.'
-																: 'No supported notebooks found. Choose a folder containing .py, .md, .markdown, or .qmd files.'}
-														</td>
-													</tr>
-												)}
-											</tbody>
-										</table>
-									</div>
-									<ImportPagination
-										count={candidates.length}
-										page={currentPage}
+									<ImportNotebookSelection
+										files={files}
+										onFilesChange={setFiles}
+										onFileChange={updateFile}
+										projectName={projectName}
+										search={search}
+										onSearchChange={setSearch}
+										page={page}
 										onPageChange={setPage}
-										label="notebooks"
 									/>
-									<p className="text-xs text-muted-foreground">
-										Likely marimo notebooks are selected. Unchecking a notebook keeps its file
-										available as a supporting file.
-									</p>
 									<ImportFileReview files={files} onChange={updateFile} />
 									{(images.length > 0 || profiles.length > 0) && (
 										<details className="rounded-lg border p-3">
@@ -317,61 +202,15 @@ export default function ImportNotebooksDialog({
 						</>
 					)}
 					{inProgress && (
-						<>
-							<p className="text-sm" aria-live="polite">
-								{completeCount} of {rows.length} imported
-								{queue.phase === 'uploading' ? ' · Preparing and uploading folder…' : ''}
-								{queue.stopping && busy ? ' · Stopping after the current request…' : ''}
-							</p>
-							<div className="divide-y rounded-lg border">
-								{visibleRows.map((row) => (
-									<div key={row.path} className="flex items-start gap-3 p-3">
-										{row.state === 'imported' ? (
-											<Check className="mt-1 size-4 text-emerald-600" />
-										) : row.state === 'importing' ? (
-											<LoaderCircle className="mt-1 size-4 animate-spin" />
-										) : (
-											<span className="mt-1 size-4" />
-										)}
-										<div className="min-w-0 flex-1">
-											<p className="text-sm font-medium">{row.title}</p>
-											<p className="break-all font-mono text-xs text-muted-foreground">
-												{row.path}
-											</p>
-											{row.message && (
-												<p className="mt-1 text-xs text-destructive">{row.message}</p>
-											)}
-										</div>
-										<div className="shrink-0 text-xs">
-											{row.notebookId ? (
-												<Link
-													className="text-primary underline"
-													target="_blank"
-													rel="noopener"
-													aria-label="View notebook (opens in new tab)"
-													to={`/projects/${projectId}/notebooks/${row.notebookId}`}
-												>
-													View notebook
-												</Link>
-											) : (
-												importStateLabels[row.state]
-											)}
-										</div>
-									</div>
-								))}
-							</div>
-							<ImportPagination
-								count={rows.length}
-								page={resultPage}
-								onPageChange={setResultPage}
-								label="notebooks"
-							/>
-							<p className="text-xs text-muted-foreground">
-								{completeCount === rows.length
-									? 'Your notebooks are ready. Each has its own copy of the included files.'
-									: 'Keep this page open until the import finishes. Stop lets the current request finish and keeps imported notebooks. You can retry this upload for 24 hours.'}
-							</p>
-						</>
+						<ImportResults
+							rows={rows}
+							projectId={projectId}
+							phase={queue.phase}
+							stopping={queue.stopping}
+							busy={busy}
+							page={resultPage}
+							onPageChange={setResultPage}
+						/>
 					)}
 				</div>
 				<div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-4">

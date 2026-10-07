@@ -1,3 +1,4 @@
+import { mapWithConcurrency } from '@marimo-hub/core/concurrency';
 import {
 	folderImportFileLimit,
 	isNotebookFilePath,
@@ -25,8 +26,7 @@ export async function inspectFolder(files: File[]): Promise<{ root: string; file
 	const root = files[0]?.webkitRelativePath.split('/')[0] ?? '';
 	if (!root) throw new Error('Choose a folder so relative paths can be preserved.');
 	const paths = new Set<string>();
-	const result: FolderFile[] = [];
-	for (const file of files) {
+	const result = await mapWithConcurrency(files, 8, async (file): Promise<FolderFile> => {
 		const relative = file.webkitRelativePath;
 		const path = relative.slice(root.length + 1);
 		let error =
@@ -59,7 +59,7 @@ export async function inspectFolder(files: File[]): Promise<{ root: string; file
 				readError = 'File could not be read';
 			}
 		}
-		result.push({
+		return {
 			file,
 			path,
 			included: !exclusion,
@@ -68,8 +68,8 @@ export async function inspectFolder(files: File[]): Promise<{ root: string; file
 			candidate,
 			selected,
 			title: name.replace(/\.[^.]+$/, ''),
-		});
-	}
+		};
+	});
 	return { root, files: result.sort((a, b) => a.path.localeCompare(b.path)) };
 }
 
@@ -97,13 +97,17 @@ export function folderProblems(files: FolderFile[]): string[] {
 
 export async function packFolder(files: FolderFile[]): Promise<Uint8Array<ArrayBuffer>> {
 	const entries: Record<string, Uint8Array> = Object.create(null);
-	for (const { path, file } of files.filter((file) => file.included)) {
-		try {
-			entries[path] = new Uint8Array(await file.arrayBuffer());
-		} catch {
-			throw new Error(`Could not read ${path}. Choose the folder again.`);
-		}
-	}
+	await mapWithConcurrency(
+		files.filter((file) => file.included),
+		8,
+		async ({ path, file }) => {
+			try {
+				entries[path] = new Uint8Array(await file.arrayBuffer());
+			} catch {
+				throw new Error(`Could not read ${path}. Choose the folder again.`);
+			}
+		},
+	);
 	return new Promise((resolve, reject) => {
 		zip(entries, { level: 0 }, (error, bytes) => {
 			if (error) reject(error);

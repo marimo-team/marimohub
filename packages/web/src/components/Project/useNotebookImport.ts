@@ -57,11 +57,9 @@ export function useNotebookImport(projectId: string) {
 		const retrying = rows.length > 0;
 		const pending = retrying
 			? retryable
-			: files
-					.filter((file) => file.selected)
-					.map(
-						(file): ImportRow => ({ path: file.path, title: file.title.trim(), state: 'queued' }),
-					);
+			: files.flatMap((file): ImportRow[] =>
+					file.selected ? [{ path: file.path, title: file.title.trim(), state: 'queued' }] : [],
+				);
 		if (!retrying) setRows(pending);
 		try {
 			let id = importId;
