@@ -101,7 +101,7 @@ export default defineConfig({
 			{
 				text: 'Configure',
 				activeMatch:
-					'^/(auth|service-accounts|storage|compute|editor-sessions|surfaces|theming|sandbox-image|apps|thumbnails|jobs|ai|environment-and-access|integration-secrets|integrations|notifications|project-alerts|syncing|notebook-previews|workload-identity-federation)',
+					'^/(auth|service-accounts|storage|compute|editor-sessions|surfaces|theming|sandbox-image|apps|thumbnails|jobs|ai|environment-and-access|integration-secrets|integrations|notifications|project-alerts|importing-notebooks|syncing|notebook-previews|workload-identity-federation)',
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },

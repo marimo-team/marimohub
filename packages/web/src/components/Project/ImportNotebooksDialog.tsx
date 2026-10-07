@@ -1,11 +1,12 @@
 import { useRef, useState } from 'react';
 import { FolderOpen, Upload, Check, LoaderCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { DialogModal, Button, TextField } from '@/components/ui';
+import { DialogModal, Button, TextField, ConfirmDialog } from '@/components/ui';
 import { useCapabilitiesQuery } from '@/api/hooks';
 import { folderProblems, inspectFolder } from './folderImport';
 import { useNotebookImport, importErrorMessage, importStateLabels } from './useNotebookImport';
 import { ImportFileReview } from './ImportFileReview';
+import { ImportPagination, IMPORT_PAGE_SIZE } from './ImportPagination';
 import type { FolderFile } from './folderImport';
 
 export default function ImportNotebooksDialog({
@@ -26,6 +27,9 @@ export default function ImportNotebooksDialog({
 	const [files, setFiles] = useState<FolderFile[]>([]);
 	const [root, setRoot] = useState('');
 	const [search, setSearch] = useState('');
+	const [page, setPage] = useState(0);
+	const [resultPage, setResultPage] = useState(0);
+	const [confirmClose, setConfirmClose] = useState(false);
 	const [baseImage, setBaseImage] = useState('');
 	const [computeProfile, setComputeProfile] = useState('');
 	const [inspecting, setInspecting] = useState(false);
@@ -36,6 +40,18 @@ export default function ImportNotebooksDialog({
 	const selected = files.filter((file) => file.selected);
 	const candidates = files.filter(
 		(file) => file.candidate && file.path.toLowerCase().includes(search.toLowerCase()),
+	);
+	const currentPage = Math.min(
+		page,
+		Math.max(0, Math.ceil(candidates.length / IMPORT_PAGE_SIZE) - 1),
+	);
+	const visibleCandidates = candidates.slice(
+		currentPage * IMPORT_PAGE_SIZE,
+		(currentPage + 1) * IMPORT_PAGE_SIZE,
+	);
+	const visibleRows = rows.slice(
+		resultPage * IMPORT_PAGE_SIZE,
+		(resultPage + 1) * IMPORT_PAGE_SIZE,
 	);
 	const inProgress = rows.length > 0;
 	const completeCount = rows.filter((row) => row.state === 'imported').length;
@@ -53,6 +69,7 @@ export default function ImportNotebooksDialog({
 			const folder = await inspectFolder([...fileList]);
 			setRoot(folder.root);
 			setSearch('');
+			setPage(0);
 			setFiles(folder.files);
 		} catch (error) {
 			setError(importErrorMessage(error));
@@ -61,18 +78,23 @@ export default function ImportNotebooksDialog({
 	}
 
 	function run() {
+		if (!inProgress) setResultPage(0);
 		void queue.run(files, {
 			...(baseImage ? { base_image: baseImage } : {}),
 			...(computeProfile ? { compute_profile: computeProfile } : {}),
 		});
 	}
 
+	function requestClose() {
+		if (busy) return;
+		if (queue.canRetry) setConfirmClose(true);
+		else onClose();
+	}
+
 	return (
 		<DialogModal
 			isOpen
-			onClose={() => {
-				if (!busy) onClose();
-			}}
+			onClose={requestClose}
 			title="Import notebooks"
 			width="xl"
 			contentClassName="flex min-h-0 flex-col overflow-hidden p-0"
@@ -133,7 +155,10 @@ export default function ImportNotebooksDialog({
 										aria-label="Search notebook paths"
 										placeholder="Search notebook paths…"
 										value={search}
-										onChange={setSearch}
+										onChange={(value) => {
+											setSearch(value);
+											setPage(0);
+										}}
 									/>
 									<div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
 										<span>
@@ -185,7 +210,7 @@ export default function ImportNotebooksDialog({
 												</tr>
 											</thead>
 											<tbody>
-												{candidates.map((file) => (
+												{visibleCandidates.map((file) => (
 													<tr key={file.path} className="border-t">
 														<td className="p-3">
 															<input
@@ -226,6 +251,12 @@ export default function ImportNotebooksDialog({
 											</tbody>
 										</table>
 									</div>
+									<ImportPagination
+										count={candidates.length}
+										page={currentPage}
+										onPageChange={setPage}
+										label="notebooks"
+									/>
 									<p className="text-xs text-muted-foreground">
 										Likely marimo notebooks are selected. Unchecking a notebook keeps its file
 										available as a supporting file.
@@ -293,7 +324,7 @@ export default function ImportNotebooksDialog({
 								{queue.stopping && busy ? ' · Stopping after the current request…' : ''}
 							</p>
 							<div className="divide-y rounded-lg border">
-								{rows.map((row) => (
+								{visibleRows.map((row) => (
 									<div key={row.path} className="flex items-start gap-3 p-3">
 										{row.state === 'imported' ? (
 											<Check className="mt-1 size-4 text-emerald-600" />
@@ -315,6 +346,9 @@ export default function ImportNotebooksDialog({
 											{row.notebookId ? (
 												<Link
 													className="text-primary underline"
+													target="_blank"
+													rel="noopener"
+													aria-label="View notebook (opens in new tab)"
 													to={`/projects/${projectId}/notebooks/${row.notebookId}`}
 												>
 													View notebook
@@ -326,6 +360,12 @@ export default function ImportNotebooksDialog({
 									</div>
 								))}
 							</div>
+							<ImportPagination
+								count={rows.length}
+								page={resultPage}
+								onPageChange={setResultPage}
+								label="notebooks"
+							/>
 							<p className="text-xs text-muted-foreground">
 								{completeCount === rows.length
 									? 'Your notebooks are ready. Each has its own copy of the included files.'
@@ -341,7 +381,7 @@ export default function ImportNotebooksDialog({
 							: ''}
 					</p>
 					<div className="flex gap-2">
-						<Button isDisabled={busy} onPress={onClose}>
+						<Button isDisabled={busy} onPress={requestClose}>
 							{inProgress ? (completeCount === rows.length ? 'View notebooks' : 'Close') : 'Cancel'}
 						</Button>
 						{busy && inProgress ? (
@@ -368,6 +408,14 @@ export default function ImportNotebooksDialog({
 					</div>
 				</div>
 			</div>
+			<ConfirmDialog
+				isOpen={confirmClose}
+				onClose={() => setConfirmClose(false)}
+				title="Leave unfinished import?"
+				description="Imported notebooks will remain, but you cannot resume this import after closing. Check unknown outcomes before starting another import."
+				confirmLabel="Leave import"
+				onConfirm={onClose}
+			/>
 		</DialogModal>
 	);
 }

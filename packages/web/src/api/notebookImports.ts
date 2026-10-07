@@ -8,7 +8,7 @@ export const notebookImports = {
 				body: '',
 				bodySerializer: () => new Blob([bytes], { type: 'application/zip' }),
 				headers: { 'Content-Type': 'application/zip' },
-				timeout: 120_000,
+				timeout: 300_000,
 			}),
 		),
 	publish: (

@@ -26,6 +26,7 @@ Include `pyproject.toml` and lockfiles when your notebooks need them.
 Caches and Git metadata stay excluded. Files such as `.env` and private keys are excluded by default but remain visible for review.
 Empty directories are not uploaded. The limits are 1,000 workspace files, 25 MiB per file, and 100 MiB total.
 Without a root `pyproject.toml`, the hub adds an empty one. This leaves room for 999 included files.
+Each file path is limited to 1,024 UTF-8 bytes, relative to the selected folder.
 
 ## Finish or recover
 
@@ -42,6 +43,7 @@ Keep the page open until the import finishes. Each notebook becomes available on
 
 **Stop import** prevents new requests and lets the current request finish. It keeps imported notebooks.
 Closing or reloading the page ends the browser queue. Reopening the dialog starts a new import.
+If unfinished imports remain, closing the dialog asks you to discard the queue. Imported notebooks remain available.
 The uploaded folder is available for retries for 24 hours.
 
 Folder import creates editable local notebooks. For notebooks connected to Git, use the existing [sync workflow](./syncing.md).

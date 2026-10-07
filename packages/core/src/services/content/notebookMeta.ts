@@ -1,3 +1,4 @@
+import { validateLocalEntryNotebook } from '../../integrations/remoteWorkspace';
 import type { NotebookId, ProjectId, UserId, VersionId } from '../../ids';
 import type { NotebookMeta, SnapshotNotebookEntry, Source, Version } from '../../schema';
 import type { SecurityLabelProjectionOptions } from './catalogProjection';
@@ -76,7 +77,9 @@ export function localSource(versionId: VersionId, entryNotebook?: string): Sourc
 		schema_version: 1,
 		type: 'local',
 		current_version_id: versionId,
-		...(entryNotebook ? { entry_notebook: entryNotebook } : {}),
+		...(entryNotebook !== undefined
+			? { entry_notebook: validateLocalEntryNotebook(entryNotebook) }
+			: {}),
 	};
 }
 

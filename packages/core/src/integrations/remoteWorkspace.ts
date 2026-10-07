@@ -115,6 +115,16 @@ export function normalizeEntryNotebook(path: string): string {
 	return normalized;
 }
 
+export function validateLocalEntryNotebook(path: string): string {
+	normalizeWorkspaceFilePath(path);
+	if (!isNotebookFilePath(path)) {
+		throw new BadRequestError(
+			`entry_notebook must be a relative notebook file path (${NOTEBOOK_FILE_EXTENSIONS.join(', ')})`,
+		);
+	}
+	return path;
+}
+
 export function normalizeWorkspaceFilePath(path: string): string {
 	const normalized = path;
 	if (!isSafeWorkspacePath(normalized)) {

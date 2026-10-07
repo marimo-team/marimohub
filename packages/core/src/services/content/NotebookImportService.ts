@@ -8,10 +8,12 @@ import { readStored, NotebookMetaSchema, NotebookIdSchema, UserIdSchema } from '
 import { parseWorkspaceArchive } from '../../integrations/workspaceArchive';
 import {
 	folderImportFileLimit,
-	normalizeEntryNotebook,
-	normalizeWorkspaceFilePath,
+	validateLocalEntryNotebook,
 } from '../../integrations/remoteWorkspace';
-import { isFolderImportExcludedPath } from '../../integrations/workspaceIgnore';
+import {
+	isFolderImportExcludedPath,
+	validateFolderImportPath,
+} from '../../integrations/workspaceIgnore';
 import { deleteByPrefix, listAllObjects } from '../catalog/storage';
 import { withCasRetry } from '../catalog/cas';
 import type { NotebookService } from './NotebookService';
@@ -256,8 +258,7 @@ export class NotebookImportService {
 	}
 
 	private itemKey(prefix: string, entry: string) {
-		if (normalizeEntryNotebook(entry) !== entry)
-			throw new BadRequestError('Entrypoint must match its original path');
+		validateLocalEntryNotebook(entry);
 		return `${prefix}items/${encodeURIComponent(entry)}.json`;
 	}
 
@@ -280,16 +281,16 @@ export class NotebookImportService {
 		const fileLimit = folderImportFileLimit(files);
 		if (files.length > fileLimit)
 			throw new BadRequestError(
-				`Include at most ${fileLimit} files; reserve one workspace file for generated pyproject.toml.`,
+				files.some((file) => file.path === 'pyproject.toml')
+					? `Include at most ${fileLimit} files.`
+					: `Include at most ${fileLimit} files; reserve one workspace file for generated pyproject.toml.`,
 			);
-		const paths = new Set(files.map((file) => normalizeWorkspaceFilePath(file.path)));
+		const paths = new Set(files.map((file) => validateFolderImportPath(file.path)));
 		for (const file of files) {
 			if (isFolderImportExcludedPath(file.path))
 				throw new BadRequestError(
 					`Exclude generated or Git metadata before importing: ${file.path}`,
 				);
-			if (file.path.startsWith('pyproject.toml/'))
-				throw new BadRequestError('pyproject.toml must be a file');
 			const segments = file.path.split('/');
 			for (let index = 1; index < segments.length; index++)
 				if (paths.has(segments.slice(0, index).join('/')))

@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { unzipSync } from 'fflate';
@@ -46,9 +46,9 @@ async function choose(files = selectedFiles()) {
 	await screen.findByRole('checkbox', { name: 'Import a/revenue.py' });
 }
 
-function renderDialog() {
+function renderDialog(onClose = vi.fn()) {
 	return renderWithClient(
-		<ImportNotebooksDialog projectId="proj-one" projectName="Sales" onClose={vi.fn()} />,
+		<ImportNotebooksDialog projectId="proj-one" projectName="Sales" onClose={onClose} />,
 		{ route: '/projects/proj-one' },
 	);
 }
@@ -126,15 +126,27 @@ describe('folder import review', () => {
 				}),
 		);
 		const user = userEvent.setup();
-		renderDialog();
+		const onClose = vi.fn();
+		renderDialog(onClose);
 		await choose();
 		await user.click(screen.getByRole('button', { name: 'Import 2 notebooks' }));
 		await waitFor(() => expect(notebookImports.publish).toHaveBeenCalledTimes(1));
+		await user.keyboard('{Escape}');
+		await user.click(screen.getAllByRole('button', { name: 'Close' })[0]);
+		expect(onClose).not.toHaveBeenCalled();
+		expect(
+			screen.queryByRole('dialog', { name: 'Leave unfinished import?' }),
+		).not.toBeInTheDocument();
 		await user.click(screen.getByRole('button', { name: 'Stop import' }));
 		await act(async () => finish({ id: 'first', title: 'First' } as never));
 		await screen.findByText('1 of 2 imported');
 		expect(notebookImports.publish).toHaveBeenCalledTimes(1);
 		expect(screen.getByText('Queued')).toBeInTheDocument();
+		await user.click(screen.getAllByRole('button', { name: 'Close' })[1]);
+		const confirmation = await screen.findByRole('dialog', { name: 'Leave unfinished import?' });
+		await user.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
+		await user.click(screen.getByRole('button', { name: 'Resume import' }));
+		await screen.findByText('2 of 2 imported');
 	});
 
 	it('does not dispatch another notebook after navigating away', async () => {
@@ -194,7 +206,10 @@ describe('folder import review', () => {
 		vi.mocked(notebookImports.status).mockResolvedValueOnce({ state: 'expired' });
 		await user.click(screen.getByRole('button', { name: 'Check outcomes and retry' }));
 		await screen.findByText('Expired');
-		expect(screen.getByRole('link', { name: 'View notebook' })).toBeInTheDocument();
+		expect(screen.getByRole('link', { name: 'View notebook (opens in new tab)' })).toHaveAttribute(
+			'target',
+			'_blank',
+		);
 		expect(screen.queryByRole('button', { name: /retry|Resume/i })).not.toBeInTheDocument();
 		expect(notebookImports.publish).toHaveBeenCalledTimes(2);
 	});
@@ -293,6 +308,96 @@ describe('folder import review', () => {
 		expect(notebookImports.prepare).not.toHaveBeenCalled();
 	});
 
+	it('bounds notebook rows while preserving edits and selecting across pages', async () => {
+		const user = userEvent.setup();
+		renderDialog();
+		await choose([
+			folderFile('a/revenue.py'),
+			...Array.from({ length: 105 }, (_, index) =>
+				folderFile(`reports/report-${String(index).padStart(3, '0')}.py`),
+			),
+		]);
+		expect(screen.getAllByRole('textbox', { name: /^Name for / })).toHaveLength(100);
+		const title = screen.getByRole('textbox', { name: 'Name for a/revenue.py' });
+		await user.clear(title);
+		await user.type(title, 'Quarterly revenue');
+		await user.click(screen.getByRole('button', { name: 'Next notebooks' }));
+		expect(screen.getAllByRole('textbox', { name: /^Name for / })).toHaveLength(6);
+		await user.click(screen.getByRole('checkbox', { name: 'Import reports/report-104.py' }));
+		await user.click(screen.getByRole('button', { name: 'Previous notebooks' }));
+		expect(screen.getByRole('textbox', { name: 'Name for a/revenue.py' })).toHaveValue(
+			'Quarterly revenue',
+		);
+		await user.click(screen.getByRole('button', { name: 'Next notebooks' }));
+		await user.type(screen.getByRole('textbox', { name: 'Search notebook paths' }), 'a/');
+		expect(screen.getAllByRole('textbox', { name: /^Name for / })).toHaveLength(1);
+		expect(screen.queryByRole('button', { name: 'Next notebooks' })).not.toBeInTheDocument();
+		await user.clear(screen.getByRole('textbox', { name: 'Search notebook paths' }));
+		await user.click(screen.getByRole('button', { name: 'Clear selection' }));
+		await user.click(screen.getByRole('button', { name: 'Select matching' }));
+		expect(screen.getByRole('button', { name: 'Import 106 notebooks' })).toBeEnabled();
+		await user.click(screen.getByRole('button', { name: 'Next notebooks' }));
+		expect(screen.getByRole('checkbox', { name: 'Import reports/report-104.py' })).toBeChecked();
+		await user.click(screen.getByRole('button', { name: 'Import 106 notebooks' }));
+		await screen.findByText('106 of 106 imported');
+		expect(screen.getAllByRole('link', { name: 'View notebook (opens in new tab)' })).toHaveLength(
+			100,
+		);
+		await user.click(screen.getByRole('button', { name: 'Next notebooks' }));
+		expect(screen.getAllByRole('link', { name: 'View notebook (opens in new tab)' })).toHaveLength(
+			6,
+		);
+		expect(notebookImports.publish).toHaveBeenCalledTimes(106);
+	});
+
+	it.each(['footer', 'dismiss', 'escape', 'backdrop'])(
+		'confirms abandoning retry state through %s and can cancel without losing it',
+		async (method) => {
+			vi.mocked(notebookImports.publish).mockRejectedValueOnce(
+				new ApiRequestError('NETWORK_ERROR', 'Connection lost'),
+			);
+			const user = userEvent.setup();
+			const onClose = vi.fn();
+			renderDialog(onClose);
+			await choose();
+			await user.click(screen.getByRole('button', { name: 'Import 2 notebooks' }));
+			await screen.findByText('1 of 2 imported');
+			if (method === 'escape') await user.keyboard('{Escape}');
+			else if (method === 'backdrop') {
+				const overlay = screen.getByRole('dialog').parentElement!.parentElement!;
+				await user.click(overlay);
+			} else
+				await user.click(
+					screen.getAllByRole('button', { name: 'Close' })[method === 'dismiss' ? 0 : 1],
+				);
+			let confirmation = await screen.findByRole('dialog', { name: 'Leave unfinished import?' });
+			expect(onClose).not.toHaveBeenCalled();
+			await user.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
+			expect(screen.getByRole('button', { name: 'Check outcomes and retry' })).toBeEnabled();
+			expect(
+				screen.getByRole('link', { name: 'View notebook (opens in new tab)' }),
+			).toHaveAttribute('target', '_blank');
+			await user.click(screen.getAllByRole('button', { name: 'Close' })[1]);
+			confirmation = await screen.findByRole('dialog', { name: 'Leave unfinished import?' });
+			await user.click(within(confirmation).getByRole('button', { name: 'Leave import' }));
+			expect(onClose).toHaveBeenCalledOnce();
+		},
+	);
+
+	it('closes a completed import without an abandonment confirmation', async () => {
+		const user = userEvent.setup();
+		const onClose = vi.fn();
+		renderDialog(onClose);
+		await choose();
+		await user.click(screen.getByRole('button', { name: 'Import 2 notebooks' }));
+		await screen.findByText('2 of 2 imported');
+		await user.click(screen.getByRole('button', { name: 'View notebooks' }));
+		expect(onClose).toHaveBeenCalledOnce();
+		expect(
+			screen.queryByRole('dialog', { name: 'Leave unfinished import?' }),
+		).not.toBeInTheDocument();
+	});
+
 	it('bounds file rows and resets pagination when filtering', async () => {
 		const user = userEvent.setup();
 		renderDialog();
@@ -351,12 +456,20 @@ describe('folder validation', () => {
 		Object.defineProperty(file, 'size', { value: 26 * 1024 * 1024 });
 		const folder = await inspectFolder([file, folderFile('../escape.py')]);
 		expect(folderProblems(folder.files)).toEqual(
-			expect.arrayContaining([
-				'big.bin exceeds 25 MiB.',
-				'../escape.py: Invalid or duplicate folder path',
-			]),
+			expect.arrayContaining(['big.bin exceeds 25 MiB.', expect.stringContaining('../escape.py:')]),
 		);
 	});
+	it.each([
+		'.marimohub-directory',
+		'data/.marimohub-directory/file.txt',
+		'pyproject.toml/config.txt',
+		`${'é'.repeat(511)}.py`,
+	])('rejects server-reserved or overlong path %s before uploading', async (path) => {
+		const folder = await inspectFolder([folderFile(path)]);
+		expect(folderProblems(folder.files)).toHaveLength(1);
+		expect(folder.files[0].selected).toBe(false);
+	});
+
 	it('allows explicitly excluding an unreadable supporting file', async () => {
 		const file = folderFile('support.py');
 		file.slice = () =>

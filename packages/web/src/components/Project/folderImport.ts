@@ -1,11 +1,14 @@
 import {
 	folderImportFileLimit,
 	isNotebookFilePath,
-	isSafeWorkspacePath,
 	WORKSPACE_LIMITS,
 } from '@marimo-hub/core/remote-workspace';
-import { isFolderImportExcludedPath } from '@marimo-hub/core/workspace-ignore';
+import {
+	isFolderImportExcludedPath,
+	validateFolderImportPath,
+} from '@marimo-hub/core/workspace-ignore';
 import { zip } from 'fflate';
+import { formatBytes } from '@/lib/formatBytes';
 
 export interface FolderFile {
 	file: File;
@@ -26,10 +29,17 @@ export async function inspectFolder(files: File[]): Promise<{ root: string; file
 	for (const file of files) {
 		const relative = file.webkitRelativePath;
 		const path = relative.slice(root.length + 1);
-		const error =
-			!relative.startsWith(`${root}/`) || !isSafeWorkspacePath(path) || paths.has(path)
+		let error =
+			!relative.startsWith(`${root}/`) || paths.has(path)
 				? 'Invalid or duplicate folder path'
 				: undefined;
+		if (!error) {
+			try {
+				validateFolderImportPath(path);
+			} catch (cause) {
+				error = cause instanceof Error ? cause.message : 'Invalid folder path';
+			}
+		}
 		paths.add(path);
 		const name = path.split('/').at(-1) ?? '';
 		const generated = isFolderImportExcludedPath(path);
@@ -76,10 +86,10 @@ export function folderProblems(files: FolderFile[]): string[] {
 			`Include at most ${fileLimit} files.${fileLimit < WORKSPACE_LIMITS.maxFiles ? ' One slot is reserved for generated pyproject.toml.' : ''}`,
 		);
 	if (included.reduce((sum, file) => sum + file.file.size, 0) > WORKSPACE_LIMITS.maxTotalBytes)
-		problems.push('Included files exceed 100 MiB.');
+		problems.push(`Included files exceed ${formatBytes(WORKSPACE_LIMITS.maxTotalBytes)}.`);
 	for (const file of included) {
 		if (file.file.size > WORKSPACE_LIMITS.maxFileBytes)
-			problems.push(`${file.path} exceeds 25 MiB.`);
+			problems.push(`${file.path} exceeds ${formatBytes(WORKSPACE_LIMITS.maxFileBytes)}.`);
 		if (file.selected && !file.title.trim()) problems.push(`${file.path} needs a notebook name.`);
 	}
 	return problems;

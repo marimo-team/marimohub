@@ -615,7 +615,6 @@ export async function readCappedFile(
 	sandbox: SandboxInstance,
 	absolutePath: string,
 	sizes: ReadonlyMap<string, number>,
-	entryNotebook: string,
 ): Promise<string | undefined> {
 	const result = await readCappedBytes(sandbox, absolutePath, sizes);
 	return result?.success ? new TextDecoder().decode(result.bytes) : undefined;

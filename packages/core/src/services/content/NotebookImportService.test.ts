@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { zipSync } from 'fflate';
 import { ACTOR, setupTestEnv, uid, fakeComputeFrom, makeFsSandbox } from '../../testing';
 import { paths } from '../../paths';
+import { ConflictError, ForbiddenError } from '../../errors';
 import { listAllKeys, deleteByPrefix } from '../catalog/storage';
 import { SandboxProvisioner } from '../runtime/SandboxProvisioner';
 import { IMPORT_RETENTION_MS } from './NotebookImportService';
@@ -41,6 +42,38 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('folder notebook import', () => {
+	it('imports a whitespace-containing entrypoint without changing its identity', async () => {
+		const { notebooks, projectId } = env;
+		const entry_notebook = ' reports / report.py';
+		const prepared = await notebooks.imports.prepare(
+			projectId,
+			zipSync({ [entry_notebook]: encode('import marimo') }),
+			ACTOR,
+		);
+		const args = { title: 'Report', entry_notebook };
+		const notebook = await notebooks.imports.publish(projectId, prepared.id, args, ACTOR);
+		expect((await notebooks.getNotebook(projectId, notebook.id)).source.entry_notebook).toBe(
+			entry_notebook,
+		);
+		expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('import marimo');
+		expect(
+			await notebooks.imports.status(projectId, prepared.id, entry_notebook, ACTOR),
+		).toMatchObject({ state: 'complete', notebook: { id: notebook.id } });
+		expect((await notebooks.imports.publish(projectId, prepared.id, args, ACTOR)).id).toBe(
+			notebook.id,
+		);
+	});
+
+	it('rejects oversized UTF-8 paths before writing an import snapshot', async () => {
+		const { notebooks, projectId, bucket } = env;
+		const prefix = `projects/${projectId}/imports/`;
+		const before = await listAllKeys(bucket, prefix);
+		await expect(
+			notebooks.imports.prepare(projectId, zipSync({ ['é'.repeat(513)]: encode('data') }), ACTOR),
+		).rejects.toThrow('1024 UTF-8 bytes');
+		expect(await listAllKeys(bucket, prefix)).toEqual(before);
+	});
+
 	it('publishes independent complete workspaces with original bytes, paths and entrypoints', async () => {
 		const { notebooks, bucket, projectId, importId } = env;
 		const one = await notebooks.imports.publish(projectId, importId, input, ACTOR);
@@ -111,9 +144,22 @@ describe('folder notebook import', () => {
 		const prefix = `projects/${projectId}/imports/`;
 		const before = await listAllKeys(bucket, prefix);
 		await expect(notebooks.imports.prepare(projectId, zipSync(contents), ACTOR)).rejects.toThrow(
-			'at most 999 files',
+			'Include at most 999 files; reserve one workspace file for generated pyproject.toml.',
 		);
 		expect(await listAllKeys(bucket, prefix)).toEqual(before);
+	});
+
+	it('reports the archive file limit without a generated-file reservation when pyproject.toml is present', async () => {
+		const { notebooks, projectId } = env;
+		const contents = {
+			'pyproject.toml': encode(''),
+			...Object.fromEntries(
+				Array.from({ length: 1000 }, (_, index) => [`data/${index}.txt`, encode('x')]),
+			),
+		};
+		await expect(notebooks.imports.prepare(projectId, zipSync(contents), ACTOR)).rejects.toThrow(
+			'Archive exceeds the 1000-file limit',
+		);
 	});
 
 	it('preserves the original entry through save, restore, workspace edit and duplicate', async () => {
@@ -163,6 +209,12 @@ describe('folder notebook import', () => {
 		await expect(
 			notebooks.workspace.createDirectory(projectId, notebook.id, input.entry_notebook),
 		).rejects.toThrow();
+		await expect(
+			notebooks.workspace.createDirectory(projectId, notebook.id, 'reports'),
+		).rejects.toBeInstanceOf(ForbiddenError);
+		await expect(
+			notebooks.workspace.createDirectory(projectId, notebook.id, 'shared'),
+		).rejects.toBeInstanceOf(ConflictError);
 		expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe(
 			new TextDecoder().decode(files['reports/revenue.py']),
 		);
@@ -200,6 +252,38 @@ describe('folder notebook import', () => {
 		);
 		expect(await (await bucket.get(nb.version(source.current_version_id!).session))?.text()).toBe(
 			'{"cells": []}',
+		);
+	});
+
+	it('retains supporting files for a root notebook.py import under source-only defaults', async () => {
+		const { notebooks, bucket, projectId, importId } = env;
+		const notebook = await notebooks.imports.publish(
+			projectId,
+			importId,
+			{ title: 'Root', entry_notebook: 'notebook.py' },
+			ACTOR,
+		);
+		const { instance, fs } = makeFsSandbox();
+		for (const [path, bytes] of Object.entries(files)) fs.set(path, bytes);
+		fs.set('notebook.py', encode('root session edit'));
+		fs.set('shared/helpers.py', encode('value = 100'));
+		const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+		await provisioner.captureSession(
+			instance,
+			notebooks,
+			bucket,
+			projectId,
+			notebook.id,
+			ACTOR,
+			'source',
+		);
+		const nb = paths.project(projectId).notebook(notebook.id);
+		expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('root session edit');
+		expect(await (await bucket.get(nb.workspaceFile('shared/helpers.py')))?.text()).toBe(
+			'value = 100',
+		);
+		expect(await (await bucket.get(nb.workspaceFile('data/raw.bin')))?.bytes()).toEqual(
+			files['data/raw.bin'],
 		);
 	});
 

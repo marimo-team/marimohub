@@ -497,6 +497,14 @@ const OBJECTS: BucketObject[] = [
 
 const ARTIFACTS: BucketArtifact[] = [
 	{
+		name: 'NotebookImportSnapshot',
+		key: `${notebookImportPrefix(PID, '{import_id}')}snapshot.zip`,
+		summary: 'Uploaded ZIP snapshot reused by notebook import attempts until expiry cleanup.',
+		mutability: 'immutable',
+		owner: 'NotebookImportService',
+		tag: 'notebook',
+	},
+	{
 		name: 'ThumbnailImage',
 		key: notebook.thumbnailImage('{image_id}'),
 		summary: 'Immutable 960×540 PNG thumbnail.',

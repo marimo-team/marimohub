@@ -1,3 +1,4 @@
+import { MAX_FOLDER_IMPORT_ARCHIVE_BYTES } from '@marimo-hub/core/workspace-ignore';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { zipSync } from 'fflate';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
@@ -34,6 +35,20 @@ async function prepare() {
 }
 
 describe('notebook import routes', () => {
+	it.each([MAX_FOLDER_IMPORT_ARCHIVE_BYTES, MAX_FOLDER_IMPORT_ARCHIVE_BYTES + 1])(
+		'enforces the import-specific archive body limit at %i bytes',
+		async (length) => {
+			const response = await env.app.request(`/api/v1/projects/${env.projectId}/notebook-imports`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/zip', 'Content-Length': String(length) },
+				body: new Uint8Array(archive),
+			});
+			if (length > MAX_FOLDER_IMPORT_ARCHIVE_BYTES)
+				await expectError(response, 413, 'PAYLOAD_TOO_LARGE');
+			else await expectOk(response, 201);
+		},
+	);
+
 	it('prepares raw zip, publishes, reconciles and exposes local original entrypoint', async () => {
 		const preparation = await prepare();
 		expect(preparation.files).toHaveLength(3);

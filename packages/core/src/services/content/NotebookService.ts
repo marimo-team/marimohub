@@ -97,6 +97,7 @@ export interface CreateNotebookInput {
 	runtime?: { python_version?: string; marimo_version?: string };
 	base_image?: string;
 	compute_profile?: string;
+	/** Explicit entrypoints opt local notebooks into full workspace persistence. */
 	entry_notebook?: string;
 	workspaceFiles?: { path: string; bytes: Uint8Array }[];
 }

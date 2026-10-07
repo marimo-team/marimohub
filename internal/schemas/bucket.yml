@@ -1739,6 +1739,50 @@ paths:
       responses:
         '204':
           description: Stored.
+  /projects/{pid}/imports/{import_id}/snapshot.zip:
+    summary: Uploaded ZIP snapshot reused by notebook import attempts until expiry
+      cleanup.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: import_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: NotebookImportService
+    get:
+      operationId: read_projects_imports_snapshot_zip
+      summary: Read NotebookImportSnapshot
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored artifact.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      operationId: write_projects_imports_snapshot_zip
+      summary: Write NotebookImportSnapshot
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/notebooks/{nid}/thumbnails/{image_id}.png:
     summary: Immutable 960×540 PNG thumbnail.
     parameters:

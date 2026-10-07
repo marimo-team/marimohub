@@ -1,3 +1,4 @@
+import { MAX_FOLDER_IMPORT_ARCHIVE_BYTES } from '@marimo-hub/core/workspace-ignore';
 import type { MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { etag } from 'hono/etag';
@@ -9,7 +10,6 @@ import {
 	IntegrationId,
 	MAX_REQUEST_BYTES,
 	MAX_WORKSPACE_FILE_BYTES,
-	MAX_WORKSPACE_BYTES,
 	NotebookId,
 	noopNotifier,
 	probeKernelLiveness,
@@ -317,8 +317,14 @@ export function createApi(rawDeps: ApiDeps) {
 			),
 	});
 	const importBodyLimit = bodyLimit({
-		maxSize: MAX_WORKSPACE_BYTES + 1024 * 1024,
-		onError: (c) => fail(c, 'PAYLOAD_TOO_LARGE', 'Folder upload exceeds 101 MiB', 413),
+		maxSize: MAX_FOLDER_IMPORT_ARCHIVE_BYTES,
+		onError: (c) =>
+			fail(
+				c,
+				'PAYLOAD_TOO_LARGE',
+				`Folder upload exceeds the ${MAX_FOLDER_IMPORT_ARCHIVE_BYTES}-byte limit`,
+				413,
+			),
 	});
 	app.use(`${API_PREFIX}/*`, (c, next) => {
 		if (c.req.method === 'POST' && /\/projects\/[^/]+\/notebook-imports$/.test(c.req.path))
