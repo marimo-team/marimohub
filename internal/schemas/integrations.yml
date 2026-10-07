@@ -1495,7 +1495,7 @@ components:
           default: us-east-1
           description: AWS region of the domain, for example us-east-1
           type: string
-          pattern: ^[a-z]{2}(?:-[a-z]+)+-\d$
+          pattern: ^[a-z]+(?:-[a-z]+)+-\d+$
         auth:
           oneOf:
             - type: object
@@ -1569,7 +1569,7 @@ components:
           default: us-east-1
           description: AWS region of the domain, for example us-east-1
           type: string
-          pattern: ^[a-z]{2}(?:-[a-z]+)+-\d$
+          pattern: ^[a-z]+(?:-[a-z]+)+-\d+$
         auth:
           oneOf:
             - type: object

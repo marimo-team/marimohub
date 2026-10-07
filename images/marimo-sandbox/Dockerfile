@@ -17,7 +17,9 @@ COPY --from=ghcr.io/astral-sh/uv:0.12.1@sha256:cf4eedcaa81655197f625739489effcbe
 # layer from here on, including the stages derived from base.
 ARG CACHE_EPOCH
 
-RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates locales \
+# BuildKit only misses the cache at an ARG's first use, so the value must appear in this command.
+RUN echo "cache epoch: ${CACHE_EPOCH:-unset}" \
+ && apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates locales \
  && sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
  && locale-gen \
  && rm -rf /var/lib/apt/lists/*

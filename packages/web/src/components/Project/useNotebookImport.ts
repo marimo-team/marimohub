@@ -62,8 +62,13 @@ function reconciled(outcome: ImportOutcome | undefined): Partial<ImportRow> | un
 			message: 'Still processing. Check again shortly.',
 			messageTone: 'neutral',
 		};
+	// The server fences `expired` for several causes (upload expiry, retry limit, deleted
+	// notebook) without saying which, so the message must not name one.
 	if (outcome?.state === 'expired')
-		return { state: 'expired', message: 'Upload expired. Start a new import for this notebook.' };
+		return {
+			state: 'expired',
+			message: 'This import can no longer continue. Start a new import for this notebook.',
+		};
 	// Absent and `publishing` entries are safe to publish: the server resumes them idempotently.
 	return undefined;
 }
@@ -114,11 +119,23 @@ export function useNotebookImport(projectId: string) {
 			const outcome = await notebookImports.get(projectId, id);
 			return new Map(outcome.notebooks.map((notebook) => [notebook.entry_notebook, notebook]));
 		} catch (error) {
+			// A purged import answers 404; retrying its id can never succeed.
+			const gone = error instanceof ApiRequestError && error.status === 404;
 			for (const row of pending)
-				updateRow(row.path, {
-					state: 'unknown',
-					message: `Outcome not confirmed. ${importErrorMessage(error)}`,
-				});
+				updateRow(
+					row.path,
+					gone
+						? {
+								state: 'expired',
+								message: 'This import has expired. Start a new import for this notebook.',
+								messageTone: undefined,
+							}
+						: {
+								state: 'unknown',
+								message: `Outcome not confirmed. ${importErrorMessage(error)}`,
+								messageTone: undefined,
+							},
+				);
 			return null;
 		}
 	}

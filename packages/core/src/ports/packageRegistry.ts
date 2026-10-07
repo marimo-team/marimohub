@@ -1,8 +1,11 @@
 import type { TempS3Creds } from './credentialBroker';
 import type { IntegrationProbe } from './integrations';
 
-/** A full AWS region name (`us-east-1`), strict enough to interpolate into a hostname. */
-export const AWS_REGION_NAME_REGEX = /^[a-z]{2}(?:-[a-z]+)+-\d$/;
+/**
+ * A full AWS region name, strict enough to interpolate into a hostname. Partition
+ * prefixes are not always two letters (`eusc-de-east-1`).
+ */
+export const AWS_REGION_NAME_REGEX = /^[a-z]+(?:-[a-z]+)+-\d+$/;
 
 /** AWS China regions live in a separate partition with its own DNS suffix. */
 export function awsDnsSuffix(region: string): string {

@@ -95,7 +95,6 @@ describe('folder import paths and archive budget', () => {
 			'tools/env/pyvenv.cfg',
 			'tools/env/bin/python',
 			'vendor/lib/site-packages/mod.py',
-			'pyvenv.cfg',
 			'app.py',
 			'venv.py',
 		];
@@ -114,6 +113,13 @@ describe('folder import paths and archive budget', () => {
 			'vendor/lib/site-packages/mod.py',
 		]);
 		expect(isFolderImportExcludedPath('venv/lib/mod.py')).toBe(false);
+	});
+
+	it('excludes everything when the chosen folder is itself a virtualenv', () => {
+		const paths = ['pyvenv.cfg', 'bin/python', 'lib/python3.13/site-packages/pkg.py', 'app.py'];
+		const excluded = folderImportExcludedDirectories(paths);
+		expect(excluded).toContain('');
+		expect(paths.filter((path) => isFolderImportExcludedPath(path, excluded))).toEqual(paths);
 	});
 
 	it('budgets both UTF-8 ZIP filenames for a full folder with long paths', async () => {

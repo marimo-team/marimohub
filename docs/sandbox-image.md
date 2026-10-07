@@ -247,7 +247,8 @@ libraries, edit `warm/pyproject.toml`; add system libraries with extra
 Configure private Python package indexes with the
 [package registry integrations](./integrations.md#package-registries), not with
 image `ENV` lines. The hub injects the uv index settings and credentials into
-each session and job before `uv sync` starts. Presets exist for
+each editor session and job before `uv sync` starts. Restricted viewer sandboxes
+receive no integrations, so private dependencies do not resolve there. Presets exist for
 [AWS CodeArtifact](./integrations.md#aws-codeartifact),
 [JFrog Artifactory](./integrations.md#jfrog-artifactory),
 [Azure Artifacts](./integrations.md#azure-artifacts), and
@@ -261,9 +262,9 @@ How injected values combine with other sources:
 - If an [Environment variables integration](./integrations.md#environment-variables)
   also sets `UV_INDEX`, the hub merges the values: package registry entries first,
   then the environment-variable entries, without duplicates.
-- `UV_DEFAULT_INDEX` set by both a package registry and an Environment variables
-  integration stops session creation. Use the registry's **Default index** option
-  instead.
+- An Environment variables integration that sets `UV_DEFAULT_INDEX` to a value
+  different from the package registry's stops session creation. Use the registry's
+  **Default index** option instead.
 - An `ENV UV_INDEX` or `ENV UV_DEFAULT_INDEX` in the sandbox image applies only
   while no integration sets that variable. An injected value replaces it.
 

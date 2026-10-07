@@ -296,7 +296,7 @@ const prepareImport = createRoute({
 			'Prepared folder snapshot',
 		),
 		...commonErrors(),
-		...errorResponses(403, 404, 413),
+		...errorResponses(400, 403, 404, 413),
 	},
 });
 const publishImport = createRoute({

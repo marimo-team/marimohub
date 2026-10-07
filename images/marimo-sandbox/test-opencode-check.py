@@ -129,7 +129,9 @@ class OpenCodeCheckTest(unittest.TestCase):
         self.assertEqual(process.returncode, 0, stderr)
 
     def test_server_exiting_before_healthy_fails_fast_with_log(self):
-        (self.root / "opencode").write_text('#!/bin/sh\necho "fixture server log"\nexit 3\n')
+        (self.root / "opencode").write_text(
+            '#!/bin/sh\necho "fixture server log"\necho $$ > "$OPENCODE_PID_FILE"\nexit 3\n'
+        )
         self.health_status = 503
         started = time.monotonic()
         with self.start_check() as process:

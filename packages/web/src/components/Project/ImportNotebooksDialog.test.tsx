@@ -361,6 +361,18 @@ describe('folder import review', () => {
 		expect(notebookImports.publish).toHaveBeenCalledTimes(2);
 	});
 
+	it('marks the import expired when the server has purged it', async () => {
+		const user = userEvent.setup();
+		await startImportWithOneUnknown(user);
+		vi.mocked(notebookImports.get).mockRejectedValueOnce(
+			new ApiRequestError('NOT_FOUND', 'Import not found', { status: 404 }),
+		);
+		await user.click(screen.getByRole('button', { name: 'Check outcomes and retry' }));
+		await screen.findByText('This import has expired. Start a new import for this notebook.');
+		expect(notebookImports.publish).toHaveBeenCalledTimes(2);
+		expect(screen.queryByRole('button', { name: 'Check outcomes and retry' })).toBeNull();
+	});
+
 	it('selects search matches without excluding supporting files when selection is cleared', async () => {
 		const user = userEvent.setup();
 		renderDialog();
@@ -784,7 +796,6 @@ describe('folder validation', () => {
 			folderFile('venv/pyvenv.cfg', 'home = /usr/bin'),
 			folderFile('venv/bin/activate.py'),
 			folderFile('vendor/lib/site-packages/marimo/__init__.py'),
-			folderFile('pyvenv.cfg', 'home = /usr/bin'),
 		]);
 		const byPath = Object.fromEntries(folder.files.map((file) => [file.path, file]));
 		for (const path of [
@@ -799,7 +810,15 @@ describe('folder validation', () => {
 			});
 		}
 		expect(byPath['app.py']).toMatchObject({ included: true, selected: true });
-		expect(byPath['pyvenv.cfg'].included).toBe(true);
+	});
+
+	it('excludes everything when the chosen folder is itself a virtualenv', async () => {
+		const folder = await inspectFolder([
+			folderFile('pyvenv.cfg', 'home = /usr/bin'),
+			folderFile('bin/activate.py'),
+			folderFile('lib/python3.13/site-packages/marimo/__init__.py'),
+		]);
+		expect(folder.files.every((file) => file.exclusion === 'generated')).toBe(true);
 	});
 
 	it('enforces the server path and name byte limits', async () => {

@@ -68,8 +68,8 @@ export function folderImportExcludedDirectories(paths: readonly string[]): strin
 	const directories = new Set<string>();
 	for (const path of paths) {
 		const segments = path.split('/');
-		if (segments.length > 1 && segments.at(-1) === 'pyvenv.cfg')
-			directories.add(segments.slice(0, -1).join('/'));
+		// A root marker means the chosen folder itself is a virtualenv ('' excludes everything).
+		if (segments.at(-1) === 'pyvenv.cfg') directories.add(segments.slice(0, -1).join('/'));
 		const sitePackages = segments.indexOf('site-packages');
 		if (sitePackages !== -1 && sitePackages < segments.length - 1)
 			directories.add(segments.slice(0, sitePackages + 1).join('/'));
@@ -85,6 +85,6 @@ export function isFolderImportExcludedPath(
 	return (
 		isRegenerableArtifactPath(path) ||
 		path.split('/').some((segment) => segment.toLowerCase() === '.git') ||
-		excludedDirectories.some((directory) => path.startsWith(`${directory}/`))
+		excludedDirectories.some((directory) => directory === '' || path.startsWith(`${directory}/`))
 	);
 }

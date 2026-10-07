@@ -148,7 +148,7 @@ Use [Operations](../operations.md) for backups, logs, metrics, and session limit
 
 ## Troubleshooting
 
-For CodeArtifact failures, check the notebook role, helper `PATH`, repository URL, and token expiry. For deployment failures, see [Troubleshooting](../troubleshooting.md).
+For CodeArtifact failures, check the integration's AWS credentials or the project's workload identity, the domain and repository names, the IAM permissions listed above, and token expiry. For deployment failures, see [Troubleshooting](../troubleshooting.md).
 
 ## See also
 

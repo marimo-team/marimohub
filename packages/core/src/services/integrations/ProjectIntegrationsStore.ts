@@ -255,7 +255,12 @@ async function curatedCredentialError<T>(run: () => Promise<T>, message: string)
 	} catch (err) {
 		if (err instanceof DomainError) throw err;
 		if (err instanceof DOMException && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
-			throw err;
+			throw new DOMException(
+				err.name === 'TimeoutError'
+					? 'Package registry authentication timed out.'
+					: 'Package registry authentication was cancelled.',
+				err.name,
+			);
 		}
 		throw new UnavailableError(message);
 	}

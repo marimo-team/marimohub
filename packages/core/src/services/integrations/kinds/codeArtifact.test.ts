@@ -55,7 +55,9 @@ describe('CodeArtifact integration', () => {
 		});
 		expect(render?.attachments[0]).toMatchObject({ id: entry.id, version: 1 });
 		expect(JSON.stringify(render?.files)).not.toContain('fresh-token');
-		expect(JSON.stringify(await s.org.get(entry.id))).not.toContain('aws-secret');
+		const stored = JSON.stringify(await s.org.get(entry.id));
+		expect(stored).not.toContain('aws-secret');
+		expect(stored).not.toContain('AKIDEXAMPLE');
 		const override = await s.project.create(
 			s.projectId,
 			{ kind: 'aws_codeartifact', name: 'private-registry', config },

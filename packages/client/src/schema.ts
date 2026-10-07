@@ -8978,6 +8978,15 @@ export interface operations {
 					};
 				};
 			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
 			/** @description Authentication required */
 			401: {
 				headers: {

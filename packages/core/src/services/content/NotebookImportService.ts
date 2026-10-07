@@ -395,6 +395,10 @@ export class NotebookImportService {
 			);
 		const paths = new Set(files.map((file) => validateFolderImportPath(file.path)));
 		const excludedDirectories = folderImportExcludedDirectories([...paths]);
+		if (excludedDirectories.includes(''))
+			throw new BadRequestError(
+				'The selected folder is a virtual environment; choose the project folder instead.',
+			);
 		for (const file of files) {
 			if (isFolderImportExcludedPath(file.path, excludedDirectories))
 				throw new BadRequestError(

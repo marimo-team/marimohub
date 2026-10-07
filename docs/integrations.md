@@ -1029,7 +1029,7 @@ That registry needs a PyPI upstream or another source for public dependencies.
 The hub writes the indexes to `UV_INDEX` and `UV_DEFAULT_INDEX`:
 
 - If an [Environment variables](#environment-variables) integration also sets `UV_INDEX`, the hub merges the values: registry entries first, then the environment-variable entries, without duplicates.
-- If both a registry and an Environment variables integration set `UV_DEFAULT_INDEX`, session creation stops. Use the registry's **Default index** option instead.
+- If an Environment variables integration sets `UV_DEFAULT_INDEX` to a different value than the registry, session creation stops. Use the registry's **Default index** option instead.
 - The injected values replace `UV_INDEX` or `UV_DEFAULT_INDEX` set in the [sandbox image](./sandbox-image.md#private-package-indexes).
 
 [Secret fields](#secret-fields) accept encrypted values or [external references](./integration-secrets.md).

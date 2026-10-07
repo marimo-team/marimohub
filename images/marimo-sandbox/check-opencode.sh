@@ -30,7 +30,14 @@ trap 'exit 130' INT
 opencode web --hostname 127.0.0.1 --port "$port" >"$log" 2>&1 &
 pid=$!
 health_deadline="${OPENCODE_HEALTH_DEADLINE:-60}"
-deadline=$((SECONDS + health_deadline))
+# Arithmetic expansion would evaluate anything embedded in the variable; accept digits only.
+case "$health_deadline" in
+	'' | *[!0-9]*)
+		echo "OPENCODE_HEALTH_DEADLINE must be a whole number of seconds" >&2
+		exit 2
+		;;
+esac
+deadline=$((SECONDS + 10#$health_deadline))
 echo 'Waiting for OpenCode health'
 until curl --connect-timeout 2 --max-time 3 -fsS "http://127.0.0.1:$port/global/health" >/dev/null; do
 	if ! kill -0 "$pid" 2>/dev/null; then

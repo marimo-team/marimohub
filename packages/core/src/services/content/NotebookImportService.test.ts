@@ -734,6 +734,7 @@ describe('folder notebook import', () => {
 			{ 'venv/pyvenv.cfg': 'home = /usr', 'venv/lib/mod.py': 'x', 'app.py': 'x' },
 			'Exclude generated or Git metadata before importing: venv/',
 		],
+		[{ 'pyvenv.cfg': 'home = /usr', 'bin/python': 'x', 'app.py': 'x' }, 'is a virtual environment'],
 		[
 			{ 'env/lib/python3.13/site-packages/pkg.py': 'x', 'app.py': 'x' },
 			'Exclude generated or Git metadata before importing: env/lib/python3.13/site-packages/pkg.py',
