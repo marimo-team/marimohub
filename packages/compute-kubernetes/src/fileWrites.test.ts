@@ -66,7 +66,7 @@ describe('batchFileWrites', () => {
 	});
 });
 
-describe.skipIf(spawnSync('python3', ['-V']).status !== 0)('file batch receiver', () => {
+describe.skipIf(spawnSync('sh', ['-c', 'python3 -V']).status !== 0)('file batch receiver', () => {
 	let directory: string;
 	beforeEach(() => {
 		directory = mkdtempSync(join(tmpdir(), 'mh-k8s-write-'));
