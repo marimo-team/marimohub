@@ -663,8 +663,8 @@ export interface paths {
 		};
 		get?: never;
 		put?: never;
-		/** Prepare a folder snapshot for notebook import */
-		post: operations['notebookImports.prepare'];
+		/** Upload a folder snapshot for notebook import */
+		post: operations['notebooks.imports.prepare'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -678,11 +678,33 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		/** Reconcile a notebook import outcome */
-		get: operations['notebookImports.status'];
+		get?: never;
 		put?: never;
-		/** Import a notebook from a prepared folder */
-		post: operations['notebookImports.publish'];
+		/**
+		 * Create a notebook from a prepared folder snapshot
+		 * @description Idempotent per entrypoint: a retry with the same body returns the same notebook. A different body for an entrypoint already attempted returns 409 `IMPORT_RESTART_REQUIRED`.
+		 */
+		post: operations['notebooks.imports.publish'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebook-imports/{import_id}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get the outcome of each notebook in a folder import
+		 * @description Lists every entrypoint with an attempt in progress or finished. Entrypoints that were never attempted, or whose attempt stopped and can be retried, are absent.
+		 */
+		get: operations['notebooks.imports.get'];
+		put?: never;
+		post?: never;
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -8920,7 +8942,7 @@ export interface operations {
 			};
 		};
 	};
-	'notebookImports.prepare': {
+	'notebooks.imports.prepare': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -8935,7 +8957,7 @@ export interface operations {
 			};
 		};
 		responses: {
-			/** @description Prepared workspace */
+			/** @description Prepared folder snapshot */
 			201: {
 				headers: {
 					[name: string]: unknown;
@@ -8946,6 +8968,7 @@ export interface operations {
 						success: true;
 						data: {
 							id: string;
+							/** Format: date-time */
 							expires_at: string;
 							files: {
 								path: string;
@@ -9022,11 +9045,9 @@ export interface operations {
 			};
 		};
 	};
-	'notebookImports.status': {
+	'notebooks.imports.publish': {
 		parameters: {
-			query: {
-				entry_notebook: string;
-			};
+			query?: never;
 			header?: never;
 			path: {
 				pid: string;
@@ -9034,10 +9055,23 @@ export interface operations {
 			};
 			cookie?: never;
 		};
-		requestBody?: never;
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @example reports/revenue.py */
+					entry_notebook: string;
+					/** @example Revenue Analysis */
+					title: string;
+					/** @example ghcr.io/orgname/marimo-gpu:latest */
+					base_image?: string;
+					/** @example large */
+					compute_profile?: string;
+				};
+			};
+		};
 		responses: {
-			/** @description Import status */
-			200: {
+			/** @description Notebook imported */
+			201: {
 				headers: {
 					[name: string]: unknown;
 				};
@@ -9045,11 +9079,7 @@ export interface operations {
 					'application/json': {
 						/** @enum {boolean} */
 						success: true;
-						data: {
-							/** @enum {string} */
-							state: 'pending' | 'preparing' | 'publishing' | 'complete' | 'expired';
-							notebook?: components['schemas']['NotebookMeta'];
-						};
+						data: components['schemas']['NotebookMeta'];
 					};
 				};
 			};
@@ -9129,7 +9159,7 @@ export interface operations {
 			};
 		};
 	};
-	'notebookImports.publish': {
+	'notebooks.imports.get': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -9139,19 +9169,10 @@ export interface operations {
 			};
 			cookie?: never;
 		};
-		requestBody: {
-			content: {
-				'application/json': {
-					entry_notebook: string;
-					title: string;
-					base_image?: string;
-					compute_profile?: string;
-				};
-			};
-		};
+		requestBody?: never;
 		responses: {
-			/** @description Notebook imported */
-			201: {
+			/** @description Import outcome */
+			200: {
 				headers: {
 					[name: string]: unknown;
 				};
@@ -9159,7 +9180,17 @@ export interface operations {
 					'application/json': {
 						/** @enum {boolean} */
 						success: true;
-						data: components['schemas']['NotebookMeta'];
+						data: {
+							id: string;
+							/** Format: date-time */
+							expires_at: string;
+							notebooks: {
+								entry_notebook: string;
+								/** @enum {string} */
+								state: 'preparing' | 'publishing' | 'complete' | 'expired';
+								notebook?: components['schemas']['NotebookMeta'];
+							}[];
+						};
 					};
 				};
 			};
@@ -9183,15 +9214,6 @@ export interface operations {
 			};
 			/** @description Not found */
 			404: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Conflict */
-			409: {
 				headers: {
 					[name: string]: unknown;
 				};

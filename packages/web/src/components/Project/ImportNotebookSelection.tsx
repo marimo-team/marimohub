@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { Button, TextField } from '@/components/ui';
 import { ImportPagination, IMPORT_PAGE_SIZE } from './ImportPagination';
@@ -22,6 +23,7 @@ export function ImportNotebookSelection({
 	page: number;
 	onPageChange: (page: number) => void;
 }) {
+	const errorId = useId();
 	const selected = files.filter((file) => file.selected);
 	const candidates = files.filter(
 		(file) => file.candidate && file.path.toLowerCase().includes(search.toLowerCase()),
@@ -34,6 +36,8 @@ export function ImportNotebookSelection({
 		currentPage * IMPORT_PAGE_SIZE,
 		(currentPage + 1) * IMPORT_PAGE_SIZE,
 	);
+	// Credential-like files stay excluded unless the user checks each one explicitly.
+	const selectable = candidates.filter((file) => !file.error && file.exclusion !== 'sensitive');
 
 	return (
 		<>
@@ -54,9 +58,9 @@ export function ImportNotebookSelection({
 					<Button
 						size="sm"
 						variant="ghost"
-						isDisabled={!candidates.some((file) => !file.selected && !file.error)}
+						isDisabled={!selectable.some((file) => !file.selected)}
 						onPress={() => {
-							const paths = new Set(candidates.flatMap((file) => (file.error ? [] : [file.path])));
+							const paths = new Set(selectable.map((file) => file.path));
 							onFilesChange((current) =>
 								current.map((file) =>
 									paths.has(file.path) ? { ...file, selected: true, included: true } : file,
@@ -90,7 +94,7 @@ export function ImportNotebookSelection({
 						</tr>
 					</thead>
 					<tbody>
-						{visibleCandidates.map((file) => (
+						{visibleCandidates.map((file, index) => (
 							<tr key={file.path} className="border-t">
 								<td className="p-3">
 									<input
@@ -99,6 +103,7 @@ export function ImportNotebookSelection({
 										aria-label={`Import ${file.path}`}
 										checked={file.selected}
 										disabled={!!file.error}
+										aria-describedby={file.error ? `${errorId}-${index}` : undefined}
 										onChange={(event) =>
 											onFileChange(file.path, {
 												selected: event.target.checked,
@@ -107,12 +112,21 @@ export function ImportNotebookSelection({
 										}
 									/>
 								</td>
-								<td className="break-all p-3 font-mono text-xs">{file.path}</td>
+								<td className="break-all p-3 font-mono text-xs">
+									{file.path}
+									{file.error && (
+										<span
+											id={`${errorId}-${index}`}
+											className="mt-1 block font-sans text-destructive"
+										>
+											{file.error}
+										</span>
+									)}
+								</td>
 								<td className="p-3">
 									<TextField
 										aria-label={`Name for ${file.path}`}
 										value={file.title}
-										maxLength={200}
 										isDisabled={!file.selected}
 										onChange={(title) => onFileChange(file.path, { title })}
 									/>

@@ -1,9 +1,8 @@
-import { codeArtifact } from './codeArtifact';
-export { codeArtifact } from './codeArtifact';
 import { IntegrationRegistry } from '../registry';
 import { athena, redshift } from './awsQueryEngines';
 import { bigquery } from './bigquery';
 import { clickhouse } from './clickhouse';
+import { codeArtifact } from './codeArtifact';
 import { customEnv } from './customEnv';
 import { databricks } from './databricks';
 import { ducklake } from './ducklake';
@@ -36,6 +35,7 @@ import { trino } from './trino';
 export { athena, redshift } from './awsQueryEngines';
 export { bigquery } from './bigquery';
 export { clickhouse } from './clickhouse';
+export { codeArtifact } from './codeArtifact';
 export { customEnv } from './customEnv';
 export { databricks } from './databricks';
 export { ducklake } from './ducklake';

@@ -17,7 +17,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `auth.token` 🔒 | string | Yes |  |  |
+| `auth.token` 🔒 | string | Yes |  | Artifactory access token (sent with an empty username) |
 
 **`auth.method: basic`**
 

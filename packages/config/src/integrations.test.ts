@@ -179,6 +179,40 @@ describe('makeIntegrations', () => {
 		}
 	});
 
+	it('the probe policy off also stops package registry token minting', async () => {
+		const pid = createProjectId();
+		const integrations = makeIntegrations(
+			{
+				MARIMOHUB_INTEGRATIONS: 'on',
+				MARIMOHUB_INTEGRATIONS_PROBE: 'off',
+				MARIMOHUB_SECRETS_KEK: 'sBN3HR4/RHc81JkWZ794UoUuUnPEHvt7zvkBjjbTWk0=',
+			},
+			new MemoryBucket(),
+		).integrations;
+		const fetch = vi.spyOn(globalThis, 'fetch');
+		await integrations?.create(
+			pid,
+			{
+				kind: 'aws_codeartifact',
+				name: 'private',
+				config: {
+					domain: 'company',
+					domain_owner: '123456789012',
+					repository: 'python',
+					auth: { method: 'static', access_key_id: 'KEY', secret_access_key: 'secret' },
+				},
+			},
+			ACTOR,
+		);
+		await expect(
+			integrations?.resolveForSession(pid, {
+				workload: { kind: 'session', id: createSessionId() },
+				principal: { userId: ACTOR, email: 'a@example.com' },
+			}),
+		).rejects.toThrow('Package registry authentication is unavailable on this deployment.');
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
 	it('secret config fields require the shared KEK', async () => {
 		const pid = createProjectId();
 		const input = { kind: 'postgres', name: 'db', config: PG_CONFIG };

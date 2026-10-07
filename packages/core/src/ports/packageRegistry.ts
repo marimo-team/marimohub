@@ -1,16 +1,22 @@
 import type { TempS3Creds } from './credentialBroker';
 import type { IntegrationProbe } from './integrations';
 
+/** A full AWS region name (`us-east-1`), strict enough to interpolate into a hostname. */
+export const AWS_REGION_NAME_REGEX = /^[a-z]{2}(?:-[a-z]+)+-\d$/;
+
+/** AWS China regions live in a separate partition with its own DNS suffix. */
+export function awsDnsSuffix(region: string): string {
+	return region.startsWith('cn-') ? 'amazonaws.com.cn' : 'amazonaws.com';
+}
+
 export interface CodeArtifactSource {
 	provider: 'aws_codeartifact';
 	domain: string;
 	domain_owner: string;
 	repository: string;
 	region: string;
-	duration_seconds: number;
 	auth:
-		| { method: 'token'; token: string }
-		| { method: 'federation' }
+		| { method: 'ambient' }
 		| {
 				method: 'static';
 				access_key_id: string;
@@ -32,7 +38,8 @@ export interface PackageRegistryCredentialProvider {
 		source: PackageRegistrySource,
 		options: {
 			probe: IntegrationProbe;
-			awsCredentials?: TempS3Creds;
+			/** The project's workload-identity credentials, present only for `ambient` auth. */
+			federatedCredentials?: TempS3Creds;
 			signal?: AbortSignal;
 		},
 	): Promise<PackageRegistryCredentials>;

@@ -12,7 +12,6 @@ const source: CodeArtifactSource = {
 	domain_owner: '123456789012',
 	repository: 'python',
 	region: 'eu-west-1',
-	duration_seconds: 3600,
 	auth: {
 		method: 'static',
 		access_key_id: 'AKIDEXAMPLE',
@@ -42,10 +41,10 @@ describe('AWS CodeArtifact credentials', () => {
 		const probe = makeProbe();
 		const token = await new AwsCodeArtifactCredentials().resolve(source, { probe });
 		expect(token).toMatchObject({ username: 'aws', password: 'registry-token' });
-		expect(Date.parse(token.expiresAt!)).toBeGreaterThan(Date.now());
+		expect(Date.parse(token.expiresAt)).toBeGreaterThan(Date.now());
 		const [url, init] = probe.fetch.mock.calls[0];
 		expect(url).toBe(
-			'https://codeartifact.eu-west-1.amazonaws.com/v1/authorization-token?domain=company&domain-owner=123456789012&duration=3600',
+			'https://codeartifact.eu-west-1.amazonaws.com/v1/authorization-token?domain=company&domain-owner=123456789012&duration=43200',
 		);
 		expect(init?.method).toBe('POST');
 		expect(init?.headers?.authorization).toMatch(
@@ -56,17 +55,17 @@ describe('AWS CodeArtifact credentials', () => {
 		expect(init?.signal).toBeInstanceOf(AbortSignal);
 	});
 
-	it('uses supplied project credentials for federation and never ambient credentials', async () => {
+	it('uses supplied project credentials for ambient auth and never the hub identity', async () => {
 		const probe = makeProbe();
 		const adapter = new AwsCodeArtifactCredentials();
-		const federated = { ...source, auth: { method: 'federation' as const } };
+		const federated = { ...source, auth: { method: 'ambient' as const } };
 		await expect(adapter.resolve(federated, { probe })).rejects.toThrow(
 			'CodeArtifact authentication failed',
 		);
 		expect(probe.fetch).not.toHaveBeenCalled();
 		await adapter.resolve(federated, {
 			probe,
-			awsCredentials: {
+			federatedCredentials: {
 				accessKeyId: 'PROJECT',
 				secretAccessKey: 'project-secret',
 				sessionToken: 'project-session',
@@ -81,17 +80,6 @@ describe('AWS CodeArtifact credentials', () => {
 		expect(probe.fetch.mock.calls[0][0]).toMatch(
 			/^https:\/\/codeartifact.cn-north-1.amazonaws.com.cn\//,
 		);
-	});
-
-	it('does not fetch or renew an explicitly supplied token', async () => {
-		const probe = makeProbe();
-		await expect(
-			new AwsCodeArtifactCredentials().resolve(
-				{ ...source, auth: { method: 'token', token: 'existing' } },
-				{ probe },
-			),
-		).resolves.toEqual({ username: 'aws', password: 'existing' });
-		expect(probe.fetch).not.toHaveBeenCalled();
 	});
 
 	it.each([401, 403, 404, 429, 500, 503])(
@@ -159,16 +147,19 @@ describe('AWS CodeArtifact credentials', () => {
 	it.each([
 		{ accessKeyId: '', secretAccessKey: 'secret' },
 		{ accessKeyId: 'KEY', secretAccessKey: '' },
-	])('does not send requests with incomplete federated credentials', async (awsCredentials) => {
-		const probe = makeProbe();
-		await expect(
-			new AwsCodeArtifactCredentials().resolve(
-				{ ...source, auth: { method: 'federation' } },
-				{ probe, awsCredentials },
-			),
-		).rejects.toThrow('CodeArtifact authentication failed');
-		expect(probe.fetch).not.toHaveBeenCalled();
-	});
+	])(
+		'does not send requests with incomplete federated credentials',
+		async (federatedCredentials) => {
+			const probe = makeProbe();
+			await expect(
+				new AwsCodeArtifactCredentials().resolve(
+					{ ...source, auth: { method: 'ambient' } },
+					{ probe, federatedCredentials },
+				),
+			).rejects.toThrow('CodeArtifact authentication failed');
+			expect(probe.fetch).not.toHaveBeenCalled();
+		},
+	);
 
 	it('rejects an invalid region before sending credentials', async () => {
 		const probe = makeProbe();

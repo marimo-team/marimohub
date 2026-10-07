@@ -12,6 +12,11 @@ ENV MARIMO_VERSION=${MARIMO_VERSION}
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.1@sha256:cf4eedcaa81655197f625739489effcbe71b61ceb1506f332c3facae5deceded /uv /uvx /usr/local/bin/
 
+# CI passes the ISO week so the shared layer cache cannot pin unversioned apt
+# packages and `uv add` resolutions indefinitely. A new value rebuilds every
+# layer from here on, including the stages derived from base.
+ARG CACHE_EPOCH
+
 RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates locales \
  && sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
  && locale-gen \

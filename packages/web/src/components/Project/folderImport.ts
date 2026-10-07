@@ -5,6 +5,7 @@ import {
 	WORKSPACE_LIMITS,
 } from '@marimo-hub/core/remote-workspace';
 import {
+	folderImportExcludedDirectories,
 	isFolderImportExcludedPath,
 	validateFolderImportPath,
 } from '@marimo-hub/core/workspace-ignore';
@@ -17,6 +18,8 @@ export interface FolderFile {
 	included: boolean;
 	exclusion?: 'generated' | 'sensitive';
 	error?: string;
+	// A conflicting path cannot be excluded on its own, so it is reported even when excluded.
+	errorReason?: 'path-conflict' | 'invalid-path' | 'unreadable';
 	candidate: boolean;
 	selected: boolean;
 	title: string;
@@ -25,24 +28,27 @@ export interface FolderFile {
 export async function inspectFolder(files: File[]): Promise<{ root: string; files: FolderFile[] }> {
 	const root = files[0]?.webkitRelativePath.split('/')[0] ?? '';
 	if (!root) throw new Error('Choose a folder so relative paths can be preserved.');
+	const relativePaths = files.map((file) => file.webkitRelativePath.slice(root.length + 1));
+	const excludedDirectories = folderImportExcludedDirectories(relativePaths);
 	const paths = new Set<string>();
-	const result = await mapWithConcurrency(files, 8, async (file): Promise<FolderFile> => {
-		const relative = file.webkitRelativePath;
-		const path = relative.slice(root.length + 1);
-		let error =
-			!relative.startsWith(`${root}/`) || paths.has(path)
-				? 'Invalid or duplicate folder path'
-				: undefined;
-		if (!error) {
+	const result = await mapWithConcurrency(files, 8, async (file, index): Promise<FolderFile> => {
+		const path = relativePaths[index];
+		let errorReason: FolderFile['errorReason'];
+		let error: string | undefined;
+		if (!file.webkitRelativePath.startsWith(`${root}/`) || paths.has(path)) {
+			errorReason = 'path-conflict';
+			error = 'Invalid or duplicate folder path';
+		} else {
 			try {
 				validateFolderImportPath(path);
 			} catch (cause) {
+				errorReason = 'invalid-path';
 				error = cause instanceof Error ? cause.message : 'Invalid folder path';
 			}
 		}
 		paths.add(path);
 		const name = path.split('/').at(-1) ?? '';
-		const generated = isFolderImportExcludedPath(path);
+		const generated = isFolderImportExcludedPath(path, excludedDirectories);
 		const sensitive =
 			/^\.env(?:\.|$)/.test(name) ||
 			/\.(pem|key|p12|pfx)$/i.test(name) ||
@@ -50,13 +56,13 @@ export async function inspectFolder(files: File[]): Promise<{ root: string; file
 		const exclusion = generated ? 'generated' : sensitive ? 'sensitive' : undefined;
 		const candidate = isNotebookFilePath(path) && !generated;
 		let selected = false;
-		let readError = error;
 		if (candidate && !exclusion && !error && file.size <= WORKSPACE_LIMITS.maxFileBytes) {
 			try {
 				const text = await file.slice(0, 64 * 1024).text();
 				selected = /(?:import marimo|from marimo import|marimo-version:)/.test(text);
 			} catch {
-				readError = 'File could not be read';
+				errorReason = 'unreadable';
+				error = 'File could not be read';
 			}
 		}
 		return {
@@ -64,7 +70,8 @@ export async function inspectFolder(files: File[]): Promise<{ root: string; file
 			path,
 			included: !exclusion,
 			exclusion,
-			error: readError,
+			error,
+			errorReason,
 			candidate,
 			selected,
 			title: name.replace(/\.[^.]+$/, ''),
@@ -76,7 +83,7 @@ export async function inspectFolder(files: File[]): Promise<{ root: string; file
 export function folderProblems(files: FolderFile[]): string[] {
 	const included = files.filter((file) => file.included);
 	const problems = files.flatMap((file) =>
-		file.error && (file.included || file.error === 'Invalid or duplicate folder path')
+		file.error && (file.included || file.errorReason === 'path-conflict')
 			? [`${file.path}: ${file.error}`]
 			: [],
 	);

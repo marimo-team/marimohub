@@ -1,11 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { zipSync } from 'fflate';
 import { ACTOR, setupTestEnv, uid, fakeComputeFrom, makeFsSandbox } from '../../testing';
+import { makeFolderArchive } from '../../testing/workspaceFixtures';
 import { paths } from '../../paths';
-import { ConflictError, ForbiddenError } from '../../errors';
+import { BadRequestError, ConflictError, ForbiddenError } from '../../errors';
+import { ImportId, NotebookId, VersionId } from '../../ids';
+import { sha256Hex } from '../../internal/sha256';
+import {
+	MAX_FOLDER_IMPORT_PATH_BYTES,
+	MAX_FOLDER_IMPORT_SEGMENT_BYTES,
+} from '../../integrations/workspaceIgnore';
 import { listAllKeys, deleteByPrefix } from '../catalog/storage';
 import { SandboxProvisioner } from '../runtime/SandboxProvisioner';
-import { IMPORT_RETENTION_MS } from './NotebookImportService';
+import { IMPORT_PURGE_MS, IMPORT_RETENTION_MS } from './NotebookImportService';
 
 const encode = (value: string) => new TextEncoder().encode(value);
 const files = {
@@ -31,11 +37,17 @@ function deferred() {
 async function setup() {
 	const env = await setupTestEnv();
 	const project = await env.projects.createProject({ name: 'Import', description: '' }, ACTOR);
-	const prepared = await env.notebooks.imports.prepare(project.id, zipSync(files), ACTOR);
+	const prepared = await env.notebooks.imports.prepare(project.id, makeFolderArchive(files), ACTOR);
 	return { ...env, projectId: project.id, importId: prepared.id };
 }
 
 let env: Awaited<ReturnType<typeof setup>>;
+
+/** The reported state of one entrypoint; an absent receipt reads as `pending`. */
+async function itemState(entry = input.entry_notebook, importId = env.importId) {
+	const result = await env.notebooks.imports.get(env.projectId, importId, ACTOR);
+	return result.notebooks.find((item) => item.entry_notebook === entry) ?? { state: 'pending' };
+}
 beforeEach(async () => {
 	env = await setup();
 });
@@ -47,7 +59,7 @@ describe('folder notebook import', () => {
 		const entry_notebook = ' reports / report.py';
 		const prepared = await notebooks.imports.prepare(
 			projectId,
-			zipSync({ [entry_notebook]: encode('import marimo') }),
+			makeFolderArchive({ [entry_notebook]: encode('import marimo') }),
 			ACTOR,
 		);
 		const args = { title: 'Report', entry_notebook };
@@ -56,9 +68,10 @@ describe('folder notebook import', () => {
 			entry_notebook,
 		);
 		expect(await notebooks.getNotebookContent(projectId, notebook.id)).toBe('import marimo');
-		expect(
-			await notebooks.imports.status(projectId, prepared.id, entry_notebook, ACTOR),
-		).toMatchObject({ state: 'complete', notebook: { id: notebook.id } });
+		expect(await itemState(entry_notebook, prepared.id)).toMatchObject({
+			state: 'complete',
+			notebook: { id: notebook.id },
+		});
 		expect((await notebooks.imports.publish(projectId, prepared.id, args, ACTOR)).id).toBe(
 			notebook.id,
 		);
@@ -69,8 +82,12 @@ describe('folder notebook import', () => {
 		const prefix = `projects/${projectId}/imports/`;
 		const before = await listAllKeys(bucket, prefix);
 		await expect(
-			notebooks.imports.prepare(projectId, zipSync({ ['é'.repeat(513)]: encode('data') }), ACTOR),
-		).rejects.toThrow('1024 UTF-8 bytes');
+			notebooks.imports.prepare(
+				projectId,
+				makeFolderArchive({ ['é'.repeat(MAX_FOLDER_IMPORT_PATH_BYTES / 2 + 1)]: encode('data') }),
+				ACTOR,
+			),
+		).rejects.toThrow(`${MAX_FOLDER_IMPORT_PATH_BYTES} UTF-8 bytes`);
 		expect(await listAllKeys(bucket, prefix)).toEqual(before);
 	});
 
@@ -124,7 +141,11 @@ describe('folder notebook import', () => {
 				),
 				...(withPyproject ? { 'pyproject.toml': encode('') } : {}),
 			};
-			const prepared = await notebooks.imports.prepare(projectId, zipSync(contents), ACTOR);
+			const prepared = await notebooks.imports.prepare(
+				projectId,
+				makeFolderArchive(contents),
+				ACTOR,
+			);
 			const notebook = await notebooks.imports.publish(projectId, prepared.id, input, ACTOR);
 			expect(await notebooks.listWorkspaceFiles(projectId, notebook.id)).toHaveLength(1000);
 			await notebooks.workspace.write(projectId, notebook.id, 'data/0.txt', encode('y'), ACTOR);
@@ -143,7 +164,9 @@ describe('folder notebook import', () => {
 		);
 		const prefix = `projects/${projectId}/imports/`;
 		const before = await listAllKeys(bucket, prefix);
-		await expect(notebooks.imports.prepare(projectId, zipSync(contents), ACTOR)).rejects.toThrow(
+		await expect(
+			notebooks.imports.prepare(projectId, makeFolderArchive(contents), ACTOR),
+		).rejects.toThrow(
 			'Include at most 999 files; reserve one workspace file for generated pyproject.toml.',
 		);
 		expect(await listAllKeys(bucket, prefix)).toEqual(before);
@@ -157,9 +180,9 @@ describe('folder notebook import', () => {
 				Array.from({ length: 1000 }, (_, index) => [`data/${index}.txt`, encode('x')]),
 			),
 		};
-		await expect(notebooks.imports.prepare(projectId, zipSync(contents), ACTOR)).rejects.toThrow(
-			'Archive exceeds the 1000-file limit',
-		);
+		await expect(
+			notebooks.imports.prepare(projectId, makeFolderArchive(contents), ACTOR),
+		).rejects.toThrow('Archive exceeds the 1000-file limit');
 	});
 
 	it('preserves the original entry through save, restore, workspace edit and duplicate', async () => {
@@ -310,9 +333,7 @@ describe('folder notebook import', () => {
 		await expect(notebooks.imports.publish(projectId, importId, input, ACTOR)).rejects.toThrow(
 			'response lost',
 		);
-		expect(
-			(await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR)).state,
-		).toBe('publishing');
+		expect((await itemState()).state).toBe('publishing');
 		const result = await notebooks.imports.publish(projectId, importId, input, ACTOR);
 		expect(await notebooks.listNotebooks(projectId)).toMatchObject([{ id: result.id }]);
 	});
@@ -330,9 +351,7 @@ describe('folder notebook import', () => {
 		await notebooks.imports.sweep(projectId);
 		expect(await notebooks.listNotebooks(projectId)).toHaveLength(1);
 		expect(await bucket.head(`projects/${projectId}/imports/${importId}/snapshot.zip`)).toBeNull();
-		expect(
-			(await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR)).state,
-		).toBe('complete');
+		expect((await itemState()).state).toBe('complete');
 	});
 
 	it('fences a stalled attempt and stops its writes after replacement', async () => {
@@ -415,7 +434,7 @@ describe('folder notebook import', () => {
 		const { notebooks, projectId, bucket } = env;
 		const prepared = await notebooks.imports.prepare(
 			projectId,
-			zipSync({
+			makeFolderArchive({
 				...files,
 				...Object.fromEntries(
 					Array.from({ length: 50 }, (_, index) => [`data/${index}.txt`, encode('x')]),
@@ -444,7 +463,10 @@ describe('folder notebook import', () => {
 		expect(checkedConcurrentRetry).toBe(true);
 		expect(await notebooks.listNotebooks(projectId)).toMatchObject([{ id: notebook.id }]);
 		const receipt = await bucket.get(
-			`projects/${projectId}/imports/${prepared.id}/items/${encodeURIComponent(input.entry_notebook)}.json`,
+			paths
+				.project(projectId)
+				.notebookImport(ImportId.parse(prepared.id))
+				.item(await sha256Hex(input.entry_notebook)),
 		);
 		expect(JSON.parse(await receipt!.text())).toMatchObject({
 			state: 'complete',
@@ -523,9 +545,9 @@ describe('folder notebook import', () => {
 			code: 'IMPORT_RESTART_REQUIRED',
 			message: 'Import identity already has different notebook settings',
 		});
-		await expect(
-			notebooks.imports.status(projectId, importId, input.entry_notebook, uid('other')),
-		).rejects.toThrow('not found');
+		await expect(notebooks.imports.get(projectId, importId, uid('other'))).rejects.toThrow(
+			'not found',
+		);
 		await expect(
 			notebooks.imports.publish(
 				projectId,
@@ -563,9 +585,7 @@ describe('folder notebook import', () => {
 		const publishing = notebooks.imports.publish(projectId, importId, input, ACTOR);
 		await started.promise;
 		vi.spyOn(Date, 'now').mockReturnValue(now + IMPORT_RETENTION_MS + 60_000);
-		expect(
-			await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR),
-		).toMatchObject({ state: 'preparing' });
+		expect(await itemState()).toMatchObject({ state: 'preparing' });
 		await expect(
 			notebooks.imports.publish(projectId, importId, input, ACTOR),
 		).rejects.toMatchObject({ code: 'CONFLICT' });
@@ -590,15 +610,11 @@ describe('folder notebook import', () => {
 			.catch((error: unknown) => error);
 		await started.promise;
 		vi.spyOn(Date, 'now').mockReturnValue(now + IMPORT_RETENTION_MS + 60_000);
-		expect(
-			await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR),
-		).toMatchObject({ state: 'pending' });
+		expect(await itemState()).toMatchObject({ state: 'pending' });
 		await expect(
 			notebooks.imports.publish(projectId, importId, input, ACTOR),
 		).rejects.toMatchObject({ code: 'IMPORT_RESTART_REQUIRED' });
-		expect(
-			await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR),
-		).toMatchObject({ state: 'expired' });
+		expect(await itemState()).toMatchObject({ state: 'expired' });
 		release.resolve();
 		expect(await stalled).toBeInstanceOf(ConflictError);
 		expect(await notebooks.listNotebooks(projectId)).toHaveLength(0);
@@ -624,17 +640,13 @@ describe('folder notebook import', () => {
 			.catch((error: unknown) => error);
 		await started.promise;
 		vi.spyOn(Date, 'now').mockReturnValue(now + IMPORT_RETENTION_MS + 60_000);
-		expect(
-			await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR),
-		).toMatchObject({ state: 'pending' });
+		expect(await itemState()).toMatchObject({ state: 'pending' });
 		await expect(
 			notebooks.imports.publish(projectId, importId, input, ACTOR),
 		).rejects.toMatchObject({ code: 'IMPORT_RESTART_REQUIRED' });
 		release.resolve();
 		expect(await stalled).toMatchObject({ code: 'IMPORT_RESTART_REQUIRED' });
-		expect(
-			await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR),
-		).toMatchObject({ state: 'expired' });
+		expect(await itemState()).toMatchObject({ state: 'expired' });
 		expect(await notebooks.listNotebooks(projectId)).toHaveLength(0);
 		expect(await listAllKeys(bucket, `projects/${projectId}/notebooks/`)).toHaveLength(0);
 	});
@@ -653,9 +665,7 @@ describe('folder notebook import', () => {
 			code: 'IMPORT_RESTART_REQUIRED',
 			message: 'Import retry limit reached',
 		});
-		expect(
-			await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR),
-		).toMatchObject({ state: 'expired' });
+		expect(await itemState()).toMatchObject({ state: 'expired' });
 		expect(await notebooks.listNotebooks(projectId)).toHaveLength(0);
 	});
 
@@ -672,9 +682,7 @@ describe('folder notebook import', () => {
 		});
 		await expect(notebooks.imports.publish(projectId, importId, input, ACTOR)).rejects.toThrow();
 		expect(await notebooks.listNotebooks(projectId)).toHaveLength(0);
-		expect(
-			await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR),
-		).toMatchObject({ state: 'pending' });
+		expect(await itemState()).toMatchObject({ state: 'pending' });
 		const imported = await notebooks.imports.publish(projectId, importId, input, ACTOR);
 		expect(await notebooks.listNotebooks(projectId)).toMatchObject([{ id: imported.id }]);
 		expect(
@@ -692,7 +700,7 @@ describe('folder notebook import', () => {
 			const { notebooks, projectId } = env;
 			const prepared = await notebooks.imports.prepare(
 				projectId,
-				zipSync({ ...files, [path]: new Uint8Array([255]) }),
+				makeFolderArchive({ ...files, [path]: new Uint8Array([255]) }),
 				ACTOR,
 			);
 			await expect(notebooks.imports.publish(projectId, prepared.id, input, ACTOR)).rejects.toThrow(
@@ -706,8 +714,163 @@ describe('folder notebook import', () => {
 		'rejects unsupported workspace path %s',
 		async (path) => {
 			await expect(
-				env.notebooks.imports.prepare(env.projectId, zipSync({ [path]: encode('x') }), ACTOR),
-			).rejects.toThrow();
+				env.notebooks.imports.prepare(
+					env.projectId,
+					makeFolderArchive({ [path]: encode('x') }),
+					ACTOR,
+				),
+			).rejects.toBeInstanceOf(BadRequestError);
 		},
 	);
+
+	it.each([
+		[{}, 'no included files'],
+		[{ data: 'x', 'data/raw.csv': 'y' }, 'File conflicts with directory: data/raw.csv'],
+		[
+			{ [`data/${'x'.repeat(MAX_FOLDER_IMPORT_SEGMENT_BYTES + 1)}`]: 'x' },
+			`${MAX_FOLDER_IMPORT_SEGMENT_BYTES} UTF-8 bytes`,
+		],
+		[
+			{ 'venv/pyvenv.cfg': 'home = /usr', 'venv/lib/mod.py': 'x', 'app.py': 'x' },
+			'Exclude generated or Git metadata before importing: venv/',
+		],
+		[
+			{ 'env/lib/python3.13/site-packages/pkg.py': 'x', 'app.py': 'x' },
+			'Exclude generated or Git metadata before importing: env/lib/python3.13/site-packages/pkg.py',
+		],
+	] as const)('rejects folder %j without storing a preparation', async (contents, message) => {
+		const { notebooks, projectId, bucket } = env;
+		const prefix = paths.project(projectId).notebookImportsPrefix;
+		const before = await listAllKeys(bucket, prefix);
+		const prepared = notebooks.imports.prepare(projectId, makeFolderArchive(contents), ACTOR);
+		await expect(prepared).rejects.toBeInstanceOf(BadRequestError);
+		await expect(prepared).rejects.toThrow(message);
+		expect(await listAllKeys(bucket, prefix)).toEqual(before);
+	});
+
+	it('keys receipts by entry hash so long entry paths fit storage key limits', async () => {
+		const { notebooks, projectId, bucket } = env;
+		const entry_notebook = `${'é'.repeat(120)}/${'d'.repeat(250)}/${'n'.repeat(200)}.py`;
+		const prepared = await notebooks.imports.prepare(
+			projectId,
+			makeFolderArchive({ [entry_notebook]: 'import marimo' }),
+			ACTOR,
+		);
+		const notebook = await notebooks.imports.publish(
+			projectId,
+			prepared.id,
+			{ title: 'Long', entry_notebook },
+			ACTOR,
+		);
+		const keys = await listAllKeys(bucket, paths.project(projectId).notebookImportsPrefix);
+		const encoder = new TextEncoder();
+		for (const key of keys)
+			for (const segment of key.split('/'))
+				expect(encoder.encode(segment).byteLength).toBeLessThanOrEqual(255);
+		const workspaceKey = paths
+			.project(projectId)
+			.notebook(notebook.id)
+			.version(VersionId.parse('ver_00000000000000000000000000'))
+			.workspaceFile(entry_notebook);
+		expect(encoder.encode(workspaceKey).byteLength).toBeLessThanOrEqual(1024);
+		expect(await itemState(entry_notebook, prepared.id)).toMatchObject({
+			state: 'complete',
+			notebook: { id: notebook.id },
+		});
+	});
+
+	it('rejects an entrypoint that is not a notebook file', async () => {
+		const { notebooks, projectId, importId } = env;
+		await expect(
+			notebooks.imports.publish(
+				projectId,
+				importId,
+				{ title: 'Data', entry_notebook: 'data/raw.bin' },
+				ACTOR,
+			),
+		).rejects.toBeInstanceOf(BadRequestError);
+		await expect(notebooks.imports.get(projectId, 'not-an-import-id', ACTOR)).rejects.toThrow(
+			'Invalid import id',
+		);
+		expect(await notebooks.listNotebooks(projectId)).toHaveLength(0);
+	});
+
+	it('reports every attempted entrypoint with its state and omits untried ones', async () => {
+		const { notebooks, projectId, importId } = env;
+		const complete = await notebooks.imports.publish(projectId, importId, input, ACTOR);
+		vi.spyOn(notebooks, 'publishImportNotebook').mockRejectedValueOnce(new Error('response lost'));
+		const forecast = { title: 'Forecast', entry_notebook: 'reports/forecast.py' };
+		await expect(notebooks.imports.publish(projectId, importId, forecast, ACTOR)).rejects.toThrow(
+			'response lost',
+		);
+		const result = await notebooks.imports.get(projectId, importId, ACTOR);
+		expect(result).toEqual({
+			id: importId,
+			expires_at: expect.any(String),
+			notebooks: [
+				{ entry_notebook: 'reports/forecast.py', state: 'publishing' },
+				{ entry_notebook: 'reports/revenue.py', state: 'complete', notebook: complete },
+			],
+		});
+	});
+
+	it('requires a restart when the notebook was deleted before a lost publication completed', async () => {
+		const { notebooks, projectId, importId, bucket } = env;
+		const publish = notebooks.publishImportNotebook.bind(notebooks);
+		let notebookId = '';
+		vi.spyOn(notebooks, 'publishImportNotebook').mockImplementationOnce(async (...args) => {
+			notebookId = (await publish(...args)).id;
+			throw new Error('response lost');
+		});
+		await expect(notebooks.imports.publish(projectId, importId, input, ACTOR)).rejects.toThrow(
+			'response lost',
+		);
+		await notebooks.deleteNotebook(projectId, NotebookId.parse(notebookId), ACTOR);
+		await expect(
+			notebooks.imports.publish(projectId, importId, input, ACTOR),
+		).rejects.toMatchObject({ code: 'IMPORT_RESTART_REQUIRED' });
+		expect(await itemState()).toMatchObject({ state: 'expired' });
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + IMPORT_RETENTION_MS + 2 * 60 * 60 * 1000);
+		await notebooks.imports.sweep(projectId);
+		expect(
+			await bucket.head(paths.project(projectId).notebook(NotebookId.parse(notebookId)).meta),
+		).not.toBeNull();
+	});
+
+	it('purges the whole import once receipts are past the retention horizon', async () => {
+		const { notebooks, projectId, importId, bucket } = env;
+		const notebook = await notebooks.imports.publish(projectId, importId, input, ACTOR);
+		const imp = paths.project(projectId).notebookImport(ImportId.parse(importId));
+		const now = Date.now();
+		vi.spyOn(Date, 'now').mockReturnValue(now + IMPORT_RETENTION_MS + 2 * 60 * 60 * 1000);
+		await notebooks.imports.sweep(projectId);
+		expect(await bucket.head(imp.snapshot)).toBeNull();
+		expect(await listAllKeys(bucket, imp.itemsPrefix)).toHaveLength(1);
+		expect(await bucket.head(imp.preparation)).not.toBeNull();
+		vi.spyOn(Date, 'now').mockReturnValue(now + IMPORT_RETENTION_MS + IMPORT_PURGE_MS + 1);
+		await notebooks.imports.sweep(projectId);
+		expect(await listAllKeys(bucket, imp.base)).toHaveLength(0);
+		expect(await notebooks.listNotebooks(projectId)).toMatchObject([{ id: notebook.id }]);
+		await expect(notebooks.imports.get(projectId, importId, ACTOR)).rejects.toThrow('not found');
+	});
+
+	it('logs and purges a publication that never completed by the retention horizon', async () => {
+		const { notebooks, projectId, importId, bucket } = env;
+		vi.spyOn(notebooks, 'publishImportNotebook').mockRejectedValue(new Error('unavailable'));
+		await expect(notebooks.imports.publish(projectId, importId, input, ACTOR)).rejects.toThrow(
+			'unavailable',
+		);
+		const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + IMPORT_RETENTION_MS + IMPORT_PURGE_MS + 1);
+		await notebooks.imports.sweep(projectId);
+		expect(errorLog).toHaveBeenCalledWith(
+			expect.stringContaining('notebook_import_publish_abandoned'),
+		);
+		expect(
+			await listAllKeys(
+				bucket,
+				paths.project(projectId).notebookImport(ImportId.parse(importId)).base,
+			),
+		).toHaveLength(0);
+	});
 });

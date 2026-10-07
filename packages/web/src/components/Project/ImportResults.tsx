@@ -1,5 +1,7 @@
 import { Check, LoaderCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { formatAbsolute } from '@/lib/time';
+import { cn } from '@/lib/utils';
 import { importStateLabels, isImportRetryable } from './useNotebookImport';
 import type { ImportRow } from './useNotebookImport';
 import { ImportPagination, IMPORT_PAGE_SIZE } from './ImportPagination';
@@ -10,6 +12,7 @@ export function ImportResults({
 	phase,
 	stopping,
 	busy,
+	expiresAt,
 	page,
 	onPageChange,
 }: {
@@ -18,6 +21,7 @@ export function ImportResults({
 	phase: 'idle' | 'uploading' | 'importing';
 	stopping: boolean;
 	busy: boolean;
+	expiresAt?: string;
 	page: number;
 	onPageChange: (page: number) => void;
 }) {
@@ -43,7 +47,16 @@ export function ImportResults({
 						<div className="min-w-0 flex-1">
 							<p className="text-sm font-medium">{row.title}</p>
 							<p className="break-all font-mono text-xs text-muted-foreground">{row.path}</p>
-							{row.message && <p className="mt-1 text-xs text-destructive">{row.message}</p>}
+							{row.message && (
+								<p
+									className={cn(
+										'mt-1 text-xs',
+										row.messageTone === 'neutral' ? 'text-muted-foreground' : 'text-destructive',
+									)}
+								>
+									{row.message}
+								</p>
+							)}
 						</div>
 						<div className="shrink-0 text-xs">
 							{row.notebookId ? (
@@ -74,7 +87,7 @@ export function ImportResults({
 					? 'Your notebooks are ready. Each has its own copy of the included files.'
 					: !rows.some(isImportRetryable)
 						? 'Some notebooks could not be imported. Review the errors before starting another import.'
-						: 'Keep this page open until the import finishes. Stop lets the current request finish and keeps imported notebooks. You can retry this upload for 24 hours.'}
+						: `Keep this page open until the import finishes. Stop lets the current request finish and keeps imported notebooks.${expiresAt ? ` You can retry this upload until ${formatAbsolute(expiresAt)}.` : ''}`}
 			</p>
 		</>
 	);

@@ -19,6 +19,7 @@ import {
 } from '../../constants';
 import { shellQuote } from './shell';
 import {
+	DEFAULT_LOCAL_ENTRY_NOTEBOOK,
 	isSafeWorkspacePath,
 	isWorkspaceInternalPath,
 	workspaceDirectoryFromMarkerPath,
@@ -145,7 +146,7 @@ export function sharedWorkspaceListing(
 }
 
 /** `commitSession` owns these; capture never uploads or mirror-deletes them. */
-function isRootSourceFile(rel: string, entryNotebook = 'notebook.py'): boolean {
+function isRootSourceFile(rel: string, entryNotebook = DEFAULT_LOCAL_ENTRY_NOTEBOOK): boolean {
 	return rel === entryNotebook || rel === 'pyproject.toml';
 }
 
@@ -156,14 +157,14 @@ function isGitHooksPath(rel: string): boolean {
 	return segments.some((segment, index) => segment === '.git' && segments[index + 1] === 'hooks');
 }
 
-function isCaptureExcluded(rel: string, entryNotebook = 'notebook.py'): boolean {
+function isCaptureExcluded(rel: string, entryNotebook = DEFAULT_LOCAL_ENTRY_NOTEBOOK): boolean {
 	return isMirrorProtected(rel, entryNotebook) || isGitHooksPath(rel);
 }
 
 /**
  * The files API can store regenerable paths. Capture does not own those copies.
  */
-function isMirrorProtected(rel: string, entryNotebook = 'notebook.py'): boolean {
+function isMirrorProtected(rel: string, entryNotebook = DEFAULT_LOCAL_ENTRY_NOTEBOOK): boolean {
 	return isRootSourceFile(rel, entryNotebook) || isRegenerableArtifactPath(rel);
 }
 
@@ -384,7 +385,7 @@ export async function captureWorkspace(
 	workingDir: string,
 	mode: 'source' | 'workspace',
 	listing: WorkspaceListing = sharedWorkspaceListing(sandbox, workingDir),
-	entryNotebook = 'notebook.py',
+	entryNotebook = DEFAULT_LOCAL_ENTRY_NOTEBOOK,
 ): Promise<void> {
 	if (!supportsBoundedReads(sandbox)) return;
 	const nb = paths.project(projectId).notebook(notebookId);
@@ -554,7 +555,7 @@ export async function readSessionArtifacts(
 	sandbox: SandboxInstance,
 	mountPath: string,
 	listing: WorkspaceListing = sharedWorkspaceListing(sandbox, mountPath),
-	entryNotebook = 'notebook.py',
+	entryNotebook = DEFAULT_LOCAL_ENTRY_NOTEBOOK,
 ): Promise<CommitSessionInput> {
 	if (!supportsBoundedReads(sandbox)) return {};
 	const sizes = await fileSizes(listing);

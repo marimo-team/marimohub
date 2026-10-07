@@ -2,7 +2,11 @@ import { Sha256 } from '@aws-crypto/sha256-js';
 import { SignatureV4 } from '@smithy/signature-v4';
 import { z } from 'zod';
 import { UnavailableError } from '@marimo-hub/core/errors';
+import { AWS_REGION_NAME_REGEX, awsDnsSuffix } from '@marimo-hub/core/ports/package-registry';
 import type { PackageRegistryCredentialProvider } from '@marimo-hub/core/ports/package-registry';
+
+/** The AWS maximum; the hub never renews a token, so sessions restart after it expires. */
+const TOKEN_DURATION_SECONDS = 43_200;
 
 const responseSchema = z.object({
 	authorizationToken: z
@@ -18,9 +22,6 @@ export class AwsCodeArtifactCredentials implements PackageRegistryCredentialProv
 		source: Parameters<PackageRegistryCredentialProvider['resolve']>[0],
 		options: Parameters<PackageRegistryCredentialProvider['resolve']>[1],
 	) {
-		if (source.auth.method === 'token') {
-			return { username: 'aws', password: source.auth.token };
-		}
 		let signal = options.signal;
 		try {
 			options.signal?.throwIfAborted();
@@ -32,17 +33,16 @@ export class AwsCodeArtifactCredentials implements PackageRegistryCredentialProv
 							secretAccessKey: source.auth.secret_access_key,
 							sessionToken: source.auth.session_token,
 						}
-					: options.awsCredentials;
+					: options.federatedCredentials;
 			if (!credentials?.accessKeyId || !credentials.secretAccessKey) {
 				throw new Error('Missing AWS credentials');
 			}
-			if (!/^[a-z]{2}(?:-[a-z]+)+-\d$/.test(source.region)) throw new Error('Invalid region');
-			const suffix = source.region.startsWith('cn-') ? 'amazonaws.com.cn' : 'amazonaws.com';
-			const hostname = `codeartifact.${source.region}.${suffix}`;
+			if (!AWS_REGION_NAME_REGEX.test(source.region)) throw new Error('Invalid region');
+			const hostname = `codeartifact.${source.region}.${awsDnsSuffix(source.region)}`;
 			const query = {
 				domain: source.domain,
 				'domain-owner': source.domain_owner,
-				duration: String(source.duration_seconds),
+				duration: String(TOKEN_DURATION_SECONDS),
 			};
 			const deadline = AbortSignal.timeout(10_000);
 			signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;

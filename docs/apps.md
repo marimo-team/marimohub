@@ -69,7 +69,9 @@ for credentials. See [secrets handling](./security.md#secrets-handling).
    MARIMOHUB_PERSIST_WORKSPACE=workspace
    ```
 
-   The default, `source`, saves only `notebook.py` and `pyproject.toml`.
+   The default, `source`, saves only the notebook's entrypoint (`notebook.py`
+   unless imported with a different entry file) and `pyproject.toml`. Notebooks
+   imported from a folder always save their full workspace.
    See the [configuration reference](./configuration.md).
 
 2. Stop the editor session. Open **Browse files** and edit `notebook.py`.

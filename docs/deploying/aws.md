@@ -73,40 +73,32 @@ Browser login and AWS permissions are separate. The hub role controls storage an
 
 ### Private Python packages with CodeArtifact
 
-An in-notebook `uv add` needs credentials in the notebook runtime. CodeArtifact tokens expire after 12 hours by default. A token exported only at startup can expire during a session. See [AWS token behavior](https://docs.aws.amazon.com/codeartifact/latest/ug/tokens-authentication.html).
+Use the [AWS CodeArtifact integration](../integrations.md#aws-codeartifact). The
+hub mints a CodeArtifact token for each new session or job and injects it for
+uv. No keyring helper, AWS CLI, or startup script is needed in the sandbox image.
 
-Use uv's keyring provider to obtain and refresh tokens:
+Choose an authentication method:
 
-1. Preinstall the helper in the sandbox image from an accessible package source:
+- **Project AWS workload identity**: the hub exchanges the project's
+  [AWS federation](../workload-identity-federation.md) credentials for a token.
+  The project needs workload identity enabled with an AWS broker.
+- **AWS credentials**: an access key for an IAM user. The keys stay on the hub;
+  only the token reaches the sandbox.
 
-   ```bash
-   uv tool install keyring --with keyrings.codeartifact
-   ```
+Grant the role or user `codeartifact:GetAuthorizationToken`,
+`sts:GetServiceBearerToken`, and `codeartifact:ReadFromRepository`. A token
+carries all CodeArtifact permissions of its principal, including publish, so use
+a read-only principal. See
+[CodeArtifact permissions](https://docs.aws.amazon.com/codeartifact/latest/ug/auth-and-access-control-permissions-reference.html)
+for domain and repository scopes.
 
-2. Make the `keyring` executable available on the notebook user's `PATH`.
-3. Set the named index and authentication variables in the notebook runtime:
+Tokens last 12 hours. A session that runs longer must restart before it installs
+more packages.
 
-   ```bash
-   UV_INDEX='private-registry=https://<domain>-<account-id>.d.codeartifact.<region>.amazonaws.com/pypi/<repository>/simple/'
-   UV_KEYRING_PROVIDER=subprocess
-   UV_INDEX_PRIVATE_REGISTRY_USERNAME=aws
-   ```
-
-4. Grant the notebook role `codeartifact:GetAuthorizationToken`, `sts:GetServiceBearerToken`, and `codeartifact:ReadFromRepository` for the required resources.
-
-See [CodeArtifact permissions](https://docs.aws.amazon.com/codeartifact/latest/ug/auth-and-access-control-permissions-reference.html) for domain and repository scopes.
-
-The index name determines the variable suffix: `private-registry` becomes `PRIVATE_REGISTRY`. Set runtime variables through the sandbox image, task definition, or [Environment variables integration](../integrations.md#environment-variables).
-
-The helper uses AWS credentials available to the notebook. On Fargate, use the notebook **task role**. The execution role only handles tasks such as image pulls and logs.
-
-Keep the helper accessible outside uv's per-notebook virtual environment. Install it for the runtime user or expose its tool directory to that user. Test installation from the actual notebook environment, including after token expiry. See [uv's CodeArtifact guide](https://docs.astral.sh/uv/guides/integration/aws/).
-
-A custom entrypoint can still configure uv before the agent starts. If it exports a token once, it also needs a refresh strategy. Updating a parent process's environment does not update an existing kernel's environment.
-
-When you switch to keyring, remove an old `UV_INDEX_PRIVATE_REGISTRY_PASSWORD`. A configured password can take precedence over the helper. Keep tokens out of index URLs committed to notebook files.
-
-marimohub's [AWS federation](../workload-identity-federation.md#example-aws-s3-athena) injects temporary credentials at session creation. Those credentials do not refresh automatically. CodeArtifact token refresh also requires valid underlying AWS credentials.
+Do not also set `UV_INDEX` for CodeArtifact in the task definition or sandbox
+image. The injected value replaces it. See
+[private package indexes](../sandbox-image.md#private-package-indexes) for how
+injected and custom index settings combine.
 
 ### Managed AI with Bedrock
 

@@ -19,7 +19,7 @@
 	},
 	"dependencies": {
 		"@marimo-hub/core": "workspace:*",
-		"fflate": "^0.8.2",
+		"fflate": "catalog:",
 		"isomorphic-git": "catalog:"
 	},
 	"devDependencies": {

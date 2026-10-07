@@ -242,44 +242,33 @@ libraries, edit `warm/pyproject.toml`; add system libraries with extra
 | Modal      | Configure registry credentials in Modal, or use a [named image](./compute.md#modal) (`modal://name[:tag]`). |
 | CoreWeave  | Configure registry credentials in CoreWeave; pass the image reference.                                      |
 
-## Custom PyPI index (private packages)
+## Private package indexes
 
-The launch command is plain `uv`, so pointing notebooks at a private or mirrored
-package index is plain
-[uv configuration](https://docs.astral.sh/uv/configuration/environment/): add
-`ENV` lines to your sandbox image and every sandbox in the deployment uses the
-index.
+Configure private Python package indexes with the
+[package registry integrations](./integrations.md#package-registries), not with
+image `ENV` lines. The hub injects the uv index settings and credentials into
+each session and job before `uv sync` starts. Presets exist for
+[AWS CodeArtifact](./integrations.md#aws-codeartifact),
+[JFrog Artifactory](./integrations.md#jfrog-artifactory),
+[Azure Artifacts](./integrations.md#azure-artifacts), and
+[GitLab](./integrations.md#gitlab-package-registry). For any other index
+(Nexus, devpi, Google Artifact Registry, an internal mirror), use the generic
+[Python package index](./integrations.md#python-package-index) integration with
+the index's simple-API URL.
 
-```dockerfile
-# Replace PyPI entirely with an internal mirror or proxy (Artifactory, Nexus,
-# devpi, …) — every `uv sync` at session start resolves against it.
-ENV UV_DEFAULT_INDEX=https://pypi.example.com/simple
+How injected values combine with other sources:
 
-# OR keep PyPI and add a private index searched first for your internal
-# packages. The `name=URL` form registers it as a NAMED index...
-ENV UV_INDEX=internal=https://pypi.example.com/simple
+- If an [Environment variables integration](./integrations.md#environment-variables)
+  also sets `UV_INDEX`, the hub merges the values: package registry entries first,
+  then the environment-variable entries, without duplicates.
+- `UV_DEFAULT_INDEX` set by both a package registry and an Environment variables
+  integration stops session creation. Use the registry's **Default index** option
+  instead.
+- An `ENV UV_INDEX` or `ENV UV_DEFAULT_INDEX` in the sandbox image applies only
+  while no integration sets that variable. An injected value replaces it.
 
-# ...so credentials can be supplied per index, without putting them in the URL.
-# The infix is the index name, uppercased. Never bake real values into the
-# image (anyone who can pull it can read them) — inject them at runtime
-# instead, through the Environment variables integration (see below).
-ENV UV_INDEX_INTERNAL_USERNAME=notebooks
-# UV_INDEX_INTERNAL_PASSWORD is injected at runtime, not baked in.
-```
-
-For credentials, add the `UV_*` names to the
-[Environment variables integration](./environment-and-access.md). Store the
-password as an [external reference](./integration-secrets.md). The hub resolves
-it before `uv sync` starts. A restricted viewer sandbox does not receive it.
-
-`uv sync` runs once at session start — an index change applies to new sessions,
-not already-running kernels.
-
-For package registries with expiring credentials, configure a helper inside the
-notebook runtime. See the platform guides for
-[CodeArtifact](./deploying/aws.md#private-python-packages-with-codeartifact),
-[Google Artifact Registry](./deploying/gcp.md#private-python-packages-with-artifact-registry),
-and [Azure Artifacts](./deploying/azure.md#private-python-packages-with-azure-artifacts).
+`uv sync` runs once at session start. An index change applies to new sessions,
+not to running kernels.
 
 ## Notebook URL bridge
 

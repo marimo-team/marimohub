@@ -1,7 +1,3 @@
-import type {
-	PackageRegistryCredentials,
-	PackageRegistrySource,
-} from '../../ports/packageRegistry';
 import { z } from 'zod';
 import { DomainError, UnavailableError, ValidationError } from '../../errors';
 import type {
@@ -26,6 +22,10 @@ import type { DatabaseSource } from '../../ports/databaseBrowser';
 import type { ProjectId, UserId } from '../../ids';
 import type { ObjectStoreProvider, ObjectStoreSourceFor } from '../../ports/objectBrowser';
 import type {
+	PackageRegistryCredentials,
+	PackageRegistrySource,
+} from '../../ports/packageRegistry';
+import type {
 	PreviewProgramAvailability,
 	PreviewProgramInput,
 	PreviewPrograms,
@@ -35,7 +35,6 @@ import { secretPaths } from './secretFields';
 import type { SecretPath } from './secretFields';
 
 export interface RenderInput<C> {
-	packageRegistryCredentials?: PackageRegistryCredentials;
 	/** Validated config with secret fields resolved to plaintext. */
 	config: C;
 	/** Instance name used to parameterize paths and environment variables. */
@@ -43,6 +42,14 @@ export interface RenderInput<C> {
 	projectId: ProjectId;
 	principal: { userId: UserId; email: string };
 	workload: WorkloadRef;
+	/** Present for `packageRegistry` kinds: credentials the store minted for this workload. */
+	packageRegistryCredentials?: PackageRegistryCredentials;
+}
+
+export interface TestConnectionOptions {
+	signal?: AbortSignal;
+	/** Present for `packageRegistry` kinds, as for {@link RenderInput}. */
+	packageRegistryCredentials?: PackageRegistryCredentials;
 }
 
 export interface RenderOutput {
@@ -212,7 +219,7 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	testConnection?(
 		config: z.infer<S>,
 		probe: IntegrationProbe,
-		options?: { signal?: AbortSignal },
+		options?: TestConnectionOptions,
 	): Promise<TestResult>;
 	/**
 	 * Optional read-only catalog browsing (namespaces → tables → schema).
@@ -223,9 +230,13 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	browse?: BrowseCapability<z.infer<S>>;
 	databaseBrowse?: DatabaseBrowseDefinition<z.infer<S>>;
 	objectBrowse?: ObjectBrowseDefinition<z.infer<S>>;
+	/**
+	 * Declares that the store must mint registry credentials (through the
+	 * deployment's `PackageRegistryCredentialProvider`) before `render` and
+	 * `testConnection`, which then receive them as `packageRegistryCredentials`.
+	 */
 	packageRegistry?: {
 		source(config: z.infer<S>): PackageRegistrySource;
-		indexUrl(config: z.infer<S>): string;
 	};
 	preview?: {
 		available(

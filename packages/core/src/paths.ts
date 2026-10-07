@@ -2,6 +2,7 @@ import type {
 	CliAuthorizationId,
 	OAuthAuthorizationId,
 	OAuthClientId,
+	ImportId,
 	IntegrationId,
 	JobId,
 	NotebookId,
@@ -134,6 +135,21 @@ export interface IntegrationPaths {
 	base: string;
 }
 
+export interface NotebookImportPaths {
+	/** Prefix of everything under one import, for the purge after retention. */
+	base: string;
+	/** Immutable uploaded ZIP, deleted once the import expires. */
+	snapshot: string;
+	/** Immutable actor and expiry record. */
+	preparation: string;
+	itemsPrefix: string;
+	/**
+	 * CAS receipt for one entrypoint, keyed by the SHA-256 hex of its path so any
+	 * valid path fits per-segment (255-byte) and whole-key (1024-byte) limits.
+	 */
+	item: (entrySha256: string) => string;
+}
+
 export interface ProjectPaths {
 	meta: string;
 	/** CAS-owned project alert destinations. */
@@ -149,6 +165,9 @@ export interface ProjectPaths {
 	 * collide with an instance dir — ids are always `intg-…`.
 	 */
 	integrationNameClaim: (name: string) => string;
+	/** Folder-import scratch space: `projects/{pid}/imports/`. */
+	notebookImportsPrefix: string;
+	notebookImport: (id: ImportId) => NotebookImportPaths;
 }
 
 function versionPaths(base: string, vid: VersionId): VersionPaths {
@@ -259,6 +278,17 @@ function projectPaths(pid: ProjectId): ProjectPaths {
 		integrationsPrefix: `${base}/integrations/`,
 		integrationNameClaim: (name: string) =>
 			`${base}/integrations/_names/${encodeURIComponent(name)}.json`,
+		notebookImportsPrefix: `${base}/imports/`,
+		notebookImport: (id: ImportId) => {
+			const importBase = `${base}/imports/${id}/`;
+			return {
+				base: importBase,
+				snapshot: `${importBase}snapshot.zip`,
+				preparation: `${importBase}preparation.json`,
+				itemsPrefix: `${importBase}items/`,
+				item: (entrySha256: string) => `${importBase}items/${entrySha256}.json`,
+			};
+		},
 	};
 }
 

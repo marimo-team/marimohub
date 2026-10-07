@@ -1,8 +1,3 @@
-import type {
-	PackageRegistryCredentialProvider,
-	PackageRegistryCredentials,
-	PackageRegistrySource,
-} from '../../ports/packageRegistry';
 import { all } from 'better-all';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
@@ -73,6 +68,11 @@ import type {
 } from '../../ports/databaseBrowser';
 import { SecretResolutionError } from '../../ports/secrets';
 import { OBJECT_BROWSE_PROVIDER_METADATA, ObjectBrowseError } from '../../ports/objectBrowser';
+import type {
+	PackageRegistryCredentialProvider,
+	PackageRegistryCredentials,
+	PackageRegistrySource,
+} from '../../ports/packageRegistry';
 import type {
 	ObjectBody,
 	ObjectBrowseContext,
@@ -245,6 +245,22 @@ function decodeVersionCursor(cursor: string | undefined): number | undefined {
 	return version;
 }
 
+/**
+ * Credential errors reach users and logs, so only curated domain errors and
+ * cancellations pass through; anything else could quote a secret.
+ */
+async function curatedCredentialError<T>(run: () => Promise<T>, message: string): Promise<T> {
+	try {
+		return await run();
+	} catch (err) {
+		if (err instanceof DomainError) throw err;
+		if (err instanceof DOMException && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+			throw err;
+		}
+		throw new UnavailableError(message);
+	}
+}
+
 export interface IntegrationsStoreOptions {
 	packageRegistryCredentials?: PackageRegistryCredentialProvider;
 	/** Required with the credential provider; token acquisition shares this probe across tests and startup. */
@@ -373,7 +389,6 @@ class ScopedIntegrationsStore {
 			const supportsTest =
 				descriptor.supports_test &&
 				(def.testConnection !== undefined ||
-					def.packageRegistry !== undefined ||
 					(databaseProvider !== undefined &&
 						this.databaseTesters[databaseProvider]?.provider === databaseProvider) ||
 					(objectProvider !== undefined &&
@@ -847,7 +862,7 @@ class ScopedIntegrationsStore {
 				});
 			}
 		}
-		if (!def.testConnection && !def.databaseBrowse && !def.objectBrowse && !def.packageRegistry) {
+		if (!def.testConnection && !def.databaseBrowse && !def.objectBrowse) {
 			throw new ValidationError(`Integration kind "${def.kind}" does not support testing.`);
 		}
 		const probe = this.probe;
@@ -861,34 +876,31 @@ class ScopedIntegrationsStore {
 				`Stored config no longer matches kind "${def.kind}" — edit and re-save it.`,
 			);
 		}
-		if (def.packageRegistry) {
+		if (def.packageRegistry && def.testConnection) {
+			let packageRegistryCredentials: PackageRegistryCredentials;
 			try {
-				options.signal?.throwIfAborted();
-				const credentials = await this.resolvePackageCredentials(
+				packageRegistryCredentials = await this.resolvePackageCredentials(
 					def.packageRegistry.source(parsed.data),
 					async () => objectContext?.federation?.credentials,
 					options.signal,
 				);
-				options.signal?.throwIfAborted();
-				const response = await probe.fetch(def.packageRegistry.indexUrl(parsed.data), {
-					headers: {
-						authorization: `Basic ${btoa(`${credentials.username}:${credentials.password}`)}`,
-					},
-					signal: options.signal,
-				});
-				return {
-					ok: response.ok,
-					details: response.ok
-						? 'Repository is accessible.'
-						: 'Repository access failed. Check the repository and IAM read permissions.',
-				};
-			} catch {
+			} catch (err) {
+				if (options.signal?.aborted) {
+					throw new DOMException('The connection test was cancelled.', 'AbortError');
+				}
+				if (err instanceof UnavailableError) return { ok: false, details: err.message };
+				const timedOut = err instanceof DOMException && err.name === 'TimeoutError';
 				return {
 					ok: false,
-					details:
-						'CodeArtifact connection failed. Check AWS authentication, repository access, and project cloud access for WIF.',
+					details: timedOut
+						? 'Package registry authentication timed out.'
+						: 'Package registry authentication failed.',
 				};
 			}
+			if (options.signal?.aborted) {
+				throw new DOMException('The connection test was cancelled.', 'AbortError');
+			}
+			return def.testConnection(parsed.data, probe, { ...options, packageRegistryCredentials });
 		}
 		if (def.testConnection) return def.testConnection(parsed.data, probe, options);
 		if (def.databaseBrowse) {
@@ -1524,14 +1536,16 @@ class ScopedIntegrationsStore {
 					`kind "${head.kind}" — edit and re-save it.`,
 			);
 		}
+		// Outside the render try: credential errors are curated `UnavailableError`s
+		// (or cancellations) whose status and message must reach the caller.
+		const packageRegistryCredentials = def.packageRegistry
+			? await this.resolvePackageCredentials(
+					def.packageRegistry.source(parsed.data),
+					context.resolveFederatedCredentials,
+				)
+			: undefined;
 		let output: ReturnType<typeof def.render>;
 		try {
-			const packageRegistryCredentials = def.packageRegistry
-				? await this.resolvePackageCredentials(
-						def.packageRegistry.source(parsed.data),
-						context.resolveAwsCredentials,
-					)
-				: undefined;
 			output = def.render({
 				...(packageRegistryCredentials ? { packageRegistryCredentials } : {}),
 				config: parsed.data,
@@ -1555,22 +1569,37 @@ class ScopedIntegrationsStore {
 
 	private async resolvePackageCredentials(
 		source: PackageRegistrySource,
-		resolveAwsCredentials?: SessionRenderContext['resolveAwsCredentials'],
+		resolveFederatedCredentials?: SessionRenderContext['resolveFederatedCredentials'],
 		signal?: AbortSignal,
 	): Promise<PackageRegistryCredentials> {
-		if (source.auth.method === 'token') return { username: 'aws', password: source.auth.token };
+		signal?.throwIfAborted();
 		const probe = this.packageRegistryProbe;
-		if (!this.packageRegistryCredentials || !probe) {
+		const provider = this.packageRegistryCredentials;
+		if (!provider || !probe) {
 			throw new UnavailableError(
 				'Package registry authentication is unavailable on this deployment.',
 			);
 		}
-		const awsCredentials =
-			source.auth.method === 'federation' ? await resolveAwsCredentials?.() : undefined;
-		if (source.auth.method === 'federation' && !awsCredentials) {
+		// Only `ambient` auth may trigger a workload-identity exchange.
+		const federatedCredentials =
+			source.auth.method === 'ambient'
+				? await curatedCredentialError(
+						async () => resolveFederatedCredentials?.(),
+						'CodeArtifact could not obtain project AWS cloud access.',
+					)
+				: undefined;
+		if (source.auth.method === 'ambient' && !federatedCredentials) {
 			throw new UnavailableError('CodeArtifact requires project AWS cloud access.');
 		}
-		return this.packageRegistryCredentials.resolve(source, { probe, awsCredentials, signal });
+		return curatedCredentialError(
+			() =>
+				provider.resolve(source, {
+					probe,
+					...(federatedCredentials ? { federatedCredentials } : {}),
+					...(signal ? { signal } : {}),
+				}),
+			'Package registry authentication failed.',
+		);
 	}
 
 	async listHeads(scope: IntegrationScope): Promise<IntegrationRecord[]> {

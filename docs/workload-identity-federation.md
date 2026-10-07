@@ -672,6 +672,11 @@ assert status["State"] == "SUCCEEDED", status.get("StateChangeReason", status["S
 rows = athena.get_query_results(QueryExecutionId=qid)["ResultSet"]["Rows"]
 ```
 
+The same project role can authenticate an
+[AWS CodeArtifact integration](./integrations.md#aws-codeartifact). The hub uses
+the project credentials to mint the CodeArtifact token for uv, so grant the role
+the CodeArtifact read permissions listed there.
+
 ### If the exchange fails
 
 Check the `wif_exchange_error` log field for the STS error code:

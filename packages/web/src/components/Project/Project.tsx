@@ -707,15 +707,17 @@ function useProjectContent() {
 							</LinkButton>
 						)}
 						{canEditProject(project.your_role) && (
-							<Button aria-label="Import notebooks" onPress={importModal.open}>
-								<Upload className="size-4" />
-								<span className="max-sm:hidden">Import notebooks</span>
-							</Button>
+							<>
+								<Button aria-label="Import notebooks" onPress={importModal.open}>
+									<Upload className="size-4" />
+									<span className="max-sm:hidden">Import notebooks</span>
+								</Button>
+								<Button variant="primary" onPress={uploadModal.open}>
+									<Plus className="size-4" />
+									New Notebook
+								</Button>
+							</>
 						)}
-						<Button variant="primary" onPress={uploadModal.open}>
-							<Plus className="size-4" />
-							New Notebook
-						</Button>
 						{canManage ? (
 							<DropdownMenu
 								label="More create options"
@@ -843,18 +845,18 @@ function useProjectContent() {
 								: 'No notebooks are available in this project yet.'
 						}
 						action={
-							<div className="flex flex-wrap justify-center gap-2">
-								<Button variant="default" onPress={uploadModal.open}>
-									<Plus className="size-4" />
-									Create your first notebook
-								</Button>
-								{canEditProject(project.your_role) && (
+							canEditProject(project.your_role) && (
+								<div className="flex flex-wrap justify-center gap-2">
+									<Button variant="default" onPress={uploadModal.open}>
+										<Plus className="size-4" />
+										Create your first notebook
+									</Button>
 									<Button onPress={importModal.open}>
 										<Upload className="size-4" />
 										Import a folder
 									</Button>
-								)}
-							</div>
+								</div>
+							)
 						}
 					/>
 				}

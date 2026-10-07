@@ -58,7 +58,7 @@ function wif(
 	};
 }
 
-function integrations(render: SessionRender | (() => Promise<SessionRender | undefined>)) {
+function integrations(render: SessionRender | ProjectIntegrationsService['resolveForSession']) {
 	const resolveForSession = vi.fn(
 		typeof render === 'function' ? render : async () => render,
 	) as unknown as ProjectIntegrationsService['resolveForSession'];
@@ -215,6 +215,24 @@ describe('resolveIntegrationRender', () => {
 		).rejects.toSatisfy(
 			(err: unknown) => err instanceof UnavailableError && !err.message.includes('pw@db'),
 		);
+	});
+
+	it('passes curated unavailability errors through unchanged', async () => {
+		const curated = new UnavailableError('CodeArtifact requires project AWS cloud access.');
+		const unavailable = integrations(async () => {
+			throw curated;
+		});
+		await expect(
+			resolveIntegrationRender(
+				{ integrations: unavailable.service },
+				{
+					projectId: makeProject().id,
+					workload: { kind: 'job-run', id: createRunId() },
+					principal: { userId: ACTOR, email: 'a@x' },
+					restricted: false,
+				},
+			),
+		).rejects.toBe(curated);
 	});
 });
 
@@ -419,13 +437,29 @@ describe('package registry federation', () => {
 			ProjectIntegrationsService['resolveForSession']
 		>[1];
 		const credentials = await Promise.all([
-			renderContext.resolveAwsCredentials!(),
-			renderContext.resolveAwsCredentials!(),
+			renderContext.resolveFederatedCredentials!(),
+			renderContext.resolveFederatedCredentials!(),
 		]);
 		expect(credentials).toEqual([
 			{ accessKeyId: 'AK', secretAccessKey: 'SK' },
 			{ accessKeyId: 'AK', secretAccessKey: 'SK' },
 		]);
+		expect(exchange).toHaveBeenCalledOnce();
+	});
+
+	it('exchanges once per job when storage env and a registry both need WIF', async () => {
+		const { config, exchange } = wif(undefined, true);
+		const bucket = await createInitializedBucket();
+		const deps = makeTestDeps(bucket);
+		const { service } = integrations(async (_projectId, renderContext) => {
+			await renderContext.resolveFederatedCredentials?.();
+			return { files: [], vars: {}, attachments: [], warnings: [] };
+		});
+		const env = await resolveJobSandboxEnv(
+			{ ...deps, wif: config, integrations: service },
+			context({ project: makeProject() }),
+		);
+		expect(env?.vars?.AWS_ACCESS_KEY_ID).toBe('AK');
 		expect(exchange).toHaveBeenCalledOnce();
 	});
 
@@ -450,7 +484,7 @@ describe('package registry federation', () => {
 					restricted: false,
 				},
 			);
-			expect(resolveForSession.mock.calls[0][1].resolveAwsCredentials).toBeUndefined();
+			expect(resolveForSession.mock.calls[0][1].resolveFederatedCredentials).toBeUndefined();
 			expect(exchange).not.toHaveBeenCalled();
 		},
 	);

@@ -310,7 +310,7 @@ export interface CopyIntegrationOptions {
 export type WorkloadRef = { kind: 'session'; id: SessionId } | { kind: 'job-run'; id: RunId };
 
 export interface SessionRenderContext {
-	resolveAwsCredentials?: () => Promise<TempS3Creds | undefined>;
+	resolveFederatedCredentials?: () => Promise<TempS3Creds | undefined>;
 	workload: WorkloadRef;
 	principal: { userId: UserId; email: string };
 }

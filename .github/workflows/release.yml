@@ -127,15 +127,17 @@ jobs:
         # dnf and rustup fetch from external mirrors; bound the step instead of the whole job.
         timeout-minutes: 10
         shell: bash
+        # manylinux_2_28 ships curl 7.61, which predates --retry-all-errors (7.71).
         run: |
-          dnf install -y python3-pip
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          dnf install -y --setopt=timeout=30 --setopt=retries=3 python3-pip
+          curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 10 --max-time 120 --retry 3 \
+            https://sh.rustup.rs | sh -s -- -y --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      # manylinux_2_28 ships curl 7.61, which predates --retry-all-errors (7.71).
       - name: Install dist
+        timeout-minutes: 5
         shell: bash
         run: |
-          curl --proto '=https' --tlsv1.2 -LsSf --retry 5 --retry-delay 2 \
+          curl --proto '=https' --tlsv1.2 -LsSf --max-time 120 --retry 5 --retry-delay 2 \
             https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
       - name: Build archive
         shell: bash

@@ -9,8 +9,8 @@ import {
 	createGitSource,
 	DomainError,
 	joinUrlPath,
+	ImportId,
 	NotebookId,
-	ImportNotebookInputSchema,
 	NotFoundError,
 	MAX_WORKSPACE_FILE_BYTES,
 	ProjectId,
@@ -25,6 +25,8 @@ import {
 import type { SessionService, WorkspaceFileItem, WorkspaceMutationOptions } from '@marimo-hub/core';
 import {
 	authorizationService,
+	BaseImageField,
+	ComputeProfileField,
 	assertProjectActionOn,
 	assertSessionAuthenticated,
 	SecurityLabelsBodySchema,
@@ -48,6 +50,8 @@ import {
 	NotebookDetailResponseSchema,
 	NotebookIdParam,
 	NotebookMetaResponseSchema,
+	ImportIdParam,
+	ImportNotebookBody,
 	ProjectIdParam,
 	resolvePublicBaseUrl,
 	RuntimeResponseSchema,
@@ -78,12 +82,8 @@ const CreateNotebookBody = z.object({
 	readme: z.string().optional(),
 	deps: z.string().optional(),
 	runtime: RuntimeResponseSchema.optional(),
-	base_image: z
-		.string()
-		.min(1)
-		.optional()
-		.openapi({ example: 'ghcr.io/orgname/marimo-gpu:latest' }),
-	compute_profile: z.string().min(1).optional().openapi({ example: 'large' }),
+	base_image: BaseImageField.optional(),
+	compute_profile: ComputeProfileField.optional(),
 });
 
 const CreateGitNotebookBody = z.object({
@@ -268,15 +268,14 @@ const createNotebook = createRoute({
 	},
 });
 
-const importEnvelope = <T extends z.ZodType>(data: T) =>
-	z.object({ success: z.literal(true), data });
-const ImportParams = ProjectIdParam.extend({ import_id: z.uuid() });
+const ImportStateSchema = z.enum(['preparing', 'publishing', 'complete', 'expired']);
 const prepareImport = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/notebook-imports',
-	operationId: 'notebookImports.prepare',
+	operationId: 'notebooks.imports.prepare',
+	'x-cli-hidden': true,
 	tags: ['Notebooks'],
-	summary: 'Prepare a folder snapshot for notebook import',
+	summary: 'Upload a folder snapshot for notebook import',
 	request: {
 		params: ProjectIdParam,
 		body: {
@@ -286,14 +285,15 @@ const prepareImport = createRoute({
 	},
 	responses: {
 		201: jsonContent(
-			importEnvelope(
-				z.object({
-					id: z.string(),
-					expires_at: z.string(),
-					files: z.array(z.object({ path: z.string(), size: z.number() })),
+			z.object({
+				success: z.literal(true),
+				data: z.object({
+					id: z.string().regex(ImportId.regex),
+					expires_at: z.iso.datetime(),
+					files: z.array(z.object({ path: z.string(), size: z.number().int().nonnegative() })),
 				}),
-			),
-			'Prepared workspace',
+			}),
+			'Prepared folder snapshot',
 		),
 		...commonErrors(),
 		...errorResponses(403, 404, 413),
@@ -302,35 +302,52 @@ const prepareImport = createRoute({
 const publishImport = createRoute({
 	method: 'post',
 	path: '/projects/{pid}/notebook-imports/{import_id}/notebooks',
-	operationId: 'notebookImports.publish',
+	operationId: 'notebooks.imports.publish',
+	'x-cli-hidden': true,
 	tags: ['Notebooks'],
-	summary: 'Import a notebook from a prepared folder',
-	request: { params: ImportParams, body: jsonBody(ImportNotebookInputSchema) },
+	summary: 'Create a notebook from a prepared folder snapshot',
+	description:
+		'Idempotent per entrypoint: a retry with the same body returns the same notebook. A different body for an entrypoint already attempted returns 409 `IMPORT_RESTART_REQUIRED`.',
+	request: { params: ImportIdParam, body: jsonBody(ImportNotebookBody) },
 	responses: {
-		201: jsonContent(importEnvelope(NotebookMetaResponseSchema), 'Notebook imported'),
+		201: jsonContent(
+			z.object({ success: z.literal(true), data: NotebookMetaResponseSchema }),
+			'Notebook imported',
+		),
 		...commonErrors(),
 		...errorResponses(403, 404, 409),
 	},
 });
-const importStatus = createRoute({
+const getImport = createRoute({
 	method: 'get',
-	path: '/projects/{pid}/notebook-imports/{import_id}/notebooks',
-	operationId: 'notebookImports.status',
+	path: '/projects/{pid}/notebook-imports/{import_id}',
+	operationId: 'notebooks.imports.get',
+	'x-cli-hidden': true,
 	tags: ['Notebooks'],
-	summary: 'Reconcile a notebook import outcome',
-	request: { params: ImportParams, query: z.object({ entry_notebook: z.string().min(1) }) },
+	summary: 'Get the outcome of each notebook in a folder import',
+	description:
+		'Lists every entrypoint with an attempt in progress or finished. Entrypoints that were never attempted, or whose attempt stopped and can be retried, are absent.',
+	request: { params: ImportIdParam },
 	responses: {
 		200: jsonContent(
-			importEnvelope(
-				z.object({
-					state: z.enum(['pending', 'preparing', 'publishing', 'complete', 'expired']),
-					notebook: NotebookMetaResponseSchema.optional(),
+			z.object({
+				success: z.literal(true),
+				data: z.object({
+					id: z.string().regex(ImportId.regex),
+					expires_at: z.iso.datetime(),
+					notebooks: z.array(
+						z.object({
+							entry_notebook: z.string(),
+							state: ImportStateSchema,
+							notebook: NotebookMetaResponseSchema.optional(),
+						}),
+					),
 				}),
-			),
-			'Import status',
+			}),
+			'Import outcome',
 		),
 		...commonErrors(),
-		...errorResponses(403, 404, 409),
+		...errorResponses(403, 404),
 	},
 });
 
@@ -1145,6 +1162,8 @@ app.openapi(prepareImport, async (c) => {
 	const { pid } = c.req.valid('param');
 	const user = c.get('user');
 	await assertProjectRole(deps.services.projects, pid, user, 'notebook.write', deps);
+	if (c.req.header('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/zip')
+		throw new BadRequestError('Folder uploads must be sent as application/zip');
 	const data = await deps.services.notebooks.imports.prepare(
 		pid,
 		new Uint8Array(await c.req.arrayBuffer()),
@@ -1159,32 +1178,39 @@ app.openapi(publishImport, async (c) => {
 	const user = c.get('user');
 	await assertProjectRole(deps.services.projects, pid, user, 'notebook.write', deps);
 	const body = c.req.valid('json');
-	const meta = await deps.services.notebooks.imports.publish(pid, import_id, body, user.id, () => ({
-		base_image: checkBaseImage(deps.sandbox.images, body.base_image) ?? undefined,
-		compute_profile: checkComputeProfile(deps.sandbox, body.compute_profile) ?? undefined,
-	}));
+	const meta = await deps.services.notebooks.imports.publish(
+		pid,
+		import_id,
+		{
+			entry_notebook: body.entry_notebook,
+			title: body.title,
+			base_image: body.base_image,
+			compute_profile: body.compute_profile,
+		},
+		user.id,
+		() => ({
+			base_image: checkBaseImage(deps.sandbox.images, body.base_image) ?? undefined,
+			compute_profile: checkComputeProfile(deps.sandbox, body.compute_profile) ?? undefined,
+		}),
+	);
 	return c.json({ success: true, data: toPublicNotebookMeta(meta) }, 201);
 });
 
-app.openapi(importStatus, async (c) => {
+app.openapi(getImport, async (c) => {
 	const deps = c.get('deps');
 	const { pid, import_id } = c.req.valid('param');
 	const user = c.get('user');
 	await assertProjectRole(deps.services.projects, pid, user, 'notebook.write', deps);
-	const result = await deps.services.notebooks.imports.status(
-		pid,
-		import_id,
-		c.req.valid('query').entry_notebook,
-		user.id,
-	);
+	const result = await deps.services.notebooks.imports.get(pid, import_id, user.id);
 	return c.json(
 		{
 			success: true,
 			data: {
-				state: result.state,
-				...('notebook' in result && result.notebook
-					? { notebook: toPublicNotebookMeta(result.notebook) }
-					: {}),
+				...result,
+				notebooks: result.notebooks.map((item) => ({
+					...item,
+					...(item.notebook ? { notebook: toPublicNotebookMeta(item.notebook) } : {}),
+				})),
 			},
 		},
 		200,

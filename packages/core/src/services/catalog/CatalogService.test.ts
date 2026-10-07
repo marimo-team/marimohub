@@ -9,7 +9,12 @@ import {
 	setupTestEnv,
 	uid,
 } from '../../testing';
-import { ConflictError, NotInitializedError, PreconditionFailedError } from '../../errors';
+import {
+	ConflictError,
+	NotFoundError,
+	NotInitializedError,
+	PreconditionFailedError,
+} from '../../errors';
 import { createNotebookId, createSnapshotId } from '../../ids';
 import { paths } from '../../paths';
 import { noopMetrics } from '../../ports/metrics';
@@ -719,6 +724,54 @@ describe('CatalogService', () => {
 			expect(snapshot.projects[0].notebooks).toEqual(before.projects[0].notebooks);
 			expect(snapshot.projects[0].updated_at).toBe(before.projects[0].updated_at);
 			expect(snapshot.projects[0].notebook_count).toBe(7);
+		});
+	});
+
+	describe('appendNotebookEntry ifAbsent', () => {
+		it('returns the current snapshot without committing when the entry exists', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'D' }, ACTOR);
+			const notebook = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'N', description: 'D', code: 'print(1)' },
+				ACTOR,
+			);
+			const before = await env.catalog.getCurrentSnapshot();
+			const entry = before.projects[0].notebooks[0];
+
+			const snapshot = await env.catalog.appendNotebookEntry(
+				'test.append',
+				ACTOR,
+				project.id,
+				entry,
+				{
+					ifAbsent: true,
+				},
+			);
+
+			expect(snapshot.snapshot_id).toBe(before.snapshot_id);
+			expect((await env.catalog.getCurrentSnapshot()).snapshot_id).toBe(before.snapshot_id);
+			expect(snapshot.projects[0].notebooks.map((n) => n.id)).toEqual([notebook.id]);
+		});
+
+		it('rejects a missing project instead of skipping it', async () => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'D' }, ACTOR);
+			await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'N', description: 'D', code: 'print(1)' },
+				ACTOR,
+			);
+			const entry = (await env.catalog.getCurrentSnapshot()).projects[0].notebooks[0];
+			await expect(
+				env.catalog.appendNotebookEntry(
+					'test.append',
+					ACTOR,
+					'proj-0000000000000000' as typeof project.id,
+					entry,
+					{ ifAbsent: true },
+				),
+			).rejects.toBeInstanceOf(NotFoundError);
 		});
 	});
 
