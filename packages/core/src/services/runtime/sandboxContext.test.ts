@@ -98,19 +98,33 @@ describe('writeSandboxContext', () => {
 		expect(await readFile(path, 'utf8')).toBe('previous context');
 	});
 
-	it.each(['command', 'transport'])('reports a %s failure', async (failure) => {
+	it.each([
+		['permission denied', 'permission denied'],
+		['/bin/sh: python3: not found\n', '/bin/sh: python3: not found'],
+		[' \n\t', ''],
+		[
+			`${'x'.repeat(3000)}\nPermissionError: context is read-only\n`,
+			`${'x'.repeat(1962)}\nPermissionError: context is read-only`,
+		],
+	])('reports bounded command diagnostics for %j', async (stderr, detail) => {
 		const { instance } = makeFakeSandbox();
-		vi.spyOn(instance, 'exec').mockImplementation(async () => {
-			if (failure === 'transport') throw new Error('connection lost');
-			return {
-				success: false,
-				stdout: '',
-				stderr: 'permission denied',
-				error: { code: 'COMMAND_FAILED' },
-			};
+		vi.spyOn(instance, 'exec').mockResolvedValue({
+			success: false,
+			stdout: '',
+			stderr,
+			error: { code: 'COMMAND_FAILED' },
 		});
-		await expect(writeSandboxContext(instance, createSandboxId(), context)).rejects.toThrow(
-			failure === 'transport' ? 'connection lost' : 'Failed to publish sandbox context',
-		);
+		await expect(writeSandboxContext(instance, createSandboxId(), context)).rejects.toMatchObject({
+			message: detail
+				? `Failed to publish sandbox context: ${detail}`
+				: 'Failed to publish sandbox context',
+		});
+	});
+
+	it('preserves transport failures', async () => {
+		const { instance } = makeFakeSandbox();
+		const error = new Error('connection lost');
+		vi.spyOn(instance, 'exec').mockRejectedValue(error);
+		await expect(writeSandboxContext(instance, createSandboxId(), context)).rejects.toBe(error);
 	});
 });

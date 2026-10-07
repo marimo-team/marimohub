@@ -524,7 +524,7 @@ describe('session warm sandbox assignment', () => {
 	});
 
 	it.each(['edit', 'app'])(
-		'reclaims a warm %s sandbox if context publication fails',
+		'keeps a warm %s sandbox running if context publication fails',
 		async (mode) => {
 			const w = await setup();
 			await w.warmPool.sweep();
@@ -540,13 +540,21 @@ describe('session warm sandbox assignment', () => {
 				}
 				return exec(...args);
 			});
-			await expectError(await w.api.request('POST', w.path, { mode }), 503, 'SERVICE_UNAVAILABLE');
+			await expectOk(await w.api.request('POST', w.path, { mode }));
 			expect(w.fake.calls.startProcess).toHaveLength(1);
-			expect(w.fake.calls.destroy).toBe(1);
-			expect((await w.warmPool.store.read()).pools[0].members).toEqual([]);
+			expect(w.fake.calls.destroy).toBe(0);
 			const [session] = await w.services.sessions.listSessions(w.notebook.id);
-			expect(session).toMatchObject({ status: 'failed', sandbox_reclaimed_at: expect.any(String) });
-			expect(session.sandbox_url).toBeUndefined();
+			expect((await w.warmPool.store.read()).pools[0].members).toEqual([
+				expect.objectContaining({
+					state: 'claimed',
+					assigned: true,
+					sandbox_id: session.sandbox_id,
+					destination: expect.objectContaining({ session_id: session.session_id }),
+				}),
+			]);
+			expect(session.status).toBe('running');
+			expect(session.sandbox_reclaimed_at).toBeUndefined();
+			expect(session.sandbox_url).toBeTruthy();
 		},
 	);
 

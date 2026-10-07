@@ -258,61 +258,78 @@ describe('Session routes', () => {
 		expect(calls.exec.filter(isSandboxContextCommand)).toEqual(contextWrites);
 	});
 
-	it.each(['write', 'command-failure', 'command-throw'] as const)(
-		'reclaims the sandbox and allows retry after context %s fails',
+	it('reclaims the sandbox and allows retry after the startup file batch fails', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const write = instance.writeFiles;
+		const writeSpy = vi.spyOn(instance, 'writeFiles').mockImplementation(async (files) => {
+			if (files.some((file) => file.path.startsWith('/tmp/marimohub-context/'))) {
+				throw new Error('context write failed');
+			}
+			await write(files);
+		});
+		const request = exclusiveApi(ACTOR, fakeComputeFrom(instance), {
+			sandbox: sandboxConfig({ exposure: new ProxyExposure('context-failure') }),
+		});
+		await expectError(await request('POST', sessionsPath()), 503, 'SERVICE_UNAVAILABLE');
+		expect(calls.destroy).toBeGreaterThan(0);
+		const sessions = await createServices(bucket).sessions.listSessions(nid);
+		expect(sessions).toHaveLength(1);
+		expect(sessions[0]).toMatchObject({
+			status: 'failed',
+			sandbox_reclaimed_at: expect.any(String),
+		});
+		expect(sessions[0].sandbox_url).toBeUndefined();
+		writeSpy.mockRestore();
+		const retried = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+		expect(retried.status).toBe('running');
+		expect(retried.session_id).not.toBe(sessions[0].session_id);
+	});
+
+	it.each(['command-failure', 'command-throw'] as const)(
+		'keeps the session running and logs a warning after context %s',
 		async (stage) => {
 			const { instance, calls } = makeFakeSandbox();
-			const write = instance.writeFiles;
-			const writeSpy = vi.spyOn(instance, 'writeFiles').mockImplementation(async (files) => {
-				if (
-					stage === 'write' &&
-					files.some((file) => file.path.startsWith('/tmp/marimohub-context/'))
-				) {
-					throw new Error('context write failed');
-				}
-				await write(files);
-			});
 			const exec = instance.exec;
 			const execSpy = vi.spyOn(instance, 'exec').mockImplementation(async (...args) => {
 				if (isSandboxContextCommand(args[0])) {
 					if (stage === 'command-throw') throw new Error('transport unavailable');
-					if (stage === 'command-failure')
-						return {
-							success: false,
-							stdout: '',
-							stderr: 'permission denied',
-							error: { code: 'COMMAND_FAILED' },
-						};
+					return {
+						success: false,
+						stdout: '',
+						stderr: 'permission denied',
+						error: { code: 'COMMAND_FAILED' },
+					};
 				}
 				return exec(...args);
 			});
-			const request = exclusiveApi(
-				ACTOR,
-				fakeComputeFrom(instance),
-				stage === 'write'
-					? {
-							sandbox: sandboxConfig({ exposure: new ProxyExposure('context-failure') }),
-						}
-					: {},
-			);
-			await expectError(
-				await request('POST', sessionsPath()),
-				stage === 'command-throw' ? 500 : 503,
-				stage === 'command-throw' ? 'INTERNAL_ERROR' : 'SERVICE_UNAVAILABLE',
-			);
-			expect(calls.destroy).toBeGreaterThan(0);
-			const sessions = await createServices(bucket).sessions.listSessions(nid);
-			expect(sessions).toHaveLength(1);
-			expect(sessions[0]).toMatchObject({
-				status: 'failed',
-				sandbox_reclaimed_at: expect.any(String),
-			});
-			expect(sessions[0].sandbox_url).toBeUndefined();
-			writeSpy.mockRestore();
-			execSpy.mockRestore();
-			const retried = await expectOk<ApiSession>(await request('POST', sessionsPath()));
-			expect(retried.status).toBe('running');
-			expect(retried.session_id).not.toBe(sessions[0].session_id);
+			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+			try {
+				const request = exclusiveApi(ACTOR, fakeComputeFrom(instance));
+				const response = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				expect(response.status).toBe('running');
+				const stored = await createServices(bucket).sessions.getSession(pid, response.session_id);
+				expect(stored.sandbox_reclaimed_at).toBeUndefined();
+				expect(stored.sandbox_url).toBeTruthy();
+				expect(calls.destroy).toBe(0);
+				const line = log.mock.calls.find((call) =>
+					String(call[0]).includes('sandbox_context_unavailable'),
+				)?.[0];
+				expect(JSON.parse(String(line))).toMatchObject({
+					level: 'warn',
+					project_id: pid,
+					session_id: response.session_id,
+					sandbox_id: stored.sandbox_id,
+					message: expect.stringContaining(
+						stage === 'command-throw' ? 'transport unavailable' : 'permission denied',
+					),
+				});
+				const reused = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				expect(reused.session_id).toBe(response.session_id);
+				expect(reused.reused).toBe(true);
+			} finally {
+				log.mockRestore();
+				execSpy.mockRestore();
+			}
 		},
 	);
 

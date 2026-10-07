@@ -104,9 +104,7 @@ describe('SandboxProvisioner', () => {
 			contextFile: { path: contextFile },
 			sessionEnv: { vars: { MARIMOHUB_CONTEXT_FILE: '/wrong.json' } },
 		});
-		expect(calls.setEnvVars).toContainEqual({
-			MARIMOHUB_CONTEXT_FILE: `/sandbox-root${contextFile}`,
-		});
+		expect(calls.setEnvVars).toEqual([{ MARIMOHUB_CONTEXT_FILE: `/sandbox-root${contextFile}` }]);
 		expect(calls.sequence.indexOf('setEnvVars')).toBeLessThan(
 			calls.sequence.indexOf('startProcess'),
 		);

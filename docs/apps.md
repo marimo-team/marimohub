@@ -220,11 +220,12 @@ The JSON file contains:
 | `persistence_mode` | `source`: notebook and dependencies only. `workspace`: also saves workspace files. `none`: session edits do not persist.           |
 | `session_mode`     | `edit` or `app`.                                                                                                                   |
 
-Local editors report `MARIMOHUB_PERSIST_WORKSPACE`. Apps, temporary editors, viewer sandboxes, previews, and Git-synced notebooks report `none`.
+For local editors whose edits persist, `persistence_mode` is `source` or `workspace`, as configured by the deployment's `MARIMOHUB_PERSIST_WORKSPACE` setting.
+Apps, temporary editors, viewer sandboxes, previews, and Git-synced notebooks report `none`.
 Studio can use this value to warn before creating view files that will not persist.
 
 Proxy context joins the startup file batch. Subdomain context uses one atomic publication command after URL resolution.
-The file is complete before the session reaches `running`. If it is absent during startup, retry later without blocking the kernel.
+If subdomain publication fails, the session still starts and the hub logs a warning. Consumers must tolerate a missing file, including during startup.
 Scheduled jobs omit the file. Consumers must tolerate an absent variable on older deployments and ignore unknown fields.
 
 After the file becomes available:

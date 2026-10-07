@@ -55,5 +55,10 @@ export async function writeSandboxContext(
 	const result = await sandbox.exec(
 		`python3 -c ${shellQuote(WRITE_CONTEXT)} ${shellQuote(utf8ToBase64Url(path))} ${shellQuote(utf8ToBase64Url(file.content))}`,
 	);
-	if (!result.success) throw new UnavailableError('Failed to publish sandbox context');
+	if (!result.success) {
+		const detail = result.stderr.trim().slice(-2000);
+		throw new UnavailableError(
+			detail ? `Failed to publish sandbox context: ${detail}` : 'Failed to publish sandbox context',
+		);
+	}
 }

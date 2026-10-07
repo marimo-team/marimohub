@@ -2039,8 +2039,21 @@ export async function startNotebookSession(input: {
 				},
 			})
 			.step('sandbox_context', async () => {
-				if (!preparedContextFile)
+				if (preparedContextFile) return;
+				try {
 					await writeSandboxContext(provisionedSandbox, sandboxId, contextFor(clientUrl));
+				} catch (error) {
+					// Optional metadata must not reclaim an already-running kernel.
+					logEvent({
+						level: 'warn',
+						event: 'sandbox_context_unavailable',
+						project_id: pid,
+						session_id: session!.session_id,
+						sandbox_id: sandboxId,
+						...errorMetadata(error),
+						message: error instanceof Error ? error.message.slice(-2200) : undefined,
+					});
+				}
 			})
 			.step('mark_running', async () => {
 				if (isPastAuthorizationDeadline(session!, Date.now())) {
