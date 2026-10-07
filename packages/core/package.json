@@ -37,6 +37,7 @@
 		"./ports/metrics": "./src/ports/metrics.ts",
 		"./ports/notifier": "./src/ports/notifier.ts",
 		"./ports/object-browser": "./src/ports/objectBrowser.ts",
+		"./ports/package-registry": "./src/ports/packageRegistry.ts",
 		"./ports/project-alerts": "./src/ports/projectAlerts.ts",
 		"./ports/resource-constraints": "./src/ports/resourceConstraints.ts",
 		"./ports/sandbox": "./src/ports/sandbox.ts",

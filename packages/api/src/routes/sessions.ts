@@ -1896,6 +1896,7 @@ export async function startNotebookSession(input: {
 					const resolveIntegrationEnv = () =>
 						resolveIntegrationRender(deps, {
 							projectId: pid,
+							project,
 							workload: { kind: 'session', id: session!.session_id },
 							principal: { userId: user.id, email: user.email },
 							restricted: restrictedViewerCredentials,

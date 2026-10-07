@@ -12,6 +12,7 @@ export * from './integrations';
 export * from './notifier';
 export * from './notebookBridge';
 export * from './objectBrowser';
+export * from './packageRegistry';
 export * from './projectAlerts';
 export * from './sourceControl';
 export * from './adapterShape';

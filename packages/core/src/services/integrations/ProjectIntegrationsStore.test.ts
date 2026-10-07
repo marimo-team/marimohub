@@ -2077,6 +2077,7 @@ describe('ProjectIntegrationsStore', () => {
 		const kinds = store.listKinds();
 		expect(kinds.map((k) => k.kind).sort()).toEqual([
 			'athena',
+			'aws_codeartifact',
 			'azure_blob',
 			'bigquery',
 			'clickhouse',

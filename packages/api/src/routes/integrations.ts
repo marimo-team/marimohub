@@ -1027,7 +1027,11 @@ async function objectTestContext(
 	makeContext: () => Promise<ObjectBrowseContext>,
 ): Promise<ObjectBrowseContext | undefined> {
 	const kind = request.source === 'draft' ? request.kind : (await getStored(request.id)).kind;
-	if (!kinds.find((item) => item.kind === kind)?.browse_surfaces.includes('objects')) {
+	const descriptor = kinds.find((item) => item.kind === kind);
+	if (
+		descriptor?.category !== 'package_registry' &&
+		!descriptor?.browse_surfaces.includes('objects')
+	) {
 		return undefined;
 	}
 	return makeContext();

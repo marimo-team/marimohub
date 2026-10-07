@@ -46,6 +46,42 @@ paths:
       responses:
         '204':
           description: Accepted.
+  /kinds/aws_codeartifact/config:
+    summary: AWS CodeArtifact
+    description: Install private Python packages with uv. AWS authentication creates
+      a token for each new session or job; restart after expiry.
+    x-kind-schema-version: 1
+    x-category: package_registry
+    x-brand-color: '#FF9900'
+    x-secret-paths:
+      - auth.access_key_id
+      - auth.secret_access_key
+      - auth.session_token
+      - auth.token
+    x-supports-test: true
+    x-requirements: []
+    get:
+      operationId: read_aws_codeartifact_config
+      summary: Stored aws_codeartifact config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/aws_codeartifact_stored'
+    put:
+      operationId: write_aws_codeartifact_config
+      summary: Input aws_codeartifact config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/aws_codeartifact'
+      responses:
+        '204':
+          description: Accepted.
   /kinds/azure_blob/config:
     summary: Azure Blob Storage
     description: Azure Blob or ADLS Gen2 containers for adlfs, polars, and duckdb.
@@ -1305,6 +1341,183 @@ components:
         - database
         - workgroup
         - catalog
+        - auth
+      additionalProperties: false
+    aws_codeartifact:
+      type: object
+      properties:
+        domain:
+          type: string
+          pattern: ^[a-z][a-z0-9-]{0,48}[a-z0-9]$
+        domain_owner:
+          type: string
+          pattern: ^\d{12}$
+          description: AWS account ID that owns the domain
+        repository:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{1,99}$
+        region:
+          default: us-east-1
+          type: string
+          pattern: ^[a-z]{2}(?:-[a-z]+)+-\d$
+        default_index:
+          default: false
+          description: Replace public PyPI with this repository
+          type: boolean
+        duration_seconds:
+          default: 43200
+          description: Token lifetime in seconds. Restart the session after expiry.
+          type: integer
+          minimum: 900
+          maximum: 43200
+        auth:
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: federation
+              required:
+                - method
+              additionalProperties: false
+              description: Project AWS workload identity
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: static
+                access_key_id:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                  writeOnly: true
+                secret_access_key:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                  writeOnly: true
+                session_token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                  writeOnly: true
+              required:
+                - method
+                - access_key_id
+                - secret_access_key
+              additionalProperties: false
+              description: AWS credentials
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: token
+                token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                  writeOnly: true
+              required:
+                - method
+                - token
+              additionalProperties: false
+              description: Existing CodeArtifact token
+          discriminator:
+            propertyName: method
+      required:
+        - domain
+        - domain_owner
+        - repository
+        - auth
+      additionalProperties: false
+    aws_codeartifact_stored:
+      type: object
+      properties:
+        domain:
+          type: string
+          pattern: ^[a-z][a-z0-9-]{0,48}[a-z0-9]$
+        domain_owner:
+          type: string
+          pattern: ^\d{12}$
+          description: AWS account ID that owns the domain
+        repository:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{1,99}$
+        region:
+          default: us-east-1
+          type: string
+          pattern: ^[a-z]{2}(?:-[a-z]+)+-\d$
+        default_index:
+          default: false
+          description: Replace public PyPI with this repository
+          type: boolean
+        duration_seconds:
+          default: 43200
+          description: Token lifetime in seconds. Restart the session after expiry.
+          type: integer
+          minimum: 900
+          maximum: 43200
+        auth:
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: federation
+              required:
+                - method
+              additionalProperties: false
+              description: Project AWS workload identity
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: static
+                access_key_id:
+                  oneOf:
+                    - $ref: '#/components/schemas/ManagedStoredSecret'
+                    - $ref: '#/components/schemas/ReferenceStoredSecret'
+                  x-marimohub-secret: true
+                secret_access_key:
+                  oneOf:
+                    - $ref: '#/components/schemas/ManagedStoredSecret'
+                    - $ref: '#/components/schemas/ReferenceStoredSecret'
+                  x-marimohub-secret: true
+                session_token:
+                  oneOf:
+                    - $ref: '#/components/schemas/ManagedStoredSecret'
+                    - $ref: '#/components/schemas/ReferenceStoredSecret'
+                  x-marimohub-secret: true
+              required:
+                - method
+                - access_key_id
+                - secret_access_key
+              additionalProperties: false
+              description: AWS credentials
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: token
+                token:
+                  oneOf:
+                    - $ref: '#/components/schemas/ManagedStoredSecret'
+                    - $ref: '#/components/schemas/ReferenceStoredSecret'
+                  x-marimohub-secret: true
+              required:
+                - method
+                - token
+              additionalProperties: false
+              description: Existing CodeArtifact token
+          discriminator:
+            propertyName: method
+      required:
+        - domain
+        - domain_owner
+        - repository
+        - region
+        - default_index
+        - duration_seconds
         - auth
       additionalProperties: false
     azure_blob:

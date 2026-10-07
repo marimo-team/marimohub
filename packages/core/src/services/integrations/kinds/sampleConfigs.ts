@@ -127,6 +127,13 @@ export const SAMPLE_CONFIGS: Record<string, unknown> = {
 	},
 	wandb: { api_key: 'wandb-key', entity: 'marimo', project: 'hub' },
 	huggingface: { token: 'hf-token' },
+	aws_codeartifact: {
+		domain: 'company',
+		domain_owner: '123456789012',
+		repository: 'python',
+		region: 'us-east-1',
+		auth: { method: 'token', token: 'codeartifact-token' },
+	},
 	custom_env: {
 		vars: { MY_FLAG: 'on' },
 		secrets: [{ name: 'MY_TOKEN', value: 'tok' }],

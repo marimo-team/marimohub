@@ -3858,7 +3858,7 @@ export interface components {
 			title: string;
 			description: string;
 			/** @enum {string} */
-			category: 'database' | 'catalog' | 'engine' | 'storage' | 'other';
+			category: 'database' | 'catalog' | 'engine' | 'storage' | 'package_registry' | 'other';
 			brand: {
 				/** @example postgresql */
 				icon?: string;

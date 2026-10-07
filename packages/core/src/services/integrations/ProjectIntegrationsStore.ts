@@ -1,3 +1,8 @@
+import type {
+	PackageRegistryCredentialProvider,
+	PackageRegistryCredentials,
+	PackageRegistrySource,
+} from '../../ports/packageRegistry';
 import { all } from 'better-all';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
@@ -241,6 +246,9 @@ function decodeVersionCursor(cursor: string | undefined): number | undefined {
 }
 
 export interface IntegrationsStoreOptions {
+	packageRegistryCredentials?: PackageRegistryCredentialProvider;
+	/** Required with the credential provider; token acquisition shares this probe across tests and startup. */
+	packageRegistryProbe?: IntegrationProbe;
 	bucket: Bucket;
 	registry: IntegrationRegistry;
 	/** Shared managed-secret codec; absence disables inline secret values. */
@@ -295,6 +303,8 @@ const sharedDatabaseTestBudget: SlidingWindowBudget<'test'> = createSlidingWindo
  * consumers use the tier facades below, which pin the scope.
  */
 class ScopedIntegrationsStore {
+	private readonly packageRegistryCredentials?: PackageRegistryCredentialProvider;
+	private readonly packageRegistryProbe?: IntegrationProbe;
 	private readonly bucket: Bucket;
 	private readonly registry: IntegrationRegistry;
 	private readonly codec?: ManagedSecretCodec;
@@ -313,6 +323,8 @@ class ScopedIntegrationsStore {
 	private readonly databaseTestBudget: SlidingWindowBudget<'test'>;
 
 	constructor(options: IntegrationsStoreOptions) {
+		this.packageRegistryCredentials = options.packageRegistryCredentials;
+		this.packageRegistryProbe = options.packageRegistryProbe;
 		this.bucket = options.bucket;
 		this.registry = options.registry;
 		this.codec = options.codec;
@@ -361,6 +373,7 @@ class ScopedIntegrationsStore {
 			const supportsTest =
 				descriptor.supports_test &&
 				(def.testConnection !== undefined ||
+					def.packageRegistry !== undefined ||
 					(databaseProvider !== undefined &&
 						this.databaseTesters[databaseProvider]?.provider === databaseProvider) ||
 					(objectProvider !== undefined &&
@@ -834,7 +847,7 @@ class ScopedIntegrationsStore {
 				});
 			}
 		}
-		if (!def.testConnection && !def.databaseBrowse && !def.objectBrowse) {
+		if (!def.testConnection && !def.databaseBrowse && !def.objectBrowse && !def.packageRegistry) {
 			throw new ValidationError(`Integration kind "${def.kind}" does not support testing.`);
 		}
 		const probe = this.probe;
@@ -847,6 +860,35 @@ class ScopedIntegrationsStore {
 			throw new ValidationError(
 				`Stored config no longer matches kind "${def.kind}" — edit and re-save it.`,
 			);
+		}
+		if (def.packageRegistry) {
+			try {
+				options.signal?.throwIfAborted();
+				const credentials = await this.resolvePackageCredentials(
+					def.packageRegistry.source(parsed.data),
+					async () => objectContext?.federation?.credentials,
+					options.signal,
+				);
+				options.signal?.throwIfAborted();
+				const response = await probe.fetch(def.packageRegistry.indexUrl(parsed.data), {
+					headers: {
+						authorization: `Basic ${btoa(`${credentials.username}:${credentials.password}`)}`,
+					},
+					signal: options.signal,
+				});
+				return {
+					ok: response.ok,
+					details: response.ok
+						? 'Repository is accessible.'
+						: 'Repository access failed. Check the repository and IAM read permissions.',
+				};
+			} catch {
+				return {
+					ok: false,
+					details:
+						'CodeArtifact connection failed. Check AWS authentication, repository access, and project cloud access for WIF.',
+				};
+			}
 		}
 		if (def.testConnection) return def.testConnection(parsed.data, probe, options);
 		if (def.databaseBrowse) {
@@ -1484,7 +1526,14 @@ class ScopedIntegrationsStore {
 		}
 		let output: ReturnType<typeof def.render>;
 		try {
+			const packageRegistryCredentials = def.packageRegistry
+				? await this.resolvePackageCredentials(
+						def.packageRegistry.source(parsed.data),
+						context.resolveAwsCredentials,
+					)
+				: undefined;
 			output = def.render({
+				...(packageRegistryCredentials ? { packageRegistryCredentials } : {}),
 				config: parsed.data,
 				instanceName: head.name,
 				projectId: renderProjectId,
@@ -1502,6 +1551,26 @@ class ScopedIntegrationsStore {
 			requirements: def.resolveRequirements?.(parsed.data) ?? def.requirements,
 			output,
 		};
+	}
+
+	private async resolvePackageCredentials(
+		source: PackageRegistrySource,
+		resolveAwsCredentials?: SessionRenderContext['resolveAwsCredentials'],
+		signal?: AbortSignal,
+	): Promise<PackageRegistryCredentials> {
+		if (source.auth.method === 'token') return { username: 'aws', password: source.auth.token };
+		const probe = this.packageRegistryProbe;
+		if (!this.packageRegistryCredentials || !probe) {
+			throw new UnavailableError(
+				'Package registry authentication is unavailable on this deployment.',
+			);
+		}
+		const awsCredentials =
+			source.auth.method === 'federation' ? await resolveAwsCredentials?.() : undefined;
+		if (source.auth.method === 'federation' && !awsCredentials) {
+			throw new UnavailableError('CodeArtifact requires project AWS cloud access.');
+		}
+		return this.packageRegistryCredentials.resolve(source, { probe, awsCredentials, signal });
 	}
 
 	async listHeads(scope: IntegrationScope): Promise<IntegrationRecord[]> {

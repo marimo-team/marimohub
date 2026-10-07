@@ -1,4 +1,5 @@
 import {
+	exchangeFederatedStorageCredentials,
 	exchangeFederatedStorageEnv,
 	projectSessionEnv,
 	UnavailableError,
@@ -65,6 +66,7 @@ export async function resolveFederatedVars(
 }
 
 export interface IntegrationRenderOptions {
+	project?: Project;
 	projectId: ProjectId;
 	workload: WorkloadRef;
 	principal: { userId: UserId; email: string };
@@ -79,14 +81,28 @@ export interface IntegrationRenderOptions {
  * partial config. Only curated validation errors are safe to return to a caller.
  */
 export async function resolveIntegrationRender(
-	deps: Pick<ApiDeps, 'integrations'>,
+	deps: Pick<ApiDeps, 'integrations'> & Partial<Pick<ApiDeps, 'wif'>>,
 	options: IntegrationRenderOptions,
 ): Promise<SessionRender | undefined> {
 	if (!(deps.integrations && !options.restricted)) return;
 	try {
+		const wif = options.project ? federationFor(options.project, deps.wif) : undefined;
+		let awsCredentials: ReturnType<typeof exchangeFederatedStorageCredentials> | undefined;
 		const render = await deps.integrations.resolveForSession(options.projectId, {
 			workload: options.workload,
 			principal: options.principal,
+			...(wif
+				? {
+						resolveAwsCredentials: () =>
+							(awsCredentials ??= exchangeFederatedStorageCredentials(
+								wif.issuer,
+								wif.issuerUrl,
+								wif.target,
+								options.projectId,
+								options.workload,
+							)),
+					}
+				: {}),
 		});
 		if (render) options.onRendered?.(render);
 		return render;
@@ -127,6 +143,7 @@ export async function resolveJobSandboxEnv(
 		}),
 		resolveIntegrationRender(deps, {
 			projectId: project.id,
+			project,
 			workload: { kind: 'job-run', id: run.run_id },
 			principal: { userId, email: identity?.email ?? '' },
 			restricted: false,

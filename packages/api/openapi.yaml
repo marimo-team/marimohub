@@ -3942,6 +3942,7 @@ components:
             - catalog
             - engine
             - storage
+            - package_registry
             - other
         brand:
           type: object

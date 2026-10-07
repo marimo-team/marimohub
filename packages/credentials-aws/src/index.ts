@@ -197,3 +197,5 @@ export class AwsStsWifBroker implements CredentialBroker {
 		};
 	}
 }
+
+export { AwsCodeArtifactCredentials } from './codeArtifact';

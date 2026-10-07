@@ -1013,6 +1013,46 @@ project can have one active Hugging Face integration.
 
 <!--@include: ./partials/integrations/huggingface.md-->
 
+## Package registries
+
+### AWS CodeArtifact
+
+Add **AWS CodeArtifact** under **Package registries** in project or organization integrations.
+Enter the domain, owning AWS account ID, repository, and region. The integration name becomes the uv index name.
+Credentials are available before dependency installation. No AWS CLI, startup script, or keyring is required.
+
+Choose an authentication method:
+
+| Method                        | Requirements                                                                                                |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Project AWS workload identity | Project WIF enabled and an AWS WIF broker. Inherited organization integrations use each project's identity. |
+| AWS credentials               | Access key ID, secret access key, and optional session token. AWS keys stay outside the sandbox.            |
+| Existing CodeArtifact token   | A valid token. The hub does not renew it.                                                                   |
+
+Secret fields accept encrypted values or external references.
+AWS token acquisition requires the Node deployment's AWS credential adapter. Existing tokens work without it.
+**Test connection** checks token acquisition and repository access. For WIF, test from a project with AWS cloud access enabled.
+
+AWS authentication creates a token for each new session or job, with a lifetime of 900–43200 seconds (default: 12 hours).
+Running sessions do not refresh tokens. After expiry, restart the session before installing packages.
+Temporary AWS credentials must remain valid for new token requests.
+
+The AWS identity needs `codeartifact:GetAuthorizationToken`, `sts:GetServiceBearerToken`, and `codeartifact:ReadFromRepository`.
+Cross-account access also requires domain and repository resource policies.
+See [AWS token authentication](https://docs.aws.amazon.com/codeartifact/latest/ug/tokens-authentication.html).
+
+CodeArtifact is an additional index by default, with PyPI as the fallback.
+Enable **Default index** to replace PyPI. For public packages, the repository then needs a PyPI upstream or equivalent source.
+Only one integration can supply the default index. Additional indexes use alphabetical integration-name order across both scopes.
+Conflicting custom `UV_INDEX` or `UV_DEFAULT_INDEX` values stop session creation.
+
+Credentials use `UV_INDEX_<NAME>_USERNAME` and `UV_INDEX_<NAME>_PASSWORD`. For example, `private-registry` becomes `PRIVATE_REGISTRY`.
+Restricted viewers receive no integration credentials.
+For `tool.uv.sources` pins, also declare the named index in `pyproject.toml`: uv cannot resolve pins from environment-only definitions.
+See [uv package indexes](https://docs.astral.sh/uv/concepts/indexes/).
+
+<!--@include: ./partials/integrations/aws_codeartifact.md-->
+
 ## Environment variables
 
 Adds the exact environment variables that you configure. It supports plain
