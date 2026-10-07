@@ -53,12 +53,17 @@ import {
 	shellQuote,
 	ShellEnvironment,
 	privateEnvironmentWriteCommand,
-	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import { Millis } from '@marimo-hub/core/duration';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import type { Timings } from '@marimo-hub/core/timing';
 import { createK8sClient } from './client';
+import {
+	batchFileWrites,
+	encodeFileWriteBatch,
+	WRITE_BATCH_COMMAND,
+	WRITE_BATCH_CONCURRENCY,
+} from './fileWrites';
 import { validatePodTemplate } from './podTemplate';
 import { MANAGED_BY_VALUE, resolveIngressTlsMode, validateIngressHostnameTemplate } from './shared';
 import type {
@@ -264,6 +269,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	private readonly surfacePorts: readonly number[];
 	private readonly subdomainExposure: boolean;
 	private resolved = false;
+	private ensuring?: Promise<void>;
 	private execCount = 0;
 	private lastEnsureTimings?: Timings;
 	/** Latest Pod snapshot from the boot poll (uid + condition timestamps). */
@@ -318,7 +324,17 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	 * comes from deploy-time config (`hostname`), so it is known on first use.
 	 */
 	private async ensure(): Promise<void> {
+		if (this.ensuring) return this.ensuring;
 		if (this.resolved) return;
+		this.ensuring = this.ensurePod();
+		try {
+			await this.ensuring;
+		} finally {
+			this.ensuring = undefined;
+		}
+	}
+
+	private async ensurePod(): Promise<void> {
 		this.environment.invalidate();
 		const options: EnsureSandboxOptions = {
 			podTemplate: this.config.podTemplate,
@@ -564,16 +580,31 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	async writeFiles(files: readonly SandboxFileWrite[]): Promise<void> {
 		if (files.length === 0) return;
 		await this.ensure();
-		// Pod exec has no multi-file write, so loop — but each exec inlines its own
-		// mkdir and streams content over stdin, so bytes are never interpolated.
-		await mapWithConcurrency(files, WRITE_CONCURRENCY, async (f) => {
-			const dir = f.path.slice(0, f.path.lastIndexOf('/')) || '/';
-			const res = await this.execInPod(
-				`mkdir -p ${shellQuote(dir)} && cat > ${shellQuote(f.path)}`,
-				{ stdin: f.content },
-			);
-			if (res.exitCode !== 0) throw new Error(`writeFile ${f.path} failed: ${res.stderr}`);
+		let failure: { error: unknown } | undefined;
+		await mapWithConcurrency(batchFileWrites(files), WRITE_BATCH_CONCURRENCY, async (batch) => {
+			if (failure) return;
+			try {
+				const single = batch.length === 1;
+				const file = batch[0];
+				const dir = file.path.slice(0, file.path.lastIndexOf('/')) || '/';
+				const command = single
+					? `mkdir -p ${shellQuote(dir)} && cat > ${shellQuote(file.path)}`
+					: WRITE_BATCH_COMMAND;
+				const res = await this.execInPod(command, {
+					stdin: single ? file.content : encodeFileWriteBatch(batch),
+					login: !single,
+				});
+				if (res.exitCode !== 0) {
+					throw new Error(
+						`${single ? `writeFile ${file.path}` : 'writeFiles batch'} failed: ${res.stderr}`,
+					);
+				}
+			} catch (error) {
+				// Drain active uploads before callers can retry or destroy the sandbox.
+				failure ??= { error };
+			}
 		});
+		if (failure) throw failure.error;
 	}
 
 	async listFiles(path: string, options?: ListFilesOptions): Promise<ListFilesResult> {

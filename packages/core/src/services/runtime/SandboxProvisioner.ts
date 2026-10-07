@@ -488,6 +488,7 @@ export interface WorkspaceLoadContext {
 	mountPath: string;
 	workspacePrefix: string;
 	excludeRelativeRoots?: readonly string[];
+	waitUntilReady?: () => Promise<void>;
 }
 
 export interface WorkspaceLoadResult {
@@ -500,6 +501,8 @@ export interface WorkspaceLoadResult {
 }
 
 export interface WorkspaceLoadStrategy {
+	/** Must await ctx.waitUntilReady before sandbox operations when enabled. */
+	readonly supportsPrefetch?: boolean;
 	load(ctx: WorkspaceLoadContext): Promise<WorkspaceLoadResult>;
 }
 
@@ -509,12 +512,15 @@ export interface WorkspaceLoadStrategies {
 }
 
 class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
+	readonly supportsPrefetch = true;
+
 	async load({
 		sandbox,
 		bucketHandle,
 		workspacePrefix,
 		mountPath,
 		excludeRelativeRoots,
+		waitUntilReady,
 	}: WorkspaceLoadContext): Promise<WorkspaceLoadResult> {
 		if (!bucketHandle) {
 			throw provisionFailure(
@@ -523,13 +529,10 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 			);
 		}
 		try {
-			const stats = await restoreWorkspace(
-				sandbox,
-				bucketHandle,
-				workspacePrefix,
-				mountPath,
-				excludeRelativeRoots ? { excludeRelativeRoots } : undefined,
-			);
+			const stats = await restoreWorkspace(sandbox, bucketHandle, workspacePrefix, mountPath, {
+				excludeRelativeRoots,
+				waitUntilReady,
+			});
 			return { usedFallback: true, stats };
 		} catch (err) {
 			throw provisionFailure('restoring the notebook workspace into the sandbox', err);
@@ -538,12 +541,15 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 }
 
 class MountOrCopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
+	readonly supportsPrefetch = true;
+
 	constructor(private copyFallback: WorkspaceLoadStrategy) {}
 
 	async load(ctx: WorkspaceLoadContext): Promise<WorkspaceLoadResult> {
 		if (ctx.bucket.mountable === false || ctx.sandbox.supportsBucketMount === false) {
 			return this.copyFallback.load(ctx);
 		}
+		await ctx.waitUntilReady?.();
 		try {
 			await ctx.sandbox.mountBucket({
 				bucketName: ctx.bucket.name,
@@ -754,7 +760,7 @@ export class SandboxProvisioner {
 		const sw = new Stopwatch();
 
 		const ensureReachable = () => this.ensureReachable(sandbox, sw);
-		const loadWorkspace = () =>
+		const loadWorkspace = (waitUntilReady: () => Promise<void>) =>
 			withSandboxSpan(sw, 'files', async (time, span) => {
 				const loaded = await time(async () => {
 					const loaded = await this.loadWorkspace(
@@ -762,6 +768,7 @@ export class SandboxProvisioner {
 						options,
 						layout,
 						options.workspacePrefix ?? nb.workspacePrefix,
+						waitUntilReady,
 					);
 					await this.applyWorkspaceOverlay(sandbox, options, mountPath);
 					return loaded;
@@ -778,15 +785,17 @@ export class SandboxProvisioner {
 		const setupEnvironment = () => this.setupEnvironment(sandbox, options, mountPath, sw);
 		const uploadBridge = () => this.uploadNotebookBridge(sandbox, options, sw);
 
-		// Setup reads only the loaded workspace. The kernel waits for credential
-		// injection and bridge upload as well.
+		// Prefetch overlaps boot; files timing includes readiness waits.
 		const { load, setup, bridge } = await all({
 			async reachable() {
 				await ensureReachable();
 			},
 			async load() {
-				await this.$.reachable;
-				return loadWorkspace();
+				try {
+					return await loadWorkspace(() => this.$.reachable);
+				} finally {
+					await this.$.reachable;
+				}
 			},
 			async inject() {
 				await this.$.reachable;
@@ -932,8 +941,16 @@ export class SandboxProvisioner {
 		options: ProvisionOptions,
 		layout: SandboxWorkspaceLayout,
 		workspacePrefix: string,
+		waitUntilReady: () => Promise<void>,
 	): Promise<WorkspaceLoadResult> {
-		const loaded = await this.restoreWorkspaceFiles(sandbox, options, layout, workspacePrefix);
+		const loaded = await this.restoreWorkspaceFiles(
+			sandbox,
+			options,
+			layout,
+			workspacePrefix,
+			waitUntilReady,
+		);
+		await waitUntilReady();
 		if (options.gitPrefix) {
 			await this.markGitWorkdirTrusted(sandbox, layout.gitRoot);
 			if (layout.rootPath) await this.configureSparseCheckout(sandbox, options, layout);
@@ -946,6 +963,7 @@ export class SandboxProvisioner {
 		options: ProvisionOptions,
 		layout: SandboxWorkspaceLayout,
 		workspacePrefix: string,
+		waitUntilReady: () => Promise<void>,
 	): Promise<WorkspaceLoadResult> {
 		if (
 			options.workspaceLoadMode === 'copy-only' &&
@@ -959,6 +977,7 @@ export class SandboxProvisioner {
 				layout.gitRoot,
 				Boolean(options.gitPrefix),
 				layout.rootPath,
+				waitUntilReady,
 			);
 			if (packed.status === 'restored') {
 				return {
@@ -981,13 +1000,19 @@ export class SandboxProvisioner {
 					packed.error,
 				);
 			}
-			const fallback = await this.loadWorkspaceObjects(sandbox, options, layout, workspacePrefix);
+			const fallback = await this.loadWorkspaceObjects(
+				sandbox,
+				options,
+				layout,
+				workspacePrefix,
+				waitUntilReady,
+			);
 			return {
 				...fallback,
 				archiveStatus: packed.status === 'missing' ? 'missing' : 'failed',
 			};
 		}
-		return this.loadWorkspaceObjects(sandbox, options, layout, workspacePrefix);
+		return this.loadWorkspaceObjects(sandbox, options, layout, workspacePrefix, waitUntilReady);
 	}
 
 	private async markGitWorkdirTrusted(sandbox: SandboxInstance, workdir: string): Promise<void> {
@@ -1031,12 +1056,14 @@ export class SandboxProvisioner {
 		options: ProvisionOptions,
 		layout: SandboxWorkspaceLayout,
 		workspacePrefix: string,
+		waitUntilReady: () => Promise<void>,
 	): Promise<WorkspaceLoadResult> {
 		const mountPath = layout.workdir;
 		const strategy =
 			options.workspaceLoadMode === 'copy-only'
 				? this.workspaceLoadStrategies.copyOnly
 				: this.workspaceLoadStrategies.mountOrCopy;
+		if (!strategy.supportsPrefetch) await waitUntilReady();
 		const load = strategy.load({
 			sandbox,
 			projectId: options.projectId,
@@ -1045,6 +1072,7 @@ export class SandboxProvisioner {
 			bucketHandle: options.bucketHandle,
 			mountPath,
 			workspacePrefix,
+			waitUntilReady,
 			...(options.gitPrefix ? { excludeRelativeRoots: ['.git'] } : {}),
 		});
 		if (!options.gitPrefix) return load;
@@ -1059,7 +1087,7 @@ export class SandboxProvisioner {
 					options.bucketHandle,
 					gitPrefix,
 					`${layout.gitRoot}/.git`,
-					{ requireComplete: true, excludeRelativeRoots: ['hooks'] },
+					{ requireComplete: true, excludeRelativeRoots: ['hooks'], waitUntilReady },
 				);
 				if (stats.objectCount === 0) throw new Error('the stored Git directory is empty');
 				return stats;

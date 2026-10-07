@@ -33,6 +33,7 @@ import type {
 	KubernetesConfig,
 } from './index';
 import { MANAGED_BY_VALUE } from './shared';
+import { MAX_WRITE_BATCH_FILES, WRITE_BATCH_COMMAND } from './fileWrites';
 
 /**
  * Tests for the native Kubernetes compute adapter.
@@ -394,6 +395,66 @@ describe('KubernetesCompute', () => {
 			expect(world.ensured).toHaveLength(1);
 		});
 
+		it('shares pod creation and readiness across concurrent first uses', async () => {
+			const world = makeWorld();
+			const created = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const ensure = world.client.ensure;
+			world.client.ensure = async (options) => {
+				const result = await ensure(options);
+				created.resolve();
+				await release.promise;
+				return result;
+			};
+			const phase = vi.spyOn(world.client, 'getPhase');
+			const inst = makeCompute(world).create(SANDBOX_ID);
+			const pending = Promise.all([
+				inst.ready!(),
+				inst.exec('a'),
+				inst.writeFiles([{ path: '/workspace/b', content: 'b' }]),
+			]);
+			await created.promise;
+			expect(world.ensured).toHaveLength(1);
+			expect(world.execCalls).toHaveLength(0);
+			release.resolve();
+			await pending;
+			expect(world.ensured).toHaveLength(1);
+			expect(phase).toHaveBeenCalledTimes(2);
+			expect(world.execCalls).toHaveLength(2);
+		});
+
+		it('retries a failed shared creation on the next use', async () => {
+			const world = makeWorld();
+			const ensure = vi.spyOn(world.client, 'ensure');
+			ensure.mockRejectedValueOnce(new Error('API unavailable'));
+			const inst = makeCompute(world).create(SANDBOX_ID);
+			const results = await Promise.allSettled([inst.ready!(), inst.exec('a')]);
+			expect(results).toEqual([
+				{ status: 'rejected', reason: new Error('API unavailable') },
+				{ status: 'rejected', reason: new Error('API unavailable') },
+			]);
+			expect(ensure).toHaveBeenCalledTimes(1);
+			expect(world.execCalls).toHaveLength(0);
+			await inst.exec('b');
+			expect(ensure).toHaveBeenCalledTimes(2);
+			expect(world.execCalls).toHaveLength(1);
+		});
+
+		it('retries readiness after a shared pod-status read fails', async () => {
+			const world = makeWorld();
+			const phase = vi.spyOn(world.client, 'getPhase');
+			phase.mockRejectedValueOnce(new Error('status unavailable'));
+			const inst = makeCompute(world).create(SANDBOX_ID);
+			const results = await Promise.allSettled([inst.ready!(), inst.exec('a')]);
+			expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected']);
+			expect(phase).toHaveBeenCalledTimes(1);
+			expect(world.execCalls).toHaveLength(0);
+			await inst.exec('b');
+			expect(world.ensured).toHaveLength(2);
+			expect(world.pods.size).toBe(1);
+			expect(world.execCalls).toHaveLength(1);
+		});
+
 		it('a re-resolved instance operates on the same Pod name', async () => {
 			const world = makeWorld();
 			const compute = makeCompute(world);
@@ -505,6 +566,94 @@ describe('KubernetesCompute', () => {
 	});
 
 	describe('writeFile() / readFile()', () => {
+		it.each(['transport', 'command'] as const)(
+			'drains active transfers after a %s failure without scheduling more',
+			async (failure) => {
+				const world = makeWorld();
+				const inst = makeCompute(world).create(SANDBOX_ID);
+				await inst.ready!();
+				const first = Promise.withResolvers<K8sExecResult>();
+				const second = Promise.withResolvers<K8sExecResult>();
+				const entered = Promise.withResolvers<void>();
+				const exec = vi
+					.spyOn(world.client, 'exec')
+					.mockImplementationOnce(() => first.promise)
+					.mockImplementationOnce(() => {
+						entered.resolve();
+						return second.promise;
+					});
+				const files = Array.from({ length: MAX_WRITE_BATCH_FILES * 3 }, (_, i) => ({
+					path: `/workspace/${i}.py`,
+					content: 'data',
+				}));
+				let settled = false;
+				const write = inst.writeFiles(files);
+				const rejected = expect(write).rejects.toThrow('connection reset');
+				void write.then(
+					() => {
+						settled = true;
+					},
+					() => {
+						settled = true;
+					},
+				);
+				await entered.promise;
+				expect(exec).toHaveBeenCalledTimes(2);
+				if (failure === 'transport') first.reject(new Error('connection reset'));
+				else first.resolve({ stdout: '', stderr: 'connection reset', exitCode: 1 });
+				try {
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					expect(settled).toBe(false);
+				} finally {
+					second.resolve({ stdout: '', stderr: 'secondary error', exitCode: 1 });
+					await rejected;
+				}
+				expect(exec).toHaveBeenCalledTimes(2);
+				await inst.writeFiles(files.slice(0, 2));
+				expect(exec).toHaveBeenCalledTimes(3);
+			},
+		);
+
+		it('writes many small files in bounded batches through one exec per batch', async () => {
+			const world = makeWorld();
+			const files = Array.from({ length: MAX_WRITE_BATCH_FILES * 2 }, (_, i) => ({
+				path: `/workspace/${i}.py`,
+				content: `print(${i})`,
+			}));
+			await makeCompute(world).create(SANDBOX_ID).writeFiles(files);
+			const writes = world.execCalls.filter((call) => call.stdin !== undefined);
+			expect(writes).toHaveLength(2);
+			for (const call of writes) {
+				expect(shCmd(call)).toBe(WRITE_BATCH_COMMAND);
+				expect(call.command[1]).toBe('-lc');
+				expect(call.stdin).toBeInstanceOf(Uint8Array);
+			}
+		});
+
+		it('does not create a pod for an empty file list', async () => {
+			const world = makeWorld();
+			await makeCompute(world).create(SANDBOX_ID).writeFiles([]);
+			expect(world.ensured).toHaveLength(0);
+			expect(world.execCalls).toHaveLength(0);
+		});
+
+		it('propagates a failed batch write', async () => {
+			const world = makeWorld({
+				execImpl: (cmd) =>
+					cmd[2] === WRITE_BATCH_COMMAND
+						? { stdout: '', stderr: 'permission denied', exitCode: 1 }
+						: undefined,
+			});
+			await expect(
+				makeCompute(world)
+					.create(SANDBOX_ID)
+					.writeFiles([
+						{ path: '/workspace/one.py', content: 'one' },
+						{ path: '/workspace/two.py', content: 'two' },
+					]),
+			).rejects.toThrow('writeFiles batch failed: permission denied');
+		});
+
 		it('writeFile pipes content via stdin and mkdir -p the parent dir', async () => {
 			const world = makeWorld();
 			await makeCompute(world)
