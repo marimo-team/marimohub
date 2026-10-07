@@ -1012,7 +1012,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_KUBERNETES_POD_TEMPLATE_FILE',
 						name: 'Kubernetes pod template file',
 						description:
-							'Path to a YAML or JSON partial Pod manifest, read at startup for new kernel Pods. Explicit configuration overrides template values. See [pod templates](compute.md#pod-templates) for an example, precedence, and compatibility limits.',
+							'Path to a YAML or JSON partial Pod manifest, read at startup for new kernel Pods. Explicit configuration overrides template values. See [pod templates](./compute.md#pod-templates) for an example, precedence, and compatibility limits.',
 						example: '/etc/marimohub/kernel-pod.yaml',
 						optIn: true,
 					},
@@ -1712,7 +1712,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_PERSIST_WORKSPACE',
 						name: 'Persist workspace',
 						description:
-							'Which sandbox working-dir files survive a session (source | workspace). `source` persists only the source files (notebook.py + pyproject.toml). `workspace` also captures runtime files (e.g. generated data) into the notebook workspace on teardown and restores them on the next session. This includes hidden files such as `.env` and `.gitignore`, `.git/`, and `__marimo__/`. It excludes regenerable caches such as `.venv/`, `__pycache__/`, `node_modules/`, and `.pytest_cache/`. Any project member with read access can read the captured files, and every later session restores them.',
+							'Which sandbox working-dir files survive a session (source | workspace). `source` persists only the source files (notebook.py + pyproject.toml). `workspace` also captures runtime files (e.g. generated data) into the notebook workspace on teardown and restores them on the next session. This includes hidden files such as `.env` and `.gitignore`, `.git/`, and `__marimo__/`. It excludes regenerable caches such as `.venv/`, `__pycache__/`, `node_modules/`, and `.pytest_cache/`. Workspace capture also skips any directory that contains a regular `CACHEDIR.TAG` file, before size limits apply; in `workspace` mode, previously stored copies of such a directory are removed on the next capture, and a `CACHEDIR.TAG` at the working-dir root removes every previously stored workspace file. `source` mode is unaffected. Any project member with read access can read the captured files, and every later session restores them.',
 						example: 'workspace',
 						default: 'source',
 					},
@@ -1932,6 +1932,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						name: 'Federation enabled by default',
 						description:
 							'Enable WIF for projects without an explicit federation setting. Explicit project settings take precedence. Requires the WIF vars (setting it `true` without them is a startup error); applies to new sessions, jobs, and data browsing. Turning it on retroactively grants credentials to EXISTING projects that never opted in, including their scheduled jobs — audit projects and set explicit Disabled overrides first. It also lets anyone who can create a project obtain cloud credentials if the cloud IAM trust accepts its subject, so restrict the trust to exact project `sub` values, not wildcards.',
+						optIn: true,
 						default: 'false',
 					},
 				],

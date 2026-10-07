@@ -19,7 +19,6 @@ import type {
 	Session,
 	SessionMode,
 	SandboxInstance,
-	SandboxContext,
 	SessionRender,
 	UserId,
 } from '@marimo-hub/core';
@@ -63,6 +62,9 @@ import {
 	SessionId,
 	sessionMode,
 	sessionPersistsEdits,
+	buildSandboxContext,
+	effectivePersistenceMode,
+	projectSessionEnv,
 	sandboxContextPath,
 	sandboxContextFile,
 	writeSandboxContext,
@@ -77,7 +79,7 @@ import {
 	TakeoverInProgressError,
 	TakeoverRetirementError,
 	kernelActiveConnections,
-	kernelBasePathFromUrl,
+	localKernelBasePath,
 	joinUrlPath,
 	SECONDARY_SURFACE_IDS,
 	SurfaceForbiddenError,
@@ -957,7 +959,7 @@ async function inspectEditorActivity(deps: ApiDeps, session: Session) {
 	if (session.status !== 'running' || !session.sandbox_id) {
 		return { state: 'unknown' as const };
 	}
-	const basePath = kernelBasePathFromUrl(session.sandbox_url);
+	const basePath = localKernelBasePath(session);
 	const active = await kernelActiveConnections(
 		deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) }),
 		basePath,
@@ -1650,16 +1652,19 @@ export async function startNotebookSession(input: {
 	let usedFallback = false;
 	let provisionedSandbox: SandboxInstance;
 	let preparedContextFile: ReturnType<typeof sandboxContextFile> | undefined;
-	const contextFor = (publicUrl: string): SandboxContext => ({
-		public_url: publicUrl,
-		notebook_url: joinUrlPath(appBaseUrl, sessionResourcePath(session!)),
-		exposure_mode: sandboxExposure.mode,
-		persistence_mode:
-			sessionPersistsEdits(session!) && workspacePolicy.persistSessionEdits
-				? sandbox.persistWorkspace
-				: 'none',
-		session_mode: mode,
-	});
+	const contextFor = (publicUrl: string) =>
+		buildSandboxContext({
+			session: session!,
+			sessionMode: mode,
+			appBaseUrl,
+			publicUrl,
+			exposureMode: sandboxExposure.mode,
+			persistence: effectivePersistenceMode({
+				persistEdits: sessionPersistsEdits(session!),
+				source: notebook.source,
+				persistWorkspace: sandbox.persistWorkspace,
+			}),
+		});
 	// Audit pin for the integration versions rendered into this sandbox.
 	let integrationAttachments: SessionRender['attachments'] | undefined;
 	// In subdomain mode clientUrl === url and originUrl is unset.
@@ -1920,8 +1925,10 @@ export async function startNotebookSession(input: {
 							const integrationEnv = await this.$.integrationEnv;
 							let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
 							if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
-							// Integration values are defaults; WIF and marimo configuration win collisions.
-							if (integrationEnv) env = mergeSessionEnv(integrationEnv, env ?? {});
+							// Integration values are the base; WIF and marimo configuration win collisions.
+							if (integrationEnv) {
+								env = mergeSessionEnv(projectSessionEnv(integrationEnv), env ?? {});
+							}
 							return env;
 						},
 						launchStrategy: async () => {
@@ -2054,6 +2061,7 @@ export async function startNotebookSession(input: {
 					await writeSandboxContext(provisionedSandbox, sandboxId, contextFor(clientUrl));
 				} catch (error) {
 					// Optional metadata must not reclaim an already-running kernel.
+					observer.tag('sandbox_context', 'unavailable');
 					logEvent({
 						level: 'warn',
 						event: 'sandbox_context_unavailable',

@@ -36,6 +36,22 @@ export function sandboxBasePath(pathname: string): string {
 	return pathname.endsWith('/') ? pathname : `${pathname}/`;
 }
 
+/** Accepts a host-sent base only if it is an already-normalized directory path on `origin`. */
+export function parseSandboxBasePath(candidate: string, origin: string): string | undefined {
+	try {
+		const base = new URL(candidate, origin);
+		return base.origin === origin &&
+			base.pathname === candidate &&
+			candidate.endsWith('/') &&
+			!base.search &&
+			!base.hash
+			? candidate
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 export function relativeNotebookPath(pathname: string, basePath: string): string | undefined {
 	if (pathname === basePath.slice(0, -1)) return '';
 	if (!pathname.startsWith(basePath)) return undefined;

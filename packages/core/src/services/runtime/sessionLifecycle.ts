@@ -18,7 +18,7 @@ import { isLivePersistingEditor, SessionRetirer } from './SessionRetirer';
 import { isTerminal, sessionMode, sessionModePolicy, sessionPersistsEdits } from './sessionState';
 import { isPastAuthorizationDeadline } from './SessionService';
 import type { SessionService } from './SessionService';
-import { kernelBasePathFromUrl } from './sandboxExposure';
+import { localKernelBasePath } from './sandboxExposure';
 import { kernelActiveConnections } from './kernelActiveConnections';
 import type { ConnectionProbe } from './kernelActiveConnections';
 
@@ -163,7 +163,7 @@ export class SessionLifecycleService {
 					this.connectionProbeBudget.consume(s.session_id, now);
 				if (sandbox && this.cfg.connectionAware && (reapCandidate || connectionCountDue)) {
 					try {
-						active = await this.probe(sandbox, kernelBasePathFromUrl(s.sandbox_url));
+						active = await this.probe(sandbox, localKernelBasePath(s));
 					} catch (error) {
 						// A vanished sandbox must not fail the pass: reclaim and idle reaping
 						// already handle a missing sandbox.

@@ -576,7 +576,7 @@ describe('captureWorkspace', () => {
 	});
 
 	it.each(['workspace', 'source'] as const)(
-		'%s mode preserves stored tagged caches, including files absent from the sandbox',
+		'%s mode skips tagged caches; only source mode keeps their stored copies',
 		async (mode) => {
 			const cache = '__marimo__/react/deno';
 			const protectedPaths = [
@@ -601,7 +601,7 @@ describe('captureWorkspace', () => {
 			await capture(mode);
 
 			for (const path of protectedPaths) {
-				expect(await stored(path)).toBe('stored');
+				expect(await stored(path)).toBe(mode === 'source' ? 'stored' : undefined);
 			}
 			expect(await bucket.get(nb.workspaceFile(`${cache}/nested/new.js`))).toBeNull();
 			expect(
@@ -641,7 +641,7 @@ describe('captureWorkspace', () => {
 	});
 
 	it.each(['workspace', 'source'] as const)(
-		'%s mode preserves the entire workspace when its root is tagged',
+		'%s mode skips the entire workspace when its root is tagged',
 		async (mode) => {
 			const { calls, bucket, nb, capture, stored } = captureFixture({
 				files: { 'new.txt': 'new', 'CACHEDIR.TAG': '' },
@@ -651,8 +651,10 @@ describe('captureWorkspace', () => {
 			await capture(mode);
 
 			expect(calls.readFile).toEqual([]);
-			expect(await stored('old.txt')).toBe('stored');
-			expect((await bucket.list({ prefix: nb.workspacePrefix })).objects).toHaveLength(1);
+			expect(await stored('old.txt')).toBe(mode === 'source' ? 'stored' : undefined);
+			expect((await bucket.list({ prefix: nb.workspacePrefix })).objects).toHaveLength(
+				mode === 'source' ? 1 : 0,
+			);
 		},
 	);
 
@@ -718,7 +720,7 @@ describe('captureWorkspace', () => {
 		expect(await bucket.get(nb.workspaceFile(stale))).toBeNull();
 	});
 
-	it('resumes capture and cleanup after a tag is removed while retaining nested tagged caches', async () => {
+	it('removes stored tagged caches and resumes capture after a tag is removed', async () => {
 		const { fs, bucket, nb, capture, stored } = captureFixture({
 			files: {
 				'cache/source.txt': 'changed',
@@ -732,15 +734,14 @@ describe('captureWorkspace', () => {
 		}
 
 		await capture();
-		expect(await stored('cache/source.txt')).toBe('stored');
-		expect(await bucket.get(nb.workspaceFile('cache/deleted.txt'))).not.toBeNull();
+		expect((await bucket.list({ prefix: nb.workspacePrefix })).objects).toEqual([]);
 
 		fs.delete('cache/CACHEDIR.TAG');
 		await capture();
 
 		expect(await stored('cache/source.txt')).toBe('changed');
 		expect(await bucket.get(nb.workspaceFile('cache/deleted.txt'))).toBeNull();
-		expect(await stored('cache/nested/deleted.txt')).toBe('stored');
+		expect(await bucket.get(nb.workspaceFile('cache/nested/deleted.txt'))).toBeNull();
 		expect(await bucket.get(nb.workspaceFile('cache/nested/new.txt'))).toBeNull();
 		expect(await bucket.get(nb.workspaceFile('cache/nested/CACHEDIR.TAG'))).toBeNull();
 	});
@@ -761,8 +762,79 @@ describe('captureWorkspace', () => {
 
 		expect(instance.readFileBounded).toHaveBeenCalledTimes(1);
 		expect(await stored('source.txt')).toBe('source');
-		expect(await stored('cache/unreadable.bin')).toBe('stored');
+		expect(await bucket.get(nb.workspaceFile('cache/unreadable.bin'))).toBeNull();
 		expect(await bucket.get(nb.workspaceFile('cache/CACHEDIR.TAG'))).toBeNull();
+	});
+
+	it('source mode skips the sandbox listing when no stored key is deletable', async () => {
+		const { instance, bucket, nb, capture } = captureFixture({
+			files: { 'notebook.py': 'x', 'data.csv': 'a' },
+		});
+		await bucket.put(nb.code, 'x');
+		await bucket.put(nb.workspaceFile('.venv/bin/python'), 'cached');
+		const listFiles = vi.spyOn(instance, 'listFiles');
+
+		await capture('source');
+
+		expect(listFiles).not.toHaveBeenCalled();
+		expect(await bucket.get(nb.workspaceFile('.venv/bin/python'))).not.toBeNull();
+	});
+
+	it('converges when a cache captured before tag detection is restored', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		const legacy = {
+			'__marimo__/deno/CACHEDIR.TAG': 'Signature: 8a477f597d28d172789f06886806bc55',
+			'__marimo__/deno/dep.js': 'cached',
+			'data.csv': 'a,b',
+		};
+		for (const [path, content] of Object.entries(legacy)) {
+			await bucket.put(nb.workspaceFile(path), content);
+		}
+
+		const first = makeFsSandbox({ files: {} });
+		await restoreWorkspace(first.instance, bucket, nb.workspacePrefix, MOUNT);
+		expect(first.fs.has('__marimo__/deno/dep.js')).toBe(true);
+		await captureWorkspace(first.instance, bucket, projectId, notebookId, MOUNT, 'workspace');
+
+		expect((await bucket.list({ prefix: nb.workspacePrefix })).objects.map((o) => o.key)).toEqual([
+			nb.workspaceFile('data.csv'),
+		]);
+		expect(warn.mock.calls.flat().join('\n')).toContain('__marimo__/deno contains CACHEDIR.TAG');
+
+		const second = makeFsSandbox({ files: {} });
+		const stats = await restoreWorkspace(second.instance, bucket, nb.workspacePrefix, MOUNT);
+		expect(stats.objectCount).toBe(1);
+		expect(second.fs.has('__marimo__/deno/dep.js')).toBe(false);
+		warn.mockRestore();
+	});
+
+	it('warns once per outermost tagged directory, louder for a tagged root', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const nested = captureFixture({
+			files: {
+				'a/CACHEDIR.TAG': '',
+				'a/b/CACHEDIR.TAG': '',
+				'c/CACHEDIR.TAG': '',
+				'keep.txt': 'keep',
+			},
+		});
+		await nested.capture();
+		const tagWarnings = () =>
+			warn.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('CACHEDIR'));
+		expect(tagWarnings()).toEqual([
+			expect.stringContaining('captureWorkspace: a contains CACHEDIR.TAG'),
+			expect.stringContaining('captureWorkspace: c contains CACHEDIR.TAG'),
+		]);
+
+		warn.mockClear();
+		const root = captureFixture({
+			files: { CACHEDIR: '', 'CACHEDIR.TAG': '', 'x/CACHEDIR.TAG': '' },
+		});
+		await root.capture();
+		expect(tagWarnings()).toEqual([expect.stringContaining('the workspace root contains')]);
+		warn.mockRestore();
 	});
 
 	it('workspace mode: round-trips binary files byte-identically', async () => {
@@ -916,7 +988,12 @@ describe('captureWorkspace', () => {
 					const remove = vi.spyOn(bucket, 'delete');
 					if (failure === 'thrown') {
 						list.mockRejectedValue(new Error('sandbox disconnected'));
-						await expect(capture(mode)).rejects.toThrow('sandbox disconnected');
+						if (mode === 'workspace') {
+							await expect(capture(mode)).rejects.toThrow('sandbox disconnected');
+						} else {
+							await capture(mode);
+							expect(warn).toHaveBeenCalled();
+						}
 					} else {
 						list.mockResolvedValue(listFilesFailure());
 						await capture(mode);

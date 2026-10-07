@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { notebookFrameUrl, notebookQueryParams } from './notebookUrls';
+import {
+	notebookFrameUrl,
+	notebookHomeSearch,
+	notebookQueryParams,
+	trustedSandboxKeys,
+} from './notebookUrls';
 
 describe('notebook URLs', () => {
 	it('preserves repeated keys, empty values, Unicode, and encoded delimiters', () => {
@@ -213,3 +218,19 @@ it.each(['files/a%20b.py', 'files/a%23b%3Fc.py', 'files/100%25.py', 'café/'])(
 		expect(url.hash).toBe('#cell');
 	},
 );
+
+it('drops only the saved path for the notebook home', () => {
+	expect(notebookHomeSearch('?__mh_path=studio%2Fdata%2F&id=1&tag=a&tag=b&theme=dark')).toBe(
+		'?theme=dark&id=1&tag=a&tag=b',
+	);
+	expect(notebookHomeSearch('?__mh_path=studio%2Fdata%2F')).toBe('');
+	expect(notebookHomeSearch('?id=1')).toBe('?id=1');
+});
+
+it('lists each trusted sandbox key once', () => {
+	expect(trustedSandboxKeys('/hub/proxy/token/?provider=a&provider=b&access_token=c')).toEqual([
+		'provider',
+		'access_token',
+	]);
+	expect(trustedSandboxKeys('https://sandbox.example/')).toEqual([]);
+});

@@ -8,6 +8,7 @@ import type {
 	ExposureResult,
 	SandboxExposure,
 } from '../../ports/sandboxExposure';
+import type { Session } from '../../schema';
 import { joinUrlPath } from '../../url';
 import { signProxyToken } from './proxyToken';
 
@@ -18,6 +19,17 @@ export function kernelBasePathFromUrl(sandboxUrl?: string): string {
 	} catch {
 		return '';
 	}
+}
+
+/**
+ * marimo's `--base-url` inside the sandbox, for callers that reach the kernel on loopback.
+ * Only `proxy` exposure (which persists `sandbox_origin_url`) starts marimo under a base
+ * path; in `subdomain` mode marimo serves at root whatever path the adapter URL carries.
+ */
+export function localKernelBasePath(
+	session: Pick<Session, 'sandbox_url' | 'sandbox_origin_url'>,
+): string {
+	return session.sandbox_origin_url ? kernelBasePathFromUrl(session.sandbox_url) : '';
 }
 
 /**

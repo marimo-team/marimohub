@@ -235,11 +235,14 @@ describe('SessionLifecycleService (app sessions)', () => {
 		expect(probe).toHaveBeenCalledTimes(2);
 	});
 
-	it('probes under the kernel base path recovered from the client URL', async () => {
-		await putSession({ sandbox_url: 'https://hub.example/proxy/tok-abc/' });
+	it('probes under the proxy base path, and at root in subdomain mode', async () => {
+		await putSession({
+			sandbox_url: 'https://hub.example/proxy/tok-abc/',
+			sandbox_origin_url: 'http://kernel.internal:2718',
+		});
 		await putSession({
 			notebook_id: createNotebookId(),
-			sandbox_url: 'https://sb-xyz.sandbox.example/',
+			sandbox_url: 'https://sb-xyz.sandbox.example/ignored-path/',
 		});
 
 		await makeService().sweep(now);

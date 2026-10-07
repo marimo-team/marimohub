@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { zipSync } from 'fflate';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ByteBudget } from './byteBudget';
 import { createPackedWorkspaceArchive } from '../../integrations/packedWorkspace';
 import type { BucketObjectBody } from '../../ports/bucket';
 import { makeFakeSandbox, MemoryBucket } from '../../testing';
@@ -368,42 +369,139 @@ describe('packed workspace extractor', () => {
 });
 
 describe('restorePackedWorkspace', () => {
-	it.each(['ready', 'failed'] as const)(
-		'waits for readiness before archive-error cleanup (boot: %s)',
-		async (boot) => {
+	it('fails fast without waiting for readiness or touching the sandbox when the read fails', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const bucket = new MemoryBucket();
+		const storageError = new Error('archive read failed');
+		vi.spyOn(bucket, 'get').mockRejectedValue(storageError);
+		const waitUntilReady = vi.fn(() => new Promise<void>(() => {}));
+
+		const result = await restorePackedWorkspace(
+			instance,
+			bucket,
+			'workspace.zip',
+			'/workspace',
+			false,
+			'',
+			waitUntilReady,
+		);
+
+		expect(result).toEqual({ status: 'failed', error: storageError });
+		expect(waitUntilReady).not.toHaveBeenCalled();
+		expect(calls.exec).toHaveLength(0);
+		expect(calls.writeFiles).toHaveLength(0);
+	});
+
+	it.each([undefined, 1] as const)(
+		'returns failed instead of throwing when readiness rejects (budget: %s)',
+		async (capacity) => {
 			const { instance, calls } = makeFakeSandbox();
 			const bucket = new MemoryBucket();
-			const storageError = new Error('archive read failed');
-			vi.spyOn(bucket, 'get').mockRejectedValue(storageError);
-			const ready = Promise.withResolvers<void>();
-			const waiting = Promise.withResolvers<void>();
-			const restored = restorePackedWorkspace(
+			vi.spyOn(bucket, 'get').mockResolvedValue(bucketObject(new Uint8Array([1, 2, 3])));
+			const bootError = new Error('pod unavailable');
+
+			const result = await restorePackedWorkspace(
 				instance,
 				bucket,
 				'workspace.zip',
 				'/workspace',
 				false,
 				'',
-				() => {
-					waiting.resolve();
-					return ready.promise;
-				},
+				() => Promise.reject(bootError),
+				capacity === undefined ? undefined : new ByteBudget(capacity),
 			);
-			const completion =
-				boot === 'failed'
-					? expect(restored).rejects.toThrow('pod unavailable')
-					: expect(restored).resolves.toEqual({ status: 'failed', error: storageError });
-			await waiting.promise;
+
+			expect(result).toEqual({ status: 'failed', error: bootError });
 			expect(calls.exec).toHaveLength(0);
-			expect(calls.writeFiles).toHaveLength(0);
-			if (boot === 'failed') ready.reject(new Error('pod unavailable'));
-			else ready.resolve();
-			await completion;
-			expect(calls.exec).toHaveLength(boot === 'failed' ? 0 : 1);
-			if (boot === 'ready') expect(calls.exec[0]).toContain('rm -rf --');
 			expect(calls.writeFiles).toHaveLength(0);
 		},
 	);
+
+	it('prefetches within budget and releases the reservation once the archive is written', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const bucket = new MemoryBucket();
+		const object = bucketObject(new Uint8Array([1, 2, 3]));
+		const bytes = vi.spyOn(object, 'bytes');
+		vi.spyOn(bucket, 'get').mockResolvedValue(object);
+		const budget = new ByteBudget(3);
+		const ready = Promise.withResolvers<void>();
+		let availableAtWrite: number | undefined;
+		const writeFiles = instance.writeFiles.bind(instance);
+		instance.writeFiles = async (files) => {
+			availableAtWrite = budget.available;
+			await writeFiles(files);
+		};
+
+		const restored = restorePackedWorkspace(
+			instance,
+			bucket,
+			'workspace.zip',
+			'/workspace',
+			false,
+			'',
+			() => ready.promise,
+			budget,
+		);
+		await vi.waitFor(() => expect(bytes).toHaveBeenCalled());
+		expect(calls.writeFiles).toHaveLength(0);
+		ready.resolve();
+
+		expect(await restored).toEqual({ status: 'restored', archiveBytes: 3 });
+		expect(availableAtWrite).toBe(0);
+		expect(budget.available).toBe(3);
+	});
+
+	it('reads an over-budget archive only after readiness and still restores it', async () => {
+		const { instance } = makeFakeSandbox();
+		const bucket = new MemoryBucket();
+		const object = bucketObject(new Uint8Array([1, 2, 3]));
+		const bytes = vi.spyOn(object, 'bytes');
+		vi.spyOn(bucket, 'get').mockResolvedValue(object);
+		const budget = new ByteBudget(2);
+		const ready = Promise.withResolvers<void>();
+		const waiting = Promise.withResolvers<void>();
+
+		const restored = restorePackedWorkspace(
+			instance,
+			bucket,
+			'workspace.zip',
+			'/workspace',
+			false,
+			'',
+			() => {
+				waiting.resolve();
+				return ready.promise;
+			},
+			budget,
+		);
+		await waiting.promise;
+		expect(bytes).not.toHaveBeenCalled();
+		ready.resolve();
+
+		expect(await restored).toEqual({ status: 'restored', archiveBytes: 3 });
+		expect(budget.available).toBe(2);
+	});
+
+	it('releases the reservation when the restore fails', async () => {
+		const { instance } = makeFakeSandbox();
+		const bucket = new MemoryBucket();
+		vi.spyOn(bucket, 'get').mockResolvedValue(bucketObject(new Uint8Array([1, 2, 3]), 4));
+		const budget = new ByteBudget(8);
+
+		const result = await restorePackedWorkspace(
+			instance,
+			bucket,
+			'workspace.zip',
+			'/workspace',
+			false,
+			'',
+			async () => {},
+			budget,
+		);
+
+		expect(result.status).toBe('failed');
+		expect(budget.available).toBe(8);
+	});
 
 	it('returns missing without creating temporary sandbox files', async () => {
 		const { instance, calls } = makeFakeSandbox();
@@ -486,7 +584,7 @@ describe('restorePackedWorkspace', () => {
 		expect(result.status).toBe('failed');
 		expect(bytes).not.toHaveBeenCalled();
 		expect(calls.writeFiles).toHaveLength(0);
-		expect(calls.exec.some((command) => command.startsWith('rm -rf -- '))).toBe(true);
+		expect(calls.exec).toHaveLength(0);
 	});
 
 	it('rejects a body whose byte length differs from object metadata', async () => {
@@ -506,7 +604,7 @@ describe('restorePackedWorkspace', () => {
 		expect(calls.writeFiles).toHaveLength(0);
 	});
 
-	it('cleans temporary paths when fetching, writing, or extracting the archive fails', async () => {
+	it('cleans temporary paths only after a sandbox write started', async () => {
 		for (const failure of ['fetch', 'body', 'write', 'exec'] as const) {
 			const { instance, calls } = makeFakeSandbox();
 			const bucket = new MemoryBucket();
@@ -543,7 +641,9 @@ describe('restorePackedWorkspace', () => {
 			);
 
 			expect(result.status).toBe('failed');
-			expect(calls.exec.some((command) => command.startsWith('rm -rf -- '))).toBe(true);
+			expect(calls.exec.some((command) => command.startsWith('rm -rf -- '))).toBe(
+				failure === 'write' || failure === 'exec',
+			);
 		}
 	});
 
@@ -609,7 +709,10 @@ describe('restorePackedWorkspace', () => {
 	it('preserves the primary failure when temporary cleanup also fails', async () => {
 		const { instance } = makeFakeSandbox();
 		const bucket = new MemoryBucket();
-		vi.spyOn(bucket, 'get').mockRejectedValue(new Error('storage unavailable'));
+		vi.spyOn(bucket, 'get').mockResolvedValue(bucketObject(new Uint8Array([1, 2, 3])));
+		instance.writeFiles = async () => {
+			throw new Error('sandbox write unavailable');
+		};
 		instance.exec = async () => {
 			throw new Error('cleanup unavailable');
 		};
@@ -624,7 +727,7 @@ describe('restorePackedWorkspace', () => {
 
 		expect(result).toMatchObject({
 			status: 'failed',
-			error: new Error('storage unavailable'),
+			error: new Error('sandbox write unavailable'),
 		});
 	});
 });

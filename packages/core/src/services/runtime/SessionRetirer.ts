@@ -1,6 +1,6 @@
 import { kernelActiveConnections } from './kernelActiveConnections';
 import type { ConnectionProbe } from './kernelActiveConnections';
-import { kernelBasePathFromUrl } from './sandboxExposure';
+import { localKernelBasePath } from './sandboxExposure';
 import { sessionResourceNotebookId } from '../../sessionOrigin';
 import { captureThumbnail } from './captureThumbnail';
 import type { Bucket } from '../../ports/bucket';
@@ -434,7 +434,7 @@ export class SessionRetirer {
 			try {
 				active = await (this.deps.probe ?? kernelActiveConnections)(
 					existing,
-					kernelBasePathFromUrl(session.sandbox_url),
+					localKernelBasePath(session),
 				);
 			} catch (error) {
 				if (!(error instanceof NotFoundError)) throw error;

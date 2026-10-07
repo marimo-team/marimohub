@@ -48,7 +48,8 @@ export function encodeFileWriteBatch(files: readonly SandboxFileWrite[]): Uint8A
 
 // Length frames keep binary contents and paths out of shell syntax. The terminal
 // marker distinguishes a complete batch from a connection lost between files.
-export const WRITE_BATCH_COMMAND = `python3 -c ${shellQuote(String.raw`import json, os, sys
+// `-I` keeps a workspace `json.py` in the cwd (or PYTHONPATH) from shadowing the stdlib.
+export const WRITE_BATCH_COMMAND = `python3 -I -c ${shellQuote(String.raw`import json, os, sys
 stream = sys.stdin.buffer
 while True:
     header = stream.readline()

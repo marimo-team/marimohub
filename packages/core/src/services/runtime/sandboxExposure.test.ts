@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { NotebookId, ProjectId, SandboxId, SessionId } from '../../ids';
 import { TEST_KERNEL_AUTH_TOKEN } from '../../testing';
 import { signProxyToken } from './proxyToken';
-import { kernelBasePathFromUrl, ProxyExposure, SubdomainExposure } from './sandboxExposure';
+import {
+	kernelBasePathFromUrl,
+	localKernelBasePath,
+	ProxyExposure,
+	SubdomainExposure,
+} from './sandboxExposure';
 
 const SECRET = 'a-test-signing-secret-at-least-32-bytes-long!!';
 const ctx = {
@@ -121,5 +126,26 @@ describe('kernelBasePathFromUrl', () => {
 		['https://hub.example/proxy/token///?access_token=secret', '/proxy/token'],
 	])('extracts the marimo base path from %s', (url, expected) => {
 		expect(kernelBasePathFromUrl(url)).toBe(expected);
+	});
+});
+
+describe('localKernelBasePath', () => {
+	it('uses the hub path prefix in proxy mode', () => {
+		expect(
+			localKernelBasePath({
+				sandbox_url: 'https://hub.example/prefix/proxy/token/',
+				sandbox_origin_url: 'http://kernel:2718',
+			}),
+		).toBe('/prefix/proxy/token');
+	});
+
+	it('serves at root in subdomain mode even when the adapter URL has a path', () => {
+		expect(
+			localKernelBasePath({ sandbox_url: 'https://sbx.example/some/path/?access_token=secret' }),
+		).toBe('');
+	});
+
+	it('is empty before the session has a URL', () => {
+		expect(localKernelBasePath({ sandbox_origin_url: 'http://kernel:2718' })).toBe('');
 	});
 });

@@ -261,6 +261,21 @@ describe('resolveJobSandboxEnv', () => {
 		});
 	});
 
+	it('applies project MARIMO_* variables as defaults, not forced values', async () => {
+		const { service } = integrations({
+			files: [],
+			vars: { MARIMO_OUTPUT_MAX_BYTES: '10', PGHOST: 'db' },
+			attachments: [],
+			warnings: [],
+		});
+		const env = await resolveJobSandboxEnv({ ...deps, integrations: service }, context());
+		expect(env).toEqual({
+			files: [],
+			vars: { PGHOST: 'db' },
+			defaults: { MARIMO_OUTPUT_MAX_BYTES: '10' },
+		});
+	});
+
 	it('attributes the render to the manual triggerer, else the job author, with their email', async () => {
 		await deps.services.identities.upsert({ id: AUTHOR, email: 'author@example.com' });
 		const { service, resolveForSession } = integrations({

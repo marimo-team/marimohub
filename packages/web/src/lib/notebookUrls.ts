@@ -1,8 +1,21 @@
 import type { Theme } from '@/context/ThemeContext';
 
-import { notebookQueryParams } from '@marimo-hub/notebook-bridge/query';
-import { notebookPath, resolveNotebookPath } from '@marimo-hub/notebook-bridge/path';
+import {
+	mergeNotebookQuery,
+	notebookFrameUrl as sandboxFrameUrl,
+	notebookQueryParams,
+	sandboxQueryKeys,
+} from '@marimo-hub/notebook-bridge/query';
 export { notebookQueryParams, shareableNotebookQuery } from '@marimo-hub/notebook-bridge/query';
+
+export function trustedSandboxKeys(sandboxUrl: string): string[] {
+	return sandboxQueryKeys(new URL(sandboxUrl, window.location.origin));
+}
+
+/** The same Hub query without the saved sandbox page path. */
+export function notebookHomeSearch(search: string): string {
+	return mergeNotebookQuery(search, [...notebookQueryParams(search)], [], '');
+}
 
 export function notebookFrameUrl(
 	url: string,
@@ -11,13 +24,7 @@ export function notebookFrameUrl(
 	isApp: boolean,
 ): string {
 	try {
-		const base = new URL(url, window.location.origin);
-		const path = notebookPath(search);
-		const parsed = path ? (resolveNotebookPath(base, path) ?? base) : base;
-		const trustedKeys = new Set(parsed.searchParams.keys());
-		for (const [key, value] of notebookQueryParams(search)) {
-			if (!trustedKeys.has(key)) parsed.searchParams.append(key, value);
-		}
+		const parsed = sandboxFrameUrl(new URL(url, window.location.origin), search);
 		parsed.searchParams.set('theme', theme);
 		if (isApp) parsed.searchParams.set('show-code', 'false');
 		return parsed.toString();

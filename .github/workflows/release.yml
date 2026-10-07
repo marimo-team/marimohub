@@ -244,9 +244,7 @@ jobs:
         id: v
         # Strip the leading "v" from the tag -> semver used for image + chart.
         # The `v*.*.*` trigger is a glob, not a semver check, and the version is
-        # reused in shell steps, so reject anything but digits and dots. Build
-        # time comes from the tagged commit: head_commit is null for annotated
-        # tag pushes.
+        # reused in shell steps, so reject anything but digits and dots.
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -254,7 +252,6 @@ jobs:
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "build_time=$(git log -1 --format=%cI)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
@@ -287,10 +284,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Only args the Dockerfile declares; undeclared build args are silently dropped.
           build-args: |
             MARIMOHUB_VERSION=${{ steps.v.outputs.version }}
             MARIMOHUB_IMAGE=${{ env.IMAGE }}:${{ steps.v.outputs.version }}
-            MARIMOHUB_BUILD_TIME=${{ steps.v.outputs.build_time }}
 
   chart:
     name: Package & push Helm chart

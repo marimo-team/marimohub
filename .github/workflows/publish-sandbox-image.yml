@@ -6,11 +6,15 @@ on:
     paths:
       - 'images/marimo-sandbox/**'
       - 'packages/notebook-bridge/src/runtime.generated.ts'
+      # Surface env names are a contract with the bundled marimo-pair skill.
+      - 'packages/core/src/services/runtime/surfaces/**'
       - '.github/workflows/publish-sandbox-image.yml'
   pull_request:
     paths:
       - 'images/marimo-sandbox/**'
       - 'packages/notebook-bridge/src/runtime.generated.ts'
+      # Surface env names are a contract with the bundled marimo-pair skill.
+      - 'packages/core/src/services/runtime/surfaces/**'
       - '.github/workflows/publish-sandbox-image.yml'
 
 permissions:

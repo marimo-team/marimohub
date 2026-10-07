@@ -144,11 +144,8 @@ The single-writer design behind these leases is in the
 
 ## Reclaim a stuck editor sandbox
 
-While a notebook's previous editor session is still being cleaned up, starting
-a new editor returns `409 EDIT_SESSION_RETIRING` and the notebook shows a
-cleanup message with a **Retry** button. The lifecycle sweep, the 5-minute
-maintenance cycle, or **Stop** normally finishes the cleanup; see
-[Editor sessions](./editor-sessions.md#session-cleanup) for the grace periods.
+Cleanup of a retired editor session normally finishes on its own; see
+[Editor sessions](./editor-sessions.md#session-cleanup) for when it waits.
 
 Super admins can force it from **Admin → Runtime → Editors → Reclaim session**
 (`POST /api/v1/admin/runtime/projects/{pid}/sessions/{sid}/reclaim`, optional
@@ -157,7 +154,11 @@ returns `200` with
 `{ "success": true, "data": { "reclaimed": true, "saved": true } }` (`saved` is
 `false` when nothing was saved).
 
-| Response | Reason                                                                 | Action                                               |
+A blocked reclaim returns the generic `CONFLICT` (`409`) or
+`SERVICE_UNAVAILABLE` (`503`) error code. The error `message` describes the
+cause; the response has no machine-readable reason field.
+
+| Response | Cause                                                                  | Action                                               |
 | -------- | ---------------------------------------------------------------------- | ---------------------------------------------------- |
 | `409`    | `not_terminal`                                                         | Stop the session first.                              |
 | `409`    | `provision_grace`, `teardown_grace`, `kernel_active`                   | Wait for the grace period or for editors to leave.   |
@@ -165,12 +166,16 @@ returns `200` with
 | `503`    | `attachment_failed`, `kernel_unreachable`, `destroy_failed`, `timeout` | Transient; retry after `Retry-After`.                |
 
 Runtime inspection shows `reclaimable` and `reclaim_blocked_reason` on each
-editor row. Each attempt writes a `session.reclaim` audit event with the actor,
-`save_requested`, `reclaimed`, and `saved` or the blocking reason.
+editor row. It reports the causes that need no sandbox call (`not_terminal`,
+the grace periods, and `attachment_unsupported`). Each attempt writes a
+`session.reclaim` audit event with the actor, `save_requested`, `reclaimed`, and
+`saved` or the blocking reason, so the audit log records every cause.
 
 **Known limitation:** providers that cannot attach to an existing sandbox
-(currently Cloudflare) cannot save a retired session. Sessions that may hold
-unsaved edits stay until a super admin reclaims them without saving.
+(currently Cloudflare) cannot save a retired session. Before the session's
+authorization deadline, sessions that may hold unsaved edits stay until a super
+admin reclaims them without saving. After it, automatic cleanup destroys the
+sandbox without saving.
 
 ## Backups & restore
 
@@ -262,6 +267,12 @@ The `client` field groups requests by route and authentication:
 | `cli`    | REST requests with token authentication, including API scripts and other token callers. |
 
 When present, `session_id` identifies the session record and `provision_error_code` identifies a provisioning failure.
+
+Phase timings such as `provision_files_ms` overlap. When the workspace is copied
+into the sandbox, bounded workspace reads start while the sandbox boots, so
+`provision_files_ms` includes the readiness wait as well as the copy. Mounted
+workspaces, and reads over the prefetch budget, wait for readiness first. Do not
+sum phase timings.
 
 ### Tracing (OpenTelemetry)
 

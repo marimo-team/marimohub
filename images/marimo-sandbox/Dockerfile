@@ -120,6 +120,7 @@ ARG OPENCODE_VERSION=1.18.17
 ARG OPENCODE_AMD64_SHA256=3f14a4c61c7f6b0d3b6d933d1d212e64e19683eba6fa453ad98e46303afe144a
 ARG OPENCODE_ARM64_SHA256=7531c1a110546aaf04b465d98a3bf54018e1740f769077c2526fec6add5fc230
 ARG TARGETARCH
+# Keep jq: agents use it, and so does the CI skill health check in publish-sandbox-image.yml.
 RUN case "${TARGETARCH:-amd64}" in \
       amd64) arch=x64; checksum="${OPENCODE_AMD64_SHA256}" ;; \
       arm64) arch=arm64; checksum="${OPENCODE_ARM64_SHA256}" ;; \

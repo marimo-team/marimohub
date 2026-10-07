@@ -1,4 +1,9 @@
-import { exchangeFederatedStorageEnv, UnavailableError, ValidationError } from '@marimo-hub/core';
+import {
+	exchangeFederatedStorageEnv,
+	projectSessionEnv,
+	UnavailableError,
+	ValidationError,
+} from '@marimo-hub/core';
 import type {
 	Project,
 	ProjectId,
@@ -145,6 +150,6 @@ export async function resolveJobSandboxEnv(
 		}),
 	]);
 	let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
-	if (render) env = mergeSessionEnv(render, env ?? {});
+	if (render) env = mergeSessionEnv(projectSessionEnv(render), env ?? {});
 	return env;
 }

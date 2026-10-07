@@ -45,7 +45,6 @@ import {
 	buildGitCloneCommand,
 	classifyListFilesFailure,
 	launchWithProcess,
-	mapWithConcurrency,
 	parseFindFilesOutput,
 	pollUntilReady,
 	portWaitCommand,
@@ -54,6 +53,7 @@ import {
 	ShellEnvironment,
 	privateEnvironmentWriteCommand,
 } from '@marimo-hub/compute-commons';
+import { forEachConcurrentUntilFailure } from '@marimo-hub/core/async';
 import { Millis } from '@marimo-hub/core/duration';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import type { Timings } from '@marimo-hub/core/timing';
@@ -143,7 +143,7 @@ function execCommand(cmd: string, login: boolean, timeout?: number): string[] {
 	return [
 		'sh',
 		'-lc',
-		`exec python3 -c ${shellQuote(EXEC_TIMEOUT_SUPERVISOR)} ${shellQuote(String(supervisorTimeout))} ${shellQuote(cmd)}`,
+		`exec python3 -I -c ${shellQuote(EXEC_TIMEOUT_SUPERVISOR)} ${shellQuote(String(supervisorTimeout))} ${shellQuote(cmd)}`,
 	];
 }
 
@@ -324,8 +324,8 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	 * comes from deploy-time config (`hostname`), so it is known on first use.
 	 */
 	private async ensure(): Promise<void> {
-		if (this.ensuring) return this.ensuring;
 		if (this.resolved) return;
+		if (this.ensuring) return this.ensuring;
 		this.ensuring = this.ensurePod();
 		try {
 			await this.ensuring;
@@ -580,10 +580,11 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	async writeFiles(files: readonly SandboxFileWrite[]): Promise<void> {
 		if (files.length === 0) return;
 		await this.ensure();
-		let failure: { error: unknown } | undefined;
-		await mapWithConcurrency(batchFileWrites(files), WRITE_BATCH_CONCURRENCY, async (batch) => {
-			if (failure) return;
-			try {
+		// Drain active uploads before callers can retry or destroy the sandbox.
+		await forEachConcurrentUntilFailure({
+			items: batchFileWrites(files),
+			concurrency: WRITE_BATCH_CONCURRENCY,
+			run: async (batch) => {
 				const single = batch.length === 1;
 				const file = batch[0];
 				const dir = file.path.slice(0, file.path.lastIndexOf('/')) || '/';
@@ -599,12 +600,8 @@ class KubernetesSandboxInstance implements SandboxInstance {
 						`${single ? `writeFile ${file.path}` : 'writeFiles batch'} failed: ${res.stderr}`,
 					);
 				}
-			} catch (error) {
-				// Drain active uploads before callers can retry or destroy the sandbox.
-				failure ??= { error };
-			}
+			},
 		});
-		if (failure) throw failure.error;
 	}
 
 	async listFiles(path: string, options?: ListFilesOptions): Promise<ListFilesResult> {

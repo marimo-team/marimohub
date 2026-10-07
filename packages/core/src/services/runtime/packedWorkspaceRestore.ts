@@ -1,3 +1,4 @@
+import type { ByteBudget } from './byteBudget';
 import { MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_FILES } from '../../constants';
 import { isSafeWorkspaceRootPath } from '../../integrations/remoteWorkspace';
 import { MAX_DECOMPRESSED_ARCHIVE_BYTES } from '../../integrations/workspaceArchive';
@@ -174,8 +175,10 @@ export async function restorePackedWorkspace(
 	requireGit: boolean,
 	workspaceSubdirectory = '',
 	waitUntilReady?: () => Promise<void>,
+	prefetchBudget?: ByteBudget,
 ): Promise<PackedWorkspaceRestoreResult> {
 	let cleanup: (() => Promise<unknown>) | undefined;
+	let prefetched: Disposable | undefined;
 	try {
 		const normalizedWorkingDir = normalizeWorkingDir(workingDir);
 		if (!isSafeWorkspaceRootPath(workspaceSubdirectory)) {
@@ -184,21 +187,27 @@ export async function restorePackedWorkspace(
 		const temporaryRoot = `${normalizedWorkingDir}/.marimohub-packed-restore`;
 		const archivePath = `${temporaryRoot}/workspace.zip`;
 		const scriptPath = `${temporaryRoot}/extract.py`;
-		cleanup = () => sandbox.exec(`rm -rf -- ${shellQuote(temporaryRoot)}`);
 		const object = await bucket.get(archiveKey);
 		if (!object) return { status: 'missing' };
 		if (object.size > MAX_PACKED_ARCHIVE_BYTES) {
 			throw new Error('Packed workspace archive exceeds the transport limit');
+		}
+		if (waitUntilReady && prefetchBudget) {
+			prefetched = prefetchBudget.tryReserve(object.size);
+			// Over budget: hold the bytes only for the transfer, not the boot.
+			if (!prefetched) await waitUntilReady();
 		}
 		const archive = await object.bytes();
 		if (archive.byteLength !== object.size) {
 			throw new Error('Packed workspace archive size changed while reading');
 		}
 		await waitUntilReady?.();
+		cleanup = () => sandbox.exec(`rm -rf -- ${shellQuote(temporaryRoot)}`);
 		await sandbox.writeFiles([
 			{ path: archivePath, content: archive },
 			{ path: scriptPath, content: EXTRACT_PACKED_WORKSPACE },
 		]);
+		prefetched?.[Symbol.dispose]();
 		const result = await sandbox.exec(
 			`python3 ${shellQuote(scriptPath)} ${shellQuote(archivePath)} ${shellQuote(temporaryRoot)} ${shellQuote(normalizedWorkingDir)} ${requireGit ? '1' : '0'} ${shellQuote(workspaceSubdirectory)}`,
 		);
@@ -212,7 +221,8 @@ export async function restorePackedWorkspace(
 		}
 		return { status: 'restored', archiveBytes: archive.byteLength };
 	} catch (error) {
-		await waitUntilReady?.();
+		prefetched?.[Symbol.dispose]();
+		// Cleanup is set only once readiness resolved, so it never races the boot.
 		await cleanup?.().catch(() => {});
 		return { status: 'failed', error };
 	}

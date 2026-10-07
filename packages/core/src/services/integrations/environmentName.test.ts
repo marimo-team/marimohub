@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ValidationError } from '../../errors';
+import { HUB_SANDBOX_ENV, SANDBOX_IMAGE_MARIMO_ENV } from '../runtime/sandboxEnvironment';
 import { assertValidEnvironmentName, CODE_EXECUTION_ENV } from './environmentName';
 
 describe('assertValidEnvironmentName', () => {
@@ -12,23 +13,25 @@ describe('assertValidEnvironmentName', () => {
 		'MARIMOHUB',
 		'MARIMOHUBX_SETTING',
 		'APP_MARIMOHUB_SETTING',
-		'MARIMO_STUDIO_TRUSTED_SERVER_RUNTIME',
-		'MARIMO_LENS_ENABLED',
 		'MARIMO_OUTPUT_MAX_BYTES',
-		'MARIMO_CONFIG_PATH_SUFFIX',
+		'MARIMO_SQL_DEFAULT_LIMIT',
+		'MARIMO_CONFIG_PATH',
 		'MARIMO_SKIP_UPDATE_CHECK_EXTRA',
 		'MARIMO_VERSION_EXTRA',
-		'_MARIMO_APP_OVERLOAD_AUTO_DOWNLOAD_EXTRA',
+		'XDG_DATA_HOME',
+		'XDG_CONFIG_HOME_EXTRA',
+		'MARIMO_',
+		'__MARIMO_X',
 	])('accepts %s', (name) => {
 		expect(() => assertValidEnvironmentName(name)).not.toThrow();
 	});
 
 	it.each([
 		'lowercase',
-		'marimo_STUDIO_TRUSTED_SERVER_RUNTIME',
-		'MARIMO_STUDIO_TRUSTED_SERVER_RUNTIME ',
-		'MARIMO_STUDIO_TRUSTED_SERVER_RUNTIME\n',
-		'MARIMO_STUDIO_TRUSTED_SERVER_RUNTIME\0',
+		'marimo_OUTPUT_MAX_BYTES',
+		'MARIMO_OUTPUT_MAX_BYTES ',
+		'MARIMO_OUTPUT_MAX_BYTES\n',
+		'MARIMO_OUTPUT_MAX_BYTES\0',
 		'HAS-DASH',
 		'1STARTS_WITH_DIGIT',
 		'',
@@ -55,18 +58,23 @@ describe('assertValidEnvironmentName', () => {
 		'AWS_SESSION_TOKEN',
 		'AWS_ENDPOINT_URL_S3',
 		'AWS_REGION',
-		'MARIMO_CONFIG_PATH',
-		'MARIMO_SKIP_UPDATE_CHECK',
-		'MARIMO_VERSION',
-		'_MARIMO_APP_OVERLOAD_AUTO_DOWNLOAD',
+		'XDG_CONFIG_HOME',
+		'XDG_CACHE_HOME',
+		'XDG_STATE_HOME',
+		...SANDBOX_IMAGE_MARIMO_ENV,
 	])('rejects reserved name %s', (name) => {
 		expect(() => assertValidEnvironmentName(name)).toThrow(ValidationError);
 	});
 
-	it.each(['MARIMOHUB_', 'MARIMOHUB_FOO', 'MARIMOHUB_INTEGRATIONS_DIR'])(
-		'rejects reserved prefix %s',
-		(name) => {
-			expect(() => assertValidEnvironmentName(name)).toThrow(ValidationError);
-		},
-	);
+	it.each([
+		'MARIMOHUB_',
+		'MARIMOHUB_FOO',
+		...HUB_SANDBOX_ENV,
+		'_MARIMO_',
+		'_MARIMO_DISABLE_AUTH_ON_VIRTUAL_FILES',
+		'_MARIMO_APP_OVERLOAD_HTML_HEAD_FILE',
+		'_MARIMO_CONFIG_OVERLOAD_RUNTIME_AUTO_INSTANTIATE',
+	])('rejects reserved prefix %s', (name) => {
+		expect(() => assertValidEnvironmentName(name)).toThrow(ValidationError);
+	});
 });

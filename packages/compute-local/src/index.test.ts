@@ -21,6 +21,13 @@ import {
 import { buildMarimoLaunch } from '@marimo-hub/core/marimo-launch';
 import { LocalCompute, prepareMarimoCommand, rewriteSandboxPaths, rewriteWorkspace } from './index';
 
+// Some CI runners and containers disable IPv6, so binding ::1 fails for reasons unrelated to the adapter.
+const ipv6Loopback = await new Promise<boolean>((resolve) => {
+	const server = net.createServer();
+	server.once('error', () => resolve(false));
+	server.listen(0, '::1', () => server.close(() => resolve(true)));
+});
+
 const compute = new LocalCompute();
 const created: SandboxId[] = [];
 
@@ -662,7 +669,7 @@ exec "$NODE_BIN" -e 'const p=Number(process.argv[1]);require("http").createServe
 		}
 	});
 
-	it.each(['::1', '::'])(
+	it.skipIf(!ipv6Loopback).each(['::1', '::'])(
 		'maps ports and checks readiness for an IPv6 listener on %s',
 		async (bindHost) => {
 			const local = new LocalCompute({ bindHost });

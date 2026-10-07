@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { ByteBudget } from './byteBudget';
 import { Millis } from '../../duration';
 import {
 	createNotebookId,
@@ -234,6 +235,75 @@ describe('SandboxProvisioner', () => {
 				await provision;
 				expect(calls.writeFiles.length).toBeGreaterThan(0);
 				expect(calls.startProcess).toHaveLength(1);
+			},
+		);
+
+		it.each(['objects', 'archive'] as const)(
+			'reads over-budget %s after readiness and still provisions',
+			async (source) => {
+				const { instance, calls, started, ready, bucketHandle, options } = fixture();
+				const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+				await bucketHandle.put(version.workspaceFile('app.py'), 'print(1)');
+				if (source === 'archive') {
+					await bucketHandle.put(version.workspaceArchive, new Uint8Array([80, 75, 3, 4]));
+				}
+				const bodyReads: string[] = [];
+				const get = bucketHandle.get.bind(bucketHandle);
+				vi.spyOn(bucketHandle, 'get').mockImplementation(async (key) => {
+					const body = await get(key);
+					if (!body) return body;
+					const bytes = body.bytes.bind(body);
+					return {
+						...body,
+						bytes: () => {
+							bodyReads.push(key);
+							return bytes();
+						},
+					};
+				});
+				const budget = new ByteBudget(1);
+				const provision = new SandboxProvisioner(fakeComputeFrom(instance), undefined, {
+					prefetchBudget: budget,
+				}).provision({
+					...options,
+					workspaceLoadMode: 'copy-only',
+					workspacePrefix: version.workspacePrefix,
+					workspaceArchive: source === 'archive' ? version.workspaceArchive : undefined,
+				});
+				await started.promise;
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				expect(bodyReads).toEqual([]);
+				ready.resolve();
+				await provision;
+				expect(bodyReads.length).toBeGreaterThan(0);
+				expect(calls.writeFiles.length).toBeGreaterThan(0);
+				expect(budget.available).toBe(1);
+			},
+		);
+
+		it.each(['objects', 'archive'] as const)(
+			'releases the %s prefetch reservation when the provision fails',
+			async (source) => {
+				const { instance, ready, bucketHandle, options } = fixture();
+				const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+				await bucketHandle.put(version.workspaceFile('app.py'), 'print(1)');
+				if (source === 'archive') {
+					await bucketHandle.put(version.workspaceArchive, new Uint8Array([80, 75, 3, 4]));
+				}
+				vi.spyOn(instance, 'writeFiles').mockRejectedValue(new Error('sandbox write failed'));
+				const budget = new ByteBudget(1024);
+				ready.resolve();
+				await expect(
+					new SandboxProvisioner(fakeComputeFrom(instance), undefined, {
+						prefetchBudget: budget,
+					}).provision({
+						...options,
+						workspaceLoadMode: 'copy-only',
+						workspacePrefix: version.workspacePrefix,
+						workspaceArchive: source === 'archive' ? version.workspaceArchive : undefined,
+					}),
+				).rejects.toThrow('restoring the notebook workspace');
+				expect(budget.available).toBe(1024);
 			},
 		);
 
@@ -2768,6 +2838,43 @@ describe('SandboxProvisioner', () => {
 				const nb = paths.project(project.id).notebook(created.id);
 				expect(await (await env.bucket.get(nb.workspaceFile('data.csv')))!.text()).toBe('1,2');
 				expect(calls.destroy).toBe(0);
+			},
+		);
+
+		it.each(['workspace', 'source'] as const)(
+			'lists the sandbox once per capture in %s mode',
+			async (mode) => {
+				const env = await setupTestEnv();
+				const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+				const created = await env.notebooks.createNotebook(
+					project.id,
+					{ title: 'NB', description: 'd', code: 'print(1)' },
+					ACTOR,
+				);
+				const nb = paths.project(project.id).notebook(created.id);
+				await env.bucket.put(nb.workspaceFile('stale.csv'), 'old');
+				const { instance } = makeFsSandbox({
+					files: { 'notebook.py': 'print(2)', 'data.csv': '1,2' },
+				});
+				const listFiles = vi.spyOn(instance, 'listFiles');
+				const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+
+				await provisioner.captureSession(
+					instance,
+					env.notebooks,
+					env.bucket,
+					project.id,
+					created.id,
+					ACTOR,
+					mode,
+				);
+
+				expect(listFiles).toHaveBeenCalledTimes(1);
+				expect(await env.notebooks.getNotebookContent(project.id, created.id)).toBe('print(2)');
+				expect(await env.bucket.get(nb.workspaceFile('stale.csv'))).toBeNull();
+				expect(await env.bucket.get(nb.workspaceFile('data.csv'))).toEqual(
+					mode === 'workspace' ? expect.anything() : null,
+				);
 			},
 		);
 

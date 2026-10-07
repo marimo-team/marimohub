@@ -1,9 +1,16 @@
+import type { ByteBudget } from './byteBudget';
 import type { Bucket } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
-import type { ReadFileResult, SandboxInstance } from '../../ports/sandbox';
+import { listFilesFailure } from '../../ports/sandbox';
+import type {
+	FileInfo,
+	ListFilesResult,
+	ReadFileResult,
+	SandboxInstance,
+} from '../../ports/sandbox';
 import {
 	MAX_ARTIFACT_BYTES,
 	MAX_WORKSPACE_BYTES,
@@ -123,6 +130,20 @@ async function createSandboxDirectories(
 	if (command.length > 'mkdir -p'.length) await execute(command);
 }
 
+/** One recursive listing of the working directory, shared by teardown's readers. */
+export type WorkspaceListing = () => Promise<ListFilesResult>;
+
+export function sharedWorkspaceListing(
+	sandbox: SandboxInstance,
+	workingDir: string,
+): WorkspaceListing {
+	let listing: Promise<ListFilesResult> | undefined;
+	return () =>
+		(listing ??= Promise.resolve().then(() =>
+			sandbox.listFiles(workingDir, { recursive: true, includeHidden: true }),
+		));
+}
+
 /** `commitSession` owns these; capture never uploads or mirror-deletes them. */
 const ROOT_SOURCE_FILES = new Set(['notebook.py', 'pyproject.toml']);
 
@@ -180,6 +201,8 @@ export interface WorkspaceRestoreOptions {
 	requireComplete?: boolean;
 	/** Storage reads may precede readiness; sandbox mutations must wait. */
 	waitUntilReady?: () => Promise<void>;
+	/** Bounds bytes fetched before readiness; over budget, a batch is read after it. */
+	prefetchBudget?: ByteBudget;
 	/** Relative path roots owned by another restore and therefore skipped. */
 	excludeRelativeRoots?: readonly string[];
 }
@@ -275,7 +298,16 @@ export async function restoreWorkspace(
 	// through a shell, and there is no temp file to decode.
 	let objectCount = 0;
 	let bytes = 0;
+	let ready = !options.waitUntilReady;
 	for (const batch of batchByBytes(wanted, RESTORE_BATCH_BYTES)) {
+		using prefetched =
+			ready || !options.prefetchBudget
+				? undefined
+				: options.prefetchBudget.tryReserve(batch.reduce((sum, f) => sum + f.size, 0));
+		if (!ready && options.prefetchBudget && !prefetched) {
+			await options.waitUntilReady?.();
+			ready = true;
+		}
 		const fetched = await mapWithConcurrency(batch, RESTORE_FETCH_CONCURRENCY, async (f) => {
 			const body = await bucket.get(f.key);
 			if (!body) {
@@ -288,6 +320,7 @@ export async function restoreWorkspace(
 		});
 		const files = fetched.filter((f) => f !== undefined);
 		await options.waitUntilReady?.();
+		ready = true;
 		if (directories.length > 0) {
 			await createSandboxDirectories(sandbox, directories);
 			directories.length = 0;
@@ -299,43 +332,9 @@ export async function restoreWorkspace(
 	return { objectCount, bytes };
 }
 
-/**
- * Save runtime files to `workspace/` on teardown. `commitSession` owns the root
- * source files. Capture preserves stored source files and regenerable caches.
- * A regular `CACHEDIR.TAG` file excludes its directory and descendants from
- * uploads and cleanup in both modes. Detection uses file presence, not contents.
- *
- * `workspace` mode saves visible files first, then `__marimo__/`, then hidden
- * files within the file and byte limits. Each Git directory goes last and must
- * fit as a whole to avoid an incomplete repository. Capture excludes Git hooks.
- * Reads have byte and time limits. Skipped uploads retain their stored copies.
- *
- * Cleanup deletes missing files in `workspace` mode and all unprotected runtime
- * files in `source` mode. A failed listing prevents uploads and cleanup.
- */
-export async function captureWorkspace(
-	sandbox: SandboxInstance,
-	bucket: Bucket,
-	projectId: ProjectId,
-	notebookId: NotebookId,
-	workingDir: string,
-	mode: 'source' | 'workspace',
-): Promise<void> {
-	if (!supportsBoundedReads(sandbox)) return;
-	const nb = paths.project(projectId).notebook(notebookId);
-
-	const present = new Set<string>();
-	const retainedGitGroups = new Set<string>();
-
-	const listing = await sandbox.listFiles(workingDir, { recursive: true, includeHidden: true });
-	if (!listing.success) {
-		// A failed listing cannot distinguish deleted files from protected caches.
-		console.warn(
-			`captureWorkspace: listing ${workingDir} failed (${listing.error.code}); skipping capture + cleanup`,
-		);
-		return;
-	}
-	const files = listing.files.filter(
+/** Files under a directory holding a regular `CACHEDIR.TAG`, by presence, not contents. */
+function taggedCaches(listed: readonly FileInfo[]) {
+	const files = listed.filter(
 		({ relativePath }) =>
 			isSafeWorkspacePath(relativePath) && !isWorkspaceInternalPath(relativePath),
 	);
@@ -353,120 +352,195 @@ export async function captureWorkspace(
 		}
 		return false;
 	};
+	const outermost = [...taggedDirectories].filter(
+		(directory) => directory === '' || !isTaggedCache(parentDirectory(directory)),
+	);
+	return { files, isTaggedCache, taggedRoots: taggedDirectories.has('') ? [''] : outermost };
+}
 
-	if (mode === 'workspace') {
-		// Reserve budgets from listed sizes before concurrent reads and uploads.
-		const selected: string[] = [];
-		const directoryMarkers: string[] = [];
-		const candidates: { rel: string; size: number; tier: number }[] = [];
-		const gitGroups = new Map<
-			string,
-			{ files: string[]; directoryMarkers: string[]; bytes: number; fitsPerFileCap: boolean }
-		>();
-		const gitGroupFor = (group: string) => {
-			let entry = gitGroups.get(group);
-			if (!entry) {
-				entry = { files: [], directoryMarkers: [], bytes: 0, fitsPerFileCap: true };
-				gitGroups.set(group, entry);
-			}
-			return entry;
-		};
-		for (const file of files) {
-			const rel = file.relativePath;
-			if (isCaptureExcluded(rel) || isTaggedCache(rel)) continue;
-			const group = gitGroupOf(rel);
-			if (file.type === 'directory') {
-				(group === null ? directoryMarkers : gitGroupFor(group).directoryMarkers).push(
-					workspaceDirectoryMarkerPath(rel),
-				);
-				continue;
-			}
-			if (file.type !== 'file') continue;
-			present.add(rel);
-			if (group !== null) {
-				const entry = gitGroupFor(group);
-				entry.files.push(rel);
-				entry.bytes += file.size;
-				if (file.size > MAX_WORKSPACE_FILE_BYTES) entry.fitsPerFileCap = false;
-				continue;
-			}
-			candidates.push({ rel, size: file.size, tier: captureTier(rel) });
-		}
-		// Stable sort keeps listing order within a tier.
-		candidates.sort((left, right) => left.tier - right.tier);
-
-		let totalBytes = 0;
-		for (const { rel, size } of candidates) {
-			if (selected.length >= MAX_WORKSPACE_FILES) {
-				console.warn(
-					`captureWorkspace: file count cap (${MAX_WORKSPACE_FILES}) reached; skipping ${rel}`,
-				);
-				continue;
-			}
-			if (size > MAX_WORKSPACE_FILE_BYTES) {
-				console.warn(
-					`captureWorkspace: per-file cap (${MAX_WORKSPACE_FILE_BYTES}) exceeded; skipping ${rel} (${size} bytes)`,
-				);
-				continue;
-			}
-			if (totalBytes + size > MAX_WORKSPACE_BYTES) {
-				console.warn(
-					`captureWorkspace: total-byte cap (${MAX_WORKSPACE_BYTES}) would be exceeded; skipping ${rel} (${size} bytes)`,
-				);
-				continue;
-			}
-			selected.push(rel);
-			totalBytes += size;
-		}
-
-		// Root repository first, then nested ones in listing order.
-		const orderedGitGroups = [...gitGroups].sort(
-			([left], [right]) => Number(right === '.git') - Number(left === '.git'),
+/**
+ * Save runtime files to `workspace/` on teardown. `commitSession` owns the root
+ * source files. Capture preserves stored source files and regenerable caches.
+ * A regular `CACHEDIR.TAG` file excludes its directory and descendants from
+ * uploads. Detection uses file presence, not contents.
+ *
+ * `workspace` mode saves visible files first, then `__marimo__/`, then hidden
+ * files within the file and byte limits. Each Git directory goes last and must
+ * fit as a whole to avoid an incomplete repository. Capture excludes Git hooks.
+ * Reads have byte and time limits. Skipped uploads retain their stored copies,
+ * except tagged caches: they are regenerable, so their stored copies (including
+ * ones captured before tag detection, which restore would otherwise re-tag and
+ * pin) are removed like missing files.
+ *
+ * Cleanup deletes missing files in `workspace` mode and all unprotected runtime
+ * files outside tagged caches in `source` mode. A failed listing prevents
+ * uploads and cleanup; a thrown listing rejects `workspace` mode only. Pass
+ * `listing` to share one listing with `readSessionArtifacts`; `source` mode
+ * lists only when a stored key could be deleted.
+ */
+export async function captureWorkspace(
+	sandbox: SandboxInstance,
+	bucket: Bucket,
+	projectId: ProjectId,
+	notebookId: NotebookId,
+	workingDir: string,
+	mode: 'source' | 'workspace',
+	listing: WorkspaceListing = sharedWorkspaceListing(sandbox, workingDir),
+): Promise<void> {
+	if (!supportsBoundedReads(sandbox)) return;
+	const nb = paths.project(projectId).notebook(notebookId);
+	const warnListingFailed = (code: string) =>
+		console.warn(
+			`captureWorkspace: listing ${workingDir} failed (${code}); skipping capture + cleanup`,
 		);
-		for (const [group, entry] of orderedGitGroups) {
-			if (
-				entry.fitsPerFileCap &&
-				selected.length + entry.files.length <= MAX_WORKSPACE_FILES &&
-				totalBytes + entry.bytes <= MAX_WORKSPACE_BYTES
-			) {
-				selected.push(...entry.files);
-				directoryMarkers.push(...entry.directoryMarkers);
-				totalBytes += entry.bytes;
-			} else {
-				// A stale but complete repository beats a deleted one, so the stored
-				// copy is kept whole rather than mirror-deleted.
-				retainedGitGroups.add(group);
-				console.warn(
-					`captureWorkspace: ${group.slice(0, 256)} (${entry.files.length} files, ${entry.bytes} bytes) does not fit the remaining workspace budget; keeping the stored copy`,
-				);
-			}
-		}
 
-		// Presence comes from the listing: skipped uploads retain the last good copy.
-		let capturedBytes = 0;
-		await mapWithConcurrency(selected, CAPTURE_READ_CONCURRENCY, async (rel) => {
-			const result = await readBoundedBytes(
-				sandbox,
-				`${workingDir}/${rel}`,
-				Math.min(MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_BYTES - capturedBytes),
-			);
-			if (!result?.success || capturedBytes + result.bytes.byteLength > MAX_WORKSPACE_BYTES) {
-				console.warn(`captureWorkspace: could not read ${rel.slice(0, 256)}; skipping`);
-				return;
-			}
-			capturedBytes += result.bytes.byteLength;
-			await bucket.put(nb.workspaceFile(rel), result.bytes);
+	if (mode === 'source') {
+		const deletable = (await listAllKeys(bucket, nb.workspacePrefix)).filter((key) => {
+			const rel = key.slice(nb.workspacePrefix.length);
+			return rel !== '' && !isMirrorProtected(rel);
 		});
-		await mapWithConcurrency(directoryMarkers, CAPTURE_FILE_CONCURRENCY, async (marker) =>
-			bucket.put(nb.workspaceFile(marker), new Uint8Array()),
+		if (deletable.length === 0) return;
+		const listed = await listing().catch(() => listFilesFailure('BACKEND_ERROR'));
+		if (!listed.success) {
+			// A failed listing cannot distinguish deleted files from protected caches.
+			warnListingFailed(listed.error.code);
+			return;
+		}
+		const { isTaggedCache } = taggedCaches(listed.files);
+		const staleKeys = deletable.filter(
+			(key) => !isTaggedCache(key.slice(nb.workspacePrefix.length)),
 		);
-		for (const marker of directoryMarkers) present.add(marker);
+		if (staleKeys.length > 0) await bucket.delete(staleKeys);
+		return;
 	}
+
+	const listed = await listing();
+	if (!listed.success) {
+		warnListingFailed(listed.error.code);
+		return;
+	}
+	const { files, isTaggedCache, taggedRoots } = taggedCaches(listed.files);
+	for (const directory of taggedRoots) {
+		console.warn(
+			directory
+				? `captureWorkspace: ${directory.slice(0, 256)} contains CACHEDIR.TAG; skipping it and removing its stored copy`
+				: 'captureWorkspace: the workspace root contains CACHEDIR.TAG; skipping every runtime file and removing their stored copies',
+		);
+	}
+	const present = new Set<string>();
+	const retainedGitGroups = new Set<string>();
+
+	// Reserve budgets from listed sizes before concurrent reads and uploads.
+	const selected: string[] = [];
+	const directoryMarkers: string[] = [];
+	const candidates: { rel: string; size: number; tier: number }[] = [];
+	const gitGroups = new Map<
+		string,
+		{ files: string[]; directoryMarkers: string[]; bytes: number; fitsPerFileCap: boolean }
+	>();
+	const gitGroupFor = (group: string) => {
+		let entry = gitGroups.get(group);
+		if (!entry) {
+			entry = { files: [], directoryMarkers: [], bytes: 0, fitsPerFileCap: true };
+			gitGroups.set(group, entry);
+		}
+		return entry;
+	};
+	for (const file of files) {
+		const rel = file.relativePath;
+		if (isCaptureExcluded(rel) || isTaggedCache(rel)) continue;
+		const group = gitGroupOf(rel);
+		if (file.type === 'directory') {
+			(group === null ? directoryMarkers : gitGroupFor(group).directoryMarkers).push(
+				workspaceDirectoryMarkerPath(rel),
+			);
+			continue;
+		}
+		if (file.type !== 'file') continue;
+		present.add(rel);
+		if (group !== null) {
+			const entry = gitGroupFor(group);
+			entry.files.push(rel);
+			entry.bytes += file.size;
+			if (file.size > MAX_WORKSPACE_FILE_BYTES) entry.fitsPerFileCap = false;
+			continue;
+		}
+		candidates.push({ rel, size: file.size, tier: captureTier(rel) });
+	}
+	// Stable sort keeps listing order within a tier.
+	candidates.sort((left, right) => left.tier - right.tier);
+
+	let totalBytes = 0;
+	for (const { rel, size } of candidates) {
+		if (selected.length >= MAX_WORKSPACE_FILES) {
+			console.warn(
+				`captureWorkspace: file count cap (${MAX_WORKSPACE_FILES}) reached; skipping ${rel}`,
+			);
+			continue;
+		}
+		if (size > MAX_WORKSPACE_FILE_BYTES) {
+			console.warn(
+				`captureWorkspace: per-file cap (${MAX_WORKSPACE_FILE_BYTES}) exceeded; skipping ${rel} (${size} bytes)`,
+			);
+			continue;
+		}
+		if (totalBytes + size > MAX_WORKSPACE_BYTES) {
+			console.warn(
+				`captureWorkspace: total-byte cap (${MAX_WORKSPACE_BYTES}) would be exceeded; skipping ${rel} (${size} bytes)`,
+			);
+			continue;
+		}
+		selected.push(rel);
+		totalBytes += size;
+	}
+
+	// Root repository first, then nested ones in listing order.
+	const orderedGitGroups = [...gitGroups].sort(
+		([left], [right]) => Number(right === '.git') - Number(left === '.git'),
+	);
+	for (const [group, entry] of orderedGitGroups) {
+		if (
+			entry.fitsPerFileCap &&
+			selected.length + entry.files.length <= MAX_WORKSPACE_FILES &&
+			totalBytes + entry.bytes <= MAX_WORKSPACE_BYTES
+		) {
+			selected.push(...entry.files);
+			directoryMarkers.push(...entry.directoryMarkers);
+			totalBytes += entry.bytes;
+		} else {
+			// A stale but complete repository beats a deleted one, so the stored
+			// copy is kept whole rather than mirror-deleted.
+			retainedGitGroups.add(group);
+			console.warn(
+				`captureWorkspace: ${group.slice(0, 256)} (${entry.files.length} files, ${entry.bytes} bytes) does not fit the remaining workspace budget; keeping the stored copy`,
+			);
+		}
+	}
+
+	// Presence comes from the listing: skipped uploads retain the last good copy.
+	let capturedBytes = 0;
+	await mapWithConcurrency(selected, CAPTURE_READ_CONCURRENCY, async (rel) => {
+		const result = await readBoundedBytes(
+			sandbox,
+			`${workingDir}/${rel}`,
+			Math.min(MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_BYTES - capturedBytes),
+		);
+		if (!result?.success || capturedBytes + result.bytes.byteLength > MAX_WORKSPACE_BYTES) {
+			console.warn(`captureWorkspace: could not read ${rel.slice(0, 256)}; skipping`);
+			return;
+		}
+		capturedBytes += result.bytes.byteLength;
+		await bucket.put(nb.workspaceFile(rel), result.bytes);
+	});
+	await mapWithConcurrency(directoryMarkers, CAPTURE_FILE_CONCURRENCY, async (marker) =>
+		bucket.put(nb.workspaceFile(marker), new Uint8Array()),
+	);
+	for (const marker of directoryMarkers) present.add(marker);
 
 	const existingKeys = await listAllKeys(bucket, nb.workspacePrefix);
 	const staleKeys = existingKeys.filter((key) => {
 		const rel = key.slice(nb.workspacePrefix.length);
-		if (!rel || isMirrorProtected(rel) || isTaggedCache(rel)) return false;
+		if (!rel || isMirrorProtected(rel)) return false;
 		if (isGitHooksPath(rel)) return true;
 		const group = gitGroupOf(rel);
 		if (group !== null && retainedGitGroups.has(group)) return false;
@@ -491,9 +565,10 @@ export async function captureWorkspace(
 export async function readSessionArtifacts(
 	sandbox: SandboxInstance,
 	mountPath: string,
+	listing: WorkspaceListing = sharedWorkspaceListing(sandbox, mountPath),
 ): Promise<CommitSessionInput> {
 	if (!supportsBoundedReads(sandbox)) return {};
-	const sizes = await listFileSizes(sandbox, mountPath);
+	const sizes = await fileSizes(listing);
 	const read = (path: string) => readCappedFile(sandbox, path, sizes);
 	const [code, deps, html, session] = await Promise.all([
 		readNotebookCode(sandbox, `${mountPath}/notebook.py`, sizes),
@@ -528,16 +603,16 @@ export async function listFileSizes(
 	sandbox: SandboxInstance,
 	mountPath: string,
 ): Promise<ReadonlyMap<string, number>> {
+	return fileSizes(sharedWorkspaceListing(sandbox, mountPath));
+}
+
+// Transport limits still apply when listing is unavailable.
+async function fileSizes(listing: WorkspaceListing): Promise<ReadonlyMap<string, number>> {
 	const sizes = new Map<string, number>();
-	try {
-		const listing = await sandbox.listFiles(mountPath, { recursive: true, includeHidden: true });
-		if (listing.success) {
-			for (const file of listing.files) {
-				sizes.set(file.absolutePath, file.type === 'file' ? file.size : Infinity);
-			}
-		}
-	} catch {
-		// Transport limits still apply when listing is unavailable.
+	const listed = await listing().catch(() => listFilesFailure('BACKEND_ERROR'));
+	if (!listed.success) return sizes;
+	for (const file of listed.files) {
+		sizes.set(file.absolutePath, file.type === 'file' ? file.size : Infinity);
 	}
 	return sizes;
 }
