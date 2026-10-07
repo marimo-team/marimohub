@@ -429,7 +429,10 @@ describe('Session surface routes', () => {
 		expect(calls.startProcess.at(-1)?.cmd).toContain(
 			`'OPENCODE_CONFIG=/tmp/.marimohub/surfaces/${session.session_id}/opencode/config/opencode/opencode.json'`,
 		);
-		expect(calls.startProcess.at(-1)?.options?.env).toBeUndefined();
+		expect(calls.startProcess.at(-1)?.options?.env).toEqual({
+			MARIMOHUB_KERNEL_URL: 'http://127.0.0.1:2718/',
+			MARIMOHUB_KERNEL_TOKEN_FILE: '',
+		});
 		const configWrite = calls.writeFile.find((file) =>
 			file.path.endsWith('/config/opencode/opencode.json'),
 		);

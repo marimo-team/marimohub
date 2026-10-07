@@ -186,6 +186,8 @@ export interface SandboxInstance {
 	/** Whether `mountBucket` is a real backend capability rather than a copy fallback signal. */
 	readonly supportsBucketMount?: boolean;
 	resolveProcessPath?(path: string): string;
+	/** Map a sandbox-local URL to the address reachable by its processes. */
+	resolveProcessUrl?(url: string): string;
 	isPortReady?(port: number, options?: Omit<WaitForPortOptions, 'timeout'>): Promise<boolean>;
 	/**
 	 * Resolve the backing sandbox without running anything in it, so an adapter

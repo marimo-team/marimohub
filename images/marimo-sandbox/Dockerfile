@@ -143,6 +143,10 @@ RUN UV_CACHE_DIR=/tmp/marimo-pair-uv-cache \
  && test -f /home/appuser/.agents/skills/marimo-pair/SKILL.md \
  && rm -rf /tmp/marimo-pair-uv-cache /tmp/marimo-pair-deno-cache
 
+COPY install-marimo-pair.py /tmp/install-marimo-pair.py
+COPY marimo-pair /tmp/marimo-pair
+RUN python3 /tmp/install-marimo-pair.py /home/appuser/.agents/skills/marimo-pair /tmp/marimo-pair
+
 FROM vscode AS tools
 
 USER root

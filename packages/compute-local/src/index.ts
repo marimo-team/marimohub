@@ -318,11 +318,17 @@ class LocalSandboxInstance implements SandboxInstance {
 		return this.mapPath(p);
 	}
 
+	resolveProcessUrl(url: string): string {
+		const resolved = new URL(url);
+		resolved.hostname = this.bindHost === '0.0.0.0' ? '127.0.0.1' : this.bindHost;
+		const port = Number(resolved.port || (resolved.protocol === 'https:' ? 443 : 80));
+		resolved.port = String(this.portMap.get(port) ?? port);
+		return resolved.toString();
+	}
+
 	async isPortReady(port: number, options?: Omit<WaitForPortOptions, 'timeout'>): Promise<boolean> {
-		const real = this.portMap.get(port) ?? port;
-		const host = this.bindHost === '0.0.0.0' ? '127.0.0.1' : this.bindHost;
 		try {
-			await fetch(`http://${host}:${real}${options?.path ?? '/'}`, {
+			await fetch(this.resolveProcessUrl(`http://127.0.0.1:${port}${options?.path ?? '/'}`), {
 				redirect: 'manual',
 				signal: AbortSignal.timeout(2_000),
 			});

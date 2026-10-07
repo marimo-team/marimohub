@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../../ids';
 import { MemoryBucket, ACTOR, fakeComputeFrom, makeFakeSandbox } from '../../../testing';
 import { SessionService } from '../SessionService';
+import { createKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from '../kernelAuth';
 import { marimoSurface } from './marimo';
 import { opencodeSurface } from './opencode';
 import { SurfaceManager } from './SurfaceManager';
@@ -31,7 +32,7 @@ async function setup(failWaitForPort?: Error, vscode = vscodeSurface()) {
 	const manager = new SurfaceManager(
 		compute,
 		sessions,
-		new SurfaceRegistry([marimoSurface, vscode]),
+		new SurfaceRegistry([marimoSurface, vscode, opencodeSurface()]),
 	);
 	return { calls, instance, compute, manager, session, sessions };
 }
@@ -47,13 +48,106 @@ function options() {
 }
 
 describe('SurfaceManager', () => {
+	it.each([
+		['vscode', 'subdomain', false],
+		['vscode', 'subdomain', true],
+		['vscode', 'proxy', false],
+		['vscode', 'proxy', true],
+		['opencode', 'subdomain', false],
+		['opencode', 'subdomain', true],
+	] as const)(
+		'gives %s the kernel connection with %s exposure and auth=%s',
+		async (id, exposure, auth) => {
+			const { calls, manager, session } = await setup();
+			const token = auth ? createKernelAuthToken() : undefined;
+			await manager.ensure(
+				{
+					...session,
+					kernel_auth_token: token,
+					sandbox_url:
+						exposure === 'proxy'
+							? 'https://hub.example/prefix/proxy/routing-token/'
+							: `https://sandbox.example/?access_token=${token ?? ''}`,
+					sandbox_origin_url: exposure === 'proxy' ? 'https://origin.example/' : undefined,
+				},
+				id,
+				{
+					...options(),
+					exposure,
+					basePath: '/surface-proxy/surface-token/vscode',
+					open: undefined,
+				},
+			);
+			expect(calls.startProcess[0].options?.env).toEqual({
+				MARIMOHUB_KERNEL_URL:
+					exposure === 'proxy'
+						? 'http://127.0.0.1:2718/prefix/proxy/routing-token/'
+						: 'http://127.0.0.1:2718/',
+				MARIMOHUB_KERNEL_TOKEN_FILE: auth ? KERNEL_AUTH_TOKEN_FILE : '',
+			});
+			if (token) expect(JSON.stringify(calls.startProcess)).not.toContain(token);
+		},
+	);
+
+	it('resolves the kernel connection for host processes and preserves surface env', async () => {
+		const { calls, instance, manager, session } = await setup(undefined, {
+			...vscodeSurface(),
+			command: () => ({ cmd: ['code-server'], env: { SURFACE_SETTING: 'enabled' } }),
+		});
+		instance.resolveProcessUrl = (url) => url.replace(':2718', ':43210');
+		instance.resolveProcessPath = (path) => `/local-sandbox${path}`;
+		await manager.ensure({ ...session, kernel_auth_token: createKernelAuthToken() }, 'vscode', {
+			...options(),
+			open: undefined,
+		});
+		expect(calls.startProcess[0].options?.env).toEqual({
+			SURFACE_SETTING: 'enabled',
+			MARIMOHUB_KERNEL_URL: 'http://127.0.0.1:43210/',
+			MARIMOHUB_KERNEL_TOKEN_FILE: `/local-sandbox${KERNEL_AUTH_TOKEN_FILE}`,
+		});
+	});
+
+	it('replaces stale surface connection variables and clears the token path with auth off', async () => {
+		const { calls, manager, session } = await setup(undefined, {
+			...vscodeSurface(),
+			command: () => ({
+				cmd: ['code-server'],
+				env: {
+					MARIMOHUB_KERNEL_URL: 'https://old-kernel.example/',
+					MARIMOHUB_KERNEL_TOKEN_FILE: '/tmp/old-token',
+				},
+			}),
+		});
+		await manager.ensure(session, 'vscode', { ...options(), open: undefined });
+		expect(calls.startProcess[0].options?.env).toEqual({
+			MARIMOHUB_KERNEL_URL: 'http://127.0.0.1:2718/',
+			MARIMOHUB_KERNEL_TOKEN_FILE: '',
+		});
+	});
+
+	it('does not launch when connection resolution fails and keeps credentials out of surface state', async () => {
+		const { calls, instance, manager, session, sessions } = await setup();
+		const token = createKernelAuthToken();
+		instance.resolveProcessUrl = () => {
+			throw new Error(`Cannot resolve kernel with token ${token}`);
+		};
+		await expect(
+			manager.ensure({ ...session, kernel_auth_token: token }, 'vscode', {
+				...options(),
+				open: undefined,
+			}),
+		).rejects.toThrow('Cannot resolve kernel');
+		expect(calls.startProcess).toHaveLength(0);
+		const stored = await sessions.getSession(session.project_id, session.session_id);
+		expect(stored.surfaces?.vscode).toMatchObject({
+			status: 'failed',
+			last_error: 'Failed to start vscode (Error)',
+		});
+		expect(JSON.stringify(stored.surfaces)).not.toContain(token);
+	});
+
 	it('rejects unsupported exposure and open-path combinations before sandbox work', async () => {
-		const { calls, instance, session, sessions } = await setup();
-		const manager = new SurfaceManager(
-			fakeComputeFrom(instance),
-			sessions,
-			new SurfaceRegistry([marimoSurface, opencodeSurface()]),
-		);
+		const { calls, manager, session } = await setup();
 
 		await expect(
 			manager.begin(session, 'opencode', { ...options(), exposure: 'proxy', open: undefined }),

@@ -108,12 +108,20 @@ Project `opencode.json` files can override the provider or initial model. Users
 can also add bring-your-own-key providers through `/connect`. These credentials
 stay in the temporary surface directory.
 
-The published OpenCode images include the `marimo-pair` skill and its shell
-dependencies. OpenCode can use it to work directly with the running marimo kernel.
-
 The managed token expires after `MARIMOHUB_AI_TOKEN_TTL_SECONDS`, even while
 OpenCode is open. Restart OpenCode to get a new token. A bring-your-own-key
 provider uses its own credential.
+
+## Kernel access
+
+Secondary surfaces and their child agents inherit:
+
+- `MARIMOHUB_KERNEL_URL`: the sandbox-local kernel URL, including any `/proxy/<token>` prefix.
+- `MARIMOHUB_KERNEL_TOKEN_FILE`: the token file path, or an empty string with native authentication disabled.
+
+The local compute adapter maps both values to the host process.
+OpenCode images bundle `marimo-pair`, which uses these variables instead of
+marimo's server registry. Discovery works regardless of authentication or `XDG_STATE_HOME`.
 
 ## Security and exposure
 
