@@ -393,3 +393,65 @@ describe('inherited federation', () => {
 		expect(env?.vars?.AWS_ACCESS_KEY_ID).toBe('AK');
 	});
 });
+
+describe('package registry federation', () => {
+	it('lazily shares project WIF credentials within an integration render', async () => {
+		const project = makeProject({ federation: { enabled: true } });
+		const { config, exchange } = wif();
+		const { service, resolveForSession } = integrations({
+			files: [],
+			vars: {},
+			attachments: [],
+			warnings: [],
+		});
+		await resolveIntegrationRender(
+			{ integrations: service, wif: config },
+			{
+				project,
+				projectId: project.id,
+				workload: { kind: 'job-run', id: createRunId() },
+				principal: { userId: ACTOR, email: 'a@x' },
+				restricted: false,
+			},
+		);
+		expect(exchange).not.toHaveBeenCalled();
+		const renderContext = resolveForSession.mock.calls[0][1] as Parameters<
+			ProjectIntegrationsService['resolveForSession']
+		>[1];
+		const credentials = await Promise.all([
+			renderContext.resolveAwsCredentials!(),
+			renderContext.resolveAwsCredentials!(),
+		]);
+		expect(credentials).toEqual([
+			{ accessKeyId: 'AK', secretAccessKey: 'SK' },
+			{ accessKeyId: 'AK', secretAccessKey: 'SK' },
+		]);
+		expect(exchange).toHaveBeenCalledOnce();
+	});
+
+	it.each([false, true])(
+		'does not grant WIF when cloud access is disabled (deployment default: %s)',
+		async (defaultEnabled) => {
+			const project = makeProject({ federation: { enabled: false } });
+			const { config, exchange } = wif(undefined, defaultEnabled);
+			const { service, resolveForSession } = integrations({
+				files: [],
+				vars: {},
+				attachments: [],
+				warnings: [],
+			});
+			await resolveIntegrationRender(
+				{ integrations: service, wif: config },
+				{
+					project,
+					projectId: project.id,
+					workload: { kind: 'job-run', id: createRunId() },
+					principal: { userId: ACTOR, email: 'a@x' },
+					restricted: false,
+				},
+			);
+			expect(resolveForSession.mock.calls[0][1].resolveAwsCredentials).toBeUndefined();
+			expect(exchange).not.toHaveBeenCalled();
+		},
+	);
+});

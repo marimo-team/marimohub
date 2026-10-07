@@ -1,3 +1,7 @@
+import type {
+	PackageRegistryCredentials,
+	PackageRegistrySource,
+} from '../../ports/packageRegistry';
 import { z } from 'zod';
 import { DomainError, UnavailableError, ValidationError } from '../../errors';
 import type {
@@ -31,6 +35,7 @@ import { secretPaths } from './secretFields';
 import type { SecretPath } from './secretFields';
 
 export interface RenderInput<C> {
+	packageRegistryCredentials?: PackageRegistryCredentials;
 	/** Validated config with secret fields resolved to plaintext. */
 	config: C;
 	/** Instance name used to parameterize paths and environment variables. */
@@ -41,6 +46,7 @@ export interface RenderInput<C> {
 }
 
 export interface RenderOutput {
+	packageIndexes?: { name: string; url: string; default: boolean }[];
 	/**
 	 * Files to place in the sandbox, paths relative to the integrations dir
 	 * (POSIX separators, no `..`). The bundler prefixes the absolute dir and
@@ -217,6 +223,10 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	browse?: BrowseCapability<z.infer<S>>;
 	databaseBrowse?: DatabaseBrowseDefinition<z.infer<S>>;
 	objectBrowse?: ObjectBrowseDefinition<z.infer<S>>;
+	packageRegistry?: {
+		source(config: z.infer<S>): PackageRegistrySource;
+		indexUrl(config: z.infer<S>): string;
+	};
 	preview?: {
 		available(
 			config: z.infer<S>,

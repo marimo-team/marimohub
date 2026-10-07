@@ -79,7 +79,8 @@ export class IntegrationRegistry {
 			supports_test:
 				def.testConnection !== undefined ||
 				def.databaseBrowse !== undefined ||
-				def.objectBrowse !== undefined,
+				def.objectBrowse !== undefined ||
+				def.packageRegistry !== undefined,
 			supports_browse: browse_surfaces.length > 0,
 			browse_surfaces,
 			secret_sources: { inline: false, references: [] },

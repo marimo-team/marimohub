@@ -54,8 +54,11 @@ export function bundleIntegrations(
 	const claimPath = pathClaimer();
 	// Claimed up front so a kind emitting the bundler's own key gets the normal
 	// collision error instead of having its value silently overwritten.
-	const vars: Record<string, string> = { [INTEGRATIONS_DIR_ENV]: INTEGRATIONS_DIR };
-	const varOwner = new Map<string, string>([[INTEGRATIONS_DIR_ENV, BUNDLER]]);
+	const vars: Record<string, string> = {
+		[INTEGRATIONS_DIR_ENV]: INTEGRATIONS_DIR,
+		...packageIndexEnv(rendered.flatMap((item) => item.output.packageIndexes ?? [])),
+	};
+	const varOwner = new Map(Object.keys(vars).map((key) => [key, BUNDLER]));
 	const warnings = rendered.flatMap((item) => item.output.warnings ?? []);
 
 	for (const item of rendered) {
@@ -145,6 +148,29 @@ export function bundleIntegrations(
 		attachments: rendered.map(({ id, name, kind, version }) => ({ id, name, kind, version })),
 		warnings,
 	};
+}
+
+function packageIndexEnv(
+	indexes: NonNullable<RenderOutput['packageIndexes']>,
+): Record<string, string> {
+	const names = new Set<string>();
+	const vars: Record<string, string> = {};
+	for (const index of indexes) {
+		assertValidIntegrationName(index.name);
+		const url = new URL(index.url);
+		if (url.protocol !== 'https:' || url.username || url.password || /\s/.test(index.url)) {
+			throw new ValidationError('Package indexes must use HTTPS without embedded credentials.');
+		}
+		if (names.has(index.name)) throw new ValidationError('Package index names must be unique.');
+		names.add(index.name);
+		const key = index.default ? 'UV_DEFAULT_INDEX' : 'UV_INDEX';
+		if (index.default && vars[key]) {
+			throw new ValidationError('Only one package index can replace PyPI.');
+		}
+		const entry = `${index.name}=${index.url}`;
+		vars[key] = vars[key] ? `${vars[key]} ${entry}` : entry;
+	}
+	return vars;
 }
 
 function assertValidEnvValue(key: string, value: string, instance: string): void {

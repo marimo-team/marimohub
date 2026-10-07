@@ -130,6 +130,17 @@ Kinds live in `core`, so they cannot import vendor SDKs. Render text files and
 environment variables instead. The bundle is placed under
 `/tmp/marimohub-integrations`, outside the notebook workspace.
 
+## Package registry authentication
+
+Kinds declare `packageRegistry` with a credential source and index URL.
+Before rendering, the store resolves credentials through `PackageRegistryCredentialProvider`.
+The Node configuration supplies the AWS adapter and guarded probe. AWS requests use explicit credentials, never the server's ambient identity.
+Session and job callers supply a lazy project-WIF resolver.
+
+The bundle combines `packageIndexes` into `UV_INDEX` and `UV_DEFAULT_INDEX`, with credentials in separate variables.
+It rejects competing defaults and conflicting uv variables.
+In `SandboxProvisioner`, dependency setup and its timeout start after credential injection.
+
 ## Connectivity probes
 
 `testConnection` must access the network only through the injected

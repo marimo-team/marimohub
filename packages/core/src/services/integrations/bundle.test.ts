@@ -252,3 +252,37 @@ describe('data-source discovery env', () => {
 		expect(parsed.warnings).toEqual(['Automatic discovery is unavailable.']);
 	});
 });
+
+describe('package indexes', () => {
+	const index = (name: string, isDefault = false): RenderOutput => ({
+		packageIndexes: [{ name, url: `https://${name}.example/simple/`, default: isDefault }],
+	});
+
+	it('rejects two default indexes instead of silently choosing one', () => {
+		expect(() =>
+			bundle([rendered('one', index('one', true)), rendered('two', index('two', true))]),
+		).toThrow('Only one package index can replace PyPI');
+	});
+
+	it('rejects duplicate index names and overrides of the generated default index', () => {
+		expect(() => bundle([rendered('one', index('same')), rendered('two', index('same'))])).toThrow(
+			'Package index names must be unique',
+		);
+		expect(() =>
+			bundle([
+				rendered('one', index('one', true)),
+				rendered('custom', { env: { UV_DEFAULT_INDEX: 'https://other.example/simple/' } }),
+			]),
+		).toThrow('same environment variable');
+	});
+
+	it.each([
+		'https://aws:token@example.com/simple/',
+		'http://example.com/simple/',
+		'https://example.com/simple/ other=https://other.example/',
+	])('rejects unsafe package index URLs', (url) => {
+		expect(() =>
+			bundle([rendered('private', { packageIndexes: [{ name: 'private', url, default: false }] })]),
+		).toThrow('HTTPS without embedded credentials');
+	});
+});

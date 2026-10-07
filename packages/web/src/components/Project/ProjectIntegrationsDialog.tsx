@@ -98,6 +98,13 @@ const CATEGORY_PRESENTATION: Record<
 		badgeClassName:
 			'border-blue-500/10 bg-blue-500/[0.05] text-blue-600 dark:border-blue-400/10 dark:text-blue-300',
 	},
+	package_registry: {
+		label: 'Package registries',
+		icon: Library,
+		iconClassName: 'bg-slate-500/[0.06] text-slate-600 dark:text-slate-300',
+		badgeClassName:
+			'border-slate-500/10 bg-slate-500/[0.05] text-slate-600 dark:border-slate-400/10 dark:text-slate-300',
+	},
 	other: {
 		label: 'Other',
 		icon: Puzzle,

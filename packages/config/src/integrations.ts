@@ -1,3 +1,4 @@
+import { AwsCodeArtifactCredentials } from '@marimo-hub/credentials-aws';
 import {
 	defaultRegistry,
 	Millis,
@@ -149,6 +150,11 @@ export function makeIntegrations(
 	const options = {
 		bucket,
 		registry: defaultRegistry(),
+		packageRegistryCredentials: new AwsCodeArtifactCredentials(),
+		packageRegistryProbe: createGuardedProbe({
+			allowPrivate: policy === 'private',
+			maxProbesPerMinute: 360,
+		}),
 		codec: secretSources.codec,
 		resolvers: secretSources.resolvers,
 		probe,

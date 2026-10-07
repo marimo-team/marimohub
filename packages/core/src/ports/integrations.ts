@@ -1,3 +1,4 @@
+import type { TempS3Creds } from './credentialBroker';
 import type { IntegrationId, RunId, SessionId, UserId } from '../ids';
 import type { BrowseSurface, ObjectBrowseCapability } from './objectBrowser';
 
@@ -8,6 +9,7 @@ export const INTEGRATION_CATEGORIES = [
 	'catalog',
 	'engine',
 	'storage',
+	'package_registry',
 	'other',
 ] as const;
 export type IntegrationCategory = (typeof INTEGRATION_CATEGORIES)[number];
@@ -308,6 +310,7 @@ export interface CopyIntegrationOptions {
 export type WorkloadRef = { kind: 'session'; id: SessionId } | { kind: 'job-run'; id: RunId };
 
 export interface SessionRenderContext {
+	resolveAwsCredentials?: () => Promise<TempS3Creds | undefined>;
 	workload: WorkloadRef;
 	principal: { userId: UserId; email: string };
 }

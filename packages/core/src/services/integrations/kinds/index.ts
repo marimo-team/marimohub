@@ -1,3 +1,5 @@
+import { codeArtifact } from './codeArtifact';
+export { codeArtifact } from './codeArtifact';
 import { IntegrationRegistry } from '../registry';
 import { athena, redshift } from './awsQueryEngines';
 import { bigquery } from './bigquery';
@@ -80,5 +82,6 @@ export function defaultRegistry(): IntegrationRegistry {
 	registry.register(wandb);
 	registry.register(huggingFace);
 	registry.register(customEnv);
+	registry.register(codeArtifact);
 	return registry;
 }
