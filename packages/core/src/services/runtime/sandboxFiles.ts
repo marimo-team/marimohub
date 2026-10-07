@@ -138,16 +138,18 @@ function isGitHooksPath(rel: string): boolean {
 }
 
 function isCaptureExcluded(rel: string): boolean {
-	return isRootSourceFile(rel) || isRegenerableArtifactPath(rel) || isGitHooksPath(rel);
+	return isMirrorProtected(rel) || isGitHooksPath(rel);
 }
 
 /**
- * Mirror-delete leaves regenerable paths alone, as it always did for `.venv/`
- * and `__pycache__/`: a copy uploaded through the files API is not capture's to
- * remove. Stored hooks are removed.
+ * The files API can store regenerable paths. Capture does not own those copies.
  */
 function isMirrorProtected(rel: string): boolean {
 	return isRootSourceFile(rel) || isRegenerableArtifactPath(rel);
+}
+
+function parentDirectory(rel: string): string {
+	return rel.slice(0, Math.max(0, rel.lastIndexOf('/')));
 }
 
 /** The repository a path belongs to (`.git`, `pkg/.git`, …), or null outside any `.git`. */
@@ -293,26 +295,18 @@ export async function restoreWorkspace(
 }
 
 /**
- * Capture the notebook's `workspace/` folder from the sandbox working directory
- * back into the bucket on teardown. `NotebookService.commitSession` owns the
- * root source files (`notebook.py`, `pyproject.toml`), so capture excludes them.
- * Capture also excludes regenerable caches (see `workspaceIgnore`) at any depth
- * and `.git/hooks/`.
+ * Save runtime files to `workspace/` on teardown. `commitSession` owns the root
+ * source files. Capture preserves stored source files and regenerable caches.
+ * A regular `CACHEDIR.TAG` file excludes its directory and descendants from
+ * uploads and cleanup in both modes. Detection uses file presence, not contents.
  *
- * In `workspace` mode, capture includes `__marimo__/` and hidden files, subject
- * to path, file-type, and size limits. The workspace copies of marimo artifacts
- * are separate from the selected HTML/session artifacts saved in versions.
- * Visible files claim the budget first, then `__marimo__/`, then other hidden
- * paths. Each Git directory (`.git/`, `pkg/.git/`, …) goes last and
- * all-or-nothing, because a partial repository restores corrupt. Each file is read with a byte/deadline budget and written
- * to its `workspace/` key. In `source` mode no runtime
- * files are uploaded. Both modes then mirror-delete: any key under `workspace/`
- * (other than the excluded source files) that is no longer present in the sandbox
- * is removed, keeping `workspace/` an accurate latest-only mirror and cleaning up
- * stale data if a notebook is downgraded from `workspace` to `source`.
+ * `workspace` mode saves visible files first, then `__marimo__/`, then hidden
+ * files within the file and byte limits. Each Git directory goes last and must
+ * fit as a whole to avoid an incomplete repository. Capture excludes Git hooks.
+ * Reads have byte and time limits. Skipped uploads retain their stored copies.
  *
- * Caps bound a runaway upload (total bytes + file count); each skipped file is
- * logged via `console.warn` rather than silently dropped.
+ * Cleanup deletes missing files in `workspace` mode and all unprotected runtime
+ * files in `source` mode. A failed listing prevents uploads and cleanup.
  */
 export async function captureWorkspace(
 	sandbox: SandboxInstance,
@@ -325,28 +319,38 @@ export async function captureWorkspace(
 	if (!supportsBoundedReads(sandbox)) return;
 	const nb = paths.project(projectId).notebook(notebookId);
 
-	// Relative paths currently present in the sandbox working dir, excluding source
-	// files and regenerable artifacts. Used to upload files and drive mirror-deletes.
 	const present = new Set<string>();
 	const retainedGitGroups = new Set<string>();
 
-	if (mode === 'workspace') {
-		const listing = await sandbox.listFiles(workingDir, { recursive: true, includeHidden: true });
-		if (!listing.success) {
-			// Could not enumerate the working dir — bail out entirely. Falling through
-			// to the mirror-delete below with an empty `present` set would treat every
-			// captured key as stale and delete it, wiping still-present workspace data
-			// on a transient listing failure.
-			console.warn(
-				`captureWorkspace: listing ${workingDir} failed (${listing.error.code}); skipping capture + cleanup`,
-			);
-			return;
+	const listing = await sandbox.listFiles(workingDir, { recursive: true, includeHidden: true });
+	if (!listing.success) {
+		// A failed listing cannot distinguish deleted files from protected caches.
+		console.warn(
+			`captureWorkspace: listing ${workingDir} failed (${listing.error.code}); skipping capture + cleanup`,
+		);
+		return;
+	}
+	const files = listing.files.filter(
+		({ relativePath }) =>
+			isSafeWorkspacePath(relativePath) && !isWorkspaceInternalPath(relativePath),
+	);
+	const taggedDirectories = new Set<string>();
+	for (const file of files) {
+		const rel = file.relativePath;
+		if (file.type === 'file' && (rel === 'CACHEDIR.TAG' || rel.endsWith('/CACHEDIR.TAG'))) {
+			taggedDirectories.add(parentDirectory(rel));
 		}
-		// Select the files to capture first — sequentially, since the count/byte caps
-		// are cumulative and order-dependent. Selection is pure size arithmetic from
-		// the listing (no I/O), so it's cheap; the actual reads+uploads run in
-		// parallel below. Uses each file's listed size for the caps (≈ the bytes we'll
-		// upload), so the decision never waits on a read.
+	}
+	const isTaggedCache = (rel: string): boolean => {
+		if (taggedDirectories.has('')) return true;
+		for (let path = rel; path; path = parentDirectory(path)) {
+			if (taggedDirectories.has(path)) return true;
+		}
+		return false;
+	};
+
+	if (mode === 'workspace') {
+		// Reserve budgets from listed sizes before concurrent reads and uploads.
 		const selected: string[] = [];
 		const directoryMarkers: string[] = [];
 		const candidates: { rel: string; size: number; tier: number }[] = [];
@@ -362,11 +366,9 @@ export async function captureWorkspace(
 			}
 			return entry;
 		};
-		for (const file of listing.files) {
+		for (const file of files) {
 			const rel = file.relativePath;
-			if (!isSafeWorkspacePath(rel) || isWorkspaceInternalPath(rel) || isCaptureExcluded(rel)) {
-				continue;
-			}
+			if (isCaptureExcluded(rel) || isTaggedCache(rel)) continue;
 			const group = gitGroupOf(rel);
 			if (file.type === 'directory') {
 				(group === null ? directoryMarkers : gitGroupFor(group).directoryMarkers).push(
@@ -456,12 +458,10 @@ export async function captureWorkspace(
 		for (const marker of directoryMarkers) present.add(marker);
 	}
 
-	// Mirror-delete: drop any captured key no longer present in the sandbox. Never
-	// touch the source files — commitSession owns those.
 	const existingKeys = await listAllKeys(bucket, nb.workspacePrefix);
 	const staleKeys = existingKeys.filter((key) => {
 		const rel = key.slice(nb.workspacePrefix.length);
-		if (!rel || isMirrorProtected(rel)) return false;
+		if (!rel || isMirrorProtected(rel) || isTaggedCache(rel)) return false;
 		if (isGitHooksPath(rel)) return true;
 		const group = gitGroupOf(rel);
 		if (group !== null && retainedGitGroups.has(group)) return false;

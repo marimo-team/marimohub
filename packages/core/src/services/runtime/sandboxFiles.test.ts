@@ -31,6 +31,20 @@ function nbCtx() {
 	return { projectId, notebookId, nb };
 }
 
+function captureFixture(options: Parameters<typeof makeFsSandbox>[0] = {}) {
+	const { projectId, notebookId, nb } = nbCtx();
+	const bucket = new MemoryBucket();
+	const sandbox = makeFsSandbox(options);
+	return {
+		...sandbox,
+		bucket,
+		nb,
+		capture: (mode: 'workspace' | 'source' = 'workspace') =>
+			captureWorkspace(sandbox.instance, bucket, projectId, notebookId, MOUNT, mode),
+		stored: async (rel: string) => (await bucket.get(nb.workspaceFile(rel)))?.text(),
+	};
+}
+
 const decode = (b: Uint8Array) => new TextDecoder().decode(b);
 
 class VanishingObjectBucket extends MemoryBucket {
@@ -512,6 +526,196 @@ describe('captureWorkspace', () => {
 		expect(stored).toEqual([nb.workspaceFile('data/cars.csv')]);
 	});
 
+	it.each(['workspace', 'source'] as const)(
+		'%s mode preserves stored tagged caches, including files absent from the sandbox',
+		async (mode) => {
+			const cache = '__marimo__/react/deno';
+			const protectedPaths = [
+				`${cache}/current.js`,
+				`${cache}/old/nested.js`,
+				`${cache}/CACHEDIR.TAG`,
+				workspaceDirectoryMarkerPath(cache),
+				`${cache}/legacy/`,
+			];
+			const { calls, bucket, nb, capture, stored } = captureFixture({
+				files: {
+					[`${cache}/current.js`]: 'changed',
+					[`${cache}/nested/new.js`]: 'new',
+					[`${cache}/CACHEDIR.TAG`]: '',
+					[`${cache}-sibling/source.tsx`]: 'source',
+				},
+				directories: [cache, `${cache}/nested`],
+			});
+			for (const path of protectedPaths) await bucket.put(nb.workspaceFile(path), 'stored');
+			await bucket.put(nb.workspaceFile(`${cache}-sibling/removed.js`), 'stale');
+
+			await capture(mode);
+
+			for (const path of protectedPaths) {
+				expect(await stored(path)).toBe('stored');
+			}
+			expect(await bucket.get(nb.workspaceFile(`${cache}/nested/new.js`))).toBeNull();
+			expect(
+				await bucket.get(nb.workspaceFile(workspaceDirectoryMarkerPath(`${cache}/nested`))),
+			).toBeNull();
+			expect(await bucket.get(nb.workspaceFile(`${cache}-sibling/removed.js`))).toBeNull();
+			expect(await stored(`${cache}-sibling/source.tsx`)).toBe(
+				mode === 'workspace' ? 'source' : undefined,
+			);
+			expect(calls.readFile).toEqual(
+				mode === 'workspace' ? [`${MOUNT}/${cache}-sibling/source.tsx`] : [],
+			);
+		},
+	);
+
+	it('excludes tagged caches before spending the file and byte budgets', async () => {
+		const cacheFiles = Object.fromEntries(
+			Array.from({ length: MAX_WORKSPACE_FILES }, (_, i) => [`__marimo__/deno/${i}.js`, 'cache']),
+		);
+		const { calls, bucket, nb, capture } = captureFixture({
+			files: {
+				...cacheFiles,
+				'__marimo__/deno/CACHEDIR.TAG': 'Signature: 8a477f597d28d172789f06886806bc55',
+				'__marimo__/react/view.tsx': 'source',
+			},
+			sizes: Object.fromEntries(
+				Object.keys(cacheFiles).map((path) => [path, MAX_WORKSPACE_FILE_BYTES]),
+			),
+		});
+
+		await capture();
+
+		expect(calls.readFile).toEqual([`${MOUNT}/__marimo__/react/view.tsx`]);
+		expect((await bucket.list({ prefix: nb.workspacePrefix })).objects.map((o) => o.key)).toEqual([
+			nb.workspaceFile('__marimo__/react/view.tsx'),
+		]);
+	});
+
+	it.each(['workspace', 'source'] as const)(
+		'%s mode preserves the entire workspace when its root is tagged',
+		async (mode) => {
+			const { calls, bucket, nb, capture, stored } = captureFixture({
+				files: { 'new.txt': 'new', 'CACHEDIR.TAG': '' },
+			});
+			await bucket.put(nb.workspaceFile('old.txt'), 'stored');
+
+			await capture(mode);
+
+			expect(calls.readFile).toEqual([]);
+			expect(await stored('old.txt')).toBe('stored');
+			expect((await bucket.list({ prefix: nb.workspacePrefix })).objects).toHaveLength(1);
+		},
+	);
+
+	it.each(['directory', 'symlink', 'other'] as const)(
+		'does not treat a %s named CACHEDIR.TAG as a cache tag',
+		async (type) => {
+			const { instance, capture, stored } = captureFixture({
+				files: { 'data/CACHEDIR.TAG': '', 'data/source.txt': 'source' },
+			});
+
+			const listFiles = instance.listFiles.bind(instance);
+			vi.spyOn(instance, 'listFiles').mockImplementation(async (...args) => {
+				const result = await listFiles(...args);
+				if (result.success) {
+					for (const file of result.files) {
+						if (file.name === 'CACHEDIR.TAG') file.type = type;
+					}
+				}
+				return result;
+			});
+
+			await capture();
+
+			expect(await stored('data/source.txt')).toBe('source');
+		},
+	);
+
+	it.each(['cachedir.tag', 'CacheDir.Tag', 'CACHEDIR.TAG.bak', 'prefixCACHEDIR.TAG'])(
+		'does not exclude a folder containing the lookalike marker %s',
+		async (name) => {
+			const { bucket, nb, capture, stored } = captureFixture({
+				files: { [`data/${name}`]: '', 'data/source.txt': 'source' },
+			});
+			await bucket.put(nb.workspaceFile('data/deleted.txt'), 'stale');
+
+			await capture();
+
+			expect(await stored('data/source.txt')).toBe('source');
+			expect(await bucket.get(nb.workspaceFile(`data/${name}`))).not.toBeNull();
+			expect(await bucket.get(nb.workspaceFile('data/deleted.txt'))).toBeNull();
+		},
+	);
+
+	it.each([
+		'/CACHEDIR.TAG',
+		'../CACHEDIR.TAG',
+		'cache/../CACHEDIR.TAG',
+		'cache//CACHEDIR.TAG',
+		'cache\\nested/CACHEDIR.TAG',
+		'cache\nextra/CACHEDIR.TAG',
+		`${WORKSPACE_DIRECTORY_MARKER}/CACHEDIR.TAG`,
+	])('ignores unsafe or reserved tag paths from the listing: %j', async (tag) => {
+		const stale = tag.replace('CACHEDIR.TAG', 'deleted.txt');
+		const { calls, bucket, nb, capture, stored } = captureFixture({
+			files: { [tag]: '', 'source.txt': 'source' },
+		});
+		await bucket.put(nb.workspaceFile(stale), 'stale');
+
+		await capture();
+
+		expect(calls.readFile).toEqual([`${MOUNT}/source.txt`]);
+		expect(await stored('source.txt')).toBe('source');
+		expect(await bucket.get(nb.workspaceFile(stale))).toBeNull();
+	});
+
+	it('resumes capture and cleanup after a tag is removed while retaining nested tagged caches', async () => {
+		const { fs, bucket, nb, capture, stored } = captureFixture({
+			files: {
+				'cache/source.txt': 'changed',
+				'cache/nested/new.txt': 'new',
+				'cache/nested/CACHEDIR.TAG': '',
+				'cache/CACHEDIR.TAG': '',
+			},
+		});
+		for (const path of ['cache/source.txt', 'cache/deleted.txt', 'cache/nested/deleted.txt']) {
+			await bucket.put(nb.workspaceFile(path), 'stored');
+		}
+
+		await capture();
+		expect(await stored('cache/source.txt')).toBe('stored');
+		expect(await bucket.get(nb.workspaceFile('cache/deleted.txt'))).not.toBeNull();
+
+		fs.delete('cache/CACHEDIR.TAG');
+		await capture();
+
+		expect(await stored('cache/source.txt')).toBe('changed');
+		expect(await bucket.get(nb.workspaceFile('cache/deleted.txt'))).toBeNull();
+		expect(await stored('cache/nested/deleted.txt')).toBe('stored');
+		expect(await bucket.get(nb.workspaceFile('cache/nested/new.txt'))).toBeNull();
+		expect(await bucket.get(nb.workspaceFile('cache/nested/CACHEDIR.TAG'))).toBeNull();
+	});
+
+	it('does not read an oversized tag or unreadable cache contents', async () => {
+		const { instance, bucket, nb, capture, stored } = captureFixture({
+			files: { 'cache/CACHEDIR.TAG': '', 'cache/unreadable.bin': '', 'source.txt': 'source' },
+			sizes: { 'cache/CACHEDIR.TAG': MAX_WORKSPACE_FILE_BYTES + 1 },
+		});
+		await bucket.put(nb.workspaceFile('cache/unreadable.bin'), 'stored');
+		const read = instance.readFileBounded!.bind(instance);
+		vi.spyOn(instance, 'readFileBounded').mockImplementation((path, options) => {
+			if (path.startsWith(`${MOUNT}/cache/`)) throw new Error('cache is unreadable');
+			return read(path, options);
+		});
+
+		await capture();
+
+		expect(instance.readFileBounded).toHaveBeenCalledTimes(1);
+		expect(await stored('source.txt')).toBe('source');
+		expect(await stored('cache/unreadable.bin')).toBe('stored');
+		expect(await bucket.get(nb.workspaceFile('cache/CACHEDIR.TAG'))).toBeNull();
+	});
+
 	it('workspace mode: round-trips binary files byte-identically', async () => {
 		const { projectId, notebookId, nb } = nbCtx();
 		const bucket = new MemoryBucket();
@@ -648,22 +852,34 @@ describe('captureWorkspace', () => {
 			warn.mockRestore();
 		});
 
-		it('workspace mode: a failed working-dir listing skips cleanup (never wipes persisted data)', async () => {
-			const { projectId, notebookId, nb } = nbCtx();
-			const bucket = new MemoryBucket();
-			// A file captured by a previous (successful) teardown.
-			await bucket.put(nb.workspaceFile('data/keep.csv'), 'precious');
-			const { instance: base } = makeFsSandbox({ files: { 'data/keep.csv': 'precious' } });
-			const instance = {
-				...base,
-				listFiles: async () => listFilesFailure(),
-			} as unknown as typeof base;
+		describe.each(['workspace', 'source'] as const)('%s mode listing failures', (mode) => {
+			it.each(['returned', 'thrown'])(
+				'preserves stored files after a %s error',
+				async (failure) => {
+					const { instance, bucket, nb, capture, stored } = captureFixture({
+						files: { 'cache/CACHEDIR.TAG': '', 'data.txt': 'changed' },
+					});
+					for (const path of ['cache/old.txt', 'data.txt']) {
+						await bucket.put(nb.workspaceFile(path), 'stored');
+					}
+					const list = vi.spyOn(instance, 'listFiles');
+					const put = vi.spyOn(bucket, 'put');
+					const remove = vi.spyOn(bucket, 'delete');
+					if (failure === 'thrown') {
+						list.mockRejectedValue(new Error('sandbox disconnected'));
+						await expect(capture(mode)).rejects.toThrow('sandbox disconnected');
+					} else {
+						list.mockResolvedValue(listFilesFailure());
+						await capture(mode);
+						expect(warn).toHaveBeenCalled();
+					}
 
-			await captureWorkspace(instance, bucket, projectId, notebookId, MOUNT, 'workspace');
-
-			// Listing failed, so the mirror-delete is skipped and the data survives.
-			expect(await bucket.get(nb.workspaceFile('data/keep.csv'))).not.toBeNull();
-			expect(warn).toHaveBeenCalled();
+					expect(put).not.toHaveBeenCalled();
+					expect(remove).not.toHaveBeenCalled();
+					expect(await stored('cache/old.txt')).toBe('stored');
+					expect(await stored('data.txt')).toBe('stored');
+				},
+			);
 		});
 
 		it('workspace mode: an unreadable file is skipped, the rest still captured', async () => {
