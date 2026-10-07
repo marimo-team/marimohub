@@ -168,7 +168,7 @@ async function allocatePort(host: string, range?: PortRange): Promise<number> {
 }
 
 /** Resolve once a TCP listener accepts a connection on the port, or true/false. */
-function tcpReady(port: number, host = '127.0.0.1'): Promise<boolean> {
+function tcpReady(port: number, host: string): Promise<boolean> {
 	return new Promise((resolve) => {
 		const sock = net.connect({ port, host });
 		sock.once('connect', () => {
@@ -319,11 +319,24 @@ class LocalSandboxInstance implements SandboxInstance {
 		return this.mapPath(p);
 	}
 
+	private get processHost(): string {
+		if (this.bindHost === '0.0.0.0') return '127.0.0.1';
+		if (this.bindHost === '::') return '::1';
+		return this.bindHost;
+	}
+
+	resolveProcessUrl(url: string): string {
+		const resolved = new URL(url);
+		const host = this.processHost;
+		resolved.hostname = net.isIP(host) === 6 ? `[${host}]` : host;
+		const port = Number(resolved.port || (resolved.protocol === 'https:' ? 443 : 80));
+		resolved.port = String(this.portMap.get(port) ?? port);
+		return resolved.toString();
+	}
+
 	async isPortReady(port: number, options?: Omit<WaitForPortOptions, 'timeout'>): Promise<boolean> {
-		const real = this.portMap.get(port) ?? port;
-		const host = this.bindHost === '0.0.0.0' ? '127.0.0.1' : this.bindHost;
 		try {
-			await fetch(`http://${host}:${real}${options?.path ?? '/'}`, {
+			await fetch(this.resolveProcessUrl(`http://127.0.0.1:${port}${options?.path ?? '/'}`), {
 				redirect: 'manual',
 				signal: AbortSignal.timeout(2_000),
 			});
@@ -616,6 +629,7 @@ class LocalSandboxInstance implements SandboxInstance {
 		});
 
 		const portMap = this.portMap;
+		const processHost = this.processHost;
 		const id = String(child.pid ?? `proc-${this.children.size}`);
 
 		const proc: SandboxProcess = {
@@ -636,7 +650,7 @@ class LocalSandboxInstance implements SandboxInstance {
 								`process exited (code ${exitInfo.code}) before port ${port} was ready.\n${stderr.toString() || stdout.toString()}`,
 							);
 						}
-						return tcpReady(real);
+						return tcpReady(real, processHost);
 					},
 					{
 						timeoutMs: timeout,

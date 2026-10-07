@@ -78,6 +78,7 @@ jobs:
           docker run --rm marimo-sandbox:opencode-ci opencode --version | grep -F '1.18.17'
           docker run --rm marimo-sandbox:opencode-ci jq --version
           docker run --rm marimo-sandbox:opencode-ci test -f /home/appuser/.agents/skills/marimo-pair/SKILL.md
+          docker run --rm -v "$PWD/images/marimo-sandbox/test-marimo-pair.py:/tmp/test-marimo-pair.py:ro" marimo-sandbox:opencode-ci python /tmp/test-marimo-pair.py
           docker run --rm marimo-sandbox:opencode-ci sh -ec '
             opencode web --hostname 127.0.0.1 --port 4096 >/tmp/opencode.log 2>&1 &
             pid=$!
@@ -102,6 +103,7 @@ jobs:
           docker run --rm marimo-sandbox:tools-ci opencode --version | grep -F '1.18.17'
           docker run --rm marimo-sandbox:tools-ci jq --version
           docker run --rm marimo-sandbox:tools-ci test -f /home/appuser/.agents/skills/marimo-pair/SKILL.md
+          docker run --rm -v "$PWD/images/marimo-sandbox/test-marimo-pair.py:/tmp/test-marimo-pair.py:ro" marimo-sandbox:tools-ci python /tmp/test-marimo-pair.py
           docker run --rm marimo-sandbox:tools-ci sh -ec '
             opencode web --hostname 127.0.0.1 --port 4096 >/tmp/opencode.log 2>&1 &
             pid=$!
