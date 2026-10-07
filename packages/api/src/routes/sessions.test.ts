@@ -12,6 +12,8 @@ import {
 	KERNEL_AUTH_TOKEN_FILE,
 	KERNEL_AUTH_TOKEN_PATTERN,
 	Millis,
+	ProxyExposure,
+	sandboxContextPath,
 	paths,
 } from '@marimo-hub/core';
 import type { NotebookId, ProjectId, SandboxInstance, Session, SessionId } from '@marimo-hub/core';
@@ -26,6 +28,7 @@ import {
 } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import type { ApiDeps } from '../context';
+import { isSandboxContextCommand, readSandboxContexts } from '../testing/sandboxContext';
 import {
 	createInitializedBucket,
 	createTestApi,
@@ -127,6 +130,191 @@ describe('Session routes', () => {
 		const data = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
 		return data.session_id as string;
 	}
+
+	it.each([
+		{
+			exposure: 'subdomain',
+			persistWorkspace: 'source',
+			mode: 'edit',
+			temporary: false,
+			expected: 'source',
+		},
+		{
+			exposure: 'proxy',
+			persistWorkspace: 'workspace',
+			mode: 'edit',
+			temporary: false,
+			expected: 'workspace',
+		},
+		{
+			exposure: 'subdomain',
+			persistWorkspace: 'workspace',
+			mode: 'app',
+			temporary: false,
+			expected: 'none',
+		},
+		{
+			exposure: 'subdomain',
+			persistWorkspace: 'workspace',
+			mode: 'edit',
+			temporary: true,
+			expected: 'none',
+		},
+	] as const)(
+		'publishes sandbox context: %j',
+		async ({ exposure, persistWorkspace, mode, temporary, expected }) => {
+			const { instance, calls } = makeFakeSandbox();
+			const request = exclusiveApi(ACTOR, fakeComputeFrom(instance), {
+				sandbox: sandboxConfig({
+					appBaseUrl: 'https://hub.example/prefix/',
+					auth: 'on',
+					exposure: exposure === 'proxy' ? new ProxyExposure('context-test') : undefined,
+					persistWorkspace,
+				}),
+			});
+			const data = await expectOk<ApiSession>(
+				await request('POST', sessionsPath(), {
+					mode,
+					...(temporary ? { edit_intent: 'temporary' } : {}),
+				}),
+			);
+			const stored = await createServices(bucket).sessions.getSession(pid, data.session_id);
+			const path = sandboxContextPath(stored.sandbox_id!);
+			const publicUrl = new URL(data.sandbox_url!);
+			publicUrl.search = '';
+			expect(calls.setEnvVars).toContainEqual(
+				expect.objectContaining({ MARIMOHUB_CONTEXT_FILE: path }),
+			);
+			const expectedContext = {
+				public_url: publicUrl.href,
+				notebook_url: `https://hub.example/prefix/projects/${pid}/notebooks/${nid}`,
+				exposure_mode: exposure,
+				persistence_mode: expected,
+				session_mode: mode,
+			};
+			expect(readSandboxContexts(calls)).toEqual([expectedContext]);
+			const commands = calls.exec.filter(isSandboxContextCommand);
+			if (exposure === 'proxy') {
+				const batch = calls.writeFiles.find((files) => files.some((file) => file.path === path))!;
+				expect(batch.some((file) => file.path === KERNEL_AUTH_TOKEN_FILE)).toBe(true);
+				expect(commands).toEqual([]);
+			} else {
+				expect(commands).toHaveLength(1);
+				expect(commands[0]).not.toContain('access_token');
+			}
+		},
+	);
+
+	it('waits for URL resolution and context publication before marking the session running', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const exposing = Promise.withResolvers<void>();
+		const exposed = Promise.withResolvers<void>();
+		const publishing = Promise.withResolvers<void>();
+		const published = Promise.withResolvers<void>();
+		const expose = instance.exposePort;
+		vi.spyOn(instance, 'exposePort').mockImplementation(async (...args) => {
+			exposing.resolve();
+			await exposed.promise;
+			return expose(...args);
+		});
+		const exec = instance.exec;
+		vi.spyOn(instance, 'exec').mockImplementation(async (...args) => {
+			if (isSandboxContextCommand(args[0])) {
+				publishing.resolve();
+				await published.promise;
+			}
+			return exec(...args);
+		});
+		const request = exclusiveApi(ACTOR, fakeComputeFrom(instance));
+		const pending = request('POST', sessionsPath());
+		const sessions = createServices(bucket).sessions;
+		await exposing.promise;
+		try {
+			const [starting] = await sessions.listSessions(nid);
+			expect(starting.status).toBe('starting');
+			expect(calls.setEnvVars).toContainEqual(
+				expect.objectContaining({
+					MARIMOHUB_CONTEXT_FILE: sandboxContextPath(starting.sandbox_id!),
+				}),
+			);
+			expect(readSandboxContexts(calls)).toEqual([]);
+			exposed.resolve();
+			await publishing.promise;
+			expect(await sessions.getSession(pid, starting.session_id)).toMatchObject({
+				status: 'starting',
+			});
+		} finally {
+			exposed.resolve();
+			published.resolve();
+			await pending;
+		}
+		const response = await expectOk<ApiSession>(await pending);
+		expect(response.status).toBe('running');
+		const contextWrites = calls.exec.filter(isSandboxContextCommand);
+		expect(contextWrites).toHaveLength(1);
+		const reused = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+		expect(reused.session_id).toBe(response.session_id);
+		expect(reused.reused).toBe(true);
+		expect(calls.exec.filter(isSandboxContextCommand)).toEqual(contextWrites);
+	});
+
+	it.each(['write', 'command-failure', 'command-throw'] as const)(
+		'reclaims the sandbox and allows retry after context %s fails',
+		async (stage) => {
+			const { instance, calls } = makeFakeSandbox();
+			const write = instance.writeFiles;
+			const writeSpy = vi.spyOn(instance, 'writeFiles').mockImplementation(async (files) => {
+				if (
+					stage === 'write' &&
+					files.some((file) => file.path.startsWith('/tmp/marimohub-context/'))
+				) {
+					throw new Error('context write failed');
+				}
+				await write(files);
+			});
+			const exec = instance.exec;
+			const execSpy = vi.spyOn(instance, 'exec').mockImplementation(async (...args) => {
+				if (isSandboxContextCommand(args[0])) {
+					if (stage === 'command-throw') throw new Error('transport unavailable');
+					if (stage === 'command-failure')
+						return {
+							success: false,
+							stdout: '',
+							stderr: 'permission denied',
+							error: { code: 'COMMAND_FAILED' },
+						};
+				}
+				return exec(...args);
+			});
+			const request = exclusiveApi(
+				ACTOR,
+				fakeComputeFrom(instance),
+				stage === 'write'
+					? {
+							sandbox: sandboxConfig({ exposure: new ProxyExposure('context-failure') }),
+						}
+					: {},
+			);
+			await expectError(
+				await request('POST', sessionsPath()),
+				stage === 'command-throw' ? 500 : 503,
+				stage === 'command-throw' ? 'INTERNAL_ERROR' : 'SERVICE_UNAVAILABLE',
+			);
+			expect(calls.destroy).toBeGreaterThan(0);
+			const sessions = await createServices(bucket).sessions.listSessions(nid);
+			expect(sessions).toHaveLength(1);
+			expect(sessions[0]).toMatchObject({
+				status: 'failed',
+				sandbox_reclaimed_at: expect.any(String),
+			});
+			expect(sessions[0].sandbox_url).toBeUndefined();
+			writeSpy.mockRestore();
+			execSpy.mockRestore();
+			const retried = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+			expect(retried.status).toBe('running');
+			expect(retried.session_id).not.toBe(sessions[0].session_id);
+		},
+	);
 
 	it('logs resolved provisioning context and best-effort integration warnings', async () => {
 		const warning =
@@ -264,6 +452,9 @@ describe('Session routes', () => {
 			expect(cmd).toContain('uv pip install');
 			// The repo pyproject layer still applies underneath the pins.
 			expect(cmd).toContain('uv sync --inexact');
+			expect(readSandboxContexts(sb.calls)).toEqual([
+				expect.objectContaining({ persistence_mode: 'none' }),
+			]);
 		});
 
 		it('uses a packed pull workspace and the project-managed env without inline metadata', async () => {
@@ -1259,9 +1450,9 @@ describe('Session routes', () => {
 		expect(config?.content).toContain('molab = false');
 		expect(config?.content).not.toContain('[ai]');
 		expect(config?.content).not.toContain('file_browser');
-		expect(calls.setEnvVars).toContainEqual({
-			XDG_CONFIG_HOME: '/tmp/marimohub-config',
-		});
+		expect(calls.setEnvVars).toContainEqual(
+			expect.objectContaining({ XDG_CONFIG_HOME: '/tmp/marimohub-config' }),
+		);
 		// Cache/state redirects are fallbacks — an image defining its own wins.
 		expect(calls.setEnvDefaults).toContainEqual({
 			XDG_CACHE_HOME: '/tmp/marimohub-cache',

@@ -18,6 +18,8 @@ import type {
 	SessionEnv,
 	Session,
 	SessionMode,
+	SandboxInstance,
+	SandboxContext,
 	SessionRender,
 	UserId,
 } from '@marimo-hub/core';
@@ -60,6 +62,10 @@ import {
 	SESSION_MODES,
 	SessionId,
 	sessionMode,
+	sessionPersistsEdits,
+	sandboxContextPath,
+	sandboxContextFile,
+	writeSandboxContext,
 	sessionOwner,
 	sessionWorkspaceDir,
 	SubdomainExposure,
@@ -1627,6 +1633,18 @@ export async function startNotebookSession(input: {
 	let updated: Session | undefined;
 	let url = '';
 	let usedFallback = false;
+	let provisionedSandbox: SandboxInstance;
+	let preparedContextFile: ReturnType<typeof sandboxContextFile> | undefined;
+	const contextFor = (publicUrl: string): SandboxContext => ({
+		public_url: publicUrl,
+		notebook_url: joinUrlPath(appBaseUrl, sessionResourcePath(session!)),
+		exposure_mode: sandboxExposure.mode,
+		persistence_mode:
+			sessionPersistsEdits(session!) && workspacePolicy.persistSessionEdits
+				? sandbox.persistWorkspace
+				: 'none',
+		session_mode: mode,
+	});
 	// Audit pin for the integration versions rendered into this sandbox.
 	let integrationAttachments: SessionRender['attachments'] | undefined;
 	// In subdomain mode clientUrl === url and originUrl is unset.
@@ -1941,7 +1959,11 @@ export async function startNotebookSession(input: {
 									observer.tag('warm_pool_fallback', 'claim_expired');
 								}
 							}
-							const { baseUrl } = await sandboxExposure.prepare(exposureCtx);
+							const { baseUrl, publicUrl } = await sandboxExposure.prepare(exposureCtx);
+							preparedContextFile =
+								publicUrl === undefined
+									? undefined
+									: sandboxContextFile(sandboxId, contextFor(publicUrl));
 							if (this.$signal.aborted) throw this.$signal.reason;
 							sandboxMayExist = true;
 							return provisioner.provision({
@@ -1961,6 +1983,7 @@ export async function startNotebookSession(input: {
 								startupTimeoutMs: sandbox.startupTimeoutMs,
 								baseUrl,
 								kernelAuthToken,
+								contextFile: preparedContextFile ?? { path: sandboxContextPath(sandboxId) },
 								// A second editor writes the notebook file, so marimo must reload it.
 								marimoWatch:
 									mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
@@ -1994,6 +2017,7 @@ export async function startNotebookSession(input: {
 						},
 					});
 					({ url, usedFallback } = provision);
+					provisionedSandbox = provision.sandbox;
 					// Per-phase durations onto the session_provision event.
 					for (const [phase, ms] of Object.entries(provision.timings)) {
 						observer.tag(`provision_${phase}_ms`, ms);
@@ -2013,6 +2037,10 @@ export async function startNotebookSession(input: {
 					await compute.create(sandboxId, { owner: { projectId: pid, userId: user.id } }).destroy();
 					await recordSandboxCleanup();
 				},
+			})
+			.step('sandbox_context', async () => {
+				if (!preparedContextFile)
+					await writeSandboxContext(provisionedSandbox, sandboxId, contextFor(clientUrl));
 			})
 			.step('mark_running', async () => {
 				if (isPastAuthorizationDeadline(session!, Date.now())) {

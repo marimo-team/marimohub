@@ -35,6 +35,8 @@ export interface ExposurePreparation {
 	 * serves at root).
 	 */
 	baseUrl?: string;
+	/** Stable client URL, when known before launch. Must match finalize's client URL. */
+	publicUrl?: string;
 }
 
 export interface ExposureResult {

@@ -207,6 +207,41 @@ Existing sandbox URL parameters take precedence. The hub then applies its theme 
 The iframe omits the referrer header to avoid sending the unfiltered outer URL.
 Query parameters are user input and grant no access to notebooks or data.
 
+## Published URLs inside the sandbox
+
+Editor and app sessions set `MARIMOHUB_CONTEXT_FILE` to an absolute path outside the workspace.
+The JSON file contains:
+
+| Field              | Meaning                                                                                                                            |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `public_url`       | The marimo endpoint without credentials, query parameters, or fragments. Deployment prefixes and signed proxy paths remain intact. |
+| `notebook_url`     | The notebook or preview page in the hub. Use this for links to other users.                                                        |
+| `exposure_mode`    | `subdomain` or `proxy`.                                                                                                            |
+| `persistence_mode` | `source`: notebook and dependencies only. `workspace`: also saves workspace files. `none`: session edits do not persist.           |
+| `session_mode`     | `edit` or `app`.                                                                                                                   |
+
+Local editors report `MARIMOHUB_PERSIST_WORKSPACE`. Apps, temporary editors, viewer sandboxes, previews, and Git-synced notebooks report `none`.
+Studio can use this value to warn before creating view files that will not persist.
+
+Proxy context joins the startup file batch. Subdomain context uses one atomic publication command after URL resolution.
+The file is complete before the session reaches `running`. If it is absent during startup, retry later without blocking the kernel.
+Scheduled jobs omit the file. Consumers must tolerate an absent variable on older deployments and ignore unknown fields.
+
+After the file becomes available:
+
+```python
+import json
+import os
+from pathlib import Path
+
+context = json.loads(Path(os.environ["MARIMOHUB_CONTEXT_FILE"]).read_text())
+notebook_link = context["notebook_url"]
+callback_url = context["public_url"].rstrip("/") + "/oauth/callback"
+```
+
+Sandbox authentication still applies. Signed proxy paths do not bypass hub authorization.
+Paths and URLs can change after a sandbox restart. The context does not publish extra ports or guarantee a stable OAuth callback.
+
 ## Who can do what
 
 App users can start and use apps regardless of `MARIMOHUB_VIEWER_MODE`.

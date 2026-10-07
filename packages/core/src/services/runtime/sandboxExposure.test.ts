@@ -68,12 +68,13 @@ describe('ProxyExposure', () => {
 	const exposure = new ProxyExposure(SECRET);
 
 	it('launches marimo under /proxy/<token> and matches the client path', async () => {
-		const { baseUrl } = await exposure.prepare(ctx);
+		const { baseUrl, publicUrl } = await exposure.prepare(ctx);
 		const token = await signProxyToken(ctx.projectId, ctx.sessionId, SECRET);
 		expect(baseUrl).toBe(`/proxy/${token}`);
 
 		const result = await exposure.finalize('http://kernel.internal:2718', ctx);
 		expect(result.clientUrl).toBe(`https://hub.example.com/proxy/${token}/`);
+		expect(publicUrl).toBe(result.clientUrl);
 		// The adapter URL becomes the server-reachable origin the forwarder targets.
 		expect(result.originUrl).toBe('http://kernel.internal:2718');
 	});
@@ -104,6 +105,7 @@ describe('ProxyExposure', () => {
 
 			expect(await exposure.prepare(prefixedCtx)).toEqual({
 				baseUrl: `/marimohub/proxy/${token}`,
+				publicUrl: `https://hub.example.com/marimohub/proxy/${token}/`,
 			});
 			const result = await exposure.finalize('http://kernel:2718', prefixedCtx);
 			expect(result.clientUrl).toBe(`https://hub.example.com/marimohub/proxy/${token}/`);

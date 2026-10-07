@@ -9,6 +9,7 @@ import {
 } from '../../ids';
 import { paths } from '../../paths';
 import { readFileFailure } from '../../ports/sandbox';
+import { expectFileResult } from '../../testing/resultAssertions';
 import {
 	ACTOR,
 	EXPOSED_URL,
@@ -30,6 +31,7 @@ import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
 import type { BucketConfig, WorkspaceLoadStrategies } from './SandboxProvisioner';
 import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
+import { sandboxContextPath } from './sandboxContext';
 
 const MOUNT_PATH = '/workspace';
 
@@ -87,6 +89,51 @@ describe('SandboxProvisioner', () => {
 	const projectId = createProjectId();
 	const notebookId = createNotebookId();
 	const sandboxId = createSandboxId();
+
+	it('sets the process-visible context path before launch, overriding session variables', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		instance.resolveProcessPath = (path) => `/sandbox-root${path}`;
+		const contextFile = `/tmp/marimohub-context/${sandboxId}.json`;
+		const start = vi.spyOn(instance, 'startProcess');
+		await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+			sandboxId,
+			projectId,
+			notebookId,
+			hostname: 'localhost',
+			bucket: bucketConfig,
+			contextFile: { path: contextFile },
+			sessionEnv: { vars: { MARIMOHUB_CONTEXT_FILE: '/wrong.json' } },
+		});
+		expect(calls.setEnvVars).toContainEqual({
+			MARIMOHUB_CONTEXT_FILE: `/sandbox-root${contextFile}`,
+		});
+		expect(calls.sequence.indexOf('setEnvVars')).toBeLessThan(
+			calls.sequence.indexOf('startProcess'),
+		);
+		expect(start).toHaveBeenCalledOnce();
+	});
+
+	it.each([false, true])(
+		'does not launch a kernel if context environment injection fails (existing: %s)',
+		async (existing) => {
+			const { instance, calls } = makeFakeSandbox();
+			vi.spyOn(instance, 'setEnvVars').mockRejectedValue(new Error('environment unavailable'));
+			await expect(
+				new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					contextFile: { path: sandboxContextPath(sandboxId) },
+					existingSandbox: existing ? instance : undefined,
+				}),
+			).rejects.toThrow('injecting session credentials');
+			expect(calls.startProcess).toEqual([]);
+			expect(calls.exposePort).toEqual([]);
+			expect(calls.destroy).toBe(existing ? 0 : 1);
+		},
+	);
 
 	it.each([false, true])(
 		'cleans up a failed provision only when it owns the sandbox (existing: %s)',
@@ -926,7 +973,7 @@ describe('SandboxProvisioner', () => {
 			expect(calls.sequence).toEqual(['writeFiles', 'setEnvVars', 'startProcess']);
 		});
 
-		it('writes the kernel token after other files and launches marimo with its path', async () => {
+		it('batches the kernel token, context, and credentials before launching marimo', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 
@@ -937,14 +984,23 @@ describe('SandboxProvisioner', () => {
 				hostname: 'localhost',
 				bucket: bucketConfig,
 				kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
+				contextFile: {
+					path: sandboxContextPath(sandboxId),
+					content: '{"public_url":"https://hub.example/proxy/route/"}',
+				},
 				sessionEnv: { files: [{ path: '/creds', content: 'credential' }] },
 			});
 
 			expect(calls.writeFile).toEqual([
 				{ path: '/creds', content: 'credential' },
+				{
+					path: sandboxContextPath(sandboxId),
+					content: '{"public_url":"https://hub.example/proxy/route/"}',
+				},
 				{ path: KERNEL_AUTH_TOKEN_FILE, content: TEST_KERNEL_AUTH_TOKEN },
 			]);
-			expect(calls.sequence).toEqual(['writeFiles', 'writeFiles', 'startProcess']);
+			expect(calls.writeFiles).toHaveLength(1);
+			expect(calls.sequence).toEqual(['writeFiles', 'setEnvVars', 'startProcess']);
 			expect(calls.startProcess[0].cmd).toContain(
 				`--token --token-password-file '${KERNEL_AUTH_TOKEN_FILE}'`,
 			);
@@ -975,7 +1031,8 @@ describe('SandboxProvisioner', () => {
 			expect(failure).toBeInstanceOf(Error);
 			expect((failure as Error).message).toContain('injecting session credentials');
 			expect((failure as Error).message).not.toContain(TEST_KERNEL_AUTH_TOKEN);
-			expect(calls.writeFiles.map(([file]) => file.path)).toEqual([
+			expect(calls.writeFiles).toHaveLength(1);
+			expect(calls.writeFiles[0].map((file) => file.path)).toEqual([
 				'/creds',
 				KERNEL_AUTH_TOKEN_FILE,
 			]);
@@ -2902,9 +2959,23 @@ describe('SandboxProvisioner', () => {
 		});
 
 		it('provision restores via createFromSnapshot when a snapshot id is given', async () => {
-			const { instance } = makeFakeSandbox();
+			const oldPath = sandboxContextPath(createSandboxId());
+			const contextFile = sandboxContextPath(sandboxId);
+			const { instance, calls } = makeFakeSandbox({
+				files: { [oldPath]: '{"public_url":"https://old.example/"}' },
+			});
 			const compute = makeSnapshotCompute(instance);
 			const provisioner = new SandboxProvisioner(compute);
+			const start = instance.startProcess;
+			vi.spyOn(instance, 'startProcess').mockImplementation(async (...args) => {
+				expect(calls.setEnvVars).toContainEqual({ MARIMOHUB_CONTEXT_FILE: contextFile });
+				expect(contextFile).not.toBe(oldPath);
+				expectFileResult(await instance.readFile(contextFile), {
+					success: false,
+					error: { code: 'NOT_FOUND' },
+				});
+				return start(...args);
+			});
 
 			await provisioner.provision({
 				sandboxId,
@@ -2913,6 +2984,7 @@ describe('SandboxProvisioner', () => {
 				hostname: 'localhost',
 				bucket: bucketConfig,
 				restoreFilesystemSnapshotId: 'snap_x',
+				contextFile: { path: contextFile },
 			});
 
 			expect(compute.createdFrom).toEqual([{ id: sandboxId, snapshotId: 'snap_x' }]);

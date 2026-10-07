@@ -38,6 +38,7 @@ import {
 	expectOk,
 	stubSourceControl,
 } from '../testing';
+import { readSandboxContexts } from '../testing/sandboxContext';
 import { sweepPreviews } from '../previews';
 import { authorizeProxyRequest } from '../sandboxProxy';
 
@@ -203,6 +204,13 @@ describe('Notebook previews', () => {
 			);
 			expect(session.sandbox_url).toMatch(/^https:\/\/hub\.example\.com\/marimohub\/proxy\//);
 			expect(calls.startProcess.some(({ cmd }) => cmd.includes('/marimohub/proxy/'))).toBe(true);
+			expect(readSandboxContexts(calls)).toEqual([
+				expect.objectContaining({
+					notebook_url: url,
+					persistence_mode: 'none',
+					session_mode: 'app',
+				}),
+			]);
 		},
 	);
 
