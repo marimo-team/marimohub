@@ -205,11 +205,11 @@ Sessions started on an older sandbox image restore the path but do not report pa
 
 ### Reserved parameters
 
-The hub strips these names from forwarded parameters and copied links, including duplicates and encoded names:
+The hub strips these names from the parameters forwarded to the notebook, including duplicates and encoded names, and from copied links except where noted:
 
 - Authentication and session controls: `access_token`, `refresh_token`, `session_id`, `auth_error`.
 - Display and runtime controls: `theme`, `show-code`, `include-code`, `kiosk`, `vscode`, `file`, `view-as`, `show-chrome`.
-- Hub navigation state: `__mh_path`.
+- Hub navigation state: `__mh_path`. Notebook code never sees it, but a valid value stays in copied links so they keep the notebook path.
 
 Existing sandbox URL parameters take precedence. The hub then applies its theme and hides code in app mode.
 The iframe omits the referrer header to avoid sending the unfiltered outer URL.

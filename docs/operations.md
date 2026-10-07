@@ -268,9 +268,11 @@ The `client` field groups requests by route and authentication:
 
 When present, `session_id` identifies the session record and `provision_error_code` identifies a provisioning failure.
 
-Phase timings such as `provision_files_ms` overlap. On every compute backend,
-workspace reads start while the sandbox boots, so `provision_files_ms` includes
-the readiness wait as well as the file copy. Do not sum phase timings.
+Phase timings such as `provision_files_ms` overlap. When the workspace is copied
+into the sandbox, bounded workspace reads start while the sandbox boots, so
+`provision_files_ms` includes the readiness wait as well as the copy. Mounted
+workspaces, and reads over the prefetch budget, wait for readiness first. Do not
+sum phase timings.
 
 ### Tracing (OpenTelemetry)
 

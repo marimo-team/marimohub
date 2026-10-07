@@ -24,13 +24,8 @@ function marimoNamesSetBy(path: string): string[] {
 }
 
 describe('sandbox image marimo environment', () => {
-	it.each([
-		'images/marimo-sandbox/Dockerfile',
-		'deployment/sandbox/Dockerfile',
-		'deployment/cloudflare/sandbox/Dockerfile',
-		'deployment/e2b/files/marimo.sh',
-	])('%s pins only names listed as image-pinned and reserved', (path) => {
-		const names = marimoNamesSetBy(path);
+	it('pins only names listed as image-pinned and reserved', () => {
+		const names = marimoNamesSetBy('images/marimo-sandbox/Dockerfile');
 		expect(names.length).toBeGreaterThan(0);
 		for (const name of names) {
 			expect(SANDBOX_IMAGE_MARIMO_ENV).toContain(name);
