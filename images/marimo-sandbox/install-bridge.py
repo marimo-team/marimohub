@@ -13,8 +13,9 @@ payload = re.search(r"export const WHEEL_BASE64 =\s*'([^']+)';", source)[1]
 with tempfile.TemporaryDirectory() as directory:
     wheel = Path(directory) / name
     wheel.write_bytes(base64.b64decode(payload, validate=True))
+    # This runs as root; leave the runtime user's shared cache untouched.
     subprocess.run(
         ["uv", "pip", "install", "--python", os.environ["UV_PROJECT_ENVIRONMENT"],
-         "--no-deps", "--no-index", "--compile-bytecode", str(wheel)],
+         "--no-deps", "--no-index", "--no-cache", "--compile-bytecode", str(wheel)],
         check=True,
     )
