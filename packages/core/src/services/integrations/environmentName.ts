@@ -36,10 +36,12 @@ const RESERVED_NAMES = new Set<string>([
 	'AWS_SESSION_TOKEN',
 	'AWS_ENDPOINT_URL_S3',
 	'AWS_REGION',
+	// Hub controls the config location and these sandbox image settings.
+	'MARIMO_CONFIG_PATH',
+	'MARIMO_SKIP_UPDATE_CHECK',
+	'MARIMO_VERSION',
+	'_MARIMO_APP_OVERLOAD_AUTO_DOWNLOAD',
 ]);
-
-/** Prefixes the hub reserves for its own injected environment. */
-const RESERVED_PREFIXES = ['MARIMO'];
 
 export function assertValidEnvironmentName(name: string): void {
 	if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) {
@@ -48,7 +50,7 @@ export function assertValidEnvironmentName(name: string): void {
 				'(uppercase letters, digits, and underscores; not starting with a digit).',
 		);
 	}
-	if (RESERVED_NAMES.has(name) || RESERVED_PREFIXES.some((p) => name.startsWith(p))) {
+	if (RESERVED_NAMES.has(name) || name.startsWith('MARIMOHUB_')) {
 		throw new ValidationError(`Environment variable name "${name}" is reserved.`);
 	}
 }

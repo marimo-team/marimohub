@@ -2235,6 +2235,58 @@ describe('kind renders (golden)', () => {
 		).toThrow(/Duplicate JSON secret bundle name/);
 	});
 
+	it.each([
+		['MARIMO', 'HUB_INTEGRATIONS_DIR'],
+		['MARIMO_', 'CONFIG_PATH'],
+		['MARIMO_', 'SKIP_UPDATE_CHECK'],
+		['MARIMO_', 'VERSION'],
+		['_MARIMO_', 'APP_OVERLOAD_AUTO_DOWNLOAD'],
+	])('custom_env: rejects %s%s through every variable source', (prefix, key) => {
+		const name = `${prefix}${key}`;
+		const error = `Environment variable name "${name}" is reserved.`;
+		const bundle = (key: string, prefix?: string) => ({
+			name: 'SETTINGS',
+			prefix,
+			value: JSON.stringify({ [key]: 'private-value' }),
+		});
+		for (const raw of [
+			{ vars: { [name]: 'private-value' } },
+			{ secrets: [{ name, value: 'private-value' }] },
+			{ secret_bundles: [bundle(name)] },
+			{ secret_bundles: [bundle(key, prefix)] },
+		]) {
+			const config = customEnv.configSchema.parse(raw);
+			if (!('secret_bundles' in raw)) {
+				expect(() => customEnv.validate?.(config)).toThrow(error);
+			}
+			expect(() => renderDefinition(customEnv, config)).toThrow(error);
+		}
+	});
+
+	it.each(['plain', 'secret', 'bundle'])(
+		'custom_env: rejects a marimo bundle variable that duplicates a %s variable',
+		(source) => {
+			const name = 'MARIMO_STUDIO_TRUSTED_SERVER_RUNTIME';
+			const config = {
+				vars: source === 'plain' ? { [name]: '0' } : {},
+				secrets: source === 'secret' ? [{ name, value: '0' }] : [],
+				secret_bundles: [
+					...(source === 'bundle'
+						? [{ name: 'FIRST', value: JSON.stringify({ [name]: '0' }) }]
+						: []),
+					{
+						name: 'SETTINGS',
+						prefix: 'MARIMO_STUDIO_',
+						value: '{"TRUSTED_SERVER_RUNTIME":"1"}',
+					},
+				],
+			};
+			expect(() => renderDefinition(customEnv, config)).toThrow(
+				`Environment variable "${name}" is defined more than once.`,
+			);
+		},
+	);
+
 	it('custom_env: names invalid plain variables without exposing their values', () => {
 		const config = customEnv.configSchema.parse({
 			vars: { VALID_NAME: 'valid', INVALID_VALUE: 'private\nvalue' },
