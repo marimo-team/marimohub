@@ -1,6 +1,7 @@
 import {
 	Connect,
 	NAVIGATION_CAPABILITY,
+	PATH_CAPABILITY,
 	HANDSHAKE_TIMEOUT_MS,
 	NAMESPACE,
 	Probe,
@@ -15,6 +16,7 @@ import {
 import type { BridgeHandle, BridgeStatus, HostApi, NotebookApi, StatusOptions } from './protocol';
 import { observeAppLinks } from './navigation';
 import { notebookQueryParams } from './query';
+import { relativeNotebookPath } from './path';
 import { createChannelRpc } from './transport';
 import { createHandshakeRetry } from './handshake';
 
@@ -33,6 +35,7 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 	let status: BridgeStatus = 'connecting';
 	let channel: ReturnType<typeof createChannelRpc<HostApi, NotebookApi>> | undefined;
 	let excludedKeys: string[] = [];
+	let basePath: string | undefined;
 	let stopLinks: (() => void) | undefined;
 	let navigating = false;
 	let connectionId: string | undefined;
@@ -52,7 +55,7 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 				namespace: NAMESPACE,
 				kind: 'ready',
 				version: VERSION,
-				capabilities: [QUERY_CAPABILITY, NAVIGATION_CAPABILITY],
+				capabilities: [QUERY_CAPABILITY, NAVIGATION_CAPABILITY, PATH_CAPABILITY],
 				documentId,
 			},
 			parentOrigin,
@@ -70,9 +73,14 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 		const current = channel;
 		if (status !== 'connected' || !current || navigating || inFlight) return;
 		const params = notebookQueryParams(win.location.search, excludedKeys);
-		const search = params.toString();
+		const path = basePath ? relativeNotebookPath(win.location.pathname, basePath) : undefined;
+		const search = JSON.stringify([params.toString(), path]);
 		if (search === lastSent) return;
-		const parsed = QuerySnapshot.safeParse({ revision: ++revision, entries: [...params] });
+		const parsed = QuerySnapshot.safeParse({
+			revision: ++revision,
+			entries: [...params],
+			...(path !== undefined ? { path } : {}),
+		});
 		if (!parsed.success) return;
 		inFlight = true;
 		void current.rpc
@@ -141,6 +149,23 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 		clearTimeout(readyTimer);
 		handshake.stop();
 		excludedKeys = parsed.data.excludedKeys;
+		basePath = undefined;
+		if (parsed.data.capabilities.includes(PATH_CAPABILITY) && parsed.data.sandboxBasePath) {
+			try {
+				const candidate = parsed.data.sandboxBasePath;
+				const base = new URL(candidate, win.location.origin);
+				if (
+					base.origin === win.location.origin &&
+					base.pathname === candidate &&
+					candidate.endsWith('/') &&
+					!base.search &&
+					!base.hash
+				)
+					basePath = candidate;
+			} catch {
+				/* An invalid optional base must not break query mirroring. */
+			}
+		}
 		lastSent = undefined;
 		inFlight = false;
 		updateStatus('connecting');
@@ -153,29 +178,35 @@ export function startNotebookBridge(options: NotebookBridgeOptions): BridgeHandl
 					clearTimeout(readyTimer);
 					updateStatus('connected');
 					if (appBaseUrl && !stopLinks) {
-						stopLinks = observeAppLinks(win, appBaseUrl, excludedKeys, (destination) => {
-							const current = channel;
-							if (status !== 'connected' || !current || navigating) return;
-							navigating = true;
-							void current.rpc
-								.navigateApp(destination)
-								.then((result) => {
-									if (channel === current && !result.applied) {
-										navigating = false;
-										schedule();
-									}
-								})
-								.catch(() => {
-									if (channel === current && status !== 'disposed') {
-										navigating = false;
-										stopLinks?.();
-										stopLinks = undefined;
-										current.dispose();
-										channel = undefined;
-										updateStatus('unavailable');
-									}
-								});
-						});
+						stopLinks = observeAppLinks(
+							win,
+							appBaseUrl,
+							excludedKeys,
+							(destination) => {
+								const current = channel;
+								if (status !== 'connected' || !current || navigating) return;
+								navigating = true;
+								void current.rpc
+									.navigateApp(destination)
+									.then((result) => {
+										if (channel === current && !result.applied) {
+											navigating = false;
+											schedule();
+										}
+									})
+									.catch(() => {
+										if (channel === current && status !== 'disposed') {
+											navigating = false;
+											stopLinks?.();
+											stopLinks = undefined;
+											current.dispose();
+											channel = undefined;
+											updateStatus('unavailable');
+										}
+									});
+							},
+							basePath !== undefined,
+						);
 					}
 					schedule();
 					return { ready: true };

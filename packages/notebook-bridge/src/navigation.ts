@@ -1,7 +1,12 @@
 import { AppNavigation } from './protocol';
-import { notebookQueryParams } from './query';
+import { shareableNotebookQuery } from './query';
 
-export function appNavigation(href: string, appBaseUrl: string, excludedKeys: readonly string[]) {
+export function appNavigation(
+	href: string,
+	appBaseUrl: string,
+	excludedKeys: readonly string[],
+	includePath = false,
+) {
 	const relative = href.startsWith(appBaseUrl) ? `app/${href.slice(appBaseUrl.length)}` : href;
 	const match = /^\/?app\/([^?#]+)(\?[^#]*)?(#.*)?(?![\s\S])/.exec(relative);
 	if (!match) return;
@@ -11,7 +16,10 @@ export function appNavigation(href: string, appBaseUrl: string, excludedKeys: re
 		hash: match[3] ?? '',
 	});
 	if (!parsed.success) return;
-	return { ...parsed.data, entries: [...notebookQueryParams(parsed.data.entries, excludedKeys)] };
+	return {
+		...parsed.data,
+		entries: [...shareableNotebookQuery(parsed.data.entries, excludedKeys, includePath)],
+	};
 }
 
 export function appNavigationHref(destination: AppNavigation, base = '/app/'): string {
@@ -24,6 +32,7 @@ export function observeAppLinks(
 	appBaseUrl: string,
 	excludedKeys: readonly string[],
 	navigate: (destination: AppNavigation) => void,
+	includePath = false,
 ) {
 	const doc = win.document;
 	const originals = new WeakMap<HTMLAnchorElement, { original: string; rewritten: string }>();
@@ -41,7 +50,7 @@ export function observeAppLinks(
 		}
 		const href = anchor.getAttribute('href');
 		if (href === null) return;
-		const destination = appNavigation(href, appBaseUrl, excludedKeys);
+		const destination = appNavigation(href, appBaseUrl, excludedKeys, includePath);
 		if (!destination) return;
 		const rewritten = appNavigationHref(destination, appBaseUrl);
 		if (href !== rewritten) {
@@ -129,7 +138,12 @@ export function observeAppLinks(
 				: (doc.querySelector<HTMLBaseElement>('base[target]')?.target ?? '')
 		).toLowerCase();
 		if (target && target !== '_self') return;
-		const destination = appNavigation(anchor.getAttribute('href') ?? '', appBaseUrl, excludedKeys);
+		const destination = appNavigation(
+			anchor.getAttribute('href') ?? '',
+			appBaseUrl,
+			excludedKeys,
+			includePath,
+		);
 		if (!destination) return;
 		event.preventDefault();
 		// Run before framework handlers can navigate the sandbox themselves.

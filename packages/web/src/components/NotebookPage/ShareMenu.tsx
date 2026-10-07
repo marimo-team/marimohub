@@ -7,7 +7,7 @@ import { DropdownMenu } from '@/components/ui';
 import type { DropdownMenuOption } from '@/components/ui';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { withBasePath } from '@/lib/basePath';
-import { notebookQueryParams } from '@/lib/notebookUrls';
+import { shareableNotebookQuery } from '@/lib/notebookUrls';
 
 export function ShareUrlMenu({
 	label,
@@ -50,7 +50,7 @@ export function ShareUrlMenu({
 					return;
 				}
 				const url = new URL(withBasePath(location.pathname), window.location.origin);
-				url.search = notebookQueryParams(location.search).toString();
+				url.search = shareableNotebookQuery(location.search).toString();
 				void copy(url.toString()).then((copied) => copied && toast.success(successMessage));
 			}}
 		/>

@@ -1,6 +1,7 @@
 import {
 	Connect,
 	NAVIGATION_CAPABILITY,
+	PATH_CAPABILITY,
 	NAMESPACE,
 	QUERY_CAPABILITY,
 	Ready,
@@ -19,7 +20,8 @@ import type {
 	QuerySnapshot,
 	StatusOptions,
 } from './protocol';
-import { notebookQueryParams } from './query';
+import { notebookQueryParams, shareableNotebookQuery } from './query';
+import { sandboxBasePath } from './path';
 import { createChannelRpc } from './transport';
 import { createHandshakeRetry } from './handshake';
 
@@ -32,6 +34,7 @@ export interface HostBridgeOptions extends StatusOptions {
 	origin: string;
 	excludedKeys?: readonly string[];
 	appBaseUrl?: string;
+	sandboxUrl?: string;
 	onNavigateApp?: (destination: AppNavigation) => boolean;
 	onQuery(snapshot: QuerySnapshot): boolean;
 }
@@ -41,6 +44,8 @@ export function createHostBridge(options: HostBridgeOptions): BridgeHandle {
 	const origin = exactOrigin(options.origin);
 	const win = iframe.ownerDocument.defaultView!;
 	const excludedKeys = [...new Set(options.excludedKeys ?? [])];
+	const sandbox = options.sandboxUrl ? new URL(options.sandboxUrl) : undefined;
+	const basePath = sandbox?.origin === origin ? sandboxBasePath(sandbox.pathname) : undefined;
 	let status: BridgeStatus = 'connecting';
 	let channel: ReturnType<typeof createChannelRpc<NotebookApi, HostApi>> | undefined;
 	let documentId: string | undefined;
@@ -98,11 +103,17 @@ export function createHostBridge(options: HostBridgeOptions): BridgeHandle {
 			options.onNavigateApp &&
 			parsed.data.capabilities.includes(NAVIGATION_CAPABILITY),
 		);
+		const paths = Boolean(basePath && parsed.data.capabilities.includes(PATH_CAPABILITY));
 		const connect = Connect.safeParse({
 			namespace: NAMESPACE,
 			kind: 'connect',
 			version: VERSION,
-			capabilities: [QUERY_CAPABILITY, ...(navigation ? [NAVIGATION_CAPABILITY] : [])],
+			capabilities: [
+				QUERY_CAPABILITY,
+				...(navigation ? [NAVIGATION_CAPABILITY] : []),
+				...(paths ? [PATH_CAPABILITY] : []),
+			],
+			...(paths ? { sandboxBasePath: basePath } : {}),
 			...(navigation ? { appBaseUrl: options.appBaseUrl } : {}),
 			documentId,
 			connectionId,
@@ -122,7 +133,7 @@ export function createHostBridge(options: HostBridgeOptions): BridgeHandle {
 				try {
 					const applied = options.onNavigateApp!({
 						...destination,
-						entries: [...notebookQueryParams(destination.entries, excludedKeys)],
+						entries: [...shareableNotebookQuery(destination.entries, excludedKeys, paths)],
 					});
 					navigating = applied;
 					return { applied };
@@ -142,10 +153,15 @@ export function createHostBridge(options: HostBridgeOptions): BridgeHandle {
 					return { applied: false };
 				revision = snapshot.revision;
 				const entries = [...notebookQueryParams(snapshot.entries, excludedKeys)];
-				const query = new URLSearchParams(entries).toString();
+				const path = paths ? snapshot.path : undefined;
+				const query = JSON.stringify([new URLSearchParams(entries).toString(), path]);
 				if (query === lastQuery) return { applied: true };
 				lastApplied = Date.now();
-				const applied = options.onQuery({ ...snapshot, entries });
+				const applied = options.onQuery({
+					revision: snapshot.revision,
+					entries,
+					...(path !== undefined ? { path } : {}),
+				});
 				if (applied) lastQuery = query;
 				return { applied };
 			},

@@ -57,7 +57,12 @@ export function useNotebookFrameLocation(
 		(snapshot: QuerySnapshot): boolean => {
 			if (!sandboxUrl) return false;
 			const trustedKeys = [...new URL(sandboxUrl, window.location.origin).searchParams.keys()];
-			const search = mergeNotebookQuery(location.search, snapshot.entries, trustedKeys);
+			const search = mergeNotebookQuery(
+				location.search,
+				snapshot.entries,
+				trustedKeys,
+				snapshot.path,
+			);
 			if (search === location.search) return true;
 			const echo = randomIdentifier(crypto);
 			setFrame((current) => ({ ...current, echo }));

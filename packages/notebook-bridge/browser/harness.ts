@@ -3,6 +3,10 @@ import type { Server } from 'node:http';
 import { build } from 'vite-plus';
 import type { BridgeHandle } from '../src/protocol';
 import { NOTEBOOK_IFRAME_SANDBOX } from '../src/host';
+import { notebookPath, resolveNotebookPath } from '../src/path';
+import { notebookQueryParams } from '../src/query';
+
+const excludedKeys = ['provider'];
 
 declare global {
 	interface Window {
@@ -43,7 +47,7 @@ async function listen(server: Server): Promise<string> {
 	return `http://127.0.0.1:${address.port}`;
 }
 
-export async function harness() {
+export async function harness(options: { sandboxBasePath?: string } = {}) {
 	const [hostScript, notebookScript, queryScript] = await Promise.all([
 		bundle('../src/host.ts'),
 		bundle('../src/notebook.ts'),
@@ -78,6 +82,9 @@ export async function harness() {
 		);
 	});
 	const childOrigin = await listen(child);
+	const sandboxUrl = options.sandboxBasePath
+		? new URL(options.sandboxBasePath, childOrigin).href
+		: undefined;
 	const host = createServer((req, res) => {
 		const script =
 			req.url === '/host.js' ? hostScript : req.url === '/query.js' ? queryScript : undefined;
@@ -92,19 +99,27 @@ export async function harness() {
 			return;
 		}
 		const params = new URL(req.url!, 'http://localhost').searchParams;
-		const source = params.get('child') ?? `${childOrigin}/?early=1`;
+		const explicitSource = params.get('child');
+		let source = explicitSource ?? `${childOrigin}/?early=1`;
+		if (sandboxUrl && explicitSource === null) {
+			const base = new URL(sandboxUrl);
+			const path = notebookPath(params);
+			const target = path ? (resolveNotebookPath(base, path) ?? base) : base;
+			target.search = notebookQueryParams(params, excludedKeys).toString();
+			source = target.href;
+		}
 		// Test-only fixture URLs are escaped as data, never HTML attributes.
 		res.end(`<iframe id="frame" sandbox="${NOTEBOOK_IFRAME_SANDBOX}" referrerpolicy="no-referrer"></iframe>
   <script type="module">
    import { createHostBridge } from '/host.js';
    import { mergeNotebookQuery } from '/query.js';
    const frame = document.querySelector('iframe');
-   const excludedKeys = ['provider'];
+   const excludedKeys = ${JSON.stringify(excludedKeys)};
    const navigationEnabled = new URLSearchParams(location.search).has('navigation');
    window.updates = 0; window.loads = 0;
    window.navigationBehavior = 'accept'; window.navigationRequests = 0;
    frame.addEventListener('load', () => window.loads++);
-   window.connect = () => { window.bridge?.dispose(); window.bridge = createHostBridge({iframe: frame, origin: ${JSON.stringify(new URL(source).origin)}, excludedKeys,
+   window.connect = () => { window.bridge?.dispose(); window.bridge = createHostBridge({iframe: frame, origin: ${JSON.stringify(new URL(source).origin)}, sandboxUrl: ${JSON.stringify(sandboxUrl)}, excludedKeys,
    ...(navigationEnabled ? {
     appBaseUrl: location.origin + '/prefix/app/',
     onNavigateApp({slug, entries, hash}) {
@@ -115,8 +130,8 @@ export async function harness() {
      history.pushState({}, '', '/prefix/app/' + slug + (query ? '?' + query : '') + hash);
      return true;
     }
-   } : {}), onQuery({entries}) {
-    window.updates++; const query = mergeNotebookQuery(location.search, entries, excludedKeys);
+   } : {}), onQuery({entries, path}) {
+    window.updates++; const query = mergeNotebookQuery(location.search, entries, excludedKeys, path);
     history.replaceState(history.state, '', location.pathname + query + location.hash);
     return true;
    }}); };

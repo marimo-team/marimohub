@@ -151,9 +151,9 @@ describe('AppLinksDialog', () => {
 				true,
 				false,
 				{},
-				'?id=123&tag=one&tag=two&empty=&access_token=evil&%73ession_id=evil&theme=dark',
+				'?id=123&tag=one&tag=two&empty=&access_token=evil&%73ession_id=evil&theme=dark&__mh_path=studio%2Fdata%2F',
 			);
-			const search = '?id=123&tag=one&tag=two&empty=';
+			const search = '?id=123&tag=one&tag=two&empty=&__mh_path=studio%2Fdata%2F';
 			const link = await screen.findByRole('link');
 			expect(link).toHaveAttribute('href', `/hub/app/sales${search}`);
 			expect(link).toHaveTextContent(`${window.location.origin}/hub/app/sales${search}`);

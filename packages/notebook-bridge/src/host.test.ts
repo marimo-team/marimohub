@@ -12,7 +12,19 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-function fixture(navigation = false, peerNavigation = navigation) {
+function fixture({
+	navigation = false,
+	peerNavigation = navigation,
+	paths = false,
+	peerPaths = paths,
+	sandboxUrl = 'https://notebook.example/hub/proxy/token/?provider=secret',
+}: {
+	navigation?: boolean;
+	peerNavigation?: boolean;
+	paths?: boolean;
+	peerPaths?: boolean;
+	sandboxUrl?: string;
+} = {}) {
 	const parent = new EventTarget();
 	Object.assign(parent, { crypto: globalThis.crypto });
 	const frame = new EventTarget();
@@ -24,6 +36,7 @@ function fixture(navigation = false, peerNavigation = navigation) {
 	const bridge = createHostBridge({
 		iframe: frame as HTMLIFrameElement,
 		origin: 'https://notebook.example',
+		...(paths ? { sandboxUrl } : {}),
 		excludedKeys: ['provider'],
 		onQuery,
 		onStatus,
@@ -44,6 +57,7 @@ function fixture(navigation = false, peerNavigation = navigation) {
 					'query-params.v1',
 					'optional.future',
 					...(peerNavigation ? ['app-navigation.v1'] : []),
+					...(peerPaths ? ['location-path.v1'] : []),
 				],
 				future: true,
 				...overrides,
@@ -293,7 +307,7 @@ describe('host lifecycle and frozen v1 peer', () => {
 
 describe('app navigation', () => {
 	it('filters credentials and fences old queries and repeated navigation', async () => {
-		const { negotiate, onNavigateApp, onQuery, peer } = fixture(true);
+		const { negotiate, onNavigateApp, onQuery, peer } = fixture({ navigation: true });
 		const remote = await negotiate();
 		expect(peer.postMessage.mock.calls.at(-1)![0]).toMatchObject({
 			appBaseUrl: 'https://hub.example/prefix/app/',
@@ -328,7 +342,10 @@ describe('app navigation', () => {
 	])(
 		'does not enable navigation unless both sides opt in (host: %s, notebook: %s)',
 		async (enabled, peerEnabled) => {
-			const { negotiate, onNavigateApp, peer } = fixture(enabled, peerEnabled);
+			const { negotiate, onNavigateApp, peer } = fixture({
+				navigation: enabled,
+				peerNavigation: peerEnabled,
+			});
 			const remote = await negotiate();
 			expect(peer.postMessage.mock.calls.at(-1)![0]).not.toHaveProperty('appBaseUrl');
 			await expect(
@@ -338,7 +355,7 @@ describe('app navigation', () => {
 		},
 	);
 	it('rejects malformed destinations before dispatch and resumes after a declined navigation', async () => {
-		const { negotiate, onNavigateApp, onQuery } = fixture(true);
+		const { negotiate, onNavigateApp, onQuery } = fixture({ navigation: true });
 		const remote = await negotiate();
 		for (const slug of ['../admin', '//evil.example', 'match?next=evil', '%2e%2e', 'match\\evil']) {
 			remote.send({ t: 'q', i: slug, m: 'navigateApp', a: [{ slug, entries: [], hash: '' }] });
@@ -357,7 +374,7 @@ describe('app navigation', () => {
 });
 
 it('resumes queries after the navigation callback throws and permits another click', async () => {
-	const { negotiate, onNavigateApp, onQuery } = fixture(true);
+	const { negotiate, onNavigateApp, onQuery } = fixture({ navigation: true });
 	const remote = await negotiate();
 	onNavigateApp.mockImplementationOnce(() => {
 		throw new Error('Router unavailable');
@@ -373,7 +390,7 @@ it('resumes queries after the navigation callback throws and permits another cli
 });
 
 it('rejects navigation before the handshake completes', async () => {
-	const { ready, peer, onNavigateApp } = fixture(true);
+	const { ready, peer, onNavigateApp } = fixture({ navigation: true });
 	ready();
 	const [connect, , ports] = peer.postMessage.mock.calls.at(-1)!;
 	const remote = wirePeer(ports[0], connect.connectionId);
@@ -386,7 +403,7 @@ it('rejects navigation before the handshake completes', async () => {
 });
 
 it('rejects queued navigation from an old document and resets the fence on reload', async () => {
-	const { negotiate, frame, onNavigateApp, onQuery } = fixture(true);
+	const { negotiate, frame, onNavigateApp, onQuery } = fixture({ navigation: true });
 	const old = await negotiate();
 	const destination = { slug: 'match', entries: [], hash: '' };
 	await old.call('navigateApp', destination);
@@ -402,7 +419,7 @@ it('rejects queued navigation from an old document and resets the fence on reloa
 });
 
 it('drops invalid navigation arguments before invoking the host', async () => {
-	const { negotiate, onNavigateApp } = fixture(true);
+	const { negotiate, onNavigateApp } = fixture({ navigation: true });
 	const remote = await negotiate();
 	const valid = { slug: 'match', entries: [], hash: '' };
 	for (const value of [
@@ -422,4 +439,154 @@ it('drops invalid navigation arguments before invoking the host', async () => {
 	await remote.call('replaceQuery', { revision: 1, entries: [] });
 	expect(onNavigateApp).not.toHaveBeenCalled();
 	await expect(remote.call('navigateApp', valid)).resolves.toEqual({ applied: true });
+});
+
+describe('path negotiation', () => {
+	it('disables paths when the sandbox URL differs from the peer origin', async () => {
+		const { negotiate, peer, onQuery } = fixture({
+			paths: true,
+			sandboxUrl: 'https://foreign.example/foreign/proxy/token/?provider=secret',
+		});
+		const remote = await negotiate();
+		const connect = peer.postMessage.mock.calls.at(-1)![0];
+		expect(connect).not.toHaveProperty('sandboxBasePath');
+		expect(connect.capabilities).not.toContain('location-path.v1');
+		await expect(
+			remote.call('replaceQuery', { revision: 1, entries: [['id', '1']], path: 'studio/data/' }),
+		).resolves.toEqual({ applied: true });
+		expect(onQuery).toHaveBeenCalledExactlyOnceWith({ revision: 1, entries: [['id', '1']] });
+	});
+	it.each([
+		[true, true],
+		[true, false],
+		[false, true],
+	])('host %s / notebook %s', async (enabled, peerEnabled) => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		const { negotiate, peer, onQuery } = fixture({ paths: enabled, peerPaths: peerEnabled });
+		const remote = await negotiate();
+		const connect = peer.postMessage.mock.calls.at(-1)![0];
+		const negotiated = enabled && peerEnabled;
+		expect(connect.capabilities.includes('location-path.v1')).toBe(negotiated);
+		expect(connect.sandboxBasePath).toBe(negotiated ? '/hub/proxy/token/' : undefined);
+		expect(JSON.stringify(connect)).not.toContain('secret');
+		await expect(
+			remote.call('replaceQuery', { revision: 1, entries: [['id', '1']], path: 'studio/data/' }),
+		).resolves.toEqual({ applied: true });
+		expect(onQuery).toHaveBeenLastCalledWith({
+			revision: 1,
+			entries: [['id', '1']],
+			...(negotiated ? { path: 'studio/data/' } : {}),
+		});
+		vi.setSystemTime(Date.now() + 100);
+		await remote.call('replaceQuery', {
+			revision: 2,
+			entries: [['id', '1']],
+			path: 'studio/settings/',
+		});
+		expect(onQuery).toHaveBeenCalledTimes(negotiated ? 2 : 1);
+		if (negotiated) {
+			vi.setSystemTime(Date.now() + 100);
+			await remote.call('replaceQuery', { revision: 3, entries: [], path: '' });
+			expect(onQuery).toHaveBeenLastCalledWith({ revision: 3, entries: [], path: '' });
+		}
+	});
+	it('rejects invalid paths before dispatch without disabling valid updates', async () => {
+		const { negotiate, onQuery } = fixture({ paths: true });
+		const remote = await negotiate();
+		for (const path of ['../admin', '%2e%2e/admin', '//evil.example', 'x'.repeat(4097)]) {
+			remote.send({
+				t: 'q',
+				i: 'invalid',
+				m: 'replaceQuery',
+				a: [{ revision: 1, entries: [], path }],
+			});
+		}
+		await remote.call('replaceQuery', { revision: 2, entries: [], path: 'studio/data/' });
+		expect(onQuery).toHaveBeenCalledExactlyOnceWith({
+			revision: 2,
+			entries: [],
+			path: 'studio/data/',
+		});
+	});
+});
+
+it.each([true, false])('gates app path metadata on path capability (%s)', async (paths) => {
+	const { negotiate, onNavigateApp } = fixture({ navigation: true, paths });
+	const remote = await negotiate();
+	await remote.call('navigateApp', {
+		slug: 'match',
+		entries: [
+			['id', '1'],
+			['__mh_path', 'studio/data/'],
+		],
+		hash: '',
+	});
+	expect(onNavigateApp).toHaveBeenCalledExactlyOnceWith({
+		slug: 'match',
+		entries: [['id', '1'], ...(paths ? [['__mh_path', 'studio/data/']] : [])],
+		hash: '',
+	});
+});
+
+it('keeps path and query unchanged on refused, throttled, or stale updates', async () => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	const { negotiate, onQuery } = fixture({ paths: true });
+	const remote = await negotiate();
+	const first = { revision: 1, entries: [['id', 'one']], path: 'studio/one/' };
+	onQuery.mockReturnValueOnce(false);
+	await expect(remote.call('replaceQuery', first)).resolves.toEqual({ applied: false });
+	vi.setSystemTime(Date.now() + 100);
+	await expect(remote.call('replaceQuery', { ...first, revision: 2 })).resolves.toEqual({
+		applied: true,
+	});
+	expect(onQuery).toHaveBeenCalledTimes(2);
+	const second = { revision: 3, entries: [['id', 'two']], path: 'studio/two/' };
+	await expect(remote.call('replaceQuery', second)).resolves.toEqual({ applied: false });
+	expect(onQuery).toHaveBeenCalledTimes(2);
+	vi.setSystemTime(Date.now() + 100);
+	await expect(remote.call('replaceQuery', { ...second, revision: 4 })).resolves.toEqual({
+		applied: true,
+	});
+	vi.setSystemTime(Date.now() + 100);
+	await expect(remote.call('replaceQuery', { ...first, revision: 3 })).resolves.toEqual({
+		applied: false,
+	});
+	expect(onQuery).toHaveBeenCalledTimes(3);
+	expect(onQuery).toHaveBeenLastCalledWith({ ...second, revision: 4 });
+});
+
+it('ignores queued paths from a replaced document and resets revision tracking', async () => {
+	const { negotiate, onQuery, frame } = fixture({ paths: true });
+	const old = await negotiate();
+	await old.call('replaceQuery', { revision: 99, entries: [], path: 'studio/old/' });
+	frame.dispatchEvent(new Event('load'));
+	const current = await negotiate('replacement');
+	old.send({
+		t: 'q',
+		i: 'late',
+		m: 'replaceQuery',
+		a: [{ revision: 100, entries: [], path: 'studio/stale/' }],
+	});
+	await expect(
+		current.call('replaceQuery', { revision: 0, entries: [], path: 'studio/new/' }),
+	).resolves.toEqual({ applied: true });
+	expect(onQuery).toHaveBeenCalledTimes(2);
+	expect(onQuery).toHaveBeenLastCalledWith({ revision: 0, entries: [], path: 'studio/new/' });
+});
+
+it('rejects malformed path types without poisoning revision tracking', async () => {
+	const { negotiate, onQuery } = fixture({ paths: true });
+	const remote = await negotiate();
+	for (const path of [null, 123, false, [], {}, ['studio/data/']]) {
+		remote.send({
+			t: 'q',
+			i: 'invalid',
+			m: 'replaceQuery',
+			a: [{ revision: 999, entries: [], path }],
+		});
+	}
+	await expect(
+		remote.call('replaceQuery', { revision: 1, entries: [], path: '' }),
+	).resolves.toEqual({ applied: true });
+	expect(onQuery).toHaveBeenCalledExactlyOnceWith({ revision: 1, entries: [], path: '' });
 });

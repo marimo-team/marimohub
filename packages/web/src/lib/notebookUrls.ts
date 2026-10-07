@@ -1,7 +1,8 @@
 import type { Theme } from '@/context/ThemeContext';
 
 import { notebookQueryParams } from '@marimo-hub/notebook-bridge/query';
-export { notebookQueryParams } from '@marimo-hub/notebook-bridge/query';
+import { notebookPath, resolveNotebookPath } from '@marimo-hub/notebook-bridge/path';
+export { notebookQueryParams, shareableNotebookQuery } from '@marimo-hub/notebook-bridge/query';
 
 export function notebookFrameUrl(
 	url: string,
@@ -10,7 +11,9 @@ export function notebookFrameUrl(
 	isApp: boolean,
 ): string {
 	try {
-		const parsed = new URL(url, window.location.origin);
+		const base = new URL(url, window.location.origin);
+		const path = notebookPath(search);
+		const parsed = path ? (resolveNotebookPath(base, path) ?? base) : base;
 		const trustedKeys = new Set(parsed.searchParams.keys());
 		for (const [key, value] of notebookQueryParams(search)) {
 			if (!trustedKeys.has(key)) parsed.searchParams.append(key, value);

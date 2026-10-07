@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import { MAX_PATH_LENGTH, validNotebookPath } from './path';
 
 export const NAMESPACE = 'marimohub.notebook-bridge';
-export const VERSION = { major: 1, minor: 1 } as const;
+export const VERSION = { major: 1, minor: 2 } as const;
+export const PATH_CAPABILITY = 'location-path.v1';
 export const NAVIGATION_CAPABILITY = 'app-navigation.v1';
 export const QUERY_CAPABILITY = 'query-params.v1';
 export const HANDSHAKE_TIMEOUT_MS = 10_000;
@@ -22,12 +24,14 @@ export const Connect = z.object({
 	documentId: identifier,
 	connectionId: identifier,
 	appBaseUrl: z.string().max(8192).optional(),
+	sandboxBasePath: z.string().max(8192).optional(),
 	excludedKeys: z.array(z.string().max(MAX_QUERY_BYTES)).max(256),
 });
 export const Probe = z.object({ namespace: z.literal(NAMESPACE), kind: z.literal('probe') });
 export const QuerySnapshot = z
 	.object({
 		revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+		path: z.string().max(MAX_PATH_LENGTH).refine(validNotebookPath).optional(),
 		entries: z
 			.array(z.tuple([z.string().max(MAX_QUERY_BYTES), z.string().max(MAX_QUERY_BYTES)]))
 			.max(256),
