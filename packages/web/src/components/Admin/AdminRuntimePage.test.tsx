@@ -89,6 +89,7 @@ const fixture: RuntimeDashboard = {
 			claim_holder_status: 'running',
 			claim_available: true,
 			reclaimable: false,
+			reclaim_blocked_reason: 'not_terminal',
 		},
 	],
 };
@@ -118,17 +119,19 @@ afterEach(() => {
 
 describe('AdminRuntimePage', () => {
 	it.each([true, false])(
-		'confirms reclaim with save=%s, refreshes on success, and hides actions for active sessions',
+		'confirms reclaim with save=%s, refreshes on success, and blocks active sessions',
 		async (save) => {
 			const data = structuredClone(fixture);
 			const { user, fetcher, client } = setup(data);
 			await user.click(await screen.findByRole('tab', { name: 'Editors' }));
-			expect(screen.queryByRole('button', { name: 'Reclaim session' })).not.toBeInTheDocument();
+			expect(screen.getByRole('button', { name: 'Reclaim session' })).toBeDisabled();
+			expect(screen.getByText('Stop the session first')).toBeInTheDocument();
 			Object.assign(data.editors[0], {
 				status: 'expired',
 				claim_holder_status: 'expired',
 				expires_at: at,
 				reclaimable: true,
+				reclaim_blocked_reason: null,
 			});
 			await act(async () => {
 				await client.invalidateQueries({ queryKey: ['admin', 'runtime'] });
@@ -139,14 +142,18 @@ describe('AdminRuntimePage', () => {
 				await user.click(
 					screen.getByRole('checkbox', { name: 'Attempt to save before reclaiming' }),
 				);
+			const toastSuccess = vi.spyOn(toast, 'success');
 			fetcher.mockImplementationOnce(async () => {
 				data.editors = [];
-				return jsonOk({ reclaimed: true });
+				return jsonOk({ reclaimed: true, saved: save });
 			});
 			await user.click(
 				screen.getByRole('button', { name: save ? 'Save and reclaim' : 'Discard and reclaim' }),
 			);
 			await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+			expect(toastSuccess).toHaveBeenCalledWith(
+				save ? 'Reclaimed and saved' : 'Reclaimed without saving',
+			);
 			expect(fetcher).toHaveBeenCalledWith(
 				'/api/v1/admin/runtime/projects/analytics/sessions/editor-one/reclaim',
 				expect.objectContaining({ method: 'POST', body: JSON.stringify({ save }) }),
@@ -159,7 +166,11 @@ describe('AdminRuntimePage', () => {
 
 	it('keeps a failed reclaim dialog open for retry', async () => {
 		const data = structuredClone(fixture);
-		Object.assign(data.editors[0], { status: 'expired', reclaimable: true });
+		Object.assign(data.editors[0], {
+			status: 'expired',
+			reclaimable: true,
+			reclaim_blocked_reason: null,
+		});
 		const { user, fetcher } = setup(data);
 		await user.click(await screen.findByRole('tab', { name: 'Editors' }));
 		await user.click(screen.getByRole('button', { name: 'Reclaim session' }));
@@ -176,6 +187,44 @@ describe('AdminRuntimePage', () => {
 		expect(await screen.findByRole('alert')).toHaveTextContent('Retry shortly');
 		expect(toastError).not.toHaveBeenCalled();
 		expect(screen.getByRole('button', { name: 'Save and reclaim' })).toBeEnabled();
+	});
+
+	it.each([
+		['provision_grace', 'Provisioning grace period'],
+		['teardown_grace', 'Teardown grace period'],
+	] as const)('disables reclaim during the %s', async (reason, label) => {
+		const data = structuredClone(fixture);
+		Object.assign(data.editors[0], { status: 'expired', reclaim_blocked_reason: reason });
+		const { user } = setup(data);
+		await user.click(await screen.findByRole('tab', { name: 'Editors' }));
+		expect(screen.getByRole('button', { name: 'Reclaim session' })).toBeDisabled();
+		expect(screen.getByText(label)).toBeInTheDocument();
+	});
+
+	it('forces discarding when the provider cannot save, and surfaces conflicts', async () => {
+		const data = structuredClone(fixture);
+		Object.assign(data.editors[0], {
+			status: 'expired',
+			reclaim_blocked_reason: 'attachment_unsupported',
+		});
+		const { user, fetcher } = setup(data);
+		await user.click(await screen.findByRole('tab', { name: 'Editors' }));
+		expect(
+			screen.getByText('Provider cannot save; reclaim without saving to discard edits'),
+		).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Reclaim session' }));
+		const saveOption = screen.getByRole('checkbox', { name: 'Attempt to save before reclaiming' });
+		expect(saveOption).not.toBeChecked();
+		expect(saveOption).toBeDisabled();
+		fetcher.mockImplementationOnce(async () =>
+			jsonError('CONFLICT', 'Kernel is still running cells', 409),
+		);
+		await user.click(screen.getByRole('button', { name: 'Discard and reclaim' }));
+		expect(await screen.findByRole('alert')).toHaveTextContent('Kernel is still running cells');
+		expect(fetcher).toHaveBeenCalledWith(
+			'/api/v1/admin/runtime/projects/analytics/sessions/editor-one/reclaim',
+			expect.objectContaining({ body: JSON.stringify({ save: false }) }),
+		);
 	});
 
 	it('preserves ordinary app cards when their deployment changes', async () => {

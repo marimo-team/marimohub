@@ -11,6 +11,39 @@ import {
 	runningSession,
 } from './Project.testWorld';
 
+describe('Project — cloud access', () => {
+	it.each([
+		['Disabled', { enabled: false, target: 'prod' }, 'Federated cloud access disabled'],
+		[/Use deployment default/, null, 'Federated cloud access uses deployment default (disabled)'],
+	] as const)(
+		'saves %s as the project federation override',
+		async (choice, federation, message) => {
+			const user = userEvent.setup();
+			const toastSuccess = vi.spyOn(toast, 'success');
+			const calls = makeFetch({
+				project: {
+					federation: { enabled: true, target: 'prod' },
+					federation_effective: { enabled: true, source: 'project' },
+				},
+				capabilities: {
+					federation: { available: true, default_enabled: false },
+					jobs: { available: true },
+				},
+			});
+			await renderProject();
+
+			await user.click(screen.getByRole('button', { name: 'Environment & cloud access' }));
+			await user.click(await screen.findByRole('button', { name: /Cloud access/ }));
+			await user.click(screen.getByRole('radio', { name: choice }));
+			await user.click(screen.getByRole('button', { name: 'Save' }));
+
+			await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(message));
+			const patch = calls.find((call) => call.method === 'PATCH' && call.url.endsWith('/proj-x'));
+			expect(patch?.body).toEqual({ federation });
+		},
+	);
+});
+
 describe('Project — Notebook Actions: configuration', () => {
 	it('groups related notebook actions with separators', async () => {
 		const user = userEvent.setup();
@@ -265,7 +298,7 @@ describe('Project — Notebook Actions: configuration', () => {
 		const user = userEvent.setup();
 		makeFetch({
 			capabilities: {
-				federation: { available: false, defaultEnabled: false },
+				federation: { available: false, default_enabled: false },
 				jobs: { available: false },
 			},
 		});
@@ -284,7 +317,7 @@ describe('Project — Notebook Actions: configuration', () => {
 		const user = userEvent.setup();
 		makeFetch({
 			capabilities: {
-				federation: { available: false, defaultEnabled: false },
+				federation: { available: false, default_enabled: false },
 				sandbox_images: ['img-a', 'img-b'],
 			},
 		});
@@ -302,7 +335,7 @@ describe('Project — Notebook Actions: configuration', () => {
 		const user = userEvent.setup();
 		makeFetch({
 			capabilities: {
-				federation: { available: false, defaultEnabled: false },
+				federation: { available: false, default_enabled: false },
 				sandbox_images: ['img-a'],
 			},
 		});
@@ -316,7 +349,7 @@ describe('Project — Notebook Actions: configuration', () => {
 	it('does not clutter the notebook list when there is only one compute profile', async () => {
 		makeFetch({
 			capabilities: {
-				federation: { available: false, defaultEnabled: false },
+				federation: { available: false, default_enabled: false },
 				compute_profiles: [{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 }],
 				compute_profile_override: 'editors',
 			},
@@ -331,7 +364,7 @@ describe('Project — Notebook Actions: configuration', () => {
 		const calls = makeFetch({
 			role: 'editor',
 			capabilities: {
-				federation: { available: false, defaultEnabled: false },
+				federation: { available: false, default_enabled: false },
 				compute_profiles: [
 					{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 },
 					{ name: 'large', cpu: 8, memory_bytes: 32 * 1024 ** 3 },
@@ -379,7 +412,7 @@ describe('Project — Notebook Actions: configuration', () => {
 				} as Session,
 			],
 			capabilities: {
-				federation: { available: false, defaultEnabled: false },
+				federation: { available: false, default_enabled: false },
 				compute_profiles: [
 					{ name: 'small', cpu: 1 },
 					{ name: 'large', cpu: 8 },
@@ -542,7 +575,7 @@ describe('Project — Notebook Actions: configuration', () => {
 				} as Session,
 			],
 			capabilities: {
-				federation: { available: false, defaultEnabled: false },
+				federation: { available: false, default_enabled: false },
 				compute_profiles: [{ name: 'small' }, { name: 'large' }],
 				compute_profile_override: 'editors',
 			},
@@ -567,7 +600,7 @@ describe('Project — Notebook Actions: configuration', () => {
 		const user = userEvent.setup();
 		makeFetch({
 			capabilities: {
-				federation: { available: false, defaultEnabled: false },
+				federation: { available: false, default_enabled: false },
 				compute_profiles: [{ name: 'small' }, { name: 'large' }],
 				compute_profile_override: 'none',
 			},

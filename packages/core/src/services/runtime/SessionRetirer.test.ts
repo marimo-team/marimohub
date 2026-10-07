@@ -292,7 +292,10 @@ describe('SessionRetirer', () => {
 		});
 
 		destroyFails = false;
-		expect(await service.reclaim(terminated, { save: false })).toBe(true);
+		expect(await service.reclaim(terminated, { save: false })).toEqual({
+			reclaimed: true,
+			saved: false,
+		});
 		expect(await sessions.getEditorClaim(projectId, notebookId)).toMatchObject({
 			session_id: null,
 		});
@@ -306,7 +309,7 @@ describe('SessionRetirer', () => {
 				{ ...session, status: 'expired' },
 				{ save: true },
 			),
-		).toBe(false);
+		).toEqual({ reclaimed: false, reason: 'not_terminal' });
 		expect(calls.destroy).toBe(0);
 		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
 			session.session_id,
@@ -322,10 +325,15 @@ describe('SessionRetirer', () => {
 		await sessions.beginTerminating(projectId, session.session_id);
 		vi.setSystemTime(Date.now() + 6 * 60_000);
 		await sessions.expireStale();
-		expect(await retirer(fakeComputeFrom(instance)).reclaim(session)).toBe(false);
+		expect(await retirer(fakeComputeFrom(instance)).reclaim(session)).toEqual({
+			reclaimed: false,
+			reason: 'teardown_grace',
+		});
 		expect(calls.destroy).toBe(0);
 		vi.setSystemTime(Date.now() + 9 * 60_000);
-		expect(await retirer(fakeComputeFrom(instance)).reclaim(session)).toBe(true);
+		expect(await retirer(fakeComputeFrom(instance)).reclaim(session)).toMatchObject({
+			reclaimed: true,
+		});
 	});
 
 	it('does not save an expired sandbox over a newer persistent editor', async () => {
@@ -336,7 +344,10 @@ describe('SessionRetirer', () => {
 			notebook_id: notebookId,
 			user_id: ACTOR,
 		});
-		expect(await retirer(fakeComputeFrom(instance)).reclaim(session, { save: true })).toBe(true);
+		expect(await retirer(fakeComputeFrom(instance)).reclaim(session, { save: true })).toEqual({
+			reclaimed: true,
+			saved: false,
+		});
 		expect(calls.destroy).toBe(1);
 		expect(notebooks.commitSession).not.toHaveBeenCalled();
 	});
@@ -354,44 +365,83 @@ describe('SessionRetirer', () => {
 				await retirer({ ...fakeComputeFrom(instance), connectExisting }).reclaim(session, {
 					save: true,
 				}),
-			).toBe(true);
+			).toEqual({ reclaimed: true, saved: false });
 			expect(connectExisting).not.toHaveBeenCalled();
 			expect(notebooks.commitSession).not.toHaveBeenCalled();
 			expect(calls.destroy).toBe(1);
 		},
 	);
 
-	it.each([new NotFoundError('Sandbox missing'), new Error('Attachment unavailable')])(
-		'retains the claim without allocating when attachment fails: %s',
-		async (error) => {
-			const session = await expiredEditor();
-			const connectExisting = vi.fn(() => {
-				throw error;
-			});
-			const create = vi.fn(() => {
-				throw new Error('Replacement allocation attempted');
-			});
-			expect(
-				await retirer({ create, connectExisting, proxy: async () => null }).reclaim(session),
-			).toBe(false);
-			expect(connectExisting).toHaveBeenCalledOnce();
-			expect(create).not.toHaveBeenCalled();
-			expect(notebooks.commitSession).not.toHaveBeenCalled();
-			expect(
-				(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
-			).toBeUndefined();
-			expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
-				session.session_id,
-			);
-		},
-	);
+	it('retains the claim without allocating when attachment fails', async () => {
+		const session = await expiredEditor();
+		const connectExisting = vi.fn(() => {
+			throw new Error('Attachment unavailable');
+		});
+		const create = vi.fn(() => {
+			throw new Error('Replacement allocation attempted');
+		});
+		expect(
+			await retirer({ create, connectExisting, proxy: async () => null }).reclaim(session),
+		).toEqual({ reclaimed: false, reason: 'attachment_failed' });
+		expect(connectExisting).toHaveBeenCalledOnce();
+		expect(create).not.toHaveBeenCalled();
+		expect(notebooks.commitSession).not.toHaveBeenCalled();
+		expect(
+			(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
+		).toBeUndefined();
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
+			session.session_id,
+		);
+	});
+
+	it('releases the claim without allocating when attachment finds the sandbox gone', async () => {
+		const session = await expiredEditor();
+		const connectExisting = vi.fn(() => {
+			throw new NotFoundError('Sandbox missing');
+		});
+		const create = vi.fn(() => {
+			throw new Error('Replacement allocation attempted');
+		});
+		expect(
+			await retirer({ create, connectExisting, proxy: async () => null }).reclaim(session),
+		).toEqual({ reclaimed: true, saved: false });
+		expect(create).not.toHaveBeenCalled();
+		expect(notebooks.commitSession).not.toHaveBeenCalled();
+		expect(
+			(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
+		).toBeDefined();
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBeNull();
+	});
+
+	it('releases the claim when the idle probe finds the sandbox gone', async () => {
+		const session = await expiredEditor();
+		const { instance, calls } = makeFakeSandbox();
+		vi.spyOn(instance, 'exec').mockRejectedValue(new NotFoundError('Sandbox missing'));
+		const create = vi.fn(() => {
+			throw new Error('Replacement allocation attempted');
+		});
+		expect(
+			await retirer({ create, connectExisting: () => instance, proxy: async () => null }).reclaim(
+				session,
+				{ requireIdle: true },
+			),
+		).toEqual({ reclaimed: true, saved: false });
+		expect(create).not.toHaveBeenCalled();
+		expect(notebooks.commitSession).not.toHaveBeenCalled();
+		expect(calls.destroy).toBe(1);
+		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBeNull();
+	});
 
 	it.each(['1', '', '0'])('automatic reclaim requires confirmed idle: %j', async (output) => {
 		const session = await expiredEditor();
 		const { instance, calls } = makeFakeSandbox();
 		vi.spyOn(instance, 'exec').mockResolvedValue(execResult(true, output, ''));
-		expect(await retirer(fakeComputeFrom(instance)).reclaim(session, { requireIdle: true })).toBe(
-			output === '0',
+		expect(
+			await retirer(fakeComputeFrom(instance)).reclaim(session, { requireIdle: true }),
+		).toEqual(
+			output === '0'
+				? { reclaimed: true, saved: true }
+				: { reclaimed: false, reason: output === '1' ? 'kernel_active' : 'kernel_unreachable' },
 		);
 		expect(calls.destroy).toBe(output === '0' ? 1 : 0);
 		if (output !== '0') {
@@ -406,12 +456,15 @@ describe('SessionRetirer', () => {
 		const { instance, calls } = makeFakeSandbox();
 		const session = await expiredEditor();
 		const service = retirer({ create: () => instance, proxy: async () => null });
-		expect(await service.reclaim(session)).toBe(false);
+		expect(await service.reclaim(session)).toEqual({
+			reclaimed: false,
+			reason: 'attachment_unsupported',
+		});
 		expect(calls.destroy).toBe(0);
 		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
 			session.session_id,
 		);
-		expect(await service.reclaim(session, { save: false })).toBe(true);
+		expect(await service.reclaim(session, { save: false })).toMatchObject({ reclaimed: true });
 		expect(calls.destroy).toBe(1);
 	});
 
@@ -445,12 +498,12 @@ describe('SessionRetirer', () => {
 			new Error('write unavailable'),
 		);
 		const service = retirer(fakeComputeFrom(instance));
-		expect(await service.reclaim(session, { save: false })).toBe(true);
+		expect(await service.reclaim(session, { save: false })).toMatchObject({ reclaimed: true });
 		expect(
 			(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
 		).toBeUndefined();
 		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBeNull();
-		expect(await service.reclaim(session, { save: false })).toBe(true);
+		expect(await service.reclaim(session, { save: false })).toMatchObject({ reclaimed: true });
 		expect(
 			(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
 		).toBeDefined();
@@ -470,14 +523,14 @@ describe('SessionRetirer', () => {
 			return put(key, body, options);
 		});
 		const service = retirer(fakeComputeFrom(instance));
-		expect(await service.reclaim(session, { save: false })).toBe(true);
+		expect(await service.reclaim(session, { save: false })).toMatchObject({ reclaimed: true });
 		expect(
 			(await sessions.getSession(projectId, session.session_id)).sandbox_reclaimed_at,
 		).toBeDefined();
 		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
 			session.session_id,
 		);
-		expect(await service.reclaim(session, { save: false })).toBe(true);
+		expect(await service.reclaim(session, { save: false })).toMatchObject({ reclaimed: true });
 		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBeNull();
 		expect(calls.destroy).toBe(1);
 	});
@@ -508,7 +561,7 @@ describe('SessionRetirer', () => {
 		} finally {
 			finish.resolve();
 		}
-		expect(await reclaim).toBe(true);
+		expect(await reclaim).toMatchObject({ reclaimed: true });
 		expect((await sessions.getEditorClaim(projectId, notebookId))?.session_id).toBe(
 			replacement.session_id,
 		);
@@ -528,10 +581,13 @@ describe('SessionRetirer', () => {
 			});
 			const service = retirer(fakeComputeFrom(instance));
 			clock.mockReturnValue(now + 15 * 60_000 - 1);
-			expect(await service.reclaim(session, { save: false })).toBe(false);
+			expect(await service.reclaim(session, { save: false })).toEqual({
+				reclaimed: false,
+				reason: status === 'expired' ? 'provision_grace' : 'teardown_grace',
+			});
 			expect(calls.destroy).toBe(0);
 			clock.mockReturnValue(now + 15 * 60_000);
-			expect(await service.reclaim(session, { save: false })).toBe(true);
+			expect(await service.reclaim(session, { save: false })).toMatchObject({ reclaimed: true });
 			expect(calls.destroy).toBe(1);
 		},
 	);
@@ -546,7 +602,9 @@ describe('SessionRetirer', () => {
 		const { instance, calls } = makeFakeSandbox();
 		const provider = fakeComputeFrom(instance);
 		const connect = vi.spyOn(provider, 'connectExisting');
-		expect(await retirer(provider).reclaim(session, { save: true })).toBe(true);
+		expect(await retirer(provider).reclaim(session, { save: true })).toMatchObject({
+			reclaimed: true,
+		});
 		expect(connect).not.toHaveBeenCalled();
 		expect(notebooks.commitSession).not.toHaveBeenCalled();
 		expect(calls.destroy).toBe(1);
@@ -558,7 +616,7 @@ describe('SessionRetirer', () => {
 		const provider = { ...snapshotProvider(instance), connectExisting: () => instance };
 		const capture = vi.spyOn(provider, 'captureSnapshot');
 		vi.spyOn(notebooks, 'commitSession').mockRejectedValueOnce(new Error('commit unavailable'));
-		expect(await retirer(provider).reclaim(session)).toBe(true);
+		expect(await retirer(provider).reclaim(session)).toEqual({ reclaimed: true, saved: false });
 		expect(notebooks.commitSession).toHaveBeenCalledOnce();
 		expect(capture).not.toHaveBeenCalled();
 		expect(calls.destroy).toBe(1);

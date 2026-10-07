@@ -12,14 +12,7 @@ import {
 	UserId,
 	ValidationError,
 } from '@marimo-hub/core';
-import type {
-	AuthSubject,
-	AuthzPolicy,
-	Identity,
-	Project,
-	ProjectMember,
-	Role,
-} from '@marimo-hub/core';
+import type { AuthSubject, Identity, Project, ProjectMember, Role } from '@marimo-hub/core';
 import {
 	assertDeploymentAction,
 	assertProjectActionOn,
@@ -46,7 +39,9 @@ import {
 	SnapshotProjectEntrySchema,
 	SuccessResponseSchema,
 } from '../shared';
+import type { ApiDeps } from '../context';
 import { idempotentCreate } from '../idempotency';
+import { effectiveFederation } from '../federation';
 import { pageSchema, paginate, ProjectListQuery } from '../pagination';
 import {
 	assertNotificationMutationAllowed,
@@ -80,7 +75,10 @@ const UpdateProjectBody = z.object({
 	name: z.string().min(1).optional().openapi({ example: 'ML Pipeline' }),
 	description: z.string().optional(),
 	tags: z.array(z.string()).optional(),
-	federation: z.union([FederationBody, z.null()]).optional(),
+	// A union rather than `.nullable()`: the latter inlines the ProjectFederationInput ref.
+	federation: z.union([FederationBody, z.null()]).optional().openapi({
+		description: '`null` clears the project override so the deployment default applies.',
+	}),
 });
 
 const AssignableRoleSchema = z.enum(ASSIGNABLE_ROLES).openapi('AssignableRole');
@@ -135,10 +133,19 @@ function visibleMembers(
 }
 
 /** Project detail + the requesting user's effective role, with internal fields stripped. */
-function projectResponse(project: Project, subject: AuthSubject, policy?: AuthzPolicy) {
-	const role = effectiveRole(project, subject, policy);
+function projectResponse(
+	project: Project,
+	subject: AuthSubject,
+	deps: Pick<ApiDeps, 'policy' | 'wif'>,
+) {
+	const role = effectiveRole(project, subject, deps.policy);
 	const pub = toPublicProject(project);
-	return { ...pub, members: visibleMembers(pub.members, role, subject), your_role: role };
+	return {
+		...pub,
+		members: visibleMembers(pub.members, role, subject),
+		your_role: role,
+		federation_effective: effectiveFederation(project, deps.wif),
+	};
 }
 
 // --- Route definitions ---
@@ -383,7 +390,7 @@ app.openapi(createProject, async (c) => {
 	const body = c.req.valid('json');
 	const data = await idempotentCreate(c, 'POST /projects', async () => {
 		const project = await deps.services.projects.createProject(body, user.id);
-		return projectResponse(project, user, deps.policy);
+		return projectResponse(project, user, deps);
 	});
 	return c.json({ success: true, data }, 201);
 });
@@ -396,7 +403,7 @@ app.openapi(getProject, async (c) => {
 	// or one that is soft-deleted.
 	const project = await loadVisibleProject(deps.services.projects, pid, user, deps);
 	c.header('ETag', etagFor(project.updated_at));
-	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 200);
+	return c.json({ success: true, data: projectResponse(project, user, deps) }, 200);
 });
 
 app.openapi(updateProject, async (c) => {
@@ -408,7 +415,7 @@ app.openapi(updateProject, async (c) => {
 	const body = c.req.valid('json');
 	const project = await projects.updateProject(pid, body, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(project.updated_at));
-	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 200);
+	return c.json({ success: true, data: projectResponse(project, user, deps) }, 200);
 });
 
 /**
@@ -452,7 +459,7 @@ async function mutateSecurityLabels(
 		ifMatchToken(c) ?? project.updated_at,
 	);
 	c.header('ETag', etagFor(updated.updated_at));
-	return c.json({ success: true, data: projectResponse(updated, user, deps.policy) }, 200);
+	return c.json({ success: true, data: projectResponse(updated, user, deps) }, 200);
 }
 
 app.openapi(setSecurityLabels, async (c) => mutateSecurityLabels(c, c.req.valid('json')));
@@ -560,7 +567,7 @@ app.openapi(addMember, async (c) => {
 		);
 		scheduleProjectAlert(deps, pid, 'member.invited', { project_id: pid, user: user.id }, render);
 	}
-	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 201);
+	return c.json({ success: true, data: projectResponse(project, user, deps) }, 201);
 });
 
 app.openapi(updateMember, async (c) => {
@@ -587,7 +594,7 @@ app.openapi(updateMember, async (c) => {
 		);
 	}
 	const project = result.project;
-	return c.json({ success: true, data: projectResponse(project, user, deps.policy) }, 200);
+	return c.json({ success: true, data: projectResponse(project, user, deps) }, 200);
 });
 
 app.openapi(removeMember, async (c) => {

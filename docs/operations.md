@@ -11,7 +11,13 @@ the image".
 ## Health & readiness
 
 - `GET /api/health` → `{ "status": "ok" }` — cheap, unauthenticated, touches no
-  downstream deps. Wire this to your k8s **liveness/readiness** probe.
+  downstream deps. Wire this to the API pods' **liveness/readiness** probes.
+- `GET /api/health/maintenance` → liveness of the
+  [background loops](#background-loops) on the maintenance replica.
+  Unauthenticated and process-local: it reads in-memory loop state and calls no
+  dependency. Like `/api/health`, it is not in the OpenAPI spec and its body has
+  no `{ success, data }` envelope. Wire it to the maintenance pod's
+  **liveness** probe only.
 - `GET /api/health?deep=true` → runs the **preflight** suite (storage, OIDC,
   compute, WIF) and reports each check. **Authenticated** (it names backends).
   Returns `200` when healthy, `503` when a dependency check fails. Use it for
@@ -19,6 +25,21 @@ the image".
   downstream deps on every request.
 - `GET /api/v1/version` → deploy version, image, backends, and process start time;
   handy for confirming what's running.
+
+`/api/health/maintenance` responds with one of:
+
+| Body                                       | HTTP  | Meaning                                                                                |
+| ------------------------------------------ | ----- | -------------------------------------------------------------------------------------- |
+| `{ "status": "ok", "loops": {…} }`         | `200` | No loop is currently `failing` or `stalled`, including before a first attempt ends.    |
+| `{ "status": "degraded", "loops": {…} }`   | `200` | At least one loop is `failing`. A restart would not fix this.                          |
+| `{ "status": "stalled", "loops": {…} }`    | `503` | At least one loop is `stalled`. Restarting the pod can recover.                        |
+| `{ "status": "unavailable", "loops": {} }` | `200` | This process runs no loops (`MARIMOHUB_RUN_MAINTENANCE` is not `true`, e.g. API pods). |
+
+A dependency outage (storage, compute) makes a loop `failing`, so the pod stays
+up and keeps retrying. Only a wedged loop returns `503`. The Helm chart and the
+example Kubernetes manifests wire the maintenance Deployment's `livenessProbe`
+to this endpoint (`initialDelaySeconds: 10`, `periodSeconds: 20`,
+`timeoutSeconds: 5`, `failureThreshold: 3`). API pods keep `/api/health`.
 
 ### Sandbox startup diagnostic
 
@@ -53,8 +74,8 @@ classes behave differently on purpose:
 
 - **API**: stateless — run as many replicas as you like behind a load balancer.
   The Helm chart's `replicaCount` controls this.
-- **Maintenance**: a single background loop expires old sessions and reaps
-  sandboxes. Run it on **exactly one** replica via `MARIMOHUB_RUN_MAINTENANCE=true`
+- **Maintenance**: [background loops](#background-loops) expire old sessions
+  and reap sandboxes. Run it on **exactly one** replica via `MARIMOHUB_RUN_MAINTENANCE=true`
   (the chart ships a dedicated single-replica `Recreate` deployment for this).
   Running it on every replica is wasteful but safe — a bucket-CAS lease guards it.
   The same replica also runs the **session lifecycle sweep**: it saves live
@@ -68,6 +89,88 @@ classes behave differently on purpose:
   `MARIMOHUB_JOBS_TICK_SECONDS` it fires due [notebook jobs](./jobs.md),
   dispatches queued runs under the concurrency caps, and reclaims runs past
   their deadline. Jobs are accepted but never run without this replica.
+
+## Background loops
+
+The maintenance replica runs these loops. Each leased loop takes its own
+bucket-CAS lease per attempt, so only one replica does the work even when
+several run maintenance.
+
+| Loop                  | Interval                                                  | Lease                             | Runs when                     |
+| --------------------- | --------------------------------------------------------- | --------------------------------- | ----------------------------- |
+| `maintenance`         | 5 min                                                     | `_system/_maintenance.lock`       | Always                        |
+| `session_lifecycle`   | `MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS` (default 60 s) | `_system/_session_lifecycle.lock` | Session lifetimes are enabled |
+| `warm_pool`           | 5 s (5 min while warm pools are disabled)                 | `_system/_warm_pool.lock`         | A warm pool is configured     |
+| `job_scheduler`       | `MARIMOHUB_JOBS_TICK_SECONDS` (default 60 s)              | `_system/_jobs.lock`              | `MARIMOHUB_JOBS=on`           |
+| `preview_preparation` | 15 s                                                      | None                              | Source control is configured  |
+
+Each attempt has a deadline of `max(3 × interval, 10 min)`, covering lease
+acquisition, the work, and lease release. When an attempt passes its deadline,
+the runner aborts it, logs `<loop>_stalled` (`level: error`, with `holder`,
+`deadline_ms`, and `duration_ms`), and starts no new attempt for that loop until
+the abandoned work settles, so a loop never has two writers. When the work
+settles, the runner logs `<loop>_recovered` (`level: debug`), discards the late
+result, and the next tick retries. Skipped attempts (another replica holds the
+lease, or there is nothing to do) count as successes.
+
+Other loop events: `<loop>_failed` (`warm_pool_sweep_failed` for the warm pool)
+when an attempt fails, `<loop>_release_failed` when releasing the lease fails
+(the attempt's outcome stands), and `<loop>_report_failed` when recording the
+outcome fails.
+
+`/api/health/maintenance` reports each loop with these fields:
+
+| Field                                                     | Meaning                                                                           |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `status`                                                  | `ok`, `failing` (last attempt failed), `stalled`, or `stopping` (shutdown began). |
+| `last_started_at`, `last_completed_at`, `last_success_at` | Unix milliseconds; `null` until the first one happens.                            |
+| `last_duration_ms`, `seconds_since_success`               | Duration of the last attempt; time since the last success.                        |
+| `consecutive_failures`, `timeouts`                        | Failed attempts since the last success; deadline hits since boot.                 |
+| `interval_ms`, `deadline_ms`                              | The loop's configuration.                                                         |
+
+A loop is `stalled` when an attempt is past its deadline and has not settled, or
+when no attempt has completed within one deadline plus one interval.
+
+Every `maintenance_cycle` event carries, per loop, `gauge.loop.<loop>.seconds_since_success`,
+`gauge.loop.<loop>.last_duration_ms`, `gauge.loop.<loop>.consecutive_failures`,
+`gauge.loop.<loop>.stalled` (`0` or `1`), and `counter.loop.<loop>.timeouts`.
+With [OTEL metrics](#metrics-opentelemetry) on, the same signals export as the
+gauges `loop.seconds_since_success`, `loop.consecutive_failures`,
+`loop.last_duration_ms`, and `loop.stalled`, and the counter `loop.timeouts`,
+each tagged `loop=<loop>`.
+
+The single-writer design behind these leases is in the
+[operations runbook](https://github.com/marimo-team/marimohub/blob/main/development_docs/operations.md#3-the-single-cron-guarantee).
+
+## Reclaim a stuck editor sandbox
+
+While a notebook's previous editor session is still being cleaned up, starting
+a new editor returns `409 EDIT_SESSION_RETIRING` and the notebook shows a
+cleanup message with a **Retry** button. The lifecycle sweep, the 5-minute
+maintenance cycle, or **Stop** normally finishes the cleanup; see
+[Editor sessions](./editor-sessions.md#session-cleanup) for the grace periods.
+
+Super admins can force it from **Admin → Runtime → Editors → Reclaim session**
+(`POST /api/v1/admin/runtime/projects/{pid}/sessions/{sid}/reclaim`, optional
+body `{ "save": false }`; `save` defaults to `true`). A successful reclaim
+returns `200` with
+`{ "success": true, "data": { "reclaimed": true, "saved": true } }` (`saved` is
+`false` when nothing was saved).
+
+| Response | Reason                                                                 | Action                                               |
+| -------- | ---------------------------------------------------------------------- | ---------------------------------------------------- |
+| `409`    | `not_terminal`                                                         | Stop the session first.                              |
+| `409`    | `provision_grace`, `teardown_grace`, `kernel_active`                   | Wait for the grace period or for editors to leave.   |
+| `409`    | `attachment_unsupported`                                               | Reclaim without saving; unsaved edits are discarded. |
+| `503`    | `attachment_failed`, `kernel_unreachable`, `destroy_failed`, `timeout` | Transient; retry after `Retry-After`.                |
+
+Runtime inspection shows `reclaimable` and `reclaim_blocked_reason` on each
+editor row. Each attempt writes a `session.reclaim` audit event with the actor,
+`save_requested`, `reclaimed`, and `saved` or the blocking reason.
+
+**Known limitation:** providers that cannot attach to an existing sandbox
+(currently Cloudflare) cannot save a retired session. Sessions that may hold
+unsaved edits stay until a super admin reclaims them without saving.
 
 ## Backups & restore
 
@@ -173,9 +276,13 @@ such as `sandbox.reachable`, `sandbox.files`, `sandbox.setup`, and
 gateway request. These spans contain only endpoint, method, timing, and sandbox
 ID attributes. They never contain request payloads or credentials.
 
-Maintenance adds `MaintenanceLock.acquire`, `MaintenanceLock.release`, and
-`Maintenance.sweepAppPools` spans. Lock spans include the bucket key as
-`marimohub.lock.key`. Lock contention does not mark the acquisition span as an error.
+Each background-loop attempt is a `loop.<loop>` span with
+`marimohub.loop.name` and `marimohub.loop.outcome` (`success`, `failed`,
+`stalled`, or `skipped`); `failed` and `stalled` set ERROR status. Its children
+include `MaintenanceLock.acquire`, `MaintenanceLock.release`, and
+`Maintenance.sweepAppPools`. Lock spans carry the lease key as `bucket.key`, and
+the acquire span adds `marimohub.lock.acquired` (boolean). Lock contention does
+not mark the acquisition span as an error.
 
 `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER` /
 `OTEL_TRACES_SAMPLER_ARG`, `OTEL_EXPORTER_OTLP_HEADERS`, and
@@ -244,20 +351,29 @@ Any other `OTEL_METRICS_EXPORTER` value disables metrics;
 
 ### Session cleanup signals
 
-| Metric                                        | Type    | Meaning                                                                                      |
-| --------------------------------------------- | ------- | -------------------------------------------------------------------------------------------- |
-| `sessions.unreclaimed_terminal`               | Gauge   | Terminal or terminating sessions whose sandboxes remain unreclaimed after reconciliation.    |
-| `sessions.unreclaimed_terminal.oldest_age_ms` | Gauge   | Time since the oldest unreclaimed session heartbeat, in milliseconds.                        |
-| `sessions.editor_claim.lost`                  | Counter | Editor starts blocked by retiring claims or lost claim races, including reuse of the winner. |
+| Metric                                        | Type    | Meaning                                                                                   |
+| --------------------------------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| `sessions.unreclaimed_terminal.count`         | Gauge   | Terminal or terminating sessions whose sandboxes remain unreclaimed after reconciliation. |
+| `sessions.unreclaimed_terminal.oldest_age_ms` | Gauge   | Time since the oldest unreclaimed session heartbeat, in milliseconds.                     |
+| `sessions.editor_claim.lost`                  | Counter | Editor starts blocked by a retiring claim or a lost claim race.                           |
 
-Completed reconciliation updates both gauges, even when provider enumeration is unavailable.
-An empty result sets both to zero. Failed or timed-out reconciliation leaves the previous values unchanged.
-Late results from a timed-out run cannot replace newer values.
+The maintenance leader records both gauges after each completed reconciliation,
+even when provider enumeration is unavailable. An empty result sets both to
+zero. Failed or timed-out reconciliation leaves the previous values unchanged,
+and late results cannot replace newer ones. A replica that loses leadership
+keeps exporting its last values under cumulative temporality, so aggregate these
+gauges with `max` across instances, not `sum`.
 
-The `maintenance_cycle` event includes these signals with `gauge.` and `counter.` prefixes.
-The editor claim counter includes `phase=preflight` for retiring claims and `phase=claim` for lost races.
-Each process counts editor claim losses separately. With OTEL metrics disabled,
-request-replica counters remain local and do not appear in the maintenance replica logs.
+The editor claim counter's only attribute is `phase`: `preflight` for a retiring
+claim (`409 EDIT_SESSION_RETIRING`) and `claim` for a lost race. The affected
+session is on the [`session_provision`](#session-provision-events) event as
+`editor_claim_lost` and `editor_claim_lost_phase`. Each process counts claim
+losses separately; with OTEL metrics off, API-replica counters stay local and
+do not appear in the maintenance replica's logs.
+
+The `maintenance_cycle` event includes `sessions_reclaimed` and these signals
+with `gauge.` and `counter.` prefixes. Each maintenance reclaim is bounded to
+60 s; a timeout logs `session_reclaim_timeout` and the next cycle retries.
 
 ### Logs (OpenTelemetry)
 

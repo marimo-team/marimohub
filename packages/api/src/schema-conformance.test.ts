@@ -97,10 +97,15 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		);
 	});
 
-	// Project omits `schema_version` and adds the request-scoped `your_role`.
-	it('Project omits `schema_version` and adds `your_role`', () => {
+	// Project omits `schema_version` and adds the request-scoped `your_role` and
+	// the deployment-resolved `federation_effective`.
+	it('Project omits `schema_version` and adds `your_role` + `federation_effective`', () => {
 		const coreKeys = shapeKeys(CoreProjectSchema);
-		const expected = [...coreKeys.filter((k) => k !== 'schema_version'), 'your_role'].sort();
+		const expected = [
+			...coreKeys.filter((k) => k !== 'schema_version'),
+			'your_role',
+			'federation_effective',
+		].sort();
 		expect(shapeKeys(ProjectResponseSchema)).toEqual(expected);
 		expect(coreKeys).toContain('schema_version');
 	});

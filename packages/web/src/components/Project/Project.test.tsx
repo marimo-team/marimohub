@@ -192,7 +192,7 @@ describe('deleted notebook tombstones', () => {
 
 describe('environment and access', () => {
 	it('is always visible and opens the unified overview', async () => {
-		makeFetch({ capabilities: { federation: { available: false, defaultEnabled: false } } });
+		makeFetch({ capabilities: { federation: { available: false, default_enabled: false } } });
 		await renderProject();
 		const user = userEvent.setup();
 		await user.click(screen.getByRole('button', { name: 'Environment & cloud access' }));
@@ -302,7 +302,7 @@ describe('Project — Create Notebook', () => {
 		const calls = makeFetch({
 			role: 'editor',
 			capabilities: {
-				federation: { available: false, defaultEnabled: false },
+				federation: { available: false, default_enabled: false },
 				compute_profiles: [
 					{ name: 'small', cpu: 1, memory_bytes: 2 * 1024 ** 3 },
 					{ name: 'large', cpu: 8, memory_bytes: 32 * 1024 ** 3 },

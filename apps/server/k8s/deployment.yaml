@@ -68,3 +68,5 @@ spec:
             httpGet: { path: /api/health/maintenance, port: 3000 }
             initialDelaySeconds: 10
             periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3

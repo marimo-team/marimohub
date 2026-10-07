@@ -35,6 +35,7 @@ import {
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import { Utf8TailBuffer } from '@marimo-hub/compute-commons/node';
+import { NotFoundError } from '@marimo-hub/core/errors';
 import { KERNEL_AUTH_TOKEN_FILE } from '@marimo-hub/core/kernel-auth';
 import { SURFACE_STATE_ROOT } from '@marimo-hub/core/surface-state';
 import type { SandboxId } from '@marimo-hub/core/ids';
@@ -693,6 +694,32 @@ class LocalSandboxInstance implements SandboxInstance {
 	}
 }
 
+/**
+ * A strict attachment to a sandbox that is not running. Every use fails with
+ * `NotFoundError`, per the port contract; destroy still cleans up a stopped
+ * instance's root so teardown stays idempotent.
+ */
+function missingSandbox(id: SandboxId, stopped?: LocalSandboxInstance): SandboxInstance {
+	const gone = () => Promise.reject(new NotFoundError(`Existing sandbox ${id} is not running`));
+	return {
+		supportsBucketMount: false,
+		exec: gone,
+		execStream: gone,
+		readFile: gone,
+		listFiles: gone,
+		writeFiles: gone,
+		gitCheckout: gone,
+		setEnvVars: gone,
+		mountBucket: gone,
+		unmountBucket: gone,
+		startProcess: gone,
+		exposePort: gone,
+		destroy: async () => {
+			await stopped?.destroy();
+		},
+	};
+}
+
 export class LocalCompute implements SandboxProvider {
 	readonly capabilities = { multiPort: true } as const;
 	private readonly root: string;
@@ -736,8 +763,8 @@ export class LocalCompute implements SandboxProvider {
 	connectExisting(id: SandboxId): SandboxInstance {
 		if (this.disposePromise) throw new Error('local compute has been disposed');
 		const instance = this.instances.get(id);
-		if (!instance?.hasLiveChildren()) throw new Error(`Existing sandbox ${id} is not running`);
-		return instance;
+		if (instance?.hasLiveChildren()) return instance;
+		return missingSandbox(id, instance);
 	}
 
 	async proxy(): Promise<Response | null> {

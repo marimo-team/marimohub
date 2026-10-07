@@ -22,6 +22,7 @@ const project = (yourRole: ProjectDetail['your_role']): ProjectDetail =>
 		owner: OWNER,
 		members: MEMBERS,
 		your_role: yourRole,
+		federation_effective: { enabled: false, source: 'unavailable' },
 	}) as ProjectDetail;
 
 const MEMBERS: ProjectMember[] = [
@@ -46,7 +47,7 @@ const OWNER_USER: User = {
 let currentTestUser = OWNER_USER;
 
 const CAPABILITIES = {
-	federation: { available: false, defaultEnabled: false },
+	federation: { available: false, default_enabled: false },
 	viewer_mode: 'static',
 	default_role: null,
 } as unknown as Capabilities;

@@ -109,7 +109,7 @@ app.openapi(capabilitiesRoute, (c) => {
 	return ok(c, {
 		federation: {
 			available: Boolean(deps.wif),
-			defaultEnabled: deps.wif ? deps.wif.defaultEnabled : false,
+			default_enabled: deps.wif?.defaultEnabled ?? false,
 		},
 		integrations: { available: Boolean(deps.integrations) },
 		source_control: {

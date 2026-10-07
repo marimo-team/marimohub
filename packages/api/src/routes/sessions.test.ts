@@ -32,7 +32,9 @@ import {
 	expectError,
 	expectOk,
 	expectPage,
+	makeTestWif,
 } from '../testing';
+import type { TestWifOptions } from '../testing';
 
 const STRANGER = uid('user_stranger');
 const MANAGER = uid('user_manager');
@@ -913,6 +915,21 @@ describe('Session routes', () => {
 		await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
 		await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
 		expect(otherCompute.lastCreateOptions?.owner).toEqual({ projectId: pid, userId: ACTOR });
+	});
+
+	it('reports unknown editor activity when the holder sandbox is gone', async () => {
+		const gone = makeFakeSandbox();
+		gone.instance.exec = async () => {
+			throw new NotFoundError('sandbox gone');
+		};
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const exclusiveOther = exclusiveApi(STRANGER, fakeComputeFrom(gone.instance));
+		const session = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
+		expect(state.holder).toMatchObject({
+			session_id: session.session_id,
+			activity: { state: 'unknown' },
+		});
 	});
 
 	it('returns the owner’s editor claim without contacting compute', async () => {
@@ -2236,11 +2253,7 @@ describe('Session routes', () => {
 
 		expect(attached.session_id).toBe(winner.session_id);
 		expect(attached.reused).toBe(true);
-		expect(increment).toHaveBeenCalledWith('sessions.editor_claim.lost', 1, {
-			project_id: pid,
-			notebook_id: nid,
-			phase: 'claim',
-		});
+		expect(increment).toHaveBeenCalledWith('sessions.editor_claim.lost', 1, { phase: 'claim' });
 		expect(
 			increment.mock.calls.filter(([name]) => name === 'sessions.editor_claim.lost'),
 		).toHaveLength(1);
@@ -2346,7 +2359,7 @@ describe('Session routes', () => {
 
 		await expectError(res, 409, 'EDIT_SESSION_RETIRING');
 		expect(increment.mock.calls.filter(([name]) => name === 'sessions.editor_claim.lost')).toEqual([
-			['sessions.editor_claim.lost', 1, { project_id: pid, notebook_id: nid, phase: 'claim' }],
+			['sessions.editor_claim.lost', 1, { phase: 'claim' }],
 		]);
 	});
 
@@ -2883,21 +2896,18 @@ describe('Session routes', () => {
 	});
 
 	describe('Workload Identity Federation', () => {
-		// Deployment WIF capability: a stub issuer (only `mint` is used) + the single
-		// federation target whose broker runs `exchange`. Cast past the issuer's class shape.
-		const wifDeps = (exchange: () => Promise<unknown>) =>
-			({
-				wif: {
-					defaultEnabled: false,
-					issuer: { mint: async () => 'jwt.value', jwks: async () => ({ keys: [] }) },
-					issuerUrl: 'https://hub.example.com',
-					target: {
-						broker: { exchange },
-						audience: 'coreweave-object-storage',
-						storage: { endpoint: 'https://cwobject.com', region: 'us-east-1' },
-					},
-				},
-			}) as unknown as Partial<ApiDeps>;
+		const wifDeps = (
+			exchange: NonNullable<TestWifOptions['exchange']>,
+			defaultEnabled = false,
+		): Partial<ApiDeps> => ({
+			wif: makeTestWif({
+				defaultEnabled,
+				exchange,
+				mint: async () => 'jwt.value',
+				audience: 'coreweave-object-storage',
+				storage: { endpoint: 'https://cwobject.com', region: 'us-east-1' },
+			}),
+		});
 
 		const goodExchange = async () => ({
 			accessKeyId: 'CWAK',
@@ -2941,8 +2951,7 @@ describe('Session routes', () => {
 						ACTOR,
 					);
 				const { instance, calls } = makeFakeSandbox();
-				const deps = wifDeps(goodExchange);
-				deps.wif!.defaultEnabled = true;
+				const deps = wifDeps(goodExchange, true);
 				const req = createTestApi({
 					bucket,
 					userId: ACTOR,

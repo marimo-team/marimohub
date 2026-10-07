@@ -270,8 +270,9 @@ export default {
 					},
 				});
 				await sessions.expireStale();
-				// Reconcile records against the provider. The Cloudflare adapter omits
-				// listActive(), so this cleanly no-ops until that backend can enumerate.
+				// Reconcile still reclaims terminal sessions from their records. The Cloudflare
+				// adapter omits listActive() and connectExisting(), so orphan reaping is skipped
+				// and sessions that may need a save wait for an admin discard.
 				await new ReconciliationService(
 					sessions,
 					notebooks,

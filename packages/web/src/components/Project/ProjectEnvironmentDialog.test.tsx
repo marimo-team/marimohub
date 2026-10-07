@@ -10,7 +10,14 @@ const project = (role: ProjectDetail['your_role'] = 'manager') =>
 		name: 'Demo',
 		your_role: role,
 		federation: { enabled: false },
+		federation_effective: { enabled: false, source: 'project' },
 	}) as ProjectDetail;
+
+const inherited = (enabled: boolean): ProjectDetail => ({
+	...project(),
+	federation: undefined,
+	federation_effective: { enabled, source: 'deployment' },
+});
 
 beforeEach(() => {
 	vi.stubGlobal('matchMedia', () => ({
@@ -30,6 +37,7 @@ describe('ProjectEnvironmentDialog', () => {
 				onClose={() => {}}
 				project={project()}
 				integrationsAvailable={false}
+				cloudAccessLoading={false}
 				cloudAccessAvailable={false}
 				onSaveCloudAccess={() => Promise.resolve()}
 				cloudAccessDefaultEnabled={false}
@@ -52,6 +60,7 @@ describe('ProjectEnvironmentDialog', () => {
 				onClose={onClose}
 				project={project()}
 				integrationsAvailable
+				cloudAccessLoading={false}
 				cloudAccessAvailable
 				onSaveCloudAccess={onSave}
 				cloudAccessDefaultEnabled={false}
@@ -60,7 +69,7 @@ describe('ProjectEnvironmentDialog', () => {
 		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
 		await user.click(screen.getByRole('radio', { name: 'Enabled' }));
 		await user.click(screen.getByRole('button', { name: 'Save' }));
-		expect(onSave).toHaveBeenCalledWith(true);
+		expect(onSave).toHaveBeenCalledWith('enabled');
 		expect(onClose).not.toHaveBeenCalled();
 		expect(screen.getByText('Federated cloud access', { selector: 'h3' })).toBeInTheDocument();
 		await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled());
@@ -75,13 +84,16 @@ describe('ProjectEnvironmentDialog', () => {
 				onClose={() => {}}
 				project={project('viewer')}
 				integrationsAvailable
+				cloudAccessLoading={false}
 				cloudAccessAvailable
 				onSaveCloudAccess={() => Promise.resolve()}
 				cloudAccessDefaultEnabled={false}
 			/>,
 		);
 		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
-		expect(screen.getByText(/Federated cloud access is disabled/)).toBeInTheDocument();
+		expect(
+			screen.getByText('Federated cloud access is disabled for this project.'),
+		).toBeInTheDocument();
 		expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
 	});
 
@@ -90,8 +102,13 @@ describe('ProjectEnvironmentDialog', () => {
 			<ProjectEnvironmentDialog
 				isOpen
 				onClose={() => {}}
-				project={{ ...project(), federation: { enabled: true } }}
+				project={{
+					...project(),
+					federation: { enabled: true },
+					federation_effective: { enabled: true, source: 'project' },
+				}}
 				integrationsAvailable
+				cloudAccessLoading={false}
 				cloudAccessAvailable
 				onSaveCloudAccess={() => Promise.resolve()}
 				cloudAccessDefaultEnabled={false}
@@ -112,6 +129,7 @@ describe('ProjectEnvironmentDialog', () => {
 				onClose={() => {}}
 				project={project()}
 				integrationsAvailable
+				cloudAccessLoading={false}
 				cloudAccessAvailable
 				onSaveCloudAccess={onSave}
 				cloudAccessDefaultEnabled={false}
@@ -135,8 +153,9 @@ describe('ProjectEnvironmentDialog', () => {
 			<ProjectEnvironmentDialog
 				isOpen
 				onClose={() => {}}
-				project={{ ...project(), federation: undefined }}
+				project={inherited(true)}
 				integrationsAvailable
+				cloudAccessLoading={false}
 				cloudAccessAvailable
 				cloudAccessDefaultEnabled
 				onSaveCloudAccess={onSave}
@@ -147,7 +166,7 @@ describe('ProjectEnvironmentDialog', () => {
 		expect(screen.getByRole('radio', { name: /Use deployment default/ })).toBeChecked();
 		await user.click(screen.getByRole('radio', { name: 'Disabled' }));
 		await user.click(screen.getByRole('button', { name: 'Save' }));
-		expect(onSave).toHaveBeenCalledWith(false);
+		expect(onSave).toHaveBeenCalledWith('disabled');
 	});
 	it('clears an explicit override to restore inheritance', async () => {
 		const user = userEvent.setup();
@@ -158,6 +177,7 @@ describe('ProjectEnvironmentDialog', () => {
 				onClose={() => {}}
 				project={project()}
 				integrationsAvailable
+				cloudAccessLoading={false}
 				cloudAccessAvailable
 				cloudAccessDefaultEnabled
 				onSaveCloudAccess={onSave}
@@ -166,7 +186,51 @@ describe('ProjectEnvironmentDialog', () => {
 		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
 		await user.click(screen.getByRole('radio', { name: /Use deployment default/ }));
 		await user.click(screen.getByRole('button', { name: 'Save' }));
-		expect(onSave).toHaveBeenCalledWith(null);
+		expect(onSave).toHaveBeenCalledWith('inherit');
+	});
+
+	it('shows non-managers the deployment default as the source', async () => {
+		const user = userEvent.setup();
+		render(
+			<ProjectEnvironmentDialog
+				isOpen
+				onClose={() => {}}
+				project={{ ...inherited(true), your_role: 'viewer' }}
+				integrationsAvailable
+				cloudAccessLoading={false}
+				cloudAccessAvailable
+				cloudAccessDefaultEnabled
+				onSaveCloudAccess={() => Promise.resolve()}
+			/>,
+		);
+		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
+		expect(
+			screen.getByText('Federated cloud access is enabled by deployment default.'),
+		).toBeInTheDocument();
+	});
+
+	it('reports unavailable federation from the server even when capabilities are stale', async () => {
+		const user = userEvent.setup();
+		render(
+			<ProjectEnvironmentDialog
+				isOpen
+				onClose={() => {}}
+				project={{
+					...project(),
+					federation_effective: { enabled: false, source: 'unavailable' },
+				}}
+				integrationsAvailable
+				cloudAccessLoading={false}
+				cloudAccessAvailable
+				cloudAccessDefaultEnabled
+				onSaveCloudAccess={() => Promise.resolve()}
+			/>,
+		);
+		expect(screen.getByText('Not configured for this deployment')).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: /Cloud access/ }));
+		expect(screen.getByRole('link', { name: /How to enable it/ })).toBeInTheDocument();
+		expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
 	});
 
 	it('waits for capabilities before showing or editing inherited cloud access', async () => {
@@ -175,15 +239,16 @@ describe('ProjectEnvironmentDialog', () => {
 		const props = {
 			isOpen: true,
 			onClose: () => {},
-			project: { ...project(), federation: undefined },
+			project: inherited(true),
 			integrationsAvailable: false,
 			onSaveCloudAccess: onSave,
 		};
 		const { rerender } = render(
 			<ProjectEnvironmentDialog
 				{...props}
-				cloudAccessAvailable={undefined}
-				cloudAccessDefaultEnabled={undefined}
+				cloudAccessLoading
+				cloudAccessAvailable={false}
+				cloudAccessDefaultEnabled={false}
 			/>,
 		);
 		expect(screen.getByText('Loading cloud access…')).toBeInTheDocument();
@@ -193,7 +258,12 @@ describe('ProjectEnvironmentDialog', () => {
 		expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
 		expect(onSave).not.toHaveBeenCalled();
 		rerender(
-			<ProjectEnvironmentDialog {...props} cloudAccessAvailable cloudAccessDefaultEnabled />,
+			<ProjectEnvironmentDialog
+				{...props}
+				cloudAccessLoading={false}
+				cloudAccessAvailable
+				cloudAccessDefaultEnabled
+			/>,
 		);
 		expect(screen.getByRole('radio', { name: /Use deployment default/ })).toBeChecked();
 		expect(screen.getByText('Currently enabled')).toBeInTheDocument();

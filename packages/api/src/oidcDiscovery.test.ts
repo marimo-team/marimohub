@@ -1,21 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { MemoryBucket } from '@marimo-hub/core/testing';
-import type { ApiDeps } from './context';
 import { createApi } from './createApi';
-import { makeTestDeps } from './testing';
+import { makeTestDeps, makeTestWif } from './testing';
 
-/** A minimal WIF config stub — only the issuer's `jwks()` is exercised here. */
-const stubWif = {
-	defaultEnabled: false,
-	issuerUrl: 'https://hub.example.com',
-	targets: {},
-	issuer: {
-		mint: async () => 'jwt',
-		jwks: async () => ({
-			keys: [{ kty: 'RSA', use: 'sig', alg: 'RS256', kid: 'kid-1', n: 'AAA', e: 'AQAB' }],
-		}),
-	},
-} as unknown as ApiDeps['wif'];
+const stubWif = makeTestWif({
+	jwks: async () => ({
+		keys: [{ kty: 'RSA', use: 'sig', alg: 'RS256', kid: 'kid-1', n: 'AAA', e: 'AQAB' }],
+	}),
+});
 
 describe('OIDC discovery routes', () => {
 	it('serves discovery + JWKS (raw JSON) when WIF is configured', async () => {

@@ -119,26 +119,39 @@ it, and `onlyIfEtagMatches` replaces an expired lease. Leased Node loops use
 distinct keys and a unique holder for each attempt. Each lease expires at the
 attempt deadline. Outside the Node runner, the default lease TTL is 10 minutes.
 
-Node loop deadlines cover eligibility checks, lease acquisition, work, and lease
-release. The limit is three intervals with a 10-minute minimum: 15 minutes for
-maintenance. On timeout, the runner logs `<loop>_stalled`, increments its timeout
-count, and permits the next tick. Late results cannot update a newer attempt's
-guard or heartbeat. Cancellation checks run between sweep steps. Underlying
-calls without cancellation support still require adapter request timeouts.
+All Node loops run through `BackgroundLoops` (`apps/server/src/backgroundLoops.ts`,
+wired in `apps/server/src/cron.ts`). The loop table, events, health endpoint, and
+signals are documented for operators in
+[`docs/operations.md`](../docs/operations.md#background-loops); this section
+covers the guarantees.
 
-Lease-release errors log separately and preserve the sweep outcome.
+An attempt's deadline (`max(3 × interval, 10 min)`, so 15 minutes for
+maintenance) covers `shouldRun`, lease acquisition, the work, and lease
+release. On timeout the runner aborts the attempt's signal and logs
+`<loop>_stalled`. `step()` checks the signal before and after each step but does
+not race it, so hung work keeps the attempt, and the in-flight guard, until it
+settles; no loop starts a second attempt over abandoned work. When the work
+settles the runner logs `<loop>_recovered`, discards the late result, and the
+next tick retries. The guard covers the loop's own work promise only. Inside
+it, the reconciler gives each session reclaim a 60-second budget; a reclaim
+that exceeds it keeps running, so the reconciler records the session and skips
+it (counted as unreclaimed, reason `timeout`) on later cycles until that reclaim
+settles. A stalled attempt does not release its lease; the lease
+expires at the deadline. Another replica can then take the lease while the
+abandoned work is still running, so calls without cancellation support still
+need adapter request timeouts.
 
-`GET /api/health/maintenance` is public and reads only process memory. It reports
-per-loop start, completion, and success timestamps (Unix milliseconds), duration,
-timeout count, and staleness. Idle ticks and lease contention count as success,
-but failed or timed-out attempts do not. It returns 503 after one deadline plus one interval
-without success, measured from registration before the first success.
-Loops that do not start are absent. Replicas without loops return 200.
+Lease-release errors log as `<loop>_release_failed` and preserve the attempt's
+outcome. Skipped attempts (`shouldRun` false or lease held elsewhere) count as
+successes.
 
-Each `maintenance_cycle` event includes `gauge.loop.<name>.*` heartbeats and
-`counter.loop.<name>.timeouts`. A missing first success is `null`.
-Helm and example Kubernetes maintenance deployments probe this endpoint.
-API replicas use `/api/health`.
+`GET /api/health/maintenance` reads only process memory (`deps.loopHealth`, set
+when `MARIMOHUB_RUN_MAINTENANCE=true`). A loop is `stalled` while an attempt is
+past its deadline and unsettled, or when nothing has completed within one
+deadline plus one interval of registration or the last completion. Only
+`stalled` returns 503; `failing` (consecutive failures) reports `degraded` with
+200, because restarting cannot fix a dependency outage. Loops that do not start
+are absent.
 
 ---
 
@@ -207,33 +220,37 @@ rates from deltas between lines.
 
 Signals emitted today:
 
-| Signal                                                                   | Type      | Source                          |
-| ------------------------------------------------------------------------ | --------- | ------------------------------- |
-| `catalog.cas.attempt` / `.conflict` / `.exhausted`                       | counter   | `CatalogService.mutateSnapshot` |
-| `sessions.live`                                                          | gauge     | `SessionService.expireStale`    |
-| `sessions.expired` / `sessions.reaped`                                   | counter   | `SessionService`                |
-| `snapshots.count` / `snapshots.bytes`                                    | gauge     | `MaintenanceService`            |
-| `maintenance.snapshots_pruned` / `.events_pruned`                        | counter   | `MaintenanceService`            |
-| `object_browser.s3.operations` / `.failures`                             | counter   | `S3ObjectBrowser`               |
-| `object_browser.s3.latency_ms`                                           | histogram | `S3ObjectBrowser`               |
-| `object_browser.s3.bytes_read` / `.keys_scanned`                         | counter   | `S3ObjectBrowser`               |
-| `object_browser.cache.requests`                                          | counter   | object browse API cache         |
-| `object_browser.download.active`                                         | gauge     | object download gate            |
-| `object_browser.download.rejected` / `.timeouts` / `.cancellations`      | counter   | object download API             |
-| `notify.delivered` / `.skipped` / `.deliver_failed`                      | counter   | `Notifier` fan-out              |
-| `project_alert.delivered` / `.skipped` / `.deliver_failed`               | counter   | `NodeProjectAlertDispatcher`    |
-| `project_alert.rate_limited`                                             | counter   | project alert delivery budget   |
-| `data_preview.selected`                                                  | counter   | `DataPreviewService`            |
-| `data_preview.duckdb.initialize` / `.execution` / `.recycle`             | counter   | `DuckDBWasmDataPreview`         |
-| `data_preview.duckdb.pool_size` / `.active` / `.rows`                    | gauge     | `DuckDBWasmDataPreview`         |
-| `data_preview.duckdb.queue_wait_ms` / `.initialize_ms` / `.execution_ms` | gauge     | `DuckDBWasmDataPreview`         |
-| `duckdb_http_broker.request` / `.redirect` / `.budget_exhausted`         | counter   | guarded DuckDB HTTP broker      |
-| `duckdb_http_broker.response_bytes`                                      | histogram | guarded DuckDB HTTP broker      |
-| `duckdb_http_broker.bridge_failure`                                      | counter   | guarded DuckDB HTTP broker      |
-| `duckdb_http_broker.request_latency_ms` / `.transport_latency_ms`        | histogram | guarded DuckDB HTTP broker      |
-| `duckdb_http_broker.oauth_exchange` / `.oauth_refresh` / `.oauth_token`  | counter   | guarded DuckDB OAuth2 provider  |
-| `duckdb_http_database.policy`                                            | counter   | remote DuckDB object validation |
-| Per-cycle: `sessions_expired`, `snapshots_pruned`, …                     | fields    | the `maintenance_cycle` event   |
+| Signal                                                                                    | Type      | Source                          |
+| ----------------------------------------------------------------------------------------- | --------- | ------------------------------- |
+| `catalog.cas.attempt` / `.conflict` / `.exhausted`                                        | counter   | `CatalogService.mutateSnapshot` |
+| `sessions.live`                                                                           | gauge     | `SessionService.expireStale`    |
+| `sessions.expired` / `sessions.reaped`                                                    | counter   | `SessionService`                |
+| `snapshots.count` / `snapshots.bytes`                                                     | gauge     | `MaintenanceService`            |
+| `maintenance.snapshots_pruned` / `.events_pruned`                                         | counter   | `MaintenanceService`            |
+| `object_browser.s3.operations` / `.failures`                                              | counter   | `S3ObjectBrowser`               |
+| `object_browser.s3.latency_ms`                                                            | histogram | `S3ObjectBrowser`               |
+| `object_browser.s3.bytes_read` / `.keys_scanned`                                          | counter   | `S3ObjectBrowser`               |
+| `object_browser.cache.requests`                                                           | counter   | object browse API cache         |
+| `object_browser.download.active`                                                          | gauge     | object download gate            |
+| `object_browser.download.rejected` / `.timeouts` / `.cancellations`                       | counter   | object download API             |
+| `notify.delivered` / `.skipped` / `.deliver_failed`                                       | counter   | `Notifier` fan-out              |
+| `project_alert.delivered` / `.skipped` / `.deliver_failed`                                | counter   | `NodeProjectAlertDispatcher`    |
+| `project_alert.rate_limited`                                                              | counter   | project alert delivery budget   |
+| `data_preview.selected`                                                                   | counter   | `DataPreviewService`            |
+| `data_preview.duckdb.initialize` / `.execution` / `.recycle`                              | counter   | `DuckDBWasmDataPreview`         |
+| `data_preview.duckdb.pool_size` / `.active` / `.rows`                                     | gauge     | `DuckDBWasmDataPreview`         |
+| `data_preview.duckdb.queue_wait_ms` / `.initialize_ms` / `.execution_ms`                  | gauge     | `DuckDBWasmDataPreview`         |
+| `duckdb_http_broker.request` / `.redirect` / `.budget_exhausted`                          | counter   | guarded DuckDB HTTP broker      |
+| `duckdb_http_broker.response_bytes`                                                       | histogram | guarded DuckDB HTTP broker      |
+| `duckdb_http_broker.bridge_failure`                                                       | counter   | guarded DuckDB HTTP broker      |
+| `duckdb_http_broker.request_latency_ms` / `.transport_latency_ms`                         | histogram | guarded DuckDB HTTP broker      |
+| `duckdb_http_broker.oauth_exchange` / `.oauth_refresh` / `.oauth_token`                   | counter   | guarded DuckDB OAuth2 provider  |
+| `duckdb_http_database.policy`                                                             | counter   | remote DuckDB object validation |
+| `sessions.unreclaimed_terminal.count` / `.oldest_age_ms`                                  | gauge     | maintenance cycle               |
+| `sessions.editor_claim.lost` (`phase`)                                                    | counter   | editor session start            |
+| `loop.seconds_since_success` / `.consecutive_failures` / `.last_duration_ms` / `.stalled` | gauge     | `BackgroundLoops`               |
+| `loop.timeouts`                                                                           | counter   | `BackgroundLoops`               |
+| Per-cycle: `sessions_expired`, `snapshots_pruned`, …                                      | fields    | the `maintenance_cycle` event   |
 
 Object-browser metric attributes are deliberately low-cardinality: operation,
 mode, outcome, and sanitized error code only. Never add bucket names, keys,
@@ -252,6 +269,11 @@ What to watch / alert on:
   down or not the lease holder. Likewise `session_lifecycle_sweep` (§7): it only
   logs non-empty sweeps, so pair its absence with `sessions.live > 0` before
   concluding the sweep is down.
+- **`loop.stalled` = 1** (or `/api/health/maintenance` returning 503) → a loop
+  is wedged past its deadline; the maintenance pod's liveness probe restarts it.
+  Rising `loop.consecutive_failures` without a stall is a dependency outage.
+- **`sessions.unreclaimed_terminal.count` rising** → sandboxes are not being
+  reclaimed; aggregate with `max` across instances, not `sum`.
 - **`sessions.live`** → the live sandbox/session count; pair it with
   **provider-side cost**. Sandbox _cost_ is intentionally not emitted here — the
   `SandboxProvider` port doesn't expose billing — so derive cost from the compute
@@ -311,10 +333,11 @@ Maintenance retries failed claim release even after that stamp exists.
 
 Reclaim attempts to save fully provisioned expired or stale stopping editors.
 It skips capture for failed or incomplete provisions, expired authorization, or
-a newer persistent editor. Capture requires strict attachment, which cannot
-create a replacement sandbox. Failed attachment retains the sandbox and claim.
-Providers without this capability retain sessions
-that need a save until an administrator chooses discard. This includes the
+a newer persistent editor. Capture requires strict attachment
+(`connectExisting`), which cannot create a replacement sandbox. A `NotFoundError`
+from attachment means the sandbox is gone, so the claim is released; any other
+attachment error retains the sandbox and claim. Providers without attachment
+retain sessions that need a save until an administrator chooses discard. This includes the
 current Cloudflare Sandbox SDK, whose read and exec methods can start a stopped
 container.
 
@@ -327,16 +350,23 @@ Automatic reclaim requires a confirmed idle kernel for an expired session with
 valid authorization. A failed activity probe retains the sandbox and claim.
 A fresh Stop or takeover has 15 minutes to finish before reclaim can proceed.
 
+While a claim is retiring, editor start returns `409 EDIT_SESSION_RETIRING`.
 Stop also reclaims expired sessions and returns a retryable error if cleanup fails.
-Administrators can use **Runtime → Editors → Reclaim** to attempt a save or discard
-edits. The action records its actor, session, and outcome.
+Super admins can use **Admin → Runtime → Editors → Reclaim session** to save or
+discard edits; the `session.reclaim` audit event records the outcome. Responses
+and blocked reasons are in
+[`docs/operations.md`](../docs/operations.md#reclaim-a-stuck-editor-sandbox).
+Each maintenance reclaim is bounded to 60 s (`session_reclaim_timeout`).
 
-The maintenance event reports `sessions_reclaimed`, `unreclaimed_terminal_sessions`,
-and `oldest_unreclaimed_session_age_ms`. Age is measured from the last heartbeat.
+The maintenance event reports `sessions_reclaimed`. The
+`sessions.unreclaimed_terminal.count` and
+`sessions.unreclaimed_terminal.oldest_age_ms` gauges (age from the last
+heartbeat) appear on it with the `gauge.` prefix.
 
 The lifecycle loop uses its own bucket-CAS lease at
-`_system/_session_lifecycle.lock` and an in-process guard against overlapping
-sweeps. Its separate lease prevents maintenance from releasing its hold.
+`_system/_session_lifecycle.lock`; like every loop, the runner's in-flight guard
+keeps a hung sweep from overlapping the next one. Its separate lease prevents
+maintenance from releasing its hold.
 The `beginTerminating` CAS coordinates explicit Stop requests; teardown is
 idempotent. Each non-empty sweep emits a `session_lifecycle_sweep` event with
 `snapshotted`, `extended`, `reapedExpired`, `reapedIdle`, and `reclaimed` counts.

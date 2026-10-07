@@ -2226,7 +2226,7 @@ export interface components {
 		Capabilities: {
 			federation: {
 				available: boolean;
-				defaultEnabled: boolean;
+				default_enabled: boolean;
 			};
 			integrations: {
 				available: boolean;
@@ -2394,6 +2394,7 @@ export interface components {
 			updated_at: string;
 			tags: string[];
 			federation?: components['schemas']['ProjectFederation'];
+			federation_effective: components['schemas']['ProjectFederationEffective'];
 			security_labels?: components['schemas']['SecurityLabels'];
 			/** @enum {string|null} */
 			your_role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user' | null;
@@ -2407,6 +2408,14 @@ export interface components {
 		ProjectFederation: {
 			enabled: boolean;
 			target?: string;
+		};
+		ProjectFederationEffective: {
+			enabled: boolean;
+			/**
+			 * @description `project` when a stored override applies, `deployment` when the deployment default applies, `unavailable` when the deployment has no workload identity federation.
+			 * @enum {string}
+			 */
+			source: 'project' | 'deployment' | 'unavailable';
 		};
 		SecurityLabels: {
 			classification: string;
@@ -2645,6 +2654,21 @@ export interface components {
 					| null;
 				claim_available: boolean;
 				reclaimable: boolean;
+				/**
+				 * @description Why an admin reclaim would be refused now, from recorded state only; null when reclaimable. Kernel activity and provider failures are only known when reclaim runs.
+				 * @enum {string|null}
+				 */
+				reclaim_blocked_reason:
+					| 'not_terminal'
+					| 'teardown_grace'
+					| 'provision_grace'
+					| 'attachment_unsupported'
+					| 'attachment_failed'
+					| 'kernel_active'
+					| 'kernel_unreachable'
+					| 'destroy_failed'
+					| 'timeout'
+					| null;
 			}[];
 			incomplete: boolean;
 			limits: {
@@ -5217,6 +5241,7 @@ export interface operations {
 					name?: string;
 					description?: string;
 					tags?: string[];
+					/** @description `null` clears the project override so the deployment default applies. */
 					federation?: components['schemas']['ProjectFederationInput'] | null;
 				};
 			};
@@ -6851,6 +6876,8 @@ export interface operations {
 						data: {
 							/** @enum {boolean} */
 							reclaimed: true;
+							/** @description Whether a new version was committed from the sandbox before destruction. */
+							saved: boolean;
 						};
 					};
 				};

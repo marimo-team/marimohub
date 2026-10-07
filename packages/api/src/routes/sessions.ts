@@ -81,6 +81,7 @@ import { previewAppPoolPolicy, previewIdleTimeout, PREVIEW_MAX_SESSIONS } from '
 import { checkComputeProfile } from '../computeProfile';
 import { logObserver } from '../saga';
 import { appendAudit, errorMetadata, logEvent } from '../log';
+import { sessionClientFor } from '../sessionClient';
 import {
 	assertNotificationMutationAllowed,
 	scheduleNotification,
@@ -95,7 +96,6 @@ import {
 	assertSessionNotebookVisible,
 	assertSessionPreviewActive,
 	authorizationService,
-	authMethodFor,
 	commonErrors,
 	createApp,
 	errorResponses,
@@ -801,9 +801,10 @@ async function retireSelectedSession(deps: ApiDeps, selected: Session): Promise<
 			session.sandbox_id &&
 			!session.sandbox_reclaimed_at
 		) {
-			reclaimFailed = !(await sessionRetirer(deps)
+			const outcome = await sessionRetirer(deps)
 				.reclaim(session)
-				.catch(() => false));
+				.catch(() => null);
+			reclaimFailed = !outcome?.reclaimed;
 		} else {
 			await sessionRetirer(deps).retire(session, { teardown: transitioned });
 		}
@@ -954,7 +955,10 @@ async function inspectEditorActivity(deps: ApiDeps, session: Session) {
 	const active = await kernelActiveConnections(
 		deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) }),
 		basePath,
-	);
+	).catch((error: unknown) => {
+		if (error instanceof NotFoundError) return null;
+		throw error;
+	});
 	const checkedAt = new Date().toISOString();
 	if (active === null) return { state: 'unknown' as const, checked_at: checkedAt };
 	await deps.services.sessions
@@ -1235,6 +1239,7 @@ export async function startNotebookSession(input: {
 		path: string;
 		hostname: string;
 		appBaseUrl: string;
+		via?: 'mcp' | 'rest';
 	};
 }): Promise<SessionCreateResult> {
 	const { deps, user, pid, nid, body, request } = input;
@@ -1588,11 +1593,21 @@ export async function startNotebookSession(input: {
 		}
 	}
 
+	const client = sessionClientFor(user.credential.kind, request.via ?? 'rest');
 	if (mode === 'edit' && !ephemeral && (await sessions.isClaimRetiring(pid, nid, user.id))) {
-		deps.metrics?.increment('sessions.editor_claim.lost', 1, {
+		deps.metrics?.increment('sessions.editor_claim.lost', 1, { phase: 'preflight' });
+		logEvent({
+			event: 'session_provision',
+			client,
+			origin,
 			project_id: pid,
-			notebook_id: nid,
-			phase: 'preflight',
+			notebook_id: origin?.notebook_id ?? nid,
+			user_id: user.id,
+			mode,
+			editor_claim_lost: true,
+			editor_claim_lost_phase: 'preflight',
+			success: false,
+			error: 'EditSessionRetiringError',
 		});
 		throw new EditSessionRetiringError();
 	}
@@ -1634,12 +1649,7 @@ export async function startNotebookSession(input: {
 	let originUrl: string | undefined;
 	const observer = logObserver({
 		event: 'session_provision',
-		client:
-			request.path === '/mcp'
-				? 'mcp'
-				: authMethodFor(user.credential.kind) === 'pat'
-					? 'cli'
-					: 'web',
+		client,
 		origin,
 		sandbox_id: sandboxId,
 		image,
@@ -2100,12 +2110,9 @@ export async function startNotebookSession(input: {
 			await deps.services.previews.releaseAdmission(previewRecord, sessionId).catch(() => {});
 
 		if (err instanceof EditorClaimLostError) {
-			deps.metrics?.increment('sessions.editor_claim.lost', 1, {
-				project_id: pid,
-				notebook_id: nid,
-				phase: 'claim',
-			});
+			deps.metrics?.increment('sessions.editor_claim.lost', 1, { phase: 'claim' });
 			observer.tag('editor_claim_lost', true);
+			observer.tag('editor_claim_lost_phase', 'claim');
 			if (session) await sessions.markTerminated(pid, session.session_id).catch(() => {});
 			const winnerCandidate = await sessions.getSession(pid, err.holder).catch(() => null);
 			if (winnerCandidate?.notebook_id === nid && sessionMode(winnerCandidate) === 'edit') {

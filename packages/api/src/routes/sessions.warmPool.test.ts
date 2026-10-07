@@ -134,6 +134,7 @@ describe('session warm sandbox assignment', () => {
 				},
 			});
 			const claim = vi.spyOn(w.warmPool, 'claim');
+			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 			w.create.mockClear();
 			await expectError(await api.request('POST', w.path), 409, 'EDIT_SESSION_RETIRING');
 			expect(claim).not.toHaveBeenCalled();
@@ -141,10 +142,21 @@ describe('session warm sandbox assignment', () => {
 			expect(await w.warmPool.store.read()).toEqual(poolBefore);
 			expect(await w.services.sessions.listSessions()).toHaveLength(1);
 			expect(metrics.increment).toHaveBeenCalledWith('sessions.editor_claim.lost', 1, {
-				project_id: w.project.id,
-				notebook_id: w.notebook.id,
 				phase: 'preflight',
 			});
+			const provisionEvents = log.mock.calls
+				.filter(([line]) => typeof line === 'string' && line.startsWith('{'))
+				.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+				.filter((event) => event.event === 'session_provision');
+			expect(provisionEvents).toEqual([
+				expect.objectContaining({
+					project_id: w.project.id,
+					notebook_id: w.notebook.id,
+					editor_claim_lost: true,
+					editor_claim_lost_phase: 'preflight',
+					success: false,
+				}),
+			]);
 		},
 	);
 
@@ -269,13 +281,7 @@ describe('session warm sandbox assignment', () => {
 			await expectError(await api.request('POST', w.path), 409, 'EDIT_SESSION_RETIRING');
 			expect(
 				metrics.increment.mock.calls.filter(([name]) => name === 'sessions.editor_claim.lost'),
-			).toEqual([
-				[
-					'sessions.editor_claim.lost',
-					1,
-					{ project_id: w.project.id, notebook_id: w.notebook.id, phase: 'claim' },
-				],
-			]);
+			).toEqual([['sessions.editor_claim.lost', 1, { phase: 'claim' }]]);
 			expect(holder).toBeDefined();
 			expect(
 				(await w.services.sessions.getEditorClaim(w.project.id, w.notebook.id))?.session_id,

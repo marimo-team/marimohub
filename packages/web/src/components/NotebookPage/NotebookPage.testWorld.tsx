@@ -274,7 +274,7 @@ export function makeFetch(opts: FetchOptions) {
 		if (url.includes('/capabilities')) {
 			const viewerMode = opts.viewerMode ?? 'static';
 			return ok({
-				federation: { available: false, defaultEnabled: false },
+				federation: { available: false, default_enabled: false },
 				jobs: { available: true },
 				...(opts.omitSourceControlCapability
 					? {}
@@ -378,7 +378,13 @@ export function makeFetch(opts: FetchOptions) {
 		}
 		if (url.includes('/users')) return ok({});
 		if (url.endsWith(`/projects/${PID}`)) {
-			return ok({ id: PID, name: 'P', description: '', your_role: opts.role });
+			return ok({
+				id: PID,
+				name: 'P',
+				description: '',
+				your_role: opts.role,
+				federation_effective: { enabled: false, source: 'unavailable' },
+			});
 		}
 		throw new Error(`unexpected fetch: ${method} ${url}`);
 	});

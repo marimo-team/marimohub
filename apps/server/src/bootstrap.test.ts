@@ -93,25 +93,19 @@ describe('bootstrap', () => {
 		});
 	});
 
-	it('serves maintenance health without authentication or downstream I/O when loops are disabled', async () => {
+	it('reports maintenance health as unavailable when loops are disabled', async () => {
 		const harness = makeHarness(deps);
 		await bootstrap(BASE_ENV, harness.overrides);
-		vi.spyOn(deps.authenticator, 'authenticate').mockImplementation(() => {
-			throw new Error('must not authenticate');
-		});
-		vi.spyOn(deps.compute, 'proxy').mockImplementation(() => {
-			throw new Error('must not proxy');
-		});
 		const fetch = harness.serveFn.mock.calls[0][0].fetch;
 		const res = (await fetch(
 			new Request('http://localhost/api/health/maintenance'),
 			{} as never,
 		)) as Response;
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ success: true, data: { ok: true, loops: {} } });
+		expect(await res.json()).toEqual({ status: 'unavailable', loops: {} });
 	});
 
-	it('preserves API fallback responses behind the maintenance probe', async () => {
+	it('preserves API fallback responses', async () => {
 		const harness = makeHarness(deps);
 		await bootstrap(BASE_ENV, harness.overrides);
 		const fetch = harness.serveFn.mock.calls[0][0].fetch;
@@ -126,8 +120,8 @@ describe('bootstrap', () => {
 		});
 	});
 
-	it('returns 503 for stalled enabled loops and returns 200 after recovery', async () => {
-		const run = vi.fn(() => new Promise<void>(() => {}));
+	it('serves loop health without authentication: 200 when degraded, 503 only when stalled', async () => {
+		const run = vi.fn<() => Promise<void>>().mockRejectedValue(new Error('bucket unavailable'));
 		vi.mocked(startMaintenance).mockImplementation(
 			(_deps, _metrics, loops) =>
 				loops!.start({
@@ -142,26 +136,40 @@ describe('bootstrap', () => {
 			{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' },
 			harness.overrides,
 		);
+		vi.spyOn(deps.authenticator, 'authenticate').mockImplementation(() => {
+			throw new Error('must not authenticate');
+		});
 		const fetch = harness.serveFn.mock.calls[0][0].fetch;
 		const health = async () =>
 			(await fetch(
 				new Request('http://localhost/api/health/maintenance'),
 				{} as never,
 			)) as Response;
-		expect((await health()).status).toBe(200);
+
 		await vi.advanceTimersByTimeAsync(350);
-		const res = await health();
+		let res = await health();
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({
+			status: 'degraded',
+			loops: { maintenance: { status: 'failing', consecutive_failures: 4 } },
+		});
+
+		const hung = Promise.withResolvers<void>();
+		run.mockReturnValueOnce(hung.promise);
+		await vi.advanceTimersByTimeAsync(300);
+		res = await health();
 		expect(res.status).toBe(503);
 		expect(await res.json()).toMatchObject({
-			success: false,
-			error: {
-				code: 'MAINTENANCE_STALE',
-				details: { loops: { maintenance: { stale: true, timeouts: 1, last_success_at: null } } },
-			},
+			status: 'stalled',
+			loops: { maintenance: { status: 'stalled', timeouts: 1, last_success_at: null } },
 		});
+
+		hung.resolve();
 		run.mockResolvedValue(undefined);
-		await vi.advanceTimersByTimeAsync(250);
-		expect((await health()).status).toBe(200);
+		await vi.advanceTimersByTimeAsync(100);
+		res = await health();
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ status: 'ok' });
 		await handle?.drain();
 	});
 

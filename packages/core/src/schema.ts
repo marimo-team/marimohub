@@ -828,6 +828,7 @@ export const SessionSchema = z.looseObject({
 	sandbox_reclaimed_at: z.iso.datetime().optional(),
 	/** Provider-guaranteed upper bound, recorded after provisioning completes. */
 	sandbox_deadline_at: z.iso.datetime().optional(),
+	/** Set by `beginTerminating`, cleared by `markTerminated`; starts the reclaim teardown grace. */
 	terminating_at: z.iso.datetime().optional(),
 	/**
 	 * Durable takeover checkpoint written after the strict source/workspace capture

@@ -4,6 +4,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { NotFoundError } from '@marimo-hub/core/errors';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import type { SandboxInstance } from '@marimo-hub/core/ports/sandbox';
@@ -748,20 +749,29 @@ describe('LocalCompute security & limits', () => {
 });
 
 describe('LocalCompute registry & teardown', () => {
-	it('strict attachment rejects missing, never-started, and stopped instances', async () => {
+	it('strict attachment fails missing, never-started, and stopped instances on first use', async () => {
 		const id = `sb-connect-${Math.random().toString(36).slice(2, 10)}` as SandboxId;
 		created.push(id);
-		expect(() => compute.connectExisting(id)).toThrow('not running');
+		await expect(compute.connectExisting(id).exec('true')).rejects.toThrow(NotFoundError);
 		const sandbox = compute.create(id);
-		expect(() => compute.connectExisting(id)).toThrow('not running');
+		await expect(compute.connectExisting(id).readFile('/workspace/x')).rejects.toThrow(
+			NotFoundError,
+		);
 		const process = await sandbox.startProcess('sleep 60');
 		expect(compute.connectExisting(id)).toBe(sandbox);
 		await process.kill();
 		await expect.poll(() => compute.listActive()).toEqual([]);
-		expect(() => compute.connectExisting(id)).toThrow('not running');
-		await sandbox.destroy();
-		await sandbox.destroy();
-		expect(() => compute.connectExisting(id)).toThrow('not running');
+		const stopped = compute.connectExisting(id);
+		await expect(stopped.exec('true')).rejects.toThrow(NotFoundError);
+		await stopped.destroy();
+		await stopped.destroy();
+		await expect(compute.connectExisting(id).exec('true')).rejects.toThrow(NotFoundError);
+	});
+
+	it('rejects attachment synchronously once disposed', async () => {
+		const disposed = new LocalCompute();
+		await disposed[Symbol.asyncDispose]();
+		expect(() => disposed.connectExisting('sb-disposed' as SandboxId)).toThrow('disposed');
 	});
 
 	it('a reconnected instance cannot recreate a removed workspace root', async () => {

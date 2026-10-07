@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runPreflight } from '@marimo-hub/core';
 import type { ApiDeps } from '@marimo-hub/api';
+import { makeTestWif } from '@marimo-hub/api/testing';
 import { buildPreflightChecks } from './preflightChecks';
 import type { Env } from './env';
 
@@ -351,20 +352,17 @@ describe('wif check', () => {
 	});
 
 	it('ok when the signing key loads', async () => {
-		const deps = makeDeps({ wif: { issuer: { jwks: async () => [] } } as never });
+		const deps = makeDeps({ wif: makeTestWif() });
 		expect((await run({}, deps)).by('wif')?.status).toBe('ok');
 	});
 
 	it('fatal when the signing key is invalid', async () => {
 		const deps = makeDeps({
-			wif: {
-				defaultEnabled: false,
-				issuer: {
-					jwks: async () => {
-						throw new Error('not a PKCS8 key');
-					},
+			wif: makeTestWif({
+				jwks: async () => {
+					throw new Error('not a PKCS8 key');
 				},
-			} as never,
+			}),
 		});
 		const { report, by } = await run({}, deps);
 		expect(by('wif')).toMatchObject({ status: 'fail', fatal: true });

@@ -225,13 +225,11 @@ export {
 export { ReconciliationService } from './runtime/ReconciliationService';
 export type { ActiveSandboxSource, ReconcileResult } from './runtime/ReconciliationService';
 export { SandboxDiagnosticLease } from './runtime/SandboxDiagnosticLease';
-export { kernelActiveConnections, SessionLifecycleService } from './runtime/sessionLifecycle';
+export { kernelActiveConnections } from './runtime/kernelActiveConnections';
+export type { ConnectionProbe } from './runtime/kernelActiveConnections';
+export { SessionLifecycleService } from './runtime/sessionLifecycle';
 export { sessionOwner } from './runtime/sessionOwner';
-export type {
-	ConnectionProbe,
-	SessionLifecycleConfig,
-	SweepResult,
-} from './runtime/sessionLifecycle';
+export type { SessionLifecycleConfig, SweepResult } from './runtime/sessionLifecycle';
 export {
 	bearerToken,
 	hashPatSecret,
@@ -403,8 +401,16 @@ export {
 	SessionService,
 	sessionWorkspaceDir,
 } from './runtime/SessionService';
-export { SessionRetirer, TakeoverRetirementError } from './runtime/SessionRetirer';
-export type { SessionRetirerDeps } from './runtime/SessionRetirer';
+export {
+	RECLAIM_BLOCKED_REASONS,
+	SessionRetirer,
+	TakeoverRetirementError,
+} from './runtime/SessionRetirer';
+export type {
+	ReclaimBlockedReason,
+	ReclaimOutcome,
+	SessionRetirerDeps,
+} from './runtime/SessionRetirer';
 export * from './runtime/surfaces';
 
 // Attribute allowlists for the traced wrappers below: stable identifiers and

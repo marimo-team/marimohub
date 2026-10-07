@@ -48,8 +48,43 @@ describe('MaintenanceLock', () => {
 	it('release by the holder frees the lease', async () => {
 		expect(await lock.acquire('A', 10_000)).toBe(true);
 		await lock.release('A');
-		expect(await bucket.get(paths.maintenanceLock)).toBeNull();
+		expect(await (await bucket.get(paths.maintenanceLock))!.json()).toEqual({
+			holder: 'A',
+			expires_at: new Date(0).toISOString(),
+		});
 		expect(await lock.acquire('B', 10_000)).toBe(true);
+	});
+
+	it('treats a lease released between the failed create and the read as free', async () => {
+		expect(await lock.acquire('A', 10_000)).toBe(true);
+		const originalGet = bucket.get.bind(bucket);
+		let released = false;
+		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			if (!released) {
+				released = true;
+				clock.set(500);
+				await lock.release('A');
+			}
+			return originalGet(key);
+		});
+
+		expect(await lock.acquire('B', 10_000)).toBe(true);
+	});
+
+	it('release does not clobber a lease stolen between its read and write', async () => {
+		expect(await lock.acquire('A', 1000)).toBe(true);
+		const stale = (await bucket.get(paths.maintenanceLock))!;
+		vi.spyOn(bucket, 'get').mockImplementationOnce(async () => {
+			clock.set(2000);
+			expect(await lock.acquire('B', 10_000)).toBe(true);
+			return stale;
+		});
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		await lock.release('A');
+
+		expect(await (await bucket.get(paths.maintenanceLock))!.json()).toMatchObject({ holder: 'B' });
+		expect(error).not.toHaveBeenCalled();
 	});
 
 	it.each(['get', 'body'] as const)(

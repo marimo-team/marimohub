@@ -21,7 +21,8 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \
     MARIMOHUB_STATIC_ROOT=./public
-# CI supplies build identity because the runtime image has no Git checkout.
+# The runtime image has no Git checkout, so the build (CI, or the deploy Makefile's
+# --build-arg) supplies build identity; an unset or empty version reports as `dev`.
 ARG MARIMOHUB_VERSION=dev
 ARG MARIMOHUB_IMAGE
 ENV MARIMOHUB_VERSION=$MARIMOHUB_VERSION \

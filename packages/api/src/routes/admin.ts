@@ -15,7 +15,13 @@ import {
 	SandboxDiagnosticLease,
 	UserId,
 } from '@marimo-hub/core';
-import type { ComputeResources, Identity, SandboxInstance } from '@marimo-hub/core';
+import type {
+	ComputeResources,
+	Identity,
+	ReclaimBlockedReason,
+	ReclaimOutcome,
+	SandboxInstance,
+} from '@marimo-hub/core';
 import {
 	AdminUserResponseSchema,
 	assertSessionAuthenticated,
@@ -492,13 +498,54 @@ const reclaimRuntimeSession = createRoute({
 	},
 	responses: {
 		200: jsonContent(
-			z.object({ success: z.literal(true), data: z.object({ reclaimed: z.literal(true) }) }),
+			z.object({
+				success: z.literal(true),
+				data: z.object({
+					reclaimed: z.literal(true),
+					saved: z
+						.boolean()
+						.describe('Whether a new version was committed from the sandbox before destruction.'),
+				}),
+			}),
 			'Sandbox reclaimed',
 		),
 		...commonErrors(),
-		...errorResponses(404, 409, 503),
+		...errorResponses(404, 409),
 	},
 });
+
+const RECLAIM_BLOCKED_MESSAGES: Record<ReclaimBlockedReason, string> = {
+	not_terminal: 'Stop the active session before reclaiming it.',
+	provision_grace:
+		'The session may still be restoring its workspace. Retry after the provision grace period ends.',
+	teardown_grace:
+		'A stop is still tearing the session down. Retry after the teardown grace period ends.',
+	kernel_active: 'Editors are still connected to the session kernel.',
+	attachment_unsupported:
+		'This compute backend cannot attach to the sandbox to save it. Reclaim without saving to discard unsaved edits.',
+	attachment_failed: 'The sandbox could not be reached. Retry shortly.',
+	kernel_unreachable:
+		'The sandbox kernel could not be checked for connected editors. Retry shortly.',
+	destroy_failed: 'The sandbox could not be destroyed. Retry shortly.',
+	timeout: 'Reclaiming the sandbox timed out. Retry shortly.',
+};
+
+/** Conflicts need a state change or a different request; the rest are transient provider failures. */
+function reclaimBlockedError(reason: ReclaimBlockedReason): Error {
+	switch (reason) {
+		case 'not_terminal':
+		case 'provision_grace':
+		case 'teardown_grace':
+		case 'kernel_active':
+		case 'attachment_unsupported':
+			return new ConflictError(RECLAIM_BLOCKED_MESSAGES[reason]);
+		case 'attachment_failed':
+		case 'kernel_unreachable':
+		case 'destroy_failed':
+		case 'timeout':
+			return new UnavailableError(RECLAIM_BLOCKED_MESSAGES[reason]);
+	}
+}
 
 const app = createApp();
 
@@ -513,12 +560,9 @@ app.openapi(reclaimRuntimeSession, async (c) => {
 		ProjectId.parse(pid),
 		SessionId.parse(sid),
 	);
-	if (session.status === 'starting' || session.status === 'running') {
-		throw new ConflictError('Stop the active session before reclaiming it.');
-	}
-	let reclaimed = false;
+	let outcome: ReclaimOutcome | undefined;
 	try {
-		reclaimed = await sessionRetirer(deps).reclaim(session, { save });
+		outcome = await sessionRetirer(deps).reclaim(session, { save });
 	} finally {
 		deps.services.runtimeInspection.invalidate();
 		await appendAudit(
@@ -533,18 +577,17 @@ app.openapi(reclaimRuntimeSession, async (c) => {
 					session_id: sid,
 					sandbox_id: session.sandbox_id,
 					save_requested: save,
-					reclaimed,
+					reclaimed: outcome?.reclaimed ?? false,
+					...(outcome?.reclaimed
+						? { saved: outcome.saved }
+						: outcome
+							? { reason: outcome.reason }
+							: {}),
 				}),
 		);
 	}
-	if (!reclaimed) {
-		throw new UnavailableError(
-			save
-				? 'The session could not be reclaimed with saving enabled. Retry later or reclaim without saving to discard unsaved edits.'
-				: 'The session could not be reclaimed yet. Retry shortly.',
-		);
-	}
-	return c.json({ success: true, data: { reclaimed: true } }, 200);
+	if (!outcome.reclaimed) throw reclaimBlockedError(outcome.reason);
+	return c.json({ success: true, data: { reclaimed: true, saved: outcome.saved } }, 200);
 });
 
 app.openapi(inspectRuntime, async (c) => {
@@ -552,7 +595,9 @@ app.openapi(inspectRuntime, async (c) => {
 	assertSessionAuthenticated(c, 'inspect runtime');
 	await assertSuperAdmin(c.get('user'), deps);
 	c.header('Cache-Control', 'no-store');
-	const snapshot = await deps.services.runtimeInspection.inspect();
+	const snapshot = await deps.services.runtimeInspection.inspect({
+		attachmentSupported: !!deps.compute.connectExisting,
+	});
 	const policy = deps.policy.appPool ?? DEFAULT_APP_POOL_POLICY;
 	return c.json(
 		{

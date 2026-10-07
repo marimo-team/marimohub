@@ -9,6 +9,7 @@ import {
 	expectError,
 	expectOk,
 	expectPage,
+	makeTestWif,
 } from '../testing';
 
 describe('Project routes', () => {
@@ -244,6 +245,77 @@ describe('Project routes', () => {
 		await expectOk(await request('PATCH', `/projects/${created.id}`, { federation: null }));
 		const reread = await expectOk<any>(await request('GET', `/projects/${created.id}`));
 		expect(reread.federation).toBeUndefined();
+	});
+
+	it('`federation: null` clears an override including its target', async () => {
+		const created = await expectOk<any>(
+			await request('POST', '/projects', {
+				name: 'Targeted',
+				description: 'd',
+				federation: { enabled: true, target: 'data' },
+			}),
+			201,
+		);
+		expect(created.federation).toEqual({ enabled: true, target: 'data' });
+		const cleared = await expectOk<any>(
+			await request('PATCH', `/projects/${created.id}`, { federation: null }),
+		);
+		expect(cleared.federation).toBeUndefined();
+	});
+
+	it('a non-manager cannot clear the federation override', async () => {
+		const created = await expectOk<any>(
+			await request('POST', '/projects', {
+				name: 'Guarded',
+				description: 'd',
+				federation: { enabled: false },
+			}),
+			201,
+		);
+		const bob = uid('user_bob');
+		await expectOk(
+			await request('POST', `/projects/${created.id}/members`, { user_id: bob, role: 'editor' }),
+			201,
+		);
+		const editor = createTestApi({ bucket, userId: bob }).request;
+		await expectError(
+			await editor('PATCH', `/projects/${created.id}`, { federation: null }),
+			403,
+			'FORBIDDEN',
+		);
+		const reread = await expectOk<any>(await request('GET', `/projects/${created.id}`));
+		expect(reread.federation).toEqual({ enabled: false });
+	});
+
+	describe('federation_effective', () => {
+		const create = async (api: typeof request, federation?: { enabled: boolean }) =>
+			expectOk<any>(
+				await api('POST', '/projects', {
+					name: 'Fed',
+					description: 'd',
+					...(federation ? { federation } : {}),
+				}),
+				201,
+			);
+
+		it('is unavailable without deployment WIF, even with a stored override', async () => {
+			const project = await create(request, { enabled: true });
+			expect(project.federation_effective).toEqual({ enabled: false, source: 'unavailable' });
+		});
+
+		it('follows the deployment default when the project has no override', async () => {
+			const api = createTestApi({ bucket, deps: { wif: makeTestWif({ defaultEnabled: true }) } });
+			const project = await create(api.request);
+			expect(project.federation_effective).toEqual({ enabled: true, source: 'deployment' });
+			const reread = await expectOk<any>(await api.request('GET', `/projects/${project.id}`));
+			expect(reread.federation_effective).toEqual({ enabled: true, source: 'deployment' });
+		});
+
+		it('reports a stored override as the project source', async () => {
+			const api = createTestApi({ bucket, deps: { wif: makeTestWif({ defaultEnabled: true }) } });
+			const project = await create(api.request, { enabled: false });
+			expect(project.federation_effective).toEqual({ enabled: false, source: 'project' });
+		});
 	});
 
 	it('GET /projects/{pid} returns the project', async () => {

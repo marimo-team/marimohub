@@ -47,6 +47,25 @@ describe('makeWif enablement', () => {
 		}
 	});
 
+	it('tells operators to unset the default-enabled flag along with the WIF vars', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			makeWif({
+				...fullEnv,
+				MARIMOHUB_WIF_DEFAULT_ENABLED: 'true',
+				MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+				MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS: 'org-data',
+			});
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining(
+					'Unset the WIF env vars and MARIMOHUB_WIF_DEFAULT_ENABLED (or the bucket list)',
+				),
+			);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
 	it('keeps hub WIF when the bucket list is set but the backend is not coreweave', () => {
 		const { wif } = makeWif({
 			...fullEnv,
@@ -146,7 +165,29 @@ describe('deployment federation default', () => {
 			/MARIMOHUB_WIF_DEFAULT_ENABLED/,
 		);
 	});
-	it.each(['true', 'false', '1'])('ignores default %s when WIF is not configured', (value) => {
-		expect(makeWif({ MARIMOHUB_WIF_DEFAULT_ENABLED: value })).toEqual({});
+	it('ignores default false when WIF is not configured', () => {
+		expect(makeWif({ MARIMOHUB_WIF_DEFAULT_ENABLED: 'false' })).toEqual({});
+	});
+	it('rejects default true when WIF is not configured', () => {
+		expect(() => makeWif({ MARIMOHUB_WIF_DEFAULT_ENABLED: 'true' })).toThrow(/has no effect/);
+	});
+	it('rejects an invalid default even when WIF is not configured', () => {
+		expect(() => makeWif({ MARIMOHUB_WIF_DEFAULT_ENABLED: '1' })).toThrow(
+			/Invalid MARIMOHUB_WIF_DEFAULT_ENABLED/,
+		);
+	});
+	it('names an ignored default in the sandbox-native storage warning', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			makeWif({
+				...fullEnv,
+				MARIMOHUB_WIF_DEFAULT_ENABLED: 'true',
+				MARIMOHUB_COMPUTE_BACKEND: 'coreweave',
+				MARIMOHUB_COMPUTE_COREWEAVE_OBJECT_STORAGE_BUCKETS: 'org-data',
+			});
+			expect(warn).toHaveBeenCalledWith(expect.stringContaining('MARIMOHUB_WIF_DEFAULT_ENABLED'));
+		} finally {
+			warn.mockRestore();
+		}
 	});
 });

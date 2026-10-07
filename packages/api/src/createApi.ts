@@ -395,6 +395,15 @@ export function createApi(rawDeps: ApiDeps) {
 		);
 	});
 
+	// Liveness for the maintenance replica: in-memory loop state only, so it stays
+	// unauthenticated like the shallow probe. A failing dependency reports `degraded`
+	// with 200 because a restart cannot fix it; only a wedged loop returns 503.
+	app.get('/api/health/maintenance', (c) => {
+		if (!deps.loopHealth) return c.json({ status: 'unavailable', loops: {} });
+		const report = deps.loopHealth();
+		return c.json(report, report.status === 'stalled' ? 503 : 200);
+	});
+
 	app.route(API_PREFIX, themeApp);
 	app.route('/', webManifestApp);
 

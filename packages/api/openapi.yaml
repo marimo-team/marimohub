@@ -157,11 +157,11 @@ components:
           properties:
             available:
               type: boolean
-            defaultEnabled:
+            default_enabled:
               type: boolean
           required:
             - available
-            - defaultEnabled
+            - default_enabled
         integrations:
           type: object
           properties:
@@ -565,6 +565,8 @@ components:
             type: string
         federation:
           $ref: '#/components/schemas/ProjectFederation'
+        federation_effective:
+          $ref: '#/components/schemas/ProjectFederationEffective'
         security_labels:
           $ref: '#/components/schemas/SecurityLabels'
         your_role:
@@ -588,6 +590,7 @@ components:
         - created_at
         - updated_at
         - tags
+        - federation_effective
         - your_role
     ProjectMember:
       type: object
@@ -615,6 +618,23 @@ components:
           type: string
       required:
         - enabled
+    ProjectFederationEffective:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        source:
+          type: string
+          enum:
+            - project
+            - deployment
+            - unavailable
+          description: '`project` when a stored override applies, `deployment` when the
+            deployment default applies, `unavailable` when the deployment has no
+            workload identity federation.'
+      required:
+        - enabled
+        - source
     SecurityLabels:
       type: object
       properties:
@@ -1188,6 +1208,24 @@ components:
                 type: boolean
               reclaimable:
                 type: boolean
+              reclaim_blocked_reason:
+                type:
+                  - string
+                  - 'null'
+                enum:
+                  - not_terminal
+                  - teardown_grace
+                  - provision_grace
+                  - attachment_unsupported
+                  - attachment_failed
+                  - kernel_active
+                  - kernel_unreachable
+                  - destroy_failed
+                  - timeout
+                  - null
+                description: Why an admin reclaim would be refused now, from recorded state
+                  only; null when reclaimable. Kernel activity and provider
+                  failures are only known when reclaim runs.
             required:
               - project_id
               - project_name
@@ -1208,6 +1246,7 @@ components:
               - claim_holder_status
               - claim_available
               - reclaimable
+              - reclaim_blocked_reason
         incomplete:
           type: boolean
         limits:
@@ -5927,6 +5966,8 @@ paths:
                   anyOf:
                     - $ref: '#/components/schemas/ProjectFederationInput'
                     - type: 'null'
+                  description: '`null` clears the project override so the deployment default
+                    applies.'
       responses:
         '200':
           description: Project updated
@@ -7741,8 +7782,13 @@ paths:
                         type: boolean
                         enum:
                           - true
+                      saved:
+                        type: boolean
+                        description: Whether a new version was committed from the sandbox before
+                          destruction.
                     required:
                       - reclaimed
+                      - saved
                 required:
                   - success
                   - data

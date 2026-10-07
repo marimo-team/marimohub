@@ -1,4 +1,5 @@
 import { MARIMO_PORT } from '../../constants';
+import { NotFoundError } from '../../errors';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { shellQuote } from './shell';
@@ -6,6 +7,8 @@ import { shellQuote } from './shell';
 /**
  * Probe the kernel through its configured base path, using its token when present.
  * An unreachable kernel or invalid response returns null (unknown), never idle.
+ * A `NotFoundError` (the sandbox itself is gone) propagates: that is a definite
+ * answer the caller must act on, not an unknown.
  */
 export async function kernelActiveConnections(
 	sandbox: SandboxInstance,
@@ -29,12 +32,13 @@ export async function kernelActiveConnections(
 		const out = res.stdout.trim();
 		const n = Number(out);
 		return /^\d+$/.test(out) && Number.isSafeInteger(n) ? n : null;
-	} catch {
+	} catch (err) {
+		if (err instanceof NotFoundError) throw err;
 		return null;
 	}
 }
 
-/** Injectable probe seam (tests fake the kernel answer without an exec fake). */
+/** Injectable probe seam (tests fake the kernel answer without an exec fake). May throw `NotFoundError`. */
 export type ConnectionProbe = (
 	sandbox: SandboxInstance,
 	basePath?: string,

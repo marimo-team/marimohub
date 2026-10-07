@@ -826,7 +826,7 @@ export function createFromEnv(
 		// (Dockerfile ARG → ENV); everything else is inferred from the live config +
 		// runtime. HOSTNAME is set to the pod name by Kubernetes.
 		version: {
-			version: env.MARIMOHUB_VERSION ?? 'dev',
+			version: env.MARIMOHUB_VERSION || 'dev',
 			image: env.MARIMOHUB_IMAGE,
 			// The default (first configured) image; the full list is on /capabilities.
 			sandboxImage: sandboxImages[0],

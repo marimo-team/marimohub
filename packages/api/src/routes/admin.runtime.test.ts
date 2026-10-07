@@ -211,7 +211,10 @@ describe('POST /admin/runtime/projects/{pid}/sessions/{sid}/reclaim', () => {
 		const { request, deps, session, sandbox, path } = await setup();
 		await expectOk(await request('GET', '/admin/runtime'));
 		const append = vi.spyOn(deps.services.events, 'append');
-		await expectOk(await request('POST', path, { save: false }));
+		expect(await expectOk(await request('POST', path, { save: false }))).toEqual({
+			reclaimed: true,
+			saved: false,
+		});
 		expect(sandbox.destroy).toHaveBeenCalledOnce();
 		expect(sandbox.exec).not.toHaveBeenCalled();
 		expect(
@@ -227,6 +230,7 @@ describe('POST /admin/runtime/projects/{pid}/sessions/{sid}/reclaim', () => {
 				session_id: session.session_id,
 				save_requested: false,
 				reclaimed: true,
+				saved: false,
 			}),
 		);
 		expect(await expectOk(await request('GET', '/admin/runtime'))).toMatchObject({ editors: [] });
@@ -236,9 +240,14 @@ describe('POST /admin/runtime/projects/{pid}/sessions/{sid}/reclaim', () => {
 
 	it.each([undefined, {}])('defaults to saving with body %j', async (body) => {
 		const { request, path, session } = await setup();
-		const reclaim = vi.spyOn(SessionRetirer.prototype, 'reclaim').mockResolvedValueOnce(true);
+		const reclaim = vi
+			.spyOn(SessionRetirer.prototype, 'reclaim')
+			.mockResolvedValueOnce({ reclaimed: true, saved: true });
 		try {
-			await expectOk(await request('POST', path, body));
+			expect(await expectOk(await request('POST', path, body))).toEqual({
+				reclaimed: true,
+				saved: true,
+			});
 			expect(reclaim).toHaveBeenCalledWith(
 				expect.objectContaining({ session_id: session.session_id }),
 				{ save: true },
@@ -280,8 +289,12 @@ describe('POST /admin/runtime/projects/{pid}/sessions/{sid}/reclaim', () => {
 			paths.session(session.project_id, session.session_id),
 			JSON.stringify({ ...session, sandbox_url: 'https://sandbox.example.com' }),
 		);
-		const error = await expectError(await request('POST', path), 503, 'SERVICE_UNAVAILABLE');
-		expect(error.message).toContain('reclaim without saving to discard unsaved edits');
+		const append = vi.spyOn(deps.services.events, 'append');
+		const error = await expectError(await request('POST', path), 409, 'CONFLICT');
+		expect(error.message).toContain('Reclaim without saving to discard unsaved edits');
+		expect(append).toHaveBeenCalledWith(
+			expect.objectContaining({ reclaimed: false, reason: 'attachment_unsupported' }),
+		);
 		expect(sandbox.destroy).not.toHaveBeenCalled();
 		expect(
 			await deps.services.sessions.getEditorClaim(session.project_id, session.notebook_id),
@@ -300,7 +313,9 @@ describe('POST /admin/runtime/projects/{pid}/sessions/{sid}/reclaim', () => {
 		expect(
 			await deps.services.sessions.getEditorClaim(session.project_id, session.notebook_id),
 		).toMatchObject({ session_id: session.session_id });
-		expect(append).toHaveBeenCalledWith(expect.objectContaining({ reclaimed: false }));
+		expect(append).toHaveBeenCalledWith(
+			expect.objectContaining({ reclaimed: false, reason: 'destroy_failed' }),
+		);
 		await expectOk(await request('POST', path, { save: false }));
 	});
 
@@ -319,7 +334,23 @@ describe('POST /admin/runtime/projects/{pid}/sessions/{sid}/reclaim', () => {
 			paths.session(session.project_id, session.session_id),
 			JSON.stringify({ ...session, terminating_at: new Date().toISOString() }),
 		);
-		await expectError(await request('POST', path, { save: false }), 503, 'SERVICE_UNAVAILABLE');
+		const error = await expectError(await request('POST', path, { save: false }), 409, 'CONFLICT');
+		expect(error.message).toContain('teardown grace');
+		expect(sandbox.destroy).not.toHaveBeenCalled();
+	});
+
+	it('maps a transient attachment failure to a retryable error', async () => {
+		const { request, deps, bucket, path, session, sandbox } = await setup();
+		await bucket.put(
+			paths.session(session.project_id, session.session_id),
+			JSON.stringify({ ...session, sandbox_url: 'https://sandbox.example.com' }),
+		);
+		deps.compute.connectExisting = () => {
+			throw new Error('provider unavailable');
+		};
+		const response = await request('POST', path);
+		expect(response.headers.get('retry-after')).toBe('2');
+		await expectError(response, 503, 'SERVICE_UNAVAILABLE');
 		expect(sandbox.destroy).not.toHaveBeenCalled();
 	});
 

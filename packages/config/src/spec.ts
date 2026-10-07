@@ -1880,18 +1880,11 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Workload Identity Federation',
 		description:
-			'Optional: let a notebook reach cloud resources (object storage, and for AWS any API the role allows) with NO long-lived key. The hub becomes an OIDC issuer and, per session, mints a short-lived project-scoped JWT and exchanges it server-side (via the selected broker) for temporary credentials, which it injects into the sandbox — the JWT itself never reaches the sandbox. Deployment-wide capability; projects inherit `MARIMOHUB_WIF_DEFAULT_ENABLED` unless they set an explicit `federation` override. All-or-nothing on the generic vars: set them to enable, or none to disable. See docs/workload-identity-federation.md.',
+			'Optional: let a notebook reach cloud resources (object storage, and for AWS any API the role allows) with NO long-lived key. The hub becomes an OIDC issuer and, per session, mints a short-lived project-scoped JWT and exchanges it server-side (via the selected broker) for temporary credentials, which it injects into the sandbox — the JWT itself never reaches the sandbox. Deployment-wide capability; projects inherit `MARIMOHUB_WIF_DEFAULT_ENABLED` unless they set an explicit `federation` override. All-or-nothing on the required generic vars (MARIMOHUB_WIF_DEFAULT_ENABLED is optional): set them to enable, or none to disable. See docs/workload-identity-federation.md.',
 		backends: [
 			{
 				name: 'Issuer + target (generic)',
 				vars: [
-					{
-						id: 'MARIMOHUB_WIF_DEFAULT_ENABLED',
-						name: 'Federation enabled by default',
-						description:
-							'Enable WIF for projects without an explicit federation setting. Explicit project settings take precedence. Requires configured WIF; applies to new sessions and jobs, and data browsing. Enabling this default lets anyone who can create a project obtain cloud credentials if the cloud IAM trust accepts its subject. Restrict cloud IAM trust to exact project `sub` values, not wildcards, so creating a project does not automatically grant access to the cloud role.',
-						default: 'false',
-					},
 					{
 						id: 'MARIMOHUB_WIF_SIGNING_KEY',
 						name: 'WIF signing key',
@@ -1933,6 +1926,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'Region injected into the sandbox as AWS_REGION. Set explicitly (no fallback to MARIMOHUB_STORAGE_S3_REGION).',
 						example: 'us-east-1',
+					},
+					{
+						id: 'MARIMOHUB_WIF_DEFAULT_ENABLED',
+						name: 'Federation enabled by default',
+						description:
+							'Enable WIF for projects without an explicit federation setting. Explicit project settings take precedence. Requires the WIF vars (setting it `true` without them is a startup error); applies to new sessions, jobs, and data browsing. Turning it on retroactively grants credentials to EXISTING projects that never opted in, including their scheduled jobs — audit projects and set explicit Disabled overrides first. It also lets anyone who can create a project obtain cloud credentials if the cloud IAM trust accepts its subject, so restrict the trust to exact project `sub` values, not wildcards.',
+						default: 'false',
 					},
 				],
 			},

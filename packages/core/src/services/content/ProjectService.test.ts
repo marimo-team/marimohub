@@ -914,6 +914,19 @@ describe('ProjectService', () => {
 			expect(renamed.federation).toEqual({ enabled: true, target: 'data' });
 		});
 
+		it('clears the federation override, including its target, on `null`', async () => {
+			const created = await projects.createProject(
+				{ name: 'P', description: 'd', federation: { enabled: true, target: 'data' } },
+				ACTOR,
+			);
+			const preserved = await projects.updateProject(created.id, { federation: undefined }, ACTOR);
+			expect(preserved.federation).toEqual({ enabled: true, target: 'data' });
+
+			const cleared = await projects.updateProject(created.id, { federation: null }, ACTOR);
+			expect(cleared.federation).toBeUndefined();
+			expect((await projects.getProject(created.id)).federation).toBeUndefined();
+		});
+
 		it('throws NotFoundError for missing project', async () => {
 			await expect(
 				projects.updateProject('proj_01HXY00000000000000000000' as ProjectId, { name: 'X' }, ACTOR),
