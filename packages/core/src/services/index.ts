@@ -330,6 +330,12 @@ export type {
 } from './authorization/actions';
 export { signProxyToken, verifyProxyToken } from './runtime/proxyToken';
 export { createKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from './runtime/kernelAuth';
+export {
+	sandboxContextPath,
+	sandboxContextFile,
+	writeSandboxContext,
+} from './runtime/sandboxContext';
+export type { SandboxContext } from './runtime/sandboxContext';
 export { kernelBasePathFromUrl } from './runtime/sandboxExposure';
 export { resolveBaseImage } from './runtime/resolveBaseImage';
 export { resolveComputeProfile, toComputeResourceRecord } from './runtime/resolveComputeProfile';

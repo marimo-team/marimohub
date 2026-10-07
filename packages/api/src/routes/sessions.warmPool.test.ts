@@ -13,6 +13,7 @@ import type { SandboxProvider, Session } from '@marimo-hub/core';
 import { ACTOR, makeFakeSandbox, makeSession } from '@marimo-hub/core/testing';
 import type { FakeSandboxOptions } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
+import { isSandboxContextCommand } from '../testing/sandboxContext';
 
 async function setup(options: FakeSandboxOptions = {}, providerLifetimeMs?: number) {
 	const bucket = await createInitializedBucket();
@@ -527,6 +528,41 @@ describe('session warm sandbox assignment', () => {
 		const [session] = await w.services.sessions.listSessions(w.notebook.id);
 		expect(session.sandbox_reclaimed_at).toEqual(expect.any(String));
 	});
+
+	it.each(['edit', 'app'])(
+		'keeps a warm %s sandbox running if context publication fails',
+		async (mode) => {
+			const w = await setup();
+			await w.warmPool.sweep();
+			const exec = w.fake.instance.exec;
+			vi.spyOn(w.fake.instance, 'exec').mockImplementation(async (...args) => {
+				if (isSandboxContextCommand(args[0])) {
+					return {
+						success: false,
+						stdout: '',
+						stderr: 'permission denied',
+						error: { code: 'COMMAND_FAILED' },
+					};
+				}
+				return exec(...args);
+			});
+			await expectOk(await w.api.request('POST', w.path, { mode }));
+			expect(w.fake.calls.startProcess).toHaveLength(1);
+			expect(w.fake.calls.destroy).toBe(0);
+			const [session] = await w.services.sessions.listSessions(w.notebook.id);
+			expect((await w.warmPool.store.read()).pools[0].members).toEqual([
+				expect.objectContaining({
+					state: 'claimed',
+					assigned: true,
+					sandbox_id: session.sandbox_id,
+					destination: expect.objectContaining({ session_id: session.session_id }),
+				}),
+			]);
+			expect(session.status).toBe('running');
+			expect(session.sandbox_reclaimed_at).toBeUndefined();
+			expect(session.sandbox_url).toBeTruthy();
+		},
+	);
 
 	it('enforces the project app limit before claiming warm capacity', async () => {
 		const w = await setup();

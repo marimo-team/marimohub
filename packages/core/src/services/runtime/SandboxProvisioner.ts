@@ -247,6 +247,8 @@ export interface ProvisionOptions {
 	sessionEnv?: SessionEnv | Promise<SessionEnv | undefined>;
 	/** Interactive marimo credential. Scheduled-job preparation omits it. */
 	kernelAuthToken?: string;
+	/** Known content joins pre-launch file writes; otherwise published after exposure resolves. */
+	contextFile?: { path: string; content?: string };
 	/** Workspace-relative notebook file marimo should open. Defaults to `notebook.py`. */
 	entryNotebook?: string;
 	/** Per-source launch strategy (see launchStrategy.ts). Defaults to the project-managed env. */
@@ -606,10 +608,10 @@ async function writeSessionFiles(
 	) {
 		throw new Error(`Session credentials cannot write reserved path ${KERNEL_AUTH_TOKEN_FILE}`);
 	}
-	if (files.length > 0) await sandbox.writeFiles(files);
-	if (kernelAuthToken !== undefined) {
-		await sandbox.writeFiles([{ path: KERNEL_AUTH_TOKEN_FILE, content: kernelAuthToken }]);
-	}
+	const batch = [...files];
+	if (kernelAuthToken !== undefined)
+		batch.push({ path: KERNEL_AUTH_TOKEN_FILE, content: kernelAuthToken });
+	if (batch.length > 0) await sandbox.writeFiles(batch);
 }
 
 export class SandboxProvisioner {
@@ -1097,15 +1099,22 @@ export class SandboxProvisioner {
 	): Promise<void> {
 		const sessionEnv = await options.sessionEnv;
 		const kernelAuthToken = options.kernelAuthToken;
-		if (!sessionEnv && kernelAuthToken === undefined) return;
+		if (!sessionEnv && kernelAuthToken === undefined && !options.contextFile) return;
 		await time(async () => {
 			try {
-				const files = sessionEnv?.files ?? [];
-				const vars = sessionEnv?.vars;
+				const files = [...(sessionEnv?.files ?? [])];
+				if (options.contextFile?.content !== undefined) {
+					files.push({ path: options.contextFile.path, content: options.contextFile.content });
+				}
+				const vars = { ...sessionEnv?.vars };
+				if (options.contextFile) {
+					vars.MARIMOHUB_CONTEXT_FILE =
+						sandbox.resolveProcessPath?.(options.contextFile.path) ?? options.contextFile.path;
+				}
 				const defaults = sessionEnv?.defaults;
 				await Promise.all([
 					writeSessionFiles(sandbox, files, kernelAuthToken),
-					vars && Object.keys(vars).length > 0 ? sandbox.setEnvVars(vars) : undefined,
+					Object.keys(vars).length > 0 ? sandbox.setEnvVars(vars) : undefined,
 					defaults && Object.keys(defaults).length > 0
 						? sandbox.setEnvVars(defaults, { onlyIfUnset: true })
 						: undefined,
