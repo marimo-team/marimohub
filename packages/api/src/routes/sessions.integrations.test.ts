@@ -71,6 +71,12 @@ describe('Session provisioning with integrations', () => {
 		});
 	}
 
+	async function customEnvApi(config: Record<string, unknown>) {
+		const store = makeStore();
+		await store.create(pid, { kind: 'custom_env', name: 'marimo-settings', config }, ACTOR);
+		return api(store);
+	}
+
 	it('injects integration env + files into the sandbox and pins the audit trail', async () => {
 		const store = makeStore();
 		await store.create(
@@ -104,6 +110,26 @@ describe('Session provisioning with integrations', () => {
 		expect(Object.assign({}, ...calls.setEnvDefaults)).toMatchObject({
 			XDG_CACHE_HOME: '/tmp/marimohub-cache',
 			XDG_STATE_HOME: '/tmp/marimohub-state',
+		});
+	});
+
+	it('injects marimo extension variables while preserving Hub configuration precedence', async () => {
+		const { request, calls } = await customEnvApi({
+			vars: {
+				MARIMO_STUDIO_TRUSTED_SERVER_RUNTIME: '1',
+				XDG_CONFIG_HOME: '/project-config',
+			},
+			secrets: [{ name: 'MARIMO_LENS_TOKEN', value: 'lens-token' }],
+			secret_bundles: [
+				{ name: 'MARIMO_SETTINGS', prefix: 'MARIMO_', value: '{"OUTPUT_MAX_BYTES":1000000}' },
+			],
+		});
+		await expectOk(await request('POST', `/projects/${pid}/notebooks/${nid}/sessions`));
+		expect(Object.assign({}, ...calls.setEnvVars)).toMatchObject({
+			MARIMO_STUDIO_TRUSTED_SERVER_RUNTIME: '1',
+			MARIMO_LENS_TOKEN: 'lens-token',
+			MARIMO_OUTPUT_MAX_BYTES: '1000000',
+			XDG_CONFIG_HOME: '/tmp/marimohub-config',
 		});
 	});
 
@@ -175,6 +201,26 @@ describe('Session provisioning with integrations', () => {
 		]);
 		expect(Object.assign({}, ...calls.setEnvVars).MY_FLAG).toBe('on');
 		expect(calls.writeFile.map((file) => file.path)).toContain(`${INTEGRATIONS_DIR}/manifest.json`);
+	});
+
+	it.each([
+		['MARIMO', 'HUB_SETTING'],
+		['MARIMO_', 'CONFIG_PATH'],
+		['MARIMO_', 'INVALID-NAME'],
+	])('rejects session creation when a secret bundle expands to %s%s', async (prefix, key) => {
+		const { request, calls } = await customEnvApi({
+			vars: { MARIMO_STUDIO_TRUSTED_SERVER_RUNTIME: '1' },
+			secret_bundles: [
+				{ name: 'SETTINGS', prefix, value: JSON.stringify({ [key]: 'private-value' }) },
+			],
+		});
+		const error = await expectError(
+			await request('POST', `/projects/${pid}/notebooks/${nid}/sessions`),
+			422,
+		);
+		expect(error.message).toBe('Integration "marimo-settings" could not be rendered.');
+		expect(calls.setEnvVars).toHaveLength(0);
+		expect(calls.startProcess).toHaveLength(0);
 	});
 
 	it('fails the session CLOSED when a configured integration cannot render', async () => {

@@ -24,7 +24,12 @@ Cloud access supplies credentials to notebook sessions. It does not control proj
 
 When a typed integration exists, use it. It provides stable environment names and client configuration files.
 
-Use **Environment variables** for application-specific values. A secret JSON bundle can create several variables from one object.
+Use **Environment variables** for application and marimo settings, such as
+`MARIMO_STUDIO_TRUSTED_SERVER_RUNTIME=1`. JSON secret bundles supply multiple variables.
+
+Reserved names: `MARIMOHUB_*`, `MARIMO_CONFIG_PATH`, `MARIMO_SKIP_UPDATE_CHECK`,
+`MARIMO_VERSION`, and `_MARIMO_APP_OVERLOAD_AUTO_DOWNLOAD`. Shell, startup hook,
+and cloud credential restrictions also apply.
 
 When the cloud provider supports WIF, use it. WIF supplies temporary credentials and does not store a cloud key.
 

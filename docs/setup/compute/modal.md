@@ -58,8 +58,8 @@ sandboxes retain their secrets.
 ::: warning Deployment-wide secrets
 marimohub injects these secrets into every editor, app, and job sandbox in every
 project. Any notebook author can read the values. For credentials that belong to
-one project, use project integration secret references instead. Secret keys must
-not use the `MARIMOHUB_` or `MARIMO_` prefixes, which the hub reserves.
+one project, use project integration secret references instead. Secret keys must avoid
+[hub-reserved names](/environment-and-access#choose-a-method).
 :::
 
 ::: warning Cold starts & shared workspaces
