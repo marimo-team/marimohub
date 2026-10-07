@@ -1015,11 +1015,68 @@ project can have one active Hugging Face integration.
 
 ## Package registries
 
+Add a registry under **Package registries** in project or organization integrations.
+The integration name becomes the uv index name. Project integrations override organization integrations with the same name.
+The hub injects registry credentials before dependency installation for sessions and jobs.
+
+Registries are additional indexes by default, ordered by integration name across both scopes.
+Enable **Default index** to replace public PyPI. Only one integration can supply the default index.
+That registry needs a PyPI upstream or another source for public dependencies.
+Conflicting custom `UV_INDEX` or `UV_DEFAULT_INDEX` values stop session creation.
+
+Secret fields accept encrypted values or external references.
+Credentials use `UV_INDEX_<NAME>_USERNAME` and `UV_INDEX_<NAME>_PASSWORD`, separate from URLs and generated files.
+For example, `private-registry` becomes `PRIVATE_REGISTRY`. Restricted viewers receive no integration credentials.
+Running sessions do not refresh credentials. After you update credentials, restart the session before you install packages.
+**Test connection** checks index access when the deployment supports connection tests.
+
+For `tool.uv.sources` pins, also declare the named index in `pyproject.toml`.
+uv cannot resolve pins from environment-only definitions. See [uv package indexes](https://docs.astral.sh/uv/concepts/indexes/).
+
+### Python package index
+
+Enter the full HTTPS simple-index URL, such as `https://packages.example.com/repository/python/simple/`.
+The URL must not contain credentials, a query, or a fragment.
+Choose **None** for public access or **Basic** for a username and secret password or token.
+For tokens, use the username that your registry requires.
+
+<!--@include: ./partials/integrations/python_package_index.md-->
+
+### JFrog Artifactory
+
+Enter the Artifactory base URL, such as `https://company.jfrog.io/artifactory`, and the PyPI repository key.
+Custom installation paths are supported.
+Choose **Token** for a JWT token or **Basic** for a username and password.
+The preset supplies the empty username for [JWT authentication](https://docs.astral.sh/uv/guides/integration/jfrog/).
+
+<!--@include: ./partials/integrations/jfrog_artifactory.md-->
+
+### Azure Artifacts
+
+Enter the Azure DevOps organization, feed, and optional project. For an organization-scoped feed, omit the project.
+Use a personal access token with Packaging read permission and access to the feed.
+The preset supplies the [Basic authentication username](https://docs.astral.sh/uv/guides/integration/azure/).
+
+<!--@include: ./partials/integrations/azure_artifacts.md-->
+
+### GitLab Package Registry
+
+Enter the instance URL, select **Project** or **Group**, and enter its numeric ID.
+The URL defaults to `https://gitlab.com`. Self-hosted instances can include a base path.
+
+Use a deploy token username and a token with `read_package_registry` permission.
+Alternatively, use a personal access token with `api` scope and its token name as the username.
+See [GitLab PyPI authentication](https://docs.gitlab.com/user/packages/pypi_repository/#authenticate-with-the-gitlab-package-registry).
+
+To prevent GitLab from forwarding missing package requests to PyPI, disable **Forward PyPI package requests** in the group settings.
+The hub's **Default index** option does not disable forwarding by the registry.
+
+<!--@include: ./partials/integrations/gitlab_packages.md-->
+
 ### AWS CodeArtifact
 
-Add **AWS CodeArtifact** under **Package registries** in project or organization integrations.
-Enter the domain, owning AWS account ID, repository, and region. The integration name becomes the uv index name.
-Credentials are available before dependency installation. No AWS CLI, startup script, or keyring is required.
+Enter the domain, owning AWS account ID, repository, and region.
+No AWS CLI, startup script, or keyring is required.
 
 Choose an authentication method:
 
@@ -1029,27 +1086,16 @@ Choose an authentication method:
 | AWS credentials               | Access key ID, secret access key, and optional session token. AWS keys stay outside the sandbox.            |
 | Existing CodeArtifact token   | A valid token. The hub does not renew it.                                                                   |
 
-Secret fields accept encrypted values or external references.
 AWS token acquisition requires the Node deployment's AWS credential adapter. Existing tokens work without it.
 **Test connection** checks token acquisition and repository access. For WIF, test from a project with AWS cloud access enabled.
 
 AWS authentication creates a token for each new session or job, with a lifetime of 900–43200 seconds (default: 12 hours).
-Running sessions do not refresh tokens. After expiry, restart the session before installing packages.
+After expiry, restart the session before installing packages.
 Temporary AWS credentials must remain valid for new token requests.
 
 The AWS identity needs `codeartifact:GetAuthorizationToken`, `sts:GetServiceBearerToken`, and `codeartifact:ReadFromRepository`.
 Cross-account access also requires domain and repository resource policies.
 See [AWS token authentication](https://docs.aws.amazon.com/codeartifact/latest/ug/tokens-authentication.html).
-
-CodeArtifact is an additional index by default, with PyPI as the fallback.
-Enable **Default index** to replace PyPI. For public packages, the repository then needs a PyPI upstream or equivalent source.
-Only one integration can supply the default index. Additional indexes use alphabetical integration-name order across both scopes.
-Conflicting custom `UV_INDEX` or `UV_DEFAULT_INDEX` values stop session creation.
-
-Credentials use `UV_INDEX_<NAME>_USERNAME` and `UV_INDEX_<NAME>_PASSWORD`. For example, `private-registry` becomes `PRIVATE_REGISTRY`.
-Restricted viewers receive no integration credentials.
-For `tool.uv.sources` pins, also declare the named index in `pyproject.toml`: uv cannot resolve pins from environment-only definitions.
-See [uv package indexes](https://docs.astral.sh/uv/concepts/indexes/).
 
 <!--@include: ./partials/integrations/aws_codeartifact.md-->
 

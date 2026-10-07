@@ -82,6 +82,39 @@ paths:
       responses:
         '204':
           description: Accepted.
+  /kinds/azure_artifacts/config:
+    summary: Azure Artifacts
+    description: Install Python packages from an Azure DevOps feed with a personal
+      access token.
+    x-kind-schema-version: 1
+    x-category: package_registry
+    x-brand-color: '#0078D4'
+    x-secret-paths:
+      - auth.token
+    x-supports-test: true
+    x-requirements: []
+    get:
+      operationId: read_azure_artifacts_config
+      summary: Stored azure_artifacts config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/azure_artifacts_stored'
+    put:
+      operationId: write_azure_artifacts_config
+      summary: Input azure_artifacts config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/azure_artifacts'
+      responses:
+        '204':
+          description: Accepted.
   /kinds/azure_blob/config:
     summary: Azure Blob Storage
     description: Azure Blob or ADLS Gen2 containers for adlfs, polars, and duckdb.
@@ -379,6 +412,39 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/gcs'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/gitlab_packages/config:
+    summary: GitLab Package Registry
+    description: Install Python packages from a GitLab project or group with a
+      deploy or personal access token.
+    x-kind-schema-version: 1
+    x-category: package_registry
+    x-brand-color: '#FC6D26'
+    x-secret-paths:
+      - auth.token
+    x-supports-test: true
+    x-requirements: []
+    get:
+      operationId: read_gitlab_packages_config
+      summary: Stored gitlab_packages config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/gitlab_packages_stored'
+    put:
+      operationId: write_gitlab_packages_config
+      summary: Input gitlab_packages config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/gitlab_packages'
       responses:
         '204':
           description: Accepted.
@@ -706,6 +772,40 @@ paths:
       responses:
         '204':
           description: Accepted.
+  /kinds/jfrog_artifactory/config:
+    summary: JFrog Artifactory
+    description: Install Python packages from Artifactory with a JWT token or
+      username and password.
+    x-kind-schema-version: 1
+    x-category: package_registry
+    x-brand-color: '#41BF47'
+    x-secret-paths:
+      - auth.token
+      - auth.password
+    x-supports-test: true
+    x-requirements: []
+    get:
+      operationId: read_jfrog_artifactory_config
+      summary: Stored jfrog_artifactory config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/jfrog_artifactory_stored'
+    put:
+      operationId: write_jfrog_artifactory_config
+      summary: Input jfrog_artifactory config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/jfrog_artifactory'
+      responses:
+        '204':
+          description: Accepted.
   /kinds/mongodb/config:
     summary: MongoDB
     description: MongoDB or Atlas cluster reachable from PyMongo.
@@ -898,6 +998,39 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/pyspark'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/python_package_index/config:
+    summary: Python package index
+    description: Install Python packages from a custom HTTPS index with optional
+      username and password authentication.
+    x-kind-schema-version: 1
+    x-category: package_registry
+    x-brand-color: '#3776AB'
+    x-secret-paths:
+      - auth.password
+    x-supports-test: true
+    x-requirements: []
+    get:
+      operationId: read_python_package_index_config
+      summary: Stored python_package_index config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/python_package_index_stored'
+    put:
+      operationId: write_python_package_index_config
+      summary: Input python_package_index config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/python_package_index'
       responses:
         '204':
           description: Accepted.
@@ -1519,6 +1652,89 @@ components:
         - default_index
         - duration_seconds
         - auth
+      additionalProperties: false
+    azure_artifacts:
+      type: object
+      properties:
+        organization:
+          type: string
+          minLength: 1
+          pattern: ^[^/\\?#%]+$
+        project:
+          description: Omit for an organization-scoped feed
+          type: string
+          minLength: 1
+          pattern: ^[^/\\?#%]+$
+        feed:
+          type: string
+          minLength: 1
+          pattern: ^[^/\\?#%]+$
+        auth:
+          type: object
+          properties:
+            method:
+              type: string
+              const: token
+            token:
+              type: string
+              minLength: 1
+              x-marimohub-secret: true
+              writeOnly: true
+          required:
+            - method
+            - token
+          additionalProperties: false
+          description: Azure DevOps personal access token with Packaging read permission
+        default_index:
+          default: false
+          description: Replace public PyPI with this repository
+          type: boolean
+      required:
+        - organization
+        - feed
+        - auth
+      additionalProperties: false
+    azure_artifacts_stored:
+      type: object
+      properties:
+        organization:
+          type: string
+          minLength: 1
+          pattern: ^[^/\\?#%]+$
+        project:
+          description: Omit for an organization-scoped feed
+          type: string
+          minLength: 1
+          pattern: ^[^/\\?#%]+$
+        feed:
+          type: string
+          minLength: 1
+          pattern: ^[^/\\?#%]+$
+        auth:
+          type: object
+          properties:
+            method:
+              type: string
+              const: token
+            token:
+              oneOf:
+                - $ref: '#/components/schemas/ManagedStoredSecret'
+                - $ref: '#/components/schemas/ReferenceStoredSecret'
+              x-marimohub-secret: true
+          required:
+            - method
+            - token
+          additionalProperties: false
+          description: Azure DevOps personal access token with Packaging read permission
+        default_index:
+          default: false
+          description: Replace public PyPI with this repository
+          type: boolean
+      required:
+        - organization
+        - feed
+        - auth
+        - default_index
       additionalProperties: false
     azure_blob:
       type: object
@@ -2725,6 +2941,119 @@ components:
       required:
         - auth
         - ambient_env
+      additionalProperties: false
+    gitlab_packages:
+      type: object
+      properties:
+        url:
+          default: https://gitlab.com
+          description: GitLab instance base URL
+          type: string
+          allOf:
+            - pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
+            - pattern: '^https:'
+            - pattern: ^[^\\]+$
+          format: uri
+          x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
+            query, fragment, or port 0
+        scope:
+          default: project
+          type: string
+          enum:
+            - project
+            - group
+        scope_id:
+          type: string
+          pattern: ^[1-9]\d*$
+          description: Numeric GitLab project or group ID
+        auth:
+          type: object
+          properties:
+            method:
+              type: string
+              const: token
+            username:
+              type: string
+              minLength: 1
+              pattern: ^[^:]*$
+              description: Deploy token username or personal access token name
+            token:
+              type: string
+              minLength: 1
+              x-marimohub-secret: true
+              description: Deploy token with read_package_registry, or personal access token
+                with api scope
+              writeOnly: true
+          required:
+            - method
+            - username
+            - token
+          additionalProperties: false
+        default_index:
+          default: false
+          description: Replace public PyPI with this repository
+          type: boolean
+      required:
+        - scope_id
+        - auth
+      additionalProperties: false
+    gitlab_packages_stored:
+      type: object
+      properties:
+        url:
+          default: https://gitlab.com
+          description: GitLab instance base URL
+          type: string
+          allOf:
+            - pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
+            - pattern: '^https:'
+            - pattern: ^[^\\]+$
+          format: uri
+          x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
+            query, fragment, or port 0
+        scope:
+          default: project
+          type: string
+          enum:
+            - project
+            - group
+        scope_id:
+          type: string
+          pattern: ^[1-9]\d*$
+          description: Numeric GitLab project or group ID
+        auth:
+          type: object
+          properties:
+            method:
+              type: string
+              const: token
+            username:
+              type: string
+              minLength: 1
+              pattern: ^[^:]*$
+              description: Deploy token username or personal access token name
+            token:
+              oneOf:
+                - $ref: '#/components/schemas/ManagedStoredSecret'
+                - $ref: '#/components/schemas/ReferenceStoredSecret'
+              x-marimohub-secret: true
+              description: Deploy token with read_package_registry, or personal access token
+                with api scope
+          required:
+            - method
+            - username
+            - token
+          additionalProperties: false
+        default_index:
+          default: false
+          description: Replace public PyPI with this repository
+          type: boolean
+      required:
+        - url
+        - scope
+        - scope_id
+        - auth
+        - default_index
       additionalProperties: false
     huggingface:
       type: object
@@ -4201,6 +4530,137 @@ components:
         - runtime
         - extra_properties
       additionalProperties: false
+    jfrog_artifactory:
+      type: object
+      properties:
+        url:
+          type: string
+          allOf:
+            - pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
+            - pattern: '^https:'
+            - pattern: ^[^\\]+$
+          format: uri
+          x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
+            query, fragment, or port 0
+          description: Artifactory base URL, for example
+            https://company.jfrog.io/artifactory
+        repository:
+          type: string
+          minLength: 1
+          pattern: ^[^/\\?#%]+$
+          description: PyPI repository key
+        auth:
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: token
+                token:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                  writeOnly: true
+              required:
+                - method
+                - token
+              additionalProperties: false
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: basic
+                username:
+                  type: string
+                  pattern: ^[^:]*$
+                password:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                  description: Password or access token
+                  writeOnly: true
+              required:
+                - method
+                - username
+                - password
+              additionalProperties: false
+          discriminator:
+            propertyName: method
+        default_index:
+          default: false
+          description: Replace public PyPI with this repository
+          type: boolean
+      required:
+        - url
+        - repository
+        - auth
+      additionalProperties: false
+    jfrog_artifactory_stored:
+      type: object
+      properties:
+        url:
+          type: string
+          allOf:
+            - pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
+            - pattern: '^https:'
+            - pattern: ^[^\\]+$
+          format: uri
+          x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
+            query, fragment, or port 0
+          description: Artifactory base URL, for example
+            https://company.jfrog.io/artifactory
+        repository:
+          type: string
+          minLength: 1
+          pattern: ^[^/\\?#%]+$
+          description: PyPI repository key
+        auth:
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: token
+                token:
+                  oneOf:
+                    - $ref: '#/components/schemas/ManagedStoredSecret'
+                    - $ref: '#/components/schemas/ReferenceStoredSecret'
+                  x-marimohub-secret: true
+              required:
+                - method
+                - token
+              additionalProperties: false
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: basic
+                username:
+                  type: string
+                  pattern: ^[^:]*$
+                password:
+                  oneOf:
+                    - $ref: '#/components/schemas/ManagedStoredSecret'
+                    - $ref: '#/components/schemas/ReferenceStoredSecret'
+                  x-marimohub-secret: true
+                  description: Password or access token
+              required:
+                - method
+                - username
+                - password
+              additionalProperties: false
+          discriminator:
+            propertyName: method
+        default_index:
+          default: false
+          description: Replace public PyPI with this repository
+          type: boolean
+      required:
+        - url
+        - repository
+        - auth
+        - default_index
+      additionalProperties: false
     mongodb:
       type: object
       properties:
@@ -5063,6 +5523,114 @@ components:
         - spark_config
         - secret_spark_config
         - ambient_env
+      additionalProperties: false
+    python_package_index:
+      type: object
+      properties:
+        url:
+          type: string
+          allOf:
+            - pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
+            - pattern: '^https:'
+            - pattern: ^[^\\]+$
+          format: uri
+          x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
+            query, fragment, or port 0
+          description: Full Python simple-index URL, including its path
+        auth:
+          default:
+            method: none
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: none
+              required:
+                - method
+              additionalProperties: false
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: basic
+                username:
+                  type: string
+                  pattern: ^[^:]*$
+                password:
+                  type: string
+                  minLength: 1
+                  x-marimohub-secret: true
+                  description: Password or access token
+                  writeOnly: true
+              required:
+                - method
+                - username
+                - password
+              additionalProperties: false
+          discriminator:
+            propertyName: method
+        default_index:
+          default: false
+          description: Replace public PyPI with this repository
+          type: boolean
+      required:
+        - url
+      additionalProperties: false
+    python_package_index_stored:
+      type: object
+      properties:
+        url:
+          type: string
+          allOf:
+            - pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
+            - pattern: '^https:'
+            - pattern: ^[^\\]+$
+          format: uri
+          x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
+            query, fragment, or port 0
+          description: Full Python simple-index URL, including its path
+        auth:
+          default:
+            method: none
+          oneOf:
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: none
+              required:
+                - method
+              additionalProperties: false
+            - type: object
+              properties:
+                method:
+                  type: string
+                  const: basic
+                username:
+                  type: string
+                  pattern: ^[^:]*$
+                password:
+                  oneOf:
+                    - $ref: '#/components/schemas/ManagedStoredSecret'
+                    - $ref: '#/components/schemas/ReferenceStoredSecret'
+                  x-marimohub-secret: true
+                  description: Password or access token
+              required:
+                - method
+                - username
+                - password
+              additionalProperties: false
+          discriminator:
+            propertyName: method
+        default_index:
+          default: false
+          description: Replace public PyPI with this repository
+          type: boolean
+      required:
+        - url
+        - auth
+        - default_index
       additionalProperties: false
     redshift:
       type: object

@@ -23,6 +23,12 @@ import { mysql } from './mysql';
 import { azureBlob, gcs, s3 } from './objectStores';
 import { postgres } from './postgres';
 import { pyspark } from './pyspark';
+import {
+	artifactory,
+	azureArtifacts,
+	gitlabPackages,
+	pythonPackageIndex,
+} from './pythonPackageIndexes';
 import { snowflake } from './snowflake';
 import { sqlserver } from './sqlserver';
 import { trino } from './trino';
@@ -49,6 +55,12 @@ export { mysql } from './mysql';
 export { azureBlob, gcs, s3 } from './objectStores';
 export { postgres } from './postgres';
 export { pyspark } from './pyspark';
+export {
+	artifactory,
+	azureArtifacts,
+	gitlabPackages,
+	pythonPackageIndex,
+} from './pythonPackageIndexes';
 export { snowflake } from './snowflake';
 export { sqlserver } from './sqlserver';
 export { trino } from './trino';
@@ -83,5 +95,9 @@ export function defaultRegistry(): IntegrationRegistry {
 	registry.register(huggingFace);
 	registry.register(customEnv);
 	registry.register(codeArtifact);
+	registry.register(pythonPackageIndex);
+	registry.register(artifactory);
+	registry.register(azureArtifacts);
+	registry.register(gitlabPackages);
 	return registry;
 }
