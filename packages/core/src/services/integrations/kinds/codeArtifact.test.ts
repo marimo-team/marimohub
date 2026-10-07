@@ -120,6 +120,7 @@ describe('CodeArtifact integration', () => {
 				secret_access_key: 'aws-secret',
 			});
 			expect(render?.vars.UV_INDEX_PRIVATE_PASSWORD).toBe('fresh-token');
+			expect(JSON.stringify(render)).not.toContain('KEY');
 			expect(JSON.stringify(render)).not.toContain('aws-secret');
 			expect(JSON.stringify(render?.files)).not.toContain('fresh-token');
 			expect(JSON.stringify(render?.files)).toContain('credentials_expire_at');
@@ -248,13 +249,44 @@ describe('CodeArtifact failure boundaries', () => {
 			await expect(project.resolveForSession(s.projectId, context)).rejects.toThrow(
 				'could not be rendered',
 			);
+			for (const auth of [awsConfig.auth, { method: 'federation' }]) {
+				await expect(
+					project.test(s.projectId, {
+						source: 'draft',
+						kind: 'aws_codeartifact',
+						config: { ...awsConfig, auth },
+					}),
+				).resolves.toMatchObject({ ok: false });
+			}
 			expect(s.resolve).not.toHaveBeenCalled();
+			expect(s.probe.fetch).not.toHaveBeenCalled();
 			await project.update(s.projectId, entry.id, { config }, actor);
 			expect(
 				(await project.resolveForSession(s.projectId, context))?.vars.UV_INDEX_PRIVATE_PASSWORD,
 			).toBe('existing-token');
 		},
 	);
+
+	it('uses the same authentication probe for connection tests and session rendering', async () => {
+		const s = setup();
+		const registryProbe = { fetch: vi.fn(), connect: vi.fn() };
+		const project = new ProjectIntegrationsStore({
+			...s.options,
+			packageRegistryProbe: registryProbe,
+		});
+		await project.create(
+			s.projectId,
+			{ kind: 'aws_codeartifact', name: 'private', config: awsConfig },
+			actor,
+		);
+		await expect(
+			project.test(s.projectId, { source: 'draft', kind: 'aws_codeartifact', config: awsConfig }),
+		).resolves.toMatchObject({ ok: true });
+		await project.resolveForSession(s.projectId, context);
+		expect(s.resolve).toHaveBeenCalledTimes(2);
+		for (const [, options] of s.resolve.mock.calls) expect(options.probe).toBe(registryProbe);
+		expect(s.probe.fetch).toHaveBeenCalledOnce();
+	});
 
 	it('disables connection tests without making an authentication request', async () => {
 		const s = setup();

@@ -247,6 +247,7 @@ function decodeVersionCursor(cursor: string | undefined): number | undefined {
 
 export interface IntegrationsStoreOptions {
 	packageRegistryCredentials?: PackageRegistryCredentialProvider;
+	/** Required with the credential provider; token acquisition shares this probe across tests and startup. */
 	packageRegistryProbe?: IntegrationProbe;
 	bucket: Bucket;
 	registry: IntegrationRegistry;
@@ -865,7 +866,6 @@ class ScopedIntegrationsStore {
 				options.signal?.throwIfAborted();
 				const credentials = await this.resolvePackageCredentials(
 					def.packageRegistry.source(parsed.data),
-					probe,
 					async () => objectContext?.federation?.credentials,
 					options.signal,
 				);
@@ -1529,7 +1529,6 @@ class ScopedIntegrationsStore {
 			const packageRegistryCredentials = def.packageRegistry
 				? await this.resolvePackageCredentials(
 						def.packageRegistry.source(parsed.data),
-						this.packageRegistryProbe,
 						context.resolveAwsCredentials,
 					)
 				: undefined;
@@ -1556,11 +1555,11 @@ class ScopedIntegrationsStore {
 
 	private async resolvePackageCredentials(
 		source: PackageRegistrySource,
-		probe: IntegrationProbe | undefined,
 		resolveAwsCredentials?: SessionRenderContext['resolveAwsCredentials'],
 		signal?: AbortSignal,
 	): Promise<PackageRegistryCredentials> {
 		if (source.auth.method === 'token') return { username: 'aws', password: source.auth.token };
+		const probe = this.packageRegistryProbe;
 		if (!this.packageRegistryCredentials || !probe) {
 			throw new UnavailableError(
 				'Package registry authentication is unavailable on this deployment.',

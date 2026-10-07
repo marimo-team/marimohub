@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ValidationError } from '../../errors';
 import { createRunId, createSessionId } from '../../ids';
 import type { IntegrationId } from '../../ids';
 import { bundleIntegrations, INTEGRATIONS_DIR, INTEGRATIONS_DIR_ENV } from './bundle';
@@ -274,6 +275,18 @@ describe('package indexes', () => {
 				rendered('custom', { env: { UV_DEFAULT_INDEX: 'https://other.example/simple/' } }),
 			]),
 		).toThrow('same environment variable');
+	});
+
+	it.each([
+		'not-a-url',
+		'https://invalid host/simple/',
+		'https://aws:private-token@example.com:invalid/simple/',
+	])('rejects malformed package index URL %s with a safe validation error', (url) => {
+		const render = () =>
+			bundle([rendered('private', { packageIndexes: [{ name: 'private', url, default: false }] })]);
+		expect(render).toThrow(ValidationError);
+		expect(render).toThrow('Package index URL is invalid.');
+		expect(render).not.toThrow(url);
 	});
 
 	it.each([

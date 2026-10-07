@@ -21,6 +21,7 @@ export class AwsCodeArtifactCredentials implements PackageRegistryCredentialProv
 		if (source.auth.method === 'token') {
 			return { username: 'aws', password: source.auth.token };
 		}
+		let signal = options.signal;
 		try {
 			options.signal?.throwIfAborted();
 			// Never fall back to the hub's ambient AWS identity for project-authored configuration.
@@ -44,7 +45,7 @@ export class AwsCodeArtifactCredentials implements PackageRegistryCredentialProv
 				duration: String(source.duration_seconds),
 			};
 			const deadline = AbortSignal.timeout(10_000);
-			const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
+			signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
 			const { accessKeyId, secretAccessKey, sessionToken } = credentials;
 			const signer = new SignatureV4({
 				credentials: { accessKeyId, secretAccessKey, sessionToken },
@@ -73,7 +74,20 @@ export class AwsCodeArtifactCredentials implements PackageRegistryCredentialProv
 				password: parsed.authorizationToken,
 				expiresAt: new Date(parsed.expiration * 1000).toISOString(),
 			};
-		} catch {
+		} catch (error) {
+			const cause = signal?.aborted ? signal.reason : error;
+			if (
+				signal?.aborted ||
+				(cause instanceof DOMException && ['AbortError', 'TimeoutError'].includes(cause.name))
+			) {
+				const timedOut = cause instanceof DOMException && cause.name === 'TimeoutError';
+				throw new DOMException(
+					timedOut
+						? 'CodeArtifact authentication timed out.'
+						: 'CodeArtifact authentication cancelled.',
+					timedOut ? 'TimeoutError' : 'AbortError',
+				);
+			}
 			throw new UnavailableError(
 				'CodeArtifact authentication failed. Check the AWS credentials, region, domain, and IAM permissions.',
 			);

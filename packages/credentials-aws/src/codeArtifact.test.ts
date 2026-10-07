@@ -181,15 +181,32 @@ describe('AWS CodeArtifact credentials', () => {
 		expect(probe.fetch).not.toHaveBeenCalled();
 	});
 
-	it('does not request a token for an already-cancelled operation', async () => {
+	it.each([new Error('registry-token'), new DOMException('registry-token', 'AbortError')])(
+		'does not request a token for an already-cancelled operation',
+		async (reason) => {
+			const probe = makeProbe();
+			await expect(
+				new AwsCodeArtifactCredentials().resolve(source, {
+					probe,
+					signal: AbortSignal.abort(reason),
+				}),
+			).rejects.toMatchObject({
+				name: 'AbortError',
+				message: 'CodeArtifact authentication cancelled.',
+			});
+			expect(probe.fetch).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		['AbortError', 'CodeArtifact authentication cancelled.'],
+		['TimeoutError', 'CodeArtifact authentication timed out.'],
+	])('preserves %s from the transport without exposing its message', async (name, message) => {
 		const probe = makeProbe();
-		await expect(
-			new AwsCodeArtifactCredentials().resolve(source, {
-				probe,
-				signal: AbortSignal.abort(new Error('registry-token')),
-			}),
-		).rejects.toThrow('CodeArtifact authentication failed');
-		expect(probe.fetch).not.toHaveBeenCalled();
+		probe.fetch.mockRejectedValue(new DOMException('registry-token', name));
+		await expect(new AwsCodeArtifactCredentials().resolve(source, { probe })).rejects.toMatchObject(
+			{ name, message },
+		);
 	});
 
 	it.each(['caller', 'deadline'] as const)(
@@ -212,11 +229,16 @@ describe('AWS CodeArtifact credentials', () => {
 				signal: caller.signal,
 			});
 			const failure = expect(result).rejects.toMatchObject({
-				message: authenticationError,
+				name: cancel === 'caller' ? 'AbortError' : 'TimeoutError',
+				message:
+					cancel === 'caller'
+						? 'CodeArtifact authentication cancelled.'
+						: 'CodeArtifact authentication timed out.',
 			});
 			await started.promise;
 			expect(timeout).toHaveBeenCalledWith(10_000);
-			(cancel === 'caller' ? caller : deadline).abort(new Error('aws-secret'));
+			if (cancel === 'caller') caller.abort(new Error('aws-secret'));
+			else deadline.abort(new DOMException('aws-secret', 'TimeoutError'));
 			await failure;
 			expect(probe.fetch.mock.calls[0][1]?.signal?.aborted).toBe(true);
 		},

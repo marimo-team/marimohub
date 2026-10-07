@@ -157,7 +157,12 @@ function packageIndexEnv(
 	const vars: Record<string, string> = {};
 	for (const index of indexes) {
 		assertValidIntegrationName(index.name);
-		const url = new URL(index.url);
+		let url: URL;
+		try {
+			url = new URL(index.url);
+		} catch {
+			throw new ValidationError('Package index URL is invalid.');
+		}
 		if (url.protocol !== 'https:' || url.username || url.password || /\s/.test(index.url)) {
 			throw new ValidationError('Package indexes must use HTTPS without embedded credentials.');
 		}
