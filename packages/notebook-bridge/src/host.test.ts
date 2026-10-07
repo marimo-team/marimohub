@@ -17,11 +17,13 @@ function fixture({
 	peerNavigation = navigation,
 	paths = false,
 	peerPaths = paths,
+	sandboxUrl = 'https://notebook.example/hub/proxy/token/?provider=secret',
 }: {
 	navigation?: boolean;
 	peerNavigation?: boolean;
 	paths?: boolean;
 	peerPaths?: boolean;
+	sandboxUrl?: string;
 } = {}) {
 	const parent = new EventTarget();
 	Object.assign(parent, { crypto: globalThis.crypto });
@@ -34,7 +36,7 @@ function fixture({
 	const bridge = createHostBridge({
 		iframe: frame as HTMLIFrameElement,
 		origin: 'https://notebook.example',
-		...(paths ? { sandboxUrl: 'https://notebook.example/hub/proxy/token/?provider=secret' } : {}),
+		...(paths ? { sandboxUrl } : {}),
 		excludedKeys: ['provider'],
 		onQuery,
 		onStatus,
@@ -440,6 +442,20 @@ it('drops invalid navigation arguments before invoking the host', async () => {
 });
 
 describe('path negotiation', () => {
+	it('disables paths when the sandbox URL differs from the peer origin', async () => {
+		const { negotiate, peer, onQuery } = fixture({
+			paths: true,
+			sandboxUrl: 'https://foreign.example/foreign/proxy/token/?provider=secret',
+		});
+		const remote = await negotiate();
+		const connect = peer.postMessage.mock.calls.at(-1)![0];
+		expect(connect).not.toHaveProperty('sandboxBasePath');
+		expect(connect.capabilities).not.toContain('location-path.v1');
+		await expect(
+			remote.call('replaceQuery', { revision: 1, entries: [['id', '1']], path: 'studio/data/' }),
+		).resolves.toEqual({ applied: true });
+		expect(onQuery).toHaveBeenCalledExactlyOnceWith({ revision: 1, entries: [['id', '1']] });
+	});
 	it.each([
 		[true, true],
 		[true, false],

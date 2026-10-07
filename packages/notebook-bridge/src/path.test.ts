@@ -44,10 +44,15 @@ describe('sandbox-relative paths', () => {
 			resolveNotebookPath(new URL('https://sandbox.example/proxy/token/'), path),
 		).toBeUndefined();
 	});
-	it('accepts the encoded length limit', () => {
+	it('bounds the URL pathname rather than its query-string encoding', () => {
 		expect(validNotebookPath('a'.repeat(4096))).toBe(true);
 		expect(validNotebookPath('%C3%A9'.repeat(682))).toBe(true);
 		expect(validNotebookPath('%C3%A9'.repeat(683))).toBe(false);
+		const path = '+'.repeat(4096);
+		expect(validNotebookPath(path)).toBe(true);
+		const search = mergeNotebookQuery('', [], [], path);
+		expect(search).toBe(`?__mh_path=${'%2B'.repeat(4096)}`);
+		expect(notebookPath(search)).toBe(path);
 	});
 	it('removes only a complete trusted base prefix', () => {
 		expect(relativeNotebookPath('/hub/proxy/token/studio/data/', '/hub/proxy/token/')).toBe(
@@ -96,4 +101,19 @@ describe('sandbox-relative paths', () => {
 		expect(notebookPath(mergeNotebookQuery(search, [], []))).toBe('studio/new/');
 		expect(mergeNotebookQuery(search, [], [], '')).toBe('?theme=dark');
 	});
+	it.each(['studio%2Fold%2F', '..%2Fadmin', 'a&__mh_path=b'])(
+		'clears existing path metadata %j when a supplied path is invalid',
+		(existing) => {
+			const search = mergeNotebookQuery(
+				`?__mh_path=${existing}&theme=dark&id=old`,
+				[
+					['id', 'new'],
+					['__mh_path', 'spoof'],
+				],
+				[],
+				'../admin',
+			);
+			expect(search).toBe('?theme=dark&id=new');
+		},
+	);
 });

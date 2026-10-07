@@ -1,12 +1,16 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { startNotebookBridge } from './notebook';
 import { wirePeer } from './testing-peer';
 import { NAMESPACE } from './protocol';
 
+// birpc captures timers at import, so its RPC timeouts must share the suite's clock.
+vi.hoisted(() => vi.useFakeTimers());
+afterAll(() => vi.useRealTimers());
+
 const cleanups: (() => void)[] = [];
 afterEach(() => {
 	for (const cleanup of cleanups.splice(0)) cleanup();
-	vi.useRealTimers();
+	vi.clearAllTimers();
 });
 function fixture() {
 	const win = new EventTarget();
@@ -96,7 +100,6 @@ describe('notebook observer lifecycle', () => {
 		expect(bridge.status).toBe('connecting');
 	});
 	it('bounds incomplete negotiation and rejects connection replay', () => {
-		vi.useFakeTimers();
 		const { bridge, connect } = fixture();
 		connect();
 		expect(connect().close).toHaveBeenCalledOnce();
@@ -106,7 +109,6 @@ describe('notebook observer lifecycle', () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 	it('coalesces updates while a request is pending and sends only the latest snapshot', async () => {
-		vi.useFakeTimers();
 		const { negotiate, change } = fixture();
 		const peer = await negotiate();
 		await vi.advanceTimersByTimeAsync(100);
@@ -137,7 +139,6 @@ describe('notebook observer lifecycle', () => {
 		expect(peer.requests).toHaveLength(0);
 	});
 	it('retries an unaccepted snapshot with a newer revision', async () => {
-		vi.useFakeTimers();
 		const { negotiate } = fixture();
 		const peer = await negotiate();
 		await vi.advanceTimersByTimeAsync(100);
@@ -149,7 +150,6 @@ describe('notebook observer lifecycle', () => {
 		expect(retry.a).toEqual([{ revision: 2, entries: [['early', '1']] }]);
 	});
 	it('ignores acknowledgements from a replaced connection with an update outstanding', async () => {
-		vi.useFakeTimers();
 		const { negotiate, change, bridge } = fixture();
 		const old = await negotiate();
 		await vi.advanceTimersByTimeAsync(100);
@@ -163,7 +163,6 @@ describe('notebook observer lifecycle', () => {
 		expect(bridge.status).toBe('connected');
 	});
 	it('cancels an in-flight update without resurrecting timers or status', async () => {
-		vi.useFakeTimers();
 		const { negotiate, bridge, change } = fixture();
 		const peer = await negotiate();
 		await vi.advanceTimersByTimeAsync(100);
@@ -177,7 +176,6 @@ describe('notebook observer lifecycle', () => {
 		expect(peer.requests).toHaveLength(0);
 	});
 	it('recovers from an oversized snapshot and sends a subsequent clear', async () => {
-		vi.useFakeTimers();
 		const { negotiate, change } = fixture();
 		change(`?large=${'x'.repeat(70_000)}`);
 		const peer = await negotiate();
@@ -189,7 +187,6 @@ describe('notebook observer lifecycle', () => {
 		expect(cleared.a).toEqual([{ revision: 2, entries: [] }]);
 	});
 	it('accepts a fresh host after the initial readiness window expires', async () => {
-		vi.useFakeTimers();
 		const { negotiate, bridge, change } = fixture();
 		await vi.advanceTimersByTimeAsync(10_000);
 		expect(bridge.status).toBe('unavailable');
@@ -221,7 +218,6 @@ it.each([
 	'https://hub.example/app/?token=secret',
 	'not a URL',
 ])('ignores invalid app bases without disabling the query bridge: %s', async (appBaseUrl) => {
-	vi.useFakeTimers();
 	const { connect, bridge } = fixture();
 	const { peer: port } = connect({
 		capabilities: ['query-params.v1', 'app-navigation.v1'],
@@ -239,7 +235,6 @@ it.each([
 
 describe('path snapshots', () => {
 	it('reports the early path, path-only updates, and a return to the base under one revision', async () => {
-		vi.useFakeTimers();
 		const { negotiatePaths, location, history } = fixture();
 		const peer = await negotiatePaths();
 		for (const [index, path] of ['studio/initial/', 'studio/data/', ''].entries()) {
@@ -255,7 +250,6 @@ describe('path snapshots', () => {
 	it.each(['/outside/', '//evil.example/', 'http://[', '/hub/../', '/hub/proxy/token/?secret=1'])(
 		'keeps queries usable with an unusable base %s',
 		async (sandboxBasePath) => {
-			vi.useFakeTimers();
 			const { negotiatePaths } = fixture();
 			const peer = await negotiatePaths('fresh', sandboxBasePath);
 			await vi.advanceTimersByTimeAsync(100);
@@ -264,7 +258,6 @@ describe('path snapshots', () => {
 	);
 
 	it('coalesces pending path and query changes and retries a refused snapshot together', async () => {
-		vi.useFakeTimers();
 		const { negotiatePaths, location, change } = fixture();
 		const peer = await negotiatePaths();
 		await vi.advanceTimersByTimeAsync(100);
@@ -296,23 +289,25 @@ describe('path snapshots', () => {
 	it('recovers the latest path after an RPC timeout and ignores a late acknowledgement', async () => {
 		const { negotiatePaths, location, change, bridge } = fixture();
 		const old = await negotiatePaths('old');
+		await vi.advanceTimersByTimeAsync(100);
 		const pending = await old.nextRequest();
-		await vi.waitFor(() => expect(bridge.status).toBe('unavailable'), { timeout: 6_500 });
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(bridge.status).toBe('unavailable');
 		location.pathname = '/hub/proxy/token/studio/recovered/';
 		change('?id=recovered');
 		const current = await negotiatePaths('replacement');
 		old.reply(pending, { applied: true });
+		await vi.advanceTimersByTimeAsync(100);
 		const recovered = await current.nextRequest();
 		expect(recovered.a).toEqual([
 			{ revision: 2, entries: [['id', 'recovered']], path: 'studio/recovered/' },
 		]);
 		expect(bridge.status).toBe('connected');
-	}, 10_000);
+	});
 
 	it.each(['/outside/view/', `/hub/proxy/token/${'x'.repeat(4097)}`])(
 		'resumes path mirroring after leaving an invalid location (%#)',
 		async (pathname) => {
-			vi.useFakeTimers();
 			const { negotiatePaths, location, change } = fixture();
 			const peer = await negotiatePaths();
 			location.pathname = pathname;
@@ -332,7 +327,6 @@ describe('path snapshots', () => {
 	);
 
 	it('stops reporting paths when a replacement host does not negotiate the capability', async () => {
-		vi.useFakeTimers();
 		const { negotiate, negotiatePaths } = fixture();
 		const old = await negotiatePaths('old');
 		await vi.advanceTimersByTimeAsync(100);

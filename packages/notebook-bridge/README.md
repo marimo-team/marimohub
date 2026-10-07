@@ -200,9 +200,11 @@ Hub stores the path as `__mh_path`, for example
 query or includes a session-specific proxy prefix. Cross-app bridge links retain
 explicit `__mh_path` values only with the negotiated capability.
 
-Paths are limited to 4,096 characters after URL encoding. Validation rejects
-absolute URLs or paths, dot segments, backslashes, controls, encoded path
-separators, and nested percent escapes. Invalid or duplicate metadata is ignored.
+Sandbox-relative URL pathnames are limited to 4,096 characters, including percent
+escapes. Query-string escaping can make the stored `__mh_path` value longer.
+Validation rejects absolute URLs or paths, dot segments, backslashes, controls,
+encoded path separators, and nested percent escapes. Invalid or duplicate
+metadata is ignored.
 
 The sandbox server must serve deep routes directly. The bridge adds no server
 routes and restores no state outside the URL. It supports marimo edit and app

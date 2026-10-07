@@ -42,9 +42,9 @@ export function mergeNotebookQuery(
 	for (const [key, value] of notebookQueryParams(entries, excludedKeys)) {
 		preserved.append(key, value);
 	}
-	if (path !== undefined && validNotebookPath(path)) {
+	if (path !== undefined) {
 		preserved.delete(NOTEBOOK_PATH_PARAM);
-		if (path) preserved.set(NOTEBOOK_PATH_PARAM, path);
+		if (path && validNotebookPath(path)) preserved.set(NOTEBOOK_PATH_PARAM, path);
 	}
 	const result = preserved.toString();
 	return result ? `?${result}` : '';

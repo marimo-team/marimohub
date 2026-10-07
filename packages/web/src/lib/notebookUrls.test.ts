@@ -148,6 +148,8 @@ it.each([false, true])('restores a path below the current sandbox base (app: %s)
 	expect(url.pathname).toBe('/hub/proxy/current/studio/data/');
 	expect(url.searchParams.get('access_token')).toBe('current');
 	expect(url.searchParams.get('id')).toBe('1');
+	expect(url.searchParams.get('show-code')).toBe(isApp ? 'false' : null);
+	expect(url.searchParams.get('theme')).toBe('light');
 	expect(url.searchParams.has('__mh_path')).toBe(false);
 });
 it.each(['../admin', '//evil.example/', '%2e%2e/admin', 'a'.repeat(4097)])(

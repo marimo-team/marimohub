@@ -6,6 +6,8 @@ import { NOTEBOOK_IFRAME_SANDBOX } from '../src/host';
 import { notebookPath, resolveNotebookPath } from '../src/path';
 import { notebookQueryParams } from '../src/query';
 
+const excludedKeys = ['provider'];
+
 declare global {
 	interface Window {
 		bridge: BridgeHandle;
@@ -80,6 +82,9 @@ export async function harness(options: { sandboxBasePath?: string } = {}) {
 		);
 	});
 	const childOrigin = await listen(child);
+	const sandboxUrl = options.sandboxBasePath
+		? new URL(options.sandboxBasePath, childOrigin).href
+		: undefined;
 	const host = createServer((req, res) => {
 		const script =
 			req.url === '/host.js' ? hostScript : req.url === '/query.js' ? queryScript : undefined;
@@ -94,15 +99,13 @@ export async function harness(options: { sandboxBasePath?: string } = {}) {
 			return;
 		}
 		const params = new URL(req.url!, 'http://localhost').searchParams;
-		const sandboxUrl = options.sandboxBasePath
-			? `${childOrigin}${options.sandboxBasePath}`
-			: undefined;
-		let source = params.get('child') ?? `${childOrigin}/?early=1`;
-		if (sandboxUrl) {
+		const explicitSource = params.get('child');
+		let source = explicitSource ?? `${childOrigin}/?early=1`;
+		if (sandboxUrl && explicitSource === null) {
 			const base = new URL(sandboxUrl);
 			const path = notebookPath(params);
 			const target = path ? (resolveNotebookPath(base, path) ?? base) : base;
-			target.search = notebookQueryParams(params).toString();
+			target.search = notebookQueryParams(params, excludedKeys).toString();
 			source = target.href;
 		}
 		// Test-only fixture URLs are escaped as data, never HTML attributes.
@@ -111,7 +114,7 @@ export async function harness(options: { sandboxBasePath?: string } = {}) {
    import { createHostBridge } from '/host.js';
    import { mergeNotebookQuery } from '/query.js';
    const frame = document.querySelector('iframe');
-   const excludedKeys = ['provider'];
+   const excludedKeys = ${JSON.stringify(excludedKeys)};
    const navigationEnabled = new URLSearchParams(location.search).has('navigation');
    window.updates = 0; window.loads = 0;
    window.navigationBehavior = 'accept'; window.navigationRequests = 0;
