@@ -837,7 +837,11 @@ function useProjectContent() {
 					<EmptyState
 						icon={<FileText />}
 						message="No notebooks yet"
-						description="Create a notebook, upload a .py file, or import a folder with supporting files."
+						description={
+							canEditProject(project.your_role)
+								? 'Create a notebook, upload a .py file, or import a folder with supporting files.'
+								: 'No notebooks are available in this project yet.'
+						}
 						action={
 							<div className="flex flex-wrap justify-center gap-2">
 								<Button variant="default" onPress={uploadModal.open}>

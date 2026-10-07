@@ -450,7 +450,7 @@ export class NotebookService {
 		input: CreateNotebookInput,
 		actor: UserId,
 		securityLabels?: ResourceSecurityLabels,
-		staging?: { notebookId: NotebookId },
+		staging?: { notebookId: NotebookId; beforeWrite?: () => Promise<void> },
 	): Promise<NotebookMeta> {
 		const notebookId = staging?.notebookId ?? createNotebookId();
 		const versionId = createVersionId();
@@ -524,11 +524,17 @@ export class NotebookService {
 						() => this.bucket.put(ver.code, input.code),
 						() => this.bucket.put(ver.deps, input.deps ?? ''),
 						() => this.bucket.put(ver.meta, JSON.stringify(version)),
-					],
+					].map((write) => async () => {
+						await staging?.beforeWrite?.();
+						return write();
+					}),
 					() => this.bucket.delete(contentKeys),
 				),
 			)
-			.step('metadata', () => this.bucket.put(nb.meta, JSON.stringify(meta)))
+			.step('metadata', async () => {
+				await staging?.beforeWrite?.();
+				return this.bucket.put(nb.meta, JSON.stringify(meta));
+			})
 			.step('catalog', () =>
 				staging
 					? Promise.resolve()
@@ -549,8 +555,12 @@ export class NotebookService {
 		notebookId: NotebookId,
 		input: CreateNotebookInput,
 		actor: UserId,
+		beforeWrite?: () => Promise<void>,
 	): Promise<NotebookMeta> {
-		return this.createNotebookWithLabels(projectId, input, actor, undefined, { notebookId });
+		return this.createNotebookWithLabels(projectId, input, actor, undefined, {
+			notebookId,
+			beforeWrite,
+		});
 	}
 
 	async publishImportNotebook(

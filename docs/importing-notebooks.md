@@ -23,7 +23,8 @@ The import preserves file contents and paths relative to the selected folder.
 That folder becomes the working directory. Nested notebooks can import modules from their own directory and the selected folder.
 Include `pyproject.toml` and lockfiles when your notebooks need them.
 
-Caches and Git metadata stay excluded. Files such as `.env` and private keys are excluded by default but remain visible for review.
+Caches and Git metadata stay excluded. A filename-based filter excludes common credentials such as `.env`, `id_rsa`, and `.pem` files by default.
+The filter does not inspect file contents or detect every secret. Review **Included files** and exclude other sensitive files, including keys named `ssh_identity`.
 Empty directories are not uploaded. The limits are 1,000 workspace files, 25 MiB per file, and 100 MiB total.
 Without a root `pyproject.toml`, the hub adds an empty one. This leaves room for 999 included files.
 Each file path is limited to 1,024 UTF-8 bytes, relative to the selected folder.
@@ -35,7 +36,7 @@ Keep the page open until the import finishes. Each notebook becomes available on
 | Result                | Next action                                                                                          |
 | --------------------- | ---------------------------------------------------------------------------------------------------- |
 | Upload failed         | Correct the error and retry. Your selections remain in the review.                                   |
-| Some notebooks failed | Select **Retry remaining**. Successful notebooks stay available.                                     |
+| Some notebooks failed | Select **Retry remaining** when available. Otherwise, review the error before starting a new import. |
 | Outcome unknown       | Select **Check outcomes and retry**. The hub checks the existing attempt before it creates anything. |
 | Still processing      | Wait, then check again.                                                                              |
 | Import stopped        | Select **Resume import** to continue the queue.                                                      |

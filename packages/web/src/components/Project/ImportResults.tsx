@@ -1,6 +1,6 @@
 import { Check, LoaderCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { importStateLabels } from './useNotebookImport';
+import { importStateLabels, isImportRetryable } from './useNotebookImport';
 import type { ImportRow } from './useNotebookImport';
 import { ImportPagination, IMPORT_PAGE_SIZE } from './ImportPagination';
 
@@ -51,7 +51,7 @@ export function ImportResults({
 									className="text-primary underline"
 									target="_blank"
 									rel="noopener"
-									aria-label="View notebook (opens in new tab)"
+									aria-label={`View ${row.path} (opens in new tab)`}
 									to={`/projects/${projectId}/notebooks/${row.notebookId}`}
 								>
 									View notebook
@@ -72,7 +72,9 @@ export function ImportResults({
 			<p className="text-xs text-muted-foreground">
 				{completeCount === rows.length
 					? 'Your notebooks are ready. Each has its own copy of the included files.'
-					: 'Keep this page open until the import finishes. Stop lets the current request finish and keeps imported notebooks. You can retry this upload for 24 hours.'}
+					: !rows.some(isImportRetryable)
+						? 'Some notebooks could not be imported. Review the errors before starting another import.'
+						: 'Keep this page open until the import finishes. Stop lets the current request finish and keeps imported notebooks. You can retry this upload for 24 hours.'}
 			</p>
 		</>
 	);

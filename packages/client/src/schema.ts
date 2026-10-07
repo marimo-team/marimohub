@@ -2211,6 +2211,7 @@ export interface components {
 					| 'CONFLICT'
 					| 'PREVIEW_NOT_READY'
 					| 'PROPOSAL_RETRY_REQUIRED'
+					| 'IMPORT_RESTART_REQUIRED'
 					| 'EDIT_SESSION_OWNED'
 					| 'EDIT_SESSION_RETIRING'
 					| 'EDIT_SESSION_CHANGED'

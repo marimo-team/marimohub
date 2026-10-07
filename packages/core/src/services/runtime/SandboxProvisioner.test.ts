@@ -112,6 +112,135 @@ describe('SandboxProvisioner', () => {
 		expect(start).toHaveBeenCalledOnce();
 	});
 
+	it.each([
+		{ inherited: '', session: undefined, suffix: '' },
+		{
+			inherited: '/physical sandbox/workspace:/existing',
+			session: undefined,
+			suffix: ':/existing',
+		},
+		{
+			inherited: '/image modules:/opt/lib',
+			session: undefined,
+			suffix: ':/image modules:/opt/lib',
+		},
+		{
+			inherited: '/image',
+			session: ' /session modules:\n/second ',
+			suffix: ': /session modules:\n/second ',
+		},
+	])(
+		'keeps the effective Python path for all nested workspace commands: $inherited',
+		async ({ inherited, session, suffix }) => {
+			const { instance, calls } = makeFakeSandbox();
+			instance.resolveProcessPath = (path) => `/physical sandbox${path}`;
+			const vars: Record<string, string> = { PYTHONPATH: inherited };
+			const setVars = instance.setEnvVars.bind(instance);
+			vi.spyOn(instance, 'setEnvVars').mockImplementation(async (values, options) => {
+				await setVars(values, options);
+				Object.assign(vars, values);
+			});
+			const exec = instance.exec.bind(instance);
+			vi.spyOn(instance, 'exec').mockImplementation(async (command, options) => {
+				if (command.includes('PYTHONPATH')) {
+					return { success: true, stdout: vars.PYTHONPATH, stderr: '' };
+				}
+				return exec(command, options);
+			});
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				entryNotebook: 'reports/revenue.py',
+				sessionEnv: session === undefined ? undefined : { vars: { PYTHONPATH: session } },
+			});
+			expect(vars.PYTHONPATH).toBe(`/physical sandbox/workspace${suffix}`);
+			expect(calls.setEnvVars.at(-1)).toEqual({ PYTHONPATH: vars.PYTHONPATH });
+			expect(calls.sequence.lastIndexOf('setEnvVars')).toBeLessThan(
+				calls.sequence.indexOf('startProcess'),
+			);
+			expect(calls.startProcess[0].cmd).not.toContain('PYTHONPATH');
+		},
+	);
+
+	it.each(['read', 'write'])(
+		'does not launch when the workspace Python path %s fails',
+		async (failure) => {
+			const { instance, calls } = makeFakeSandbox();
+			if (failure === 'read') {
+				const exec = instance.exec.bind(instance);
+				vi.spyOn(instance, 'exec').mockImplementation((command, options) =>
+					command.includes('PYTHONPATH')
+						? Promise.resolve({
+								success: false,
+								stdout: 'private path',
+								stderr: 'private diagnostic',
+								error: { code: 'COMMAND_FAILED' },
+							})
+						: exec(command, options),
+				);
+			} else {
+				vi.spyOn(instance, 'setEnvVars').mockRejectedValue(new Error('private environment'));
+			}
+			await expect(
+				new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					entryNotebook: 'reports/revenue.py',
+				}),
+			).rejects.toThrow('configuring the workspace Python path Error');
+			expect(calls.startProcess).toEqual([]);
+			expect(calls.destroy).toBe(1);
+		},
+	);
+
+	it('bounds Python path configuration even when the adapter never settles', async () => {
+		vi.useFakeTimers();
+		try {
+			const { instance, calls } = makeFakeSandbox();
+			const exec = instance.exec.bind(instance);
+			vi.spyOn(instance, 'exec').mockImplementation((command, options) =>
+				command.includes('PYTHONPATH') ? new Promise(() => {}) : exec(command, options),
+			);
+			const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				entryNotebook: 'reports/revenue.py',
+				startupTimeoutMs: Millis.of(50),
+			});
+			const failed = expect(provision).rejects.toThrow('configuring the workspace Python path');
+			await vi.advanceTimersByTimeAsync(50);
+			await failed;
+			expect(calls.startProcess).toEqual([]);
+			expect(calls.destroy).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('leaves the Python path unchanged for a root entry notebook', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+			sandboxId,
+			projectId,
+			notebookId,
+			hostname: 'localhost',
+			bucket: bucketConfig,
+			entryNotebook: 'notebook.py',
+			sessionEnv: { vars: { PYTHONPATH: '/configured' } },
+		});
+		expect(calls.setEnvVars).toEqual([{ PYTHONPATH: '/configured' }]);
+		expect(calls.exec.some((command) => command.includes('PYTHONPATH'))).toBe(false);
+	});
+
 	it.each([false, true])(
 		'does not launch a kernel if context environment injection fails (existing: %s)',
 		async (existing) => {
@@ -639,9 +768,8 @@ describe('SandboxProvisioner', () => {
 			expect(cmd).not.toContain('MARIMOHUB_MARIMO_VERSION');
 			expect(cmd).not.toContain('marimo==');
 			expect(calls.startProcess[0].cmd).toContain("marimo --quiet edit 'apps/dash.py'");
-			expect(calls.startProcess[0].cmd).toContain(
-				'export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" && ',
-			);
+			expect(calls.startProcess[0].cmd).not.toContain('export PYTHONPATH');
+			expect(calls.setEnvVars).toContainEqual({ PYTHONPATH: MOUNT_PATH });
 			expect(calls.startProcess[0].cmd).not.toContain('uv sync');
 		});
 

@@ -114,8 +114,8 @@ export function ImportFileReview({
 						label="files"
 					/>
 					<p className="mt-3 text-xs text-muted-foreground">
-						Caches and Git metadata stay excluded. Credentials such as .env files and private keys
-						are excluded by default.
+						Caches and Git metadata stay excluded. A filename filter excludes common credentials,
+						but cannot detect every secret. Review and exclude other sensitive files.
 					</p>
 					<p className="mt-1 text-xs text-muted-foreground">
 						Limits: {fileLimit.toLocaleString('en-US')} included files,{' '}

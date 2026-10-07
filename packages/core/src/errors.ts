@@ -10,6 +10,7 @@ export const DOMAIN_ERROR_CODES = [
 	'CONFLICT',
 	'PREVIEW_NOT_READY',
 	'PROPOSAL_RETRY_REQUIRED',
+	'IMPORT_RESTART_REQUIRED',
 	'EDIT_SESSION_OWNED',
 	'EDIT_SESSION_RETIRING',
 	'EDIT_SESSION_CHANGED',
@@ -86,6 +87,15 @@ export class ProposalRetryRequiredError extends DomainError {
 	constructor(message = 'The proposal cannot be resumed; retry with a new idempotency key') {
 		super(message);
 		this.name = 'ProposalRetryRequiredError';
+	}
+}
+
+export class ImportRestartRequiredError extends DomainError {
+	readonly code = 'IMPORT_RESTART_REQUIRED';
+	readonly status = 409;
+	constructor(message: string) {
+		super(message);
+		this.name = 'ImportRestartRequiredError';
 	}
 }
 

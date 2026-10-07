@@ -25,7 +25,7 @@ export default function ImportNotebooksDialog({
 	const profiles =
 		capabilities?.compute_profile_override === 'editors' ? capabilities.compute_profiles : [];
 	const [files, setFiles] = useState<FolderFile[]>([]);
-	const [root, setRoot] = useState('');
+	const [{ root, revision }, setFolder] = useState({ root: '', revision: 0 });
 	const [search, setSearch] = useState('');
 	const [page, setPage] = useState(0);
 	const [resultPage, setResultPage] = useState(0);
@@ -52,7 +52,7 @@ export default function ImportNotebooksDialog({
 		setError(undefined);
 		try {
 			const folder = await inspectFolder([...fileList]);
-			setRoot(folder.root);
+			setFolder((current) => ({ root: folder.root, revision: current.revision + 1 }));
 			setSearch('');
 			setPage(0);
 			setFiles(folder.files);
@@ -146,7 +146,7 @@ export default function ImportNotebooksDialog({
 										page={page}
 										onPageChange={setPage}
 									/>
-									<ImportFileReview files={files} onChange={updateFile} />
+									<ImportFileReview key={revision} files={files} onChange={updateFile} />
 									{(images.length > 0 || profiles.length > 0) && (
 										<details className="rounded-lg border p-3">
 											<summary className="cursor-pointer text-sm font-medium">

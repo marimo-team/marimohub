@@ -12,6 +12,7 @@ export interface ImportRow {
 	state: 'queued' | 'importing' | 'imported' | 'failed' | 'unknown' | 'expired';
 	message?: string;
 	notebookId?: string;
+	retryable?: boolean;
 }
 
 export const importStateLabels: Record<ImportRow['state'], string> = {
@@ -24,6 +25,9 @@ export const importStateLabels: Record<ImportRow['state'], string> = {
 };
 export const importErrorMessage = (error: unknown) =>
 	error instanceof Error ? error.message : 'Import failed. Please try again.';
+
+export const isImportRetryable = (row: ImportRow) =>
+	row.state !== 'imported' && row.state !== 'expired' && row.retryable !== false;
 
 export function useNotebookImport(projectId: string) {
 	const queryClient = useQueryClient();
@@ -43,7 +47,7 @@ export function useNotebookImport(projectId: string) {
 
 	const updateRow = (path: string, patch: Partial<ImportRow>) =>
 		setRows((current) => current.map((row) => (row.path === path ? { ...row, ...patch } : row)));
-	const retryable = rows.filter((row) => row.state !== 'imported' && row.state !== 'expired');
+	const retryable = rows.filter(isImportRetryable);
 
 	async function run(
 		files: FolderFile[],
@@ -115,16 +119,22 @@ export function useNotebookImport(projectId: string) {
 					});
 					updateRow(row.path, { state: 'imported', notebookId: notebook.id });
 				} catch (error) {
+					const restartRequired =
+						error instanceof ApiRequestError && error.code === 'IMPORT_RESTART_REQUIRED';
 					const unknown =
-						!(error instanceof ApiRequestError) ||
-						!error.status ||
-						error.status >= 500 ||
-						error.status === 409;
+						!restartRequired &&
+						(!(error instanceof ApiRequestError) ||
+							!error.status ||
+							error.status >= 500 ||
+							error.status === 409);
 					updateRow(row.path, {
 						state: unknown ? 'unknown' : 'failed',
+						retryable: !restartRequired,
 						message: unknown
 							? `Outcome not confirmed. ${importErrorMessage(error)}`
-							: importErrorMessage(error),
+							: restartRequired
+								? `${importErrorMessage(error)}. Check the project before starting another import.`
+								: importErrorMessage(error),
 					});
 				}
 			}

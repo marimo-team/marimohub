@@ -71,6 +71,81 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe('folder import review', () => {
+	it.each([
+		'Import expired; choose the folder again',
+		'Import retry limit reached',
+		'Import identity already has different notebook settings',
+	])('does not retry a deterministic conflict: %s', async (message) => {
+		vi.mocked(notebookImports.publish).mockRejectedValueOnce(
+			new ApiRequestError('IMPORT_RESTART_REQUIRED', message, { status: 409 }),
+		);
+		const user = userEvent.setup();
+		renderDialog();
+		await choose();
+		await user.click(screen.getByRole('button', { name: 'Import 2 notebooks' }));
+		await screen.findByText('1 of 2 imported');
+		expect(screen.getByText('Failed')).toBeInTheDocument();
+		expect(screen.queryByText(/Outcome not confirmed/)).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: /retry|Resume/i })).not.toBeInTheDocument();
+		expect(notebookImports.status).not.toHaveBeenCalled();
+		expect(notebookImports.publish).toHaveBeenCalledTimes(2);
+	});
+
+	it('keeps an in-progress conflict available for outcome reconciliation', async () => {
+		vi.mocked(notebookImports.publish).mockRejectedValueOnce(
+			new ApiRequestError('CONFLICT', 'Notebook import is still in progress', { status: 409 }),
+		);
+		const user = userEvent.setup();
+		renderDialog();
+		await choose();
+		await user.click(screen.getByRole('button', { name: 'Import 2 notebooks' }));
+		await screen.findByText('1 of 2 imported');
+		expect(screen.getByText(/Outcome not confirmed/)).toBeInTheDocument();
+		vi.mocked(notebookImports.status).mockResolvedValueOnce({
+			state: 'complete',
+			notebook: { id: 'reconciled' },
+		} as never);
+		await user.click(screen.getByRole('button', { name: 'Check outcomes and retry' }));
+		await screen.findByText('2 of 2 imported');
+		expect(notebookImports.publish).toHaveBeenCalledTimes(2);
+	});
+
+	it('names result links with distinct notebook paths', async () => {
+		const user = userEvent.setup();
+		renderDialog();
+		await choose();
+		await user.click(screen.getByRole('button', { name: 'Import 2 notebooks' }));
+		await screen.findByText('2 of 2 imported');
+		for (const path of ['a/revenue.py', 'b/revenue.py']) {
+			expect(screen.getByRole('link', { name: `View ${path} (opens in new tab)` })).toHaveAttribute(
+				'href',
+				`/projects/proj-one/notebooks/${path}`,
+			);
+		}
+	});
+
+	it('resets file review filters when choosing another folder with the same name', async () => {
+		const user = userEvent.setup();
+		renderDialog();
+		await choose();
+		await user.click(screen.getByText(/Included files:/));
+		await user.type(
+			screen.getByRole('textbox', { name: 'Filter included and excluded files' }),
+			'.env',
+		);
+		await user.selectOptions(screen.getByRole('combobox', { name: 'Show files' }), 'excluded');
+		fireEvent.change(screen.getByLabelText('Choose folder', { selector: 'input' }), {
+			target: { files: [folderFile('new.py'), folderFile('data.csv', '1,2')] },
+		});
+		await screen.findByRole('checkbox', { name: 'Import new.py' });
+		await user.click(screen.getByText(/Included files:/));
+		expect(screen.getByRole('textbox', { name: 'Filter included and excluded files' })).toHaveValue(
+			'',
+		);
+		expect(screen.getByRole('combobox', { name: 'Show files' })).toHaveValue('all');
+		expect(screen.getByRole('checkbox', { name: 'Include data.csv' })).toBeInTheDocument();
+	});
+
 	it('distinguishes duplicate names, preserves unselected notebook files, and excludes credentials visibly', async () => {
 		const user = userEvent.setup();
 		renderDialog();
@@ -206,7 +281,7 @@ describe('folder import review', () => {
 		vi.mocked(notebookImports.status).mockResolvedValueOnce({ state: 'expired' });
 		await user.click(screen.getByRole('button', { name: 'Check outcomes and retry' }));
 		await screen.findByText('Expired');
-		expect(screen.getByRole('link', { name: 'View notebook (opens in new tab)' })).toHaveAttribute(
+		expect(screen.getByRole('link', { name: /View .+ \(opens in new tab\)/ })).toHaveAttribute(
 			'target',
 			'_blank',
 		);
@@ -340,13 +415,9 @@ describe('folder import review', () => {
 		expect(screen.getByRole('checkbox', { name: 'Import reports/report-104.py' })).toBeChecked();
 		await user.click(screen.getByRole('button', { name: 'Import 106 notebooks' }));
 		await screen.findByText('106 of 106 imported');
-		expect(screen.getAllByRole('link', { name: 'View notebook (opens in new tab)' })).toHaveLength(
-			100,
-		);
+		expect(screen.getAllByRole('link', { name: /View .+ \(opens in new tab\)/ })).toHaveLength(100);
 		await user.click(screen.getByRole('button', { name: 'Next notebooks' }));
-		expect(screen.getAllByRole('link', { name: 'View notebook (opens in new tab)' })).toHaveLength(
-			6,
-		);
+		expect(screen.getAllByRole('link', { name: /View .+ \(opens in new tab\)/ })).toHaveLength(6);
 		expect(notebookImports.publish).toHaveBeenCalledTimes(106);
 	});
 
@@ -374,9 +445,10 @@ describe('folder import review', () => {
 			expect(onClose).not.toHaveBeenCalled();
 			await user.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
 			expect(screen.getByRole('button', { name: 'Check outcomes and retry' })).toBeEnabled();
-			expect(
-				screen.getByRole('link', { name: 'View notebook (opens in new tab)' }),
-			).toHaveAttribute('target', '_blank');
+			expect(screen.getByRole('link', { name: /View .+ \(opens in new tab\)/ })).toHaveAttribute(
+				'target',
+				'_blank',
+			);
 			await user.click(screen.getAllByRole('button', { name: 'Close' })[1]);
 			confirmation = await screen.findByRole('dialog', { name: 'Leave unfinished import?' });
 			await user.click(within(confirmation).getByRole('button', { name: 'Leave import' }));
@@ -521,6 +593,7 @@ describe('folder validation', () => {
 		'.marimohub-directory',
 		'data/.marimohub-directory/file.txt',
 		'pyproject.toml/config.txt',
+		'PYPROJECT.TOML/config.txt',
 		`${'é'.repeat(511)}.py`,
 	])('rejects server-reserved or overlong path %s before uploading', async (path) => {
 		const folder = await inspectFolder([folderFile(path)]);

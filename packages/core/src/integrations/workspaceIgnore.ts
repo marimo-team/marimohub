@@ -11,7 +11,7 @@ export const MAX_FOLDER_IMPORT_ARCHIVE_BYTES =
 
 export function validateFolderImportPath(path: string): string {
 	normalizeWorkspaceFilePath(path);
-	if (path.startsWith('pyproject.toml/'))
+	if (path.toLowerCase().startsWith('pyproject.toml/'))
 		throw new BadRequestError('pyproject.toml must be a file');
 	if (new TextEncoder().encode(path).byteLength > MAX_FOLDER_IMPORT_PATH_BYTES)
 		throw new BadRequestError(

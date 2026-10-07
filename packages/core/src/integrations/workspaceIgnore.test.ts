@@ -47,9 +47,14 @@ describe('folder import paths and archive budget', () => {
 		(path) => expect(isFolderImportExcludedPath(path)).toBe(false),
 	);
 
-	it.each(['.marimohub-directory', 'a/.marimohub-directory/file', 'pyproject.toml/child.py'])(
-		'rejects reserved import paths: %s',
-		(path) => expect(() => validateFolderImportPath(path)).toThrow(),
+	it.each([
+		'.marimohub-directory',
+		'a/.marimohub-directory/file',
+		'pyproject.toml/child.py',
+		'PYPROJECT.TOML/child.py',
+		'PyProject.toml/child.py',
+	])('rejects reserved import paths: %s', (path) =>
+		expect(() => validateFolderImportPath(path)).toThrow(),
 	);
 
 	it('caps UTF-8 bytes rather than characters without changing whitespace', () => {

@@ -335,7 +335,7 @@ describe('folder notebook import', () => {
 		).toBe('complete');
 	});
 
-	it('fences a stalled attempt with a new identity and cleans late orphan writes on later sweeps', async () => {
+	it('fences a stalled attempt and stops its writes after replacement', async () => {
 		const { notebooks, projectId, importId, bucket } = env;
 		const started = deferred();
 		const release = deferred();
@@ -361,14 +361,137 @@ describe('folder notebook import', () => {
 		await notebooks.imports.sweep(projectId);
 		release.resolve();
 		expect(await stalled).toBeInstanceOf(Error);
-		expect(
-			await listAllKeys(bucket, `projects/${projectId}/notebooks/${orphanId}/`),
-		).not.toHaveLength(0);
+		expect(await listAllKeys(bucket, `projects/${projectId}/notebooks/${orphanId}/`)).toHaveLength(
+			0,
+		);
 		await notebooks.imports.sweep(projectId);
 		expect(await listAllKeys(bucket, `projects/${projectId}/notebooks/${orphanId}/`)).toHaveLength(
 			0,
 		);
 		expect(await notebooks.listNotebooks(projectId)).toMatchObject([{ id: winner.id }]);
+	});
+
+	it('reclaims a storage write that finishes after its attempt was replaced and swept', async () => {
+		const { notebooks, projectId, importId, bucket } = env;
+		const started = deferred();
+		const releaseWrite = deferred();
+		const written = deferred();
+		const releaseResponse = deferred();
+		const put = bucket.put.bind(bucket);
+		let lateKey = '';
+		vi.spyOn(bucket, 'put').mockImplementation(async (...args) => {
+			if (!lateKey && args[0].endsWith('/workspace/data/raw.bin')) {
+				lateKey = args[0];
+				started.resolve();
+				await releaseWrite.promise;
+				const result = await put(...args);
+				written.resolve();
+				await releaseResponse.promise;
+				return result;
+			}
+			return put(...args);
+		});
+		const stalled = notebooks.imports
+			.publish(projectId, importId, input, ACTOR)
+			.catch((error: unknown) => error);
+		await started.promise;
+		const now = Date.now();
+		vi.spyOn(Date, 'now').mockReturnValue(now + 11 * 60_000);
+		const winner = await notebooks.imports.publish(projectId, importId, input, ACTOR);
+		vi.spyOn(Date, 'now').mockReturnValue(now + IMPORT_RETENTION_MS + 2 * 60 * 60_000);
+		await notebooks.imports.sweep(projectId);
+		expect(await bucket.head(lateKey)).toBeNull();
+		releaseWrite.resolve();
+		await written.promise;
+		expect(await bucket.head(lateKey)).not.toBeNull();
+		await notebooks.imports.sweep(projectId);
+		expect(await bucket.head(lateKey)).toBeNull();
+		releaseResponse.resolve();
+		expect(await stalled).toBeInstanceOf(Error);
+		expect(await notebooks.listNotebooks(projectId)).toMatchObject([{ id: winner.id }]);
+	});
+
+	it('renews the lease while workspace writes make progress beyond the initial lease', async () => {
+		const { notebooks, projectId, bucket } = env;
+		const prepared = await notebooks.imports.prepare(
+			projectId,
+			zipSync({
+				...files,
+				...Object.fromEntries(
+					Array.from({ length: 50 }, (_, index) => [`data/${index}.txt`, encode('x')]),
+				),
+			}),
+			ACTOR,
+		);
+		const started = Date.now();
+		let now = started;
+		vi.spyOn(Date, 'now').mockImplementation(() => now);
+		const put = bucket.put.bind(bucket);
+		let checkedConcurrentRetry = false;
+		vi.spyOn(bucket, 'put').mockImplementation(async (...args) => {
+			if (args[0].includes('/workspace/')) {
+				now += 30_000;
+				if (!checkedConcurrentRetry && now > started + 11 * 60_000) {
+					checkedConcurrentRetry = true;
+					await expect(
+						notebooks.imports.publish(projectId, prepared.id, input, ACTOR),
+					).rejects.toThrow('still in progress');
+				}
+			}
+			return put(...args);
+		});
+		const notebook = await notebooks.imports.publish(projectId, prepared.id, input, ACTOR);
+		expect(checkedConcurrentRetry).toBe(true);
+		expect(await notebooks.listNotebooks(projectId)).toMatchObject([{ id: notebook.id }]);
+		const receipt = await bucket.get(
+			`projects/${projectId}/imports/${prepared.id}/items/${encodeURIComponent(input.entry_notebook)}.json`,
+		);
+		expect(JSON.parse(await receipt!.text())).toMatchObject({
+			state: 'complete',
+			attempts: [notebook.id],
+		});
+	});
+
+	it('cleans abandoned workspaces and later items when publication reconciliation keeps failing', async () => {
+		const { notebooks, projectId, importId, bucket } = env;
+		const primaryInput = { title: 'Forecast', entry_notebook: 'reports/forecast.py' };
+		const stage = notebooks.stageImportNotebook.bind(notebooks);
+		const abandoned: string[] = [];
+		const failAfterStaging = async (...args: Parameters<typeof stage>) => {
+			abandoned.push(args[1]);
+			await stage(...args);
+			throw new Error('interrupted after staging');
+		};
+		const stageSpy = vi
+			.spyOn(notebooks, 'stageImportNotebook')
+			.mockImplementationOnce(failAfterStaging);
+		await expect(
+			notebooks.imports.publish(projectId, importId, primaryInput, ACTOR),
+		).rejects.toThrow('interrupted after staging');
+		const publishSpy = vi
+			.spyOn(notebooks, 'publishImportNotebook')
+			.mockRejectedValue(new ConflictError('Write conflict: max retries exceeded'));
+		await expect(
+			notebooks.imports.publish(projectId, importId, primaryInput, ACTOR),
+		).rejects.toThrow('max retries');
+		const fencedId = publishSpy.mock.calls[0][1];
+		stageSpy.mockImplementationOnce(failAfterStaging);
+		await expect(notebooks.imports.publish(projectId, importId, input, ACTOR)).rejects.toThrow(
+			'interrupted after staging',
+		);
+		const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + IMPORT_RETENTION_MS + 2 * 60 * 60 * 1000);
+		await notebooks.imports.sweep(projectId);
+		for (const id of abandoned)
+			expect(await listAllKeys(bucket, `projects/${projectId}/notebooks/${id}/`)).toHaveLength(0);
+		expect(await bucket.head(paths.project(projectId).notebook(fencedId).meta)).not.toBeNull();
+		expect(await bucket.head(`projects/${projectId}/imports/${importId}/snapshot.zip`)).toBeNull();
+		expect(errorLog).toHaveBeenCalledWith(
+			expect.stringContaining('notebook_import_publish_retry_failed'),
+		);
+		publishSpy.mockRestore();
+		await notebooks.imports.sweep(projectId);
+		expect(await notebooks.listNotebooks(projectId)).toMatchObject([{ id: fencedId }]);
 	});
 
 	it('keeps the catalog empty until every supporting file is written', async () => {
@@ -396,7 +519,10 @@ describe('folder notebook import', () => {
 		await notebooks.imports.publish(projectId, importId, input, ACTOR);
 		await expect(
 			notebooks.imports.publish(projectId, importId, { ...input, title: 'Other' }, ACTOR),
-		).rejects.toThrow('different notebook settings');
+		).rejects.toMatchObject({
+			code: 'IMPORT_RESTART_REQUIRED',
+			message: 'Import identity already has different notebook settings',
+		});
 		await expect(
 			notebooks.imports.status(projectId, importId, input.entry_notebook, uid('other')),
 		).rejects.toThrow('not found');
@@ -416,7 +542,121 @@ describe('folder notebook import', () => {
 				{ ...input, entry_notebook: 'reports/forecast.py' },
 				ACTOR,
 			),
-		).rejects.toThrow('expired');
+		).rejects.toMatchObject({
+			code: 'IMPORT_RESTART_REQUIRED',
+			message: 'Import expired; choose the folder again',
+		});
+	});
+
+	it('keeps an active attempt preparing across snapshot expiry and allows it to finish', async () => {
+		const { notebooks, projectId, importId } = env;
+		const started = deferred();
+		const release = deferred();
+		const stage = notebooks.stageImportNotebook.bind(notebooks);
+		vi.spyOn(notebooks, 'stageImportNotebook').mockImplementationOnce(async (...args) => {
+			started.resolve();
+			await release.promise;
+			return stage(...args);
+		});
+		const now = Date.now();
+		vi.spyOn(Date, 'now').mockReturnValue(now + IMPORT_RETENTION_MS - 60_000);
+		const publishing = notebooks.imports.publish(projectId, importId, input, ACTOR);
+		await started.promise;
+		vi.spyOn(Date, 'now').mockReturnValue(now + IMPORT_RETENTION_MS + 60_000);
+		expect(
+			await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR),
+		).toMatchObject({ state: 'preparing' });
+		await expect(
+			notebooks.imports.publish(projectId, importId, input, ACTOR),
+		).rejects.toMatchObject({ code: 'CONFLICT' });
+		release.resolve();
+		const notebook = await publishing;
+		expect(await notebooks.listNotebooks(projectId)).toMatchObject([{ id: notebook.id }]);
+	});
+
+	it('fences a stale attempt before reporting expiry so resumed staging cannot publish', async () => {
+		const { notebooks, projectId, importId } = env;
+		const started = deferred();
+		const release = deferred();
+		const stage = notebooks.stageImportNotebook.bind(notebooks);
+		vi.spyOn(notebooks, 'stageImportNotebook').mockImplementationOnce(async (...args) => {
+			started.resolve();
+			await release.promise;
+			return stage(...args);
+		});
+		const now = Date.now();
+		const stalled = notebooks.imports
+			.publish(projectId, importId, input, ACTOR)
+			.catch((error: unknown) => error);
+		await started.promise;
+		vi.spyOn(Date, 'now').mockReturnValue(now + IMPORT_RETENTION_MS + 60_000);
+		expect(
+			await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR),
+		).toMatchObject({ state: 'pending' });
+		await expect(
+			notebooks.imports.publish(projectId, importId, input, ACTOR),
+		).rejects.toMatchObject({ code: 'IMPORT_RESTART_REQUIRED' });
+		expect(
+			await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR),
+		).toMatchObject({ state: 'expired' });
+		release.resolve();
+		expect(await stalled).toBeInstanceOf(ConflictError);
+		expect(await notebooks.listNotebooks(projectId)).toHaveLength(0);
+	});
+
+	it('fences a delayed initial claim when an unused import expires', async () => {
+		const { notebooks, projectId, importId, bucket } = env;
+		const started = deferred();
+		const release = deferred();
+		const put = bucket.put.bind(bucket);
+		let delayed = false;
+		vi.spyOn(bucket, 'put').mockImplementation(async (...args) => {
+			if (!delayed && args[0].includes(`/imports/${importId}/items/`)) {
+				delayed = true;
+				started.resolve();
+				await release.promise;
+			}
+			return put(...args);
+		});
+		const now = Date.now();
+		const stalled = notebooks.imports
+			.publish(projectId, importId, input, ACTOR)
+			.catch((error: unknown) => error);
+		await started.promise;
+		vi.spyOn(Date, 'now').mockReturnValue(now + IMPORT_RETENTION_MS + 60_000);
+		expect(
+			await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR),
+		).toMatchObject({ state: 'pending' });
+		await expect(
+			notebooks.imports.publish(projectId, importId, input, ACTOR),
+		).rejects.toMatchObject({ code: 'IMPORT_RESTART_REQUIRED' });
+		release.resolve();
+		expect(await stalled).toMatchObject({ code: 'IMPORT_RESTART_REQUIRED' });
+		expect(
+			await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR),
+		).toMatchObject({ state: 'expired' });
+		expect(await notebooks.listNotebooks(projectId)).toHaveLength(0);
+		expect(await listAllKeys(bucket, `projects/${projectId}/notebooks/`)).toHaveLength(0);
+	});
+
+	it('requires a new import after exhausting the attempt limit', async () => {
+		const { notebooks, projectId, importId } = env;
+		vi.spyOn(notebooks, 'stageImportNotebook').mockRejectedValue(new Error('Storage unavailable'));
+		for (let attempt = 0; attempt < 10; attempt++) {
+			await expect(notebooks.imports.publish(projectId, importId, input, ACTOR)).rejects.toThrow(
+				'Storage unavailable',
+			);
+		}
+		await expect(
+			notebooks.imports.publish(projectId, importId, input, ACTOR),
+		).rejects.toMatchObject({
+			code: 'IMPORT_RESTART_REQUIRED',
+			message: 'Import retry limit reached',
+		});
+		expect(
+			await notebooks.imports.status(projectId, importId, input.entry_notebook, ACTOR),
+		).toMatchObject({ state: 'expired' });
+		expect(await notebooks.listNotebooks(projectId)).toHaveLength(0);
 	});
 
 	it('retries a failed workspace write without publishing partial files', async () => {

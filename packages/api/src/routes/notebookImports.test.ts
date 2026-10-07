@@ -1,5 +1,5 @@
 import { MAX_FOLDER_IMPORT_ARCHIVE_BYTES } from '@marimo-hub/core/workspace-ignore';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { zipSync } from 'fflate';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { createServices } from '@marimo-hub/core';
@@ -17,6 +17,7 @@ let env: Awaited<ReturnType<typeof setup>>;
 beforeEach(async () => {
 	env = await setup();
 });
+afterEach(() => vi.restoreAllMocks());
 const encode = (text: string) => new TextEncoder().encode(text);
 const archive = zipSync({
 	'reports/revenue.py': encode('import marimo'),
@@ -108,38 +109,53 @@ describe('notebook import routes', () => {
 		);
 		expect(await env.deps.services.notebooks.listNotebooks(env.projectId)).toHaveLength(0);
 	});
-	it('replays normalized default settings even after deployment options change', async () => {
-		const preparation = await prepare();
-		const path = `/projects/${env.projectId}/notebook-imports/${preparation.id}/notebooks`;
-		const { request } = createTestApi({
-			bucket: env.bucket,
-			deps: {
-				sandbox: {
-					bucket: { name: 'test', endpoint: '' },
-					hostname: 'localhost',
-					workdir: '/workspace',
-					persistWorkspace: 'source',
-					computeProfiles: [{ name: 'small', resources: { cpu: 1 } }],
-					computeProfileOverride: 'editors',
+	it.each(['complete', 'publishing'])(
+		'replays %s settings even after deployment options change',
+		async (state) => {
+			const preparation = await prepare();
+			const path = `/projects/${env.projectId}/notebook-imports/${preparation.id}/notebooks`;
+			const { request, deps } = createTestApi({
+				bucket: env.bucket,
+				deps: {
+					sandbox: {
+						bucket: { name: 'test', endpoint: '' },
+						hostname: 'localhost',
+						workdir: '/workspace',
+						persistWorkspace: 'source',
+						computeProfiles: [{ name: 'small', resources: { cpu: 1 } }],
+						computeProfileOverride: 'editors',
+					},
 				},
-			},
-		});
-		const body = {
-			entry_notebook: 'reports/revenue.py',
-			title: 'Revenue',
-			base_image: 'default',
-			compute_profile: 'small',
-		};
-		const first = await expectOk<{ id: string; base_image?: string; compute_profile?: string }>(
-			await request('POST', path, body),
-			201,
-		);
-		expect(first.base_image).toBeUndefined();
-		expect(first.compute_profile).toBeUndefined();
-		const replay = await expectOk<{ id: string }>(await env.request('POST', path, body), 201);
-		expect(replay.id).toBe(first.id);
-		await expectError(await env.request('POST', path, { ...body, compute_profile: 'large' }), 409);
-	});
+			});
+			const body = {
+				entry_notebook: 'reports/revenue.py',
+				title: 'Revenue',
+				base_image: 'default',
+				compute_profile: 'small',
+			};
+			const publish = deps.services.notebooks.publishImportNotebook.bind(deps.services.notebooks);
+			let notebookId: string | undefined;
+			vi.spyOn(deps.services.notebooks, 'publishImportNotebook').mockImplementationOnce(
+				async (...args) => {
+					const notebook = await publish(...args);
+					notebookId = notebook.id;
+					expect(notebook.base_image).toBeUndefined();
+					expect(notebook.compute_profile).toBeUndefined();
+					if (state === 'publishing') throw new Error('publication response lost');
+					return notebook;
+				},
+			);
+			const response = await request('POST', path, body);
+			if (state === 'publishing') await expectError(response, 500);
+			else await expectOk(response, 201);
+			const replay = await expectOk<{ id: string }>(await env.request('POST', path, body), 201);
+			expect(replay.id).toBe(notebookId);
+			await expectError(
+				await env.request('POST', path, { ...body, compute_profile: 'large' }),
+				409,
+			);
+		},
+	);
 
 	it('rejects blank names and invalid status paths without creating notebooks', async () => {
 		const preparation = await prepare();
@@ -152,17 +168,32 @@ describe('notebook import routes', () => {
 		expect(await env.deps.services.notebooks.listNotebooks(env.projectId)).toHaveLength(0);
 	});
 
-	it('rejects unavailable runtime settings without publication', async () => {
-		const preparation = await prepare();
-		const path = `/projects/${env.projectId}/notebook-imports/${preparation.id}/notebooks`;
-		await expectError(
-			await env.request('POST', path, {
-				entry_notebook: 'reports/revenue.py',
-				title: 'Revenue',
-				compute_profile: 'large',
-			}),
-			403,
-		);
-		expect(await env.deps.services.notebooks.listNotebooks(env.projectId)).toHaveLength(0);
-	});
+	it.each([
+		{ settings: { compute_profile: 'large' }, status: 403 },
+		{ settings: { base_image: 'missing' }, status: 400 },
+	])(
+		'allows correcting rejected runtime settings %j without uploading again',
+		async ({ settings, status: rejectionStatus }) => {
+			const preparation = await prepare();
+			const path = `/projects/${env.projectId}/notebook-imports/${preparation.id}/notebooks`;
+			await expectError(
+				await env.request('POST', path, {
+					entry_notebook: 'reports/revenue.py',
+					title: 'Revenue',
+					...settings,
+				}),
+				rejectionStatus,
+			);
+			expect(await env.deps.services.notebooks.listNotebooks(env.projectId)).toHaveLength(0);
+			const status = await expectOk(
+				await env.request('GET', `${path}?entry_notebook=reports%2Frevenue.py`),
+			);
+			expect(status).toMatchObject({ state: 'pending' });
+			await expectOk(
+				await env.request('POST', path, { entry_notebook: 'reports/revenue.py', title: 'Revenue' }),
+				201,
+			);
+			expect(await env.deps.services.notebooks.listNotebooks(env.projectId)).toHaveLength(1);
+		},
+	);
 });

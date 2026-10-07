@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { BadRequestError, ConflictError, NotFoundError } from '../../errors';
+import {
+	BadRequestError,
+	ConflictError,
+	ImportRestartRequiredError,
+	NotFoundError,
+} from '../../errors';
+import { logOperationalError } from '../../operationalLog';
 import { createNotebookId } from '../../ids';
 import type { ProjectId, UserId } from '../../ids';
 import type { Bucket } from '../../ports/bucket';
@@ -81,6 +87,7 @@ export class NotebookImportService {
 		const input = ImportNotebookInputSchema.parse(rawInput);
 		const key = this.itemKey(prefix, input.entry_notebook);
 		const candidate = createNotebookId();
+		let settings: Pick<ImportNotebookInput, 'base_image' | 'compute_profile'> | undefined;
 		const claimed = await withCasRetry(this.bucket, async (cas) => {
 			const object = await this.bucket.get(key);
 			const current = object ? await readStored(NotebookImportItemSchema, object, key) : null;
@@ -88,14 +95,33 @@ export class NotebookImportService {
 				current &&
 				(current.actor !== actor || JSON.stringify(current.input) !== JSON.stringify(input))
 			)
-				throw new ConflictError('Import identity already has different notebook settings');
+				throw new ImportRestartRequiredError(
+					'Import identity already has different notebook settings',
+				);
 			if (current?.state === 'publishing' || current?.state === 'complete') return current;
-			if (current?.state === 'expired' || preparation.expires_at <= Date.now())
-				throw new ConflictError('Import expired; choose the folder again');
+			if (current?.state === 'expired')
+				throw new ImportRestartRequiredError('Import expired; choose the folder again');
 			if (current && current.lease_until > Date.now())
 				throw new ConflictError('Notebook import is still in progress; check again shortly');
-			if (current && current.attempts.length >= 10)
-				throw new ConflictError('Import retry limit reached');
+			const restartReason =
+				preparation.expires_at <= Date.now()
+					? 'Import expired; choose the folder again'
+					: current && current.attempts.length >= 10
+						? 'Import retry limit reached'
+						: null;
+			if (restartReason) {
+				// Fence stalled writers before promising that this entry cannot publish.
+				await cas.put(
+					key,
+					JSON.stringify({
+						...(current ?? { actor, input, notebook_id: candidate, attempts: [], lease_until: 0 }),
+						state: 'expired',
+					}),
+					object ? { onlyIfEtagMatches: object.etag } : { onlyIfNotExists: true },
+				);
+				throw new ImportRestartRequiredError(restartReason);
+			}
+			settings = resolveSettings?.() ?? input;
 			const next: z.infer<typeof NotebookImportItemSchema> = {
 				actor,
 				input,
@@ -113,8 +139,29 @@ export class NotebookImportService {
 		});
 		if (claimed.state === 'complete' && claimed.notebook) return claimed.notebook;
 		if (claimed.state === 'preparing') {
+			let renewAt = claimed.lease_until - ATTEMPT_LEASE_MS / 2;
+			let renewing: Promise<void> | undefined;
+			const beforeWrite = () => {
+				if (renewing) return renewing;
+				if (Date.now() < renewAt) return Promise.resolve();
+				// Concurrent workspace writes share one heartbeat and stop if their claim was replaced.
+				renewing = withCasRetry(this.bucket, async (cas) => {
+					const object = await this.bucket.get(key);
+					if (!object) throw new ConflictError('Import attempt expired');
+					const current = await readStored(NotebookImportItemSchema, object, key);
+					if (current.state !== 'preparing' || current.notebook_id !== candidate)
+						throw new ConflictError('Import attempt was replaced');
+					const lease_until = Date.now() + ATTEMPT_LEASE_MS;
+					await cas.put(key, JSON.stringify({ ...current, lease_until }), {
+						onlyIfEtagMatches: object.etag,
+					});
+					renewAt = lease_until - ATTEMPT_LEASE_MS / 2;
+				}).finally(() => {
+					renewing = undefined;
+				});
+				return renewing;
+			};
 			try {
-				const settings = resolveSettings?.() ?? input;
 				const archive = await this.bucket.get(`${prefix}snapshot.zip`);
 				if (!archive) throw new NotFoundError('Import snapshot not found');
 				const files = this.parse(await archive.bytes());
@@ -143,6 +190,7 @@ export class NotebookImportService {
 						workspaceFiles: files,
 					},
 					actor,
+					beforeWrite,
 				);
 				await withCasRetry(this.bucket, async (cas) => {
 					const object = await this.bucket.get(key);
@@ -184,20 +232,17 @@ export class NotebookImportService {
 
 	async status(projectId: ProjectId, id: string, entry: string, actor: UserId) {
 		const prefix = this.prefix(projectId, id);
-		const preparation = await this.preparation(prefix, actor);
+		await this.preparation(prefix, actor);
 		const key = this.itemKey(prefix, entry);
 		const object = await this.bucket.get(key);
-		if (!object)
-			return {
-				state: preparation.expires_at <= Date.now() ? ('expired' as const) : ('pending' as const),
-			};
+		if (!object) return { state: 'pending' as const };
 		const item = await readStored(NotebookImportItemSchema, object, key);
 		if (item.state === 'complete' && item.notebook)
 			return { state: 'complete' as const, notebook: item.notebook };
 		if (item.state === 'publishing') return { state: 'publishing' as const };
 		return {
 			state:
-				item.state === 'expired' || preparation.expires_at <= Date.now()
+				item.state === 'expired'
 					? ('expired' as const)
 					: item.lease_until > Date.now()
 						? ('preparing' as const)
@@ -237,9 +282,6 @@ export class NotebookImportService {
 					return current;
 				});
 				if (!item) continue;
-				if (item.state === 'publishing') {
-					await this.publish(projectId, base.slice(prefix.length, -1), item.input, item.actor);
-				}
 				for (const notebookId of item.attempts) {
 					if (
 						notebookId === item.notebook_id &&
@@ -250,6 +292,17 @@ export class NotebookImportService {
 						this.bucket,
 						`${paths.project(projectId).notebook(notebookId).base}/`,
 					);
+				}
+				if (item.state === 'publishing') {
+					try {
+						await this.publish(projectId, base.slice(prefix.length, -1), item.input, item.actor);
+					} catch (error) {
+						logOperationalError(
+							'notebook_import_publish_retry_failed',
+							{ projectId, notebookId: item.notebook_id },
+							error,
+						);
+					}
 				}
 			}
 			await this.bucket.delete(`${base}snapshot.zip`);

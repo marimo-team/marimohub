@@ -1183,6 +1183,43 @@ export class SandboxProvisioner {
 		});
 	}
 
+	private async configureWorkspacePythonPath(
+		sandbox: SandboxInstance,
+		mountPath: string,
+		startup: MarimoStartup,
+	): Promise<void> {
+		const timeoutMs =
+			startup.deadline.timeoutMs === 0 ? 10_000 : Math.min(10_000, remainingStartupMs(startup));
+		if (timeoutMs <= 0) throw pythonEnvironmentSetupTimeout(startup.deadline.timeoutMs);
+		try {
+			await withDeadline(
+				(async () => {
+					const result = await sandbox.exec('printf \'%s\' "${PYTHONPATH-}"', {
+						timeout: timeoutMs,
+						maxOutputBytes: 64 * 1024,
+					});
+					if (!result.success || new TextEncoder().encode(result.stdout).byteLength >= 64 * 1024)
+						throw new Error('Could not read the sandbox Python path');
+					const root = sandbox.resolveProcessPath?.(mountPath) ?? mountPath;
+					await sandbox.setEnvVars({
+						PYTHONPATH:
+							result.stdout === root || result.stdout.startsWith(`${root}:`)
+								? result.stdout
+								: result.stdout
+									? `${root}:${result.stdout}`
+									: root,
+					});
+				})(),
+				{
+					timeoutMs,
+					timeoutError: () => new Error('Python path configuration timed out'),
+				},
+			);
+		} catch (error) {
+			throw provisionFailure('configuring the workspace Python path', error);
+		}
+	}
+
 	private async setupEnvironment(
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
@@ -1210,8 +1247,10 @@ export class SandboxProvisioner {
 			},
 		};
 		if (options.entryNotebook?.includes('/')) {
-			// marimo adds the entry's directory; shared modules also need the workspace root.
-			startup.plan.start = `export PYTHONPATH="$PWD\${PYTHONPATH:+:$PYTHONPATH}" && ${startup.plan.start}`;
+			// marimo adds the entry's directory; other workspace tools also need the shared root.
+			await withSandboxSpan(sw, 'pythonpath', (time) =>
+				time(() => this.configureWorkspacePythonPath(sandbox, mountPath, startup)),
+			);
 		}
 		if (startup.plan.setup.length === 0) return startup;
 
