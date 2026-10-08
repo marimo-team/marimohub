@@ -1389,7 +1389,10 @@ See the [role matrix](../docs/auth.md#authorization-roles) and [app restrictions
 Normal reads mask inaccessible or soft-deleted resources as `404`; insufficient write permissions return `403 FORBIDDEN`.
 Security labels and credential scopes can further restrict access.
 
-Catalog entries carry `member_ids` and `member_emails`, but no roles or default access.
+Catalog entries carry optional `member_ids`, `member_emails`, and `member_groups` projections, but no roles or default access.
+A missing `member_groups` field is empty; it grants no directory access.
+Directory search builds membership candidates from the snapshot and confirms them against current project heads.
+A stale projection cannot retain a revoked grant.
 Listings read permissions from `project.json` because catalog projections can lag changes.
 Each listing reuses project reads across role, tag, and label checks.
 Roles, credential scopes, and labels are filtered before pagination and totals.
@@ -1403,6 +1406,16 @@ Project creation follows `MARIMOHUB_PROJECT_CREATION`.
 App-only users always need super-admin status or `project-creator`, including on open deployments.
 The server resolves app-only status from current defaults and effective memberships on each request.
 Creators become project owners with the reserved admin role.
+
+Project members contain exactly one `user_id`, `email`, or `group`, plus a role.
+Group ids use the auth port's shared validator and match authenticated groups exactly.
+Equal-role ties report the user-id source before email, and email before group.
+Group rows cannot carry `admin` and never become user rows during invite claiming.
+`ProjectService` writes group members and their `member_groups` projection through the existing metadata and catalog CAS paths.
+These writes are separate; authorization must use the project head after a projection failure.
+Group mutations use `{ group }` selectors, separate from string selectors for user ids and invite emails.
+
+The schema version remains 1. See [group membership rollout](../docs/auth.md#rolling-out-group-membership) before storing group rows or rolling back.
 
 `app-user`, `viewer`, `editor`, and `manager` are assignable; existing non-owner `admin` memberships remain valid.
 Upgrade every replica before assigning a role that older versions cannot parse.
@@ -1542,7 +1555,7 @@ Only the successful writer appends the mutation event.
 | Object-store versioning           | Enable native object versioning and lifecycle expiry as a backup below the snapshot layer. This can recover overwritten latest-only files and out-of-band deletions. See [`operations.md`](./operations.md) §1.                                                                                         |
 | Notebook ordering                 | Notebook lists use `created_at` and the random notebook ID as a stable tiebreaker. Manual ordering needs a new explicit field.                                                                                                                                                                          |
 | Additional source types           | `local` and push-synced `git` are implemented (§4.6). A future source type must define its write, sync, cache, and credential rules.                                                                                                                                                                    |
-| Read-side tenant isolation        | Project-level isolation is implemented (§12). `MARIMOHUB_DEFAULT_ROLE=none` filters snapshot entries by `member_ids`, so the read still uses two GETs. Per-notebook ACLs and storage-enforced isolation for untrusted tenants remain open.                                                              |
+| Read-side tenant isolation        | Project-level isolation is implemented (§12). Listings confirm access from authoritative project heads; snapshot member projections alone do not grant access. Per-notebook ACLs and storage-enforced isolation for untrusted tenants remain open.                                                      |
 | Execution logs locality           | Run logs currently go to `_system/events/`. Alternative: `projects/{pid}/notebooks/{nid}/runs/{run-id}.log` for per-notebook locality. Tradeoff is discoverability vs. centralization.                                                                                                                  |
 | Live state for real-time sessions | If kernel output streaming or sub-second variable inspection is needed, live session state belongs in a low-latency store (in-memory cache / stateful coordinator) co-located with the kernel runtime. Object storage retains the durable audit record.                                                 |
 | Version pruning                   | **Resolved.** `NotebookService.pruneVersions` keeps the most recent `MAX_VERSIONS` (50) per notebook, pruning on each save (`packages/core/src/services/content/NotebookService.ts`). Snapshot and event growth are handled separately by `MaintenanceService` ([`operations.md`](./operations.md) §5). |

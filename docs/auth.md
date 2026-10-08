@@ -92,40 +92,77 @@ App-only users need super-admin status or the `project-creator` entitlement, eve
 An [OIDC group mapping](#groups-and-roles) or [login-policy module](#login-policy-module) can grant `project-creator`.
 The creator becomes the project owner.
 
-### Members: user ids and email invites
+### Members: users, email invites, and IdP groups
 
-A member is identified by user id (canonical) or by email. Managers can add a
-member either way: a known email — someone who has signed in before — is
-resolved to their user id, while an unknown email is stored as a **pending
-invite**. At request time the caller matches a membership by their user id or,
-case-insensitively, by their login email, so an invite grants access the first
-time that person signs in, with no extra step. One person can never hold both
-an invite row and an id row — adding a member is rejected (409) when any of
-their known identifiers is already on the roster, so removing a member always
-revokes their access.
+Each member row identifies one user id, email, or IdP group. Managers and admins can add members.
+The highest matching membership role overrides default access, even when the default is higher.
+Owners and super admins retain `admin` access.
 
-After an invitee signs in, the next membership write or maintenance sweep
-replaces their email invite with a user-id row while preserving their role. A
-legacy roster that contains both forms is collapsed to one user-id row with the
-higher role. Email matching remains active until that claim occurs, so access is
-continuous.
+Removing a row removes that grant. Other memberships, default access, ownership, or super-admin status can still grant access.
+Duplicate requests for an existing member return `409`.
 
-The login email grants access, so OIDC requires email verification by default.
-Each present `email_verified` claim must be boolean `true` or the exact string
-`"true"`. `trusted-issuer` permits missing claims, including with a domain
-allowlist.
+#### Users and email invites
 
-Invite emails are PII of people who never signed in: the members list and
-project detail show them only to project managers (and to the invitee themself).
-The add-member picker searches the user directory
-(`GET /api/v1/users/search` — email, name, or id substring; everyone who has
-signed in at least once). Search requires a viewer-or-higher default role,
-super-admin status, or membership in at least one active project (including ownership).
+User ids match exactly. The server resolves known emails to user ids and stores unknown emails as **pending invites**.
+An invite matches the login email without regard to case and grants access on the first sign-in.
+The login email grants access, so [OIDC](#oidc-production) requires email verification by default.
 
-**Rollout note:** code older than this feature cannot parse a `project.json`
-containing an email invite row. Finish rolling out a release with this feature
-before creating email invites, and treat a rollback across it as requiring
-those invites to be removed first.
+After sign-in, the next membership write or maintenance sweep replaces the email row with a user-id row and preserves its role.
+If a legacy roster contains both forms, the server keeps one user-id row with the higher role.
+The email row grants access until this replacement occurs.
+
+The add-member picker searches signed-in users by email, name, or id through `GET /api/v1/users/search`.
+Search requires a default role of viewer or higher, super-admin status, or membership in an active project (including ownership).
+User and group rows are visible to all project readers. Pending invite emails are visible only to managers, admins, and the invitee.
+
+#### IdP groups
+
+A group membership grants its role to callers whose authenticated groups contain the exact group id.
+Groups can receive `app-user`, `viewer`, `editor`, or `manager`. They cannot receive `admin`.
+A group named like a user id or email remains a separate member.
+
+Group ids are case-sensitive. The server does not trim whitespace or normalize Unicode.
+See [group selection and ID limits](#group-membership) for valid IDs and OIDC configuration.
+Group creation requires OIDC membership selection or a [login-policy module](#login-policy-module) that can carry groups.
+The API reports this capability as `groups_carried` in `/api/v1/capabilities`.
+
+To add a group in **Project Access**:
+
+1. Select **IdP group**.
+2. Enter the exact group id.
+3. Choose a role.
+4. Select **Add group**.
+
+The picker suggests your own authenticated groups. It cannot search the IdP directory or confirm that a group exists.
+You can add a group you do not belong to.
+Group ids are visible to project readers and subscribed alert destinations. Do not use secrets as group ids.
+
+Group grants require browser SSO sessions or enabled external OIDC access tokens.
+PATs do not inherit SSO groups and need another applicable project grant within their credential scope.
+IdP changes take effect when the credential's groups refresh. See [session freshness](#group-membership).
+
+The API uses these routes:
+
+| Action      | Request                                                                                      |
+| ----------- | -------------------------------------------------------------------------------------------- |
+| Add         | `POST /api/v1/projects/{pid}/members` with `{ "group": "/teams/data", "role": "editor" }`    |
+| Change role | `PUT /api/v1/projects/{pid}/group-members?group=%2Fteams%2Fdata` with `{ "role": "viewer" }` |
+| Remove      | `DELETE /api/v1/projects/{pid}/group-members?group=%2Fteams%2Fdata`                          |
+
+Encode the group as a query parameter, including literal `+`, `/`, and `&` characters.
+The `/members/{uid}` route addresses users and email invites only.
+Existing group rows remain editable and removable if group creation is disabled.
+
+### Rolling out group membership
+
+1. Upgrade all replicas and stop all old replicas before adding group rows.
+2. Before rollback, remove all group rows with a compatible server.
+
+Older versions reject project records with group rows and return `503`.
+The bucket schema version remains 1. Project reads and listings use the authoritative project record, even if catalog projections are stale.
+
+Email invites have the same rollout requirement. Before creating invites, upgrade all replicas.
+Before rollback to an unsupported release, remove pending invites.
 
 ### What viewers see: `MARIMOHUB_VIEWER_MODE`
 
@@ -157,11 +194,11 @@ and the next visit starts fresh from the notebook's saved version.
 `MARIMOHUB_DEFAULT_ROLE` sets access for signed-in non-members (`editor` by default).
 Managers and admins can override it in **Project Access → Default access for signed-in users**.
 
-| Setting                               | API value                                 | Access for non-members                            |
-| ------------------------------------- | ----------------------------------------- | ------------------------------------------------- |
-| Inherit deployment and group defaults | `inherit`                                 | Higher of the deployment and OIDC group defaults. |
-| Members only                          | `none`                                    | No default access, including from OIDC groups.    |
-| App user, Viewer, Editor, or Manager  | `app-user`, `viewer`, `editor`, `manager` | Selected role for this project.                   |
+| Setting                                 | API value                                 | Access for non-members                                       |
+| --------------------------------------- | ----------------------------------------- | ------------------------------------------------------------ |
+| Inherit deployment and sign-in defaults | `inherit`                                 | Higher of the deployment and OIDC group defaults.            |
+| Members only                            | `none`                                    | No default access, including OIDC default-role entitlements. |
+| App user, Viewer, Editor, or Manager    | `app-user`, `viewer`, `editor`, `manager` | Selected role for this project.                              |
 
 Existing projects inherit. Explicit memberships override defaults. Owners and super
 admins retain admin access. These rules apply to project listings, direct requests,

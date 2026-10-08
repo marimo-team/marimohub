@@ -222,13 +222,13 @@ export interface paths {
 		};
 		/**
 		 * List project members
-		 * @description Pending email invites are visible only to project managers (plus the invitee themself); other callers see the id-keyed rows only.
+		 * @description Pending email invites are visible only to project managers (plus the invitee themself); other callers see user and group rows.
 		 */
 		get: operations['projects.members.list'];
 		put?: never;
 		/**
 		 * Add a project member
-		 * @description Add a member by user id or email. A known email resolves to its user id; an unknown email becomes a pending invite that grants access when that person first signs in.
+		 * @description Add a member by user id, email, or exact IdP group id. A known email resolves to its user id; an unknown email becomes a pending invite that grants access when that person first signs in.
 		 */
 		post: operations['projects.members.add'];
 		delete?: never;
@@ -255,6 +255,24 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/group-members': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		/** Change a group's project role */
+		put: operations['projects.members.groups.update'];
+		post?: never;
+		/** Remove a project group member */
+		delete: operations['projects.members.groups.remove'];
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/alert-destinations': {
 		parameters: {
 			query?: never;
@@ -267,7 +285,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Create a project alert destination
-		 * @description New destinations subscribe to all 12 project alert kinds when kinds is omitted. They remain disabled until a successful test.
+		 * @description New destinations subscribe to all 13 project alert kinds when kinds is omitted. They remain disabled until a successful test.
 		 */
 		post: operations['alerts.destinations.create'];
 		delete?: never;
@@ -2283,6 +2301,8 @@ export interface components {
 			version: string;
 		};
 		Capabilities: {
+			/** @description Whether this deployment supports IdP groups as project members. */
+			groups_carried?: boolean;
 			federation: {
 				available: boolean;
 				default_enabled: boolean;
@@ -2326,6 +2346,7 @@ export interface components {
 				selectable_kinds: (
 					| 'member.invited'
 					| 'member.added'
+					| 'member.group_added'
 					| 'member.role_changed'
 					| 'member.removed'
 					| 'session.takeover'
@@ -2467,6 +2488,7 @@ export interface components {
 			your_role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user' | null;
 		};
 		ProjectMember: {
+			group?: string;
 			user_id?: string;
 			email?: string;
 			/** @enum {string} */
@@ -2518,6 +2540,7 @@ export interface components {
 					kinds: (
 						| 'member.invited'
 						| 'member.added'
+						| 'member.group_added'
 						| 'member.role_changed'
 						| 'member.removed'
 						| 'session.takeover'
@@ -2550,6 +2573,7 @@ export interface components {
 					kinds: (
 						| 'member.invited'
 						| 'member.added'
+						| 'member.group_added'
 						| 'member.role_changed'
 						| 'member.removed'
 						| 'session.takeover'
@@ -3159,6 +3183,7 @@ export interface components {
 				owner: string;
 				members: {
 					user_id?: string;
+					group?: string;
 					email?: string;
 					/** @enum {string} */
 					role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user';
@@ -5739,6 +5764,8 @@ export interface operations {
 					 * @example teammate@example.com
 					 */
 					email?: string;
+					/** @example /teams/data-science */
+					group?: string;
 					role: components['schemas']['AssignableRole'];
 				};
 			};
@@ -6072,6 +6099,234 @@ export interface operations {
 			};
 		};
 	};
+	'projects.members.groups.update': {
+		parameters: {
+			query: {
+				group: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					role: components['schemas']['AssignableRole'] & unknown;
+				};
+			};
+		};
+		responses: {
+			/** @description Group role updated */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Project'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.members.groups.remove': {
+		parameters: {
+			query: {
+				group: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Group removed */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
 	'alerts.destinations.list': {
 		parameters: {
 			query?: never;
@@ -6180,6 +6435,7 @@ export interface operations {
 							kinds?: (
 								| 'member.invited'
 								| 'member.added'
+								| 'member.group_added'
 								| 'member.role_changed'
 								| 'member.removed'
 								| 'session.takeover'
@@ -6201,6 +6457,7 @@ export interface operations {
 							kinds?: (
 								| 'member.invited'
 								| 'member.added'
+								| 'member.group_added'
 								| 'member.role_changed'
 								| 'member.removed'
 								| 'session.takeover'
@@ -6451,6 +6708,7 @@ export interface operations {
 							kinds?: (
 								| 'member.invited'
 								| 'member.added'
+								| 'member.group_added'
 								| 'member.role_changed'
 								| 'member.removed'
 								| 'session.takeover'
@@ -6473,6 +6731,7 @@ export interface operations {
 							kinds?: (
 								| 'member.invited'
 								| 'member.added'
+								| 'member.group_added'
 								| 'member.role_changed'
 								| 'member.removed'
 								| 'session.takeover'

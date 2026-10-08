@@ -58,7 +58,9 @@ export function ConfirmDialog({
 				}}
 			>
 				<div className="flex flex-col gap-4">
-					<p className="text-sm leading-relaxed text-muted-foreground">{description}</p>
+					<p className="wrap-anywhere text-sm leading-relaxed text-muted-foreground">
+						{description}
+					</p>
 					{children}
 					<div className="flex justify-end gap-2 pt-2 max-md:flex-col">
 						<Button type="button" variant="ghost" onPress={handleClose} isDisabled={isPending}>

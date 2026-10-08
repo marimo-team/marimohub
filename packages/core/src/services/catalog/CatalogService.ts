@@ -51,6 +51,7 @@ export function upgradeSnapshot(raw: Snapshot): Snapshot {
 type ProjectInvolvement = {
 	userIds: Map<string, ProjectId[]>;
 	emails: Map<string, ProjectId[]>;
+	groups: Map<string, ProjectId[]>;
 };
 
 export class CatalogService {
@@ -121,13 +122,18 @@ export class CatalogService {
 		return this.readSnapshot(await this.readCurrentCatalog());
 	}
 
-	async hasProjectInvolvement(user: { id: UserId; email: string }): Promise<boolean> {
+	async hasProjectInvolvement(user: {
+		id: UserId;
+		email: string;
+		groups?: readonly string[];
+	}): Promise<boolean> {
 		// Refresh the pointer on every check; cache candidates, never authorization decisions.
 		const catalog = await this.readCurrentCatalog();
 		if (this.involvementIndex?.snapshotKey !== catalog.current_snapshot_key) {
 			const value = this.readSnapshot(catalog).then(async (snapshot) => {
 				const userIds = new Map<string, ProjectId[]>();
 				const emails = new Map<string, ProjectId[]>();
+				const groups = new Map<string, ProjectId[]>();
 				const legacy: ProjectId[] = [];
 				const add = (index: Map<string, ProjectId[]>, key: string, project: ProjectId) => {
 					const candidates = index.get(key) ?? [];
@@ -138,6 +144,7 @@ export class CatalogService {
 					if (project.status === 'deleted') continue;
 					add(userIds, project.owner, project.id);
 					if (project.member_ids === undefined) legacy.push(project.id);
+					for (const group of project.member_groups ?? []) add(groups, group, project.id);
 					for (const id of project.member_ids ?? []) add(userIds, id, project.id);
 					for (const email of project.member_emails ?? []) {
 						add(emails, normalizeEmail(email), project.id);
@@ -148,11 +155,12 @@ export class CatalogService {
 					if (!project || project.status === 'deleted') return;
 					add(userIds, project.owner, id);
 					for (const member of project.members) {
+						if (member.group !== undefined) add(groups, member.group, id);
 						if (member.user_id !== undefined) add(userIds, member.user_id, id);
 						if (member.email !== undefined) add(emails, normalizeEmail(member.email), id);
 					}
 				});
-				return { userIds, emails };
+				return { userIds, emails, groups };
 			});
 			this.involvementIndex = { snapshotKey: catalog.current_snapshot_key, value };
 		}
@@ -167,6 +175,7 @@ export class CatalogService {
 		const candidates = new Set([
 			...(index.userIds.get(user.id) ?? []),
 			...(index.emails.get(normalizeEmail(user.email)) ?? []),
+			...(user.groups ?? []).flatMap((group) => index.groups.get(group) ?? []),
 		]);
 		// A failed roster projection must not preserve a revoked directory grant.
 		for (const id of candidates) {

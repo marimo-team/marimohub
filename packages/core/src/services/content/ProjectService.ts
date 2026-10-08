@@ -12,8 +12,9 @@ import type {
 	ResourceSecurityPolicy,
 } from '../authorization/AuthorizationService';
 import { memberRefMatchesSelector, normalizeEmail } from '../../identityMatch';
+import type { MemberSelector } from '../../identityMatch';
 import { mapWithConcurrency } from '../../concurrency';
-import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { ASSIGNABLE_ROLES, BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import type { AssignableRole, Role } from '../../constants';
 import { Millis } from '../../duration';
 import {
@@ -31,7 +32,13 @@ import type { Metrics } from '../../ports/metrics';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import { metricsObserver, saga } from '../../saga';
-import { parseStored, ProjectSchema, readStored, toPublicProjectEntry } from '../../schema';
+import {
+	parseStored,
+	ProjectMemberSchema,
+	ProjectSchema,
+	readStored,
+	toPublicProjectEntry,
+} from '../../schema';
 import { normalizeSecurityLabels } from '../../securityLabels';
 import type { ResourceSecurityLabels } from '../../securityLabels';
 import type {
@@ -70,13 +77,10 @@ export interface UpdateProjectInput {
 }
 
 /**
- * Identifier for a member being added: a known user id, or an email invite.
- * An id add may also carry the person's known email (from the identity
- * directory) — it is not stored, but lets the duplicate check catch a pending
- * invite row for the same person, so one human can never hold two rows (which
- * would make demote/remove of one row silently fail to revoke the other).
+ * A known email prevents an id add from duplicating a pending invite.
+ * Only the user id is stored in that case.
  */
-export type NewMember = { user_id: UserId; email?: string } | { email: string };
+export type NewMember = { user_id: UserId; email?: string } | { email: string } | { group: string };
 
 export interface MemberMutationResult {
 	project: Project;
@@ -120,7 +124,8 @@ function higherRole(a: Role, b: Role): Role {
 	return roleAtLeast(a, b) ? a : b;
 }
 
-function selectorAfterClaims(member: ProjectMember, claimed: ClaimedInviteRows): string {
+function selectorAfterClaims(member: ProjectMember, claimed: ClaimedInviteRows): MemberSelector {
+	if (member.group !== undefined) return { group: member.group };
 	if (member.user_id !== undefined) return member.user_id;
 	const email = member.email as string;
 	return claimed.userIdsByEmail.get(normalizeEmail(email)) ?? email;
@@ -159,6 +164,10 @@ async function resolveInviteRows(
 	let claimedRows = 0;
 
 	for (const member of members) {
+		if (member.group !== undefined) {
+			output.push(member);
+			continue;
+		}
 		if (member.user_id !== undefined) {
 			const pendingRole = pendingRoles.get(member.user_id);
 			const index = output.length;
@@ -391,6 +400,7 @@ export class ProjectService {
 									m.user_id !== undefined ? [m.user_id] : [],
 								),
 								member_emails: [],
+								member_groups: [],
 								security_labels: null,
 							},
 						],
@@ -578,6 +588,21 @@ export class ProjectService {
 		role: AssignableRole,
 		actor: UserId,
 	): Promise<MemberMutationResult> {
+		if (!(ASSIGNABLE_ROLES as readonly string[]).includes(role))
+			throw new ValidationError('Cannot assign admin');
+		if ('group' in member) {
+			const row = ProjectMemberSchema.safeParse({ ...member, role });
+			if (!row.success) throw new ValidationError('Invalid group member');
+			return this.writeMembers(
+				id,
+				(_current, claimed) => {
+					if (claimed.members.some((m) => m.group === member.group))
+						throw new ConflictError(`group ${member.group} is already a member of project ${id}`);
+					return [...claimed.members, row.data];
+				},
+				actor,
+			);
+		}
 		const userId = 'user_id' in member ? member.user_id : undefined;
 		const email = member.email !== undefined ? normalizeEmail(member.email) : undefined;
 		const { project, mutationId } = await this.writeMembers(
@@ -603,13 +628,13 @@ export class ProjectService {
 	}
 
 	/**
-	 * Change a member's role. `selector` is the member's user id or email. 404 if
+	 * Change a member's role by user id, email, or group selector. 404 if
 	 * not a member. The owner's membership is immutable (they are implicitly
 	 * admin), which keeps at least one admin on the project at all times.
 	 */
 	async updateMemberRole(
 		id: ProjectId,
-		selector: string,
+		selector: MemberSelector,
 		role: AssignableRole,
 		actor: UserId,
 	): Promise<Project> {
@@ -618,21 +643,25 @@ export class ProjectService {
 
 	async updateMemberRoleWithMutation(
 		id: ProjectId,
-		selector: string,
+		selector: MemberSelector,
 		role: AssignableRole,
 		actor: UserId,
 	): Promise<UpdatedMemberMutationResult> {
+		if (!(ASSIGNABLE_ROLES as readonly string[]).includes(role))
+			throw new ValidationError('Cannot assign admin');
 		let previousMember: ProjectMember | undefined;
 		let member: ProjectMember | undefined;
 		const { project, mutationId } = await this.writeMembers(
 			id,
 			(current, claimed) => {
-				if (selector === current.owner) {
+				if (typeof selector === 'string' && selector === current.owner) {
 					throw new ConflictError(`Cannot change the role of the project owner`);
 				}
 				previousMember = current.members.find((m) => memberRefMatchesSelector(m, selector));
 				if (!previousMember) {
-					throw new NotFoundError(`${selector} is not a member of project ${id}`);
+					throw new NotFoundError(
+						`${typeof selector === 'string' ? selector : selector.group} is not a member of project ${id}`,
+					);
 				}
 				const claimedSelector = selectorAfterClaims(previousMember, claimed);
 				const members = claimed.members.map((m) =>
@@ -647,28 +676,30 @@ export class ProjectService {
 	}
 
 	/**
-	 * Remove a member by user id or email. 404 if not a member; the owner cannot
+	 * Remove a member by user id, email, or group selector. 404 if not a member; the owner cannot
 	 * be removed.
 	 */
-	async removeMember(id: ProjectId, selector: string, actor: UserId): Promise<Project> {
+	async removeMember(id: ProjectId, selector: MemberSelector, actor: UserId): Promise<Project> {
 		return (await this.removeMemberWithMutation(id, selector, actor)).project;
 	}
 
 	async removeMemberWithMutation(
 		id: ProjectId,
-		selector: string,
+		selector: MemberSelector,
 		actor: UserId,
 	): Promise<ExistingMemberMutationResult> {
 		let previousMember: ProjectMember | undefined;
 		const { project, mutationId } = await this.writeMembers(
 			id,
 			(current, claimed) => {
-				if (selector === current.owner) {
+				if (typeof selector === 'string' && selector === current.owner) {
 					throw new ConflictError(`Cannot remove the project owner`);
 				}
 				previousMember = current.members.find((m) => memberRefMatchesSelector(m, selector));
 				if (!previousMember) {
-					throw new NotFoundError(`${selector} is not a member of project ${id}`);
+					throw new NotFoundError(
+						`${typeof selector === 'string' ? selector : selector.group} is not a member of project ${id}`,
+					);
 				}
 				const claimedSelector = selectorAfterClaims(previousMember, claimed);
 				return claimed.members.filter((m) => !memberRefMatchesSelector(m, claimedSelector));
@@ -678,11 +709,8 @@ export class ProjectService {
 		return { project, mutationId, previousMember: previousMember! };
 	}
 
-	// The authoritative roster (with roles) lives on project.json; the snapshot
-	// entry carries only `member_ids`/`member_emails` (denormalized copies of the
-	// identifiers) so the project list can be filtered per-caller in-memory. A
-	// membership change rewrites the meta blob and, in the same catalog CAS, bumps
-	// `updated_at` and refreshes both rosters to match.
+	// The roster CAS and catalog CAS are separate writes. If projection fails,
+	// project.json still holds the committed roles and must decide access.
 	private async writeMembers(
 		id: ProjectId,
 		deriveMembers: (current: Project, claimed: ClaimedInviteRows) => ProjectMember[],
@@ -744,7 +772,8 @@ export class ProjectService {
 			const projection = projectCatalogPatch(result.project, candidate);
 			const projectionIsCurrent =
 				sameValues(candidate.member_ids, projection.member_ids) &&
-				sameValues(candidate.member_emails, projection.member_emails);
+				sameValues(candidate.member_emails, projection.member_emails) &&
+				sameValues(candidate.member_groups, projection.member_groups);
 			if (!result.written && projectionIsCurrent) return 0;
 			await this.catalog.updateProjectEntry(
 				result.written ? 'project.members.claim' : 'project.members.repair',

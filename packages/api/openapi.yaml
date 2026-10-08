@@ -158,6 +158,9 @@ components:
     Capabilities:
       type: object
       properties:
+        groups_carried:
+          type: boolean
+          description: Whether this deployment supports IdP groups as project members.
         federation:
           type: object
           properties:
@@ -238,6 +241,7 @@ components:
                 enum:
                   - member.invited
                   - member.added
+                  - member.group_added
                   - member.role_changed
                   - member.removed
                   - session.takeover
@@ -249,11 +253,11 @@ components:
                   - job.run.failed
                   - job.run.succeeded
                   - unknown
-                description: 'Known values: member.invited, member.added, member.role_changed,
-                  member.removed, session.takeover, notebook.deleted,
-                  project.deleted, app.start_failed, app.unavailable,
-                  sync.failed, job.run.failed, job.run.succeeded. Unrecognized
-                  values normalize to unknown.'
+                description: 'Known values: member.invited, member.added, member.group_added,
+                  member.role_changed, member.removed, session.takeover,
+                  notebook.deleted, project.deleted, app.start_failed,
+                  app.unavailable, sync.failed, job.run.failed,
+                  job.run.succeeded. Unrecognized values normalize to unknown.'
                 example: member.invited
             max_destinations:
               type: integer
@@ -617,6 +621,8 @@ components:
     ProjectMember:
       type: object
       properties:
+        group:
+          type: string
         user_id:
           type: string
         email:
@@ -742,6 +748,7 @@ components:
                 enum: &a1
                   - member.invited
                   - member.added
+                  - member.group_added
                   - member.role_changed
                   - member.removed
                   - session.takeover
@@ -753,11 +760,11 @@ components:
                   - job.run.failed
                   - job.run.succeeded
                   - unknown
-                description: 'Known values: member.invited, member.added, member.role_changed,
-                  member.removed, session.takeover, notebook.deleted,
-                  project.deleted, app.start_failed, app.unavailable,
-                  sync.failed, job.run.failed, job.run.succeeded. Unrecognized
-                  values normalize to unknown.'
+                description: 'Known values: member.invited, member.added, member.group_added,
+                  member.role_changed, member.removed, session.takeover,
+                  notebook.deleted, project.deleted, app.start_failed,
+                  app.unavailable, sync.failed, job.run.failed,
+                  job.run.succeeded. Unrecognized values normalize to unknown.'
                 example: member.invited
             enabled:
               type: boolean
@@ -808,11 +815,11 @@ components:
               items:
                 type: string
                 enum: *a1
-                description: 'Known values: member.invited, member.added, member.role_changed,
-                  member.removed, session.takeover, notebook.deleted,
-                  project.deleted, app.start_failed, app.unavailable,
-                  sync.failed, job.run.failed, job.run.succeeded. Unrecognized
-                  values normalize to unknown.'
+                description: 'Known values: member.invited, member.added, member.group_added,
+                  member.role_changed, member.removed, session.takeover,
+                  notebook.deleted, project.deleted, app.start_failed,
+                  app.unavailable, sync.failed, job.run.failed,
+                  job.run.succeeded. Unrecognized values normalize to unknown.'
                 example: member.invited
             enabled:
               type: boolean
@@ -2266,6 +2273,8 @@ components:
                   user_id:
                     type: string
                     minLength: 1
+                  group:
+                    type: string
                   email:
                     type: string
                     minLength: 3
@@ -6443,7 +6452,7 @@ paths:
         - Projects
       summary: List project members
       description: Pending email invites are visible only to project managers (plus
-        the invitee themself); other callers see the id-keyed rows only.
+        the invitee themself); other callers see user and group rows.
       parameters:
         - schema:
             type: string
@@ -6526,9 +6535,9 @@ paths:
       tags:
         - Projects
       summary: Add a project member
-      description: Add a member by user id or email. A known email resolves to its
-        user id; an unknown email becomes a pending invite that grants access
-        when that person first signs in.
+      description: Add a member by user id, email, or exact IdP group id. A known
+        email resolves to its user id; an unknown email becomes a pending invite
+        that grants access when that person first signs in.
       parameters:
         - schema:
             type: string
@@ -6552,6 +6561,9 @@ paths:
                   type: string
                   format: email
                   example: teammate@example.com
+                group:
+                  type: string
+                  example: /teams/data-science
                 role:
                   $ref: '#/components/schemas/AssignableRole'
               required:
@@ -6863,6 +6875,222 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/group-members:
+    put:
+      operationId: projects.members.groups.update
+      tags:
+        - Projects
+      summary: Change a group's project role
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            example: /teams/data-science
+          required: true
+          name: group
+          in: query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role:
+                  allOf:
+                    - $ref: '#/components/schemas/AssignableRole'
+                    - example: manager
+              required:
+                - role
+      responses:
+        '200':
+          description: Group role updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/Project'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: projects.members.groups.remove
+      tags:
+        - Projects
+      summary: Remove a project group member
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            example: /teams/data-science
+          required: true
+          name: group
+          in: query
+      responses:
+        '200':
+          description: Group removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/alert-destinations:
     get:
       operationId: alerts.destinations.list
@@ -6949,7 +7177,7 @@ paths:
       tags:
         - Alerts
       summary: Create a project alert destination
-      description: New destinations subscribe to all 12 project alert kinds when kinds
+      description: New destinations subscribe to all 13 project alert kinds when kinds
         is omitted. They remain disabled until a successful test.
       parameters:
         - schema:
@@ -6978,6 +7206,7 @@ paths:
                         enum:
                           - member.invited
                           - member.added
+                          - member.group_added
                           - member.role_changed
                           - member.removed
                           - session.takeover
@@ -7014,6 +7243,7 @@ paths:
                         enum:
                           - member.invited
                           - member.added
+                          - member.group_added
                           - member.role_changed
                           - member.removed
                           - session.takeover
@@ -7184,6 +7414,7 @@ paths:
                         enum:
                           - member.invited
                           - member.added
+                          - member.group_added
                           - member.role_changed
                           - member.removed
                           - session.takeover
@@ -7220,6 +7451,7 @@ paths:
                         enum:
                           - member.invited
                           - member.added
+                          - member.group_added
                           - member.role_changed
                           - member.removed
                           - session.takeover

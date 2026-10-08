@@ -16,6 +16,7 @@ import type { ProjectAlertDestination, ProjectAlertKind } from '@/types';
 const LABELS: Record<ProjectAlertKind, string> = {
 	'member.invited': 'Member invited',
 	'member.added': 'Member added',
+	'member.group_added': 'Group added',
 	'member.role_changed': 'Member role changed',
 	'member.removed': 'Member removed',
 	'session.takeover': 'Editor takeover',
@@ -41,7 +42,13 @@ function sameKinds(a: readonly ProjectAlertKind[], b: readonly ProjectAlertKind[
 const GROUPS: { label: string; kinds: ProjectAlertKind[] }[] = [
 	{
 		label: 'Access',
-		kinds: ['member.invited', 'member.added', 'member.role_changed', 'member.removed'],
+		kinds: [
+			'member.invited',
+			'member.added',
+			'member.group_added',
+			'member.role_changed',
+			'member.removed',
+		],
 	},
 	{ label: 'Content', kinds: ['session.takeover', 'notebook.deleted', 'project.deleted'] },
 	{ label: 'Runtime', kinds: ['app.start_failed', 'app.unavailable', 'sync.failed'] },

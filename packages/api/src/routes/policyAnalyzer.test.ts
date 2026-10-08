@@ -726,7 +726,7 @@ describe('policy analyzer group isolation', () => {
 		{ groups: undefined, grant: { actions: ['project.read'], projects: '*' } },
 		{ groups: ['simulated-team'], grant: { actions: ['project.read'], projects: '*' } },
 	])(
-		'uses explicit groups instead of ambient caller groups in live-self analysis: %j',
+		'preserves authenticated groups instead of supplied groups in live-self analysis: %j',
 		async ({ groups, grant }) => {
 			const { request } = createTestApi({
 				deps: {
@@ -756,7 +756,7 @@ describe('policy analyzer group isolation', () => {
 			);
 			expect(data.valid).toBe(true);
 			expect(analyze).toHaveBeenCalledWith(
-				expect.objectContaining({ groups: groups ?? [] }),
+				expect.objectContaining({ groups: ['ambient-team'] }),
 				'project.read',
 				expect.anything(),
 				{ mode: 'live' },
@@ -803,5 +803,98 @@ describe('policy analyzer group isolation', () => {
 			authorization: null,
 		});
 		expect(analyze).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('policy analyzer project group membership', () => {
+	it('uses login-policy groups for linked group authorization', async () => {
+		const { request } = createTestApi({
+			deps: {
+				policy: { superAdmins: [ACTOR] },
+				policyAnalyzer: {
+					classificationOrder: [],
+					loginPolicy: {
+						evaluate: async () => ({
+							outcome: 'allow',
+							entitlements: [],
+							groups: ['team'],
+							durationMs: 0,
+						}),
+					},
+				},
+			},
+		});
+		const entry = authorizationCase({
+			subject: { id: 'subject', email: 'subject@example.com', entitlement_source: 'login' },
+			resource: {
+				source: 'synthetic',
+				kind: 'project',
+				project: { owner: 'other', members: [{ group: 'team', role: 'editor' }] },
+			},
+		});
+		const data = await expectOk(
+			await request('POST', '/admin/policy-analyzer/evaluate', {
+				schema_version: 1,
+				cases: [
+					{
+						...entry,
+						login: {
+							identity: { id: 'subject', email: 'subject@example.com' },
+							id_token_claims: {},
+							expected: { outcome: 'allow', groups: ['team'] },
+						},
+					},
+				],
+			}),
+		);
+		expect(data.valid).toBe(true);
+		expect(JSON.stringify(data)).toContain('effective_role_member-group');
+	});
+	it('resolves synthetic group memberships with the group role source', async () => {
+		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+		const data = await expectOk(
+			await request('POST', '/admin/policy-analyzer/evaluate', {
+				schema_version: 1,
+				cases: [
+					authorizationCase({
+						subject: {
+							id: 'subject',
+							email: 'subject@example.com',
+							entitlement_source: 'explicit',
+							groups: ['/teams/data'],
+						},
+						resource: {
+							source: 'synthetic',
+							kind: 'project',
+							project: { owner: 'other', members: [{ group: '/teams/data', role: 'viewer' }] },
+						},
+					}),
+				],
+			}),
+		);
+		expect(data.valid).toBe(true);
+		expect(JSON.stringify(data)).toContain('effective_role_member-group');
+	});
+	it.each([
+		{ group: 'team', role: 'admin' },
+		{ group: 'team', email: 'a@b.com', role: 'editor' },
+		{ group: ' team', role: 'editor' },
+	])('rejects invalid synthetic group rows: %j', async (member) => {
+		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+		await expectError(
+			await request('POST', '/admin/policy-analyzer/evaluate', {
+				schema_version: 1,
+				cases: [
+					authorizationCase({
+						resource: {
+							source: 'synthetic',
+							kind: 'project',
+							project: { owner: 'other', members: [member] },
+						},
+					}),
+				],
+			}),
+			422,
+		);
 	});
 });

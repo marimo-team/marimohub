@@ -166,6 +166,7 @@ describe('OpenAPI spec', () => {
 		const alertKinds = [
 			'member.invited',
 			'member.added',
+			'member.group_added',
 			'member.role_changed',
 			'member.removed',
 			'session.takeover',

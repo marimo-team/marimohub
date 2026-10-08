@@ -20,6 +20,8 @@ export interface ComboBoxProps<T extends ComboBoxOption> {
 	retainSelection?: boolean;
 	label?: string;
 	'aria-label'?: string;
+	'aria-describedby'?: string;
+	isInvalid?: boolean;
 	placeholder?: string;
 	/** Controlled text: the caller derives its options (e.g. a search) from it. */
 	inputValue: string;
@@ -32,6 +34,9 @@ export interface ComboBoxProps<T extends ComboBoxOption> {
 	emptyState?: ReactNode;
 	isDisabled?: boolean;
 	autoFocus?: boolean;
+	autoCapitalize?: string;
+	spellCheck?: boolean;
+	inputClassName?: string;
 	className?: string;
 }
 
@@ -49,6 +54,8 @@ export function ComboBox<T extends ComboBoxOption>({
 	retainSelection = false,
 	label,
 	'aria-label': ariaLabel,
+	'aria-describedby': ariaDescribedBy,
+	isInvalid,
 	placeholder,
 	inputValue,
 	onInputChange,
@@ -58,11 +65,16 @@ export function ComboBox<T extends ComboBoxOption>({
 	emptyState,
 	isDisabled,
 	autoFocus,
+	autoCapitalize,
+	spellCheck,
+	inputClassName,
 	className,
 }: ComboBoxProps<T>) {
 	return (
 		<AriaComboBox
 			aria-label={ariaLabel}
+			aria-describedby={ariaDescribedBy}
+			isInvalid={isInvalid}
 			inputValue={inputValue}
 			onInputChange={onInputChange}
 			value={
@@ -84,9 +96,12 @@ export function ComboBox<T extends ComboBoxOption>({
 			<Input
 				placeholder={placeholder}
 				autoFocus={autoFocus}
+				autoCapitalize={autoCapitalize}
+				spellCheck={spellCheck}
 				className={cn(
 					'h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm transition-colors',
 					'placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+					inputClassName,
 				)}
 			/>
 			<AriaPopover

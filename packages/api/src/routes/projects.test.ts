@@ -455,6 +455,15 @@ describe('Project member routes', () => {
 	let notifier: MemoryNotifier;
 	const bob = uid('user_bob');
 
+	async function projectState() {
+		const response = await owner('GET', `/projects/${pid}`);
+		return {
+			etag: response.headers.get('ETag'),
+			project: await expectOk(response),
+			catalog: await createServices(bucket).catalog.getCurrentSnapshot(),
+		};
+	}
+
 	beforeEach(async () => {
 		bucket = await createInitializedBucket();
 		notifier = new MemoryNotifier();
@@ -472,6 +481,114 @@ describe('Project member routes', () => {
 		const members = await expectOk<any[]>(await owner('GET', `/projects/${pid}/members`));
 		expect(members).toEqual([{ user_id: ACTOR, role: 'admin' }]);
 	});
+
+	it.each(['invalid-json', 'invalid-member-role'] as const)(
+		'fails closed on %s despite a matching catalog membership',
+		async (corruption) => {
+			await expectOk(
+				await owner('POST', `/projects/${pid}/members`, { user_id: bob, role: 'viewer' }),
+				201,
+			);
+			const member = createTestApi({ bucket, userId: bob }).request;
+			await expectOk(await member('GET', `/projects/${pid}`));
+			expect(await expectPage(await member('GET', '/projects'))).toHaveLength(1);
+			const project = await createServices(bucket).projects.getProject(ProjectId.parse(pid));
+			await bucket.put(
+				paths.project(project.id).meta,
+				corruption === 'invalid-json'
+					? '{'
+					: JSON.stringify({ ...project, members: [{ user_id: bob, role: 'superuser' }] }),
+			);
+
+			for (const path of [`/projects/${pid}`, `/projects/${pid}/members`, '/projects']) {
+				await expectError(await member('GET', path), 503, 'SERVICE_UNAVAILABLE');
+			}
+		},
+	);
+
+	it.each([
+		{
+			attempt: 'demote-owner',
+			method: 'PUT',
+			selector: ACTOR,
+			body: { role: 'viewer' },
+			status: 409,
+		},
+		{ attempt: 'remove-owner', method: 'DELETE', selector: ACTOR, body: undefined, status: 409 },
+		{
+			attempt: 'promote-admin',
+			method: 'PUT',
+			selector: bob,
+			body: { role: 'admin' },
+			status: 422,
+		},
+		{
+			attempt: 'add-admin',
+			method: 'POST',
+			selector: undefined,
+			body: { user_id: uid('user_new'), role: 'admin' },
+			status: 422,
+		},
+		{
+			attempt: 'missing-member',
+			method: 'DELETE',
+			selector: 'user_missing',
+			body: undefined,
+			status: 404,
+		},
+	] as const)(
+		'rejects $attempt without changing the roster or catalog',
+		async ({ method, selector, body, status }) => {
+			await expectOk(
+				await owner('POST', `/projects/${pid}/members`, { user_id: bob, role: 'manager' }),
+				201,
+			);
+			const manager = createTestApi({ bucket, userId: bob }).request;
+			const before = await projectState();
+			const path = `/projects/${pid}/members${selector === undefined ? '' : `/${selector}`}`;
+
+			await expectError(await manager(method, path, body), status);
+
+			expect(await projectState()).toEqual(before);
+		},
+	);
+
+	it.each(['app-user', 'viewer', 'editor'] as const)(
+		'does not let an explicit %s manage members through higher defaults',
+		async (role) => {
+			await expectOk(await owner('PATCH', `/projects/${pid}`, { default_role: 'manager' }));
+			await expectOk(await owner('POST', `/projects/${pid}/members`, { user_id: bob, role }), 201);
+			const member = createTestApi({
+				bucket,
+				deps: {
+					policy: { defaultRole: 'manager' },
+					authenticator: {
+						authenticate: async () => ({
+							id: bob,
+							email: `${bob}@example.com`,
+							credential: { kind: 'sso' },
+							entitlements: ['default-role:manager'],
+							groups: ['managers'],
+						}),
+					},
+				},
+			}).request;
+			const before = await projectState();
+			await expectError(
+				await member('POST', `/projects/${pid}/members`, {
+					user_id: uid('user_new'),
+					role: 'manager',
+				}),
+				403,
+			);
+			await expectError(
+				await member('PUT', `/projects/${pid}/members/${bob}`, { role: 'manager' }),
+				403,
+			);
+			await expectError(await member('DELETE', `/projects/${pid}/members/${ACTOR}`), 403);
+			expect(await projectState()).toEqual(before);
+		},
+	);
 
 	it('a group-derived default manager can manage a project without membership', async () => {
 		const groupManager = uid('user_group_manager');

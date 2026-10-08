@@ -9,11 +9,8 @@
  * `app-user`. Project defaults override deployment and OIDC defaults for
  * non-members. A project's `owner` is implicitly admin.
  *
- * A member row carries either a `user_id` or an `email` (a pending invite for
- * someone who hasn't logged in yet). The caller is therefore matched as a
- * subject — `{ id, email }` — against both: id rows by exact id, email rows by
- * case-insensitive email. Session ownership is NOT part of this module and
- * stays strict id equality (see api/shared.ts assertSessionControl).
+ * User ids and group ids match exactly; invite emails match case-insensitively.
+ * Session ownership remains strict user-id equality.
  */
 
 import type { AssignableRole, Role } from './constants';
@@ -73,6 +70,7 @@ export type EffectiveRoleSource =
 	| 'owner'
 	| 'member-id'
 	| 'member-email'
+	| 'member-group'
 	| 'entitlement-default'
 	| 'deployment-default'
 	| 'project-default'
@@ -106,7 +104,7 @@ export function canCreateProject(subject: AuthSubject, policy?: AuthzPolicy): bo
 
 /**
  * Membership overrides defaults; project defaults override deployment and OIDC defaults.
- * Matching id and email memberships use the highest role, independent of row order.
+ * Matching user, email, and group memberships use the highest role, independent of row order.
  * Owners and super admins remain admin regardless of defaults or membership.
  */
 export function effectiveRole(
@@ -130,20 +128,28 @@ export function resolveEffectiveRole(
 	}
 	if (project.owner === subject.id) return { role: 'admin', source: 'owner' };
 	let best: Role | null = null;
-	let source: 'member-id' | 'member-email' | undefined;
+	const preference = { 'member-id': 2, 'member-email': 1, 'member-group': 0 };
+	let source: keyof typeof preference | undefined;
 	for (const member of project.members) {
+		if (member.group !== undefined && member.role === 'admin') continue;
 		if (!memberRefMatchesSubject(member, subject)) continue;
+		const candidateSource =
+			member.user_id !== undefined
+				? 'member-id'
+				: member.email !== undefined
+					? 'member-email'
+					: 'member-group';
 		if (
 			best === null ||
 			RANK[member.role] > RANK[best] ||
 			(RANK[member.role] === RANK[best] &&
-				member.user_id !== undefined &&
-				source === 'member-email')
+				source !== undefined &&
+				preference[candidateSource] > preference[source])
 		) {
 			best = member.role;
-			source = member.user_id !== undefined ? 'member-id' : 'member-email';
+			source = candidateSource;
 		}
-		if (best === 'admin') break;
+		if (best === 'admin' && source === 'member-id') break;
 	}
 	if (best !== null) return { role: best, source: source ?? 'member-id' };
 
@@ -189,7 +195,12 @@ export function requireRole(
  * Non-owner decisions must load the authoritative project record.
  */
 export function canSeeProjectEntry(
-	entry: { owner: UserId; member_ids?: UserId[]; member_emails?: string[] },
+	entry: {
+		owner: UserId;
+		member_ids?: UserId[];
+		member_emails?: string[];
+		member_groups?: string[];
+	},
 	subject: AuthSubject,
 	policy?: AuthzPolicy,
 ): boolean | null {

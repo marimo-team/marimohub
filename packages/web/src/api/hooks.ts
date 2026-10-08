@@ -1,3 +1,4 @@
+import type { MemberSelector } from '@marimo-hub/core/identity-match';
 import { MAX_RESOLVED_USERS } from '@marimo-hub/core/constants';
 import {
 	useInfiniteQuery,
@@ -619,16 +620,19 @@ export function useProjectMembersQuery(projectId: string) {
 	});
 }
 
-/** A project's member list and its detail both carry membership — drop both. */
+/** Membership changes can also change the caller’s app-only mode and visible projects. */
 const memberKeys = (projectId: string) => [
 	projectKeys.members(projectId),
 	projectKeys.detail(projectId),
+	projectKeys.list(),
+	userKeys.me(),
+	appKeys.all,
 ];
 
 export function useAddMember(projectId: string) {
 	return useApiMutation(
-		// Exactly one of user_id / email, enforced server-side (422).
-		(body: { user_id?: string; email?: string; role: AssignableProjectRole }) =>
+		// Exactly one of user_id / email / group, enforced server-side (422).
+		(body: { user_id?: string; email?: string; group?: string; role: AssignableProjectRole }) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/members', {
 					params: { path: { pid: projectId } },
@@ -641,12 +645,17 @@ export function useAddMember(projectId: string) {
 
 export function useUpdateMemberRole(projectId: string) {
 	return useApiMutation(
-		({ uid, role }: { uid: string; role: AssignableProjectRole }) =>
+		({ selector, role }: { selector: MemberSelector; role: AssignableProjectRole }) =>
 			apiData(
-				apiClient.PUT('/api/v1/projects/{pid}/members/{uid}', {
-					params: { path: { pid: projectId, uid } },
-					body: { role },
-				}),
+				typeof selector === 'string'
+					? apiClient.PUT('/api/v1/projects/{pid}/members/{uid}', {
+							params: { path: { pid: projectId, uid: selector } },
+							body: { role },
+						})
+					: apiClient.PUT('/api/v1/projects/{pid}/group-members', {
+							params: { path: { pid: projectId }, query: selector },
+							body: { role },
+						}),
 			),
 		() => memberKeys(projectId),
 	);
@@ -654,11 +663,15 @@ export function useUpdateMemberRole(projectId: string) {
 
 export function useRemoveMember(projectId: string) {
 	return useApiMutation(
-		(uid: string) =>
+		(selector: MemberSelector) =>
 			apiData(
-				apiClient.DELETE('/api/v1/projects/{pid}/members/{uid}', {
-					params: { path: { pid: projectId, uid } },
-				}),
+				typeof selector === 'string'
+					? apiClient.DELETE('/api/v1/projects/{pid}/members/{uid}', {
+							params: { path: { pid: projectId, uid: selector } },
+						})
+					: apiClient.DELETE('/api/v1/projects/{pid}/group-members', {
+							params: { path: { pid: projectId }, query: selector },
+						}),
 			),
 		() => memberKeys(projectId),
 	);

@@ -802,6 +802,7 @@ describe('createFromEnv oidc login-policy library', () => {
 		const deps = createFromEnv(loginPolicyEnv, undefined, { libraries: { oidcLoginPolicy } });
 		expect(deps.authenticator).toBeDefined();
 		expect(deps.authRoutes).toBeDefined();
+		expect(deps.policy.groups_carried).toBe(true);
 		await expect(
 			deps.policyAnalyzer?.loginPolicy?.evaluate({
 				identity: { id: ACTOR, email: 'actor@example.com' },
@@ -843,6 +844,24 @@ describe('createFromEnv oidc email-domain allowlist', () => {
 		MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://hub.example.com/api/auth/callback',
 		MARIMOHUB_AUTH_SESSION_SECRET: 'x'.repeat(48),
 	};
+
+	it.each([
+		[{}, false],
+		[{ MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS: 'team' }, true],
+		[{ MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES: '/teams/' }, true],
+		[{ MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS: 'admins' }, false],
+	] as const)(
+		'advertises group membership only when sessions carry groups: %j',
+		(extra, expected) => {
+			const deps = createFromEnv({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: Object.keys(extra).length > 0 ? '/groups' : undefined,
+				MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: '*',
+				...extra,
+			});
+			expect(deps.policy.groups_carried).toBe(expected);
+		},
+	);
 
 	it('fails closed when the allowlist is unset', () => {
 		expect(() => createFromEnv({ ...oidcEnv })).toThrow(/MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS/);

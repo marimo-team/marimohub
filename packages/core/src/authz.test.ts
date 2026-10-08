@@ -48,6 +48,37 @@ describe('authz', () => {
 	});
 
 	describe('effectiveRole', () => {
+		it.each(['app-user', 'viewer', 'editor', 'manager'] as const)(
+			'prefers the id source for tied %s memberships in either row order',
+			(role) => {
+				const members = [
+					{ email: VIEWER.email, role },
+					{ user_id: VIEWER.id, role },
+				];
+				for (const rows of [members, [...members].reverse()]) {
+					expect(
+						resolveEffectiveRole(
+							makeProject({ owner: OWNER.id, members: rows, default_role: 'manager' }),
+							{ ...VIEWER, entitlements: ['default-role:manager'] },
+							{ defaultRole: 'manager' },
+						),
+					).toEqual({ role, source: 'member-id' });
+				}
+			},
+		);
+
+		it('does not interpret group names as user ids, emails, or entitlements', () => {
+			const caller = {
+				...STRANGER,
+				groups: [OWNER.id, MANAGER.id, INVITEE.email, 'super-admin', 'default-role:manager'],
+			};
+			expect(resolveEffectiveRole(project, caller, { superAdmins: [MANAGER.id] })).toEqual({
+				role: null,
+				source: 'none',
+			});
+			expect(canCreateProject(caller, { projectCreationRestricted: true })).toBe(false);
+		});
+
 		it('reports every effective-role source', () => {
 			expect(resolveEffectiveRole(project, STRANGER, { superAdmins: [STRANGER.id] })).toEqual({
 				role: 'admin',

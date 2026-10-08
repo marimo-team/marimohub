@@ -8,7 +8,7 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/alert-destinations",
 			"summary": "Create a project alert destination",
-			"description": "New destinations subscribe to all 12 project alert kinds when kinds is omitted. They remain disabled until a successful test.",
+			"description": "New destinations subscribe to all 13 project alert kinds when kinds is omitted. They remain disabled until a successful test.",
 			"parameters": [
 				{
 					"name": "pid",
@@ -4689,7 +4689,7 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/members",
 			"summary": "Add a project member",
-			"description": "Add a member by user id or email. A known email resolves to its user id; an unknown email becomes a pending invite that grants access when that person first signs in.",
+			"description": "Add a member by user id, email, or exact IdP group id. A known email resolves to its user id; an unknown email becomes a pending invite that grants access when that person first signs in.",
 			"parameters": [
 				{
 					"name": "pid",
@@ -4706,6 +4706,13 @@
 					{
 						"name": "email",
 						"cli_name": "email",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "group",
+						"cli_name": "group",
 						"required": false,
 						"value_type": "string",
 						"repeatable": false
@@ -4733,12 +4740,84 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "projects.members.groups.remove",
+			"command": ["projects", "members", "groups", "remove"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/group-members",
+			"summary": "Remove a project group member",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "group",
+					"cli_name": "group",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "projects.members.groups.update",
+			"command": ["projects", "members", "groups", "update"],
+			"method": "PUT",
+			"path": "/api/v1/projects/{pid}/group-members",
+			"summary": "Change a group's project role",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "group",
+					"cli_name": "group",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "role",
+						"cli_name": "role",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "projects.members.list",
 			"command": ["projects", "members", "list"],
 			"method": "GET",
 			"path": "/api/v1/projects/{pid}/members",
 			"summary": "List project members",
-			"description": "Pending email invites are visible only to project managers (plus the invitee themself); other callers see the id-keyed rows only.",
+			"description": "Pending email invites are visible only to project managers (plus the invitee themself); other callers see user and group rows.",
 			"parameters": [
 				{
 					"name": "pid",

@@ -137,6 +137,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 			'notebooks',
 			'member_ids',
 			'member_emails',
+			'member_groups',
 			'security_labels',
 			'security_labels_pending',
 		];

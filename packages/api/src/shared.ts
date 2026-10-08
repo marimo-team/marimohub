@@ -1056,10 +1056,10 @@ export function commonErrors() {
 
 // --- Domain response schemas for OpenAPI docs ---
 
-// Exactly one of `user_id` / `email` is present: `user_id` for a known user,
-// `email` for a pending invite (someone who hasn't logged in yet).
+// Exactly one of user_id, email (pending invite), or group is present.
 export const ProjectMemberResponseSchema = z
 	.object({
+		group: z.string().optional(),
 		user_id: z.string().optional(),
 		email: z.string().optional(),
 		role: z.enum(ROLES),
@@ -1554,6 +1554,10 @@ export const DeploymentInfoResponseSchema = z
  */
 export const CapabilitiesResponseSchema = z
 	.object({
+		groups_carried: z
+			.boolean()
+			.optional()
+			.openapi({ description: 'Whether this deployment supports IdP groups as project members.' }),
 		federation: z.object({ available: z.boolean(), default_enabled: z.boolean() }),
 		integrations: z.object({ available: z.boolean() }),
 		source_control: z.object({
