@@ -240,7 +240,23 @@ function parseOneProfile(chunk: string, index: number): ComputeProfile {
 	};
 }
 
-export function parseComputeProfiles(raw: string | undefined): ComputeProfilesConfig {
+export function parseComputeProfiles(
+	raw: string | undefined,
+	variable = 'MARIMOHUB_COMPUTE_PROFILES',
+): ComputeProfilesConfig {
+	try {
+		return parseProfiles(raw);
+	} catch (error) {
+		if (variable === 'MARIMOHUB_COMPUTE_PROFILES' || !(error instanceof ComputeProfileConfigError))
+			throw error;
+		throw new ConfigError(error.message.replace('MARIMOHUB_COMPUTE_PROFILES', variable), {
+			variable,
+			docs: 'docs/configuration.md#compute',
+		});
+	}
+}
+
+function parseProfiles(raw: string | undefined): ComputeProfilesConfig {
 	if (raw === undefined || raw.trim().length === 0) {
 		return { profiles: [], defaultProfile: undefined };
 	}

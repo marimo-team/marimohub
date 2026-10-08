@@ -23,7 +23,14 @@ function makeFetch(currentComputeProfile?: string, modeDefaults = false) {
 					{ name: 'large', cpu: 8, memory_bytes: 32 * 1024 ** 3 },
 				],
 				compute_profile_override: 'editors',
-				...(modeDefaults ? { edit_compute_profile: 'large', app_compute_profile: 'small' } : {}),
+				...(modeDefaults
+					? {
+							app_compute_profiles: [
+								{ name: 'app-small', cpu: 1 },
+								{ name: 'app-large', cpu: 4 },
+							],
+						}
+					: {}),
 			});
 		}
 		if (method === 'GET' && url === '/api/v1/projects/proj-x/notebooks/nb-1') {
@@ -93,15 +100,30 @@ describe('ChangeComputeProfileDialog', () => {
 		const fetchImpl = makeFetch(undefined, true);
 		renderDialog(fetchImpl);
 		await waitFor(() =>
-			expect(editing().getByRole('radio', { name: /Default \(large\)/ })).toBeChecked(),
+			expect(editing().getByRole('radio', { name: /Default \(small\)/ })).toBeChecked(),
 		);
 		const app = within(screen.getByRole('radiogroup', { name: 'App profile' }));
-		expect(app.getByRole('radio', { name: /Default \(small\)/ })).toBeChecked();
-		await user.click(app.getByRole('radio', { name: /^large/ }));
+		expect(app.getByRole('radio', { name: /Default \(app-small\)/ })).toBeChecked();
+		await user.click(app.getByRole('radio', { name: /^app-large/ }));
 		await user.click(screen.getByRole('button', { name: 'Save' }));
 		await waitFor(() => expect(patchCall(fetchImpl)).toBeDefined());
 		expect(JSON.parse(patchCall(fetchImpl)![1]!.body as string)).toEqual({
-			app_compute_profile: 'large',
+			app_compute_profile: 'app-large',
+		});
+	});
+
+	it('can override an inherited editing profile with the first shared profile', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = makeFetch('large');
+		renderDialog(fetchImpl);
+		await waitFor(() => expect(editing().getByRole('radio', { name: /^large/ })).toBeChecked());
+		const app = within(screen.getByRole('radiogroup', { name: 'App profile' }));
+		expect(app.getByRole('radio', { name: 'Use editing profile' })).toBeChecked();
+		await user.click(app.getByRole('radio', { name: /^small/ }));
+		await user.click(screen.getByRole('button', { name: 'Save' }));
+		await waitFor(() => expect(patchCall(fetchImpl)).toBeDefined());
+		expect(JSON.parse(patchCall(fetchImpl)![1]!.body as string)).toEqual({
+			app_compute_profile: 'small',
 		});
 	});
 
@@ -140,7 +162,7 @@ describe('ChangeComputeProfileDialog', () => {
 		await user.click(screen.getByRole('button', { name: 'Save' }));
 
 		const call = patchCall(fetchImpl);
-		expect(JSON.parse(call![1]!.body as string)).toEqual({ edit_compute_profile: null });
+		expect(JSON.parse(call![1]!.body as string)).toEqual({ compute_profile: null });
 		expect(onClose).toHaveBeenCalled();
 		await user.click(await screen.findByRole('button', { name: 'Restart session' }));
 		expect(onRestart).toHaveBeenCalled();

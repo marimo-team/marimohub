@@ -112,38 +112,42 @@ describe('createFromEnv auth backend selection', () => {
 		expect(deps.sandbox.computeProfileOverride).toBe('none');
 	});
 
-	it('wires separate edit and app defaults without enabling notebook overrides', () => {
+	it('wires separate ordered app profiles without enabling notebook overrides', () => {
 		const deps = createFromEnv({
 			...baseEnv,
 			MARIMOHUB_AUTH_BACKEND: 'dev',
 			MARIMOHUB_COMPUTE_BACKEND: 'docker',
-			MARIMOHUB_COMPUTE_PROFILES: 'app:cpu=1;mem=2Gi,editing:cpu=2;mem=4Gi',
-			MARIMOHUB_SESSION_EDIT_COMPUTE_PROFILE: ' editing ',
-			MARIMOHUB_SESSION_APP_COMPUTE_PROFILE: 'app',
+			MARIMOHUB_COMPUTE_PROFILES: 'editing:cpu=2;mem=4Gi',
+			MARIMOHUB_APP_COMPUTE_PROFILES: 'app:cpu=1;mem=2Gi,large:cpu=4',
 		});
 		expect(deps.sandbox).toMatchObject({
-			editComputeProfile: 'editing',
-			appComputeProfile: 'app',
+			computeProfile: 'editing',
+			appComputeProfiles: [
+				{ name: 'app', resources: { cpu: 1, memoryBytes: 2 * 1024 ** 3 } },
+				{ name: 'large', resources: { cpu: 4 } },
+			],
 			computeProfileOverride: 'none',
 		});
 	});
-
-	it.each(['MARIMOHUB_SESSION_EDIT_COMPUTE_PROFILE', 'MARIMOHUB_SESSION_APP_COMPUTE_PROFILE'])(
-		'rejects unknown or unsupported mode profiles: %s',
-		(variable) => {
-			for (const backend of ['docker', 'none']) {
-				expect(() =>
-					createFromEnv({
-						...baseEnv,
-						MARIMOHUB_AUTH_BACKEND: 'dev',
-						MARIMOHUB_COMPUTE_BACKEND: backend,
-						MARIMOHUB_COMPUTE_PROFILES: 'small:cpu=1',
-						[variable]: backend === 'none' ? 'small' : 'missing',
-					}),
-				).toThrow(`${variable} must name an available compute profile`);
-			}
-		},
-	);
+	it('reports invalid app profiles against the app setting', () => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_APP_COMPUTE_PROFILES: 'app:cpu=nope',
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+			}),
+		).toThrow('MARIMOHUB_APP_COMPUTE_PROFILES');
+	});
+	it.each([undefined, ''])('leaves the app list unset for shared profiles: %s', (value) => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_COMPUTE_BACKEND: 'docker',
+			MARIMOHUB_COMPUTE_PROFILES: 'editing:cpu=2',
+			MARIMOHUB_APP_COMPUTE_PROFILES: value,
+		});
+		expect(deps.sandbox.appComputeProfiles).toBeUndefined();
+	});
 
 	it('wires GPU profiles through for Modal', () => {
 		const deps = createFromEnv({

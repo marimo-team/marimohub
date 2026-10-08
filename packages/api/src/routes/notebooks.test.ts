@@ -329,7 +329,7 @@ describe('Notebook routes', () => {
 			{ name: 'large', resources: { cpu: 4 } },
 		];
 
-		function profileApi(override: 'none' | 'editors' = 'editors') {
+		function profileApi(override: 'none' | 'editors' = 'editors', appProfiles?: typeof profiles) {
 			return createTestApi({
 				bucket,
 				deps: {
@@ -339,6 +339,7 @@ describe('Notebook routes', () => {
 						workdir: '/workspace',
 						persistWorkspace: 'source',
 						computeProfiles: profiles,
+						appComputeProfiles: appProfiles,
 						computeProfileOverride: override,
 					},
 				},
@@ -362,6 +363,29 @@ describe('Notebook routes', () => {
 			expect(listed.find((item) => item.id === chosen.id)?.compute_profile).toBe('large');
 		});
 
+		it('validates app choices against their own list', async () => {
+			const req = profileApi('editors', [{ name: 'app-only', resources: { cpu: 1 } }]);
+			const created = await expectOk<any>(
+				await req('POST', nb(''), {
+					title: 'App',
+					description: '',
+					code: 'x = 1',
+					compute_profile: 'large',
+					app_compute_profile: 'app-only',
+				}),
+				201,
+			);
+			expect(created).toMatchObject({ compute_profile: 'large', app_compute_profile: 'app-only' });
+			await expectError(
+				await req('PATCH', nb(`/${created.id}`), { app_compute_profile: 'large' }),
+				400,
+			);
+			await expectError(
+				await req('PATCH', nb(`/${created.id}`), { compute_profile: 'app-only' }),
+				400,
+			);
+		});
+
 		it('persists and clears each mode independently, including the first profile', async () => {
 			const req = profileApi();
 			const created = await expectOk<any>(
@@ -370,27 +394,20 @@ describe('Notebook routes', () => {
 					description: '',
 					code: 'x = 1',
 					compute_profile: 'large',
-					edit_compute_profile: 'large',
 					app_compute_profile: 'small',
 				}),
 				201,
 			);
 			expect(created).toMatchObject({
-				edit_compute_profile: 'large',
+				compute_profile: 'large',
 				app_compute_profile: 'small',
 			});
 			const path = nb(`/${created.id}`);
-			const cleared = await expectOk<any>(await req('PATCH', path, { edit_compute_profile: null }));
-			expect(cleared).toMatchObject({
-				edit_compute_profile: null,
-				app_compute_profile: 'small',
-				compute_profile: 'large',
-			});
+			const cleared = await expectOk<any>(await req('PATCH', path, { app_compute_profile: null }));
+			expect(cleared.compute_profile).toBe('large');
+			expect(cleared.app_compute_profile).toBeUndefined();
 			const listed = await expectPage<any>(await req('GET', nb('')));
-			expect(listed.find((item) => item.id === created.id)).toMatchObject({
-				edit_compute_profile: null,
-				app_compute_profile: 'small',
-			});
+			expect(listed.find((item) => item.id === created.id)?.app_compute_profile).toBeUndefined();
 			await expectError(await req('PATCH', path, { app_compute_profile: 'missing' }), 400);
 			await expectError(
 				await profileApi('none')('PATCH', path, { app_compute_profile: 'large' }),

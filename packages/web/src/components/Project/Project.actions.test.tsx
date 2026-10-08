@@ -396,7 +396,7 @@ describe('Project — Notebook Actions: configuration', () => {
 					(call) =>
 						call.method === 'PATCH' &&
 						call.url.endsWith('/notebooks/nb-1') &&
-						(call.body as { edit_compute_profile?: string })?.edit_compute_profile === 'large',
+						(call.body as { compute_profile?: string })?.compute_profile === 'large',
 				),
 			).toBe(true),
 		);

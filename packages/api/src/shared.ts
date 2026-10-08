@@ -1158,8 +1158,7 @@ export const SnapshotNotebookEntrySchema = z
 		last_run_at: nullableDt(),
 		/** The notebook's non-default compute profile; absent = deployment default. */
 		compute_profile: z.string().optional(),
-		edit_compute_profile: z.string().nullable().optional(),
-		app_compute_profile: z.string().nullable().optional(),
+		app_compute_profile: z.string().optional(),
 	})
 	.openapi('SnapshotNotebookEntry');
 
@@ -1202,8 +1201,7 @@ export const NotebookMetaResponseSchema = z
 		base_image: z.string().optional(),
 		/** The notebook's non-default compute profile; absent = deployment default. */
 		compute_profile: z.string().optional(),
-		edit_compute_profile: z.string().nullable().optional(),
-		app_compute_profile: z.string().nullable().optional(),
+		app_compute_profile: z.string().optional(),
 		/** Security-label override enforced in addition to the project labels. */
 		security_labels: SecurityLabelsResponseSchema.optional(),
 	})
@@ -1653,8 +1651,9 @@ export const CapabilitiesResponseSchema = z
 			}),
 		),
 		compute_profile_override: z.enum(['none', 'editors']),
-		edit_compute_profile: z.string().optional(),
-		app_compute_profile: z.string().optional(),
+		app_compute_profiles: z
+			.array(ComputeResourcesResponseSchema.extend({ name: z.string() }))
+			.optional(),
 		surfaces: z.array(
 			z.discriminatedUnion('id', [
 				z.object({

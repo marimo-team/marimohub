@@ -2894,14 +2894,8 @@ components:
                         - type: 'null'
                     compute_profile:
                       type: string
-                    edit_compute_profile:
-                      anyOf:
-                        - type: string
-                        - type: 'null'
                     app_compute_profile:
-                      anyOf:
-                        - type: string
-                        - type: 'null'
+                      type: string
                     security_labels:
                       anyOf:
                         - type: object
@@ -3354,14 +3348,8 @@ components:
           type: string
         compute_profile:
           type: string
-        edit_compute_profile:
-          anyOf:
-            - type: string
-            - type: 'null'
         app_compute_profile:
-          anyOf:
-            - type: string
-            - type: 'null'
+          type: string
         security_labels:
           type: object
           properties:
@@ -3453,14 +3441,8 @@ components:
           type: string
         compute_profile:
           type: string
-        edit_compute_profile:
-          anyOf:
-            - type: string
-            - type: 'null'
         app_compute_profile:
-          anyOf:
-            - type: string
-            - type: 'null'
+          type: string
         security_labels:
           type: object
           properties:
@@ -4873,14 +4855,8 @@ components:
               type: string
             compute_profile:
               type: string
-            edit_compute_profile:
-              anyOf:
-                - type: string
-                - type: 'null'
             app_compute_profile:
-              anyOf:
-                - type: string
-                - type: 'null'
+              type: string
             security_labels:
               type: object
               properties:

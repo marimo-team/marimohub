@@ -190,8 +190,7 @@ export interface SandboxConfig {
 	resources?: ComputeResources;
 	/** Name of the default compute profile, persisted on newly-created sessions. */
 	computeProfile?: string;
-	editComputeProfile?: string;
-	appComputeProfile?: string;
+	appComputeProfiles?: SandboxComputeProfile[];
 	/** Ordered profiles available to session provisioning; the first is the default. */
 	computeProfiles?: SandboxComputeProfile[];
 	/** Whether editors may persist a non-default profile on a notebook. */

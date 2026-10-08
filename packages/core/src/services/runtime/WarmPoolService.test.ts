@@ -97,6 +97,28 @@ function setup(overrides: Partial<WarmPoolConfig> = {}) {
 afterEach(() => vi.restoreAllMocks());
 
 describe('warm sandbox pools', () => {
+	it('claims the resources requested when two profiles share a name', async () => {
+		const w = setup({
+			profiles: [
+				{ key: 'editing', name: 'small', resources: { cpu: 2 } },
+				{ key: 'app', name: 'small', resources: { cpu: 1 } },
+			],
+		});
+		await w.service.sweep();
+		const pools = (await w.service.store.read()).pools;
+		const appSandbox = pools.find((p) => p.key === 'app')?.members[0]?.sandbox_id;
+		const claim = await w.service.claim({
+			...w.request(),
+			profile: 'small',
+			resources: { cpu: 1 },
+		});
+		expect(appSandbox).toBeDefined();
+		expect(claim?.member.sandbox_id).toBe(appSandbox);
+		expect(
+			await w.service.claim({ ...w.request(), profile: 'small', resources: { cpu: 3 } }),
+		).toBeUndefined();
+	});
+
 	it('bounds provider lifetime from readiness and does not extend it during health checks', async () => {
 		const lifetime = 60 * 60_000;
 		const w = setup({ providerLifetimeMs: lifetime });

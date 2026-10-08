@@ -24,11 +24,7 @@ import type { SessionEnded } from '@/hooks/useNotebookSession';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
-import {
-	effectiveComputeProfile,
-	modeComputeProfile,
-	profilesForMode,
-} from '@/components/Notebook/computeProfiles';
+import { effectiveComputeProfile, modeComputeProfile } from '@/components/Notebook/computeProfiles';
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
 import { ChangeRequestActions } from '@/components/NotebookPage/ChangeRequestActions';
 import { sessionConnectionHint, isSessionStale, sessionsByNotebook } from '@/lib/sessions';
@@ -252,15 +248,19 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 				? endedPanel(ended)
 				: editorEndedPanel(ended, endedByName)
 			: null;
-	const computeProfiles = profilesForMode(
-		capabilities?.compute_profiles ?? [],
-		isApp ? capabilities?.app_compute_profile : capabilities?.edit_compute_profile,
-	);
+	const computeProfiles =
+		(isApp ? capabilities?.app_compute_profiles : undefined) ??
+		capabilities?.compute_profiles ??
+		[];
 	const computeOverrideApplies =
 		capabilities?.compute_profile_override === 'editors' && (!isViewer || isApp);
 	const selectedComputeProfile = effectiveComputeProfile(
 		computeProfiles,
-		modeComputeProfile(notebook?.meta, isApp ? 'app' : 'edit'),
+		modeComputeProfile(
+			notebook?.meta,
+			isApp ? 'app' : 'edit',
+			capabilities?.app_compute_profiles !== undefined,
+		),
 		computeOverrideApplies,
 	);
 	const canRetryWithDefault =

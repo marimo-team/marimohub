@@ -59,8 +59,7 @@ async function setup(
 	const sandbox: Partial<SandboxConfig> = mode
 		? {
 				computeProfiles: [{ name: mode, resources: { cpu: mode === 'edit' ? 2 : 1 } }],
-				editComputeProfile: mode,
-				appComputeProfile: mode,
+				appComputeProfiles: [{ name: mode, resources: { cpu: mode === 'edit' ? 2 : 1 } }],
 			}
 		: {};
 	const api = createTestApi({

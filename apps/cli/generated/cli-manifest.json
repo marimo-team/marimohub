@@ -2945,13 +2945,6 @@
 						"repeatable": false
 					},
 					{
-						"name": "edit_compute_profile",
-						"cli_name": "edit-compute-profile",
-						"required": false,
-						"value_type": "string",
-						"repeatable": false
-					},
-					{
 						"name": "readme",
 						"cli_name": "readme",
 						"required": false,
@@ -3039,13 +3032,6 @@
 						"name": "description",
 						"cli_name": "description",
 						"required": true,
-						"value_type": "string",
-						"repeatable": false
-					},
-					{
-						"name": "edit_compute_profile",
-						"cli_name": "edit-compute-profile",
-						"required": false,
 						"value_type": "string",
 						"repeatable": false
 					},
@@ -3929,13 +3915,6 @@
 					{
 						"name": "description",
 						"cli_name": "description",
-						"required": false,
-						"value_type": "string",
-						"repeatable": false
-					},
-					{
-						"name": "edit_compute_profile",
-						"cli_name": "edit-compute-profile",
 						"required": false,
 						"value_type": "string",
 						"repeatable": false

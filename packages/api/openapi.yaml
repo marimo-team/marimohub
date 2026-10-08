@@ -408,10 +408,17 @@ components:
           enum:
             - none
             - editors
-        edit_compute_profile:
-          type: string
-        app_compute_profile:
-          type: string
+        app_compute_profiles:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/ComputeResources'
+              - type: object
+                properties:
+                  name:
+                    type: string
+                required:
+                  - name
         surfaces:
           type: array
           items:
@@ -2531,14 +2538,8 @@ components:
           example: 2025-03-05T14:00:00Z
         compute_profile:
           type: string
-        edit_compute_profile:
-          type:
-            - string
-            - 'null'
         app_compute_profile:
-          type:
-            - string
-            - 'null'
+          type: string
       required:
         - id
         - title
@@ -2599,14 +2600,8 @@ components:
           type: string
         compute_profile:
           type: string
-        edit_compute_profile:
-          type:
-            - string
-            - 'null'
         app_compute_profile:
-          type:
-            - string
-            - 'null'
+          type: string
         security_labels:
           $ref: '#/components/schemas/SecurityLabels'
       required:
@@ -9775,12 +9770,6 @@ paths:
                   type: string
                   minLength: 1
                   example: large
-                edit_compute_profile:
-                  type:
-                    - string
-                    - 'null'
-                  minLength: 1
-                  example: large
                 app_compute_profile:
                   type:
                     - string
@@ -10295,12 +10284,6 @@ paths:
                 compute_profile:
                   type: string
                   minLength: 1
-                edit_compute_profile:
-                  type:
-                    - string
-                    - 'null'
-                  minLength: 1
-                  example: large
                 app_compute_profile:
                   type:
                     - string
@@ -11057,12 +11040,6 @@ paths:
                     - string
                     - 'null'
                   minLength: 1
-                edit_compute_profile:
-                  type:
-                    - string
-                    - 'null'
-                  minLength: 1
-                  example: large
                 app_compute_profile:
                   type:
                     - string

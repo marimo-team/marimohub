@@ -87,8 +87,7 @@ export class SyncedNotebookService {
 			runtime: input.runtime,
 			baseImage: input.base_image,
 			computeProfile: input.compute_profile,
-			editComputeProfile: input.edit_compute_profile,
-			appComputeProfile: input.app_compute_profile,
+			appComputeProfile: input.app_compute_profile ?? undefined,
 		});
 
 		const tokenRecord = syncToken ? await createSyncTokenRecord(syncToken, now) : undefined;

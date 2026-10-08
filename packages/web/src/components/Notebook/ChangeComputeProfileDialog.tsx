@@ -4,8 +4,7 @@ import { FormDialog, useAppForm, useSeedOnOpen } from '@/components/form';
 import { useCapabilitiesQuery, useNotebookQuery, useUpdateNotebook } from '@/api/hooks';
 import {
 	computeProfileOptions,
-	modeComputeProfile,
-	profilesForMode,
+	computeProfileResources,
 	computeProfilePickerValue,
 	DEFAULT_COMPUTE_PROFILE,
 } from './computeProfiles';
@@ -28,17 +27,30 @@ export function ChangeComputeProfileDialog({
 	const { data: capabilities } = useCapabilitiesQuery();
 	const profiles = capabilities?.compute_profiles ?? [];
 	const detail = useNotebookQuery(projectId, notebook.id);
-	const editProfiles = profilesForMode(profiles, capabilities?.edit_compute_profile);
-	const appProfiles = profilesForMode(profiles, capabilities?.app_compute_profile);
-	const stored = modeComputeProfile(detail.data?.meta, 'edit');
-	const appStored = modeComputeProfile(detail.data?.meta, 'app');
+	const editProfiles = profiles;
+	const appProfiles = capabilities?.app_compute_profiles ?? profiles;
+	const stored = detail.data?.meta.compute_profile;
+	const appStored = detail.data?.meta.app_compute_profile;
 	const current = computeProfilePickerValue(editProfiles, stored);
-	const appCurrent = computeProfilePickerValue(appProfiles, appStored);
-	const stale = [stored, appStored].some(
-		(name) => !!name && !profiles.some((profile) => profile.name === name),
-	);
+	const appCurrent = appStored ?? DEFAULT_COMPUTE_PROFILE;
+	const stale =
+		(!!stored && !editProfiles.some((p) => p.name === stored)) ||
+		(!!appStored && !appProfiles.some((p) => p.name === appStored));
 	const options = computeProfileOptions(editProfiles, stored);
-	const appOptions = computeProfileOptions(appProfiles, appStored);
+	const appOptions = [
+		{
+			value: DEFAULT_COMPUTE_PROFILE,
+			label: capabilities?.app_compute_profiles
+				? `Default (${appProfiles[0]?.name})`
+				: 'Use editing profile',
+		},
+		...appProfiles.map((profile) => ({
+			value: profile.name,
+			label: profile.name,
+			description: computeProfileResources(profile),
+		})),
+		...computeProfileOptions(appProfiles, appStored).filter((option) => option.isDisabled),
+	];
 	const updateNotebook = useUpdateNotebook(projectId);
 	const form = useAppForm({
 		defaultValues: { computeProfile: current, appComputeProfile: appCurrent },
@@ -47,7 +59,7 @@ export function ChangeComputeProfileDialog({
 			try {
 				await updateNotebook.mutateAsync({
 					notebookId: notebook.id,
-					...(value.computeProfile !== current ? { edit_compute_profile: choice } : {}),
+					...(value.computeProfile !== current ? { compute_profile: choice } : {}),
 					...(value.appComputeProfile !== appCurrent
 						? {
 								app_compute_profile:

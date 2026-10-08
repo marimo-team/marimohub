@@ -421,7 +421,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_WARM_POOL_PROFILES',
 						name: 'Warm pool profiles',
 						description:
-							'`default` warms the first compute profile; `all` warms every configured profile. With no profiles, warms adapter defaults. Each pool uses only the default image.',
+							'`default` warms the first profile in each editing and app list; `all` warms every profile in both lists. Identical names and resources share a pool. With no profiles, warms adapter defaults. Each pool uses only the default image.',
 						default: 'default',
 						optIn: true,
 					},
@@ -433,17 +433,10 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
-						id: 'MARIMOHUB_SESSION_EDIT_COMPUTE_PROFILE',
-						name: 'Editing compute profile',
+						id: 'MARIMOHUB_APP_COMPUTE_PROFILES',
+						name: 'App compute profiles',
 						description:
-							'Default compute profile for edit sessions. Must name an available profile on a supported backend. Unset uses the first profile. Notebook overrides require MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors.',
-						optIn: true,
-					},
-					{
-						id: 'MARIMOHUB_SESSION_APP_COMPUTE_PROFILE',
-						name: 'App compute profile',
-						description:
-							'Default compute profile for app sessions. Must name an available profile on a supported backend. Unset uses the first profile. Notebook overrides require MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors.',
+							'Optional ordered app profiles, using the same format as MARIMOHUB_COMPUTE_PROFILES. The first is the app default. Unset uses the shared profiles and notebook compute_profile. Notebook app overrides require MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors.',
 						optIn: true,
 					},
 					{
