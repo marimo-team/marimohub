@@ -30,6 +30,76 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('ProjectEnvironmentDialog', () => {
+	it.each([
+		{
+			available: false,
+			defaultEnabled: true,
+			override: true,
+			label: 'Not configured for this deployment',
+			selected: undefined,
+		},
+		{
+			available: true,
+			defaultEnabled: true,
+			override: undefined,
+			label: 'Enabled by deployment default',
+			selected: /Use deployment default/,
+		},
+		{
+			available: true,
+			defaultEnabled: false,
+			override: undefined,
+			label: 'Disabled by deployment default',
+			selected: /Use deployment default/,
+		},
+		{
+			available: true,
+			defaultEnabled: true,
+			override: false,
+			label: 'Disabled for this project',
+			selected: 'Disabled',
+		},
+		{
+			available: true,
+			defaultEnabled: false,
+			override: true,
+			label: 'Enabled for this project',
+			selected: 'Enabled',
+		},
+	])(
+		'opens cloud access without federation_effective: $label',
+		async ({ available, defaultEnabled, override, label, selected }) => {
+			const user = userEvent.setup();
+			const legacyProject = {
+				...project(),
+				federation: override === undefined ? undefined : { enabled: override },
+			};
+			Reflect.deleteProperty(legacyProject, 'federation_effective');
+			render(
+				<ProjectEnvironmentDialog
+					isOpen
+					onClose={() => {}}
+					project={legacyProject}
+					integrationsAvailable
+					cloudAccessLoading={false}
+					cloudAccessAvailable={available}
+					cloudAccessDefaultEnabled={defaultEnabled}
+					onSaveCloudAccess={() => Promise.resolve()}
+				/>,
+			);
+			expect(screen.getByText(label)).toBeInTheDocument();
+			await user.click(screen.getByRole('button', { name: /Cloud access/ }));
+			if (selected) {
+				expect(screen.getByRole('radio', { name: selected })).toBeChecked();
+				expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+			} else {
+				expect(screen.getByRole('link', { name: /How to enable it/ })).toBeInTheDocument();
+				expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+				expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+			}
+		},
+	);
+
 	it('shows the integrations and cloud access overview', () => {
 		render(
 			<ProjectEnvironmentDialog
