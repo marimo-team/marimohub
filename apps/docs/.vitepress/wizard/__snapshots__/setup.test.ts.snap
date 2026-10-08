@@ -45,8 +45,8 @@ MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS=hub-project-managers
 <p>Nested claims use JSON Pointer syntax, such as <code>/realm_access/roles</code>.
 Array elements use zero-based indices, such as <code>/identities/0/groups</code>.
 <code>ALLOWED_GROUPS</code> controls login. The other lists map groups to internal
-entitlements. The session stores mapped entitlements and, when membership groups
-are configured, only the selected group IDs. It never copies the full claim by default.</p>
+entitlements. The session stores mapped entitlements and only the selected
+membership group IDs. Without membership selection, the session stores no group IDs.</p>
 <p>If <code>ALLOWED_GROUPS</code> is set, it must contain at least one group ID. An empty list
 fails at startup. Unset it to disable the login group restriction.</p>
 <p><code>PROJECT_CREATION_GROUPS</code> controls who can create projects:</p>
@@ -94,14 +94,16 @@ characters, commas, or leading or trailing whitespace. Internal spaces, <code>@<
 leading <code>/</code> are valid. The host discards selected IDs that fail these rules;
 malformed provider claims still fail admission. A missing claim produces no groups.</p>
 <p>The host deduplicates IDs and sorts them by code unit. The selected set must fit
-within <strong>32 groups and 1,280 UTF-8 bytes of JSON</strong>. Overflow fails login with
-<code>auth_failed</code>; the host never truncates the set. Narrow the selection to fix this.</p>
+within <strong>32 groups and 1,280 UTF-8 bytes of JSON</strong>. Overflow fails browser login
+with <code>auth_failed</code> or rejects external-token authentication. The host never
+truncates the set. Narrow the selection to fix this.</p>
 <p>The cookie is signed, not encrypted, and <code>GET /api/v1/me</code> exposes selected groups.
 Do not select sensitive group names. The identity directory stores no groups.
 Logs contain counts only: <code>oidc_session_issued</code> records entitlements, retained
 groups, and discarded values; <code>oidc_membership_groups_exceeded</code> records overflow.</p>
-<p>Groups expire with the credential, within one hour. External access tokens use
-the same selection rules and their token expiry. Personal access tokens, service
+<p>Groups expire with the credential, within one hour. External OIDC access tokens
+use the same selection rules. Their selected groups enter the authenticated
+subject and expire with the token. Personal access tokens, service
 accounts, background work, and non-OIDC backends have no group source; <code>/me</code>
 returns <code>groups: []</code>. Groups currently grant no access and never supply security
 labels or subject compartments.</p>

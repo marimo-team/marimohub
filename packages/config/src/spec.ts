@@ -62,7 +62,7 @@ const AUTH_ALLOWED_EMAIL_DOMAINS: ConfigVar = {
 };
 
 const OIDC_MEMBERSHIP_DESCRIPTION =
-	'Requires MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM. Groups enter the signed, unencrypted session. Limits: 32 groups and 1280 UTF-8 JSON bytes; overflow denies login. Groups currently grant no access.';
+	'Requires MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM. Selected groups enter signed, unencrypted browser sessions or authenticated subjects for external OIDC access tokens. Limits: 32 groups and 1280 UTF-8 JSON bytes. Overflow rejects browser login or external-token authentication. Groups currently grant no access.';
 
 // Shared by every managed-AI backend (Bedrock, OpenAI-compatible); the config
 // registry requires one definition per variable id.
@@ -1379,7 +1379,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND',
 						name: 'Login-policy backend',
 						description:
-							'Set `library` for a trusted module that returns a login decision, entitlements, and optional groups. Mutually exclusive with the `MARIMOHUB_AUTH_OIDC_*GROUPS*` variables. `none` (or unset) disables it.',
+							'Set `library` for a trusted module that returns a login decision, entitlements, and optional groups. Mutually exclusive with the `MARIMOHUB_AUTH_OIDC_*GROUP*` variables. `none` (or unset) disables it.',
 						example: 'library',
 						optIn: true,
 					},

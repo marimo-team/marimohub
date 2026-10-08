@@ -2044,7 +2044,6 @@ components:
               type: array
               items:
                 type: string
-              maxItems: 32
           required:
             - outcome
           additionalProperties: false
@@ -2090,7 +2089,6 @@ components:
               type: array
               items:
                 type: string
-              maxItems: 32
             grant:
               type: object
               properties:

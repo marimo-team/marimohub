@@ -191,7 +191,7 @@ it('bounds membership-only access tokens to one hour without persisting groups o
 	const me = async (token: string) =>
 		app.request('/api/v1/me', { headers: { Authorization: `Bearer ${token}` } });
 	const response = await me(
-		accessToken({ iat: now, exp: now + 3600, groups: ['team-b', 'private', 'team-a'] }),
+		accessToken({ iat: now, exp: now + 3600, groups: ['team-b', 'private', 'team-a', 'team-a'] }),
 	);
 	expect(response.status).toBe(200);
 	expect(await response.json()).toMatchObject({ data: { groups: ['team-a', 'team-b'] } });

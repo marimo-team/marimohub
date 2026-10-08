@@ -64,6 +64,7 @@ describe('App routes', () => {
 						email: 'user@example.com',
 						logout_url: null,
 						is_super_admin: false,
+						groups: [],
 					});
 				}
 				if (url === '/api/v1/projects') return jsonOk({ items: [], next_cursor: null });
@@ -93,6 +94,7 @@ describe('App routes', () => {
 						email: 'admin@example.com',
 						logout_url: null,
 						is_super_admin: true,
+						groups: [],
 					});
 				}
 				if (url === '/api/v1/admin/users') return jsonOk({ items: [] });
@@ -120,6 +122,7 @@ describe('App routes', () => {
 						email: 'admin@example.com',
 						logout_url: null,
 						is_super_admin: true,
+						groups: [],
 					});
 				}
 				if (url === '/api/v1/admin/users') {
@@ -150,6 +153,7 @@ describe('App routes', () => {
 						email: 'admin@example.com',
 						logout_url: null,
 						is_super_admin: true,
+						groups: [],
 					});
 				}
 				if (url === '/api/v1/admin/users') {
@@ -196,6 +200,7 @@ describe('App routes', () => {
 						email: 'admin@example.com',
 						logout_url: null,
 						is_super_admin: true,
+						groups: [],
 					});
 				}
 				if (url === '/api/v1/capabilities') {

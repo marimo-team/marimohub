@@ -56,8 +56,8 @@ MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS=hub-project-managers
 Nested claims use JSON Pointer syntax, such as `/realm_access/roles`.
 Array elements use zero-based indices, such as `/identities/0/groups`.
 `ALLOWED_GROUPS` controls login. The other lists map groups to internal
-entitlements. The session stores mapped entitlements and, when membership groups
-are configured, only the selected group IDs. It never copies the full claim by default.
+entitlements. The session stores mapped entitlements and only the selected
+membership group IDs. Without membership selection, the session stores no group IDs.
 
 If `ALLOWED_GROUPS` is set, it must contain at least one group ID. An empty list
 fails at startup. Unset it to disable the login group restriction.
@@ -121,16 +121,18 @@ leading `/` are valid. The host discards selected IDs that fail these rules;
 malformed provider claims still fail admission. A missing claim produces no groups.
 
 The host deduplicates IDs and sorts them by code unit. The selected set must fit
-within **32 groups and 1,280 UTF-8 bytes of JSON**. Overflow fails login with
-`auth_failed`; the host never truncates the set. Narrow the selection to fix this.
+within **32 groups and 1,280 UTF-8 bytes of JSON**. Overflow fails browser login
+with `auth_failed` or rejects external-token authentication. The host never
+truncates the set. Narrow the selection to fix this.
 
 The cookie is signed, not encrypted, and `GET /api/v1/me` exposes selected groups.
 Do not select sensitive group names. The identity directory stores no groups.
 Logs contain counts only: `oidc_session_issued` records entitlements, retained
 groups, and discarded values; `oidc_membership_groups_exceeded` records overflow.
 
-Groups expire with the credential, within one hour. External access tokens use
-the same selection rules and their token expiry. Personal access tokens, service
+Groups expire with the credential, within one hour. External OIDC access tokens
+use the same selection rules. Their selected groups enter the authenticated
+subject and expire with the token. Personal access tokens, service
 accounts, background work, and non-OIDC backends have no group source; `/me`
 returns `groups: []`. Groups currently grant no access and never supply security
 labels or subject compartments.

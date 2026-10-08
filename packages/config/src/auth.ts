@@ -330,7 +330,12 @@ function parseLoginPolicy(
 			'Set it to an npm package installed in the image, or a path to a mounted ESM module.',
 		docs: 'docs/configuration.md#auth',
 	});
-	const conflicting = GROUP_POLICY_VARS.find((key) => env[key]?.trim());
+	const conflicting = GROUP_POLICY_VARS.find((key) =>
+		key === 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS' ||
+		key === 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES'
+			? env[key] !== undefined
+			: env[key]?.trim(),
+	);
 	if (conflicting) {
 		throw new ConfigError(
 			`MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library cannot be combined with ${conflicting}; ` +

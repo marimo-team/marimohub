@@ -736,6 +736,17 @@ describe('makeAuth oidc login policy', () => {
 		expect(error.message).toMatch(new RegExp(groupVar));
 	});
 
+	describe.each([
+		'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES',
+	])('login policy with %s', (key) => {
+		it.each(['', '   ', '\t\n'])('rejects a blank membership setting (%j)', (value) => {
+			const error = getConfigError(() => makeAuth({ ...loginPolicyEnv, [key]: value }, libraries));
+			expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND');
+			expect(error.message).toContain(`cannot be combined with ${key}`);
+		});
+	});
+
 	it.each(['0', '31', 'abc', '2.5'])('rejects login-policy timeout %s', (value) => {
 		expect(() =>
 			makeAuth(
@@ -934,6 +945,14 @@ describe.each([
 	['MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS', 200],
 	['MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES', 20],
 ] as const)('membership configuration: %s', (key, maximum) => {
+	it.each(['a', 'a'.repeat(128), '😀', '😀'.repeat(128)])(
+		'accepts a selection entry at the character bounds (%j)',
+		(value) => {
+			expect(() =>
+				makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups', [key]: value }),
+			).not.toThrow();
+		},
+	);
 	it('permits membership alone and enforces the derived session lifetime', () => {
 		const env = { ...oidcEnv, MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups', [key]: 'team-a' };
 		expect(() => makeAuth(env)).not.toThrow();

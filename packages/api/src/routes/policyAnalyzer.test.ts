@@ -587,6 +587,7 @@ describe('policy analyzer membership groups', () => {
 	it.each([
 		{ expected: ['team-b', 'team-a', 'team-a'], passed: true },
 		{ expected: ['wrong'], passed: false },
+		{ expected: Array.from({ length: 40 }, (_, i) => (i % 2 ? 'team-a' : 'team-b')), passed: true },
 	])(
 		'compares expected groups as sets and links them into authorization: %j',
 		async ({ expected, passed }) => {
@@ -652,6 +653,62 @@ describe('policy analyzer membership groups', () => {
 			422,
 		);
 	});
+	it('normalizes duplicate-heavy explicit groups before enforcing count and byte limits', async () => {
+		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+		const analyze = vi.spyOn(AuthorizationService.prototype, 'analyze');
+		const entry = authorizationCase();
+		const group = 'x'.repeat(128);
+		const data = await expectOk<any>(
+			await request('POST', '/admin/policy-analyzer/evaluate', {
+				schema_version: 1,
+				cases: [
+					authorizationCase({
+						subject: {
+							...entry.authorization.subject,
+							groups: Array.from({ length: 40 }, () => group),
+						},
+					}),
+				],
+			}),
+		);
+		expect(data.valid).toBe(true);
+		expect(analyze).toHaveBeenCalledWith(
+			expect.objectContaining({ groups: [group] }),
+			expect.anything(),
+			expect.anything(),
+			expect.anything(),
+		);
+	});
+
+	it.each([
+		{ groups: Array.from({ length: 33 }, (_, i) => `g${i}`) },
+		{ groups: Array.from({ length: 12 }, (_, i) => `${i}${'x'.repeat(120)}`) },
+	])('explains normalized group bounds on both analyzer inputs: $groups', async ({ groups }) => {
+		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+		const entry = authorizationCase();
+		for (const testCase of [
+			authorizationCase({ subject: { ...entry.authorization.subject, groups } }),
+			{
+				id: entry.id,
+				name: entry.name,
+				login: {
+					identity: { id: ACTOR, email: `${ACTOR}@example.com` },
+					id_token_claims: {},
+					expected: { outcome: 'allow', groups },
+				},
+			},
+		]) {
+			const error = await expectError(
+				await request('POST', '/admin/policy-analyzer/evaluate', {
+					schema_version: 1,
+					cases: [testCase],
+				}),
+				422,
+			);
+			expect(error.message).toContain('at most 32 IDs and 1280 UTF-8 JSON bytes');
+		}
+	});
+
 	it('reports the membership cap in metadata', async () => {
 		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
 		expect(await expectOk(await request('GET', '/admin/policy-analyzer/metadata'))).toMatchObject({

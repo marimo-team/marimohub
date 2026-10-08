@@ -1,4 +1,9 @@
-import { MAX_AUTH_GROUPS, isAuthGroupId, normalizeAuthGroups } from '@marimo-hub/core/ports/auth';
+import {
+	MAX_AUTH_GROUPS,
+	MAX_AUTH_GROUPS_JSON_BYTES,
+	isAuthGroupId,
+	normalizeAuthGroups,
+} from '@marimo-hub/core/ports/auth';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	ACTION_RULES,
@@ -47,8 +52,9 @@ const MAX_POLICY_CASES = 25;
 const EntitlementSchema = z.enum(AUTH_ENTITLEMENTS);
 const GroupsSchema = z
 	.array(z.string().refine(isAuthGroupId))
-	.max(MAX_AUTH_GROUPS)
-	.refine((groups) => normalizeAuthGroups(groups).ok);
+	.refine((groups) => normalizeAuthGroups(groups).ok, {
+		message: `Groups must normalize to at most ${MAX_AUTH_GROUPS} IDs and ${MAX_AUTH_GROUPS_JSON_BYTES} UTF-8 JSON bytes.`,
+	});
 const AuthorizationActionSchema = z.enum(AUTHORIZATION_ACTIONS);
 const SecurityLabelsSchema = z.strictObject({
 	classification: z.string().regex(SECURITY_LABEL_TOKEN),
@@ -559,10 +565,13 @@ async function evaluateCase(
 						? loginEvaluation.entitlements
 						: (stage.subject.entitlements ?? []),
 				);
-				const groups =
+				const normalizedGroups = normalizeAuthGroups(
 					linked && loginEvaluation?.outcome === 'allow'
 						? loginEvaluation.groups
-						: (stage.subject.groups ?? []);
+						: (stage.subject.groups ?? []),
+				);
+				if (!normalizedGroups.ok) throw new Error('invalid_groups');
+				const groups = normalizedGroups.groups;
 				let subject: AuthorizationSubject = {
 					id: UserId.parse(stage.subject.id),
 					email: stage.subject.email,
