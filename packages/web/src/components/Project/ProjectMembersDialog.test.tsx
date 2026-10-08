@@ -42,6 +42,7 @@ const OWNER_USER: User = {
 	email: DIRECTORY[OWNER].email,
 	logout_url: null,
 	is_super_admin: false,
+	groups: [],
 	can_create_projects: true,
 };
 let currentTestUser = OWNER_USER;
@@ -368,6 +369,7 @@ describe('ProjectMembersDialog — admin', () => {
 				email: DIRECTORY[EDITOR].email,
 				logout_url: null,
 				is_super_admin: false,
+				groups: [],
 				can_create_projects: true,
 			},
 			members: MEMBERS.map((member) =>
@@ -455,6 +457,7 @@ describe('ProjectMembersDialog — non-admin', () => {
 				email: INVITED,
 				logout_url: null,
 				is_super_admin: false,
+				groups: [],
 				can_create_projects: true,
 			},
 			directory: {
@@ -478,6 +481,7 @@ describe('ProjectMembersDialog — non-admin', () => {
 				email: DIRECTORY[EDITOR].email,
 				logout_url: null,
 				is_super_admin: false,
+				groups: [],
 				can_create_projects: true,
 			},
 			members: [...MEMBERS, { user_id: legacy, role: 'admin' }],
@@ -500,6 +504,7 @@ describe('ProjectMembersDialog — current access', () => {
 				email: INVITED,
 				logout_url: null,
 				is_super_admin: false,
+				groups: [],
 				can_create_projects: true,
 			},
 			directory: {
@@ -521,6 +526,7 @@ describe('ProjectMembersDialog — current access', () => {
 				email: NINA.email,
 				logout_url: null,
 				is_super_admin: false,
+				groups: [],
 				can_create_projects: true,
 			},
 			capabilities: { ...CAPABILITIES, default_role: 'editor' } as Capabilities,
@@ -541,6 +547,7 @@ describe('ProjectMembersDialog — current access', () => {
 				email: NINA.email,
 				logout_url: null,
 				is_super_admin: true,
+				groups: [],
 				can_create_projects: true,
 			},
 			directory: { ...DIRECTORY, [NINA.id]: NINA },
@@ -572,6 +579,7 @@ describe('ProjectMembersDialog — current access', () => {
 				email: INVITED,
 				logout_url: null,
 				is_super_admin: false,
+				groups: [],
 				can_create_projects: true,
 			},
 			capabilities: {

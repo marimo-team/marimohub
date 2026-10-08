@@ -26,7 +26,9 @@ GET /api/v1/capabilities added `subschema #1, subschema #2` to the `data/surface
 ```
 
 `directory.search` expands the shared action enum in both `PolicyCaseV1`
-request branches. oasdiff reports the resulting compatible branches as removed.
+request branches. Optional `groups` fields expand their login and authorization
+inputs. Existing request shapes remain valid. oasdiff reports these compatible
+branches as removed.
 
 ```text
 POST /api/v1/admin/policy-analyzer/evaluate removed `subschema #1, subschema #2` from the `cases/items/` request property `anyOf` list

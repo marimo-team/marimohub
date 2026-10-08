@@ -37,9 +37,19 @@ function assertWithinHostContract(result) {
 	assert.notEqual(result, null);
 	if (result.decision === 'allow') {
 		assert.deepEqual(
-			Object.keys(result).filter((key) => key !== 'decision' && key !== 'entitlements'),
+			Object.keys(result).filter(
+				(key) => key !== 'decision' && key !== 'entitlements' && key !== 'groups',
+			),
 			[],
 		);
+		const groups = result.groups === undefined ? [] : result.groups;
+		assert.ok(Array.isArray(groups), 'groups must be an array');
+		const uniqueGroups = [...new Set(groups)];
+		assert.ok(uniqueGroups.length <= 32);
+		assert.ok(Buffer.byteLength(JSON.stringify(uniqueGroups)) <= 1280);
+		for (const group of groups) {
+			assert.match(group, /^[^\s,\p{Cc}](?:[^,\p{Cc}]{0,126}[^\s,\p{Cc}])?$/u);
+		}
 		for (const entitlement of result.entitlements ?? []) {
 			assert.ok(KNOWN_ENTITLEMENTS.has(entitlement), `unknown entitlement: ${entitlement}`);
 		}
@@ -94,6 +104,7 @@ void describe('allow paths', () => {
 		assert.deepEqual(evaluate(satisfied), {
 			decision: 'allow',
 			entitlements: ['default-role:editor'],
+			groups: ['team-data', 'team-ml'],
 		});
 	});
 
@@ -101,6 +112,10 @@ void describe('allow paths', () => {
 		for (const department of ['orgcode1', 'orgcode2']) {
 			assert.equal(evaluate({ ...satisfied, department }).decision, 'allow');
 		}
+	});
+
+	void test('flattens departments into selected team groups', () => {
+		assert.deepEqual(evaluate({ ...satisfied, department: 'orgcode2' }).groups, ['team-platform']);
 	});
 
 	void test('accepts a level above the minimum', () => {
@@ -227,6 +242,24 @@ void describe('unhappy paths — malformed and hostile claims', () => {
 });
 
 void describe('host-contract details', () => {
+	void test('accepts allow results with omitted groups and normalized duplicate groups', () => {
+		assert.doesNotThrow(() => assertWithinHostContract({ decision: 'allow' }));
+		assert.doesNotThrow(() =>
+			assertWithinHostContract({
+				decision: 'allow',
+				groups: Array.from({ length: 40 }, () => 'team-a'),
+			}),
+		);
+	});
+
+	void test('reports malformed groups as assertion failures', () => {
+		for (const groups of [null, 'team-a', {}, [null]]) {
+			assert.throws(() => assertWithinHostContract({ decision: 'allow', groups }), {
+				code: 'ERR_ASSERTION',
+			});
+		}
+	});
+
 	void test('reads only ID-token claims — satisfying UserInfo claims do not grant access', () => {
 		// The host passes ID-token and UserInfo claims as separate objects and
 		// never merges them; this policy deliberately keys off the ID token only.

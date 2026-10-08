@@ -1432,6 +1432,8 @@ export const UserResponseSchema = z
 
 export const MeResponseSchema = z
 	.object({
+		/** Current credential groups; empty for PATs, service accounts, and non-OIDC backends. */
+		groups: z.array(z.string()),
 		id: z.string(),
 		email: z.string(),
 		name: z.string().nullable().optional(),

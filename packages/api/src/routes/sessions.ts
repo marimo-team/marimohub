@@ -643,7 +643,7 @@ function earliestDeadline(...deadlines: (string | undefined)[]): string | undefi
 
 function entitlementAuthorizationDeadline(user: AuthUser): string | undefined {
 	if (!user.entitlementsExpiresAt) {
-		if (user.entitlements?.length) {
+		if (user.entitlements?.length || user.groups?.length) {
 			throw new ForbiddenError('Group authorization has no credential expiry; sign in again');
 		}
 		return undefined;

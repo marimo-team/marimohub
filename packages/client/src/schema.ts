@@ -2268,6 +2268,7 @@ export interface components {
 			};
 		};
 		Me: {
+			groups: string[];
 			id: string;
 			email: string;
 			name?: string | null;
@@ -2850,6 +2851,7 @@ export interface components {
 			/** @enum {number} */
 			schema_version: 1;
 			max_cases: number;
+			max_groups: number;
 			capabilities: {
 				login_policy: boolean;
 				resource_security: boolean;
@@ -2937,6 +2939,7 @@ export interface components {
 				| 'default-role:editor'
 				| 'default-role:manager'
 			)[];
+			groups: string[];
 			reason?: string;
 			problem?: string;
 			assertion: components['schemas']['PolicyAssertionResult'];
@@ -3033,6 +3036,7 @@ export interface components {
 						| 'default-role:editor'
 						| 'default-role:manager'
 					)[];
+					groups?: string[];
 			  }
 			| {
 					/** @enum {string} */
@@ -3052,6 +3056,7 @@ export interface components {
 					| 'default-role:editor'
 					| 'default-role:manager'
 				)[];
+				groups?: string[];
 				grant?: {
 					actions:
 						| '*'

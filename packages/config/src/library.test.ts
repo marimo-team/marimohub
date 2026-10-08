@@ -394,6 +394,7 @@ describe('OIDC login-policy library loading', () => {
 		expect(loaded.oidcLoginPolicy?.evaluate(policyInput({ user_attributes: satisfied }))).toEqual({
 			decision: 'allow',
 			entitlements: ['default-role:editor'],
+			groups: ['team-data', 'team-ml'],
 		});
 		for (const missing of [
 			{ ...satisfied, department: 'other' },

@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { LocalResourceConstraintPolicy } from '@marimo-hub/core';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AuthorizationService, LocalResourceConstraintPolicy } from '@marimo-hub/core';
 import type { Authenticator } from '@marimo-hub/core';
 import { ACTOR } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
@@ -186,6 +186,7 @@ describe('policy analyzer routes', () => {
 					loginPolicy: {
 						evaluate: async () => ({
 							outcome: 'allow',
+							groups: [],
 							entitlements: ['project-creator'],
 							durationMs: 2,
 						}),
@@ -203,7 +204,7 @@ describe('policy analyzer routes', () => {
 						login: {
 							identity: { id: 'new-user', email: 'new@example.com' },
 							id_token_claims: { group: 'creators' },
-							expected: { outcome: 'allow', entitlements: ['project-creator'] },
+							expected: { outcome: 'allow', groups: [], entitlements: ['project-creator'] },
 						},
 						authorization: {
 							subject: {
@@ -251,6 +252,7 @@ describe('policy analyzer routes', () => {
 					loginPolicy: {
 						evaluate: async () => ({
 							outcome: 'allow',
+							groups: [],
 							entitlements: ['project-creator'],
 							durationMs: 2,
 						}),
@@ -281,6 +283,7 @@ describe('policy analyzer routes', () => {
 					valid: true,
 					login: {
 						outcome: 'allow',
+						groups: [],
 						entitlements: ['project-creator'],
 						assertion: { passed: true },
 					},
@@ -576,5 +579,229 @@ describe('policy analyzer routes', () => {
 		expect(data.cases[0].errors).toEqual([
 			{ stage: 'authorization', code: 'stored_resource_inaccessible' },
 		]);
+	});
+});
+
+describe('policy analyzer membership groups', () => {
+	afterEach(() => vi.restoreAllMocks());
+	it.each([
+		{ expected: ['team-b', 'team-a', 'team-a'], passed: true },
+		{ expected: ['wrong'], passed: false },
+		{ expected: Array.from({ length: 40 }, (_, i) => (i % 2 ? 'team-a' : 'team-b')), passed: true },
+	])(
+		'compares expected groups as sets and links them into authorization: %j',
+		async ({ expected, passed }) => {
+			const { request, deps } = createTestApi({
+				deps: {
+					policy: { superAdmins: [ACTOR] },
+					policyAnalyzer: {
+						classificationOrder: [],
+						loginPolicy: {
+							evaluate: async () => ({
+								outcome: 'allow',
+								entitlements: [],
+								groups: ['team-a', 'team-b'],
+								durationMs: 1,
+							}),
+						},
+					},
+				},
+			});
+			const analyze = vi.spyOn(AuthorizationService.prototype, 'analyze');
+			const entry = authorizationCase();
+			entry.authorization.subject.entitlement_source = 'login';
+			const data = await expectOk<any>(
+				await request('POST', '/admin/policy-analyzer/evaluate', {
+					schema_version: 1,
+					cases: [
+						{
+							...entry,
+							login: {
+								identity: { id: ACTOR, email: `${ACTOR}@example.com` },
+								id_token_claims: {},
+								expected: { outcome: 'allow', groups: expected },
+							},
+						},
+					],
+				}),
+			);
+			expect(data.cases[0].login.groups).toEqual(['team-a', 'team-b']);
+			expect(data.valid).toBe(passed);
+			expect(analyze).toHaveBeenCalledWith(
+				expect.objectContaining({ groups: ['team-a', 'team-b'] }),
+				expect.anything(),
+				expect.anything(),
+				expect.anything(),
+			);
+			const events = await deps.services.events.getEvents(new Date().toISOString().slice(0, 10));
+			expect(JSON.stringify(events)).not.toContain('team-a');
+		},
+	);
+	it.each([
+		['a,b'],
+		['a\n'],
+		Array.from({ length: 33 }, (_, i) => `g${i}`),
+		Array.from({ length: 12 }, (_, i) => `${i}${'x'.repeat(120)}`),
+	])('rejects invalid explicit groups: %j', async (...groups) => {
+		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+		const entry = authorizationCase();
+		await expectError(
+			await request('POST', '/admin/policy-analyzer/evaluate', {
+				schema_version: 1,
+				cases: [authorizationCase({ subject: { ...entry.authorization.subject, groups } })],
+			}),
+			422,
+		);
+	});
+	it('normalizes duplicate-heavy explicit groups before enforcing count and byte limits', async () => {
+		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+		const analyze = vi.spyOn(AuthorizationService.prototype, 'analyze');
+		const entry = authorizationCase();
+		const group = 'x'.repeat(128);
+		const data = await expectOk<any>(
+			await request('POST', '/admin/policy-analyzer/evaluate', {
+				schema_version: 1,
+				cases: [
+					authorizationCase({
+						subject: {
+							...entry.authorization.subject,
+							groups: Array.from({ length: 40 }, () => group),
+						},
+					}),
+				],
+			}),
+		);
+		expect(data.valid).toBe(true);
+		expect(analyze).toHaveBeenCalledWith(
+			expect.objectContaining({ groups: [group] }),
+			expect.anything(),
+			expect.anything(),
+			expect.anything(),
+		);
+	});
+
+	it.each([
+		{ groups: Array.from({ length: 33 }, (_, i) => `g${i}`) },
+		{ groups: Array.from({ length: 12 }, (_, i) => `${i}${'x'.repeat(120)}`) },
+	])('explains normalized group bounds on both analyzer inputs: $groups', async ({ groups }) => {
+		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+		const entry = authorizationCase();
+		for (const testCase of [
+			authorizationCase({ subject: { ...entry.authorization.subject, groups } }),
+			{
+				id: entry.id,
+				name: entry.name,
+				login: {
+					identity: { id: ACTOR, email: `${ACTOR}@example.com` },
+					id_token_claims: {},
+					expected: { outcome: 'allow', groups },
+				},
+			},
+		]) {
+			const error = await expectError(
+				await request('POST', '/admin/policy-analyzer/evaluate', {
+					schema_version: 1,
+					cases: [testCase],
+				}),
+				422,
+			);
+			expect(error.message).toContain('at most 32 IDs and 1280 UTF-8 JSON bytes');
+		}
+	});
+
+	it('reports the membership cap in metadata', async () => {
+		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+		expect(await expectOk(await request('GET', '/admin/policy-analyzer/metadata'))).toMatchObject({
+			max_groups: 32,
+		});
+	});
+});
+
+describe('policy analyzer group isolation', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it.each([
+		{ groups: undefined, grant: undefined },
+		{ groups: ['simulated-team'], grant: undefined },
+		{ groups: undefined, grant: { actions: ['project.read'], projects: '*' } },
+		{ groups: ['simulated-team'], grant: { actions: ['project.read'], projects: '*' } },
+	])(
+		'uses explicit groups instead of ambient caller groups in live-self analysis: %j',
+		async ({ groups, grant }) => {
+			const { request } = createTestApi({
+				deps: {
+					policy: { superAdmins: [ACTOR] },
+					authenticator: {
+						authenticate: async () => ({
+							id: ACTOR,
+							email: `${ACTOR}@example.com`,
+							credential: { kind: 'sso' },
+							groups: ['ambient-team'],
+						}),
+					},
+				},
+			});
+			const analyze = vi.spyOn(AuthorizationService.prototype, 'analyze');
+			const original = authorizationCase();
+			const data = await expectOk<any>(
+				await request('POST', '/admin/policy-analyzer/evaluate', {
+					schema_version: 1,
+					cases: [
+						authorizationCase({
+							subject: { ...original.authorization.subject, groups, grant },
+							context: { mode: 'live-self' },
+						}),
+					],
+				}),
+			);
+			expect(data.valid).toBe(true);
+			expect(analyze).toHaveBeenCalledWith(
+				expect.objectContaining({ groups: groups ?? [] }),
+				'project.read',
+				expect.anything(),
+				{ mode: 'live' },
+			);
+		},
+	);
+
+	it('does not reuse groups from an allowed login when a later case fails', async () => {
+		const { request } = createTestApi({
+			deps: {
+				policy: { superAdmins: [ACTOR] },
+				policyAnalyzer: {
+					classificationOrder: [],
+					loginPolicy: {
+						evaluate: async ({ idTokenClaims }) =>
+							idTokenClaims.allow
+								? { outcome: 'allow', entitlements: [], groups: ['private-team'], durationMs: 0 }
+								: { outcome: 'invalid', problem: 'invalid_group', durationMs: 0 },
+					},
+				},
+			},
+		});
+		const analyze = vi.spyOn(AuthorizationService.prototype, 'analyze');
+		const entry = authorizationCase();
+		entry.authorization.subject.entitlement_source = 'login';
+		const data = await expectOk<any>(
+			await request('POST', '/admin/policy-analyzer/evaluate', {
+				schema_version: 1,
+				cases: [true, false].map((allow) => ({
+					...entry,
+					id: String(allow),
+					login: {
+						identity: { id: ACTOR, email: `${ACTOR}@example.com` },
+						id_token_claims: { allow },
+						expected: { outcome: 'allow' },
+					},
+				})),
+			}),
+		);
+		expect(data.cases[0].login.groups).toEqual(['private-team']);
+		expect(data.cases[1]).toMatchObject({
+			valid: false,
+			login: { groups: [], outcome: 'invalid' },
+			authorization: null,
+		});
+		expect(analyze).toHaveBeenCalledTimes(1);
 	});
 });

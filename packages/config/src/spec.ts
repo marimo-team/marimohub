@@ -61,6 +61,9 @@ const AUTH_ALLOWED_EMAIL_DOMAINS: ConfigVar = {
 	required: true,
 };
 
+const OIDC_MEMBERSHIP_DESCRIPTION =
+	'Requires MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM. Selected groups enter signed, unencrypted browser sessions or authenticated subjects for external OIDC access tokens. Limits: 32 groups and 1280 UTF-8 JSON bytes. Overflow rejects browser login or external-token authentication. Groups currently grant no access.';
+
 // Shared by every managed-AI backend (Bedrock, OpenAI-compatible); the config
 // registry requires one definition per variable id.
 const AI_MODEL: ConfigVar = {
@@ -1351,6 +1354,20 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
+						id: 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS',
+						name: 'Membership groups',
+						description: `Comma-separated, case-sensitive exact group IDs to retain (at most 200). A standalone * selects all groups within the same limits. ${OIDC_MEMBERSHIP_DESCRIPTION}`,
+						example: 'hub-team-data,hub-team-ml',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES',
+						name: 'Membership group prefixes',
+						description: `Comma-separated, case-sensitive literal group prefixes to retain (at most 20); * is not a wildcard here. ${OIDC_MEMBERSHIP_DESCRIPTION}`,
+						example: 'hub-team-',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS',
 						name: 'Group authorization lifetime',
 						description:
@@ -1362,7 +1379,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND',
 						name: 'Login-policy backend',
 						description:
-							'Set `library` to load a trusted external login-policy module that maps validated OIDC claims to a login decision and entitlements. Mutually exclusive with the `MARIMOHUB_AUTH_OIDC_*GROUPS*` variables. `none` (or unset) disables it.',
+							'Set `library` for a trusted module that returns a login decision, entitlements, and optional groups. Mutually exclusive with the `MARIMOHUB_AUTH_OIDC_*GROUP*` variables. `none` (or unset) disables it.',
 						example: 'library',
 						optIn: true,
 					},

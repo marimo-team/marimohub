@@ -1,4 +1,5 @@
 import { UserId } from '@marimo-hub/core/ids';
+import { normalizeAuthGroups } from '@marimo-hub/core/ports/auth';
 import type { AuthEntitlement, AuthUser } from '@marimo-hub/core/ports/auth';
 import {
 	claimAtPointer,
@@ -9,6 +10,7 @@ import {
 	MAX_GROUPS,
 	normalizeEmailDomains,
 	parseGroups,
+	retainMembershipGroups,
 	pictureUrlClaim,
 	validEmail,
 	validJsonPointer,
@@ -60,8 +62,12 @@ export type AdmissionFailure =
 	| 'email_not_verified'
 	| 'domain_not_allowed'
 	| 'invalid_groups'
-	| 'group_not_allowed';
-export type AdmissionResult = { user: AuthUser } | { error: AdmissionFailure };
+	| 'group_not_allowed'
+	| 'too_many_groups';
+export type AdmissionResult =
+	| { user: AuthUser; groupStats?: { unretainable: number } }
+	| { error: Exclude<AdmissionFailure, 'too_many_groups'> }
+	| { error: 'too_many_groups'; retained: number };
 
 export function admitOidcIdentity(
 	claims: Record<string, unknown>,
@@ -87,6 +93,8 @@ export function admitOidcIdentity(
 		return { error: 'domain_not_allowed' };
 	}
 	let entitlements: AuthEntitlement[] | undefined;
+	let memberships: readonly string[] | undefined;
+	let groupStats: { unretainable: number } | undefined;
 	if (policy.groups) {
 		let rawGroups = userInfo ? claimAtPointer(userInfo, policy.groups.claim) : undefined;
 		if (rawGroups === undefined) rawGroups = claimAtPointer(claims, policy.groups.claim);
@@ -103,16 +111,25 @@ export function admitOidcIdentity(
 			return { error: 'group_not_allowed' };
 		}
 		entitlements = mappedEntitlements(groups, policy.groups);
+		if (policy.groups.membership) {
+			const { retained, unretainable } = retainMembershipGroups(groups, policy.groups.membership);
+			const normalized = normalizeAuthGroups(retained);
+			if (!normalized.ok) return { error: 'too_many_groups', retained: new Set(retained).size };
+			memberships = normalized.groups;
+			groupStats = { unretainable };
+		}
 	}
 	const name = displayNameClaim(userInfo?.name) ?? displayNameClaim(claims.name);
 	const pictureUrl = pictureUrlClaim(userInfo?.picture) ?? pictureUrlClaim(claims.picture);
 	return {
+		...(groupStats ? { groupStats } : {}),
 		user: {
 			id: UserId.parse(claims.sub),
 			email,
 			...(name ? { name } : {}),
 			...(pictureUrl ? { pictureUrl } : {}),
 			...(entitlements ? { entitlements } : {}),
+			...(memberships !== undefined ? { groups: memberships } : {}),
 		},
 	};
 }

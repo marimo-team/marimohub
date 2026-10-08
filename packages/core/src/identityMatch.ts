@@ -13,6 +13,7 @@ export interface IdentitySubject {
 	id: UserId;
 	email: string;
 	entitlements?: readonly AuthEntitlement[];
+	groups?: readonly string[];
 }
 
 /** A member reference: exactly one of a user id or an email. */

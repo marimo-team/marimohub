@@ -352,7 +352,7 @@ export interface ConfigSummary {
 }
 
 export type LoginPolicyAnalysisResult = { durationMs: number } & (
-	| { outcome: 'allow'; entitlements: readonly AuthEntitlement[] }
+	| { outcome: 'allow'; entitlements: readonly AuthEntitlement[]; groups: readonly string[] }
 	| { outcome: 'deny'; reason?: string }
 	| { outcome: 'timeout' }
 	| { outcome: 'error' }

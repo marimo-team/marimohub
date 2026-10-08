@@ -37,7 +37,9 @@ export default {
 factory returns a `SandboxProvider`. An `oidc-login-policy` factory returns
 `evaluate(input)`. Its contract lives in `@marimo-hub/auth-oidc/loginPolicy.ts`,
 not in `core`. It maps validated OIDC claims to a bounded login decision and
-entitlements. It does not authorize runtime resources. A
+entitlements, with optional bounded `groups` on allow. This additive field keeps
+API version 1. The host normalizes groups and rejects invalid or oversized sets.
+It does not authorize runtime resources. A
 `subject-security-context` factory returns `resolve(principal, signal)` and
 implements `SubjectSecurityContextProvider`. Each factory receives the full
 `MARIMOHUB_*` environment. A compute factory also receives
