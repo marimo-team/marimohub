@@ -73,3 +73,14 @@ GET /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid} the response property 
 POST /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/heartbeat the response property `data/user_id` became optional for the status `200`
 GET /api/v1/projects/{pid}/sessions the response property `data/items/items/user_id` became optional for the status `200`
 ```
+
+Folder import routes shipped unreleased after v0.4.16 and were reshaped in the
+pre-release pass: the per-entry status route became `GET …/notebook-imports/{import_id}`,
+import ids follow the `imp-` convention, and the publish body shares the create validators.
+
+```text
+GET /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks `api removed without deprecation`
+POST /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks added the pattern `^imp-[0-9a-z]{16}$` to the `path` request parameter `import_id`
+POST /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks the `base_image` request property's minLength was increased from `0` to `1`
+POST /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks the `compute_profile` request property's minLength was increased from `0` to `1`
+```

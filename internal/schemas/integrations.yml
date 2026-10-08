@@ -48,8 +48,9 @@ paths:
           description: Accepted.
   /kinds/aws_codeartifact/config:
     summary: AWS CodeArtifact
-    description: Install private Python packages with uv. AWS authentication creates
-      a token for each new session or job; restart after expiry.
+    description: Install private Python packages with uv. The hub mints a 12-hour
+      CodeArtifact token for each new session or job; restart the session after
+      the token expires.
     x-kind-schema-version: 1
     x-category: package_registry
     x-brand-color: '#FF9900'
@@ -57,7 +58,6 @@ paths:
       - auth.access_key_id
       - auth.secret_access_key
       - auth.session_token
-      - auth.token
     x-supports-test: true
     x-requirements: []
     get:
@@ -1482,6 +1482,7 @@ components:
         domain:
           type: string
           pattern: ^[a-z][a-z0-9-]{0,48}[a-z0-9]$
+          description: CodeArtifact domain name
         domain_owner:
           type: string
           pattern: ^\d{12}$
@@ -1489,31 +1490,24 @@ components:
         repository:
           type: string
           pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{1,99}$
+          description: CodeArtifact repository name
         region:
           default: us-east-1
+          description: AWS region of the domain, for example us-east-1
           type: string
-          pattern: ^[a-z]{2}(?:-[a-z]+)+-\d$
-        default_index:
-          default: false
-          description: Replace public PyPI with this repository
-          type: boolean
-        duration_seconds:
-          default: 43200
-          description: Token lifetime in seconds. Restart the session after expiry.
-          type: integer
-          minimum: 900
-          maximum: 43200
+          pattern: ^[a-z]+(?:-[a-z]+)+-\d+$
         auth:
           oneOf:
             - type: object
               properties:
                 method:
                   type: string
-                  const: federation
+                  const: ambient
               required:
                 - method
               additionalProperties: false
-              description: Project AWS workload identity
+              description: Exchange the project's workload identity for AWS credentials on the
+                hub, then mint a token
             - type: object
               properties:
                 method:
@@ -1539,24 +1533,17 @@ components:
                 - access_key_id
                 - secret_access_key
               additionalProperties: false
-              description: AWS credentials
-            - type: object
-              properties:
-                method:
-                  type: string
-                  const: token
-                token:
-                  type: string
-                  minLength: 1
-                  x-marimohub-secret: true
-                  writeOnly: true
-              required:
-                - method
-                - token
-              additionalProperties: false
-              description: Existing CodeArtifact token
+              description: Mint a token on the hub with these AWS keys; the keys never enter
+                the sandbox
+          description: "How the hub gets AWS credentials to mint the CodeArtifact token:
+            `ambient` uses the project's workload identity (WIF), `static` uses
+            the AWS keys below. Neither reaches the sandbox."
           discriminator:
             propertyName: method
+        default_index:
+          default: false
+          description: Replace public PyPI with this repository
+          type: boolean
       required:
         - domain
         - domain_owner
@@ -1569,6 +1556,7 @@ components:
         domain:
           type: string
           pattern: ^[a-z][a-z0-9-]{0,48}[a-z0-9]$
+          description: CodeArtifact domain name
         domain_owner:
           type: string
           pattern: ^\d{12}$
@@ -1576,31 +1564,24 @@ components:
         repository:
           type: string
           pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{1,99}$
+          description: CodeArtifact repository name
         region:
           default: us-east-1
+          description: AWS region of the domain, for example us-east-1
           type: string
-          pattern: ^[a-z]{2}(?:-[a-z]+)+-\d$
-        default_index:
-          default: false
-          description: Replace public PyPI with this repository
-          type: boolean
-        duration_seconds:
-          default: 43200
-          description: Token lifetime in seconds. Restart the session after expiry.
-          type: integer
-          minimum: 900
-          maximum: 43200
+          pattern: ^[a-z]+(?:-[a-z]+)+-\d+$
         auth:
           oneOf:
             - type: object
               properties:
                 method:
                   type: string
-                  const: federation
+                  const: ambient
               required:
                 - method
               additionalProperties: false
-              description: Project AWS workload identity
+              description: Exchange the project's workload identity for AWS credentials on the
+                hub, then mint a token
             - type: object
               properties:
                 method:
@@ -1626,32 +1607,24 @@ components:
                 - access_key_id
                 - secret_access_key
               additionalProperties: false
-              description: AWS credentials
-            - type: object
-              properties:
-                method:
-                  type: string
-                  const: token
-                token:
-                  oneOf:
-                    - $ref: '#/components/schemas/ManagedStoredSecret'
-                    - $ref: '#/components/schemas/ReferenceStoredSecret'
-                  x-marimohub-secret: true
-              required:
-                - method
-                - token
-              additionalProperties: false
-              description: Existing CodeArtifact token
+              description: Mint a token on the hub with these AWS keys; the keys never enter
+                the sandbox
+          description: "How the hub gets AWS credentials to mint the CodeArtifact token:
+            `ambient` uses the project's workload identity (WIF), `static` uses
+            the AWS keys below. Neither reaches the sandbox."
           discriminator:
             propertyName: method
+        default_index:
+          default: false
+          description: Replace public PyPI with this repository
+          type: boolean
       required:
         - domain
         - domain_owner
         - repository
         - region
-        - default_index
-        - duration_seconds
         - auth
+        - default_index
       additionalProperties: false
     azure_artifacts:
       type: object
@@ -1679,12 +1652,12 @@ components:
               type: string
               minLength: 1
               x-marimohub-secret: true
+              description: Azure DevOps personal access token with Packaging read permission
               writeOnly: true
           required:
             - method
             - token
           additionalProperties: false
-          description: Azure DevOps personal access token with Packaging read permission
         default_index:
           default: false
           description: Replace public PyPI with this repository
@@ -1721,11 +1694,11 @@ components:
                 - $ref: '#/components/schemas/ManagedStoredSecret'
                 - $ref: '#/components/schemas/ReferenceStoredSecret'
               x-marimohub-secret: true
+              description: Azure DevOps personal access token with Packaging read permission
           required:
             - method
             - token
           additionalProperties: false
-          description: Azure DevOps personal access token with Packaging read permission
         default_index:
           default: false
           description: Replace public PyPI with this repository
@@ -4560,6 +4533,7 @@ components:
                   type: string
                   minLength: 1
                   x-marimohub-secret: true
+                  description: Artifactory access token (sent with an empty username)
                   writeOnly: true
               required:
                 - method
@@ -4626,6 +4600,7 @@ components:
                     - $ref: '#/components/schemas/ManagedStoredSecret'
                     - $ref: '#/components/schemas/ReferenceStoredSecret'
                   x-marimohub-secret: true
+                  description: Artifactory access token (sent with an empty username)
               required:
                 - method
                 - token

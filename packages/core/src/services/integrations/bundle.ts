@@ -82,6 +82,17 @@ export function bundleIntegrations(
 		for (const [key, value] of Object.entries(item.output.env ?? {})) {
 			assertValidEnvValue(key, value, item.name);
 			const owner = varOwner.get(key);
+			if (owner === BUNDLER && key === 'UV_INDEX') {
+				vars[key] = appendIndexEntries(vars[key], value);
+				continue;
+			}
+			if (owner === BUNDLER && key === 'UV_DEFAULT_INDEX' && vars[key] !== value) {
+				throw new ValidationError(
+					`Integration "${item.name}" sets UV_DEFAULT_INDEX, but a package registry integration ` +
+						'already replaces PyPI. Remove UV_DEFAULT_INDEX from the environment variables ' +
+						'integration and use the package registry\'s "default index" option instead.',
+				);
+			}
 			// An identical value from two instances is tolerated (e.g. a shared
 			// tool var like PYICEBERG_HOME); a differing one is ambiguous.
 			if (owner && vars[key] !== value) {
@@ -176,6 +187,19 @@ function packageIndexEnv(
 		vars[key] = vars[key] ? `${vars[key]} ${entry}` : entry;
 	}
 	return vars;
+}
+
+/**
+ * `UV_INDEX` set by hand (the documented setup before package registry
+ * integrations existed) keeps working: uv tries indexes in order, so the
+ * registry integrations stay first and hand-written entries follow.
+ */
+function appendIndexEntries(current: string, added: string): string {
+	const entries = current.split(' ');
+	for (const entry of added.split(/\s+/)) {
+		if (entry && !entries.includes(entry)) entries.push(entry);
+	}
+	return entries.join(' ');
 }
 
 function assertValidEnvValue(key: string, value: string, instance: string): void {

@@ -17,6 +17,7 @@ import {
 import { createNotebookId, createVersionId, SYSTEM_ACTOR, VersionId } from '../../ids';
 import {
 	isWorkspaceDirectoryMarkerPath,
+	localEntryNotebook,
 	remoteWorkspaceEntry,
 	workspaceSourcePolicy,
 } from '../../integrations/remoteWorkspace';
@@ -178,6 +179,11 @@ export class NotebookService {
 		});
 	}
 
+	/**
+	 * `path` is a string, not a literal union, because an imported local source's
+	 * entrypoint can be any notebook path. Callers only route the source's
+	 * entrypoint and `pyproject.toml` here.
+	 */
 	private async saveWorkspaceSourceFile(
 		projectId: ProjectId,
 		notebookId: NotebookId,
@@ -484,10 +490,10 @@ export class NotebookService {
 
 		const nb = paths.project(projectId).notebook(notebookId);
 		const ver = nb.version(versionId);
-		const codeKey = nb.workspaceFile(input.entry_notebook ?? 'notebook.py');
+		const entryNotebook = localEntryNotebook(input);
+		const codeKey = nb.workspaceFile(entryNotebook);
 		const workspaceFiles = (input.workspaceFiles ?? []).filter(
-			(file) =>
-				file.path !== (input.entry_notebook ?? 'notebook.py') && file.path !== 'pyproject.toml',
+			(file) => file.path !== entryNotebook && file.path !== 'pyproject.toml',
 		);
 		// Every blob this create writes; deleting them unreferences the notebook.
 		const contentKeys = [
@@ -569,43 +575,15 @@ export class NotebookService {
 		actor: UserId,
 	): Promise<NotebookMeta> {
 		const meta = await this.getNotebookMeta(projectId, notebookId);
-		const alreadyPublished = new Error('Already published');
-		try {
-			await this.catalog.mutateSnapshot(
-				'notebook.import',
-				actor,
-				(snapshot) => {
-					const project = snapshot.projects.find((entry) => entry.id === projectId);
-					if (!project || project.status === 'deleted')
-						throw new NotFoundError('Project not found');
-					if (project.notebooks.some((entry) => entry.id === notebookId)) throw alreadyPublished;
-					return {
-						...snapshot,
-						projects: snapshot.projects.map((entry) =>
-							entry.id !== projectId
-								? entry
-								: {
-										...entry,
-										updated_at: meta.updated_at,
-										notebook_count: entry.notebook_count + 1,
-										notebooks: [
-											...entry.notebooks,
-											buildNotebookEntry(
-												meta,
-												'local',
-												paths.project(projectId).notebook(notebookId).base,
-												actor,
-											),
-										],
-									},
-						),
-					};
-				},
-				{ project_id: projectId, notebook_id: notebookId },
-			);
-		} catch (error) {
-			if (error !== alreadyPublished) throw error;
-		}
+		// A replay after the user deleted the notebook must not report it as imported.
+		if (meta.status === 'deleted') throw new NotFoundError(`Notebook ${notebookId} not found`);
+		await this.catalog.appendNotebookEntry(
+			'notebook.import',
+			actor,
+			projectId,
+			buildNotebookEntry(meta, 'local', paths.project(projectId).notebook(notebookId).base, actor),
+			{ ifAbsent: true },
+		);
 		return meta;
 	}
 

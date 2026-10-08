@@ -9761,10 +9761,11 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebook-imports:
     post:
-      operationId: notebookImports.prepare
+      operationId: notebooks.imports.prepare
+      x-cli-hidden: true
       tags:
         - Notebooks
-      summary: Prepare a folder snapshot for notebook import
+      summary: Upload a folder snapshot for notebook import
       parameters:
         - schema:
             type: string
@@ -9782,7 +9783,7 @@ paths:
               format: binary
       responses:
         '201':
-          description: Prepared workspace
+          description: Prepared folder snapshot
           content:
             application/json:
               schema:
@@ -9797,8 +9798,10 @@ paths:
                     properties:
                       id:
                         type: string
+                        pattern: ^imp-[0-9a-z]{16}$
                       expires_at:
                         type: string
+                        format: date-time
                       files:
                         type: array
                         items:
@@ -9807,7 +9810,8 @@ paths:
                             path:
                               type: string
                             size:
-                              type: number
+                              type: integer
+                              minimum: 0
                           required:
                             - path
                             - size
@@ -9818,6 +9822,12 @@ paths:
                 required:
                   - success
                   - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Authentication required
           content:
@@ -9870,10 +9880,14 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks:
     post:
-      operationId: notebookImports.publish
+      operationId: notebooks.imports.publish
+      x-cli-hidden: true
       tags:
         - Notebooks
-      summary: Import a notebook from a prepared folder
+      summary: Create a notebook from a prepared folder snapshot
+      description: 'Idempotent per entrypoint: a retry with the same body returns the
+        same notebook. A different body for an entrypoint already attempted
+        returns 409 `IMPORT_RESTART_REQUIRED`.'
       parameters:
         - schema:
             type: string
@@ -9884,7 +9898,8 @@ paths:
           in: path
         - schema:
             type: string
-            format: uuid
+            pattern: ^imp-[0-9a-z]{16}$
+            example: imp-4xz7rp3w8h2k9qm4
           required: true
           name: import_id
           in: path
@@ -9898,14 +9913,19 @@ paths:
                 entry_notebook:
                   type: string
                   minLength: 1
+                  example: reports/revenue.py
                 title:
                   type: string
                   minLength: 1
-                  maxLength: 200
+                  example: Revenue Analysis
                 base_image:
                   type: string
+                  minLength: 1
+                  example: ghcr.io/orgname/marimo-gpu:latest
                 compute_profile:
                   type: string
+                  minLength: 1
+                  example: large
               required:
                 - entry_notebook
                 - title
@@ -9982,11 +10002,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebook-imports/{import_id}:
     get:
-      operationId: notebookImports.status
+      operationId: notebooks.imports.get
+      x-cli-hidden: true
       tags:
         - Notebooks
-      summary: Reconcile a notebook import outcome
+      summary: Get the outcome of each notebook in a folder import
+      description: Lists every entrypoint with an attempt in progress or finished.
+        Entrypoints that were never attempted, or whose attempt stopped and can
+        be retried, are absent.
       parameters:
         - schema:
             type: string
@@ -9997,19 +10022,14 @@ paths:
           in: path
         - schema:
             type: string
-            format: uuid
+            pattern: ^imp-[0-9a-z]{16}$
+            example: imp-4xz7rp3w8h2k9qm4
           required: true
           name: import_id
           in: path
-        - schema:
-            type: string
-            minLength: 1
-          required: true
-          name: entry_notebook
-          in: query
       responses:
         '200':
-          description: Import status
+          description: Import outcome
           content:
             application/json:
               schema:
@@ -10022,18 +10042,35 @@ paths:
                   data:
                     type: object
                     properties:
-                      state:
+                      id:
                         type: string
-                        enum:
-                          - pending
-                          - preparing
-                          - publishing
-                          - complete
-                          - expired
-                      notebook:
-                        $ref: '#/components/schemas/NotebookMeta'
+                        pattern: ^imp-[0-9a-z]{16}$
+                      expires_at:
+                        type: string
+                        format: date-time
+                      notebooks:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            entry_notebook:
+                              type: string
+                            state:
+                              type: string
+                              enum:
+                                - preparing
+                                - publishing
+                                - complete
+                                - expired
+                            notebook:
+                              $ref: '#/components/schemas/NotebookMeta'
+                          required:
+                            - entry_notebook
+                            - state
                     required:
-                      - state
+                      - id
+                      - expires_at
+                      - notebooks
                 required:
                   - success
                   - data
@@ -10051,12 +10088,6 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '409':
-          description: Conflict
           content:
             application/json:
               schema:

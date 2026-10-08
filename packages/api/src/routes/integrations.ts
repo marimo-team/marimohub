@@ -1026,14 +1026,16 @@ async function objectTestContext(
 	getStored: (id: IntegrationId) => Promise<IntegrationDetail>,
 	makeContext: () => Promise<ObjectBrowseContext>,
 ): Promise<ObjectBrowseContext | undefined> {
-	const kind = request.source === 'draft' ? request.kind : (await getStored(request.id)).kind;
+	const stored = request.source === 'stored' ? await getStored(request.id) : undefined;
+	const kind = stored?.kind ?? (request.source === 'draft' ? request.kind : undefined);
 	const descriptor = kinds.find((item) => item.kind === kind);
-	if (
-		descriptor?.category !== 'package_registry' &&
-		!descriptor?.browse_surfaces.includes('objects')
-	) {
-		return undefined;
+	if (descriptor?.category === 'package_registry') {
+		// Only project-identity auth mints its token from federated credentials.
+		const config = stored?.config ?? (request.source === 'draft' ? request.config : {});
+		const auth = config.auth as { method?: unknown } | undefined;
+		return auth?.method === 'ambient' ? makeContext() : undefined;
 	}
+	if (!descriptor?.browse_surfaces.includes('objects')) return undefined;
 	return makeContext();
 }
 

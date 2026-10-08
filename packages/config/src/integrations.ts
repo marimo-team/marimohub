@@ -151,10 +151,17 @@ export function makeIntegrations(
 		bucket,
 		registry: defaultRegistry(),
 		packageRegistryCredentials: new AwsCodeArtifactCredentials(),
-		packageRegistryProbe: createGuardedProbe({
-			allowPrivate: policy === 'private',
-			maxProbesPerMinute: 360,
-		}),
+		// `off` is the deployment's integration egress kill switch, so it also stops
+		// token minting; the store then fails package registries closed.
+		...(policy === 'off'
+			? {}
+			: {
+					packageRegistryProbe: createGuardedProbe({
+						allowPrivate: policy === 'private',
+						// Hub-wide backstop shared by every project; per-project budgeting is a follow-up.
+						maxProbesPerMinute: 360,
+					}),
+				}),
 		codec: secretSources.codec,
 		resolvers: secretSources.resolvers,
 		probe,

@@ -25,11 +25,10 @@ const basicAuth = z.strictObject({
 	username: usernameField(),
 	password: zSecret().describe('Password or access token'),
 });
-const tokenAuth = z.strictObject({ method: z.literal('token'), token: zSecret() });
-const defaultIndex = z
-	.boolean()
-	.default(false)
-	.describe('Replace public PyPI with this repository');
+const tokenAuth = (description: string) =>
+	z.strictObject({ method: z.literal('token'), token: zSecret().describe(description) });
+export const defaultIndexField = () =>
+	z.boolean().default(false).describe('Replace public PyPI with this repository');
 const pathSegment = () =>
 	z
 		.string()
@@ -55,17 +54,28 @@ function validateConnection({ url, credentials }: IndexConnection): void {
 	}
 }
 
-function definePythonIndex<S extends z.ZodType<{ default_index: boolean }>>(
+/**
+ * The one implementation behind every Python package index kind. A kind whose
+ * credentials are minted at runtime declares `packageRegistry`; the store then
+ * resolves them first and hands them to `connection` through `input`.
+ */
+export function definePythonIndex<S extends z.ZodType<{ default_index: boolean }>>(
 	definition: Pick<
 		IntegrationDefinition<S>,
-		'kind' | 'title' | 'description' | 'brand' | 'configSchema' | 'uiHints'
+		'kind' | 'title' | 'description' | 'brand' | 'configSchema' | 'uiHints' | 'packageRegistry'
 	> & {
-		connection(config: z.infer<S>): IndexConnection;
+		connection(
+			config: z.infer<S>,
+			input: { packageRegistryCredentials?: PackageRegistryCredentials },
+		): IndexConnection;
 	},
 ): IntegrationDefinition<S> {
 	const { connection, ...metadata } = definition;
-	function resolve(config: z.infer<S>): IndexConnection {
-		const result = connection(config);
+	function resolve(
+		config: z.infer<S>,
+		input: { packageRegistryCredentials?: PackageRegistryCredentials } = {},
+	): IndexConnection {
+		const result = connection(config, input);
 		validateConnection(result);
 		return result;
 	}
@@ -78,8 +88,9 @@ function definePythonIndex<S extends z.ZodType<{ default_index: boolean }>>(
 			auth: { group: 'Authentication', order: 10 },
 			default_index: { group: 'Package resolution', order: 20 },
 		},
-		render({ config, instanceName }) {
-			const { url, credentials } = resolve(config);
+		render(input) {
+			const { config, instanceName } = input;
+			const { url, credentials } = resolve(config, input);
 			const segment = envSegment(instanceName);
 			return {
 				packageIndexes: [{ name: instanceName, url, default: config.default_index }],
@@ -89,10 +100,13 @@ function definePythonIndex<S extends z.ZodType<{ default_index: boolean }>>(
 							[`UV_INDEX_${segment}_PASSWORD`]: credentials.password,
 						}
 					: {},
+				...(credentials?.expiresAt
+					? { manifestExtra: { credentials_expire_at: credentials.expiresAt } }
+					: {}),
 			};
 		},
 		async testConnection(config, probe, options) {
-			const { url, credentials } = resolve(config);
+			const { url, credentials } = resolve(config, options);
 			const signal = options?.signal;
 			signal?.throwIfAborted();
 			const response = await probe.fetch(url, {
@@ -123,7 +137,7 @@ export const pythonPackageIndex = definePythonIndex({
 		auth: z
 			.discriminatedUnion('method', [z.strictObject({ method: z.literal('none') }), basicAuth])
 			.default({ method: 'none' }),
-		default_index: defaultIndex,
+		default_index: defaultIndexField(),
 	}),
 	uiHints: { url: { group: 'Repository', order: 1 } },
 	connection: (config) => ({
@@ -143,8 +157,11 @@ export const artifactory = definePythonIndex({
 			'Artifactory base URL, for example https://company.jfrog.io/artifactory',
 		),
 		repository: pathSegment().describe('PyPI repository key'),
-		auth: z.discriminatedUnion('method', [tokenAuth, basicAuth]),
-		default_index: defaultIndex,
+		auth: z.discriminatedUnion('method', [
+			tokenAuth('Artifactory access token (sent with an empty username)'),
+			basicAuth,
+		]),
+		default_index: defaultIndexField(),
 	}),
 	uiHints: {
 		url: { group: 'Repository', order: 1 },
@@ -166,8 +183,8 @@ export const azureArtifacts = definePythonIndex({
 		organization: pathSegment(),
 		project: pathSegment().optional().describe('Omit for an organization-scoped feed'),
 		feed: pathSegment(),
-		auth: tokenAuth.describe('Azure DevOps personal access token with Packaging read permission'),
-		default_index: defaultIndex,
+		auth: tokenAuth('Azure DevOps personal access token with Packaging read permission'),
+		default_index: defaultIndexField(),
 	}),
 	uiHints: {
 		organization: { group: 'Repository', order: 1 },
@@ -206,7 +223,7 @@ export const gitlabPackages = definePythonIndex({
 				'Deploy token with read_package_registry, or personal access token with api scope',
 			),
 		}),
-		default_index: defaultIndex,
+		default_index: defaultIndexField(),
 	}),
 	uiHints: {
 		url: { group: 'Repository', order: 1 },

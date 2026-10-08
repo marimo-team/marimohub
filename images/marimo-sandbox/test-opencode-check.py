@@ -1,14 +1,14 @@
 import json
-from contextlib import contextmanager
 import os
-from pathlib import Path
 import signal
 import subprocess
 import tempfile
 import threading
 import time
 import unittest
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 
 CHECK = Path(__file__).with_name("check-opencode.sh")
@@ -32,6 +32,7 @@ class OpenCodeCheckTest(unittest.TestCase):
             "OPENCODE_PID_FILE": str(self.pid_file),
         }
         self.hang_path = None
+        self.health_status = 200
         self.skills = [{"name": "marimo-pair"}]
         self.headers = []
         self.requested = threading.Event()
@@ -53,12 +54,14 @@ class OpenCodeCheckTest(unittest.TestCase):
                     owner.requested.set()
                     owner.release.wait(20)
                     return
+                status = 200
                 if self.path == "/skill":
                     owner.headers.append(self.headers.get("x-opencode-directory"))
                     body = owner.skills
                 else:
-                    body = {"healthy": True}
-                self.send_response(200)
+                    status = owner.health_status
+                    body = {"healthy": status == 200}
+                self.send_response(status)
                 self.end_headers()
                 self.wfile.write(json.dumps(body).encode())
 
@@ -114,7 +117,7 @@ class OpenCodeCheckTest(unittest.TestCase):
         self.assertNotEqual(process.returncode, 0)
         self.assertIn("fixture server log", stderr)
 
-    def test_unresponsive_server_is_killed_and_reaped(self):
+    def test_server_ignoring_sigterm_is_killed_and_reaped(self):
         opencode = self.root / "opencode"
         opencode.write_text(opencode.read_text().replace(
             "#!/bin/sh\n", "#!/bin/sh\ntrap '' TERM\n"
@@ -124,6 +127,30 @@ class OpenCodeCheckTest(unittest.TestCase):
             with self.assertRaises(ProcessLookupError):
                 os.kill(int(self.pid_file.read_text()), 0)
         self.assertEqual(process.returncode, 0, stderr)
+
+    def test_server_exiting_before_healthy_fails_fast_with_log(self):
+        (self.root / "opencode").write_text(
+            '#!/bin/sh\necho "fixture server log"\necho $$ > "$OPENCODE_PID_FILE"\nexit 3\n'
+        )
+        self.health_status = 503
+        started = time.monotonic()
+        with self.start_check() as process:
+            _, stderr = process.communicate(timeout=10)
+        self.assertLess(time.monotonic() - started, 8)
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn("exited with status 3 before becoming healthy", stderr)
+        self.assertIn("fixture server log", stderr)
+
+    def test_health_deadline_expiry_reports_live_server(self):
+        self.health_status = 503
+        self.env["OPENCODE_HEALTH_DEADLINE"] = "2"
+        with self.start_check() as process:
+            _, stderr = process.communicate(timeout=10)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(self.pid_file.read_text()), 0)
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn("not ready within 2s (server alive: yes)", stderr)
+        self.assertIn("fixture server log", stderr)
 
     def test_communication_timeout_kills_and_reaps_check(self):
         self.hang_path = "/global/health"

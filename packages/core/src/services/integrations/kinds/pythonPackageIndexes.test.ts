@@ -1,25 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SecretResolver } from '../../../ports/secrets';
-import { createProjectId, createRunId, createSessionId, UserId } from '../../../ids';
-import type { IntegrationProbe, SessionRenderContext } from '../../../ports/integrations';
-import { MemoryBucket } from '../../../testing/MemoryBucket';
-import { AesGcmSecretCodec } from '../../secrets/AesGcmSecretCodec';
-import { OrgIntegrationsStore, ProjectIntegrationsStore } from '../ProjectIntegrationsStore';
+import { createRunId, createSessionId } from '../../../ids';
+import { ProjectIntegrationsStore } from '../ProjectIntegrationsStore';
 import { basicAuthHeader } from '../sdk';
-import { defaultRegistry } from './index';
+import { actor, context, fixture, packageIndexStores } from './packageIndexTestkit';
 import {
 	artifactory,
 	azureArtifacts,
 	gitlabPackages,
 	pythonPackageIndex,
 } from './pythonPackageIndexes';
-import { SAMPLE_CONFIGS } from './sampleConfigs';
 
-const actor = UserId.parse('user-test');
-const context: SessionRenderContext = {
-	workload: { kind: 'session', id: createSessionId() },
-	principal: { userId: actor, email: 'test@example.com' },
-};
 const cases = [
 	{
 		kind: 'python_package_index',
@@ -47,30 +38,8 @@ const cases = [
 	},
 ];
 
-function setup() {
-	const fetch = vi.fn<IntegrationProbe['fetch']>(async () => ({
-		ok: true,
-		status: 200,
-		json: async () => ({}),
-	}));
-	const options = {
-		bucket: new MemoryBucket(),
-		registry: defaultRegistry(),
-		codec: new AesGcmSecretCodec({ kek: 'sFjp5R6eWYvc9SGtfeYEsQQlMKB8MfP4FdFAD7JAjsw=' }),
-		probe: { fetch, connect: vi.fn() },
-	};
-	return {
-		options,
-		fetch,
-		projectId: createProjectId(),
-		project: new ProjectIntegrationsStore(options),
-		org: new OrgIntegrationsStore(options),
-	};
-}
-
-function fixture(kind: string): Record<string, unknown> {
-	return SAMPLE_CONFIGS[kind] as Record<string, unknown>;
-}
+const setup = () =>
+	packageIndexStores({ packageRegistryCredentials: undefined, packageRegistryProbe: undefined });
 
 function withSecret(kind: string, value: unknown): Record<string, unknown> {
 	const config = fixture(kind);
@@ -357,6 +326,18 @@ describe('Python package index configuration', () => {
 		},
 	);
 
+	it('exports the empty Artifactory token username instead of dropping it', async () => {
+		const s = setup();
+		await s.project.create(
+			s.projectId,
+			{ kind: 'jfrog_artifactory', name: 'private', config: fixture('jfrog_artifactory') },
+			actor,
+		);
+		const vars = (await s.project.resolveForSession(s.projectId, context))?.vars ?? {};
+		expect(Object.hasOwn(vars, 'UV_INDEX_PRIVATE_USERNAME')).toBe(true);
+		expect(vars.UV_INDEX_PRIVATE_USERNAME).toBe('');
+	});
+
 	it('removes credentials when a generic index switches to anonymous authentication', async () => {
 		const s = setup();
 		const entry = await s.project.create(
@@ -490,8 +471,8 @@ describe('Python package index configuration', () => {
 		},
 	);
 
-	it('combines providers with CodeArtifact and rejects competing defaults and custom variables', async () => {
-		const s = setup();
+	it('combines providers with CodeArtifact and rejects competing defaults', async () => {
+		const s = packageIndexStores();
 		await s.org.create(
 			{ kind: 'aws_codeartifact', name: 'aws', config: fixture('aws_codeartifact') },
 			actor,
@@ -530,12 +511,27 @@ describe('Python package index configuration', () => {
 			{
 				kind: 'custom_env',
 				name: 'custom',
-				config: { vars: { UV_INDEX: 'https://other.example/simple/' } },
+				config: { vars: { UV_INDEX: 'legacy=https://other.example/simple/' } },
 			},
 			actor,
 		);
-		await expect(s.project.resolveForSession(s.projectId, context)).rejects.toThrow(
-			'same environment variable',
+		const merged = (await s.project.resolveForSession(s.projectId, context))?.vars.UV_INDEX;
+		expect(merged?.split(' ')).toHaveLength(5);
+		expect(merged).toMatch(/ legacy=https:\/\/other\.example\/simple\/$/);
+		await s.project.create(
+			s.projectId,
+			{
+				kind: 'custom_env',
+				name: 'credentials',
+				config: { secrets: [{ name: 'UV_INDEX_AWS_PASSWORD', value: 'conflicting-token' }] },
+			},
+			actor,
 		);
+		const error = await s.project
+			.resolveForSession(s.projectId, context)
+			.catch((err: Error) => err);
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toContain('same environment variable');
+		expect((error as Error).message).not.toMatch(/fresh-token|conflicting-token/);
 	});
 });

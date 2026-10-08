@@ -70,8 +70,8 @@ wait_http_200() { # $1 = host port; $2 = optional bearer token
 }
 
 read_kernel_token() { # $1 = container id
-	local cid="$1" token i
-	for i in $(seq 1 30); do
+	local cid="$1" token
+	for _ in $(seq 1 30); do
 		token="$(docker exec "$cid" sh -lc "cat '$KERNEL_TOKEN_FILE'" 2>/dev/null || true)"
 		if [ -n "$token" ]; then
 			echo "$token"

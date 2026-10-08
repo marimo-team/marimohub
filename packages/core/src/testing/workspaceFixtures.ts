@@ -1,3 +1,4 @@
+import { zipSync } from 'fflate';
 import type { NotebookId, ProjectId, UserId } from '../ids';
 import { paths } from '../paths';
 import type { Bucket } from '../ports/bucket';
@@ -43,4 +44,17 @@ export function makeWorkspaceService(
 		},
 	});
 	return { service, owner };
+}
+
+/** A folder-import ZIP; string contents are UTF-8 encoded. */
+export function makeFolderArchive(files: Record<string, string | Uint8Array>): Uint8Array {
+	const encoder = new TextEncoder();
+	return zipSync(
+		Object.fromEntries(
+			Object.entries(files).map(([path, contents]) => [
+				path,
+				typeof contents === 'string' ? encoder.encode(contents) : contents,
+			]),
+		),
+	);
 }

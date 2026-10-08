@@ -1,7 +1,7 @@
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
-import { NotInitializedError, PreconditionFailedError } from '../../errors';
+import { NotFoundError, NotInitializedError, PreconditionFailedError } from '../../errors';
 import { createSnapshotId } from '../../ids';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import { paths } from '../../paths';
@@ -19,6 +19,14 @@ import type { Catalog, Snapshot, SnapshotNotebookEntry, SnapshotProjectEntry } f
 import { withCasRetry } from './cas';
 import type { CasRetryOptions } from './cas';
 import type { EventService } from './EventService';
+
+// Aborts an idempotent append's CAS attempt without writing a snapshot.
+class NotebookEntryExistsError extends Error {
+	constructor(readonly snapshot: Snapshot) {
+		super('Notebook entry already exists');
+		this.name = 'NotebookEntryExistsError';
+	}
+}
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -335,24 +343,51 @@ export class CatalogService {
 	 * CAS-mutate the snapshot to append a notebook entry to its project, bumping
 	 * the project's `notebook_count` and `updated_at` (taken from the entry) in the
 	 * same write. Shared by the local and synced create paths.
+	 *
+	 * `ifAbsent` makes a replayed append idempotent: when the entry already exists
+	 * it returns the current snapshot without committing (or auditing) a new one,
+	 * and a missing or deleted project is a `NotFoundError` instead of a no-op.
 	 */
-	appendNotebookEntry(
+	async appendNotebookEntry(
 		operation: string,
 		actor: UserId,
 		projectId: ProjectId,
 		entry: SnapshotNotebookEntry,
+		options: { ifAbsent?: boolean } = {},
 	): Promise<Snapshot> {
-		return this.updateProjectEntry(
-			operation,
-			actor,
-			projectId,
-			(p) => ({
-				updated_at: entry.updated_at,
-				notebook_count: p.notebook_count + 1,
-				notebooks: [...p.notebooks, entry],
-			}),
-			{ project_id: projectId, notebook_id: entry.id },
-		);
+		try {
+			return await this.mutateSnapshot(
+				operation,
+				actor,
+				(snap) => {
+					const project = snap.projects.find((p) => p.id === projectId);
+					if (options.ifAbsent) {
+						if (!project || project.status === 'deleted')
+							throw new NotFoundError('Project not found');
+						if (project.notebooks.some((notebook) => notebook.id === entry.id))
+							throw new NotebookEntryExistsError(snap);
+					}
+					if (project === undefined) return snap;
+					return {
+						...snap,
+						projects: snap.projects.map((p) =>
+							p.id === projectId
+								? {
+										...p,
+										updated_at: entry.updated_at,
+										notebook_count: p.notebook_count + 1,
+										notebooks: [...p.notebooks, entry],
+									}
+								: p,
+						),
+					};
+				},
+				{ project_id: projectId, notebook_id: entry.id },
+			);
+		} catch (error) {
+			if (error instanceof NotebookEntryExistsError) return error.snapshot;
+			throw error;
+		}
 	}
 
 	/**

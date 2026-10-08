@@ -1,5 +1,5 @@
 ---
-description: Configure project and organization data sources for notebook sessions, including databases, warehouses, query engines, catalogs, object storage, ML platforms, and environment variables.
+description: Configure project and organization data sources for notebook sessions, including databases, warehouses, query engines, catalogs, object storage, ML platforms, Python package registries, and environment variables.
 ---
 
 # Integrations
@@ -11,7 +11,9 @@ databases and warehouses (PostgreSQL, MySQL, SQL Server, MongoDB, ClickHouse,
 Snowflake, BigQuery, Redshift, MotherDuck), query engines (Trino, Spark Connect,
 Databricks SQL, Athena), PyIceberg catalogs, object storage (S3, GCS, Azure
 Blob), remote DuckDB databases and DuckLake catalogs, ML platforms (Weights &
-Biases, Hugging Face), and environment variables.
+Biases, Hugging Face), [Python package registries](#package-registries) for uv
+(any simple index, JFrog Artifactory, Azure Artifacts, GitLab, AWS
+CodeArtifact), and environment variables.
 
 Each new, non-ephemeral session receives the applicable connection
 configuration as environment variables and files. Notebook code never accesses
@@ -1015,23 +1017,37 @@ project can have one active Hugging Face integration.
 
 ## Package registries
 
-Add a registry under **Package registries** in project or organization integrations.
+A package registry integration points uv at a private Python package index.
+Add one under **Package registries** in project or organization integrations.
 The integration name becomes the uv index name. Project integrations override organization integrations with the same name.
-The hub injects registry credentials before dependency installation for sessions and jobs.
+The hub injects the index settings and credentials before dependency installation for sessions and jobs.
 
 Registries are additional indexes by default, ordered by integration name across both scopes.
 Enable **Default index** to replace public PyPI. Only one integration can supply the default index.
 That registry needs a PyPI upstream or another source for public dependencies.
-Conflicting custom `UV_INDEX` or `UV_DEFAULT_INDEX` values stop session creation.
 
-Secret fields accept encrypted values or external references.
+The hub writes the indexes to `UV_INDEX` and `UV_DEFAULT_INDEX`:
+
+- If an [Environment variables](#environment-variables) integration also sets `UV_INDEX`, the hub merges the values: registry entries first, then the environment-variable entries, without duplicates.
+- If an Environment variables integration sets `UV_DEFAULT_INDEX` to a different value than the registry, session creation stops. Use the registry's **Default index** option instead.
+- The injected values replace `UV_INDEX` or `UV_DEFAULT_INDEX` set in the [sandbox image](./sandbox-image.md#private-package-indexes).
+
+[Secret fields](#secret-fields) accept encrypted values or [external references](./integration-secrets.md).
 Credentials use `UV_INDEX_<NAME>_USERNAME` and `UV_INDEX_<NAME>_PASSWORD`, separate from URLs and generated files.
-For example, `private-registry` becomes `PRIVATE_REGISTRY`. Restricted viewers receive no integration credentials.
+For example, `private-registry` becomes `PRIVATE_REGISTRY`.
+Notebook code can read these variables, so use read-only credentials.
 Running sessions do not refresh credentials. After you update credentials, restart the session before you install packages.
 **Test connection** checks index access when the deployment supports connection tests.
 
 For `tool.uv.sources` pins, also declare the named index in `pyproject.toml`.
 uv cannot resolve pins from environment-only definitions. See [uv package indexes](https://docs.astral.sh/uv/concepts/indexes/).
+
+Restricted viewers receive no package-index configuration at all, not only no credentials.
+Their sessions resolve unpinned dependencies from public PyPI, or from an index set in the sandbox image.
+A private package name that also exists on PyPI can then install the public package.
+To prevent this, pin each private package to a named index with `tool.uv.sources`, and declare that index with `explicit = true` in `pyproject.toml`.
+Keep uv's default `UV_INDEX_STRATEGY` (`first-index`); `unsafe-best-match` lets public versions win for every user.
+See [uv index strategies](https://docs.astral.sh/uv/concepts/indexes/#searching-across-multiple-indexes).
 
 ### Python package index
 
@@ -1080,22 +1096,26 @@ No AWS CLI, startup script, or keyring is required.
 
 Choose an authentication method:
 
-| Method                        | Requirements                                                                                                |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Project AWS workload identity | Project WIF enabled and an AWS WIF broker. Inherited organization integrations use each project's identity. |
-| AWS credentials               | Access key ID, secret access key, and optional session token. AWS keys stay outside the sandbox.            |
-| Existing CodeArtifact token   | A valid token. The hub does not renew it.                                                                   |
+| Method                        | Requirements                                                                                                                                                |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Project AWS workload identity | Project [workload identity](./workload-identity-federation.md) enabled with an AWS broker. Inherited organization integrations use each project's identity. |
+| AWS credentials               | Access key ID, secret access key, and optional session token. AWS keys stay on the hub.                                                                     |
 
-AWS token acquisition requires the Node deployment's AWS credential adapter. Existing tokens work without it.
-**Test connection** checks token acquisition and repository access. For WIF, test from a project with AWS cloud access enabled.
+Token acquisition requires the Node deployment's AWS credential adapter.
+**Test connection** checks token acquisition and repository access. For workload identity, test from a project with AWS cloud access enabled.
 
-AWS authentication creates a token for each new session or job, with a lifetime of 900–43200 seconds (default: 12 hours).
+The hub creates a token for each new session or job. Tokens last 12 hours.
 After expiry, restart the session before installing packages.
 Temporary AWS credentials must remain valid for new token requests.
 
 The AWS identity needs `codeartifact:GetAuthorizationToken`, `sts:GetServiceBearerToken`, and `codeartifact:ReadFromRepository`.
+A token carries all CodeArtifact permissions of its principal, including publish. Use a read-only role or user.
 Cross-account access also requires domain and repository resource policies.
 See [AWS token authentication](https://docs.aws.amazon.com/codeartifact/latest/ug/tokens-authentication.html).
+
+An [organization-wide](#organization-wide-integrations) CodeArtifact integration that uses workload identity
+fails session and job startup in each project without AWS workload identity.
+The hub does not fall back to public PyPI. To opt a project out, create a disabled project integration with the same name.
 
 <!--@include: ./partials/integrations/aws_codeartifact.md-->
 
@@ -1195,8 +1215,9 @@ Saving a reference does not fetch its value. **Test connection** resolves the
 current draft for supported kinds. **Environment variables** has no connection
 test, so its resolution errors can first appear during session creation.
 
-Environment-name precedence is integrations &lt; hub, WIF, AI, and marimo
-configuration. An integration cannot replace a hub-controlled value.
+Environment-name precedence is sandbox image &lt; integrations &lt; hub, WIF,
+AI, and marimo configuration. An integration cannot replace a hub-controlled
+value, and an injected value replaces the same variable set in the image.
 
 A few PyIceberg settings (`legacy-current-snapshot-id`, `max-workers`) apply to
 the whole process, not to one catalog, so two Iceberg integrations in the same

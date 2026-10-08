@@ -44,9 +44,12 @@ function bundleIntegrations(
 	return bundleWorkloadIntegrations(rendered, { kind: 'session', id: sessionId });
 }
 
+const REGISTRY_CREDENTIALS = { username: 'aws', password: 'registry-token' };
+
 /** Fixed session context for deterministic render comparisons. */
 function input<C>(config: unknown, def: { configSchema: { parse(v: unknown): C } }, name = 'prod') {
 	return {
+		packageRegistryCredentials: REGISTRY_CREDENTIALS,
 		config: def.configSchema.parse(config),
 		instanceName: name,
 		projectId: createProjectId(),
@@ -3780,7 +3783,9 @@ describe('testConnection goes through the injected probe only', () => {
 		for (const def of defaultRegistry().list()) {
 			if (!def.testConnection) continue;
 			const config = def.configSchema.parse(FIXTURES[def.kind]);
-			const result = await def.testConnection(config, probe);
+			const result = await def.testConnection(config, probe, {
+				packageRegistryCredentials: REGISTRY_CREDENTIALS,
+			});
 			expect(result.ok, def.kind).toBe(true);
 		}
 	});
@@ -3911,7 +3916,9 @@ describe('testConnection goes through the injected probe only', () => {
 				connect: () => Promise.reject(new Error(`transport failed with ${secrets.join(' ')}`)),
 				fetch: () => Promise.reject(new Error(`transport failed with ${secrets.join(' ')}`)),
 			};
-			const result = await def.testConnection(config, probe);
+			const result = await def.testConnection(config, probe, {
+				packageRegistryCredentials: REGISTRY_CREDENTIALS,
+			});
 			// A kind that reported no detail at all would pass the check below for
 			// the wrong reason.
 			expect(typeof result.details, def.kind).toBe('string');

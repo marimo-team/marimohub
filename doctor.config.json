@@ -21,6 +21,7 @@
 	},
 	"rules": {
 		"react-doctor/iframe-missing-sandbox": "off",
+		"react-doctor/async-await-in-loop": "off",
 		"react-doctor/no-multi-component-file": "off",
 		"react-doctor/unused-file": "error",
 		"react-doctor/unused-export": "error",

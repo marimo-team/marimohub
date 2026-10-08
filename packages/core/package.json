@@ -82,7 +82,7 @@
 		"@opentelemetry/api-logs": "catalog:",
 		"better-all": "catalog:",
 		"croner": "catalog:",
-		"fflate": "^0.8.2",
+		"fflate": "catalog:",
 		"smol-toml": "catalog:",
 		"tldts": "catalog:",
 		"ulidx": "catalog:",

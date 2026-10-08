@@ -11,6 +11,7 @@ import {
 	mapWithConcurrency,
 	SECURITY_LABEL_TOKEN,
 	ForbiddenError,
+	ImportId,
 	NotebookId,
 	NotFoundError,
 	NOTEBOOK_STATUSES,
@@ -933,6 +934,32 @@ export const SessionIdParam = NotebookIdParam.extend({
 			param: { name: 'sid', in: 'path' },
 			example: 'sess-9qm4xz7rp3w8h2k9',
 		}),
+});
+
+export const ImportIdParam = ProjectIdParam.extend({
+	import_id: z
+		.string()
+		.regex(ImportId.regex)
+		.refine(ImportId.is)
+		.openapi({
+			param: { name: 'import_id', in: 'path' },
+			example: 'imp-4xz7rp3w8h2k9qm4',
+		}),
+});
+
+// --- Shared request fields ---
+
+export const BaseImageField = z
+	.string()
+	.min(1)
+	.openapi({ example: 'ghcr.io/orgname/marimo-gpu:latest' });
+export const ComputeProfileField = z.string().min(1).openapi({ example: 'large' });
+
+export const ImportNotebookBody = z.object({
+	entry_notebook: z.string().min(1).openapi({ example: 'reports/revenue.py' }),
+	title: z.string().trim().min(1).openapi({ example: 'Revenue Analysis' }),
+	base_image: BaseImageField.optional(),
+	compute_profile: ComputeProfileField.optional(),
 });
 
 // --- Shared response schemas ---

@@ -1,7 +1,7 @@
 import {
 	exchangeFederatedStorageCredentials,
-	exchangeFederatedStorageEnv,
 	projectSessionEnv,
+	s3CredsToEnv,
 	UnavailableError,
 	ValidationError,
 } from '@marimo-hub/core';
@@ -10,6 +10,7 @@ import type {
 	ProjectId,
 	SessionEnv,
 	SessionRender,
+	TempS3Creds,
 	UserId,
 	WorkloadRef,
 } from '@marimo-hub/core';
@@ -33,11 +34,38 @@ export function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): 
 	};
 }
 
+export type FederatedCredentials = () => Promise<TempS3Creds>;
+
+/**
+ * One lazy, memoized WIF exchange per workload so the storage env and package
+ * registry token minting share a single JWT and STS round trip.
+ */
+export function federatedCredentialsFor(
+	deps: Partial<Pick<ApiDeps, 'wif'>>,
+	project: Project,
+	workload: WorkloadRef,
+	options: { restricted?: boolean } = {},
+): FederatedCredentials | undefined {
+	const wif = federationFor(project, deps.wif, options);
+	if (!wif) return;
+	let exchange: Promise<TempS3Creds> | undefined;
+	return () =>
+		(exchange ??= exchangeFederatedStorageCredentials(
+			wif.issuer,
+			wif.issuerUrl,
+			wif.target,
+			project.id,
+			workload,
+		));
+}
+
 export interface FederatedVarsOptions {
 	project: Project;
 	workload: WorkloadRef;
 	/** True for a viewer's throwaway sandbox: never federated credentials. */
 	restricted: boolean;
+	/** Shares the exchange with {@link resolveIntegrationRender}; built per call when absent. */
+	federatedCredentials?: FederatedCredentials;
 	onError?: (err: unknown) => void;
 }
 
@@ -51,13 +79,15 @@ export async function resolveFederatedVars(
 ): Promise<Record<string, string> | undefined> {
 	const wif = federationFor(options.project, deps.wif, { restricted: options.restricted });
 	if (!wif) return;
+	const credentials =
+		options.federatedCredentials ??
+		federatedCredentialsFor(deps, options.project, options.workload, options);
+	if (!credentials) return;
 	try {
-		return await exchangeFederatedStorageEnv(
-			wif.issuer,
-			wif.issuerUrl,
-			wif.target,
-			options.project.id,
-			options.workload,
+		return s3CredsToEnv(
+			await credentials(),
+			wif.target.storage.endpoint,
+			wif.target.storage.region,
 		);
 	} catch (err) {
 		options.onError?.(err);
@@ -71,6 +101,8 @@ export interface IntegrationRenderOptions {
 	workload: WorkloadRef;
 	principal: { userId: UserId; email: string };
 	restricted: boolean;
+	/** Shares the exchange with {@link resolveFederatedVars}; built per call when absent. */
+	federatedCredentials?: FederatedCredentials;
 	onRendered?: (render: SessionRender) => void;
 	onError?: (err: unknown) => void;
 }
@@ -78,7 +110,8 @@ export interface IntegrationRenderOptions {
 /**
  * Integrations FAIL CLOSED — a configured data source is load-bearing, so a
  * render failure aborts provisioning rather than starting a sandbox with
- * partial config. Only curated validation errors are safe to return to a caller.
+ * partial config. Only curated validation and unavailability errors are safe
+ * to return to a caller.
  */
 export async function resolveIntegrationRender(
 	deps: Pick<ApiDeps, 'integrations'> & Partial<Pick<ApiDeps, 'wif'>>,
@@ -86,29 +119,21 @@ export async function resolveIntegrationRender(
 ): Promise<SessionRender | undefined> {
 	if (!(deps.integrations && !options.restricted)) return;
 	try {
-		const wif = options.project ? federationFor(options.project, deps.wif) : undefined;
-		let awsCredentials: ReturnType<typeof exchangeFederatedStorageCredentials> | undefined;
+		const resolveFederatedCredentials =
+			options.federatedCredentials ??
+			(options.project
+				? federatedCredentialsFor(deps, options.project, options.workload)
+				: undefined);
 		const render = await deps.integrations.resolveForSession(options.projectId, {
 			workload: options.workload,
 			principal: options.principal,
-			...(wif
-				? {
-						resolveAwsCredentials: () =>
-							(awsCredentials ??= exchangeFederatedStorageCredentials(
-								wif.issuer,
-								wif.issuerUrl,
-								wif.target,
-								options.projectId,
-								options.workload,
-							)),
-					}
-				: {}),
+			...(resolveFederatedCredentials ? { resolveFederatedCredentials } : {}),
 		});
 		if (render) options.onRendered?.(render);
 		return render;
 	} catch (err) {
 		options.onError?.(err);
-		if (err instanceof ValidationError) throw err;
+		if (err instanceof ValidationError || err instanceof UnavailableError) throw err;
 		throw new UnavailableError(
 			'integration_render_failed: could not render this project’s integrations',
 		);
@@ -128,11 +153,14 @@ export async function resolveJobSandboxEnv(
 	const userId = run.triggered_by ?? job.created_by;
 	const identity = await deps.services.identities.get(userId).catch(() => null);
 	const fields = { project_id: run.project_id, job_id: run.job_id, run_id: run.run_id };
+	const workload: WorkloadRef = { kind: 'job-run', id: run.run_id };
+	const federatedCredentials = federatedCredentialsFor(deps, project, workload);
 	const [wifVars, render] = await Promise.all([
 		resolveFederatedVars(deps, {
 			project,
-			workload: { kind: 'job-run', id: run.run_id },
+			workload,
 			restricted: false,
+			federatedCredentials,
 			onError: (err) =>
 				logEvent({
 					level: 'warn',
@@ -144,7 +172,8 @@ export async function resolveJobSandboxEnv(
 		resolveIntegrationRender(deps, {
 			projectId: project.id,
 			project,
-			workload: { kind: 'job-run', id: run.run_id },
+			workload,
+			federatedCredentials,
 			principal: { userId, email: identity?.email ?? '' },
 			restricted: false,
 			onRendered: (rendered) => {

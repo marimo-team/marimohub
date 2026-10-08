@@ -69,3 +69,9 @@ PUT /projects/{pid}/notebooks/{nid}/source.json request property `oneOf[subschem
 GET /projects/{pid}/notebooks/{nid}/source.json added the new `pull` enum value to the `oneOf[subschema #2]/sync_mode` response property for the response status `200`
 GET /projects/{pid}/notebooks/{nid}/source.json added the new `push` enum value to the `oneOf[subschema #2]/sync_mode` response property for the response status `200`
 ```
+
+Import receipts shipped unreleased after v0.4.16; the title cap moved to the API body.
+
+```text
+GET /projects/{pid}/imports/{import_id}/items/{encoded_entrypoint}.json the `input/title` response property's maxLength was unset from `200` for the response status `200`
+```

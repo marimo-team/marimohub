@@ -414,21 +414,34 @@ Legacy local sources omit this field and use `notebook.py`.
 The live entry file keeps its original path. Version snapshots still use `versions/{vid}/notebook.py`.
 The original entry remains protected during workspace moves and deletes.
 
-Folder imports use `projects/{pid}/imports/{import-id}/`:
+Folder imports use `projects/{pid}/imports/{import-id}/` (`paths.project(pid).notebookImport(id)`):
 
-| Object                            | Owner and lifetime                                                               |
-| --------------------------------- | -------------------------------------------------------------------------------- |
-| `snapshot.zip`                    | Immutable folder bytes; expires after 24 hours, deleted after one hour of grace. |
-| `preparation.json`                | Immutable actor and expiry record; retained until project deletion.              |
-| `items/{encoded-entrypoint}.json` | `NotebookImportService` CAS receipt; retained until project deletion.            |
+| Object                      | Owner and lifetime                                                               |
+| --------------------------- | -------------------------------------------------------------------------------- |
+| `snapshot.zip`              | Immutable folder bytes; expires after 24 hours, deleted after one hour of grace. |
+| `preparation.json`          | Immutable actor and expiry record; deleted 7 days after the import expires.      |
+| `items/{entry-sha256}.json` | `NotebookImportService` CAS receipt; deleted 7 days after the import expires.    |
+
+Import IDs are `imp-` plus 16 random characters. A receipt key is the SHA-256 hex of the entrypoint path, so any valid
+path fits the 255-byte segment and 1024-byte key limits. The receipt's `input.entry_notebook` is the source of truth.
+Folder paths are limited to 896 UTF-8 bytes and 255 bytes per segment. The longest key a path is stored under is
+`projects/{pid}/notebooks/{nid}/versions/{vid}/workspace/{path}` (111-byte prefix).
 
 Each receipt binds the actor and submitted notebook settings to one entrypoint.
 Each attempt gets a separate notebook ID and a ten-minute lease. Retries cannot overwrite another attempt's workspace.
 Runtime settings are resolved for new attempts only. Completed replays return the stored result, even if deployment options change.
 
-After every file exists, CAS advances `preparing` to `publishing`. `NotebookService` then publishes through the catalog owner.
-Maintenance completes interrupted publication and repeatedly removes abandoned attempt prefixes, including late writes.
+Receipt states: `preparing` (an attempt holds the lease), `publishing` (every file exists; publication was authorized),
+`complete` (stores the published `NotebookMeta`), and `expired` (fenced by expiry, the retry limit, sweep, or a
+replay that found the notebook deleted).
+
+After every file exists, CAS advances `preparing` to `publishing`. Only `NotebookImportService` calls
+`NotebookService.publishImportNotebook`, and only for a receipt it fenced to `publishing`. Publication is an idempotent
+catalog append (`appendNotebookEntry` with `ifAbsent`).
+If the notebook was deleted before a replay completes it, the receipt becomes `expired` and the caller must restart.
+Maintenance completes interrupted publication and removes abandoned attempt prefixes, including late writes.
 It preserves the winning workspace and completed receipts. Replays cannot overwrite edits or recreate a deleted notebook.
+Seven days after the import expires, maintenance logs any receipt still `publishing` and deletes the whole import prefix.
 
 Imported local workspaces retain supporting files even under `MARIMOHUB_PERSIST_WORKSPACE=source`.
 The workspace root is the working directory and is added to `PYTHONPATH` for nested entrypoints.

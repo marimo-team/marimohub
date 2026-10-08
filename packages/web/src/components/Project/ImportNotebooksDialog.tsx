@@ -47,7 +47,11 @@ export default function ImportNotebooksDialog({
 		);
 
 	async function chooseFolder(fileList: FileList | null) {
-		if (!fileList?.length) return;
+		if (!fileList) return;
+		if (fileList.length === 0) {
+			setError('This folder has no files.');
+			return;
+		}
 		setInspecting(true);
 		setError(undefined);
 		try {
@@ -146,7 +150,12 @@ export default function ImportNotebooksDialog({
 										page={page}
 										onPageChange={setPage}
 									/>
-									<ImportFileReview key={revision} files={files} onChange={updateFile} />
+									<ImportFileReview
+										key={revision}
+										files={files}
+										onChange={updateFile}
+										onFilesChange={setFiles}
+									/>
 									{(images.length > 0 || profiles.length > 0) && (
 										<details className="rounded-lg border p-3">
 											<summary className="cursor-pointer text-sm font-medium">
@@ -191,7 +200,10 @@ export default function ImportNotebooksDialog({
 										</details>
 									)}
 									{problems.length > 0 && (
-										<ul role="alert" className="list-inside list-disc text-sm text-destructive">
+										<ul
+											aria-live="polite"
+											className="list-inside list-disc text-sm text-destructive"
+										>
 											{problems.map((problem) => (
 												<li key={problem}>{problem}</li>
 											))}
@@ -208,6 +220,7 @@ export default function ImportNotebooksDialog({
 							phase={queue.phase}
 							stopping={queue.stopping}
 							busy={busy}
+							expiresAt={queue.expiresAt}
 							page={resultPage}
 							onPageChange={setResultPage}
 						/>

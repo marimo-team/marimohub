@@ -47,7 +47,8 @@ so the feature can be turned back on without loss.
   fresh copy-only sandbox (never a bucket mount) and records the notebook version
   it started from. Git-synced notebooks copy the complete immutable workspace of
   that version. Local notebooks copy the current workspace, then overlay the
-  pinned version's `notebook.py` and `pyproject.toml`; other local workspace files
+  pinned version's entrypoint (`notebook.py` unless imported with a different
+  entry file) and `pyproject.toml`; other local workspace files
   therefore reflect their values when execution starts. The rendered HTML and
   captured stdout/stderr live under the run only. They are **not** notebook
   versions and never advance the notebook's head.
