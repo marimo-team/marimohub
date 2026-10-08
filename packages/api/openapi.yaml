@@ -5645,13 +5645,17 @@ paths:
             maxLength: 256
             pattern: ^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*(?![\s\S])
             description: Path-tag namespace. Matches projects with a tag equal to this value
-              or nested under it (`a` matches `a` and `a/b`, not `ab`).
-              Lowercase segments of [a-z0-9._-] separated by `/`.
+              or nested under it (`a` matches `a` and `a/b`, not `ab`). Segments
+              are separated by `/`. Each segment must start with a lowercase
+              letter or digit, followed by lowercase letters, digits, `.`, `_`,
+              or `-`.
             example: research/vision
           required: false
           description: Path-tag namespace. Matches projects with a tag equal to this value
-            or nested under it (`a` matches `a` and `a/b`, not `ab`). Lowercase
-            segments of [a-z0-9._-] separated by `/`.
+            or nested under it (`a` matches `a` and `a/b`, not `ab`). Segments
+            are separated by `/`. Each segment must start with a lowercase
+            letter or digit, followed by lowercase letters, digits, `.`, `_`, or
+            `-`.
           name: tag_prefix
           in: query
         - schema:

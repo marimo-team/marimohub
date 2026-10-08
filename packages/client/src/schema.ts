@@ -4863,7 +4863,7 @@ export interface operations {
 			query?: {
 				limit?: number;
 				cursor?: string;
-				/** @description Path-tag namespace. Matches projects with a tag equal to this value or nested under it (`a` matches `a` and `a/b`, not `ab`). Lowercase segments of [a-z0-9._-] separated by `/`. */
+				/** @description Path-tag namespace. Matches projects with a tag equal to this value or nested under it (`a` matches `a` and `a/b`, not `ab`). Segments are separated by `/`. Each segment must start with a lowercase letter or digit, followed by lowercase letters, digits, `.`, `_`, or `-`. */
 				tag_prefix?: string;
 				/** @description Project status to match. Deleted projects are excluded when omitted. */
 				status?: 'active' | 'deleted';
