@@ -318,8 +318,12 @@ describe('authz', () => {
 
 		it('admits owners and super admins without a roster', () => {
 			expect(canSeeProjectEntry({ owner: OWNER.id }, OWNER)).toBe(true);
-			expect(canSeeProjectEntry(entry, STRANGER, { superAdmins: [STRANGER.id] })).toBe(true);
-			expect(canSeeProjectEntry(entry, { ...STRANGER, entitlements: ['super-admin'] })).toBe(true);
+			expect(
+				canSeeProjectEntry({ owner: OWNER.id }, STRANGER, { superAdmins: [STRANGER.id] }),
+			).toBe(true);
+			expect(
+				canSeeProjectEntry({ owner: OWNER.id }, { ...STRANGER, entitlements: ['super-admin'] }),
+			).toBe(true);
 		});
 	});
 });

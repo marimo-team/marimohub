@@ -1138,6 +1138,15 @@ describe('Read visibility (MARIMOHUB_DEFAULT_ROLE)', () => {
 			ACTOR,
 		);
 		await expectOk(await owner('PATCH', `/projects/${pid}`, { default_role: 'none' }));
+		await createServices(bucket).catalog.updateProjectEntry(
+			'test.reorder',
+			ACTOR,
+			ProjectId.parse(pid),
+			() => ({
+				created_at: new Date(Date.parse(other.created_at) + 1).toISOString(),
+			}),
+		);
+		expect(await expectPage(await owner('GET', '/projects?limit=1'))).toMatchObject([{ id: pid }]);
 		const stranger = createTestApi({
 			bucket,
 			userId: uid('user_out'),
