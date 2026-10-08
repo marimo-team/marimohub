@@ -58,6 +58,8 @@ interface FetchOptions {
 	sessionResponses?: Session[];
 	computeProfiles?: { name: string; cpu?: number; memory_bytes?: number }[];
 	computeProfile?: string;
+	appComputeProfile?: string;
+	appComputeProfiles?: { name: string; cpu?: number; memory_bytes?: number }[];
 	computeProfileOverride?: 'none' | 'editors';
 	editorSharing?: 'shared' | 'exclusive';
 	editorOwner?: { id: string; activity: 'active' | 'idle' | 'unknown' | 'starting' };
@@ -254,6 +256,7 @@ export function makeFetch(opts: FetchOptions) {
 					title: 'Forecast',
 					author: 'me',
 					...(opts.computeProfile ? { compute_profile: opts.computeProfile } : {}),
+					app_compute_profile: opts.appComputeProfile,
 				},
 				source:
 					opts.sourceType === 'git'
@@ -297,6 +300,7 @@ export function makeFetch(opts: FetchOptions) {
 							: [],
 				limits: {},
 				compute_profiles: opts.computeProfiles ?? [],
+				app_compute_profiles: opts.appComputeProfiles,
 				compute_profile_override: opts.computeProfileOverride ?? 'none',
 				editor_sandbox_sharing: opts.editorSharing ?? 'shared',
 				surfaces: [

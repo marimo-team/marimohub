@@ -42,7 +42,9 @@ export function ChangeComputeProfileDialog({
 		{
 			value: DEFAULT_COMPUTE_PROFILE,
 			label: capabilities?.app_compute_profiles
-				? `Default (${appProfiles[0]?.name})`
+				? appProfiles[0]
+					? `Default (${appProfiles[0].name})`
+					: 'Default'
 				: 'Use editing profile',
 		},
 		...appProfiles.map((profile) => ({

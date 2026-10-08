@@ -88,7 +88,10 @@ MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
 
   The first app profile is the app default, even when notebook overrides are
   disabled. If the app list is unset or empty, apps share the editing list and
-  inherit the notebook's `compute_profile` unless `app_compute_profile` is set.
+  use the editing default. With that shared list and
+  `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors`, apps instead inherit the notebook's `compute_profile` unless
+  `app_compute_profile` is set. With overrides disabled, both stored notebook
+  selections are ignored.
   Names are scoped to each list, so the same name can specify different resources.
   Kubernetes profiles set both requests and limits; include their full requests
   in capacity and namespace quota planning.

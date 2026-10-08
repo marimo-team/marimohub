@@ -705,3 +705,31 @@ describe('Project — Notebook Actions: configuration', () => {
 		);
 	});
 });
+
+describe('Project — create compute selection', () => {
+	it.each([{ computeProfiles: [] }, { computeProfiles: [{ name: 'edit', cpu: 2 }] }])(
+		'hides editing choices with app-only choices: %j',
+		async ({ computeProfiles }) => {
+			const user = userEvent.setup();
+			makeFetch({
+				role: 'editor',
+				capabilities: {
+					federation: { available: false, default_enabled: false },
+					compute_profiles: computeProfiles,
+					app_compute_profiles: [
+						{ name: 'app-small', cpu: 1 },
+						{ name: 'app-large', cpu: 4 },
+					],
+					compute_profile_override: 'editors',
+				},
+			});
+			await renderProject();
+			await user.click(screen.getByRole('button', { name: 'New Notebook' }));
+			const dialog = await screen.findByRole('dialog');
+			expect(within(dialog).queryByRole('radiogroup', { name: 'Compute' })).not.toBeInTheDocument();
+			await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+			await chooseNotebookAction(user, 'Change compute…');
+			expect(await screen.findByRole('radiogroup', { name: 'App profile' })).toBeInTheDocument();
+		},
+	);
+});

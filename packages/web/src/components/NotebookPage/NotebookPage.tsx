@@ -254,13 +254,14 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		[];
 	const computeOverrideApplies =
 		capabilities?.compute_profile_override === 'editors' && (!isViewer || isApp);
+	const storedComputeProfile = modeComputeProfile(
+		notebook?.meta,
+		isApp ? 'app' : 'edit',
+		capabilities?.app_compute_profiles !== undefined,
+	);
 	const selectedComputeProfile = effectiveComputeProfile(
 		computeProfiles,
-		modeComputeProfile(
-			notebook?.meta,
-			isApp ? 'app' : 'edit',
-			capabilities?.app_compute_profiles !== undefined,
-		),
+		storedComputeProfile,
 		computeOverrideApplies,
 	);
 	const canRetryWithDefault =
@@ -431,6 +432,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		closeSecondaryFrame,
 		computeOverrideApplies,
 		computeProfiles,
+		storedComputeProfile,
 		confirmAppAction,
 		confirmEditRestart,
 		confirmEditStop,
@@ -514,6 +516,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		closeSecondaryFrame,
 		computeOverrideApplies,
 		computeProfiles,
+		storedComputeProfile,
 		confirmAppAction,
 		confirmEditRestart,
 		confirmEditStop,
@@ -619,7 +622,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 							session={session}
 							profiles={computeProfiles}
 							selectedProfileName={selectedComputeProfile?.name}
-							storedName={notebook?.meta.compute_profile}
+							storedName={storedComputeProfile}
 							allowOverride={computeOverrideApplies}
 							isProvisioning={isProvisioning}
 							error={error?.message}

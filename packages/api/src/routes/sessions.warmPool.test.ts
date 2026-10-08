@@ -44,13 +44,12 @@ async function setup(
 		{
 			enabled: true,
 			size: 1,
-			profiles: [
-				{
-					key: mode ?? 'default',
-					name: mode,
-					resources: mode ? { cpu: mode === 'edit' ? 2 : 1 } : {},
-				},
-			],
+			profiles: mode
+				? [
+						{ key: 'edit', name: 'edit', resources: { cpu: 2 } },
+						{ key: 'app', name: 'app', resources: { cpu: 1 } },
+					]
+				: [{ key: 'default', resources: {} }],
 			creationTimeoutMs: 300_000,
 			minimumRemainingMs: 60_000,
 			providerLifetimeMs,
@@ -58,8 +57,8 @@ async function setup(
 	);
 	const sandbox: Partial<SandboxConfig> = mode
 		? {
-				computeProfiles: [{ name: mode, resources: { cpu: mode === 'edit' ? 2 : 1 } }],
-				appComputeProfiles: [{ name: mode, resources: { cpu: mode === 'edit' ? 2 : 1 } }],
+				computeProfiles: [{ name: 'edit', resources: { cpu: 2 } }],
+				appComputeProfiles: [{ name: 'app', resources: { cpu: 1 } }],
 			}
 		: {};
 	const api = createTestApi({
@@ -115,10 +114,12 @@ describe('session warm sandbox assignment', () => {
 		await w.warmPool.sweep();
 		const claim = vi.spyOn(w.warmPool, 'claim');
 		const response = await expectOk<Session>(await w.api.request('POST', w.path, { mode }));
-		expect(claim).toHaveBeenCalledWith(expect.objectContaining({ profile: mode }));
+		expect(claim).toHaveBeenCalledWith(
+			expect.objectContaining({ profile: mode, resources: { cpu: mode === 'edit' ? 2 : 1 } }),
+		);
 		expect(response.compute_profile).toBe(mode);
 		expect(response.compute_resources).toMatchObject({ cpu: mode === 'edit' ? 2 : 1 });
-		expect(w.create).toHaveBeenCalledTimes(1);
+		expect(w.create).toHaveBeenCalledTimes(2);
 	});
 
 	it.each(['warm', 'legacy-warm', 'cold-fallback'] as const)(

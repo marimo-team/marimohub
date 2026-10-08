@@ -29,6 +29,43 @@ describe('NotebookPage app variant', () => {
 		expect(screen.queryByLabelText('Rename notebook')).toBeNull();
 	});
 
+	it.each([true, false])(
+		'uses the app profile in session details (running: %s)',
+		async (running) => {
+			makeFetch({
+				role: 'editor',
+				session: appSession({ compute_profile: 'app-large' }),
+				computeProfile: 'large',
+				appComputeProfile: 'app-large',
+				computeProfileOverride: 'editors',
+				computeProfiles: [{ name: 'large', cpu: 8 }],
+				appComputeProfiles: [
+					{ name: 'app-small', cpu: 1 },
+					{ name: 'app-large', cpu: 4 },
+				],
+				...(running
+					? {}
+					: {
+							createError: {
+								code: 'COMPUTE_UNAVAILABLE',
+								message: 'Unable to start app',
+								status: 503,
+							},
+						}),
+			});
+			renderPage('app');
+			await userEvent.click(
+				await screen.findByRole('button', {
+					name: running ? 'Session Running — details' : 'Session Failed — details',
+				}),
+			);
+			expect(await screen.findByText('app-large — 4 CPU')).toBeInTheDocument();
+			expect(
+				screen.queryByText(/(?:selected profile.*unavailable|large \(unavailable\))/i),
+			).not.toBeInTheDocument();
+		},
+	);
+
 	it('shows the staleness banner when the app trails the notebook head', async () => {
 		makeFetch({
 			role: 'editor',

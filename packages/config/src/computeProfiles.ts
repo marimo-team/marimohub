@@ -249,10 +249,9 @@ export function parseComputeProfiles(
 	} catch (error) {
 		if (variable === 'MARIMOHUB_COMPUTE_PROFILES' || !(error instanceof ComputeProfileConfigError))
 			throw error;
-		throw new ConfigError(error.message.replace('MARIMOHUB_COMPUTE_PROFILES', variable), {
-			variable,
-			docs: 'docs/configuration.md#compute',
-		});
+		error.message = error.message.replace('MARIMOHUB_COMPUTE_PROFILES', variable);
+		error.opts.variable = variable;
+		throw error;
 	}
 }
 

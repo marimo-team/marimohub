@@ -1071,7 +1071,7 @@ function useProjectContent() {
 						)}
 					</createNotebookForm.AppField>
 				)}
-				{offersComputeChoice && (
+				{canChooseComputeProfile && computeProfiles.length > 1 && (
 					<createNotebookForm.AppField name="computeProfile">
 						{(field) => (
 							<field.RadioGroupField

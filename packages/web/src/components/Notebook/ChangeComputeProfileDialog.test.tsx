@@ -14,7 +14,7 @@ const json = (data: unknown) =>
 
 function makeFetch(
 	currentComputeProfile?: string,
-	modeDefaults = false,
+	modeDefaults: boolean | 'empty' = false,
 	appComputeProfile?: string,
 ) {
 	return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -29,10 +29,13 @@ function makeFetch(
 				compute_profile_override: 'editors',
 				...(modeDefaults
 					? {
-							app_compute_profiles: [
-								{ name: 'app-small', cpu: 1 },
-								{ name: 'app-large', cpu: 4 },
-							],
+							app_compute_profiles:
+								modeDefaults === 'empty'
+									? []
+									: [
+											{ name: 'app-small', cpu: 1 },
+											{ name: 'app-large', cpu: 4 },
+										],
 						}
 					: {}),
 			});
@@ -103,6 +106,16 @@ afterEach(() => {
 });
 
 describe('ChangeComputeProfileDialog', () => {
+	it('shows a plain default label for an empty app profile list', async () => {
+		renderDialog(makeFetch(undefined, 'empty'));
+		await waitFor(() =>
+			expect(editing().getByRole('radio', { name: /Default \(small\)/ })).toBeChecked(),
+		);
+		const app = within(screen.getByRole('radiogroup', { name: 'App profile' }));
+		expect(app.getByRole('radio', { name: 'Default' })).toBeChecked();
+		expect(screen.queryByText('Default (undefined)')).not.toBeInTheDocument();
+	});
+
 	it('shows different defaults and saves only the changed app choice', async () => {
 		const user = userEvent.setup();
 		const fetchImpl = makeFetch(undefined, true);

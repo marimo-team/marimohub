@@ -17,6 +17,23 @@ const Gi = 1024 ** 3;
 const Mi = 1024 ** 2;
 
 describe('parseComputeProfiles', () => {
+	it('preserves app-profile error metadata and remediation', () => {
+		let error: unknown;
+		try {
+			parseComputeProfiles('app:cpu=invalid', 'MARIMOHUB_APP_COMPUTE_PROFILES');
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toBeInstanceOf(ComputeProfileConfigError);
+		const configError = error as ComputeProfileConfigError;
+		expect(configError.profileName).toBe('app');
+		expect(configError.key).toBe('cpu');
+		expect(configError.opts.variable).toBe('MARIMOHUB_APP_COMPUTE_PROFILES');
+		expect(configError.format()).toContain('MARIMOHUB_APP_COMPUTE_PROFILES:');
+		expect(configError.format()).toContain('fix:');
+		expect(configError.format()).toContain('name:cpu=<cores>;mem=<Mi|Gi|Ti>;gpu=<type>[:<count>]');
+	});
+
 	it('returns no profiles when unset, empty, or whitespace', () => {
 		for (const raw of [undefined, '', '   ']) {
 			const config = parseComputeProfiles(raw);
