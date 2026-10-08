@@ -154,16 +154,21 @@ and the next visit starts fresh from the notebook's saved version.
 
 ### Default access for non-members
 
-A logged-in user who is not the owner or a member falls back to
-`MARIMOHUB_DEFAULT_ROLE`:
+`MARIMOHUB_DEFAULT_ROLE` sets access for signed-in non-members (`editor` by default).
+Managers and admins can override it in **Project Access → Default access for signed-in users**.
 
-- `editor` (default): every logged-in user can edit notebooks and run sessions in
-  any project, but cannot update or delete projects.
-- `manager`: every logged-in user can manage every project. Use only in a fully
-  trusted deployment.
-- `viewer`: every logged-in user can read any project.
-- `app-user`: every logged-in user can use apps without source access.
-- `none`: non-members cannot see projects they do not own or belong to.
+| Setting                               | API value                                 | Access for non-members                            |
+| ------------------------------------- | ----------------------------------------- | ------------------------------------------------- |
+| Inherit deployment and group defaults | `inherit`                                 | Higher of the deployment and OIDC group defaults. |
+| Members only                          | `none`                                    | No default access, including from OIDC groups.    |
+| App user, Viewer, Editor, or Manager  | `app-user`, `viewer`, `editor`, `manager` | Selected role for this project.                   |
+
+Existing projects inherit. Explicit memberships override defaults. Owners and super
+admins retain admin access. These rules apply to project listings, direct requests,
+and apps. They never grant anonymous access.
+
+`PATCH /api/v1/projects/{pid}` accepts `default_role` with the values above.
+Omitting the field preserves its current value. Project details include the override when present.
 
 ### Super admins: `MARIMOHUB_SUPER_ADMINS`
 

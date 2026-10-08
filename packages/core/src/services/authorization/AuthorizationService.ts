@@ -666,8 +666,7 @@ export class AuthorizationService {
 	}
 
 	/**
-	 * List fast path: subjects who see every project (super admins, or anyone a
-	 * deployment default role makes at least a viewer) skip per-entry checks.
+	 * Only super admins bypass project defaults and explicit memberships.
 	 */
 	listsAllProjects(subject: AuthorizationSubject): boolean {
 		const grant = 'credential' in subject ? subject.credential.grant : undefined;
@@ -677,18 +676,10 @@ export class AuthorizationService {
 		) {
 			return false;
 		}
-		return (
-			roleAtLeast(subjectDefaultRole(subject, this.policy), 'viewer') ||
-			isSuperAdmin(subject, this.policy?.superAdmins)
-		);
+		return isSuperAdmin(subject, this.policy?.superAdmins);
 	}
 
-	/**
-	 * Per-entry list visibility from the denormalized catalog snapshot. `null`
-	 * means indeterminate (the entry predates `member_ids`): the caller must
-	 * decide from the authoritative project record instead — never treat
-	 * indeterminate as visible.
-	 */
+	/** Null requires an authoritative project read; snapshot rosters can be stale. */
 	projectEntryVisibility(
 		subject: AuthorizationSubject,
 		entry: ProjectEntryVisibilityInput,
@@ -767,7 +758,10 @@ export class AuthorizationService {
 						projectCreationRestricted: this.policy?.projectCreationRestricted || appOnly !== false,
 					});
 				case 'directory.search':
-					return this.listsAllProjects(subject);
+					return (
+						roleAtLeast(subjectDefaultRole(subject, this.policy), 'viewer') ||
+						isSuperAdmin(subject, this.policy?.superAdmins)
+					);
 				case 'admin.access':
 				case 'org-integration.manage':
 				case 'audit.global.read':

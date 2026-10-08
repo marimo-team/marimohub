@@ -53,6 +53,7 @@ type ProjectListQuery = NonNullable<paths['/api/v1/projects']['get']['parameters
 export type ProjectListFilters = Pick<ProjectListQuery, 'q' | 'status' | 'tag'>;
 /** The full project meta returned by `GET /api/v1/projects/:id` (includes `federation`). */
 export type ProjectDetail = ClientProject;
+export type ProjectDefaultRole = NonNullable<ProjectDetail['default_role']>;
 /** Per-project workload-identity federation override. */
 export type ProjectFederation = ClientProjectFederation;
 // The client re-exports the raw OpenAPI `components` but no named aliases for

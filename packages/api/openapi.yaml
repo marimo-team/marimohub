@@ -547,6 +547,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ProjectMember'
+        default_role:
+          type: string
+          enum:
+            - inherit
+            - none
+            - manager
+            - editor
+            - viewer
+            - app-user
         status:
           type: string
           enum:
@@ -5956,6 +5965,17 @@ paths:
             schema:
               type: object
               properties:
+                default_role:
+                  type: string
+                  enum:
+                    - inherit
+                    - none
+                    - manager
+                    - editor
+                    - viewer
+                    - app-user
+                  description: Non-member access. inherit uses deployment and OIDC defaults. none
+                    grants no default access. Requires manager or higher.
                 name:
                   type: string
                   minLength: 1

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
@@ -71,6 +71,7 @@ function conflict(message: string) {
  */
 function makeFetch({
 	addResponse,
+	updateResponse,
 	searchResults = [NINA],
 	capabilities = CAPABILITIES,
 	currentUser = OWNER_USER,
@@ -78,6 +79,7 @@ function makeFetch({
 	directory = DIRECTORY,
 }: {
 	addResponse?: Response;
+	updateResponse?: () => Promise<Response>;
 	searchResults?: ResolvedUser[];
 	capabilities?: Capabilities;
 	currentUser?: User;
@@ -94,6 +96,8 @@ function makeFetch({
 			: undefined;
 		if (method !== 'GET') calls.push({ url, method, body });
 
+		if (method === 'PATCH' && url.endsWith(`/projects/${PID}`))
+			return updateResponse ? updateResponse() : ok({ ...project('admin'), ...body });
 		if (method === 'POST' && url.endsWith(`/projects/${PID}/members`))
 			return addResponse ?? ok(project('admin'));
 		if (method === 'PUT' && url.includes(`/projects/${PID}/members/`)) return ok(project('admin'));
@@ -109,7 +113,10 @@ function makeFetch({
 	return calls;
 }
 
-async function renderDialog(yourRole: ProjectDetail['your_role']) {
+async function renderDialog(
+	yourRole: ProjectDetail['your_role'],
+	overrides: Partial<ProjectDetail> = {},
+) {
 	const client = createTestQueryClient();
 	client.setQueryData(userKeys.me(), currentTestUser);
 	const onClose = vi.fn();
@@ -119,9 +126,16 @@ async function renderDialog(yourRole: ProjectDetail['your_role']) {
 			<Toaster />
 		</QueryClientProvider>
 	);
-	render(<ProjectMembersDialog isOpen onClose={onClose} project={project(yourRole)} />, {
-		wrapper,
-	});
+	render(
+		<ProjectMembersDialog
+			isOpen
+			onClose={onClose}
+			project={{ ...project(yourRole), ...overrides }}
+		/>,
+		{
+			wrapper,
+		},
+	);
 	// Wait for the member list and the user directory to resolve.
 	await waitFor(() => expect(screen.getAllByText('Eddie Editor').length).toBeGreaterThan(0));
 	return onClose;
@@ -437,13 +451,13 @@ describe('ProjectMembersDialog — admin', () => {
 	it('describes a members-only deployment (default_role null)', async () => {
 		makeFetch();
 		await renderDialog('admin');
-		expect(await screen.findByText(/members-only/)).toBeInTheDocument();
+		expect(await screen.findByText(/Your default access: Members only/)).toBeInTheDocument();
 	});
 
 	it('describes an open deployment (default_role editor)', async () => {
 		makeFetch({ capabilities: { ...CAPABILITIES, default_role: 'editor' } as Capabilities });
 		await renderDialog('admin');
-		expect(await screen.findByText(/Everyone who signs in can edit/)).toBeInTheDocument();
+		expect(await screen.findByText(/Your default access: Editor/)).toBeInTheDocument();
 	});
 });
 
@@ -590,5 +604,115 @@ describe('ProjectMembersDialog — current access', () => {
 		await user.tab();
 		expect(role).toHaveFocus();
 		expect(await screen.findByText(/temporary sandbox/)).toBeInTheDocument();
+	});
+});
+
+describe('project default access', () => {
+	it.each([
+		{ status: 403, code: 'FORBIDDEN', message: 'Requires manager role' },
+		{ status: 500, code: 'INTERNAL_ERROR', message: 'Could not save default access' },
+	])(
+		'retains saved access after a $status failure and allows retry',
+		async ({ status, code, message }) => {
+			const updateResponse = vi
+				.fn()
+				.mockResolvedValueOnce(
+					new Response(JSON.stringify({ success: false, error: { code, message } }), {
+						status,
+						headers: { 'content-type': 'application/json' },
+					}),
+				)
+				.mockResolvedValueOnce(ok({ ...project('manager'), default_role: 'viewer' }));
+			const calls = makeFetch({ updateResponse });
+			const onClose = await renderDialog('manager', { default_role: 'none' });
+			const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
+			const user = userEvent.setup();
+			await user.selectOptions(select, 'viewer');
+
+			expect(await screen.findByText(message)).toBeInTheDocument();
+			expect(select).toHaveValue('none');
+			expect(select).toBeEnabled();
+			expect(screen.getByText(/This project is members-only/)).toBeInTheDocument();
+			expect(screen.queryByText('Default access updated')).not.toBeInTheDocument();
+			expect(onClose).not.toHaveBeenCalled();
+
+			await user.selectOptions(select, 'viewer');
+			expect(await screen.findByText('Default access updated')).toBeInTheDocument();
+			expect(calls.filter(({ method }) => method === 'PATCH')).toEqual([
+				{ url: `/api/v1/projects/${PID}`, method: 'PATCH', body: { default_role: 'viewer' } },
+				{ url: `/api/v1/projects/${PID}`, method: 'PATCH', body: { default_role: 'viewer' } },
+			]);
+		},
+	);
+
+	it('disables the access control while a save is pending and recovers after failure', async () => {
+		let resolveResponse!: (response: Response) => void;
+		const response = new Promise<Response>((resolve) => {
+			resolveResponse = resolve;
+		});
+		const calls = makeFetch({ updateResponse: () => response });
+		await renderDialog('manager', { default_role: 'none' });
+		const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
+		const user = userEvent.setup();
+		await user.selectOptions(select, 'viewer');
+		await waitFor(() => expect(select).toBeDisabled());
+		await user.selectOptions(select, 'manager');
+		expect(calls.filter(({ method }) => method === 'PATCH')).toHaveLength(1);
+		expect(screen.queryByText('Default access updated')).not.toBeInTheDocument();
+
+		await act(async () => {
+			resolveResponse(conflict('Project changed; try again'));
+		});
+		expect(await screen.findByText('Project changed; try again')).toBeInTheDocument();
+		expect(select).toBeEnabled();
+		expect(select).toHaveValue('none');
+	});
+
+	it('recovers from a network rejection without showing a successful save', async () => {
+		makeFetch({
+			updateResponse: async () => {
+				throw new TypeError('Network unavailable');
+			},
+		});
+		await renderDialog('manager', { default_role: 'none' });
+		const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
+		await userEvent.setup().selectOptions(select, 'manager');
+		expect(await screen.findByText('Network unavailable')).toBeInTheDocument();
+		expect(select).toHaveValue('none');
+		expect(select).toBeEnabled();
+		expect(screen.queryByText('Default access updated')).not.toBeInTheDocument();
+	});
+
+	it.each(['none', 'app-user', 'viewer', 'editor', 'manager', 'inherit'] as const)(
+		'saves %s from the manager control',
+		async (default_role) => {
+			const calls = makeFetch();
+			await renderDialog('manager', {
+				default_role: default_role === 'inherit' ? 'none' : 'inherit',
+			});
+			await userEvent
+				.setup()
+				.selectOptions(
+					screen.getByRole('combobox', { name: 'Default access for signed-in users' }),
+					default_role,
+				);
+			await waitFor(() =>
+				expect(calls).toContainEqual({
+					url: `/api/v1/projects/${PID}`,
+					method: 'PATCH',
+					body: { default_role },
+				}),
+			);
+			expect(await screen.findByText('Default access updated')).toBeInTheDocument();
+		},
+	);
+
+	it('shows project access instead of deployment access and hides editing from viewers', async () => {
+		makeFetch({ capabilities: { ...CAPABILITIES, default_role: 'editor' } as Capabilities });
+		await renderDialog('viewer', { default_role: 'none' });
+		expect(screen.getByText(/This project is members-only/)).toBeInTheDocument();
+		expect(
+			screen.queryByRole('combobox', { name: 'Default access for signed-in users' }),
+		).not.toBeInTheDocument();
 	});
 });

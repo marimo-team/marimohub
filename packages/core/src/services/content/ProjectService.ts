@@ -62,6 +62,7 @@ export interface CreateProjectInput {
 }
 
 export interface UpdateProjectInput {
+	default_role?: Project['default_role'];
 	name?: string;
 	description?: string;
 	tags?: string[];
@@ -419,6 +420,7 @@ export class ProjectService {
 					name: name ?? current.name,
 					description: input.description ?? current.description,
 					tags: input.tags ?? current.tags,
+					default_role: input.default_role ?? current.default_role,
 					federation:
 						input.federation === undefined ? current.federation : (input.federation ?? undefined),
 					updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),

@@ -2417,6 +2417,8 @@ export interface components {
 			owner: string;
 			members: components['schemas']['ProjectMember'][];
 			/** @enum {string} */
+			default_role?: 'inherit' | 'none' | 'manager' | 'editor' | 'viewer' | 'app-user';
+			/** @enum {string} */
 			status: 'active' | 'deleted';
 			/**
 			 * Format: date-time
@@ -5274,6 +5276,11 @@ export interface operations {
 		requestBody: {
 			content: {
 				'application/json': {
+					/**
+					 * @description Non-member access. inherit uses deployment and OIDC defaults. none grants no default access. Requires manager or higher.
+					 * @enum {string}
+					 */
+					default_role?: 'inherit' | 'none' | 'manager' | 'editor' | 'viewer' | 'app-user';
 					/** @example ML Pipeline */
 					name?: string;
 					description?: string;

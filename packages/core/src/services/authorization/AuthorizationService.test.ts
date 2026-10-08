@@ -508,19 +508,19 @@ describe('AuthorizationService: list visibility', () => {
 		member_emails: ['invitee@example.com'],
 	};
 
-	it('fast path admits super admins and default-role subjects', () => {
+	it('fast path admits only super admins', () => {
 		expect(service().listsAllProjects(STRANGER)).toBe(false);
-		expect(service({ defaultRole: 'viewer' }).listsAllProjects(STRANGER)).toBe(true);
+		expect(service({ defaultRole: 'viewer' }).listsAllProjects(STRANGER)).toBe(false);
 		expect(service({ superAdmins: [STRANGER.id] }).listsAllProjects(STRANGER)).toBe(true);
 	});
 
-	it('decides per-entry visibility from the denormalized snapshot', () => {
+	it('defers non-owner visibility to the authoritative project', () => {
 		expect(service().projectEntryVisibility(OWNER, entry)).toBe(true);
-		expect(service().projectEntryVisibility(VIEWER, entry)).toBe(true);
-		expect(service().projectEntryVisibility(subject('user_x', 'invitee@example.com'), entry)).toBe(
-			true,
-		);
-		expect(service().projectEntryVisibility(STRANGER, entry)).toBe(false);
+		expect(service().projectEntryVisibility(VIEWER, entry)).toBeNull();
+		expect(
+			service().projectEntryVisibility(subject('user_x', 'invitee@example.com'), entry),
+		).toBeNull();
+		expect(service().projectEntryVisibility(STRANGER, entry)).toBeNull();
 	});
 
 	it('reports indeterminate entries as null, never visible', () => {
@@ -728,24 +728,22 @@ describe('AuthorizationService: session edge cases', () => {
 });
 
 describe('AuthorizationService: list-entry edge cases', () => {
-	it('fails closed (not indeterminate) when member_emails is missing', async () => {
-		// An email-pending invitee may briefly miss the project in listings; this
-		// must never surface as `null`, which would trigger a per-entry fallback.
+	it('requires current permissions when member_emails is missing', async () => {
 		const entry = { owner: OWNER.id, member_ids: [VIEWER.id] };
-		expect(service().projectEntryVisibility(subject('user_x', 'invitee@example.com'), entry)).toBe(
-			false,
-		);
+		expect(
+			service().projectEntryVisibility(subject('user_x', 'invitee@example.com'), entry),
+		).toBeNull();
 	});
 
-	it('normalizes stored invite emails before comparing', async () => {
+	it('does not trust a snapshot email match', async () => {
 		const entry = {
 			owner: OWNER.id,
 			member_ids: [],
 			member_emails: ['  Invitee@Example.COM '],
 		};
-		expect(service().projectEntryVisibility(subject('user_x', 'invitee@example.com'), entry)).toBe(
-			true,
-		);
+		expect(
+			service().projectEntryVisibility(subject('user_x', 'invitee@example.com'), entry),
+		).toBeNull();
 	});
 
 	it('rejects the whole batch when any resource kind mismatches the action scope', async () => {
@@ -765,7 +763,7 @@ describe('AuthorizationService app-user visibility', () => {
 		expect((await authz.authorize(VIEWER, 'session.start', start)).allowed).toBe(false);
 	});
 
-	it('list visibility agrees with project.read under an app-user default role', async () => {
+	it('defers app-user list visibility to the project permissions', async () => {
 		const authz = service({ defaultRole: 'app-user' });
 		const decision = await authz.authorize(STRANGER, 'project.read', { kind: 'project', project });
 		expect(
@@ -775,6 +773,7 @@ describe('AuthorizationService app-user visibility', () => {
 				member_ids: [],
 				member_emails: [],
 			}),
-		).toBe(decision.allowed);
+		).toBeNull();
+		expect(decision.allowed).toBe(false);
 	});
 });

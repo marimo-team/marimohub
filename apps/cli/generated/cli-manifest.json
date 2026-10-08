@@ -4993,6 +4993,14 @@
 				"required": true,
 				"properties": [
 					{
+						"name": "default_role",
+						"cli_name": "default-role",
+						"required": false,
+						"description": "Non-member access. inherit uses deployment and OIDC defaults. none grants no default access. Requires manager or higher.",
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
 						"name": "description",
 						"cli_name": "description",
 						"required": false,
