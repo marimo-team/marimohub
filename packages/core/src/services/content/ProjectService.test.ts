@@ -80,6 +80,47 @@ describe('ProjectService', () => {
 		]);
 	});
 
+	it('lists projected tags without reading project metadata', async () => {
+		const project = await projects.createProject(
+			{ name: 'Projected', description: '', tags: ['dep1/team'] },
+			ACTOR,
+		);
+		const get = vi.spyOn(bucket, 'get');
+
+		for (const filter of [undefined, { subject: { id: ACTOR, email: 'actor@example.com' } }]) {
+			expect(await projects.listProjects(filter)).toEqual([
+				expect.objectContaining({ id: project.id, tags: ['dep1/team'] }),
+			]);
+		}
+		expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(
+			0,
+		);
+	});
+
+	it('stops reading legacy tags after an unrelated project update repairs the projection', async () => {
+		const project = await projects.createProject(
+			{ name: 'Legacy', description: '', tags: ['dep1/team'] },
+			ACTOR,
+		);
+		await catalog.updateProjectEntry('test.strip', ACTOR, project.id, () => ({ tags: undefined }));
+		const get = vi.spyOn(bucket, 'get');
+		expect(await projects.listProjects()).toEqual([
+			expect.objectContaining({ id: project.id, tags: ['dep1/team'] }),
+		]);
+		expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(
+			1,
+		);
+
+		await projects.updateProject(project.id, { description: 'Updated' }, ACTOR);
+		get.mockClear();
+		expect(await projects.listProjects()).toEqual([
+			expect.objectContaining({ id: project.id, description: 'Updated', tags: ['dep1/team'] }),
+		]);
+		expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(
+			0,
+		);
+	});
+
 	it('does not read legacy tags for projects excluded by the token grant', async () => {
 		const project = await projects.createProject(
 			{ name: 'Hidden', description: '', tags: ['dep1/team'] },
