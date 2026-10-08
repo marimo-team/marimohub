@@ -23,7 +23,9 @@ The API stores tags as supplied, without normalization.
 ## Browse namespaces
 
 Projects appear in each matching group by default. The total counts each project once.
-Each group shows up to five projects. Projects without path tags appear under **Ungrouped**.
+Groups preview up to five projects when their namespace fits the 256-character filter limit.
+Longer namespaces show all projects without a drill-down link.
+Projects without path tags appear under **Ungrouped**.
 If no projects have path tags, the list stays flat.
 
 - Select a group name or **Show all X** to open its namespace.

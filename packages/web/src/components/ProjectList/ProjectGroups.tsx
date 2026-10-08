@@ -1,4 +1,5 @@
 import { useId, useState } from 'react';
+import { MAX_TAG_PREFIX_LENGTH } from '@marimo-hub/core/tag-paths';
 import { ChevronRight, Folder } from 'lucide-react';
 import { Button, Chip, RowLink } from '@/components/ui';
 import { NotebookTags } from '@/components/Project/NotebookTags';
@@ -99,7 +100,9 @@ export function ProjectGroups({
 					projects={group.projects}
 					collapsed={collapsed.has(group.prefix)}
 					onToggle={() => toggle(group.prefix)}
-					onSelect={() => onSelect(group.prefix)}
+					onSelect={
+						group.prefix.length <= MAX_TAG_PREFIX_LENGTH ? () => onSelect(group.prefix) : undefined
+					}
 				/>
 			))}
 			{ungrouped.length > 0 && <ProjectSection label="Ungrouped" projects={ungrouped} />}
@@ -137,7 +140,7 @@ function ProjectSection({
 						<ChevronRight aria-hidden="true" className={`size-4 ${collapsed ? '' : 'rotate-90'}`} />
 					</Button>
 				)}
-				<h2 id={id} className="text-xs font-medium text-muted-foreground">
+				<h2 id={id} className="min-w-0 text-xs font-medium text-muted-foreground wrap-anywhere">
 					{onSelect ? (
 						<Button variant="ghost" size="sm" onPress={onSelect}>
 							{label} · {projects.length}

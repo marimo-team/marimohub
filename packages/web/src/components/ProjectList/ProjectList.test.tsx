@@ -212,6 +212,46 @@ describe('ProjectList', () => {
 		},
 	);
 
+	it.each(['', 'ops/'])(
+		'keeps oversized groups accessible without invalid links under %j',
+		async (parent) => {
+			const user = userEvent.setup();
+			const label = 'a'.repeat(257 - parent.length);
+			const route = parent ? '/?tag_prefix=ops' : '/';
+			const { fetchMock } = renderList(scaleProjects(6, `${parent}${label}`), route);
+			await waitForLoaded();
+			const group = screen.getByRole('region', { name: `${label} · 6` });
+			expect(within(group).queryByRole('button', { name: `${label} · 6` })).not.toBeInTheDocument();
+			expect(within(group).queryByRole('button', { name: 'Show all 6' })).not.toBeInTheDocument();
+			expect(within(group).getAllByTestId('project-row')).toHaveLength(6);
+			expect(within(group).getByRole('link', { name: /Scale 5/ })).toHaveAttribute(
+				'href',
+				'/projects/proj-scale 5',
+			);
+			await user.click(within(group).getByRole('button', { name: `Collapse ${label}` }));
+			expect(within(group).queryAllByTestId('project-row')).toHaveLength(0);
+			await user.click(within(group).getByRole('button', { name: `Expand ${label}` }));
+			expect(within(group).getAllByTestId('project-row')).toHaveLength(6);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it.each(['', 'ops/'])(
+		'allows namespace links at the 256-character boundary under %j',
+		async (parent) => {
+			const user = userEvent.setup();
+			const tag = parent + 'a'.repeat(256 - parent.length);
+			renderList(scaleProjects(6, tag), parent ? '/?tag_prefix=ops' : '/');
+			await waitForLoaded();
+			expect(screen.getAllByTestId('project-row')).toHaveLength(5);
+			await user.click(screen.getByRole('button', { name: 'Show all 6' }));
+			await waitFor(() => expect(screen.getAllByTestId('project-row')).toHaveLength(6));
+			expect(
+				new URLSearchParams(screen.getByTestId('location').textContent ?? '').get('tag_prefix'),
+			).toBe(tag);
+		},
+	);
+
 	it('hides show-all when collapsed and shows every row when grouping is disabled', async () => {
 		const user = userEvent.setup();
 		renderList(scaleProjects(7));
