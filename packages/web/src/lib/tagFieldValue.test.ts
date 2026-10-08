@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TagFieldValue } from './TagField';
+import { TagFieldValue } from './tagFieldValue';
 
 describe('TagFieldValue', () => {
 	it('splits comma and newline input while preserving spaces within tags', () => {

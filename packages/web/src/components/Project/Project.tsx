@@ -1,4 +1,5 @@
-import { TagField, TagFieldValue } from '@/components/ui/TagField';
+import { TagField } from '@/components/ui/TagField';
+import { TagFieldValue } from '@/lib/tagFieldValue';
 import { isPathTag } from '@marimo-hub/core/tag-paths';
 import { hasNotebookPreviews } from '@/api/previews';
 import { PageTitle } from '@/components/ui/PageTitle';

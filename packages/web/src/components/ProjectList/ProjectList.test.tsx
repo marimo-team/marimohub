@@ -99,6 +99,46 @@ afterEach(() => {
 });
 
 describe('ProjectList', () => {
+	it.each(['', ' ', 'Research', 'research/', 'a'.repeat(257)])(
+		'ignores an invalid namespace URL %j before requesting projects',
+		async (prefix) => {
+			const { fetchMock } = renderList(
+				[project('Available')],
+				`/?tag_prefix=${encodeURIComponent(prefix)}`,
+			);
+			await waitForLoaded();
+			expect(screen.getByText('Available')).toBeInTheDocument();
+			expect(
+				screen.queryByRole('navigation', { name: 'Project namespace' }),
+			).not.toBeInTheDocument();
+			expect(
+				new URL(String(fetchMock.mock.calls[0][0]), 'http://localhost').searchParams.has(
+					'tag_prefix',
+				),
+			).toBe(false);
+		},
+	);
+
+	it('normalizes a copied namespace URL for both requests and breadcrumbs', async () => {
+		const { fetchMock } = renderList(
+			[project('Vision', '', { tags: ['research/vision'] }), project('Unrelated')],
+			'/?tag_prefix=%20research%2Fvision%20',
+		);
+		await waitForLoaded();
+		expect(screen.getByText('Vision')).toBeInTheDocument();
+		expect(screen.queryByText('Unrelated')).not.toBeInTheDocument();
+		const breadcrumb = screen.getByRole('navigation', { name: 'Project namespace' });
+		expect(within(breadcrumb).getByRole('button', { name: 'vision' })).toHaveAttribute(
+			'aria-current',
+			'page',
+		);
+		expect(
+			new URL(String(fetchMock.mock.calls[0][0]), 'http://localhost').searchParams.get(
+				'tag_prefix',
+			),
+		).toBe('research/vision');
+	});
+
 	it('groups by default and remembers opting out without duplicating shared projects', async () => {
 		const user = userEvent.setup();
 		const projects = [project('Shared', '', { tags: ['ops', 'research'] })];
@@ -267,15 +307,28 @@ describe('ProjectList', () => {
 		expect(screen.queryByRole('button', { name: 'Show all 7' })).not.toBeInTheDocument();
 	});
 
-	it('keeps all ungrouped projects reachable without a namespace to drill into', async () => {
+	it('collapses Ungrouped independently from a namespace named ungrouped', async () => {
+		const user = userEvent.setup();
 		renderList([
-			project('Tagged', '', { tags: ['ops'] }),
+			project('Tagged', '', { tags: ['ungrouped'] }),
 			...Array.from({ length: 7 }, (_, i) => project(`Loose ${i}`)),
 		]);
 		await waitForLoaded();
-		expect(
-			within(screen.getByRole('region', { name: 'Ungrouped · 7' })).getAllByTestId('project-row'),
-		).toHaveLength(7);
+		const ungrouped = screen.getByRole('region', { name: 'Ungrouped · 7' });
+		expect(within(ungrouped).getAllByTestId('project-row')).toHaveLength(7);
+
+		await user.click(within(ungrouped).getByRole('button', { name: 'Collapse Ungrouped' }));
+		expect(within(ungrouped).queryAllByTestId('project-row')).toHaveLength(0);
+		expect(within(ungrouped).getByRole('button', { name: 'Expand Ungrouped' })).toHaveAttribute(
+			'aria-expanded',
+			'false',
+		);
+		expect(screen.getByText('Tagged')).toBeInTheDocument();
+
+		await user.click(screen.getByRole('button', { name: 'Collapse ungrouped' }));
+		await user.click(within(ungrouped).getByRole('button', { name: 'Expand Ungrouped' }));
+		expect(within(ungrouped).getAllByTestId('project-row')).toHaveLength(7);
+		expect(screen.queryByText('Tagged')).not.toBeInTheDocument();
 	});
 
 	it('shows direct matches under the breadcrumb without a redundant heading', async () => {

@@ -7,6 +7,7 @@ import { groupProjectsByTagPath } from '@/lib/projectGroups';
 import type { ProjectSummary } from '@/types';
 
 const GROUP_PREVIEW_LIMIT = 5;
+const UNGROUPED_SECTION = Symbol('ungrouped');
 
 function ProjectRow({ project }: { project: ProjectSummary }) {
 	const content = (
@@ -79,8 +80,8 @@ export function ProjectGroups({
 	onSelect: (prefix: string) => void;
 }) {
 	const { groups, direct, ungrouped } = groupProjectsByTagPath(projects, prefix);
-	const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
-	const toggle = (key: string) =>
+	const [collapsed, setCollapsed] = useState<Set<string | symbol>>(() => new Set());
+	const toggle = (key: string | symbol) =>
 		setCollapsed((previous) => {
 			const next = new Set(previous);
 			if (next.has(key)) next.delete(key);
@@ -105,7 +106,14 @@ export function ProjectGroups({
 					}
 				/>
 			))}
-			{ungrouped.length > 0 && <ProjectSection label="Ungrouped" projects={ungrouped} />}
+			{ungrouped.length > 0 && (
+				<ProjectSection
+					label="Ungrouped"
+					projects={ungrouped}
+					collapsed={collapsed.has(UNGROUPED_SECTION)}
+					onToggle={() => toggle(UNGROUPED_SECTION)}
+				/>
+			)}
 		</div>
 	);
 }

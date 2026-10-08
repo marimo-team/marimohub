@@ -9,7 +9,7 @@ export function useListFilters<Status extends string>(
 	const [searchParams, setSearchParams] = useSearchParams();
 	const filters = readListFilters(searchParams, statuses, options);
 	const setFilters = (values: ListFilterValues<Status>) =>
-		setSearchParams(updateListFilterParams(searchParams, values));
+		setSearchParams(updateListFilterParams(searchParams, values, options));
 
 	return { filters, setFilters, filtersActive: hasListFilters(filters) };
 }
