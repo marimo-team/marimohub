@@ -9,6 +9,7 @@ import type { ProjectDetail } from '@/types';
 import { ProjectIntegrationsPanel } from './ProjectIntegrationsDialog';
 
 type Area = 'overview' | 'integrations' | 'cloud';
+type EffectiveFederation = ProjectDetail['federation_effective'];
 
 export type CloudAccessSetting = 'inherit' | 'enabled' | 'disabled';
 
@@ -36,13 +37,13 @@ export function ProjectEnvironmentDialog({
 	isPending = false,
 }: ProjectEnvironmentDialogProps) {
 	const [area, setArea] = useState<Area>('overview');
+	const federation = resolveCloudAccess(project, cloudAccessAvailable, cloudAccessDefaultEnabled);
 	// The capability flag can be stale; the project's own resolution is authoritative.
-	const cloudAccessConfigured =
-		cloudAccessAvailable && project.federation_effective.source !== 'unavailable';
+	const cloudAccessConfigured = cloudAccessAvailable && federation.source !== 'unavailable';
 	let cloudAccessStatus = 'Loading cloud access…';
 	if (!cloudAccessLoading) {
 		cloudAccessStatus = cloudAccessConfigured
-			? effectiveCloudAccessLabel(project)
+			? effectiveCloudAccessLabel(federation)
 			: 'Not configured for this deployment';
 	}
 
@@ -78,6 +79,7 @@ export function ProjectEnvironmentDialog({
 				<CloudAccessPanel
 					isOpen={isOpen}
 					project={project}
+					federation={federation}
 					available={cloudAccessConfigured}
 					defaultEnabled={cloudAccessDefaultEnabled}
 					onBack={() => setArea('overview')}
@@ -89,8 +91,24 @@ export function ProjectEnvironmentDialog({
 	);
 }
 
-function effectiveCloudAccessLabel(project: ProjectDetail): string {
-	const { enabled, source } = project.federation_effective;
+function resolveCloudAccess(
+	project: Pick<ProjectDetail, 'federation' | 'federation_effective'>,
+	available: boolean,
+	defaultEnabled: boolean,
+): EffectiveFederation {
+	if (project.federation_effective) return project.federation_effective;
+	// Older API responses omit federation_effective.
+	if (!available) return { enabled: false, source: 'unavailable' };
+	if (project.federation) return { enabled: project.federation.enabled, source: 'project' };
+	return { enabled: defaultEnabled, source: 'deployment' };
+}
+
+function cloudAccessSetting({ enabled, source }: EffectiveFederation): CloudAccessSetting {
+	if (source !== 'project') return 'inherit';
+	return enabled ? 'enabled' : 'disabled';
+}
+
+function effectiveCloudAccessLabel({ enabled, source }: EffectiveFederation): string {
 	if (source === 'unavailable') return 'Not configured for this deployment';
 	return `${enabled ? 'Enabled' : 'Disabled'} ${source === 'deployment' ? 'by deployment default' : 'for this project'}`;
 }
@@ -125,6 +143,7 @@ function AreaCard({
 function CloudAccessPanel({
 	isOpen,
 	project,
+	federation,
 	available,
 	defaultEnabled,
 	onBack,
@@ -133,18 +152,14 @@ function CloudAccessPanel({
 }: {
 	isOpen: boolean;
 	project: ProjectDetail;
+	federation: EffectiveFederation;
 	available: boolean;
 	defaultEnabled: boolean;
 	onBack: () => void;
 	onSave: (setting: CloudAccessSetting) => Promise<void>;
 	isPending: boolean;
 }) {
-	const setting: CloudAccessSetting =
-		project.federation_effective.source !== 'project'
-			? 'inherit'
-			: project.federation_effective.enabled
-				? 'enabled'
-				: 'disabled';
+	const setting = cloudAccessSetting(federation);
 	const canManage = canManageProject(project.your_role);
 	const form = useAppForm({
 		defaultValues: { setting },
@@ -193,7 +208,7 @@ function CloudAccessPanel({
 			) : !canManage ? (
 				<div className="flex items-center gap-2 rounded-md border border-input p-3">
 					<KeyRound className="size-4" aria-hidden />
-					Federated cloud access is {effectiveCloudAccessLabel(project).toLowerCase()}.
+					Federated cloud access is {effectiveCloudAccessLabel(federation).toLowerCase()}.
 				</div>
 			) : (
 				<form
