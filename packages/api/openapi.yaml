@@ -114,6 +114,10 @@ components:
     Me:
       type: object
       properties:
+        groups:
+          type: array
+          items:
+            type: string
         id:
           type: string
         email:
@@ -138,6 +142,7 @@ components:
         app_only:
           type: boolean
       required:
+        - groups
         - id
         - email
         - logout_url
@@ -1595,6 +1600,9 @@ components:
         max_cases:
           type: integer
           exclusiveMinimum: 0
+        max_groups:
+          type: integer
+          exclusiveMinimum: 0
         capabilities:
           type: object
           properties:
@@ -1697,6 +1705,7 @@ components:
       required:
         - schema_version
         - max_cases
+        - max_groups
         - capabilities
         - entitlements
         - classification_order
@@ -1800,6 +1809,10 @@ components:
               - default-role:viewer
               - default-role:editor
               - default-role:manager
+        groups:
+          type: array
+          items:
+            type: string
         reason:
           type: string
         problem:
@@ -1810,6 +1823,7 @@ components:
         - outcome
         - duration_ms
         - entitlements
+        - groups
         - assertion
       additionalProperties: false
     PolicyAssertionResult:
@@ -2026,6 +2040,11 @@ components:
                   - default-role:viewer
                   - default-role:editor
                   - default-role:manager
+            groups:
+              type: array
+              items:
+                type: string
+              maxItems: 32
           required:
             - outcome
           additionalProperties: false
@@ -2067,6 +2086,11 @@ components:
                   - default-role:viewer
                   - default-role:editor
                   - default-role:manager
+            groups:
+              type: array
+              items:
+                type: string
+              maxItems: 32
             grant:
               type: object
               properties:

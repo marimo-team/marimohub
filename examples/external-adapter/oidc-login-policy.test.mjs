@@ -37,9 +37,16 @@ function assertWithinHostContract(result) {
 	assert.notEqual(result, null);
 	if (result.decision === 'allow') {
 		assert.deepEqual(
-			Object.keys(result).filter((key) => key !== 'decision' && key !== 'entitlements'),
+			Object.keys(result).filter(
+				(key) => key !== 'decision' && key !== 'entitlements' && key !== 'groups',
+			),
 			[],
 		);
+		assert.ok(result.groups.length <= 32);
+		assert.ok(Buffer.byteLength(JSON.stringify(result.groups)) <= 1280);
+		for (const group of result.groups) {
+			assert.match(group, /^[^\s,\p{Cc}](?:[^,\p{Cc}]{0,126}[^\s,\p{Cc}])?$/u);
+		}
 		for (const entitlement of result.entitlements ?? []) {
 			assert.ok(KNOWN_ENTITLEMENTS.has(entitlement), `unknown entitlement: ${entitlement}`);
 		}
@@ -94,6 +101,7 @@ void describe('allow paths', () => {
 		assert.deepEqual(evaluate(satisfied), {
 			decision: 'allow',
 			entitlements: ['default-role:editor'],
+			groups: ['team-data', 'team-ml'],
 		});
 	});
 
@@ -101,6 +109,10 @@ void describe('allow paths', () => {
 		for (const department of ['orgcode1', 'orgcode2']) {
 			assert.equal(evaluate({ ...satisfied, department }).decision, 'allow');
 		}
+	});
+
+	void test('flattens departments into selected team groups', () => {
+		assert.deepEqual(evaluate({ ...satisfied, department: 'orgcode2' }).groups, ['team-platform']);
 	});
 
 	void test('accepts a level above the minimum', () => {

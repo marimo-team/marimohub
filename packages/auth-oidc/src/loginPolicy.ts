@@ -13,12 +13,12 @@
  * sample claims) can reuse them and get the same bounded outcomes.
  */
 import { z } from 'zod';
-import { AUTH_ENTITLEMENTS } from '@marimo-hub/core/ports/auth';
+import { AUTH_ENTITLEMENTS, normalizeAuthGroups } from '@marimo-hub/core/ports/auth';
 import { withDeadline } from '@marimo-hub/core/async';
 import type { AuthEntitlement } from '@marimo-hub/core/ports/auth';
 import type { UserId } from '@marimo-hub/core/ids';
 
-/** Bump on any breaking change to the module contract below. */
+/** Optional groups are additive; a version bump would reject existing v1 modules. */
 export const OIDC_LOGIN_POLICY_API_VERSION = 1;
 
 export const OIDC_LOGIN_POLICY_KIND = 'oidc-login-policy';
@@ -43,6 +43,7 @@ export type OidcLoginPolicyDecision =
 	| {
 			readonly decision: 'allow';
 			readonly entitlements?: readonly AuthEntitlement[];
+			readonly groups?: readonly string[];
 	  }
 	| {
 			readonly decision: 'deny';
@@ -84,10 +85,14 @@ export type LoginPolicyResultProblem =
 	| 'entitlements_not_an_array'
 	| 'unknown_entitlement'
 	| 'entitlements_on_deny'
-	| 'invalid_reason';
+	| 'invalid_reason'
+	| 'groups_not_an_array'
+	| 'invalid_group'
+	| 'too_many_groups'
+	| 'groups_on_deny';
 
 export type ParsedLoginPolicyDecision =
-	| { decision: 'allow'; entitlements: readonly AuthEntitlement[] }
+	| { decision: 'allow'; entitlements: readonly AuthEntitlement[]; groups: readonly string[] }
 	| { decision: 'deny'; reason?: string };
 
 export type LoginPolicyParseResult =
@@ -109,6 +114,7 @@ export const OidcLoginPolicyDecisionSchema = z.discriminatedUnion('decision', [
 	z.strictObject({
 		decision: z.literal('allow'),
 		entitlements: z.array(z.enum(AUTH_ENTITLEMENTS)).optional(),
+		groups: z.array(z.string()).optional(),
 	}),
 	z.strictObject({
 		decision: z.literal('deny'),
@@ -124,6 +130,7 @@ function problemFromIssues(
 	// smuggling extra state is reported as such even when a value is also bad.
 	for (const issue of issues) {
 		if (issue.code === 'unrecognized_keys') {
+			if (decision === 'deny' && issue.keys.includes('groups')) return 'groups_on_deny';
 			return decision === 'deny' && issue.keys.includes('entitlements')
 				? 'entitlements_on_deny'
 				: 'unknown_result_field';
@@ -132,6 +139,9 @@ function problemFromIssues(
 	for (const issue of issues) {
 		if (issue.path[0] === 'entitlements') {
 			return issue.path.length > 1 ? 'unknown_entitlement' : 'entitlements_not_an_array';
+		}
+		if (issue.path[0] === 'groups') {
+			return issue.path.length > 1 ? 'invalid_group' : 'groups_not_an_array';
 		}
 		if (issue.path[0] === 'reason') return 'invalid_reason';
 	}
@@ -168,12 +178,15 @@ function parseDecision(value: unknown): LoginPolicyParseResult {
 		const { reason } = result.data;
 		return { ok: true, value: { decision: 'deny', ...(reason !== undefined ? { reason } : {}) } };
 	}
+	const groups = normalizeAuthGroups(result.data.groups ?? []);
+	if (!groups.ok) return groups;
 	const granted = new Set(result.data.entitlements);
 	return {
 		ok: true,
 		value: {
 			decision: 'allow',
 			entitlements: AUTH_ENTITLEMENTS.filter((entitlement) => granted.has(entitlement)),
+			groups: groups.groups,
 		},
 	};
 }
@@ -222,7 +235,7 @@ export const DEFAULT_LOGIN_POLICY_TIMEOUT_MS = 5_000;
  * as-is. `durationMs` supports operational latency signals.
  */
 export type LoginPolicyEvaluation = { durationMs: number } & (
-	| { outcome: 'allow'; entitlements: readonly AuthEntitlement[] }
+	| { outcome: 'allow'; entitlements: readonly AuthEntitlement[]; groups: readonly string[] }
 	| { outcome: 'deny'; reason?: string }
 	| { outcome: 'timeout' }
 	| { outcome: 'error' }
@@ -283,7 +296,12 @@ export async function evaluateLoginPolicy(
 	const parsed = parseLoginPolicyDecision(value);
 	if (!parsed.ok) return { outcome: 'invalid', problem: parsed.problem, durationMs };
 	return parsed.value.decision === 'allow'
-		? { outcome: 'allow', entitlements: parsed.value.entitlements, durationMs }
+		? {
+				outcome: 'allow',
+				entitlements: parsed.value.entitlements,
+				groups: parsed.value.groups,
+				durationMs,
+			}
 		: {
 				outcome: 'deny',
 				...(parsed.value.reason !== undefined ? { reason: parsed.value.reason } : {}),

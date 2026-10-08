@@ -26,6 +26,7 @@ describe('App routes', () => {
 						is_super_admin: false,
 						logout_url: null,
 						app_only: appOnly,
+						groups: [],
 						can_create_projects: !appOnly,
 					});
 				if (url.startsWith('/api/v1/apps') || url === '/api/v1/projects')

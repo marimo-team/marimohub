@@ -1,5 +1,6 @@
 import { ASSIGNABLE_ROLES } from '@marimo-hub/core/constants';
 import type { AssignableRole } from '@marimo-hub/core/constants';
+import { isAuthGroupId } from '@marimo-hub/core/ports/auth';
 import type { AuthEntitlement } from '@marimo-hub/core/ports/auth';
 
 export type EmailVerificationPolicy = 'required' | 'trusted-issuer';
@@ -17,6 +18,7 @@ export interface OidcGroupPolicy {
 	defaultRoles?: Partial<Record<AssignableRole, string[]>>;
 	/** Maximum accepted group count (default 200, maximum 200). */
 	maxGroups?: number;
+	membership?: { exact?: string[]; prefixes?: string[] };
 }
 
 const MAX_SUBJECT_LENGTH = 512;
@@ -124,12 +126,48 @@ export function validateGroupPolicy(policy: OidcGroupPolicy): void {
 		policy.projectCreation,
 		...ASSIGNABLE_ROLES.map((role) => policy.defaultRoles?.[role]),
 	].filter((list): list is string[] => list !== undefined);
-	if (lists.length === 0) throw new Error('OIDC groups claim requires at least one group policy');
+	if (lists.length === 0 && !policy.membership)
+		throw new Error('OIDC groups claim requires at least one group policy');
+	if (policy.membership) {
+		const { exact, prefixes } = policy.membership;
+		if (!exact && !prefixes) throw new Error('OIDC membership requires exact ids or prefixes');
+		for (const [list, maximum] of [
+			[exact, MAX_GROUPS],
+			[prefixes, 20],
+		] as const) {
+			if (
+				list &&
+				(list.length === 0 || list.length > maximum || list.some((group) => !isAuthGroupId(group)))
+			) {
+				throw new Error(
+					`OIDC membership policies must contain 1 to ${maximum} valid group ids or prefixes`,
+				);
+			}
+		}
+	}
 	for (const list of lists) {
 		if (list.length === 0 || list.length > MAX_GROUPS || list.some((group) => !validGroup(group))) {
 			throw new Error('OIDC group policies must contain 1 to 200 valid group ids');
 		}
 	}
+}
+
+export function retainMembershipGroups(
+	groups: readonly string[],
+	membership: NonNullable<OidcGroupPolicy['membership']>,
+): { retained: string[]; unretainable: number } {
+	const retained: string[] = [];
+	let unretainable = 0;
+	for (const group of groups) {
+		if (
+			!membership.exact?.includes(group) &&
+			!membership.prefixes?.some((prefix) => group.startsWith(prefix))
+		)
+			continue;
+		if (isAuthGroupId(group)) retained.push(group);
+		else unretainable += 1;
+	}
+	return { retained, unretainable };
 }
 
 export function parseGroups(value: unknown, maxGroups: number): string[] | undefined {

@@ -723,6 +723,8 @@ describe('makeAuth oidc login policy', () => {
 		'MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS',
 		'MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS',
 		'MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS',
+		'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES',
 	])('rejects a login policy combined with %s', (groupVar) => {
 		const error = getConfigError(() =>
 			makeAuth(
@@ -926,4 +928,40 @@ it('accepts an app-user group as the only OIDC role mapping', () => {
 			MARIMOHUB_AUTH_OIDC_DEFAULT_APP_USER_GROUPS: 'stakeholders',
 		}),
 	).not.toThrow();
+});
+
+describe.each([
+	['MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS', 200],
+	['MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES', 20],
+] as const)('membership configuration: %s', (key, maximum) => {
+	it('permits membership alone and enforces the derived session lifetime', () => {
+		const env = { ...oidcEnv, MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups', [key]: 'team-a' };
+		expect(() => makeAuth(env)).not.toThrow();
+		expect(() =>
+			makeAuth({ ...env, MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS: '3601' }),
+		).toThrow();
+	});
+	it('requires a claim pointer', () => {
+		expect(() => makeAuth({ ...oidcEnv, [key]: 'team-a' })).toThrow(/GROUPS_CLAIM/);
+	});
+	it.each(['', ' ', ' team-a', 'team-a ', 'team-a,,team-b', 'a\n', 'a'.repeat(129)])(
+		'rejects invalid configuration %j',
+		(value) => {
+			const error = getConfigError(() =>
+				makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups', [key]: value }),
+			);
+			expect(error.opts.variable).toBe(key);
+			expect(error.message).toContain('1–128 characters');
+		},
+	);
+	it('bounds the selection list', () => {
+		const selected = Array.from({ length: maximum }, (_, i) => `team-${i}`).join(',');
+		const env = {
+			...oidcEnv,
+			MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+			[key]: selected,
+		};
+		expect(() => makeAuth(env)).not.toThrow();
+		expect(() => makeAuth({ ...env, [key]: `${selected},extra` })).toThrow(key);
+	});
 });

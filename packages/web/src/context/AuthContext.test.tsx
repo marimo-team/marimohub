@@ -12,6 +12,7 @@ const ME: User = {
 	email: 'ada@example.com',
 	logout_url: null,
 	is_super_admin: false,
+	groups: [],
 	can_create_projects: true,
 };
 

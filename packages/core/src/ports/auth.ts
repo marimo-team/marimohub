@@ -21,6 +21,41 @@ export const AUTH_ENTITLEMENTS = [
 
 export type AuthEntitlement = (typeof AUTH_ENTITLEMENTS)[number];
 
+/** 1–128 Unicode characters; no controls, commas, or edge whitespace. */
+export const AUTH_GROUP_ID_PATTERN = /^[^\s,\p{Cc}](?:[^,\p{Cc}]{0,126}[^\s,\p{Cc}])?$/u;
+// Cookie readers enforce these bounds; increases require a two-phase rollout.
+export const MAX_AUTH_GROUPS = 32;
+/** UTF-8 bytes of the normalized JSON array, reserving space for other session claims. */
+export const MAX_AUTH_GROUPS_JSON_BYTES = 1280;
+
+export type AuthGroupsProblem = 'groups_not_an_array' | 'invalid_group' | 'too_many_groups';
+
+export function isAuthGroupId(value: unknown): value is string {
+	return typeof value === 'string' && AUTH_GROUP_ID_PATTERN.test(value);
+}
+
+export function normalizeAuthGroups(
+	value: unknown,
+): { ok: true; groups: readonly string[] } | { ok: false; problem: AuthGroupsProblem } {
+	try {
+		if (!Array.isArray(value)) return { ok: false, problem: 'groups_not_an_array' };
+		const unique = new Set<string>();
+		for (const group of value) {
+			if (!isAuthGroupId(group)) return { ok: false, problem: 'invalid_group' };
+			unique.add(group);
+		}
+		const groups = [...unique].sort();
+		if (
+			groups.length > MAX_AUTH_GROUPS ||
+			new TextEncoder().encode(JSON.stringify(groups)).byteLength > MAX_AUTH_GROUPS_JSON_BYTES
+		)
+			return { ok: false, problem: 'too_many_groups' };
+		return { ok: true, groups };
+	} catch {
+		return { ok: false, problem: 'groups_not_an_array' };
+	}
+}
+
 export interface AuthUser {
 	id: UserId;
 	email: string;
@@ -35,7 +70,9 @@ export interface AuthUser {
 	pictureUrl?: string;
 	/** Provider groups mapped to marimohub-owned authorization capabilities. */
 	entitlements?: readonly AuthEntitlement[];
-	/** Expiry of the credential that supplied group authorization. */
+	/** Operator-selected, normalized IdP groups; never the full provider claim. */
+	groups?: readonly string[];
+	/** Expiry of the credential that supplied group-derived authorization (entitlements and groups). */
 	entitlementsExpiresAt?: string;
 }
 

@@ -1,3 +1,4 @@
+import { isAuthGroupId } from '@marimo-hub/core/ports/auth';
 import type { Authenticator } from '@marimo-hub/core';
 import { basePathFromUrl } from '@marimo-hub/core/url';
 import {
@@ -267,7 +268,22 @@ function checkedGroups(env: Env, key: string): string[] | undefined {
 	return groups;
 }
 
+function checkedMembershipGroups(env: Env, key: string, maximum: number): string[] | undefined {
+	const value = env[key];
+	if (value === undefined) return undefined;
+	const groups = value.split(',');
+	if (groups.length > maximum || groups.some((group) => !isAuthGroupId(group))) {
+		throw new ConfigError(
+			`Invalid ${key}: expected 1 to ${maximum} group ids or prefixes; 1–128 characters, no control characters or commas, no leading or trailing whitespace.`,
+			{ variable: key },
+		);
+	}
+	return groups;
+}
+
 const GROUP_POLICY_VARS = [
+	'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS',
+	'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES',
 	'MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM',
 	'MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS',
 	'MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS',
@@ -364,8 +380,25 @@ function parseGroupPolicy(env: Env, allowed: string[] | undefined): OidcGroupPol
 	const viewer = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS');
 	const editor = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS');
 	const manager = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS');
+	const exact = checkedMembershipGroups(env, 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS', 200);
+	const prefixes = checkedMembershipGroups(
+		env,
+		'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES',
+		20,
+	);
+	const membership =
+		exact || prefixes
+			? { ...(exact ? { exact } : {}), ...(prefixes ? { prefixes } : {}) }
+			: undefined;
 	const mappedPolicy = Boolean(
-		allowed || superAdmin || projectCreation || appUser || viewer || editor || manager,
+		allowed ||
+		superAdmin ||
+		projectCreation ||
+		appUser ||
+		viewer ||
+		editor ||
+		manager ||
+		membership,
 	);
 	if (!claim && !mappedPolicy) return undefined;
 	if (
@@ -391,6 +424,7 @@ function parseGroupPolicy(env: Env, allowed: string[] | undefined): OidcGroupPol
 	}
 	return {
 		claim,
+		...(membership ? { membership } : {}),
 		...(allowed ? { allowed } : {}),
 		...(superAdmin ? { superAdmin } : {}),
 		...(projectCreation ? { projectCreation } : {}),

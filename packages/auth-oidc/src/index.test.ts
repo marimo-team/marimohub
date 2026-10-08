@@ -1,3 +1,4 @@
+import { AUTH_ENTITLEMENTS } from '@marimo-hub/core/ports/auth';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { SignJWT } from 'jose';
 import {
@@ -116,6 +117,7 @@ async function signSession(
 		name?: unknown;
 		pictureUrl?: unknown;
 		entitlements?: unknown;
+		groups?: unknown;
 		issuer?: string;
 		audience?: string;
 		typ?: string;
@@ -128,6 +130,7 @@ async function signSession(
 	if (opts.name !== undefined) payload.name = opts.name;
 	if (opts.pictureUrl !== undefined) payload.picture_url = opts.pictureUrl;
 	if (opts.entitlements !== undefined) payload.entitlements = opts.entitlements;
+	if (opts.groups !== undefined) payload.groups = opts.groups;
 	let jwt = new SignJWT(payload)
 		.setProtectedHeader({ alg: 'HS256', typ: opts.typ ?? 'mh-session+jwt' })
 		.setIssuer(opts.issuer ?? 'https://issuer.example.com/')
@@ -2557,6 +2560,144 @@ describe('OIDC login policy', () => {
 				expect(res.headers.get('location')).toBe('/?auth_error=policy_denied');
 				expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
 			}
+		}
+	});
+});
+
+describe('session membership groups', () => {
+	it('round-trips selected groups with an expiry and logs only counts', async () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+				sub: 'user-1',
+				email: 'user@example.com',
+				email_verified: true,
+				groups: ['team-z', 'team-a', 'team-a', 'team-bad,comma', 'private'],
+			});
+			const { routes, authenticator } = makeOidc({
+				groups: { claim: '/groups', membership: { prefixes: ['team-'] } },
+			});
+			const txn = await beginOidcTransaction(routes);
+			const response = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+				headers: { cookie: txn },
+			});
+			const token = cookiePair(response, SESSION_COOKIE).split('=')[1];
+			await expect(authenticator.authenticate(requestWithCookie(token))).resolves.toMatchObject({
+				groups: ['team-a', 'team-z'],
+				entitlementsExpiresAt: expect.any(String),
+			});
+			const events = log.mock.calls.flat().join('\n');
+			expect(events).toContain('oidc_session_issued');
+			expect(events).toContain('"groups":2');
+			expect(events).toContain('"unretainable":1');
+			expect(events).not.toContain('team-');
+		} finally {
+			log.mockRestore();
+		}
+	});
+	it('accepts older cookies without groups', async () => {
+		const token = await signSession({ sub: 'u', email: 'u@example.com' });
+		const user = await makeAuthenticator().authenticate(requestWithCookie(token));
+		expect(user).not.toBeNull();
+		expect(user).not.toHaveProperty('groups');
+	});
+	it.each([
+		'team-a',
+		['bad,group'],
+		Array.from({ length: 33 }, (_, i) => `g${i}`),
+		Array.from({ length: 12 }, (_, i) => `${i}${'x'.repeat(120)}`),
+	])('rejects signed invalid groups %j', async (groups) => {
+		const token = await signSession({ sub: 'u', email: 'u@example.com', entitlements: [], groups });
+		await expect(makeAuthenticator().authenticate(requestWithCookie(token))).resolves.toBeNull();
+	});
+	it('rejects groups without the derived-authorization marker', async () => {
+		const token = await signSession({ sub: 'u', email: 'u@example.com', groups: [] });
+		await expect(makeAuthenticator().authenticate(requestWithCookie(token))).resolves.toBeNull();
+	});
+	it('normalizes signed groups on each request and requires an expiry', async () => {
+		const token = await signSession({
+			sub: 'u',
+			email: 'u@example.com',
+			entitlements: [],
+			groups: ['team-z', 'team-a', 'team-z'],
+		});
+		await expect(makeAuthenticator().authenticate(requestWithCookie(token))).resolves.toMatchObject(
+			{ groups: ['team-a', 'team-z'] },
+		);
+		const withoutExpiry = await new SignJWT({
+			email: 'u@example.com',
+			entitlements: [],
+			groups: ['team-a'],
+		})
+			.setProtectedHeader({ alg: 'HS256', typ: 'mh-session+jwt' })
+			.setIssuer('https://issuer.example.com/')
+			.setAudience('client-id')
+			.setSubject('u')
+			.sign(new TextEncoder().encode(SESSION_SECRET));
+		await expect(
+			makeAuthenticator().authenticate(requestWithCookie(withoutExpiry)),
+		).resolves.toBeNull();
+	});
+
+	it('fits maximum identity, entitlements, and 1280 bytes of groups within 3800 bytes', async () => {
+		const groups = Array.from(
+			{ length: 32 },
+			(_, i) => `${String(i).padStart(2, '0')}${'g'.repeat(i === 0 ? 34 : 35)}`,
+		);
+		expect(utf8ByteLength(JSON.stringify(groups))).toBe(1280);
+		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+			sub: 's'.repeat(512),
+			email: `${'e'.repeat(308)}@example.com`,
+			email_verified: true,
+			name: '名'.repeat(200),
+			picture: `https://images.example.com/${'a'.repeat(2000)}`,
+		});
+		const { routes, authenticator } = makeOidc({
+			loginPolicy: {
+				policy: {
+					evaluate: () => ({ decision: 'allow', entitlements: AUTH_ENTITLEMENTS, groups }),
+				},
+			},
+		});
+		const txn = await beginOidcTransaction(routes);
+		const response = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+		const token = cookiePair(response, SESSION_COOKIE).split('=')[1];
+		expect(utf8ByteLength(token)).toBeLessThanOrEqual(3800);
+		const principal = await authenticator.authenticate(requestWithCookie(token));
+		expect(principal).toMatchObject({
+			groups,
+			entitlements: AUTH_ENTITLEMENTS,
+			entitlementsExpiresAt: expect.any(String),
+		});
+		expect(principal).not.toHaveProperty('name');
+		expect(principal).not.toHaveProperty('pictureUrl');
+	});
+	it('denies overflow with generic auth_failed and a count-only event', async () => {
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+				sub: 'user-1',
+				email: 'user@example.com',
+				email_verified: true,
+				groups: Array.from({ length: 33 }, (_, i) => `team-${i}`),
+			});
+			const { routes } = makeOidc({
+				groups: { claim: '/groups', membership: { prefixes: ['team-'] } },
+			});
+			const txn = await beginOidcTransaction(routes);
+			const response = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+				headers: { cookie: txn },
+			});
+			expect(response.headers.get('location')).toContain('auth_error=auth_failed');
+			expect(response.headers.get('set-cookie')).not.toContain('mh_session=');
+			const events = log.mock.calls.flat().join('\n');
+			expect(events).toContain('oidc_membership_groups_exceeded');
+			expect(events).toContain('"retained":33');
+			expect(events).not.toContain('team-');
+		} finally {
+			log.mockRestore();
 		}
 	});
 });

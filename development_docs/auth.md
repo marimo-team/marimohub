@@ -165,8 +165,15 @@ Each deployment supports one issuer. Stored user IDs use that issuer's `sub`.
 An issuer change is an identity migration. Reconcile stored owners and members
 before the change.
 
-The session stores mapped entitlements, not raw groups. Group-derived roles and
-project-creation access do not transfer to personal access tokens.
+The session stores mapped entitlements and optional operator-selected group IDs.
+`AuthUser.groups` contains at most 32 normalized IDs and 1,280 UTF-8 bytes of JSON.
+The host validates these bounds on every request. Overflow denies login rather
+than truncating the set. Groups share `entitlementsExpiresAt` and the one-hour limit.
+Group-derived roles, selected groups, and project-creation access do not transfer
+to personal access tokens, service accounts, or background work.
+The identity directory stores no groups. The signed cookie is not encrypted,
+and `/me` exposes selected groups to the user. Groups never supply security labels
+or `SubjectSecurityContext` compartments.
 Group-authorized kernels use the session JWT expiry as a fixed authorization deadline. Active editors cannot extend it.
 Session reuse keeps the earliest credential deadline presented by any caller.
 At expiry, the lifecycle destroys the kernel and the proxy closes WebSockets.
@@ -218,7 +225,7 @@ The adapter calls the module after every protocol/email validation above and
 before session signing, with the host-owned identity (`sub` + verified email),
 deep-frozen clones of the ID-token and UserInfo claims as **separate** objects,
 and an abort signal. The host accepts only a bounded result — `allow` with
-recognized entitlements, or `deny` with an optional `^[a-z][a-z0-9_]{0,63}$`
+recognized entitlements and optional bounded `groups`, or `deny` with an optional `^[a-z][a-z0-9_]{0,63}$`
 reason — and fails closed on everything else. A denial redirects with
 `policy_denied`; a timeout (timer race, since a module can ignore the signal),
 exception, or malformed result redirects with the generic `auth_failed`. A
@@ -232,7 +239,9 @@ reason/problem code, never claim values or module exception messages.
 An allowed login always signs an `entitlements` claim (possibly empty), so the
 session carries the short authorization lifetime; policy sessions are capped at
 one hour like group sessions. Entitlements apply to browser sessions only —
-never to personal access tokens.
+never to personal access tokens. Selected groups use the same deadline.
+The optional `groups` field keeps API version 1; older hosts reject that field.
+Deploy support on every replica before a module returns groups.
 
 **Boundary — this is not resource fine-grained access control (FGAC).** The
 login policy controls login and deployment roles. It does not authorize

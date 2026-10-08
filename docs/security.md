@@ -136,7 +136,12 @@ API key. Project configuration and bring-your-own-key providers can override it.
 - OIDC requires email verification by default. Each present `email_verified`
   claim must be boolean `true` or the exact string `"true"`. `trusted-issuer`
   permits missing claims only. UserInfo must have the same `sub` as the ID token.
-- Group policy accepts at most 200 group IDs and stores only mapped entitlements.
+- Group policy accepts at most 200 claim group IDs. The signed session holds
+  mapped entitlements and optional operator-selected groups. The selected set
+  cannot exceed 32 IDs or 1,280 UTF-8 bytes of JSON; overflow denies login.
+  The host validates the selected set on each request and never stores it in
+  the identity directory. The cookie is not encrypted, and `/me` exposes selected
+  groups to the user. Groups never supply security labels or subject compartments.
   Group sessions and kernels expire with the entitlement credential. Active
   connections cannot extend this deadline.
 - An external OIDC login-policy module is **trusted in-process code** with
@@ -144,10 +149,12 @@ API key. Project configuration and bring-your-own-key providers can override it.
   replica. The host fails closed on module load errors, timeouts, exceptions,
   and out-of-contract results, and accepts only an allow/deny decision plus the
   built-in entitlements (`project-creator` permits project creation under
-  `MARIMOHUB_PROJECT_CREATION=restricted` and for app-only users). The host keeps raw provider claims out of cookies,
-  storage, logs, and client errors — but the module sees every claim and could
-  log or persist them itself, so require and review that policy code does
-  neither. Policy sessions expire within one hour. The module
+  `MARIMOHUB_PROJECT_CREATION=restricted` and for app-only users), plus optional
+  selected groups. The host keeps raw provider claims out of storage, logs, and
+  client errors. Only selected, bounded groups enter the signed cookie.
+  The module sees every claim and can log or store claim values itself.
+  Review policy code to prevent those disclosures. Policy sessions expire
+  within one hour. The module
   maps identity to login eligibility and coarse roles only — it is not
   resource-level access control, and an entitlement never bypasses the
   project-role checks below.

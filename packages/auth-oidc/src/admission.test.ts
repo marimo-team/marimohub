@@ -256,3 +256,80 @@ describe('shared OIDC identity admission', () => {
 		expect(() => createAdmissionPolicy(config as OidcAdmissionConfig)).toThrow();
 	});
 });
+
+describe('retained membership groups', () => {
+	it.each([
+		[{ exact: ['staff'] }, ['staff']],
+		[{ prefixes: ['team-'] }, ['team-a', 'team-b']],
+		[{ exact: ['staff'], prefixes: ['team-'] }, ['staff', 'team-a', 'team-b']],
+	] as const)('selects exact ids and prefixes: %j', (membership, expected) => {
+		const admission = createAdmissionPolicy({
+			groups: {
+				...groupConfig.groups,
+				membership: {
+					exact: 'exact' in membership ? [...membership.exact] : undefined,
+					prefixes: 'prefixes' in membership ? [...membership.prefixes] : undefined,
+				},
+			},
+		});
+		expect(
+			admitOidcIdentity(
+				{ ...identity, groups: ['staff', 'admin', 'team-b', 'team-a', 'team-a', 'TEAM-c'] },
+				admission,
+			),
+		).toMatchObject({
+			user: { groups: expected, entitlements: ['super-admin', 'default-role:editor'] },
+		});
+		expect(admitOidcIdentity({ ...identity, groups: ['team-a'] }, admission)).toEqual({
+			error: 'group_not_allowed',
+		});
+	});
+	it('distinguishes an absent membership policy from a missing claim', () => {
+		expect(admitOidcIdentity(identity, policy)).toEqual({
+			user: { id: identity.sub, email: identity.email },
+		});
+		const admission = createAdmissionPolicy({
+			groups: { claim: '/groups', membership: { prefixes: ['team-'] } },
+		});
+		expect(admitOidcIdentity(identity, admission)).toMatchObject({
+			user: { groups: [], entitlements: [] },
+		});
+	});
+	it('drops only unretainable selected ids and keeps counts off the user', () => {
+		const admission = createAdmissionPolicy({
+			groups: { claim: '/groups', membership: { prefixes: ['team-'] } },
+		});
+		expect(
+			admitOidcIdentity(
+				{
+					...identity,
+					groups: ['team-ok', 'team-bad,comma', `team-${'x'.repeat(129)}`, 'other,bad'],
+				},
+				admission,
+			),
+		).toEqual({
+			user: { id: identity.sub, email: identity.email, groups: ['team-ok'], entitlements: [] },
+			groupStats: { unretainable: 2 },
+		});
+	});
+	it('denies overflow without truncating', () => {
+		const admission = createAdmissionPolicy({
+			groups: { claim: '/groups', membership: { prefixes: ['team-'] } },
+		});
+		const groups = Array.from({ length: 33 }, (_, i) => `team-${i}`);
+		expect(admitOidcIdentity({ ...identity, groups }, admission)).toEqual({
+			error: 'too_many_groups',
+			retained: 33,
+		});
+	});
+	it.each([
+		{ exact: [] },
+		{ prefixes: [''] },
+		{},
+		{ exact: ['a,b'] },
+		{ prefixes: Array(21).fill('team-') },
+		{ exact: Array(201).fill('team-a') },
+	])('rejects invalid membership configuration: %j', (membership) => {
+		expect(() => createAdmissionPolicy({ groups: { claim: '/groups', membership } })).toThrow();
+	});
+});

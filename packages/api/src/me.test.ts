@@ -9,6 +9,7 @@ describe('GET /api/v1/me', () => {
 		const res = await request('GET', '/me');
 		expect(await expectOk(res)).toEqual({
 			id: ACTOR,
+			groups: [],
 			email: `${ACTOR}@example.com`,
 			name: null,
 			picture_url: null,
@@ -28,12 +29,14 @@ describe('GET /api/v1/me', () => {
 				name: 'Ada',
 				pictureUrl: 'https://images.example.com/ada.png',
 				entitlements: ['super-admin'],
+				groups: ['team-a', 'team-b'],
 			}),
 		};
 		const { request } = createTestApi({ deps: { authenticator } });
 		expect(await expectOk(await request('GET', '/me'))).toMatchObject({
 			name: 'Ada',
 			picture_url: 'https://images.example.com/ada.png',
+			groups: ['team-a', 'team-b'],
 			is_super_admin: true,
 		});
 	});

@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { LocalResourceConstraintPolicy } from '@marimo-hub/core';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AuthorizationService, LocalResourceConstraintPolicy } from '@marimo-hub/core';
 import type { Authenticator } from '@marimo-hub/core';
 import { ACTOR } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
@@ -186,6 +186,7 @@ describe('policy analyzer routes', () => {
 					loginPolicy: {
 						evaluate: async () => ({
 							outcome: 'allow',
+							groups: [],
 							entitlements: ['project-creator'],
 							durationMs: 2,
 						}),
@@ -203,7 +204,7 @@ describe('policy analyzer routes', () => {
 						login: {
 							identity: { id: 'new-user', email: 'new@example.com' },
 							id_token_claims: { group: 'creators' },
-							expected: { outcome: 'allow', entitlements: ['project-creator'] },
+							expected: { outcome: 'allow', groups: [], entitlements: ['project-creator'] },
 						},
 						authorization: {
 							subject: {
@@ -251,6 +252,7 @@ describe('policy analyzer routes', () => {
 					loginPolicy: {
 						evaluate: async () => ({
 							outcome: 'allow',
+							groups: [],
 							entitlements: ['project-creator'],
 							durationMs: 2,
 						}),
@@ -281,6 +283,7 @@ describe('policy analyzer routes', () => {
 					valid: true,
 					login: {
 						outcome: 'allow',
+						groups: [],
 						entitlements: ['project-creator'],
 						assertion: { passed: true },
 					},
@@ -576,5 +579,83 @@ describe('policy analyzer routes', () => {
 		expect(data.cases[0].errors).toEqual([
 			{ stage: 'authorization', code: 'stored_resource_inaccessible' },
 		]);
+	});
+});
+
+describe('policy analyzer membership groups', () => {
+	afterEach(() => vi.restoreAllMocks());
+	it.each([
+		{ expected: ['team-b', 'team-a', 'team-a'], passed: true },
+		{ expected: ['wrong'], passed: false },
+	])(
+		'compares expected groups as sets and links them into authorization: %j',
+		async ({ expected, passed }) => {
+			const { request, deps } = createTestApi({
+				deps: {
+					policy: { superAdmins: [ACTOR] },
+					policyAnalyzer: {
+						classificationOrder: [],
+						loginPolicy: {
+							evaluate: async () => ({
+								outcome: 'allow',
+								entitlements: [],
+								groups: ['team-a', 'team-b'],
+								durationMs: 1,
+							}),
+						},
+					},
+				},
+			});
+			const analyze = vi.spyOn(AuthorizationService.prototype, 'analyze');
+			const entry = authorizationCase();
+			entry.authorization.subject.entitlement_source = 'login';
+			const data = await expectOk<any>(
+				await request('POST', '/admin/policy-analyzer/evaluate', {
+					schema_version: 1,
+					cases: [
+						{
+							...entry,
+							login: {
+								identity: { id: ACTOR, email: `${ACTOR}@example.com` },
+								id_token_claims: {},
+								expected: { outcome: 'allow', groups: expected },
+							},
+						},
+					],
+				}),
+			);
+			expect(data.cases[0].login.groups).toEqual(['team-a', 'team-b']);
+			expect(data.valid).toBe(passed);
+			expect(analyze).toHaveBeenCalledWith(
+				expect.objectContaining({ groups: ['team-a', 'team-b'] }),
+				expect.anything(),
+				expect.anything(),
+				expect.anything(),
+			);
+			const events = await deps.services.events.getEvents(new Date().toISOString().slice(0, 10));
+			expect(JSON.stringify(events)).not.toContain('team-a');
+		},
+	);
+	it.each([
+		['a,b'],
+		['a\n'],
+		Array.from({ length: 33 }, (_, i) => `g${i}`),
+		Array.from({ length: 12 }, (_, i) => `${i}${'x'.repeat(120)}`),
+	])('rejects invalid explicit groups: %j', async (...groups) => {
+		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+		const entry = authorizationCase();
+		await expectError(
+			await request('POST', '/admin/policy-analyzer/evaluate', {
+				schema_version: 1,
+				cases: [authorizationCase({ subject: { ...entry.authorization.subject, groups } })],
+			}),
+			422,
+		);
+	});
+	it('reports the membership cap in metadata', async () => {
+		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+		expect(await expectOk(await request('GET', '/admin/policy-analyzer/metadata'))).toMatchObject({
+			max_groups: 32,
+		});
 	});
 });

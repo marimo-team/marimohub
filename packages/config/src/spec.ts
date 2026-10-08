@@ -1351,6 +1351,22 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
+						id: 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS',
+						name: 'Membership groups',
+						description:
+							'Exact, case-sensitive, comma-separated group IDs to retain (at most 200). Requires GROUPS_CLAIM. Selected groups ride in the signed, not encrypted session, limited to 32 groups / 1280 JSON bytes. Exceeding the bound denies login. No access effect until group bindings from plans 068/069 use them.',
+						example: 'hub-team-data,hub-team-ml',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES',
+						name: 'Membership group prefixes',
+						description:
+							'Case-sensitive, comma-separated startsWith prefixes to retain (at most 20). Requires GROUPS_CLAIM. Selected groups ride in the signed, not encrypted session, limited to 32 groups / 1280 JSON bytes. Exceeding the bound denies login. No access effect until group bindings from plans 068/069 use them.',
+						example: 'hub-team-',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS',
 						name: 'Group authorization lifetime',
 						description:
@@ -1362,7 +1378,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND',
 						name: 'Login-policy backend',
 						description:
-							'Set `library` to load a trusted external login-policy module that maps validated OIDC claims to a login decision and entitlements. Mutually exclusive with the `MARIMOHUB_AUTH_OIDC_*GROUPS*` variables. `none` (or unset) disables it.',
+							'Set `library` to load a trusted external login-policy module that maps validated OIDC claims to a login decision, entitlements, and optional groups. Mutually exclusive with the `MARIMOHUB_AUTH_OIDC_*GROUPS*` variables. `none` (or unset) disables it.',
 						example: 'library',
 						optIn: true,
 					},
