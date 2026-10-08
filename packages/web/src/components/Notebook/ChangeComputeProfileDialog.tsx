@@ -4,6 +4,8 @@ import { FormDialog, useAppForm, useSeedOnOpen } from '@/components/form';
 import { useCapabilitiesQuery, useNotebookQuery, useUpdateNotebook } from '@/api/hooks';
 import {
 	computeProfileOptions,
+	modeComputeProfile,
+	profilesForMode,
 	computeProfilePickerValue,
 	DEFAULT_COMPUTE_PROFILE,
 } from './computeProfiles';
@@ -13,7 +15,7 @@ interface ChangeComputeProfileDialogProps {
 	onClose: () => void;
 	projectId: string;
 	notebook: { id: string; title: string };
-	restartAction?: { label: string; onRestart: () => void };
+	restartAction?: { label: string; onRestart: () => void; mode?: 'edit' | 'app' };
 }
 
 export function ChangeComputeProfileDialog({
@@ -26,24 +28,41 @@ export function ChangeComputeProfileDialog({
 	const { data: capabilities } = useCapabilitiesQuery();
 	const profiles = capabilities?.compute_profiles ?? [];
 	const detail = useNotebookQuery(projectId, notebook.id);
-	const stored = detail.data?.meta.compute_profile;
-	const current = computeProfilePickerValue(profiles, stored);
-	const stale = !!stored && !profiles.some((profile) => profile.name === stored);
-	const options = computeProfileOptions(profiles, stored);
+	const editProfiles = profilesForMode(profiles, capabilities?.edit_compute_profile);
+	const appProfiles = profilesForMode(profiles, capabilities?.app_compute_profile);
+	const stored = modeComputeProfile(detail.data?.meta, 'edit');
+	const appStored = modeComputeProfile(detail.data?.meta, 'app');
+	const current = computeProfilePickerValue(editProfiles, stored);
+	const appCurrent = computeProfilePickerValue(appProfiles, appStored);
+	const stale = [stored, appStored].some(
+		(name) => !!name && !profiles.some((profile) => profile.name === name),
+	);
+	const options = computeProfileOptions(editProfiles, stored);
+	const appOptions = computeProfileOptions(appProfiles, appStored);
 	const updateNotebook = useUpdateNotebook(projectId);
 	const form = useAppForm({
-		defaultValues: { computeProfile: current },
+		defaultValues: { computeProfile: current, appComputeProfile: appCurrent },
 		onSubmit: async ({ value }) => {
 			const choice = value.computeProfile === DEFAULT_COMPUTE_PROFILE ? null : value.computeProfile;
 			try {
 				await updateNotebook.mutateAsync({
 					notebookId: notebook.id,
-					compute_profile: choice,
+					...(value.computeProfile !== current ? { edit_compute_profile: choice } : {}),
+					...(value.appComputeProfile !== appCurrent
+						? {
+								app_compute_profile:
+									value.appComputeProfile === DEFAULT_COMPUTE_PROFILE
+										? null
+										: value.appComputeProfile,
+							}
+						: {}),
 				});
-				const selectedName = choice ?? profiles[0]?.name ?? 'default';
 				toast.success(
-					`Compute set to ${selectedName}. Applies when the notebook session restarts.`,
-					restartAction
+					'Compute profiles saved. Applies when each session restarts.',
+					restartAction &&
+						(restartAction.mode === 'app'
+							? value.appComputeProfile !== appCurrent
+							: value.computeProfile !== current)
 						? {
 								action: {
 									label: restartAction.label,
@@ -58,7 +77,10 @@ export function ChangeComputeProfileDialog({
 			}
 		},
 	});
-	useSeedOnOpen(form, isOpen && detail.isSuccess, { computeProfile: current });
+	useSeedOnOpen(form, isOpen && detail.isSuccess, {
+		computeProfile: current,
+		appComputeProfile: appCurrent,
+	});
 
 	return (
 		<FormDialog
@@ -73,17 +95,20 @@ export function ChangeComputeProfileDialog({
 			pendingLabel="Saving..."
 		>
 			<p className="text-xs text-muted-foreground">
-				The compute profile "{notebook.title}" uses when a session starts.
+				Choose separate resources for editing "{notebook.title}" and running it as an app.
 			</p>
 			{stale && (
 				<p className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-500">
 					<AlertTriangle className="size-3.5 shrink-0" />
-					{stored} was removed by your operator. New sessions use Default until you choose another
-					profile.
+					A selected profile was removed by your operator. New sessions use the corresponding
+					default.
 				</p>
 			)}
 			<form.AppField name="computeProfile">
-				{(field) => <field.RadioGroupField label="Compute profile" options={options} />}
+				{(field) => <field.RadioGroupField label="Editing profile" options={options} />}
+			</form.AppField>
+			<form.AppField name="appComputeProfile">
+				{(field) => <field.RadioGroupField label="App profile" options={appOptions} />}
 			</form.AppField>
 		</FormDialog>
 	);

@@ -376,8 +376,18 @@ describe('Project — Notebook Actions: configuration', () => {
 
 		await chooseNotebookAction(user, 'Change compute…');
 		const dialog = await screen.findByRole('dialog');
-		expect(within(dialog).getByRole('radio', { name: /Default \(small\)/ })).toBeChecked();
-		await user.click(within(dialog).getByRole('radio', { name: /large/ }));
+		expect(
+			within(within(dialog).getByRole('radiogroup', { name: 'Editing profile' })).getByRole(
+				'radio',
+				{ name: /Default \(small\)/ },
+			),
+		).toBeChecked();
+		await user.click(
+			within(within(dialog).getByRole('radiogroup', { name: 'Editing profile' })).getByRole(
+				'radio',
+				{ name: /large/ },
+			),
+		);
 		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 
 		await waitFor(() =>
@@ -386,7 +396,7 @@ describe('Project — Notebook Actions: configuration', () => {
 					(call) =>
 						call.method === 'PATCH' &&
 						call.url.endsWith('/notebooks/nb-1') &&
-						(call.body as { compute_profile?: string })?.compute_profile === 'large',
+						(call.body as { edit_compute_profile?: string })?.edit_compute_profile === 'large',
 				),
 			).toBe(true),
 		);
@@ -424,7 +434,12 @@ describe('Project — Notebook Actions: configuration', () => {
 
 		await chooseNotebookAction(user, 'Change compute…');
 		const dialog = await screen.findByRole('dialog');
-		await user.click(within(dialog).getByRole('radio', { name: /large/ }));
+		await user.click(
+			within(within(dialog).getByRole('radiogroup', { name: 'Editing profile' })).getByRole(
+				'radio',
+				{ name: /large/ },
+			),
+		);
 		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 		await user.click(await screen.findByRole('button', { name: 'Restart edit session' }));
 
@@ -584,7 +599,12 @@ describe('Project — Notebook Actions: configuration', () => {
 
 		await chooseNotebookAction(user, 'Change compute…');
 		const dialog = await screen.findByRole('dialog');
-		await user.click(within(dialog).getByRole('radio', { name: /large/ }));
+		await user.click(
+			within(within(dialog).getByRole('radiogroup', { name: 'Editing profile' })).getByRole(
+				'radio',
+				{ name: /large/ },
+			),
+		);
 		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 		await user.click(await screen.findByRole('button', { name: 'Restart session' }));
 

@@ -362,6 +362,42 @@ describe('Notebook routes', () => {
 			expect(listed.find((item) => item.id === chosen.id)?.compute_profile).toBe('large');
 		});
 
+		it('persists and clears each mode independently, including the first profile', async () => {
+			const req = profileApi();
+			const created = await expectOk<any>(
+				await req('POST', nb(''), {
+					title: 'Modes',
+					description: '',
+					code: 'x = 1',
+					compute_profile: 'large',
+					edit_compute_profile: 'large',
+					app_compute_profile: 'small',
+				}),
+				201,
+			);
+			expect(created).toMatchObject({
+				edit_compute_profile: 'large',
+				app_compute_profile: 'small',
+			});
+			const path = nb(`/${created.id}`);
+			const cleared = await expectOk<any>(await req('PATCH', path, { edit_compute_profile: null }));
+			expect(cleared).toMatchObject({
+				edit_compute_profile: null,
+				app_compute_profile: 'small',
+				compute_profile: 'large',
+			});
+			const listed = await expectPage<any>(await req('GET', nb('')));
+			expect(listed.find((item) => item.id === created.id)).toMatchObject({
+				edit_compute_profile: null,
+				app_compute_profile: 'small',
+			});
+			await expectError(await req('PATCH', path, { app_compute_profile: 'missing' }), 400);
+			await expectError(
+				await profileApi('none')('PATCH', path, { app_compute_profile: 'large' }),
+				403,
+			);
+		});
+
 		it('normalizes the default profile and supports set and clear', async () => {
 			const req = profileApi();
 			const created = await expectOk<any>(

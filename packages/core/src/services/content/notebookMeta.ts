@@ -15,6 +15,8 @@ interface BuildNotebookMetaArgs {
 	runtime?: NotebookMeta['runtime'];
 	baseImage?: string;
 	computeProfile?: string;
+	editComputeProfile?: string | null;
+	appComputeProfile?: string | null;
 	securityLabels?: NotebookMeta['security_labels'];
 }
 
@@ -38,6 +40,8 @@ export function buildNotebookMeta(args: BuildNotebookMetaArgs): NotebookMeta {
 		runtime: args.runtime,
 		base_image: args.baseImage,
 		compute_profile: args.computeProfile,
+		edit_compute_profile: args.editComputeProfile,
+		app_compute_profile: args.appComputeProfile,
 		...(args.securityLabels ? { security_labels: args.securityLabels } : {}),
 	};
 }
@@ -106,6 +110,8 @@ export function buildNotebookEntry(
 		tags: meta.tags,
 		last_run_at: null,
 		compute_profile: meta.compute_profile,
+		edit_compute_profile: meta.edit_compute_profile,
+		app_compute_profile: meta.app_compute_profile,
 		security_labels: meta.security_labels ?? null,
 		key_prefix: keyPrefix,
 	};
@@ -124,6 +130,8 @@ export function notebookCatalogPatch(
 		tags: meta.tags,
 		last_run_at: meta.last_run_at,
 		compute_profile: meta.compute_profile,
+		edit_compute_profile: meta.edit_compute_profile,
+		app_compute_profile: meta.app_compute_profile,
 		// While a label mutation is pending, the override projection stays
 		// indeterminate — see SecurityLabelProjectionOptions.
 		...(options?.finalizeSecurityLabels

@@ -135,6 +135,8 @@ Read regardless of the selected compute backend.
 | `MARIMOHUB_COMPUTE_WARM_POOL_SIZE` | Positive integer target of idle sandboxes per selected profile, shared across all server replicas. Used only when warm pools are enabled. | — | `1` | — |
 | `MARIMOHUB_COMPUTE_WARM_POOL_PROFILES` | `default` warms the first compute profile; `all` warms every configured profile. With no profiles, warms adapter defaults. Each pool uses only the default image. | — | `default` | — |
 | `MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE` | Default compute profile for notebook previews. Must name an available profile. Unset uses the deployment default. | — | — | — |
+| `MARIMOHUB_SESSION_EDIT_COMPUTE_PROFILE` | Default compute profile for edit sessions. Must name an available profile on a supported backend. Unset uses the first profile. Notebook overrides require MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors. | — | — | — |
+| `MARIMOHUB_SESSION_APP_COMPUTE_PROFILE` | Default compute profile for app sessions. Must name an available profile on a supported backend. Unset uses the first profile. Notebook overrides require MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors. | — | — | — |
 | `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE` | Whether editors may choose a non-default compute profile per notebook (`none` or `editors`). | — | `none` | `editors` |
 | `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` | Public hostname used to expose kernel ports. | — | `'' (empty)` | `hub.example.com` |
 | `MARIMOHUB_COMPUTE_WORKDIR` | Working directory inside the sandbox where notebook files land and marimo runs. | — | `/workspace` | — |

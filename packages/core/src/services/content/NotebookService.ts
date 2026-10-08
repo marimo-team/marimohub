@@ -98,6 +98,8 @@ export interface CreateNotebookInput {
 	runtime?: { python_version?: string; marimo_version?: string };
 	base_image?: string;
 	compute_profile?: string;
+	edit_compute_profile?: string | null;
+	app_compute_profile?: string | null;
 	/** Explicit entrypoints opt local notebooks into full workspace persistence. */
 	entry_notebook?: string;
 	workspaceFiles?: { path: string; bytes: Uint8Array }[];
@@ -115,6 +117,8 @@ export interface UpdateNotebookInput {
 	base_image?: string | null;
 	/** `null` clears the choice back to the deployment default; `undefined` leaves it unchanged. */
 	compute_profile?: string | null;
+	edit_compute_profile?: string | null;
+	app_compute_profile?: string | null;
 }
 
 export interface NotebookDeleteMutationResult {
@@ -474,6 +478,8 @@ export class NotebookService {
 			runtime: input.runtime,
 			baseImage: input.base_image,
 			computeProfile: input.compute_profile,
+			editComputeProfile: input.edit_compute_profile,
+			appComputeProfile: input.app_compute_profile,
 			securityLabels,
 		});
 
@@ -620,6 +626,8 @@ export class NotebookService {
 				runtime: meta.runtime,
 				base_image: meta.base_image,
 				compute_profile: meta.compute_profile,
+				edit_compute_profile: meta.edit_compute_profile,
+				app_compute_profile: meta.app_compute_profile,
 				...(source.type === 'local' && source.entry_notebook
 					? {
 							entry_notebook: source.entry_notebook,
@@ -830,6 +838,14 @@ export class NotebookService {
 						input.compute_profile === null
 							? undefined
 							: (input.compute_profile ?? current.compute_profile),
+					edit_compute_profile:
+						input.edit_compute_profile === undefined
+							? current.edit_compute_profile
+							: input.edit_compute_profile,
+					app_compute_profile:
+						input.app_compute_profile === undefined
+							? current.app_compute_profile
+							: input.app_compute_profile,
 					updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),
 				};
 			},

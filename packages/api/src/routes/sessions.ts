@@ -1467,19 +1467,26 @@ export async function startNotebookSession(input: {
 		logStoredConfigFallback('base_image'),
 	);
 	const retryWithDefault = mode === 'edit' && body?.compute_profile === 'default';
-	let selectedComputeProfile =
-		notebook.meta.compute_profile ?? (isPreview ? sandbox.previewComputeProfile : undefined);
+	const modeProfile =
+		mode === 'edit' ? notebook.meta.edit_compute_profile : notebook.meta.app_compute_profile;
+	let selectedComputeProfile = isPreview
+		? (notebook.meta.compute_profile ?? sandbox.previewComputeProfile)
+		: modeProfile === undefined
+			? notebook.meta.compute_profile
+			: (modeProfile ?? undefined);
 	if (body?.compute_profile !== undefined && body.compute_profile !== 'default') {
 		if (mode !== 'edit' || !profileOverrideEligible) {
 			throw new ForbiddenError('Compute profile selection requires a persistent edit session');
 		}
-		selectedComputeProfile = checkComputeProfile(sandbox, body.compute_profile) ?? undefined;
+		selectedComputeProfile =
+			checkComputeProfile(sandbox, body.compute_profile, 'edit') ?? undefined;
 	}
 	const requestedComputeProfile = resolveComputeProfile(
 		sandbox,
 		retryWithDefault ? undefined : selectedComputeProfile,
 		isPreview || (sandbox.computeProfileOverride === 'editors' && profileOverrideEligible),
 		() => logStoredConfigFallback('compute_profile'),
+		isPreview ? undefined : mode,
 	);
 	const provisioner = new SandboxProvisioner(compute);
 

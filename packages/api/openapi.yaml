@@ -408,6 +408,10 @@ components:
           enum:
             - none
             - editors
+        edit_compute_profile:
+          type: string
+        app_compute_profile:
+          type: string
         surfaces:
           type: array
           items:
@@ -2527,6 +2531,14 @@ components:
           example: 2025-03-05T14:00:00Z
         compute_profile:
           type: string
+        edit_compute_profile:
+          type:
+            - string
+            - 'null'
+        app_compute_profile:
+          type:
+            - string
+            - 'null'
       required:
         - id
         - title
@@ -2587,6 +2599,14 @@ components:
           type: string
         compute_profile:
           type: string
+        edit_compute_profile:
+          type:
+            - string
+            - 'null'
+        app_compute_profile:
+          type:
+            - string
+            - 'null'
         security_labels:
           $ref: '#/components/schemas/SecurityLabels'
       required:
@@ -9755,6 +9775,18 @@ paths:
                   type: string
                   minLength: 1
                   example: large
+                edit_compute_profile:
+                  type:
+                    - string
+                    - 'null'
+                  minLength: 1
+                  example: large
+                app_compute_profile:
+                  type:
+                    - string
+                    - 'null'
+                  minLength: 1
+                  example: large
               required:
                 - title
                 - description
@@ -10263,6 +10295,18 @@ paths:
                 compute_profile:
                   type: string
                   minLength: 1
+                edit_compute_profile:
+                  type:
+                    - string
+                    - 'null'
+                  minLength: 1
+                  example: large
+                app_compute_profile:
+                  type:
+                    - string
+                    - 'null'
+                  minLength: 1
+                  example: large
                 sync_mode:
                   type: string
                   enum:
@@ -11013,6 +11057,18 @@ paths:
                     - string
                     - 'null'
                   minLength: 1
+                edit_compute_profile:
+                  type:
+                    - string
+                    - 'null'
+                  minLength: 1
+                  example: large
+                app_compute_profile:
+                  type:
+                    - string
+                    - 'null'
+                  minLength: 1
+                  example: large
       responses:
         '200':
           description: Notebook updated

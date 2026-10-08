@@ -2903,6 +2903,13 @@
 				"required": true,
 				"properties": [
 					{
+						"name": "app_compute_profile",
+						"cli_name": "app-compute-profile",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
 						"name": "base_image",
 						"cli_name": "base-image",
 						"required": false,
@@ -2934,6 +2941,13 @@
 						"name": "description",
 						"cli_name": "description",
 						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "edit_compute_profile",
+						"cli_name": "edit-compute-profile",
+						"required": false,
 						"value_type": "string",
 						"repeatable": false
 					},
@@ -2994,6 +3008,13 @@
 				"required": true,
 				"properties": [
 					{
+						"name": "app_compute_profile",
+						"cli_name": "app-compute-profile",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
 						"name": "base_image",
 						"cli_name": "base-image",
 						"required": false,
@@ -3018,6 +3039,13 @@
 						"name": "description",
 						"cli_name": "description",
 						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "edit_compute_profile",
+						"cli_name": "edit-compute-profile",
+						"required": false,
 						"value_type": "string",
 						"repeatable": false
 					},
@@ -3864,6 +3892,13 @@
 				"required": true,
 				"properties": [
 					{
+						"name": "app_compute_profile",
+						"cli_name": "app-compute-profile",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
 						"name": "base_image",
 						"cli_name": "base-image",
 						"required": false,
@@ -3894,6 +3929,13 @@
 					{
 						"name": "description",
 						"cli_name": "description",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "edit_compute_profile",
+						"cli_name": "edit-compute-profile",
 						"required": false,
 						"value_type": "string",
 						"repeatable": false

@@ -4,6 +4,8 @@ import type { ComputeResourceRecord } from '../../schema';
 export interface ComputeProfileConfig {
 	/** Name of the default compute profile. */
 	computeProfile?: string;
+	editComputeProfile?: string;
+	appComputeProfile?: string;
 	/** Ordered profiles available to provisioning; the first is the default. */
 	computeProfiles?: { name: string; resources: ComputeResources }[];
 	/** Resources from the deployment's default compute profile. */
@@ -18,8 +20,8 @@ export interface ResolvedComputeProfile {
 /**
  * The profile a sandbox provisions with: the notebook's stored choice when
  * editors may override and it is still configured, else the deployment default.
- * Shared by session starts and job runs so a notebook's compute never differs
- * by how it was launched. A stored profile the operator removed falls back
+ * Session modes may select different defaults; jobs keep the deployment default.
+ * A stored profile the operator removed falls back
  * (and reports it) rather than failing the launch.
  */
 export function resolveComputeProfile(
@@ -27,11 +29,19 @@ export function resolveComputeProfile(
 	storedName: string | undefined,
 	allowOverride: boolean,
 	onFallback: (message: string) => void,
+	mode?: 'edit' | 'app',
 ): ResolvedComputeProfile {
-	const fallback = config.computeProfiles?.[0] ?? {
-		name: config.computeProfile,
-		resources: config.resources ?? {},
-	};
+	const modeDefault =
+		mode === 'edit'
+			? config.editComputeProfile
+			: mode === 'app'
+				? config.appComputeProfile
+				: undefined;
+	const fallback = config.computeProfiles?.find((profile) => profile.name === modeDefault) ??
+		config.computeProfiles?.[0] ?? {
+			name: config.computeProfile,
+			resources: config.resources ?? {},
+		};
 	if (!allowOverride || !storedName) return fallback;
 	const selected = config.computeProfiles?.find((profile) => profile.name === storedName);
 	if (selected) return selected;

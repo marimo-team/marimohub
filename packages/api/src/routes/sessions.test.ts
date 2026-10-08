@@ -1586,6 +1586,55 @@ describe('Session routes', () => {
 		});
 	});
 
+	it.each([
+		{ mode: 'edit', choice: undefined, enabled: false, expected: 'editing' },
+		{ mode: 'app', choice: undefined, enabled: false, expected: 'app' },
+		{ mode: 'edit', choice: 'app', enabled: true, expected: 'app' },
+		{ mode: 'app', choice: 'editing', enabled: true, expected: 'editing' },
+		{ mode: 'edit', choice: 'missing', enabled: true, expected: 'editing' },
+		{ mode: 'app', choice: 'missing', enabled: true, expected: 'app' },
+		{ mode: 'edit', choice: 'app', enabled: false, expected: 'editing' },
+		{ mode: 'app', choice: 'editing', enabled: false, expected: 'app' },
+	])(
+		'selects $expected for $mode with override $choice (enabled=$enabled)',
+		async ({ mode, choice, enabled, expected }) => {
+			await createServices(bucket).notebooks.updateNotebook(
+				pid,
+				nid,
+				{
+					compute_profile: 'legacy',
+					edit_compute_profile: mode === 'edit' ? (choice ?? null) : 'app',
+					app_compute_profile: mode === 'app' ? (choice ?? null) : 'editing',
+				},
+				ACTOR,
+			);
+			const compute = makeFakeCompute();
+			const request = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute,
+				deps: {
+					sandbox: sandboxConfig({
+						computeProfiles: [
+							{ name: 'legacy', resources: { cpu: 8 } },
+							{ name: 'editing', resources: { cpu: 2, memoryBytes: 4 * 1024 ** 3 } },
+							{ name: 'app', resources: { cpu: 1, memoryBytes: 2 * 1024 ** 3 } },
+						],
+						editComputeProfile: 'editing',
+						appComputeProfile: 'app',
+						computeProfileOverride: enabled ? 'editors' : 'none',
+					}),
+				},
+			}).request;
+			const data = await expectOk<ApiSession>(await request('POST', sessionsPath(), { mode }));
+			expect(data.compute_profile).toBe(expected);
+			expect(compute.lastCreateOptions?.resources).toEqual({
+				cpu: expected === 'editing' ? 2 : 1,
+				memoryBytes: (expected === 'editing' ? 4 : 2) * 1024 ** 3,
+			});
+		},
+	);
+
 	it('provisions an editor session with the notebook compute profile override', async () => {
 		await createServices(bucket).notebooks.updateNotebook(
 			pid,

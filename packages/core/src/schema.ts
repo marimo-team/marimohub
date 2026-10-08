@@ -205,6 +205,8 @@ export const SnapshotNotebookEntrySchema = z.looseObject({
 	tags: z.array(z.string()),
 	last_run_at: z.iso.datetime().nullable(),
 	compute_profile: z.string().optional(),
+	edit_compute_profile: z.string().nullable().optional(),
+	app_compute_profile: z.string().nullable().optional(),
 	/**
 	 * Notebook security-label OVERRIDE projection, mirroring the tri-state on
 	 * `SnapshotProjectEntrySchema.security_labels`: object = overridden, `null`
@@ -287,6 +289,8 @@ export type PublicNotebookEntry = Pick<
 	| 'tags'
 	| 'last_run_at'
 	| 'compute_profile'
+	| 'edit_compute_profile'
+	| 'app_compute_profile'
 >;
 
 // The project-list entry drops the nested `notebooks` array entirely: it is
@@ -321,6 +325,8 @@ export function toPublicNotebookEntry(entry: SnapshotNotebookEntry): PublicNoteb
 		tags: entry.tags,
 		last_run_at: entry.last_run_at,
 		compute_profile: entry.compute_profile,
+		edit_compute_profile: entry.edit_compute_profile,
+		app_compute_profile: entry.app_compute_profile,
 	};
 }
 
@@ -486,6 +492,8 @@ export const NotebookMetaSchema = z.object({
 	// Absent = the deployment's default compute profile. Only a non-default
 	// choice is persisted.
 	compute_profile: z.string().optional(),
+	edit_compute_profile: z.string().nullable().optional(),
+	app_compute_profile: z.string().nullable().optional(),
 	/**
 	 * Optional security-label override — authoritative copy. Enforced IN
 	 * ADDITION to the project's labels (both must be satisfied), so an override

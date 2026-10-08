@@ -433,6 +433,20 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
+						id: 'MARIMOHUB_SESSION_EDIT_COMPUTE_PROFILE',
+						name: 'Editing compute profile',
+						description:
+							'Default compute profile for edit sessions. Must name an available profile on a supported backend. Unset uses the first profile. Notebook overrides require MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors.',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SESSION_APP_COMPUTE_PROFILE',
+						name: 'App compute profile',
+						description:
+							'Default compute profile for app sessions. Must name an available profile on a supported backend. Unset uses the first profile. Notebook overrides require MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors.',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_COMPUTE_PROFILE_OVERRIDE',
 						name: 'Compute profile override',
 						description:

@@ -6,7 +6,7 @@ import { SessionDetails } from '@/components/ui/SessionDetails';
 import { sessionStatusPresentation } from '@/components/ui/sessionStatus';
 import { cn } from '@/lib/utils';
 import { isSessionStale } from '@/lib/sessions';
-import { effectiveComputeProfile } from '@/components/Notebook/computeProfiles';
+import { effectiveComputeProfile, modeComputeProfile } from '@/components/Notebook/computeProfiles';
 import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
 
 const EMPTY_PROFILES: ComputeProfile[] = [];
@@ -54,7 +54,9 @@ function AppSessionDetails({
 	const stale =
 		!suppressForLocalEdit && isSessionStale(session, notebook?.source.current_version_id);
 	const connections = session.active_connections;
-	const storedProfileName = notebook ? notebook.meta.compute_profile : selectedProfileName;
+	const storedProfileName = notebook
+		? modeComputeProfile(notebook.meta, 'app')
+		: selectedProfileName;
 	const selectedProfile = effectiveComputeProfile(
 		profiles,
 		storedProfileName,

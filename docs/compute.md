@@ -78,8 +78,21 @@ MARIMOHUB_COMPUTE_PROFILES="small:cpu=1;mem=2Gi,gpu-large:cpu=8;mem=32Gi;gpu=A10
 MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
 ```
 
-- The first profile is the default and applies to every new sandbox. Reordering
-  the list changes the default.
+- The first profile is the deployment default. Operators can choose separate
+  defaults for editing and app sessions:
+
+  ```bash
+  MARIMOHUB_COMPUTE_PROFILES="app:cpu=1;mem=2Gi,editing:cpu=2;mem=4Gi"
+  MARIMOHUB_SESSION_EDIT_COMPUTE_PROFILE="editing"
+  MARIMOHUB_SESSION_APP_COMPUTE_PROFILE="app"
+  ```
+
+  Both mode defaults must name an available profile on a backend that supports
+  compute profiles. Unset mode defaults use the first profile. These defaults
+  apply even when notebook overrides are disabled. Kubernetes profiles set both
+  requests and limits; include their full CPU and memory requests in capacity
+  and namespace quota planning.
+
 - Use `<type>[:<count>]` for GPU values. Examples include `A100`, `T4:2`, and
   `A100-80GB:4`. The maximum count is 8. The Modal backend applies GPU values
   when it creates a sandbox. Other backends ignore GPU values and log a startup
@@ -89,12 +102,20 @@ MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
 - Changes apply on the next session start. Running kernels keep their current
   resources. The session details show both the running and selected profile
   until the restart.
-- With `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors`, editors can choose a
-  non-default profile per notebook. The choice falls back to the first profile
-  if that profile is later removed; the stored name is retained in case the
-  operator restores it. A viewer's own ephemeral edit kernel always uses the
-  default, but the shared notebook app runs the notebook's chosen profile
-  regardless of who starts it.
+- With `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors`, editors can choose separate
+  editing and app profiles in **Change Compute**. The notebook create and update
+  APIs accept `edit_compute_profile` and `app_compute_profile`. A removed choice
+  falls back to that mode's default. Setting a mode field to `null` explicitly
+  follows its default; omitting a field in an update preserves its current value.
+  A viewer's ephemeral edit kernel always uses the editing default. Shared apps
+  use the notebook's app selection regardless of who starts them.
+- Existing `compute_profile` values remain a compatibility fallback for either
+  mode whose new field is absent. A mode-specific value (including `null`) takes
+  precedence. Legacy clients can still set the shared field; the web editor saves
+  only the mode that changed. New notebooks need no override to use the two
+  deployment defaults.
+- Notebook previews retain their preview-specific profile policy, and scheduled
+  jobs continue to use the legacy notebook profile and deployment default.
 - A failed non-default personal edit session can be retried once on Default
   without changing the notebook's stored choice. Shared apps always use the
   notebook's selected profile.

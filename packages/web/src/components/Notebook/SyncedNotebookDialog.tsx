@@ -21,7 +21,7 @@ import {
 	rootPathText,
 } from '@/lib/git';
 import { baseImageOptions, DEFAULT_BASE_IMAGE } from './baseImage';
-import { computeProfileOptions, DEFAULT_COMPUTE_PROFILE } from './computeProfiles';
+import { computeProfileOptions, profilesForMode, DEFAULT_COMPUTE_PROFILE } from './computeProfiles';
 
 export interface SyncedNotebookCreated {
 	notebookId: string;
@@ -82,7 +82,10 @@ export function SyncedNotebookDialog({
 	);
 	const sandboxImages = capabilities?.sandbox_images ?? [];
 	const offersImageChoice = sandboxImages.length > 1;
-	const computeProfiles = capabilities?.compute_profiles ?? [];
+	const computeProfiles = profilesForMode(
+		capabilities?.compute_profiles ?? [],
+		capabilities?.edit_compute_profile,
+	);
 	const offersComputeChoice =
 		capabilities?.compute_profile_override === 'editors' && computeProfiles.length > 1;
 	const initialValues = emptyValues(pullAvailable ? 'pull' : 'push');
@@ -102,7 +105,7 @@ export function SyncedNotebookDialog({
 					sync_mode: value.syncMode,
 					...(value.baseImage !== DEFAULT_BASE_IMAGE ? { base_image: value.baseImage } : {}),
 					...(value.computeProfile !== DEFAULT_COMPUTE_PROFILE
-						? { compute_profile: value.computeProfile }
+						? { edit_compute_profile: value.computeProfile }
 						: {}),
 				});
 				if (data.sync_error) {

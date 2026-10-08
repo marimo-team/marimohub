@@ -1487,6 +1487,8 @@ export function useCreateNotebook(projectId: string) {
 			code: string;
 			base_image?: string;
 			compute_profile?: string;
+			edit_compute_profile?: string | null;
+			app_compute_profile?: string | null;
 		}) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/notebooks', {
@@ -1528,6 +1530,8 @@ export function useCreateSyncedNotebook(projectId: string) {
 			sync_mode?: 'push' | 'pull';
 			base_image?: string;
 			compute_profile?: string;
+			edit_compute_profile?: string | null;
+			app_compute_profile?: string | null;
 		}) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/notebooks/git', {
@@ -1629,6 +1633,8 @@ export function useUpdateNotebook(projectId: string) {
 			title?: string;
 			base_image?: string | null;
 			compute_profile?: string | null;
+			edit_compute_profile?: string | null;
+			app_compute_profile?: string | null;
 		}) =>
 			apiData(
 				apiClient.PATCH('/api/v1/projects/{pid}/notebooks/{nid}', {

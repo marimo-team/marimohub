@@ -177,7 +177,7 @@ describe('SyncedNotebookDialog', () => {
 		const [, init] = fetchImpl.mock.calls[0];
 		expect(JSON.parse(init!.body as string)).toMatchObject({
 			base_image: 'registry.example.com/marimo:gpu',
-			compute_profile: 'large',
+			edit_compute_profile: 'large',
 		});
 	});
 

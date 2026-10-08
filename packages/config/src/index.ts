@@ -645,6 +645,22 @@ export function createFromEnv(
 	const computeProfileOverride = parseComputeProfileOverride(
 		env.MARIMOHUB_COMPUTE_PROFILE_OVERRIDE,
 	);
+	const modeProfile = (variable: string): string | undefined => {
+		const name = env[variable]?.trim() || undefined;
+		if (
+			name &&
+			(!profilesSupported ||
+				!appliedComputeProfiles.profiles.some((profile) => profile.name === name))
+		) {
+			throw new ConfigError(`${variable} must name an available compute profile`, {
+				variable,
+				docs: 'docs/configuration.md#compute',
+			});
+		}
+		return name;
+	};
+	const editComputeProfile = modeProfile('MARIMOHUB_SESSION_EDIT_COMPUTE_PROFILE');
+	const appComputeProfile = modeProfile('MARIMOHUB_SESSION_APP_COMPUTE_PROFILE');
 	const previewComputeProfile = env.MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE?.trim() || undefined;
 	if (
 		previewComputeProfile &&
@@ -765,6 +781,8 @@ export function createFromEnv(
 			sessionLifetime,
 			images: sandboxImages,
 			resources: computeResources,
+			editComputeProfile,
+			appComputeProfile,
 			computeProfile: profilesSupported ? appliedComputeProfiles.defaultProfile?.name : undefined,
 			computeProfiles: profilesSupported ? [...appliedComputeProfiles.profiles] : [],
 			previewComputeProfile,

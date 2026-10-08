@@ -4,6 +4,7 @@ import type { SandboxConfig } from './context';
 export function checkComputeProfile(
 	sandbox: SandboxConfig,
 	value: string | null | undefined,
+	mode?: 'edit' | 'app',
 ): string | null | undefined {
 	if (value === undefined) return value;
 	const profiles = sandbox.computeProfiles ?? [];
@@ -13,7 +14,7 @@ export function checkComputeProfile(
 	if (value === null) return value;
 	const known = profiles.some((profile) => profile.name === value);
 	// A configured profile named `default` takes precedence over the clear sentinel.
-	if (value === profiles[0]?.name || (value === 'default' && !known)) return null;
+	if ((!mode && value === profiles[0]?.name) || (value === 'default' && !known)) return null;
 	if (!known) {
 		throw new BadRequestError(
 			profiles.length > 0

@@ -439,7 +439,7 @@ describe('Project — Create Notebook', () => {
 			const post = calls.find(
 				(call) => call.method === 'POST' && call.url.endsWith(`/projects/${PID}/notebooks`),
 			);
-			expect(post?.body).toMatchObject({ compute_profile: 'large' });
+			expect(post?.body).toMatchObject({ edit_compute_profile: 'large' });
 		});
 	});
 

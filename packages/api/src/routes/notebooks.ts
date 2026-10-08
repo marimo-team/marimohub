@@ -84,6 +84,8 @@ const CreateNotebookBody = z.object({
 	runtime: RuntimeResponseSchema.optional(),
 	base_image: BaseImageField.optional(),
 	compute_profile: ComputeProfileField.optional(),
+	edit_compute_profile: ComputeProfileField.nullable().optional(),
+	app_compute_profile: ComputeProfileField.nullable().optional(),
 });
 
 const CreateGitNotebookBody = z.object({
@@ -108,6 +110,8 @@ const CreateGitNotebookBody = z.object({
 	runtime: RuntimeResponseSchema.optional(),
 	base_image: z.string().min(1).optional(),
 	compute_profile: z.string().min(1).optional(),
+	edit_compute_profile: ComputeProfileField.nullable().optional(),
+	app_compute_profile: ComputeProfileField.nullable().optional(),
 	sync_mode: z.enum(['push', 'pull']).optional().default('push'),
 });
 
@@ -150,6 +154,8 @@ const UpdateNotebookBody = z.object({
 	base_image: z.string().min(1).nullable().optional(),
 	// null clears the choice back to the deployment default.
 	compute_profile: z.string().min(1).nullable().optional(),
+	edit_compute_profile: ComputeProfileField.nullable().optional(),
+	app_compute_profile: ComputeProfileField.nullable().optional(),
 });
 
 const DuplicateNotebookBody = z.object({
@@ -1231,7 +1237,13 @@ app.openapi(createNotebook, async (c) => {
 		const compute_profile = checkComputeProfile(deps.sandbox, body.compute_profile) ?? undefined;
 		const meta = await notebooks.createNotebook(
 			pid,
-			{ ...body, base_image, compute_profile },
+			{
+				...body,
+				base_image,
+				compute_profile,
+				edit_compute_profile: checkComputeProfile(deps.sandbox, body.edit_compute_profile, 'edit'),
+				app_compute_profile: checkComputeProfile(deps.sandbox, body.app_compute_profile, 'app'),
+			},
 			user.id,
 		);
 		return toPublicNotebookMeta(meta);
@@ -1248,7 +1260,13 @@ app.openapi(createGitNotebook, async (c) => {
 	const body = c.req.valid('json');
 	const base_image = checkBaseImage(deps.sandbox.images, body.base_image) ?? undefined;
 	const compute_profile = checkComputeProfile(deps.sandbox, body.compute_profile) ?? undefined;
-	const input = { ...body, base_image, compute_profile };
+	const input = {
+		...body,
+		base_image,
+		compute_profile,
+		edit_compute_profile: checkComputeProfile(deps.sandbox, body.edit_compute_profile, 'edit'),
+		app_compute_profile: checkComputeProfile(deps.sandbox, body.app_compute_profile, 'app'),
+	};
 	const prospectiveSource = createGitSource(input, deps.sourceControl?.repositoryHosts);
 	if (prospectiveSource.sync_mode === 'pull') {
 		assertPullSourceSupported(deps, prospectiveSource, pid);
@@ -1468,7 +1486,13 @@ app.openapi(updateNotebook, async (c) => {
 	const meta = await notebooks.updateNotebook(
 		pid,
 		nid,
-		{ ...body, base_image, compute_profile },
+		{
+			...body,
+			base_image,
+			compute_profile,
+			edit_compute_profile: checkComputeProfile(deps.sandbox, body.edit_compute_profile, 'edit'),
+			app_compute_profile: checkComputeProfile(deps.sandbox, body.app_compute_profile, 'app'),
+		},
 		user.id,
 		ifMatchToken(c),
 	);

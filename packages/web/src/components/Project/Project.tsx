@@ -99,6 +99,8 @@ import { baseImageOptions, DEFAULT_BASE_IMAGE } from '@/components/Notebook/base
 import { ChangeComputeProfileDialog } from '@/components/Notebook/ChangeComputeProfileDialog';
 import {
 	computeProfileOptions,
+	modeComputeProfile,
+	profilesForMode,
 	DEFAULT_COMPUTE_PROFILE,
 } from '@/components/Notebook/computeProfiles';
 import { GitSourcePopover } from '@/components/Notebook/GitSourcePopover';
@@ -316,7 +318,10 @@ function useProjectContent() {
 	const canOperateSource = project.your_role !== null && canEditProject(project.your_role);
 	const sandboxImages = capabilities?.sandbox_images ?? [];
 	const offersImageChoice = sandboxImages.length > 1;
-	const computeProfiles = capabilities?.compute_profiles ?? [];
+	const computeProfiles = profilesForMode(
+		capabilities?.compute_profiles ?? [],
+		capabilities?.edit_compute_profile,
+	);
 	const canChooseComputeProfile =
 		capabilities?.compute_profile_override === 'editors' && canEditProject(project.your_role);
 	const offersComputeChoice = canChooseComputeProfile && computeProfiles.length > 1;
@@ -409,7 +414,7 @@ function useProjectContent() {
 					code: uploadedCode ?? NEW_NOTEBOOK_CODE(name),
 					...(value.baseImage !== DEFAULT_BASE_IMAGE ? { base_image: value.baseImage } : {}),
 					...(value.computeProfile !== DEFAULT_COMPUTE_PROFILE
-						? { compute_profile: value.computeProfile }
+						? { edit_compute_profile: value.computeProfile }
 						: {}),
 				});
 				toast.success(`Created "${name}"`);
@@ -928,9 +933,13 @@ function useProjectContent() {
 												session={appSession}
 												canControl={!!appSession.can?.stop}
 												editActive={!!live.persistentEdit}
-												profiles={computeProfiles}
+												profiles={profilesForMode(
+													computeProfiles,
+													capabilities?.app_compute_profile ??
+														capabilities?.compute_profiles?.[0]?.name,
+												)}
 												allowComputeOverride={capabilities?.compute_profile_override === 'editors'}
-												selectedProfileName={nb.compute_profile}
+												selectedProfileName={modeComputeProfile(nb, 'app')}
 												onStop={() =>
 													appModal.open({ action: 'stop', notebook: nb, session: appSession })
 												}
@@ -944,7 +953,11 @@ function useProjectContent() {
 											loading={sessionsLoading}
 											profiles={computeProfiles}
 											selectedProfileName={
-												canChooseComputeProfile ? nb.compute_profile : computeProfiles[0]?.name
+												canChooseComputeProfile
+													? (modeComputeProfile(nb, 'edit') ??
+														capabilities?.edit_compute_profile ??
+														computeProfiles[0]?.name)
+													: (capabilities?.edit_compute_profile ?? computeProfiles[0]?.name)
 											}
 										/>
 										<span
@@ -1133,6 +1146,7 @@ function useProjectContent() {
 												? 'Restart edit session'
 												: 'Restart session',
 									onRestart: handleComputeRestart,
+									mode: computeRestartSession.mode ?? 'edit',
 								}
 							: undefined
 					}
