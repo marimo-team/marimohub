@@ -43,6 +43,7 @@ export class WarmPoolClaimExpiredError extends ConflictError {
 	}
 }
 interface ClaimRequest {
+	resources?: ComputeResources;
 	profile?: string;
 	image?: string;
 	userHome?: unknown;
@@ -65,7 +66,13 @@ export class WarmPoolService {
 		if (!this.config.enabled) return;
 		const started = this.now();
 		const profile = this.config.profiles.find(
-			(item) => item.name === request.profile && item.image === request.image,
+			(item) =>
+				item.name === request.profile &&
+				item.image === request.image &&
+				(!request.resources ||
+					(item.resources.cpu === request.resources.cpu &&
+						item.resources.memoryBytes === request.resources.memoryBytes &&
+						item.resources.gpu === request.resources.gpu)),
 		);
 		const bypass = request.userHome
 			? 'user_home'

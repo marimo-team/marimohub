@@ -78,8 +78,24 @@ MARIMOHUB_COMPUTE_PROFILES="small:cpu=1;mem=2Gi,gpu-large:cpu=8;mem=32Gi;gpu=A10
 MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
 ```
 
-- The first profile is the default and applies to every new sandbox. Reordering
-  the list changes the default.
+- The first profile is the editing default. Define a separate ordered app list
+  when apps need different resources:
+
+  ```bash
+  MARIMOHUB_COMPUTE_PROFILES="editing:cpu=2;mem=4Gi"
+  MARIMOHUB_APP_COMPUTE_PROFILES="app:cpu=1;mem=2Gi"
+  ```
+
+  The first app profile is the app default, even when notebook overrides are
+  disabled. If the app list is unset or empty, apps share the editing list and
+  use the editing default. With that shared list and
+  `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors`, apps instead inherit the notebook's `compute_profile` unless
+  `app_compute_profile` is set. With overrides disabled, both stored notebook
+  selections are ignored.
+  Names are scoped to each list, so the same name can specify different resources.
+  Kubernetes profiles set both requests and limits; include their full requests
+  in capacity and namespace quota planning.
+
 - Use `<type>[:<count>]` for GPU values. Examples include `A100`, `T4:2`, and
   `A100-80GB:4`. The maximum count is 8. The Modal backend applies GPU values
   when it creates a sandbox. Other backends ignore GPU values and log a startup
@@ -89,12 +105,17 @@ MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
 - Changes apply on the next session start. Running kernels keep their current
   resources. The session details show both the running and selected profile
   until the restart.
-- With `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors`, editors can choose a
-  non-default profile per notebook. The choice falls back to the first profile
-  if that profile is later removed; the stored name is retained in case the
-  operator restores it. A viewer's own ephemeral edit kernel always uses the
-  default, but the shared notebook app runs the notebook's chosen profile
-  regardless of who starts it.
+- With `MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors`, editors can choose separate
+  editing and app profiles in **Change Compute**. The notebook create and update
+  APIs keep `compute_profile` for editing and add `app_compute_profile` for apps.
+  A removed choice falls back to the first profile in the corresponding list.
+  Setting a field to `null` clears its override; omitting it in an update preserves
+  its current value. With a separate app list, an unset app override uses the app
+  default regardless of the editing selection.
+  A viewer's ephemeral edit kernel always uses the editing default. Shared apps
+  use the notebook's app selection regardless of who starts them.
+- Notebook previews retain their preview-specific profile policy, and scheduled
+  jobs continue to use the legacy notebook profile and deployment default.
 - A failed non-default personal edit session can be retried once on Default
   without changing the notebook's stored choice. Shared apps always use the
   notebook's selected profile.

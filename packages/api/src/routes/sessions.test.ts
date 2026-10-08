@@ -1586,6 +1586,99 @@ describe('Session routes', () => {
 		});
 	});
 
+	it.each([
+		{ mode: 'edit', choice: undefined, enabled: false, expected: 'editing' },
+		{ mode: 'app', choice: undefined, enabled: false, expected: 'app' },
+		{ mode: 'edit', choice: 'app', enabled: true, expected: 'app' },
+		{ mode: 'app', choice: 'editing', enabled: true, expected: 'editing' },
+		{ mode: 'edit', choice: 'missing', enabled: true, expected: 'editing' },
+		{ mode: 'app', choice: 'missing', enabled: true, expected: 'app' },
+		{ mode: 'edit', choice: 'app', enabled: false, expected: 'editing' },
+		{ mode: 'app', choice: 'editing', enabled: false, expected: 'app' },
+	])(
+		'selects $expected for $mode with override $choice (enabled=$enabled)',
+		async ({ mode, choice, enabled, expected }) => {
+			await createServices(bucket).notebooks.updateNotebook(
+				pid,
+				nid,
+				{
+					compute_profile: mode === 'edit' ? (choice ?? null) : 'editing',
+					app_compute_profile: mode === 'app' ? (choice ?? null) : 'editing',
+				},
+				ACTOR,
+			);
+			const compute = makeFakeCompute();
+			const request = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute,
+				deps: {
+					sandbox: sandboxConfig({
+						computeProfiles: [
+							{ name: 'editing', resources: { cpu: 2, memoryBytes: 4 * 1024 ** 3 } },
+							{ name: 'app', resources: { cpu: 1, memoryBytes: 2 * 1024 ** 3 } },
+						],
+						appComputeProfiles: [
+							{ name: 'app', resources: { cpu: 1, memoryBytes: 2 * 1024 ** 3 } },
+							{ name: 'editing', resources: { cpu: 2, memoryBytes: 4 * 1024 ** 3 } },
+						],
+						computeProfileOverride: enabled ? 'editors' : 'none',
+					}),
+				},
+			}).request;
+			const data = await expectOk<ApiSession>(await request('POST', sessionsPath(), { mode }));
+			expect(data.compute_profile).toBe(expected);
+			expect(compute.lastCreateOptions?.resources).toEqual({
+				cpu: expected === 'editing' ? 2 : 1,
+				memoryBytes: (expected === 'editing' ? 4 : 2) * 1024 ** 3,
+			});
+		},
+	);
+
+	it.each([
+		{ separate: false, appChoice: undefined, expected: 'large', cpu: 8 },
+		{ separate: false, appChoice: 'small', expected: 'small', cpu: 1 },
+		{ separate: true, appChoice: undefined, expected: 'small', cpu: 2 },
+		{ separate: true, appChoice: 'large', expected: 'small', cpu: 2 },
+		{ separate: true, appChoice: 'app-large', expected: 'app-large', cpu: 4 },
+	])(
+		'resolves app profile $appChoice with separate list=$separate',
+		async ({ separate, appChoice, expected, cpu }) => {
+			await createServices(bucket).notebooks.updateNotebook(
+				pid,
+				nid,
+				{ compute_profile: 'large', app_compute_profile: appChoice },
+				ACTOR,
+			);
+			const compute = makeFakeCompute();
+			const request = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute,
+				deps: {
+					sandbox: sandboxConfig({
+						computeProfiles: [
+							{ name: 'small', resources: { cpu: 1 } },
+							{ name: 'large', resources: { cpu: 8 } },
+						],
+						appComputeProfiles: separate
+							? [
+									{ name: 'small', resources: { cpu: 2 } },
+									{ name: 'app-large', resources: { cpu: 4 } },
+								]
+							: undefined,
+						computeProfileOverride: 'editors',
+					}),
+				},
+			}).request;
+			const data = await expectOk<ApiSession>(
+				await request('POST', sessionsPath(), { mode: 'app' }),
+			);
+			expect(data.compute_profile).toBe(expected);
+			expect(compute.lastCreateOptions?.resources).toEqual({ cpu });
+		},
+	);
+
 	it('provisions an editor session with the notebook compute profile override', async () => {
 		await createServices(bucket).notebooks.updateNotebook(
 			pid,

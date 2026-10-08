@@ -38,6 +38,25 @@ function coreWeaveOptions(maxLifetimeSeconds?: number) {
 }
 
 describe('warm pool configuration', () => {
+	it.each(['default', 'all'])(
+		'includes app profiles and separates same-name resources: %s',
+		(selection) => {
+			const parsed = parseWarmPoolConfig(
+				{ ...enabled, MARIMOHUB_COMPUTE_WARM_POOL_PROFILES: selection },
+				{
+					...options,
+					appProfiles: parseComputeProfiles('small:cpu=2;mem=4Gi,large:cpu=4;mem=8Gi').profiles,
+				},
+			)!;
+			const profiles = parsed.config.profiles;
+			expect(profiles.filter((p) => p.name === 'small').map((p) => p.resources.cpu)).toEqual([
+				1, 2,
+			]);
+			expect(new Set(profiles.map((p) => p.key)).size).toBe(profiles.length);
+			expect(profiles).toHaveLength(selection === 'all' ? 3 : 2);
+		},
+	);
+
 	it('accepts an external provider through capabilities without a backend allowlist', () => {
 		const sandbox = makeFakeSandbox().instance;
 		const compute: SandboxProvider = {

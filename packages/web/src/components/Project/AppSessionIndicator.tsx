@@ -6,7 +6,7 @@ import { SessionDetails } from '@/components/ui/SessionDetails';
 import { sessionStatusPresentation } from '@/components/ui/sessionStatus';
 import { cn } from '@/lib/utils';
 import { isSessionStale } from '@/lib/sessions';
-import { effectiveComputeProfile } from '@/components/Notebook/computeProfiles';
+import { effectiveComputeProfile, modeComputeProfile } from '@/components/Notebook/computeProfiles';
 import type { ComputeProfile } from '@/components/Notebook/computeProfiles';
 
 const EMPTY_PROFILES: ComputeProfile[] = [];
@@ -29,6 +29,7 @@ function AppSessionDetails({
 	profiles,
 	allowComputeOverride,
 	selectedProfileName,
+	appProfilesConfigured,
 }: {
 	session: Session;
 	label: string;
@@ -39,6 +40,7 @@ function AppSessionDetails({
 	profiles: ComputeProfile[];
 	allowComputeOverride: boolean;
 	selectedProfileName?: string;
+	appProfilesConfigured?: boolean;
 }) {
 	// Lazy (popover-open only) head-version fetch for the stale hint. `staleTime:
 	// 0` because this mounts only while the popover is open: the shared cache may
@@ -54,7 +56,9 @@ function AppSessionDetails({
 	const stale =
 		!suppressForLocalEdit && isSessionStale(session, notebook?.source.current_version_id);
 	const connections = session.active_connections;
-	const storedProfileName = notebook ? notebook.meta.compute_profile : selectedProfileName;
+	const storedProfileName = notebook
+		? modeComputeProfile(notebook.meta, 'app', appProfilesConfigured)
+		: selectedProfileName;
 	const selectedProfile = effectiveComputeProfile(
 		profiles,
 		storedProfileName,
@@ -139,6 +143,7 @@ export function AppSessionIndicator({
 	profiles = EMPTY_PROFILES,
 	allowComputeOverride = false,
 	selectedProfileName,
+	appProfilesConfigured,
 }: {
 	session: Session;
 	/** Editors may stop/restart the shared app; viewers only see its state. */
@@ -150,6 +155,7 @@ export function AppSessionIndicator({
 	profiles?: ComputeProfile[];
 	allowComputeOverride?: boolean;
 	selectedProfileName?: string;
+	appProfilesConfigured?: boolean;
 }) {
 	const color = APP_STATUS_COLOR[session.status];
 	if (!color) return null;
@@ -182,6 +188,7 @@ export function AppSessionIndicator({
 					profiles={profiles}
 					allowComputeOverride={allowComputeOverride}
 					selectedProfileName={selectedProfileName}
+					appProfilesConfigured={appProfilesConfigured}
 				/>
 			)}
 		</Popover>

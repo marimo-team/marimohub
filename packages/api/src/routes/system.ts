@@ -187,6 +187,10 @@ app.openapi(capabilitiesRoute, (c) => {
 			...toComputeResourcesResponse(profile.resources),
 		})),
 		compute_profile_override: deps.sandbox.computeProfileOverride ?? 'none',
+		app_compute_profiles: deps.sandbox.appComputeProfiles?.map((profile) => ({
+			name: profile.name,
+			...toComputeResourcesResponse(profile.resources),
+		})),
 		surfaces: surfaceCapabilities(deps),
 	});
 });

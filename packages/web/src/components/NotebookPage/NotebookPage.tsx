@@ -24,7 +24,7 @@ import type { SessionEnded } from '@/hooks/useNotebookSession';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
-import { effectiveComputeProfile } from '@/components/Notebook/computeProfiles';
+import { effectiveComputeProfile, modeComputeProfile } from '@/components/Notebook/computeProfiles';
 import { StaticNotebookView } from '@/components/NotebookPage/StaticNotebookView';
 import { ChangeRequestActions } from '@/components/NotebookPage/ChangeRequestActions';
 import { sessionConnectionHint, isSessionStale, sessionsByNotebook } from '@/lib/sessions';
@@ -248,12 +248,20 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 				? endedPanel(ended)
 				: editorEndedPanel(ended, endedByName)
 			: null;
-	const computeProfiles = capabilities?.compute_profiles ?? [];
+	const computeProfiles =
+		(isApp ? capabilities?.app_compute_profiles : undefined) ??
+		capabilities?.compute_profiles ??
+		[];
 	const computeOverrideApplies =
 		capabilities?.compute_profile_override === 'editors' && (!isViewer || isApp);
+	const storedComputeProfile = modeComputeProfile(
+		notebook?.meta,
+		isApp ? 'app' : 'edit',
+		capabilities?.app_compute_profiles !== undefined,
+	);
 	const selectedComputeProfile = effectiveComputeProfile(
 		computeProfiles,
-		notebook?.meta.compute_profile,
+		storedComputeProfile,
 		computeOverrideApplies,
 	);
 	const canRetryWithDefault =
@@ -424,6 +432,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		closeSecondaryFrame,
 		computeOverrideApplies,
 		computeProfiles,
+		storedComputeProfile,
 		confirmAppAction,
 		confirmEditRestart,
 		confirmEditStop,
@@ -507,6 +516,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		closeSecondaryFrame,
 		computeOverrideApplies,
 		computeProfiles,
+		storedComputeProfile,
 		confirmAppAction,
 		confirmEditRestart,
 		confirmEditStop,
@@ -612,7 +622,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 							session={session}
 							profiles={computeProfiles}
 							selectedProfileName={selectedComputeProfile?.name}
-							storedName={notebook?.meta.compute_profile}
+							storedName={storedComputeProfile}
 							allowOverride={computeOverrideApplies}
 							isProvisioning={isProvisioning}
 							error={error?.message}

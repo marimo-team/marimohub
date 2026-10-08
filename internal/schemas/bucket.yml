@@ -2894,6 +2894,8 @@ components:
                         - type: 'null'
                     compute_profile:
                       type: string
+                    app_compute_profile:
+                      type: string
                     security_labels:
                       anyOf:
                         - type: object
@@ -3352,6 +3354,8 @@ components:
           type: string
         compute_profile:
           type: string
+        app_compute_profile:
+          type: string
         security_labels:
           type: object
           properties:
@@ -3442,6 +3446,8 @@ components:
         base_image:
           type: string
         compute_profile:
+          type: string
+        app_compute_profile:
           type: string
         security_labels:
           type: object
@@ -4854,6 +4860,8 @@ components:
             base_image:
               type: string
             compute_profile:
+              type: string
+            app_compute_profile:
               type: string
             security_labels:
               type: object

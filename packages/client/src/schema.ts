@@ -2404,6 +2404,9 @@ export interface components {
 			})[];
 			/** @enum {string} */
 			compute_profile_override: 'none' | 'editors';
+			app_compute_profiles?: (components['schemas']['ComputeResources'] & {
+				name: string;
+			})[];
 			surfaces: (
 				| {
 						/** @enum {string} */
@@ -3301,6 +3304,7 @@ export interface components {
 			 */
 			last_run_at: string | null;
 			compute_profile?: string;
+			app_compute_profile?: string;
 		};
 		NotebookMeta: {
 			id: string;
@@ -3332,6 +3336,7 @@ export interface components {
 			};
 			base_image?: string;
 			compute_profile?: string;
+			app_compute_profile?: string;
 			security_labels?: components['schemas']['SecurityLabels'];
 		};
 		GitNotebookCreateResult: {
@@ -9158,6 +9163,8 @@ export interface operations {
 					base_image?: string;
 					/** @example large */
 					compute_profile?: string;
+					/** @example large */
+					app_compute_profile?: string | null;
 				};
 			};
 		};
@@ -9612,6 +9619,8 @@ export interface operations {
 					};
 					base_image?: string;
 					compute_profile?: string;
+					/** @example large */
+					app_compute_profile?: string | null;
 					/**
 					 * @default push
 					 * @enum {string}
@@ -10414,6 +10423,8 @@ export interface operations {
 					message?: string;
 					base_image?: string | null;
 					compute_profile?: string | null;
+					/** @example large */
+					app_compute_profile?: string | null;
 				};
 			};
 		};

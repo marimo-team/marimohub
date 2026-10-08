@@ -376,8 +376,18 @@ describe('Project — Notebook Actions: configuration', () => {
 
 		await chooseNotebookAction(user, 'Change compute…');
 		const dialog = await screen.findByRole('dialog');
-		expect(within(dialog).getByRole('radio', { name: /Default \(small\)/ })).toBeChecked();
-		await user.click(within(dialog).getByRole('radio', { name: /large/ }));
+		expect(
+			within(within(dialog).getByRole('radiogroup', { name: 'Editing profile' })).getByRole(
+				'radio',
+				{ name: /Default \(small\)/ },
+			),
+		).toBeChecked();
+		await user.click(
+			within(within(dialog).getByRole('radiogroup', { name: 'Editing profile' })).getByRole(
+				'radio',
+				{ name: /large/ },
+			),
+		);
 		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 
 		await waitFor(() =>
@@ -424,7 +434,12 @@ describe('Project — Notebook Actions: configuration', () => {
 
 		await chooseNotebookAction(user, 'Change compute…');
 		const dialog = await screen.findByRole('dialog');
-		await user.click(within(dialog).getByRole('radio', { name: /large/ }));
+		await user.click(
+			within(within(dialog).getByRole('radiogroup', { name: 'Editing profile' })).getByRole(
+				'radio',
+				{ name: /large/ },
+			),
+		);
 		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 		await user.click(await screen.findByRole('button', { name: 'Restart edit session' }));
 
@@ -437,6 +452,56 @@ describe('Project — Notebook Actions: configuration', () => {
 		await waitFor(() => {
 			expect(toastSuccess).toHaveBeenCalledWith('Restarted the session for "Forecast"');
 		});
+	});
+
+	it('offers the app restart after an app-only compute change with both sessions live', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({
+			role: 'editor',
+			sessions: [
+				{
+					...runningSession(),
+					session_id: 'sess-edit',
+					mode: 'edit',
+					can: { attach: true, stop: true },
+				} as Session,
+				{
+					...runningSession(),
+					session_id: 'sess-app',
+					mode: 'app',
+					can: { attach: true, stop: true },
+				} as Session,
+			],
+			capabilities: {
+				federation: { available: false, default_enabled: false },
+				compute_profiles: [
+					{ name: 'small', cpu: 1 },
+					{ name: 'large', cpu: 8 },
+				],
+				compute_profile_override: 'editors',
+			},
+		});
+		await renderProject();
+
+		await chooseNotebookAction(user, 'Change compute…');
+		const dialog = await screen.findByRole('dialog');
+		await user.click(
+			within(within(dialog).getByRole('radiogroup', { name: 'App profile' })).getByRole('radio', {
+				name: /large/,
+			}),
+		);
+		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+		await user.click(await screen.findByRole('button', { name: 'Restart app' }));
+
+		const confirmation = await screen.findByRole('dialog');
+		await user.click(within(confirmation).getByRole('button', { name: 'Restart' }));
+		await waitFor(() => {
+			const request = calls.find(
+				(call) => call.method === 'POST' && call.url.endsWith('/sessions'),
+			);
+			expect(request?.body).toEqual({ mode: 'app', replace_app_session_id: 'sess-app' });
+		});
+		expect(calls.some((call) => call.method === 'DELETE')).toBe(false);
 	});
 
 	it.each(['editor', 'viewer'] as const)(
@@ -584,7 +649,12 @@ describe('Project — Notebook Actions: configuration', () => {
 
 		await chooseNotebookAction(user, 'Change compute…');
 		const dialog = await screen.findByRole('dialog');
-		await user.click(within(dialog).getByRole('radio', { name: /large/ }));
+		await user.click(
+			within(within(dialog).getByRole('radiogroup', { name: 'Editing profile' })).getByRole(
+				'radio',
+				{ name: /large/ },
+			),
+		);
 		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 		await user.click(await screen.findByRole('button', { name: 'Restart session' }));
 
@@ -634,4 +704,32 @@ describe('Project — Notebook Actions: configuration', () => {
 			}),
 		);
 	});
+});
+
+describe('Project — create compute selection', () => {
+	it.each([{ computeProfiles: [] }, { computeProfiles: [{ name: 'edit', cpu: 2 }] }])(
+		'hides editing choices with app-only choices: %j',
+		async ({ computeProfiles }) => {
+			const user = userEvent.setup();
+			makeFetch({
+				role: 'editor',
+				capabilities: {
+					federation: { available: false, default_enabled: false },
+					compute_profiles: computeProfiles,
+					app_compute_profiles: [
+						{ name: 'app-small', cpu: 1 },
+						{ name: 'app-large', cpu: 4 },
+					],
+					compute_profile_override: 'editors',
+				},
+			});
+			await renderProject();
+			await user.click(screen.getByRole('button', { name: 'New Notebook' }));
+			const dialog = await screen.findByRole('dialog');
+			expect(within(dialog).queryByRole('radiogroup', { name: 'Compute' })).not.toBeInTheDocument();
+			await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+			await chooseNotebookAction(user, 'Change compute…');
+			expect(await screen.findByRole('radiogroup', { name: 'App profile' })).toBeInTheDocument();
+		},
+	);
 });

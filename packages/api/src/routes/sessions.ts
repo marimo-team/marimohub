@@ -1467,8 +1467,12 @@ export async function startNotebookSession(input: {
 		logStoredConfigFallback('base_image'),
 	);
 	const retryWithDefault = mode === 'edit' && body?.compute_profile === 'default';
-	let selectedComputeProfile =
-		notebook.meta.compute_profile ?? (isPreview ? sandbox.previewComputeProfile : undefined);
+	let selectedComputeProfile = isPreview
+		? (notebook.meta.compute_profile ?? sandbox.previewComputeProfile)
+		: mode === 'app'
+			? (notebook.meta.app_compute_profile ??
+				(sandbox.appComputeProfiles === undefined ? notebook.meta.compute_profile : undefined))
+			: notebook.meta.compute_profile;
 	if (body?.compute_profile !== undefined && body.compute_profile !== 'default') {
 		if (mode !== 'edit' || !profileOverrideEligible) {
 			throw new ForbiddenError('Compute profile selection requires a persistent edit session');
@@ -1480,6 +1484,7 @@ export async function startNotebookSession(input: {
 		retryWithDefault ? undefined : selectedComputeProfile,
 		isPreview || (sandbox.computeProfileOverride === 'editors' && profileOverrideEligible),
 		() => logStoredConfigFallback('compute_profile'),
+		isPreview ? undefined : mode,
 	);
 	const provisioner = new SandboxProvisioner(compute);
 
@@ -1736,6 +1741,7 @@ export async function startNotebookSession(input: {
 			.step('warm_sandbox', async () => {
 				warmClaim = await deps.warmPool?.claim({
 					profile: requestedComputeProfile.name,
+					resources: requestedComputeProfile.resources,
 					image,
 					userHome,
 					restoreSnapshotId: restoreFilesystemSnapshot?.snapshot_id,

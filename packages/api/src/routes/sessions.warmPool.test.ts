@@ -11,11 +11,16 @@ import {
 } from '@marimo-hub/core';
 import type { SandboxProvider, Session } from '@marimo-hub/core';
 import { ACTOR, makeFakeSandbox, makeSession } from '@marimo-hub/core/testing';
+import type { SandboxConfig } from '../context';
 import type { FakeSandboxOptions } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 import { failSandboxContextPublication } from '../testing/sandboxContext';
 
-async function setup(options: FakeSandboxOptions = {}, providerLifetimeMs?: number) {
+async function setup(
+	options: FakeSandboxOptions = {},
+	providerLifetimeMs?: number,
+	mode?: 'edit' | 'app',
+) {
 	const bucket = await createInitializedBucket();
 	const services = createServices(bucket);
 	const project = await services.projects.createProject({ name: 'Warm', description: '' }, ACTOR);
@@ -39,13 +44,41 @@ async function setup(options: FakeSandboxOptions = {}, providerLifetimeMs?: numb
 		{
 			enabled: true,
 			size: 1,
-			profiles: [{ key: 'default', resources: {} }],
+			profiles: mode
+				? [
+						{ key: 'edit', name: 'edit', resources: { cpu: 2 } },
+						{ key: 'app', name: 'app', resources: { cpu: 1 } },
+					]
+				: [{ key: 'default', resources: {} }],
 			creationTimeoutMs: 300_000,
 			minimumRemainingMs: 60_000,
 			providerLifetimeMs,
 		},
 	);
-	const api = createTestApi({ bucket, compute, deps: { warmPool } });
+	const sandbox: Partial<SandboxConfig> = mode
+		? {
+				computeProfiles: [{ name: 'edit', resources: { cpu: 2 } }],
+				appComputeProfiles: [{ name: 'app', resources: { cpu: 1 } }],
+			}
+		: {};
+	const api = createTestApi({
+		bucket,
+		compute,
+		deps: {
+			warmPool,
+			...(mode
+				? {
+						sandbox: {
+							bucket: { name: 'test', endpoint: '' },
+							hostname: 'localhost',
+							workdir: '/workspace',
+							persistWorkspace: 'source',
+							...sandbox,
+						},
+					}
+				: {}),
+		},
+	});
 	const path = `/projects/${project.id}/notebooks/${notebook.id}/sessions`;
 	return { bucket, services, project, notebook, fake, create, compute, warmPool, api, path };
 }
@@ -76,6 +109,19 @@ async function seedEditorClaim(
 afterEach(() => vi.restoreAllMocks());
 
 describe('session warm sandbox assignment', () => {
+	it.each(['edit', 'app'] as const)('claims the %s profile from a warm pool', async (mode) => {
+		const w = await setup({}, undefined, mode);
+		await w.warmPool.sweep();
+		const claim = vi.spyOn(w.warmPool, 'claim');
+		const response = await expectOk<Session>(await w.api.request('POST', w.path, { mode }));
+		expect(claim).toHaveBeenCalledWith(
+			expect.objectContaining({ profile: mode, resources: { cpu: mode === 'edit' ? 2 : 1 } }),
+		);
+		expect(response.compute_profile).toBe(mode);
+		expect(response.compute_resources).toMatchObject({ cpu: mode === 'edit' ? 2 : 1 });
+		expect(w.create).toHaveBeenCalledTimes(2);
+	});
+
 	it.each(['warm', 'legacy-warm', 'cold-fallback'] as const)(
 		'preserves the provider lifetime boundary after idle and provisioning time: %s',
 		async (scenario) => {

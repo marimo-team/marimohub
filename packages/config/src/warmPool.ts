@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { WARM_POOL_MAX_IDLE_MS } from '@marimo-hub/core';
-import type { Millis, SandboxProvider, WarmPoolConfig } from '@marimo-hub/core';
+import type { ComputeResources, Millis, SandboxProvider, WarmPoolConfig } from '@marimo-hub/core';
 import type { ComputeProfilesConfig } from './computeProfiles';
 import type { Env } from './env';
 import { parseBool, parseEnum, parseIntEnv } from './env';
@@ -13,6 +13,7 @@ export function parseWarmPoolConfig(
 		compute: SandboxProvider;
 		images: readonly string[];
 		profiles: ComputeProfilesConfig;
+		appProfiles?: ComputeProfilesConfig['profiles'];
 		sessionMaxLifetimeMs: Millis;
 		startupTimeoutMs?: Millis;
 	},
@@ -75,11 +76,25 @@ export function parseWarmPoolConfig(
 		minimumRemainingMs,
 		maxIdleMs: WARM_POOL_MAX_IDLE_MS,
 	});
-	const configured =
+	const configured: readonly { name?: string; resources: ComputeResources }[] =
 		options.profiles.profiles.length > 0
 			? options.profiles.profiles
 			: [{ name: undefined, resources: {} }];
-	const selected = selection === 'all' ? configured : configured.slice(0, 1);
+	const appProfiles = options.appProfiles ?? [];
+	const candidates =
+		selection === 'all'
+			? [...configured, ...appProfiles]
+			: [...configured.slice(0, 1), ...appProfiles.slice(0, 1)];
+	const selected = candidates.filter(
+		(profile, index) =>
+			candidates.findIndex(
+				(candidate) =>
+					candidate.name === profile.name &&
+					candidate.resources.cpu === profile.resources.cpu &&
+					candidate.resources.memoryBytes === profile.resources.memoryBytes &&
+					candidate.resources.gpu === profile.resources.gpu,
+			) === index,
+	);
 	return {
 		backend: options.backend,
 		config: {

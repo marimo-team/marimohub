@@ -4,6 +4,8 @@ import { FormDialog, useAppForm, useSeedOnOpen } from '@/components/form';
 import { useCapabilitiesQuery, useNotebookQuery, useUpdateNotebook } from '@/api/hooks';
 import {
 	computeProfileOptions,
+	effectiveComputeProfile,
+	computeProfileResources,
 	computeProfilePickerValue,
 	DEFAULT_COMPUTE_PROFILE,
 } from './computeProfiles';
@@ -13,7 +15,7 @@ interface ChangeComputeProfileDialogProps {
 	onClose: () => void;
 	projectId: string;
 	notebook: { id: string; title: string };
-	restartAction?: { label: string; onRestart: () => void };
+	restartActions?: Partial<Record<'edit' | 'app', { label: string; onRestart: () => void }>>;
 }
 
 export function ChangeComputeProfileDialog({
@@ -21,35 +23,75 @@ export function ChangeComputeProfileDialog({
 	onClose,
 	projectId,
 	notebook,
-	restartAction,
+	restartActions,
 }: ChangeComputeProfileDialogProps) {
 	const { data: capabilities } = useCapabilitiesQuery();
 	const profiles = capabilities?.compute_profiles ?? [];
 	const detail = useNotebookQuery(projectId, notebook.id);
+	const editProfiles = profiles;
+	const appProfiles = capabilities?.app_compute_profiles ?? profiles;
 	const stored = detail.data?.meta.compute_profile;
-	const current = computeProfilePickerValue(profiles, stored);
-	const stale = !!stored && !profiles.some((profile) => profile.name === stored);
-	const options = computeProfileOptions(profiles, stored);
+	const appStored = detail.data?.meta.app_compute_profile;
+	const current = computeProfilePickerValue(editProfiles, stored);
+	const appCurrent = appStored ?? DEFAULT_COMPUTE_PROFILE;
+	const stale =
+		(!!stored && !editProfiles.some((p) => p.name === stored)) ||
+		(!!appStored && !appProfiles.some((p) => p.name === appStored));
+	const options = computeProfileOptions(editProfiles, stored);
+	const appOptions = [
+		{
+			value: DEFAULT_COMPUTE_PROFILE,
+			label: capabilities?.app_compute_profiles
+				? appProfiles[0]
+					? `Default (${appProfiles[0].name})`
+					: 'Default'
+				: 'Use editing profile',
+		},
+		...appProfiles.map((profile) => ({
+			value: profile.name,
+			label: profile.name,
+			description: computeProfileResources(profile),
+		})),
+		...computeProfileOptions(appProfiles, appStored).filter((option) => option.isDisabled),
+	];
 	const updateNotebook = useUpdateNotebook(projectId);
 	const form = useAppForm({
-		defaultValues: { computeProfile: current },
+		defaultValues: { computeProfile: current, appComputeProfile: appCurrent },
 		onSubmit: async ({ value }) => {
 			const choice = value.computeProfile === DEFAULT_COMPUTE_PROFILE ? null : value.computeProfile;
 			try {
 				await updateNotebook.mutateAsync({
 					notebookId: notebook.id,
-					compute_profile: choice,
-				});
-				const selectedName = choice ?? profiles[0]?.name ?? 'default';
-				toast.success(
-					`Compute set to ${selectedName}. Applies when the notebook session restarts.`,
-					restartAction
+					...(value.computeProfile !== current ? { compute_profile: choice } : {}),
+					...(value.appComputeProfile !== appCurrent
 						? {
-								action: {
-									label: restartAction.label,
-									onClick: restartAction.onRestart,
-								},
+								app_compute_profile:
+									value.appComputeProfile === DEFAULT_COMPUTE_PROFILE
+										? null
+										: value.appComputeProfile,
 							}
+						: {}),
+				});
+				const appProfile = (editChoice: string, appChoice: string) =>
+					effectiveComputeProfile(
+						appProfiles,
+						appChoice === DEFAULT_COMPUTE_PROFILE
+							? capabilities?.app_compute_profiles
+								? undefined
+								: editChoice
+							: appChoice,
+						true,
+					);
+				const restartAction =
+					(value.computeProfile !== current ? restartActions?.edit : undefined) ??
+					(appProfile(value.computeProfile, value.appComputeProfile) !==
+					appProfile(current, appCurrent)
+						? restartActions?.app
+						: undefined);
+				toast.success(
+					'Compute profiles saved. Applies when each session restarts.',
+					restartAction
+						? { action: { label: restartAction.label, onClick: restartAction.onRestart } }
 						: undefined,
 				);
 				onClose();
@@ -58,7 +100,10 @@ export function ChangeComputeProfileDialog({
 			}
 		},
 	});
-	useSeedOnOpen(form, isOpen && detail.isSuccess, { computeProfile: current });
+	useSeedOnOpen(form, isOpen && detail.isSuccess, {
+		computeProfile: current,
+		appComputeProfile: appCurrent,
+	});
 
 	return (
 		<FormDialog
@@ -73,17 +118,20 @@ export function ChangeComputeProfileDialog({
 			pendingLabel="Saving..."
 		>
 			<p className="text-xs text-muted-foreground">
-				The compute profile "{notebook.title}" uses when a session starts.
+				Choose separate resources for editing "{notebook.title}" and running it as an app.
 			</p>
 			{stale && (
 				<p className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-500">
 					<AlertTriangle className="size-3.5 shrink-0" />
-					{stored} was removed by your operator. New sessions use Default until you choose another
-					profile.
+					A selected profile was removed by your operator. New sessions use the corresponding
+					default.
 				</p>
 			)}
 			<form.AppField name="computeProfile">
-				{(field) => <field.RadioGroupField label="Compute profile" options={options} />}
+				{(field) => <field.RadioGroupField label="Editing profile" options={options} />}
+			</form.AppField>
+			<form.AppField name="appComputeProfile">
+				{(field) => <field.RadioGroupField label="App profile" options={appOptions} />}
 			</form.AppField>
 		</FormDialog>
 	);

@@ -645,6 +645,19 @@ export function createFromEnv(
 	const computeProfileOverride = parseComputeProfileOverride(
 		env.MARIMOHUB_COMPUTE_PROFILE_OVERRIDE,
 	);
+	const appProfiles = parseComputeProfiles(
+		env.MARIMOHUB_APP_COMPUTE_PROFILES,
+		'MARIMOHUB_APP_COMPUTE_PROFILES',
+	);
+	const appliedAppProfiles = profilesForBackend(
+		computeBackendValue,
+		appProfiles,
+		computeCapabilities,
+	);
+	const appComputeProfiles =
+		profilesSupported && appliedAppProfiles.profiles.length > 0
+			? [...appliedAppProfiles.profiles]
+			: undefined;
 	const previewComputeProfile = env.MARIMOHUB_NOTEBOOK_PREVIEW_COMPUTE_PROFILE?.trim() || undefined;
 	if (
 		previewComputeProfile &&
@@ -666,8 +679,18 @@ export function createFromEnv(
 		computeProfileOverride,
 		computeCapabilities,
 	);
-	if (profileNotice && !warnedUnsupportedProfileBackends.has(computeBackendValue)) {
-		console.warn(profileNotice);
+	const appProfileNotice = unsupportedBackendNotice(
+		computeBackendValue,
+		appProfiles,
+		'none',
+		computeCapabilities,
+	)?.replaceAll('MARIMOHUB_COMPUTE_PROFILES', 'MARIMOHUB_APP_COMPUTE_PROFILES');
+	if (
+		(profileNotice || appProfileNotice) &&
+		!warnedUnsupportedProfileBackends.has(computeBackendValue)
+	) {
+		if (profileNotice) console.warn(profileNotice);
+		if (appProfileNotice) console.warn(appProfileNotice);
 		warnedUnsupportedProfileBackends.add(computeBackendValue);
 	}
 	const sourceControlConfig = makeSourceControl(env);
@@ -700,6 +723,7 @@ export function createFromEnv(
 		compute,
 		images: sandboxImages,
 		profiles: profilesSupported ? appliedComputeProfiles : parseComputeProfiles(undefined),
+		appProfiles: appComputeProfiles,
 		sessionMaxLifetimeMs: sessionLifetime.maxLifetimeMs,
 		startupTimeoutMs: parseSecondsEnv(env, 'MARIMOHUB_SANDBOX_STARTUP_TIMEOUT_SECONDS'),
 	});
@@ -765,6 +789,7 @@ export function createFromEnv(
 			sessionLifetime,
 			images: sandboxImages,
 			resources: computeResources,
+			appComputeProfiles,
 			computeProfile: profilesSupported ? appliedComputeProfiles.defaultProfile?.name : undefined,
 			computeProfiles: profilesSupported ? [...appliedComputeProfiles.profiles] : [],
 			previewComputeProfile,

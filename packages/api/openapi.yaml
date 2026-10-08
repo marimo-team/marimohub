@@ -412,6 +412,17 @@ components:
           enum:
             - none
             - editors
+        app_compute_profiles:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/ComputeResources'
+              - type: object
+                properties:
+                  name:
+                    type: string
+                required:
+                  - name
         surfaces:
           type: array
           items:
@@ -2584,6 +2595,8 @@ components:
           example: 2025-03-05T14:00:00Z
         compute_profile:
           type: string
+        app_compute_profile:
+          type: string
       required:
         - id
         - title
@@ -2643,6 +2656,8 @@ components:
         base_image:
           type: string
         compute_profile:
+          type: string
+        app_compute_profile:
           type: string
         security_labels:
           $ref: '#/components/schemas/SecurityLabels'
@@ -10035,6 +10050,12 @@ paths:
                   type: string
                   minLength: 1
                   example: large
+                app_compute_profile:
+                  type:
+                    - string
+                    - 'null'
+                  minLength: 1
+                  example: large
               required:
                 - title
                 - description
@@ -10543,6 +10564,12 @@ paths:
                 compute_profile:
                   type: string
                   minLength: 1
+                app_compute_profile:
+                  type:
+                    - string
+                    - 'null'
+                  minLength: 1
+                  example: large
                 sync_mode:
                   type: string
                   enum:
@@ -11293,6 +11320,12 @@ paths:
                     - string
                     - 'null'
                   minLength: 1
+                app_compute_profile:
+                  type:
+                    - string
+                    - 'null'
+                  minLength: 1
+                  example: large
       responses:
         '200':
           description: Notebook updated

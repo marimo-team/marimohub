@@ -1,5 +1,15 @@
 import type { RadioGroupFieldOption } from '@/components/form/fields/RadioGroupField';
-import type { Capabilities, Session } from '@/types';
+import type { Capabilities, Session, NotebookMeta } from '@/types';
+
+export function modeComputeProfile(
+	meta: Pick<NotebookMeta, 'compute_profile' | 'app_compute_profile'> | undefined,
+	mode: 'edit' | 'app',
+	appProfilesConfigured = false,
+): string | undefined {
+	return mode === 'app'
+		? (meta?.app_compute_profile ?? (appProfilesConfigured ? undefined : meta?.compute_profile))
+		: meta?.compute_profile;
+}
 
 export const DEFAULT_COMPUTE_PROFILE = '__marimohub_default_compute__';
 

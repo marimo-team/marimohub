@@ -99,6 +99,7 @@ import { baseImageOptions, DEFAULT_BASE_IMAGE } from '@/components/Notebook/base
 import { ChangeComputeProfileDialog } from '@/components/Notebook/ChangeComputeProfileDialog';
 import {
 	computeProfileOptions,
+	modeComputeProfile,
 	DEFAULT_COMPUTE_PROFILE,
 } from '@/components/Notebook/computeProfiles';
 import { GitSourcePopover } from '@/components/Notebook/GitSourcePopover';
@@ -319,7 +320,9 @@ function useProjectContent() {
 	const computeProfiles = capabilities?.compute_profiles ?? [];
 	const canChooseComputeProfile =
 		capabilities?.compute_profile_override === 'editors' && canEditProject(project.your_role);
-	const offersComputeChoice = canChooseComputeProfile && computeProfiles.length > 1;
+	const offersComputeChoice =
+		canChooseComputeProfile &&
+		(computeProfiles.length > 1 || (capabilities?.app_compute_profiles?.length ?? 0) > 1);
 	// Re-bound each render to the notebook in the stop dialog; only fired on confirm.
 	const stopSession = useStopSession(pid!, stopModal.target?.notebook.id ?? '');
 	const stopAppSession = useStopSession(pid!, appModal.target?.notebook.id ?? '');
@@ -442,9 +445,9 @@ function useProjectContent() {
 	const sessionByNotebook = useMemo(() => sessionsByNotebook(sessions), [sessions]);
 	const computeTarget = computeProfileModal.target;
 	const computeLive = computeTarget ? sessionByNotebook.get(computeTarget.id) : undefined;
-	const computeRestartSession = computeLive?.edit?.can?.stop
-		? computeLive.edit
-		: computeLive?.apps?.length === 1 && computeLive.apps[0].can?.stop
+	const computeEditSession = computeLive?.edit?.can?.stop ? computeLive.edit : undefined;
+	const computeAppSession =
+		computeLive?.apps?.length === 1 && computeLive.apps[0].can?.stop
 			? computeLive.apps[0]
 			: undefined;
 
@@ -552,7 +555,7 @@ function useProjectContent() {
 		});
 	};
 
-	const handleComputeRestart = () => {
+	const handleComputeRestart = (computeRestartSession: Session) => {
 		if (!computeTarget || !computeRestartSession) return;
 		if (computeRestartSession.mode === 'app') {
 			appModal.open({
@@ -928,9 +931,14 @@ function useProjectContent() {
 												session={appSession}
 												canControl={!!appSession.can?.stop}
 												editActive={!!live.persistentEdit}
-												profiles={computeProfiles}
+												profiles={capabilities?.app_compute_profiles ?? computeProfiles}
+												appProfilesConfigured={capabilities?.app_compute_profiles !== undefined}
 												allowComputeOverride={capabilities?.compute_profile_override === 'editors'}
-												selectedProfileName={nb.compute_profile}
+												selectedProfileName={modeComputeProfile(
+													nb,
+													'app',
+													capabilities?.app_compute_profiles !== undefined,
+												)}
 												onStop={() =>
 													appModal.open({ action: 'stop', notebook: nb, session: appSession })
 												}
@@ -1063,7 +1071,7 @@ function useProjectContent() {
 						)}
 					</createNotebookForm.AppField>
 				)}
-				{offersComputeChoice && (
+				{canChooseComputeProfile && computeProfiles.length > 1 && (
 					<createNotebookForm.AppField name="computeProfile">
 						{(field) => (
 							<field.RadioGroupField
@@ -1123,19 +1131,20 @@ function useProjectContent() {
 					onClose={computeProfileModal.close}
 					projectId={pid!}
 					notebook={computeProfileModal.target}
-					restartAction={
-						computeRestartSession
+					restartActions={{
+						edit: computeEditSession
 							? {
-									label:
-										computeRestartSession.mode === 'app'
-											? 'Restart app'
-											: computeLive?.app?.can?.stop
-												? 'Restart edit session'
-												: 'Restart session',
-									onRestart: handleComputeRestart,
+									label: computeLive?.app?.can?.stop ? 'Restart edit session' : 'Restart session',
+									onRestart: () => handleComputeRestart(computeEditSession),
 								}
-							: undefined
-					}
+							: undefined,
+						app: computeAppSession
+							? {
+									label: 'Restart app',
+									onRestart: () => handleComputeRestart(computeAppSession),
+								}
+							: undefined,
+					}}
 				/>
 			)}
 
