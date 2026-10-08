@@ -61,6 +61,9 @@ const AUTH_ALLOWED_EMAIL_DOMAINS: ConfigVar = {
 	required: true,
 };
 
+const OIDC_MEMBERSHIP_DESCRIPTION =
+	'Requires MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM. Groups enter the signed, unencrypted session. Limits: 32 groups and 1280 UTF-8 JSON bytes; overflow denies login. Groups currently grant no access.';
+
 // Shared by every managed-AI backend (Bedrock, OpenAI-compatible); the config
 // registry requires one definition per variable id.
 const AI_MODEL: ConfigVar = {
@@ -1353,16 +1356,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					{
 						id: 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS',
 						name: 'Membership groups',
-						description:
-							'Exact, case-sensitive, comma-separated group IDs to retain (at most 200). Requires GROUPS_CLAIM. Selected groups ride in the signed, not encrypted session, limited to 32 groups / 1280 JSON bytes. Exceeding the bound denies login. No access effect until group bindings from plans 068/069 use them.',
+						description: `Comma-separated, case-sensitive exact group IDs to retain (at most 200). ${OIDC_MEMBERSHIP_DESCRIPTION}`,
 						example: 'hub-team-data,hub-team-ml',
 						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES',
 						name: 'Membership group prefixes',
-						description:
-							'Case-sensitive, comma-separated startsWith prefixes to retain (at most 20). Requires GROUPS_CLAIM. Selected groups ride in the signed, not encrypted session, limited to 32 groups / 1280 JSON bytes. Exceeding the bound denies login. No access effect until group bindings from plans 068/069 use them.',
+						description: `Comma-separated, case-sensitive group prefixes to retain (at most 20). ${OIDC_MEMBERSHIP_DESCRIPTION}`,
 						example: 'hub-team-',
 						optIn: true,
 					},
@@ -1378,7 +1379,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND',
 						name: 'Login-policy backend',
 						description:
-							'Set `library` to load a trusted external login-policy module that maps validated OIDC claims to a login decision, entitlements, and optional groups. Mutually exclusive with the `MARIMOHUB_AUTH_OIDC_*GROUPS*` variables. `none` (or unset) disables it.',
+							'Set `library` for a trusted module that returns a login decision, entitlements, and optional groups. Mutually exclusive with the `MARIMOHUB_AUTH_OIDC_*GROUPS*` variables. `none` (or unset) disables it.',
 						example: 'library',
 						optIn: true,
 					},

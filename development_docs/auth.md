@@ -165,15 +165,15 @@ Each deployment supports one issuer. Stored user IDs use that issuer's `sub`.
 An issuer change is an identity migration. Reconcile stored owners and members
 before the change.
 
-The session stores mapped entitlements and optional operator-selected group IDs.
-`AuthUser.groups` contains at most 32 normalized IDs and 1,280 UTF-8 bytes of JSON.
-The host validates these bounds on every request. Overflow denies login rather
-than truncating the set. Groups share `entitlementsExpiresAt` and the one-hour limit.
-Group-derived roles, selected groups, and project-creation access do not transfer
-to personal access tokens, service accounts, or background work.
-The identity directory stores no groups. The signed cookie is not encrypted,
-and `/me` exposes selected groups to the user. Groups never supply security labels
-or `SubjectSecurityContext` compartments.
+`AuthUser.groups` holds optional operator-selected IDs: at most 32 normalized
+values and 1,280 UTF-8 JSON bytes. The host validates them on every request and
+rejects overflow at login. Groups share `entitlementsExpiresAt` and its one-hour
+limit. Neither groups nor mapped entitlements transfer to personal access tokens,
+service accounts, or background work. Groups are absent from the identity
+directory but visible in the signed cookie and `/me`. They never supply security
+labels or `SubjectSecurityContext` compartments. See the
+[operator guide](../docs/setup/auth/oidc.md#group-membership) for selection rules.
+
 Group-authorized kernels use the session JWT expiry as a fixed authorization deadline. Active editors cannot extend it.
 Session reuse keeps the earliest credential deadline presented by any caller.
 At expiry, the lifecycle destroys the kernel and the proxy closes WebSockets.
@@ -215,11 +215,9 @@ For compound identity rules that exact group matching cannot express, the OIDC
 backend can load one trusted login-policy module
 (`MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_LIBRARY`; see
 [Ports → External adapter libraries](./ports.md#external-adapter-libraries)).
-The versioned contract lives in `@marimo-hub/auth-oidc` (`loginPolicy.ts`), and
-deliberately **not** in `core`: OIDC claims stay an adapter concern. The
-composition root (`packages/config`) loads the module once during
-`createFromEnvAsync()` and rejects any combination with the group variables, so
-exactly one identity-mapping mechanism is ever in force.
+The contract lives in `@marimo-hub/auth-oidc` (`loginPolicy.ts`) because OIDC
+claims are an adapter concern. `packages/config` loads the module once during
+`createFromEnvAsync()` and rejects combinations with group configuration.
 
 The adapter calls the module after every protocol/email validation above and
 before session signing, with the host-owned identity (`sub` + verified email),
@@ -236,12 +234,10 @@ stable operator events are `oidc_login_policy_denied`,
 `oidc_login_policy_result_invalid`; they carry a duration and a bounded
 reason/problem code, never claim values or module exception messages.
 
-An allowed login always signs an `entitlements` claim (possibly empty), so the
-session carries the short authorization lifetime; policy sessions are capped at
-one hour like group sessions. Entitlements apply to browser sessions only —
-never to personal access tokens. Selected groups use the same deadline.
-The optional `groups` field keeps API version 1; older hosts reject that field.
-Deploy support on every replica before a module returns groups.
+Allowed logins always sign an `entitlements` claim, even when empty, to enforce
+the one-hour policy deadline. Entitlements and groups apply only to browser
+sessions and share this deadline. The optional `groups` field keeps API version
+1, but older hosts reject it. Deploy support on every replica before use.
 
 **Boundary — this is not resource fine-grained access control (FGAC).** The
 login policy controls login and deployment roles. It does not authorize

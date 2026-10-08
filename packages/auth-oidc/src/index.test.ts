@@ -163,6 +163,13 @@ async function beginOidcTransaction(
 	return cookiePair(login, TXN_COOKIE);
 }
 
+async function completeOidcTransaction(routes: ReturnType<typeof createOidcAuth>['routes']) {
+	const txn = await beginOidcTransaction(routes);
+	return routes.request('/api/auth/callback?code=abc&state=state-1', {
+		headers: { cookie: txn },
+	});
+}
+
 describe('createOidcAuth configuration validation', () => {
 	it('throws when sessionSecret is shorter than 32 bytes', () => {
 		expect(() => createOidcAuth({ ...BASE_CONFIG, sessionSecret: 'short' })).toThrow(
@@ -1536,10 +1543,7 @@ describe('OIDC routes', () => {
 			picture: 'http://attacker.example/avatar.png',
 		});
 		const { authenticator, routes } = makeOidc();
-		const txn = await beginOidcTransaction(routes);
-		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
-			headers: { cookie: txn },
-		});
+		const res = await completeOidcTransaction(routes);
 
 		const sessionCookie = cookiePair(res, SESSION_COOKIE);
 		const user = await authenticator.authenticate(requestWithCookie(sessionCookie.split('=')[1]));
@@ -2280,13 +2284,6 @@ describe('OIDC login policy', () => {
 		},
 	});
 
-	async function callback(routes: ReturnType<typeof createOidcAuth>['routes']) {
-		const txn = await beginOidcTransaction(routes);
-		return routes.request('/api/auth/callback?code=abc&state=state-1', {
-			headers: { cookie: txn },
-		});
-	}
-
 	function sessionPayload(res: Response): Record<string, unknown> {
 		const token = cookiePair(res, SESSION_COOKIE).split('=')[1];
 		return JSON.parse(
@@ -2347,7 +2344,7 @@ describe('OIDC login policy', () => {
 			},
 		});
 
-		const res = await callback(routes);
+		const res = await completeOidcTransaction(routes);
 
 		expect(res.headers.get('set-cookie') ?? '').toMatch(/mh_session=[^;,]+/);
 		expect(seen?.identity).toEqual({ id: 'user-1', email: 'user@example.com' });
@@ -2374,7 +2371,7 @@ describe('OIDC login policy', () => {
 			},
 		});
 
-		await callback(routes);
+		await completeOidcTransaction(routes);
 
 		expect(seen && 'userInfoClaims' in seen).toBe(false);
 	});
@@ -2382,7 +2379,7 @@ describe('OIDC login policy', () => {
 	it('signs recognized entitlements into a session bounded to one hour', async () => {
 		const { authenticator, routes } = makeOidc({ loginPolicy: allowEditor() });
 
-		const res = await callback(routes);
+		const res = await completeOidcTransaction(routes);
 		const sessionCookie = cookiePair(res, SESSION_COOKIE);
 		const user = await authenticator.authenticate(requestWithCookie(sessionCookie.split('=')[1]));
 
@@ -2395,7 +2392,7 @@ describe('OIDC login policy', () => {
 			loginPolicy: { policy: { evaluate: () => ({ decision: 'allow' }) } },
 		});
 
-		const res = await callback(routes);
+		const res = await completeOidcTransaction(routes);
 		expect(sessionPayload(res).entitlements).toEqual([]);
 		const sessionCookie = cookiePair(res, SESSION_COOKIE);
 		const user = await authenticator.authenticate(requestWithCookie(sessionCookie.split('=')[1]));
@@ -2417,7 +2414,7 @@ describe('OIDC login policy', () => {
 			},
 		});
 
-		const res = await callback(routes);
+		const res = await completeOidcTransaction(routes);
 
 		expect(res.headers.get('location')).toBe('/?auth_error=policy_denied');
 		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
@@ -2437,7 +2434,7 @@ describe('OIDC login policy', () => {
 			},
 		});
 
-		const res = await callback(routes);
+		const res = await completeOidcTransaction(routes);
 
 		expect(res.headers.get('location')).toBe('/?auth_error=auth_failed');
 		expect(warnedLines().some((line) => line.includes('oidc_login_policy_timeout'))).toBe(true);
@@ -2454,7 +2451,7 @@ describe('OIDC login policy', () => {
 			},
 		});
 
-		const res = await callback(routes);
+		const res = await completeOidcTransaction(routes);
 
 		expect(res.headers.get('location')).toBe('/?auth_error=auth_failed');
 		const lines = warnedLines();
@@ -2471,7 +2468,7 @@ describe('OIDC login policy', () => {
 			loginPolicy: { policy: { evaluate: () => result as never } },
 		});
 
-		const res = await callback(routes);
+		const res = await completeOidcTransaction(routes);
 
 		expect(res.headers.get('location')).toBe('/?auth_error=auth_failed');
 		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
@@ -2493,7 +2490,7 @@ describe('OIDC login policy', () => {
 		});
 		const { routes } = makeOidc({ loginPolicy: allowEditor() });
 
-		const res = await callback(routes);
+		const res = await completeOidcTransaction(routes);
 		const payload = sessionPayload(res);
 
 		expect(payload).not.toHaveProperty('user_attributes');
@@ -2552,7 +2549,7 @@ describe('OIDC login policy', () => {
 			});
 			const { routes } = makeOidc({ loginPolicy: { policy: compound } });
 
-			const res = await callback(routes);
+			const res = await completeOidcTransaction(routes);
 
 			if (expected === 'allowed') {
 				expect(res.headers.get('set-cookie') ?? '').toMatch(/mh_session=[^;,]+/);
@@ -2577,10 +2574,7 @@ describe('session membership groups', () => {
 			const { routes, authenticator } = makeOidc({
 				groups: { claim: '/groups', membership: { prefixes: ['team-'] } },
 			});
-			const txn = await beginOidcTransaction(routes);
-			const response = await routes.request('/api/auth/callback?code=abc&state=state-1', {
-				headers: { cookie: txn },
-			});
+			const response = await completeOidcTransaction(routes);
 			const token = cookiePair(response, SESSION_COOKIE).split('=')[1];
 			await expect(authenticator.authenticate(requestWithCookie(token))).resolves.toMatchObject({
 				groups: ['team-a', 'team-z'],
@@ -2661,10 +2655,7 @@ describe('session membership groups', () => {
 				},
 			},
 		});
-		const txn = await beginOidcTransaction(routes);
-		const response = await routes.request('/api/auth/callback?code=abc&state=state-1', {
-			headers: { cookie: txn },
-		});
+		const response = await completeOidcTransaction(routes);
 		const token = cookiePair(response, SESSION_COOKIE).split('=')[1];
 		expect(utf8ByteLength(token)).toBeLessThanOrEqual(3800);
 		const principal = await authenticator.authenticate(requestWithCookie(token));
@@ -2688,10 +2679,7 @@ describe('session membership groups', () => {
 			const { routes } = makeOidc({
 				groups: { claim: '/groups', membership: { prefixes: ['team-'] } },
 			});
-			const txn = await beginOidcTransaction(routes);
-			const response = await routes.request('/api/auth/callback?code=abc&state=state-1', {
-				headers: { cookie: txn },
-			});
+			const response = await completeOidcTransaction(routes);
 			expect(response.headers.get('location')).toContain('auth_error=auth_failed');
 			expect(response.headers.get('set-cookie')).not.toContain('mh_session=');
 			const events = log.mock.calls.flat().join('\n');
@@ -2741,10 +2729,7 @@ describe('membership cookie and callback failures', () => {
 				policy: { evaluate: () => ({ decision: 'allow', entitlements: ['super-admin'], groups }) },
 			},
 		});
-		const txn = await beginOidcTransaction(routes);
-		const response = await routes.request('/api/auth/callback?code=abc&state=state-1', {
-			headers: { cookie: txn },
-		});
+		const response = await completeOidcTransaction(routes);
 		expect(response.status).toBe(302);
 		expect(response.headers.get('location')).toBe('/?auth_error=auth_failed');
 		expect(response.headers.get('set-cookie')).not.toContain('mh_session=');
@@ -2763,13 +2748,7 @@ describe('membership cookie and callback failures', () => {
 			email_verified: true,
 		});
 		const control = makeOidc({ clientId: 'c'.repeat(1500) });
-		const controlTxn = await beginOidcTransaction(control.routes);
-		const controlResponse = await control.routes.request(
-			'/api/auth/callback?code=abc&state=state-1',
-			{
-				headers: { cookie: controlTxn },
-			},
-		);
+		const controlResponse = await completeOidcTransaction(control.routes);
 		expect(controlResponse.headers.get('set-cookie')).toContain('mh_session=');
 		const groups = Array.from(
 			{ length: 32 },
@@ -2779,10 +2758,7 @@ describe('membership cookie and callback failures', () => {
 			clientId: 'c'.repeat(1500),
 			loginPolicy: { policy: { evaluate: () => ({ decision: 'allow', groups }) } },
 		});
-		const txn = await beginOidcTransaction(routes);
-		const response = await routes.request('/api/auth/callback?code=abc&state=state-1', {
-			headers: { cookie: txn },
-		});
+		const response = await completeOidcTransaction(routes);
 		expect(response.headers.get('location')).toBe('/?auth_error=auth_failed');
 		expect(response.headers.get('set-cookie')).not.toContain('mh_session=');
 		const output = error.mock.calls.flat().join('\n');

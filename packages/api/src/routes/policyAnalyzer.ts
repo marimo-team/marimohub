@@ -45,6 +45,10 @@ import { appendAudit } from '../log';
 const MAX_POLICY_CASES = 25;
 
 const EntitlementSchema = z.enum(AUTH_ENTITLEMENTS);
+const GroupsSchema = z
+	.array(z.string().refine(isAuthGroupId))
+	.max(MAX_AUTH_GROUPS)
+	.refine((groups) => normalizeAuthGroups(groups).ok);
 const AuthorizationActionSchema = z.enum(AUTHORIZATION_ACTIONS);
 const SecurityLabelsSchema = z.strictObject({
 	classification: z.string().regex(SECURITY_LABEL_TOKEN),
@@ -56,11 +60,7 @@ const ExpectedLoginSchema = z
 		z.strictObject({
 			outcome: z.literal('allow'),
 			entitlements: z.array(EntitlementSchema).optional(),
-			groups: z
-				.array(z.string().refine(isAuthGroupId))
-				.max(MAX_AUTH_GROUPS)
-				.refine((groups) => normalizeAuthGroups(groups).ok)
-				.optional(),
+			groups: GroupsSchema.optional(),
 		}),
 		z.strictObject({ outcome: z.literal('deny') }),
 	])
@@ -141,11 +141,7 @@ const AuthorizationStageSchema = z
 			email: z.string().min(3).max(320),
 			entitlement_source: z.enum(['explicit', 'login']),
 			entitlements: z.array(EntitlementSchema).optional(),
-			groups: z
-				.array(z.string().refine(isAuthGroupId))
-				.max(MAX_AUTH_GROUPS)
-				.refine((groups) => normalizeAuthGroups(groups).ok)
-				.optional(),
+			groups: GroupsSchema.optional(),
 			grant: TokenGrantSchema.optional(),
 		}),
 		action: AuthorizationActionSchema,
@@ -586,18 +582,17 @@ async function evaluateCase(
 					if (subject.id !== caller.id || subject.email !== caller.email) {
 						throw new Error('live_context_requires_self');
 					}
-					subject = stage.subject.grant
-						? {
-								...caller,
-								entitlements,
-								groups,
-								credential: {
-									...caller.credential,
-									kind: 'personal-access-token',
-									grant: stage.subject.grant,
-								},
-							}
-						: { ...caller, entitlements, groups };
+					subject = { ...caller, entitlements, groups };
+					if (stage.subject.grant) {
+						subject = {
+							...subject,
+							credential: {
+								...caller.credential,
+								kind: 'personal-access-token',
+								grant: stage.subject.grant,
+							},
+						};
+					}
 					context = { mode: 'live' };
 				} else {
 					const supplied = stage.context.value;

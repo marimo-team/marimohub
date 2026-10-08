@@ -136,28 +136,19 @@ API key. Project configuration and bring-your-own-key providers can override it.
 - OIDC requires email verification by default. Each present `email_verified`
   claim must be boolean `true` or the exact string `"true"`. `trusted-issuer`
   permits missing claims only. UserInfo must have the same `sub` as the ID token.
-- Group policy accepts at most 200 claim group IDs. The signed session holds
-  mapped entitlements and optional operator-selected groups. The selected set
-  cannot exceed 32 IDs or 1,280 UTF-8 bytes of JSON; overflow denies login.
-  The host validates the selected set on each request and never stores it in
-  the identity directory. The cookie is not encrypted, and `/me` exposes selected
-  groups to the user. Groups never supply security labels or subject compartments.
-  Group sessions and kernels expire with the entitlement credential. Active
-  connections cannot extend this deadline.
-- An external OIDC login-policy module is **trusted in-process code** with
-  server privileges — load only pinned, reviewed modules, identical on every
-  replica. The host fails closed on module load errors, timeouts, exceptions,
-  and out-of-contract results, and accepts only an allow/deny decision plus the
-  built-in entitlements (`project-creator` permits project creation under
-  `MARIMOHUB_PROJECT_CREATION=restricted` and for app-only users), plus optional
-  selected groups. The host keeps raw provider claims out of storage, logs, and
-  client errors. Only selected, bounded groups enter the signed cookie.
-  The module sees every claim and can log or store claim values itself.
-  Review policy code to prevent those disclosures. Policy sessions expire
-  within one hour. The module
-  maps identity to login eligibility and coarse roles only — it is not
-  resource-level access control, and an entitlement never bypasses the
-  project-role checks below.
+- Group policy accepts at most 200 claim IDs. Sessions carry mapped entitlements
+  and optional selected groups, validated on every request. Overflow denies login.
+  The signed cookie is not encrypted, and `/me` exposes selected groups; the
+  identity directory stores none. Groups never supply security labels or subject
+  compartments. Group sessions and kernels expire with the credential; active
+  connections cannot extend that deadline. See [group limits and selection](/auth#group-membership).
+- Login-policy modules run with **server privileges**. Use pinned, reviewed code
+  on every replica. Load errors stop startup; timeouts, exceptions, and invalid
+  results deny login. The host accepts only allow/deny decisions, built-in
+  entitlements, and optional selected groups. It keeps raw claims out of storage,
+  logs, and client errors; selected groups enter the signed cookie. Review module
+  code to prevent it from logging or storing claims. Policy sessions expire
+  within one hour. Entitlements never bypass project-role checks.
 - The OIDC issuer, callback, authorization endpoint, and logout endpoint must
   use HTTPS and cannot contain credentials. Stored user IDs are issuer-local
   `sub` values, so an issuer change requires an identity migration.
