@@ -86,3 +86,18 @@ POST /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks added the pat
 POST /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks the `base_image` request property's minLength was increased from `0` to `1`
 POST /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks the `compute_profile` request property's minLength was increased from `0` to `1`
 ```
+
+Project members now use exclusive user, email, and IdP group response variants.
+This corrects the unreleased group contract: each row has exactly one identity,
+and groups cannot hold the admin role. Existing user and email rows remain valid.
+
+```text
+POST /api/v1/projects added `subschema #1, subschema #2, subschema #3` to the `data/members/items/` response property `oneOf` list for the response status `201`
+GET /api/v1/projects/{pid} added `subschema #1, subschema #2, subschema #3` to the `data/members/items/` response property `oneOf` list for the response status `200`
+PATCH /api/v1/projects/{pid} added `subschema #1, subschema #2, subschema #3` to the `data/members/items/` response property `oneOf` list for the response status `200`
+GET /api/v1/projects/{pid}/members added `subschema #1, subschema #2, subschema #3` to the `data/items/` response property `oneOf` list for the response status `200`
+POST /api/v1/projects/{pid}/members added `subschema #1, subschema #2, subschema #3` to the `data/members/items/` response property `oneOf` list for the response status `201`
+PUT /api/v1/projects/{pid}/members/{uid} added `subschema #1, subschema #2, subschema #3` to the `data/members/items/` response property `oneOf` list for the response status `200`
+DELETE /api/v1/projects/{pid}/security-labels added `subschema #1, subschema #2, subschema #3` to the `data/members/items/` response property `oneOf` list for the response status `200`
+PUT /api/v1/projects/{pid}/security-labels added `subschema #1, subschema #2, subschema #3` to the `data/members/items/` response property `oneOf` list for the response status `200`
+```

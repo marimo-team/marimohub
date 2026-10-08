@@ -586,14 +586,6 @@ async function evaluateCase(
 					email: stage.subject.email,
 					entitlements,
 					groups,
-					...(stage.subject.grant
-						? {
-								credential: {
-									kind: 'personal-access-token' as const,
-									grant: stage.subject.grant,
-								},
-							}
-						: {}),
 				};
 				let context: Parameters<AuthorizationService['analyze']>[3];
 				if (stage.context.mode === 'live-self') {
@@ -601,22 +593,23 @@ async function evaluateCase(
 						throw new Error('live_context_requires_self');
 					}
 					subject = { ...caller, entitlements };
-					if (stage.subject.grant) {
-						subject = {
-							...subject,
-							credential: {
-								...caller.credential,
-								kind: 'personal-access-token',
-								grant: stage.subject.grant,
-							},
-						};
-					}
 					context = { mode: 'live' };
 				} else {
 					const supplied = stage.context.value;
 					const validated = supplied === null ? null : validateSubjectSecurityContext(supplied);
 					if (supplied !== null && validated === null) throw new Error('synthetic_context_invalid');
 					context = { mode: 'synthetic', value: validated };
+				}
+				if (stage.subject.grant) {
+					subject = {
+						...subject,
+						groups: [],
+						credential: {
+							...('credential' in subject ? subject.credential : {}),
+							kind: 'personal-access-token',
+							grant: stage.subject.grant,
+						},
+					};
 				}
 				const resource =
 					stage.resource.source === 'stored'

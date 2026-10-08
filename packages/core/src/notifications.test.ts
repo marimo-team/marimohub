@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Metrics, Notification, Notifier } from '.';
+import type { Metrics, Notification, Notifier, ProjectMember } from '.';
 import {
 	fanOutNotifier,
 	filterNotifier,
@@ -736,6 +736,66 @@ describe('fanOutNotifier', () => {
 });
 
 describe('NotificationSchema', () => {
+	describe.each(['member.role_changed', 'member.removed'] as const)(
+		'%s member identity',
+		(kind) => {
+			function renderMemberAlert(member: ProjectMember) {
+				const input = {
+					project,
+					member,
+					actor: { id: uid('owner_notify'), email: 'owner@example.com' },
+					mutationId: 'identity-validation',
+				};
+				return notificationRouter.render(
+					kind === 'member.role_changed'
+						? { ...input, kind, oldRole: 'viewer' }
+						: { ...input, kind },
+				)[0];
+			}
+
+			it.each([
+				{ user_id: uid('member_notify'), role: 'editor' },
+				{ email: 'member@example.com', role: 'editor' },
+				{ group: '/teams/Research', role: 'editor' },
+			] as const)('accepts a single member principal: %j', (member) => {
+				const rendered = renderMemberAlert(member);
+				expect(NotificationSchema.parse(rendered).data).toMatchObject({
+					member_user_id: 'user_id' in member ? member.user_id : null,
+					member_email: 'email' in member ? member.email : null,
+					member_group: 'group' in member ? member.group : null,
+				});
+			});
+
+			it.each([
+				[null, null, null],
+				[uid('member_notify'), 'member@example.com', null],
+				[uid('member_notify'), null, '/teams/Research'],
+				[null, 'member@example.com', '/teams/Research'],
+				[uid('member_notify'), 'member@example.com', '/teams/Research'],
+			])('rejects ambiguous member identity: %j, %j, %j', (userId, email, group) => {
+				const rendered = renderMemberAlert({ group: '/teams/Research', role: 'editor' });
+				const parsed = NotificationSchema.safeParse({
+					...rendered,
+					data: {
+						...rendered.data,
+						member_user_id: userId,
+						member_email: email,
+						member_group: group,
+					},
+				});
+				expect(parsed.success).toBe(false);
+				if (!parsed.success) {
+					expect(parsed.error.issues).toContainEqual(
+						expect.objectContaining({
+							path: ['data'],
+							message: 'a member has exactly one of member_user_id, member_email, or member_group',
+						}),
+					);
+				}
+			});
+		},
+	);
+
 	it.each([
 		['an invalid recipient email', { recipients: [{ email: 'not-an-email' }] }],
 		['a relative link', { link: '/projects/project_01' }],

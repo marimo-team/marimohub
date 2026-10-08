@@ -1056,15 +1056,31 @@ export function commonErrors() {
 
 // --- Domain response schemas for OpenAPI docs ---
 
-// Exactly one of user_id, email (pending invite), or group is present.
+// An empty enum represents `never` in OpenAPI and preserves exclusive identities in codegen.
+const AbsentMemberIdentitySchema = z.never().optional().openapi({ type: 'string', enum: [] });
+
 export const ProjectMemberResponseSchema = z
-	.object({
-		group: z.string().optional(),
-		user_id: z.string().optional(),
-		email: z.string().optional(),
-		role: z.enum(ROLES),
-	})
-	.openapi('ProjectMember');
+	.union([
+		z.strictObject({
+			user_id: z.string(),
+			email: AbsentMemberIdentitySchema,
+			group: AbsentMemberIdentitySchema,
+			role: z.enum(ROLES),
+		}),
+		z.strictObject({
+			user_id: AbsentMemberIdentitySchema,
+			email: z.string(),
+			group: AbsentMemberIdentitySchema,
+			role: z.enum(ROLES),
+		}),
+		z.strictObject({
+			user_id: AbsentMemberIdentitySchema,
+			email: AbsentMemberIdentitySchema,
+			group: z.string(),
+			role: z.enum(ASSIGNABLE_ROLES),
+		}),
+	])
+	.openapi('ProjectMember', {}, { unionPreferredType: 'oneOf' });
 
 // Loose: audit events carry per-operation context fields (project_id,
 // notebook_id, …) beyond the required envelope.

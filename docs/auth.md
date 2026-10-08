@@ -159,7 +159,9 @@ Existing group rows remain editable and removable if group creation is disabled.
 2. Before rollback, remove all group rows with a compatible server.
 
 Older versions reject project records with group rows and return `503`.
-The bucket schema version remains 1. Project reads and listings use the authoritative project record, even if catalog projections are stale.
+The bucket schema version remains 1. Project reads and listing visibility checks use
+the authoritative project record, even if catalog projections are stale. Listing data
+still comes from the catalog snapshot.
 
 Email invites have the same rollout requirement. Before creating invites, upgrade all replicas.
 Before rollback to an unsupported release, remove pending invites.

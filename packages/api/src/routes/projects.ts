@@ -142,16 +142,17 @@ const GroupMemberQuery = z.object({
  * everyone else sees user and group rows plus — so invitees can find themselves — any
  * invite row matching their own login email.
  */
-function visibleMembers(
-	members: ProjectMember[],
-	role: Role | null,
-	subject: AuthSubject,
-): ProjectMember[] {
-	if (roleAtLeast(role, 'manager')) return members;
+function visibleMembers(members: ProjectMember[], role: Role | null, subject: AuthSubject) {
 	const email = subject.email.toLowerCase();
-	return members.filter(
-		(m) => m.user_id !== undefined || m.group !== undefined || m.email === email,
-	);
+	return members
+		.filter(
+			(m) =>
+				roleAtLeast(role, 'manager') ||
+				m.user_id !== undefined ||
+				m.group !== undefined ||
+				m.email === email,
+		)
+		.map((member) => ProjectMemberResponseSchema.parse(member));
 }
 
 /** Project detail + the requesting user's effective role, with internal fields stripped. */

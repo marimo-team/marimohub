@@ -186,8 +186,7 @@ interface AddMemberPickerProps {
 	/** Resolved identities for the id-keyed member rows (email dedupe). */
 	users: UserDirectory | undefined;
 	descriptions: Record<ProjectRole, string>;
-	/** Resolves true on success (errors are toasted by the caller). */
-	onAdd: (choice: MemberChoice, role: AssignableProjectRole) => Promise<boolean>;
+	onAdd: (choice: MemberChoice, role: AssignableProjectRole, onSuccess: () => void) => void;
 	isPending: boolean;
 }
 
@@ -279,9 +278,7 @@ function AddMemberPicker({
 			return;
 		}
 		// Keep the typed query on failure so the user can retry or correct it.
-		void onAdd(choice, role).then((added) => {
-			if (added) setQuery('');
-		});
+		onAdd(choice, role, () => setQuery(''));
 	};
 
 	return (
@@ -346,24 +343,22 @@ function AddGroupPicker({
 	inputValue: group,
 	onInputChange: setGroup,
 }: AddMemberPickerProps & MemberPickerInputProps & { groups: string[] }) {
-	const duplicate = members.some((member) => member.group === group);
+	const memberGroups = new Set(members.map((member) => member.group));
+	const duplicate = memberGroups.has(group);
 	const valid = isAuthGroupId(group);
-	const suggestions = groups
-		.filter(
-			(value) =>
-				value.toLowerCase().includes(group.toLowerCase()) &&
-				!members.some((member) => member.group === value),
-		)
-		.map((value) => ({ id: value, textValue: value }));
+	const query = group.toLowerCase();
+	const suggestions = groups.flatMap((value) =>
+		value.toLowerCase().includes(query) && !memberGroups.has(value)
+			? [{ id: value, textValue: value }]
+			: [],
+	);
 	return (
 		<form
 			className="flex flex-col gap-3"
 			onSubmit={(event) => {
 				event.preventDefault();
 				if (!valid || duplicate || isPending) return;
-				void onAdd({ group }, role).then((added) => {
-					if (added) setGroup('');
-				});
+				onAdd({ group }, role, () => setGroup(''));
 			}}
 		>
 			<p id="group-member-help" className="text-xs text-muted-foreground">
@@ -546,6 +541,80 @@ function ProjectDefaultAccess({
 	);
 }
 
+function ProjectCurrentAccess({
+	project,
+	user,
+	members,
+	users,
+	descriptions,
+}: {
+	project: ProjectDetail;
+	user: User | null;
+	members: ProjectMember[];
+	users: UserDirectory | undefined;
+	descriptions: Record<ProjectRole, string>;
+}) {
+	const currentUserIsMember = user
+		? members.some((member) => isCurrentUser(member, user) && member.role === project.your_role)
+		: false;
+	const userGroups = new Set(user?.groups);
+	const accessSource =
+		user?.id === project.owner
+			? 'Project owner'
+			: user?.is_super_admin
+				? 'Deployment super admin'
+				: currentUserIsMember
+					? 'Project member'
+					: members.some((member) => member.group !== undefined && userGroups.has(member.group))
+						? 'Group membership'
+						: 'Default access';
+	const currentIdentity = user ? users?.[user.id] : undefined;
+	const currentDisplayName = currentIdentity?.name || user?.email || 'You';
+
+	return (
+		<section aria-labelledby="your-access-heading" className="rounded-lg border bg-muted/40 p-3.5">
+			<div className="flex flex-wrap items-center justify-between gap-3">
+				<div className="flex min-w-0 max-w-full items-center gap-3">
+					<UserAvatar
+						pictureUrl={currentIdentity?.picture_url ?? user?.picture_url}
+						label={currentDisplayName}
+						className="size-9 text-xs"
+					/>
+					<div className="min-w-0">
+						<h3 id="your-access-heading" className="text-xs font-semibold text-muted-foreground">
+							Your Access
+						</h3>
+						<p className="truncate font-medium">{currentDisplayName}</p>
+						<p className="truncate text-xs text-muted-foreground">
+							{currentIdentity?.name && user?.email ? (
+								<>
+									<span translate="no">{user.email}</span>
+									<span aria-hidden="true"> · </span>
+								</>
+							) : null}
+							{accessSource}
+						</p>
+					</div>
+				</div>
+				{user?.id === project.owner ? (
+					<OwnerBadge label="Your role" />
+				) : project.your_role ? (
+					<RoleBadge
+						value={project.your_role}
+						descriptions={descriptions}
+						label="Your role"
+						legacyAdmin={
+							project.your_role === 'admin' && currentUserIsMember && !user?.is_super_admin
+						}
+					/>
+				) : (
+					<span className="text-xs text-muted-foreground">No Project Role</span>
+				)}
+			</div>
+		</section>
+	);
+}
+
 export interface ProjectMembersDialogProps {
 	isOpen: boolean;
 	onClose: () => void;
@@ -562,7 +631,7 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 		isFetching,
 		refetch,
 	} = useProjectMembersQuery(project.id);
-	const visibleMembers = members ?? project.members ?? [];
+	const visibleMembers: ProjectMember[] = members ?? project.members ?? [];
 	const { data: users, isLoading: usersLoading } = useUsersQuery([
 		...visibleMembers.map((m) => m.user_id),
 		user?.id,
@@ -574,36 +643,19 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 	const removeMember = useRemoveMember(project.id);
 	const changingMember = updateRole.isPending || removeMember.isPending;
 	const confirmRemove = useDialogTarget<ProjectMember>();
-	const currentUserIsMember = user
-		? visibleMembers.some(
-				(member) => isCurrentUser(member, user) && member.role === project.your_role,
-			)
-		: false;
-	const accessSource =
-		user?.id === project.owner
-			? 'Project owner'
-			: user?.is_super_admin
-				? 'Deployment super admin'
-				: currentUserIsMember
-					? 'Project member'
-					: visibleMembers.some(
-								(member) => member.group !== undefined && user?.groups.includes(member.group),
-						  )
-						? 'Group membership'
-						: 'Default access';
-	const currentIdentity = user ? users?.[user.id] : undefined;
-	const currentDisplayName = currentIdentity?.name || user?.email || 'You';
 
-	const handleAdd = async (choice: MemberChoice, role: AssignableProjectRole) => {
-		try {
-			await addMember.mutateAsync({ ...choice, role });
-			toast.success(
-				'group' in choice ? 'Group added' : 'email' in choice ? 'Invite added' : 'Member added',
-			);
-			return true;
-		} catch {
-			return false;
-		}
+	const handleAdd: AddMemberPickerProps['onAdd'] = (choice, role, onSuccess) => {
+		addMember.mutate(
+			{ ...choice, role },
+			{
+				onSuccess: () => {
+					toast.success(
+						'group' in choice ? 'Group added' : 'email' in choice ? 'Invite added' : 'Member added',
+					);
+					onSuccess();
+				},
+			},
+		);
 	};
 
 	const handleRoleChange = (member: ProjectMember, role: AssignableProjectRole) => {
@@ -637,52 +689,13 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 			<DialogModal isOpen={isOpen} onClose={onClose} title="Project Access" width="lg">
 				<div className="-m-1 max-h-[70dvh] overflow-y-auto overscroll-contain p-1">
 					<div className="flex flex-col gap-5 text-sm">
-						<section
-							aria-labelledby="your-access-heading"
-							className="rounded-lg border bg-muted/40 p-3.5"
-						>
-							<div className="flex flex-wrap items-center justify-between gap-3">
-								<div className="flex min-w-0 max-w-full items-center gap-3">
-									<UserAvatar
-										pictureUrl={currentIdentity?.picture_url ?? user?.picture_url}
-										label={currentDisplayName}
-										className="size-9 text-xs"
-									/>
-									<div className="min-w-0">
-										<h3
-											id="your-access-heading"
-											className="text-xs font-semibold text-muted-foreground"
-										>
-											Your Access
-										</h3>
-										<p className="truncate font-medium">{currentDisplayName}</p>
-										<p className="truncate text-xs text-muted-foreground">
-											{currentIdentity?.name && user?.email ? (
-												<>
-													<span translate="no">{user.email}</span>
-													<span aria-hidden="true"> · </span>
-												</>
-											) : null}
-											{accessSource}
-										</p>
-									</div>
-								</div>
-								{user?.id === project.owner ? (
-									<OwnerBadge label="Your role" />
-								) : project.your_role ? (
-									<RoleBadge
-										value={project.your_role}
-										descriptions={descriptions}
-										label="Your role"
-										legacyAdmin={
-											project.your_role === 'admin' && currentUserIsMember && !user?.is_super_admin
-										}
-									/>
-								) : (
-									<span className="text-xs text-muted-foreground">No Project Role</span>
-								)}
-							</div>
-						</section>
+						<ProjectCurrentAccess
+							project={project}
+							user={user}
+							members={visibleMembers}
+							users={users}
+							descriptions={descriptions}
+						/>
 
 						<section aria-labelledby="members-heading" className="flex flex-col gap-2">
 							<div className="flex items-baseline justify-between gap-3">

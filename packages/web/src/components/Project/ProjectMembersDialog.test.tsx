@@ -83,7 +83,7 @@ function makeFetch({
 	members = MEMBERS,
 	directory = DIRECTORY,
 }: {
-	addResponse?: Response;
+	addResponse?: Response | (() => Promise<Response>);
 	updateResponse?: () => Promise<Response>;
 	groupResponse?: (method: string) => Promise<Response>;
 	searchResults?: ResolvedUser[];
@@ -108,7 +108,9 @@ function makeFetch({
 		if (method === 'PATCH' && url.endsWith(`/projects/${PID}`))
 			return updateResponse ? updateResponse() : ok({ ...project('admin'), ...body });
 		if (method === 'POST' && url.endsWith(`/projects/${PID}/members`))
-			return addResponse ?? ok(project('admin'));
+			return typeof addResponse === 'function'
+				? addResponse()
+				: (addResponse ?? ok(project('admin')));
 		if (method === 'PUT' && url.includes(`/projects/${PID}/group-members?`))
 			return groupResponse ? groupResponse(method) : ok(project('admin'));
 		if (method === 'DELETE' && url.includes(`/projects/${PID}/group-members?`))
@@ -973,8 +975,31 @@ describe('IdP group members', () => {
 				}),
 			),
 		);
-		expect(screen.getByRole('combobox', { name: 'IdP group ID' })).toHaveValue('');
+		await waitFor(() =>
+			expect(screen.getByRole('combobox', { name: 'IdP group ID' })).toHaveValue(''),
+		);
 		expect(screen.queryByText('Invite')).not.toBeInTheDocument();
+	});
+	it('keeps the group draft until a delayed add succeeds and prevents duplicate submission', async () => {
+		let resolveResponse!: (response: Response) => void;
+		const response = new Promise<Response>((resolve) => {
+			resolveResponse = resolve;
+		});
+		const calls = makeFetch({ capabilities: groupCapabilities, addResponse: () => response });
+		const user = await groupPicker();
+		const input = screen.getByRole('combobox', { name: 'IdP group ID' });
+		await user.type(input, '/teams/Data');
+		await user.click(screen.getByRole('button', { name: 'Add group' }));
+		await waitFor(() => expect(calls).toHaveLength(1));
+		expect(input).toHaveValue('/teams/Data');
+		expect(input).toBeDisabled();
+		const submit = screen.getByRole('button', { name: 'Adding…' });
+		expect(submit).toBeDisabled();
+		await user.click(submit);
+		expect(calls).toHaveLength(1);
+		await act(async () => resolveResponse(ok(project('admin'))));
+		await waitFor(() => expect(input).toHaveValue(''));
+		expect(input).toBeEnabled();
 	});
 	it('offers the caller’s groups as suggestions without adding on selection', async () => {
 		const calls = makeFetch({
@@ -986,6 +1011,18 @@ describe('IdP group members', () => {
 		await user.click(await screen.findByRole('option', { name: '/teams/Data' }));
 		expect(screen.getByRole('combobox', { name: 'IdP group ID' })).toHaveValue('/teams/Data');
 		expect(calls).toEqual([]);
+	});
+	it('filters group suggestions by text while excluding only exact existing group memberships', async () => {
+		makeFetch({
+			capabilities: groupCapabilities,
+			currentUser: { ...OWNER_USER, groups: ['Team', 'team', 'Other'] },
+			members: [...MEMBERS, { group: 'Team', role: 'viewer' }],
+		});
+		const user = await groupPicker();
+		await user.type(screen.getByRole('combobox', { name: 'IdP group ID' }), 'TEAM');
+		expect(await screen.findByRole('option', { name: 'team' })).toBeInTheDocument();
+		expect(screen.queryByRole('option', { name: 'Team' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('option', { name: 'Other' })).not.toBeInTheDocument();
 	});
 	it('selects a group with the keyboard without submitting or leaving suggestions open', async () => {
 		const calls = makeFetch({

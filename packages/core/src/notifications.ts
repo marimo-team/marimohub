@@ -71,21 +71,25 @@ const SessionTakeoverDataSchema = NotebookAlertDataSchema.extend({
 	displaced_user_id: UserIdSchema,
 });
 
-const MemberRoleChangedDataSchema = ProjectAlertDataSchema.extend({
+const MemberAlertDataSchema = ProjectAlertDataSchema.extend({
 	member_user_id: UserIdSchema.nullable(),
 	member_email: EmailAddressSchema.nullable(),
 	member_group: MemberGroupSchema.nullable(),
+	actor_user_id: UserIdSchema,
+}).refine(
+	(data) =>
+		[data.member_user_id, data.member_email, data.member_group].filter((id) => id !== null)
+			.length === 1,
+	{ message: 'a member has exactly one of member_user_id, member_email, or member_group' },
+);
+
+const MemberRoleChangedDataSchema = MemberAlertDataSchema.safeExtend({
 	old_role: z.enum(ROLES),
 	new_role: z.enum(ROLES),
-	actor_user_id: UserIdSchema,
 });
 
-const MemberRemovedDataSchema = ProjectAlertDataSchema.extend({
-	member_user_id: UserIdSchema.nullable(),
-	member_email: EmailAddressSchema.nullable(),
-	member_group: MemberGroupSchema.nullable(),
+const MemberRemovedDataSchema = MemberAlertDataSchema.safeExtend({
 	role: z.enum(ROLES),
-	actor_user_id: UserIdSchema,
 });
 
 const NotebookDeletedDataSchema = NotebookAlertDataSchema.extend({

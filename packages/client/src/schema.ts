@@ -2487,13 +2487,34 @@ export interface components {
 			/** @enum {string|null} */
 			your_role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user' | null;
 		};
-		ProjectMember: {
-			group?: string;
-			user_id?: string;
-			email?: string;
-			/** @enum {string} */
-			role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user';
-		};
+		ProjectMember:
+			| {
+					user_id: string;
+					/** @enum {string} */
+					email?: never;
+					/** @enum {string} */
+					group?: never;
+					/** @enum {string} */
+					role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user';
+			  }
+			| {
+					/** @enum {string} */
+					user_id?: never;
+					email: string;
+					/** @enum {string} */
+					group?: never;
+					/** @enum {string} */
+					role: 'admin' | 'manager' | 'editor' | 'viewer' | 'app-user';
+			  }
+			| {
+					/** @enum {string} */
+					user_id?: never;
+					/** @enum {string} */
+					email?: never;
+					group: string;
+					/** @enum {string} */
+					role: 'manager' | 'editor' | 'viewer' | 'app-user';
+			  };
 		ProjectFederation: {
 			enabled: boolean;
 			target?: string;

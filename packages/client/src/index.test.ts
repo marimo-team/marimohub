@@ -20,6 +20,24 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
+it('models project members as exclusive identities with non-admin group roles', () => {
+	type Member = components['schemas']['ProjectMember'];
+	expectTypeOf<{ user_id: string; role: 'admin' }>().toExtend<Member>();
+	expectTypeOf<{ email: string; role: 'admin' }>().toExtend<Member>();
+	expectTypeOf<{ group: string; role: 'manager' }>().toExtend<Member>();
+	expectTypeOf<{ role: 'viewer' }>().not.toExtend<Member>();
+	expectTypeOf<{ group: string; role: 'admin' }>().not.toExtend<Member>();
+	expectTypeOf<{ user_id: string; email: string; role: 'viewer' }>().not.toExtend<Member>();
+	expectTypeOf<{ user_id: string; group: string; role: 'viewer' }>().not.toExtend<Member>();
+	expectTypeOf<{ email: string; group: string; role: 'viewer' }>().not.toExtend<Member>();
+	expectTypeOf<{
+		user_id: string;
+		email: string;
+		group: string;
+		role: 'viewer';
+	}>().not.toExtend<Member>();
+});
+
 describe('ApiRequestError', () => {
 	it('carries a code and is an Error subclass', () => {
 		const err = new ApiRequestError('NOT_FOUND', 'gone');

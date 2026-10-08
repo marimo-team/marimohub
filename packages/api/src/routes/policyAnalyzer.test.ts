@@ -720,14 +720,9 @@ describe('policy analyzer membership groups', () => {
 describe('policy analyzer group isolation', () => {
 	afterEach(() => vi.restoreAllMocks());
 
-	it.each([
-		{ groups: undefined, grant: undefined },
-		{ groups: ['simulated-team'], grant: undefined },
-		{ groups: undefined, grant: { actions: ['project.read'], projects: '*' } },
-		{ groups: ['simulated-team'], grant: { actions: ['project.read'], projects: '*' } },
-	])(
+	it.each([{ groups: undefined }, { groups: ['simulated-team'] }])(
 		'preserves authenticated groups instead of supplied groups in live-self analysis: %j',
-		async ({ groups, grant }) => {
+		async ({ groups }) => {
 			const { request } = createTestApi({
 				deps: {
 					policy: { superAdmins: [ACTOR] },
@@ -748,7 +743,7 @@ describe('policy analyzer group isolation', () => {
 					schema_version: 1,
 					cases: [
 						authorizationCase({
-							subject: { ...original.authorization.subject, groups, grant },
+							subject: { ...original.authorization.subject, groups },
 							context: { mode: 'live-self' },
 						}),
 					],
@@ -760,6 +755,101 @@ describe('policy analyzer group isolation', () => {
 				'project.read',
 				expect.anything(),
 				{ mode: 'live' },
+			);
+		},
+	);
+
+	it.each(
+		(['live-self', 'synthetic'] as const).flatMap((mode) =>
+			(['explicit', 'login'] as const).flatMap((source) =>
+				[false, true].map((directMember) => ({ mode, source, directMember })),
+			),
+		),
+	)(
+		'clears IdP groups for simulated PATs: $mode / $source / direct member $directMember',
+		async ({ mode, source, directMember }) => {
+			const { request } = createTestApi({
+				deps: {
+					authenticator: {
+						authenticate: async () => ({
+							id: ACTOR,
+							email: `${ACTOR}@example.com`,
+							credential: { kind: 'sso' },
+							entitlements: ['super-admin'],
+							groups: ['ambient-team'],
+						}),
+					},
+					policyAnalyzer: {
+						classificationOrder: [],
+						loginPolicy: {
+							evaluate: async () => ({
+								outcome: 'allow',
+								entitlements: [],
+								groups: ['login-team'],
+								durationMs: 0,
+							}),
+						},
+					},
+				},
+			});
+			const analyze = vi.spyOn(AuthorizationService.prototype, 'analyze');
+			const grant = { actions: ['project.read'], projects: '*' };
+			const entry = authorizationCase({
+				subject: {
+					id: ACTOR,
+					email: `${ACTOR}@example.com`,
+					entitlement_source: source,
+					entitlements: [],
+					groups: ['supplied-team'],
+					grant,
+				},
+				resource: {
+					source: 'synthetic',
+					kind: 'project',
+					project: {
+						owner: 'other',
+						members: [
+							...['ambient-team', 'supplied-team', 'login-team'].map((group) => ({
+								group,
+								role: 'viewer',
+							})),
+							...(directMember ? [{ user_id: ACTOR, role: 'viewer' }] : []),
+						],
+					},
+				},
+				context: mode === 'live-self' ? { mode } : { mode, value: null },
+				expected: { allowed: directMember },
+			});
+			const data = await expectOk<any>(
+				await request('POST', '/admin/policy-analyzer/evaluate', {
+					schema_version: 1,
+					cases: [
+						{
+							...entry,
+							...(source === 'login'
+								? {
+										login: {
+											identity: { id: ACTOR, email: `${ACTOR}@example.com` },
+											id_token_claims: {},
+											expected: { outcome: 'allow', groups: ['login-team'] },
+										},
+									}
+								: {}),
+						},
+					],
+				}),
+			);
+			expect(data.valid).toBe(true);
+			expect(data.cases[0].authorization.decision.allowed).toBe(directMember);
+			expect(analyze).toHaveBeenCalledWith(
+				expect.objectContaining({
+					groups: [],
+					entitlements: [],
+					credential: expect.objectContaining({ kind: 'personal-access-token', grant }),
+				}),
+				'project.read',
+				expect.anything(),
+				mode === 'live-self' ? { mode: 'live' } : { mode: 'synthetic', value: null },
 			);
 		},
 	);
