@@ -445,9 +445,9 @@ function useProjectContent() {
 	const sessionByNotebook = useMemo(() => sessionsByNotebook(sessions), [sessions]);
 	const computeTarget = computeProfileModal.target;
 	const computeLive = computeTarget ? sessionByNotebook.get(computeTarget.id) : undefined;
-	const computeRestartSession = computeLive?.edit?.can?.stop
-		? computeLive.edit
-		: computeLive?.apps?.length === 1 && computeLive.apps[0].can?.stop
+	const computeEditSession = computeLive?.edit?.can?.stop ? computeLive.edit : undefined;
+	const computeAppSession =
+		computeLive?.apps?.length === 1 && computeLive.apps[0].can?.stop
 			? computeLive.apps[0]
 			: undefined;
 
@@ -555,7 +555,7 @@ function useProjectContent() {
 		});
 	};
 
-	const handleComputeRestart = () => {
+	const handleComputeRestart = (computeRestartSession: Session) => {
 		if (!computeTarget || !computeRestartSession) return;
 		if (computeRestartSession.mode === 'app') {
 			appModal.open({
@@ -1131,20 +1131,20 @@ function useProjectContent() {
 					onClose={computeProfileModal.close}
 					projectId={pid!}
 					notebook={computeProfileModal.target}
-					restartAction={
-						computeRestartSession
+					restartActions={{
+						edit: computeEditSession
 							? {
-									label:
-										computeRestartSession.mode === 'app'
-											? 'Restart app'
-											: computeLive?.app?.can?.stop
-												? 'Restart edit session'
-												: 'Restart session',
-									onRestart: handleComputeRestart,
-									mode: computeRestartSession.mode ?? 'edit',
+									label: computeLive?.app?.can?.stop ? 'Restart edit session' : 'Restart session',
+									onRestart: () => handleComputeRestart(computeEditSession),
 								}
-							: undefined
-					}
+							: undefined,
+						app: computeAppSession
+							? {
+									label: 'Restart app',
+									onRestart: () => handleComputeRestart(computeAppSession),
+								}
+							: undefined,
+					}}
 				/>
 			)}
 

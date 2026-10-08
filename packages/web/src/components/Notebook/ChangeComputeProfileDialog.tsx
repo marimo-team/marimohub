@@ -4,6 +4,7 @@ import { FormDialog, useAppForm, useSeedOnOpen } from '@/components/form';
 import { useCapabilitiesQuery, useNotebookQuery, useUpdateNotebook } from '@/api/hooks';
 import {
 	computeProfileOptions,
+	effectiveComputeProfile,
 	computeProfileResources,
 	computeProfilePickerValue,
 	DEFAULT_COMPUTE_PROFILE,
@@ -14,7 +15,7 @@ interface ChangeComputeProfileDialogProps {
 	onClose: () => void;
 	projectId: string;
 	notebook: { id: string; title: string };
-	restartAction?: { label: string; onRestart: () => void; mode?: 'edit' | 'app' };
+	restartActions?: Partial<Record<'edit' | 'app', { label: string; onRestart: () => void }>>;
 }
 
 export function ChangeComputeProfileDialog({
@@ -22,7 +23,7 @@ export function ChangeComputeProfileDialog({
 	onClose,
 	projectId,
 	notebook,
-	restartAction,
+	restartActions,
 }: ChangeComputeProfileDialogProps) {
 	const { data: capabilities } = useCapabilitiesQuery();
 	const profiles = capabilities?.compute_profiles ?? [];
@@ -69,18 +70,26 @@ export function ChangeComputeProfileDialog({
 							}
 						: {}),
 				});
+				const appProfile = (editChoice: string, appChoice: string) =>
+					effectiveComputeProfile(
+						appProfiles,
+						appChoice === DEFAULT_COMPUTE_PROFILE
+							? capabilities?.app_compute_profiles
+								? undefined
+								: editChoice
+							: appChoice,
+						true,
+					);
+				const restartAction =
+					(value.computeProfile !== current ? restartActions?.edit : undefined) ??
+					(appProfile(value.computeProfile, value.appComputeProfile) !==
+					appProfile(current, appCurrent)
+						? restartActions?.app
+						: undefined);
 				toast.success(
 					'Compute profiles saved. Applies when each session restarts.',
-					restartAction &&
-						(restartAction.mode === 'app'
-							? value.appComputeProfile !== appCurrent
-							: value.computeProfile !== current)
-						? {
-								action: {
-									label: restartAction.label,
-									onClick: restartAction.onRestart,
-								},
-							}
+					restartAction
+						? { action: { label: restartAction.label, onClick: restartAction.onRestart } }
 						: undefined,
 				);
 				onClose();

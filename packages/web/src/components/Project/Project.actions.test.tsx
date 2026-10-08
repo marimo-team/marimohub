@@ -454,6 +454,56 @@ describe('Project — Notebook Actions: configuration', () => {
 		});
 	});
 
+	it('offers the app restart after an app-only compute change with both sessions live', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({
+			role: 'editor',
+			sessions: [
+				{
+					...runningSession(),
+					session_id: 'sess-edit',
+					mode: 'edit',
+					can: { attach: true, stop: true },
+				} as Session,
+				{
+					...runningSession(),
+					session_id: 'sess-app',
+					mode: 'app',
+					can: { attach: true, stop: true },
+				} as Session,
+			],
+			capabilities: {
+				federation: { available: false, default_enabled: false },
+				compute_profiles: [
+					{ name: 'small', cpu: 1 },
+					{ name: 'large', cpu: 8 },
+				],
+				compute_profile_override: 'editors',
+			},
+		});
+		await renderProject();
+
+		await chooseNotebookAction(user, 'Change compute…');
+		const dialog = await screen.findByRole('dialog');
+		await user.click(
+			within(within(dialog).getByRole('radiogroup', { name: 'App profile' })).getByRole('radio', {
+				name: /large/,
+			}),
+		);
+		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+		await user.click(await screen.findByRole('button', { name: 'Restart app' }));
+
+		const confirmation = await screen.findByRole('dialog');
+		await user.click(within(confirmation).getByRole('button', { name: 'Restart' }));
+		await waitFor(() => {
+			const request = calls.find(
+				(call) => call.method === 'POST' && call.url.endsWith('/sessions'),
+			);
+			expect(request?.body).toEqual({ mode: 'app', replace_app_session_id: 'sess-app' });
+		});
+		expect(calls.some((call) => call.method === 'DELETE')).toBe(false);
+	});
+
 	it.each(['editor', 'viewer'] as const)(
 		'lets an unassigned %s open an app through admission',
 		async (role) => {

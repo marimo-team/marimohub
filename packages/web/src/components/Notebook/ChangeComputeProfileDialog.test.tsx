@@ -12,7 +12,11 @@ const json = (data: unknown) =>
 		headers: { 'content-type': 'application/json' },
 	});
 
-function makeFetch(currentComputeProfile?: string, modeDefaults = false) {
+function makeFetch(
+	currentComputeProfile?: string,
+	modeDefaults = false,
+	appComputeProfile?: string,
+) {
 	return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		const method = init?.method ?? 'GET';
@@ -38,6 +42,7 @@ function makeFetch(currentComputeProfile?: string, modeDefaults = false) {
 				meta: {
 					id: 'nb-1',
 					title: 'My NB',
+					app_compute_profile: appComputeProfile,
 					...(currentComputeProfile ? { compute_profile: currentComputeProfile } : {}),
 				},
 				readme: null,
@@ -51,7 +56,7 @@ function makeFetch(currentComputeProfile?: string, modeDefaults = false) {
 
 function renderDialog(
 	fetchImpl: ReturnType<typeof makeFetch>,
-	options: { restartLabel?: string; onRestart?: () => void } = {},
+	options: { restartLabel?: string; onRestart?: () => void; onAppRestart?: () => void } = {},
 ) {
 	vi.stubGlobal('fetch', fetchImpl);
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -73,11 +78,14 @@ function renderDialog(
 				}}
 				projectId="proj-x"
 				notebook={{ id: 'nb-1', title: 'My NB' }}
-				restartAction={
-					options.onRestart
+				restartActions={{
+					edit: options.onRestart
 						? { label: options.restartLabel ?? 'Restart session', onRestart: options.onRestart }
-						: undefined
-				}
+						: undefined,
+					app: options.onAppRestart
+						? { label: 'Restart app', onRestart: options.onAppRestart }
+						: undefined,
+				}}
 			/>
 		);
 	}
@@ -126,6 +134,33 @@ describe('ChangeComputeProfileDialog', () => {
 			app_compute_profile: 'small',
 		});
 	});
+
+	it.each([
+		{ modeDefaults: false, appOverride: undefined, shouldRestart: true },
+		{ modeDefaults: true, appOverride: undefined, shouldRestart: false },
+		{ modeDefaults: false, appOverride: 'small', shouldRestart: false },
+	])(
+		'offers app restart only when editing changes its effective profile: %j',
+		async ({ modeDefaults, appOverride, shouldRestart }) => {
+			const user = userEvent.setup();
+			const onAppRestart = vi.fn();
+			const { onClose } = renderDialog(makeFetch(undefined, modeDefaults, appOverride), {
+				onAppRestart,
+			});
+			await waitFor(() =>
+				expect(editing().getByRole('radio', { name: /Default \(small\)/ })).toBeChecked(),
+			);
+			await user.click(editing().getByRole('radio', { name: /^large/ }));
+			await user.click(screen.getByRole('button', { name: 'Save' }));
+			await waitFor(() => expect(onClose).toHaveBeenCalled());
+			if (shouldRestart) {
+				await user.click(await screen.findByRole('button', { name: 'Restart app' }));
+				expect(onAppRestart).toHaveBeenCalledOnce();
+			} else {
+				expect(screen.queryByRole('button', { name: 'Restart app' })).not.toBeInTheDocument();
+			}
+		},
+	);
 
 	it('lists Default first with derived resources and seeds the stored choice', async () => {
 		renderDialog(makeFetch('large'));
