@@ -332,7 +332,26 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 	]);
 	const { data: capabilities } = useCapabilitiesQuery();
 	const descriptions = roleDescriptions(capabilities);
-	const defaultRole = project.default_role ?? 'inherit';
+	const projectDefaultRole = project.default_role ?? 'inherit';
+	const [defaultAccess, setDefaultAccess] = useState({
+		projectId: project.id,
+		sourceRole: projectDefaultRole,
+		updatedAt: project.updated_at,
+		role: projectDefaultRole,
+	});
+	if (
+		defaultAccess.projectId !== project.id ||
+		defaultAccess.sourceRole !== projectDefaultRole ||
+		defaultAccess.updatedAt !== project.updated_at
+	) {
+		setDefaultAccess({
+			projectId: project.id,
+			sourceRole: projectDefaultRole,
+			updatedAt: project.updated_at,
+			role: projectDefaultRole,
+		});
+	}
+	const defaultRole = defaultAccess.role;
 	const accessSummary = defaultAccessSummary(defaultRole, capabilities?.default_role);
 	const updateProject = useUpdateProject();
 	const addMember = useAddMember(project.id);
@@ -545,7 +564,7 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 							)}
 						</section>
 
-						{accessSummary && (
+						{(canManage || accessSummary) && (
 							<section
 								aria-labelledby="default-access-heading"
 								className="rounded-lg border bg-card p-3"
@@ -564,7 +583,16 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 													projectId: project.id,
 													default_role: event.target.value as ProjectDefaultRole,
 												},
-												{ onSuccess: () => toast.success('Default access updated') },
+												{
+													onSuccess: (updated) => {
+														setDefaultAccess((current) =>
+															current.projectId === project.id
+																? { ...current, role: updated.default_role ?? 'inherit' }
+																: current,
+														);
+														toast.success('Default access updated');
+													},
+												},
 											)
 										}
 										className="mb-2 h-9 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
@@ -574,7 +602,9 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 										{assignableRoleOptions}
 									</select>
 								)}
-								<p className="text-xs leading-relaxed text-muted-foreground">{accessSummary}</p>
+								{accessSummary && (
+									<p className="text-xs leading-relaxed text-muted-foreground">{accessSummary}</p>
+								)}
 								<p className="mt-1 text-xs leading-relaxed text-muted-foreground">
 									Explicit membership takes precedence. Owners and super admins retain access.
 								</p>

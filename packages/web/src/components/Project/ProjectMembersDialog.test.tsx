@@ -2,11 +2,11 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { ProjectMembersDialog } from './ProjectMembersDialog';
 import { AuthProvider } from '@/context/AuthContext';
-import { userKeys } from '@/api/queryKeys';
+import { projectKeys, userKeys } from '@/api/queryKeys';
 import { createTestQueryClient } from '@/test/render';
 import type { Capabilities, ProjectDetail, ProjectMember, ResolvedUser, User } from '@/types';
 
@@ -74,6 +74,7 @@ function makeFetch({
 	updateResponse,
 	searchResults = [NINA],
 	capabilities = CAPABILITIES,
+	capabilitiesResponse,
 	currentUser = OWNER_USER,
 	members = MEMBERS,
 	directory = DIRECTORY,
@@ -82,6 +83,7 @@ function makeFetch({
 	updateResponse?: () => Promise<Response>;
 	searchResults?: ResolvedUser[];
 	capabilities?: Capabilities;
+	capabilitiesResponse?: () => Promise<Response>;
 	currentUser?: User;
 	members?: ProjectMember[];
 	directory?: Record<string, ResolvedUser>;
@@ -102,9 +104,10 @@ function makeFetch({
 			return addResponse ?? ok(project('admin'));
 		if (method === 'PUT' && url.includes(`/projects/${PID}/members/`)) return ok(project('admin'));
 		if (method === 'DELETE' && url.includes(`/projects/${PID}/members/`)) return ok(null);
-		if (url.includes(`/projects/${PID}/members`)) return ok(members);
+		if (url.includes('/projects/') && url.endsWith('/members')) return ok(members);
 		if (url.endsWith('/api/v1/me')) return ok(currentUser);
-		if (url.includes('/capabilities')) return ok(capabilities);
+		if (url.includes('/capabilities'))
+			return capabilitiesResponse ? capabilitiesResponse() : ok(capabilities);
 		if (url.includes('/users/search')) return ok(searchResults);
 		if (url.includes('/users')) return ok(directory);
 		throw new Error(`unexpected fetch: ${method} ${url}`);
@@ -126,7 +129,7 @@ async function renderDialog(
 			<Toaster />
 		</QueryClientProvider>
 	);
-	render(
+	const { rerender } = render(
 		<ProjectMembersDialog
 			isOpen
 			onClose={onClose}
@@ -138,7 +141,7 @@ async function renderDialog(
 	);
 	// Wait for the member list and the user directory to resolve.
 	await waitFor(() => expect(screen.getAllByText('Eddie Editor').length).toBeGreaterThan(0));
-	return onClose;
+	return { onClose, client, rerender };
 }
 
 /** Type into the picker and click the option it surfaces (debounced search). */
@@ -608,6 +611,114 @@ describe('ProjectMembersDialog — current access', () => {
 });
 
 describe('project default access', () => {
+	it.each(['pending', 'failed'] as const)(
+		'keeps inherited access editable when capabilities are %s',
+		async (status) => {
+			const capabilitiesResponse = vi.fn(() =>
+				status === 'pending'
+					? new Promise<Response>(() => {})
+					: Promise.reject(new TypeError('Capabilities unavailable')),
+			);
+			const calls = makeFetch({ capabilitiesResponse });
+			await renderDialog('manager');
+			expect(capabilitiesResponse).toHaveBeenCalled();
+			const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
+			expect(select).toHaveValue('inherit');
+			expect(select).toBeEnabled();
+			await userEvent.setup().selectOptions(select, 'none');
+			expect(await screen.findByText('Default access updated')).toBeInTheDocument();
+			expect(select).toHaveValue('none');
+			expect(screen.getByText(/This project is members-only/)).toBeInTheDocument();
+			expect(calls).toContainEqual({
+				url: `/api/v1/projects/${PID}`,
+				method: 'PATCH',
+				body: { default_role: 'none' },
+			});
+		},
+	);
+
+	it('shows confirmed access when the project refetch fails', async () => {
+		makeFetch();
+		const { client } = await renderDialog('manager', { default_role: 'none' });
+		const previous = { ...project('manager'), default_role: 'none' as const };
+		const refetch = vi.fn().mockRejectedValue(new TypeError('Project unavailable'));
+		const observer = new QueryObserver(client, {
+			queryKey: projectKeys.detail(PID),
+			queryFn: refetch,
+			initialData: previous,
+			staleTime: Infinity,
+		});
+		const unsubscribe = observer.subscribe(() => {});
+		try {
+			const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
+			await userEvent.setup().selectOptions(select, 'viewer');
+			expect(await screen.findByText('Default access updated')).toBeInTheDocument();
+			await waitFor(() => expect(observer.getCurrentResult().isRefetchError).toBe(true));
+			expect(refetch).toHaveBeenCalledOnce();
+			expect(client.getQueryData(projectKeys.detail(PID))).toEqual(previous);
+			expect(select).toHaveValue('viewer');
+			expect(select).toBeEnabled();
+			expect(
+				screen.getByText(/Everyone who signs in can view this project by default/),
+			).toBeInTheDocument();
+		} finally {
+			unsubscribe();
+		}
+	});
+
+	it('resyncs confirmed access when the server default or project changes', async () => {
+		makeFetch();
+		const { rerender } = await renderDialog('manager', { default_role: 'none' });
+		const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
+		await userEvent.setup().selectOptions(select, 'viewer');
+		await screen.findByText('Default access updated');
+		expect(select).toHaveValue('viewer');
+
+		const renderProject = (overrides: Partial<ProjectDetail>) =>
+			rerender(
+				<ProjectMembersDialog
+					isOpen
+					onClose={vi.fn()}
+					project={{ ...project('manager'), ...overrides }}
+				/>,
+			);
+		renderProject({ default_role: 'none', name: 'Renamed' });
+		expect(select).toHaveValue('viewer');
+		renderProject({ default_role: 'none', updated_at: '2026-10-07T12:00:00Z' });
+		expect(select).toHaveValue('none');
+		renderProject({ default_role: 'editor' });
+		expect(select).toHaveValue('editor');
+		renderProject({ id: 'another-project', default_role: 'none' });
+		expect(select).toHaveValue('none');
+		renderProject({ id: 'legacy-project' });
+		expect(select).toHaveValue('inherit');
+	});
+
+	it('does not apply a previous project’s delayed save to a different project', async () => {
+		let resolveResponse!: (response: Response) => void;
+		const response = new Promise<Response>((resolve) => {
+			resolveResponse = resolve;
+		});
+		makeFetch({ updateResponse: () => response });
+		const { rerender } = await renderDialog('manager', { default_role: 'none' });
+		const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
+		await userEvent.setup().selectOptions(select, 'viewer');
+		await waitFor(() => expect(select).toBeDisabled());
+		rerender(
+			<ProjectMembersDialog
+				isOpen
+				onClose={vi.fn()}
+				project={{ ...project('manager'), id: 'another-project', default_role: 'none' }}
+			/>,
+		);
+		await act(async () => {
+			resolveResponse(ok({ ...project('manager'), default_role: 'viewer' }));
+		});
+		await waitFor(() => expect(select).toBeEnabled());
+		expect(select).toHaveValue('none');
+		expect(screen.getByText(/This project is members-only/)).toBeInTheDocument();
+	});
+
 	it.each([
 		{ status: 403, code: 'FORBIDDEN', message: 'Requires manager role' },
 		{ status: 500, code: 'INTERNAL_ERROR', message: 'Could not save default access' },
@@ -624,7 +735,7 @@ describe('project default access', () => {
 				)
 				.mockResolvedValueOnce(ok({ ...project('manager'), default_role: 'viewer' }));
 			const calls = makeFetch({ updateResponse });
-			const onClose = await renderDialog('manager', { default_role: 'none' });
+			const { onClose } = await renderDialog('manager', { default_role: 'none' });
 			const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
 			const user = userEvent.setup();
 			await user.selectOptions(select, 'viewer');
@@ -638,6 +749,7 @@ describe('project default access', () => {
 
 			await user.selectOptions(select, 'viewer');
 			expect(await screen.findByText('Default access updated')).toBeInTheDocument();
+			expect(select).toHaveValue('viewer');
 			expect(calls.filter(({ method }) => method === 'PATCH')).toEqual([
 				{ url: `/api/v1/projects/${PID}`, method: 'PATCH', body: { default_role: 'viewer' } },
 				{ url: `/api/v1/projects/${PID}`, method: 'PATCH', body: { default_role: 'viewer' } },
