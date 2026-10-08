@@ -153,7 +153,7 @@ export const SAMPLE_CONFIGS: Record<string, unknown> = {
 		domain_owner: '123456789012',
 		repository: 'python',
 		region: 'us-east-1',
-		auth: { method: 'token', token: 'codeartifact-token' },
+		auth: { method: 'static', access_key_id: 'AKIDEXAMPLE', secret_access_key: 'aws-secret' },
 	},
 	custom_env: {
 		vars: { MY_FLAG: 'on' },

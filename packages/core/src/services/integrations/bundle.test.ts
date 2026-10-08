@@ -274,7 +274,43 @@ describe('package indexes', () => {
 				rendered('one', index('one', true)),
 				rendered('custom', { env: { UV_DEFAULT_INDEX: 'https://other.example/simple/' } }),
 			]),
-		).toThrow('same environment variable');
+		).toThrow(
+			'Integration "custom" sets UV_DEFAULT_INDEX, but a package registry integration already ' +
+				'replaces PyPI. Remove UV_DEFAULT_INDEX from the environment variables integration and ' +
+				'use the package registry\'s "default index" option instead.',
+		);
+	});
+
+	it('appends a hand-set UV_INDEX after the package registry indexes', () => {
+		const result = bundle([
+			rendered('custom', {
+				env: { UV_INDEX: 'legacy=https://legacy.example/simple/ https://bare.example/simple/' },
+			}),
+			rendered('one', index('one')),
+			rendered('two', index('two')),
+		]);
+		expect(result.vars.UV_INDEX).toBe(
+			'one=https://one.example/simple/ two=https://two.example/simple/ ' +
+				'legacy=https://legacy.example/simple/ https://bare.example/simple/',
+		);
+	});
+
+	it('drops hand-set UV_INDEX entries that a package registry already provides', () => {
+		const result = bundle([
+			rendered('one', index('one')),
+			rendered('custom', {
+				env: { UV_INDEX: 'one=https://one.example/simple/  extra=https://extra.example/simple/' },
+			}),
+		]);
+		expect(result.vars.UV_INDEX).toBe(
+			'one=https://one.example/simple/ extra=https://extra.example/simple/',
+		);
+	});
+
+	it('leaves a hand-set UV_INDEX untouched without a package registry', () => {
+		const value = 'legacy=https://legacy.example/simple/';
+		const result = bundle([rendered('custom', { env: { UV_INDEX: value } })]);
+		expect(result.vars.UV_INDEX).toBe(value);
 	});
 
 	it.each([

@@ -12,7 +12,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `project` | string |  |  | Omit for an organization-scoped feed |
 | `feed` | string | Yes |  |  |
 | `auth.method` | `token` | Yes |  |  |
-| `auth.token` 🔒 | string | Yes |  |  |
+| `auth.token` 🔒 | string | Yes |  | Azure DevOps personal access token with Packaging read permission |
 | `default_index` | boolean |  | `false` | Replace public PyPI with this repository |
 
 :::

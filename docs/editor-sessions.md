@@ -92,9 +92,10 @@ The browser is read-only when:
 - an editor session is running (`active_session`): the sandbox owns the files
   until it stops, so its next save does not overwrite yours.
 
-`notebook.py` and `pyproject.toml` are protected. Editing them saves a new
-notebook version through the normal save path. They cannot be renamed, moved,
-deleted, or replaced by a copy.
+The notebook's entrypoint (`notebook.py` unless imported with a different entry
+file) and `pyproject.toml` are protected. Editing them saves a new notebook
+version through the normal save path. They cannot be renamed, moved, deleted, or
+replaced by a copy.
 
 If a move fails while deleting its source, the complete destination remains.
 A storage delete can complete after an error, even if the source initially

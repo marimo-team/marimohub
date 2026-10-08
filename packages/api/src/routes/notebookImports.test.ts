@@ -1,7 +1,7 @@
 import { MAX_FOLDER_IMPORT_ARCHIVE_BYTES } from '@marimo-hub/core/workspace-ignore';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { zipSync } from 'fflate';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
+import { makeFolderArchive } from '@marimo-hub/core/testing/workspace-fixtures';
 import { createServices } from '@marimo-hub/core';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 
@@ -18,22 +18,33 @@ beforeEach(async () => {
 	env = await setup();
 });
 afterEach(() => vi.restoreAllMocks());
-const encode = (text: string) => new TextEncoder().encode(text);
-const archive = zipSync({
-	'reports/revenue.py': encode('import marimo'),
-	'helpers.py': encode('VALUE = 1'),
+const archive = makeFolderArchive({
+	'reports/revenue.py': 'import marimo',
+	'helpers.py': 'VALUE = 1',
 	'data/raw.bin': new Uint8Array([0, 255]),
 });
+type ImportOutcome = {
+	id: string;
+	expires_at: string;
+	notebooks: { entry_notebook: string; state: string; notebook?: { id: string } }[];
+};
+const upload = (
+	app = env.app,
+	contentType = 'application/zip',
+	body: BodyInit = new Uint8Array(archive),
+) =>
+	app.request(`/api/v1/projects/${env.projectId}/notebook-imports`, {
+		method: 'POST',
+		headers: { 'Content-Type': contentType },
+		body,
+	});
 async function prepare() {
-	return expectOk<{ id: string; files: { path: string; size: number }[] }>(
-		await env.app.request(`/api/v1/projects/${env.projectId}/notebook-imports`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/zip' },
-			body: new Uint8Array(archive),
-		}),
+	return expectOk<{ id: string; expires_at: string; files: { path: string; size: number }[] }>(
+		await upload(),
 		201,
 	);
 }
+const importPath = (id: string) => `/projects/${env.projectId}/notebook-imports/${id}`;
 
 describe('notebook import routes', () => {
 	it.each([MAX_FOLDER_IMPORT_ARCHIVE_BYTES, MAX_FOLDER_IMPORT_ARCHIVE_BYTES + 1])(
@@ -53,12 +64,23 @@ describe('notebook import routes', () => {
 	it('prepares raw zip, publishes, reconciles and exposes local original entrypoint', async () => {
 		const preparation = await prepare();
 		expect(preparation.files).toHaveLength(3);
-		const path = `/projects/${env.projectId}/notebook-imports/${preparation.id}/notebooks`;
+		expect(preparation.id).toMatch(/^imp-[0-9a-z]{16}$/);
+		expect(new Date(preparation.expires_at).toISOString()).toBe(preparation.expires_at);
+		const path = `${importPath(preparation.id)}/notebooks`;
+		expect(await expectOk(await env.request('GET', importPath(preparation.id)))).toEqual({
+			id: preparation.id,
+			expires_at: preparation.expires_at,
+			notebooks: [],
+		});
 		const body = { entry_notebook: 'reports/revenue.py', title: 'Revenue' };
 		const notebook = await expectOk<{ id: string }>(await env.request('POST', path, body), 201);
 		expect(
-			await expectOk(await env.request('GET', `${path}?entry_notebook=reports%2Frevenue.py`)),
-		).toMatchObject({ state: 'complete', notebook: { id: notebook.id } });
+			await expectOk<ImportOutcome>(await env.request('GET', importPath(preparation.id))),
+		).toMatchObject({
+			notebooks: [
+				{ entry_notebook: 'reports/revenue.py', state: 'complete', notebook: { id: notebook.id } },
+			],
+		});
 		expect(await expectOk(await env.request('POST', path, body), 201)).toMatchObject({
 			id: notebook.id,
 		});
@@ -69,35 +91,55 @@ describe('notebook import routes', () => {
 		).toMatchObject({ source: { type: 'local', entry_notebook: 'reports/revenue.py' } });
 	});
 
-	it('enforces project authorization on preparation and status', async () => {
+	it('enforces project authorization on every import route', async () => {
 		const preparation = await prepare();
+		const body = { entry_notebook: 'reports/revenue.py', title: 'Revenue' };
 		const outsider = createTestApi({ bucket: env.bucket, userId: uid('outsider') });
+		const viewerId = uid('viewer');
+		const writerId = uid('writer');
+		const services = env.deps.services;
+		await services.projects.addMember(env.projectId, { user_id: viewerId }, 'viewer', ACTOR);
+		await services.projects.addMember(env.projectId, { user_id: writerId }, 'editor', ACTOR);
+		const viewer = createTestApi({ bucket: env.bucket, userId: viewerId });
+		const writer = createTestApi({ bucket: env.bucket, userId: writerId });
+		for (const client of [outsider, viewer]) {
+			await expectError(await upload(client.app), 403);
+			await expectError(await client.request('GET', importPath(preparation.id)), 403);
+			await expectError(
+				await client.request('POST', `${importPath(preparation.id)}/notebooks`, body),
+				403,
+			);
+		}
+		// Another writer in the project cannot see or use someone else's upload.
+		await expectError(await writer.request('GET', importPath(preparation.id)), 404);
 		await expectError(
-			await outsider.app.request(`/api/v1/projects/${env.projectId}/notebook-imports`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/zip' },
-				body: new Uint8Array(archive),
-			}),
-			403,
+			await writer.request('POST', `${importPath(preparation.id)}/notebooks`, body),
+			404,
 		);
+		expect(await services.notebooks.listNotebooks(env.projectId)).toHaveLength(0);
+	});
+
+	it.each(['application/octet-stream', 'application/json', 'multipart/form-data'])(
+		'rejects an upload sent as %s',
+		async (contentType) => {
+			await expectError(await upload(env.app, contentType), 400, 'BAD_REQUEST');
+		},
+	);
+
+	it('accepts a zip content type with parameters', async () => {
+		await expectOk(await upload(env.app, 'Application/Zip; charset=binary'), 201);
+	});
+
+	it('rejects an empty folder and a malformed import id', async () => {
 		await expectError(
-			await outsider.request(
-				'GET',
-				`/projects/${env.projectId}/notebook-imports/${preparation.id}/notebooks?entry_notebook=reports/revenue.py`,
-			),
-			403,
+			await upload(env.app, 'application/zip', new Uint8Array(makeFolderArchive({}))),
+			400,
 		);
+		await expectError(await env.request('GET', importPath('not-an-import')), 422);
 	});
 
 	it('rejects malformed archive and missing entrypoints without publishing a notebook', async () => {
-		await expectError(
-			await env.app.request(`/api/v1/projects/${env.projectId}/notebook-imports`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/zip' },
-				body: 'invalid',
-			}),
-			400,
-		);
+		await expectError(await upload(env.app, 'application/zip', 'invalid'), 400);
 		const preparation = await prepare();
 		await expectError(
 			await env.request(
@@ -113,7 +155,7 @@ describe('notebook import routes', () => {
 		'replays %s settings even after deployment options change',
 		async (state) => {
 			const preparation = await prepare();
-			const path = `/projects/${env.projectId}/notebook-imports/${preparation.id}/notebooks`;
+			const path = `${importPath(preparation.id)}/notebooks`;
 			const { request, deps } = createTestApi({
 				bucket: env.bucket,
 				deps: {
@@ -157,14 +199,21 @@ describe('notebook import routes', () => {
 		},
 	);
 
-	it('rejects blank names and invalid status paths without creating notebooks', async () => {
+	it('rejects blank names and invalid entrypoints without creating notebooks', async () => {
 		const preparation = await prepare();
-		const path = `/projects/${env.projectId}/notebook-imports/${preparation.id}/notebooks`;
+		const path = `${importPath(preparation.id)}/notebooks`;
 		await expectError(
 			await env.request('POST', path, { entry_notebook: 'reports/revenue.py', title: '   ' }),
 			422,
 		);
-		await expectError(await env.request('GET', `${path}?entry_notebook=..%2Fescape.py`), 400);
+		await expectError(
+			await env.request('POST', path, { entry_notebook: '../escape.py', title: 'Escape' }),
+			400,
+		);
+		await expectError(
+			await env.request('POST', path, { entry_notebook: 'data/raw.bin', title: 'Data' }),
+			400,
+		);
 		expect(await env.deps.services.notebooks.listNotebooks(env.projectId)).toHaveLength(0);
 	});
 
@@ -175,7 +224,7 @@ describe('notebook import routes', () => {
 		'allows correcting rejected runtime settings %j without uploading again',
 		async ({ settings, status: rejectionStatus }) => {
 			const preparation = await prepare();
-			const path = `/projects/${env.projectId}/notebook-imports/${preparation.id}/notebooks`;
+			const path = `${importPath(preparation.id)}/notebooks`;
 			await expectError(
 				await env.request('POST', path, {
 					entry_notebook: 'reports/revenue.py',
@@ -185,10 +234,10 @@ describe('notebook import routes', () => {
 				rejectionStatus,
 			);
 			expect(await env.deps.services.notebooks.listNotebooks(env.projectId)).toHaveLength(0);
-			const status = await expectOk(
-				await env.request('GET', `${path}?entry_notebook=reports%2Frevenue.py`),
+			const outcome = await expectOk<ImportOutcome>(
+				await env.request('GET', importPath(preparation.id)),
 			);
-			expect(status).toMatchObject({ state: 'pending' });
+			expect(outcome.notebooks).toEqual([]);
 			await expectOk(
 				await env.request('POST', path, { entry_notebook: 'reports/revenue.py', title: 'Revenue' }),
 				201,

@@ -18,7 +18,7 @@ import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { jwtVerify, SignJWT } from 'jose';
 import * as oauth from 'oauth4webapi';
-import { AUTH_ENTITLEMENTS } from '@marimo-hub/core/ports/auth';
+import { AUTH_ENTITLEMENTS, normalizeAuthGroups } from '@marimo-hub/core/ports/auth';
 import { logEvent } from '@marimo-hub/core/logs';
 import { logOperationalError } from '@marimo-hub/core/operational-log';
 import { UserId } from '@marimo-hub/core/ids';
@@ -248,6 +248,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 			...(name !== undefined ? { name } : {}),
 			...(pictureUrl !== undefined ? { picture_url: pictureUrl } : {}),
 			...(user.entitlements !== undefined ? { entitlements: user.entitlements } : {}),
+			...(user.groups !== undefined ? { groups: user.groups } : {}),
 		})
 			.setProtectedHeader({ alg: 'HS256', typ: 'mh-session+jwt' })
 			.setIssuer(sessionIssuer)
@@ -296,6 +297,15 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 				// mutable index-signature access like `payload.entitlements`.
 				const entitlementsClaim = payload.entitlements;
 				const hasGroupAuthorization = Array.isArray(entitlementsClaim);
+				let groups: readonly string[] | undefined;
+				if (payload.groups !== undefined) {
+					const normalized = normalizeAuthGroups(payload.groups);
+					if (!normalized.ok || !hasGroupAuthorization || typeof payload.exp !== 'number') {
+						logEvent({ level: 'error', event: 'oidc_session_groups_invalid' });
+						return null;
+					}
+					groups = normalized.groups;
+				}
 				const entitlements = hasGroupAuthorization
 					? entitlementsClaim.filter(
 							(value): value is AuthEntitlement =>
@@ -312,6 +322,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 					...(name ? { name } : {}),
 					...(pictureUrl ? { pictureUrl } : {}),
 					...(entitlements?.length ? { entitlements } : {}),
+					...(groups !== undefined ? { groups } : {}),
 					...(entitlementsExpiresAt ? { entitlementsExpiresAt } : {}),
 					credential: {
 						kind: 'sso',
@@ -507,6 +518,14 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		if (!claims) return callbackError(c, 'auth_failed', returnTo);
 		const admission = admitOidcIdentity(claims, admissionPolicy, userInfo);
 		if ('error' in admission) {
+			if (admission.error === 'too_many_groups') {
+				logEvent({
+					level: 'error',
+					event: 'oidc_membership_groups_exceeded',
+					retained: admission.retained,
+				});
+				return callbackError(c, 'auth_failed', returnTo);
+			}
 			if (admission.error === 'invalid_groups') {
 				logEvent({ level: 'error', event: 'oidc_group_claim_invalid' });
 				return callbackError(c, 'auth_failed', returnTo);
@@ -515,6 +534,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		}
 		const user = admission.user;
 		let entitlements = user.entitlements;
+		let groups = user.groups;
 		if (config.loginPolicy) {
 			const evaluation = await evaluateLoginPolicy(
 				config.loginPolicy.policy,
@@ -542,6 +562,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 				return callbackError(c, denied ? 'policy_denied' : 'auth_failed', returnTo);
 			}
 			entitlements = [...evaluation.entitlements];
+			groups = evaluation.groups;
 		}
 
 		let session: string;
@@ -551,11 +572,19 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 				// Always present (possibly empty) under derived authorization: the claim
 				// marks the session so `authenticate` exposes `entitlementsExpiresAt`.
 				...(derivedAuthorization ? { entitlements: entitlements ?? [] } : {}),
+				...(groups !== undefined ? { groups } : {}),
 			});
 		} catch (err) {
 			logOperationalError('oidc_session_signing_failed', {}, err);
 			return callbackError(c, 'auth_failed', returnTo);
 		}
+		logEvent({
+			level: 'info',
+			event: 'oidc_session_issued',
+			entitlements: entitlements?.length ?? 0,
+			groups: groups?.length ?? null,
+			unretainable: admission.groupStats?.unretainable ?? 0,
+		});
 		setCookie(c, SESSION_COOKIE, session, {
 			httpOnly: true,
 			secure: true,

@@ -621,7 +621,7 @@ importers:
         specifier: 'catalog:'
         version: 0.0.7
       fflate:
-        specifier: ^0.8.2
+        specifier: 'catalog:'
         version: 0.8.3
       hono:
         specifier: 4.13.7
@@ -1185,7 +1185,7 @@ importers:
         specifier: 'catalog:'
         version: 10.0.1
       fflate:
-        specifier: ^0.8.2
+        specifier: 'catalog:'
         version: 0.8.3
       smol-toml:
         specifier: 'catalog:'
@@ -1368,7 +1368,7 @@ importers:
         specifier: 'catalog:'
         version: 25.9.3
       fflate:
-        specifier: ^0.8.2
+        specifier: 'catalog:'
         version: 0.8.3
       typescript:
         specifier: 'catalog:'
@@ -1669,7 +1669,7 @@ importers:
         specifier: workspace:*
         version: link:../core
       fflate:
-        specifier: ^0.8.2
+        specifier: 'catalog:'
         version: 0.8.3
       isomorphic-git:
         specifier: 'catalog:'

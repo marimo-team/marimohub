@@ -57,10 +57,11 @@ refresh tokens. Expiry or revocation requires a new authorization.
 Use `list_catalog` to find accessible projects, notebooks, and active sessions.
 Project and notebook selectors accept IDs or exact names, case-insensitively.
 Use IDs when names are duplicated and for subsequent calls.
+Use `project_tag_prefix` to filter [project namespaces](./organizing-projects.md#filter-by-namespace).
 
 | Tool              | Purpose                                                                           |
 | ----------------- | --------------------------------------------------------------------------------- |
-| `list_catalog`    | Discover notebooks. Filter by project, status, tag, or text.                      |
+| `list_catalog`    | Discover notebooks by project, namespace, notebook status, tag, or text.          |
 | `get_notebook`    | Read notebook metadata and stored source.                                         |
 | `create_notebook` | Create a local notebook. Optional `launch` starts an edit session.                |
 | `update_notebook` | Replace supplied metadata fields or the complete local source.                    |

@@ -1,10 +1,15 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
 import { folderImportFileLimit, WORKSPACE_LIMITS } from '@marimo-hub/core/remote-workspace';
-import { TextField } from '@/components/ui';
+import {
+	MAX_FOLDER_IMPORT_PATH_BYTES,
+	MAX_FOLDER_IMPORT_SEGMENT_BYTES,
+} from '@marimo-hub/core/workspace-ignore';
+import { Button, TextField } from '@/components/ui';
 import { formatBytes } from '@/lib/formatBytes';
 import type { FolderFile } from './folderImport';
-
 import { ImportPagination, IMPORT_PAGE_SIZE } from './ImportPagination';
+
 const exclusionLabels = {
 	generated: 'Generated files or Git metadata',
 	sensitive: 'May contain credentials',
@@ -13,10 +18,13 @@ const exclusionLabels = {
 export function ImportFileReview({
 	files,
 	onChange,
+	onFilesChange,
 }: {
 	files: FolderFile[];
 	onChange: (path: string, patch: Partial<FolderFile>) => void;
+	onFilesChange: Dispatch<SetStateAction<FolderFile[]>>;
 }) {
+	const reasonId = useId();
 	const [expanded, setExpanded] = useState(false);
 	const [search, setSearch] = useState('');
 	const [filter, setFilter] = useState('all');
@@ -30,6 +38,7 @@ export function ImportFileReview({
 					(filter === 'all' || file.included === (filter === 'included')),
 			)
 		: [];
+	const excludable = matches.filter((file) => file.included && !file.selected);
 	const pages = Math.max(1, Math.ceil(matches.length / IMPORT_PAGE_SIZE));
 	const currentPage = Math.min(page, pages - 1);
 
@@ -69,11 +78,26 @@ export function ImportFileReview({
 							<option value="included">Included</option>
 							<option value="excluded">Excluded</option>
 						</select>
+						<Button
+							size="sm"
+							variant="ghost"
+							isDisabled={excludable.length === 0}
+							onPress={() => {
+								const paths = new Set(excludable.map((file) => file.path));
+								onFilesChange((current) =>
+									current.map((file) =>
+										paths.has(file.path) ? { ...file, included: false } : file,
+									),
+								);
+							}}
+						>
+							Exclude matching
+						</Button>
 					</div>
 					<div className="mt-3 max-h-60 divide-y overflow-auto">
 						{matches
 							.slice(currentPage * IMPORT_PAGE_SIZE, (currentPage + 1) * IMPORT_PAGE_SIZE)
-							.map((file) => (
+							.map((file, index) => (
 								<label key={file.path} className="flex items-start gap-2 py-2 text-xs">
 									<input
 										className="mt-0.5 size-4 shrink-0 accent-primary"
@@ -81,11 +105,12 @@ export function ImportFileReview({
 										aria-label={`Include ${file.path}`}
 										checked={file.included}
 										disabled={file.selected || file.exclusion === 'generated'}
+										aria-describedby={`${reasonId}-${index}`}
 										onChange={(event) => onChange(file.path, { included: event.target.checked })}
 									/>
 									<span className="min-w-0 flex-1">
 										<span className="block break-all font-mono">{file.path}</span>
-										<span className="text-muted-foreground">
+										<span id={`${reasonId}-${index}`} className="text-muted-foreground">
 											{file.error ||
 												(file.selected
 													? 'Selected notebook'
@@ -120,7 +145,9 @@ export function ImportFileReview({
 					<p className="mt-1 text-xs text-muted-foreground">
 						Limits: {fileLimit.toLocaleString('en-US')} included files,{' '}
 						{formatBytes(WORKSPACE_LIMITS.maxFileBytes)} per file,{' '}
-						{formatBytes(WORKSPACE_LIMITS.maxTotalBytes)} total.
+						{formatBytes(WORKSPACE_LIMITS.maxTotalBytes)} total, paths up to{' '}
+						{MAX_FOLDER_IMPORT_PATH_BYTES} bytes, and names up to {MAX_FOLDER_IMPORT_SEGMENT_BYTES}{' '}
+						bytes.
 					</p>
 					{fileLimit < WORKSPACE_LIMITS.maxFiles && (
 						<p className="mt-1 text-xs text-muted-foreground">

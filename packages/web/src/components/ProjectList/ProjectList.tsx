@@ -1,11 +1,11 @@
+import { useState } from 'react';
+import { ProjectGroups } from './ProjectGroups';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { toast } from 'sonner';
 import { z } from 'zod';
-import { ChevronRight, Folder, FolderPlus, Plus } from 'lucide-react';
+import { FolderPlus, Plus } from 'lucide-react';
 import {
 	Button,
-	Chip,
-	RowLink,
 	EmptyState,
 	ListFilters,
 	ListResults,
@@ -24,7 +24,6 @@ import { useProjectsQuery, useCreateProject } from '@/api/hooks';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { useListFilters } from '@/hooks/useListFilters';
 import { useAuth } from '@/context/AuthContext';
-import type { ProjectSummary } from '@/types';
 
 const PROJECT_STATUS_FILTERS = [
 	{ value: 'active', label: 'Active' },
@@ -41,8 +40,18 @@ const EMPTY_PROJECT = { name: '', description: '' };
 export function ProjectList() {
 	const { user } = useAuth();
 	const canCreateProjects = user?.can_create_projects ?? user !== null;
-	const { filters, setFilters, filtersActive } = useListFilters(PROJECT_STATUS_FILTERS);
+	const { filters, setFilters, filtersActive } = useListFilters(PROJECT_STATUS_FILTERS, {
+		tagPrefix: true,
+	});
+	const selectNamespace = (tag_prefix?: string) => setFilters({ ...filters, tag_prefix });
 	const createModal = useDisclosure();
+	const [groupByTags, setGroupByTags] = useState(() => {
+		try {
+			return localStorage.getItem('project-group-by-tags') !== 'false';
+		} catch {
+			return true;
+		}
+	});
 
 	const { data: projects = [], isPending, isFetching } = useProjectsQuery(filters);
 	const createProject = useCreateProject();
@@ -93,7 +102,42 @@ export function ProjectList() {
 				isLoading={isPending}
 				isFetching={isFetching}
 				onChange={setFilters}
+				actions={
+					<Button
+						size="sm"
+						variant={groupByTags ? 'default' : 'ghost'}
+						aria-pressed={groupByTags}
+						onPress={() => {
+							setGroupByTags(!groupByTags);
+							try {
+								localStorage.setItem('project-group-by-tags', String(!groupByTags));
+							} catch {}
+						}}
+					>
+						Group by tags
+					</Button>
+				}
 			/>
+
+			{filters.tag_prefix !== undefined && (
+				<nav aria-label="Project namespace" className="flex flex-wrap items-center gap-1 text-sm">
+					<Button variant="ghost" onPress={() => selectNamespace()}>
+						All projects
+					</Button>
+					{filters.tag_prefix.split('/').map((segment, index, segments) => (
+						<span key={segments.slice(0, index + 1).join('/')} className="flex items-center gap-1">
+							<span aria-hidden="true">/</span>
+							<Button
+								variant="ghost"
+								aria-current={index === segments.length - 1 ? 'page' : undefined}
+								onPress={() => selectNamespace(segments.slice(0, index + 1).join('/'))}
+							>
+								{segment}
+							</Button>
+						</span>
+					))}
+				</nav>
+			)}
 
 			<ListResults
 				count={projects.length}
@@ -119,9 +163,12 @@ export function ProjectList() {
 				onReset={() => setFilters({})}
 				resultsId="project-results"
 			>
-				{projects.map((project) => (
-					<ProjectRow key={project.id} project={project} />
-				))}
+				<ProjectGroups
+					projects={projects}
+					groupByTags={groupByTags}
+					prefix={filters.tag_prefix}
+					onSelect={selectNamespace}
+				/>
 			</ListResults>
 
 			{canCreateProjects ? (
@@ -143,52 +190,5 @@ export function ProjectList() {
 				</FormDialog>
 			) : null}
 		</PageContainer>
-	);
-}
-
-function ProjectRow({ project }: { project: ProjectSummary }) {
-	const content = (
-		<>
-			<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors group-hover:bg-primary/15">
-				<Folder className="size-4" aria-hidden="true" />
-			</span>
-			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-				<span className="truncate text-sm font-medium" title={project.name}>
-					{project.name}
-				</span>
-				<span className="truncate text-xs text-muted-foreground" title={project.description}>
-					{project.description}
-				</span>
-			</span>
-			{project.status === 'deleted' ? <Chip>Deleted</Chip> : null}
-			<span className="shrink-0 rounded-full border bg-muted/60 px-2.5 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
-				{project.notebook_count} notebook{project.notebook_count !== 1 ? 's' : ''}
-			</span>
-		</>
-	);
-
-	if (project.status === 'deleted') {
-		return (
-			<div
-				data-testid="project-row"
-				className="flex items-center gap-3 border-b border-l-2 border-l-transparent bg-muted/20 px-4 py-3.5 last:border-b-0"
-			>
-				{content}
-			</div>
-		);
-	}
-
-	return (
-		<RowLink
-			to={`/projects/${project.id}`}
-			testId="project-row"
-			contentClassName="items-center gap-3 py-3.5"
-		>
-			{content}
-			<ChevronRight
-				className="size-4 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground"
-				aria-hidden="true"
-			/>
-		</RowLink>
 	);
 }

@@ -1499,9 +1499,9 @@ paths:
       responses:
         '204':
           description: Stored.
-  /projects/{pid}/imports/{import_id}/items/{encoded_entrypoint}.json:
-    summary: Fenced preparation attempts and retained publication receipt for one
-      imported notebook.
+  /projects/{pid}/imports/{import_id}/items/{entry_hash}.json:
+    summary: Fenced attempts and publication receipt for one imported entrypoint,
+      keyed by the SHA-256 of its path; purged 7 days after the import expires.
     parameters:
       - name: pid
         in: path
@@ -1513,7 +1513,7 @@ paths:
         required: true
         schema:
           type: string
-      - name: encoded_entrypoint
+      - name: entry_hash
         in: path
         required: true
         schema:
@@ -4766,7 +4766,6 @@ components:
             title:
               type: string
               minLength: 1
-              maxLength: 200
             base_image:
               type: string
             compute_profile:

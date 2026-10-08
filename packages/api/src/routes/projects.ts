@@ -374,6 +374,7 @@ app.openapi(listProjects, async (c) => {
 		resourceSecurity: deps.resourceSecurity,
 		status: query.status,
 		tag: query.tag,
+		tagPrefix: query.tag_prefix,
 		q: query.q,
 	});
 	const data = paginate(all, query, {

@@ -8,7 +8,8 @@
  * login-time state cannot express revocation, and the signed session cookie is
  * not encrypted, so raw attributes must not ride in it. Implementations live in
  * adapter packages (an agency package, an IdP sync, a static file); core owns
- * only the contract and the bounds.
+ * only the contract and the bounds. Session-carried `AuthUser.groups` are coarse
+ * membership and must never satisfy security labels or supply compartments.
  *
  * Resolution semantics by credential kind:
  * - `sso` — resolve from the provider's bounded record for the user (an

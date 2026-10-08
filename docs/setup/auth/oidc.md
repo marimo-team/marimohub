@@ -56,7 +56,8 @@ MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS=hub-project-managers
 Nested claims use JSON Pointer syntax, such as `/realm_access/roles`.
 Array elements use zero-based indices, such as `/identities/0/groups`.
 `ALLOWED_GROUPS` controls login. The other lists map groups to internal
-entitlements. The session cookie stores mapped entitlements, not raw groups.
+entitlements. The session stores mapped entitlements and only the selected
+membership group IDs. Without membership selection, the session stores no group IDs.
 
 If `ALLOWED_GROUPS` is set, it must contain at least one group ID. An empty list
 fails at startup. Unset it to disable the login group restriction.
@@ -100,6 +101,56 @@ is an identity migration. Reconcile stored owners and members before the change.
 
 Generate a session secret with `openssl rand -base64 32`.
 
+### Group membership
+
+To retain selected group IDs in the current credential, configure exact IDs, prefixes, or both:
+
+```bash
+MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM=/groups
+MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS=hub-team-data,hub-team-ml
+MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES=/marimohub/
+```
+
+Selection is case-sensitive: exact IDs match whole values; prefixes match the
+start of a value without a path boundary. Either list can select a group.
+Configure at most 200 exact IDs and 20 prefixes. Empty lists are invalid.
+
+To select all groups, set `MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS='*'`.
+A standalone `*` selects every group, even alongside other IDs. Group validation,
+size limits, and credential expiry still apply. More than 32 retained groups or
+1,280 UTF-8 JSON bytes rejects authentication; the host does not truncate them.
+The raw provider claim remains limited to 200 entries, including duplicates.
+
+Only this membership setting treats `*` as a wildcard. Prefixes, admission lists,
+and role mappings remain literal; `team-*` is not a glob pattern.
+
+IDs and prefixes must contain 1–128 Unicode characters, with no control
+characters, commas, or leading or trailing whitespace. Internal spaces, `@`, and
+leading `/` are valid. The host discards selected IDs that fail these rules;
+malformed provider claims still fail admission. A missing claim produces no groups.
+
+The host deduplicates IDs and sorts them by code unit. The selected set must fit
+within **32 groups and 1,280 UTF-8 bytes of JSON**. Overflow fails browser login
+with `auth_failed` or rejects external-token authentication. The host never
+truncates the set. Narrow the selection to fix this.
+
+The cookie is signed, not encrypted, and `GET /api/v1/me` exposes selected groups.
+Do not select sensitive group names. The identity directory stores no groups.
+Logs contain counts only: `oidc_session_issued` records entitlements, retained
+groups, and discarded values; `oidc_membership_groups_exceeded` records overflow.
+
+Groups expire with the credential, within one hour. External OIDC access tokens
+use the same selection rules. Their selected groups enter the authenticated
+subject and expire with the token. Personal access tokens, service
+accounts, background work, and non-OIDC backends have no group source; `/me`
+returns `groups: []`. Groups currently grant no access and never supply security
+labels or subject compartments.
+
+For Microsoft Entra, select **Groups assigned to the application** to limit the
+provider claim. See [Microsoft's group limits and application assignment](https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-fed-group-claims).
+Group overage omits the claim and produces no retained groups. The host does not
+resolve overage references through Microsoft Graph.
+
 ### Login-policy module
 
 When a group mapping cannot express your access rule — for example, an approved
@@ -124,34 +175,42 @@ allow or deny decision, plus the built-in entitlements (`super-admin`,
 `project-creator` permits creation on restricted deployments and for app-only users.
 `MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=none` (or unset) disables the module.
 
-Login-policy configuration is mutually exclusive with the group variables
-above. A module can reproduce any group rule in code. The module applies to
-browser sessions only; personal access tokens never receive login-policy
-entitlements.
+A login-policy module cannot be combined with the group configuration above.
+It applies only to browser sessions. Personal access tokens receive neither its
+entitlements nor its groups.
 
-The module is trusted code and runs in-process with server privileges. Bundle
-it (with its dependencies) into one `.mjs` file, pin its version, and mount the
-same artifact on every replica. A module that fails to load stops the server at
-startup. During login, a policy denial shows the user a generic access-policy
-message; a policy error, timeout, or malformed result fails closed with the
-generic sign-in error and a bounded operator log event — the host never
-persists, logs, or writes raw claims into the session cookie. That guarantee
-covers the host only: the module sees every claim and runs with server
-privileges, so your policy code must not log or store claim values, and
-reviews should verify that it doesn't.
+The module runs in-process with server privileges. Bundle its dependencies into
+one `.mjs` file, pin its version, and mount the same artifact on every replica.
+Load errors stop server startup. Policy denials show a generic access-policy
+message. Errors, timeouts, and malformed results fail login with a generic
+sign-in error and a bounded operator log event.
+
+An allow result can include `groups: ['team-data', 'team-ml']`. The host validates
+these IDs against the [membership limits](#group-membership), deduplicates them,
+and sorts them. Omission produces `groups: []`. The module selects groups itself;
+no host selection filter applies. Invalid IDs fail login rather than being discarded.
+
+The host keeps raw claims out of storage and logs. Only selected groups enter
+the signed cookie. Review module code to prevent it from logging or storing
+claim values.
+
+Invalid group results fail login with one of these bounded problem codes:
+`groups_not_an_array`, `invalid_group`, `too_many_groups`, or `groups_on_deny`.
+The policy analyzer shows selected groups and supports expected-group assertions.
+Its login stage evaluates modules only, not environment-based group mappings.
+
+The optional field keeps login-policy API version `1`, but older hosts reject
+`groups` as `unknown_result_field`. Deploy a host version that supports groups
+on every replica before a module returns them.
 
 Policy sessions last at most one hour, like group sessions, which bounds the
 delay after an attribute or policy change. A module change requires a server
 restart and takes effect on the next login.
 
-This feature maps identity to login eligibility and coarse roles. It is not
-resource-level access control: it cannot see projects or notebooks, and an
-entitlement never bypasses project-role checks. See
-[Security](/security) for the boundary.
-
-See
-[`examples/external-adapter/oidc-login-policy.mjs`](https://github.com/marimo-team/marimohub/blob/main/examples/external-adapter/oidc-login-policy.mjs)
-for a complete example.
+The module controls login eligibility and deployment roles. It cannot see
+projects or notebooks, and entitlements never bypass project-role checks.
+See [Security](/security) and the
+[example module](https://github.com/marimo-team/marimohub/blob/main/examples/external-adapter/oidc-login-policy.mjs).
 
 ### Google
 

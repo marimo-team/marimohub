@@ -1,3 +1,9 @@
+import {
+	MAX_AUTH_GROUPS,
+	MAX_AUTH_GROUPS_JSON_BYTES,
+	isAuthGroupId,
+	normalizeAuthGroups,
+} from '@marimo-hub/core/ports/auth';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	ACTION_RULES,
@@ -44,6 +50,11 @@ import { appendAudit } from '../log';
 const MAX_POLICY_CASES = 25;
 
 const EntitlementSchema = z.enum(AUTH_ENTITLEMENTS);
+const GroupsSchema = z
+	.array(z.string().refine(isAuthGroupId))
+	.refine((groups) => normalizeAuthGroups(groups).ok, {
+		message: `Groups must normalize to at most ${MAX_AUTH_GROUPS} IDs and ${MAX_AUTH_GROUPS_JSON_BYTES} UTF-8 JSON bytes.`,
+	});
 const AuthorizationActionSchema = z.enum(AUTHORIZATION_ACTIONS);
 const SecurityLabelsSchema = z.strictObject({
 	classification: z.string().regex(SECURITY_LABEL_TOKEN),
@@ -55,6 +66,7 @@ const ExpectedLoginSchema = z
 		z.strictObject({
 			outcome: z.literal('allow'),
 			entitlements: z.array(EntitlementSchema).optional(),
+			groups: GroupsSchema.optional(),
 		}),
 		z.strictObject({ outcome: z.literal('deny') }),
 	])
@@ -135,6 +147,7 @@ const AuthorizationStageSchema = z
 			email: z.string().min(3).max(320),
 			entitlement_source: z.enum(['explicit', 'login']),
 			entitlements: z.array(EntitlementSchema).optional(),
+			groups: GroupsSchema.optional(),
 			grant: TokenGrantSchema.optional(),
 		}),
 		action: AuthorizationActionSchema,
@@ -198,6 +211,7 @@ const LoginResultSchema = z
 		outcome: z.enum(['allow', 'deny', 'timeout', 'error', 'invalid', 'unavailable']),
 		duration_ms: z.number().nonnegative(),
 		entitlements: z.array(EntitlementSchema),
+		groups: z.array(z.string()),
 		reason: z.string().optional(),
 		problem: z.string().optional(),
 		assertion: AssertionSchema,
@@ -284,6 +298,7 @@ const PolicyAnalyzerMetadataSchema = z
 	.strictObject({
 		schema_version: z.literal(1),
 		max_cases: z.number().int().positive(),
+		max_groups: z.number().int().positive(),
 		capabilities: z.strictObject({
 			login_policy: z.boolean(),
 			resource_security: z.boolean(),
@@ -356,11 +371,15 @@ function loginAssertion(stage: LoginStage, result: LoginPolicyAnalysisResult | u
 	if (result.outcome !== stage.expected.outcome) return false;
 	if (stage.expected.outcome === 'deny') return true;
 	if (result.outcome !== 'allow') return false;
-	if (stage.expected.entitlements === undefined) return true;
-	return (
+	const entitlementsMatch =
+		stage.expected.entitlements === undefined ||
 		JSON.stringify(normalizedEntitlements(result.entitlements)) ===
-		JSON.stringify(normalizedEntitlements(stage.expected.entitlements))
-	);
+			JSON.stringify(normalizedEntitlements(stage.expected.entitlements));
+	const groupsMatch =
+		stage.expected.groups === undefined ||
+		JSON.stringify([...new Set(result.groups)].sort()) ===
+			JSON.stringify([...new Set(stage.expected.groups)].sort());
+	return entitlementsMatch && groupsMatch;
 }
 
 function loginResponse(stage: LoginStage, result?: LoginPolicyAnalysisResult) {
@@ -370,6 +389,7 @@ function loginResponse(stage: LoginStage, result?: LoginPolicyAnalysisResult) {
 			outcome: 'unavailable' as const,
 			duration_ms: 0,
 			entitlements: [] as AuthEntitlement[],
+			groups: [] as string[],
 			assertion: { passed, expected: stage.expected },
 		};
 	}
@@ -377,6 +397,7 @@ function loginResponse(stage: LoginStage, result?: LoginPolicyAnalysisResult) {
 		outcome: result.outcome,
 		duration_ms: result.durationMs,
 		entitlements: result.outcome === 'allow' ? [...result.entitlements] : [],
+		groups: result.outcome === 'allow' ? [...result.groups] : [],
 		...('reason' in result && result.reason ? { reason: result.reason } : {}),
 		...('problem' in result ? { problem: result.problem } : {}),
 		assertion: { passed, expected: stage.expected },
@@ -544,10 +565,18 @@ async function evaluateCase(
 						? loginEvaluation.entitlements
 						: (stage.subject.entitlements ?? []),
 				);
+				const normalizedGroups = normalizeAuthGroups(
+					linked && loginEvaluation?.outcome === 'allow'
+						? loginEvaluation.groups
+						: (stage.subject.groups ?? []),
+				);
+				if (!normalizedGroups.ok) throw new Error('invalid_groups');
+				const groups = normalizedGroups.groups;
 				let subject: AuthorizationSubject = {
 					id: UserId.parse(stage.subject.id),
 					email: stage.subject.email,
 					entitlements,
+					groups,
 					...(stage.subject.grant
 						? {
 								credential: {
@@ -562,17 +591,17 @@ async function evaluateCase(
 					if (subject.id !== caller.id || subject.email !== caller.email) {
 						throw new Error('live_context_requires_self');
 					}
-					subject = stage.subject.grant
-						? {
-								...caller,
-								entitlements,
-								credential: {
-									...caller.credential,
-									kind: 'personal-access-token',
-									grant: stage.subject.grant,
-								},
-							}
-						: { ...caller, entitlements };
+					subject = { ...caller, entitlements, groups };
+					if (stage.subject.grant) {
+						subject = {
+							...subject,
+							credential: {
+								...caller.credential,
+								kind: 'personal-access-token',
+								grant: stage.subject.grant,
+							},
+						};
+					}
 					context = { mode: 'live' };
 				} else {
 					const supplied = stage.context.value;
@@ -635,6 +664,7 @@ app.openapi(getMetadata, async (c) => {
 			data: {
 				schema_version: 1 as const,
 				max_cases: MAX_POLICY_CASES,
+				max_groups: MAX_AUTH_GROUPS,
 				capabilities: {
 					login_policy: deps.policyAnalyzer?.loginPolicy !== undefined,
 					resource_security: deps.resourceSecurity !== undefined,

@@ -14,8 +14,6 @@ backends, deploy, operate, and troubleshoot the hub.
 - [Deployment options](./deployment-options.md) - config-driven server image vs.
   SDK/library composition.
 
-- [Import notebooks](./importing-notebooks.md) - upload a folder with its modules and data.
-
 ## Configure
 
 Every deployment picks storage, compute, and auth.
@@ -34,8 +32,12 @@ Every deployment picks storage, compute, and auth.
 - [Managed AI](./ai.md) - server-managed AI keys for notebook assistants.
 - [Environment & cloud access](./environment-and-access.md) - choose integration configuration or federated cloud access.
 - [Integrations](./integrations.md) - databases, warehouses, query engines,
-  PyIceberg catalogs, object storage, ML platforms, and environment variables.
+  PyIceberg catalogs, object storage, ML platforms,
+  [Python package registries](./integrations.md#package-registries), and
+  environment variables.
 - [Integration secret sources](./integration-secrets.md) - inline encrypted values and external references.
+- [Import notebooks from a folder](./importing-notebooks.md) - import a local folder of
+  notebooks with their modules and data.
 - [Syncing](./syncing.md) - read-only notebooks pushed from external systems.
 - [Workload Identity Federation](./workload-identity-federation.md) - short-lived
   cloud credentials from notebooks (CoreWeave, AWS).

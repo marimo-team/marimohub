@@ -38,6 +38,7 @@ describe('AdminPolicyAnalyzerPage', () => {
 					id: 'admin',
 					email: 'admin@example.com',
 					is_super_admin: true,
+					groups: [],
 					can_create_projects: true,
 					logout_url: null,
 				});
@@ -61,6 +62,7 @@ describe('AdminPolicyAnalyzerPage', () => {
 				return jsonOk({
 					schema_version: 1,
 					max_cases: 25,
+					max_groups: 32,
 					capabilities: {
 						login_policy: false,
 						resource_security: true,
@@ -202,6 +204,7 @@ describe('AdminPolicyAnalyzerPage', () => {
 					id: 'admin',
 					email: 'admin@example.com',
 					is_super_admin: true,
+					groups: [],
 					can_create_projects: true,
 					logout_url: null,
 				});
@@ -213,6 +216,7 @@ describe('AdminPolicyAnalyzerPage', () => {
 				return jsonOk({
 					schema_version: 1,
 					max_cases: 25,
+					max_groups: 32,
 					capabilities: {
 						login_policy: true,
 						resource_security: true,

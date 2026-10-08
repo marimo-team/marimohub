@@ -61,6 +61,9 @@ const AUTH_ALLOWED_EMAIL_DOMAINS: ConfigVar = {
 	required: true,
 };
 
+const OIDC_MEMBERSHIP_DESCRIPTION =
+	'Requires MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM. Selected groups enter signed, unencrypted browser sessions or authenticated subjects for external OIDC access tokens. Limits: 32 groups and 1280 UTF-8 JSON bytes. Overflow rejects browser login or external-token authentication. Groups currently grant no access.';
+
 // Shared by every managed-AI backend (Bedrock, OpenAI-compatible); the config
 // registry requires one definition per variable id.
 const AI_MODEL: ConfigVar = {
@@ -1351,6 +1354,20 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
+						id: 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS',
+						name: 'Membership groups',
+						description: `Comma-separated, case-sensitive exact group IDs to retain (at most 200). A standalone * selects all groups within the same limits. ${OIDC_MEMBERSHIP_DESCRIPTION}`,
+						example: 'hub-team-data,hub-team-ml',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES',
+						name: 'Membership group prefixes',
+						description: `Comma-separated, case-sensitive literal group prefixes to retain (at most 20); * is not a wildcard here. ${OIDC_MEMBERSHIP_DESCRIPTION}`,
+						example: 'hub-team-',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS',
 						name: 'Group authorization lifetime',
 						description:
@@ -1362,7 +1379,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND',
 						name: 'Login-policy backend',
 						description:
-							'Set `library` to load a trusted external login-policy module that maps validated OIDC claims to a login decision and entitlements. Mutually exclusive with the `MARIMOHUB_AUTH_OIDC_*GROUPS*` variables. `none` (or unset) disables it.',
+							'Set `library` for a trusted module that returns a login decision, entitlements, and optional groups. Mutually exclusive with the `MARIMOHUB_AUTH_OIDC_*GROUP*` variables. `none` (or unset) disables it.',
 						example: 'library',
 						optIn: true,
 					},
@@ -1712,7 +1729,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_PERSIST_WORKSPACE',
 						name: 'Persist workspace',
 						description:
-							'Which sandbox working-dir files survive a session (source | workspace). `source` persists only the source files (notebook.py + pyproject.toml). `workspace` also captures runtime files (e.g. generated data) into the notebook workspace on teardown and restores them on the next session. This includes hidden files such as `.env` and `.gitignore`, `.git/`, and `__marimo__/`. It excludes regenerable caches such as `.venv/`, `__pycache__/`, `node_modules/`, and `.pytest_cache/`. Workspace capture also skips any directory that contains a regular `CACHEDIR.TAG` file, before size limits apply; in `workspace` mode, previously stored copies of such a directory are removed on the next capture, and a `CACHEDIR.TAG` at the working-dir root removes every previously stored workspace file. `source` mode is unaffected. Any project member with read access can read the captured files, and every later session restores them.',
+							'Which sandbox working-dir files survive a session (source | workspace). `source` persists only the source files: the notebook entrypoint (`notebook.py` unless imported with a different entry file) and `pyproject.toml`. In editor sessions that save edits, notebooks imported from a folder always persist their full workspace. `workspace` also captures runtime files (e.g. generated data) into the notebook workspace on teardown and restores them on the next session. This includes hidden files such as `.env` and `.gitignore`, `.git/`, and `__marimo__/`. It excludes regenerable caches such as `.venv/`, `__pycache__/`, `node_modules/`, and `.pytest_cache/`. Workspace capture also skips any directory that contains a regular `CACHEDIR.TAG` file, before size limits apply; in `workspace` mode, previously stored copies of such a directory are removed on the next capture, and a `CACHEDIR.TAG` at the working-dir root removes every previously stored workspace file. `source` mode is unaffected. Any project member with read access can read the captured files, and every later session restores them.',
 						example: 'workspace',
 						default: 'source',
 					},

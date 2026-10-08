@@ -26,7 +26,9 @@ GET /api/v1/capabilities added `subschema #1, subschema #2` to the `data/surface
 ```
 
 `directory.search` expands the shared action enum in both `PolicyCaseV1`
-request branches. oasdiff reports the resulting compatible branches as removed.
+request branches. Optional `groups` fields expand their login and authorization
+inputs. Existing request shapes remain valid. oasdiff reports these compatible
+branches as removed.
 
 ```text
 POST /api/v1/admin/policy-analyzer/evaluate removed `subschema #1, subschema #2` from the `cases/items/` request property `anyOf` list
@@ -72,4 +74,15 @@ POST /api/v1/projects/{pid}/notebooks/{nid}/sessions the response property `data
 GET /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid} the response property `data/user_id` became optional for the status `200`
 POST /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/heartbeat the response property `data/user_id` became optional for the status `200`
 GET /api/v1/projects/{pid}/sessions the response property `data/items/items/user_id` became optional for the status `200`
+```
+
+Folder import routes shipped unreleased after v0.4.16 and were reshaped in the
+pre-release pass: the per-entry status route became `GET …/notebook-imports/{import_id}`,
+import ids follow the `imp-` convention, and the publish body shares the create validators.
+
+```text
+GET /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks `api removed without deprecation`
+POST /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks added the pattern `^imp-[0-9a-z]{16}$` to the `path` request parameter `import_id`
+POST /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks the `base_image` request property's minLength was increased from `0` to `1`
+POST /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks the `compute_profile` request property's minLength was increased from `0` to `1`
 ```

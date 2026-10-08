@@ -6,17 +6,23 @@ import {
 	NotFoundError,
 } from '../../errors';
 import { logOperationalError } from '../../operationalLog';
-import { createNotebookId } from '../../ids';
+import { createImportId, createNotebookId, ImportId } from '../../ids';
 import type { ProjectId, UserId } from '../../ids';
 import type { Bucket } from '../../ports/bucket';
 import { paths } from '../../paths';
+import type { NotebookImportPaths } from '../../paths';
+import { mapWithConcurrency } from '../../concurrency';
+import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { sha256Hex } from '../../internal/sha256';
 import { readStored, NotebookMetaSchema, NotebookIdSchema, UserIdSchema } from '../../schema';
+import type { NotebookMeta } from '../../schema';
 import { parseWorkspaceArchive } from '../../integrations/workspaceArchive';
 import {
 	folderImportFileLimit,
 	validateLocalEntryNotebook,
 } from '../../integrations/remoteWorkspace';
 import {
+	folderImportExcludedDirectories,
 	isFolderImportExcludedPath,
 	validateFolderImportPath,
 } from '../../integrations/workspaceIgnore';
@@ -25,11 +31,15 @@ import { withCasRetry } from '../catalog/cas';
 import type { NotebookService } from './NotebookService';
 
 export const IMPORT_RETENTION_MS = 24 * 60 * 60 * 1000;
+// Receipts outlive the snapshot so lost responses and stalled attempts still
+// reconcile; past this horizon the whole import prefix is deleted.
+export const IMPORT_PURGE_MS = 7 * 24 * 60 * 60 * 1000;
 const ATTEMPT_LEASE_MS = 10 * 60 * 1000;
 const CLEANUP_GRACE_MS = 60 * 60 * 1000;
+const MAX_IMPORT_ATTEMPTS = 10;
 export const ImportNotebookInputSchema = z.object({
 	entry_notebook: z.string().min(1),
-	title: z.string().trim().min(1).max(200),
+	title: z.string().trim().min(1),
 	base_image: z.string().optional(),
 	compute_profile: z.string().optional(),
 });
@@ -48,9 +58,9 @@ export const NotebookImportItemSchema = z.object({
 	notebook: NotebookMetaSchema.optional(),
 	lease_until: z.number(),
 });
-export const notebookImportPrefix = (pid: ProjectId, id: string) =>
-	`projects/${pid}/imports/${id}/`;
-const validId = (id: string) => /^[0-9a-f-]{36}$/.test(id);
+type NotebookImportItem = z.infer<typeof NotebookImportItemSchema>;
+
+type ImportSettings = Pick<ImportNotebookInput, 'base_image' | 'compute_profile'>;
 
 export class NotebookImportService {
 	constructor(
@@ -60,12 +70,12 @@ export class NotebookImportService {
 
 	async prepare(projectId: ProjectId, bytes: Uint8Array, actor: UserId) {
 		const files = this.parse(bytes);
-		const id = crypto.randomUUID();
-		const prefix = notebookImportPrefix(projectId, id);
+		const id = createImportId();
+		const imp = paths.project(projectId).notebookImport(id);
 		const created_at = Date.now();
 		const preparation = { actor, created_at, expires_at: created_at + IMPORT_RETENTION_MS };
-		await this.bucket.put(`${prefix}snapshot.zip`, bytes, { onlyIfNotExists: true });
-		await this.bucket.put(`${prefix}preparation.json`, JSON.stringify(preparation), {
+		await this.bucket.put(imp.snapshot, bytes, { onlyIfNotExists: true });
+		await this.bucket.put(imp.preparation, JSON.stringify(preparation), {
 			onlyIfNotExists: true,
 		});
 		return {
@@ -80,14 +90,14 @@ export class NotebookImportService {
 		id: string,
 		rawInput: ImportNotebookInput,
 		actor: UserId,
-		resolveSettings?: () => Pick<ImportNotebookInput, 'base_image' | 'compute_profile'>,
+		resolveSettings?: () => ImportSettings,
 	) {
-		const prefix = this.prefix(projectId, id);
-		const preparation = await this.preparation(prefix, actor);
+		const imp = this.paths(projectId, id);
+		const preparation = await this.preparation(imp, actor);
 		const input = ImportNotebookInputSchema.parse(rawInput);
-		const key = this.itemKey(prefix, input.entry_notebook);
+		const key = await this.itemKey(imp, input.entry_notebook);
 		const candidate = createNotebookId();
-		let settings: Pick<ImportNotebookInput, 'base_image' | 'compute_profile'> | undefined;
+		let settings: ImportSettings | undefined;
 		const claimed = await withCasRetry(this.bucket, async (cas) => {
 			const object = await this.bucket.get(key);
 			const current = object ? await readStored(NotebookImportItemSchema, object, key) : null;
@@ -106,7 +116,7 @@ export class NotebookImportService {
 			const restartReason =
 				preparation.expires_at <= Date.now()
 					? 'Import expired; choose the folder again'
-					: current && current.attempts.length >= 10
+					: current && current.attempts.length >= MAX_IMPORT_ATTEMPTS
 						? 'Import retry limit reached'
 						: null;
 			if (restartReason) {
@@ -162,7 +172,7 @@ export class NotebookImportService {
 				return renewing;
 			};
 			try {
-				const archive = await this.bucket.get(`${prefix}snapshot.zip`);
+				const archive = await this.bucket.get(imp.snapshot);
 				if (!archive) throw new NotFoundError('Import snapshot not found');
 				const files = this.parse(await archive.bytes());
 				const entry = files.find((file) => file.path === input.entry_notebook);
@@ -213,61 +223,87 @@ export class NotebookImportService {
 							onlyIfEtagMatches: object.etag,
 						});
 					}
-				}).catch(() => {});
+				}).catch((releaseError: unknown) =>
+					logOperationalError(
+						'notebook_import_lease_release_failed',
+						{ projectId, importId: id, notebookId: candidate },
+						releaseError,
+					),
+				);
 				throw error;
 			}
 		}
-		const meta = await this.notebooks.publishImportNotebook(projectId, claimed.notebook_id, actor);
-		await withCasRetry(this.bucket, async (cas) => {
-			const object = await this.bucket.get(key);
-			if (!object) return;
-			const current = await readStored(NotebookImportItemSchema, object, key);
-			if (current.state === 'publishing')
-				await cas.put(key, JSON.stringify({ ...current, state: 'complete', notebook: meta }), {
-					onlyIfEtagMatches: object.etag,
-				});
-		});
+		let meta: NotebookMeta;
+		try {
+			meta = await this.notebooks.publishImportNotebook(projectId, claimed.notebook_id, actor);
+		} catch (error) {
+			if (!(error instanceof NotFoundError)) throw error;
+			await this.settle(key, claimed.notebook_id, (current) => ({
+				...current,
+				state: 'expired',
+				// The user deleted this notebook; leave its files to notebook deletion.
+				attempts: current.attempts.filter((notebookId) => notebookId !== current.notebook_id),
+			}));
+			throw new ImportRestartRequiredError(
+				'Imported notebook was deleted; choose the folder again',
+			);
+		}
+		await this.settle(key, claimed.notebook_id, (current) => ({
+			...current,
+			state: 'complete',
+			notebook: meta,
+		}));
 		return meta;
 	}
 
-	async status(projectId: ProjectId, id: string, entry: string, actor: UserId) {
-		const prefix = this.prefix(projectId, id);
-		await this.preparation(prefix, actor);
-		const key = this.itemKey(prefix, entry);
-		const object = await this.bucket.get(key);
-		if (!object) return { state: 'pending' as const };
-		const item = await readStored(NotebookImportItemSchema, object, key);
-		if (item.state === 'complete' && item.notebook)
-			return { state: 'complete' as const, notebook: item.notebook };
-		if (item.state === 'publishing') return { state: 'publishing' as const };
-		return {
-			state:
-				item.state === 'expired'
-					? ('expired' as const)
-					: item.lease_until > Date.now()
-						? ('preparing' as const)
-						: ('pending' as const),
-		};
+	async get(projectId: ProjectId, id: string, actor: UserId) {
+		const imp = this.paths(projectId, id);
+		const preparation = await this.preparation(imp, actor);
+		const objects = await listAllObjects(this.bucket, imp.itemsPrefix);
+		const items = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async ({ key }) => {
+			const object = await this.bucket.get(key);
+			return object ? readStored(NotebookImportItemSchema, object, key) : null;
+		});
+		const now = Date.now();
+		const notebooks = items
+			.flatMap((item) =>
+				// A preparing receipt whose lease lapsed can be retried, so it reads like an untried entry.
+				!item || (item.state === 'preparing' && item.lease_until <= now)
+					? []
+					: [
+							{
+								entry_notebook: item.input.entry_notebook,
+								state: item.state,
+								...(item.state === 'complete' && item.notebook ? { notebook: item.notebook } : {}),
+							},
+						],
+			)
+			.sort((a, b) => a.entry_notebook.localeCompare(b.entry_notebook));
+		return { id, expires_at: new Date(preparation.expires_at).toISOString(), notebooks };
 	}
 
 	async sweep(projectId: ProjectId): Promise<void> {
-		const prefix = `projects/${projectId}/imports/`;
-		for (const object of await listAllObjects(this.bucket, prefix)) {
-			if (object.uploaded.getTime() + IMPORT_RETENTION_MS + CLEANUP_GRACE_MS > Date.now()) continue;
-			if (object.key.endsWith('/snapshot.zip')) {
-				const base = object.key.slice(0, -'snapshot.zip'.length);
-				if (!(await this.bucket.head(`${base}preparation.json`)))
-					await this.bucket.delete(object.key);
+		const project = paths.project(projectId);
+		const now = Date.now();
+		for (const object of await listAllObjects(this.bucket, project.notebookImportsPrefix)) {
+			if (object.uploaded.getTime() + IMPORT_RETENTION_MS + CLEANUP_GRACE_MS > now) continue;
+			const id = object.key.slice(project.notebookImportsPrefix.length).split('/')[0];
+			if (!ImportId.is(id)) continue;
+			const imp = project.notebookImport(id);
+			if (object.key === imp.snapshot) {
+				if (!(await this.bucket.head(imp.preparation))) await this.bucket.delete(object.key);
 				continue;
 			}
-			if (!object.key.endsWith('/preparation.json')) continue;
-			const base = object.key.slice(0, -'preparation.json'.length);
-			const preparation = await this.bucket.get(`${base}preparation.json`);
-			if (!preparation) {
-				await this.bucket.delete(object.key);
-				continue;
-			}
-			for (const itemObject of await listAllObjects(this.bucket, `${base}items/`)) {
+			if (object.key !== imp.preparation) continue;
+			const preparationObject = await this.bucket.get(imp.preparation);
+			if (!preparationObject) continue;
+			const preparation = await readStored(
+				NotebookImportPreparationSchema,
+				preparationObject,
+				imp.preparation,
+			);
+			const purge = preparation.expires_at + IMPORT_PURGE_MS <= now;
+			for (const itemObject of await listAllObjects(this.bucket, imp.itemsPrefix)) {
 				const item = await withCasRetry(this.bucket, async (cas) => {
 					const currentObject = await this.bucket.get(itemObject.key);
 					if (!currentObject) return null;
@@ -288,43 +324,62 @@ export class NotebookImportService {
 						(item.state === 'publishing' || item.state === 'complete')
 					)
 						continue;
-					await deleteByPrefix(
-						this.bucket,
-						`${paths.project(projectId).notebook(notebookId).base}/`,
+					await deleteByPrefix(this.bucket, `${project.notebook(notebookId).base}/`);
+				}
+				if (item.state !== 'publishing') continue;
+				if (purge) {
+					logOperationalError(
+						'notebook_import_publish_abandoned',
+						{ projectId, importId: id, notebookId: item.notebook_id },
+						new Error('Notebook import publication did not complete before purge'),
+					);
+					continue;
+				}
+				try {
+					await this.publish(projectId, id, item.input, item.actor);
+				} catch (error) {
+					logOperationalError(
+						'notebook_import_publish_retry_failed',
+						{ projectId, notebookId: item.notebook_id },
+						error,
 					);
 				}
-				if (item.state === 'publishing') {
-					try {
-						await this.publish(projectId, base.slice(prefix.length, -1), item.input, item.actor);
-					} catch (error) {
-						logOperationalError(
-							'notebook_import_publish_retry_failed',
-							{ projectId, notebookId: item.notebook_id },
-							error,
-						);
-					}
-				}
 			}
-			await this.bucket.delete(`${base}snapshot.zip`);
-			// Receipts remain: replays must never resurrect a deleted or subsequently edited notebook.
+			if (purge) await deleteByPrefix(this.bucket, imp.base);
+			// Receipts stay until the purge: a replay must not resurrect a deleted or edited notebook.
+			else await this.bucket.delete(imp.snapshot);
 		}
 	}
 
-	private itemKey(prefix: string, entry: string) {
+	/** CAS-advance a `publishing` receipt for `notebookId`; a no-op once anything else won. */
+	private async settle(
+		key: string,
+		notebookId: string,
+		next: (current: NotebookImportItem) => NotebookImportItem,
+	) {
+		await withCasRetry(this.bucket, async (cas) => {
+			const object = await this.bucket.get(key);
+			if (!object) return;
+			const current = await readStored(NotebookImportItemSchema, object, key);
+			if (current.state === 'publishing' && current.notebook_id === notebookId)
+				await cas.put(key, JSON.stringify(next(current)), { onlyIfEtagMatches: object.etag });
+		});
+	}
+
+	private async itemKey(imp: NotebookImportPaths, entry: string) {
 		validateLocalEntryNotebook(entry);
-		return `${prefix}items/${encodeURIComponent(entry)}.json`;
+		return imp.item(await sha256Hex(entry));
 	}
 
-	private prefix(projectId: ProjectId, id: string) {
-		if (!validId(id)) throw new BadRequestError('Invalid import id');
-		return notebookImportPrefix(projectId, id);
+	private paths(projectId: ProjectId, id: string) {
+		if (!ImportId.is(id)) throw new BadRequestError('Invalid import id');
+		return paths.project(projectId).notebookImport(id);
 	}
 
-	private async preparation(prefix: string, actor: UserId) {
-		const key = `${prefix}preparation.json`;
-		const object = await this.bucket.get(key);
+	private async preparation(imp: NotebookImportPaths, actor: UserId) {
+		const object = await this.bucket.get(imp.preparation);
 		if (!object) throw new NotFoundError('Import not found');
-		const preparation = await readStored(NotebookImportPreparationSchema, object, key);
+		const preparation = await readStored(NotebookImportPreparationSchema, object, imp.preparation);
 		if (preparation.actor !== actor) throw new NotFoundError('Import not found');
 		return preparation;
 	}
@@ -339,8 +394,13 @@ export class NotebookImportService {
 					: `Include at most ${fileLimit} files; reserve one workspace file for generated pyproject.toml.`,
 			);
 		const paths = new Set(files.map((file) => validateFolderImportPath(file.path)));
+		const excludedDirectories = folderImportExcludedDirectories([...paths]);
+		if (excludedDirectories.includes(''))
+			throw new BadRequestError(
+				'The selected folder is a virtual environment; choose the project folder instead.',
+			);
 		for (const file of files) {
-			if (isFolderImportExcludedPath(file.path))
+			if (isFolderImportExcludedPath(file.path, excludedDirectories))
 				throw new BadRequestError(
 					`Exclude generated or Git metadata before importing: ${file.path}`,
 				);

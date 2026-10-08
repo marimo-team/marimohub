@@ -132,19 +132,27 @@ environment variables instead. The bundle is placed under
 
 ## Package registry authentication
 
+Kinds in the `package_registry` category configure uv package indexes; user
+docs are in `docs/integrations.md#package-registries`. A kind's render returns
+`packageIndexes` (name, URL, default flag) and keeps credentials out of URLs.
+
 Static Python indexes share `definePythonIndex` in `kinds/pythonPackageIndexes.ts`.
 Each definition supplies its schema and a pure URL/credentials mapping.
 The helper validates that mapping locally before rendering or testing a connection.
 Connection tests make network requests only through `IntegrationProbe`.
 Static credentials require no credential adapter.
 
-Kinds that acquire credentials declare `packageRegistry` with a credential source and index URL.
+Kinds that mint credentials (`aws_codeartifact`) declare `packageRegistry` with a credential source; the index URL still comes from the preset's `connection` mapping, which receives the minted credentials.
 Before rendering, the store resolves credentials through `PackageRegistryCredentialProvider`.
 The Node configuration supplies the AWS adapter and guarded probe. AWS requests use explicit credentials, never the server's ambient identity.
-Session and job callers supply a lazy project-WIF resolver.
+`static` auth uses the stored access key; `ambient` auth uses project WIF credentials from a lazy resolver that session and job callers supply.
+A missing resolver or project WIF fails the render; there is no fallback to public PyPI.
 
-The bundle combines `packageIndexes` into `UV_INDEX` and `UV_DEFAULT_INDEX`, with credentials in separate variables.
-It rejects competing defaults and conflicting uv variables.
+The bundle combines `packageIndexes` into `UV_INDEX` and `UV_DEFAULT_INDEX`, and writes credentials to
+`UV_INDEX_<NAME>_USERNAME` / `UV_INDEX_<NAME>_PASSWORD`.
+A `custom_env` `UV_INDEX` is merged after the registry entries, with duplicates removed.
+A second default index, or a `custom_env` `UV_DEFAULT_INDEX` that differs from the registry's, fails the bundle; an identical value is tolerated.
+Restricted-viewer renders skip integrations entirely, so they get no index configuration.
 In `SandboxProvisioner`, dependency setup and its timeout start after credential injection.
 
 ## Connectivity probes

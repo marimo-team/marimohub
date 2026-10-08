@@ -89,25 +89,16 @@ Browser login does not grant notebook access to Azure resources. Configure noteb
 
 ### Private Python packages with Azure Artifacts
 
-Preinstall the credential helper in the sandbox image:
+Use the [Azure Artifacts integration](../integrations.md#azure-artifacts) with a
+personal access token that has Packaging read permission on the feed. The hub
+injects the index and credentials for uv before each session or job installs
+dependencies. No keyring helper is needed in the sandbox image.
 
-```bash
-uv tool install keyring --with artifacts-keyring
-```
-
-Set the named index and authentication variables in the notebook runtime:
-
-```bash
-UV_INDEX='private-registry=https://pkgs.dev.azure.com/<organization>/<project>/_packaging/<feed>/pypi/simple/'
-UV_KEYRING_PROVIDER=subprocess
-UV_INDEX_PRIVATE_REGISTRY_USERNAME=VssSessionToken
-```
-
-Make `keyring` available on the notebook user's `PATH`, outside its per-notebook virtual environment. Configure the Azure Artifacts Credential Provider for noninteractive authentication and grant feed read access.
-
-The helper does not inherit browser login or automatically gain access from the hub's Blob Storage identity. Test installation and credential renewal inside the notebook container. See [uv's Azure Artifacts guide](https://docs.astral.sh/uv/guides/integration/azure/).
-
-Runtime variables can come from the image or an [Environment variables integration](../integrations.md#environment-variables).
+The token does not come from browser login or from the hub's Blob Storage
+identity. Store it as an [external reference](../integration-secrets.md) to
+rotate it without editing the integration, and restart sessions after rotation.
+See [private package indexes](../sandbox-image.md#private-package-indexes) for
+how injected and custom `UV_INDEX` settings combine.
 
 ### Managed AI
 

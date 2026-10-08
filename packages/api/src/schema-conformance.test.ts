@@ -127,7 +127,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 	});
 
 	// The project-list response drops the nested `notebooks` roster (unbounded,
-	// defeats the page cursor) and the denormalized filtering aids.
+	// defeats the page cursor) and internal membership and security fields.
 	// `notebook_count` stays for the summary; clients page
 	// `GET /projects/{pid}/notebooks`.
 	it('SnapshotProjectEntry omits internal list-filter fields from the core entry', () => {
@@ -135,7 +135,6 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		const apiKeys = shapeKeys(SnapshotProjectEntrySchema);
 		const internal = [
 			'notebooks',
-			'tags',
 			'member_ids',
 			'member_emails',
 			'security_labels',

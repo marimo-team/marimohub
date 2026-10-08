@@ -1,7 +1,6 @@
 import {
 	NotebookImportPreparationSchema,
 	NotebookImportItemSchema,
-	notebookImportPrefix,
 } from '../services/content/NotebookImportService';
 import {
 	PreviewProjectSchema,
@@ -22,6 +21,7 @@ import { ThumbnailRecordSchema } from '../services/content/ThumbnailService';
 import { DeepLinkRecordSchema } from '../deepLinks';
 import { z } from 'zod';
 import type {
+	ImportId,
 	IntegrationId,
 	JobId,
 	NotebookId,
@@ -79,6 +79,7 @@ const UID = '{uid}' as UserId;
 const SNAPSHOT_ID = '{snapshot_id}' as SnapshotId;
 const JOB_ID = '{job_id}' as JobId;
 const RUN_ID = '{run_id}' as RunId;
+const IMPORT_ID = '{import_id}' as ImportId;
 
 // Some path builders encodeURIComponent their segment, which mangles the
 // placeholder braces; restore them.
@@ -114,6 +115,7 @@ const notebook = project.notebook(NID);
 const proposal = notebook.proposal(PROPOSAL_ID);
 const job = notebook.job(JOB_ID);
 const jobRun = job.run(RUN_ID);
+const notebookImport = project.notebookImport(IMPORT_ID);
 const projectIntegration = project.integration(IID);
 const orgIntegration = paths.orgIntegration(IID);
 
@@ -433,7 +435,7 @@ const OBJECTS: BucketObject[] = [
 	},
 	{
 		name: 'NotebookImportPreparation',
-		key: `${notebookImportPrefix(PID, '{import_id}')}preparation.json`,
+		key: notebookImport.preparation,
 		schema: NotebookImportPreparationSchema,
 		summary: 'Actor and expiry for an immutable uploaded folder snapshot.',
 		mutability: 'immutable',
@@ -442,10 +444,10 @@ const OBJECTS: BucketObject[] = [
 	},
 	{
 		name: 'NotebookImportItem',
-		key: `${notebookImportPrefix(PID, '{import_id}')}items/{encoded_entrypoint}.json`,
+		key: notebookImport.item('{entry_hash}'),
 		schema: NotebookImportItemSchema,
 		summary:
-			'Fenced preparation attempts and retained publication receipt for one imported notebook.',
+			'Fenced attempts and publication receipt for one imported entrypoint, keyed by the SHA-256 of its path; purged 7 days after the import expires.',
 		mutability: 'cas',
 		owner: 'NotebookImportService',
 		tag: 'notebook',
@@ -498,7 +500,7 @@ const OBJECTS: BucketObject[] = [
 const ARTIFACTS: BucketArtifact[] = [
 	{
 		name: 'NotebookImportSnapshot',
-		key: `${notebookImportPrefix(PID, '{import_id}')}snapshot.zip`,
+		key: notebookImport.snapshot,
 		summary: 'Uploaded ZIP snapshot reused by notebook import attempts until expiry cleanup.',
 		mutability: 'immutable',
 		owner: 'NotebookImportService',

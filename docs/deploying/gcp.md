@@ -82,23 +82,22 @@ Browser login, hub storage credentials, and notebook cloud access are separate c
 
 ### Private Python packages with Artifact Registry
 
-Preinstall the credential helper in the sandbox image:
+Artifact Registry has no preset. Use the generic
+[Python package index integration](../integrations.md#python-package-index):
 
-```bash
-uv tool install keyring --with keyrings.google-artifactregistry-auth
-```
+1. Create a service account with the Artifact Registry Reader role on the
+   repository, and create a JSON key for it.
+2. Set the URL to `https://<region>-python.pkg.dev/<project>/<repository>/simple/`.
+3. Choose **Basic** authentication. Set the username to `_json_key_base64` and
+   the password to the base64-encoded JSON key. Store the password as an
+   [external reference](../integration-secrets.md).
 
-Set the named index and authentication variables in the notebook runtime:
-
-```bash
-UV_INDEX='private-registry=https://<region>-python.pkg.dev/<project>/<repository>/simple/'
-UV_KEYRING_PROVIDER=subprocess
-UV_INDEX_PRIVATE_REGISTRY_USERNAME=oauth2accesstoken
-```
-
-Make `keyring` available on the notebook user's `PATH`, outside its per-notebook virtual environment. Configure the helper's Google credentials and grant read access to the repository. Test installation from the notebook environment after token expiry. See [uv's Artifact Registry guide](https://docs.astral.sh/uv/guides/integration/google/).
-
-Runtime variables can come from the image or an [Environment variables integration](../integrations.md#environment-variables). The hub's GCS storage key does not configure the notebook's package helper.
+The hub injects the index and credentials for uv before each session or job
+installs dependencies. The hub's GCS storage key does not grant access to the
+repository. See
+[Artifact Registry authentication](https://cloud.google.com/artifact-registry/docs/python/authentication)
+and [private package indexes](../sandbox-image.md#private-package-indexes) for
+how injected and custom `UV_INDEX` settings combine.
 
 ### Managed AI
 

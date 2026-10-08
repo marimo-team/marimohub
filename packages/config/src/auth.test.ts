@@ -723,6 +723,8 @@ describe('makeAuth oidc login policy', () => {
 		'MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS',
 		'MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS',
 		'MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS',
+		'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES',
 	])('rejects a login policy combined with %s', (groupVar) => {
 		const error = getConfigError(() =>
 			makeAuth(
@@ -732,6 +734,29 @@ describe('makeAuth oidc login policy', () => {
 		);
 		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND');
 		expect(error.message).toMatch(new RegExp(groupVar));
+	});
+
+	describe.each([
+		'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS',
+		'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES',
+	])('login policy with %s', (key) => {
+		it.each(['', '   ', '\t\n'])('rejects a blank membership setting (%j)', (value) => {
+			const error = getConfigError(() => makeAuth({ ...loginPolicyEnv, [key]: value }, libraries));
+			expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND');
+			expect(error.message).toContain(`cannot be combined with ${key}`);
+		});
+	});
+
+	it('rejects wildcard membership combined with a login-policy module', () => {
+		expect(() =>
+			makeAuth(
+				{
+					...loginPolicyEnv,
+					MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS: '*',
+				},
+				libraries,
+			),
+		).toThrow('cannot be combined with MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS');
 	});
 
 	it.each(['0', '31', 'abc', '2.5'])('rejects login-policy timeout %s', (value) => {
@@ -926,4 +951,82 @@ it('accepts an app-user group as the only OIDC role mapping', () => {
 			MARIMOHUB_AUTH_OIDC_DEFAULT_APP_USER_GROUPS: 'stakeholders',
 		}),
 	).not.toThrow();
+});
+
+describe.each([
+	['MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS', 200],
+	['MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES', 20],
+] as const)('membership configuration: %s', (key, maximum) => {
+	it.each(['a', 'a'.repeat(128), '😀', '😀'.repeat(128)])(
+		'accepts a selection entry at the character bounds (%j)',
+		(value) => {
+			expect(() =>
+				makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups', [key]: value }),
+			).not.toThrow();
+		},
+	);
+	it('permits membership alone and enforces the derived session lifetime', () => {
+		const env = { ...oidcEnv, MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups', [key]: 'team-a' };
+		expect(() => makeAuth(env)).not.toThrow();
+		expect(() =>
+			makeAuth({ ...env, MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS: '3601' }),
+		).toThrow();
+	});
+	it('requires a claim pointer', () => {
+		expect(() => makeAuth({ ...oidcEnv, [key]: 'team-a' })).toThrow(/GROUPS_CLAIM/);
+	});
+	it.each(['', ' ', ' team-a', 'team-a ', 'team-a,,team-b', 'a\n', 'a'.repeat(129)])(
+		'rejects invalid configuration %j',
+		(value) => {
+			const error = getConfigError(() =>
+				makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups', [key]: value }),
+			);
+			expect(error.opts.variable).toBe(key);
+			expect(error.message).toContain('1–128 characters');
+		},
+	);
+	it('bounds the selection list', () => {
+		const selected = Array.from({ length: maximum }, (_, i) => `team-${i}`).join(',');
+		const env = {
+			...oidcEnv,
+			MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+			[key]: selected,
+		};
+		expect(() => makeAuth(env)).not.toThrow();
+		expect(() => makeAuth({ ...env, [key]: `${selected},extra` })).toThrow(key);
+	});
+});
+
+describe('wildcard membership configuration', () => {
+	it.each(['*', 'team-a,*', '*,*'])('accepts %j with a claim pointer', (value) => {
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS: value,
+			}),
+		).not.toThrow();
+	});
+
+	it.each([' *', '* ', '*,', '*,bad\n'])('rejects malformed wildcard selections %j', (value) => {
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS: value,
+			}),
+		).toThrow('MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS');
+	});
+
+	it('still requires the claim pointer and bounds credential lifetime', () => {
+		const env = { ...oidcEnv, MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS: '*' };
+		expect(() => makeAuth(env)).toThrow(/GROUPS_CLAIM/);
+		expect(() =>
+			makeAuth({
+				...env,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS: '3601',
+			}),
+		).toThrow(/GROUP_SESSION_TTL_SECONDS/);
+	});
 });

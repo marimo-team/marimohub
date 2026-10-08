@@ -9,15 +9,20 @@ import type { WorkspaceItem } from '@marimo-hub/client';
 
 export const PID = 'proj-x';
 
-export const project = (): ProjectDetail =>
-	({
-		id: PID,
-		name: 'Sales',
-		description: 'revenue',
-		federation: { enabled: false },
-		federation_effective: { enabled: false, source: 'project' },
-		your_role: 'manager',
-	}) as ProjectDetail;
+export const project = (): ProjectDetail => ({
+	id: PID,
+	owner: 'me',
+	members: [],
+	status: 'active',
+	created_at: '2025-03-05T14:00:00Z',
+	updated_at: '2025-03-05T14:00:00Z',
+	name: 'Sales',
+	description: 'revenue',
+	tags: [],
+	federation: { enabled: false },
+	federation_effective: { enabled: false, source: 'project' },
+	your_role: 'manager',
+});
 
 export const notebook = (): NotebookEntry =>
 	({

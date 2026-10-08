@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { jsonError } from '@/test/render';
 import userEvent from '@testing-library/user-event';
 import { PID, makeFetch, notebook, renderProject, stoppableSession } from './Project.testWorld';
 
@@ -248,6 +249,23 @@ describe('Project — Delete Project (type-to-confirm)', () => {
 	});
 });
 
+function replaceTagInput(input: HTMLElement, text: string) {
+	const range = document.createRange();
+	range.selectNodeContents(input);
+	window.getSelection()!.removeAllRanges();
+	window.getSelection()!.addRange(range);
+	// TokenField edits through beforeinput, which userEvent does not dispatch in jsdom.
+	fireEvent(
+		input,
+		new InputEvent('beforeinput', {
+			bubbles: true,
+			cancelable: true,
+			inputType: 'insertText',
+			data: text,
+		}),
+	);
+}
+
 describe('Project — Edit Project', () => {
 	it('seeds the current values and PATCHes the edited name', async () => {
 		const user = userEvent.setup();
@@ -264,11 +282,93 @@ describe('Project — Edit Project', () => {
 		expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled();
 
 		await user.type(name, 'Sales EMEA');
+		expect(within(dialog).getByRole('textbox', { name: 'Tags' })).toHaveTextContent('');
+		const tags = within(dialog).getByRole('textbox', { name: 'Tags' });
+		await user.click(tags);
+		replaceTagInput(tags, ' research/vision, Team/Repo, ,shared ');
+		expect(within(dialog).getByText(/won't be treated as a namespace/)).toBeInTheDocument();
 		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 
 		await waitFor(() => {
 			const patch = calls.find((c) => c.method === 'PATCH');
-			expect(patch?.body).toMatchObject({ name: 'Sales EMEA', description: 'revenue' });
+			expect(patch?.body).toMatchObject({
+				name: 'Sales EMEA',
+				description: 'revenue',
+				tags: ['research/vision', 'Team/Repo', 'shared'],
+			});
+		});
+	});
+
+	it('preserves existing free-form tags when only the project name changes', async () => {
+		const user = userEvent.setup();
+		const tags = ['Research, Inc.', 'Data Team', 'Team/Repo'];
+		const calls = makeFetch({ project: { tags } });
+		await renderProject();
+		await user.click(screen.getByRole('button', { name: 'Edit project' }));
+		const dialog = screen.getByRole('dialog');
+		for (const tag of tags) expect(within(dialog).getByText(tag)).toBeInTheDocument();
+		await user.type(within(dialog).getByLabelText('Project Name'), ' EMEA');
+		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+		await waitFor(() =>
+			expect(calls.find((call) => call.method === 'PATCH')?.body).toMatchObject({
+				name: 'Sales EMEA',
+				tags,
+			}),
+		);
+	});
+
+	it('sends an empty tag array when all tags are removed', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({ project: { tags: ['research/vision', 'shared'] } });
+		await renderProject();
+		await user.click(screen.getByRole('button', { name: 'Edit project' }));
+		const dialog = screen.getByRole('dialog');
+		const tags = within(dialog).getByRole('textbox', { name: 'Tags' });
+		await user.click(tags);
+		replaceTagInput(tags, ' , , ');
+		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+		await waitFor(() =>
+			expect(calls.find((call) => call.method === 'PATCH')?.body).toMatchObject({ tags: [] }),
+		);
+	});
+
+	it('discards cancelled edits and restores saved tags on reopening', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({ project: { tags: ['ops'] } });
+		await renderProject();
+		await user.click(screen.getByRole('button', { name: 'Edit project' }));
+		const tags = within(screen.getByRole('dialog')).getByRole('textbox', { name: 'Tags' });
+		await user.click(tags);
+		replaceTagInput(tags, 'research/vision,draft');
+		expect(tags).toHaveTextContent('draft');
+		await user.click(screen.getByRole('button', { name: 'Cancel' }));
+		await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+		await user.click(screen.getByRole('button', { name: 'Edit project' }));
+		const reopened = within(screen.getByRole('dialog')).getByRole('textbox', { name: 'Tags' });
+		expect(reopened).toHaveTextContent('ops');
+		expect(reopened).not.toHaveTextContent('draft');
+		expect(calls.filter((call) => call.method === 'PATCH')).toHaveLength(0);
+	});
+
+	it('keeps edited tags after a failed save and permits retrying', async () => {
+		const user = userEvent.setup();
+		const calls = makeFetch({ project: { tags: ['ops'] } });
+		await renderProject();
+		await user.click(screen.getByRole('button', { name: 'Edit project' }));
+		const dialog = screen.getByRole('dialog');
+		const tags = within(dialog).getByRole('textbox', { name: 'Tags' });
+		await user.click(tags);
+		replaceTagInput(tags, 'research/vision,Data Team');
+		vi.mocked(fetch).mockResolvedValueOnce(jsonError('INTERNAL_ERROR', 'Could not save tags', 500));
+		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+		expect(await screen.findByText('Could not save tags')).toBeInTheDocument();
+		expect(dialog).toBeInTheDocument();
+		expect(tags).toHaveTextContent('research/vision');
+		expect(tags).toHaveTextContent('Data Team');
+		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+		await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+		expect(calls.find((call) => call.method === 'PATCH')?.body).toMatchObject({
+			tags: ['research/vision', 'Data Team'],
 		});
 	});
 });

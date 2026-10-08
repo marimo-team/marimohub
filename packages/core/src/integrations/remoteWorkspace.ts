@@ -14,6 +14,12 @@ export const WORKSPACE_OPERATIONS = ['create', 'write', 'move', 'copy', 'delete'
 export type WorkspaceOperation = (typeof WORKSPACE_OPERATIONS)[number];
 export type WorkspaceReadOnlyReason = 'git_source' | 'viewer' | 'active_session';
 export const WORKSPACE_DIRECTORY_MARKER = '.marimohub-directory';
+/** Entrypoint of local sources created before `entry_notebook` was recorded. */
+export const DEFAULT_LOCAL_ENTRY_NOTEBOOK = 'notebook.py';
+
+export function localEntryNotebook(source: { entry_notebook?: string }): string {
+	return source.entry_notebook ?? DEFAULT_LOCAL_ENTRY_NOTEBOOK;
+}
 
 export const WORKSPACE_LIMITS = {
 	maxFileBytes: MAX_WORKSPACE_FILE_BYTES,
@@ -177,14 +183,14 @@ const WORKSPACE_SOURCE_POLICIES: {
 	[K in Source['type']]: (source: Extract<Source, { type: K }>) => WorkspaceSourcePolicy;
 } = {
 	local: (source) => ({
-		entryNotebook: source.entry_notebook ?? 'notebook.py',
+		entryNotebook: localEntryNotebook(source),
 		loadMode: 'mount-or-copy',
 		persistSessionEdits: true,
 		restoreFilesystemSnapshot: true,
 		workspaceWritable: true,
 		allowedOperations: WORKSPACE_OPERATIONS,
 		protectedPaths: [
-			{ path: source.entry_notebook ?? 'notebook.py', deniedOperations: ['move', 'delete'] },
+			{ path: localEntryNotebook(source), deniedOperations: ['move', 'delete'] },
 			{ path: 'pyproject.toml', deniedOperations: ['move', 'delete'] },
 		],
 	}),

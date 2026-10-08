@@ -29,7 +29,7 @@
 		"@marimo-hub/tsconfig": "workspace:*",
 		"@playwright/test": "^1.50.0",
 		"@types/node": "catalog:",
-		"fflate": "^0.8.2",
+		"fflate": "catalog:",
 		"typescript": "catalog:",
 		"vite-plus": "catalog:",
 		"vitest": "catalog:"

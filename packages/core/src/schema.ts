@@ -293,9 +293,8 @@ export type PublicNotebookEntry = Pick<
 // unbounded (a project can hold thousands of notebooks) and would let one row
 // blow up a page that is otherwise bounded by the cursor. Clients use
 // `notebook_count` for the summary and page `GET /projects/{pid}/notebooks` for
-// the list. `tags`, `member_ids`, and `member_emails` are server-side filtering
-// aids, not part of the public contract, so they are stripped too. The bytes
-// stay in the persisted snapshot — the GC sweep and list filters read them.
+// the list. Membership and security labels stay internal. Tags are public so
+// clients can group projects without fetching each project head.
 export type PublicProjectEntry = Pick<
 	SnapshotProjectEntry,
 	| 'id'
@@ -306,7 +305,8 @@ export type PublicProjectEntry = Pick<
 	| 'created_at'
 	| 'updated_at'
 	| 'notebook_count'
->;
+	| 'tags'
+> & { tags: string[] };
 
 export function toPublicNotebookEntry(entry: SnapshotNotebookEntry): PublicNotebookEntry {
 	return {
@@ -326,7 +326,9 @@ export function toPublicNotebookEntry(entry: SnapshotNotebookEntry): PublicNoteb
 
 // Explicit pick (not a rest-spread): the entry schema is loose, so unknown keys
 // written by newer replicas survive parsing and MUST NOT leak into responses.
-export function toPublicProjectEntry(entry: SnapshotProjectEntry): PublicProjectEntry {
+export function toPublicProjectEntry(
+	entry: SnapshotProjectEntry & { tags: string[] },
+): PublicProjectEntry {
 	return {
 		id: entry.id,
 		name: entry.name,
@@ -336,6 +338,7 @@ export function toPublicProjectEntry(entry: SnapshotProjectEntry): PublicProject
 		created_at: entry.created_at,
 		updated_at: entry.updated_at,
 		notebook_count: entry.notebook_count,
+		tags: entry.tags,
 	};
 }
 

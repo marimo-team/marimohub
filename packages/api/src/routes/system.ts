@@ -55,6 +55,7 @@ app.openapi(meRoute, async (c) => {
 	const appOnly = await deps.services.projects.isAppOnly(user, deps.policy);
 	return ok(c, {
 		id: user.id,
+		groups: [...(user.groups ?? [])],
 		email: user.email,
 		name: user.name ?? null,
 		picture_url: user.pictureUrl ?? null,

@@ -1,3 +1,4 @@
+import { TagPrefixSchema } from './tagPrefix';
 import { z } from '@hono/zod-openapi';
 import { BadRequestError, NOTEBOOK_STATUSES, PROJECT_STATUSES } from '@marimo-hub/core';
 
@@ -56,6 +57,12 @@ const ListFilterQuery = {
 };
 
 export const ProjectListQuery = PaginationQuery.extend({
+	tag_prefix: TagPrefixSchema.optional().openapi({
+		param: { name: 'tag_prefix', in: 'query' },
+		description:
+			'Path-tag namespace. Matches projects with a tag equal to this value or nested under it (`a` matches `a` and `a/b`, not `ab`). Segments are separated by `/`. Each segment must start with a lowercase letter or digit, followed by lowercase letters, digits, `.`, `_`, or `-`.',
+		example: 'research/vision',
+	}),
 	status: z
 		.enum(PROJECT_STATUSES)
 		.optional()

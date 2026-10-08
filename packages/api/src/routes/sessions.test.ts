@@ -1899,6 +1899,36 @@ describe('Session routes', () => {
 		expect(Date.parse(stored.expires_at!)).toBeGreaterThan(Date.parse(authorizationExpiresAt));
 	});
 
+	it.each([undefined, new Date(Date.now() + Millis.minutes(30)).toISOString()])(
+		'bounds group-only credentials by expiry: %s',
+		async (expiry) => {
+			const groupOwner = createTestApi({
+				bucket,
+				compute: makeFakeCompute(),
+				deps: {
+					authenticator: {
+						authenticate: async () => ({
+							id: ACTOR,
+							email: `${ACTOR}@example.com`,
+							credential: { kind: 'sso' },
+							groups: ['team-a'],
+							...(expiry ? { entitlementsExpiresAt: expiry } : {}),
+						}),
+					},
+				},
+			}).request;
+			const response = await groupOwner('POST', sessionsPath());
+			if (!expiry) {
+				const error = await expectError(response, 403, 'FORBIDDEN');
+				expect(error.message).toContain('no credential expiry');
+			} else {
+				const data = await expectOk<ApiSession>(response);
+				const stored = await createServices(bucket).sessions.getSession(pid, data.session_id);
+				expect(stored.authorization_expires_at).toBe(expiry);
+			}
+		},
+	);
+
 	it('fails closed when an entitlement-bearing authenticator omits its credential expiry', async () => {
 		const groupEditor = createTestApi({
 			bucket,

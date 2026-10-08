@@ -10,7 +10,10 @@ import { Millis } from '../../duration';
 import { NotFoundError, PythonEnvironmentSetupError, UnavailableError } from '../../errors';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { effectivePersistenceMode } from './sessionPersistence';
-import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
+import {
+	DEFAULT_LOCAL_ENTRY_NOTEBOOK,
+	workspaceSourcePolicy,
+} from '../../integrations/remoteWorkspace';
 import type { WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
 import { logEvent } from '../../logs';
 import { paths } from '../../paths';
@@ -1229,7 +1232,7 @@ export class SandboxProvisioner {
 		const startup: MarimoStartup = {
 			plan: buildMarimoLaunch(
 				{
-					notebookFile: options.entryNotebook ?? 'notebook.py',
+					notebookFile: options.entryNotebook ?? DEFAULT_LOCAL_ENTRY_NOTEBOOK,
 					port: MARIMO_PORT,
 					host: '0.0.0.0',
 					mode: options.launchMode,

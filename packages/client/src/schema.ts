@@ -663,8 +663,8 @@ export interface paths {
 		};
 		get?: never;
 		put?: never;
-		/** Prepare a folder snapshot for notebook import */
-		post: operations['notebookImports.prepare'];
+		/** Upload a folder snapshot for notebook import */
+		post: operations['notebooks.imports.prepare'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -678,11 +678,33 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		/** Reconcile a notebook import outcome */
-		get: operations['notebookImports.status'];
+		get?: never;
 		put?: never;
-		/** Import a notebook from a prepared folder */
-		post: operations['notebookImports.publish'];
+		/**
+		 * Create a notebook from a prepared folder snapshot
+		 * @description Idempotent per entrypoint: a retry with the same body returns the same notebook. A different body for an entrypoint already attempted returns 409 `IMPORT_RESTART_REQUIRED`.
+		 */
+		post: operations['notebooks.imports.publish'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebook-imports/{import_id}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Get the outcome of each notebook in a folder import
+		 * @description Lists every entrypoint with an attempt in progress or finished. Entrypoints that were never attempted, or whose attempt stopped and can be retried, are absent.
+		 */
+		get: operations['notebooks.imports.get'];
+		put?: never;
+		post?: never;
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -2246,6 +2268,7 @@ export interface components {
 			};
 		};
 		Me: {
+			groups: string[];
 			id: string;
 			email: string;
 			name?: string | null;
@@ -2409,6 +2432,12 @@ export interface components {
 			 */
 			updated_at: string;
 			notebook_count: number;
+			/**
+			 * @example [
+			 *       "research/vision"
+			 *     ]
+			 */
+			tags: string[];
 		};
 		Project: {
 			id: string;
@@ -2830,6 +2859,7 @@ export interface components {
 			/** @enum {number} */
 			schema_version: 1;
 			max_cases: number;
+			max_groups: number;
 			capabilities: {
 				login_policy: boolean;
 				resource_security: boolean;
@@ -2917,6 +2947,7 @@ export interface components {
 				| 'default-role:editor'
 				| 'default-role:manager'
 			)[];
+			groups: string[];
 			reason?: string;
 			problem?: string;
 			assertion: components['schemas']['PolicyAssertionResult'];
@@ -3013,6 +3044,7 @@ export interface components {
 						| 'default-role:editor'
 						| 'default-role:manager'
 					)[];
+					groups?: string[];
 			  }
 			| {
 					/** @enum {string} */
@@ -3032,6 +3064,7 @@ export interface components {
 					| 'default-role:editor'
 					| 'default-role:manager'
 				)[];
+				groups?: string[];
 				grant?: {
 					actions:
 						| '*'
@@ -4859,6 +4892,8 @@ export interface operations {
 			query?: {
 				limit?: number;
 				cursor?: string;
+				/** @description Path-tag namespace. Matches projects with a tag equal to this value or nested under it (`a` matches `a` and `a/b`, not `ab`). Segments are separated by `/`. Each segment must start with a lowercase letter or digit, followed by lowercase letters, digits, `.`, `_`, or `-`. */
+				tag_prefix?: string;
 				/** @description Project status to match. Deleted projects are excluded when omitted. */
 				status?: 'active' | 'deleted';
 				/** @description Exact tag to match. */
@@ -8927,7 +8962,7 @@ export interface operations {
 			};
 		};
 	};
-	'notebookImports.prepare': {
+	'notebooks.imports.prepare': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -8942,7 +8977,7 @@ export interface operations {
 			};
 		};
 		responses: {
-			/** @description Prepared workspace */
+			/** @description Prepared folder snapshot */
 			201: {
 				headers: {
 					[name: string]: unknown;
@@ -8953,6 +8988,7 @@ export interface operations {
 						success: true;
 						data: {
 							id: string;
+							/** Format: date-time */
 							expires_at: string;
 							files: {
 								path: string;
@@ -8962,6 +8998,15 @@ export interface operations {
 					};
 				};
 			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
 			/** @description Authentication required */
 			401: {
 				headers: {
@@ -9029,114 +9074,7 @@ export interface operations {
 			};
 		};
 	};
-	'notebookImports.status': {
-		parameters: {
-			query: {
-				entry_notebook: string;
-			};
-			header?: never;
-			path: {
-				pid: string;
-				import_id: string;
-			};
-			cookie?: never;
-		};
-		requestBody?: never;
-		responses: {
-			/** @description Import status */
-			200: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': {
-						/** @enum {boolean} */
-						success: true;
-						data: {
-							/** @enum {string} */
-							state: 'pending' | 'preparing' | 'publishing' | 'complete' | 'expired';
-							notebook?: components['schemas']['NotebookMeta'];
-						};
-					};
-				};
-			};
-			/** @description Authentication required */
-			401: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Access forbidden */
-			403: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Not found */
-			404: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Conflict */
-			409: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Request body too large */
-			413: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Validation error */
-			422: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Internal server error */
-			500: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Service unavailable */
-			503: {
-				headers: {
-					/** @description Seconds to wait before retrying. */
-					'Retry-After': string;
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-		};
-	};
-	'notebookImports.publish': {
+	'notebooks.imports.publish': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -9149,9 +9087,13 @@ export interface operations {
 		requestBody: {
 			content: {
 				'application/json': {
+					/** @example reports/revenue.py */
 					entry_notebook: string;
+					/** @example Revenue Analysis */
 					title: string;
+					/** @example ghcr.io/orgname/marimo-gpu:latest */
 					base_image?: string;
+					/** @example large */
 					compute_profile?: string;
 				};
 			};
@@ -9199,6 +9141,108 @@ export interface operations {
 			};
 			/** @description Conflict */
 			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.imports.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				import_id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Import outcome */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							id: string;
+							/** Format: date-time */
+							expires_at: string;
+							notebooks: {
+								entry_notebook: string;
+								/** @enum {string} */
+								state: 'preparing' | 'publishing' | 'complete' | 'expired';
+								notebook?: components['schemas']['NotebookMeta'];
+							}[];
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
 				headers: {
 					[name: string]: unknown;
 				};

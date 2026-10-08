@@ -8,13 +8,12 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `domain` | string | Yes |  |  |
+| `domain` | string | Yes |  | CodeArtifact domain name |
 | `domain_owner` | string | Yes |  | AWS account ID that owns the domain |
-| `repository` | string | Yes |  |  |
-| `region` | string |  | `us-east-1` |  |
+| `repository` | string | Yes |  | CodeArtifact repository name |
+| `region` | string |  | `us-east-1` | AWS region of the domain, for example us-east-1 |
+| `auth.method` | `ambient`, `static` | Yes |  | How the hub gets AWS credentials to mint the CodeArtifact token: `ambient` uses the project's workload identity (WIF), `static` uses the AWS keys below. Neither reaches the sandbox. |
 | `default_index` | boolean |  | `false` | Replace public PyPI with this repository |
-| `duration_seconds` | integer |  | `43200` | Token lifetime in seconds. Restart the session after expiry. |
-| `auth.method` | `federation`, `static`, `token` | Yes |  |  |
 
 **`auth.method: static`**
 
@@ -23,11 +22,5 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `auth.access_key_id` 🔒 | string | Yes |  |  |
 | `auth.secret_access_key` 🔒 | string | Yes |  |  |
 | `auth.session_token` 🔒 | string |  |  |  |
-
-**`auth.method: token`**
-
-| Field | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `auth.token` 🔒 | string | Yes |  |  |
 
 :::

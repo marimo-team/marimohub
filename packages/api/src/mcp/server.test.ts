@@ -33,6 +33,40 @@ afterEach(() => {
 });
 
 describe('MCP tool boundaries', () => {
+	it('filters project namespaces with and without a project selector and returns project tags', async () => {
+		const bucket = new MemoryBucket();
+		await new CatalogService(bucket).initialize(ACTOR);
+		const deps = makeTestDeps(bucket);
+		const project = await deps.services.projects.createProject(
+			{ name: 'Research', description: '', tags: ['dep1/team'] },
+			PRINCIPAL.id,
+		);
+		await deps.services.projects.createProject(
+			{ name: 'Other', description: '', tags: ['dep10'] },
+			PRINCIPAL.id,
+		);
+		const { client, server } = await connect(deps);
+		try {
+			for (const selector of [undefined, project.id]) {
+				const response = await client.callTool({
+					name: 'list_catalog',
+					arguments: { project: selector, project_tag_prefix: 'dep1', include_sessions: false },
+				});
+				expect(response.structuredContent).toEqual({
+					projects: [{ id: project.id, name: 'Research', tags: ['dep1/team'], notebooks: [] }],
+				});
+			}
+			const miss = await client.callTool({
+				name: 'list_catalog',
+				arguments: { project: project.id, project_tag_prefix: 'dep10' },
+			});
+			expect(miss.structuredContent).toEqual({ projects: [] });
+		} finally {
+			await client.close();
+			await server.close();
+		}
+	});
+
 	it('permits stakeholder app launches without exposing authoring tools', async () => {
 		const bucket = new MemoryBucket();
 		await new CatalogService(bucket).initialize(ACTOR);

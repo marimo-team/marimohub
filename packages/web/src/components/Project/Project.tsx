@@ -1,3 +1,6 @@
+import { TagField } from '@/components/ui/TagField';
+import { TagFieldValue } from '@/lib/tagFieldValue';
+import { isPathTag } from '@marimo-hub/core/tag-paths';
 import { hasNotebookPreviews } from '@/api/previews';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { useProjectThumbnails } from '@/api/thumbnails';
@@ -229,6 +232,7 @@ function DeletedNotebookRow({ notebook, user, usersLoading, onAction }: DeletedN
 }
 
 const projectSchema = z.object({
+	tags: z.instanceof(TagFieldValue),
 	name: requiredText('Project name'),
 	description: optionalText(),
 });
@@ -343,8 +347,14 @@ function useProjectContent() {
 		);
 	}, [integrationKinds, projectIntegrations]);
 
+	const projectTags = useMemo(() => TagFieldValue.fromTags(project.tags), [project.tags]);
+	const projectFormValues = {
+		name: project.name,
+		description: project.description,
+		tags: projectTags,
+	};
 	const editProjectForm = useAppForm({
-		defaultValues: { name: project.name, description: project.description },
+		defaultValues: projectFormValues,
 		validators: schemaValidators(projectSchema),
 		onSubmit: async ({ value }) => {
 			const name = value.name.trim();
@@ -353,6 +363,7 @@ function useProjectContent() {
 					projectId: pid!,
 					name,
 					description: value.description.trim(),
+					tags: value.tags.tags,
 				});
 				toast.success(`Updated project "${name}"`);
 				editProjectModal.close();
@@ -361,10 +372,7 @@ function useProjectContent() {
 			}
 		},
 	});
-	useSeedOnOpen(editProjectForm, editProjectModal.isOpen, {
-		name: project.name,
-		description: project.description,
-	});
+	useSeedOnOpen(editProjectForm, editProjectModal.isOpen, projectFormValues);
 
 	const deleteProjectForm = useAppForm({
 		defaultValues: { confirmName: '' },
@@ -707,15 +715,17 @@ function useProjectContent() {
 							</LinkButton>
 						)}
 						{canEditProject(project.your_role) && (
-							<Button aria-label="Import notebooks" onPress={importModal.open}>
-								<Upload className="size-4" />
-								<span className="max-sm:hidden">Import notebooks</span>
-							</Button>
+							<>
+								<Button aria-label="Import notebooks" onPress={importModal.open}>
+									<Upload className="size-4" />
+									<span className="max-sm:hidden">Import notebooks</span>
+								</Button>
+								<Button variant="primary" onPress={uploadModal.open}>
+									<Plus className="size-4" />
+									New Notebook
+								</Button>
+							</>
 						)}
-						<Button variant="primary" onPress={uploadModal.open}>
-							<Plus className="size-4" />
-							New Notebook
-						</Button>
 						{canManage ? (
 							<DropdownMenu
 								label="More create options"
@@ -843,18 +853,18 @@ function useProjectContent() {
 								: 'No notebooks are available in this project yet.'
 						}
 						action={
-							<div className="flex flex-wrap justify-center gap-2">
-								<Button variant="default" onPress={uploadModal.open}>
-									<Plus className="size-4" />
-									Create your first notebook
-								</Button>
-								{canEditProject(project.your_role) && (
+							canEditProject(project.your_role) && (
+								<div className="flex flex-wrap justify-center gap-2">
+									<Button variant="default" onPress={uploadModal.open}>
+										<Plus className="size-4" />
+										Create your first notebook
+									</Button>
 									<Button onPress={importModal.open}>
 										<Upload className="size-4" />
 										Import a folder
 									</Button>
-								)}
-							</div>
+								</div>
+							)
 						}
 					/>
 				}
@@ -1214,6 +1224,21 @@ function useProjectContent() {
 				</editProjectForm.AppField>
 				<editProjectForm.AppField name="description">
 					{(f) => <f.TextField label="Description" placeholder="Optional description" />}
+				</editProjectForm.AppField>
+				<editProjectForm.AppField name="tags">
+					{(f) => (
+						<TagField
+							label="Tags"
+							value={f.state.value}
+							onChange={f.handleChange}
+							onBlur={f.handleBlur}
+							description={
+								f.state.value.tags.some((tag) => tag.includes('/') && !isPathTag(tag))
+									? "Some tags won't be treated as a namespace (use lowercase segments like team/repo)."
+									: 'Press Enter or comma to add a tag. Use team/repo for namespaces.'
+							}
+						/>
+					)}
 				</editProjectForm.AppField>
 			</FormDialog>
 

@@ -27,6 +27,19 @@ function filters(values: ListFilterValues<'active' | 'deleted'> = {}) {
 }
 
 describe('ListFilters', () => {
+	it('preserves the namespace when applying other filters', async () => {
+		render(filters({ tag_prefix: 'research/vision' }));
+		expect(screen.getByRole('button', { name: 'Filters' })).toHaveAttribute(
+			'aria-expanded',
+			'false',
+		);
+		await userEvent.setup().click(screen.getByRole('button', { name: 'Filters' }));
+		await userEvent.setup().click(screen.getByRole('button', { name: 'Apply' }));
+		expect(onChange).toHaveBeenLastCalledWith(
+			expect.objectContaining({ tag_prefix: 'research/vision' }),
+		);
+	});
+
 	it('opens when URL-backed filters become active after mount', async () => {
 		const { rerender } = render(filters());
 		const toggle = screen.getByRole('button', { name: 'Filters' });

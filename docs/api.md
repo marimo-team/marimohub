@@ -60,7 +60,8 @@ The repository source is
 Resource groups:
 
 - **Projects** — list/create/update/delete projects; add/update/remove members
-  (`/projects/{pid}/members`). Project responses carry `your_role` (the caller's
+  (`/projects/{pid}/members`). Project list items carry `tags`. `GET /projects` accepts
+  `tag_prefix` to filter [project namespaces](./organizing-projects.md). Project responses carry `your_role` (the caller's
   effective role). Managers can read the audit log one UTC day at a time
   (`GET /projects/{pid}/events?date=YYYY-MM-DD`, defaults to today) — every
   project/notebook mutation is recorded as an event.
@@ -73,6 +74,18 @@ Resource groups:
 - **Sessions** — list, create, inspect, heartbeat, and stop kernel sessions.
   The session routes also expose editor ownership and exclusive takeover.
   [Secondary surfaces](/surfaces) provide VS Code and OpenCode access within edit sessions.
+- **Notebook imports** — [import a local folder](/importing-notebooks) as
+  notebooks with their supporting files:
+  - `POST /projects/{pid}/notebook-imports` starts an import from a zip of the
+    folder (`application/zip` body) and returns `201`.
+  - `POST /projects/{pid}/notebook-imports/{import_id}/notebooks` creates one
+    notebook from the import (`201`).
+  - `GET /projects/{pid}/notebook-imports/{import_id}` returns the import with
+    each notebook's state.
+
+  The hub keeps the folder snapshot for 24 hours and per-notebook receipts for 7
+  days after that.
+
 - **Workspace files** — browse, read, upload, copy, move, and delete notebook files
   under `/projects/{pid}/notebooks/{nid}/workspace`.
 - **Previews** — create, list, get, and delete [notebook previews](/notebook-previews),

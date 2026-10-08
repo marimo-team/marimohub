@@ -21,6 +21,7 @@ import type {
 	SandboxInstance,
 	SessionRender,
 	UserId,
+	WorkloadRef,
 } from '@marimo-hub/core';
 import {
 	AppPoolService,
@@ -96,7 +97,12 @@ import {
 	scheduleProjectAlert,
 } from '../notifications';
 import type { ApiDeps, SandboxConfig } from '../context';
-import { mergeSessionEnv, resolveFederatedVars, resolveIntegrationRender } from '../sandboxEnv';
+import {
+	federatedCredentialsFor,
+	mergeSessionEnv,
+	resolveFederatedVars,
+	resolveIntegrationRender,
+} from '../sandboxEnv';
 import {
 	assertProjectRole,
 	assertSessionAccess,
@@ -637,7 +643,7 @@ function earliestDeadline(...deadlines: (string | undefined)[]): string | undefi
 
 function entitlementAuthorizationDeadline(user: AuthUser): string | undefined {
 	if (!user.entitlementsExpiresAt) {
-		if (user.entitlements?.length) {
+		if (user.entitlements?.length || user.groups?.length) {
 			throw new ForbiddenError('Group authorization has no credential expiry; sign in again');
 		}
 		return undefined;
@@ -1833,11 +1839,16 @@ export async function startNotebookSession(input: {
 					};
 					// WIF + integrations share `sandboxEnv.ts` with the job runner, so the
 					// two injection paths cannot drift. Never for a viewer sandbox.
+					const sessionWorkload: WorkloadRef = { kind: 'session', id: session!.session_id };
+					const federatedCredentials = federatedCredentialsFor(deps, project, sessionWorkload, {
+						restricted: restrictedViewerCredentials,
+					});
 					const resolveWifVars = () =>
 						resolveFederatedVars(deps, {
 							project,
-							workload: { kind: 'session', id: session!.session_id },
+							workload: sessionWorkload,
 							restricted: restrictedViewerCredentials,
+							federatedCredentials,
 							onError: (err) => {
 								observer.tag('wif_exchange_failed', true);
 								observer.tag(
@@ -1897,9 +1908,10 @@ export async function startNotebookSession(input: {
 						resolveIntegrationRender(deps, {
 							projectId: pid,
 							project,
-							workload: { kind: 'session', id: session!.session_id },
+							workload: sessionWorkload,
 							principal: { userId: user.id, email: user.email },
 							restricted: restrictedViewerCredentials,
+							federatedCredentials,
 							onRendered: (render) => {
 								observer.tag('integrations_rendered_count', render.attachments.length);
 								if (render.warnings.length > 0) {

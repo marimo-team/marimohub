@@ -147,3 +147,33 @@ describe('OAuth scope syntax', () => {
 		expect(parseAccessTokenScopes('a'.repeat(8192))).toEqual(['a'.repeat(8192)]);
 	});
 });
+
+it('carries selected access-token groups until token expiry and denies overflow', () => {
+	const membershipPolicy = {
+		...policy,
+		admission: createAdmissionPolicy({
+			groups: { claim: '/groups', membership: { prefixes: ['team-'] } },
+		}),
+	};
+	expect(
+		principalFromVerifiedAccessToken(
+			{ ...claims, groups: ['team-z', 'team-a', 'private'] },
+			'at+jwt',
+			membershipPolicy,
+			now,
+		),
+	).toMatchObject({
+		principal: {
+			groups: ['team-a', 'team-z'],
+			entitlementsExpiresAt: new Date(claims.exp * 1000).toISOString(),
+		},
+	});
+	expect(
+		principalFromVerifiedAccessToken(
+			{ ...claims, groups: Array.from({ length: 33 }, (_, i) => `team-${i}`) },
+			'at+jwt',
+			membershipPolicy,
+			now,
+		),
+	).toEqual({ error: 'admission_denied' });
+});

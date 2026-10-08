@@ -23,6 +23,10 @@ const MINIMUM_LEVEL_RANK = LEVEL_RANK.get('elevated');
 
 const ALLOWED_DEPARTMENTS = new Set(['orgcode1', 'orgcode2']);
 const REQUIRED_ELEMENTS = ['element-a', 'element-b'];
+const DEPARTMENT_TEAMS = new Map([
+	['orgcode1', ['team-data', 'team-ml']],
+	['orgcode2', ['team-platform']],
+]);
 
 function isRecord(value) {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -69,6 +73,8 @@ export default {
 					// MARIMOHUB_PROJECT_CREATION=restricted; otherwise everyone can
 					// create projects.
 					entitlements: ['default-role:editor'],
+					// The host caps selected groups at 32 ids and 1280 serialized UTF-8 bytes.
+					groups: DEPARTMENT_TEAMS.get(attributes.department),
 				};
 			},
 		};

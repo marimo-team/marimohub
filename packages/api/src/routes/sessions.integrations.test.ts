@@ -79,7 +79,7 @@ describe('Session provisioning with integrations', () => {
 		return api(store);
 	}
 
-	async function codeArtifactStore(method: 'static' | 'federation' = 'static') {
+	async function codeArtifactStore(method: 'static' | 'ambient' = 'static') {
 		const resolve = vi.fn(async () => {
 			throw new Error('private-aws-secret');
 		});
@@ -100,7 +100,7 @@ describe('Session provisioning with integrations', () => {
 					domain_owner: '123456789012',
 					repository: 'python',
 					auth:
-						method === 'federation'
+						method === 'ambient'
 							? { method }
 							: { method, access_key_id: 'KEY', secret_access_key: 'private-aws-secret' },
 				},
@@ -110,18 +110,21 @@ describe('Session provisioning with integrations', () => {
 		return { store, resolve };
 	}
 
-	it.each(['token exchange', 'WIF unavailable'] as const)(
-		'stops session startup when CodeArtifact fails: %s',
-		async (failure) => {
+	it.each([
+		['token exchange', 'Package registry authentication failed.'],
+		['WIF unavailable', 'CodeArtifact requires project AWS cloud access.'],
+	] as const)(
+		'stops session startup with a 503 when CodeArtifact fails: %s',
+		async (failure, message) => {
 			const { store, resolve } = await codeArtifactStore(
-				failure === 'WIF unavailable' ? 'federation' : 'static',
+				failure === 'WIF unavailable' ? 'ambient' : 'static',
 			);
 			const { request, calls } = api(store);
 			const error = await expectError(
 				await request('POST', `/projects/${pid}/notebooks/${nid}/sessions`),
-				422,
+				503,
 			);
-			expect(error.message).toBe('Integration "private" could not be rendered.');
+			expect(error.message).toBe(message);
 			expect(JSON.stringify(error)).not.toContain('private-aws-secret');
 			expect(calls.exec.some((command) => command.includes('uv sync'))).toBe(false);
 			expect(calls.startProcess).toHaveLength(0);
