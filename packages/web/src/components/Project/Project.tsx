@@ -1,3 +1,4 @@
+import { isPathTag } from '@marimo-hub/core/tag-paths';
 import { hasNotebookPreviews } from '@/api/previews';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { useProjectThumbnails } from '@/api/thumbnails';
@@ -228,7 +229,14 @@ function DeletedNotebookRow({ notebook, user, usersLoading, onAction }: DeletedN
 	);
 }
 
+const parseTags = (value: string) =>
+	value
+		.split(',')
+		.map((tag) => tag.trim())
+		.filter(Boolean);
+
 const projectSchema = z.object({
+	tags: z.string(),
 	name: requiredText('Project name'),
 	description: optionalText(),
 });
@@ -344,7 +352,11 @@ function useProjectContent() {
 	}, [integrationKinds, projectIntegrations]);
 
 	const editProjectForm = useAppForm({
-		defaultValues: { name: project.name, description: project.description },
+		defaultValues: {
+			name: project.name,
+			description: project.description,
+			tags: project.tags.join(', '),
+		},
 		validators: schemaValidators(projectSchema),
 		onSubmit: async ({ value }) => {
 			const name = value.name.trim();
@@ -353,6 +365,7 @@ function useProjectContent() {
 					projectId: pid!,
 					name,
 					description: value.description.trim(),
+					tags: parseTags(value.tags),
 				});
 				toast.success(`Updated project "${name}"`);
 				editProjectModal.close();
@@ -364,6 +377,7 @@ function useProjectContent() {
 	useSeedOnOpen(editProjectForm, editProjectModal.isOpen, {
 		name: project.name,
 		description: project.description,
+		tags: project.tags.join(', '),
 	});
 
 	const deleteProjectForm = useAppForm({
@@ -1214,6 +1228,22 @@ function useProjectContent() {
 				</editProjectForm.AppField>
 				<editProjectForm.AppField name="description">
 					{(f) => <f.TextField label="Description" placeholder="Optional description" />}
+				</editProjectForm.AppField>
+				<editProjectForm.AppField name="tags">
+					{(f) => (
+						<>
+							<f.TextField
+								label="Tags"
+								placeholder="research/vision, shared"
+								aria-describedby="project-tags-hint"
+							/>
+							<p id="project-tags-hint" className="text-xs text-muted-foreground">
+								{parseTags(f.state.value).some((tag) => tag.includes('/') && !isPathTag(tag))
+									? "Some tags won't be treated as a namespace (use lowercase segments like team/repo)."
+									: 'Separate tags with commas. Use paths like team/repo to organize projects.'}
+							</p>
+						</>
+					)}
 				</editProjectForm.AppField>
 			</FormDialog>
 

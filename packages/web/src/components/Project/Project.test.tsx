@@ -264,11 +264,18 @@ describe('Project — Edit Project', () => {
 		expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled();
 
 		await user.type(name, 'Sales EMEA');
+		expect(within(dialog).getByLabelText('Tags')).toHaveValue('');
+		await user.type(within(dialog).getByLabelText('Tags'), ' research/vision, Team/Repo, ,shared ');
+		expect(within(dialog).getByText(/won't be treated as a namespace/)).toBeInTheDocument();
 		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 
 		await waitFor(() => {
 			const patch = calls.find((c) => c.method === 'PATCH');
-			expect(patch?.body).toMatchObject({ name: 'Sales EMEA', description: 'revenue' });
+			expect(patch?.body).toMatchObject({
+				name: 'Sales EMEA',
+				description: 'revenue',
+				tags: ['research/vision', 'Team/Repo', 'shared'],
+			});
 		});
 	});
 });
