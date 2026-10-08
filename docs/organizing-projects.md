@@ -33,6 +33,7 @@ A project appears once in each matching group. Projects without path tags appear
 The result count counts each project once, even if it appears in several groups.
 
 Select a group name to browse its child namespaces. Select its chevron to collapse or expand the group.
+Each namespace group previews up to five projects. Select **Show all X** to open that namespace.
 Projects tagged exactly with the selected namespace appear directly below the breadcrumb, before any child groups.
 Use the breadcrumb to return to a parent namespace or **All projects**.
 

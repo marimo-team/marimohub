@@ -5,6 +5,8 @@ import { NotebookTags } from '@/components/Project/NotebookTags';
 import { groupProjectsByTagPath } from '@/lib/projectGroups';
 import type { ProjectSummary } from '@/types';
 
+const GROUP_PREVIEW_LIMIT = 5;
+
 function ProjectRow({ project }: { project: ProjectSummary }) {
 	const content = (
 		<>
@@ -117,6 +119,7 @@ function ProjectSection({
 	onSelect?: () => void;
 }) {
 	const id = useId();
+	const visibleProjects = onSelect ? projects.slice(0, GROUP_PREVIEW_LIMIT) : projects;
 	return (
 		<section aria-labelledby={id}>
 			<div className="flex items-center gap-1 px-3 py-1">
@@ -142,7 +145,21 @@ function ProjectSection({
 					)}
 				</h2>
 			</div>
-			{!collapsed && projects.map((project) => <ProjectRow key={project.id} project={project} />)}
+			{!collapsed && (
+				<>
+					{visibleProjects.map((project) => (
+						<ProjectRow key={project.id} project={project} />
+					))}
+					{onSelect && projects.length > GROUP_PREVIEW_LIMIT && (
+						<div className="px-4 py-2">
+							<Button variant="ghost" size="sm" onPress={onSelect}>
+								Show all {projects.length}
+								<ChevronRight className="size-4" aria-hidden="true" />
+							</Button>
+						</div>
+					)}
+				</>
+			)}
 		</section>
 	);
 }

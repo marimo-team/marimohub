@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { tagsMatchPrefix } from '@marimo-hub/core/tag-paths';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -172,6 +172,73 @@ describe('ProjectList', () => {
 		expect(screen.queryByText('Hidden')).not.toBeInTheDocument();
 		const params = new URLSearchParams(screen.getByTestId('location').textContent ?? '');
 		expect(Object.fromEntries(params)).toEqual({ tag: 'shared', q: 'annual', status: 'active' });
+	});
+
+	it.each([5, 6])(
+		'previews at most five of %i projects and only offers show-all when needed',
+		async (count) => {
+			renderList(
+				Array.from({ length: count }, (_, i) => project(`Scale ${i}`, '', { tags: ['scale'] })),
+			);
+			await waitForLoaded();
+			const group = screen.getByRole('region', { name: `scale · ${count}` });
+			expect(within(group).getAllByTestId('project-row')).toHaveLength(5);
+			expect(screen.queryByText('Scale 5')).not.toBeInTheDocument();
+			expect(within(group).queryAllByRole('button', { name: `Show all ${count}` })).toHaveLength(
+				count > 5 ? 1 : 0,
+			);
+			expect(screen.getByRole('status')).toHaveTextContent(`${count} projects`);
+		},
+	);
+
+	it.each(['/', '/?tag_prefix=scale'])(
+		'drills down from a five-row preview at %s and shows all direct matches',
+		async (route) => {
+			const user = userEvent.setup();
+			const tag = route === '/' ? 'scale' : 'scale/team';
+			const { fetchMock } = renderList(
+				Array.from({ length: 7 }, (_, i) => project(`Scale ${i}`, '', { tags: [tag] })),
+				route,
+				true,
+				3,
+			);
+			await waitForLoaded();
+			expect(fetchMock).toHaveBeenCalledTimes(3);
+			expect(screen.getAllByTestId('project-row')).toHaveLength(5);
+			await user.click(screen.getByRole('button', { name: 'Show all 7' }));
+			await waitFor(() => expect(screen.getAllByTestId('project-row')).toHaveLength(7));
+			expect(screen.getByTestId('location')).toHaveTextContent(
+				`tag_prefix=${encodeURIComponent(tag)}`,
+			);
+			expect(screen.getByRole('navigation', { name: 'Project namespace' })).toBeInTheDocument();
+			expect(screen.queryByRole('button', { name: 'Show all 7' })).not.toBeInTheDocument();
+		},
+	);
+
+	it('hides show-all when collapsed and shows every row when grouping is disabled', async () => {
+		const user = userEvent.setup();
+		renderList(Array.from({ length: 7 }, (_, i) => project(`Scale ${i}`, '', { tags: ['scale'] })));
+		await waitForLoaded();
+		await user.click(screen.getByRole('button', { name: 'Collapse scale' }));
+		expect(screen.queryAllByTestId('project-row')).toHaveLength(0);
+		expect(screen.queryByRole('button', { name: 'Show all 7' })).not.toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Expand scale' }));
+		expect(screen.getAllByTestId('project-row')).toHaveLength(5);
+		expect(screen.getByRole('button', { name: 'Show all 7' })).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Group by tags' }));
+		expect(screen.getAllByTestId('project-row')).toHaveLength(7);
+		expect(screen.queryByRole('button', { name: 'Show all 7' })).not.toBeInTheDocument();
+	});
+
+	it('keeps all ungrouped projects reachable without a namespace to drill into', async () => {
+		renderList([
+			project('Tagged', '', { tags: ['ops'] }),
+			...Array.from({ length: 7 }, (_, i) => project(`Loose ${i}`)),
+		]);
+		await waitForLoaded();
+		expect(
+			within(screen.getByRole('region', { name: 'Ungrouped · 7' })).getAllByTestId('project-row'),
+		).toHaveLength(7);
 	});
 
 	it('shows direct matches under the breadcrumb without a redundant heading', async () => {
