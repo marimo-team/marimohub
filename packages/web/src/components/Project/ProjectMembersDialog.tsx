@@ -18,6 +18,7 @@ import {
 	useProjectMembersQuery,
 	useRemoveMember,
 	useUpdateMemberRole,
+	useUpdateProject,
 	useUserSearchQuery,
 	useUsersQuery,
 } from '@/api/hooks';
@@ -30,10 +31,13 @@ import {
 	canManageProject,
 	defaultAccessSummary,
 	roleDescriptions,
+	roleLabel,
 } from '@/lib/roles';
 import type {
 	AssignableProjectRole,
+	Capabilities,
 	ProjectDetail,
+	ProjectDefaultRole,
 	ProjectMember,
 	ProjectRole,
 	ResolvedUser,
@@ -56,9 +60,11 @@ function isCurrentUser(member: ProjectMember, user: User): boolean {
 	);
 }
 
-function roleLabel(role: ProjectRole): string {
-	return role === 'app-user' ? 'App user' : role[0].toUpperCase() + role.slice(1);
-}
+const assignableRoleOptions = ASSIGNABLE_ROLES.map((role) => (
+	<option key={role} value={role}>
+		{roleLabel(role)}
+	</option>
+));
 
 interface RoleBadgeProps {
 	value: ProjectRole;
@@ -138,11 +144,7 @@ function RoleSelect({ label, value, onChange, descriptions, disabled }: RoleSele
 							Admin (legacy)
 						</option>
 					)}
-					{ASSIGNABLE_ROLES.map((role) => (
-						<option key={role} value={role}>
-							{roleLabel(role)}
-						</option>
-					))}
+					{assignableRoleOptions}
 				</select>
 			</Tooltip>
 			<ChevronDown
@@ -308,6 +310,83 @@ function AddMemberPicker({ members, users, descriptions, onAdd, isPending }: Add
 	);
 }
 
+function ProjectDefaultAccess({
+	project,
+	capabilities,
+}: {
+	project: ProjectDetail;
+	capabilities: Capabilities | undefined;
+}) {
+	const canManage = canManageProject(project.your_role);
+	const projectDefaultRole = project.default_role ?? 'inherit';
+	const [defaultAccess, setDefaultAccess] = useState({
+		projectId: project.id,
+		sourceRole: projectDefaultRole,
+		updatedAt: project.updated_at,
+		role: projectDefaultRole,
+	});
+	if (
+		defaultAccess.projectId !== project.id ||
+		defaultAccess.sourceRole !== projectDefaultRole ||
+		defaultAccess.updatedAt !== project.updated_at
+	) {
+		setDefaultAccess({
+			projectId: project.id,
+			sourceRole: projectDefaultRole,
+			updatedAt: project.updated_at,
+			role: projectDefaultRole,
+		});
+	}
+	const defaultRole = defaultAccess.role;
+	const accessSummary = defaultAccessSummary(defaultRole, capabilities?.default_role);
+	const updateProject = useUpdateProject();
+	if (!canManage && !accessSummary) return null;
+
+	return (
+		<section aria-labelledby="default-access-heading" className="rounded-lg border bg-card p-3">
+			<h3 id="default-access-heading" className="mb-1 text-xs font-semibold">
+				Default access for signed-in users
+			</h3>
+			{canManage && (
+				<select
+					aria-label="Default access for signed-in users"
+					value={defaultRole}
+					disabled={updateProject.isPending}
+					onChange={(event) =>
+						updateProject.mutate(
+							{
+								projectId: project.id,
+								default_role: event.target.value as ProjectDefaultRole,
+							},
+							{
+								onSuccess: (updated) => {
+									setDefaultAccess((current) =>
+										current.projectId === project.id
+											? { ...current, role: updated.default_role ?? 'inherit' }
+											: current,
+									);
+									toast.success('Default access updated');
+								},
+							},
+						)
+					}
+					className="mb-2 h-9 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+				>
+					<option value="inherit">Inherit deployment and group defaults</option>
+					<option value="none">Members only</option>
+					{assignableRoleOptions}
+				</select>
+			)}
+			{accessSummary && (
+				<p className="text-xs leading-relaxed text-muted-foreground">{accessSummary}</p>
+			)}
+			<p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+				Explicit membership takes precedence. Owners and super admins retain access.
+			</p>
+		</section>
+	);
+}
+
 export interface ProjectMembersDialogProps {
 	isOpen: boolean;
 	onClose: () => void;
@@ -331,7 +410,6 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 	]);
 	const { data: capabilities } = useCapabilitiesQuery();
 	const descriptions = roleDescriptions(capabilities);
-	const accessSummary = defaultAccessSummary(capabilities);
 	const addMember = useAddMember(project.id);
 	const updateRole = useUpdateMemberRole(project.id);
 	const removeMember = useRemoveMember(project.id);
@@ -542,17 +620,7 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 							)}
 						</section>
 
-						{accessSummary && (
-							<section
-								aria-labelledby="default-access-heading"
-								className="rounded-lg border bg-card p-3"
-							>
-								<h3 id="default-access-heading" className="mb-1 text-xs font-semibold">
-									Default Access
-								</h3>
-								<p className="text-xs leading-relaxed text-muted-foreground">{accessSummary}</p>
-							</section>
-						)}
+						<ProjectDefaultAccess project={project} capabilities={capabilities} />
 					</div>
 				</div>
 			</DialogModal>

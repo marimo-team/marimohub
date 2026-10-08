@@ -28,14 +28,23 @@ describe('roleDescriptions', () => {
 });
 
 describe('defaultAccessSummary', () => {
-	it('is null while capabilities load', () => {
-		expect(defaultAccessSummary(undefined)).toBeNull();
+	it('waits for inherited capabilities but can describe an explicit project setting', () => {
+		expect(defaultAccessSummary('inherit')).toBeNull();
+		expect(defaultAccessSummary('none')).toMatch(/members-only/);
+		expect(defaultAccessSummary('viewer')).toMatch(/can view/);
 	});
 
-	it('describes members-only and each open default', () => {
-		expect(defaultAccessSummary(caps({ default_role: null }))).toMatch(/members-only/);
-		expect(defaultAccessSummary(caps({ default_role: 'viewer' }))).toMatch(/can view/);
-		expect(defaultAccessSummary(caps({ default_role: 'editor' }))).toMatch(/can edit/);
-		expect(defaultAccessSummary(caps({ default_role: 'manager' }))).toMatch(/can manage/);
+	it('describes inherited access without treating it as a project override', () => {
+		expect(defaultAccessSummary('inherit', null)).toMatch(/Your default access: Members only/);
+		expect(defaultAccessSummary('inherit', 'app-user')).toMatch(/Your default access: App user/);
+		expect(defaultAccessSummary('inherit', 'editor')).toMatch(/Your default access: Editor/);
+	});
+
+	it('describes each project default independently of inherited access', () => {
+		expect(defaultAccessSummary('none', 'manager')).toMatch(/members-only/);
+		expect(defaultAccessSummary('app-user', 'manager')).toMatch(/without source access/);
+		expect(defaultAccessSummary('viewer', 'manager')).toMatch(/can view/);
+		expect(defaultAccessSummary('editor', 'manager')).toMatch(/can edit/);
+		expect(defaultAccessSummary('manager', null)).toMatch(/can manage/);
 	});
 });

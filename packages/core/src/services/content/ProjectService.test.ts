@@ -43,6 +43,87 @@ describe('ProjectService', () => {
 		identities = env.identities;
 	});
 
+	it('uses committed default access even when catalog projection fails', async () => {
+		const project = await projects.createProject({ name: 'Private', description: '' }, ACTOR);
+		const subject = { id: uid('user_out'), email: 'out@example.com' };
+		const policy = { defaultRole: 'manager' as const };
+		vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(new Error('projection failed'));
+		await expect(
+			projects.updateProject(project.id, { default_role: 'none' }, ACTOR),
+		).rejects.toThrow('projection failed');
+		expect((await projects.getProject(project.id)).default_role).toBe('none');
+		expect(await projects.listProjects({ subject, policy })).toEqual([]);
+		expect(await projects.listProjects({ subject, policy, action: 'app.read' })).toEqual([]);
+	});
+
+	it('applies project app-user defaults to app listings and app-only classification', async () => {
+		const project = await projects.createProject({ name: 'Apps', description: '' }, ACTOR);
+		const subject = { id: uid('user_out'), email: 'out@example.com' };
+		await projects.updateProject(project.id, { default_role: 'app-user' }, ACTOR);
+		expect(await projects.listProjects({ subject })).toEqual([]);
+		expect(await projects.listProjects({ subject, action: 'app.read' })).toMatchObject([
+			{ id: project.id },
+		]);
+		expect(await projects.isAppOnly(subject)).toBe(true);
+		await projects.updateProject(project.id, { default_role: 'viewer' }, ACTOR);
+		expect(await projects.isAppOnly(subject)).toBe(false);
+	});
+
+	it('keeps members-only access when the authoritative write fails', async () => {
+		const project = await projects.createProject({ name: 'Private', description: '' }, ACTOR);
+		const restricted = await projects.updateProject(project.id, { default_role: 'none' }, ACTOR);
+		const projectKey = paths.project(project.id).meta;
+		const realPut = bucket.put.bind(bucket);
+		const projection = vi.spyOn(catalog, 'updateProjectEntry');
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, ...args) => {
+			if (key === projectKey) throw new Error('storage unavailable');
+			return realPut(key, ...args);
+		});
+
+		await expect(
+			projects.updateProject(project.id, { default_role: 'manager' }, ACTOR),
+		).rejects.toThrow('storage unavailable');
+		expect(await projects.getProject(project.id)).toEqual(restricted);
+		expect(projection).not.toHaveBeenCalled();
+		expect(
+			await projects.listProjects({
+				subject: { id: uid('user_out'), email: 'out@example.com' },
+				policy: { defaultRole: 'manager' },
+			}),
+		).toEqual([]);
+	});
+
+	it('preserves a concurrent membership change when retrying a default-access write', async () => {
+		const project = await projects.createProject({ name: 'Private', description: '' }, ACTOR);
+		const member = uid('user_new');
+		const realPut = bucket.put.bind(bucket);
+		let raced = false;
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+			if (!raced && key === paths.project(project.id).meta && options?.onlyIfEtagMatches) {
+				raced = true;
+				await projects.addMember(project.id, { user_id: member }, 'viewer', ACTOR);
+			}
+			return realPut(key, value, options);
+		});
+
+		await projects.updateProject(project.id, { default_role: 'none' }, ACTOR);
+		const stored = await projects.getProject(project.id);
+		expect(raced).toBe(true);
+		expect(stored.default_role).toBe('none');
+		expect(stored.members).toContainEqual({ user_id: member, role: 'viewer' });
+		expect(
+			await projects.listProjects({
+				subject: { id: member, email: 'new@example.com' },
+			}),
+		).toMatchObject([{ id: project.id }]);
+		expect(
+			await projects.listProjects({
+				subject: { id: uid('user_out'), email: 'out@example.com' },
+				policy: { defaultRole: 'manager' },
+			}),
+		).toEqual([]);
+	});
+
 	it('resolves legacy namespace tags once, after token authorization', async () => {
 		const project = await projects.createProject(
 			{ name: 'Target', description: '', tags: ['dep1/team', 'shared'] },

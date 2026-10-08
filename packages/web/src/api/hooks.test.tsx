@@ -833,6 +833,24 @@ describe('list + detail invalidation', () => {
 		]);
 	});
 
+	it('refreshes app visibility and user access after a project default changes', async () => {
+		const fetchMock = stubFetch(async () => jsonOk({ project_id: PID }));
+		const { result, client } = renderHookWithClient(() => useUpdateProject(), { toaster: false });
+		const spy = vi.spyOn(client, 'invalidateQueries');
+
+		await act(async () => {
+			await result.current.mutateAsync({ projectId: PID, default_role: 'none' });
+		});
+
+		expect(await requestOf(fetchMock).clone().json()).toEqual({ default_role: 'none' });
+		expect(invalidatedKeys(spy)).toEqual([
+			projectKeys.list(),
+			projectKeys.detail(PID),
+			['user', 'me'],
+			['apps'],
+		]);
+	});
+
 	it('useUpdateProject drops both the list and the project it patched', async () => {
 		const fetchMock = stubFetch(async () => jsonOk({ project_id: PID }));
 

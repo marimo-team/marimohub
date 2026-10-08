@@ -5,10 +5,9 @@
  * answers *what* an authenticated caller may do on a given project.
  *
  * Writes are gated by the role matrix (see development_docs/bucket_spec.md §12)
- * against the target project. Reads are gated at `viewer`: with a default role
- * set by deployment policy or a mapped OIDC entitlement, the user is at least
- * a viewer, so reads stay open. Otherwise reads are membership-gated and a
- * non-member cannot see the project. A project's `owner` is implicitly admin.
+ * against the target project. Project reads require `viewer`; app access accepts
+ * `app-user`. Project defaults override deployment and OIDC defaults for
+ * non-members. A project's `owner` is implicitly admin.
  *
  * A member row carries either a `user_id` or an `email` (a pending invite for
  * someone who hasn't logged in yet). The caller is therefore matched as a
@@ -20,7 +19,7 @@
 import type { AssignableRole, Role } from './constants';
 import { ForbiddenError } from './errors';
 import type { UserId } from './ids';
-import { anyRefMatchesSubject, emailsEqual, memberRefMatchesSubject } from './identityMatch';
+import { anyRefMatchesSubject, memberRefMatchesSubject } from './identityMatch';
 import type { IdentitySubject } from './identityMatch';
 import type { Project } from './schema';
 
@@ -76,6 +75,7 @@ export type EffectiveRoleSource =
 	| 'member-email'
 	| 'entitlement-default'
 	| 'deployment-default'
+	| 'project-default'
 	| 'none';
 
 export interface EffectiveRoleResolution {
@@ -105,19 +105,9 @@ export function canCreateProject(subject: AuthSubject, policy?: AuthzPolicy): bo
 }
 
 /**
- * The caller's effective role on a project, or null if they have none.
- *
- * `policy.defaultRole` is the deployment-wide fallback (config:
- * MARIMOHUB_DEFAULT_ROLE) applied to any authenticated caller who is neither
- * the owner nor an explicit member. Left undefined it preserves the
- * members-only behavior; passed `editor` it lets every logged-in user edit
- * notebooks. The default never overrides an explicit membership — it only
- * fills the gap when there is none. A static or group-derived super admin is
- * `admin` everywhere, regardless of membership.
- *
- * When both an id row and an email row match the same caller (added by id and
- * separately invited by email), the highest-ranked role wins, so the result is
- * independent of member order.
+ * Membership overrides defaults; project defaults override deployment and OIDC defaults.
+ * Matching id and email memberships use the highest role, independent of row order.
+ * Owners and super admins remain admin regardless of defaults or membership.
  */
 export function effectiveRole(
 	project: Project,
@@ -157,24 +147,19 @@ export function resolveEffectiveRole(
 	}
 	if (best !== null) return { role: best, source: source ?? 'member-id' };
 
-	let entitlementRole: AssignableRole | null = null;
-	for (const entitlement of subject.entitlements ?? []) {
-		const candidate = ENTITLEMENT_ROLE[entitlement];
-		if (candidate && (entitlementRole === null || RANK[candidate] > RANK[entitlementRole])) {
-			entitlementRole = candidate;
-		}
+	if (project.default_role !== undefined && project.default_role !== 'inherit') {
+		return {
+			role: project.default_role === 'none' ? null : project.default_role,
+			source: 'project-default',
+		};
 	}
-	if (entitlementRole !== null) {
-		const deploymentRole = policy?.defaultRole ?? null;
-		if (deploymentRole !== null && RANK[deploymentRole] >= RANK[entitlementRole]) {
-			return { role: deploymentRole, source: 'deployment-default' };
-		}
-		return { role: entitlementRole, source: 'entitlement-default' };
-	}
-	if (policy?.defaultRole !== undefined && policy.defaultRole !== null) {
-		return { role: policy.defaultRole, source: 'deployment-default' };
-	}
-	return { role: null, source: 'none' };
+
+	const role = subjectDefaultRole(subject, policy);
+	if (role === null) return { role, source: 'none' };
+	return {
+		role,
+		source: role === policy?.defaultRole ? 'deployment-default' : 'entitlement-default',
+	};
 }
 
 /** True if the caller's role on the project is at least `min`. */
@@ -200,38 +185,14 @@ export function requireRole(
 }
 
 /**
- * Whether a caller may *see* a project, decided from a catalog snapshot entry
- * (owner + denormalized `member_ids`/`member_emails`) without loading
- * `project.json`. A `defaultRole` of viewer or higher makes all projects visible
- * to authenticated users. Otherwise, only owners and explicit members can see
- * the project entry.
- *
- * Returns `null` when the entry predates `member_ids` and the caller is not the
- * owner — visibility is then indeterminate from the snapshot alone, so the
- * caller must fall back to loading `project.json`.
- *
- * A missing `member_emails` (entry written before email invites existed, or
- * stripped by an old replica's strict re-parse during a rolling deploy) is
- * treated as empty — fail closed rather than indeterminate, because returning
- * `null` here would force a `project.json` load per entry for every non-member
- * caller across all pre-existing entries. Worst case an email-pending member
- * briefly misses the project in their list; it self-heals on the next
- * membership write, and direct project access (which reads `project.json`)
- * is unaffected.
+ * Snapshot rosters can lag membership changes and omit project defaults.
+ * Non-owner decisions must load the authoritative project record.
  */
 export function canSeeProjectEntry(
 	entry: { owner: UserId; member_ids?: UserId[]; member_emails?: string[] },
 	subject: AuthSubject,
 	policy?: AuthzPolicy,
 ): boolean | null {
-	if (isSuperAdmin(subject, policy?.superAdmins)) return true;
-	if (roleAtLeast(subjectDefaultRole(subject, policy), 'viewer')) return true;
-	if (entry.owner === subject.id) return true;
-	if (entry.member_ids === undefined) return null;
-	if (entry.member_ids.includes(subject.id)) return true;
-	// Normalize both sides (stored entries are lowercased but not trimmed by
-	// ProjectMemberSchema), matching memberRefMatchesSubject — otherwise a pending
-	// invitee with whitespace in their stored email could reach the project
-	// directly yet be omitted from its listing.
-	return (entry.member_emails ?? []).some((e) => emailsEqual(e, subject.email));
+	if (isSuperAdmin(subject, policy?.superAdmins) || entry.owner === subject.id) return true;
+	return null;
 }

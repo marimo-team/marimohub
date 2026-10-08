@@ -1641,7 +1641,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_DEFAULT_ROLE',
 						name: 'Default role',
 						description:
-							'Fallback role for logged-in non-members (app-user | viewer | editor | manager | none). `app-user` grants apps without source access; `viewer`, `editor`, and `manager` grant read, edit, and management access respectively. `none` grants no fallback access. Explicit membership overrides defaults; ownership grants admin.',
+							'Fallback role for signed-in non-members (app-user | viewer | editor | manager | none). `none` grants no default access. Project defaults and explicit memberships take precedence. See [default access](./auth.md#default-access-for-non-members).',
 						example: 'editor',
 						default: 'editor',
 					},

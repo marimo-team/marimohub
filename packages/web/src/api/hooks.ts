@@ -39,6 +39,7 @@ import type {
 	NotebookDetail,
 	ResolvedUser,
 	ProjectFederation,
+	ProjectDefaultRole,
 	ProjectAlertKind,
 	ProjectListFilters,
 	NotebookListFilters,
@@ -472,6 +473,7 @@ export function useUpdateProject() {
 			description?: string;
 			tags?: string[];
 			federation?: ProjectFederation | null;
+			default_role?: ProjectDefaultRole;
 		}) =>
 			apiData(
 				apiClient.PATCH('/api/v1/projects/{pid}', {
@@ -479,7 +481,11 @@ export function useUpdateProject() {
 					body,
 				}),
 			),
-		({ projectId }) => [projectKeys.list(), projectKeys.detail(projectId)],
+		({ projectId, default_role }) => [
+			projectKeys.list(),
+			projectKeys.detail(projectId),
+			...(default_role === undefined ? [] : [userKeys.me(), appKeys.all]),
+		],
 	);
 }
 

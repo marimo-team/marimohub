@@ -305,78 +305,25 @@ describe('authz', () => {
 	});
 
 	describe('canSeeProjectEntry', () => {
-		const entry = {
-			owner: OWNER.id,
-			member_ids: [OWNER.id, EDITOR.id, VIEWER.id],
-			member_emails: ['invitee@example.com'],
-		};
+		const entry = { owner: OWNER.id, member_ids: [VIEWER.id], member_emails: [INVITEE.email] };
 
-		it('makes every project visible when a default role is set', () => {
-			expect(canSeeProjectEntry(entry, STRANGER, { defaultRole: 'viewer' })).toBe(true);
-			expect(canSeeProjectEntry(entry, STRANGER, { defaultRole: 'editor' })).toBe(true);
-		});
-
-		it('makes every project visible for a group-derived default role', () => {
+		it('requires authoritative permissions for non-owners, even with a default or roster match', () => {
+			for (const caller of [STRANGER, VIEWER, INVITEE]) {
+				expect(canSeeProjectEntry(entry, caller, { defaultRole: 'manager' })).toBeNull();
+			}
 			expect(
-				canSeeProjectEntry(entry, {
-					...STRANGER,
-					entitlements: ['default-role:viewer'],
-				}),
-			).toBe(true);
-		});
-
-		it('restricts visibility to owner and members under none (null default)', () => {
-			expect(canSeeProjectEntry(entry, OWNER)).toBe(true);
-			expect(canSeeProjectEntry(entry, EDITOR)).toBe(true);
-			expect(canSeeProjectEntry(entry, STRANGER)).toBe(false);
-		});
-
-		it('sees an email member via member_emails, case-insensitively', () => {
-			expect(canSeeProjectEntry(entry, INVITEE)).toBe(true);
-			expect(canSeeProjectEntry(entry, { ...INVITEE, email: 'INVITEE@example.com' })).toBe(true);
-		});
-
-		it('normalizes stored member_emails, so a whitespace-padded entry still lists', () => {
-			// ProjectMemberSchema lowercases but does not trim; direct access
-			// (memberRefMatchesSubject) trims both sides, so listing must too or an
-			// invitee could reach the project yet be missing from their list.
-			const padded = {
-				owner: OWNER.id,
-				member_ids: [OWNER.id],
-				member_emails: [' invitee@example.com '],
-			};
-			expect(canSeeProjectEntry(padded, INVITEE)).toBe(true);
-		});
-
-		it('fails closed for an email member when member_emails is absent', () => {
-			const stripped = { owner: OWNER.id, member_ids: [OWNER.id] };
-			expect(canSeeProjectEntry(stripped, INVITEE)).toBe(false);
-		});
-
-		it('sees the owner even when member_ids is absent', () => {
-			expect(canSeeProjectEntry({ owner: OWNER.id }, OWNER)).toBe(true);
-		});
-
-		it('is indeterminate for a non-owner when member_ids is absent (fallback)', () => {
-			expect(canSeeProjectEntry({ owner: OWNER.id }, STRANGER)).toBeNull();
-		});
-
-		it('a super admin sees everything, even indeterminate legacy entries', () => {
-			const policy = { superAdmins: [STRANGER.id] };
-			expect(canSeeProjectEntry(entry, STRANGER, policy)).toBe(true);
-			expect(canSeeProjectEntry({ owner: OWNER.id }, STRANGER, policy)).toBe(true);
-		});
-
-		it('does not grant visibility on an id/email namespace collision', () => {
-			// Email entry, caller whose ID equals it but whose email is their own:
-			// visibility stays members-only (here: indeterminate → fallback needed).
-			const impostor = subject('admin@example.com', 'attacker@evil.example');
-			expect(
-				canSeeProjectEntry({ owner: OWNER.id }, impostor, { superAdmins: ['admin@example.com'] }),
+				canSeeProjectEntry(entry, { ...STRANGER, entitlements: ['default-role:manager'] }),
 			).toBeNull();
-			expect(canSeeProjectEntry(entry, impostor, { superAdmins: ['admin@example.com'] })).toBe(
-				false,
-			);
+		});
+
+		it('admits owners and super admins without a roster', () => {
+			expect(canSeeProjectEntry({ owner: OWNER.id }, OWNER)).toBe(true);
+			expect(
+				canSeeProjectEntry({ owner: OWNER.id }, STRANGER, { superAdmins: [STRANGER.id] }),
+			).toBe(true);
+			expect(
+				canSeeProjectEntry({ owner: OWNER.id }, { ...STRANGER, entitlements: ['super-admin'] }),
+			).toBe(true);
 		});
 	});
 });
@@ -397,4 +344,43 @@ describe('app-user role resolution', () => {
 		invited.members.push({ user_id: STRANGER.id, role: 'viewer' });
 		expect(effectiveRole(invited, STRANGER)).toBe('viewer');
 	});
+});
+
+describe('project default access', () => {
+	it.each(['none', 'app-user', 'viewer', 'editor', 'manager'] as const)(
+		'%s overrides deployment and OIDC defaults for non-members',
+		(default_role) => {
+			const restricted = { ...project, default_role };
+			const caller: AuthSubject = { ...STRANGER, entitlements: ['default-role:manager'] };
+			expect(resolveEffectiveRole(restricted, caller, { defaultRole: 'manager' })).toEqual({
+				role: default_role === 'none' ? null : default_role,
+				source: 'project-default',
+			});
+			expect(effectiveRole(restricted, STRANGER)).toBe(
+				default_role === 'none' ? null : default_role,
+			);
+			expect(effectiveRole(restricted, OWNER)).toBe('admin');
+			expect(effectiveRole(restricted, VIEWER)).toBe('viewer');
+			expect(effectiveRole(restricted, INVITEE)).toBe('editor');
+			expect(effectiveRole(restricted, STRANGER, { superAdmins: [STRANGER.id] })).toBe('admin');
+			expect(effectiveRole(restricted, { ...STRANGER, entitlements: ['super-admin'] })).toBe(
+				'admin',
+			);
+		},
+	);
+
+	it.each([undefined, 'inherit'] as const)(
+		'preserves deployment and group defaults for %s',
+		(default_role) => {
+			const inherited = { ...project, default_role };
+			expect(effectiveRole(inherited, STRANGER, { defaultRole: 'viewer' })).toBe('viewer');
+			expect(
+				effectiveRole(
+					inherited,
+					{ ...STRANGER, entitlements: ['default-role:editor'] },
+					{ defaultRole: 'viewer' },
+				),
+			).toBe('editor');
+		},
+	);
 });

@@ -6,6 +6,7 @@ import {
 	isMonotonicRestrictionIncrease,
 	notificationRouter,
 	ProjectId,
+	ProjectDefaultRoleSchema,
 	resolveMemberRecipient,
 	roleAtLeast,
 	toPublicProject,
@@ -72,6 +73,10 @@ const CreateProjectBody = z.object({
 });
 
 const UpdateProjectBody = z.object({
+	default_role: ProjectDefaultRoleSchema.optional().openapi({
+		description:
+			'Non-member access. inherit uses deployment and OIDC defaults. none grants no default access. Requires manager or higher.',
+	}),
 	name: z.string().min(1).optional().openapi({ example: 'ML Pipeline' }),
 	description: z.string().optional(),
 	tags: z.array(z.string()).optional(),

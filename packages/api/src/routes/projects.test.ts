@@ -1039,6 +1039,187 @@ describe('Read visibility (MARIMOHUB_DEFAULT_ROLE)', () => {
 		pid = created.id;
 	});
 
+	it('updates project defaults, preserves them on unrelated edits, and restores inheritance', async () => {
+		const stranger = createTestApi({
+			bucket,
+			userId: uid('user_out'),
+			deps: { policy: { defaultRole: 'editor' } },
+		}).request;
+		await expectOk(await stranger('GET', `/projects/${pid}`));
+		const restricted = await expectOk<any>(
+			await owner('PATCH', `/projects/${pid}`, { default_role: 'none' }),
+		);
+		expect(restricted.default_role).toBe('none');
+		expect(restricted.your_role).toBe('admin');
+		await expectError(await stranger('GET', `/projects/${pid}`), 404);
+		await expectError(await stranger('GET', `/projects/${pid}/notebooks`), 404);
+		expect(await expectPage(await stranger('GET', '/projects'))).toEqual([]);
+		expect(
+			(await expectOk<any>(await owner('PATCH', `/projects/${pid}`, { name: 'Renamed' })))
+				.default_role,
+		).toBe('none');
+		await expectOk(await owner('PATCH', `/projects/${pid}`, { default_role: 'inherit' }));
+		expect((await expectOk<any>(await stranger('GET', `/projects/${pid}`))).your_role).toBe(
+			'editor',
+		);
+		expect(await expectPage(await stranger('GET', '/projects'))).toHaveLength(1);
+	});
+
+	it('grants project access in a members-only deployment and keeps explicit membership precedence', async () => {
+		const stranger = createTestApi({ bucket, userId: uid('user_out') }).request;
+		await expectOk(await owner('PATCH', `/projects/${pid}`, { default_role: 'editor' }));
+		expect((await expectOk<any>(await stranger('GET', `/projects/${pid}`))).your_role).toBe(
+			'editor',
+		);
+		expect(await expectPage(await stranger('GET', '/projects'))).toHaveLength(1);
+		await expectOk(
+			await owner('POST', `/projects/${pid}/members`, { user_id: uid('user_out'), role: 'viewer' }),
+			201,
+		);
+		expect((await expectOk<any>(await stranger('GET', `/projects/${pid}`))).your_role).toBe(
+			'viewer',
+		);
+	});
+
+	it.each(['manager', 'editor', 'viewer'] as const)(
+		'requires manager authority to change defaults: %s',
+		async (role) => {
+			const userId = uid('user_member');
+			await expectOk(
+				await owner('POST', `/projects/${pid}/members`, { user_id: userId, role }),
+				201,
+			);
+			const member = createTestApi({ bucket, userId }).request;
+			const response = await member('PATCH', `/projects/${pid}`, { default_role: 'none' });
+			if (role === 'manager') {
+				expect((await expectOk<any>(response)).default_role).toBe('none');
+			} else {
+				await expectError(response, 403);
+				expect(
+					(await expectOk<any>(await owner('GET', `/projects/${pid}`))).default_role,
+				).toBeUndefined();
+			}
+		},
+	);
+
+	it.each(['admin', 'invalid', '', 'NONE', null, false, 1, [], {}])(
+		'rejects invalid default role %j without changing the project',
+		async (default_role) => {
+			await expectOk(await owner('PATCH', `/projects/${pid}`, { default_role: 'none' }));
+			const before = await expectOk(await owner('GET', `/projects/${pid}`));
+			await expectError(
+				await owner('PATCH', `/projects/${pid}`, { default_role, name: 'Changed' }),
+				422,
+			);
+			expect(await expectOk(await owner('GET', `/projects/${pid}`))).toEqual(before);
+		},
+	);
+
+	it('rejects a stale attempt to reopen a project without changing its default or ETag', async () => {
+		const staleEtag = (await owner('GET', `/projects/${pid}`)).headers.get('ETag')!;
+		await expectOk(await owner('PATCH', `/projects/${pid}`, { default_role: 'none' }));
+		const beforeResponse = await owner('GET', `/projects/${pid}`);
+		const currentEtag = beforeResponse.headers.get('ETag');
+		const before = await expectOk(beforeResponse);
+
+		await expectError(
+			await owner(
+				'PATCH',
+				`/projects/${pid}`,
+				{ default_role: 'manager' },
+				{
+					'If-Match': staleEtag,
+				},
+			),
+			412,
+			'PRECONDITION_FAILED',
+		);
+		const after = await owner('GET', `/projects/${pid}`);
+		expect(after.headers.get('ETag')).toBe(currentEtag);
+		expect(await expectOk(after)).toEqual(before);
+	});
+
+	it('lets a default manager restrict access, then rejects their attempt to restore it', async () => {
+		const groupManager = uid('user_group_manager');
+		const manager = createTestApi({
+			bucket,
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						id: groupManager,
+						email: 'group-manager@example.com',
+						credential: { kind: 'development' },
+						entitlements: ['default-role:manager'],
+					}),
+				},
+			},
+		}).request;
+		const restricted = await expectOk<any>(
+			await manager('PATCH', `/projects/${pid}`, { default_role: 'none' }),
+		);
+		expect(restricted.your_role).toBeNull();
+		await expectError(await manager('GET', `/projects/${pid}`), 404);
+		expect(await expectPage(await manager('GET', '/projects'))).toEqual([]);
+		await expectError(await manager('PATCH', `/projects/${pid}`, { default_role: 'inherit' }), 403);
+		expect((await expectOk<any>(await owner('GET', `/projects/${pid}`))).default_role).toBe('none');
+		await expectOk(await owner('PATCH', `/projects/${pid}`, { default_role: 'inherit' }));
+		expect((await expectOk<any>(await manager('GET', `/projects/${pid}`))).your_role).toBe(
+			'manager',
+		);
+	});
+
+	it('keeps another project on the deployment default and filters before pagination', async () => {
+		const other = await createServices(bucket).projects.createProject(
+			{ name: 'Shared', description: '' },
+			ACTOR,
+		);
+		await expectOk(await owner('PATCH', `/projects/${pid}`, { default_role: 'none' }));
+		await createServices(bucket).catalog.updateProjectEntry(
+			'test.reorder',
+			ACTOR,
+			ProjectId.parse(pid),
+			() => ({
+				created_at: new Date(Date.parse(other.created_at) + 1).toISOString(),
+			}),
+		);
+		expect(await expectPage(await owner('GET', '/projects?limit=1'))).toMatchObject([{ id: pid }]);
+		const stranger = createTestApi({
+			bucket,
+			userId: uid('user_out'),
+			deps: { policy: { defaultRole: 'viewer' } },
+		}).request;
+		await expectError(await stranger('GET', `/projects/${pid}`), 404);
+		expect((await expectOk<any>(await stranger('GET', `/projects/${other.id}`))).your_role).toBe(
+			'viewer',
+		);
+		expect(await expectPage(await stranger('GET', '/projects?limit=1'))).toMatchObject([
+			{ id: other.id },
+		]);
+	});
+
+	it('does not elevate an explicit app-user through a manager project default', async () => {
+		const userId = uid('user_app');
+		await expectOk(
+			await owner('POST', `/projects/${pid}/members`, { user_id: userId, role: 'app-user' }),
+			201,
+		);
+		await expectOk(await owner('PATCH', `/projects/${pid}`, { default_role: 'manager' }));
+		const appUser = createTestApi({ bucket, userId }).request;
+		await expectError(await appUser('GET', `/projects/${pid}`), 404);
+		await expectError(await appUser('PATCH', `/projects/${pid}`, { default_role: 'inherit' }), 403);
+		expect((await expectOk<any>(await owner('GET', `/projects/${pid}`))).default_role).toBe(
+			'manager',
+		);
+	});
+
+	it('cannot restore a deleted project by changing its default access', async () => {
+		await expectOk(await owner('DELETE', `/projects/${pid}`));
+		await expectError(await owner('PATCH', `/projects/${pid}`, { default_role: 'manager' }), 404);
+		expect(await createServices(bucket).projects.getProject(ProjectId.parse(pid))).toMatchObject({
+			status: 'deleted',
+		});
+	});
+
 	it('none: a non-member cannot see or list the project, but the owner still can', async () => {
 		const stranger = createTestApi({ bucket, userId: uid('user_out') }).request;
 		await expectError(await stranger('GET', `/projects/${pid}`), 404);

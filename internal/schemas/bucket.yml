@@ -3047,6 +3047,15 @@ components:
                   - app-user
             required:
               - role
+        default_role:
+          type: string
+          enum:
+            - inherit
+            - none
+            - manager
+            - editor
+            - viewer
+            - app-user
         federation:
           type: object
           properties:

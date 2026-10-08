@@ -1377,8 +1377,11 @@ A request that fails authentication receives `401 UNAUTHORIZED`. The verified us
 All routes use the same `effectiveRole` calculation:
 
 - Project ownership and super-admin status grant `admin`.
-- Explicit membership overrides defaults; multiple matching memberships resolve to the highest role.
-- Non-members receive the highest deployment or login-derived default role. `none` grants no fallback access.
+- Explicit membership overrides defaults. Multiple matching memberships use the highest role.
+- Project `default_role` overrides deployment and OIDC defaults for non-members. `none` grants no default access.
+- An absent project default or `inherit` uses the higher deployment or OIDC default.
+
+Project-default changes require `manager` at the API boundary. `ProjectService.updateProject` persists them through the existing metadata CAS.
 
 `project.read` requires `viewer`; `app.read` admits `app-user` to minimal app metadata.
 Notebook content changes require `editor`; notebook administration and project changes require `manager`.
@@ -1386,9 +1389,8 @@ See the [role matrix](../docs/auth.md#authorization-roles) and [app restrictions
 Normal reads mask inaccessible or soft-deleted resources as `404`; insufficient write permissions return `403 FORBIDDEN`.
 Security labels and credential scopes can further restrict access.
 
-Catalog entries carry `member_ids` and `member_emails`, but no roles.
-These projections can lag committed membership changes.
-Listings resolve membership from `project.json`; a stale roster cannot prove that a restrictive membership is absent.
+Catalog entries carry `member_ids` and `member_emails`, but no roles or default access.
+Listings read permissions from `project.json` because catalog projections can lag changes.
 Each listing reuses project reads across role, tag, and label checks.
 Roles, credential scopes, and labels are filtered before pagination and totals.
 This preserves the catalog snapshot model (§7.1) without a separate per-user index.

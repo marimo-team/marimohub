@@ -3,6 +3,7 @@ import { ResourceSecurityLabelsSchema } from './securityLabels';
 import { TokenGrantSchema } from './tokenGrants';
 import { DomainError } from './errors';
 import {
+	ASSIGNABLE_ROLES,
 	NOTEBOOK_STATUSES,
 	PROJECT_STATUSES,
 	ROLES,
@@ -246,17 +247,9 @@ export const SnapshotProjectEntrySchema = z.looseObject({
 	// Filtering aid added after the v1 snapshot shape shipped. Legacy entries
 	// omit it; ProjectService falls back to project.json for those entries.
 	tags: z.array(z.string()).optional(),
-	// Denormalized roster (user ids of `owner` + every member) so the project
-	// list can be filtered to a caller's visible projects in-memory, without an
-	// extra `project.json` read per entry — see ProjectService.listProjects and
-	// bucket_spec.md §12. Optional: entries written before this field existed omit
-	// it, and the list falls back to loading `project.json` for those.
+	// Roster projections can lag changes. Authorization reads project.json.
 	member_ids: z.array(UserIdSchema).optional(),
-	// Companion roster for pending email invites (lowercased). Unlike a missing
-	// `member_ids`, a missing `member_emails` does NOT trigger the project.json
-	// fallback — see canSeeProjectEntry for why it fails closed instead.
-	// Lowercased on parse so authz matching against a lowercased subject email holds
-	// regardless of the case an invite was stored in.
+	// Pending invite emails are normalized for identity reconciliation.
 	member_emails: z.array(z.string().transform((e) => e.toLowerCase())).optional(),
 	/**
 	 * Denormalized security-label projection for list filtering ahead of
@@ -424,6 +417,8 @@ export const ProjectFederationSchema = z.object({
 
 export type ProjectFederation = z.infer<typeof ProjectFederationSchema>;
 
+export const ProjectDefaultRoleSchema = z.enum(['inherit', 'none', ...ASSIGNABLE_ROLES]);
+
 export const ProjectSchema = z.object({
 	schema_version: SchemaVersionSchema,
 	id: ProjectIdSchema,
@@ -431,6 +426,8 @@ export const ProjectSchema = z.object({
 	description: z.string(),
 	owner: UserIdSchema,
 	members: z.array(ProjectMemberSchema),
+	/** Absent or inherit uses deployment and OIDC defaults; none is members-only. */
+	default_role: ProjectDefaultRoleSchema.optional(),
 	/** Optional WIF override; see ProjectFederationSchema. */
 	federation: ProjectFederationSchema.optional(),
 	// Defaulted for backward compatibility: project.json written before this

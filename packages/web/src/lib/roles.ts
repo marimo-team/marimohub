@@ -1,4 +1,4 @@
-import type { AssignableProjectRole, Capabilities, ProjectRole } from '@/types';
+import type { AssignableProjectRole, Capabilities, ProjectDefaultRole, ProjectRole } from '@/types';
 
 const ROLE_ORDER: Record<ProjectRole, true> = {
 	'app-user': true,
@@ -40,14 +40,19 @@ export function roleDescriptions(caps: Capabilities | undefined): Record<Project
 	};
 }
 
-/**
- * One-line summary of what a signed-in NON-member can do, from the deployment's
- * MARIMOHUB_DEFAULT_ROLE. Null while capabilities are loading.
- */
-export function defaultAccessSummary(caps: Capabilities | undefined): string | null {
-	if (caps === undefined) return null;
-	switch (caps.default_role) {
-		case null:
+export function roleLabel(role: ProjectRole): string {
+	return role === 'app-user' ? 'App user' : role[0].toUpperCase() + role.slice(1);
+}
+
+export function defaultAccessSummary(
+	role: ProjectDefaultRole,
+	inheritedRole?: Capabilities['default_role'],
+): string | null {
+	switch (role) {
+		case 'inherit':
+			if (inheritedRole === undefined) return null;
+			return `Deployment and group defaults apply. Your default access: ${inheritedRole === null ? 'Members only' : roleLabel(inheritedRole)}.`;
+		case 'none':
 			return 'This project is members-only: only the owner and the members listed here can access it.';
 		case 'app-user':
 			return 'Everyone who signs in can use this project’s apps by default, without source access.';
