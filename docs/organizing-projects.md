@@ -42,8 +42,9 @@ The list loads every page before it shows the groups. If no project has a path t
 
 Project managers can change tags.
 
-In the web app, open **Edit Project** and enter comma-separated values in **Tags**.
-The form trims each value and removes empty values. It shows a hint for invalid paths but permits ordinary tags.
+In the web app, open **Edit Project** and enter values in **Tags**.
+Press Enter or comma to add each tag. Select a tag and press Backspace or Delete to remove it.
+The form trims new values and ignores empty values. It shows a hint for invalid paths but permits ordinary tags.
 
 With the CLI:
 

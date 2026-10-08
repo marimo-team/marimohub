@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PID, makeFetch, notebook, renderProject, stoppableSession } from './Project.testWorld';
 
@@ -264,8 +264,23 @@ describe('Project — Edit Project', () => {
 		expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled();
 
 		await user.type(name, 'Sales EMEA');
-		expect(within(dialog).getByLabelText('Tags')).toHaveValue('');
-		await user.type(within(dialog).getByLabelText('Tags'), ' research/vision, Team/Repo, ,shared ');
+		expect(within(dialog).getByRole('textbox', { name: 'Tags' })).toHaveTextContent('');
+		const tags = within(dialog).getByRole('textbox', { name: 'Tags' });
+		await user.click(tags);
+		const range = document.createRange();
+		range.selectNodeContents(tags);
+		range.collapse(false);
+		window.getSelection()!.removeAllRanges();
+		window.getSelection()!.addRange(range);
+		fireEvent(
+			tags,
+			new InputEvent('beforeinput', {
+				bubbles: true,
+				cancelable: true,
+				inputType: 'insertText',
+				data: ' research/vision, Team/Repo, ,shared ',
+			}),
+		);
 		expect(within(dialog).getByText(/won't be treated as a namespace/)).toBeInTheDocument();
 		await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 
