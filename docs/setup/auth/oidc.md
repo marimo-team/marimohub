@@ -115,6 +115,15 @@ Selection is case-sensitive: exact IDs match whole values; prefixes match the
 start of a value without a path boundary. Either list can select a group.
 Configure at most 200 exact IDs and 20 prefixes. Empty lists are invalid.
 
+To select all groups, set `MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS='*'`.
+A standalone `*` selects every group, even alongside other IDs. Group validation,
+size limits, and credential expiry still apply. More than 32 retained groups or
+1,280 UTF-8 JSON bytes rejects authentication; the host does not truncate them.
+The raw provider claim remains limited to 200 entries, including duplicates.
+
+Only this membership setting treats `*` as a wildcard. Prefixes, admission lists,
+and role mappings remain literal; `team-*` is not a glob pattern.
+
 IDs and prefixes must contain 1–128 Unicode characters, with no control
 characters, commas, or leading or trailing whitespace. Internal spaces, `@`, and
 leading `/` are valid. The host discards selected IDs that fail these rules;

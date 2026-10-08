@@ -18,6 +18,7 @@ export interface OidcGroupPolicy {
 	defaultRoles?: Partial<Record<AssignableRole, string[]>>;
 	/** Maximum accepted group count (default 200, maximum 200). */
 	maxGroups?: number;
+	/** A standalone `*` in exact selects every valid ID; prefixes remain literal. */
 	membership?: { exact?: string[]; prefixes?: string[] };
 }
 
@@ -157,9 +158,11 @@ export function retainMembershipGroups(
 	membership: NonNullable<OidcGroupPolicy['membership']>,
 ): { retained: string[]; unretainable: number } {
 	const retained: string[] = [];
+	const selectAll = membership.exact?.includes('*') ?? false;
 	let unretainable = 0;
 	for (const group of groups) {
 		if (
+			!selectAll &&
 			!membership.exact?.includes(group) &&
 			!membership.prefixes?.some((prefix) => group.startsWith(prefix))
 		)

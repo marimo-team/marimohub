@@ -533,16 +533,27 @@ describe('external token verification failures', () => {
 	});
 });
 
-it('verifies signed membership groups and rejects over-cap tokens', async () => {
-	const auth = createOidcAccessTokenAuthenticator({
-		...config,
-		groups: { claim: '/groups', membership: { prefixes: ['team-'] } },
-	});
-	const payload = claims({ groups: ['team-z', 'team-a', 'private'] });
-	expect(await auth.authenticate(request(await sign(payload)))).toMatchObject({
-		groups: ['team-a', 'team-z'],
-		entitlementsExpiresAt: new Date(payload.exp! * 1000).toISOString(),
-	});
-	const oversized = claims({ groups: Array.from({ length: 33 }, (_, i) => `team-${i}`) });
-	expect(await auth.authenticate(request(await sign(oversized)))).toBeNull();
-});
+it.each([
+	{ membership: { prefixes: ['team-'] }, expected: ['team-a', 'team-z'] },
+	{ membership: { exact: ['*'] }, expected: ['private', 'team-a', 'team-z'] },
+])(
+	'verifies signed groups with $membership and rejects invalid tokens',
+	async ({ membership, expected }) => {
+		const auth = createOidcAccessTokenAuthenticator({
+			...config,
+			groups: { claim: '/groups', membership },
+		});
+		const payload = claims({ groups: ['team-z', 'team-a', 'private', 'team-a'] });
+		expect(await auth.authenticate(request(await sign(payload)))).toMatchObject({
+			groups: expected,
+			entitlementsExpiresAt: new Date(payload.exp! * 1000).toISOString(),
+		});
+		for (const groups of [
+			Array.from({ length: 33 }, (_, i) => `team-${i}`),
+			Array.from({ length: 11 }, (_, i) => `team-${i}-${'x'.repeat(120)}`),
+			['team-a', null],
+		]) {
+			expect(await auth.authenticate(request(await sign(claims({ groups }))))).toBeNull();
+		}
+	},
+);

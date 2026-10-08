@@ -747,6 +747,18 @@ describe('makeAuth oidc login policy', () => {
 		});
 	});
 
+	it('rejects wildcard membership combined with a login-policy module', () => {
+		expect(() =>
+			makeAuth(
+				{
+					...loginPolicyEnv,
+					MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS: '*',
+				},
+				libraries,
+			),
+		).toThrow('cannot be combined with MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS');
+	});
+
 	it.each(['0', '31', 'abc', '2.5'])('rejects login-policy timeout %s', (value) => {
 		expect(() =>
 			makeAuth(
@@ -982,5 +994,39 @@ describe.each([
 		};
 		expect(() => makeAuth(env)).not.toThrow();
 		expect(() => makeAuth({ ...env, [key]: `${selected},extra` })).toThrow(key);
+	});
+});
+
+describe('wildcard membership configuration', () => {
+	it.each(['*', 'team-a,*', '*,*'])('accepts %j with a claim pointer', (value) => {
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS: value,
+			}),
+		).not.toThrow();
+	});
+
+	it.each([' *', '* ', '*,', '*,bad\n'])('rejects malformed wildcard selections %j', (value) => {
+		expect(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS: value,
+			}),
+		).toThrow('MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS');
+	});
+
+	it('still requires the claim pointer and bounds credential lifetime', () => {
+		const env = { ...oidcEnv, MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS: '*' };
+		expect(() => makeAuth(env)).toThrow(/GROUPS_CLAIM/);
+		expect(() =>
+			makeAuth({
+				...env,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS: '3601',
+			}),
+		).toThrow(/GROUP_SESSION_TTL_SECONDS/);
 	});
 });

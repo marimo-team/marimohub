@@ -1356,14 +1356,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					{
 						id: 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS',
 						name: 'Membership groups',
-						description: `Comma-separated, case-sensitive exact group IDs to retain (at most 200). ${OIDC_MEMBERSHIP_DESCRIPTION}`,
+						description: `Comma-separated, case-sensitive exact group IDs to retain (at most 200). A standalone * selects all groups within the same limits. ${OIDC_MEMBERSHIP_DESCRIPTION}`,
 						example: 'hub-team-data,hub-team-ml',
 						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES',
 						name: 'Membership group prefixes',
-						description: `Comma-separated, case-sensitive group prefixes to retain (at most 20). ${OIDC_MEMBERSHIP_DESCRIPTION}`,
+						description: `Comma-separated, case-sensitive literal group prefixes to retain (at most 20); * is not a wildcard here. ${OIDC_MEMBERSHIP_DESCRIPTION}`,
 						example: 'hub-team-',
 						optIn: true,
 					},

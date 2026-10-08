@@ -179,30 +179,44 @@ describe('signed external tokens through the composition root', () => {
 	});
 });
 
-it('bounds membership-only access tokens to one hour without persisting groups or passing them to PATs', async () => {
-	const deps = createFromEnv({
-		...env,
-		MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: undefined,
-		MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS: '3600',
-		MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES: 'team-',
-	});
-	const app = createApi(deps);
-	const now = Math.floor(Date.now() / 1000);
-	const me = async (token: string) =>
-		app.request('/api/v1/me', { headers: { Authorization: `Bearer ${token}` } });
-	const response = await me(
-		accessToken({ iat: now, exp: now + 3600, groups: ['team-b', 'private', 'team-a', 'team-a'] }),
-	);
-	expect(response.status).toBe(200);
-	expect(await response.json()).toMatchObject({ data: { groups: ['team-a', 'team-b'] } });
-	expect(await deps.services.identities.get(UserId.parse('user-one'))).not.toHaveProperty('groups');
-	expect((await me(accessToken({ iat: now, exp: now + 3601 }))).status).toBe(401);
-	const pat = await deps.services.tokens.create(
-		{ name: 'group-isolation', grant: { actions: ['project.read'], projects: '*' } },
-		UserId.parse('user-one'),
-	);
-	expect(await (await me(pat.token)).json()).toMatchObject({ data: { groups: [] } });
-});
+it.each([
+	{
+		selection: { MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES: 'team-' },
+		expected: ['team-a', 'team-b'],
+	},
+	{
+		selection: { MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS: '*' },
+		expected: ['private', 'team-a', 'team-b'],
+	},
+])(
+	'bounds membership-only tokens with $selection without persisting or passing groups to PATs',
+	async ({ selection, expected }) => {
+		const deps = createFromEnv({
+			...env,
+			MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: undefined,
+			MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS: '3600',
+			...selection,
+		});
+		const app = createApi(deps);
+		const now = Math.floor(Date.now() / 1000);
+		const me = async (token: string) =>
+			app.request('/api/v1/me', { headers: { Authorization: `Bearer ${token}` } });
+		const response = await me(
+			accessToken({ iat: now, exp: now + 3600, groups: ['team-b', 'private', 'team-a', 'team-a'] }),
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ data: { groups: expected } });
+		expect(await deps.services.identities.get(UserId.parse('user-one'))).not.toHaveProperty(
+			'groups',
+		);
+		expect((await me(accessToken({ iat: now, exp: now + 3601 }))).status).toBe(401);
+		const pat = await deps.services.tokens.create(
+			{ name: 'group-isolation', grant: { actions: ['project.read'], projects: '*' } },
+			UserId.parse('user-one'),
+		);
+		expect(await (await me(pat.token)).json()).toMatchObject({ data: { groups: [] } });
+	},
+);
 
 it('denies invalid membership tokens despite a valid cookie and does not reuse earlier groups', async () => {
 	const deps = createFromEnv({

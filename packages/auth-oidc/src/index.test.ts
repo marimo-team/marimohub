@@ -2562,33 +2562,40 @@ describe('OIDC login policy', () => {
 });
 
 describe('session membership groups', () => {
-	it('round-trips selected groups with an expiry and logs only counts', async () => {
-		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-		try {
-			oauthMock.getValidatedIdTokenClaims.mockReturnValue({
-				sub: 'user-1',
-				email: 'user@example.com',
-				email_verified: true,
-				groups: ['team-z', 'team-a', 'team-a', 'team-bad,comma', 'private'],
-			});
-			const { routes, authenticator } = makeOidc({
-				groups: { claim: '/groups', membership: { prefixes: ['team-'] } },
-			});
-			const response = await completeOidcTransaction(routes);
-			const token = cookiePair(response, SESSION_COOKIE).split('=')[1];
-			await expect(authenticator.authenticate(requestWithCookie(token))).resolves.toMatchObject({
-				groups: ['team-a', 'team-z'],
-				entitlementsExpiresAt: expect.any(String),
-			});
-			const events = log.mock.calls.flat().join('\n');
-			expect(events).toContain('oidc_session_issued');
-			expect(events).toContain('"groups":2');
-			expect(events).toContain('"unretainable":1');
-			expect(events).not.toContain('team-');
-		} finally {
-			log.mockRestore();
-		}
-	});
+	it.each([
+		{ membership: { prefixes: ['team-'] }, expected: ['team-a', 'team-z'] },
+		{ membership: { exact: ['*'] }, expected: ['private', 'team-a', 'team-z'] },
+	])(
+		'round-trips $membership with an expiry and logs only counts',
+		async ({ membership, expected }) => {
+			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+			try {
+				oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+					sub: 'user-1',
+					email: 'user@example.com',
+					email_verified: true,
+					groups: ['team-z', 'team-a', 'team-a', 'team-bad,comma', 'private'],
+				});
+				const { routes, authenticator } = makeOidc({
+					groups: { claim: '/groups', membership },
+				});
+				const response = await completeOidcTransaction(routes);
+				const token = cookiePair(response, SESSION_COOKIE).split('=')[1];
+				await expect(authenticator.authenticate(requestWithCookie(token))).resolves.toMatchObject({
+					groups: expected,
+					entitlementsExpiresAt: expect.any(String),
+				});
+				const events = log.mock.calls.flat().join('\n');
+				expect(events).toContain('oidc_session_issued');
+				expect(events).toContain(`"groups":${expected.length}`);
+				expect(events).toContain('"unretainable":1');
+				expect(events).not.toContain('team-');
+				expect(events).not.toContain('private');
+			} finally {
+				log.mockRestore();
+			}
+		},
+	);
 	it('accepts older cookies without groups', async () => {
 		const token = await signSession({ sub: 'u', email: 'u@example.com' });
 		const user = await makeAuthenticator().authenticate(requestWithCookie(token));
@@ -2667,29 +2674,32 @@ describe('session membership groups', () => {
 		expect(principal).not.toHaveProperty('name');
 		expect(principal).not.toHaveProperty('pictureUrl');
 	});
-	it('denies overflow with generic auth_failed and a count-only event', async () => {
-		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-		try {
-			oauthMock.getValidatedIdTokenClaims.mockReturnValue({
-				sub: 'user-1',
-				email: 'user@example.com',
-				email_verified: true,
-				groups: Array.from({ length: 33 }, (_, i) => `team-${i}`),
-			});
-			const { routes } = makeOidc({
-				groups: { claim: '/groups', membership: { prefixes: ['team-'] } },
-			});
-			const response = await completeOidcTransaction(routes);
-			expect(response.headers.get('location')).toContain('auth_error=auth_failed');
-			expect(response.headers.get('set-cookie')).not.toContain('mh_session=');
-			const events = log.mock.calls.flat().join('\n');
-			expect(events).toContain('oidc_membership_groups_exceeded');
-			expect(events).toContain('"retained":33');
-			expect(events).not.toContain('team-');
-		} finally {
-			log.mockRestore();
-		}
-	});
+	it.each([{ prefixes: ['team-'] }, { exact: ['*'] }])(
+		'denies overflow for %j with generic auth_failed and a count-only event',
+		async (membership) => {
+			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+			try {
+				oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+					sub: 'user-1',
+					email: 'user@example.com',
+					email_verified: true,
+					groups: Array.from({ length: 33 }, (_, i) => `team-${i}`),
+				});
+				const { routes } = makeOidc({
+					groups: { claim: '/groups', membership },
+				});
+				const response = await completeOidcTransaction(routes);
+				expect(response.headers.get('location')).toContain('auth_error=auth_failed');
+				expect(response.headers.get('set-cookie')).not.toContain('mh_session=');
+				const events = log.mock.calls.flat().join('\n');
+				expect(events).toContain('oidc_membership_groups_exceeded');
+				expect(events).toContain('"retained":33');
+				expect(events).not.toContain('team-');
+			} finally {
+				log.mockRestore();
+			}
+		},
+	);
 });
 
 describe('membership cookie and callback failures', () => {

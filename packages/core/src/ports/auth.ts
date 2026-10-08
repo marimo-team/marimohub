@@ -70,7 +70,7 @@ export interface AuthUser {
 	pictureUrl?: string;
 	/** Provider groups mapped to marimohub-owned authorization capabilities. */
 	entitlements?: readonly AuthEntitlement[];
-	/** Operator-selected, normalized IdP groups; never the full provider claim. */
+	/** Operator-selected, normalized IdP groups with host-enforced count and byte limits. */
 	groups?: readonly string[];
 	/** Expiry of the credential that supplied group-derived authorization (entitlements and groups). */
 	entitlementsExpiresAt?: string;

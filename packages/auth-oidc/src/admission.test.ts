@@ -401,3 +401,146 @@ describe('membership admission failure boundaries', () => {
 		});
 	});
 });
+
+describe('wildcard membership selection', () => {
+	const wildcard = createAdmissionPolicy({
+		groups: { claim: '/groups', membership: { exact: ['*'] } },
+	});
+
+	it.each([
+		{ exact: ['*'] },
+		{ exact: ['staff', '*'] },
+		{ exact: ['*', '*'], prefixes: ['team-'] },
+	])('selects and normalizes every valid ID with %j', (membership) => {
+		const groups = ['team-b', 'staff', 'Team A', '/org/data', 'é', '*', 'team-b'];
+		expect(
+			admitOidcIdentity(
+				{ ...identity, groups },
+				createAdmissionPolicy({
+					groups: { claim: '/groups', membership },
+				}),
+			),
+		).toMatchObject({
+			user: { groups: ['*', '/org/data', 'Team A', 'staff', 'team-b', 'é'], entitlements: [] },
+			groupStats: { unretainable: 0 },
+		});
+	});
+
+	it.each([
+		{ groups: undefined, expected: { user: { groups: [] } } },
+		{ groups: [], expected: { user: { groups: [] } } },
+		{ groups: null, expected: { error: 'invalid_groups' } },
+		{ groups: '*', expected: { error: 'invalid_groups' } },
+		{ groups: ['staff', null], expected: { error: 'invalid_groups' } },
+		{ groups: ['staff', 'bad\n'], expected: { error: 'invalid_groups' } },
+	])('preserves claim validation for $groups', ({ groups, expected }) => {
+		expect(admitOidcIdentity({ ...identity, groups }, wildcard)).toMatchObject(expected);
+	});
+
+	it('discards unretainable IDs without mutating the provider claim', () => {
+		const groups = Object.freeze(['valid', 'bad,comma', ' leading', 'trailing ', 'x'.repeat(129)]);
+		expect(admitOidcIdentity({ ...identity, groups }, wildcard)).toMatchObject({
+			user: { groups: ['valid'] },
+			groupStats: { unretainable: 4 },
+		});
+		expect(groups).toHaveLength(5);
+	});
+
+	it('retains no IDs when every provider group is unretainable', () => {
+		expect(
+			admitOidcIdentity({ ...identity, groups: ['bad,comma', ' leading'] }, wildcard),
+		).toMatchObject({ user: { groups: [] }, groupStats: { unretainable: 2 } });
+	});
+
+	it('deduplicates before the 32-ID limit but still rejects more than 200 raw entries', () => {
+		const selected = Array.from({ length: 32 }, (_, i) => `g${i}`);
+		const groups = [...selected, ...Array.from({ length: 168 }, () => 'g0')];
+		expect(admitOidcIdentity({ ...identity, groups }, wildcard)).toMatchObject({
+			user: { groups: [...selected].sort() },
+		});
+		expect(admitOidcIdentity({ ...identity, groups: [...selected, 'extra'] }, wildcard)).toEqual({
+			error: 'too_many_groups',
+			retained: 33,
+		});
+		expect(admitOidcIdentity({ ...identity, groups: [...groups, 'g0'] }, wildcard)).toEqual({
+			error: 'invalid_groups',
+		});
+	});
+
+	it('accepts the UTF-8 byte boundary and rejects one byte more without truncation', () => {
+		const groups = Array.from(
+			{ length: 32 },
+			(_, i) => `${String(i).padStart(2, '0')}${'é'.repeat(17)}${i === 0 ? '' : 'x'}`,
+		);
+		expect(new TextEncoder().encode(JSON.stringify(groups))).toHaveLength(1280);
+		expect(admitOidcIdentity({ ...identity, groups }, wildcard)).toMatchObject({
+			user: { groups },
+		});
+		groups[0] += 'x';
+		expect(admitOidcIdentity({ ...identity, groups }, wildcard)).toEqual({
+			error: 'too_many_groups',
+			retained: 32,
+		});
+	});
+
+	it.each([
+		{ groups: [], expected: { user: { groups: [] } } },
+		{ groups: ['from-info'], expected: { user: { groups: ['from-info'] } } },
+		{ groups: undefined, expected: { user: { groups: ['from-token'] } } },
+		{ groups: null, expected: { error: 'invalid_groups' } },
+	])('keeps UserInfo precedence for $groups', ({ groups, expected }) => {
+		expect(
+			admitOidcIdentity({ ...identity, groups: ['from-token'] }, wildcard, {
+				...identity,
+				groups,
+			}),
+		).toMatchObject(expected);
+	});
+
+	it('does not bypass admission or turn role mappings into wildcards', () => {
+		const admission = createAdmissionPolicy({
+			groups: { ...groupConfig.groups, superAdmin: ['*'], membership: { exact: ['*'] } },
+		});
+		expect(admitOidcIdentity({ ...identity, groups: ['admin'] }, admission)).toEqual({
+			error: 'group_not_allowed',
+		});
+		expect(admitOidcIdentity({ ...identity, groups: ['staff', 'admin'] }, admission)).toMatchObject(
+			{ user: { groups: ['admin', 'staff'], entitlements: ['default-role:editor'] } },
+		);
+		expect(admitOidcIdentity({ ...identity, groups: ['staff', '*'] }, admission)).toMatchObject({
+			user: { groups: ['*', 'staff'], entitlements: ['super-admin', 'default-role:editor'] },
+		});
+		const literalAllowed = createAdmissionPolicy({
+			groups: { claim: '/groups', allowed: ['*'], membership: { exact: ['*'] } },
+		});
+		expect(admitOidcIdentity({ ...identity, groups: ['staff'] }, literalAllowed)).toEqual({
+			error: 'group_not_allowed',
+		});
+	});
+
+	it.each([
+		{ membership: { exact: ['team-*'] }, expected: ['team-*'] },
+		{ membership: { prefixes: ['*'] }, expected: ['*', '*literal'] },
+		{ membership: { prefixes: ['team-*'] }, expected: ['team-*', 'team-*literal'] },
+	])('keeps embedded stars and prefixes literal: $membership', ({ membership, expected }) => {
+		const admission = createAdmissionPolicy({ groups: { claim: '/groups', membership } });
+		expect(
+			admitOidcIdentity(
+				{
+					...identity,
+					groups: ['*', '*literal', 'team-*', 'team-*literal', 'team-other'],
+				},
+				admission,
+			),
+		).toMatchObject({ user: { groups: expected } });
+	});
+
+	it.each([
+		{ exact: ['*', ''] },
+		{ exact: ['*', 'bad,comma'] },
+		{ exact: ['*'], prefixes: [] },
+		{ exact: ['*', ...Array.from({ length: 200 }, (_, i) => `g${i}`)] },
+	])('does not skip policy validation with a wildcard: %j', (membership) => {
+		expect(() => createAdmissionPolicy({ groups: { claim: '/groups', membership } })).toThrow();
+	});
+});
