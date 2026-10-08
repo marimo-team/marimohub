@@ -2601,12 +2601,14 @@ describe('session membership groups', () => {
 		expect(user).not.toBeNull();
 		expect(user).not.toHaveProperty('groups');
 	});
-	it.each([
-		'team-a',
-		['bad,group'],
-		Array.from({ length: 33 }, (_, i) => `g${i}`),
-		Array.from({ length: 12 }, (_, i) => `${i}${'x'.repeat(120)}`),
-	])('rejects signed invalid groups %j', async (groups) => {
+	it.each(
+		[
+			'team-a',
+			['bad,group'],
+			Array.from({ length: 33 }, (_, i) => `g${i}`),
+			Array.from({ length: 12 }, (_, i) => `${i}${'x'.repeat(120)}`),
+		].map((groups) => ({ groups })),
+	)('rejects signed invalid groups $groups', async ({ groups }) => {
 		const token = await signSession({ sub: 'u', email: 'u@example.com', entitlements: [], groups });
 		await expect(makeAuthenticator().authenticate(requestWithCookie(token))).resolves.toBeNull();
 	});
@@ -2699,5 +2701,92 @@ describe('session membership groups', () => {
 		} finally {
 			log.mockRestore();
 		}
+	});
+});
+
+describe('membership cookie and callback failures', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it.each([null, 'super-admin', {}, 0].map((entitlements) => ({ entitlements })))(
+		'rejects groups with a malformed authorization marker: $entitlements',
+		async ({ entitlements }) => {
+			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+			const token = await signSession({
+				sub: 'u',
+				email: 'u@example.com',
+				groups: ['private-team'],
+				entitlements,
+			});
+			await expect(makeAuthenticator().authenticate(requestWithCookie(token))).resolves.toBeNull();
+			const output = log.mock.calls.flat().join('\n');
+			expect(output).toContain('oidc_session_groups_invalid');
+			expect(output).not.toContain('private-team');
+		},
+	);
+
+	it.each([
+		{ groups: ['private-team,bad'], problem: 'invalid_group' },
+		{
+			groups: Array.from({ length: 33 }, (_, i) => `private-team-${i}`),
+			problem: 'too_many_groups',
+		},
+		{
+			groups: Array.from({ length: 11 }, (_, i) => `private-team-${i}-${'x'.repeat(110)}`),
+			problem: 'too_many_groups',
+		},
+	])('does not issue a session when a module returns $problem', async ({ groups, problem }) => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const { routes } = makeOidc({
+			loginPolicy: {
+				policy: { evaluate: () => ({ decision: 'allow', entitlements: ['super-admin'], groups }) },
+			},
+		});
+		const txn = await beginOidcTransaction(routes);
+		const response = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+		expect(response.status).toBe(302);
+		expect(response.headers.get('location')).toBe('/?auth_error=auth_failed');
+		expect(response.headers.get('set-cookie')).not.toContain('mh_session=');
+		const records = warn.mock.calls.map(([line]) => JSON.parse(String(line)));
+		expect(records).toContainEqual(
+			expect.objectContaining({ event: 'oidc_login_policy_result_invalid', problem }),
+		);
+		expect(JSON.stringify(records)).not.toContain('private-team');
+	});
+
+	it('fails session signing rather than dropping valid groups to fit the cookie', async () => {
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
+			sub: 's'.repeat(512),
+			email: `${'e'.repeat(308)}@example.com`,
+			email_verified: true,
+		});
+		const control = makeOidc({ clientId: 'c'.repeat(1500) });
+		const controlTxn = await beginOidcTransaction(control.routes);
+		const controlResponse = await control.routes.request(
+			'/api/auth/callback?code=abc&state=state-1',
+			{
+				headers: { cookie: controlTxn },
+			},
+		);
+		expect(controlResponse.headers.get('set-cookie')).toContain('mh_session=');
+		const groups = Array.from(
+			{ length: 32 },
+			(_, i) => `private-team-${String(i).padStart(2, '0')}-${'x'.repeat(20)}`,
+		);
+		const { routes } = makeOidc({
+			clientId: 'c'.repeat(1500),
+			loginPolicy: { policy: { evaluate: () => ({ decision: 'allow', groups }) } },
+		});
+		const txn = await beginOidcTransaction(routes);
+		const response = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+		expect(response.headers.get('location')).toBe('/?auth_error=auth_failed');
+		expect(response.headers.get('set-cookie')).not.toContain('mh_session=');
+		const output = error.mock.calls.flat().join('\n');
+		expect(output).toContain('oidc_session_signing_failed');
+		expect(output).not.toContain('private-team');
 	});
 });

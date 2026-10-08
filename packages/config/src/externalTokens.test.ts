@@ -203,3 +203,38 @@ it('bounds membership-only access tokens to one hour without persisting groups o
 	);
 	expect(await (await me(pat.token)).json()).toMatchObject({ data: { groups: [] } });
 });
+
+it('denies invalid membership tokens despite a valid cookie and does not reuse earlier groups', async () => {
+	const deps = createFromEnv({
+		...env,
+		MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS: undefined,
+		MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES: 'team-',
+	});
+	const app = createApi(deps);
+	const cookie = sessionCookie();
+	const me = (groups: unknown) =>
+		app.request('/api/v1/me', {
+			headers: {
+				Cookie: cookie,
+				Authorization: `Bearer ${accessToken({ groups })}`,
+			},
+		});
+	expect((await app.request('/api/v1/me', { headers: { Cookie: cookie } })).status).toBe(200);
+	expect(await (await me(['team-previous'])).json()).toMatchObject({
+		data: { groups: ['team-previous'] },
+	});
+	for (const groups of [
+		null,
+		'team-previous',
+		Array.from({ length: 33 }, (_, i) => `team-${i}`),
+		Array.from({ length: 11 }, (_, i) => `team-${i}-${'x'.repeat(120)}`),
+	]) {
+		const response = await me(groups);
+		expect(response.status).toBe(401);
+		expect(await response.json()).toMatchObject({ success: false });
+	}
+	for (const groups of [[], undefined, ['other']]) {
+		expect(await (await me(groups)).json()).toMatchObject({ data: { groups: [] } });
+	}
+	expect(await deps.services.identities.get(UserId.parse('user-one'))).not.toHaveProperty('groups');
+});

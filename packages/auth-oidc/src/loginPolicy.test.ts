@@ -385,3 +385,42 @@ describe('login-policy groups', () => {
 		expect(parseLoginPolicyDecision(value)).toEqual({ ok: false, problem });
 	});
 });
+
+describe('hostile login-policy group results', () => {
+	const sparse: unknown[] = [];
+	sparse.length = 1;
+
+	it('rejects throwing group getters without exposing their errors', async () => {
+		const result = {
+			decision: 'allow',
+			get groups() {
+				throw new Error('private-group-value');
+			},
+		};
+		await expect(evaluate(policyReturning(result))).resolves.toMatchObject({
+			outcome: 'invalid',
+			problem: 'result_not_an_object',
+		});
+	});
+
+	it('copies module-owned groups before returning the evaluated subject', async () => {
+		const groups = Array(40).fill('x'.repeat(128)) as string[];
+		const evaluation = await evaluate(policyReturning({ decision: 'allow', groups }));
+		groups.fill('injected');
+		expect(evaluation).toMatchObject({ outcome: 'allow', groups: ['x'.repeat(128)] });
+	});
+
+	it.each([
+		{ value: null, problem: 'groups_not_an_array' },
+		{ value: [null], problem: 'invalid_group' },
+		{ value: sparse, problem: 'invalid_group' },
+		{ value: ['team-valid', ' team-invalid'], problem: 'invalid_group' },
+	])('rejects the entire decision for malformed groups: $value', async ({ value, problem }) => {
+		const result = await evaluate(
+			policyReturning({ decision: 'allow', entitlements: ['super-admin'], groups: value }),
+		);
+		expect(result).toMatchObject({ outcome: 'invalid', problem });
+		expect(result).not.toHaveProperty('groups');
+		expect(result).not.toHaveProperty('entitlements');
+	});
+});

@@ -72,3 +72,45 @@ describe('bounded authentication groups', () => {
 		}
 	});
 });
+
+describe('authentication group normalization edge cases', () => {
+	it('counts Unicode code points and preserves case and Unicode spelling', () => {
+		expect(isAuthGroupId('😀'.repeat(128))).toBe(true);
+		expect(isAuthGroupId('😀'.repeat(129))).toBe(false);
+		expect(normalizeAuthGroups(['é', 'e\u0301', 'Team', 'team'])).toEqual({
+			ok: true,
+			groups: ['Team', 'e\u0301', 'team', 'é'],
+		});
+	});
+
+	it.each(['\u0000', '\u001f', '\u007f', '\u009f', '\u00a0', '\u2003', '\ufeff'])(
+		'rejects control or whitespace characters at either edge: %j',
+		(character) => {
+			expect(isAuthGroupId(`${character}team`)).toBe(false);
+			expect(isAuthGroupId(`team${character}`)).toBe(false);
+		},
+	);
+
+	it('rejects sparse arrays and invalid entries even when the count also exceeds the cap', () => {
+		const sparse: unknown[] = [];
+		sparse.length = 2;
+		expect(normalizeAuthGroups(sparse)).toEqual({ ok: false, problem: 'invalid_group' });
+		expect(
+			normalizeAuthGroups([...Array.from({ length: 33 }, (_, i) => `team-${i}`), null]),
+		).toEqual({
+			ok: false,
+			problem: 'invalid_group',
+		});
+	});
+
+	it('deduplicates before measuring bytes and does not mutate or retain the input array', () => {
+		const input = Object.freeze(Array(32).fill('x'.repeat(128)) as string[]);
+		expect(new TextEncoder().encode(JSON.stringify(input)).byteLength).toBeGreaterThan(1280);
+		expect(normalizeAuthGroups(input)).toEqual({ ok: true, groups: ['x'.repeat(128)] });
+		const mutable = ['z', 'a', 'z'];
+		const result = normalizeAuthGroups(mutable);
+		expect(mutable).toEqual(['z', 'a', 'z']);
+		mutable[0] = 'injected';
+		expect(result).toEqual({ ok: true, groups: ['a', 'z'] });
+	});
+});

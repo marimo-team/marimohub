@@ -659,3 +659,92 @@ describe('policy analyzer membership groups', () => {
 		});
 	});
 });
+
+describe('policy analyzer group isolation', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it.each([
+		{ groups: undefined, grant: undefined },
+		{ groups: ['simulated-team'], grant: undefined },
+		{ groups: undefined, grant: { actions: ['project.read'], projects: '*' } },
+		{ groups: ['simulated-team'], grant: { actions: ['project.read'], projects: '*' } },
+	])(
+		'uses explicit groups instead of ambient caller groups in live-self analysis: %j',
+		async ({ groups, grant }) => {
+			const { request } = createTestApi({
+				deps: {
+					policy: { superAdmins: [ACTOR] },
+					authenticator: {
+						authenticate: async () => ({
+							id: ACTOR,
+							email: `${ACTOR}@example.com`,
+							credential: { kind: 'sso' },
+							groups: ['ambient-team'],
+						}),
+					},
+				},
+			});
+			const analyze = vi.spyOn(AuthorizationService.prototype, 'analyze');
+			const original = authorizationCase();
+			const data = await expectOk<any>(
+				await request('POST', '/admin/policy-analyzer/evaluate', {
+					schema_version: 1,
+					cases: [
+						authorizationCase({
+							subject: { ...original.authorization.subject, groups, grant },
+							context: { mode: 'live-self' },
+						}),
+					],
+				}),
+			);
+			expect(data.valid).toBe(true);
+			expect(analyze).toHaveBeenCalledWith(
+				expect.objectContaining({ groups: groups ?? [] }),
+				'project.read',
+				expect.anything(),
+				{ mode: 'live' },
+			);
+		},
+	);
+
+	it('does not reuse groups from an allowed login when a later case fails', async () => {
+		const { request } = createTestApi({
+			deps: {
+				policy: { superAdmins: [ACTOR] },
+				policyAnalyzer: {
+					classificationOrder: [],
+					loginPolicy: {
+						evaluate: async ({ idTokenClaims }) =>
+							idTokenClaims.allow
+								? { outcome: 'allow', entitlements: [], groups: ['private-team'], durationMs: 0 }
+								: { outcome: 'invalid', problem: 'invalid_group', durationMs: 0 },
+					},
+				},
+			},
+		});
+		const analyze = vi.spyOn(AuthorizationService.prototype, 'analyze');
+		const entry = authorizationCase();
+		entry.authorization.subject.entitlement_source = 'login';
+		const data = await expectOk<any>(
+			await request('POST', '/admin/policy-analyzer/evaluate', {
+				schema_version: 1,
+				cases: [true, false].map((allow) => ({
+					...entry,
+					id: String(allow),
+					login: {
+						identity: { id: ACTOR, email: `${ACTOR}@example.com` },
+						id_token_claims: { allow },
+						expected: { outcome: 'allow' },
+					},
+				})),
+			}),
+		);
+		expect(data.cases[0].login.groups).toEqual(['private-team']);
+		expect(data.cases[1]).toMatchObject({
+			valid: false,
+			login: { groups: [], outcome: 'invalid' },
+			authorization: null,
+		});
+		expect(analyze).toHaveBeenCalledTimes(1);
+	});
+});
