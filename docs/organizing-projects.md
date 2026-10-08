@@ -27,12 +27,13 @@ Tags support this shared membership without folders, moves, or a separate projec
 
 ## Browse namespaces
 
-The project list groups projects by the first segment of each path tag.
+The project list groups projects by the first segment of each path tag by default.
+Turn off **Group by tags** for a flat list. Your browser remembers this preference.
 A project appears once in each matching group. Projects without path tags appear under **Ungrouped**.
 The result count counts each project once, even if it appears in several groups.
 
 Select a group name to browse its child namespaces. Select its chevron to collapse or expand the group.
-Projects tagged exactly with the selected namespace appear under **Tagged {namespace}**.
+Projects tagged exactly with the selected namespace appear directly below the breadcrumb, before any child groups.
 Use the breadcrumb to return to a parent namespace or **All projects**.
 
 The list loads every page before it shows the groups. If no project has a path tag, the list stays flat.

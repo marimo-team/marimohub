@@ -62,10 +62,12 @@ function ProjectRow({ project }: { project: ProjectSummary }) {
 
 export function ProjectGroups({
 	projects,
+	groupByTags,
 	prefix,
 	onSelect,
 }: {
 	projects: ProjectSummary[];
+	groupByTags: boolean;
 	prefix?: string;
 	onSelect: (prefix: string) => void;
 }) {
@@ -78,12 +80,14 @@ export function ProjectGroups({
 			else next.add(key);
 			return next;
 		});
-	if (groups.length === 0 && prefix === undefined) {
+	if (!groupByTags || groups.length === 0) {
 		return projects.map((project) => <ProjectRow key={project.id} project={project} />);
 	}
 	return (
 		<div className="flex flex-col divide-y">
-			{direct.length > 0 && <ProjectSection label={`Tagged ${prefix}`} projects={direct} />}
+			{direct.map((project) => (
+				<ProjectRow key={project.id} project={project} />
+			))}
 			{groups.map((group) => (
 				<ProjectSection
 					key={group.prefix}
@@ -115,12 +119,12 @@ function ProjectSection({
 	const id = useId();
 	return (
 		<section aria-labelledby={id}>
-			<div className="flex items-center gap-1 bg-muted/30 px-3 py-2">
+			<div className="flex items-center gap-1 px-3 py-1">
 				{onToggle && (
 					<Button
 						variant="ghost"
 						size="sm"
-						className="size-8 p-0"
+						className="size-7 p-0"
 						aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${label}`}
 						aria-expanded={!collapsed}
 						onPress={onToggle}
@@ -128,9 +132,9 @@ function ProjectSection({
 						<ChevronRight aria-hidden="true" className={`size-4 ${collapsed ? '' : 'rotate-90'}`} />
 					</Button>
 				)}
-				<h2 id={id} className="text-sm font-medium">
+				<h2 id={id} className="text-xs font-medium text-muted-foreground">
 					{onSelect ? (
-						<Button variant="ghost" onPress={onSelect}>
+						<Button variant="ghost" size="sm" onPress={onSelect}>
 							{label} · {projects.length}
 						</Button>
 					) : (

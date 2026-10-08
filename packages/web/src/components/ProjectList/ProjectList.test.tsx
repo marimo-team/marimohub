@@ -90,9 +90,45 @@ async function waitForLoaded() {
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+	localStorage.removeItem('project-group-by-tags');
 });
 
 describe('ProjectList', () => {
+	it('groups by default and remembers opting out without duplicating shared projects', async () => {
+		const user = userEvent.setup();
+		const projects = [project('Shared', '', { tags: ['ops', 'research'] })];
+		const { unmount } = renderList(projects);
+		await waitForLoaded();
+		const toggle = screen.getByRole('button', { name: 'Group by tags' });
+		expect(toggle).toHaveAttribute('aria-pressed', 'true');
+		expect(screen.getAllByText('Shared')).toHaveLength(2);
+		await user.click(toggle);
+		expect(toggle).toHaveAttribute('aria-pressed', 'false');
+		expect(screen.getAllByText('Shared')).toHaveLength(1);
+		unmount();
+		renderList(projects);
+		await waitForLoaded();
+		expect(screen.getByRole('button', { name: 'Group by tags' })).toHaveAttribute(
+			'aria-pressed',
+			'false',
+		);
+		expect(screen.queryByRole('region')).not.toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Group by tags' }));
+		expect(screen.getAllByText('Shared')).toHaveLength(2);
+	});
+
+	it('shows direct matches under the breadcrumb without a redundant heading', async () => {
+		renderList([project('Operations', '', { tags: ['ops'] })], '/?tag_prefix=ops');
+		await waitForLoaded();
+		expect(screen.getByRole('navigation', { name: 'Project namespace' })).toBeInTheDocument();
+		expect(screen.getByText('Operations')).toBeInTheDocument();
+		expect(screen.queryByRole('heading', { level: 2 })).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Filters' })).toHaveAttribute(
+			'aria-expanded',
+			'false',
+		);
+	});
+
 	it('renders groups and tags, collapses rows, and drills down with breadcrumbs', async () => {
 		const user = userEvent.setup();
 		const { fetchMock } = renderList([

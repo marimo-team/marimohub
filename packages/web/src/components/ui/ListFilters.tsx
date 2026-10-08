@@ -44,11 +44,13 @@ export function ListFilters<Status extends string>({
 	const panelId = useId();
 	const searchRef = useRef<HTMLInputElement>(null);
 	const active = hasListFilters(values);
-	const [isOpen, setIsOpen] = useState(active);
-	const [wasActive, setWasActive] = useState(active);
-	if (active !== wasActive) {
-		setWasActive(active);
-		if (active) setIsOpen(true);
+	const panelActive =
+		values.q !== undefined || values.tag !== undefined || values.status !== undefined;
+	const [isOpen, setIsOpen] = useState(panelActive);
+	const [wasActive, setWasActive] = useState(panelActive);
+	if (panelActive !== wasActive) {
+		setWasActive(panelActive);
+		if (panelActive) setIsOpen(true);
 	}
 	const focusSearchOnOpen = useRef(false);
 	const openFilters = useCallback(() => {
@@ -115,7 +117,7 @@ export function ListFilters<Status extends string>({
 					}}
 					className="mt-2 rounded-lg border bg-card p-2 shadow-xs"
 				>
-					<div className="grid grid-cols-[minmax(0,2fr)_minmax(7rem,1fr)_minmax(8.5rem,1fr)_auto] items-end gap-2 max-md:grid-cols-1">
+					<div className="grid grid-cols-[minmax(0,2fr)_minmax(7rem,1fr)_minmax(10rem,1fr)_auto] items-end gap-2 max-md:grid-cols-1">
 						<SearchField
 							label="Search"
 							name="q"
@@ -136,19 +138,25 @@ export function ListFilters<Status extends string>({
 							<label htmlFor={statusId} className="text-xs font-medium text-muted-foreground">
 								Status
 							</label>
-							<select
-								id={statusId}
-								name="status"
-								defaultValue={values.status ?? ''}
-								className="h-8 cursor-pointer rounded-md border border-input bg-background px-2.5 text-xs text-foreground shadow-sm transition-colors [color-scheme:light] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background max-md:h-11 dark:[color-scheme:dark]"
-							>
-								<option value="">All current statuses</option>
-								{statuses.map((status) => (
-									<option key={status.value} value={status.value}>
-										{status.label}
-									</option>
-								))}
-							</select>
+							<div className="relative">
+								<select
+									id={statusId}
+									name="status"
+									defaultValue={values.status ?? ''}
+									className="h-8 w-full appearance-none cursor-pointer rounded-md border border-input bg-background pl-3 pr-8 text-xs text-foreground shadow-sm transition-colors [color-scheme:light] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background max-md:h-11 dark:[color-scheme:dark]"
+								>
+									<option value="">All current statuses</option>
+									{statuses.map((status) => (
+										<option key={status.value} value={status.value}>
+											{status.label}
+										</option>
+									))}
+								</select>
+								<ChevronDown
+									aria-hidden="true"
+									className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+								/>
+							</div>
 						</div>
 						<div className="flex gap-1 max-md:grid max-md:grid-cols-2">
 							<Button type="submit" size="sm" aria-controls={resultsId}>

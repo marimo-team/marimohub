@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { ProjectGroups } from './ProjectGroups';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { toast } from 'sonner';
@@ -43,6 +44,13 @@ export function ProjectList() {
 		tagPrefix: true,
 	});
 	const createModal = useDisclosure();
+	const [groupByTags, setGroupByTags] = useState(() => {
+		try {
+			return localStorage.getItem('project-group-by-tags') !== 'false';
+		} catch {
+			return true;
+		}
+	});
 
 	const { data: projects = [], isPending, isFetching } = useProjectsQuery(filters);
 	const createProject = useCreateProject();
@@ -93,6 +101,21 @@ export function ProjectList() {
 				isLoading={isPending}
 				isFetching={isFetching}
 				onChange={setFilters}
+				actions={
+					<Button
+						size="sm"
+						variant={groupByTags ? 'default' : 'ghost'}
+						aria-pressed={groupByTags}
+						onPress={() => {
+							setGroupByTags(!groupByTags);
+							try {
+								localStorage.setItem('project-group-by-tags', String(!groupByTags));
+							} catch {}
+						}}
+					>
+						Group by tags
+					</Button>
+				}
 			/>
 
 			{filters.tag_prefix !== undefined && (
@@ -143,6 +166,7 @@ export function ProjectList() {
 			>
 				<ProjectGroups
 					projects={projects}
+					groupByTags={groupByTags}
 					prefix={filters.tag_prefix}
 					onSelect={(tag_prefix) => setFilters({ ...filters, tag_prefix })}
 				/>
