@@ -89,6 +89,7 @@ async function waitForLoaded() {
 }
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 	localStorage.removeItem('project-group-by-tags');
 });
@@ -115,6 +116,62 @@ describe('ProjectList', () => {
 		expect(screen.queryByRole('region')).not.toBeInTheDocument();
 		await user.click(screen.getByRole('button', { name: 'Group by tags' }));
 		expect(screen.getAllByText('Shared')).toHaveLength(2);
+	});
+
+	it.each([
+		{ label: 'no projects', projects: [] },
+		{ label: 'untagged projects', projects: [project('Loose')] },
+		{
+			label: 'only free-form tags',
+			projects: [project('Loose', '', { tags: ['Team A', 'Research/X', 'ops/'] })],
+		},
+	])('keeps a flat list with $label when grouping is toggled', async ({ projects }) => {
+		const user = userEvent.setup();
+		renderList(projects);
+		await waitForLoaded();
+		const toggle = screen.getByRole('button', { name: 'Group by tags' });
+		for (let i = 0; i < 2; i++) {
+			expect(screen.queryByRole('region')).not.toBeInTheDocument();
+			expect(screen.queryAllByTestId('project-row')).toHaveLength(projects.length);
+			await user.click(toggle);
+		}
+		expect(screen.getByRole('status')).toHaveTextContent(`${projects.length} project`);
+	});
+
+	it('still groups and toggles when browser storage is unavailable', async () => {
+		vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+			throw new DOMException('Storage disabled', 'SecurityError');
+		});
+		vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+			throw new DOMException('Storage disabled', 'SecurityError');
+		});
+		const user = userEvent.setup();
+		renderList([project('Shared', '', { tags: ['ops', 'research'] })]);
+		await waitForLoaded();
+		const toggle = screen.getByRole('button', { name: 'Group by tags' });
+		expect(toggle).toHaveAttribute('aria-pressed', 'true');
+		expect(screen.getAllByText('Shared')).toHaveLength(2);
+		await user.click(toggle);
+		expect(toggle).toHaveAttribute('aria-pressed', 'false');
+		expect(screen.getAllByText('Shared')).toHaveLength(1);
+	});
+
+	it('can leave an empty namespace without clearing the other filters', async () => {
+		const user = userEvent.setup();
+		renderList(
+			[
+				project('Sales', 'annual report', { tags: ['finance', 'shared'] }),
+				project('Hidden', 'annual report', { tags: ['finance'] }),
+			],
+			'/?tag_prefix=missing&tag=shared&q=annual&status=active',
+		);
+		await waitForLoaded();
+		expect(screen.getByText('No projects match these filters')).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'All projects' }));
+		expect(await screen.findAllByText('Sales')).toHaveLength(2);
+		expect(screen.queryByText('Hidden')).not.toBeInTheDocument();
+		const params = new URLSearchParams(screen.getByTestId('location').textContent ?? '');
+		expect(Object.fromEntries(params)).toEqual({ tag: 'shared', q: 'annual', status: 'active' });
 	});
 
 	it('shows direct matches under the breadcrumb without a redundant heading', async () => {
