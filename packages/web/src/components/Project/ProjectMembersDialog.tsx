@@ -1,8 +1,10 @@
 import { useState } from 'react';
+import { isAuthGroupId } from '@marimo-hub/core/ports/auth';
 import { toast } from 'sonner';
 import { z } from 'zod';
-import { ChevronDown, Trash2 } from 'lucide-react';
+import { ChevronDown, Trash2, Users } from 'lucide-react';
 import {
+	Button,
 	ComboBox,
 	ConfirmDialog,
 	DialogModal,
@@ -26,6 +28,7 @@ import type { UserDirectory } from '@/api/hooks';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useAuth } from '@/context/AuthContext';
+import { cn } from '@/lib/utils';
 import {
 	ASSIGNABLE_ROLES,
 	canManageProject,
@@ -48,9 +51,20 @@ import type {
 // an "Invite by email" option the API would 422.
 const isEmail = (value: string) => z.email().safeParse(value).success;
 
-/** The identifier the API keys a member row by: user id, or invite email. */
+function memberLabel(member: ProjectMember): string {
+	return member.group ?? member.user_id ?? member.email ?? '';
+}
+
+function memberSelector(member: ProjectMember) {
+	return member.group !== undefined ? { group: member.group } : memberLabel(member);
+}
+
 function memberKey(member: ProjectMember): string {
-	return member.user_id ?? member.email ?? '';
+	return member.group !== undefined
+		? `group:${member.group}`
+		: member.user_id !== undefined
+			? `user:${member.user_id}`
+			: `email:${member.email}`;
 }
 
 function isCurrentUser(member: ProjectMember, user: User): boolean {
@@ -137,7 +151,7 @@ function RoleSelect({ label, value, onChange, descriptions, disabled }: RoleSele
 					value={value}
 					onChange={(e) => onChange(e.target.value as AssignableProjectRole)}
 					disabled={disabled}
-					className="peer h-8 rounded-md border border-input bg-background appearance-none pl-2 pr-8 text-sm text-foreground shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+					className="peer h-8 max-sm:h-11 rounded-md border border-input bg-background appearance-none pl-2 pr-8 text-sm text-foreground shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 				>
 					{value === 'admin' && (
 						<option value="admin" disabled>
@@ -155,13 +169,13 @@ function RoleSelect({ label, value, onChange, descriptions, disabled }: RoleSele
 	);
 }
 
-// What the picker submits: a directory hit / raw id, or an email invite.
-type MemberChoice = { user_id: string } | { email: string };
+type PersonChoice = { user_id: string } | { email: string };
+type MemberChoice = PersonChoice | { group: string };
 
 type PickerOption = {
 	id: string;
 	textValue: string;
-	choice: MemberChoice;
+	choice: PersonChoice;
 	user?: ResolvedUser;
 	/** Label for the synthetic fallback rows ("Invite …", "Add by id …"). */
 	action?: string;
@@ -172,21 +186,25 @@ interface AddMemberPickerProps {
 	/** Resolved identities for the id-keyed member rows (email dedupe). */
 	users: UserDirectory | undefined;
 	descriptions: Record<ProjectRole, string>;
-	/** Resolves true on success (errors are toasted by the caller). */
-	onAdd: (choice: MemberChoice, role: AssignableProjectRole) => Promise<boolean>;
+	onAdd: (choice: MemberChoice, role: AssignableProjectRole, onSuccess: () => void) => void;
 	isPending: boolean;
 }
 
-/**
- * Search-driven member picker: results come from the user directory (anyone
- * who has signed in), minus existing members. Free text still works — an
- * email becomes an invite (granted on their first sign-in) and anything else
- * can be added as a raw user id, so people outside the directory aren't
- * blocked. Picking an option adds immediately at the selected role.
- */
-function AddMemberPicker({ members, users, descriptions, onAdd, isPending }: AddMemberPickerProps) {
-	const [query, setQuery] = useState('');
-	const [role, setRole] = useState<AssignableProjectRole>('editor');
+interface MemberPickerInputProps {
+	inputValue: string;
+	onInputChange: (value: string) => void;
+	role: AssignableProjectRole;
+}
+
+function AddMemberPicker({
+	members,
+	users,
+	onAdd,
+	isPending,
+	role,
+	inputValue: query,
+	onInputChange: setQuery,
+}: AddMemberPickerProps & MemberPickerInputProps) {
 	const debounced = useDebouncedValue(query);
 	const search = useUserSearchQuery(debounced);
 
@@ -194,7 +212,7 @@ function AddMemberPicker({ members, users, descriptions, onAdd, isPending }: Add
 	// A member matches by id, by invite email, or by the email their id row
 	// resolves to — so an existing member's address is never offered as an invite
 	// (the server would resolve it to their id and 409).
-	const isMember = (choice: MemberChoice) => {
+	const isMember = (choice: PersonChoice) => {
 		if ('user_id' in choice) return members.some((m) => m.user_id === choice.user_id);
 		const email = choice.email.toLowerCase();
 		return members.some(
@@ -217,13 +235,15 @@ function AddMemberPicker({ members, users, descriptions, onAdd, isPending }: Add
 				],
 	);
 
-	// Synthetic fallbacks only once the search for the CURRENT text has settled:
-	// while the debounce or request is still pending, the directory might match,
-	// and offering "add by id" early lets a mis-timed click persist garbage.
+	// Old results and premature fallbacks can add the wrong person while typing.
 	const settled =
-		debounced.trim() === trimmed && !search.isFetching && (search.data !== undefined || !trimmed);
+		debounced.trim() === trimmed &&
+		!search.isFetching &&
+		!search.isError &&
+		!search.isPlaceholderData &&
+		(search.data !== undefined || !trimmed);
 
-	const options = [...results];
+	const options = settled ? [...results] : [];
 	if (settled && isEmail(trimmed)) {
 		const email = trimmed.toLowerCase();
 		// Redundant next to a directory hit for the same address — the server
@@ -252,33 +272,36 @@ function AddMemberPicker({ members, users, descriptions, onAdd, isPending }: Add
 		}
 	}
 
-	const submit = (choice: MemberChoice) => {
+	const submit = (choice: PersonChoice) => {
 		if (isMember(choice)) {
 			toast.error('Already a member');
 			return;
 		}
 		// Keep the typed query on failure so the user can retry or correct it.
-		void onAdd(choice, role).then((added) => {
-			if (added) setQuery('');
-		});
+		onAdd(choice, role, () => setQuery(''));
 	};
 
 	return (
-		<div className="flex flex-col gap-3 border-t pt-4">
-			<span className="text-xs font-semibold">Add Member</span>
+		<div className="flex flex-col gap-3">
+			<p className="text-xs text-muted-foreground">
+				Choose a role, then select a person to add them immediately.
+			</p>
 			<ComboBox
 				aria-label="Search users"
+				inputClassName="max-sm:h-11 max-sm:text-base"
+				autoCapitalize="none"
+				spellCheck={false}
 				placeholder="Search by name or email, or paste a user ID…"
 				inputValue={query}
 				onInputChange={setQuery}
 				options={trimmed ? options : []}
 				isDisabled={isPending}
 				emptyState={
-					!trimmed
+					!trimmed || (search.isError && debounced.trim() === trimmed)
 						? undefined
-						: debounced.trim().length < 2
+						: trimmed.length < 2
 							? 'Type at least 2 characters to search'
-							: search.isFetching
+							: !settled
 								? 'Searching…'
 								: 'No matching users'
 				}
@@ -297,15 +320,146 @@ function AddMemberPicker({ members, users, descriptions, onAdd, isPending }: Add
 					)
 				}
 			/>
-			<div className="flex items-center gap-2">
-				<span className="text-xs text-muted-foreground">New members join as</span>
+			{search.isError && trimmed.length >= 2 && debounced.trim() === trimmed && (
+				<div className="flex flex-wrap items-center justify-between gap-2">
+					<p role="alert" className="text-xs text-destructive">
+						Could not search users. Try again.
+					</p>
+					<Button size="sm" onPress={() => void search.refetch()} isDisabled={search.isFetching}>
+						Retry search
+					</Button>
+				</div>
+			)}
+		</div>
+	);
+}
+
+function AddGroupPicker({
+	members,
+	role,
+	onAdd,
+	isPending,
+	groups,
+	inputValue: group,
+	onInputChange: setGroup,
+}: AddMemberPickerProps & MemberPickerInputProps & { groups: string[] }) {
+	const memberGroups = new Set(members.map((member) => member.group));
+	const duplicate = memberGroups.has(group);
+	const valid = isAuthGroupId(group);
+	const query = group.toLowerCase();
+	const suggestions = groups.flatMap((value) =>
+		value.toLowerCase().includes(query) && !memberGroups.has(value)
+			? [{ id: value, textValue: value }]
+			: [],
+	);
+	return (
+		<form
+			className="flex flex-col gap-3"
+			onSubmit={(event) => {
+				event.preventDefault();
+				if (!valid || duplicate || isPending) return;
+				onAdd({ group }, role, () => setGroup(''));
+			}}
+		>
+			<p id="group-member-help" className="text-xs text-muted-foreground">
+				Use an exact, case-sensitive group ID. Suggestions come from your sign-in; the hub cannot
+				verify other groups.
+			</p>
+			<ComboBox
+				label="IdP group ID"
+				retainSelection
+				inputClassName="max-sm:h-11 max-sm:text-base"
+				autoCapitalize="none"
+				spellCheck={false}
+				aria-describedby={
+					group && (!valid || duplicate)
+						? 'group-member-help group-member-error'
+						: 'group-member-help'
+				}
+				isInvalid={!!group && (!valid || duplicate)}
+				placeholder="/teams/data-science…"
+				inputValue={group}
+				onInputChange={setGroup}
+				options={suggestions}
+				isDisabled={isPending}
+				onSelect={setGroup}
+				renderOption={(option) => (
+					<span className="wrap-anywhere" translate="no">
+						{option.textValue}
+					</span>
+				)}
+			/>
+			{group && (!valid || duplicate) && (
+				<p id="group-member-error" role="alert" className="text-xs text-destructive">
+					{duplicate
+						? 'This group is already a member.'
+						: 'Use 1–128 characters, without commas, control characters, or leading or trailing whitespace.'}
+				</p>
+			)}
+			<div className="flex justify-end">
+				<Button
+					type="submit"
+					variant="primary"
+					size="sm"
+					isDisabled={!valid || duplicate || isPending}
+				>
+					{isPending ? 'Adding…' : 'Add group'}
+				</Button>
+			</div>
+		</form>
+	);
+}
+
+function AddMemberForm(props: AddMemberPickerProps & { groupsCarried: boolean; groups: string[] }) {
+	const [kind, setKind] = useState('person');
+	const [role, setRole] = useState<AssignableProjectRole>('editor');
+	const [personQuery, setPersonQuery] = useState('');
+	const [groupQuery, setGroupQuery] = useState('');
+	const isGroup = props.groupsCarried && kind === 'group';
+	return (
+		<div className="flex flex-col gap-3 border-t pt-4">
+			<div className="flex items-center justify-between gap-3">
+				<span className="text-xs font-semibold">Add Member</span>
+				{props.groupsCarried && (
+					<select
+						aria-label="Member type"
+						className="h-9 max-sm:h-11 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+						value={kind}
+						onChange={(event) => setKind(event.target.value)}
+						disabled={props.isPending}
+					>
+						<option value="person">Person</option>
+						<option value="group">IdP group</option>
+					</select>
+				)}
+			</div>
+			<div className="flex flex-wrap items-center gap-2">
+				<span className="text-xs text-muted-foreground">
+					{isGroup ? 'Group members join as' : 'New members join as'}
+				</span>
 				<RoleSelect
-					label="New member role"
+					label={isGroup ? 'New group role' : 'New member role'}
 					value={role}
 					onChange={setRole}
-					descriptions={descriptions}
+					descriptions={props.descriptions}
+					disabled={props.isPending}
 				/>
 			</div>
+			{isGroup ? (
+				<AddGroupPicker
+					{...props}
+					role={role}
+					inputValue={groupQuery}
+					onInputChange={setGroupQuery}
+				/>
+			) : (
+				<AddMemberPicker
+					{...props}
+					role={role}
+					inputValue={personQuery}
+					onInputChange={setPersonQuery}
+				/>
+			)}
 		</div>
 	);
 }
@@ -370,9 +524,9 @@ function ProjectDefaultAccess({
 							},
 						)
 					}
-					className="mb-2 h-9 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+					className="mb-2 h-9 max-sm:h-11 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 				>
-					<option value="inherit">Inherit deployment and group defaults</option>
+					<option value="inherit">Inherit deployment and sign-in defaults</option>
 					<option value="none">Members only</option>
 					{assignableRoleOptions}
 				</select>
@@ -381,8 +535,82 @@ function ProjectDefaultAccess({
 				<p className="text-xs leading-relaxed text-muted-foreground">{accessSummary}</p>
 			)}
 			<p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-				Explicit membership takes precedence. Owners and super admins retain access.
+				Explicit user and group memberships take precedence. Owners and super admins retain access.
 			</p>
+		</section>
+	);
+}
+
+function ProjectCurrentAccess({
+	project,
+	user,
+	members,
+	users,
+	descriptions,
+}: {
+	project: ProjectDetail;
+	user: User | null;
+	members: ProjectMember[];
+	users: UserDirectory | undefined;
+	descriptions: Record<ProjectRole, string>;
+}) {
+	const currentUserIsMember = user
+		? members.some((member) => isCurrentUser(member, user) && member.role === project.your_role)
+		: false;
+	const userGroups = new Set(user?.groups);
+	const accessSource =
+		user?.id === project.owner
+			? 'Project owner'
+			: user?.is_super_admin
+				? 'Deployment super admin'
+				: currentUserIsMember
+					? 'Project member'
+					: members.some((member) => member.group !== undefined && userGroups.has(member.group))
+						? 'Group membership'
+						: 'Default access';
+	const currentIdentity = user ? users?.[user.id] : undefined;
+	const currentDisplayName = currentIdentity?.name || user?.email || 'You';
+
+	return (
+		<section aria-labelledby="your-access-heading" className="rounded-lg border bg-muted/40 p-3.5">
+			<div className="flex flex-wrap items-center justify-between gap-3">
+				<div className="flex min-w-0 max-w-full items-center gap-3">
+					<UserAvatar
+						pictureUrl={currentIdentity?.picture_url ?? user?.picture_url}
+						label={currentDisplayName}
+						className="size-9 text-xs"
+					/>
+					<div className="min-w-0">
+						<h3 id="your-access-heading" className="text-xs font-semibold text-muted-foreground">
+							Your Access
+						</h3>
+						<p className="truncate font-medium">{currentDisplayName}</p>
+						<p className="truncate text-xs text-muted-foreground">
+							{currentIdentity?.name && user?.email ? (
+								<>
+									<span translate="no">{user.email}</span>
+									<span aria-hidden="true"> · </span>
+								</>
+							) : null}
+							{accessSource}
+						</p>
+					</div>
+				</div>
+				{user?.id === project.owner ? (
+					<OwnerBadge label="Your role" />
+				) : project.your_role ? (
+					<RoleBadge
+						value={project.your_role}
+						descriptions={descriptions}
+						label="Your role"
+						legacyAdmin={
+							project.your_role === 'admin' && currentUserIsMember && !user?.is_super_admin
+						}
+					/>
+				) : (
+					<span className="text-xs text-muted-foreground">No Project Role</span>
+				)}
+			</div>
 		</section>
 	);
 }
@@ -393,17 +621,17 @@ export interface ProjectMembersDialogProps {
 	project: ProjectDetail;
 }
 
-/**
- * Member management for a project: the member list (visible to everyone), and —
- * for managers — a role select and remove control per member plus a search-driven
- * add-member picker. The owner's row shows no controls: the API rejects changing
- * or removing the owner, so the UI doesn't offer it.
- */
 export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMembersDialogProps) {
 	const { user } = useAuth();
 	const canManage = canManageProject(project.your_role);
-	const { data: members, isLoading } = useProjectMembersQuery(project.id);
-	const visibleMembers = members ?? project.members ?? [];
+	const {
+		data: members,
+		isLoading,
+		isError,
+		isFetching,
+		refetch,
+	} = useProjectMembersQuery(project.id);
+	const visibleMembers: ProjectMember[] = members ?? project.members ?? [];
 	const { data: users, isLoading: usersLoading } = useUsersQuery([
 		...visibleMembers.map((m) => m.user_id),
 		user?.id,
@@ -413,55 +641,46 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 	const addMember = useAddMember(project.id);
 	const updateRole = useUpdateMemberRole(project.id);
 	const removeMember = useRemoveMember(project.id);
+	const changingMember = updateRole.isPending || removeMember.isPending;
 	const confirmRemove = useDialogTarget<ProjectMember>();
-	const currentUserIsMember = user
-		? visibleMembers.some((member) => isCurrentUser(member, user))
-		: false;
-	const accessSource =
-		user?.id === project.owner
-			? 'Project owner'
-			: currentUserIsMember
-				? 'Project member'
-				: user?.is_super_admin
-					? 'Deployment super admin'
-					: 'Default access';
-	const currentIdentity = user ? users?.[user.id] : undefined;
-	const currentDisplayName = currentIdentity?.name || user?.email || 'You';
 
-	const handleAdd = async (choice: MemberChoice, role: AssignableProjectRole) => {
-		try {
-			await addMember.mutateAsync({ ...choice, role });
-			toast.success('email' in choice ? 'Invite added' : 'Member added');
-			return true;
-		} catch {
-			return false;
-		}
+	const handleAdd: AddMemberPickerProps['onAdd'] = (choice, role, onSuccess) => {
+		addMember.mutate(
+			{ ...choice, role },
+			{
+				onSuccess: () => {
+					toast.success(
+						'group' in choice ? 'Group added' : 'email' in choice ? 'Invite added' : 'Member added',
+					);
+					onSuccess();
+				},
+			},
+		);
 	};
 
 	const handleRoleChange = (member: ProjectMember, role: AssignableProjectRole) => {
 		updateRole.mutate(
-			{ uid: memberKey(member), role },
-			{
-				onSuccess: () => toast.success('Role updated'),
-			},
+			{ selector: memberSelector(member), role },
+			{ onSuccess: () => toast.success('Role updated') },
 		);
 	};
 
 	const handleRemove = () => {
 		const target = confirmRemove.target;
 		if (!target) return;
-		removeMember.mutate(memberKey(target), {
+		const options = {
 			onSuccess: () => {
-				toast.success('Member removed');
+				toast.success(target.group !== undefined ? 'Group removed' : 'Member removed');
 				confirmRemove.close();
 			},
-		});
+		};
+		removeMember.mutate(memberSelector(target), options);
 	};
 
 	const removeTargetName = confirmRemove.target
 		? displayName(
 				confirmRemove.target.user_id ? users?.[confirmRemove.target.user_id] : undefined,
-				memberKey(confirmRemove.target),
+				memberLabel(confirmRemove.target),
 			)
 		: '';
 
@@ -470,52 +689,13 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 			<DialogModal isOpen={isOpen} onClose={onClose} title="Project Access" width="lg">
 				<div className="-m-1 max-h-[70dvh] overflow-y-auto overscroll-contain p-1">
 					<div className="flex flex-col gap-5 text-sm">
-						<section
-							aria-labelledby="your-access-heading"
-							className="rounded-lg border bg-muted/40 p-3.5"
-						>
-							<div className="flex flex-wrap items-center justify-between gap-3">
-								<div className="flex min-w-0 items-center gap-3">
-									<UserAvatar
-										pictureUrl={currentIdentity?.picture_url ?? user?.picture_url}
-										label={currentDisplayName}
-										className="size-9 text-xs"
-									/>
-									<div className="min-w-0">
-										<h3
-											id="your-access-heading"
-											className="text-xs font-semibold text-muted-foreground"
-										>
-											Your Access
-										</h3>
-										<p className="truncate font-medium">{currentDisplayName}</p>
-										<p className="truncate text-xs text-muted-foreground">
-											{currentIdentity?.name && user?.email ? (
-												<>
-													<span translate="no">{user.email}</span>
-													<span aria-hidden="true"> · </span>
-												</>
-											) : null}
-											{accessSource}
-										</p>
-									</div>
-								</div>
-								{user?.id === project.owner ? (
-									<OwnerBadge label="Your role" />
-								) : project.your_role ? (
-									<RoleBadge
-										value={project.your_role}
-										descriptions={descriptions}
-										label="Your role"
-										legacyAdmin={
-											project.your_role === 'admin' && currentUserIsMember && !user?.is_super_admin
-										}
-									/>
-								) : (
-									<span className="text-xs text-muted-foreground">No Project Role</span>
-								)}
-							</div>
-						</section>
+						<ProjectCurrentAccess
+							project={project}
+							user={user}
+							members={visibleMembers}
+							users={users}
+							descriptions={descriptions}
+						/>
 
 						<section aria-labelledby="members-heading" className="flex flex-col gap-2">
 							<div className="flex items-baseline justify-between gap-3">
@@ -527,8 +707,18 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 								)}
 							</div>
 
+							{isError && (
+								<div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 p-3">
+									<p role="alert" className="text-xs text-destructive">
+										Could not refresh members. The list may be out of date.
+									</p>
+									<Button size="sm" onPress={() => void refetch()} isDisabled={isFetching}>
+										Retry members
+									</Button>
+								</div>
+							)}
 							{isLoading ? (
-								<p className="py-2 text-muted-foreground">Loading members…</p>
+								<output className="py-2 text-muted-foreground">Loading members…</output>
 							) : visibleMembers.length === 0 ? (
 								<p className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
 									No explicit project members
@@ -536,17 +726,45 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 							) : (
 								<ul className="flex flex-col divide-y">
 									{visibleMembers.map((member) => {
-										const key = memberKey(member);
+										const key =
+											member.group !== undefined ? `group ${member.group}` : memberLabel(member);
 										const isOwner = member.user_id === project.owner;
 										const isYou = user ? isCurrentUser(member, user) : false;
 										return (
 											<li
-												key={key}
+												key={memberKey(member)}
 												data-testid="member-row"
-												className="flex min-w-0 items-center justify-between gap-3 py-2.5"
+												className="flex min-w-0 flex-wrap items-center justify-between gap-3 py-2.5"
 											>
-												<span className="flex min-w-0 flex-1 items-center gap-2">
-													{member.user_id ? (
+												<span
+													className={cn(
+														'flex min-w-0 flex-1 items-center gap-2',
+														!isOwner && 'max-sm:basis-full',
+													)}
+												>
+													{member.group !== undefined ? (
+														<>
+															<Users
+																aria-hidden="true"
+																className="size-5 shrink-0 text-muted-foreground"
+															/>
+															<span
+																className="min-w-0 wrap-anywhere select-text text-sm leading-5"
+																translate="no"
+															>
+																{member.group}
+															</span>
+															<Tooltip content="Access applies to everyone whose authenticated IdP groups include this exact ID.">
+																<button
+																	type="button"
+																	aria-label={`IdP group ${member.group}`}
+																	className="shrink-0 cursor-help rounded-full border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+																>
+																	Group
+																</button>
+															</Tooltip>
+														</>
+													) : member.user_id ? (
 														<UserLabel
 															user={users?.[member.user_id]}
 															fallbackId={member.user_id}
@@ -584,15 +802,19 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 															value={member.role}
 															onChange={(role) => handleRoleChange(member, role)}
 															descriptions={descriptions}
-															disabled={updateRole.isPending}
+															disabled={isError || changingMember}
 														/>
 														<IconButton
 															label={`Remove ${key}`}
-															tooltip="Remove member"
+															tooltip={
+																member.group !== undefined ? 'Remove group' : 'Remove member'
+															}
+															className="max-sm:size-11"
 															tone="danger"
 															onPress={() => confirmRemove.open(member)}
+															isDisabled={isError || changingMember}
 														>
-															<Trash2 className="size-4" />
+															<Trash2 aria-hidden="true" className="size-4" />
 														</IconButton>
 													</span>
 												) : (
@@ -610,12 +832,15 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 							)}
 
 							{canManage && (
-								<AddMemberPicker
+								<AddMemberForm
+									key={project.id}
 									members={visibleMembers}
+									groupsCarried={capabilities?.groups_carried ?? false}
+									groups={user?.groups ?? []}
 									users={users}
 									descriptions={descriptions}
 									onAdd={handleAdd}
-									isPending={addMember.isPending}
+									isPending={isLoading || isError || addMember.isPending || changingMember}
 								/>
 							)}
 						</section>
@@ -628,10 +853,10 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 			<ConfirmDialog
 				isOpen={confirmRemove.isOpen}
 				onClose={confirmRemove.close}
-				title="Remove Member"
-				description={`Remove "${removeTargetName}" from "${project.name}"? They lose access to all notebooks in this project.`}
+				title={confirmRemove.target?.group !== undefined ? 'Remove Group' : 'Remove Member'}
+				description={`Remove “${removeTargetName}” from “${project.name}”? This removes this membership. Other memberships, default access, or super-admin status may still give access.`}
 				confirmLabel="Remove"
-				pendingLabel="Removing..."
+				pendingLabel="Removing…"
 				isPending={removeMember.isPending}
 				onConfirm={handleRemove}
 			/>

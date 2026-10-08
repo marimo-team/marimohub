@@ -16,11 +16,14 @@ export interface IdentitySubject {
 	groups?: readonly string[];
 }
 
-/** A member reference: exactly one of a user id or an email. */
+/** A member names exactly one user id, email, or IdP group. */
 export interface MemberRef {
 	user_id?: UserId;
 	email?: string;
+	group?: string;
 }
+
+export type MemberSelector = string | { group: string };
 
 /** Trim and lowercase — the canonical fold for any case-insensitive comparison. */
 export function foldCase(value: string): string {
@@ -62,21 +65,25 @@ export function anyRefMatchesSubject(
 	return refs?.some((ref) => refMatchesSubject(ref, subject)) ?? false;
 }
 
-/**
- * Whether a member row (which carries either a `user_id` or an `email`) denotes
- * this subject: id rows by exact id, invite rows by case-insensitive email.
- */
+/** Group ids and user ids match exactly; invite emails match case-insensitively. */
 export function memberRefMatchesSubject(member: MemberRef, subject: IdentitySubject): boolean {
+	if (member.group !== undefined)
+		return (
+			member.user_id === undefined &&
+			member.email === undefined &&
+			(subject.groups?.includes(member.group) ?? false)
+		);
 	if (member.user_id !== undefined) return member.user_id === subject.id;
 	return member.email !== undefined && emailsEqual(member.email, subject.email);
 }
 
-/**
- * Whether a member row denotes a single selector string (a path/API-supplied id
- * or email). The row's populated field decides which comparison applies: id rows
- * compare exactly, invite rows case-insensitively.
- */
-export function memberRefMatchesSelector(member: MemberRef, selector: string): boolean {
+/** Group selectors cannot address individual members, even when their names coincide. */
+export function memberRefMatchesSelector(member: MemberRef, selector: MemberSelector): boolean {
+	if (typeof selector !== 'string')
+		return (
+			member.user_id === undefined && member.email === undefined && member.group === selector.group
+		);
+	if (member.group !== undefined) return false;
 	if (member.user_id !== undefined) return member.user_id === selector;
 	return member.email !== undefined && emailsEqual(member.email, selector);
 }

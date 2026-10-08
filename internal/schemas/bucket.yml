@@ -2974,6 +2974,10 @@ components:
                 type: array
                 items:
                   type: string
+              member_groups:
+                type: array
+                items:
+                  type: string
               security_labels:
                 anyOf:
                   - type: object
@@ -3036,6 +3040,8 @@ components:
               user_id:
                 type: string
               email:
+                type: string
+              group:
                 type: string
               role:
                 type: string

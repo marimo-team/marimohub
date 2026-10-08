@@ -1056,15 +1056,31 @@ export function commonErrors() {
 
 // --- Domain response schemas for OpenAPI docs ---
 
-// Exactly one of `user_id` / `email` is present: `user_id` for a known user,
-// `email` for a pending invite (someone who hasn't logged in yet).
+// An empty enum represents `never` in OpenAPI and preserves exclusive identities in codegen.
+const AbsentMemberIdentitySchema = z.never().optional().openapi({ type: 'string', enum: [] });
+
 export const ProjectMemberResponseSchema = z
-	.object({
-		user_id: z.string().optional(),
-		email: z.string().optional(),
-		role: z.enum(ROLES),
-	})
-	.openapi('ProjectMember');
+	.union([
+		z.strictObject({
+			user_id: z.string(),
+			email: AbsentMemberIdentitySchema,
+			group: AbsentMemberIdentitySchema,
+			role: z.enum(ROLES),
+		}),
+		z.strictObject({
+			user_id: AbsentMemberIdentitySchema,
+			email: z.string(),
+			group: AbsentMemberIdentitySchema,
+			role: z.enum(ROLES),
+		}),
+		z.strictObject({
+			user_id: AbsentMemberIdentitySchema,
+			email: AbsentMemberIdentitySchema,
+			group: z.string(),
+			role: z.enum(ASSIGNABLE_ROLES),
+		}),
+	])
+	.openapi('ProjectMember', {}, { unionPreferredType: 'oneOf' });
 
 // Loose: audit events carry per-operation context fields (project_id,
 // notebook_id, …) beyond the required envelope.
@@ -1554,6 +1570,10 @@ export const DeploymentInfoResponseSchema = z
  */
 export const CapabilitiesResponseSchema = z
 	.object({
+		groups_carried: z
+			.boolean()
+			.optional()
+			.openapi({ description: 'Whether this deployment supports IdP groups as project members.' }),
 		federation: z.object({ available: z.boolean(), default_enabled: z.boolean() }),
 		integrations: z.object({ available: z.boolean() }),
 		source_control: z.object({

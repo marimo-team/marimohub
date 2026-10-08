@@ -320,6 +320,8 @@ export interface PolicyConfig {
 	superAdmins?: string[];
 	/** Require super-admin or OIDC project-creator entitlement for project creation. */
 	projectCreationRestricted?: boolean;
+	/** Whether authenticated sessions can carry IdP membership groups. */
+	groups_carried?: boolean;
 }
 
 export interface ConfigSettingSummary {

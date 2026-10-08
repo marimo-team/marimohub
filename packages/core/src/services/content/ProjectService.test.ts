@@ -425,6 +425,35 @@ describe('ProjectService', () => {
 		);
 
 		describe.each(['id', 'email'] as const)('stale %s membership projection', (kind) => {
+			const member = kind === 'id' ? { user_id: STRANGER.id } : { email: STRANGER.email };
+			const selector = kind === 'id' ? STRANGER.id : STRANGER.email;
+
+			it('denies a revoked member when the catalog still lists their membership', async () => {
+				const project = await projects.createProject({ name: 'Private', description: '' }, ACTOR);
+				await projects.updateProject(project.id, { default_role: 'none' }, ACTOR);
+				await projects.addMember(project.id, member, 'manager', ACTOR);
+				expect(await projects.listProjects({ subject: STRANGER })).toHaveLength(1);
+				const snapshot = await catalog.getCurrentSnapshot();
+				vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(
+					new Error('projection failed'),
+				);
+
+				await expect(projects.removeMember(project.id, selector, ACTOR)).rejects.toThrow(
+					'projection failed',
+				);
+
+				expect(await catalog.getCurrentSnapshot()).toEqual(snapshot);
+				expect((await projects.getProject(project.id)).members).toEqual([
+					{ user_id: ACTOR, role: 'admin' },
+				]);
+				const filter = {
+					subject: { ...STRANGER, entitlements: ['default-role:manager'] as const },
+					policy: { defaultRole: 'manager' as const },
+				};
+				expect(await projects.listProjects(filter)).toEqual([]);
+				expect(await projects.listProjects({ ...filter, action: 'app.read' })).toEqual([]);
+			});
+
 			it.each([
 				{ role: 'app-user', defaultRole: 'manager', visible: false, appOnly: true },
 				{ role: 'viewer', defaultRole: 'app-user', visible: true, appOnly: false },
@@ -436,14 +465,9 @@ describe('ProjectService', () => {
 					vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(
 						new Error('projection failed'),
 					);
-					await expect(
-						projects.addMember(
-							project.id,
-							kind === 'id' ? { user_id: STRANGER.id } : { email: STRANGER.email },
-							role,
-							ACTOR,
-						),
-					).rejects.toThrow('projection failed');
+					await expect(projects.addMember(project.id, member, role, ACTOR)).rejects.toThrow(
+						'projection failed',
+					);
 					const [entry] = (await catalog.getCurrentSnapshot()).projects;
 					expect(entry.member_ids).not.toContain(STRANGER.id);
 					expect(entry.member_emails).not.toContain(STRANGER.email);

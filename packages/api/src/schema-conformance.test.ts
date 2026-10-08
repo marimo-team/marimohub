@@ -66,13 +66,38 @@ function shapeKeys(schema: unknown): string[] {
 }
 
 describe('schema conformance: api response shapes vs core public shapes', () => {
-	// Same field set on both sides — the API response is exactly the core shape.
-	const identical: [string, unknown, unknown][] = [
-		['ProjectMember', ProjectMemberResponseSchema, CoreProjectMemberSchema],
-	];
+	it('ProjectMember variants have the same field set as the core schema', () => {
+		for (const variant of ProjectMemberResponseSchema.options) {
+			expect(shapeKeys(variant)).toEqual(shapeKeys(CoreProjectMemberSchema));
+		}
+	});
 
-	it.each(identical)('%s has the same field set as its core schema', (_name, api, core) => {
-		expect(shapeKeys(api)).toEqual(shapeKeys(core));
+	it.each([
+		{ user_id: 'usr_01ARZ3NDEKTSV4RRFFQ69G5FAV', role: 'admin' },
+		{ email: 'person@example.com', role: 'admin' },
+		{ group: '/teams/data', role: 'viewer' },
+		{ group: '/teams/data', role: 'editor' },
+		{ group: '/teams/data', role: 'manager' },
+		{ group: '/teams/data', role: 'app-user' },
+	])('accepts supported member response %j', (member) => {
+		expect(ProjectMemberResponseSchema.parse(member)).toEqual(member);
+	});
+
+	it.each([
+		{ role: 'viewer' },
+		{ group: '/teams/data', role: 'admin' },
+		{ user_id: 'usr_01ARZ3NDEKTSV4RRFFQ69G5FAV', email: 'person@example.com', role: 'viewer' },
+		{ user_id: 'usr_01ARZ3NDEKTSV4RRFFQ69G5FAV', group: '/teams/data', role: 'viewer' },
+		{ email: 'person@example.com', group: '/teams/data', role: 'viewer' },
+		{
+			user_id: 'usr_01ARZ3NDEKTSV4RRFFQ69G5FAV',
+			email: 'person@example.com',
+			group: '/teams/data',
+			role: 'viewer',
+		},
+	])('rejects unsupported member response %j', (member) => {
+		expect(ProjectMemberResponseSchema.safeParse(member).success).toBe(false);
+		expect(CoreProjectMemberSchema.safeParse(member).success).toBe(false);
 	});
 
 	// Response shapes that omit exactly `schema_version` (internal persistence field).
@@ -137,6 +162,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 			'notebooks',
 			'member_ids',
 			'member_emails',
+			'member_groups',
 			'security_labels',
 			'security_labels_pending',
 		];

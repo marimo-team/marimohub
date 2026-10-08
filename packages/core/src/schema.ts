@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isAuthGroupId } from './ports/auth';
 import { ResourceSecurityLabelsSchema } from './securityLabels';
 import { TokenGrantSchema } from './tokenGrants';
 import { DomainError } from './errors';
@@ -251,6 +252,8 @@ export const SnapshotProjectEntrySchema = z.looseObject({
 	member_ids: z.array(UserIdSchema).optional(),
 	// Pending invite emails are normalized for identity reconciliation.
 	member_emails: z.array(z.string().transform((e) => e.toLowerCase())).optional(),
+	// Group ids are exact. Missing projections cannot grant access.
+	member_groups: z.array(z.string()).optional(),
 	/**
 	 * Denormalized security-label projection for list filtering ahead of
 	 * pagination. Tri-state: an object = labeled, `null` = KNOWN unlabeled,
@@ -378,10 +381,13 @@ export const EmailAddressSchema = z.string().refine(
 	{ message: 'Invalid email address' },
 );
 
+export const MemberGroupSchema = z
+	.string()
+	.refine(isAuthGroupId, { message: 'Invalid identity-provider group id' });
+
 // --- Project ---
 
-// A member is either a known user (by id) or a pending email invite: someone
-// added before they ever logged in. Exactly one of the two identifiers is set.
+// A member names exactly one user id, email invite, or IdP group.
 // The schema lowercases emails on parse so the authz comparison (see authz.ts)
 // can rely on the invariant even for rows written outside ProjectService. An
 // email row keeps matching during the pending window, then becomes an id row on
@@ -390,10 +396,14 @@ export const ProjectMemberSchema = z
 	.object({
 		user_id: UserIdSchema.optional(),
 		email: EmailAddressSchema.transform((email) => email.toLowerCase()).optional(),
+		group: MemberGroupSchema.optional(),
 		role: z.enum(ROLES),
 	})
-	.refine((m) => (m.user_id === undefined) !== (m.email === undefined), {
-		message: 'a member has exactly one of user_id or email',
+	.refine((m) => [m.user_id, m.email, m.group].filter((id) => id !== undefined).length === 1, {
+		message: 'a member has exactly one of user_id, email, or group',
+	})
+	.refine((m) => m.group === undefined || m.role !== 'admin', {
+		message: 'a group member cannot hold admin',
 	});
 
 export type ProjectMember = z.infer<typeof ProjectMemberSchema>;

@@ -158,6 +158,9 @@ components:
     Capabilities:
       type: object
       properties:
+        groups_carried:
+          type: boolean
+          description: Whether this deployment supports IdP groups as project members.
         federation:
           type: object
           properties:
@@ -238,6 +241,7 @@ components:
                 enum:
                   - member.invited
                   - member.added
+                  - member.group_added
                   - member.role_changed
                   - member.removed
                   - session.takeover
@@ -249,11 +253,11 @@ components:
                   - job.run.failed
                   - job.run.succeeded
                   - unknown
-                description: 'Known values: member.invited, member.added, member.role_changed,
-                  member.removed, session.takeover, notebook.deleted,
-                  project.deleted, app.start_failed, app.unavailable,
-                  sync.failed, job.run.failed, job.run.succeeded. Unrecognized
-                  values normalize to unknown.'
+                description: 'Known values: member.invited, member.added, member.group_added,
+                  member.role_changed, member.removed, session.takeover,
+                  notebook.deleted, project.deleted, app.start_failed,
+                  app.unavailable, sync.failed, job.run.failed,
+                  job.run.succeeded. Unrecognized values normalize to unknown.'
                 example: member.invited
             max_destinations:
               type: integer
@@ -615,22 +619,72 @@ components:
         - federation_effective
         - your_role
     ProjectMember:
-      type: object
-      properties:
-        user_id:
-          type: string
-        email:
-          type: string
-        role:
-          type: string
-          enum:
-            - admin
-            - manager
-            - editor
-            - viewer
-            - app-user
-      required:
-        - role
+      oneOf:
+        - type: object
+          properties:
+            user_id:
+              type: string
+            email:
+              type: string
+              enum: &a1 []
+            group:
+              type: string
+              enum: *a1
+            role:
+              type: string
+              enum:
+                - admin
+                - manager
+                - editor
+                - viewer
+                - app-user
+          required:
+            - user_id
+            - role
+          additionalProperties: false
+        - type: object
+          properties:
+            user_id:
+              type: string
+              enum: *a1
+            email:
+              type: string
+            group:
+              type: string
+              enum: *a1
+            role:
+              type: string
+              enum:
+                - admin
+                - manager
+                - editor
+                - viewer
+                - app-user
+          required:
+            - email
+            - role
+          additionalProperties: false
+        - type: object
+          properties:
+            user_id:
+              type: string
+              enum: *a1
+            email:
+              type: string
+              enum: *a1
+            group:
+              type: string
+            role:
+              type: string
+              enum:
+                - manager
+                - editor
+                - viewer
+                - app-user
+          required:
+            - group
+            - role
+          additionalProperties: false
     ProjectFederation:
       type: object
       properties:
@@ -739,9 +793,10 @@ components:
               type: array
               items:
                 type: string
-                enum: &a1
+                enum: &a2
                   - member.invited
                   - member.added
+                  - member.group_added
                   - member.role_changed
                   - member.removed
                   - session.takeover
@@ -753,11 +808,11 @@ components:
                   - job.run.failed
                   - job.run.succeeded
                   - unknown
-                description: 'Known values: member.invited, member.added, member.role_changed,
-                  member.removed, session.takeover, notebook.deleted,
-                  project.deleted, app.start_failed, app.unavailable,
-                  sync.failed, job.run.failed, job.run.succeeded. Unrecognized
-                  values normalize to unknown.'
+                description: 'Known values: member.invited, member.added, member.group_added,
+                  member.role_changed, member.removed, session.takeover,
+                  notebook.deleted, project.deleted, app.start_failed,
+                  app.unavailable, sync.failed, job.run.failed,
+                  job.run.succeeded. Unrecognized values normalize to unknown.'
                 example: member.invited
             enabled:
               type: boolean
@@ -807,12 +862,12 @@ components:
               type: array
               items:
                 type: string
-                enum: *a1
-                description: 'Known values: member.invited, member.added, member.role_changed,
-                  member.removed, session.takeover, notebook.deleted,
-                  project.deleted, app.start_failed, app.unavailable,
-                  sync.failed, job.run.failed, job.run.succeeded. Unrecognized
-                  values normalize to unknown.'
+                enum: *a2
+                description: 'Known values: member.invited, member.added, member.group_added,
+                  member.role_changed, member.removed, session.takeover,
+                  notebook.deleted, project.deleted, app.start_failed,
+                  app.unavailable, sync.failed, job.run.failed,
+                  job.run.succeeded. Unrecognized values normalize to unknown.'
                 example: member.invited
             enabled:
               type: boolean
@@ -2266,6 +2321,8 @@ components:
                   user_id:
                     type: string
                     minLength: 1
+                  group:
+                    type: string
                   email:
                     type: string
                     minLength: 3
@@ -3668,7 +3725,7 @@ components:
         type: string
         maxLength: 4096
       maxProperties: 32
-      propertyNames: &a2
+      propertyNames: &a3
         type: string
         pattern: ^[A-Za-z][A-Za-z0-9_-]{0,63}$
       description: String parameters passed to the notebook as `--key value` after
@@ -3779,7 +3836,7 @@ components:
             type: string
             maxLength: 4096
           maxProperties: 32
-          propertyNames: *a2
+          propertyNames: *a3
         retry:
           type:
             - object
@@ -6228,7 +6285,7 @@ paths:
         super-admin standing — no project role grants label authority — and the
         deployment must have resource security configured. Labels only add
         restrictions on top of role checks.
-      security: &a3
+      security: &a4
         - cookieAuth: []
       parameters:
         - schema:
@@ -6338,7 +6395,7 @@ paths:
       tags:
         - Projects
       summary: Remove project security labels
-      security: *a3
+      security: *a4
       parameters:
         - schema:
             type: string
@@ -6443,7 +6500,7 @@ paths:
         - Projects
       summary: List project members
       description: Pending email invites are visible only to project managers (plus
-        the invitee themself); other callers see the id-keyed rows only.
+        the invitee themself); other callers see user and group rows.
       parameters:
         - schema:
             type: string
@@ -6526,9 +6583,9 @@ paths:
       tags:
         - Projects
       summary: Add a project member
-      description: Add a member by user id or email. A known email resolves to its
-        user id; an unknown email becomes a pending invite that grants access
-        when that person first signs in.
+      description: Add a member by user id, email, or exact IdP group id. A known
+        email resolves to its user id; an unknown email becomes a pending invite
+        that grants access when that person first signs in.
       parameters:
         - schema:
             type: string
@@ -6552,6 +6609,9 @@ paths:
                   type: string
                   format: email
                   example: teammate@example.com
+                group:
+                  type: string
+                  example: /teams/data-science
                 role:
                   $ref: '#/components/schemas/AssignableRole'
               required:
@@ -6863,6 +6923,222 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/group-members:
+    put:
+      operationId: projects.members.groups.update
+      tags:
+        - Projects
+      summary: Change a group's project role
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            example: /teams/data-science
+          required: true
+          name: group
+          in: query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role:
+                  allOf:
+                    - $ref: '#/components/schemas/AssignableRole'
+                    - example: manager
+              required:
+                - role
+      responses:
+        '200':
+          description: Group role updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/Project'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: projects.members.groups.remove
+      tags:
+        - Projects
+      summary: Remove a project group member
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            example: /teams/data-science
+          required: true
+          name: group
+          in: query
+      responses:
+        '200':
+          description: Group removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/alert-destinations:
     get:
       operationId: alerts.destinations.list
@@ -6949,7 +7225,7 @@ paths:
       tags:
         - Alerts
       summary: Create a project alert destination
-      description: New destinations subscribe to all 12 project alert kinds when kinds
+      description: New destinations subscribe to all 13 project alert kinds when kinds
         is omitted. They remain disabled until a successful test.
       parameters:
         - schema:
@@ -6978,6 +7254,7 @@ paths:
                         enum:
                           - member.invited
                           - member.added
+                          - member.group_added
                           - member.role_changed
                           - member.removed
                           - session.takeover
@@ -7014,6 +7291,7 @@ paths:
                         enum:
                           - member.invited
                           - member.added
+                          - member.group_added
                           - member.role_changed
                           - member.removed
                           - session.takeover
@@ -7184,6 +7462,7 @@ paths:
                         enum:
                           - member.invited
                           - member.added
+                          - member.group_added
                           - member.role_changed
                           - member.removed
                           - session.takeover
@@ -7220,6 +7499,7 @@ paths:
                         enum:
                           - member.invited
                           - member.added
+                          - member.group_added
                           - member.role_changed
                           - member.removed
                           - session.takeover
@@ -7811,7 +8091,7 @@ paths:
       description: Super-admin and session authentication required. Saving is best
         effort and only applies when the session still owns its edits. Active
         sessions must be stopped first.
-      security: *a3
+      security: *a4
       parameters:
         - schema:
             type: string
@@ -7928,7 +8208,7 @@ paths:
       description: Read-only runtime snapshot, cached for 30 seconds per service
         instance. Super-admin and session authentication required. Recorded
         state is not a live compute health check.
-      security: *a3
+      security: *a4
       responses:
         '200':
           description: Runtime snapshot
@@ -7999,7 +8279,7 @@ paths:
       description: 'Every user who has signed in at least once, name-sorted. Currently
         a single page (`next_cursor` is always null). Super-admin only, and
         session-only: a PAT — even a super admin’s — is rejected with 403.'
-      security: *a3
+      security: *a4
       responses:
         '200':
           description: The user directory, name-sorted
@@ -8072,7 +8352,7 @@ paths:
       description: Blocks the user at authentication time, including personal access
         tokens. Super-admin only and session-only. A super admin cannot suspend
         their own account.
-      security: *a3
+      security: *a4
       parameters:
         - schema:
             type: string
@@ -8157,7 +8437,7 @@ paths:
       summary: Reactivate a suspended user
       description: Restores authentication for a known user. Super-admin only and
         session-only.
-      security: *a3
+      security: *a4
       parameters:
         - schema:
             type: string
@@ -8247,7 +8527,7 @@ paths:
         CPU limits, files.pythonhosted.org throughput, uv phase timings, and CPU
         throttling counters. The sandbox is always destroyed. Runtime failures
         are returned as a partial report. Super-admin only and session-only.
-      security: *a3
+      security: *a4
       requestBody:
         required: false
         description: Optional; omit to use the deployment defaults.
@@ -8346,7 +8626,7 @@ paths:
         auth, …) as resolved from the serving replica's environment at boot;
         secret values are never included, only whether they are set. Super-admin
         only, session-only.
-      security: *a3
+      security: *a4
       responses:
         '200':
           description: The deployment configuration, secrets redacted
@@ -8414,7 +8694,7 @@ paths:
       tags:
         - Admin
       summary: Describe policy analyzer inputs
-      security: *a3
+      security: *a4
       responses:
         '200':
           description: Policy analyzer metadata
@@ -8483,7 +8763,7 @@ paths:
       tags:
         - Admin
       summary: Evaluate a policy test suite
-      security: *a3
+      security: *a4
       requestBody:
         required: true
         content:
@@ -11293,7 +11573,7 @@ paths:
       description: Sets an override enforced IN ADDITION to the project labels, so it
         can only add restrictions. Requires super-admin standing — no project
         role grants label authority.
-      security: *a3
+      security: *a4
       parameters:
         - schema:
             type: string
@@ -11409,7 +11689,7 @@ paths:
       tags:
         - Notebooks
       summary: Remove a notebook security-label override
-      security: *a3
+      security: *a4
       parameters:
         - schema:
             type: string
@@ -20573,7 +20853,7 @@ paths:
         scripts, the CLI): send it as `Authorization: Bearer mhub_pat_…`. The
         plaintext token is returned once, in this response, and never again.
         Requires session (SSO) auth — a token cannot mint tokens.'
-      security: *a3
+      security: *a4
       requestBody:
         required: true
         content:
@@ -20676,7 +20956,7 @@ paths:
         - Auth
       summary: List the caller's personal access tokens
       description: Metadata only — the secret is never retrievable after creation.
-      security: *a3
+      security: *a4
       responses:
         '200':
           description: Tokens, newest first
@@ -20749,7 +21029,7 @@ paths:
       description: Mint a v2 personal access token with an immutable action and
         project grant. Selected projects must be visible to the caller when the
         token is created.
-      security: *a3
+      security: *a4
       requestBody:
         required: true
         content:
@@ -20918,7 +21198,7 @@ paths:
       description: Deletes the token; API requests using it fail within the
         verification-cache TTL (~30 seconds) on other replicas, immediately on
         this one.
-      security: *a3
+      security: *a4
       parameters:
         - schema:
             type: string
@@ -20993,7 +21273,7 @@ paths:
       summary: Approve a CLI login
       description: Creates a one-time code that is bound to the CLI PKCE challenge.
         Requires a browser session. Exchange creates the personal access token.
-      security: *a3
+      security: *a4
       requestBody:
         required: true
         content:
@@ -21131,7 +21411,7 @@ paths:
       tags:
         - Auth
       summary: Approve a scoped CLI login
-      security: *a3
+      security: *a4
       requestBody:
         required: true
         content:
@@ -21391,7 +21671,7 @@ paths:
       summary: Approve a CLI device login
       description: Approves a short-lived device code for the signed-in user. Requires
         a browser session. Personal access tokens cannot approve device logins.
-      security: *a3
+      security: *a4
       requestBody:
         required: true
         content:
@@ -21512,7 +21792,7 @@ paths:
       tags:
         - Auth
       summary: Preview a CLI device login
-      security: *a3
+      security: *a4
       parameters:
         - schema:
             type: string
@@ -21696,7 +21976,7 @@ paths:
       tags:
         - Auth
       summary: Approve a scoped CLI device login
-      security: *a3
+      security: *a4
       requestBody:
         required: true
         content:
@@ -21879,7 +22159,7 @@ paths:
       x-cli-hidden: true
       tags:
         - Auth
-      security: *a3
+      security: *a4
       parameters:
         - schema:
             type: string
@@ -21967,7 +22247,7 @@ paths:
       x-cli-hidden: true
       tags:
         - Auth
-      security: *a3
+      security: *a4
       parameters:
         - schema:
             type: string
@@ -22122,7 +22402,7 @@ paths:
       x-cli-hidden: true
       tags:
         - Auth
-      security: *a3
+      security: *a4
       parameters:
         - schema:
             type: string

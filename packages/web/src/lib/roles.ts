@@ -51,9 +51,9 @@ export function defaultAccessSummary(
 	switch (role) {
 		case 'inherit':
 			if (inheritedRole === undefined) return null;
-			return `Deployment and group defaults apply. Your default access: ${inheritedRole === null ? 'Members only' : roleLabel(inheritedRole)}.`;
+			return `Deployment and sign-in defaults apply. Your default access: ${inheritedRole === null ? 'Members only' : roleLabel(inheritedRole)}.`;
 		case 'none':
-			return 'This project is members-only: only the owner and the members listed here can access it.';
+			return 'This project is members-only. Owners, members, and super admins retain access.';
 		case 'app-user':
 			return 'Everyone who signs in can use this project’s apps by default, without source access.';
 		case 'viewer':

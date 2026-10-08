@@ -775,6 +775,11 @@ export function createFromEnv(
 		jobs: parseJobsConfig(env),
 		mcp,
 		policy: {
+			groups_carried:
+				authBackend(env) === 'oidc' &&
+				(oidcLoginPolicySelected(env) ||
+					(parseList(env.MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS)?.length ?? 0) > 0 ||
+					(parseList(env.MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES)?.length ?? 0) > 0),
 			appPool: parseAppPoolPolicy(env),
 			defaultRole: parseDefaultRole(env),
 			viewerMode: parseViewerMode(env),

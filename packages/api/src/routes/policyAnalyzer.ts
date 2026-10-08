@@ -14,6 +14,7 @@ import {
 	sessionResourceNotebookId,
 	ProjectId,
 	ProjectSchema,
+	MemberGroupSchema,
 	NotFoundError,
 	SECURITY_LABEL_TOKEN,
 	SessionId,
@@ -84,11 +85,19 @@ const LoginStageSchema = z
 const SyntheticMemberSchema = z
 	.strictObject({
 		user_id: z.string().min(1).optional(),
+		group: MemberGroupSchema.optional(),
 		email: z.string().min(3).max(320).optional(),
 		role: z.enum(ROLES),
 	})
-	.refine((member) => (member.user_id === undefined) !== (member.email === undefined), {
-		message: 'A member must contain one user_id or one email.',
+	.refine(
+		(member) =>
+			[member.user_id, member.email, member.group].filter((v) => v !== undefined).length === 1,
+		{
+			message: 'Provide exactly one of user_id, email, or group.',
+		},
+	)
+	.refine((member) => member.group === undefined || member.role !== 'admin', {
+		message: 'Groups cannot have the admin role.',
 	});
 
 const SyntheticProjectSchema = z.strictObject({
@@ -577,37 +586,30 @@ async function evaluateCase(
 					email: stage.subject.email,
 					entitlements,
 					groups,
-					...(stage.subject.grant
-						? {
-								credential: {
-									kind: 'personal-access-token' as const,
-									grant: stage.subject.grant,
-								},
-							}
-						: {}),
 				};
 				let context: Parameters<AuthorizationService['analyze']>[3];
 				if (stage.context.mode === 'live-self') {
 					if (subject.id !== caller.id || subject.email !== caller.email) {
 						throw new Error('live_context_requires_self');
 					}
-					subject = { ...caller, entitlements, groups };
-					if (stage.subject.grant) {
-						subject = {
-							...subject,
-							credential: {
-								...caller.credential,
-								kind: 'personal-access-token',
-								grant: stage.subject.grant,
-							},
-						};
-					}
+					subject = { ...caller, entitlements };
 					context = { mode: 'live' };
 				} else {
 					const supplied = stage.context.value;
 					const validated = supplied === null ? null : validateSubjectSecurityContext(supplied);
 					if (supplied !== null && validated === null) throw new Error('synthetic_context_invalid');
 					context = { mode: 'synthetic', value: validated };
+				}
+				if (stage.subject.grant) {
+					subject = {
+						...subject,
+						groups: [],
+						credential: {
+							...('credential' in subject ? subject.credential : {}),
+							kind: 'personal-access-token',
+							grant: stage.subject.grant,
+						},
+					};
 				}
 				const resource =
 					stage.resource.source === 'stored'

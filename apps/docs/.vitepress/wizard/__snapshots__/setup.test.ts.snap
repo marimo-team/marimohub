@@ -90,30 +90,28 @@ MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES=/marimohub/
 start of a value without a path boundary. Either list can select a group.
 Configure at most 200 exact IDs and 20 prefixes. Empty lists are invalid.</p>
 <p>To select all groups, set <code>MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS='*'</code>.
-A standalone <code>*</code> selects every group, even alongside other IDs. Group validation,
-size limits, and credential expiry still apply. More than 32 retained groups or
-1,280 UTF-8 JSON bytes rejects authentication; the host does not truncate them.
-The raw provider claim remains limited to 200 entries, including duplicates.</p>
+A standalone <code>*</code> selects every group, even alongside other IDs.
+The same ID limits and credential expiry apply. The raw provider claim remains limited to 200 entries, including duplicates.</p>
 <p>Only this membership setting treats <code>*</code> as a wildcard. Prefixes, admission lists,
 and role mappings remain literal; <code>team-*</code> is not a glob pattern.</p>
 <p>IDs and prefixes must contain 1–128 Unicode characters, with no control
 characters, commas, or leading or trailing whitespace. Internal spaces, <code>@</code>, and
 leading <code>/</code> are valid. The host discards selected IDs that fail these rules;
 malformed provider claims still fail admission. A missing claim produces no groups.</p>
-<p>The host deduplicates IDs and sorts them by code unit. The selected set must fit
-within <strong>32 groups and 1,280 UTF-8 bytes of JSON</strong>. Overflow fails browser login
-with <code>auth_failed</code> or rejects external-token authentication. The host never
-truncates the set. Narrow the selection to fix this.</p>
+<p>The host removes duplicate IDs and sorts them by code unit.
+The selected set must fit within <strong>32 groups and 1,280 UTF-8 bytes of JSON</strong>.
+Overflow fails browser login with <code>auth_failed</code> or rejects external-token authentication. The host does not truncate the set.
+If authentication exceeds these limits, narrow the group selection.</p>
 <p>The cookie is signed, not encrypted, and <code>GET /api/v1/me</code> exposes selected groups.
 Do not select sensitive group names. The identity directory stores no groups.
 Logs contain counts only: <code>oidc_session_issued</code> records entitlements, retained
 groups, and discarded values; <code>oidc_membership_groups_exceeded</code> records overflow.</p>
-<p>Groups expire with the credential, within one hour. External OIDC access tokens
-use the same selection rules. Their selected groups enter the authenticated
-subject and expire with the token. Personal access tokens, service
-accounts, background work, and non-OIDC backends have no group source; <code>/me</code>
-returns <code>groups: []</code>. Groups currently grant no access and never supply security
-labels or subject compartments.</p>
+<p>Group changes at the IdP take effect when the authenticated groups refresh.
+Existing browser sessions can retain groups until the credential expires, within one hour.
+External OIDC access tokens use the same selection rules and retain groups until token expiry.
+Personal access tokens, service accounts, background work, and non-OIDC backends have no group source. Their <code>/me</code> response contains <code>groups: []</code>.</p>
+<p>A matching <a href="/auth#idp-groups">project group membership</a> grants its assigned role.
+Groups do not supply security labels or subject compartments.</p>
 <p>For Microsoft Entra, select <strong>Groups assigned to the application</strong> to limit the
 provider claim. See <a href="https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/how-to-connect-fed-group-claims">Microsoft's group limits and application assignment</a>.
 Group overage omits the claim and produces no retained groups. The host does not

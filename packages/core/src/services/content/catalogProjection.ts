@@ -93,6 +93,9 @@ export function projectCatalogPatch(
 		member_emails: project.members.flatMap((member) =>
 			member.email !== undefined ? [member.email] : [],
 		),
+		member_groups: project.members.flatMap((member) =>
+			member.group !== undefined ? [member.group] : [],
+		),
 		...securityLabelsProjection(project, entry, options),
 	};
 }

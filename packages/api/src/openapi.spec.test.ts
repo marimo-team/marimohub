@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { parse, stringify } from 'yaml';
 import {
+	ASSIGNABLE_ROLES,
+	ROLES,
 	JOB_PARAMETER_KEY_PATTERN,
 	MAX_JOB_PARAMETERS,
 	MAX_QUEUED_RUNS_PER_JOB,
@@ -113,6 +115,23 @@ describe('OpenAPI spec', () => {
 		});
 	});
 
+	it('documents exclusive member identities and non-admin group roles', () => {
+		const schemas = (doc as { components: { schemas: Record<string, SchemaNode> } }).components
+			.schemas;
+		const variants = schemas.ProjectMember.oneOf;
+		expect(variants).toHaveLength(3);
+		for (const [index, identity] of ['user_id', 'email', 'group'].entries()) {
+			const variant = variants![index];
+			expect(variant).toMatchObject({ required: [identity, 'role'], additionalProperties: false });
+			expect(property(variant, 'role').enum).toEqual(
+				identity === 'group' ? ASSIGNABLE_ROLES : ROLES,
+			);
+			for (const other of ['user_id', 'email', 'group'].filter((key) => key !== identity)) {
+				expect(property(variant, other).enum).toEqual([]);
+			}
+		}
+	});
+
 	it('keeps job limits and defaults aligned with the core contract', () => {
 		const schemas = (doc as { components: { schemas: Record<string, SchemaNode> } }).components
 			.schemas;
@@ -166,6 +185,7 @@ describe('OpenAPI spec', () => {
 		const alertKinds = [
 			'member.invited',
 			'member.added',
+			'member.group_added',
 			'member.role_changed',
 			'member.removed',
 			'session.takeover',

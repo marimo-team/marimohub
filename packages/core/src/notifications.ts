@@ -14,6 +14,7 @@ import {
 	AlertDestinationIdSchema,
 	EmailAddressSchema,
 	JobIdSchema,
+	MemberGroupSchema,
 	NotebookIdSchema,
 	ProjectIdSchema,
 	RUN_STATUSES,
@@ -58,25 +59,37 @@ const MemberAddedDataSchema = ProjectAlertDataSchema.extend({
 	actor_user_id: UserIdSchema,
 });
 
+const MemberGroupAddedDataSchema = ProjectAlertDataSchema.extend({
+	role: z.enum(ROLES),
+	member_group: MemberGroupSchema,
+	actor_user_id: UserIdSchema,
+});
+
 const SessionTakeoverDataSchema = NotebookAlertDataSchema.extend({
 	takeover_id: z.string().min(1),
 	actor_user_id: UserIdSchema,
 	displaced_user_id: UserIdSchema,
 });
 
-const MemberRoleChangedDataSchema = ProjectAlertDataSchema.extend({
+const MemberAlertDataSchema = ProjectAlertDataSchema.extend({
 	member_user_id: UserIdSchema.nullable(),
 	member_email: EmailAddressSchema.nullable(),
+	member_group: MemberGroupSchema.nullable(),
+	actor_user_id: UserIdSchema,
+}).refine(
+	(data) =>
+		[data.member_user_id, data.member_email, data.member_group].filter((id) => id !== null)
+			.length === 1,
+	{ message: 'a member has exactly one of member_user_id, member_email, or member_group' },
+);
+
+const MemberRoleChangedDataSchema = MemberAlertDataSchema.safeExtend({
 	old_role: z.enum(ROLES),
 	new_role: z.enum(ROLES),
-	actor_user_id: UserIdSchema,
 });
 
-const MemberRemovedDataSchema = ProjectAlertDataSchema.extend({
-	member_user_id: UserIdSchema.nullable(),
-	member_email: EmailAddressSchema.nullable(),
+const MemberRemovedDataSchema = MemberAlertDataSchema.safeExtend({
 	role: z.enum(ROLES),
-	actor_user_id: UserIdSchema,
 });
 
 const NotebookDeletedDataSchema = NotebookAlertDataSchema.extend({
@@ -138,6 +151,14 @@ export interface MemberAddedNotificationInput {
 	project: Project;
 	member: ProjectMember & { user_id: UserId };
 	recipient: NotificationRecipient | null;
+	actor: AuthUser;
+	mutationId: string;
+	baseUrl?: string;
+}
+
+export interface MemberGroupAddedNotificationInput {
+	project: Project;
+	member: ProjectMember & { group: string };
 	actor: AuthUser;
 	mutationId: string;
 	baseUrl?: string;
@@ -254,13 +275,16 @@ function notebookLink(projectId: ProjectId, notebookId: NotebookId, baseUrl: str
 }
 
 function memberLabel(member: ProjectMember): string {
-	return member.email ?? member.user_id ?? 'project member';
+	return member.group !== undefined
+		? `group ${member.group}`
+		: (member.email ?? member.user_id ?? 'project member');
 }
 
 function memberData(member: ProjectMember) {
 	return {
 		member_user_id: member.user_id ?? null,
 		member_email: member.email ?? null,
+		member_group: member.group ?? null,
 	};
 }
 
@@ -429,6 +453,26 @@ export const NOTIFICATION_KIND_REGISTRY = {
 					actor_user_id: input.actor.id,
 				},
 				dedupeKey: `member.added:${input.mutationId}:broadcast`,
+			}),
+		},
+	},
+	'member.group_added': {
+		severity: 'info',
+		dataSchema: MemberGroupAddedDataSchema,
+		render: {
+			broadcast: (input: MemberGroupAddedNotificationInput) => ({
+				title: `Group added to ${input.project.name}`,
+				body: `${actorLabel(input.actor)} added group ${input.member.group} to ${input.project.name} as ${input.member.role}.`,
+				...optionalLink(projectLink(input.project.id, input.baseUrl)),
+				recipients: [],
+				context: { pid: input.project.id, role: input.member.role },
+				data: {
+					...projectData(input.project),
+					role: input.member.role,
+					member_group: input.member.group,
+					actor_user_id: input.actor.id,
+				},
+				dedupeKey: `member.group_added:${input.mutationId}:broadcast`,
 			}),
 		},
 	},
@@ -660,6 +704,7 @@ export const NOTIFICATION_KINDS = GLOBAL_NOTIFICATION_KINDS;
 export const PROJECT_ALERT_KINDS = Object.freeze([
 	'member.invited',
 	'member.added',
+	'member.group_added',
 	'member.role_changed',
 	'member.removed',
 	'session.takeover',
@@ -764,6 +809,7 @@ export function resolveMemberRecipient(
 	member: ProjectMember,
 	identity?: Identity | null,
 ): NotificationRecipient | null {
+	if (member.group !== undefined) return null;
 	if (member.email) {
 		const result = NotificationRecipientSchema.safeParse({ email: member.email });
 		return result.success ? result.data : null;

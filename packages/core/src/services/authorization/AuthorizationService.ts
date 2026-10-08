@@ -288,6 +288,7 @@ export interface ProjectEntryVisibilityInput {
 	owner: UserId;
 	member_ids?: UserId[];
 	member_emails?: string[];
+	member_groups?: string[];
 }
 
 export class AuthorizationService {

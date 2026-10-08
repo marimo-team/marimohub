@@ -53,6 +53,7 @@ operation and requires `--yes` in non-interactive use.
 | --------------------- | -------------------------------------------------------------------------------------------------- | -------- |
 | `member.invited`      | A pending email invitation is created.                                                             | Info     |
 | `member.added`        | A known user is added.                                                                             | Info     |
+| `member.group_added`  | An IdP group is added to the project.                                                              | Info     |
 | `member.role_changed` | A member role changes.                                                                             | Warning  |
 | `member.removed`      | A member is removed.                                                                               | Warning  |
 | `session.takeover`    | An exclusive editor takeover succeeds.                                                             | Warning  |
@@ -79,6 +80,11 @@ clamped to that range. Other retries are immediate. Other 4xx responses are not 
 events contain a sanitized error code, not provider messages, URLs, credentials, or secrets.
 Project alert webhooks use the same `X-Marimohub-Signature` header and HMAC construction as
 deployment-wide [generic webhooks](./notifications.md#generic-webhook).
+
+Group membership alerts go only to project destinations, with no personal recipient.
+`member.group_added` includes `member_group`, `role`, project identifiers, and the actor's user id.
+`member.role_changed` and `member.removed` include nullable `member_user_id`, `member_email`, and `member_group` fields.
+Exactly one identifies the affected member. Group ids are visible to subscribed destinations.
 
 Delivery is best-effort. It begins only after the related storage mutation commits, and a
 delivery failure never changes the API response. There is no durable queue, history, digest, or

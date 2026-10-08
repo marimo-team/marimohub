@@ -169,6 +169,7 @@ app.openapi(capabilitiesRoute, (c) => {
 		},
 		editor_sandbox_sharing: deps.policy.editorSandboxSharing ?? 'shared',
 		default_role: subjectDefaultRole(c.get('user'), deps.policy),
+		groups_carried: deps.policy.groups_carried ?? false,
 		limits: {
 			max_concurrent_sessions_per_user: deps.policy.maxConcurrentSessionsPerUser ?? null,
 			max_apps_per_project: deps.policy.maxAppsPerProject ?? null,
