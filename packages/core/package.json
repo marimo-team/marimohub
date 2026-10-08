@@ -48,6 +48,7 @@
 		"./ports/subject-context": "./src/ports/subjectContext.ts",
 		"./project-resource-policy": "./src/projectResourcePolicy.ts",
 		"./remote-workspace": "./src/integrations/remoteWorkspace.ts",
+		"./tag-paths": "./src/tagPaths.ts",
 		"./surface-state": "./src/services/runtime/surfaces/state.ts",
 		"./testing/thumbnail": "./src/testing/thumbnail.ts",
 		"./testing": "./src/testing/index.ts",

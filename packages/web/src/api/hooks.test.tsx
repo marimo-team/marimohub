@@ -1,6 +1,7 @@
 import {
 	useDeleteNotebook,
 	useDeleteProject,
+	useProjectsQuery,
 	refreshBrowseQueries,
 	resetBrowseRefreshBudgetForTests,
 	useBrowseCapabilityQuery,
@@ -76,6 +77,65 @@ function invalidatedKeys(spy: { mock: { calls: unknown[][] } }): unknown[] {
 afterEach(() => {
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
+});
+
+describe('useProjectsQuery', () => {
+	it.each(['http', 'network'] as const)(
+		'rejects a partial roster after a %s failure and retries from the first page',
+		async (failure) => {
+			let fail = true;
+			const fetchMock = stubFetch(async (input) => {
+				const cursor = new URL(String(input), 'http://localhost').searchParams.get('cursor');
+				if (cursor === null)
+					return jsonOk({ items: [{ id: 'first', tags: ['ops'] }], next_cursor: 'page-2' });
+				if (fail) {
+					if (failure === 'network') throw new TypeError('Failed to fetch');
+					return jsonError('INTERNAL_ERROR', 'Second page failed', 500);
+				}
+				return jsonOk({ items: [{ id: 'second', tags: ['ops/infra'] }], next_cursor: null });
+			});
+			const { result } = renderHookWithClient(
+				() => useProjectsQuery({ tag_prefix: 'ops' }, { throwOnError: false }),
+				{ toaster: false },
+			);
+			await waitFor(() => expect(result.current.isError).toBe(true));
+			expect(result.current.data).toBeUndefined();
+			expect(result.current.error).toBeInstanceOf(Error);
+			fail = false;
+			await act(async () => {
+				await result.current.refetch();
+			});
+			await waitFor(() => expect(result.current.isSuccess).toBe(true));
+			expect(result.current.data?.map((project) => project.id)).toEqual(['first', 'second']);
+			expect(
+				urlsOf(fetchMock).map((url) => new URL(url, 'http://localhost').searchParams.get('cursor')),
+			).toEqual([null, 'page-2', null, 'page-2']);
+			for (const url of urlsOf(fetchMock))
+				expect(new URL(url, 'http://localhost').searchParams.get('tag_prefix')).toBe('ops');
+		},
+	);
+
+	it.each([
+		['same', 'same'],
+		['a', 'b', 'a'],
+	])('rejects a pagination cycle %j without publishing partial projects', async (...cursors) => {
+		let page = 0;
+		const fetchMock = stubFetch(async () =>
+			jsonOk({
+				items: [{ id: `project-${page}`, tags: ['ops'] }],
+				next_cursor: cursors[page++] ?? null,
+			}),
+		);
+		const { result } = renderHookWithClient(() => useProjectsQuery({}, { throwOnError: false }), {
+			toaster: false,
+		});
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		expect(result.current.error?.message).toBe(
+			'Project listing did not advance; refusing a partial roster.',
+		);
+		expect(result.current.data).toBeUndefined();
+		expect(fetchMock).toHaveBeenCalledTimes(cursors.length);
+	});
 });
 
 describe('useUsersQuery', () => {

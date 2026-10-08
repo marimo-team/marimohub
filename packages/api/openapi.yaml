@@ -528,6 +528,12 @@ components:
           example: 2025-03-05T14:00:00Z
         notebook_count:
           type: number
+        tags:
+          type: array
+          items:
+            type: string
+          example:
+            - research/vision
       required:
         - id
         - name
@@ -537,6 +543,7 @@ components:
         - created_at
         - updated_at
         - notebook_count
+        - tags
     Project:
       type: object
       properties:
@@ -5654,6 +5661,24 @@ paths:
             example: WyIyMDI1LTAzLTA1VDE0OjAwOjAwWiIsIm5iLTEiXQ
           required: false
           name: cursor
+          in: query
+        - schema:
+            type: string
+            maxLength: 256
+            pattern: ^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*(?![\s\S])
+            description: Path-tag namespace. Matches projects with a tag equal to this value
+              or nested under it (`a` matches `a` and `a/b`, not `ab`). Segments
+              are separated by `/`. Each segment must start with a lowercase
+              letter or digit, followed by lowercase letters, digits, `.`, `_`,
+              or `-`.
+            example: research/vision
+          required: false
+          description: Path-tag namespace. Matches projects with a tag equal to this value
+            or nested under it (`a` matches `a` and `a/b`, not `ab`). Segments
+            are separated by `/`. Each segment must start with a lowercase
+            letter or digit, followed by lowercase letters, digits, `.`, `_`, or
+            `-`.
+          name: tag_prefix
           in: query
         - schema:
             type: string

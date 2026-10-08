@@ -1,3 +1,6 @@
+import { TagField } from '@/components/ui/TagField';
+import { TagFieldValue } from '@/lib/tagFieldValue';
+import { isPathTag } from '@marimo-hub/core/tag-paths';
 import { hasNotebookPreviews } from '@/api/previews';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { useProjectThumbnails } from '@/api/thumbnails';
@@ -229,6 +232,7 @@ function DeletedNotebookRow({ notebook, user, usersLoading, onAction }: DeletedN
 }
 
 const projectSchema = z.object({
+	tags: z.instanceof(TagFieldValue),
 	name: requiredText('Project name'),
 	description: optionalText(),
 });
@@ -343,8 +347,14 @@ function useProjectContent() {
 		);
 	}, [integrationKinds, projectIntegrations]);
 
+	const projectTags = useMemo(() => TagFieldValue.fromTags(project.tags), [project.tags]);
+	const projectFormValues = {
+		name: project.name,
+		description: project.description,
+		tags: projectTags,
+	};
 	const editProjectForm = useAppForm({
-		defaultValues: { name: project.name, description: project.description },
+		defaultValues: projectFormValues,
 		validators: schemaValidators(projectSchema),
 		onSubmit: async ({ value }) => {
 			const name = value.name.trim();
@@ -353,6 +363,7 @@ function useProjectContent() {
 					projectId: pid!,
 					name,
 					description: value.description.trim(),
+					tags: value.tags.tags,
 				});
 				toast.success(`Updated project "${name}"`);
 				editProjectModal.close();
@@ -361,10 +372,7 @@ function useProjectContent() {
 			}
 		},
 	});
-	useSeedOnOpen(editProjectForm, editProjectModal.isOpen, {
-		name: project.name,
-		description: project.description,
-	});
+	useSeedOnOpen(editProjectForm, editProjectModal.isOpen, projectFormValues);
 
 	const deleteProjectForm = useAppForm({
 		defaultValues: { confirmName: '' },
@@ -1216,6 +1224,21 @@ function useProjectContent() {
 				</editProjectForm.AppField>
 				<editProjectForm.AppField name="description">
 					{(f) => <f.TextField label="Description" placeholder="Optional description" />}
+				</editProjectForm.AppField>
+				<editProjectForm.AppField name="tags">
+					{(f) => (
+						<TagField
+							label="Tags"
+							value={f.state.value}
+							onChange={f.handleChange}
+							onBlur={f.handleBlur}
+							description={
+								f.state.value.tags.some((tag) => tag.includes('/') && !isPathTag(tag))
+									? "Some tags won't be treated as a namespace (use lowercase segments like team/repo)."
+									: 'Press Enter or comma to add a tag. Use team/repo for namespaces.'
+							}
+						/>
+					)}
 				</editProjectForm.AppField>
 			</FormDialog>
 

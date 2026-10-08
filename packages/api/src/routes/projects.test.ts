@@ -53,7 +53,7 @@ describe('Project routes', () => {
 			).toEqual([deleted.id]);
 			const tagged = await expectPage<any>(await request('GET', '/projects?tag=finance'));
 			expect(tagged.map((p) => p.id)).toEqual([finance.id]);
-			expect(tagged[0]).not.toHaveProperty('tags');
+			expect(tagged[0].tags).toEqual(['finance']);
 			expect(
 				(await expectPage<any>(await request('GET', '/projects?q=pipeline'))).map((p) => p.id),
 			).toEqual([operations.id]);
@@ -67,6 +67,41 @@ describe('Project routes', () => {
 			).toEqual(
 				[...initial.map((p) => p.id), finance.id, operations.id].sort((a, b) => a.localeCompare(b)),
 			);
+		});
+
+		it.each(['', 'Dep1', 'dep1/', 'dep1//a', 'a'.repeat(257), 'dep1\n'])(
+			'rejects invalid prefix %j',
+			async (prefix) => {
+				await expectError(
+					await request('GET', `/projects?tag_prefix=${encodeURIComponent(prefix)}`),
+					422,
+					'VALIDATION_ERROR',
+				);
+			},
+		);
+
+		it('matches namespace segments and paginates the intersection of filters', async () => {
+			const ids: string[] = [];
+			for (const tag of ['dep1', 'dep1/a', 'dep1/a/b']) {
+				const p = await expectOk<any>(await create('Target', '', [tag, 'shared']), 201);
+				ids.push(p.id);
+			}
+			for (const tag of ['dep10', 'dep1-old', 'Dep1', 'dep1/Team A'])
+				await create('Target', '', [tag, 'shared']);
+			await create('Other', '', ['dep1', 'shared']);
+			await create('Target', '', ['dep1']);
+			const query = '/projects?tag_prefix=dep1&tag=shared&q=TARGET&status=active&limit=2';
+			const first = await expectOk<any>(await request('GET', query));
+			expect(first.items).toHaveLength(2);
+			expect(first.next_cursor).toBeTruthy();
+			const second = await expectOk<any>(
+				await request('GET', `${query}&cursor=${encodeURIComponent(first.next_cursor)}`),
+			);
+			expect(second.items).toHaveLength(1);
+			expect(second.next_cursor).toBeNull();
+			expect(
+				[...first.items, ...second.items].map((p: any) => p.id).sort((a, b) => a.localeCompare(b)),
+			).toEqual(ids.sort((a, b) => a.localeCompare(b)));
 		});
 
 		it('ANDs filters and paginates the filtered set', async () => {
@@ -117,6 +152,7 @@ describe('Project routes', () => {
 
 			const items = await expectPage<any>(await request('GET', '/projects?tag=legacy'));
 			expect(items.map((item) => item.id)).toEqual([project.id]);
+			expect(items[0].tags).toEqual(['legacy']);
 		});
 
 		it('treats empty search as unfiltered and returns a terminal empty page for misses', async () => {

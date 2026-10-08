@@ -419,14 +419,16 @@ export function useProjectsQuery(
 ) {
 	return useQuery({
 		queryKey: projectKeys.filteredList(filters),
-		queryFn: async () =>
-			(
-				await apiData(
-					apiClient.GET('/api/v1/projects', {
-						params: { query: filters },
-					}),
-				)
-			).items,
+		queryFn: () =>
+			listAllCursorPages(
+				(cursor) =>
+					apiData(
+						apiClient.GET('/api/v1/projects', {
+							params: { query: { ...filters, limit: 500, ...(cursor ? { cursor } : {}) } },
+						}),
+					),
+				'Project listing did not advance; refusing a partial roster.',
+			),
 		placeholderData: keepPreviousData,
 		enabled: options.enabled,
 		throwOnError: options.throwOnError ?? true,
@@ -872,8 +874,7 @@ export function useCopyIntegration(projectId: string) {
 
 /**
  * Non-suspense project list for pickers rendered inside dialogs. Walks every
- * page (unlike the first-page home list) so the roster is COMPLETE — a
- * truncated result would silently hide older projects from the picker. The
+ * page so a truncated result cannot hide older projects from the picker. The
  * loop is bounded by a cycle guard instead of a page cap: a repeated cursor
  * (the realistic paging bug) fails the query loudly rather than truncating.
  */
