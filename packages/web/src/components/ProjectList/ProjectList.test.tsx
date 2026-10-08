@@ -34,6 +34,10 @@ function project(
 	} as TestProject;
 }
 
+function scaleProjects(count: number, tag = 'scale') {
+	return Array.from({ length: count }, (_, i) => project(`Scale ${i}`, '', { tags: [tag] }));
+}
+
 function renderList(
 	projects: TestProject[],
 	route = '/',
@@ -177,9 +181,7 @@ describe('ProjectList', () => {
 	it.each([5, 6])(
 		'previews at most five of %i projects and only offers show-all when needed',
 		async (count) => {
-			renderList(
-				Array.from({ length: count }, (_, i) => project(`Scale ${i}`, '', { tags: ['scale'] })),
-			);
+			renderList(scaleProjects(count));
 			await waitForLoaded();
 			const group = screen.getByRole('region', { name: `scale · ${count}` });
 			expect(within(group).getAllByTestId('project-row')).toHaveLength(5);
@@ -196,12 +198,7 @@ describe('ProjectList', () => {
 		async (route) => {
 			const user = userEvent.setup();
 			const tag = route === '/' ? 'scale' : 'scale/team';
-			const { fetchMock } = renderList(
-				Array.from({ length: 7 }, (_, i) => project(`Scale ${i}`, '', { tags: [tag] })),
-				route,
-				true,
-				3,
-			);
+			const { fetchMock } = renderList(scaleProjects(7, tag), route, true, 3);
 			await waitForLoaded();
 			expect(fetchMock).toHaveBeenCalledTimes(3);
 			expect(screen.getAllByTestId('project-row')).toHaveLength(5);
@@ -217,7 +214,7 @@ describe('ProjectList', () => {
 
 	it('hides show-all when collapsed and shows every row when grouping is disabled', async () => {
 		const user = userEvent.setup();
-		renderList(Array.from({ length: 7 }, (_, i) => project(`Scale ${i}`, '', { tags: ['scale'] })));
+		renderList(scaleProjects(7));
 		await waitForLoaded();
 		await user.click(screen.getByRole('button', { name: 'Collapse scale' }));
 		expect(screen.queryAllByTestId('project-row')).toHaveLength(0);

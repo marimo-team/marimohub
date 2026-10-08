@@ -62,6 +62,10 @@ function ProjectRow({ project }: { project: ProjectSummary }) {
 	);
 }
 
+function ProjectRows({ projects }: { projects: ProjectSummary[] }) {
+	return projects.map((project) => <ProjectRow key={project.id} project={project} />);
+}
+
 export function ProjectGroups({
 	projects,
 	groupByTags,
@@ -83,13 +87,11 @@ export function ProjectGroups({
 			return next;
 		});
 	if (!groupByTags || groups.length === 0) {
-		return projects.map((project) => <ProjectRow key={project.id} project={project} />);
+		return <ProjectRows projects={projects} />;
 	}
 	return (
 		<div className="flex flex-col divide-y">
-			{direct.map((project) => (
-				<ProjectRow key={project.id} project={project} />
-			))}
+			<ProjectRows projects={direct} />
 			{groups.map((group) => (
 				<ProjectSection
 					key={group.prefix}
@@ -147,9 +149,7 @@ function ProjectSection({
 			</div>
 			{!collapsed && (
 				<>
-					{visibleProjects.map((project) => (
-						<ProjectRow key={project.id} project={project} />
-					))}
+					<ProjectRows projects={visibleProjects} />
 					{onSelect && projects.length > GROUP_PREVIEW_LIMIT && (
 						<div className="px-4 py-2">
 							<Button variant="ghost" size="sm" onPress={onSelect}>

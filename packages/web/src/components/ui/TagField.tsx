@@ -11,7 +11,8 @@ export class TagFieldValue extends TokenFieldValue {
 		const parts = text.split(/[,\r\n]/);
 		return parts.flatMap<TokenFieldSegment>((part, index) => {
 			if (index === parts.length - 1) return part ? [{ type: 'text', text: part }] : [];
-			return part.trim() ? [{ type: 'token', text: part.trim() }] : [];
+			const tag = part.trim();
+			return tag ? [{ type: 'token', text: tag }] : [];
 		});
 	}
 

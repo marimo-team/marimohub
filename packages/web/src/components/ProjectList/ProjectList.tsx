@@ -43,6 +43,7 @@ export function ProjectList() {
 	const { filters, setFilters, filtersActive } = useListFilters(PROJECT_STATUS_FILTERS, {
 		tagPrefix: true,
 	});
+	const selectNamespace = (tag_prefix?: string) => setFilters({ ...filters, tag_prefix });
 	const createModal = useDisclosure();
 	const [groupByTags, setGroupByTags] = useState(() => {
 		try {
@@ -120,7 +121,7 @@ export function ProjectList() {
 
 			{filters.tag_prefix !== undefined && (
 				<nav aria-label="Project namespace" className="flex flex-wrap items-center gap-1 text-sm">
-					<Button variant="ghost" onPress={() => setFilters({ ...filters, tag_prefix: undefined })}>
+					<Button variant="ghost" onPress={() => selectNamespace()}>
 						All projects
 					</Button>
 					{filters.tag_prefix.split('/').map((segment, index, segments) => (
@@ -129,9 +130,7 @@ export function ProjectList() {
 							<Button
 								variant="ghost"
 								aria-current={index === segments.length - 1 ? 'page' : undefined}
-								onPress={() =>
-									setFilters({ ...filters, tag_prefix: segments.slice(0, index + 1).join('/') })
-								}
+								onPress={() => selectNamespace(segments.slice(0, index + 1).join('/'))}
 							>
 								{segment}
 							</Button>
@@ -168,7 +167,7 @@ export function ProjectList() {
 					projects={projects}
 					groupByTags={groupByTags}
 					prefix={filters.tag_prefix}
-					onSelect={(tag_prefix) => setFilters({ ...filters, tag_prefix })}
+					onSelect={selectNamespace}
 				/>
 			</ListResults>
 

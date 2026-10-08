@@ -1,10 +1,9 @@
+import { TagPrefixSchema } from '../tagPrefix';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { all } from 'better-all';
 import { z } from 'zod';
 import {
 	BadRequestError,
-	MAX_TAG_PREFIX_LENGTH,
-	PATH_TAG_PATTERN,
 	tagsMatchPrefix,
 	NOTEBOOK_STATUSES,
 	NotFoundError,
@@ -73,12 +72,9 @@ export function createMcpServer(
 			annotations: { readOnlyHint: true },
 			inputSchema: z.object({
 				project: z.string().optional().describe(PROJECT_REFERENCE_DESCRIPTION),
-				project_tag_prefix: z
-					.string()
-					.max(MAX_TAG_PREFIX_LENGTH)
-					.regex(PATH_TAG_PATTERN)
-					.optional()
-					.describe('Only projects with a path tag equal to or nested under this namespace.'),
+				project_tag_prefix: TagPrefixSchema.optional().describe(
+					'Only projects with a path tag equal to or nested under this namespace.',
+				),
 				status: z.enum(NOTEBOOK_STATUSES).optional(),
 				tag: z.string().optional(),
 				q: z.string().optional(),

@@ -347,12 +347,13 @@ function useProjectContent() {
 	}, [integrationKinds, projectIntegrations]);
 
 	const projectTags = useMemo(() => TagFieldValue.fromTags(project.tags), [project.tags]);
+	const projectFormValues = {
+		name: project.name,
+		description: project.description,
+		tags: projectTags,
+	};
 	const editProjectForm = useAppForm({
-		defaultValues: {
-			name: project.name,
-			description: project.description,
-			tags: projectTags,
-		},
+		defaultValues: projectFormValues,
 		validators: schemaValidators(projectSchema),
 		onSubmit: async ({ value }) => {
 			const name = value.name.trim();
@@ -370,11 +371,7 @@ function useProjectContent() {
 			}
 		},
 	});
-	useSeedOnOpen(editProjectForm, editProjectModal.isOpen, {
-		name: project.name,
-		description: project.description,
-		tags: projectTags,
-	});
+	useSeedOnOpen(editProjectForm, editProjectModal.isOpen, projectFormValues);
 
 	const deleteProjectForm = useAppForm({
 		defaultValues: { confirmName: '' },
