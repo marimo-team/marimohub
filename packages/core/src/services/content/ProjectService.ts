@@ -48,7 +48,7 @@ import { deleteByPrefix, listAllKeys, listAllPrefixes } from '../catalog/storage
 import { AppPoolStore } from '../runtime/AppPoolStore';
 import { loadProjectCatalogPatch, projectCatalogPatch } from './catalogProjection';
 import { DeepLinkService } from './DeepLinkService';
-import { createListFilter } from './listFilters';
+import { createListFilter, tagsMatchFilters } from './listFilters';
 import type { ListFilters } from './listFilters';
 
 /** Grace period before a soft-deleted project's storage is purged by the GC sweep. */
@@ -246,24 +246,30 @@ export class ProjectService {
 			return project;
 		};
 		const snapshot = await this.catalog.getCurrentSnapshot();
-		let matching = snapshot.projects.filter(
+		const matching = snapshot.projects.filter(
 			createListFilter<SnapshotProjectEntry>(
 				filter,
 				(project) => [project.name, project.description],
 				{ allowUnknownTags: true },
 			),
 		);
-		if (filter?.tag !== undefined) {
-			const tag = filter.tag;
-			const tagMatches = await mapWithConcurrency(
-				matching,
-				BUCKET_SCAN_CONCURRENCY,
-				async (project) =>
-					project.tags?.includes(tag) ?? (await loadProject(project.id)).tags.includes(tag),
-			);
-			matching = matching.filter((_, index) => tagMatches[index]);
-		}
-		if (!filter || !authz) return matching.map(toPublicProjectEntry);
+		// Resolve legacy tags after authorization, sharing the head memo with roles and labels.
+		const publicEntries = async (entries: SnapshotProjectEntry[]) => {
+			const resolved = await mapWithConcurrency(entries, BUCKET_SCAN_CONCURRENCY, async (entry) => {
+				let tags = entry.tags;
+				if (tags === undefined) {
+					try {
+						tags = (await loadProject(entry.id)).tags;
+					} catch (error) {
+						if (!(error instanceof NotFoundError)) throw error;
+						tags = [];
+					}
+				}
+				return toPublicProjectEntry({ ...entry, tags });
+			});
+			return resolved.filter((entry) => tagsMatchFilters(entry.tags, filter ?? {}));
+		};
+		if (!filter || !authz) return publicEntries(matching);
 		// Filter before pagination so hidden projects cannot affect counts or cursors.
 		const admitted = await mapWithConcurrency(matching, BUCKET_SCAN_CONCURRENCY, async (entry) => {
 			const grant = 'credential' in filter.subject ? filter.subject.credential.grant : undefined;
@@ -272,15 +278,15 @@ export class ProjectService {
 			return roleAtLeast(role, projectActionMinRole(action));
 		});
 		const visible = matching.filter((_, index) => admitted[index]);
-		return (
+		return publicEntries(
 			await filterByLabelConstraints(
 				authz,
 				filter.subject,
 				visible,
 				async (entry) => (await loadProject(entry.id)).security_labels ?? null,
 				action,
-			)
-		).map(toPublicProjectEntry);
+			),
+		);
 	}
 
 	private async entryRole(

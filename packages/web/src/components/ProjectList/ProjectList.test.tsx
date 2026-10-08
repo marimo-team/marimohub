@@ -2,7 +2,8 @@ import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { tagsMatchPrefix } from '@marimo-hub/core/tag-paths';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ProjectSummary } from '@/types';
 import { ProjectList } from './ProjectList';
@@ -13,7 +14,7 @@ vi.mock('@/context/AuthContext', () => ({
 	useAuth: () => ({ user: { can_create_projects: authState.canCreateProjects } }),
 }));
 
-type TestProject = ProjectSummary & { tags: string[] };
+type TestProject = ProjectSummary;
 
 function project(
 	name: string,
@@ -37,20 +38,26 @@ function renderList(
 	projects: TestProject[],
 	route = '/',
 	canCreateProjects: boolean | undefined = true,
+	pageSize = 500,
 ) {
 	authState.canCreateProjects = canCreateProjects;
 	const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
 		const url = new URL(String(input), 'http://localhost');
 		const q = url.searchParams.get('q')?.toLocaleLowerCase();
 		const tag = url.searchParams.get('tag');
+		const prefix = url.searchParams.get('tag_prefix');
 		const status = url.searchParams.get('status');
-		const items = projects.filter(
+		const filtered = projects.filter(
 			(entry) =>
 				(status ? entry.status === status : entry.status !== 'deleted') &&
 				(!tag || entry.tags.includes(tag)) &&
+				(prefix === null || tagsMatchPrefix(entry.tags, prefix)) &&
 				(!q || `${entry.name} ${entry.description}`.toLocaleLowerCase().includes(q)),
 		);
-		return new Response(JSON.stringify({ success: true, data: { items, next_cursor: null } }), {
+		const start = Number(url.searchParams.get('cursor') ?? 0);
+		const items = filtered.slice(start, start + pageSize);
+		const next_cursor = start + pageSize < filtered.length ? String(start + pageSize) : null;
+		return new Response(JSON.stringify({ success: true, data: { items, next_cursor } }), {
 			headers: { 'content-type': 'application/json' },
 		});
 	});
@@ -61,7 +68,20 @@ function renderList(
 			<QueryClientProvider client={client}>{children}</QueryClientProvider>
 		</MemoryRouter>
 	);
-	return { ...render(<ProjectList />, { wrapper }), fetchMock };
+	return {
+		...render(
+			<>
+				<ProjectList />
+				<Location />
+			</>,
+			{ wrapper },
+		),
+		fetchMock,
+	};
+}
+
+function Location() {
+	return <span data-testid="location">{useLocation().search}</span>;
 }
 
 async function waitForLoaded() {
@@ -73,6 +93,66 @@ afterEach(() => {
 });
 
 describe('ProjectList', () => {
+	it('renders groups and tags, collapses rows, and drills down with breadcrumbs', async () => {
+		const user = userEvent.setup();
+		const { fetchMock } = renderList([
+			project('Vision', '', { tags: ['research/vision/seg'] }),
+			project('Language', '', { tags: ['research/nlp'] }),
+			project('Neighbor', '', { tags: ['research10'] }),
+			project('Loose'),
+		]);
+		await waitForLoaded();
+		expect(screen.getByText('research/vision/seg')).toBeInTheDocument();
+		expect(screen.getByRole('region', { name: 'Ungrouped · 1' })).toBeInTheDocument();
+		expect(screen.getByRole('status')).toHaveTextContent('4 projects');
+		await user.click(screen.getByRole('button', { name: 'Collapse research' }));
+		expect(screen.queryByText('Vision')).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Expand research' })).toHaveAttribute(
+			'aria-expanded',
+			'false',
+		);
+		await user.click(screen.getByRole('button', { name: 'research · 2' }));
+		await waitFor(() => expect(screen.queryByText('Neighbor')).not.toBeInTheDocument());
+		expect(screen.getByTestId('location')).toHaveTextContent('tag_prefix=research');
+		expect(String(fetchMock.mock.lastCall?.[0])).toContain('tag_prefix=research');
+		await user.click(screen.getByRole('button', { name: 'vision · 1' }));
+		await waitFor(() => expect(screen.queryByText('Language')).not.toBeInTheDocument());
+		expect(screen.getByTestId('location')).toHaveTextContent('tag_prefix=research%2Fvision');
+		await user.click(screen.getByRole('button', { name: 'research' }));
+		expect(await screen.findByText('Language')).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'All projects' }));
+		expect(await screen.findByText('Neighbor')).toBeInTheDocument();
+		expect(screen.getByTestId('location')).toBeEmptyDOMElement();
+	});
+
+	it('fetches all pages with the same filters and counts shared projects once', async () => {
+		const { fetchMock } = renderList(
+			[
+				project('First', 'match', { tags: ['research/vision', 'research/nlp', 'shared'] }),
+				project('Second', 'match', { tags: ['research/vision', 'shared'] }),
+			],
+			'/?tag_prefix=research&tag=shared&q=match&status=active',
+			true,
+			1,
+		);
+		await waitForLoaded();
+		expect(screen.getAllByText('First')).toHaveLength(2);
+		expect(screen.getByText('Second')).toBeInTheDocument();
+		expect(screen.getByRole('status')).toHaveTextContent('2 projects');
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		for (const [input] of fetchMock.mock.calls) {
+			const params = new URL(String(input), 'http://localhost').searchParams;
+			expect(Object.fromEntries(params)).toMatchObject({
+				tag_prefix: 'research',
+				tag: 'shared',
+				q: 'match',
+				status: 'active',
+				limit: '500',
+			});
+		}
+		expect(String(fetchMock.mock.calls[1][0])).toContain('cursor=1');
+	});
+
 	it('renders the fetched projects', async () => {
 		renderList([project('Sales'), project('Marketing')]);
 		await waitForLoaded();
@@ -80,6 +160,7 @@ describe('ProjectList', () => {
 		expect(document.title).toBe('Projects · marimohub');
 		expect(screen.getByText('Sales')).toBeInTheDocument();
 		expect(screen.getByText('Marketing')).toBeInTheDocument();
+		expect(screen.queryByRole('region')).not.toBeInTheDocument();
 	});
 
 	it('renders each project as a real link (cmd/middle-click can open a new tab)', async () => {
@@ -196,6 +277,7 @@ describe('ProjectList', () => {
 		expect(screen.queryByText('Marketing')).not.toBeInTheDocument();
 		const requestUrl = new URL(String(fetchMock.mock.calls[0]?.[0]), 'http://localhost');
 		expect(Object.fromEntries(requestUrl.searchParams)).toEqual({
+			limit: '500',
 			q: 'analysis',
 			tag: 'finance',
 			status: 'active',

@@ -1,5 +1,11 @@
 import { z } from '@hono/zod-openapi';
-import { BadRequestError, NOTEBOOK_STATUSES, PROJECT_STATUSES } from '@marimo-hub/core';
+import {
+	BadRequestError,
+	NOTEBOOK_STATUSES,
+	PROJECT_STATUSES,
+	MAX_TAG_PREFIX_LENGTH,
+	PATH_TAG_PATTERN,
+} from '@marimo-hub/core';
 
 /**
  * Keyset (cursor) pagination for the list endpoints. List responses carry their
@@ -56,6 +62,17 @@ const ListFilterQuery = {
 };
 
 export const ProjectListQuery = PaginationQuery.extend({
+	tag_prefix: z
+		.string()
+		.max(MAX_TAG_PREFIX_LENGTH)
+		.regex(PATH_TAG_PATTERN)
+		.optional()
+		.openapi({
+			param: { name: 'tag_prefix', in: 'query' },
+			description:
+				'Path-tag namespace. Matches projects with a tag equal to this value or nested under it (`a` matches `a` and `a/b`, not `ab`). Lowercase segments of [a-z0-9._-] separated by `/`.',
+			example: 'research/vision',
+		}),
 	status: z
 		.enum(PROJECT_STATUSES)
 		.optional()

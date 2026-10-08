@@ -2,7 +2,14 @@ import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import { uid, ACTOR, localResourceSecurity, makeSubjectContext, setupTestEnv } from '../../testing';
 
 import { ConflictError, NotFoundError, PreconditionFailedError } from '../../errors';
-import { createJobId, createNotebookId, createRunId, createVersionId, UserId } from '../../ids';
+import {
+	createJobId,
+	createNotebookId,
+	createRunId,
+	createVersionId,
+	UserId,
+	createProjectId,
+} from '../../ids';
 import type { ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
@@ -34,6 +41,76 @@ describe('ProjectService', () => {
 		notebooks = env.notebooks;
 		catalog = env.catalog;
 		identities = env.identities;
+	});
+
+	it('resolves legacy namespace tags once, after token authorization', async () => {
+		const project = await projects.createProject(
+			{ name: 'Target', description: '', tags: ['dep1/team', 'shared'] },
+			ACTOR,
+		);
+		await catalog.updateProjectEntry('test.strip', ACTOR, project.id, () => ({ tags: undefined }));
+		const get = vi.spyOn(bucket, 'get');
+		const entries = await projects.listProjects({
+			subject: { id: ACTOR, email: 'actor@example.com' },
+			tagPrefix: 'dep1',
+			tag: 'shared',
+			q: 'TARGET',
+		});
+		expect(entries).toEqual([
+			expect.objectContaining({ id: project.id, tags: ['dep1/team', 'shared'] }),
+		]);
+		expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(
+			1,
+		);
+		expect(
+			await projects.listProjects({
+				subject: { id: ACTOR, email: 'actor@example.com' },
+				tagPrefix: 'dep10',
+			}),
+		).toEqual([]);
+		expect(
+			await projects.listProjects({
+				subject: { id: ACTOR, email: 'actor@example.com' },
+				tagPrefix: 'dep1',
+				tag: 'missing',
+			}),
+		).toEqual([]);
+		expect(await projects.listProjects()).toEqual([
+			expect.objectContaining({ tags: ['dep1/team', 'shared'] }),
+		]);
+	});
+
+	it('does not read legacy tags for projects excluded by the token grant', async () => {
+		const project = await projects.createProject(
+			{ name: 'Hidden', description: '', tags: ['dep1/team'] },
+			ACTOR,
+		);
+		await catalog.updateProjectEntry('test.strip', ACTOR, project.id, () => ({ tags: undefined }));
+		const get = vi.spyOn(bucket, 'get');
+		expect(
+			await projects.listProjects({
+				subject: {
+					id: ACTOR,
+					email: 'actor@example.com',
+					credential: {
+						kind: 'personal-access-token',
+						id: 'tok',
+						grant: { actions: ['project.read'], projects: [createProjectId()] },
+					},
+				},
+				tagPrefix: 'dep1',
+			}),
+		).toEqual([]);
+		expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(
+			0,
+		);
+	});
+
+	it('returns empty tags for a visible legacy entry whose head is missing', async () => {
+		const project = await projects.createProject({ name: 'Missing', description: '' }, ACTOR);
+		await catalog.updateProjectEntry('test.strip', ACTOR, project.id, () => ({ tags: undefined }));
+		await bucket.delete(paths.project(project.id).meta);
+		expect(await projects.listProjects()).toEqual([expect.objectContaining({ tags: [] })]);
 	});
 
 	describe('createProject', () => {
@@ -276,6 +353,7 @@ describe('ProjectService', () => {
 					subject: STRANGER,
 					policy: { defaultRole: 'viewer' },
 					tag: 'team',
+					tagPrefix: 'team',
 				}),
 			).toHaveLength(1);
 			expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(

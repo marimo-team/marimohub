@@ -1145,6 +1145,7 @@ export const SnapshotProjectEntrySchema = z
 		// would defeat the cursor's page bound. Use `notebook_count` for the summary
 		// and page `GET /projects/{pid}/notebooks` for the list.
 		notebook_count: z.number(),
+		tags: z.array(z.string()).openapi({ example: ['research/vision'] }),
 	})
 	.openapi('SnapshotProjectEntry');
 

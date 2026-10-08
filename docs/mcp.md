@@ -58,16 +58,16 @@ Use `list_catalog` to find accessible projects, notebooks, and active sessions.
 Project and notebook selectors accept IDs or exact names, case-insensitively.
 Use IDs when names are duplicated and for subsequent calls.
 
-| Tool              | Purpose                                                                           |
-| ----------------- | --------------------------------------------------------------------------------- |
-| `list_catalog`    | Discover notebooks. Filter by project, status, tag, or text.                      |
-| `get_notebook`    | Read notebook metadata and stored source.                                         |
-| `create_notebook` | Create a local notebook. Optional `launch` starts an edit session.                |
-| `update_notebook` | Replace supplied metadata fields or the complete local source.                    |
-| `delete_notebook` | Soft-delete a notebook, retire live apps, and cancel job runs.                    |
-| `start_session`   | Start or reuse an edit or app session.                                            |
-| `execute_code`    | Run Python in an edit session's live scratchpad.                                  |
-| `stop_session`    | Stop a session and destroy its sandbox, with a save attempt for persistent edits. |
+| Tool              | Purpose                                                                                               |
+| ----------------- | ----------------------------------------------------------------------------------------------------- |
+| `list_catalog`    | Discover notebooks. Filter by project, `project_tag_prefix` namespace, notebook status, tag, or text. |
+| `get_notebook`    | Read notebook metadata and stored source.                                                             |
+| `create_notebook` | Create a local notebook. Optional `launch` starts an edit session.                                    |
+| `update_notebook` | Replace supplied metadata fields or the complete local source.                                        |
+| `delete_notebook` | Soft-delete a notebook, retire live apps, and cancel job runs.                                        |
+| `start_session`   | Start or reuse an edit or app session.                                                                |
+| `execute_code`    | Run Python in an edit session's live scratchpad.                                                      |
+| `stop_session`    | Stop a session and destroy its sandbox, with a save attempt for persistent edits.                     |
 
 When profile selection is enabled, both tools accept an optional `compute_profile`:
 

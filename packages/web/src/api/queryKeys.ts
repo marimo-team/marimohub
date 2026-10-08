@@ -11,6 +11,7 @@ interface ListQueryFilters {
 	q?: string;
 	status?: string;
 	tag?: string;
+	tag_prefix?: string;
 }
 
 export const userKeys = {

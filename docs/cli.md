@@ -146,6 +146,7 @@ it uses a user-only credentials file instead.
 
 ```bash
 mohub projects list --all
+mohub projects list --all --tag-prefix research/vision
 mohub notebooks list --pid <PROJECT_ID> --all
 mohub notebooks create --pid <PROJECT_ID> --title analysis \
 	--code 'import marimo as mo' --description 'Analysis notebook'

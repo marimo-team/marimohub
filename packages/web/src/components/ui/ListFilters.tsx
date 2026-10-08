@@ -100,13 +100,14 @@ export function ListFilters<Status extends string>({
 			{isOpen ? (
 				<form
 					id={panelId}
-					key={`${values.q ?? ''}\0${values.tag ?? ''}\0${values.status ?? ''}`}
+					key={`${values.q ?? ''}\0${values.tag ?? ''}\0${values.status ?? ''}\0${values.tag_prefix ?? ''}`}
 					role="search"
 					aria-label={label}
 					onSubmit={(event) => {
 						event.preventDefault();
 						const data = new FormData(event.currentTarget);
 						onChange({
+							...values,
 							q: formValue(data, 'q'),
 							tag: formValue(data, 'tag'),
 							status: formValue(data, 'status') as Status | undefined,

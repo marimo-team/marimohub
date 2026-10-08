@@ -3,6 +3,9 @@ import { all } from 'better-all';
 import { z } from 'zod';
 import {
 	BadRequestError,
+	MAX_TAG_PREFIX_LENGTH,
+	PATH_TAG_PATTERN,
+	tagsMatchPrefix,
 	NOTEBOOK_STATUSES,
 	NotFoundError,
 	SessionId,
@@ -66,10 +69,16 @@ export function createMcpServer(
 		'list_catalog',
 		{
 			description:
-				'Discover accessible projects, notebooks, and active sessions. Filter by project, notebook status, tag, or text.',
+				'Discover accessible projects, notebooks, and active sessions. Filter by project, project namespace, notebook status, notebook tag, or text.',
 			annotations: { readOnlyHint: true },
 			inputSchema: z.object({
 				project: z.string().optional().describe(PROJECT_REFERENCE_DESCRIPTION),
+				project_tag_prefix: z
+					.string()
+					.max(MAX_TAG_PREFIX_LENGTH)
+					.regex(PATH_TAG_PATTERN)
+					.optional()
+					.describe('Only projects with a path tag equal to or nested under this namespace.'),
 				status: z.enum(NOTEBOOK_STATUSES).optional(),
 				tag: z.string().optional(),
 				q: z.string().optional(),
@@ -81,54 +90,63 @@ export function createMcpServer(
 					),
 			}),
 		},
-		async ({ project, status, tag, q, include_sessions }) => {
+		async ({ project, project_tag_prefix, status, tag, q, include_sessions }) => {
 			try {
 				const projects = project
 					? [await resolveProject(deps, principal, project)]
 					: await deps.services.projects.listProjects({
+							tagPrefix: project_tag_prefix,
 							subject: principal,
 							policy: deps.policy,
 							resourceSecurity: deps.resourceSecurity,
 						});
 				const entries = await Promise.all(
-					projects.map(async (projectEntry) => {
-						const { notebooks, active } = await all({
-							notebooks: async () =>
-								deps.services.notebooks.listNotebooks(projectEntry.id, {
-									...(status ? { status } : {}),
-									...(tag ? { tag } : {}),
-									...(q ? { q } : {}),
-									subject: principal,
-									policy: deps.policy,
-									resourceSecurity: deps.resourceSecurity,
-								}),
-							active: async () =>
-								include_sessions ? deps.services.sessions.listActiveByProject(projectEntry.id) : [],
-						});
-						return {
-							id: projectEntry.id,
-							name: projectEntry.name,
-							notebooks: notebooks.map((notebook) => ({
-								id: notebook.id,
-								title: notebook.title,
-								status: notebook.status,
-								tags: notebook.tags,
-								updated_at: notebook.updated_at,
-								url: `${request.appBaseUrl}/projects/${projectEntry.id}/notebooks/${notebook.id}`,
-								...(include_sessions
-									? {
-											sessions: active
-												.filter((session) => session.notebook_id === notebook.id)
-												.map((session) => ({
-													id: session.session_id,
-													mode: sessionMode(session),
-													status: session.status,
-												})),
-										}
-									: {}),
-							})),
-						};
-					}),
+					projects
+						.filter(
+							(entry) =>
+								project_tag_prefix === undefined || tagsMatchPrefix(entry.tags, project_tag_prefix),
+						)
+						.map(async (projectEntry) => {
+							const { notebooks, active } = await all({
+								notebooks: async () =>
+									deps.services.notebooks.listNotebooks(projectEntry.id, {
+										...(status ? { status } : {}),
+										...(tag ? { tag } : {}),
+										...(q ? { q } : {}),
+										subject: principal,
+										policy: deps.policy,
+										resourceSecurity: deps.resourceSecurity,
+									}),
+								active: async () =>
+									include_sessions
+										? deps.services.sessions.listActiveByProject(projectEntry.id)
+										: [],
+							});
+							return {
+								id: projectEntry.id,
+								name: projectEntry.name,
+								tags: projectEntry.tags,
+								notebooks: notebooks.map((notebook) => ({
+									id: notebook.id,
+									title: notebook.title,
+									status: notebook.status,
+									tags: notebook.tags,
+									updated_at: notebook.updated_at,
+									url: `${request.appBaseUrl}/projects/${projectEntry.id}/notebooks/${notebook.id}`,
+									...(include_sessions
+										? {
+												sessions: active
+													.filter((session) => session.notebook_id === notebook.id)
+													.map((session) => ({
+														id: session.session_id,
+														mode: sessionMode(session),
+														status: session.status,
+													})),
+											}
+										: {}),
+								})),
+							};
+						}),
 				);
 				return result({ projects: entries });
 			} catch (error) {

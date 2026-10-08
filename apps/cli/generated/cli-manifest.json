@@ -4789,6 +4789,15 @@
 					"description": "Exact tag to match.",
 					"value_type": "string",
 					"repeatable": false
+				},
+				{
+					"name": "tag_prefix",
+					"cli_name": "tag-prefix",
+					"in": "query",
+					"required": false,
+					"description": "Path-tag namespace. Matches projects with a tag equal to this value or nested under it (`a` matches `a` and `a/b`, not `ab`). Lowercase segments of [a-z0-9._-] separated by `/`.",
+					"value_type": "string",
+					"repeatable": false
 				}
 			],
 			"destructive": false,

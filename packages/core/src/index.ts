@@ -74,3 +74,5 @@ export * from './duration';
 export * from './fsm';
 
 export * from './deepLinks';
+
+export * from './tagPaths';

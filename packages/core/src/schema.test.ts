@@ -575,7 +575,9 @@ describe('SnapshotProjectEntrySchema (rolling-deploy tolerance)', () => {
 			...makeSnapshotProjectEntry({ id: createProjectId() }),
 			future_field: 'internal',
 		});
-		expect(toPublicProjectEntry(entry)).not.toHaveProperty('future_field');
+		expect(toPublicProjectEntry({ ...entry, tags: ['research/vision'] })).not.toHaveProperty(
+			'future_field',
+		);
 	});
 });
 
@@ -597,7 +599,7 @@ describe('toPublic* strippers', () => {
 			notebook_count: 2,
 		});
 
-		const pub = toPublicProjectEntry(project);
+		const pub = toPublicProjectEntry({ ...project, tags: [] });
 
 		expect('notebooks' in pub).toBe(false);
 		// non-stripped fields survive
