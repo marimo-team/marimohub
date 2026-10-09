@@ -64,8 +64,8 @@ catalogs:
       specifier: ^6.43.7
       version: 6.43.7
     '@coreweave/cwsandbox':
-      specifier: 0.5.0-beta.0
-      version: 0.5.0-beta.0
+      specifier: 1.0.0
+      version: 1.0.0
     '@duckdb/duckdb-wasm':
       specifier: 1.32.0
       version: 1.32.0
@@ -861,7 +861,7 @@ importers:
     dependencies:
       '@coreweave/cwsandbox':
         specifier: 'catalog:'
-        version: 0.5.0-beta.0
+        version: 1.0.0
       '@marimo-hub/compute-commons':
         specifier: workspace:*
         version: link:../compute-commons
@@ -2564,8 +2564,8 @@ packages:
     peerDependencies:
       '@bufbuild/protobuf': ^2.7.0
 
-  '@coreweave/cwsandbox@0.5.0-beta.0':
-    resolution: {integrity: sha512-nPS2gA6NxlLkm9bl8yQ8Pe5IlTYZGAy7iiVeYjlDl89wzoai+bBgRTNytyqBimHLzxjEae5DrWAx5jJDWyzxDg==}
+  '@coreweave/cwsandbox@1.0.0':
+    resolution: {integrity: sha512-QVej1FZ8OqlD1zeaa/2qthNx02pgRAfoT9ZU/i/6ivB6WlW3WRrDJSYV+KwRv3j9pNnAijnriP6D8qeuto0Bjg==}
     engines: {node: '>=22'}
 
   '@csstools/color-helpers@6.0.2':
@@ -9349,7 +9349,7 @@ snapshots:
     dependencies:
       '@bufbuild/protobuf': 2.12.1
 
-  '@coreweave/cwsandbox@0.5.0-beta.0':
+  '@coreweave/cwsandbox@1.0.0':
     dependencies:
       '@grpc/grpc-js': 1.14.5
       '@peculiar/x509': 2.1.0
