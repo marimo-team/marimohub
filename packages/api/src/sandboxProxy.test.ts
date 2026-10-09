@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import {
 	createServices,
 	KERNEL_AUTH_TOKEN_PATTERN,
+	NotFoundError,
 	ProjectId,
 	ProxyExposure,
 	signProxyToken,
@@ -101,6 +102,95 @@ describe('authorizeProxyRequest', () => {
 	function req(path: string): Request {
 		return new Request(`https://hub.example.com${path}`);
 	}
+
+	it('loads project and notebook permissions concurrently after loading the session', async () => {
+		const d = deps(ACTOR);
+		const session = await d.services.sessions.getSession(pid, sessionId as never);
+		const project = await d.services.projects.getProject(pid);
+		const sessionRead = Promise.withResolvers<typeof session>();
+		const projectRead = Promise.withResolvers<typeof project>();
+		const notebookStarted = Promise.withResolvers<void>();
+		vi.spyOn(d.services.sessions, 'getSession').mockReturnValue(sessionRead.promise);
+		const projectSpy = vi
+			.spyOn(d.services.projects, 'getProject')
+			.mockReturnValue(projectRead.promise);
+		const notebookSpy = vi
+			.spyOn(d.services.notebooks, 'getSecurityLabels')
+			.mockImplementation(async () => {
+				notebookStarted.resolve();
+				return null;
+			});
+		const decision = authorizeProxyRequest(req(`/proxy/${token}/`), d);
+		await vi.waitFor(() => expect(d.services.sessions.getSession).toHaveBeenCalled());
+		expect(projectSpy).not.toHaveBeenCalled();
+		expect(notebookSpy).not.toHaveBeenCalled();
+		sessionRead.resolve(session);
+		await notebookStarted.promise;
+		expect(projectSpy).toHaveBeenCalledWith(pid);
+		projectRead.resolve(project);
+		expect(await decision).toMatchObject({ kind: 'forward' });
+	});
+
+	it.each([true, false])(
+		'preserves project error precedence (project fails: %s)',
+		async (projectFails) => {
+			const d = deps(ACTOR);
+			const project = await d.services.projects.getProject(pid);
+			const projectRead = Promise.withResolvers<typeof project>();
+			const notebookStarted = Promise.withResolvers<void>();
+			vi.spyOn(d.services.projects, 'getProject').mockReturnValue(projectRead.promise);
+			vi.spyOn(d.services.notebooks, 'getSecurityLabels').mockImplementation(async () => {
+				notebookStarted.resolve();
+				throw new UnavailableError('Notebook storage unavailable');
+			});
+			const decision = authorizeProxyRequest(req(`/proxy/${token}/`), d);
+			await notebookStarted.promise;
+			if (projectFails) projectRead.reject(new Error('Project storage unavailable'));
+			else projectRead.resolve(project);
+			expect(await decision).toMatchObject({
+				kind: 'reject',
+				status: projectFails ? 404 : 503,
+				message: projectFails ? 'Session not found' : 'Session authorization could not be verified',
+			});
+		},
+	);
+
+	it('masks a missing notebook after the concurrent reads', async () => {
+		const d = deps(ACTOR);
+		vi.spyOn(d.services.notebooks, 'getSecurityLabels').mockRejectedValue(
+			new NotFoundError('Notebook missing'),
+		);
+		expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+			kind: 'reject',
+			status: 404,
+			message: 'Session not found',
+		});
+	});
+
+	it.each(['missing', 'stopped', 'expired', 'unreachable'] as const)(
+		'does not read project or notebook permissions for a %s session',
+		async (state) => {
+			const d = deps(ACTOR);
+			const session = await d.services.sessions.getSession(pid, sessionId as never);
+			const sessionSpy = vi.spyOn(d.services.sessions, 'getSession');
+			if (state === 'missing') sessionSpy.mockRejectedValue(new NotFoundError('Session missing'));
+			else
+				sessionSpy.mockResolvedValue({
+					...session,
+					...(state === 'stopped' ? { status: 'terminated' as const } : {}),
+					...(state === 'expired' ? { authorization_expires_at: '2000-01-01T00:00:00.000Z' } : {}),
+					...(state === 'unreachable' ? { sandbox_origin_url: undefined } : {}),
+				});
+			const projectSpy = vi.spyOn(d.services.projects, 'getProject');
+			const notebookSpy = vi.spyOn(d.services.notebooks, 'getSecurityLabels');
+			expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+				kind: 'reject',
+				status: state === 'missing' ? 404 : state === 'unreachable' ? 503 : 410,
+			});
+			expect(projectSpy).not.toHaveBeenCalled();
+			expect(notebookSpy).not.toHaveBeenCalled();
+		},
+	);
 
 	it('forwards directly mounted middleware without a dependency context injector', async () => {
 		const directDeps = deps(ACTOR);
