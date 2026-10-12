@@ -155,6 +155,36 @@ describe('authorizeProxyRequest', () => {
 		},
 	);
 
+	it('returns a project failure without waiting for the notebook read or leaking its rejection', async () => {
+		const d = deps(ACTOR);
+		const notebookRead = Promise.withResolvers<null>();
+		const notebookStarted = Promise.withResolvers<void>();
+		vi.spyOn(d.services.projects, 'getProject').mockRejectedValue(
+			new NotFoundError('Project missing'),
+		);
+		vi.spyOn(d.services.notebooks, 'getSecurityLabels').mockImplementation(() => {
+			notebookStarted.resolve();
+			return notebookRead.promise;
+		});
+		const settled = vi.fn();
+		const decision = authorizeProxyRequest(req(`/proxy/${token}/`), d).then(settled);
+		await notebookStarted.promise;
+		try {
+			await vi.waitFor(() =>
+				expect(settled).toHaveBeenCalledWith({
+					kind: 'reject',
+					status: 404,
+					code: 'NOT_FOUND',
+					message: 'Session not found',
+				}),
+			);
+		} finally {
+			notebookRead.reject(new UnavailableError('Notebook storage unavailable'));
+			await decision;
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		}
+	});
+
 	it('masks a missing notebook after the concurrent reads', async () => {
 		const d = deps(ACTOR);
 		vi.spyOn(d.services.notebooks, 'getSecurityLabels').mockRejectedValue(

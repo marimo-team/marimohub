@@ -163,18 +163,19 @@ export async function authorizeProxyRequest(
 		};
 	}
 
-	// Settle both reads before inspecting errors so project failures keep precedence.
-	const [projectResult, notebookResult] = await Promise.allSettled([
-		deps.services.projects.getProject(projectId),
-		(async () => {
-			await assertSessionPreviewActive(deps, projectId, session);
-			return deps.services.notebooks.getSecurityLabels(
-				projectId,
-				sessionResourceNotebookId(session),
-			);
-		})(),
-	]);
-	if (projectResult.status === 'rejected') {
+	const projectRead = deps.services.projects.getProject(projectId);
+	// Handle notebook failures even when a project failure returns before this read settles.
+	const notebookRead = (async () => {
+		await assertSessionPreviewActive(deps, projectId, session);
+		return deps.services.notebooks.getSecurityLabels(projectId, sessionResourceNotebookId(session));
+	})().then(
+		(value) => ({ status: 'fulfilled' as const, value }),
+		(reason: unknown) => ({ status: 'rejected' as const, reason }),
+	);
+	let project;
+	try {
+		project = await projectRead;
+	} catch {
 		// A session whose project is gone is unreachable, like a missing session.
 		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
 	}
@@ -182,6 +183,7 @@ export async function authorizeProxyRequest(
 	// satisfies the project labels but not the override must not reach the
 	// kernel. A missing notebook masks; a transient meta failure fails closed as
 	// unavailable rather than pretending the session is gone.
+	const notebookResult = await notebookRead;
 	if (notebookResult.status === 'rejected') {
 		if (notebookResult.reason instanceof NotFoundError) {
 			return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
@@ -193,7 +195,6 @@ export async function authorizeProxyRequest(
 			message: 'Session authorization could not be verified',
 		};
 	}
-	const project = projectResult.value;
 	const notebookLabels = notebookResult.value;
 	// ONE decision covers the whole gate: lifecycle (a soft-deleted project's
 	// kernels go dark immediately — this is the only thing in the
