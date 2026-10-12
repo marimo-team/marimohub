@@ -1303,7 +1303,7 @@ describe('changing your own access', () => {
 		expect(dialog).toHaveTextContent('You may lose access to this project.');
 		await user.click(within(dialog).getByRole('button', { name: 'Remove' }));
 		await waitFor(() => expect(onClose).toHaveBeenCalled());
-		expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/);
+		await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/));
 		expect(calls).toContainEqual({
 			url: `/api/v1/projects/${PID}/members/${EDITOR}`,
 			method: 'DELETE',
@@ -1327,7 +1327,7 @@ describe('changing your own access', () => {
 		expect(role).toHaveValue('manager');
 		await user.click(within(dialog).getByRole('button', { name: 'Change role' }));
 		await waitFor(() => expect(onClose).toHaveBeenCalled());
-		expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/);
+		await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/));
 		expect(calls).toContainEqual({
 			url: `/api/v1/projects/${PID}/members/${EDITOR}`,
 			method: 'PUT',
