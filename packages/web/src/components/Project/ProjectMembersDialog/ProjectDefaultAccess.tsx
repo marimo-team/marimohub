@@ -5,7 +5,7 @@ import { useUpdateProject } from '@/api/hooks';
 import { projectKeys } from '@/api/queryKeys';
 import { canManageProject, defaultAccessSummary } from '@/lib/roles';
 import type { Capabilities, ProjectDefaultRole, ProjectDetail } from '@/types';
-import { assignableRoleOptions } from './RoleControls';
+import { assignableRoleOptions } from './roleOptions';
 
 export function ProjectDefaultAccess({
 	project,

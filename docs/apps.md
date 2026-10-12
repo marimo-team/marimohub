@@ -311,8 +311,9 @@ Assign the role through any of these mechanisms:
 - Login policy: return the `default-role:app-user` entitlement.
 
 Set `MARIMOHUB_DEFAULT_ROLE=none` if groups should provide the only deployment-wide role grants.
-Without a project default, the highest deployment or OIDC default wins.
-A project default, when set, replaces deployment and OIDC defaults, even when it is lower.
+Without a project default, the highest of the deployment default, OIDC group defaults, and
+login-policy `default-role:*` entitlements wins.
+A project default, when set, replaces all of those sign-in defaults, even when it is lower.
 For example, `none` removes an OIDC `app-user` grant on that project.
 Explicit project membership overrides all defaults.
 

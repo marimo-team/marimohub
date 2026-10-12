@@ -2,18 +2,13 @@ import { ChevronDown } from 'lucide-react';
 import { Tooltip } from '@/components/ui';
 import { cn } from '@/lib/utils';
 import { ASSIGNABLE_ROLES, roleLabel } from '@/lib/roles';
+import { assignableRoleOptions } from './roleOptions';
 import type { AssignableProjectRole, ProjectRole } from '@/types';
 
 const ROLE_PILL_CLASS =
 	'inline-flex h-7 shrink-0 items-center rounded-full border border-primary/20 bg-primary/10 px-2.5 text-xs font-medium text-primary';
 
 const FOCUS_RING_CLASS = 'outline-none focus-visible:ring-2 focus-visible:ring-ring';
-
-export const assignableRoleOptions = ASSIGNABLE_ROLES.map((role) => (
-	<option key={role} value={role}>
-		{roleLabel(role)}
-	</option>
-));
 
 interface RoleBadgeProps {
 	value: ProjectRole;

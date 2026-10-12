@@ -522,7 +522,7 @@ describe('NotificationRouter', () => {
 			severity: 'warning',
 			audience: 'broadcast',
 			recipients: [],
-			body: 'owner@example.com changed default access to Forecasts from inherit to none.',
+			body: 'owner@example.com changed default access in Forecasts from inherit to none.',
 			link: `https://hub.example.com/projects/${project.id}`,
 			data: {
 				project_id: project.id,

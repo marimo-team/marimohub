@@ -97,7 +97,8 @@ operating system credential store.
 
 The CLI token does not carry your IdP groups, so
 [IdP group](./auth.md#idp-groups) project access does not apply to it. External
-OIDC access tokens carry groups.
+OIDC access tokens carry the groups selected by the membership settings when
+[group membership](./auth.md#group-membership) is configured.
 
 If the browser does not open automatically, the CLI prints the loopback approval
 URL. Open this URL on the same machine as the CLI.

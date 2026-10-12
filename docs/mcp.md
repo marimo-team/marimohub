@@ -53,7 +53,9 @@ actions and projects. The token lifetime defaults to 7 days and cannot exceed
 refresh tokens. Expiry or revocation requires a new authorization.
 The Hub-issued token does not carry your IdP groups, so
 [IdP group](./auth.md#idp-groups) project access does not apply to it.
-[External authorization](#external-authorization) access tokens carry groups.
+[External authorization](#external-authorization) access tokens carry the groups selected by
+`MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS` or `MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES`; without that
+configuration they carry none.
 
 ## Work with notebooks
 

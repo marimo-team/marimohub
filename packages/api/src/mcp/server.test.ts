@@ -61,6 +61,13 @@ describe('MCP tool boundaries', () => {
 				arguments: { project: project.id, project_tag_namespace: 'dep10' },
 			});
 			expect(miss.structuredContent).toEqual({ projects: [] });
+			const unfiltered = await client.callTool({
+				name: 'list_catalog',
+				arguments: { project: project.id, project_tag_namespace: '' },
+			});
+			expect(unfiltered.structuredContent).toEqual({
+				projects: [{ id: project.id, name: 'Research', tags: ['dep1/team'], notebooks: [] }],
+			});
 			for (const invalid of ['Dep1', 'a/']) {
 				const rejected = await client.callTool({
 					name: 'list_catalog',

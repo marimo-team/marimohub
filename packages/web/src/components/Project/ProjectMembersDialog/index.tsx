@@ -19,7 +19,13 @@ import { canManageProject, PROJECT_ROLES, roleDescriptions, roleLabel } from '@/
 import type { AssignableProjectRole, ProjectDetail, ProjectMember } from '@/types';
 import { AddMemberForm } from './AddMemberForm';
 import type { AddMemberHandler } from './AddMemberForm';
-import { isSelf, memberKey, memberLabel, memberSelector } from './memberIdentity';
+import {
+	isSelf,
+	memberKey,
+	memberLabel,
+	memberMatchesUser,
+	memberSelector,
+} from './memberIdentity';
 import { MemberRow } from './MemberRow';
 import { ProjectCurrentAccess } from './ProjectCurrentAccess';
 import { ProjectDefaultAccess } from './ProjectDefaultAccess';
@@ -62,9 +68,13 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 	const confirmRemove = useDialogTarget<ProjectMember>();
 	const confirmDemote = useDialogTarget<{ member: ProjectMember; role: AssignableProjectRole }>();
 
+	// A group row can be the caller's only access, so it is guarded like their own row.
 	// Owners and super admins keep access whatever their member row says.
 	const isGuardedSelf = (member: ProjectMember) =>
-		isSelf(member, user) && user?.id !== project.owner && !user?.is_super_admin;
+		user !== null &&
+		memberMatchesUser(member, user) &&
+		user.id !== project.owner &&
+		!user.is_super_admin;
 
 	const leaveIfAccessLost = async () => {
 		try {

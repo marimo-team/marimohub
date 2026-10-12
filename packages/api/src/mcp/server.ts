@@ -14,7 +14,11 @@ import {
 } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import { checkComputeProfile } from '../computeProfile';
-import { TAG_NAMESPACE_DESCRIPTION, TagNamespaceSchema, TagsBodySchema } from '../tagNamespace';
+import {
+	OptionalTagNamespaceSchema,
+	TAG_NAMESPACE_DESCRIPTION,
+	TagsBodySchema,
+} from '../tagNamespace';
 import type { ApiDeps } from '../context';
 import { withMcpSessionActivity } from './sessionActivity';
 import { startMcpSession } from './sessionStartup';
@@ -72,7 +76,9 @@ export function createMcpServer(
 			annotations: { readOnlyHint: true },
 			inputSchema: z.object({
 				project: z.string().optional().describe(PROJECT_REFERENCE_DESCRIPTION),
-				project_tag_namespace: TagNamespaceSchema.optional().describe(TAG_NAMESPACE_DESCRIPTION),
+				project_tag_namespace: OptionalTagNamespaceSchema.describe(
+					`${TAG_NAMESPACE_DESCRIPTION} An empty value applies no filter.`,
+				),
 				status: z.enum(NOTEBOOK_STATUSES).optional(),
 				tag: z.string().optional(),
 				q: z.string().optional(),

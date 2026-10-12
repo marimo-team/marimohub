@@ -629,20 +629,26 @@ const memberKeys = (projectId: string) => [
 	appKeys.all,
 ];
 
-export type MemberChoice = { user_id: string } | { email: string } | { group: string };
+export type MemberChoice =
+	| { user_id: string; email?: never; group?: never }
+	| { email: string; user_id?: never; group?: never }
+	| { group: string; user_id?: never; email?: never };
 
 export function useAddMember(projectId: string) {
 	return useApiMutation(
 		({ role, ...choice }: MemberChoice & { role: AssignableProjectRole }) =>
 			apiData(
-				'group' in choice
+				choice.group !== undefined
 					? apiClient.POST('/api/v1/projects/{pid}/group-members', {
 							params: { path: { pid: projectId } },
 							body: { group: choice.group, role },
 						})
 					: apiClient.POST('/api/v1/projects/{pid}/members', {
 							params: { path: { pid: projectId } },
-							body: { ...choice, role },
+							body:
+								choice.user_id !== undefined
+									? { user_id: choice.user_id, role }
+									: { email: choice.email, role },
 						}),
 			),
 		() => memberKeys(projectId),

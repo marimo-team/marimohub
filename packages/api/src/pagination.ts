@@ -1,4 +1,4 @@
-import { TAG_NAMESPACE_DESCRIPTION, TagNamespaceSchema } from './tagNamespace';
+import { OptionalTagNamespaceSchema, TAG_NAMESPACE_DESCRIPTION } from './tagNamespace';
 import { z } from '@hono/zod-openapi';
 import { BadRequestError, NOTEBOOK_STATUSES, PROJECT_STATUSES } from '@marimo-hub/core';
 
@@ -57,14 +57,11 @@ const ListFilterQuery = {
 };
 
 export const ProjectListQuery = PaginationQuery.extend({
-	// An empty value means no filter, matching `?q=`.
-	tag_namespace: z
-		.preprocess((value) => (value === '' ? undefined : value), TagNamespaceSchema.optional())
-		.openapi({
-			param: { name: 'tag_namespace', in: 'query' },
-			description: `${TAG_NAMESPACE_DESCRIPTION} An empty value applies no filter.`,
-			example: 'research/vision',
-		}),
+	tag_namespace: OptionalTagNamespaceSchema.openapi({
+		param: { name: 'tag_namespace', in: 'query' },
+		description: `${TAG_NAMESPACE_DESCRIPTION} An empty value applies no filter.`,
+		example: 'research/vision',
+	}),
 	status: z
 		.enum(PROJECT_STATUSES)
 		.optional()

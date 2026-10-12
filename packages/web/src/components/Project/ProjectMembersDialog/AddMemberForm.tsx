@@ -70,7 +70,7 @@ function AddPersonPicker({
 	};
 
 	const results: PickerOption[] = (search.data ?? []).flatMap((user) =>
-		isMember({ user_id: user.id })
+		isMember({ user_id: user.id }) || isMember({ email: user.email })
 			? []
 			: [
 					{

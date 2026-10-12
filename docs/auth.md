@@ -225,13 +225,16 @@ A change sends the [`project.default_access_changed` alert](./project-alerts.md#
 #### Rolling out default access
 
 1. Upgrade all replicas and stop all old replicas before setting any value other than `inherit`.
-2. Before rollback, reset every override to `inherit`. Replace `none` with explicit memberships
-   or a deployment default of `none`.
+2. Before rollback, reset every override to `inherit`. A project that used `none` then grants
+   nonmembers the inherited default again; explicit memberships do not suppress it. To keep such a
+   project members-only, set `MARIMOHUB_DEFAULT_ROLE=none` and remove the OIDC group and
+   login-policy `default-role:*` grants that would otherwise apply.
 
 Older versions parse `project.json` with a schema that strips unknown fields.
 During a mixed-version rollout, an old replica that handles a member change or rename drops `default_role`.
 After a rollback, old versions ignore the field.
-In both cases the project falls back to the deployment default, which is `editor` out of the box.
+In both cases the project falls back to the inherited default: the deployment default (`editor` out
+of the box) or a higher OIDC group or login-policy default-role grant.
 
 ### Super admins: `MARIMOHUB_SUPER_ADMINS`
 

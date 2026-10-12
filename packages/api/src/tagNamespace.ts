@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from '@hono/zod-openapi';
 import {
 	isValidTagNamespace,
 	MAX_TAG_NAMESPACE_LENGTH,
@@ -16,6 +16,12 @@ export const TagNamespaceSchema = z
 	.string()
 	.refine(isValidTagNamespace, `Expected a path-tag namespace. ${PATH_TAG_RULES}`)
 	.meta({ maxLength: MAX_TAG_NAMESPACE_LENGTH, pattern: PATH_TAG_PATTERN.source });
+
+/** An empty value means no filter, matching `?q=`; the REST query and MCP tool share it. */
+export const OptionalTagNamespaceSchema = z.preprocess(
+	(value) => (value === '' ? undefined : value),
+	TagNamespaceSchema.optional(),
+);
 
 export const TagsBodySchema = z
 	.array(z.string().min(1).max(MAX_TAG_NAMESPACE_LENGTH))

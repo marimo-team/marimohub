@@ -652,7 +652,7 @@ export const NOTIFICATION_KIND_REGISTRY = {
 		render: {
 			broadcast: (input: ProjectDefaultAccessChangedNotificationInput) => ({
 				title: `Default access changed in ${input.project.name}`,
-				body: `${actorLabel(input.actor)} changed default access to ${input.project.name} from ${input.oldDefaultRole} to ${input.newDefaultRole}.`,
+				body: `${actorLabel(input.actor)} changed default access in ${input.project.name} from ${input.oldDefaultRole} to ${input.newDefaultRole}.`,
 				...optionalLink(projectLink(input.project.id, input.baseUrl)),
 				recipients: [],
 				context: { pid: input.project.id },

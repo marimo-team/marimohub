@@ -1422,9 +1422,10 @@ The schema version remains 1. See [group membership rollout](../docs/auth.md#rol
 
 Older versions parse `project.json` with a stripping schema, so they drop or ignore `default_role`.
 A member change or rename on an old replica rewrites the record without it, and a rollback ignores it.
-Either way the project falls back to the deployment default (`editor` out of the box).
+Either way the project falls back to the inherited default: the deployment default (`editor` out of the box) or a higher OIDC group or login-policy default-role grant.
 Stop every old replica before storing a value other than `inherit`.
-Before rollback, reset overrides to `inherit` and replace `none` with explicit memberships or a deployment default of `none`.
+Before rollback, reset overrides to `inherit`. A project that used `none` then grants nonmembers the inherited default again; explicit memberships do not suppress it.
+Keep such a project members-only by setting the deployment default to `none` and removing the OIDC group and login-policy default-role grants that would apply.
 See [default access rollout](../docs/auth.md#rolling-out-default-access).
 
 `app-user`, `viewer`, `editor`, and `manager` are assignable; existing non-owner `admin` memberships remain valid.

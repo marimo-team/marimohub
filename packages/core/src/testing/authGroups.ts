@@ -21,6 +21,9 @@ export function groupsExceedingCount(prefix = 'group-'): string[] {
 export function groupsExceedingBytes(prefix = 'group-'): string[] {
 	const groups: string[] = [];
 	const encoder = new TextEncoder();
+	// Room for the longest counter keeps every ID exactly at the length limit.
+	if (`${prefix}${MAX_AUTH_GROUPS}-`.length > MAX_AUTH_GROUP_ID_LENGTH)
+		throw new Error('byte overflow fixture prefix is too long');
 	while (encoder.encode(JSON.stringify(groups)).byteLength <= MAX_AUTH_GROUPS_JSON_BYTES) {
 		const id = `${prefix}${groups.length}-`;
 		groups.push(id.padEnd(MAX_AUTH_GROUP_ID_LENGTH, 'x'));

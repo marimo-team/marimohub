@@ -27,3 +27,11 @@ POST /api/v1/projects/{pid}/notebooks the `tags/items/` request property's minLe
 POST /api/v1/projects/{pid}/notebooks/git the `tags/items/` request property's minLength was increased from `0` to `1`
 PATCH /api/v1/projects/{pid}/notebooks/{nid} the `tags/items/` request property's minLength was increased from `0` to `1`
 ```
+
+`app_compute_profile` shipped unreleased in #499. Create requests never clear an
+override, so the field no longer accepts `null` there; the update body still does.
+
+```text
+POST /api/v1/projects/{pid}/notebooks the request property `app_compute_profile` became not nullable
+POST /api/v1/projects/{pid}/notebooks/git the request property `app_compute_profile` became not nullable
+```
