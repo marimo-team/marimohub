@@ -2410,6 +2410,7 @@ export interface components {
 			})[];
 			/** @enum {string} */
 			compute_profile_override: 'none' | 'editors';
+			/** @description Absent when apps share compute_profiles and inherit the notebook's editing selection. */
 			app_compute_profiles?: (components['schemas']['ComputeResources'] & {
 				name: string;
 			})[];
@@ -9293,7 +9294,7 @@ export interface operations {
 					/** @example large */
 					compute_profile?: string;
 					/** @example large */
-					app_compute_profile?: string | null;
+					app_compute_profile?: string;
 				};
 			};
 		};
@@ -9747,9 +9748,10 @@ export interface operations {
 						marimo_version?: string;
 					};
 					base_image?: string;
+					/** @example large */
 					compute_profile?: string;
 					/** @example large */
-					app_compute_profile?: string | null;
+					app_compute_profile?: string;
 					/**
 					 * @default push
 					 * @enum {string}

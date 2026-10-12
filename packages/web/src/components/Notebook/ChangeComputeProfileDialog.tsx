@@ -4,19 +4,27 @@ import { FormDialog, useAppForm, useSeedOnOpen } from '@/components/form';
 import { useCapabilitiesQuery, useNotebookQuery, useUpdateNotebook } from '@/api/hooks';
 import {
 	computeProfileOptions,
-	effectiveComputeProfile,
-	computeProfileResources,
 	computeProfilePickerValue,
 	DEFAULT_COMPUTE_PROFILE,
+	effectiveComputeProfile,
+	hasSeparateAppProfiles,
+	modeComputeProfile,
+	modeComputeProfiles,
 } from './computeProfiles';
+
+type RestartAction = { label: string; onRestart: () => void };
 
 interface ChangeComputeProfileDialogProps {
 	isOpen: boolean;
 	onClose: () => void;
 	projectId: string;
 	notebook: { id: string; title: string };
-	restartActions?: Partial<Record<'edit' | 'app', { label: string; onRestart: () => void }>>;
+	restartActions?: Partial<Record<'edit' | 'app', RestartAction>>;
 }
+
+const storedChoice = (value: string) => (value === DEFAULT_COMPUTE_PROFILE ? undefined : value);
+
+const toastAction = ({ label, onRestart }: RestartAction) => ({ label, onClick: onRestart });
 
 export function ChangeComputeProfileDialog({
 	isOpen,
@@ -26,78 +34,67 @@ export function ChangeComputeProfileDialog({
 	restartActions,
 }: ChangeComputeProfileDialogProps) {
 	const { data: capabilities } = useCapabilitiesQuery();
-	const profiles = capabilities?.compute_profiles ?? [];
 	const detail = useNotebookQuery(projectId, notebook.id);
-	const editProfiles = profiles;
-	const appProfiles = capabilities?.app_compute_profiles ?? profiles;
+	const separateApp = hasSeparateAppProfiles(capabilities);
+	const profiles = modeComputeProfiles(capabilities, 'edit');
+	const appProfiles = modeComputeProfiles(capabilities, 'app');
 	const stored = detail.data?.meta.compute_profile;
 	const appStored = detail.data?.meta.app_compute_profile;
-	const current = computeProfilePickerValue(editProfiles, stored);
-	const appCurrent = appStored ?? DEFAULT_COMPUTE_PROFILE;
+	const current = computeProfilePickerValue(profiles, stored);
+	// In shared mode an explicit first profile pins the app, so it must not collapse into the
+	// inherit-editing default.
+	const appCurrent = separateApp
+		? computeProfilePickerValue(appProfiles, appStored)
+		: (appStored ?? DEFAULT_COMPUTE_PROFILE);
 	const stale =
-		(!!stored && !editProfiles.some((p) => p.name === stored)) ||
+		(!!stored && !profiles.some((p) => p.name === stored)) ||
 		(!!appStored && !appProfiles.some((p) => p.name === appStored));
-	const options = computeProfileOptions(editProfiles, stored);
-	const appOptions = [
-		{
-			value: DEFAULT_COMPUTE_PROFILE,
-			label: capabilities?.app_compute_profiles
-				? appProfiles[0]
-					? `Default (${appProfiles[0].name})`
-					: 'Default'
-				: 'Use editing profile',
-		},
-		...appProfiles.map((profile) => ({
-			value: profile.name,
-			label: profile.name,
-			description: computeProfileResources(profile),
-		})),
-		...computeProfileOptions(appProfiles, appStored).filter((option) => option.isDisabled),
-	];
+	const options = computeProfileOptions(profiles, stored);
+	const appOptions = computeProfileOptions(
+		appProfiles,
+		appStored,
+		separateApp ? {} : { defaultLabel: 'Use editing profile', includeFirst: true },
+	);
+	const appProfileFor = (editChoice: string, appChoice: string) =>
+		effectiveComputeProfile(
+			appProfiles,
+			modeComputeProfile(
+				{ compute_profile: storedChoice(editChoice), app_compute_profile: storedChoice(appChoice) },
+				'app',
+				separateApp,
+			),
+			true,
+		);
 	const updateNotebook = useUpdateNotebook(projectId);
 	const form = useAppForm({
 		defaultValues: { computeProfile: current, appComputeProfile: appCurrent },
 		onSubmit: async ({ value }) => {
-			const choice = value.computeProfile === DEFAULT_COMPUTE_PROFILE ? null : value.computeProfile;
+			const editChanged = value.computeProfile !== current;
 			try {
 				await updateNotebook.mutateAsync({
 					notebookId: notebook.id,
-					...(value.computeProfile !== current ? { compute_profile: choice } : {}),
+					...(editChanged ? { compute_profile: storedChoice(value.computeProfile) ?? null } : {}),
 					...(value.appComputeProfile !== appCurrent
-						? {
-								app_compute_profile:
-									value.appComputeProfile === DEFAULT_COMPUTE_PROFILE
-										? null
-										: value.appComputeProfile,
-							}
+						? { app_compute_profile: storedChoice(value.appComputeProfile) ?? null }
 						: {}),
 				});
-				const appProfile = (editChoice: string, appChoice: string) =>
-					effectiveComputeProfile(
-						appProfiles,
-						appChoice === DEFAULT_COMPUTE_PROFILE
-							? capabilities?.app_compute_profiles
-								? undefined
-								: editChoice
-							: appChoice,
-						true,
-					);
-				const restartAction =
-					(value.computeProfile !== current ? restartActions?.edit : undefined) ??
-					(appProfile(value.computeProfile, value.appComputeProfile) !==
-					appProfile(current, appCurrent)
-						? restartActions?.app
-						: undefined);
-				toast.success(
-					'Compute profiles saved. Applies when each session restarts.',
-					restartAction
-						? { action: { label: restartAction.label, onClick: restartAction.onRestart } }
-						: undefined,
-				);
-				onClose();
 			} catch {
 				return;
 			}
+			const editRestart = editChanged ? restartActions?.edit : undefined;
+			const appRestart =
+				appProfileFor(value.computeProfile, value.appComputeProfile) !==
+				appProfileFor(current, appCurrent)
+					? restartActions?.app
+					: undefined;
+			const [action, cancel] = [editRestart, appRestart].filter(
+				(restart): restart is RestartAction => restart !== undefined,
+			);
+			toast.success('Compute profiles saved. Applies when each session restarts.', {
+				...(action ? { action: toastAction(action) } : {}),
+				...(cancel ? { cancel: toastAction(cancel) } : {}),
+			});
+			onClose();
 		},
 	});
 	useSeedOnOpen(form, isOpen && detail.isSuccess, {

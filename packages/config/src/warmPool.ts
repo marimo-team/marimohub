@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { WARM_POOL_MAX_IDLE_MS } from '@marimo-hub/core';
+import { WARM_POOL_MAX_IDLE_MS, sameComputeResources } from '@marimo-hub/core';
 import type { ComputeResources, Millis, SandboxProvider, WarmPoolConfig } from '@marimo-hub/core';
 import type { ComputeProfilesConfig } from './computeProfiles';
 import type { Env } from './env';
@@ -90,9 +90,7 @@ export function parseWarmPoolConfig(
 			candidates.findIndex(
 				(candidate) =>
 					candidate.name === profile.name &&
-					candidate.resources.cpu === profile.resources.cpu &&
-					candidate.resources.memoryBytes === profile.resources.memoryBytes &&
-					candidate.resources.gpu === profile.resources.gpu,
+					sameComputeResources(candidate.resources, profile.resources),
 			) === index,
 	);
 	return {

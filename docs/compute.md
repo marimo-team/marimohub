@@ -83,7 +83,7 @@ MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
 
   ```bash
   MARIMOHUB_COMPUTE_PROFILES="editing:cpu=2;mem=4Gi"
-  MARIMOHUB_APP_COMPUTE_PROFILES="app:cpu=1;mem=2Gi"
+  MARIMOHUB_COMPUTE_APP_PROFILES="app:cpu=1;mem=2Gi"
   ```
 
   The first app profile is the app default, even when notebook overrides are
@@ -114,6 +114,10 @@ MARIMOHUB_COMPUTE_PROFILE_OVERRIDE="editors"
   default regardless of the editing selection.
   A viewer's ephemeral edit kernel always uses the editing default. Shared apps
   use the notebook's app selection regardless of who starts them.
+  Sending `default` clears an override. For `app_compute_profile` with a shared
+  list, clearing means the app inherits the editing selection.
+  Set app profiles through the notebook API or **Change Compute**; MCP
+  `create_notebook` and notebook import set only the editing profile.
 - Notebook previews retain their preview-specific profile policy, and scheduled
   jobs continue to use the legacy notebook profile and deployment default.
 - A failed non-default personal edit session can be retried once on Default

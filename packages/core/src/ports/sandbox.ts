@@ -263,6 +263,10 @@ export interface ComputeResources {
 	gpu?: string;
 }
 
+export function sameComputeResources(a: ComputeResources, b: ComputeResources): boolean {
+	return a.cpu === b.cpu && a.memoryBytes === b.memoryBytes && a.gpu === b.gpu;
+}
+
 /** A per-user directory selected before the sandbox Pod is created. */
 export interface SandboxUserHome {
 	/** Profile-facing directory key, currently the user's canonical email. */

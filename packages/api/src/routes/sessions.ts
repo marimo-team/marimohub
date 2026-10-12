@@ -48,6 +48,7 @@ import {
 	roleAtLeast,
 	resolveBaseImage,
 	resolveComputeProfile,
+	storedComputeProfile,
 	resolveLaunchStrategyForSession,
 	resolveNotebookLaunchSource,
 	resolveRestoreSnapshot,
@@ -1469,10 +1470,7 @@ export async function startNotebookSession(input: {
 	const retryWithDefault = mode === 'edit' && body?.compute_profile === 'default';
 	let selectedComputeProfile = isPreview
 		? (notebook.meta.compute_profile ?? sandbox.previewComputeProfile)
-		: mode === 'app'
-			? (notebook.meta.app_compute_profile ??
-				(sandbox.appComputeProfiles === undefined ? notebook.meta.compute_profile : undefined))
-			: notebook.meta.compute_profile;
+		: storedComputeProfile(notebook.meta, sandbox, mode);
 	if (body?.compute_profile !== undefined && body.compute_profile !== 'default') {
 		if (mode !== 'edit' || !profileOverrideEligible) {
 			throw new ForbiddenError('Compute profile selection requires a persistent edit session');

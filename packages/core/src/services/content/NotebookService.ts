@@ -98,7 +98,7 @@ export interface CreateNotebookInput {
 	runtime?: { python_version?: string; marimo_version?: string };
 	base_image?: string;
 	compute_profile?: string;
-	app_compute_profile?: string | null;
+	app_compute_profile?: string;
 	/** Explicit entrypoints opt local notebooks into full workspace persistence. */
 	entry_notebook?: string;
 	workspaceFiles?: { path: string; bytes: Uint8Array }[];
@@ -476,7 +476,7 @@ export class NotebookService {
 			runtime: input.runtime,
 			baseImage: input.base_image,
 			computeProfile: input.compute_profile,
-			appComputeProfile: input.app_compute_profile ?? undefined,
+			appComputeProfile: input.app_compute_profile,
 			securityLabels,
 		});
 

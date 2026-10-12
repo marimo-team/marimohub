@@ -1,6 +1,25 @@
 import type { RadioGroupFieldOption } from '@/components/form/fields/RadioGroupField';
 import type { Capabilities, Session, NotebookMeta } from '@/types';
 
+type ProfileCapabilities = Pick<Capabilities, 'compute_profiles' | 'app_compute_profiles'>;
+
+// The server omits `app_compute_profiles` when apps share `compute_profiles`; in that mode an app
+// without its own choice inherits the editing selection. An empty list is treated the same way.
+export function hasSeparateAppProfiles(capabilities: ProfileCapabilities | undefined): boolean {
+	return (capabilities?.app_compute_profiles?.length ?? 0) > 0;
+}
+
+export function modeComputeProfiles(
+	capabilities: ProfileCapabilities | undefined,
+	mode: 'edit' | 'app',
+): ComputeProfile[] {
+	return (
+		(mode === 'app' && hasSeparateAppProfiles(capabilities)
+			? capabilities?.app_compute_profiles
+			: capabilities?.compute_profiles) ?? []
+	);
+}
+
 export function modeComputeProfile(
 	meta: Pick<NotebookMeta, 'compute_profile' | 'app_compute_profile'> | undefined,
 	mode: 'edit' | 'app',
@@ -70,9 +89,17 @@ export function computeProfilePickerValue(
 	return !storedName || storedName === profiles[0]?.name ? DEFAULT_COMPUTE_PROFILE : storedName;
 }
 
+export interface ComputeProfileOptionsConfig {
+	/** Replaces `Default (<first>)`; the option then carries no resource description. */
+	defaultLabel?: string;
+	/** Also offer the first profile as an explicit choice, distinct from the default option. */
+	includeFirst?: boolean;
+}
+
 export function computeProfileOptions(
 	profiles: ComputeProfile[],
 	staleName?: string,
+	{ defaultLabel, includeFirst = false }: ComputeProfileOptionsConfig = {},
 ): RadioGroupFieldOption[] {
 	const defaultProfile = profiles[0];
 	if (!defaultProfile) return [];
@@ -86,12 +113,14 @@ export function computeProfileOptions(
 				}
 			: undefined;
 	return [
-		{
-			value: DEFAULT_COMPUTE_PROFILE,
-			label: `Default (${defaultProfile.name})`,
-			description: computeProfileResources(defaultProfile),
-		},
-		...profiles.slice(1).map((profile) => ({
+		defaultLabel === undefined
+			? {
+					value: DEFAULT_COMPUTE_PROFILE,
+					label: `Default (${defaultProfile.name})`,
+					description: computeProfileResources(defaultProfile),
+				}
+			: { value: DEFAULT_COMPUTE_PROFILE, label: defaultLabel },
+		...(includeFirst ? profiles : profiles.slice(1)).map((profile) => ({
 			value: profile.name,
 			label: profile.name,
 			description: computeProfileResources(profile),

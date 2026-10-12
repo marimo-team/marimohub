@@ -18,6 +18,7 @@ export type ComputeProfileOverride = 'none' | 'editors';
 
 export class ComputeProfileConfigError extends ConfigError {
 	constructor(
+		variable: string,
 		message: string,
 		readonly profileName?: string,
 		readonly key?: string,
@@ -26,8 +27,8 @@ export class ComputeProfileConfigError extends ConfigError {
 			profileName !== undefined
 				? ` (profile ${JSON.stringify(profileName)}${key ? `, key ${JSON.stringify(key)}` : ''})`
 				: '';
-		super(`MARIMOHUB_COMPUTE_PROFILES: ${message}${where}`, {
-			variable: 'MARIMOHUB_COMPUTE_PROFILES',
+		super(`${variable}: ${message}${where}`, {
+			variable,
 			remediation:
 				'Use name:cpu=<cores>;mem=<Mi|Gi|Ti>;gpu=<type>[:<count>], with lowercase names and unique keys.',
 			docs: 'docs/configuration.md#compute',
@@ -91,9 +92,10 @@ export function profilesForBackend(
 	return { profiles, defaultProfile: profiles[0] };
 }
 
-function parseCpu(value: string, profile: string): number {
+function parseCpu(value: string, profile: string, variable: string): number {
 	if (!/^\d+(?:\.\d+)?$/.test(value)) {
 		throw new ComputeProfileConfigError(
+			variable,
 			`cpu must be a positive decimal core count, got ${JSON.stringify(value)}`,
 			profile,
 			'cpu',
@@ -102,6 +104,7 @@ function parseCpu(value: string, profile: string): number {
 	const cpu = Number(value);
 	if (!Number.isFinite(cpu) || cpu < MIN_CPU_CORES) {
 		throw new ComputeProfileConfigError(
+			variable,
 			`cpu must be at least ${MIN_CPU_CORES} cores, got ${JSON.stringify(value)}`,
 			profile,
 			'cpu',
@@ -109,6 +112,7 @@ function parseCpu(value: string, profile: string): number {
 	}
 	if (cpu > MAX_CPU_CORES) {
 		throw new ComputeProfileConfigError(
+			variable,
 			`cpu=${value} exceeds sanity limit of ${MAX_CPU_CORES} cores`,
 			profile,
 			'cpu',
@@ -117,11 +121,12 @@ function parseCpu(value: string, profile: string): number {
 	return cpu;
 }
 
-function parseMem(value: string, profile: string): number {
+function parseMem(value: string, profile: string, variable: string): number {
 	const match = MEM_RE.exec(value);
 	if (!match) {
 		if (/^\d+(?:\.\d+)?$/.test(value)) {
 			throw new ComputeProfileConfigError(
+				variable,
 				`mem requires an explicit binary unit (Mi, Gi, Ti); bare number ${JSON.stringify(value)} is ambiguous`,
 				profile,
 				'mem',
@@ -129,12 +134,14 @@ function parseMem(value: string, profile: string): number {
 		}
 		if (/^\d+(?:\.\d+)?\s*(B|KB|MB|GB|TB|K|M|G|T|MiB|GiB|TiB)$/i.test(value)) {
 			throw new ComputeProfileConfigError(
+				variable,
 				`mem uses binary units Mi, Gi, or Ti exactly (e.g. "4Gi"), got ${JSON.stringify(value)}`,
 				profile,
 				'mem',
 			);
 		}
 		throw new ComputeProfileConfigError(
+			variable,
 			`mem must match <number><Mi|Gi|Ti>, got ${JSON.stringify(value)}`,
 			profile,
 			'mem',
@@ -143,6 +150,7 @@ function parseMem(value: string, profile: string): number {
 	const bytes = Number(match[1]) * MEM_MULTIPLIER[match[2]];
 	if (!Number.isFinite(bytes) || bytes < MIN_MEMORY_BYTES) {
 		throw new ComputeProfileConfigError(
+			variable,
 			`mem must be at least 1Mi, got ${JSON.stringify(value)}`,
 			profile,
 			'mem',
@@ -150,6 +158,7 @@ function parseMem(value: string, profile: string): number {
 	}
 	if (bytes > MAX_MEMORY_BYTES) {
 		throw new ComputeProfileConfigError(
+			variable,
 			`mem=${value} exceeds sanity limit of 64Ti`,
 			profile,
 			'mem',
@@ -158,10 +167,11 @@ function parseMem(value: string, profile: string): number {
 	return Math.round(bytes);
 }
 
-function parseGpu(value: string, profile: string): string {
+function parseGpu(value: string, profile: string, variable: string): string {
 	const match = GPU_RE.exec(value);
 	if (!match) {
 		throw new ComputeProfileConfigError(
+			variable,
 			`gpu must match <type>[:<positive integer count>], got ${JSON.stringify(value)}`,
 			profile,
 			'gpu',
@@ -170,6 +180,7 @@ function parseGpu(value: string, profile: string): string {
 	const count = match[2] === undefined ? undefined : Number(match[2]);
 	if (count !== undefined && (!Number.isSafeInteger(count) || count > MAX_GPU_COUNT)) {
 		throw new ComputeProfileConfigError(
+			variable,
 			`gpu count exceeds sanity limit of ${MAX_GPU_COUNT}, got ${JSON.stringify(match[2])}`,
 			profile,
 			'gpu',
@@ -178,16 +189,20 @@ function parseGpu(value: string, profile: string): string {
 	return `${match[1].toUpperCase()}${count === undefined ? '' : `:${count}`}`;
 }
 
-function parseOneProfile(chunk: string, index: number): ComputeProfile {
+function parseOneProfile(chunk: string, index: number, variable: string): ComputeProfile {
 	const colon = chunk.indexOf(':');
 	const name = (colon === -1 ? chunk : chunk.slice(0, colon)).trim();
 	const body = colon === -1 ? '' : chunk.slice(colon + 1).trim();
 
 	if (name.length === 0) {
-		throw new ComputeProfileConfigError(`profile at position ${index + 1} has an empty name`);
+		throw new ComputeProfileConfigError(
+			variable,
+			`profile at position ${index + 1} has an empty name`,
+		);
 	}
 	if (!NAME_RE.test(name)) {
 		throw new ComputeProfileConfigError(
+			variable,
 			`invalid profile name ${JSON.stringify(name)}; must match [a-z0-9-]{1,32}`,
 			name,
 		);
@@ -203,11 +218,12 @@ function parseOneProfile(chunk: string, index: number): ComputeProfile {
 			const pair = rawPair.trim();
 			if (pair.length === 0) {
 				if (pairIndex === pairs.length - 1) continue;
-				throw new ComputeProfileConfigError('empty resource entry', name);
+				throw new ComputeProfileConfigError(variable, 'empty resource entry', name);
 			}
 			const equals = pair.indexOf('=');
 			if (equals === -1) {
 				throw new ComputeProfileConfigError(
+					variable,
 					`expected key=value, got ${JSON.stringify(pair)}`,
 					name,
 				);
@@ -216,17 +232,19 @@ function parseOneProfile(chunk: string, index: number): ComputeProfile {
 			const value = pair.slice(equals + 1).trim();
 			if (!KNOWN_KEYS.has(key)) {
 				throw new ComputeProfileConfigError(
+					variable,
 					`unknown key ${JSON.stringify(key)}; supported keys: ${[...KNOWN_KEYS].join(', ')}`,
 					name,
 					key,
 				);
 			}
-			if (seen.has(key)) throw new ComputeProfileConfigError('duplicate key', name, key);
+			if (seen.has(key)) throw new ComputeProfileConfigError(variable, 'duplicate key', name, key);
 			seen.add(key);
-			if (value.length === 0) throw new ComputeProfileConfigError('empty value', name, key);
-			if (key === 'cpu') cpu = parseCpu(value, name);
-			if (key === 'mem') memoryBytes = parseMem(value, name);
-			if (key === 'gpu') gpu = parseGpu(value, name);
+			if (value.length === 0)
+				throw new ComputeProfileConfigError(variable, 'empty value', name, key);
+			if (key === 'cpu') cpu = parseCpu(value, name, variable);
+			if (key === 'mem') memoryBytes = parseMem(value, name, variable);
+			if (key === 'gpu') gpu = parseGpu(value, name, variable);
 		}
 	}
 
@@ -244,32 +262,23 @@ export function parseComputeProfiles(
 	raw: string | undefined,
 	variable = 'MARIMOHUB_COMPUTE_PROFILES',
 ): ComputeProfilesConfig {
-	try {
-		return parseProfiles(raw);
-	} catch (error) {
-		if (variable === 'MARIMOHUB_COMPUTE_PROFILES' || !(error instanceof ComputeProfileConfigError))
-			throw error;
-		error.message = error.message.replace('MARIMOHUB_COMPUTE_PROFILES', variable);
-		error.opts.variable = variable;
-		throw error;
-	}
-}
-
-function parseProfiles(raw: string | undefined): ComputeProfilesConfig {
 	if (raw === undefined || raw.trim().length === 0) {
 		return { profiles: [], defaultProfile: undefined };
 	}
 	const chunks = raw.split(',').map((chunk) => chunk.trim());
 	const emptyIndex = chunks.findIndex((chunk) => chunk.length === 0);
 	if (emptyIndex !== -1) {
-		throw new ComputeProfileConfigError(`profile at position ${emptyIndex + 1} has an empty name`);
+		throw new ComputeProfileConfigError(
+			variable,
+			`profile at position ${emptyIndex + 1} has an empty name`,
+		);
 	}
 
-	const profiles = chunks.map(parseOneProfile);
+	const profiles = chunks.map((chunk, index) => parseOneProfile(chunk, index, variable));
 	const names = new Set<string>();
 	for (const profile of profiles) {
 		if (names.has(profile.name)) {
-			throw new ComputeProfileConfigError('duplicate profile name', profile.name);
+			throw new ComputeProfileConfigError(variable, 'duplicate profile name', profile.name);
 		}
 		names.add(profile.name);
 	}
@@ -311,13 +320,14 @@ export function unsupportedBackendNotice(
 	config: ComputeProfilesConfig,
 	override: ComputeProfileOverride = 'none',
 	capabilities?: SandboxProvider['capabilities'],
+	variable = 'MARIMOHUB_COMPUTE_PROFILES',
 ): string | undefined {
 	const profilesConfigured = hasConfiguredResources(config);
 	const overrideConfigured = override !== 'none';
 	if (supportsComputeProfiles(backend, capabilities)) {
 		if (!hasConfiguredGpu(config) || supportsGpuProfiles(backend, capabilities)) return undefined;
 		return (
-			`MARIMOHUB_COMPUTE_PROFILES includes gpu values but the ${JSON.stringify(backend)} ` +
+			`${variable} includes gpu values but the ${JSON.stringify(backend)} ` +
 			'compute backend does not apply profile GPUs; gpu values are ignored while CPU and memory values still apply.'
 		);
 	}
@@ -329,7 +339,7 @@ export function unsupportedBackendNotice(
 			? ' Backend-specific MARIMOHUB_COMPUTE_* settings remain authoritative.'
 			: '';
 	const ignoredSettings = [
-		profilesConfigured ? 'MARIMOHUB_COMPUTE_PROFILES' : undefined,
+		profilesConfigured ? variable : undefined,
 		overrideConfigured ? 'MARIMOHUB_COMPUTE_PROFILE_OVERRIDE' : undefined,
 	].filter((setting): setting is string => setting !== undefined);
 	const ignoredDescription =

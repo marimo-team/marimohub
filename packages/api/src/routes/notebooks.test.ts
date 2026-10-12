@@ -1,4 +1,4 @@
-import type { NotebookId, ProjectId } from '@marimo-hub/core';
+import type { NotebookId, ProjectId, UserId } from '@marimo-hub/core';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { strFromU8, unzipSync, zipSync } from 'fflate';
 import {
@@ -329,10 +329,16 @@ describe('Notebook routes', () => {
 			{ name: 'large', resources: { cpu: 4 } },
 		];
 
-		function profileApi(override: 'none' | 'editors' = 'editors', appProfiles?: typeof profiles) {
+		function profileApi(
+			override: 'none' | 'editors' = 'editors',
+			appProfiles?: typeof profiles,
+			userId?: UserId,
+		) {
 			return createTestApi({
 				bucket,
+				userId,
 				deps: {
+					...(userId ? { policy: { defaultRole: 'viewer' as const } } : {}),
 					sandbox: {
 						bucket: { name: 'test', endpoint: '' },
 						hostname: 'localhost',
@@ -364,7 +370,10 @@ describe('Notebook routes', () => {
 		});
 
 		it('validates app choices against their own list', async () => {
-			const req = profileApi('editors', [{ name: 'app-only', resources: { cpu: 1 } }]);
+			const req = profileApi('editors', [
+				{ name: 'app-default', resources: { cpu: 1 } },
+				{ name: 'app-only', resources: { cpu: 2 } },
+			]);
 			const created = await expectOk<any>(
 				await req('POST', nb(''), {
 					title: 'App',
@@ -415,6 +424,98 @@ describe('Notebook routes', () => {
 			);
 		});
 
+		it('clears the first app profile only when apps have their own list', async () => {
+			const appProfiles = [
+				{ name: 'app-small', resources: { cpu: 1 } },
+				{ name: 'app-large', resources: { cpu: 4 } },
+			];
+			const separate = profileApi('editors', appProfiles);
+			const shared = profileApi();
+			const body = { title: 'App', description: '', code: 'x = 1' };
+			for (const [req, first, expected] of [
+				[separate, 'app-small', undefined],
+				[separate, 'default', undefined],
+				[separate, 'app-large', 'app-large'],
+				[shared, 'small', 'small'],
+				[shared, 'default', undefined],
+			] as const) {
+				const created = await expectOk<any>(
+					await req('POST', nb(''), { ...body, app_compute_profile: first }),
+					201,
+				);
+				expect(created.app_compute_profile).toBe(expected);
+			}
+		});
+
+		it('rejects app profile changes from viewers', async () => {
+			const created = await expectOk<any>(
+				await profileApi()('POST', nb(''), { title: 'NB', description: '', code: 'x = 1' }),
+				201,
+			);
+			const viewer = profileApi('editors', undefined, uid('user_viewer'));
+			await expectError(
+				await viewer('PATCH', nb(`/${created.id}`), { app_compute_profile: 'large' }),
+				403,
+				'FORBIDDEN',
+			);
+		});
+
+		it('duplicates both profile selections', async () => {
+			const req = profileApi();
+			const created = await expectOk<any>(
+				await req('POST', nb(''), {
+					title: 'NB',
+					description: '',
+					code: 'x = 1',
+					compute_profile: 'large',
+					app_compute_profile: 'large',
+				}),
+				201,
+			);
+			const copy = await expectOk<any>(await req('POST', nb(`/${created.id}/duplicate`), {}), 201);
+			expect(copy).toMatchObject({ compute_profile: 'large', app_compute_profile: 'large' });
+		});
+
+		it('validates and persists git notebook profile choices', async () => {
+			const req = profileApi('editors', [
+				{ name: 'app-small', resources: { cpu: 1 } },
+				{ name: 'app-large', resources: { cpu: 4 } },
+			]);
+			const body = {
+				title: 'Git',
+				description: '',
+				repo: 'org/repo',
+				branch: 'main',
+				entry_notebook: 'app.py',
+			};
+			for (const invalid of [{ app_compute_profile: 'large' }, { compute_profile: 'app-large' }]) {
+				await expectError(await req('POST', nb('/git'), { ...body, ...invalid }), 400);
+			}
+			await expectError(await req('POST', nb('/git'), { ...body, compute_profile: '' }), 422);
+			await expectError(
+				await profileApi('none')('POST', nb('/git'), { ...body, app_compute_profile: 'app-large' }),
+				403,
+				'FORBIDDEN',
+			);
+			const created = await expectOk<any>(
+				await req('POST', nb('/git'), {
+					...body,
+					compute_profile: 'large',
+					app_compute_profile: 'app-large',
+				}),
+				201,
+			);
+			expect(created.notebook).toMatchObject({
+				compute_profile: 'large',
+				app_compute_profile: 'app-large',
+			});
+			const detail = await expectOk<any>(await req('GET', nb(`/${created.notebook.id}`)));
+			expect(detail.meta).toMatchObject({
+				compute_profile: 'large',
+				app_compute_profile: 'app-large',
+			});
+		});
+
 		it('normalizes the default profile and supports set and clear', async () => {
 			const req = profileApi();
 			const created = await expectOk<any>(
@@ -444,6 +545,12 @@ describe('Notebook routes', () => {
 			};
 			await expectError(await profileApi()('POST', nb(''), { ...body, compute_profile: 'x' }), 400);
 			await expectError(await profileApi('none')('POST', nb(''), body), 403, 'FORBIDDEN');
+			const { compute_profile: _editing, ...appOnly } = body;
+			await expectError(
+				await profileApi('none')('POST', nb(''), { ...appOnly, app_compute_profile: 'small' }),
+				403,
+				'FORBIDDEN',
+			);
 			await expectError(
 				await profileApi('none')('POST', nb(''), {
 					...body,

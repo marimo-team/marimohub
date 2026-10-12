@@ -347,7 +347,11 @@ export type { PersistenceMode } from './runtime/sessionPersistence';
 export * from './runtime/sandboxEnvironment';
 export { kernelBasePathFromUrl, localKernelBasePath } from './runtime/sandboxExposure';
 export { resolveBaseImage } from './runtime/resolveBaseImage';
-export { resolveComputeProfile, toComputeResourceRecord } from './runtime/resolveComputeProfile';
+export {
+	resolveComputeProfile,
+	storedComputeProfile,
+	toComputeResourceRecord,
+} from './runtime/resolveComputeProfile';
 export type { ComputeProfileConfig, ResolvedComputeProfile } from './runtime/resolveComputeProfile';
 export { resolveLaunchStrategyForSession } from './runtime/launchStrategy';
 export type { ResolvedLaunchStrategy } from './runtime/launchStrategy';

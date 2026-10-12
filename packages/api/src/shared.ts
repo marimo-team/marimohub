@@ -1671,7 +1671,10 @@ export const CapabilitiesResponseSchema = z
 		compute_profile_override: z.enum(['none', 'editors']),
 		app_compute_profiles: z
 			.array(ComputeResourcesResponseSchema.extend({ name: z.string() }))
-			.optional(),
+			.optional()
+			.describe(
+				"Absent when apps share compute_profiles and inherit the notebook's editing selection.",
+			),
 		surfaces: z.array(
 			z.discriminatedUnion('id', [
 				z.object({

@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { ChangeComputeProfileDialog } from './ChangeComputeProfileDialog';
+import { DEFAULT_COMPUTE_PROFILE } from './computeProfiles';
 
 const json = (data: unknown) =>
 	new Response(JSON.stringify({ success: true, data }), {
@@ -97,6 +98,7 @@ function renderDialog(
 }
 
 const editing = () => within(screen.getByRole('radiogroup', { name: 'Editing profile' }));
+const appGroup = () => within(screen.getByRole('radiogroup', { name: 'App profile' }));
 
 const patchCall = (fetchImpl: ReturnType<typeof makeFetch>) =>
 	fetchImpl.mock.calls.find(([, init]) => init?.method === 'PATCH');
@@ -106,14 +108,48 @@ afterEach(() => {
 });
 
 describe('ChangeComputeProfileDialog', () => {
-	it('shows a plain default label for an empty app profile list', async () => {
+	it('defensively treats an empty app profile list like a shared list', async () => {
 		renderDialog(makeFetch(undefined, 'empty'));
 		await waitFor(() =>
 			expect(editing().getByRole('radio', { name: /Default \(small\)/ })).toBeChecked(),
 		);
-		const app = within(screen.getByRole('radiogroup', { name: 'App profile' }));
-		expect(app.getByRole('radio', { name: 'Default' })).toBeChecked();
-		expect(screen.queryByText('Default (undefined)')).not.toBeInTheDocument();
+		expect(appGroup().getByRole('radio', { name: 'Use editing profile' })).toBeChecked();
+		expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+	});
+
+	it('lists the first separate app profile only as the default', async () => {
+		renderDialog(makeFetch(undefined, true, 'app-small'));
+		await waitFor(() =>
+			expect(appGroup().getByRole('radio', { name: /Default \(app-small\)/ })).toBeChecked(),
+		);
+		expect(
+			appGroup()
+				.getAllByRole('radio')
+				.map((radio) => radio.getAttribute('value')),
+		).toEqual([DEFAULT_COMPUTE_PROFILE, 'app-large']);
+	});
+
+	it('offers both restart actions when both selections change', async () => {
+		const user = userEvent.setup();
+		const fetchImpl = makeFetch(undefined, true);
+		const onRestart = vi.fn();
+		const onAppRestart = vi.fn();
+		renderDialog(fetchImpl, { onRestart, onAppRestart });
+		await waitFor(() =>
+			expect(editing().getByRole('radio', { name: /Default \(small\)/ })).toBeChecked(),
+		);
+		await user.click(editing().getByRole('radio', { name: /^large/ }));
+		await user.click(appGroup().getByRole('radio', { name: /^app-large/ }));
+		await user.click(screen.getByRole('button', { name: 'Save' }));
+		await waitFor(() => expect(patchCall(fetchImpl)).toBeDefined());
+		expect(JSON.parse(patchCall(fetchImpl)![1]!.body as string)).toEqual({
+			compute_profile: 'large',
+			app_compute_profile: 'app-large',
+		});
+		expect(await screen.findByRole('button', { name: 'Restart session' })).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Restart app' }));
+		expect(onAppRestart).toHaveBeenCalledOnce();
+		expect(onRestart).not.toHaveBeenCalled();
 	});
 
 	it('shows different defaults and saves only the changed app choice', async () => {
@@ -123,7 +159,7 @@ describe('ChangeComputeProfileDialog', () => {
 		await waitFor(() =>
 			expect(editing().getByRole('radio', { name: /Default \(small\)/ })).toBeChecked(),
 		);
-		const app = within(screen.getByRole('radiogroup', { name: 'App profile' }));
+		const app = appGroup();
 		expect(app.getByRole('radio', { name: /Default \(app-small\)/ })).toBeChecked();
 		await user.click(app.getByRole('radio', { name: /^app-large/ }));
 		await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -138,8 +174,13 @@ describe('ChangeComputeProfileDialog', () => {
 		const fetchImpl = makeFetch('large');
 		renderDialog(fetchImpl);
 		await waitFor(() => expect(editing().getByRole('radio', { name: /^large/ })).toBeChecked());
-		const app = within(screen.getByRole('radiogroup', { name: 'App profile' }));
+		const app = appGroup();
 		expect(app.getByRole('radio', { name: 'Use editing profile' })).toBeChecked();
+		expect(app.getAllByRole('radio').map((radio) => radio.getAttribute('value'))).toEqual([
+			DEFAULT_COMPUTE_PROFILE,
+			'small',
+			'large',
+		]);
 		await user.click(app.getByRole('radio', { name: /^small/ }));
 		await user.click(screen.getByRole('button', { name: 'Save' }));
 		await waitFor(() => expect(patchCall(fetchImpl)).toBeDefined());

@@ -33,7 +33,7 @@ export interface CreateSyncedNotebookInput {
 	runtime?: { python_version?: string; marimo_version?: string };
 	base_image?: string;
 	compute_profile?: string;
-	app_compute_profile?: string | null;
+	app_compute_profile?: string;
 	sync_mode?: 'push' | 'pull';
 }
 

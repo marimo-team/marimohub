@@ -429,6 +429,8 @@ components:
                     type: string
                 required:
                   - name
+          description: Absent when apps share compute_profiles and inherit the notebook's
+            editing selection.
         surfaces:
           type: array
           items:
@@ -10190,9 +10192,7 @@ paths:
                   minLength: 1
                   example: large
                 app_compute_profile:
-                  type:
-                    - string
-                    - 'null'
+                  type: string
                   minLength: 1
                   example: large
               required:
@@ -10706,10 +10706,9 @@ paths:
                 compute_profile:
                   type: string
                   minLength: 1
+                  example: large
                 app_compute_profile:
-                  type:
-                    - string
-                    - 'null'
+                  type: string
                   minLength: 1
                   example: large
                 sync_mode:

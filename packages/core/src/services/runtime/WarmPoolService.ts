@@ -6,6 +6,7 @@ import { logOperationalError } from '../../operationalLog';
 import { logEvent } from '../../logs';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
+import { sameComputeResources } from '../../ports/sandbox';
 import type { ComputeResources, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
 import type { SessionService } from './SessionService';
 import type { AppPoolStore } from './AppPoolStore';
@@ -69,10 +70,7 @@ export class WarmPoolService {
 			(item) =>
 				item.name === request.profile &&
 				item.image === request.image &&
-				(!request.resources ||
-					(item.resources.cpu === request.resources.cpu &&
-						item.resources.memoryBytes === request.resources.memoryBytes &&
-						item.resources.gpu === request.resources.gpu)),
+				(!request.resources || sameComputeResources(item.resources, request.resources)),
 		);
 		const bypass = request.userHome
 			? 'user_home'

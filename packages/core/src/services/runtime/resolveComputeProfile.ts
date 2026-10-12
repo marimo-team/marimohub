@@ -1,5 +1,5 @@
 import type { ComputeResources } from '../../ports/sandbox';
-import type { ComputeResourceRecord } from '../../schema';
+import type { ComputeResourceRecord, NotebookMeta } from '../../schema';
 
 export interface ComputeProfileConfig {
 	/** Name of the default compute profile. */
@@ -14,6 +14,23 @@ export interface ComputeProfileConfig {
 export interface ResolvedComputeProfile {
 	name: string | undefined;
 	resources: ComputeResources;
+}
+
+/**
+ * The stored profile name a session mode starts from. Apps inherit the editing
+ * choice only while both modes share one list; a separate app list has its own
+ * names, so an editing name would never match it.
+ */
+export function storedComputeProfile(
+	meta: Pick<NotebookMeta, 'compute_profile' | 'app_compute_profile'>,
+	config: Pick<ComputeProfileConfig, 'appComputeProfiles'>,
+	mode: 'edit' | 'app',
+): string | undefined {
+	if (mode === 'edit') return meta.compute_profile;
+	return (
+		meta.app_compute_profile ??
+		(config.appComputeProfiles === undefined ? meta.compute_profile : undefined)
+	);
 }
 
 /**

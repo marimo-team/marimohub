@@ -127,6 +127,22 @@ describe('warm pool configuration', () => {
 		expect(parsed.config.profiles[0].key).not.toBe(parsed.config.profiles[1].key);
 	});
 
+	it.each([
+		['default', [undefined, 'app-small']],
+		['all', [undefined, 'app-small', 'app-large']],
+	])('adds an adapter-default pool when only app profiles exist: %s', (selection, names) => {
+		const parsed = parseWarmPoolConfig(
+			{ ...enabled, MARIMOHUB_COMPUTE_WARM_POOL_PROFILES: selection },
+			{
+				...options,
+				profiles: parseComputeProfiles(undefined),
+				appProfiles: parseComputeProfiles('app-small:cpu=1,app-large:cpu=4').profiles,
+			},
+		)!;
+		expect(parsed.config.profiles.map((profile) => profile.name)).toEqual(names);
+		expect(parsed.config.profiles[0].resources).toEqual({});
+	});
+
 	it('uses one adapter-default pool with no profiles or images', () => {
 		const parsed = parseWarmPoolConfig(enabled, {
 			...options,

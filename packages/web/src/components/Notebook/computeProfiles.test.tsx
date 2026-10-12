@@ -9,6 +9,9 @@ import {
 	computeSessionPresentation,
 	DEFAULT_COMPUTE_PROFILE,
 	effectiveComputeProfile,
+	hasSeparateAppProfiles,
+	modeComputeProfile,
+	modeComputeProfiles,
 } from './computeProfiles';
 import { ComputeProfileIndicator } from './ComputeProfileIndicator';
 
@@ -55,6 +58,44 @@ describe('compute profile presentation', () => {
 			{ value: 'large', isDisabled: undefined },
 			{ value: 'gpu-big', isDisabled: true },
 		]);
+	});
+
+	it('offers the first profile explicitly only when asked, under a custom default label', () => {
+		expect(
+			computeProfileOptions(profiles, undefined, {
+				defaultLabel: 'Use editing profile',
+				includeFirst: true,
+			}).map(({ value, label, description }) => ({ value, label, description })),
+		).toEqual([
+			{ value: DEFAULT_COMPUTE_PROFILE, label: 'Use editing profile', description: undefined },
+			{ value: 'small', label: 'small', description: '1 CPU · 2 Gi' },
+			{ value: 'large', label: 'large', description: '8 CPU · 32 Gi' },
+		]);
+	});
+
+	it('detects a separate app profile list from capabilities', () => {
+		const appProfiles = [{ name: 'app-small', cpu: 1 }];
+		const shared = { compute_profiles: profiles };
+		const separate = { compute_profiles: profiles, app_compute_profiles: appProfiles };
+		expect(hasSeparateAppProfiles(undefined)).toBe(false);
+		expect(hasSeparateAppProfiles(shared)).toBe(false);
+		expect(hasSeparateAppProfiles({ ...shared, app_compute_profiles: [] })).toBe(false);
+		expect(hasSeparateAppProfiles(separate)).toBe(true);
+		expect(modeComputeProfiles(shared, 'app')).toBe(profiles);
+		expect(modeComputeProfiles({ ...shared, app_compute_profiles: [] }, 'app')).toBe(profiles);
+		expect(modeComputeProfiles(separate, 'app')).toBe(appProfiles);
+		expect(modeComputeProfiles(separate, 'edit')).toBe(profiles);
+		expect(modeComputeProfiles(undefined, 'edit')).toEqual([]);
+	});
+
+	it('inherits the editing choice for apps only with a shared list', () => {
+		const meta = { compute_profile: 'large' };
+		expect(modeComputeProfile(meta, 'app', false)).toBe('large');
+		expect(modeComputeProfile(meta, 'app', true)).toBeUndefined();
+		expect(modeComputeProfile({ ...meta, app_compute_profile: 'small' }, 'app', false)).toBe(
+			'small',
+		);
+		expect(modeComputeProfile({ ...meta, app_compute_profile: 'small' }, 'edit')).toBe('large');
 	});
 
 	it('shows a removed stored profile falling back to Default', () => {

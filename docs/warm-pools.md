@@ -16,13 +16,13 @@ MARIMOHUB_COMPUTE_WARM_POOL_SIZE=2
 MARIMOHUB_COMPUTE_WARM_POOL_PROFILES=default
 ```
 
-| Variable                               | Default   | Meaning                                                                              |
-| -------------------------------------- | --------- | ------------------------------------------------------------------------------------ |
-| `MARIMOHUB_COMPUTE_WARM_POOL_ENABLED`  | `false`   | Enable warm pools for `coreweave` or `kubernetes`.                                   |
-| `MARIMOHUB_COMPUTE_WARM_POOL_SIZE`     | `1`       | Positive integer target of idle sandboxes per selected profile.                      |
-| `MARIMOHUB_COMPUTE_WARM_POOL_PROFILES` | `default` | `default` selects the first compute profile; `all` selects every configured profile. |
+| Variable                               | Default   | Meaning                                                                                                  |
+| -------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------- |
+| `MARIMOHUB_COMPUTE_WARM_POOL_ENABLED`  | `false`   | Enable warm pools for `coreweave` or `kubernetes`.                                                       |
+| `MARIMOHUB_COMPUTE_WARM_POOL_SIZE`     | `1`       | Positive integer target of idle sandboxes per selected profile.                                          |
+| `MARIMOHUB_COMPUTE_WARM_POOL_PROFILES` | `default` | `default` warms the first profile in each editing and app list; `all` warms every profile in both lists. |
 
-When `MARIMOHUB_APP_COMPUTE_PROFILES` is set, `default` warms the first profile in each list and `all` warms both lists. Profiles with identical names and resources share a pool; the same name with different resources gets separate pools.
+When `MARIMOHUB_COMPUTE_APP_PROFILES` is set, `default` warms the first profile in each list and `all` warms both lists. Profiles with identical names and resources share a pool; the same name with different resources gets separate pools.
 
 When no editing profiles are configured, both `default` and `all` include an adapter-default editing pool, in addition to any selected app pools. Without either profile list, one pool uses adapter defaults. Capacity is shared across server replicas. Three profiles with size two maintain six idle sandboxes.
 

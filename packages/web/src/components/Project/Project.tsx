@@ -99,8 +99,10 @@ import { baseImageOptions, DEFAULT_BASE_IMAGE } from '@/components/Notebook/base
 import { ChangeComputeProfileDialog } from '@/components/Notebook/ChangeComputeProfileDialog';
 import {
 	computeProfileOptions,
-	modeComputeProfile,
 	DEFAULT_COMPUTE_PROFILE,
+	hasSeparateAppProfiles,
+	modeComputeProfile,
+	modeComputeProfiles,
 } from '@/components/Notebook/computeProfiles';
 import { GitSourcePopover } from '@/components/Notebook/GitSourcePopover';
 import { SyncedNotebookDialog } from '@/components/Notebook/SyncedNotebookDialog';
@@ -322,7 +324,7 @@ function useProjectContent() {
 		capabilities?.compute_profile_override === 'editors' && canEditProject(project.your_role);
 	const offersComputeChoice =
 		canChooseComputeProfile &&
-		(computeProfiles.length > 1 || (capabilities?.app_compute_profiles?.length ?? 0) > 1);
+		(computeProfiles.length > 1 || modeComputeProfiles(capabilities, 'app').length > 1);
 	// Re-bound each render to the notebook in the stop dialog; only fired on confirm.
 	const stopSession = useStopSession(pid!, stopModal.target?.notebook.id ?? '');
 	const stopAppSession = useStopSession(pid!, appModal.target?.notebook.id ?? '');
@@ -931,13 +933,13 @@ function useProjectContent() {
 												session={appSession}
 												canControl={!!appSession.can?.stop}
 												editActive={!!live.persistentEdit}
-												profiles={capabilities?.app_compute_profiles ?? computeProfiles}
-												appProfilesConfigured={capabilities?.app_compute_profiles !== undefined}
+												profiles={modeComputeProfiles(capabilities, 'app')}
+												appProfilesConfigured={hasSeparateAppProfiles(capabilities)}
 												allowComputeOverride={capabilities?.compute_profile_override === 'editors'}
 												selectedProfileName={modeComputeProfile(
 													nb,
 													'app',
-													capabilities?.app_compute_profiles !== undefined,
+													hasSeparateAppProfiles(capabilities),
 												)}
 												onStop={() =>
 													appModal.open({ action: 'stop', notebook: nb, session: appSession })

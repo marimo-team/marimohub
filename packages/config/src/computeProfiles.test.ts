@@ -20,7 +20,7 @@ describe('parseComputeProfiles', () => {
 	it('preserves app-profile error metadata and remediation', () => {
 		let error: unknown;
 		try {
-			parseComputeProfiles('app:cpu=invalid', 'MARIMOHUB_APP_COMPUTE_PROFILES');
+			parseComputeProfiles('app:cpu=invalid', 'MARIMOHUB_COMPUTE_APP_PROFILES');
 		} catch (caught) {
 			error = caught;
 		}
@@ -28,8 +28,8 @@ describe('parseComputeProfiles', () => {
 		const configError = error as ComputeProfileConfigError;
 		expect(configError.profileName).toBe('app');
 		expect(configError.key).toBe('cpu');
-		expect(configError.opts.variable).toBe('MARIMOHUB_APP_COMPUTE_PROFILES');
-		expect(configError.format()).toContain('MARIMOHUB_APP_COMPUTE_PROFILES:');
+		expect(configError.opts.variable).toBe('MARIMOHUB_COMPUTE_APP_PROFILES');
+		expect(configError.format()).toContain('MARIMOHUB_COMPUTE_APP_PROFILES:');
 		expect(configError.format()).toContain('fix:');
 		expect(configError.format()).toContain('name:cpu=<cores>;mem=<Mi|Gi|Ti>;gpu=<type>[:<count>]');
 	});

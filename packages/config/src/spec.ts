@@ -402,6 +402,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
+						id: 'MARIMOHUB_COMPUTE_APP_PROFILES',
+						name: 'App compute profiles',
+						description:
+							'Optional ordered app profiles, using the same format as MARIMOHUB_COMPUTE_PROFILES. Backends that support compute profiles use the first as the app default. Unset uses the shared profiles and notebook compute_profile. Notebook app overrides require MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors.',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_COMPUTE_WARM_POOL_ENABLED',
 						name: 'Warm sandbox pools',
 						description:
@@ -430,13 +437,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						name: 'Preview compute profile',
 						description:
 							'Default compute profile for notebook previews. Must name an available profile. Unset uses the deployment default.',
-						optIn: true,
-					},
-					{
-						id: 'MARIMOHUB_APP_COMPUTE_PROFILES',
-						name: 'App compute profiles',
-						description:
-							'Optional ordered app profiles, using the same format as MARIMOHUB_COMPUTE_PROFILES. Backends that support compute profiles use the first as the app default. Unset uses the shared profiles and notebook compute_profile. Notebook app overrides require MARIMOHUB_COMPUTE_PROFILE_OVERRIDE=editors.',
 						optIn: true,
 					},
 					{
