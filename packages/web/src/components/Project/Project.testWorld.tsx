@@ -19,6 +19,7 @@ export const project = (): ProjectDetail => ({
 	name: 'Sales',
 	description: 'revenue',
 	tags: [],
+	default_role: 'inherit',
 	federation: { enabled: false },
 	federation_effective: { enabled: false, source: 'project' },
 	your_role: 'manager',

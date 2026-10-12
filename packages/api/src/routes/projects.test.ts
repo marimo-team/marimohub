@@ -69,16 +69,63 @@ describe('Project routes', () => {
 			);
 		});
 
-		it.each(['', 'Dep1', 'dep1/', 'dep1//a', 'a'.repeat(257), 'dep1\n'])(
-			'rejects invalid prefix %j',
-			async (prefix) => {
+		it.each(['Dep1', 'dep1/', 'dep1//a', 'a'.repeat(257), 'dep1\n', 'café', 'ａ'])(
+			'rejects invalid namespace %j',
+			async (namespace) => {
 				await expectError(
-					await request('GET', `/projects?tag_prefix=${encodeURIComponent(prefix)}`),
+					await request('GET', `/projects?tag_namespace=${encodeURIComponent(namespace)}`),
 					422,
 					'VALIDATION_ERROR',
 				);
 			},
 		);
+
+		it('treats an empty namespace as no filter and accepts a 256-character namespace', async () => {
+			const all = await expectPage<any>(await request('GET', '/projects'));
+			expect(await expectPage<any>(await request('GET', '/projects?tag_namespace='))).toEqual(all);
+			expect(
+				await expectPage<any>(await request('GET', `/projects?tag_namespace=${'a'.repeat(256)}`)),
+			).toEqual([]);
+		});
+
+		it('lists a project with several matching tags once', async () => {
+			const project = await expectOk<any>(await create('Both', '', ['dep1', 'dep1/a']), 201);
+			expect(
+				(await expectPage<any>(await request('GET', '/projects?tag_namespace=dep1'))).map(
+					(p) => p.id,
+				),
+			).toEqual([project.id]);
+		});
+
+		it.each([
+			['too many tags', Array.from({ length: 51 }, (_, i) => `t${i}`)],
+			['an over-long tag', ['a'.repeat(257)]],
+			['an empty tag', ['']],
+		])('rejects %s on project and notebook bodies', async (_, tags) => {
+			await expectError(await create('Bounded', '', tags), 422, 'VALIDATION_ERROR');
+			const project = await expectOk<any>(await create('Bounded', '', []), 201);
+			await expectError(
+				await request('PATCH', `/projects/${project.id}`, { tags }),
+				422,
+				'VALIDATION_ERROR',
+			);
+			await expectError(
+				await request('POST', `/projects/${project.id}/notebooks`, {
+					title: 'Bounded',
+					description: '',
+					code: 'import marimo',
+					tags,
+				}),
+				422,
+				'VALIDATION_ERROR',
+			);
+		});
+
+		it('accepts 50 tags of 256 characters', async () => {
+			const tags = Array.from({ length: 50 }, (_, i) => `${i}`.padEnd(256, 'a'));
+			const project = await expectOk<any>(await create('Bounded', '', tags), 201);
+			expect(project.tags).toEqual(tags);
+		});
 
 		it('matches namespace segments and paginates the intersection of filters', async () => {
 			const ids: string[] = [];
@@ -90,7 +137,7 @@ describe('Project routes', () => {
 				await create('Target', '', [tag, 'shared']);
 			await create('Other', '', ['dep1', 'shared']);
 			await create('Target', '', ['dep1']);
-			const query = '/projects?tag_prefix=dep1&tag=shared&q=TARGET&status=active&limit=2';
+			const query = '/projects?tag_namespace=dep1&tag=shared&q=TARGET&status=active&limit=2';
 			const first = await expectOk<any>(await request('GET', query));
 			expect(first.items).toHaveLength(2);
 			expect(first.next_cursor).toBeTruthy();
@@ -560,18 +607,13 @@ describe('Project member routes', () => {
 			await expectOk(await owner('POST', `/projects/${pid}/members`, { user_id: bob, role }), 201);
 			const member = createTestApi({
 				bucket,
-				deps: {
-					policy: { defaultRole: 'manager' },
-					authenticator: {
-						authenticate: async () => ({
-							id: bob,
-							email: `${bob}@example.com`,
-							credential: { kind: 'sso' },
-							entitlements: ['default-role:manager'],
-							groups: ['managers'],
-						}),
-					},
+				userId: bob,
+				subject: {
+					credential: { kind: 'sso' },
+					entitlements: ['default-role:manager'],
+					groups: ['managers'],
 				},
+				deps: { policy: { defaultRole: 'manager' } },
 			}).request;
 			const before = await projectState();
 			await expectError(
@@ -594,16 +636,8 @@ describe('Project member routes', () => {
 		const groupManager = uid('user_group_manager');
 		const managerRequest = createTestApi({
 			bucket,
-			deps: {
-				authenticator: {
-					authenticate: async () => ({
-						credential: { kind: 'development' },
-						id: groupManager,
-						email: 'group-manager@example.com',
-						entitlements: ['default-role:manager'],
-					}),
-				},
-			},
+			userId: groupManager,
+			subject: { email: 'group-manager@example.com', entitlements: ['default-role:manager'] },
 		}).request;
 
 		const updated = await expectOk<any>(
@@ -1156,6 +1190,57 @@ describe('Read visibility (MARIMOHUB_DEFAULT_ROLE)', () => {
 		pid = created.id;
 	});
 
+	it('reports inherit when the stored project omits a default', async () => {
+		expect((await expectOk<any>(await owner('GET', `/projects/${pid}`))).default_role).toBe(
+			'inherit',
+		);
+	});
+
+	it('alerts on effective default access changes only', async () => {
+		const deliver = vi.fn<ProjectAlertDispatcher['deliver']>(async () => 'delivered' as const);
+		const tasks: Promise<unknown>[] = [];
+		const alertsOwner = createTestApi({
+			bucket,
+			deps: {
+				backgroundTasks: {
+					defer: (task) => {
+						tasks.push(task);
+					},
+				},
+				projectAlerts: {
+					store: {} as never,
+					dispatcher: { deliver, test: vi.fn() },
+					maxDestinations: 10,
+				},
+			},
+		}).request;
+
+		await expectOk(await alertsOwner('PATCH', `/projects/${pid}`, { default_role: 'inherit' }));
+		await expectOk(await alertsOwner('PATCH', `/projects/${pid}`, { name: 'Renamed' }));
+		await Promise.all(tasks);
+		expect(deliver).not.toHaveBeenCalled();
+
+		await expectOk(await alertsOwner('PATCH', `/projects/${pid}`, { default_role: 'none' }));
+		await expectOk(await alertsOwner('PATCH', `/projects/${pid}`, { default_role: 'none' }));
+		await Promise.all(tasks);
+		expect(deliver).toHaveBeenCalledOnce();
+		expect(deliver).toHaveBeenCalledWith(
+			pid,
+			'project.default_access_changed',
+			expect.objectContaining({
+				audience: 'broadcast',
+				severity: 'warning',
+				data: {
+					project_id: pid,
+					project_name: 'Renamed',
+					old_default_role: 'inherit',
+					new_default_role: 'none',
+					actor_user_id: ACTOR,
+				},
+			}),
+		);
+	});
+
 	it('updates project defaults, preserves them on unrelated edits, and restores inheritance', async () => {
 		const stranger = createTestApi({
 			bucket,
@@ -1212,9 +1297,9 @@ describe('Read visibility (MARIMOHUB_DEFAULT_ROLE)', () => {
 				expect((await expectOk<any>(response)).default_role).toBe('none');
 			} else {
 				await expectError(response, 403);
-				expect(
-					(await expectOk<any>(await owner('GET', `/projects/${pid}`))).default_role,
-				).toBeUndefined();
+				expect((await expectOk<any>(await owner('GET', `/projects/${pid}`))).default_role).toBe(
+					'inherit',
+				);
 			}
 		},
 	);
@@ -1260,16 +1345,8 @@ describe('Read visibility (MARIMOHUB_DEFAULT_ROLE)', () => {
 		const groupManager = uid('user_group_manager');
 		const manager = createTestApi({
 			bucket,
-			deps: {
-				authenticator: {
-					authenticate: async () => ({
-						id: groupManager,
-						email: 'group-manager@example.com',
-						credential: { kind: 'development' },
-						entitlements: ['default-role:manager'],
-					}),
-				},
-			},
+			userId: groupManager,
+			subject: { email: 'group-manager@example.com', entitlements: ['default-role:manager'] },
 		}).request;
 		const restricted = await expectOk<any>(
 			await manager('PATCH', `/projects/${pid}`, { default_role: 'none' }),

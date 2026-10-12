@@ -174,6 +174,14 @@ directory but visible in the signed cookie and `/me`. They never supply security
 labels or `SubjectSecurityContext` compartments. See the
 [operator guide](../docs/setup/auth/oidc.md#group-membership) for selection rules.
 
+Group matching is exact-string, and a matching project group membership grants
+a role. Operators must configure the IdP to emit immutable, IdP-unique group
+IDs (Entra object IDs, Okta group IDs), not display names, and must never select
+groups that users can create or rename. Membership overflow emits the
+error-level `oidc_membership_groups_exceeded` event (counts only) on both the
+browser callback and the external access-token path; `oidc_session_issued`
+reports filtered-out selected values as `unretainable`.
+
 Group-authorized kernels use the session JWT expiry as a fixed authorization deadline. Active editors cannot extend it.
 Session reuse keeps the earliest credential deadline presented by any caller.
 At expiry, the lifecycle destroys the kernel and the proxy closes WebSockets.

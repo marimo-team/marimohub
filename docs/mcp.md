@@ -51,13 +51,16 @@ The default grant permits notebook editing and execution. Use the smallest pract
 actions and projects. The token lifetime defaults to 7 days and cannot exceed
 90 days. Revoke a token from the API tokens dialog. Marimohub does not issue
 refresh tokens. Expiry or revocation requires a new authorization.
+The Hub-issued token does not carry your IdP groups, so
+[IdP group](./auth.md#idp-groups) project access does not apply to it.
+[External authorization](#external-authorization) access tokens carry groups.
 
 ## Work with notebooks
 
 Use `list_catalog` to find accessible projects, notebooks, and active sessions.
 Project and notebook selectors accept IDs or exact names, case-insensitively.
 Use IDs when names are duplicated and for subsequent calls.
-Use `project_tag_prefix` to filter [project namespaces](./organizing-projects.md#filter-by-namespace).
+Use `project_tag_namespace` to filter [project namespaces](./organizing-projects.md#filter-by-namespace).
 
 | Tool              | Purpose                                                                           |
 | ----------------- | --------------------------------------------------------------------------------- |

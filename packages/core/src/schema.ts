@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { isAuthGroupId } from './ports/auth';
 import { ResourceSecurityLabelsSchema } from './securityLabels';
 import { TokenGrantSchema } from './tokenGrants';
-import { DomainError } from './errors';
+import { DomainError, ValidationError } from './errors';
+import type { AssignableRole } from './constants';
 import {
 	ASSIGNABLE_ROLES,
 	NOTEBOOK_STATUSES,
@@ -390,24 +391,63 @@ export const MemberGroupSchema = z
 
 // --- Project ---
 
+export function assertAssignableRole(role: string): asserts role is AssignableRole {
+	if (!(ASSIGNABLE_ROLES as readonly string[]).includes(role))
+		throw new ValidationError('Cannot assign admin');
+}
+
+export interface MemberIdentityFields {
+	user_id?: unknown;
+	email?: unknown;
+	group?: unknown;
+	role?: string;
+}
+
+/**
+ * Applies the member identity rules shared by stored rows, request bodies, and alert
+ * payloads: exactly one of user id, email, or group, and a group never holds admin.
+ * `select` maps differently named (or nullable) fields onto the canonical ones.
+ */
+export function withMemberIdentityRules<T extends z.ZodType>(
+	schema: T,
+	options: {
+		select?: (value: z.output<T>) => MemberIdentityFields;
+		identities?: string;
+	} = {},
+) {
+	const select = options.select ?? ((value: z.output<T>) => value as MemberIdentityFields);
+	return schema
+		.refine(
+			(value) => {
+				const m = select(value);
+				return [m.user_id, m.email, m.group].filter((id) => id != null).length === 1;
+			},
+			{
+				message: `a member has exactly one of ${options.identities ?? 'user_id, email, or group'}`,
+			},
+		)
+		.refine(
+			(value) => {
+				const m = select(value);
+				return m.group == null || m.role !== 'admin';
+			},
+			{ message: 'a group member cannot hold admin' },
+		);
+}
+
 // A member names exactly one user id, email invite, or IdP group.
 // The schema lowercases emails on parse so the authz comparison (see authz.ts)
 // can rely on the invariant even for rows written outside ProjectService. An
 // email row keeps matching during the pending window, then becomes an id row on
 // the next membership write or maintenance sweep after the invitee signs in.
-export const ProjectMemberSchema = z
-	.object({
+export const ProjectMemberSchema = withMemberIdentityRules(
+	z.object({
 		user_id: UserIdSchema.optional(),
 		email: EmailAddressSchema.transform((email) => email.toLowerCase()).optional(),
 		group: MemberGroupSchema.optional(),
 		role: z.enum(ROLES),
-	})
-	.refine((m) => [m.user_id, m.email, m.group].filter((id) => id !== undefined).length === 1, {
-		message: 'a member has exactly one of user_id, email, or group',
-	})
-	.refine((m) => m.group === undefined || m.role !== 'admin', {
-		message: 'a group member cannot hold admin',
-	});
+	}),
+);
 
 export type ProjectMember = z.infer<typeof ProjectMemberSchema>;
 
@@ -431,6 +471,7 @@ export const ProjectFederationSchema = z.object({
 export type ProjectFederation = z.infer<typeof ProjectFederationSchema>;
 
 export const ProjectDefaultRoleSchema = z.enum(['inherit', 'none', ...ASSIGNABLE_ROLES]);
+export type ProjectDefaultRole = z.infer<typeof ProjectDefaultRoleSchema>;
 
 export const ProjectSchema = z.object({
 	schema_version: SchemaVersionSchema,

@@ -113,10 +113,19 @@ MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES=/marimohub/
 
 Selection is case-sensitive: exact IDs match whole values; prefixes match the
 start of a value without a path boundary. Either list can select a group.
-Configure at most 200 exact IDs and 20 prefixes. Empty lists are invalid.
+Configure at most 200 exact IDs and 20 prefixes. The host trims spaces around
+each comma-separated entry. Empty lists and empty entries are invalid.
+
+::: warning Use immutable group IDs
+Matching is exact-string, and a matching group grants project roles. Configure
+the groups claim to emit immutable, IdP-unique IDs, such as Microsoft Entra
+object IDs or Okta group IDs, not display names. Never select groups that users
+can create or rename.
+:::
 
 To select all groups, set `MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS='*'`.
-A standalone `*` selects every group, even alongside other IDs.
+`*` must be the only entry, and `MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES`
+must be unset. Otherwise, startup fails.
 The same ID limits and credential expiry apply. The raw provider claim remains limited to 200 entries, including duplicates.
 
 Only this membership setting treats `*` as a wildcard. Prefixes, admission lists,
@@ -134,8 +143,12 @@ If authentication exceeds these limits, narrow the group selection.
 
 The cookie is signed, not encrypted, and `GET /api/v1/me` exposes selected groups.
 Do not select sensitive group names. The identity directory stores no groups.
-Logs contain counts only: `oidc_session_issued` records entitlements, retained
-groups, and discarded values; `oidc_membership_groups_exceeded` records overflow.
+Logs contain counts only. `oidc_session_issued` records entitlements, retained
+groups, and `unretainable` (selected values that fail the ID rules).
+`oidc_membership_groups_exceeded` is an error-level event for overflow on both
+browser login and external access tokens. It records the `retained` count.
+External tokens also log `oidc_access_token_rejected` with reason
+`membership_groups_exceeded`.
 
 Group changes at the IdP take effect when the authenticated groups refresh.
 Existing browser sessions can retain groups until the credential expires, within one hour.

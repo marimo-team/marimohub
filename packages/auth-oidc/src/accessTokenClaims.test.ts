@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { principalFromVerifiedAccessToken, parseAccessTokenScopes } from './accessTokenClaims';
 import { createAdmissionPolicy } from './admission';
+import { MAX_AUTH_GROUPS } from '@marimo-hub/core/ports/auth';
+import { groupsExceedingBytes, groupsExceedingCount } from '@marimo-hub/core/testing/auth-groups';
 
 const now = 1700000000;
 const policy = {
@@ -170,10 +172,14 @@ it('carries selected access-token groups until token expiry and denies overflow'
 	});
 	expect(
 		principalFromVerifiedAccessToken(
-			{ ...claims, groups: Array.from({ length: 33 }, (_, i) => `team-${i}`) },
+			{ ...claims, groups: groupsExceedingCount('team-') },
 			'at+jwt',
 			membershipPolicy,
 			now,
 		),
-	).toEqual({ error: 'admission_denied' });
+	).toEqual({ error: 'membership_groups_exceeded', retained: MAX_AUTH_GROUPS + 1 });
+	const bytes = groupsExceedingBytes('team-');
+	expect(
+		principalFromVerifiedAccessToken({ ...claims, groups: bytes }, 'at+jwt', membershipPolicy, now),
+	).toEqual({ error: 'membership_groups_exceeded', retained: bytes.length });
 });

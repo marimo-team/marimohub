@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { canSeeProjectEntry, resolveEffectiveRole } from './authz';
+import { resolveEffectiveRole } from './authz';
 import { memberRefMatchesSelector, memberRefMatchesSubject } from './identityMatch';
 import { ProjectMemberSchema } from './schema';
 import { paths } from './paths';
@@ -124,9 +124,6 @@ describe('group principals', () => {
 		expect(resolveEffectiveRole(project, { ...subject, entitlements: ['super-admin'] }).role).toBe(
 			'admin',
 		);
-	});
-	it('never authorizes a group member from a catalog projection alone', () => {
-		expect(canSeeProjectEntry({ owner: ACTOR, member_groups: subject.groups }, subject)).toBeNull();
 	});
 	it('does not normalize Unicode group ids when resolving access', () => {
 		const group = 'caf\u00e9';

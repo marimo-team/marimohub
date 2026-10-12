@@ -44,8 +44,7 @@ export function ListFilters<Status extends string>({
 	const panelId = useId();
 	const searchRef = useRef<HTMLInputElement>(null);
 	const active = hasListFilters(values);
-	const panelActive =
-		values.q !== undefined || values.tag !== undefined || values.status !== undefined;
+	const panelActive = hasListFilters({ ...values, tag_namespace: undefined });
 	const [isOpen, setIsOpen] = useState(panelActive);
 	const [wasActive, setWasActive] = useState(panelActive);
 	if (panelActive !== wasActive) {
@@ -102,7 +101,7 @@ export function ListFilters<Status extends string>({
 			{isOpen ? (
 				<form
 					id={panelId}
-					key={`${values.q ?? ''}\0${values.tag ?? ''}\0${values.status ?? ''}\0${values.tag_prefix ?? ''}`}
+					key={`${values.q ?? ''}\0${values.tag ?? ''}\0${values.status ?? ''}\0${values.tag_namespace ?? ''}`}
 					role="search"
 					aria-label={label}
 					onSubmit={(event) => {

@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
 	canCreateProject,
 	canAct,
-	canSeeProjectEntry,
 	effectiveRole,
 	isSuperAdmin,
 	requireRole,
@@ -332,29 +331,6 @@ describe('authz', () => {
 			expect(() => requireRole(project, STRANGER, 'manager', { defaultRole: 'editor' })).toThrow(
 				ForbiddenError,
 			);
-		});
-	});
-
-	describe('canSeeProjectEntry', () => {
-		const entry = { owner: OWNER.id, member_ids: [VIEWER.id], member_emails: [INVITEE.email] };
-
-		it('requires authoritative permissions for non-owners, even with a default or roster match', () => {
-			for (const caller of [STRANGER, VIEWER, INVITEE]) {
-				expect(canSeeProjectEntry(entry, caller, { defaultRole: 'manager' })).toBeNull();
-			}
-			expect(
-				canSeeProjectEntry(entry, { ...STRANGER, entitlements: ['default-role:manager'] }),
-			).toBeNull();
-		});
-
-		it('admits owners and super admins without a roster', () => {
-			expect(canSeeProjectEntry({ owner: OWNER.id }, OWNER)).toBe(true);
-			expect(
-				canSeeProjectEntry({ owner: OWNER.id }, STRANGER, { superAdmins: [STRANGER.id] }),
-			).toBe(true);
-			expect(
-				canSeeProjectEntry({ owner: OWNER.id }, { ...STRANGER, entitlements: ['super-admin'] }),
-			).toBe(true);
 		});
 	});
 });

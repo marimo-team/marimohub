@@ -50,7 +50,7 @@ describe('MCP tool boundaries', () => {
 			for (const selector of [undefined, project.id]) {
 				const response = await client.callTool({
 					name: 'list_catalog',
-					arguments: { project: selector, project_tag_prefix: 'dep1', include_sessions: false },
+					arguments: { project: selector, project_tag_namespace: 'dep1', include_sessions: false },
 				});
 				expect(response.structuredContent).toEqual({
 					projects: [{ id: project.id, name: 'Research', tags: ['dep1/team'], notebooks: [] }],
@@ -58,9 +58,21 @@ describe('MCP tool boundaries', () => {
 			}
 			const miss = await client.callTool({
 				name: 'list_catalog',
-				arguments: { project: project.id, project_tag_prefix: 'dep10' },
+				arguments: { project: project.id, project_tag_namespace: 'dep10' },
 			});
 			expect(miss.structuredContent).toEqual({ projects: [] });
+			for (const invalid of ['Dep1', 'a/']) {
+				const rejected = await client.callTool({
+					name: 'list_catalog',
+					arguments: { project_tag_namespace: invalid },
+				});
+				expect(rejected.isError).toBe(true);
+			}
+			const { tools } = await client.listTools();
+			expect(
+				tools.find((tool) => tool.name === 'list_catalog')?.inputSchema.properties
+					?.project_tag_namespace,
+			).toMatchObject({ maxLength: 256, pattern: expect.any(String) });
 		} finally {
 			await client.close();
 			await server.close();

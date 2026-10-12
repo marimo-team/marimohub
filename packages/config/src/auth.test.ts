@@ -740,10 +740,8 @@ describe('makeAuth oidc login policy', () => {
 		'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS',
 		'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES',
 	])('login policy with %s', (key) => {
-		it.each(['', '   ', '\t\n'])('rejects a blank membership setting (%j)', (value) => {
-			const error = getConfigError(() => makeAuth({ ...loginPolicyEnv, [key]: value }, libraries));
-			expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND');
-			expect(error.message).toContain(`cannot be combined with ${key}`);
+		it.each(['', '   ', '\t\n'])('ignores a blank membership setting (%j)', (value) => {
+			expect(() => makeAuth({ ...loginPolicyEnv, [key]: value }, libraries)).not.toThrow();
 		});
 	});
 
@@ -975,7 +973,7 @@ describe.each([
 	it('requires a claim pointer', () => {
 		expect(() => makeAuth({ ...oidcEnv, [key]: 'team-a' })).toThrow(/GROUPS_CLAIM/);
 	});
-	it.each(['', ' ', ' team-a', 'team-a ', 'team-a,,team-b', 'a\n', 'a'.repeat(129)])(
+	it.each(['', ' ', 'team-a,,team-b', 'team-a, ,team-b', 'team-a,', 'a\nb', 'a'.repeat(129)])(
 		'rejects invalid configuration %j',
 		(value) => {
 			const error = getConfigError(() =>
@@ -985,6 +983,11 @@ describe.each([
 			expect(error.message).toContain('1–128 characters');
 		},
 	);
+	it.each([' team-a', 'team-a ', ' team-a , team-b '])('trims entries in %j', (value) => {
+		expect(() =>
+			makeAuth({ ...oidcEnv, MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups', [key]: value }),
+		).not.toThrow();
+	});
 	it('bounds the selection list', () => {
 		const selected = Array.from({ length: maximum }, (_, i) => `team-${i}`).join(',');
 		const env = {
@@ -998,7 +1001,7 @@ describe.each([
 });
 
 describe('wildcard membership configuration', () => {
-	it.each(['*', 'team-a,*', '*,*'])('accepts %j with a claim pointer', (value) => {
+	it.each(['*', ' *', '* '])('accepts %j with a claim pointer', (value) => {
 		expect(() =>
 			makeAuth({
 				...oidcEnv,
@@ -1008,7 +1011,24 @@ describe('wildcard membership configuration', () => {
 		).not.toThrow();
 	});
 
-	it.each([' *', '* ', '*,', '*,bad\n'])('rejects malformed wildcard selections %j', (value) => {
+	it.each([
+		['team-a,*', undefined],
+		['*,*', undefined],
+		['*', 'team-'],
+	])('requires `*` to be the only selection (%j, prefixes %j)', (value, prefixes) => {
+		const error = getConfigError(() =>
+			makeAuth({
+				...oidcEnv,
+				MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM: '/groups',
+				MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS: value,
+				...(prefixes ? { MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES: prefixes } : {}),
+			}),
+		);
+		expect(error.opts.variable).toBe('MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS');
+		expect(error.message).toContain('`*` must be the only entry');
+	});
+
+	it.each(['*,', '*,bad\n'])('rejects malformed wildcard selections %j', (value) => {
 		expect(() =>
 			makeAuth({
 				...oidcEnv,

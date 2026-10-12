@@ -10,17 +10,17 @@ describe('list filter URL state', () => {
 	it.each(['research/vision', 'a'.repeat(256)])(
 		'reads valid namespace filters only for projects: %s',
 		(prefix) => {
-			const params = new URLSearchParams({ tag_prefix: prefix, view: 'grid' });
-			expect(readListFilters(params, STATUSES).tag_prefix).toBeUndefined();
-			const filters = readListFilters(params, STATUSES, { tagPrefix: true });
-			expect(filters.tag_prefix).toBe(prefix);
+			const params = new URLSearchParams({ tag_namespace: prefix, view: 'grid' });
+			expect(readListFilters(params, STATUSES).tag_namespace).toBeUndefined();
+			const filters = readListFilters(params, STATUSES, { tagNamespace: true });
+			expect(filters.tag_namespace).toBe(prefix);
 			expect(hasListFilters(filters)).toBe(true);
 		},
 	);
 
 	it('trims copied namespace URLs', () => {
-		const params = new URLSearchParams({ tag_prefix: ' research/vision ' });
-		expect(readListFilters(params, STATUSES, { tagPrefix: true }).tag_prefix).toBe(
+		const params = new URLSearchParams({ tag_namespace: ' research/vision ' });
+		expect(readListFilters(params, STATUSES, { tagNamespace: true }).tag_namespace).toBe(
 			'research/vision',
 		);
 	});
@@ -28,38 +28,40 @@ describe('list filter URL state', () => {
 	it.each(['', ' ', 'Research', 'dep1/', 'a//b', '-team', 'a/_team', 'a'.repeat(257)])(
 		'ignores invalid namespace filter %j',
 		(prefix) => {
-			const filters = readListFilters(new URLSearchParams({ tag_prefix: prefix }), STATUSES, {
-				tagPrefix: true,
+			const filters = readListFilters(new URLSearchParams({ tag_namespace: prefix }), STATUSES, {
+				tagNamespace: true,
 			});
-			expect(filters.tag_prefix).toBeUndefined();
+			expect(filters.tag_namespace).toBeUndefined();
 			expect(hasListFilters(filters)).toBe(false);
 		},
 	);
 
 	it('updates and clears namespace filters when opted in', () => {
-		const current = new URLSearchParams('tag_prefix=old&view=grid');
+		const current = new URLSearchParams('tag_namespace=old&view=grid');
 		const params = updateListFilterParams(
 			current,
-			{ tag_prefix: 'research/vision' },
-			{ tagPrefix: true },
+			{ tag_namespace: 'research/vision' },
+			{ tagNamespace: true },
 		);
-		expect(Object.fromEntries(params)).toEqual({ tag_prefix: 'research/vision', view: 'grid' });
-		expect(updateListFilterParams(params, {}, { tagPrefix: true }).has('tag_prefix')).toBe(false);
-		expect(current.get('tag_prefix')).toBe('old');
+		expect(Object.fromEntries(params)).toEqual({ tag_namespace: 'research/vision', view: 'grid' });
+		expect(updateListFilterParams(params, {}, { tagNamespace: true }).has('tag_namespace')).toBe(
+			false,
+		);
+		expect(current.get('tag_namespace')).toBe('old');
 	});
 
-	it.each([{}, { tag_prefix: 'replacement' }])(
+	it.each([{}, { tag_namespace: 'replacement' }])(
 		'preserves namespace parameters for callers that have not opted in',
 		(values) => {
-			const current = new URLSearchParams('tag_prefix=research&q=old&view=grid');
+			const current = new URLSearchParams('tag_namespace=research&q=old&view=grid');
 			const params = updateListFilterParams(current, { ...values, q: 'new' });
 			expect(Object.fromEntries(params)).toEqual({
-				tag_prefix: 'research',
+				tag_namespace: 'research',
 				q: 'new',
 				view: 'grid',
 			});
 			expect(Object.fromEntries(updateListFilterParams(params, {}))).toEqual({
-				tag_prefix: 'research',
+				tag_namespace: 'research',
 				view: 'grid',
 			});
 		},

@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import type { JWTPayload, JWK } from 'jose';
 import { expandTokenGrantPreset } from '@marimo-hub/core/token-grants';
+import { groupsExceedingBytes, groupsExceedingCount } from '@marimo-hub/core/testing/auth-groups';
 import { createOidcAccessTokenAuthenticator } from './accessTokens';
 import type { OidcAccessTokenConfig } from './accessTokens';
 import { createOidcAuth } from './index';
@@ -549,11 +550,38 @@ it.each([
 			entitlementsExpiresAt: new Date(payload.exp! * 1000).toISOString(),
 		});
 		for (const groups of [
-			Array.from({ length: 33 }, (_, i) => `team-${i}`),
-			Array.from({ length: 11 }, (_, i) => `team-${i}-${'x'.repeat(120)}`),
+			groupsExceedingCount('team-'),
+			groupsExceedingBytes('team-'),
 			['team-a', null],
 		]) {
 			expect(await auth.authenticate(request(await sign(claims({ groups }))))).toBeNull();
 		}
 	},
 );
+
+it.each([
+	{ name: 'count', groups: groupsExceedingCount('team-') },
+	{ name: 'bytes', groups: groupsExceedingBytes('team-') },
+])('logs membership $name overflow as an error without group values', async ({ groups }) => {
+	const auth = createOidcAccessTokenAuthenticator({
+		...config,
+		groups: { claim: '/groups', membership: { prefixes: ['team-'] } },
+	});
+	expect(await auth.authenticate(request(await sign(claims({ groups }))))).toBeNull();
+	const events = vi.mocked(console.log).mock.calls.map(([line]) => JSON.parse(String(line)));
+	expect(events).toContainEqual(
+		expect.objectContaining({
+			level: 'error',
+			event: 'oidc_membership_groups_exceeded',
+			credential: 'external-access-token',
+			retained: groups.length,
+		}),
+	);
+	expect(events).toContainEqual(
+		expect.objectContaining({
+			event: 'oidc_access_token_rejected',
+			reason: 'membership_groups_exceeded',
+		}),
+	);
+	expect(JSON.stringify(events)).not.toContain('team-');
+});

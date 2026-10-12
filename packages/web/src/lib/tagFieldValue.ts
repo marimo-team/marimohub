@@ -1,5 +1,6 @@
-import { TokenFieldValue } from 'react-aria-components/TokenField';
-import type { TokenFieldSegment } from 'react-aria-components/TokenField';
+import { TokenFieldValue } from 'react-aria-components';
+
+type TokenFieldSegment = TokenFieldValue['segments'][number];
 
 export class TagFieldValue extends TokenFieldValue {
 	static fromTags(tags: readonly string[]): TagFieldValue {
@@ -16,10 +17,11 @@ export class TagFieldValue extends TokenFieldValue {
 	}
 
 	get tags(): string[] {
-		return this.segments.flatMap((segment) => {
+		const tags = this.segments.flatMap((segment) => {
 			const tag = segment.type === 'token' ? segment.text : segment.text.trim();
 			return tag ? [tag] : [];
 		});
+		return [...new Set(tags)];
 	}
 
 	override toString(): string {

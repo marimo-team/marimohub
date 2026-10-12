@@ -1,5 +1,16 @@
-import { isAuthGroupId, normalizeAuthGroups, MAX_AUTH_GROUPS_JSON_BYTES } from './auth';
+import {
+	isAuthGroupId,
+	normalizeAuthGroups,
+	MAX_AUTH_GROUP_ID_LENGTH,
+	MAX_AUTH_GROUPS,
+	MAX_AUTH_GROUPS_JSON_BYTES,
+} from './auth';
 import { describe, expect, expectTypeOf, it } from 'vitest';
+import {
+	groupsAtCountLimit,
+	groupsExceedingBytes,
+	groupsExceedingCount,
+} from '../testing/authGroups';
 import type { AuthEntitlement, AuthUser } from './auth';
 
 describe('AuthUser', () => {
@@ -32,12 +43,23 @@ describe('bounded authentication groups', () => {
 			groups: ['A', 'a', 'z'],
 		});
 		expect(normalizeAuthGroups(Array(100).fill('a'))).toEqual({ ok: true, groups: ['a'] });
-		const groups = Array.from({ length: 32 }, (_, i) => `group-${i}`);
-		expect(normalizeAuthGroups(groups).ok).toBe(true);
-		expect(normalizeAuthGroups([...groups, 'extra'])).toEqual({
+		expect(normalizeAuthGroups(groupsAtCountLimit()).ok).toBe(true);
+		expect(normalizeAuthGroups(groupsExceedingCount())).toEqual({
 			ok: false,
 			problem: 'too_many_groups',
 		});
+	});
+	it('provides overflow fixtures that trip exactly one limit', () => {
+		expect(groupsExceedingCount('team-')).toHaveLength(MAX_AUTH_GROUPS + 1);
+		const bytes = groupsExceedingBytes('team-');
+		expect(bytes.length).toBeLessThan(MAX_AUTH_GROUPS);
+		expect(bytes.every((group) => group.startsWith('team-') && isAuthGroupId(group))).toBe(true);
+		expect(normalizeAuthGroups(bytes)).toEqual({ ok: false, problem: 'too_many_groups' });
+		expect(normalizeAuthGroups(bytes.slice(1)).ok).toBe(true);
+	});
+	it('bounds group IDs at MAX_AUTH_GROUP_ID_LENGTH', () => {
+		expect(isAuthGroupId('a'.repeat(MAX_AUTH_GROUP_ID_LENGTH))).toBe(true);
+		expect(isAuthGroupId('a'.repeat(MAX_AUTH_GROUP_ID_LENGTH + 1))).toBe(false);
 	});
 	it.each(['x', 'é', '"', '\\'])('bounds serialized UTF-8 bytes including %s', (character) => {
 		const groups = Array.from({ length: 10 }, (_, i) => `${i}${character.repeat(60)}`);
@@ -95,9 +117,7 @@ describe('authentication group normalization edge cases', () => {
 		const sparse: unknown[] = [];
 		sparse.length = 2;
 		expect(normalizeAuthGroups(sparse)).toEqual({ ok: false, problem: 'invalid_group' });
-		expect(
-			normalizeAuthGroups([...Array.from({ length: 33 }, (_, i) => `team-${i}`), null]),
-		).toEqual({
+		expect(normalizeAuthGroups([...groupsExceedingCount(), null])).toEqual({
 			ok: false,
 			problem: 'invalid_group',
 		});

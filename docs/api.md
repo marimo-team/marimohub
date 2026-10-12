@@ -60,8 +60,12 @@ The repository source is
 Resource groups:
 
 - **Projects** — list/create/update/delete projects; add/update/remove members
-  (`/projects/{pid}/members`). Project list items carry `tags`. `GET /projects` accepts
-  `tag_prefix` to filter [project namespaces](./organizing-projects.md). Project responses carry `your_role` (the caller's
+  (`/projects/{pid}/members`) and [IdP group members](./auth.md#idp-groups)
+  (`/projects/{pid}/group-members`). `PATCH /projects/{pid}` accepts
+  [`default_role`](./auth.md#default-access-for-non-members) for non-member
+  access. Project list items carry `tags`. `GET /projects` accepts
+  `tag_namespace` to filter [project namespaces](./organizing-projects.md).
+  Project responses carry `your_role` (the caller's
   effective role). Managers can read the audit log one UTC day at a time
   (`GET /projects/{pid}/events?date=YYYY-MM-DD`, defaults to today) — every
   project/notebook mutation is recorded as an event.

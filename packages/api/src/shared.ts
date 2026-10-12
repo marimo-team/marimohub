@@ -1147,7 +1147,7 @@ export const ProjectResponseSchema = z
 		description: z.string(),
 		owner: z.string(),
 		members: z.array(ProjectMemberResponseSchema),
-		default_role: ProjectDefaultRoleSchema.optional(),
+		default_role: ProjectDefaultRoleSchema,
 		status: z.enum(PROJECT_STATUSES),
 		created_at: dt(),
 		updated_at: dt(),
@@ -1572,10 +1572,8 @@ export const DeploymentInfoResponseSchema = z
  */
 export const CapabilitiesResponseSchema = z
 	.object({
-		groups_carried: z
-			.boolean()
-			.optional()
-			.openapi({ description: 'Whether this deployment supports IdP groups as project members.' }),
+		/** Whether this deployment supports IdP groups as project members. */
+		project_groups: z.object({ available: z.boolean() }),
 		federation: z.object({ available: z.boolean(), default_enabled: z.boolean() }),
 		integrations: z.object({ available: z.boolean() }),
 		source_control: z.object({

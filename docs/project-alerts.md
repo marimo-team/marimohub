@@ -49,21 +49,22 @@ operation and requires `--yes` in non-interactive use.
 
 ## Alert catalog
 
-| Kind                  | Trigger                                                                                            | Severity |
-| --------------------- | -------------------------------------------------------------------------------------------------- | -------- |
-| `member.invited`      | A pending email invitation is created.                                                             | Info     |
-| `member.added`        | A known user is added.                                                                             | Info     |
-| `member.group_added`  | An IdP group is added to the project.                                                              | Info     |
-| `member.role_changed` | A member role changes.                                                                             | Warning  |
-| `member.removed`      | A member is removed.                                                                               | Warning  |
-| `session.takeover`    | An exclusive editor takeover succeeds.                                                             | Warning  |
-| `notebook.deleted`    | A notebook is soft-deleted.                                                                        | Warning  |
-| `project.deleted`     | A project is soft-deleted.                                                                         | Warning  |
-| `app.start_failed`    | Shared-app provisioning fails after its session record exists.                                     | Error    |
-| `app.unavailable`     | Maintenance finds that a running shared app lost its sandbox.                                      | Error    |
-| `sync.failed`         | An authenticated git-sync push fails validation or persistence.                                    | Error    |
-| `job.run.failed`      | A notebook job run fails or times out, once its retries are exhausted (only for jobs that opt in). | Error    |
-| `job.run.succeeded`   | A notebook job run succeeds (only for jobs that opt in).                                           | Info     |
+| Kind                             | Trigger                                                                                            | Severity |
+| -------------------------------- | -------------------------------------------------------------------------------------------------- | -------- |
+| `member.invited`                 | A pending email invitation is created.                                                             | Info     |
+| `member.added`                   | A known user is added.                                                                             | Info     |
+| `member.group_added`             | An IdP group is added to the project.                                                              | Info     |
+| `member.role_changed`            | A member role changes.                                                                             | Warning  |
+| `member.removed`                 | A member is removed.                                                                               | Warning  |
+| `project.default_access_changed` | A project's default access changes.                                                                | Warning  |
+| `session.takeover`               | An exclusive editor takeover succeeds.                                                             | Warning  |
+| `notebook.deleted`               | A notebook is soft-deleted.                                                                        | Warning  |
+| `project.deleted`                | A project is soft-deleted.                                                                         | Warning  |
+| `app.start_failed`               | Shared-app provisioning fails after its session record exists.                                     | Error    |
+| `app.unavailable`                | Maintenance finds that a running shared app lost its sandbox.                                      | Error    |
+| `sync.failed`                    | An authenticated git-sync push fails validation or persistence.                                    | Error    |
+| `job.run.failed`                 | A notebook job run fails or times out, once its retries are exhausted (only for jobs that opt in). | Error    |
+| `job.run.succeeded`              | A notebook job run succeeds (only for jobs that opt in).                                           | Info     |
 
 `app.unavailable` can arrive up to one five-minute maintenance interval after the sandbox
 disappears. It is emitted only for the state transition that marks the session failed. Normal
@@ -85,6 +86,12 @@ Group membership alerts go only to project destinations, with no personal recipi
 `member.group_added` includes `member_group`, `role`, project identifiers, and the actor's user id.
 `member.role_changed` and `member.removed` include nullable `member_user_id`, `member_email`, and `member_group` fields.
 Exactly one identifies the affected member. Group ids are visible to subscribed destinations.
+
+`project.default_access_changed` also goes only to project destinations, with no personal recipient.
+`PATCH /api/v1/projects/{pid}` sends it when `default_role` changes.
+It includes `old_default_role`, `new_default_role`, project identifiers, and the actor's user id.
+Role values use the API values, with `inherit` for no project default.
+See [default access](./auth.md#default-access-for-non-members).
 
 Delivery is best-effort. It begins only after the related storage mutation commits, and a
 delivery failure never changes the API response. There is no durable queue, history, digest, or

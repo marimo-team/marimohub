@@ -800,7 +800,7 @@ export function createFromEnv(
 		jobs: parseJobsConfig(env),
 		mcp,
 		policy: {
-			groups_carried:
+			groupsCarried:
 				authBackend(env) === 'oidc' &&
 				(oidcLoginPolicySelected(env) ||
 					(parseList(env.MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS)?.length ?? 0) > 0 ||

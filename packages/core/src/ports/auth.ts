@@ -21,6 +21,7 @@ export const AUTH_ENTITLEMENTS = [
 
 export type AuthEntitlement = (typeof AUTH_ENTITLEMENTS)[number];
 
+export const MAX_AUTH_GROUP_ID_LENGTH = 128;
 /** 1–128 Unicode characters; no controls, commas, or edge whitespace. */
 export const AUTH_GROUP_ID_PATTERN = /^[^\s,\p{Cc}](?:[^,\p{Cc}]{0,126}[^\s,\p{Cc}])?$/u;
 // Cookie readers enforce these bounds; increases require a two-phase rollout.

@@ -19,6 +19,17 @@ describe('TagFieldValue', () => {
 		expect(TagFieldValue.fromTags(tags).tags).toEqual(tags);
 	});
 
+	it('drops repeated tags, keeping the first occurrence', () => {
+		const value = TagFieldValue.fromTags([]);
+		const edited = value.replaceRange(
+			value.caretPosition,
+			value.caretPosition,
+			'ops, research, ops, new, research',
+		);
+		expect(edited.tags).toEqual(['ops', 'research', 'new']);
+		expect(edited.toString()).toBe('ops, research, new');
+	});
+
 	it('ignores blank and repeated separators', () => {
 		const value = TagFieldValue.fromTags([]);
 		expect(value.replaceRange(value.caretPosition, value.caretPosition, ', ,\n ').tags).toEqual([]);

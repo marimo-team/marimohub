@@ -1,10 +1,9 @@
-import { TagPrefixSchema } from '../tagPrefix';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { all } from 'better-all';
 import { z } from 'zod';
 import {
 	BadRequestError,
-	tagsMatchPrefix,
+	tagsInNamespace,
 	NOTEBOOK_STATUSES,
 	NotFoundError,
 	SessionId,
@@ -15,6 +14,7 @@ import {
 } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import { checkComputeProfile } from '../computeProfile';
+import { TAG_NAMESPACE_DESCRIPTION, TagNamespaceSchema, TagsBodySchema } from '../tagNamespace';
 import type { ApiDeps } from '../context';
 import { withMcpSessionActivity } from './sessionActivity';
 import { startMcpSession } from './sessionStartup';
@@ -72,9 +72,7 @@ export function createMcpServer(
 			annotations: { readOnlyHint: true },
 			inputSchema: z.object({
 				project: z.string().optional().describe(PROJECT_REFERENCE_DESCRIPTION),
-				project_tag_prefix: TagPrefixSchema.optional().describe(
-					'Only projects with a path tag equal to or nested under this namespace.',
-				),
+				project_tag_namespace: TagNamespaceSchema.optional().describe(TAG_NAMESPACE_DESCRIPTION),
 				status: z.enum(NOTEBOOK_STATUSES).optional(),
 				tag: z.string().optional(),
 				q: z.string().optional(),
@@ -86,63 +84,60 @@ export function createMcpServer(
 					),
 			}),
 		},
-		async ({ project, project_tag_prefix, status, tag, q, include_sessions }) => {
+		async ({ project, project_tag_namespace, status, tag, q, include_sessions }) => {
 			try {
 				const projects = project
-					? [await resolveProject(deps, principal, project)]
+					? [await resolveProject(deps, principal, project)].filter(
+							(entry) =>
+								project_tag_namespace === undefined ||
+								tagsInNamespace(entry.tags, project_tag_namespace),
+						)
 					: await deps.services.projects.listProjects({
-							tagPrefix: project_tag_prefix,
+							tagNamespace: project_tag_namespace,
 							subject: principal,
 							policy: deps.policy,
 							resourceSecurity: deps.resourceSecurity,
 						});
 				const entries = await Promise.all(
-					projects
-						.filter(
-							(entry) =>
-								project_tag_prefix === undefined || tagsMatchPrefix(entry.tags, project_tag_prefix),
-						)
-						.map(async (projectEntry) => {
-							const { notebooks, active } = await all({
-								notebooks: async () =>
-									deps.services.notebooks.listNotebooks(projectEntry.id, {
-										...(status ? { status } : {}),
-										...(tag ? { tag } : {}),
-										...(q ? { q } : {}),
-										subject: principal,
-										policy: deps.policy,
-										resourceSecurity: deps.resourceSecurity,
-									}),
-								active: async () =>
-									include_sessions
-										? deps.services.sessions.listActiveByProject(projectEntry.id)
-										: [],
-							});
-							return {
-								id: projectEntry.id,
-								name: projectEntry.name,
-								tags: projectEntry.tags,
-								notebooks: notebooks.map((notebook) => ({
-									id: notebook.id,
-									title: notebook.title,
-									status: notebook.status,
-									tags: notebook.tags,
-									updated_at: notebook.updated_at,
-									url: `${request.appBaseUrl}/projects/${projectEntry.id}/notebooks/${notebook.id}`,
-									...(include_sessions
-										? {
-												sessions: active
-													.filter((session) => session.notebook_id === notebook.id)
-													.map((session) => ({
-														id: session.session_id,
-														mode: sessionMode(session),
-														status: session.status,
-													})),
-											}
-										: {}),
-								})),
-							};
-						}),
+					projects.map(async (projectEntry) => {
+						const { notebooks, active } = await all({
+							notebooks: async () =>
+								deps.services.notebooks.listNotebooks(projectEntry.id, {
+									...(status ? { status } : {}),
+									...(tag ? { tag } : {}),
+									...(q ? { q } : {}),
+									subject: principal,
+									policy: deps.policy,
+									resourceSecurity: deps.resourceSecurity,
+								}),
+							active: async () =>
+								include_sessions ? deps.services.sessions.listActiveByProject(projectEntry.id) : [],
+						});
+						return {
+							id: projectEntry.id,
+							name: projectEntry.name,
+							tags: projectEntry.tags,
+							notebooks: notebooks.map((notebook) => ({
+								id: notebook.id,
+								title: notebook.title,
+								status: notebook.status,
+								tags: notebook.tags,
+								updated_at: notebook.updated_at,
+								url: `${request.appBaseUrl}/projects/${projectEntry.id}/notebooks/${notebook.id}`,
+								...(include_sessions
+									? {
+											sessions: active
+												.filter((session) => session.notebook_id === notebook.id)
+												.map((session) => ({
+													id: session.session_id,
+													mode: sessionMode(session),
+													status: session.status,
+												})),
+										}
+									: {}),
+							})),
+						};
+					}),
 				);
 				return result({ projects: entries });
 			} catch (error) {
@@ -161,7 +156,7 @@ export function createMcpServer(
 				title: z.string().min(1),
 				description: z.string().default(''),
 				code: z.string().describe(NOTEBOOK_CODE_DESCRIPTION),
-				tags: z.array(z.string()).optional(),
+				tags: TagsBodySchema.optional(),
 				readme: z.string().optional(),
 				compute_profile: z
 					.string()
@@ -285,7 +280,7 @@ export function createMcpServer(
 				title: z.string().min(1).optional(),
 				description: z.string().optional(),
 				code: z.string().describe(NOTEBOOK_CODE_DESCRIPTION).optional(),
-				tags: z.array(z.string()).optional(),
+				tags: TagsBodySchema.optional(),
 				readme: z.string().optional(),
 				message: z.string().optional().describe('Version message when replacing code.'),
 				expected_updated_at: z.string().optional().describe(EXPECTED_UPDATED_AT_DESCRIPTION),

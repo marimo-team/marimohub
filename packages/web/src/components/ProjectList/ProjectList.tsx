@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ProjectGroups } from './ProjectGroups';
+import { ProjectNamespaces } from './ProjectNamespaces';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { toast } from 'sonner';
 import { z } from 'zod';
@@ -37,17 +37,20 @@ const projectSchema = z.object({
 
 const EMPTY_PROJECT = { name: '', description: '' };
 
+// Predates the namespace rename; kept so saved preferences survive.
+const GROUP_BY_NAMESPACE_KEY = 'project-group-by-tags';
+
 export function ProjectList() {
 	const { user } = useAuth();
 	const canCreateProjects = user?.can_create_projects ?? user !== null;
 	const { filters, setFilters, filtersActive } = useListFilters(PROJECT_STATUS_FILTERS, {
-		tagPrefix: true,
+		tagNamespace: true,
 	});
-	const selectNamespace = (tag_prefix?: string) => setFilters({ ...filters, tag_prefix });
+	const selectNamespace = (tag_namespace?: string) => setFilters({ ...filters, tag_namespace });
 	const createModal = useDisclosure();
-	const [groupByTags, setGroupByTags] = useState(() => {
+	const [groupByNamespace, setGroupByNamespace] = useState(() => {
 		try {
-			return localStorage.getItem('project-group-by-tags') !== 'false';
+			return localStorage.getItem(GROUP_BY_NAMESPACE_KEY) !== 'false';
 		} catch {
 			return true;
 		}
@@ -105,26 +108,26 @@ export function ProjectList() {
 				actions={
 					<Button
 						size="sm"
-						variant={groupByTags ? 'default' : 'ghost'}
-						aria-pressed={groupByTags}
+						variant={groupByNamespace ? 'default' : 'ghost'}
+						aria-pressed={groupByNamespace}
 						onPress={() => {
-							setGroupByTags(!groupByTags);
+							setGroupByNamespace(!groupByNamespace);
 							try {
-								localStorage.setItem('project-group-by-tags', String(!groupByTags));
+								localStorage.setItem(GROUP_BY_NAMESPACE_KEY, String(!groupByNamespace));
 							} catch {}
 						}}
 					>
-						Group by tags
+						Group by namespace
 					</Button>
 				}
 			/>
 
-			{filters.tag_prefix !== undefined && (
+			{filters.tag_namespace !== undefined && (
 				<nav aria-label="Project namespace" className="flex flex-wrap items-center gap-1 text-sm">
 					<Button variant="ghost" onPress={() => selectNamespace()}>
 						All projects
 					</Button>
-					{filters.tag_prefix.split('/').map((segment, index, segments) => (
+					{filters.tag_namespace.split('/').map((segment, index, segments) => (
 						<span key={segments.slice(0, index + 1).join('/')} className="flex items-center gap-1">
 							<span aria-hidden="true">/</span>
 							<Button
@@ -163,10 +166,10 @@ export function ProjectList() {
 				onReset={() => setFilters({})}
 				resultsId="project-results"
 			>
-				<ProjectGroups
+				<ProjectNamespaces
 					projects={projects}
-					groupByTags={groupByTags}
-					prefix={filters.tag_prefix}
+					groupByNamespace={groupByNamespace}
+					namespace={filters.tag_namespace}
 					onSelect={selectNamespace}
 				/>
 			</ListResults>

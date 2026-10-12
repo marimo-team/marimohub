@@ -24,6 +24,7 @@ import {
 	TokenGrantSchema,
 	UserId,
 	validateSubjectSecurityContext,
+	withMemberIdentityRules,
 } from '@marimo-hub/core';
 import type {
 	AuthEntitlement,
@@ -55,6 +56,10 @@ const GroupsSchema = z
 	.array(z.string().refine(isAuthGroupId))
 	.refine((groups) => normalizeAuthGroups(groups).ok, {
 		message: `Groups must normalize to at most ${MAX_AUTH_GROUPS} IDs and ${MAX_AUTH_GROUPS_JSON_BYTES} UTF-8 JSON bytes.`,
+	})
+	.transform((groups) => {
+		const normalized = normalizeAuthGroups(groups);
+		return normalized.ok ? [...normalized.groups] : groups;
 	});
 const AuthorizationActionSchema = z.enum(AUTHORIZATION_ACTIONS);
 const SecurityLabelsSchema = z.strictObject({
@@ -82,23 +87,14 @@ const LoginStageSchema = z
 	})
 	.openapi('PolicyLoginStageV1');
 
-const SyntheticMemberSchema = z
-	.strictObject({
+const SyntheticMemberSchema = withMemberIdentityRules(
+	z.strictObject({
 		user_id: z.string().min(1).optional(),
 		group: MemberGroupSchema.optional(),
 		email: z.string().min(3).max(320).optional(),
 		role: z.enum(ROLES),
-	})
-	.refine(
-		(member) =>
-			[member.user_id, member.email, member.group].filter((v) => v !== undefined).length === 1,
-		{
-			message: 'Provide exactly one of user_id, email, or group.',
-		},
-	)
-	.refine((member) => member.group === undefined || member.role !== 'admin', {
-		message: 'Groups cannot have the admin role.',
-	});
+	}),
+);
 
 const SyntheticProjectSchema = z.strictObject({
 	owner: z.string().min(1),
@@ -386,8 +382,7 @@ function loginAssertion(stage: LoginStage, result: LoginPolicyAnalysisResult | u
 			JSON.stringify(normalizedEntitlements(stage.expected.entitlements));
 	const groupsMatch =
 		stage.expected.groups === undefined ||
-		JSON.stringify([...new Set(result.groups)].sort()) ===
-			JSON.stringify([...new Set(stage.expected.groups)].sort());
+		JSON.stringify(result.groups) === JSON.stringify(stage.expected.groups);
 	return entitlementsMatch && groupsMatch;
 }
 
@@ -574,13 +569,10 @@ async function evaluateCase(
 						? loginEvaluation.entitlements
 						: (stage.subject.entitlements ?? []),
 				);
-				const normalizedGroups = normalizeAuthGroups(
+				const groups =
 					linked && loginEvaluation?.outcome === 'allow'
 						? loginEvaluation.groups
-						: (stage.subject.groups ?? []),
-				);
-				if (!normalizedGroups.ok) throw new Error('invalid_groups');
-				const groups = normalizedGroups.groups;
+						: (stage.subject.groups ?? []);
 				let subject: AuthorizationSubject = {
 					id: UserId.parse(stage.subject.id),
 					email: stage.subject.email,

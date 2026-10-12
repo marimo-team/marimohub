@@ -4,7 +4,6 @@
  */
 import {
 	canCreateProject,
-	canSeeProjectEntry,
 	isSuperAdmin,
 	resolveEffectiveRole,
 	roleAtLeast,
@@ -30,7 +29,6 @@ import type {
 import type { ResourceSecurityLabels } from '../../securityLabels';
 import { MAX_SECURITY_COMPARTMENTS, SECURITY_LABEL_TOKEN } from '../../securityLabels';
 import type { EditorSandboxSharing, Role, SessionMode, ViewerMode } from '../../constants';
-import type { ProjectId, UserId } from '../../ids';
 import type { Project, Session } from '../../schema';
 import {
 	serviceAccountGrantAllowsAction,
@@ -280,15 +278,6 @@ function parseConstraintEvidence(value: unknown): ConstraintEvidence | null {
 		classificationSatisfied: evidence.classificationSatisfied,
 		missingCompartments: evidence.missingCompartments as string[],
 	};
-}
-
-/** A catalog snapshot entry as list visibility reads it (denormalized members). */
-export interface ProjectEntryVisibilityInput {
-	id?: ProjectId;
-	owner: UserId;
-	member_ids?: UserId[];
-	member_emails?: string[];
-	member_groups?: string[];
 }
 
 export class AuthorizationService {
@@ -664,37 +653,6 @@ export class AuthorizationService {
 
 	isSuperAdmin(subject: AuthSubject): boolean {
 		return isSuperAdmin(subject, this.policy?.superAdmins);
-	}
-
-	/**
-	 * Only super admins bypass project defaults and explicit memberships.
-	 */
-	listsAllProjects(subject: AuthorizationSubject): boolean {
-		const grant = 'credential' in subject ? subject.credential.grant : undefined;
-		if (
-			!this.credentialAllowsAction(subject, 'project.read') ||
-			(grant && grant.projects !== '*')
-		) {
-			return false;
-		}
-		return isSuperAdmin(subject, this.policy?.superAdmins);
-	}
-
-	/** Null requires an authoritative project read; snapshot rosters can be stale. */
-	projectEntryVisibility(
-		subject: AuthorizationSubject,
-		entry: ProjectEntryVisibilityInput,
-	): boolean | null {
-		const grant = 'credential' in subject ? subject.credential.grant : undefined;
-		if (
-			!this.credentialAllowsAction(subject, 'project.read') ||
-			(grant !== undefined &&
-				grant.projects !== '*' &&
-				(entry.id === undefined || !tokenGrantAllowsProject(grant, entry.id)))
-		) {
-			return false;
-		}
-		return canSeeProjectEntry(entry, subject, this.policy);
 	}
 
 	credentialAllowsAction(subject: AuthorizationSubject, action: AuthorizationAction): boolean {

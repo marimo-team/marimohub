@@ -23,6 +23,7 @@ Every deployment picks storage, compute, and auth.
 - [Editor sessions](./editor-sessions.md) - choose shared or exclusive editor sandboxes.
 - [Session surfaces](./surfaces.md) - open VS Code or OpenCode in an editor sandbox.
 - [Auth](./auth.md) - who can sign in and what they can do.
+- [Organizing projects](./organizing-projects.md) - organize projects into namespaces with path tags.
 - [Sandbox image](./sandbox-image.md) - the container contract for notebook
   kernels.
 - [Notebook apps](./apps.md) - serve a notebook as a read-only application.

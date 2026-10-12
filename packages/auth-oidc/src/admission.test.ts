@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { admitOidcIdentity, createAdmissionPolicy } from './admission';
 import type { OidcAdmissionConfig } from './admission';
+import { MAX_GROUPS } from './claims';
+import { MAX_AUTH_GROUPS } from '@marimo-hub/core/ports/auth';
+import {
+	groupsAtCountLimit,
+	groupsExceedingBytes,
+	groupsExceedingCount,
+} from '@marimo-hub/core/testing/auth-groups';
 
 const identity = { sub: 'user', email: 'user@example.com', email_verified: true };
 const policy = createAdmissionPolicy({ allowedEmailDomains: [' @EXAMPLE.COM ', ''] });
@@ -316,10 +323,10 @@ describe('retained membership groups', () => {
 		const admission = createAdmissionPolicy({
 			groups: { claim: '/groups', membership: { prefixes: ['team-'] } },
 		});
-		const groups = Array.from({ length: 33 }, (_, i) => `team-${i}`);
+		const groups = groupsExceedingCount('team-');
 		expect(admitOidcIdentity({ ...identity, groups }, admission)).toEqual({
 			error: 'too_many_groups',
-			retained: 33,
+			retained: groups.length,
 		});
 	});
 	it.each([
@@ -358,8 +365,8 @@ describe('membership admission failure boundaries', () => {
 	);
 
 	it('bounds only unique selected groups, but still enforces the raw claim count', () => {
-		const selected = Array.from({ length: 32 }, (_, i) => `team-${i}`);
-		const groups = [...selected, ...Array(168).fill('unselected')];
+		const selected = groupsAtCountLimit('team-');
+		const groups = [...selected, ...Array(MAX_GROUPS - selected.length).fill('unselected')];
 		expect(admitOidcIdentity({ ...identity, groups }, membershipPolicy)).toMatchObject({
 			user: { groups: [...selected].sort() },
 		});
@@ -372,10 +379,10 @@ describe('membership admission failure boundaries', () => {
 	});
 
 	it('denies byte overflow below the group-count cap and succeeds after the filter is narrowed', () => {
-		const groups = Array.from({ length: 11 }, (_, i) => `team-${i}-${'x'.repeat(120)}`);
+		const groups = groupsExceedingBytes('team-');
 		expect(admitOidcIdentity({ ...identity, groups }, membershipPolicy)).toEqual({
 			error: 'too_many_groups',
-			retained: 11,
+			retained: groups.length,
 		});
 		const narrow = createAdmissionPolicy({
 			groups: { claim: '/groups', membership: { exact: [groups[0]] } },
@@ -407,20 +414,9 @@ describe('wildcard membership selection', () => {
 		groups: { claim: '/groups', membership: { exact: ['*'] } },
 	});
 
-	it.each([
-		{ exact: ['*'] },
-		{ exact: ['staff', '*'] },
-		{ exact: ['*', '*'], prefixes: ['team-'] },
-	])('selects and normalizes every valid ID with %j', (membership) => {
+	it('selects and normalizes every valid ID', () => {
 		const groups = ['team-b', 'staff', 'Team A', '/org/data', 'é', '*', 'team-b'];
-		expect(
-			admitOidcIdentity(
-				{ ...identity, groups },
-				createAdmissionPolicy({
-					groups: { claim: '/groups', membership },
-				}),
-			),
-		).toMatchObject({
+		expect(admitOidcIdentity({ ...identity, groups }, wildcard)).toMatchObject({
 			user: { groups: ['*', '/org/data', 'Team A', 'staff', 'team-b', 'é'], entitlements: [] },
 			groupStats: { unretainable: 0 },
 		});
@@ -453,15 +449,14 @@ describe('wildcard membership selection', () => {
 	});
 
 	it('deduplicates before the 32-ID limit but still rejects more than 200 raw entries', () => {
-		const selected = Array.from({ length: 32 }, (_, i) => `g${i}`);
-		const groups = [...selected, ...Array.from({ length: 168 }, () => 'g0')];
+		const selected = groupsAtCountLimit('g');
+		const groups = [...selected, ...Array(MAX_GROUPS - selected.length).fill('g0')];
 		expect(admitOidcIdentity({ ...identity, groups }, wildcard)).toMatchObject({
 			user: { groups: [...selected].sort() },
 		});
-		expect(admitOidcIdentity({ ...identity, groups: [...selected, 'extra'] }, wildcard)).toEqual({
-			error: 'too_many_groups',
-			retained: 33,
-		});
+		expect(admitOidcIdentity({ ...identity, groups: groupsExceedingCount('g') }, wildcard)).toEqual(
+			{ error: 'too_many_groups', retained: MAX_AUTH_GROUPS + 1 },
+		);
 		expect(admitOidcIdentity({ ...identity, groups: [...groups, 'g0'] }, wildcard)).toEqual({
 			error: 'invalid_groups',
 		});
@@ -542,5 +537,15 @@ describe('wildcard membership selection', () => {
 		{ exact: ['*', ...Array.from({ length: 200 }, (_, i) => `g${i}`)] },
 	])('does not skip policy validation with a wildcard: %j', (membership) => {
 		expect(() => createAdmissionPolicy({ groups: { claim: '/groups', membership } })).toThrow();
+	});
+
+	it.each([
+		{ exact: ['staff', '*'] },
+		{ exact: ['*', '*'] },
+		{ exact: ['*'], prefixes: ['team-'] },
+	])('requires a wildcard to be the only selection: %j', (membership) => {
+		expect(() => createAdmissionPolicy({ groups: { claim: '/groups', membership } })).toThrow(
+			'`*` must be the only entry',
+		);
 	});
 });

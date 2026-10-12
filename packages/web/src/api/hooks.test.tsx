@@ -1,4 +1,5 @@
 import {
+	useAddMember,
 	useDeleteNotebook,
 	useDeleteProject,
 	useProjectsQuery,
@@ -95,7 +96,7 @@ describe('useProjectsQuery', () => {
 				return jsonOk({ items: [{ id: 'second', tags: ['ops/infra'] }], next_cursor: null });
 			});
 			const { result } = renderHookWithClient(
-				() => useProjectsQuery({ tag_prefix: 'ops' }, { throwOnError: false }),
+				() => useProjectsQuery({ tag_namespace: 'ops' }, { throwOnError: false }),
 				{ toaster: false },
 			);
 			await waitFor(() => expect(result.current.isError).toBe(true));
@@ -111,7 +112,7 @@ describe('useProjectsQuery', () => {
 				urlsOf(fetchMock).map((url) => new URL(url, 'http://localhost').searchParams.get('cursor')),
 			).toEqual([null, 'page-2', null, 'page-2']);
 			for (const url of urlsOf(fetchMock))
-				expect(new URL(url, 'http://localhost').searchParams.get('tag_prefix')).toBe('ops');
+				expect(new URL(url, 'http://localhost').searchParams.get('tag_namespace')).toBe('ops');
 		},
 	);
 
@@ -867,6 +868,24 @@ describe('list + detail invalidation', () => {
 		// `projectId` addresses the resource; it must not be sent as a patch field.
 		expect(await request.clone().text()).toBe('{"name":"Renamed"}');
 		expect(invalidatedKeys(spy)).toEqual([projectKeys.list(), projectKeys.detail(PID)]);
+	});
+
+	it.each([
+		{ choice: { user_id: 'u-1' }, path: 'members' },
+		{ choice: { email: 'new@x.io' }, path: 'members' },
+		{ choice: { group: '/teams/data' }, path: 'group-members' },
+	])('useAddMember POSTs $choice to /$path', async ({ choice, path }) => {
+		const fetchMock = stubFetch(async () => jsonOk({ project_id: PID }, { status: 201 }));
+		const { result } = renderHookWithClient(() => useAddMember(PID), { toaster: false });
+
+		await act(async () => {
+			await result.current.mutateAsync({ ...choice, role: 'viewer' });
+		});
+
+		const request = requestOf(fetchMock);
+		expect(requestUrl(request)).toBe(`/api/v1/projects/${PID}/${path}`);
+		expect(request.method).toBe('POST');
+		expect(await request.clone().json()).toEqual({ ...choice, role: 'viewer' });
 	});
 });
 

@@ -322,7 +322,7 @@ export interface PolicyConfig {
 	/** Require super-admin or OIDC project-creator entitlement for project creation. */
 	projectCreationRestricted?: boolean;
 	/** Whether authenticated sessions can carry IdP membership groups. */
-	groups_carried?: boolean;
+	groupsCarried?: boolean;
 }
 
 export interface ConfigSettingSummary {
@@ -355,7 +355,12 @@ export interface ConfigSummary {
 }
 
 export type LoginPolicyAnalysisResult = { durationMs: number } & (
-	| { outcome: 'allow'; entitlements: readonly AuthEntitlement[]; groups: readonly string[] }
+	| {
+			outcome: 'allow';
+			entitlements: readonly AuthEntitlement[];
+			/** Normalized by `normalizeAuthGroups`: unique, sorted, and within bounds. */
+			groups: readonly string[];
+	  }
 	| { outcome: 'deny'; reason?: string }
 	| { outcome: 'timeout' }
 	| { outcome: 'error' }

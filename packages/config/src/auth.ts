@@ -1,9 +1,11 @@
-import { isAuthGroupId } from '@marimo-hub/core/ports/auth';
+import { isAuthGroupId, MAX_AUTH_GROUP_ID_LENGTH } from '@marimo-hub/core/ports/auth';
 import type { Authenticator } from '@marimo-hub/core';
 import { basePathFromUrl } from '@marimo-hub/core/url';
 import {
 	createOidcAuth,
 	createOidcAccessTokenAuthenticator,
+	MAX_MEMBERSHIP_GROUP_PREFIXES,
+	MAX_MEMBERSHIP_GROUPS,
 	normalizeEmailDomains,
 } from '@marimo-hub/auth-oidc';
 import type {
@@ -271,14 +273,23 @@ function checkedGroups(env: Env, key: string): string[] | undefined {
 function checkedMembershipGroups(env: Env, key: string, maximum: number): string[] | undefined {
 	const value = env[key];
 	if (value === undefined) return undefined;
-	const groups = value.split(',');
+	const groups = value.split(',').map((group) => group.trim());
 	if (groups.length > maximum || groups.some((group) => !isAuthGroupId(group))) {
 		throw new ConfigError(
-			`Invalid ${key}: expected 1 to ${maximum} group ids or prefixes; 1–128 characters, no control characters or commas, no leading or trailing whitespace.`,
+			`Invalid ${key}: expected 1 to ${maximum} comma-separated group ids or prefixes of 1–${MAX_AUTH_GROUP_ID_LENGTH} characters, with no control characters and no empty entries.`,
 			{ variable: key },
 		);
 	}
 	return groups;
+}
+
+function checkedMembershipWildcard(exact: string[] | undefined, prefixes: string[] | undefined) {
+	if (!exact?.includes('*') || (exact.length === 1 && !prefixes)) return;
+	throw new ConfigError(
+		'Invalid MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS: `*` must be the only entry, and ' +
+			'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES must be unset when it is used.',
+		{ variable: 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS' },
+	);
 }
 
 const GROUP_POLICY_VARS = [
@@ -330,12 +341,7 @@ function parseLoginPolicy(
 			'Set it to an npm package installed in the image, or a path to a mounted ESM module.',
 		docs: 'docs/configuration.md#auth',
 	});
-	const conflicting = GROUP_POLICY_VARS.find((key) =>
-		key === 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS' ||
-		key === 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES'
-			? env[key] !== undefined
-			: env[key]?.trim(),
-	);
+	const conflicting = GROUP_POLICY_VARS.find((key) => env[key]?.trim());
 	if (conflicting) {
 		throw new ConfigError(
 			`MARIMOHUB_AUTH_OIDC_LOGIN_POLICY_BACKEND=library cannot be combined with ${conflicting}; ` +
@@ -385,12 +391,17 @@ function parseGroupPolicy(env: Env, allowed: string[] | undefined): OidcGroupPol
 	const viewer = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_VIEWER_GROUPS');
 	const editor = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS');
 	const manager = checkedGroups(env, 'MARIMOHUB_AUTH_OIDC_DEFAULT_MANAGER_GROUPS');
-	const exact = checkedMembershipGroups(env, 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS', 200);
+	const exact = checkedMembershipGroups(
+		env,
+		'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS',
+		MAX_MEMBERSHIP_GROUPS,
+	);
 	const prefixes = checkedMembershipGroups(
 		env,
 		'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES',
-		20,
+		MAX_MEMBERSHIP_GROUP_PREFIXES,
 	);
+	checkedMembershipWildcard(exact, prefixes);
 	const membership =
 		exact || prefixes
 			? { ...(exact ? { exact } : {}), ...(prefixes ? { prefixes } : {}) }

@@ -4,7 +4,7 @@ import type { ListFilterStatus, ListFilterValues } from '@/lib/listFilters';
 
 export function useListFilters<Status extends string>(
 	statuses: readonly ListFilterStatus<Status>[],
-	options?: { tagPrefix?: boolean },
+	options?: { tagNamespace?: boolean },
 ) {
 	const [searchParams, setSearchParams] = useSearchParams();
 	const filters = readListFilters(searchParams, statuses, options);

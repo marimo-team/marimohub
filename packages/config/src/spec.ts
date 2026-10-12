@@ -62,7 +62,7 @@ const AUTH_ALLOWED_EMAIL_DOMAINS: ConfigVar = {
 };
 
 const OIDC_MEMBERSHIP_DESCRIPTION =
-	'Requires MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM. Selected groups enter signed, unencrypted browser sessions or authenticated subjects for external OIDC access tokens. Limits: 32 groups and 1280 UTF-8 JSON bytes. Overflow rejects browser login or external-token authentication. Matching project group memberships grant their assigned roles.';
+	'Requires `MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM`. Selected groups enter signed, unencrypted browser sessions or authenticated subjects for external OIDC access tokens. Limits: 32 groups and 1280 UTF-8 JSON bytes. Overflow rejects browser login or external-token authentication. Matching project group memberships grant their assigned roles. See [group membership](./auth.md#group-membership).';
 
 // Shared by every managed-AI backend (Bedrock, OpenAI-compatible); the config
 // registry requires one definition per variable id.
@@ -1363,14 +1363,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					{
 						id: 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS',
 						name: 'Membership groups',
-						description: `Comma-separated, case-sensitive exact group IDs to retain (at most 200). A standalone * selects all groups within the same limits. ${OIDC_MEMBERSHIP_DESCRIPTION}`,
+						description: `Comma-separated, case-sensitive exact group IDs to retain (at most 200). \`*\` as the only entry selects all groups within the same limits and cannot be combined with prefixes. ${OIDC_MEMBERSHIP_DESCRIPTION}`,
 						example: 'hub-team-data,hub-team-ml',
 						optIn: true,
 					},
 					{
 						id: 'MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES',
 						name: 'Membership group prefixes',
-						description: `Comma-separated, case-sensitive literal group prefixes to retain (at most 20); * is not a wildcard here. ${OIDC_MEMBERSHIP_DESCRIPTION}`,
+						description: `Comma-separated, case-sensitive literal group prefixes to retain (at most 20); \`*\` is not a wildcard here. ${OIDC_MEMBERSHIP_DESCRIPTION}`,
 						example: 'hub-team-',
 						optIn: true,
 					},

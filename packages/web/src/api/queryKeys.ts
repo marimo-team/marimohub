@@ -11,7 +11,7 @@ interface ListQueryFilters {
 	q?: string;
 	status?: string;
 	tag?: string;
-	tag_prefix?: string;
+	tag_namespace?: string;
 }
 
 export const userKeys = {
@@ -28,7 +28,7 @@ export const projectKeys = {
 	all: ['projects'] as const,
 	list: () => [...projectKeys.all, 'list'] as const,
 	filteredList: (filters: ListQueryFilters) => [...projectKeys.list(), filters] as const,
-	/** Full multi-page roster for pickers; distinct from the first-page `list`. */
+	/** Unfiltered roster for dialog pickers; nested under `list` so list invalidation reaches it. */
 	pickerList: () => [...projectKeys.all, 'list', 'all'] as const,
 	detail: (projectId: string) => [...projectKeys.all, 'detail', projectId] as const,
 	members: (projectId: string) => [...projectKeys.all, 'members', projectId] as const,

@@ -1382,6 +1382,9 @@ All routes use the same `effectiveRole` calculation:
 - An absent project default or `inherit` uses the higher deployment or OIDC default.
 
 Project-default changes require `manager` at the API boundary. `ProjectService.updateProject` persists them through the existing metadata CAS.
+The stored `project.json` field `default_role` is optional; an absent field means `inherit`.
+Project responses always include `default_role` and report `inherit` when nothing is stored.
+A change emits the broadcast-only `project.default_access_changed` project alert.
 
 `project.read` requires `viewer`; `app.read` admits `app-user` to minimal app metadata.
 Notebook content changes require `editor`; notebook administration and project changes require `manager`.
@@ -1416,6 +1419,13 @@ These writes are separate; authorization must use the project head after a proje
 Group mutations use `{ group }` selectors, separate from string selectors for user ids and invite emails.
 
 The schema version remains 1. See [group membership rollout](../docs/auth.md#rolling-out-group-membership) before storing group rows or rolling back.
+
+Older versions parse `project.json` with a stripping schema, so they drop or ignore `default_role`.
+A member change or rename on an old replica rewrites the record without it, and a rollback ignores it.
+Either way the project falls back to the deployment default (`editor` out of the box).
+Stop every old replica before storing a value other than `inherit`.
+Before rollback, reset overrides to `inherit` and replace `none` with explicit memberships or a deployment default of `none`.
+See [default access rollout](../docs/auth.md#rolling-out-default-access).
 
 `app-user`, `viewer`, `editor`, and `manager` are assignable; existing non-owner `admin` memberships remain valid.
 Upgrade every replica before assigning a role that older versions cannot parse.

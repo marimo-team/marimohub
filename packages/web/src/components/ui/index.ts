@@ -18,6 +18,8 @@ export type { RowLinkProps } from './RowLink';
 export { TextField } from './TextField';
 export type { TextFieldProps } from './TextField';
 
+export { TagField } from './TagField';
+
 export { SearchField } from './SearchField';
 export type { SearchFieldProps } from './SearchField';
 

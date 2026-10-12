@@ -8,7 +8,7 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/alert-destinations",
 			"summary": "Create a project alert destination",
-			"description": "New destinations subscribe to all 13 project alert kinds when kinds is omitted. They remain disabled until a successful test.",
+			"description": "New destinations subscribe to all 14 project alert kinds when kinds is omitted. They remain disabled until a successful test.",
 			"parameters": [
 				{
 					"name": "pid",
@@ -4689,11 +4689,11 @@
 					"repeatable": false
 				},
 				{
-					"name": "tag_prefix",
-					"cli_name": "tag-prefix",
+					"name": "tag_namespace",
+					"cli_name": "tag-namespace",
 					"in": "query",
 					"required": false,
-					"description": "Path-tag namespace. Matches projects with a tag equal to this value or nested under it (`a` matches `a` and `a/b`, not `ab`). Segments are separated by `/`. Each segment must start with a lowercase letter or digit, followed by lowercase letters, digits, `.`, `_`, or `-`.",
+					"description": "Path-tag namespace. Matches whole path segments: `research` matches `research` and `research/vision`, but not `researchx`. Segments are separated by `/`. Each segment must start with a lowercase letter or digit, followed by lowercase letters, digits, `.`, `_`, or `-`. An empty value applies no filter.",
 					"value_type": "string",
 					"repeatable": false
 				}
@@ -4710,7 +4710,7 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/members",
 			"summary": "Add a project member",
-			"description": "Add a member by user id, email, or exact IdP group id. A known email resolves to its user id; an unknown email becomes a pending invite that grants access when that person first signs in.",
+			"description": "Add a member by user id or email. A known email resolves to its user id; an unknown email becomes a pending invite that grants access when that person first signs in.",
 			"parameters": [
 				{
 					"name": "pid",
@@ -4732,13 +4732,6 @@
 						"repeatable": false
 					},
 					{
-						"name": "group",
-						"cli_name": "group",
-						"required": false,
-						"value_type": "string",
-						"repeatable": false
-					},
-					{
 						"name": "role",
 						"cli_name": "role",
 						"required": true,
@@ -4749,6 +4742,48 @@
 						"name": "user_id",
 						"cli_name": "user-id",
 						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "projects.members.groups.add",
+			"command": ["projects", "members", "groups", "add"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/group-members",
+			"summary": "Add a project group member",
+			"description": "Grant an exact IdP group id a project role. Groups cannot hold admin. Requires a deployment whose sessions carry IdP groups (see `project_groups` in capabilities).",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "group",
+						"cli_name": "group",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "role",
+						"cli_name": "role",
+						"required": true,
 						"value_type": "string",
 						"repeatable": false
 					}

@@ -1,4 +1,3 @@
-import { TagField } from '@/components/ui/TagField';
 import { TagFieldValue } from '@/lib/tagFieldValue';
 import { isPathTag } from '@marimo-hub/core/tag-paths';
 import { hasNotebookPreviews } from '@/api/previews';
@@ -56,6 +55,7 @@ import {
 	PageContainer,
 	PageHeader,
 	SessionStatusDot,
+	TagField,
 	UserLabel,
 } from '@/components/ui';
 import {

@@ -1,10 +1,13 @@
-import { tagsMatchPrefix } from '../../tagPaths';
+import { tagsInNamespace } from '../../tagPaths';
 
 export interface ListFilters<Status extends string> {
 	status?: Status;
 	tag?: string;
-	tagPrefix?: string;
 	q?: string;
+}
+
+export interface ProjectListFilters<Status extends string> extends ListFilters<Status> {
+	tagNamespace?: string;
 }
 
 interface ListFilterEntry {
@@ -14,23 +17,23 @@ interface ListFilterEntry {
 
 export function tagsMatchFilters(
 	tags: readonly string[],
-	filter: Pick<ListFilters<string>, 'tag' | 'tagPrefix'>,
+	filter: Pick<ProjectListFilters<string>, 'tag' | 'tagNamespace'>,
 ): boolean {
 	return (
 		(filter.tag === undefined || tags.includes(filter.tag)) &&
-		(filter.tagPrefix === undefined || tagsMatchPrefix(tags, filter.tagPrefix))
+		(filter.tagNamespace === undefined || tagsInNamespace(tags, filter.tagNamespace))
 	);
 }
 
 export function createListFilter<Entry extends ListFilterEntry>(
-	filter: ListFilters<Entry['status']> | undefined,
+	filter: ProjectListFilters<Entry['status']> | undefined,
 	searchableFields: (entry: Entry) => readonly string[],
 	options: { allowUnknownTags?: boolean } = {},
 ): (entry: Entry) => boolean {
 	const query = filter?.q?.toLowerCase();
 	return (entry) =>
 		(filter?.status ? entry.status === filter.status : entry.status !== 'deleted') &&
-		((filter?.tag === undefined && filter?.tagPrefix === undefined) ||
+		((filter?.tag === undefined && filter?.tagNamespace === undefined) ||
 			tagsMatchFilters(entry.tags ?? [], filter ?? {}) ||
 			(entry.tags === undefined && options.allowUnknownTags === true)) &&
 		(query === undefined ||

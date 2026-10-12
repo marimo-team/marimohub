@@ -137,7 +137,8 @@ API key. Project configuration and bring-your-own-key providers can override it.
   claim must be boolean `true` or the exact string `"true"`. `trusted-issuer`
   permits missing claims only. UserInfo must have the same `sub` as the ID token.
 - Group policy accepts at most 200 claim IDs. Sessions carry mapped entitlements
-  and optional selected groups, validated on every request. Overflow denies login.
+  and optional selected groups, validated on every request. Overflow denies login
+  and external-token authentication.
   The signed cookie is not encrypted, and `/me` exposes selected groups; the
   identity directory stores none. Groups never supply security labels or subject
   compartments. Group sessions and kernels expire with the credential; active
@@ -201,7 +202,12 @@ App-only users need super-admin status or the `project-creator` entitlement.
 requires these grants for everyone.
 Project reads require an effective `viewer` role, obtained through ownership,
 explicit user, email, or IdP group membership, or default access.
-Explicit memberships take precedence over defaults. Project defaults override deployment and OIDC defaults, including when set to `none`.
+Explicit memberships take precedence over defaults.
+A project default, when set, replaces deployment and OIDC defaults in both directions.
+`none` removes all default access, and a role such as `editor` applies even when `MARIMOHUB_DEFAULT_ROLE=none`.
+Project responses report `inherit` when no project default is set.
+Each change sends the [`project.default_access_changed` alert](./project-alerts.md#alert-catalog).
+See [default access](./auth.md#default-access-for-non-members) for rollout and rollback steps.
 See [membership rules](./auth.md#members-users-email-invites-and-idp-groups) for multiple grants and group credentials.
 Project listings and directory membership checks use the authoritative project record.
 Notebook writes require `editor` or higher against

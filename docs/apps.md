@@ -306,11 +306,15 @@ Assign the role through any of these mechanisms:
 
 - Project membership: choose **App user** in the member dialog or send `app-user` through the membership API.
 - Deployment default: `MARIMOHUB_DEFAULT_ROLE=app-user`.
+- Project default access: choose **App user** for [default access](./auth.md#default-access-for-non-members) on one project.
 - OIDC groups: configure the groups claim and set `MARIMOHUB_AUTH_OIDC_DEFAULT_APP_USER_GROUPS=stakeholders`.
 - Login policy: return the `default-role:app-user` entitlement.
 
 Set `MARIMOHUB_DEFAULT_ROLE=none` if groups should provide the only deployment-wide role grants.
-The highest default grant wins; explicit project membership overrides defaults.
+Without a project default, the highest deployment or OIDC default wins.
+A project default, when set, replaces deployment and OIDC defaults, even when it is lower.
+For example, `none` removes an OIDC `app-user` grant on that project.
+Explicit project membership overrides all defaults.
 
 ### Source protection and revocation
 

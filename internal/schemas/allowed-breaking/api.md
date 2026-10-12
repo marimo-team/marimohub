@@ -4,100 +4,26 @@ One line per accepted finding: the endpoint plus the finding's description,
 backticks included (format details in `../README.md`). Remove entries after
 the PR merges — a stale entry masks future accidental breaks.
 
-GET /api/v1/projects/{pid}/secrets `api path removed without deprecation`
-POST /api/v1/projects/{pid}/secrets/validate `api path removed without deprecation`
-DELETE /api/v1/projects/{pid}/secrets/{name} `api path removed without deprecation`
-PUT /api/v1/projects/{pid}/secrets/{name} `api path removed without deprecation`
-GET /api/v1/version removed the required property `data/backends` from the response with the `200` status
-GET /api/v1/version removed the required property `data/image` from the response with the `200` status
-GET /api/v1/version removed the required property `data/node` from the response with the `200` status
-GET /api/v1/version removed the required property `data/replica` from the response with the `200` status
-GET /api/v1/version removed the required property `data/sandbox_image` from the response with the `200` status
-GET /api/v1/version removed the required property `data/started_at` from the response with the `200` status
-
-GET /api/v1/projects/{pid}/notebooks/{nid} the response property `data/source/oneOf[subschema #2]/provider` became nullable for the status `200`
-PATCH /api/v1/projects/{pid}/notebooks/{nid}/source the response property `data/source/provider` became nullable for the status `200`
-
-Capabilities now return independent schemas for each supported secondary
-surface. Existing VS Code responses are unchanged.
+Project alert kinds gained `project.default_access_changed`. The destination
+schemas embed the kind vocabulary, so oasdiff reports their `oneOf` branches as
+replaced. Existing destination payloads remain valid.
 
 ```text
-GET /api/v1/capabilities added `subschema #1, subschema #2` to the `data/surfaces/items/` response property `oneOf` list for the response status `200`
-```
-
-`directory.search` expands the shared action enum in both `PolicyCaseV1`
-request branches. Optional `groups` fields expand their login and authorization
-inputs. Existing request shapes remain valid. oasdiff reports these compatible
-branches as removed.
-
-```text
-POST /api/v1/admin/policy-analyzer/evaluate removed `subschema #1, subschema #2` from the `cases/items/` request property `anyOf` list
-```
-
-GET /api/v1/projects/{pid}/alert-destinations the `data` response's property `type` changed from `array<any>` to `object` for status `200`
 GET /api/v1/projects/{pid}/alert-destinations added `subschema #1, subschema #2` to the `data/items/items/` response property `oneOf` list for the response status `200`
 POST /api/v1/projects/{pid}/alert-destinations removed `subschema #1, subschema #2` from the request body `oneOf` list
 POST /api/v1/projects/{pid}/alert-destinations added `subschema #1, subschema #2` to the `data` response property `oneOf` list for the response status `201`
-PATCH /api/v1/projects/{pid}/alert-destinations/{aid} the request body was restructured into a oneOf, so a payload that was previously valid may no longer be accepted
 PATCH /api/v1/projects/{pid}/alert-destinations/{aid} removed `subschema #1, subschema #2` from the request body `oneOf` list
 PATCH /api/v1/projects/{pid}/alert-destinations/{aid} added `subschema #1, subschema #2` to the `data` response property `oneOf` list for the response status `200`
-POST /api/v1/projects/{pid}/alert-destinations/{aid}/test added the new required `header` request parameter `idempotency-key`
 POST /api/v1/projects/{pid}/alert-destinations/{aid}/test added `subschema #1, subschema #2` to the `data` response property `oneOf` list for the response status `200`
-GET /api/v1/projects/{pid}/integrations/{iid}/browse removed the required property `data/metadata` from the response with the `200` status
-GET /api/v1/projects/{pid}/integrations/{iid}/browse removed the required property `data/preview` from the response with the `200` status
-GET /api/v1/projects/{pid}/integrations/{iid}/browse removed the optional property `data/reason` from the response with the `200` status
-POST /api/v1/projects/{pid}/integrations/{iid}/browse/objects/preview added `subschema #1, subschema #2, subschema #3` to the `data` response property `oneOf` list for the response status `200`
-
-POST /api/v1/projects/{pid}/notebooks/git removed the enum value `github` of the request property `provider`
-POST /api/v1/projects/{pid}/notebooks/git removed the enum value `gitlab` of the request property `provider`
-POST /api/v1/projects/{pid}/notebooks/git the `provider` request property's minLength was increased from `0` to `1`
-
-DELETE /api/v1/users/{id}/suspension `api path removed without deprecation`
-PUT /api/v1/users/{id}/suspension `api path removed without deprecation`
-
-`sync_mode` now accepts pull sources. Pull creation omits the push-only token
-and URL. Existing push responses still contain both fields.
-
-```text
-POST /api/v1/projects/{pid}/notebooks/git the response property `data/sync_token` became optional for the status `201`
-POST /api/v1/projects/{pid}/notebooks/git the response property `data/sync_url` became optional for the status `201`
-GET /api/v1/projects/{pid}/notebooks/{nid} added the new `pull` enum value to the `data/source/oneOf[subschema #2]/sync_mode` response property for the response status `200`
-PATCH /api/v1/projects/{pid}/notebooks/{nid}/source added the new `pull` enum value to the `data/source/sync_mode` response property for the response status `200`
 ```
 
-App-only session responses omit the starter's identity, including app-scoped tokens
-without `project.read`. Viewer-or-higher responses with project-read access still
-include `user_id`; the shared session schema makes it optional for app-only access.
+Tags are bounded (1–256 characters each, at most 50 per resource) so list rows
+and namespace filters stay small. Empty tags were never meaningful.
 
 ```text
-POST /api/v1/projects/{pid}/notebooks/{nid}/sessions the response property `data/allOf[#/components/schemas/Session]/user_id` became optional for the status `200`
-GET /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid} the response property `data/user_id` became optional for the status `200`
-POST /api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/heartbeat the response property `data/user_id` became optional for the status `200`
-GET /api/v1/projects/{pid}/sessions the response property `data/items/items/user_id` became optional for the status `200`
-```
-
-Folder import routes shipped unreleased after v0.4.16 and were reshaped in the
-pre-release pass: the per-entry status route became `GET …/notebook-imports/{import_id}`,
-import ids follow the `imp-` convention, and the publish body shares the create validators.
-
-```text
-GET /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks `api removed without deprecation`
-POST /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks added the pattern `^imp-[0-9a-z]{16}$` to the `path` request parameter `import_id`
-POST /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks the `base_image` request property's minLength was increased from `0` to `1`
-POST /api/v1/projects/{pid}/notebook-imports/{import_id}/notebooks the `compute_profile` request property's minLength was increased from `0` to `1`
-```
-
-Project members now use exclusive user, email, and IdP group response variants.
-This corrects the unreleased group contract: each row has exactly one identity,
-and groups cannot hold the admin role. Existing user and email rows remain valid.
-
-```text
-POST /api/v1/projects added `subschema #1, subschema #2, subschema #3` to the `data/members/items/` response property `oneOf` list for the response status `201`
-GET /api/v1/projects/{pid} added `subschema #1, subschema #2, subschema #3` to the `data/members/items/` response property `oneOf` list for the response status `200`
-PATCH /api/v1/projects/{pid} added `subschema #1, subschema #2, subschema #3` to the `data/members/items/` response property `oneOf` list for the response status `200`
-GET /api/v1/projects/{pid}/members added `subschema #1, subschema #2, subschema #3` to the `data/items/` response property `oneOf` list for the response status `200`
-POST /api/v1/projects/{pid}/members added `subschema #1, subschema #2, subschema #3` to the `data/members/items/` response property `oneOf` list for the response status `201`
-PUT /api/v1/projects/{pid}/members/{uid} added `subschema #1, subschema #2, subschema #3` to the `data/members/items/` response property `oneOf` list for the response status `200`
-DELETE /api/v1/projects/{pid}/security-labels added `subschema #1, subschema #2, subschema #3` to the `data/members/items/` response property `oneOf` list for the response status `200`
-PUT /api/v1/projects/{pid}/security-labels added `subschema #1, subschema #2, subschema #3` to the `data/members/items/` response property `oneOf` list for the response status `200`
+POST /api/v1/projects the `tags/items/` request property's minLength was increased from `0` to `1`
+PATCH /api/v1/projects/{pid} the `tags/items/` request property's minLength was increased from `0` to `1`
+POST /api/v1/projects/{pid}/notebooks the `tags/items/` request property's minLength was increased from `0` to `1`
+POST /api/v1/projects/{pid}/notebooks/git the `tags/items/` request property's minLength was increased from `0` to `1`
+PATCH /api/v1/projects/{pid}/notebooks/{nid} the `tags/items/` request property's minLength was increased from `0` to `1`
 ```

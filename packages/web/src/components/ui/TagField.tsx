@@ -1,6 +1,6 @@
+import { Label, Text, Token, TokenField, TokenInput } from 'react-aria-components';
 import type { TagFieldValue } from '@/lib/tagFieldValue';
-import { Label, Text } from 'react-aria-components';
-import { Token, TokenField, TokenInput } from 'react-aria-components/TokenField';
+import { cn } from '@/lib/utils';
 
 export function TagField({
 	label,
@@ -8,12 +8,14 @@ export function TagField({
 	onChange,
 	onBlur,
 	description,
+	className,
 }: {
 	label: string;
 	value: TagFieldValue;
 	onChange: (value: TagFieldValue) => void;
 	onBlur?: () => void;
 	description?: string;
+	className?: string;
 }) {
 	return (
 		<TokenField
@@ -22,7 +24,7 @@ export function TagField({
 			onBlur={onBlur}
 			allowsNewlines
 			onSubmit={() => onChange(value.replaceRange(value.caretPosition, value.caretPosition, ','))}
-			className="flex flex-col gap-1.5"
+			className={cn('flex flex-col gap-1.5', className)}
 		>
 			<Label className="text-xs font-medium text-muted-foreground">{label}</Label>
 			<TokenInput className="min-h-9 w-full rounded-md border border-input bg-background px-2 py-1 text-sm leading-7 text-foreground shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background wrap-anywhere">

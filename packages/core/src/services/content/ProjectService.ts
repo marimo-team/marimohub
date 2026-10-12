@@ -11,10 +11,14 @@ import type {
 	AuthorizationSubject,
 	ResourceSecurityPolicy,
 } from '../authorization/AuthorizationService';
-import { memberRefMatchesSelector, normalizeEmail } from '../../identityMatch';
+import {
+	describeMemberSelector,
+	memberRefMatchesSelector,
+	normalizeEmail,
+} from '../../identityMatch';
 import type { MemberSelector } from '../../identityMatch';
 import { mapWithConcurrency } from '../../concurrency';
-import { ASSIGNABLE_ROLES, BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import type { AssignableRole, Role } from '../../constants';
 import { Millis } from '../../duration';
 import {
@@ -33,6 +37,7 @@ import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import { metricsObserver, saga } from '../../saga';
 import {
+	assertAssignableRole,
 	parseStored,
 	ProjectMemberSchema,
 	ProjectSchema,
@@ -56,7 +61,7 @@ import { AppPoolStore } from '../runtime/AppPoolStore';
 import { loadProjectCatalogPatch, projectCatalogPatch } from './catalogProjection';
 import { DeepLinkService } from './DeepLinkService';
 import { createListFilter, tagsMatchFilters } from './listFilters';
-import type { ListFilters } from './listFilters';
+import type { ProjectListFilters } from './listFilters';
 
 /** Grace period before a soft-deleted project's storage is purged by the GC sweep. */
 export const DEFAULT_DELETED_PROJECT_RETENTION_MS = Millis.days(30);
@@ -232,7 +237,7 @@ export class ProjectService {
 
 	/** Apply role, token, and label restrictions before the caller paginates. */
 	async listProjects(
-		filter?: ListFilters<Project['status']> & {
+		filter?: ProjectListFilters<Project['status']> & {
 			subject: AuthorizationSubject;
 			policy?: AuthorizationPolicy;
 			resourceSecurity?: ResourceSecurityPolicy;
@@ -588,8 +593,7 @@ export class ProjectService {
 		role: AssignableRole,
 		actor: UserId,
 	): Promise<MemberMutationResult> {
-		if (!(ASSIGNABLE_ROLES as readonly string[]).includes(role))
-			throw new ValidationError('Cannot assign admin');
+		assertAssignableRole(role);
 		if ('group' in member) {
 			const row = ProjectMemberSchema.safeParse({ ...member, role });
 			if (!row.success) throw new ValidationError('Invalid group member');
@@ -647,8 +651,7 @@ export class ProjectService {
 		role: AssignableRole,
 		actor: UserId,
 	): Promise<UpdatedMemberMutationResult> {
-		if (!(ASSIGNABLE_ROLES as readonly string[]).includes(role))
-			throw new ValidationError('Cannot assign admin');
+		assertAssignableRole(role);
 		let previousMember: ProjectMember | undefined;
 		let member: ProjectMember | undefined;
 		const { project, mutationId } = await this.writeMembers(
@@ -660,7 +663,7 @@ export class ProjectService {
 				previousMember = current.members.find((m) => memberRefMatchesSelector(m, selector));
 				if (!previousMember) {
 					throw new NotFoundError(
-						`${typeof selector === 'string' ? selector : selector.group} is not a member of project ${id}`,
+						`${describeMemberSelector(selector)} is not a member of project ${id}`,
 					);
 				}
 				const claimedSelector = selectorAfterClaims(previousMember, claimed);
@@ -698,7 +701,7 @@ export class ProjectService {
 				previousMember = current.members.find((m) => memberRefMatchesSelector(m, selector));
 				if (!previousMember) {
 					throw new NotFoundError(
-						`${typeof selector === 'string' ? selector : selector.group} is not a member of project ${id}`,
+						`${describeMemberSelector(selector)} is not a member of project ${id}`,
 					);
 				}
 				const claimedSelector = selectorAfterClaims(previousMember, claimed);

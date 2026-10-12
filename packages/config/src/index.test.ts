@@ -839,7 +839,7 @@ describe('createFromEnv oidc login-policy library', () => {
 		const deps = createFromEnv(loginPolicyEnv, undefined, { libraries: { oidcLoginPolicy } });
 		expect(deps.authenticator).toBeDefined();
 		expect(deps.authRoutes).toBeDefined();
-		expect(deps.policy.groups_carried).toBe(true);
+		expect(deps.policy.groupsCarried).toBe(true);
 		await expect(
 			deps.policyAnalyzer?.loginPolicy?.evaluate({
 				identity: { id: ACTOR, email: 'actor@example.com' },
@@ -896,7 +896,7 @@ describe('createFromEnv oidc email-domain allowlist', () => {
 				MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: '*',
 				...extra,
 			});
-			expect(deps.policy.groups_carried).toBe(expected);
+			expect(deps.policy.groupsCarried).toBe(expected);
 		},
 	);
 

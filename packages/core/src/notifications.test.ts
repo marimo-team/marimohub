@@ -268,6 +268,7 @@ describe('NotificationRouter', () => {
 			'session.takeover',
 			'notebook.deleted',
 			'project.deleted',
+			'project.default_access_changed',
 			'app.start_failed',
 			'app.unavailable',
 			'sync.failed',
@@ -502,6 +503,56 @@ describe('NotificationRouter', () => {
 			dedupe_key: 'project.deleted:project-delete-1:broadcast',
 		});
 		expect(projectDeleted).not.toHaveProperty('link');
+	});
+
+	it('renders a broadcast-only default access change', () => {
+		const actor = { id: uid('owner_notify'), email: 'owner@example.com' };
+		const rendered = notificationRouter.render({
+			kind: 'project.default_access_changed',
+			project,
+			oldDefaultRole: 'inherit',
+			newDefaultRole: 'none',
+			actor,
+			mutationId: 'default-access-1',
+			baseUrl: 'https://hub.example.com',
+		});
+		expect(rendered).toHaveLength(1);
+		expect(rendered[0]).toMatchObject({
+			kind: 'project.default_access_changed',
+			severity: 'warning',
+			audience: 'broadcast',
+			recipients: [],
+			body: 'owner@example.com changed default access to Forecasts from inherit to none.',
+			link: `https://hub.example.com/projects/${project.id}`,
+			data: {
+				project_id: project.id,
+				project_name: 'Forecasts',
+				old_default_role: 'inherit',
+				new_default_role: 'none',
+				actor_user_id: actor.id,
+			},
+			dedupe_key: 'project.default_access_changed:default-access-1:broadcast',
+		});
+		expect(() =>
+			NotificationSchema.parse({
+				...rendered[0],
+				data: { ...rendered[0].data, new_default_role: 'admin' },
+			}),
+		).toThrow();
+	});
+
+	it('renders a group addition as a broadcast with an assignable role', () => {
+		const rendered = notificationRouter.render({
+			kind: 'member.group_added',
+			project,
+			member: { group: '/teams/Research', role: 'editor' },
+			actor: { id: uid('owner_notify'), email: 'owner@example.com' },
+			mutationId: 'group-add-1',
+		});
+		expect(rendered.map((n) => n.audience)).toEqual(['broadcast']);
+		expect(() =>
+			NotificationSchema.parse({ ...rendered[0], data: { ...rendered[0].data, role: 'admin' } }),
+		).toThrow();
 	});
 
 	it('renders unavailable-app and sync-failure alerts', () => {
@@ -792,6 +843,16 @@ describe('NotificationSchema', () => {
 						}),
 					);
 				}
+			});
+
+			it('rejects a group member holding admin', () => {
+				const rendered = renderMemberAlert({ group: '/teams/Research', role: 'editor' });
+				const role = kind === 'member.role_changed' ? { new_role: 'admin' } : { role: 'admin' };
+				const parsed = NotificationSchema.safeParse({
+					...rendered,
+					data: { ...rendered.data, ...role },
+				});
+				expect(parsed.success).toBe(false);
 			});
 		},
 	);

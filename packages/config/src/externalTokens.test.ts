@@ -2,6 +2,7 @@ import { createHmac, generateKeyPairSync, sign } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApi } from '@marimo-hub/api';
 import { generateServiceAccountToken, UserId } from '@marimo-hub/core';
+import { groupsExceedingBytes, groupsExceedingCount } from '@marimo-hub/core/testing/auth-groups';
 import { createFromEnv } from './index';
 
 const issuer = 'https://issuer.example.com';
@@ -240,8 +241,8 @@ it('denies invalid membership tokens despite a valid cookie and does not reuse e
 	for (const groups of [
 		null,
 		'team-previous',
-		Array.from({ length: 33 }, (_, i) => `team-${i}`),
-		Array.from({ length: 11 }, (_, i) => `team-${i}-${'x'.repeat(120)}`),
+		groupsExceedingCount('team-'),
+		groupsExceedingBytes('team-'),
 	]) {
 		const response = await me(groups);
 		expect(response.status).toBe(401);

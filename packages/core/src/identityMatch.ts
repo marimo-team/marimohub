@@ -87,3 +87,7 @@ export function memberRefMatchesSelector(member: MemberRef, selector: MemberSele
 	if (member.user_id !== undefined) return member.user_id === selector;
 	return member.email !== undefined && emailsEqual(member.email, selector);
 }
+
+export function describeMemberSelector(selector: MemberSelector): string {
+	return typeof selector === 'string' ? selector : selector.group;
+}

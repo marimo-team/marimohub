@@ -18,7 +18,7 @@ export interface OidcGroupPolicy {
 	defaultRoles?: Partial<Record<AssignableRole, string[]>>;
 	/** Maximum accepted group count (default 200, maximum 200). */
 	maxGroups?: number;
-	/** A standalone `*` in exact selects every valid ID; prefixes remain literal. */
+	/** `*` as the sole exact entry, without prefixes, selects every valid ID; prefixes are literal. */
 	membership?: { exact?: string[]; prefixes?: string[] };
 }
 
@@ -28,6 +28,8 @@ const MAX_NAME_LENGTH = 200;
 const MAX_PICTURE_URL_INPUT_LENGTH = 2048;
 const MAX_PICTURE_URL_BYTES = 2048;
 export const MAX_GROUPS = 200;
+export const MAX_MEMBERSHIP_GROUPS = 200;
+export const MAX_MEMBERSHIP_GROUP_PREFIXES = 20;
 const MAX_GROUP_LENGTH = 256;
 
 export function utf8ByteLength(value: string): number {
@@ -133,8 +135,8 @@ export function validateGroupPolicy(policy: OidcGroupPolicy): void {
 		const { exact, prefixes } = policy.membership;
 		if (!exact && !prefixes) throw new Error('OIDC membership requires exact ids or prefixes');
 		for (const [list, maximum] of [
-			[exact, MAX_GROUPS],
-			[prefixes, 20],
+			[exact, MAX_MEMBERSHIP_GROUPS],
+			[prefixes, MAX_MEMBERSHIP_GROUP_PREFIXES],
 		] as const) {
 			if (
 				list &&
@@ -144,6 +146,11 @@ export function validateGroupPolicy(policy: OidcGroupPolicy): void {
 					`OIDC membership policies must contain 1 to ${maximum} valid group ids or prefixes`,
 				);
 			}
+		}
+		if (exact?.includes('*') && (exact.length > 1 || prefixes)) {
+			throw new Error(
+				'OIDC membership exact ids: `*` must be the only entry, and prefixes must be unset',
+			);
 		}
 	}
 	for (const list of lists) {

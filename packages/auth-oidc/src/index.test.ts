@@ -1,4 +1,5 @@
-import { AUTH_ENTITLEMENTS } from '@marimo-hub/core/ports/auth';
+import { AUTH_ENTITLEMENTS, MAX_AUTH_GROUPS } from '@marimo-hub/core/ports/auth';
+import { groupsExceedingBytes, groupsExceedingCount } from '@marimo-hub/core/testing/auth-groups';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { SignJWT } from 'jose';
 import {
@@ -2603,12 +2604,9 @@ describe('session membership groups', () => {
 		expect(user).not.toHaveProperty('groups');
 	});
 	it.each(
-		[
-			'team-a',
-			['bad,group'],
-			Array.from({ length: 33 }, (_, i) => `g${i}`),
-			Array.from({ length: 12 }, (_, i) => `${i}${'x'.repeat(120)}`),
-		].map((groups) => ({ groups })),
+		['team-a', ['bad,group'], groupsExceedingCount(), groupsExceedingBytes()].map((groups) => ({
+			groups,
+		})),
 	)('rejects signed invalid groups $groups', async ({ groups }) => {
 		const token = await signSession({ sub: 'u', email: 'u@example.com', entitlements: [], groups });
 		await expect(makeAuthenticator().authenticate(requestWithCookie(token))).resolves.toBeNull();
@@ -2683,7 +2681,7 @@ describe('session membership groups', () => {
 					sub: 'user-1',
 					email: 'user@example.com',
 					email_verified: true,
-					groups: Array.from({ length: 33 }, (_, i) => `team-${i}`),
+					groups: groupsExceedingCount('team-'),
 				});
 				const { routes } = makeOidc({
 					groups: { claim: '/groups', membership },
@@ -2693,7 +2691,7 @@ describe('session membership groups', () => {
 				expect(response.headers.get('set-cookie')).not.toContain('mh_session=');
 				const events = log.mock.calls.flat().join('\n');
 				expect(events).toContain('oidc_membership_groups_exceeded');
-				expect(events).toContain('"retained":33');
+				expect(events).toContain(`"retained":${MAX_AUTH_GROUPS + 1}`);
 				expect(events).not.toContain('team-');
 			} finally {
 				log.mockRestore();
@@ -2724,14 +2722,8 @@ describe('membership cookie and callback failures', () => {
 
 	it.each([
 		{ groups: ['private-team,bad'], problem: 'invalid_group' },
-		{
-			groups: Array.from({ length: 33 }, (_, i) => `private-team-${i}`),
-			problem: 'too_many_groups',
-		},
-		{
-			groups: Array.from({ length: 11 }, (_, i) => `private-team-${i}-${'x'.repeat(110)}`),
-			problem: 'too_many_groups',
-		},
+		{ groups: groupsExceedingCount('private-team-'), problem: 'too_many_groups' },
+		{ groups: groupsExceedingBytes('private-team-'), problem: 'too_many_groups' },
 	])('does not issue a session when a module returns $problem', async ({ groups, problem }) => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const { routes } = makeOidc({

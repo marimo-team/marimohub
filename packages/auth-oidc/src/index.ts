@@ -44,6 +44,8 @@ import type { OidcAdmissionConfig } from './admission';
 import { createOidcDiscovery, oidcIssuerUrl } from './discovery';
 export type { EmailVerificationPolicy, OidcGroupPolicy } from './claims';
 export {
+	MAX_MEMBERSHIP_GROUP_PREFIXES,
+	MAX_MEMBERSHIP_GROUPS,
 	pictureUrlClaim,
 	claimAtPointer,
 	normalizeEmailDomains,

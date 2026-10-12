@@ -19,8 +19,12 @@ export type AccessTokenRejection =
 	| 'verification_failed'
 	| 'invalid_claims'
 	| 'admission_denied'
+	| 'membership_groups_exceeded'
 	| 'missing_grant_scope';
-type PrincipalResult = { principal: AuthenticatedPrincipal } | { error: AccessTokenRejection };
+type PrincipalResult =
+	| { principal: AuthenticatedPrincipal }
+	| { error: Exclude<AccessTokenRejection, 'membership_groups_exceeded'> }
+	| { error: 'membership_groups_exceeded'; retained: number };
 
 function tokenExpiry(
 	issuedAt: unknown,
@@ -69,8 +73,11 @@ export function principalFromVerifiedAccessToken(
 	const scopes = parseAccessTokenScopes(payload.scope);
 	if (!expiresAt || !scopes) return { error: 'invalid_claims' };
 	const admission = admitOidcIdentity(payload, policy.admission);
-	if ('error' in admission)
+	if ('error' in admission) {
+		if (admission.error === 'too_many_groups')
+			return { error: 'membership_groups_exceeded', retained: admission.retained };
 		return { error: admission.error === 'auth_failed' ? 'invalid_claims' : 'admission_denied' };
+	}
 	const grant = externalTokenGrant(scopes);
 	if (!grant) return { error: 'missing_grant_scope' };
 	return {

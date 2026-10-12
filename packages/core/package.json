@@ -53,6 +53,7 @@
 		"./surface-state": "./src/services/runtime/surfaces/state.ts",
 		"./testing/thumbnail": "./src/testing/thumbnail.ts",
 		"./testing": "./src/testing/index.ts",
+		"./testing/auth-groups": "./src/testing/authGroups.ts",
 		"./testing/browse-contract": "./src/testing/browseContract.ts",
 		"./testing/compute-contract": "./src/testing/computeContract.ts",
 		"./testing/contract": "./src/testing/bucketContract.ts",

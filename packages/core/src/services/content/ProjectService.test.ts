@@ -1,4 +1,5 @@
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
+import type { MockInstance } from 'vitest';
 import { uid, ACTOR, localResourceSecurity, makeSubjectContext, setupTestEnv } from '../../testing';
 
 import { ConflictError, NotFoundError, PreconditionFailedError } from '../../errors';
@@ -26,6 +27,12 @@ import { AppPoolService } from '../runtime/AppPoolService';
 import { DEFAULT_APP_POOL_POLICY } from '../runtime/AppPoolRouter';
 import { SessionService } from '../runtime/SessionService';
 import { DeepLinkService } from './DeepLinkService';
+
+const SUBJECT = { id: ACTOR, email: 'actor@example.com' };
+
+function metaReads(get: MockInstance<MemoryBucket['get']>, id: ProjectId) {
+	return get.mock.calls.filter(([key]) => key === paths.project(id).meta);
+}
 
 describe('ProjectService', () => {
 	let bucket: MemoryBucket;
@@ -132,27 +139,25 @@ describe('ProjectService', () => {
 		await catalog.updateProjectEntry('test.strip', ACTOR, project.id, () => ({ tags: undefined }));
 		const get = vi.spyOn(bucket, 'get');
 		const entries = await projects.listProjects({
-			subject: { id: ACTOR, email: 'actor@example.com' },
-			tagPrefix: 'dep1',
+			subject: SUBJECT,
+			tagNamespace: 'dep1',
 			tag: 'shared',
 			q: 'TARGET',
 		});
 		expect(entries).toEqual([
 			expect.objectContaining({ id: project.id, tags: ['dep1/team', 'shared'] }),
 		]);
-		expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(
-			1,
-		);
+		expect(metaReads(get, project.id)).toHaveLength(1);
 		expect(
 			await projects.listProjects({
-				subject: { id: ACTOR, email: 'actor@example.com' },
-				tagPrefix: 'dep10',
+				subject: SUBJECT,
+				tagNamespace: 'dep10',
 			}),
 		).toEqual([]);
 		expect(
 			await projects.listProjects({
-				subject: { id: ACTOR, email: 'actor@example.com' },
-				tagPrefix: 'dep1',
+				subject: SUBJECT,
+				tagNamespace: 'dep1',
 				tag: 'missing',
 			}),
 		).toEqual([]);
@@ -168,14 +173,12 @@ describe('ProjectService', () => {
 		);
 		const get = vi.spyOn(bucket, 'get');
 
-		for (const filter of [undefined, { subject: { id: ACTOR, email: 'actor@example.com' } }]) {
+		for (const filter of [undefined, { subject: SUBJECT }]) {
 			expect(await projects.listProjects(filter)).toEqual([
 				expect.objectContaining({ id: project.id, tags: ['dep1/team'] }),
 			]);
 		}
-		expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(
-			0,
-		);
+		expect(metaReads(get, project.id)).toHaveLength(0);
 	});
 
 	it('stops reading legacy tags after an unrelated project update repairs the projection', async () => {
@@ -188,18 +191,14 @@ describe('ProjectService', () => {
 		expect(await projects.listProjects()).toEqual([
 			expect.objectContaining({ id: project.id, tags: ['dep1/team'] }),
 		]);
-		expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(
-			1,
-		);
+		expect(metaReads(get, project.id)).toHaveLength(1);
 
 		await projects.updateProject(project.id, { description: 'Updated' }, ACTOR);
 		get.mockClear();
 		expect(await projects.listProjects()).toEqual([
 			expect.objectContaining({ id: project.id, description: 'Updated', tags: ['dep1/team'] }),
 		]);
-		expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(
-			0,
-		);
+		expect(metaReads(get, project.id)).toHaveLength(0);
 	});
 
 	it('does not read legacy tags for projects excluded by the token grant', async () => {
@@ -212,20 +211,17 @@ describe('ProjectService', () => {
 		expect(
 			await projects.listProjects({
 				subject: {
-					id: ACTOR,
-					email: 'actor@example.com',
+					...SUBJECT,
 					credential: {
 						kind: 'personal-access-token',
 						id: 'tok',
 						grant: { actions: ['project.read'], projects: [createProjectId()] },
 					},
 				},
-				tagPrefix: 'dep1',
+				tagNamespace: 'dep1',
 			}),
 		).toEqual([]);
-		expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(
-			0,
-		);
+		expect(metaReads(get, project.id)).toHaveLength(0);
 	});
 
 	it('returns empty tags for a visible legacy entry whose head is missing', async () => {
@@ -332,7 +328,7 @@ describe('ProjectService', () => {
 
 	describe('listProjects visibility filter (MARIMOHUB_DEFAULT_ROLE=none)', () => {
 		const STRANGER = { id: UserId.parse('user_stranger'), email: 'stranger@example.com' };
-		const OWNER = { id: ACTOR, email: 'actor@example.com' };
+		const OWNER = SUBJECT;
 
 		it('returns all projects when a default role is set', async () => {
 			await projects.createProject({ name: 'A', description: 'a' }, ACTOR);
@@ -499,12 +495,10 @@ describe('ProjectService', () => {
 					subject: STRANGER,
 					policy: { defaultRole: 'viewer' },
 					tag: 'team',
-					tagPrefix: 'team',
+					tagNamespace: 'team',
 				}),
 			).toHaveLength(1);
-			expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(
-				1,
-			);
+			expect(metaReads(get, project.id)).toHaveLength(1);
 		});
 
 		it('does not cache roles across listing or account requests', async () => {

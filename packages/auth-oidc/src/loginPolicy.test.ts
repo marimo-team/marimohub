@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AUTH_ENTITLEMENTS } from '@marimo-hub/core/ports/auth';
 import { UserId } from '@marimo-hub/core/ids';
+import { groupsExceedingBytes, groupsExceedingCount } from '@marimo-hub/core/testing/auth-groups';
 import type { OidcLoginPolicy, OidcLoginPolicyInput } from './loginPolicy';
 import {
 	evaluateLoginPolicy,
@@ -371,14 +372,8 @@ describe('login-policy groups', () => {
 		[{ decision: 'allow', groups: 'a' }, 'groups_not_an_array'],
 		[{ decision: 'allow', groups: [1] }, 'invalid_group'],
 		[{ decision: 'allow', groups: ['a,b'] }, 'invalid_group'],
-		[
-			{ decision: 'allow', groups: Array.from({ length: 33 }, (_, i) => `g${i}`) },
-			'too_many_groups',
-		],
-		[
-			{ decision: 'allow', groups: Array.from({ length: 12 }, (_, i) => `${i}${'x'.repeat(120)}`) },
-			'too_many_groups',
-		],
+		[{ decision: 'allow', groups: groupsExceedingCount() }, 'too_many_groups'],
+		[{ decision: 'allow', groups: groupsExceedingBytes() }, 'too_many_groups'],
 		[{ decision: 'deny', groups: [] }, 'groups_on_deny'],
 		[{ decision: 'allow', groups: [1], extra: true }, 'unknown_result_field'],
 	] as const)('rejects %j with %s', (value, problem) => {

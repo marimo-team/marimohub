@@ -75,6 +75,8 @@ export function ComboBox<T extends ComboBoxOption>({
 			aria-label={ariaLabel}
 			aria-describedby={ariaDescribedBy}
 			isInvalid={isInvalid}
+			// Native validation would keep a cleared error blocking later form submits.
+			validationBehavior="aria"
 			inputValue={inputValue}
 			onInputChange={onInputChange}
 			value={

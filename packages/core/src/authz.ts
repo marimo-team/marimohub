@@ -13,20 +13,17 @@
  * Session ownership remains strict user-id equality.
  */
 
+import { ASSIGNABLE_ROLES } from './constants';
 import type { AssignableRole, Role } from './constants';
 import { ForbiddenError } from './errors';
-import type { UserId } from './ids';
 import { anyRefMatchesSubject, memberRefMatchesSubject } from './identityMatch';
 import type { IdentitySubject } from './identityMatch';
 import type { Project } from './schema';
 
 const RANK: Record<Role, number> = { 'app-user': 0, viewer: 1, editor: 2, manager: 3, admin: 4 };
-const ENTITLEMENT_ROLE: Partial<Record<string, AssignableRole>> = {
-	'default-role:app-user': 'app-user',
-	'default-role:viewer': 'viewer',
-	'default-role:editor': 'editor',
-	'default-role:manager': 'manager',
-};
+const ENTITLEMENT_ROLE: Partial<Record<string, AssignableRole>> = Object.fromEntries(
+	ASSIGNABLE_ROLES.map((role) => [`default-role:${role}`, role]),
+);
 
 export function roleAtLeast(role: Role | null, minimum: Role): boolean {
 	return role !== null && RANK[role] >= RANK[minimum];
@@ -188,22 +185,4 @@ export function requireRole(
 	if (!canAct(project, subject, min, policy)) {
 		throw new ForbiddenError(`Requires '${min}' role on project ${project.id}`);
 	}
-}
-
-/**
- * Snapshot rosters can lag membership changes and omit project defaults.
- * Non-owner decisions must load the authoritative project record.
- */
-export function canSeeProjectEntry(
-	entry: {
-		owner: UserId;
-		member_ids?: UserId[];
-		member_emails?: string[];
-		member_groups?: string[];
-	},
-	subject: AuthSubject,
-	policy?: AuthzPolicy,
-): boolean | null {
-	if (isSuperAdmin(subject, policy?.superAdmins) || entry.owner === subject.id) return true;
-	return null;
 }

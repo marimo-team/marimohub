@@ -1,13 +1,19 @@
-import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
-import { Toaster } from 'sonner';
-import { ProjectMembersDialog } from './ProjectMembersDialog';
+import { useQuery } from '@tanstack/react-query';
+import { useLocation } from 'react-router-dom';
+import { ProjectMembersDialog } from '.';
 import { AuthProvider } from '@/context/AuthContext';
+import { projectQueryOptions } from '@/api/hooks';
 import { appKeys, projectKeys, userKeys } from '@/api/queryKeys';
-import { createTestQueryClient } from '@/test/render';
+import {
+	createTestQueryClient,
+	installMatchMedia,
+	jsonError,
+	jsonOk,
+	renderWithClient,
+} from '@/test/render';
 import type { Capabilities, ProjectDetail, ProjectMember, ResolvedUser, User } from '@/types';
 
 const PID = 'proj-1';
@@ -22,6 +28,7 @@ const project = (yourRole: ProjectDetail['your_role']): ProjectDetail =>
 		owner: OWNER,
 		members: MEMBERS,
 		your_role: yourRole,
+		default_role: 'inherit',
 		federation_effective: { enabled: false, source: 'unavailable' },
 	}) as ProjectDetail;
 
@@ -46,25 +53,17 @@ const OWNER_USER: User = {
 	can_create_projects: true,
 };
 let currentTestUser = OWNER_USER;
+/** What `GET /projects/{pid}` returns; successful PATCHes write through to it. */
+let serverProject = project('admin');
 
 const CAPABILITIES = {
 	federation: { available: false, default_enabled: false },
+	project_groups: { available: false },
 	viewer_mode: 'static',
 	default_role: null,
 } as unknown as Capabilities;
 
-function ok(data: unknown) {
-	return new Response(JSON.stringify({ success: true, data }), {
-		headers: { 'content-type': 'application/json' },
-	});
-}
-
-function conflict(message: string) {
-	return new Response(JSON.stringify({ success: false, error: { code: 'CONFLICT', message } }), {
-		status: 409,
-		headers: { 'content-type': 'application/json' },
-	});
-}
+const conflict = (message: string) => jsonError('CONFLICT', message, 409);
 
 /**
  * Route every request the dialog makes to a canned response, recording the
@@ -73,6 +72,7 @@ function conflict(message: string) {
 function makeFetch({
 	addResponse,
 	updateResponse,
+	detailResponse,
 	groupResponse,
 	searchResults = [NINA],
 	searchResponse,
@@ -85,6 +85,7 @@ function makeFetch({
 }: {
 	addResponse?: Response | (() => Promise<Response>);
 	updateResponse?: () => Promise<Response>;
+	detailResponse?: () => Promise<Response>;
 	groupResponse?: (method: string) => Promise<Response>;
 	searchResults?: ResolvedUser[];
 	searchResponse?: () => Promise<Response>;
@@ -105,29 +106,72 @@ function makeFetch({
 			: undefined;
 		if (method !== 'GET') calls.push({ url, method, body });
 
-		if (method === 'PATCH' && url.endsWith(`/projects/${PID}`))
-			return updateResponse ? updateResponse() : ok({ ...project('admin'), ...body });
+		if (method === 'PATCH' && url.endsWith(`/projects/${PID}`)) {
+			const response = await (updateResponse
+				? updateResponse()
+				: jsonOk({ ...serverProject, ...body }));
+			if (response.ok)
+				serverProject = ((await response.clone().json()) as { data: ProjectDetail }).data;
+			return response;
+		}
+		if (method === 'GET' && url.endsWith(`/projects/${PID}`))
+			return detailResponse ? detailResponse() : jsonOk(serverProject);
 		if (method === 'POST' && url.endsWith(`/projects/${PID}/members`))
 			return typeof addResponse === 'function'
 				? addResponse()
-				: (addResponse ?? ok(project('admin')));
+				: (addResponse ?? jsonOk(project('admin'), { status: 201 }));
+		if (method === 'POST' && url.endsWith(`/projects/${PID}/group-members`))
+			return typeof addResponse === 'function'
+				? addResponse()
+				: (addResponse ?? jsonOk(project('admin'), { status: 201 }));
 		if (method === 'PUT' && url.includes(`/projects/${PID}/group-members?`))
-			return groupResponse ? groupResponse(method) : ok(project('admin'));
+			return groupResponse ? groupResponse(method) : jsonOk(project('admin'));
 		if (method === 'DELETE' && url.includes(`/projects/${PID}/group-members?`))
-			return groupResponse ? groupResponse(method) : ok(null);
-		if (method === 'PUT' && url.includes(`/projects/${PID}/members/`)) return ok(project('admin'));
-		if (method === 'DELETE' && url.includes(`/projects/${PID}/members/`)) return ok(null);
+			return groupResponse ? groupResponse(method) : jsonOk(null);
+		if (method === 'PUT' && url.includes(`/projects/${PID}/members/`))
+			return jsonOk(project('admin'));
+		if (method === 'DELETE' && url.includes(`/projects/${PID}/members/`)) return jsonOk(null);
 		if (url.includes('/projects/') && url.endsWith('/members'))
-			return membersResponse ? membersResponse() : ok(members);
-		if (url.endsWith('/api/v1/me')) return ok(currentUser);
+			return membersResponse ? membersResponse() : jsonOk(members);
+		if (url.endsWith('/api/v1/me')) return jsonOk(currentUser);
 		if (url.includes('/capabilities'))
-			return capabilitiesResponse ? capabilitiesResponse() : ok(capabilities);
-		if (url.includes('/users/search')) return searchResponse ? searchResponse() : ok(searchResults);
-		if (url.includes('/users')) return ok(directory);
+			return capabilitiesResponse ? capabilitiesResponse() : jsonOk(capabilities);
+		if (url.includes('/users/search'))
+			return searchResponse ? searchResponse() : jsonOk(searchResults);
+		if (url.includes('/users')) return jsonOk(directory);
 		throw new Error(`unexpected fetch: ${method} ${url}`);
 	});
 	vi.stubGlobal('fetch', impl);
 	return calls;
+}
+
+/** Feeds the dialog from the detail cache, as the project page does. */
+function CachedProjectDialog({
+	project,
+	onClose,
+}: {
+	project: ProjectDetail;
+	onClose: () => void;
+}) {
+	const { data } = useQuery({
+		...projectQueryOptions(project.id),
+		initialData: project,
+		staleTime: Infinity,
+	});
+	return <ProjectMembersDialog isOpen onClose={onClose} project={data} />;
+}
+
+function Location() {
+	return <span data-testid="location">{useLocation().pathname}</span>;
+}
+
+function dialogTree(project: ProjectDetail, onClose: () => void = vi.fn()) {
+	return (
+		<AuthProvider>
+			<CachedProjectDialog project={project} onClose={onClose} />
+			<Location />
+		</AuthProvider>
+	);
 }
 
 async function renderDialog(
@@ -137,22 +181,11 @@ async function renderDialog(
 	const client = createTestQueryClient();
 	client.setQueryData(userKeys.me(), currentTestUser);
 	const onClose = vi.fn();
-	const wrapper = ({ children }: { children: ReactNode }) => (
-		<QueryClientProvider client={client}>
-			<AuthProvider>{children}</AuthProvider>
-			<Toaster />
-		</QueryClientProvider>
-	);
-	const { rerender } = render(
-		<ProjectMembersDialog
-			isOpen
-			onClose={onClose}
-			project={{ ...project(yourRole), ...overrides }}
-		/>,
-		{
-			wrapper,
-		},
-	);
+	serverProject = { ...project(yourRole), ...overrides };
+	const { rerender } = renderWithClient(dialogTree(serverProject, onClose), {
+		client,
+		route: `/projects/${PID}`,
+	});
 	// Wait for the member list and the user directory to resolve.
 	await waitFor(() => expect(screen.getAllByText('Eddie Editor').length).toBeGreaterThan(0));
 	return { onClose, client, rerender };
@@ -165,17 +198,7 @@ async function pickOption(user: ReturnType<typeof userEvent.setup>, query: strin
 }
 
 beforeEach(() => {
-	// jsdom has no matchMedia; Tooltip's mobile check needs it.
-	vi.stubGlobal('matchMedia', (query: string) => ({
-		matches: false,
-		media: query,
-		onchange: null,
-		addEventListener: () => {},
-		removeEventListener: () => {},
-		addListener: () => {},
-		removeListener: () => {},
-		dispatchEvent: () => false,
-	}));
+	installMatchMedia();
 });
 
 afterEach(() => {
@@ -187,7 +210,7 @@ describe('ProjectMembersDialog — admin', () => {
 		const membersResponse = vi
 			.fn()
 			.mockRejectedValueOnce(new TypeError('Network unavailable'))
-			.mockResolvedValueOnce(ok(MEMBERS));
+			.mockResolvedValueOnce(jsonOk(MEMBERS));
 		makeFetch({ membersResponse });
 		await renderDialog('admin');
 		expect(await screen.findByRole('alert')).toHaveTextContent('The list may be out of date');
@@ -206,7 +229,7 @@ describe('ProjectMembersDialog — admin', () => {
 		const searchResponse = vi
 			.fn()
 			.mockRejectedValueOnce(new TypeError('Search unavailable'))
-			.mockResolvedValueOnce(ok([NINA]));
+			.mockResolvedValueOnce(jsonOk([NINA]));
 		const calls = makeFetch({ searchResponse });
 		await renderDialog('admin');
 		const user = userEvent.setup();
@@ -236,7 +259,7 @@ describe('ProjectMembersDialog — admin', () => {
 		let resolveSearch!: (response: Response) => void;
 		const searchResponse = vi
 			.fn()
-			.mockResolvedValueOnce(ok([NINA]))
+			.mockResolvedValueOnce(jsonOk([NINA]))
 			.mockImplementation(
 				() =>
 					new Promise<Response>((resolve) => {
@@ -257,7 +280,7 @@ describe('ProjectMembersDialog — admin', () => {
 			screen.queryByRole('option', { name: /Nina New|by user id|Invite/ }),
 		).not.toBeInTheDocument();
 		expect(calls).toEqual([]);
-		await act(async () => resolveSearch(ok([])));
+		await act(async () => resolveSearch(jsonOk([])));
 		expect(
 			await screen.findByRole('option', { name: /Add "different" by user id/ }),
 		).toBeInTheDocument();
@@ -760,61 +783,34 @@ describe('project default access', () => {
 		},
 	);
 
-	it('shows confirmed access when the project refetch fails', async () => {
-		makeFetch();
-		const { client } = await renderDialog('manager', { default_role: 'none' });
-		const previous = { ...project('manager'), default_role: 'none' as const };
-		const refetch = vi.fn().mockRejectedValue(new TypeError('Project unavailable'));
-		const observer = new QueryObserver(client, {
-			queryKey: projectKeys.detail(PID),
-			queryFn: refetch,
-			initialData: previous,
-			staleTime: Infinity,
-		});
-		const unsubscribe = observer.subscribe(() => {});
-		try {
-			const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
-			await userEvent.setup().selectOptions(select, 'viewer');
-			expect(await screen.findByText('Default access updated')).toBeInTheDocument();
-			await waitFor(() => expect(observer.getCurrentResult().isRefetchError).toBe(true));
-			expect(refetch).toHaveBeenCalledOnce();
-			expect(client.getQueryData(projectKeys.detail(PID))).toEqual(previous);
-			expect(select).toHaveValue('viewer');
-			expect(select).toBeEnabled();
-			expect(
-				screen.getByText(/Everyone who signs in can view this project by default/),
-			).toBeInTheDocument();
-		} finally {
-			unsubscribe();
-		}
+	it('keeps confirmed access when the project refetch fails', async () => {
+		const detailResponse = vi.fn(() => Promise.reject(new TypeError('Project unavailable')));
+		makeFetch({ detailResponse });
+		await renderDialog('manager', { default_role: 'none' });
+		const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
+		await userEvent.setup().selectOptions(select, 'viewer');
+		expect(await screen.findByText('Default access updated')).toBeInTheDocument();
+		await waitFor(() => expect(detailResponse).toHaveBeenCalled());
+		expect(select).toHaveValue('viewer');
+		expect(select).toBeEnabled();
+		expect(
+			screen.getByText(/Everyone who signs in can view this project by default/),
+		).toBeInTheDocument();
 	});
 
-	it('resyncs confirmed access when the server default or project changes', async () => {
+	it('follows the project when its default changes or another project opens', async () => {
 		makeFetch();
-		const { rerender } = await renderDialog('manager', { default_role: 'none' });
+		const { client, rerender } = await renderDialog('manager', { default_role: 'none' });
 		const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
 		await userEvent.setup().selectOptions(select, 'viewer');
 		await screen.findByText('Default access updated');
 		expect(select).toHaveValue('viewer');
+		await waitFor(() => expect(client.isFetching()).toBe(0));
 
-		const renderProject = (overrides: Partial<ProjectDetail>) =>
-			rerender(
-				<ProjectMembersDialog
-					isOpen
-					onClose={vi.fn()}
-					project={{ ...project('manager'), ...overrides }}
-				/>,
-			);
-		renderProject({ default_role: 'none', name: 'Renamed' });
-		expect(select).toHaveValue('viewer');
-		renderProject({ default_role: 'none', updated_at: '2026-10-07T12:00:00Z' });
+		client.setQueryData(projectKeys.detail(PID), { ...project('manager'), default_role: 'editor' });
+		await waitFor(() => expect(select).toHaveValue('editor'));
+		rerender(dialogTree({ ...project('manager'), id: 'another-project', default_role: 'none' }));
 		expect(select).toHaveValue('none');
-		renderProject({ default_role: 'editor' });
-		expect(select).toHaveValue('editor');
-		renderProject({ id: 'another-project', default_role: 'none' });
-		expect(select).toHaveValue('none');
-		renderProject({ id: 'legacy-project' });
-		expect(select).toHaveValue('inherit');
 	});
 
 	it('does not apply a previous project’s delayed save to a different project', async () => {
@@ -827,15 +823,10 @@ describe('project default access', () => {
 		const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
 		await userEvent.setup().selectOptions(select, 'viewer');
 		await waitFor(() => expect(select).toBeDisabled());
-		rerender(
-			<ProjectMembersDialog
-				isOpen
-				onClose={vi.fn()}
-				project={{ ...project('manager'), id: 'another-project', default_role: 'none' }}
-			/>,
-		);
+		rerender(dialogTree({ ...project('manager'), id: 'another-project', default_role: 'none' }));
+		expect(select).toHaveValue('none');
 		await act(async () => {
-			resolveResponse(ok({ ...project('manager'), default_role: 'viewer' }));
+			resolveResponse(jsonOk({ ...project('manager'), default_role: 'viewer' }));
 		});
 		await waitFor(() => expect(select).toBeEnabled());
 		expect(select).toHaveValue('none');
@@ -850,13 +841,8 @@ describe('project default access', () => {
 		async ({ status, code, message }) => {
 			const updateResponse = vi
 				.fn()
-				.mockResolvedValueOnce(
-					new Response(JSON.stringify({ success: false, error: { code, message } }), {
-						status,
-						headers: { 'content-type': 'application/json' },
-					}),
-				)
-				.mockResolvedValueOnce(ok({ ...project('manager'), default_role: 'viewer' }));
+				.mockResolvedValueOnce(jsonError(code, message, status))
+				.mockResolvedValueOnce(jsonOk({ ...project('manager'), default_role: 'viewer' }));
 			const calls = makeFetch({ updateResponse });
 			const { onClose } = await renderDialog('manager', { default_role: 'none' });
 			const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
@@ -953,7 +939,7 @@ describe('project default access', () => {
 });
 
 describe('IdP group members', () => {
-	const groupCapabilities = { ...CAPABILITIES, groups_carried: true };
+	const groupCapabilities = { ...CAPABILITIES, project_groups: { available: true } };
 	async function groupPicker() {
 		const user = userEvent.setup();
 		await renderDialog('admin');
@@ -968,12 +954,11 @@ describe('IdP group members', () => {
 		await user.selectOptions(screen.getByRole('combobox', { name: 'New group role' }), 'viewer');
 		await user.click(screen.getByRole('button', { name: 'Add group' }));
 		await waitFor(() =>
-			expect(calls).toContainEqual(
-				expect.objectContaining({
-					method: 'POST',
-					body: { group: '/Teams/Data + Research', role: 'viewer' },
-				}),
-			),
+			expect(calls).toContainEqual({
+				url: `/api/v1/projects/${PID}/group-members`,
+				method: 'POST',
+				body: { group: '/Teams/Data + Research', role: 'viewer' },
+			}),
 		);
 		await waitFor(() =>
 			expect(screen.getByRole('combobox', { name: 'IdP group ID' })).toHaveValue(''),
@@ -997,7 +982,7 @@ describe('IdP group members', () => {
 		expect(submit).toBeDisabled();
 		await user.click(submit);
 		expect(calls).toHaveLength(1);
-		await act(async () => resolveResponse(ok(project('admin'))));
+		await act(async () => resolveResponse(jsonOk(project('admin'))));
 		await waitFor(() => expect(input).toHaveValue(''));
 		expect(input).toBeEnabled();
 	});
@@ -1071,6 +1056,24 @@ describe('IdP group members', () => {
 		expect(input).toHaveAttribute('aria-invalid', 'true');
 		expect(input).toHaveAccessibleDescription(/without commas, control characters/);
 	});
+	it('submits with Enter once an invalid group id is corrected', async () => {
+		const calls = makeFetch({ capabilities: groupCapabilities });
+		const user = await groupPicker();
+		const input = screen.getByRole('combobox', { name: 'IdP group ID' });
+		await user.type(input, ' team');
+		expect(input).toHaveAttribute('aria-invalid', 'true');
+		await user.clear(input);
+		await user.type(input, 'team');
+		expect(input).not.toHaveAttribute('aria-invalid');
+		await user.keyboard('{Enter}');
+		await waitFor(() =>
+			expect(calls).toContainEqual({
+				url: `/api/v1/projects/${PID}/group-members`,
+				method: 'POST',
+				body: { group: 'team', role: 'editor' },
+			}),
+		);
+	});
 	it.each([' team', 'team ', 'a,b', 'x'.repeat(129)])(
 		'rejects invalid group input without trimming it: %j',
 		async (group) => {
@@ -1116,9 +1119,9 @@ describe('IdP group members', () => {
 			.mockRejectedValueOnce(new TypeError('Network unavailable'))
 			.mockImplementationOnce(async () => {
 				members = [...MEMBERS, { group: 'team', role: 'manager' }];
-				return ok({ ...project('admin'), members });
+				return jsonOk({ ...project('admin'), members });
 			});
-		const calls = makeFetch({ groupResponse, membersResponse: async () => ok(members) });
+		const calls = makeFetch({ groupResponse, membersResponse: async () => jsonOk(members) });
 		const { client } = await renderDialog('admin');
 		const invalidate = vi.spyOn(client, 'invalidateQueries');
 		const user = userEvent.setup();
@@ -1140,9 +1143,9 @@ describe('IdP group members', () => {
 			.mockResolvedValueOnce(conflict('Membership changed; try again'))
 			.mockImplementationOnce(async () => {
 				members = MEMBERS;
-				return ok(null);
+				return jsonOk(null);
 			});
-		const calls = makeFetch({ groupResponse, membersResponse: async () => ok(members) });
+		const calls = makeFetch({ groupResponse, membersResponse: async () => jsonOk(members) });
 		await renderDialog('admin');
 		const user = userEvent.setup();
 		await user.click(screen.getByRole('button', { name: 'Remove group team' }));
@@ -1278,5 +1281,84 @@ describe('IdP group members', () => {
 		await renderDialog('admin');
 		expect(screen.queryByRole('combobox', { name: 'Member type' })).not.toBeInTheDocument();
 		expect(screen.queryByRole('combobox', { name: 'IdP group ID' })).not.toBeInTheDocument();
+	});
+});
+
+describe('changing your own access', () => {
+	const SELF: User = { ...OWNER_USER, id: EDITOR, email: DIRECTORY[EDITOR].email };
+	const SELF_MANAGED = MEMBERS.map((member) =>
+		member.user_id === EDITOR ? { ...member, role: 'manager' as const } : member,
+	);
+
+	it('warns before removing yourself and leaves once access is gone', async () => {
+		const calls = makeFetch({
+			currentUser: SELF,
+			members: SELF_MANAGED,
+			detailResponse: async () => jsonError('FORBIDDEN', 'Requires project access', 403),
+		});
+		const { onClose } = await renderDialog('manager');
+		const user = userEvent.setup();
+		await user.click(screen.getByRole('button', { name: `Remove ${EDITOR}` }));
+		const dialog = screen.getByRole('dialog', { name: 'Remove Yourself' });
+		expect(dialog).toHaveTextContent('You may lose access to this project.');
+		await user.click(within(dialog).getByRole('button', { name: 'Remove' }));
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/);
+		expect(calls).toContainEqual({
+			url: `/api/v1/projects/${PID}/members/${EDITOR}`,
+			method: 'DELETE',
+			body: undefined,
+		});
+	});
+
+	it('confirms demoting yourself and leaves when the project is no longer visible', async () => {
+		const calls = makeFetch({
+			currentUser: SELF,
+			members: SELF_MANAGED,
+			detailResponse: async () => jsonError('NOT_FOUND', 'Project not found', 404),
+		});
+		const { onClose } = await renderDialog('manager');
+		const user = userEvent.setup();
+		const role = screen.getByRole('combobox', { name: `Role for ${EDITOR}` });
+		await user.selectOptions(role, 'viewer');
+		const dialog = screen.getByRole('dialog', { name: 'Change Your Role' });
+		expect(dialog).toHaveTextContent('to Viewer? You may lose access to this project.');
+		expect(calls.filter((call) => call.method === 'PUT')).toEqual([]);
+		expect(role).toHaveValue('manager');
+		await user.click(within(dialog).getByRole('button', { name: 'Change role' }));
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/);
+		expect(calls).toContainEqual({
+			url: `/api/v1/projects/${PID}/members/${EDITOR}`,
+			method: 'PUT',
+			body: { role: 'viewer' },
+		});
+	});
+
+	it('keeps the dialog open when you still have access after demoting yourself', async () => {
+		makeFetch({ currentUser: SELF, members: SELF_MANAGED });
+		const { onClose } = await renderDialog('manager');
+		const user = userEvent.setup();
+		await user.selectOptions(
+			screen.getByRole('combobox', { name: `Role for ${EDITOR}` }),
+			'editor',
+		);
+		await user.click(screen.getByRole('button', { name: 'Change role' }));
+		await screen.findByText('Role updated');
+		expect(onClose).not.toHaveBeenCalled();
+		expect(screen.getByTestId('location')).toHaveTextContent(`/projects/${PID}`);
+	});
+
+	it('cancels a self-demotion without sending it', async () => {
+		const calls = makeFetch({ currentUser: SELF, members: SELF_MANAGED });
+		await renderDialog('manager');
+		const user = userEvent.setup();
+		await user.selectOptions(
+			screen.getByRole('combobox', { name: `Role for ${EDITOR}` }),
+			'app-user',
+		);
+		await user.click(screen.getByRole('button', { name: 'Cancel' }));
+		expect(screen.queryByRole('dialog', { name: 'Change Your Role' })).not.toBeInTheDocument();
+		expect(calls).toEqual([]);
 	});
 });

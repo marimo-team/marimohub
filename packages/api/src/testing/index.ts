@@ -1,6 +1,7 @@
 import { expect } from 'vitest';
 import { CatalogService, createServices } from '@marimo-hub/core';
 import type {
+	AuthenticatedPrincipal,
 	Authenticator,
 	CredentialBroker,
 	FederationTarget,
@@ -104,6 +105,8 @@ export interface TestApiOptions {
 	compute?: SandboxProvider;
 	/** Per-user concurrent-session cap to wire into deps (default: unlimited). */
 	maxConcurrentSessionsPerUser?: number;
+	/** Fields merged over the stub principal, e.g. `groups`, `entitlements`, or `credential`. */
+	subject?: Partial<Omit<AuthenticatedPrincipal, 'id'>>;
 	/** Arbitrary extra `ApiDeps` overrides (e.g. WIF issuer/broker) merged last. */
 	deps?: Partial<ApiDeps>;
 }
@@ -123,6 +126,7 @@ export function createTestApi(options: TestApiOptions = {}) {
 			id: userId,
 			email: `${userId}@example.com`,
 			credential: { kind: 'development' },
+			...options.subject,
 		}),
 	};
 	const deps = makeTestDeps(bucket, {

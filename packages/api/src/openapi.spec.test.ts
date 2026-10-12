@@ -191,6 +191,7 @@ describe('OpenAPI spec', () => {
 			'session.takeover',
 			'notebook.deleted',
 			'project.deleted',
+			'project.default_access_changed',
 			'app.start_failed',
 			'app.unavailable',
 			'sync.failed',

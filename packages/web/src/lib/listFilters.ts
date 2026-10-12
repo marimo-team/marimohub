@@ -1,10 +1,10 @@
-import { isPathTag, MAX_TAG_PREFIX_LENGTH } from '@marimo-hub/core/tag-paths';
+import { isValidTagNamespace } from '@marimo-hub/core/tag-paths';
 
 export interface ListFilterValues<Status extends string = string> {
 	q?: string;
 	status?: Status;
 	tag?: string;
-	tag_prefix?: string;
+	tag_namespace?: string;
 }
 
 export interface ListFilterStatus<Status extends string> {
@@ -15,19 +15,17 @@ export interface ListFilterStatus<Status extends string> {
 export function readListFilters<Status extends string>(
 	params: URLSearchParams,
 	statuses: readonly ListFilterStatus<Status>[],
-	{ tagPrefix = false }: { tagPrefix?: boolean } = {},
+	{ tagNamespace = false }: { tagNamespace?: boolean } = {},
 ): ListFilterValues<Status> {
 	const readParam = (name: string) => params.get(name)?.trim() || undefined;
 	const status = readParam('status');
-	const prefix = tagPrefix ? readParam('tag_prefix') : undefined;
+	const namespace = tagNamespace ? readParam('tag_namespace') : undefined;
 	return {
 		q: readParam('q'),
-		...(tagPrefix
+		...(tagNamespace
 			? {
-					tag_prefix:
-						prefix && prefix.length <= MAX_TAG_PREFIX_LENGTH && isPathTag(prefix)
-							? prefix
-							: undefined,
+					tag_namespace:
+						namespace !== undefined && isValidTagNamespace(namespace) ? namespace : undefined,
 				}
 			: {}),
 		tag: readParam('tag'),
@@ -38,11 +36,11 @@ export function readListFilters<Status extends string>(
 export function updateListFilterParams(
 	current: URLSearchParams,
 	values: ListFilterValues,
-	{ tagPrefix = false }: { tagPrefix?: boolean } = {},
+	{ tagNamespace = false }: { tagNamespace?: boolean } = {},
 ): URLSearchParams {
 	const next = new URLSearchParams(current);
 	const names: (keyof ListFilterValues)[] = ['q', 'status', 'tag'];
-	if (tagPrefix) names.push('tag_prefix');
+	if (tagNamespace) names.push('tag_namespace');
 	for (const name of names) {
 		next.delete(name);
 		if (values[name] !== undefined) next.set(name, values[name]);
@@ -55,6 +53,6 @@ export function hasListFilters(values: ListFilterValues): boolean {
 		values.q !== undefined ||
 		values.status !== undefined ||
 		values.tag !== undefined ||
-		values.tag_prefix !== undefined
+		values.tag_namespace !== undefined
 	);
 }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServices, paths, ProjectId } from '@marimo-hub/core';
-import type { Authenticator, ProjectAlertDispatcher } from '@marimo-hub/core';
+import type { ProjectAlertDispatcher } from '@marimo-hub/core';
 import { ACTOR, MemoryNotifier, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import {
@@ -20,24 +20,21 @@ describe('project group member routes', () => {
 	let pid: string;
 	beforeEach(async () => {
 		bucket = await createInitializedBucket();
-		owner = createTestApi({ bucket, deps: { policy: { groups_carried: true } } }).request;
+		owner = createTestApi({ bucket, deps: { policy: { groupsCarried: true } } }).request;
 		pid = (
 			await expectOk(await owner('POST', '/projects', { name: 'Groups', description: '' }), 201)
 		).id;
 	});
 	function caller(groups: string[] = [GROUP], kind: 'sso' | 'external-access-token' = 'sso') {
-		const authenticator: Authenticator = {
-			authenticate: async () => ({
-				id: uid('group-user'),
-				email: 'group-user@example.com',
-				credential: { kind },
-				groups,
-			}),
-		};
-		return createTestApi({ bucket, deps: { authenticator, policy: { groups_carried: true } } });
+		return createTestApi({
+			bucket,
+			userId: uid('group-user'),
+			subject: { email: 'group-user@example.com', credential: { kind }, groups },
+			deps: { policy: { groupsCarried: true } },
+		});
 	}
 	const add = (role = 'viewer', group = GROUP) =>
-		owner('POST', `/projects/${pid}/members`, { group, role });
+		owner('POST', `/projects/${pid}/group-members`, { group, role });
 	function withAlerts() {
 		const notifier = new MemoryNotifier();
 		const deliver = vi.fn<ProjectAlertDispatcher['deliver']>(async () => 'delivered');
@@ -46,7 +43,7 @@ describe('project group member routes', () => {
 			bucket,
 			deps: {
 				notifier,
-				policy: { groups_carried: true },
+				policy: { groupsCarried: true },
 				backgroundTasks: {
 					defer: (task) => {
 						tasks.push(task);
@@ -121,14 +118,14 @@ describe('project group member routes', () => {
 	});
 	it('does not give a personal access token its user’s SSO groups', async () => {
 		await expectOk(await add(), 201);
-		const authenticator: Authenticator = {
-			authenticate: async () => ({
-				id: uid('group-user'),
+		const { request } = createTestApi({
+			bucket,
+			userId: uid('group-user'),
+			subject: {
 				email: 'group-user@example.com',
 				credential: { kind: 'personal-access-token', id: 'token' },
-			}),
-		};
-		const { request } = createTestApi({ bucket, deps: { authenticator } });
+			},
+		});
 		await expectError(await request('GET', `/projects/${pid}`), 404);
 	});
 	it('keeps lower explicit group membership ahead of higher project and deployment defaults', async () => {
@@ -136,7 +133,10 @@ describe('project group member routes', () => {
 		await expectOk(await owner('PATCH', `/projects/${pid}`, { default_role: 'manager' }));
 		await expectError(await caller().request('GET', `/projects/${pid}`), 404);
 		await expectError(
-			await caller().request('POST', `/projects/${pid}/members`, { group: 'new', role: 'viewer' }),
+			await caller().request('POST', `/projects/${pid}/group-members`, {
+				group: 'new',
+				role: 'viewer',
+			}),
 			403,
 		);
 	});
@@ -144,7 +144,10 @@ describe('project group member routes', () => {
 		await expectOk(await add('manager'), 201);
 		const manager = caller().request;
 		await expectOk(
-			await manager('POST', `/projects/${pid}/members`, { group: '/other/team', role: 'viewer' }),
+			await manager('POST', `/projects/${pid}/group-members`, {
+				group: '/other/team',
+				role: 'viewer',
+			}),
 			201,
 		);
 		const updated = await expectOk(
@@ -207,7 +210,7 @@ describe('project group member routes', () => {
 			201,
 		);
 		await expectOk(
-			await owner('POST', `/projects/${other.id}/members`, { group: GROUP, role: 'viewer' }),
+			await owner('POST', `/projects/${other.id}/group-members`, { group: GROUP, role: 'viewer' }),
 			201,
 		);
 		const { request } = caller();
@@ -265,8 +268,7 @@ describe('project group member routes', () => {
 		},
 	);
 	it.each([
-		{ group: GROUP, email: 'a@example.com', role: 'editor' },
-		{ group: GROUP, user_id: 'a', role: 'editor' },
+		{ role: 'editor' },
 		{ group: GROUP, role: 'admin' },
 		{ group: '', role: 'editor' },
 		{ group: ' team', role: 'editor' },
@@ -276,15 +278,25 @@ describe('project group member routes', () => {
 		{ group: 'a'.repeat(129), role: 'editor' },
 	])('rejects invalid additions without mutating the project: %j', async (body) => {
 		const before = await bucket.get(paths.project(ProjectId.parse(pid)).meta);
-		await expectError(await owner('POST', `/projects/${pid}/members`, body), 422);
+		await expectError(await owner('POST', `/projects/${pid}/group-members`, body), 422);
 		expect((await bucket.get(paths.project(ProjectId.parse(pid)).meta))?.etag).toBe(before?.etag);
+	});
+	it('does not accept groups on the individual member route', async () => {
+		await expectError(
+			await owner('POST', `/projects/${pid}/members`, { group: GROUP, role: 'viewer' }),
+			422,
+		);
 	});
 	it('rejects unsupported group creation but allows removal after support is disabled', async () => {
 		const disabled = createTestApi({ bucket }).request;
-		expect((await expectOk(await disabled('GET', '/capabilities'))).groups_carried).toBe(false);
-		expect((await expectOk(await owner('GET', '/capabilities'))).groups_carried).toBe(true);
+		expect((await expectOk(await disabled('GET', '/capabilities'))).project_groups).toEqual({
+			available: false,
+		});
+		expect((await expectOk(await owner('GET', '/capabilities'))).project_groups).toEqual({
+			available: true,
+		});
 		await expectError(
-			await disabled('POST', `/projects/${pid}/members`, { group: GROUP, role: 'viewer' }),
+			await disabled('POST', `/projects/${pid}/group-members`, { group: GROUP, role: 'viewer' }),
 			422,
 		);
 		await expectOk(await add(), 201);
@@ -348,7 +360,7 @@ describe('project group member routes', () => {
 	it('emits only a broadcast alert when adding a group', async () => {
 		const { request, notifier, deliver, drain } = withAlerts();
 		await expectOk(
-			await request('POST', `/projects/${pid}/members`, { group: GROUP, role: 'editor' }),
+			await request('POST', `/projects/${pid}/group-members`, { group: GROUP, role: 'editor' }),
 			201,
 		);
 		await drain();
@@ -378,7 +390,7 @@ describe('project group member routes', () => {
 				await request(
 					method,
 					method === 'POST'
-						? `/projects/${pid}/members`
+						? `/projects/${pid}/group-members`
 						: `/projects/${pid}/group-members${groupQuery}`,
 					method === 'POST'
 						? { group: GROUP, role: 'editor' }
@@ -401,7 +413,7 @@ describe('project group member routes', () => {
 			await request('PUT', `/projects/${pid}/group-members${groupQuery}`, { role: 'viewer' }),
 		);
 		await expectError(
-			await request('POST', `/projects/${pid}/members`, { group: GROUP, role: 'manager' }),
+			await request('POST', `/projects/${pid}/group-members`, { group: GROUP, role: 'manager' }),
 			409,
 		);
 		await drain();

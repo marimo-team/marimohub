@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AuthorizationService, LocalResourceConstraintPolicy } from '@marimo-hub/core';
 import type { Authenticator } from '@marimo-hub/core';
 import { ACTOR } from '@marimo-hub/core/testing';
+import { groupsExceedingBytes, groupsExceedingCount } from '@marimo-hub/core/testing/auth-groups';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 
 function authorizationCase(overrides: Record<string, unknown> = {}) {
@@ -637,22 +638,20 @@ describe('policy analyzer membership groups', () => {
 			expect(JSON.stringify(events)).not.toContain('team-a');
 		},
 	);
-	it.each([
-		['a,b'],
-		['a\n'],
-		Array.from({ length: 33 }, (_, i) => `g${i}`),
-		Array.from({ length: 12 }, (_, i) => `${i}${'x'.repeat(120)}`),
-	])('rejects invalid explicit groups: %j', async (...groups) => {
-		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
-		const entry = authorizationCase();
-		await expectError(
-			await request('POST', '/admin/policy-analyzer/evaluate', {
-				schema_version: 1,
-				cases: [authorizationCase({ subject: { ...entry.authorization.subject, groups } })],
-			}),
-			422,
-		);
-	});
+	it.each([['a,b'], ['a\n'], groupsExceedingCount(), groupsExceedingBytes()])(
+		'rejects invalid explicit groups: %j',
+		async (...groups) => {
+			const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+			const entry = authorizationCase();
+			await expectError(
+				await request('POST', '/admin/policy-analyzer/evaluate', {
+					schema_version: 1,
+					cases: [authorizationCase({ subject: { ...entry.authorization.subject, groups } })],
+				}),
+				422,
+			);
+		},
+	);
 	it('normalizes duplicate-heavy explicit groups before enforcing count and byte limits', async () => {
 		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
 		const analyze = vi.spyOn(AuthorizationService.prototype, 'analyze');
@@ -680,34 +679,34 @@ describe('policy analyzer membership groups', () => {
 		);
 	});
 
-	it.each([
-		{ groups: Array.from({ length: 33 }, (_, i) => `g${i}`) },
-		{ groups: Array.from({ length: 12 }, (_, i) => `${i}${'x'.repeat(120)}`) },
-	])('explains normalized group bounds on both analyzer inputs: $groups', async ({ groups }) => {
-		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
-		const entry = authorizationCase();
-		for (const testCase of [
-			authorizationCase({ subject: { ...entry.authorization.subject, groups } }),
-			{
-				id: entry.id,
-				name: entry.name,
-				login: {
-					identity: { id: ACTOR, email: `${ACTOR}@example.com` },
-					id_token_claims: {},
-					expected: { outcome: 'allow', groups },
+	it.each([{ groups: groupsExceedingCount() }, { groups: groupsExceedingBytes() }])(
+		'explains normalized group bounds on both analyzer inputs: $groups',
+		async ({ groups }) => {
+			const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });
+			const entry = authorizationCase();
+			for (const testCase of [
+				authorizationCase({ subject: { ...entry.authorization.subject, groups } }),
+				{
+					id: entry.id,
+					name: entry.name,
+					login: {
+						identity: { id: ACTOR, email: `${ACTOR}@example.com` },
+						id_token_claims: {},
+						expected: { outcome: 'allow', groups },
+					},
 				},
-			},
-		]) {
-			const error = await expectError(
-				await request('POST', '/admin/policy-analyzer/evaluate', {
-					schema_version: 1,
-					cases: [testCase],
-				}),
-				422,
-			);
-			expect(error.message).toContain('at most 32 IDs and 1280 UTF-8 JSON bytes');
-		}
-	});
+			]) {
+				const error = await expectError(
+					await request('POST', '/admin/policy-analyzer/evaluate', {
+						schema_version: 1,
+						cases: [testCase],
+					}),
+					422,
+				);
+				expect(error.message).toContain('at most 32 IDs and 1280 UTF-8 JSON bytes');
+			}
+		},
+	);
 
 	it('reports the membership cap in metadata', async () => {
 		const { request } = createTestApi({ deps: { policy: { superAdmins: [ACTOR] } } });

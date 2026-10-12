@@ -95,8 +95,9 @@ describe('project alert destination routes', () => {
 			endpoint_host: 'hooks.slack.com',
 			webhook_url_set: true,
 		});
-		expect(destination.kinds).toHaveLength(13);
+		expect(destination.kinds).toHaveLength(14);
 		expect(destination.kinds).toContain('member.group_added');
+		expect(destination.kinds).toContain('project.default_access_changed');
 		expect(destination).not.toHaveProperty('webhook_url');
 		expect(
 			await expectOk<{ items: any[]; next_cursor: string | null }>(

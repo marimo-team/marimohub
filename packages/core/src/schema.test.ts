@@ -11,6 +11,7 @@ import {
 } from './ids';
 import { z } from 'zod';
 import {
+	assertAssignableRole,
 	CatalogSchema,
 	CURRENT_JOB_DEFINITION_VERSION,
 	CURRENT_JOB_RUN_VERSION,
@@ -41,7 +42,9 @@ import {
 	toPublicJobDefinition,
 	toPublicJobRun,
 	toPublicProjectEntry,
+	withMemberIdentityRules,
 } from './schema';
+import { ValidationError } from './errors';
 import {
 	makeCatalog,
 	makeNotebookMeta,
@@ -521,6 +524,44 @@ describe('ProjectMemberSchema', () => {
 		expect(ProjectMemberSchema.safeParse({ email: 'not-an-email', role: 'viewer' }).success).toBe(
 			false,
 		);
+	});
+});
+
+describe('withMemberIdentityRules', () => {
+	const Aliased = withMemberIdentityRules(
+		z.object({
+			who: z.string().nullable(),
+			team: z.string().nullable(),
+			level: z.string(),
+		}),
+		{
+			select: (value) => ({ user_id: value.who, group: value.team, role: value.level }),
+			identities: 'who or team',
+		},
+	);
+
+	it('treats null selected fields as absent', () => {
+		expect(Aliased.safeParse({ who: 'user_a', team: null, level: 'admin' }).success).toBe(true);
+		expect(Aliased.safeParse({ who: null, team: 'team', level: 'editor' }).success).toBe(true);
+	});
+
+	it('names the configured identities when the count is wrong', () => {
+		const parsed = Aliased.safeParse({ who: null, team: null, level: 'editor' });
+		expect(parsed.error?.issues.map((issue) => issue.message)).toContain(
+			'a member has exactly one of who or team',
+		);
+	});
+
+	it('rejects a group holding admin', () => {
+		expect(ProjectMemberSchema.safeParse({ group: 'team', role: 'admin' }).success).toBe(false);
+		expect(Aliased.safeParse({ who: null, team: 'team', level: 'admin' }).success).toBe(false);
+	});
+});
+
+describe('assertAssignableRole', () => {
+	it('accepts assignable roles and rejects admin', () => {
+		expect(() => assertAssignableRole('manager')).not.toThrow();
+		expect(() => assertAssignableRole('admin')).toThrow(ValidationError);
 	});
 });
 

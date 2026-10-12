@@ -99,7 +99,16 @@ export function createOidcAccessTokenAuthenticator(config: OidcAccessTokenConfig
 				policy,
 				Math.floor(Date.now() / 1000),
 			);
-			return 'error' in result ? reject(result.error) : result.principal;
+			if (!('error' in result)) return result.principal;
+			if (result.error === 'membership_groups_exceeded') {
+				logEvent({
+					level: 'error',
+					event: 'oidc_membership_groups_exceeded',
+					credential: 'external-access-token',
+					retained: result.retained,
+				});
+			}
+			return reject(result.error);
 		},
 	};
 }

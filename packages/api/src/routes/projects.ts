@@ -1,8 +1,10 @@
 import { retireNotebookPreviews } from '../previews';
+import { TagsBodySchema } from '../tagNamespace';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	ASSIGNABLE_ROLES,
 	MemberGroupSchema,
+	withMemberIdentityRules,
 	effectiveRole,
 	isMonotonicRestrictionIncrease,
 	notificationRouter,
@@ -15,9 +17,11 @@ import {
 	ValidationError,
 } from '@marimo-hub/core';
 import type {
+	AssignableRole,
 	AuthSubject,
 	Identity,
 	MemberSelector,
+	NewMember,
 	Project,
 	ProjectMember,
 	Role,
@@ -73,10 +77,7 @@ const FederationBody = z
 const CreateProjectBody = z.object({
 	name: z.string().min(1).openapi({ example: 'Data Science' }),
 	description: z.string().openapi({ example: 'Exploratory analysis notebooks' }),
-	tags: z
-		.array(z.string())
-		.optional()
-		.openapi({ example: ['analytics'] }),
+	tags: TagsBodySchema.optional().openapi({ example: ['analytics'] }),
 	federation: FederationBody.optional(),
 });
 
@@ -87,7 +88,7 @@ const UpdateProjectBody = z.object({
 	}),
 	name: z.string().min(1).optional().openapi({ example: 'ML Pipeline' }),
 	description: z.string().optional(),
-	tags: z.array(z.string()).optional(),
+	tags: TagsBodySchema.optional(),
 	// A union rather than `.nullable()`: the latter inlines the ProjectFederationInput ref.
 	federation: z.union([FederationBody, z.null()]).optional().openapi({
 		description: '`null` clears the project override so the deployment default applies.',
@@ -97,17 +98,20 @@ const UpdateProjectBody = z.object({
 const AssignableRoleSchema = z.enum(ASSIGNABLE_ROLES).openapi('AssignableRole');
 
 // Known emails resolve to user ids; unknown emails remain pending invites.
-// Group ids stay in their own namespace and never resolve through the directory.
-const AddMemberBody = z
-	.object({
+const AddMemberBody = withMemberIdentityRules(
+	z.object({
 		user_id: z.string().min(1).optional().openapi({ example: 'user_01HXY00000000000000000000' }),
 		email: z.email().optional().openapi({ example: 'teammate@example.com' }),
-		group: MemberGroupSchema.optional().openapi({ example: '/teams/data-science' }),
 		role: AssignableRoleSchema.openapi({ example: 'editor' }),
-	})
-	.refine((b) => [b.user_id, b.email, b.group].filter((v) => v !== undefined).length === 1, {
-		message: 'Provide exactly one of user_id, email, or group',
-	});
+	}),
+	{ identities: 'user_id or email' },
+);
+
+// Group ids stay in their own namespace and never resolve through the directory.
+const AddGroupMemberBody = z.object({
+	group: MemberGroupSchema.clone().openapi({ example: '/teams/data-science' }),
+	role: AssignableRoleSchema.openapi({ example: 'editor' }),
+});
 
 const UpdateMemberRoleBody = z.object({
 	role: AssignableRoleSchema.openapi({ example: 'manager' }),
@@ -165,6 +169,7 @@ function projectResponse(
 	const pub = toPublicProject(project);
 	return {
 		...pub,
+		default_role: pub.default_role ?? 'inherit',
 		members: visibleMembers(pub.members, role, subject),
 		your_role: role,
 		federation_effective: effectiveFederation(project, deps.wif),
@@ -334,7 +339,7 @@ const addMember = createRoute({
 	tags: ['Projects'],
 	summary: 'Add a project member',
 	description:
-		'Add a member by user id, email, or exact IdP group id. A known email resolves to its user id; an unknown ' +
+		'Add a member by user id or email. A known email resolves to its user id; an unknown ' +
 		'email becomes a pending invite that grants access when that person first signs in.',
 	request: { params: ProjectIdParam, body: jsonBody(AddMemberBody) },
 	responses: {
@@ -375,6 +380,26 @@ const removeMember = createRoute({
 		200: jsonContent(SuccessResponseSchema, 'Member removed'),
 		...commonErrors(),
 		...errorResponses(403, 404, 409, 429),
+	},
+});
+
+const addGroupMember = createRoute({
+	method: 'post',
+	path: '/projects/{pid}/group-members',
+	operationId: 'projects.members.groups.add',
+	tags: ['Projects'],
+	summary: 'Add a project group member',
+	description:
+		'Grant an exact IdP group id a project role. Groups cannot hold admin. Requires a deployment ' +
+		'whose sessions carry IdP groups (see `project_groups` in capabilities).',
+	request: { params: ProjectIdParam, body: jsonBody(AddGroupMemberBody) },
+	responses: {
+		201: jsonContent(
+			z.object({ success: z.literal(true), data: ProjectResponseSchema }),
+			'Group added',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 409, 422, 429),
 	},
 });
 
@@ -427,7 +452,7 @@ app.openapi(listProjects, async (c) => {
 		resourceSecurity: deps.resourceSecurity,
 		status: query.status,
 		tag: query.tag,
-		tagPrefix: query.tag_prefix,
+		tagNamespace: query.tag_namespace,
 		q: query.q,
 	});
 	const data = paginate(all, query, {
@@ -470,9 +495,34 @@ app.openapi(updateProject, async (c) => {
 	const { projects } = deps.services;
 	const user = c.get('user');
 	const { pid } = c.req.valid('param');
-	await assertProjectRole(projects, pid, user, 'project.update', deps);
+	const current = await assertProjectRole(projects, pid, user, 'project.update', deps);
 	const body = c.req.valid('json');
+	const oldDefaultRole = current.default_role ?? 'inherit';
+	const defaultAccessChanged =
+		body.default_role !== undefined && body.default_role !== oldDefaultRole;
+	if (defaultAccessChanged)
+		assertNotificationMutationAllowed(deps, user.id, { delivery: 'project-alert' });
 	const project = await projects.updateProject(pid, body, user.id, ifMatchToken(c));
+	const newDefaultRole = project.default_role ?? 'inherit';
+	if (defaultAccessChanged && newDefaultRole !== oldDefaultRole) {
+		scheduleProjectAlert(
+			deps,
+			pid,
+			'project.default_access_changed',
+			{ project_id: pid, user: user.id },
+			() =>
+				notificationRouter.render({
+					kind: 'project.default_access_changed',
+					project,
+					oldDefaultRole,
+					newDefaultRole,
+					actor: user,
+					// Each write advances updated_at, so it identifies this mutation.
+					mutationId: project.updated_at,
+					baseUrl: deps.sandbox.appBaseUrl,
+				}),
+		);
+	}
 	c.header('ETag', etagFor(project.updated_at));
 	return c.json({ success: true, data: projectResponse(project, user, deps) }, 200);
 });
@@ -558,6 +608,48 @@ app.openapi(listMembers, async (c) => {
 	return c.json({ success: true, data: visibleMembers(project.members, role, user) }, 200);
 });
 
+type MemberAddedAlert =
+	| { kind: 'member.added'; member: { user_id: UserId; role: AssignableRole } }
+	| { kind: 'member.invited'; member: { email: string; role: AssignableRole } }
+	| { kind: 'member.group_added'; member: { group: string; role: AssignableRole } };
+
+async function addProjectMember(
+	deps: ApiDeps,
+	user: AuthSubject,
+	pid: ProjectId,
+	member: NewMember,
+	role: AssignableRole,
+	memberIdentity: Identity | null,
+) {
+	const { project, mutationId } = await deps.services.projects.addMemberWithMutation(
+		pid,
+		member,
+		role,
+		user.id,
+	);
+	const notification: MemberAddedAlert =
+		'group' in member
+			? { kind: 'member.group_added', member: { group: member.group, role } }
+			: 'user_id' in member
+				? { kind: 'member.added', member: { user_id: member.user_id, role } }
+				: { kind: 'member.invited', member: { email: member.email, role } };
+	const render = () =>
+		notificationRouter.render({
+			...notification,
+			project,
+			recipient: resolveMemberRecipient(notification.member, memberIdentity),
+			actor: user,
+			mutationId,
+			baseUrl: deps.sandbox.appBaseUrl,
+		});
+	const fields = { project_id: pid, user: user.id };
+	scheduleNotification(deps, notification.kind, fields, () =>
+		render().filter((notification) => notification.audience === 'personal'),
+	);
+	scheduleProjectAlert(deps, pid, notification.kind, fields, render);
+	return projectResponse(project, user, deps);
+}
+
 app.openapi(addMember, async (c) => {
 	const deps = c.get('deps');
 	const { projects, identities } = deps.services;
@@ -565,29 +657,6 @@ app.openapi(addMember, async (c) => {
 	const { pid } = c.req.valid('param');
 	await assertProjectRole(projects, pid, user, 'project.members.manage', deps);
 	const body = c.req.valid('json');
-	if (body.group !== undefined) {
-		const group = body.group;
-		if (!deps.policy.groups_carried)
-			throw new ValidationError('IdP group membership is not enabled for this deployment');
-		assertNotificationMutationAllowed(deps, user.id, { delivery: 'project-alert' });
-		const { project, mutationId } = await projects.addMemberWithMutation(
-			pid,
-			{ group: body.group },
-			body.role,
-			user.id,
-		);
-		scheduleProjectAlert(deps, pid, 'member.group_added', { project_id: pid, user: user.id }, () =>
-			notificationRouter.render({
-				kind: 'member.group_added',
-				project,
-				member: { group, role: body.role },
-				actor: user,
-				mutationId,
-				baseUrl: deps.sandbox.appBaseUrl,
-			}),
-		);
-		return c.json({ success: true, data: projectResponse(project, user, deps) }, 201);
-	}
 	// Both identifiers are passed to the service whenever both are known, so the
 	// duplicate check spans a person's id row AND any pending invite row — one
 	// human must never hold two rows (revoking one would silently leave the other).
@@ -610,31 +679,21 @@ app.openapi(addMember, async (c) => {
 		recipient: memberIdentity?.email ?? ('user_id' in member ? member.user_id : member.email),
 		recipientScope: pid,
 	});
-	const { project, mutationId } = await projects.addMemberWithMutation(
-		pid,
-		member,
-		body.role,
-		user.id,
-	);
-	const notification =
-		'user_id' in member
-			? { kind: 'member.added' as const, member: { user_id: member.user_id, role: body.role } }
-			: { kind: 'member.invited' as const, member: { email: member.email, role: body.role } };
-	const render = () =>
-		notificationRouter.render({
-			...notification,
-			project,
-			recipient: resolveMemberRecipient(notification.member, memberIdentity),
-			actor: user,
-			mutationId,
-			baseUrl: deps.sandbox.appBaseUrl,
-		});
-	const fields = { project_id: pid, user: user.id };
-	scheduleNotification(deps, notification.kind, fields, () =>
-		render().filter((notification) => notification.audience === 'personal'),
-	);
-	scheduleProjectAlert(deps, pid, notification.kind, fields, render);
-	return c.json({ success: true, data: projectResponse(project, user, deps) }, 201);
+	const data = await addProjectMember(deps, user, pid, member, body.role, memberIdentity);
+	return c.json({ success: true, data }, 201);
+});
+
+app.openapi(addGroupMember, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid } = c.req.valid('param');
+	await assertProjectRole(deps.services.projects, pid, user, 'project.members.manage', deps);
+	if (!deps.policy.groupsCarried)
+		throw new ValidationError('IdP group membership is not enabled for this deployment');
+	const { group, role } = c.req.valid('json');
+	assertNotificationMutationAllowed(deps, user.id, { delivery: 'project-alert' });
+	const data = await addProjectMember(deps, user, pid, { group }, role, null);
+	return c.json({ success: true, data }, 201);
 });
 
 async function changeMemberRole(
@@ -642,7 +701,7 @@ async function changeMemberRole(
 	user: AuthSubject,
 	pid: ProjectId,
 	selector: MemberSelector,
-	role: (typeof ASSIGNABLE_ROLES)[number],
+	role: AssignableRole,
 ) {
 	const { projects } = deps.services;
 	await assertProjectRole(projects, pid, user, 'project.members.manage', deps);

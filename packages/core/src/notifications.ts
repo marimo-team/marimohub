@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ROLES } from './constants';
+import { ASSIGNABLE_ROLES, ROLES } from './constants';
 import type {
 	AlertDestinationId,
 	JobId,
@@ -16,14 +16,23 @@ import {
 	JobIdSchema,
 	MemberGroupSchema,
 	NotebookIdSchema,
+	ProjectDefaultRoleSchema,
 	ProjectIdSchema,
 	RUN_STATUSES,
 	RUN_TRIGGERS,
 	RunIdSchema,
 	SessionIdSchema,
 	UserIdSchema,
+	withMemberIdentityRules,
 } from './schema';
-import type { Identity, JobDefinition, JobRun, Project, ProjectMember } from './schema';
+import type {
+	Identity,
+	JobDefinition,
+	JobRun,
+	Project,
+	ProjectDefaultRole,
+	ProjectMember,
+} from './schema';
 import { joinUrlPath } from './url';
 
 export const NotificationRecipientSchema = z.object({
@@ -60,7 +69,7 @@ const MemberAddedDataSchema = ProjectAlertDataSchema.extend({
 });
 
 const MemberGroupAddedDataSchema = ProjectAlertDataSchema.extend({
-	role: z.enum(ROLES),
+	role: z.enum(ASSIGNABLE_ROLES),
 	member_group: MemberGroupSchema,
 	actor_user_id: UserIdSchema,
 });
@@ -76,20 +85,44 @@ const MemberAlertDataSchema = ProjectAlertDataSchema.extend({
 	member_email: EmailAddressSchema.nullable(),
 	member_group: MemberGroupSchema.nullable(),
 	actor_user_id: UserIdSchema,
-}).refine(
-	(data) =>
-		[data.member_user_id, data.member_email, data.member_group].filter((id) => id !== null)
-			.length === 1,
-	{ message: 'a member has exactly one of member_user_id, member_email, or member_group' },
-);
-
-const MemberRoleChangedDataSchema = MemberAlertDataSchema.safeExtend({
-	old_role: z.enum(ROLES),
-	new_role: z.enum(ROLES),
 });
 
-const MemberRemovedDataSchema = MemberAlertDataSchema.safeExtend({
-	role: z.enum(ROLES),
+function memberAlertIdentity(data: z.output<typeof MemberAlertDataSchema>, role: string) {
+	return {
+		user_id: data.member_user_id,
+		email: data.member_email,
+		group: data.member_group,
+		role,
+	};
+}
+
+const MEMBER_ALERT_IDENTITIES = 'member_user_id, member_email, or member_group';
+
+const MemberRoleChangedDataSchema = withMemberIdentityRules(
+	MemberAlertDataSchema.extend({
+		old_role: z.enum(ROLES),
+		new_role: z.enum(ROLES),
+	}),
+	{
+		select: (data) => memberAlertIdentity(data, data.new_role),
+		identities: MEMBER_ALERT_IDENTITIES,
+	},
+);
+
+const MemberRemovedDataSchema = withMemberIdentityRules(
+	MemberAlertDataSchema.extend({
+		role: z.enum(ROLES),
+	}),
+	{
+		select: (data) => memberAlertIdentity(data, data.role),
+		identities: MEMBER_ALERT_IDENTITIES,
+	},
+);
+
+const ProjectDefaultAccessChangedDataSchema = ProjectAlertDataSchema.extend({
+	old_default_role: ProjectDefaultRoleSchema,
+	new_default_role: ProjectDefaultRoleSchema,
+	actor_user_id: UserIdSchema,
 });
 
 const NotebookDeletedDataSchema = NotebookAlertDataSchema.extend({
@@ -159,6 +192,17 @@ export interface MemberAddedNotificationInput {
 export interface MemberGroupAddedNotificationInput {
 	project: Project;
 	member: ProjectMember & { group: string };
+	/** Ignored: groups have no personal recipient. Accepted so member adds share one render path. */
+	recipient?: NotificationRecipient | null;
+	actor: AuthUser;
+	mutationId: string;
+	baseUrl?: string;
+}
+
+export interface ProjectDefaultAccessChangedNotificationInput {
+	project: Project;
+	oldDefaultRole: ProjectDefaultRole;
+	newDefaultRole: ProjectDefaultRole;
 	actor: AuthUser;
 	mutationId: string;
 	baseUrl?: string;
@@ -602,6 +646,26 @@ export const NOTIFICATION_KIND_REGISTRY = {
 			}),
 		},
 	},
+	'project.default_access_changed': {
+		severity: 'warning',
+		dataSchema: ProjectDefaultAccessChangedDataSchema,
+		render: {
+			broadcast: (input: ProjectDefaultAccessChangedNotificationInput) => ({
+				title: `Default access changed in ${input.project.name}`,
+				body: `${actorLabel(input.actor)} changed default access to ${input.project.name} from ${input.oldDefaultRole} to ${input.newDefaultRole}.`,
+				...optionalLink(projectLink(input.project.id, input.baseUrl)),
+				recipients: [],
+				context: { pid: input.project.id },
+				data: {
+					...projectData(input.project),
+					old_default_role: input.oldDefaultRole,
+					new_default_role: input.newDefaultRole,
+					actor_user_id: input.actor.id,
+				},
+				dedupeKey: `project.default_access_changed:${input.mutationId}:broadcast`,
+			}),
+		},
+	},
 	'app.start_failed': {
 		severity: 'error',
 		dataSchema: AppFailureDataSchema,
@@ -710,6 +774,7 @@ export const PROJECT_ALERT_KINDS = Object.freeze([
 	'session.takeover',
 	'notebook.deleted',
 	'project.deleted',
+	'project.default_access_changed',
 	'app.start_failed',
 	'app.unavailable',
 	'sync.failed',

@@ -228,10 +228,32 @@ export interface paths {
 		put?: never;
 		/**
 		 * Add a project member
-		 * @description Add a member by user id, email, or exact IdP group id. A known email resolves to its user id; an unknown email becomes a pending invite that grants access when that person first signs in.
+		 * @description Add a member by user id or email. A known email resolves to its user id; an unknown email becomes a pending invite that grants access when that person first signs in.
 		 */
 		post: operations['projects.members.add'];
 		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/group-members': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		/** Change a group's project role */
+		put: operations['projects.members.groups.update'];
+		/**
+		 * Add a project group member
+		 * @description Grant an exact IdP group id a project role. Groups cannot hold admin. Requires a deployment whose sessions carry IdP groups (see `project_groups` in capabilities).
+		 */
+		post: operations['projects.members.groups.add'];
+		/** Remove a project group member */
+		delete: operations['projects.members.groups.remove'];
 		options?: never;
 		head?: never;
 		patch?: never;
@@ -255,24 +277,6 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/v1/projects/{pid}/group-members': {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		get?: never;
-		/** Change a group's project role */
-		put: operations['projects.members.groups.update'];
-		post?: never;
-		/** Remove a project group member */
-		delete: operations['projects.members.groups.remove'];
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
 	'/api/v1/projects/{pid}/alert-destinations': {
 		parameters: {
 			query?: never;
@@ -285,7 +289,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Create a project alert destination
-		 * @description New destinations subscribe to all 13 project alert kinds when kinds is omitted. They remain disabled until a successful test.
+		 * @description New destinations subscribe to all 14 project alert kinds when kinds is omitted. They remain disabled until a successful test.
 		 */
 		post: operations['alerts.destinations.create'];
 		delete?: never;
@@ -2301,8 +2305,9 @@ export interface components {
 			version: string;
 		};
 		Capabilities: {
-			/** @description Whether this deployment supports IdP groups as project members. */
-			groups_carried?: boolean;
+			project_groups: {
+				available: boolean;
+			};
 			federation: {
 				available: boolean;
 				default_enabled: boolean;
@@ -2352,6 +2357,7 @@ export interface components {
 					| 'session.takeover'
 					| 'notebook.deleted'
 					| 'project.deleted'
+					| 'project.default_access_changed'
 					| 'app.start_failed'
 					| 'app.unavailable'
 					| 'sync.failed'
@@ -2470,7 +2476,7 @@ export interface components {
 			owner: string;
 			members: components['schemas']['ProjectMember'][];
 			/** @enum {string} */
-			default_role?: 'inherit' | 'none' | 'manager' | 'editor' | 'viewer' | 'app-user';
+			default_role: 'inherit' | 'none' | 'manager' | 'editor' | 'viewer' | 'app-user';
 			/** @enum {string} */
 			status: 'active' | 'deleted';
 			/**
@@ -2570,6 +2576,7 @@ export interface components {
 						| 'session.takeover'
 						| 'notebook.deleted'
 						| 'project.deleted'
+						| 'project.default_access_changed'
 						| 'app.start_failed'
 						| 'app.unavailable'
 						| 'sync.failed'
@@ -2603,6 +2610,7 @@ export interface components {
 						| 'session.takeover'
 						| 'notebook.deleted'
 						| 'project.deleted'
+						| 'project.default_access_changed'
 						| 'app.start_failed'
 						| 'app.unavailable'
 						| 'sync.failed'
@@ -4943,8 +4951,8 @@ export interface operations {
 			query?: {
 				limit?: number;
 				cursor?: string;
-				/** @description Path-tag namespace. Matches projects with a tag equal to this value or nested under it (`a` matches `a` and `a/b`, not `ab`). Segments are separated by `/`. Each segment must start with a lowercase letter or digit, followed by lowercase letters, digits, `.`, `_`, or `-`. */
-				tag_prefix?: string;
+				/** @description Path-tag namespace. Matches whole path segments: `research` matches `research` and `research/vision`, but not `researchx`. Segments are separated by `/`. Each segment must start with a lowercase letter or digit, followed by lowercase letters, digits, `.`, `_`, or `-`. An empty value applies no filter. */
+				tag_namespace?: string;
 				/** @description Project status to match. Deleted projects are excluded when omitted. */
 				status?: 'active' | 'deleted';
 				/** @description Exact tag to match. */
@@ -5790,8 +5798,6 @@ export interface operations {
 					 * @example teammate@example.com
 					 */
 					email?: string;
-					/** @example /teams/data-science */
-					group?: string;
 					role: components['schemas']['AssignableRole'];
 				};
 			};
@@ -5808,6 +5814,353 @@ export interface operations {
 						success: true;
 						data: components['schemas']['Project'];
 					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.members.groups.update': {
+		parameters: {
+			query: {
+				group: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					role: components['schemas']['AssignableRole'] & unknown;
+				};
+			};
+		};
+		responses: {
+			/** @description Group role updated */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Project'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.members.groups.add': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @example /teams/data-science */
+					group: string;
+					role: components['schemas']['AssignableRole'];
+				};
+			};
+		};
+		responses: {
+			/** @description Group added */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['Project'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'projects.members.groups.remove': {
+		parameters: {
+			query: {
+				group: string;
+			};
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Group removed */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
 				};
 			};
 			/** @description Authentication required */
@@ -6125,234 +6478,6 @@ export interface operations {
 			};
 		};
 	};
-	'projects.members.groups.update': {
-		parameters: {
-			query: {
-				group: string;
-			};
-			header?: never;
-			path: {
-				pid: string;
-			};
-			cookie?: never;
-		};
-		requestBody: {
-			content: {
-				'application/json': {
-					role: components['schemas']['AssignableRole'] & unknown;
-				};
-			};
-		};
-		responses: {
-			/** @description Group role updated */
-			200: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': {
-						/** @enum {boolean} */
-						success: true;
-						data: components['schemas']['Project'];
-					};
-				};
-			};
-			/** @description Authentication required */
-			401: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Access forbidden */
-			403: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Not found */
-			404: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Conflict */
-			409: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Request body too large */
-			413: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Validation error */
-			422: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Resource limit reached */
-			429: {
-				headers: {
-					/** @description Seconds to wait before retrying. */
-					'Retry-After': string;
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Internal server error */
-			500: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Service unavailable */
-			503: {
-				headers: {
-					/** @description Seconds to wait before retrying. */
-					'Retry-After': string;
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-		};
-	};
-	'projects.members.groups.remove': {
-		parameters: {
-			query: {
-				group: string;
-			};
-			header?: never;
-			path: {
-				pid: string;
-			};
-			cookie?: never;
-		};
-		requestBody?: never;
-		responses: {
-			/** @description Group removed */
-			200: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['SuccessResponse'];
-				};
-			};
-			/** @description Authentication required */
-			401: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Access forbidden */
-			403: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Not found */
-			404: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Conflict */
-			409: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Request body too large */
-			413: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Validation error */
-			422: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Resource limit reached */
-			429: {
-				headers: {
-					/** @description Seconds to wait before retrying. */
-					'Retry-After': string;
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Internal server error */
-			500: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Service unavailable */
-			503: {
-				headers: {
-					/** @description Seconds to wait before retrying. */
-					'Retry-After': string;
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-		};
-	};
 	'alerts.destinations.list': {
 		parameters: {
 			query?: never;
@@ -6467,6 +6592,7 @@ export interface operations {
 								| 'session.takeover'
 								| 'notebook.deleted'
 								| 'project.deleted'
+								| 'project.default_access_changed'
 								| 'app.start_failed'
 								| 'app.unavailable'
 								| 'sync.failed'
@@ -6489,6 +6615,7 @@ export interface operations {
 								| 'session.takeover'
 								| 'notebook.deleted'
 								| 'project.deleted'
+								| 'project.default_access_changed'
 								| 'app.start_failed'
 								| 'app.unavailable'
 								| 'sync.failed'
@@ -6740,6 +6867,7 @@ export interface operations {
 								| 'session.takeover'
 								| 'notebook.deleted'
 								| 'project.deleted'
+								| 'project.default_access_changed'
 								| 'app.start_failed'
 								| 'app.unavailable'
 								| 'sync.failed'
@@ -6763,6 +6891,7 @@ export interface operations {
 								| 'session.takeover'
 								| 'notebook.deleted'
 								| 'project.deleted'
+								| 'project.default_access_changed'
 								| 'app.start_failed'
 								| 'app.unavailable'
 								| 'sync.failed'

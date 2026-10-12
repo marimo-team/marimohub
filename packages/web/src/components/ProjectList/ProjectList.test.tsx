@@ -1,18 +1,13 @@
-import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { tagsMatchPrefix } from '@marimo-hub/core/tag-paths';
-import { MemoryRouter, useLocation } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { ProjectSummary } from '@/types';
+import { tagsInNamespace } from '@marimo-hub/core/tag-paths';
+import { useLocation } from 'react-router-dom';
+import { AuthProvider } from '@/context/AuthContext';
+import { userKeys } from '@/api/queryKeys';
+import { createTestQueryClient, jsonOk, renderWithClient } from '@/test/render';
+import type { ProjectSummary, User } from '@/types';
 import { ProjectList } from './ProjectList';
-
-const authState = vi.hoisted(() => ({ canCreateProjects: true as boolean | undefined }));
-
-vi.mock('@/context/AuthContext', () => ({
-	useAuth: () => ({ user: { can_create_projects: authState.canCreateProjects } }),
-}));
 
 type TestProject = ProjectSummary;
 
@@ -44,41 +39,34 @@ function renderList(
 	canCreateProjects: boolean | undefined = true,
 	pageSize = 500,
 ) {
-	authState.canCreateProjects = canCreateProjects;
 	const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
 		const url = new URL(String(input), 'http://localhost');
 		const q = url.searchParams.get('q')?.toLocaleLowerCase();
 		const tag = url.searchParams.get('tag');
-		const prefix = url.searchParams.get('tag_prefix');
+		const namespace = url.searchParams.get('tag_namespace');
 		const status = url.searchParams.get('status');
 		const filtered = projects.filter(
 			(entry) =>
 				(status ? entry.status === status : entry.status !== 'deleted') &&
 				(!tag || entry.tags.includes(tag)) &&
-				(prefix === null || tagsMatchPrefix(entry.tags, prefix)) &&
+				(namespace === null || tagsInNamespace(entry.tags, namespace)) &&
 				(!q || `${entry.name} ${entry.description}`.toLocaleLowerCase().includes(q)),
 		);
 		const start = Number(url.searchParams.get('cursor') ?? 0);
 		const items = filtered.slice(start, start + pageSize);
 		const next_cursor = start + pageSize < filtered.length ? String(start + pageSize) : null;
-		return new Response(JSON.stringify({ success: true, data: { items, next_cursor } }), {
-			headers: { 'content-type': 'application/json' },
-		});
+		return jsonOk({ items, next_cursor });
 	});
 	vi.stubGlobal('fetch', fetchMock);
-	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	const wrapper = ({ children }: { children: ReactNode }) => (
-		<MemoryRouter initialEntries={[route]}>
-			<QueryClientProvider client={client}>{children}</QueryClientProvider>
-		</MemoryRouter>
-	);
+	const client = createTestQueryClient();
+	client.setQueryData(userKeys.me(), { id: 'me', can_create_projects: canCreateProjects } as User);
 	return {
-		...render(
-			<>
+		...renderWithClient(
+			<AuthProvider>
 				<ProjectList />
 				<Location />
-			</>,
-			{ wrapper },
+			</AuthProvider>,
+			{ client, route, toaster: false },
 		),
 		fetchMock,
 	};
@@ -104,7 +92,7 @@ describe('ProjectList', () => {
 		async (prefix) => {
 			const { fetchMock } = renderList(
 				[project('Available')],
-				`/?tag_prefix=${encodeURIComponent(prefix)}`,
+				`/?tag_namespace=${encodeURIComponent(prefix)}`,
 			);
 			await waitForLoaded();
 			expect(screen.getByText('Available')).toBeInTheDocument();
@@ -113,7 +101,7 @@ describe('ProjectList', () => {
 			).not.toBeInTheDocument();
 			expect(
 				new URL(String(fetchMock.mock.calls[0][0]), 'http://localhost').searchParams.has(
-					'tag_prefix',
+					'tag_namespace',
 				),
 			).toBe(false);
 		},
@@ -122,7 +110,7 @@ describe('ProjectList', () => {
 	it('normalizes a copied namespace URL for both requests and breadcrumbs', async () => {
 		const { fetchMock } = renderList(
 			[project('Vision', '', { tags: ['research/vision'] }), project('Unrelated')],
-			'/?tag_prefix=%20research%2Fvision%20',
+			'/?tag_namespace=%20research%2Fvision%20',
 		);
 		await waitForLoaded();
 		expect(screen.getByText('Vision')).toBeInTheDocument();
@@ -134,7 +122,7 @@ describe('ProjectList', () => {
 		);
 		expect(
 			new URL(String(fetchMock.mock.calls[0][0]), 'http://localhost').searchParams.get(
-				'tag_prefix',
+				'tag_namespace',
 			),
 		).toBe('research/vision');
 	});
@@ -144,7 +132,7 @@ describe('ProjectList', () => {
 		const projects = [project('Shared', '', { tags: ['ops', 'research'] })];
 		const { unmount } = renderList(projects);
 		await waitForLoaded();
-		const toggle = screen.getByRole('button', { name: 'Group by tags' });
+		const toggle = screen.getByRole('button', { name: 'Group by namespace' });
 		expect(toggle).toHaveAttribute('aria-pressed', 'true');
 		expect(screen.getAllByText('Shared')).toHaveLength(2);
 		await user.click(toggle);
@@ -153,12 +141,12 @@ describe('ProjectList', () => {
 		unmount();
 		renderList(projects);
 		await waitForLoaded();
-		expect(screen.getByRole('button', { name: 'Group by tags' })).toHaveAttribute(
+		expect(screen.getByRole('button', { name: 'Group by namespace' })).toHaveAttribute(
 			'aria-pressed',
 			'false',
 		);
 		expect(screen.queryByRole('region')).not.toBeInTheDocument();
-		await user.click(screen.getByRole('button', { name: 'Group by tags' }));
+		await user.click(screen.getByRole('button', { name: 'Group by namespace' }));
 		expect(screen.getAllByText('Shared')).toHaveLength(2);
 	});
 
@@ -173,7 +161,7 @@ describe('ProjectList', () => {
 		const user = userEvent.setup();
 		renderList(projects);
 		await waitForLoaded();
-		const toggle = screen.getByRole('button', { name: 'Group by tags' });
+		const toggle = screen.getByRole('button', { name: 'Group by namespace' });
 		for (let i = 0; i < 2; i++) {
 			expect(screen.queryByRole('region')).not.toBeInTheDocument();
 			expect(screen.queryAllByTestId('project-row')).toHaveLength(projects.length);
@@ -192,7 +180,7 @@ describe('ProjectList', () => {
 		const user = userEvent.setup();
 		renderList([project('Shared', '', { tags: ['ops', 'research'] })]);
 		await waitForLoaded();
-		const toggle = screen.getByRole('button', { name: 'Group by tags' });
+		const toggle = screen.getByRole('button', { name: 'Group by namespace' });
 		expect(toggle).toHaveAttribute('aria-pressed', 'true');
 		expect(screen.getAllByText('Shared')).toHaveLength(2);
 		await user.click(toggle);
@@ -207,7 +195,7 @@ describe('ProjectList', () => {
 				project('Sales', 'annual report', { tags: ['finance', 'shared'] }),
 				project('Hidden', 'annual report', { tags: ['finance'] }),
 			],
-			'/?tag_prefix=missing&tag=shared&q=annual&status=active',
+			'/?tag_namespace=missing&tag=shared&q=annual&status=active',
 		);
 		await waitForLoaded();
 		expect(screen.getByText('No projects match these filters')).toBeInTheDocument();
@@ -233,7 +221,7 @@ describe('ProjectList', () => {
 		},
 	);
 
-	it.each(['/', '/?tag_prefix=scale'])(
+	it.each(['/', '/?tag_namespace=scale'])(
 		'drills down from a five-row preview at %s and shows all direct matches',
 		async (route) => {
 			const user = userEvent.setup();
@@ -245,34 +233,10 @@ describe('ProjectList', () => {
 			await user.click(screen.getByRole('button', { name: 'Show all 7' }));
 			await waitFor(() => expect(screen.getAllByTestId('project-row')).toHaveLength(7));
 			expect(screen.getByTestId('location')).toHaveTextContent(
-				`tag_prefix=${encodeURIComponent(tag)}`,
+				`tag_namespace=${encodeURIComponent(tag)}`,
 			);
 			expect(screen.getByRole('navigation', { name: 'Project namespace' })).toBeInTheDocument();
 			expect(screen.queryByRole('button', { name: 'Show all 7' })).not.toBeInTheDocument();
-		},
-	);
-
-	it.each(['', 'ops/'])(
-		'keeps oversized groups accessible without invalid links under %j',
-		async (parent) => {
-			const user = userEvent.setup();
-			const label = 'a'.repeat(257 - parent.length);
-			const route = parent ? '/?tag_prefix=ops' : '/';
-			const { fetchMock } = renderList(scaleProjects(6, `${parent}${label}`), route);
-			await waitForLoaded();
-			const group = screen.getByRole('region', { name: `${label} · 6` });
-			expect(within(group).queryByRole('button', { name: `${label} · 6` })).not.toBeInTheDocument();
-			expect(within(group).queryByRole('button', { name: 'Show all 6' })).not.toBeInTheDocument();
-			expect(within(group).getAllByTestId('project-row')).toHaveLength(6);
-			expect(within(group).getByRole('link', { name: /Scale 5/ })).toHaveAttribute(
-				'href',
-				'/projects/proj-scale 5',
-			);
-			await user.click(within(group).getByRole('button', { name: `Collapse ${label}` }));
-			expect(within(group).queryAllByTestId('project-row')).toHaveLength(0);
-			await user.click(within(group).getByRole('button', { name: `Expand ${label}` }));
-			expect(within(group).getAllByTestId('project-row')).toHaveLength(6);
-			expect(fetchMock).toHaveBeenCalledTimes(1);
 		},
 	);
 
@@ -281,13 +245,13 @@ describe('ProjectList', () => {
 		async (parent) => {
 			const user = userEvent.setup();
 			const tag = parent + 'a'.repeat(256 - parent.length);
-			renderList(scaleProjects(6, tag), parent ? '/?tag_prefix=ops' : '/');
+			renderList(scaleProjects(6, tag), parent ? '/?tag_namespace=ops' : '/');
 			await waitForLoaded();
 			expect(screen.getAllByTestId('project-row')).toHaveLength(5);
 			await user.click(screen.getByRole('button', { name: 'Show all 6' }));
 			await waitFor(() => expect(screen.getAllByTestId('project-row')).toHaveLength(6));
 			expect(
-				new URLSearchParams(screen.getByTestId('location').textContent ?? '').get('tag_prefix'),
+				new URLSearchParams(screen.getByTestId('location').textContent ?? '').get('tag_namespace'),
 			).toBe(tag);
 		},
 	);
@@ -296,13 +260,13 @@ describe('ProjectList', () => {
 		const user = userEvent.setup();
 		renderList(scaleProjects(7));
 		await waitForLoaded();
-		await user.click(screen.getByRole('button', { name: 'Collapse scale' }));
+		await user.click(screen.getByRole('button', { name: 'Toggle scale' }));
 		expect(screen.queryAllByTestId('project-row')).toHaveLength(0);
 		expect(screen.queryByRole('button', { name: 'Show all 7' })).not.toBeInTheDocument();
-		await user.click(screen.getByRole('button', { name: 'Expand scale' }));
+		await user.click(screen.getByRole('button', { name: 'Toggle scale' }));
 		expect(screen.getAllByTestId('project-row')).toHaveLength(5);
 		expect(screen.getByRole('button', { name: 'Show all 7' })).toBeInTheDocument();
-		await user.click(screen.getByRole('button', { name: 'Group by tags' }));
+		await user.click(screen.getByRole('button', { name: 'Group by namespace' }));
 		expect(screen.getAllByTestId('project-row')).toHaveLength(7);
 		expect(screen.queryByRole('button', { name: 'Show all 7' })).not.toBeInTheDocument();
 	});
@@ -315,24 +279,27 @@ describe('ProjectList', () => {
 		]);
 		await waitForLoaded();
 		const ungrouped = screen.getByRole('region', { name: 'Ungrouped · 7' });
-		expect(within(ungrouped).getAllByTestId('project-row')).toHaveLength(7);
+		const toggle = within(ungrouped).getByRole('button', { name: 'Toggle Ungrouped' });
+		expect(toggle).toHaveAttribute('aria-expanded', 'true');
+		const controlled = document.getElementById(toggle.getAttribute('aria-controls') ?? '');
+		expect(within(controlled!).getAllByTestId('project-row')).toHaveLength(7);
 
-		await user.click(within(ungrouped).getByRole('button', { name: 'Collapse Ungrouped' }));
+		await user.click(within(ungrouped).getByRole('button', { name: 'Toggle Ungrouped' }));
 		expect(within(ungrouped).queryAllByTestId('project-row')).toHaveLength(0);
-		expect(within(ungrouped).getByRole('button', { name: 'Expand Ungrouped' })).toHaveAttribute(
+		expect(within(ungrouped).getByRole('button', { name: 'Toggle Ungrouped' })).toHaveAttribute(
 			'aria-expanded',
 			'false',
 		);
 		expect(screen.getByText('Tagged')).toBeInTheDocument();
 
-		await user.click(screen.getByRole('button', { name: 'Collapse ungrouped' }));
-		await user.click(within(ungrouped).getByRole('button', { name: 'Expand Ungrouped' }));
+		await user.click(screen.getByRole('button', { name: 'Toggle ungrouped' }));
+		await user.click(within(ungrouped).getByRole('button', { name: 'Toggle Ungrouped' }));
 		expect(within(ungrouped).getAllByTestId('project-row')).toHaveLength(7);
 		expect(screen.queryByText('Tagged')).not.toBeInTheDocument();
 	});
 
 	it('shows direct matches under the breadcrumb without a redundant heading', async () => {
-		renderList([project('Operations', '', { tags: ['ops'] })], '/?tag_prefix=ops');
+		renderList([project('Operations', '', { tags: ['ops'] })], '/?tag_namespace=ops');
 		await waitForLoaded();
 		expect(screen.getByRole('navigation', { name: 'Project namespace' })).toBeInTheDocument();
 		expect(screen.getByText('Operations')).toBeInTheDocument();
@@ -355,19 +322,19 @@ describe('ProjectList', () => {
 		expect(screen.getByText('research/vision/seg')).toBeInTheDocument();
 		expect(screen.getByRole('region', { name: 'Ungrouped · 1' })).toBeInTheDocument();
 		expect(screen.getByRole('status')).toHaveTextContent('4 projects');
-		await user.click(screen.getByRole('button', { name: 'Collapse research' }));
+		await user.click(screen.getByRole('button', { name: 'Toggle research' }));
 		expect(screen.queryByText('Vision')).not.toBeInTheDocument();
-		expect(screen.getByRole('button', { name: 'Expand research' })).toHaveAttribute(
+		expect(screen.getByRole('button', { name: 'Toggle research' })).toHaveAttribute(
 			'aria-expanded',
 			'false',
 		);
 		await user.click(screen.getByRole('button', { name: 'research · 2' }));
 		await waitFor(() => expect(screen.queryByText('Neighbor')).not.toBeInTheDocument());
-		expect(screen.getByTestId('location')).toHaveTextContent('tag_prefix=research');
-		expect(String(fetchMock.mock.lastCall?.[0])).toContain('tag_prefix=research');
+		expect(screen.getByTestId('location')).toHaveTextContent('tag_namespace=research');
+		expect(String(fetchMock.mock.lastCall?.[0])).toContain('tag_namespace=research');
 		await user.click(screen.getByRole('button', { name: 'vision · 1' }));
 		await waitFor(() => expect(screen.queryByText('Language')).not.toBeInTheDocument());
-		expect(screen.getByTestId('location')).toHaveTextContent('tag_prefix=research%2Fvision');
+		expect(screen.getByTestId('location')).toHaveTextContent('tag_namespace=research%2Fvision');
 		await user.click(screen.getByRole('button', { name: 'research' }));
 		expect(await screen.findByText('Language')).toBeInTheDocument();
 		await user.click(screen.getByRole('button', { name: 'All projects' }));
@@ -381,7 +348,7 @@ describe('ProjectList', () => {
 				project('First', 'match', { tags: ['research/vision', 'research/nlp', 'shared'] }),
 				project('Second', 'match', { tags: ['research/vision', 'shared'] }),
 			],
-			'/?tag_prefix=research&tag=shared&q=match&status=active',
+			'/?tag_namespace=research&tag=shared&q=match&status=active',
 			true,
 			1,
 		);
@@ -393,7 +360,7 @@ describe('ProjectList', () => {
 		for (const [input] of fetchMock.mock.calls) {
 			const params = new URL(String(input), 'http://localhost').searchParams;
 			expect(Object.fromEntries(params)).toMatchObject({
-				tag_prefix: 'research',
+				tag_namespace: 'research',
 				tag: 'shared',
 				q: 'match',
 				status: 'active',

@@ -1,12 +1,12 @@
 import { useId, useState } from 'react';
-import { MAX_TAG_PREFIX_LENGTH } from '@marimo-hub/core/tag-paths';
 import { ChevronRight, Folder } from 'lucide-react';
 import { Button, Chip, RowLink } from '@/components/ui';
 import { NotebookTags } from '@/components/Project/NotebookTags';
-import { groupProjectsByTagPath } from '@/lib/projectGroups';
+import { groupProjectsByNamespace } from '@/lib/projectNamespaces';
+import { cn } from '@/lib/utils';
 import type { ProjectSummary } from '@/types';
 
-const GROUP_PREVIEW_LIMIT = 5;
+const NAMESPACE_PREVIEW_LIMIT = 5;
 const UNGROUPED_SECTION = Symbol('ungrouped');
 
 function ProjectRow({ project }: { project: ProjectSummary }) {
@@ -68,18 +68,18 @@ function ProjectRows({ projects }: { projects: ProjectSummary[] }) {
 	return projects.map((project) => <ProjectRow key={project.id} project={project} />);
 }
 
-export function ProjectGroups({
+export function ProjectNamespaces({
 	projects,
-	groupByTags,
-	prefix,
+	groupByNamespace,
+	namespace,
 	onSelect,
 }: {
 	projects: ProjectSummary[];
-	groupByTags: boolean;
-	prefix?: string;
-	onSelect: (prefix: string) => void;
+	groupByNamespace: boolean;
+	namespace?: string;
+	onSelect: (namespace: string) => void;
 }) {
-	const { groups, direct, ungrouped } = groupProjectsByTagPath(projects, prefix);
+	const { namespaces, direct, ungrouped } = groupProjectsByNamespace(projects, namespace);
 	const [collapsed, setCollapsed] = useState<Set<string | symbol>>(() => new Set());
 	const toggle = (key: string | symbol) =>
 		setCollapsed((previous) => {
@@ -88,26 +88,29 @@ export function ProjectGroups({
 			else next.add(key);
 			return next;
 		});
-	if (!groupByTags || groups.length === 0) {
+	if (!groupByNamespace || namespaces.length === 0) {
 		return <ProjectRows projects={projects} />;
 	}
 	return (
 		<div className="flex flex-col divide-y">
-			<ProjectRows projects={direct} />
-			{groups.map((group) => (
-				<ProjectSection
-					key={group.prefix}
-					label={group.label}
-					projects={group.projects}
-					collapsed={collapsed.has(group.prefix)}
-					onToggle={() => toggle(group.prefix)}
-					onSelect={
-						group.prefix.length <= MAX_TAG_PREFIX_LENGTH ? () => onSelect(group.prefix) : undefined
-					}
+			{/* Rows drop their own border-b when last, so divide-y adds the only separator. */}
+			{direct.length > 0 && (
+				<div>
+					<ProjectRows projects={direct} />
+				</div>
+			)}
+			{namespaces.map((entry) => (
+				<NamespaceSection
+					key={entry.namespace}
+					label={entry.label}
+					projects={entry.projects}
+					collapsed={collapsed.has(entry.namespace)}
+					onToggle={() => toggle(entry.namespace)}
+					onSelect={() => onSelect(entry.namespace)}
 				/>
 			))}
 			{ungrouped.length > 0 && (
-				<ProjectSection
+				<NamespaceSection
 					label="Ungrouped"
 					projects={ungrouped}
 					collapsed={collapsed.has(UNGROUPED_SECTION)}
@@ -118,37 +121,43 @@ export function ProjectGroups({
 	);
 }
 
-function ProjectSection({
+function NamespaceSection({
 	label,
 	projects,
-	collapsed = false,
+	collapsed,
 	onToggle,
 	onSelect,
 }: {
 	label: string;
 	projects: ProjectSummary[];
-	collapsed?: boolean;
-	onToggle?: () => void;
+	collapsed: boolean;
+	onToggle: () => void;
 	onSelect?: () => void;
 }) {
-	const id = useId();
-	const visibleProjects = onSelect ? projects.slice(0, GROUP_PREVIEW_LIMIT) : projects;
+	const headingId = useId();
+	const contentId = useId();
+	const visibleProjects = onSelect ? projects.slice(0, NAMESPACE_PREVIEW_LIMIT) : projects;
 	return (
-		<section aria-labelledby={id}>
+		<section aria-labelledby={headingId}>
 			<div className="flex items-center gap-1 px-3 py-1">
-				{onToggle && (
-					<Button
-						variant="ghost"
-						size="sm"
-						className="size-7 p-0"
-						aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${label}`}
-						aria-expanded={!collapsed}
-						onPress={onToggle}
-					>
-						<ChevronRight aria-hidden="true" className={`size-4 ${collapsed ? '' : 'rotate-90'}`} />
-					</Button>
-				)}
-				<h2 id={id} className="min-w-0 text-xs font-medium text-muted-foreground wrap-anywhere">
+				<Button
+					variant="ghost"
+					size="sm"
+					className="size-7 p-0"
+					aria-label={`Toggle ${label}`}
+					aria-expanded={!collapsed}
+					aria-controls={contentId}
+					onPress={onToggle}
+				>
+					<ChevronRight
+						aria-hidden="true"
+						className={cn('size-4 transition-transform', !collapsed && 'rotate-90')}
+					/>
+				</Button>
+				<h2
+					id={headingId}
+					className="min-w-0 text-xs font-medium text-muted-foreground wrap-anywhere"
+				>
 					{onSelect ? (
 						<Button variant="ghost" size="sm" onPress={onSelect}>
 							{label} · {projects.length}
@@ -158,19 +167,21 @@ function ProjectSection({
 					)}
 				</h2>
 			</div>
-			{!collapsed && (
-				<>
-					<ProjectRows projects={visibleProjects} />
-					{onSelect && projects.length > GROUP_PREVIEW_LIMIT && (
-						<div className="px-4 py-2">
-							<Button variant="ghost" size="sm" onPress={onSelect}>
-								Show all {projects.length}
-								<ChevronRight className="size-4" aria-hidden="true" />
-							</Button>
-						</div>
-					)}
-				</>
-			)}
+			<div id={contentId}>
+				{!collapsed && (
+					<>
+						<ProjectRows projects={visibleProjects} />
+						{onSelect && projects.length > NAMESPACE_PREVIEW_LIMIT && (
+							<div className="px-4 py-2">
+								<Button variant="ghost" size="sm" onPress={onSelect}>
+									Show all {projects.length}
+									<ChevronRight className="size-4" aria-hidden="true" />
+								</Button>
+							</div>
+						)}
+					</>
+				)}
+			</div>
 		</section>
 	);
 }

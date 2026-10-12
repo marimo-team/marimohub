@@ -61,6 +61,10 @@ After deployment:
 - In proxy-header mode, block proxy bypasses and remove client-supplied identity headers.
 - Review `MARIMOHUB_DEFAULT_ROLE` before launch. The default is permissive for a
   trusted single-tenant deployment.
+- A [project default](#default-access-for-non-members) overrides the deployment default in both directions.
+  A project manager can open a project to every signed-in user, even when `MARIMOHUB_DEFAULT_ROLE=none`.
+  The [`project.default_access_changed` alert](./project-alerts.md#alert-catalog) reports each change.
+  Super admins can reset the project to `inherit`.
 - Treat auth errors as fail-closed until configuration proves otherwise.
 
 ## Authorization roles
@@ -124,7 +128,11 @@ A group named like a user id or email remains a separate member.
 Group ids are case-sensitive. The server does not trim whitespace or normalize Unicode.
 See [group selection and ID limits](#group-membership) for valid IDs and OIDC configuration.
 Group creation requires OIDC membership selection or a [login-policy module](#login-policy-module) that can carry groups.
-The API reports this capability as `groups_carried` in `/api/v1/capabilities`.
+The API reports this capability as `project_groups.available` in `/api/v1/capabilities`.
+
+IdP group members differ from the deployment-wide [OIDC group mappings](#groups-and-roles).
+A mapping such as `MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS` grants a default role on every project.
+An IdP group member grants its role on one project only.
 
 To add a group in **Project Access**:
 
@@ -138,19 +146,22 @@ You can add a group you do not belong to.
 Group ids are visible to project readers and subscribed alert destinations. Do not use secrets as group ids.
 
 Group grants require browser SSO sessions or enabled external OIDC access tokens.
-PATs do not inherit SSO groups and need another applicable project grant within their credential scope.
+PATs do not inherit IdP groups and need another applicable project grant within their credential scope.
 IdP changes take effect when the credential's groups refresh. See [session freshness](#group-membership).
 
 The API uses these routes:
 
-| Action      | Request                                                                                      |
-| ----------- | -------------------------------------------------------------------------------------------- |
-| Add         | `POST /api/v1/projects/{pid}/members` with `{ "group": "/teams/data", "role": "editor" }`    |
-| Change role | `PUT /api/v1/projects/{pid}/group-members?group=%2Fteams%2Fdata` with `{ "role": "viewer" }` |
-| Remove      | `DELETE /api/v1/projects/{pid}/group-members?group=%2Fteams%2Fdata`                          |
+| Action      | Request                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------- |
+| Add         | `POST /api/v1/projects/{pid}/group-members` with `{ "group": "/teams/data", "role": "editor" }` |
+| Change role | `PUT /api/v1/projects/{pid}/group-members?group=%2Fteams%2Fdata` with `{ "role": "viewer" }`    |
+| Remove      | `DELETE /api/v1/projects/{pid}/group-members?group=%2Fteams%2Fdata`                             |
 
+A successful add returns `201`.
 Encode the group as a query parameter, including literal `+`, `/`, and `&` characters.
+`POST /api/v1/projects/{pid}/members` accepts only `user_id` or `email`.
 The `/members/{uid}` route addresses users and email invites only.
+`GET /api/v1/projects/{pid}/members` returns one list with user rows, pending email rows, and group rows.
 Existing group rows remain editable and removable if group creation is disabled.
 
 ### Rolling out group membership
@@ -207,7 +218,20 @@ admins retain admin access. These rules apply to project listings, direct reques
 and apps. They never grant anonymous access.
 
 `PATCH /api/v1/projects/{pid}` accepts `default_role` with the values above.
-Omitting the field preserves its current value. Project details include the override when present.
+Omitting the field preserves its current value. Project responses always include `default_role`.
+The value is `inherit` when the project stores no override.
+A change sends the [`project.default_access_changed` alert](./project-alerts.md#alert-catalog).
+
+#### Rolling out default access
+
+1. Upgrade all replicas and stop all old replicas before setting any value other than `inherit`.
+2. Before rollback, reset every override to `inherit`. Replace `none` with explicit memberships
+   or a deployment default of `none`.
+
+Older versions parse `project.json` with a schema that strips unknown fields.
+During a mixed-version rollout, an old replica that handles a member change or rename drops `default_role`.
+After a rollback, old versions ignore the field.
+In both cases the project falls back to the deployment default, which is `editor` out of the box.
 
 ### Super admins: `MARIMOHUB_SUPER_ADMINS`
 

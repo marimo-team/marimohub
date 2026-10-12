@@ -95,6 +95,10 @@ requests a full grant, but you can narrow it on the approval page. Then select
 The CLI exchanges the one-time approval code and stores the token in the
 operating system credential store.
 
+The CLI token does not carry your IdP groups, so
+[IdP group](./auth.md#idp-groups) project access does not apply to it. External
+OIDC access tokens carry groups.
+
 If the browser does not open automatically, the CLI prints the loopback approval
 URL. Open this URL on the same machine as the CLI.
 
@@ -146,7 +150,7 @@ it uses a user-only credentials file instead.
 
 ```bash
 mohub projects list --all
-mohub projects list --all --tag-prefix research/vision
+mohub projects list --all --tag-namespace research/vision
 mohub notebooks list --pid <PROJECT_ID> --all
 mohub notebooks create --pid <PROJECT_ID> --title analysis \
 	--code 'import marimo as mo' --description 'Analysis notebook'
