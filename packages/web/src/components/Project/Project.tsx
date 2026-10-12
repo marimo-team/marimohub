@@ -720,30 +720,34 @@ function useProjectContent() {
 							</LinkButton>
 						)}
 						{canEditProject(project.your_role) && (
-							<>
-								<Button aria-label="Import notebooks" onPress={importModal.open}>
-									<Upload className="size-4" />
-									<span className="max-sm:hidden">Import notebooks</span>
-								</Button>
-								<Button variant="primary" onPress={uploadModal.open}>
-									<Plus className="size-4" />
-									New Notebook
-								</Button>
-							</>
+							<Button variant="primary" onPress={uploadModal.open}>
+								<Plus className="size-4" />
+								New Notebook
+							</Button>
 						)}
-						{canManage ? (
+						{canEditProject(project.your_role) ? (
 							<DropdownMenu
 								label="More create options"
 								icon={<ChevronDown className="size-4" />}
 								triggerClassName="size-9 rounded-md border border-input bg-background hover:border-primary hover:text-primary"
 								options={[
 									{
-										id: 'synced',
-										label: 'Sync from git repo',
-										icon: <GitBranch className="size-4" />,
+										id: 'import',
+										label: 'Import notebooks',
+										icon: <Upload className="size-4" />,
 									},
+									...(canManage
+										? [
+												{
+													id: 'synced',
+													label: 'Sync from git repo',
+													icon: <GitBranch className="size-4" />,
+												},
+											]
+										: []),
 								]}
 								onAction={(key) => {
+									if (key === 'import') importModal.open();
 									if (key === 'synced') syncedCreateModal.open();
 								}}
 							/>

@@ -109,11 +109,14 @@ describe('Project — Notebook Actions: files and sessions', () => {
 	});
 
 	it('does not offer git notebook creation to editors', async () => {
+		const user = userEvent.setup();
 		makeFetch({ role: 'editor' });
 		await renderProject();
 
-		expect(screen.queryByRole('button', { name: 'More create options' })).not.toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'More create options' }));
 		expect(screen.queryByText('Sync from git repo')).not.toBeInTheDocument();
+		await user.click(screen.getByRole('menuitem', { name: 'Import notebooks' }));
+		expect(await screen.findByRole('heading', { name: 'Import notebooks' })).toBeInTheDocument();
 	});
 
 	it("a git row's source tile opens a popover with GitHub links", async () => {
