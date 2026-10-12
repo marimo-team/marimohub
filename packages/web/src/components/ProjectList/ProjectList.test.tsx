@@ -157,16 +157,12 @@ describe('ProjectList', () => {
 			label: 'only free-form tags',
 			projects: [project('Loose', '', { tags: ['Team A', 'Research/X', 'ops/'] })],
 		},
-	])('keeps a flat list with $label when grouping is toggled', async ({ projects }) => {
-		const user = userEvent.setup();
+	])('hides namespace grouping with $label', async ({ projects }) => {
 		renderList(projects);
 		await waitForLoaded();
-		const toggle = screen.getByRole('button', { name: 'Group by namespace' });
-		for (let i = 0; i < 2; i++) {
-			expect(screen.queryByRole('region')).not.toBeInTheDocument();
-			expect(screen.queryAllByTestId('project-row')).toHaveLength(projects.length);
-			await user.click(toggle);
-		}
+		expect(screen.queryByRole('button', { name: 'Group by namespace' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('region')).not.toBeInTheDocument();
+		expect(screen.queryAllByTestId('project-row')).toHaveLength(projects.length);
 		expect(screen.getByRole('status')).toHaveTextContent(`${projects.length} project`);
 	});
 

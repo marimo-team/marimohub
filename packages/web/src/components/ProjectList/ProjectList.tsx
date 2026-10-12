@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { isPathTag } from '@marimo-hub/core/tag-paths';
 import { ProjectNamespaces } from './ProjectNamespaces';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { toast } from 'sonner';
@@ -57,6 +58,7 @@ export function ProjectList() {
 	});
 
 	const { data: projects = [], isPending, isFetching } = useProjectsQuery(filters);
+	const hasNamespaces = projects.some((project) => project.tags.some(isPathTag));
 	const createProject = useCreateProject();
 
 	const createForm = useAppForm({
@@ -106,19 +108,21 @@ export function ProjectList() {
 				isFetching={isFetching}
 				onChange={setFilters}
 				actions={
-					<Button
-						size="sm"
-						variant={groupByNamespace ? 'default' : 'ghost'}
-						aria-pressed={groupByNamespace}
-						onPress={() => {
-							setGroupByNamespace(!groupByNamespace);
-							try {
-								localStorage.setItem(GROUP_BY_NAMESPACE_KEY, String(!groupByNamespace));
-							} catch {}
-						}}
-					>
-						Group by namespace
-					</Button>
+					hasNamespaces ? (
+						<Button
+							size="sm"
+							variant={groupByNamespace ? 'default' : 'ghost'}
+							aria-pressed={groupByNamespace}
+							onPress={() => {
+								setGroupByNamespace(!groupByNamespace);
+								try {
+									localStorage.setItem(GROUP_BY_NAMESPACE_KEY, String(!groupByNamespace));
+								} catch {}
+							}}
+						>
+							Group by namespace
+						</Button>
+					) : null
 				}
 			/>
 
