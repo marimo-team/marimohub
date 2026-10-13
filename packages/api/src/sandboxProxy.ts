@@ -1,11 +1,10 @@
 /**
  * Request-time forwarding for `proxy` sandbox-exposure mode.
  *
- * The browser reaches a kernel via `…/proxy/<token>/…` on the app's origin. Each
+ * Token routes preserve `/proxy/<token>`; app routes map to that kernel base. Each
  * HTTP request is authenticated and authorized per-session (the caller must hold
  * the project role that starting a session requires), then streamed to the
- * kernel's origin. The kernel runs under `--base-url=/proxy/<token>`, so the full
- * path is forwarded unchanged. `authorizeProxyRequest` is shared with the
+ * kernel's origin. `authorizeProxyRequest` is shared with the
  * WebSocket path (the Node entrypoint) so the two transports authorize
  * identically. Entitlement-backed sessions also return a fixed deadline that
  * the Node relay uses to close an established socket.
@@ -13,20 +12,27 @@
 import type { MiddlewareHandler } from 'hono';
 import {
 	AppPoolService,
+	AppVisitSchema,
+	NotebookId,
+	ProjectId,
+	SessionId,
+	isPastAuthorizationDeadline,
 	sessionMode,
 	sessionResourceNotebookId,
 	NotFoundError,
 	ProxyExposure,
 	UnavailableError,
 	verifyProxyToken,
+	signProxyToken,
 } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
 import { assertSessionPreviewActive, authorizationService, fail } from './shared';
 
-/** Outcome of routing a `/proxy/<token>/…` request. */
+/** Outcome of routing a sandbox proxy request. */
 export type ProxyDecision =
 	| { kind: 'pass' } // Not a proxy path — let the normal app handle it.
+	| { kind: 'starting' }
 	| {
 			kind: 'reject';
 			status: 401 | 403 | 404 | 410 | 503;
@@ -45,23 +51,41 @@ export type ProxyDecision =
 			sessionId: string;
 			kernelAuthToken?: string;
 			authorizationDeadline?: number;
+			appProxyBaseUrl?: string;
 	  };
 
 const PROXY_PREFIX = /^\/proxy\/([^/]+)/;
 const SURFACE_PROXY_PREFIX = /^\/surface-proxy\/([^/]+)\/([^/]+)/;
+const APP_PROXY_PREFIX = /^\/app-proxy\/([^/]+)\/([^/]+)\/([^/]+)(?=\/|$)/;
+export const APP_VISIT_HEADER = 'x-marimohub-app-visit-id';
+export const APP_GENERATION_HEADER = 'x-marimohub-app-generation';
+export const APP_STATUS_HEADER = 'x-marimohub-app-status';
+export const APP_PROXY_HEADER = 'x-marimohub-app-proxy';
 
 /** Strip a trailing slash so we can concatenate an origin with a path cleanly. */
 function trimTrailingSlash(s: string): string {
 	return s.endsWith('/') ? s.slice(0, -1) : s;
 }
 
+function settle<T>(promise: Promise<T>): Promise<PromiseSettledResult<T>> {
+	return promise.then(
+		(value) => ({ status: 'fulfilled', value }),
+		(reason: unknown) => ({ status: 'rejected', reason }),
+	);
+}
+
+function settledValue<T>(result: PromiseSettledResult<T>): T {
+	if (result.status === 'rejected') throw result.reason;
+	return result.value;
+}
+
 /**
- * Resolve and authorize a possible `/proxy/<token>/…` request without forwarding
+ * Resolve and authorize a possible sandbox proxy request without forwarding
  * it. Returns `pass` when the path isn't a proxy path (caller continues normally),
  * `reject` with an HTTP status to deny, or `forward` with the kernel target.
  *
- * Order matters: token signature first (cheap, no I/O), then authentication, then
- * session liveness, then the per-session role check.
+ * Validate the route proof before authentication; require live authorization
+ * before app-pool renewal or forwarding.
  */
 export async function authorizeProxyRequest(
 	request: Request,
@@ -70,7 +94,8 @@ export async function authorizeProxyRequest(
 	const url = new URL(request.url);
 	const kernelMatch = PROXY_PREFIX.exec(url.pathname);
 	const surfaceMatch = SURFACE_PROXY_PREFIX.exec(url.pathname);
-	if (!kernelMatch && !surfaceMatch) return { kind: 'pass' };
+	const appMatch = APP_PROXY_PREFIX.exec(url.pathname);
+	if (!kernelMatch && !surfaceMatch && !appMatch) return { kind: 'pass' };
 
 	// The proxy signing secret travels with the ProxyExposure (subdomain mode has none).
 	const exposure = deps.sandbox.exposure;
@@ -81,8 +106,22 @@ export async function authorizeProxyRequest(
 		return { kind: 'pass' };
 	}
 
-	const token = (kernelMatch ?? surfaceMatch)![1];
-	const verified = await verifyProxyToken(token, secret);
+	const visit = appMatch
+		? AppVisitSchema.safeParse({
+				visit_id: request.headers.get(APP_VISIT_HEADER),
+				generation: request.headers.get(APP_GENERATION_HEADER),
+			})
+		: undefined;
+	if (appMatch && (!visit?.success || !NotebookId.is(appMatch[2]))) {
+		return { kind: 'reject', status: 403, code: 'FORBIDDEN', message: 'Invalid app visit' };
+	}
+	// The canonical app route is authenticated below and fenced by an exact visit;
+	// it cannot fall back to the older proxy contract on a mixed-version rollout.
+	const verified = appMatch
+		? ProjectId.is(appMatch[1]) && SessionId.is(appMatch[3])
+			? { projectId: appMatch[1], sessionId: appMatch[3] }
+			: null
+		: await verifyProxyToken((kernelMatch ?? surfaceMatch)![1], secret);
 	if (!verified) {
 		return { kind: 'reject', status: 403, code: 'FORBIDDEN', message: 'Invalid sandbox token' };
 	}
@@ -121,14 +160,34 @@ export async function authorizeProxyRequest(
 		throw err;
 	}
 
+	// Handle speculative failures immediately; an earlier failure must not wait for later reads.
+	const appMetadata = appMatch
+		? {
+				session: settle(deps.services.sessions.getSession(projectId, sessionId)),
+				project: settle(deps.services.projects.getProject(projectId)),
+				notebook: settle(
+					deps.services.notebooks.getSecurityLabels(projectId, NotebookId.parse(appMatch[2])),
+				),
+			}
+		: undefined;
 	let session;
 	try {
-		session = await deps.services.sessions.getSession(projectId, sessionId);
+		session = appMetadata
+			? settledValue(await appMetadata.session)
+			: await deps.services.sessions.getSession(projectId, sessionId);
 	} catch {
 		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
 	}
+	if (
+		appMatch &&
+		(sessionMode(session) !== 'app' ||
+			!session.app_pool ||
+			sessionResourceNotebookId(session) !== appMatch[2])
+	) {
+		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
+	}
 
-	if (session.status !== 'running') {
+	if (session.status !== 'running' && !(appMatch && session.status === 'starting')) {
 		return { kind: 'reject', status: 410, code: 'GONE', message: 'Session is no longer running' };
 	}
 	const authorizationDeadline = session.authorization_expires_at
@@ -150,7 +209,7 @@ export async function authorizeProxyRequest(
 			? surfaceState.origin_url
 			: undefined
 		: session.sandbox_origin_url;
-	if (!originUrl) {
+	if (!originUrl && !(appMatch && session.status === 'starting')) {
 		// Running but no origin recorded — the session was provisioned under a
 		// different exposure mode. Not reachable via the proxy.
 		return {
@@ -163,18 +222,18 @@ export async function authorizeProxyRequest(
 		};
 	}
 
-	const projectRead = deps.services.projects.getProject(projectId);
-	// Handle notebook failures even when a project failure returns before this read settles.
-	const notebookRead = (async () => {
-		await assertSessionPreviewActive(deps, projectId, session);
-		return deps.services.notebooks.getSecurityLabels(projectId, sessionResourceNotebookId(session));
-	})().then(
-		(value) => ({ status: 'fulfilled' as const, value }),
-		(reason: unknown) => ({ status: 'rejected' as const, reason }),
+	const projectRead = appMetadata?.project ?? settle(deps.services.projects.getProject(projectId));
+	const notebookRead = settle(
+		(async () => {
+			await assertSessionPreviewActive(deps, projectId, session);
+			return appMetadata
+				? settledValue(await appMetadata.notebook)
+				: deps.services.notebooks.getSecurityLabels(projectId, sessionResourceNotebookId(session));
+		})(),
 	);
 	let project;
 	try {
-		project = await projectRead;
+		project = settledValue(await projectRead);
 	} catch {
 		// A session whose project is gone is unreachable, like a missing session.
 		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
@@ -196,7 +255,7 @@ export async function authorizeProxyRequest(
 		};
 	}
 	const notebookLabels = notebookResult.value;
-	// ONE decision covers the whole gate: lifecycle (a soft-deleted project's
+	// The proxy decision covers lifecycle (a soft-deleted project's
 	// kernels go dark immediately — this is the only thing in the
 	// browser→kernel path, and the sandbox may still be alive), session
 	// admission (role re-checked per request, so a revoked membership cuts
@@ -204,10 +263,12 @@ export async function authorizeProxyRequest(
 	// override — one subject-context resolve and one adapter round-trip, not
 	// one per gate). Lifecycle and constraint denials mask as a missing
 	// session; membership and session denials keep the historical 403.
-	const decision = await authorizationService(deps).authorize(
+	const authorizer = authorizationService(deps);
+	const resource = { kind: 'session' as const, project, session, notebookLabels };
+	const decision = await authorizer.authorize(
 		user,
 		surfaceId ? 'session.surface' : 'session.proxy',
-		{ kind: 'session', project, session, notebookLabels },
+		resource,
 	);
 	if (!decision.allowed) {
 		if (
@@ -226,15 +287,70 @@ export async function authorizeProxyRequest(
 				: 'Not authorized to attach this session',
 		};
 	}
+	// Renewal needs attach permission as well as proxy permission, including
+	// action-specific resource-security policy and scoped credential grants.
+	const renewalDecision = appMatch
+		? await authorizer.authorize(user, 'session.attach', resource)
+		: undefined;
+	if (renewalDecision && !renewalDecision.allowed) {
+		if (
+			renewalDecision.category === 'constraint' ||
+			renewalDecision.category === 'lifecycle' ||
+			renewalDecision.category === 'credential-resource'
+		) {
+			return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
+		}
+		return {
+			kind: 'reject',
+			status: 403,
+			code: 'FORBIDDEN',
+			message: 'App renewal not authorized',
+		};
+	}
+
+	// The CURRENT context expiry can be earlier than the deadline stamped at
+	// session start — an established socket must not outlive either.
+	const contextDeadline =
+		decision.subjectContextExpiresAt !== undefined
+			? Date.parse(decision.subjectContextExpiresAt)
+			: undefined;
+	let effectiveDeadline =
+		authorizationDeadline !== undefined && contextDeadline !== undefined
+			? Math.min(authorizationDeadline, contextDeadline)
+			: (authorizationDeadline ?? contextDeadline);
+	if (renewalDecision?.allowed && renewalDecision.subjectContextExpiresAt) {
+		effectiveDeadline = Math.min(
+			effectiveDeadline ?? Infinity,
+			Date.parse(renewalDecision.subjectContextExpiresAt),
+		);
+	}
+	if (appMatch && effectiveDeadline !== undefined && Date.now() >= effectiveDeadline) {
+		return {
+			kind: 'reject',
+			status: 410,
+			code: 'GONE',
+			message: 'Session authorization has expired',
+		};
+	}
 
 	if (sessionMode(session) === 'app') {
 		try {
-			const allowed = await new AppPoolService(
+			const pool = new AppPoolService(
 				deps.bucket,
 				deps.services.sessions,
 				deps.policy.appPool,
 				deps.metrics,
-			).canAccess(projectId, session.notebook_id, user.id, sessionId, !session.app_pool);
+			);
+			const allowed =
+				appMatch && visit?.success
+					? await pool.heartbeat(projectId, session.notebook_id, user.id, sessionId, visit.data)
+					: await pool.canAccess(
+							projectId,
+							session.notebook_id,
+							user.id,
+							sessionId,
+							!session.app_pool,
+						);
 			if (!allowed) {
 				return {
 					kind: 'reject',
@@ -242,6 +358,28 @@ export async function authorizeProxyRequest(
 					code: 'GONE',
 					message: 'The app assignment expired. Open the app again.',
 				};
+			}
+			if (appMatch) {
+				session = await deps.services.sessions.heartbeatFromSnapshot(session);
+				if (
+					(session.status !== 'running' && session.status !== 'starting') ||
+					isPastAuthorizationDeadline(session, Date.now())
+				) {
+					return {
+						kind: 'reject',
+						status: 410,
+						code: 'GONE',
+						message: 'Session is no longer running',
+					};
+				}
+				if (session.sandbox_origin_url !== originUrl) {
+					return {
+						kind: 'reject',
+						status: 503,
+						code: 'SERVICE_UNAVAILABLE',
+						message: 'Session target changed',
+					};
+				}
 			}
 		} catch {
 			return {
@@ -252,16 +390,30 @@ export async function authorizeProxyRequest(
 			};
 		}
 	}
-	// The CURRENT context expiry can be earlier than the deadline stamped at
-	// session start — an established socket must not outlive either.
-	const contextDeadline =
-		decision.subjectContextExpiresAt !== undefined
-			? Date.parse(decision.subjectContextExpiresAt)
-			: undefined;
-	const effectiveDeadline =
-		authorizationDeadline !== undefined && contextDeadline !== undefined
-			? Math.min(authorizationDeadline, contextDeadline)
-			: (authorizationDeadline ?? contextDeadline);
+	if (appMatch && session.authorization_expires_at) {
+		effectiveDeadline = Math.min(
+			effectiveDeadline ?? Infinity,
+			Date.parse(session.authorization_expires_at),
+		);
+	}
+	if (appMatch && effectiveDeadline !== undefined && Date.now() >= effectiveDeadline) {
+		return {
+			kind: 'reject',
+			status: 410,
+			code: 'GONE',
+			message: 'Session authorization has expired',
+		};
+	}
+
+	if (appMatch && session.status === 'starting') return { kind: 'starting' };
+	if (!originUrl) {
+		return {
+			kind: 'reject',
+			status: 503,
+			code: 'SERVICE_UNAVAILABLE',
+			message: 'Session is not reachable via the proxy',
+		};
+	}
 
 	// Records written before `proxy_path` was persisted route by the configured
 	// VS Code flavor; code-server (the default) strips the prefix.
@@ -270,8 +422,12 @@ export async function authorizeProxyRequest(
 		(surfaceId === 'vscode' && deps.sandbox.surfaces?.vscode?.flavor === 'openvscode'
 			? 'preserve-prefix'
 			: 'strip-prefix');
-	const upstreamPath =
-		surfaceMatch && proxyPath === 'strip-prefix'
+	const appKernelBase = appMatch
+		? `/proxy/${await signProxyToken(projectId, sessionId, secret)}`
+		: undefined;
+	const upstreamPath = appMatch
+		? `${appKernelBase}${url.pathname.slice(appMatch[0].length) || '/'}`
+		: surfaceMatch && proxyPath === 'strip-prefix'
 			? url.pathname.slice(surfaceMatch[0].length) || '/'
 			: url.pathname;
 	const targetUrl = `${trimTrailingSlash(originUrl)}${upstreamPath}${url.search}`;
@@ -279,10 +435,13 @@ export async function authorizeProxyRequest(
 		kind: 'forward',
 		targetUrl,
 		sessionId,
-		...(kernelMatch && session.kernel_auth_token
+		...((kernelMatch || appMatch) && session.kernel_auth_token
 			? { kernelAuthToken: session.kernel_auth_token }
 			: {}),
 		...(effectiveDeadline !== undefined ? { authorizationDeadline: effectiveDeadline } : {}),
+		...(appKernelBase
+			? { appProxyBaseUrl: `${trimTrailingSlash(originUrl)}${appKernelBase}` }
+			: {}),
 	};
 }
 
@@ -310,6 +469,10 @@ const HOP_BY_HOP = new Set([
  * `cookie`. The WS forwarder filters on this same set.
  */
 export const CREDENTIAL_HEADERS = new Set([
+	APP_PROXY_HEADER,
+	APP_STATUS_HEADER,
+	APP_VISIT_HEADER,
+	APP_GENERATION_HEADER,
 	'cookie',
 	'authorization',
 	'x-goog-iap-jwt-assertion',
@@ -325,7 +488,14 @@ export const CREDENTIAL_HEADERS = new Set([
  * it emits is written for the hub — letting notebook-author code overwrite the
  * caller's hub session. The WS forwarder strips the same set from its 101.
  */
-export const UNSAFE_RESPONSE_HEADERS = new Set(['set-cookie', 'set-cookie2']);
+export const UNSAFE_RESPONSE_HEADERS = new Set([
+	APP_VISIT_HEADER,
+	APP_GENERATION_HEADER,
+	'set-cookie',
+	'set-cookie2',
+	APP_STATUS_HEADER,
+	APP_PROXY_HEADER,
+]);
 
 export function isCredentialHeader(name: string, additional: readonly string[] = []): boolean {
 	const lower = name.toLowerCase();
@@ -452,25 +622,84 @@ export async function forwardHttp(
 	});
 }
 
+async function appProxyResponse(
+	response: Response,
+	requestUrl: string,
+	targetUrl: string,
+	baseUrl: string,
+): Promise<Response> {
+	const location = response.headers.get('location');
+	if (location === null) return response;
+	const target = new URL(targetUrl);
+	const kernelBase = new URL(baseUrl).pathname;
+	let redirect: URL | undefined;
+	try {
+		redirect = new URL(location, target);
+	} catch {
+		// An invalid Location must not turn a handled upstream response into a 500.
+	}
+	if (
+		!redirect ||
+		redirect.origin !== target.origin ||
+		(redirect.pathname !== kernelBase && !redirect.pathname.startsWith(`${kernelBase}/`))
+	) {
+		await response.body?.cancel();
+		return Response.json(
+			{
+				success: false,
+				error: { code: 'SERVICE_UNAVAILABLE', message: 'Kernel redirect left the app' },
+			},
+			{ status: 502 },
+		);
+	}
+	const request = new URL(requestUrl);
+	const appBase = APP_PROXY_PREFIX.exec(request.pathname)![0];
+	const headers = new Headers(response.headers);
+	headers.set(
+		'location',
+		`${request.origin}${appBase}${redirect.pathname.slice(kernelBase.length)}${redirect.search}${redirect.hash}`,
+	);
+	return new Response(response.body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers,
+	});
+}
+
 /**
  * Hono middleware that serves `proxy`-mode kernel traffic. A no-op in `subdomain`
- * mode (and for any non-`/proxy` path). Mounted on `*` ahead of the app's own
+ * mode (and for non-proxy paths). Mounted on `*` ahead of the app's own
  * routes so kernel asset/API requests never fall through to the SPA or `/api`.
  */
 export function sandboxProxyMiddleware(deps: ApiDeps): MiddlewareHandler<HonoEnv> {
 	return async (c, next) => {
 		if (deps.sandbox.exposure?.mode !== 'proxy') return next();
+		const appRoute = APP_PROXY_PREFIX.test(new URL(c.req.url).pathname);
+		if (appRoute) c.header(APP_PROXY_HEADER, '1');
 		const decision = await authorizeProxyRequest(c.req.raw, deps);
 		if (decision.kind === 'pass') return next();
 		if (decision.kind === 'reject') {
 			return fail(c, decision.code, decision.message, decision.status);
 		}
-		return forwardHttp(
+		if (decision.kind === 'starting') {
+			c.header(APP_STATUS_HEADER, 'starting');
+			return fail(c, 'SERVICE_UNAVAILABLE', 'App session is starting', 503);
+		}
+		const response = await forwardHttp(
 			c.req.raw,
 			decision.targetUrl,
 			decision.sessionId,
 			decision.kernelAuthToken,
 			deps.sandbox.credentialHeaders,
 		);
+		if (!decision.appProxyBaseUrl) return response;
+		const forwarded = await appProxyResponse(
+			response,
+			c.req.url,
+			decision.targetUrl,
+			decision.appProxyBaseUrl,
+		);
+		forwarded.headers.set(APP_PROXY_HEADER, '1');
+		return forwarded;
 	};
 }

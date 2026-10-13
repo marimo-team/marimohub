@@ -54,6 +54,33 @@ Proxy HTTP requests and WebSocket upgrades require an account assignment to the 
 An account can have assignments to several sandboxes. Direct kernel URLs bypass managed-page admission.
 Occupancy therefore measures managed page visits, not exact kernel connections.
 
+### Combined visit renewal and proxying
+
+In proxy exposure mode, `GET /api/v1/capabilities` advertises
+`app_pool.proxy_renewal: true`. Clients can forward an admitted visit through
+`/app-proxy/{project_id}/{notebook_id}/{session_id}/...`, supplying their normal
+Hub authentication plus `x-marimohub-app-visit-id` and
+`x-marimohub-app-generation` from that visit's `app_assignment`.
+
+Each HTTP request or WebSocket upgrade checks both `session.proxy` and
+`session.attach`, the current resource permissions, and the exact active visit.
+It renews due leases before forwarding to the admitted kernel. It does not admit
+a new visit or transfer one to another session. Continue sending ordinary
+lifecycle heartbeats while a page is open, and leave on departure.
+
+Handled HTTP responses and successful WebSocket upgrades carry
+`x-marimohub-app-proxy: 1`. An authorized starting session returns HTTP 503 with
+`x-marimohub-app-status: starting`. Internal visit headers never reach the kernel;
+kernel-supplied protocol markers are discarded. Redirects within the admitted
+kernel route are rewritten to the app route; redirects outside it fail with 502.
+
+Clients must require the protocol marker and strip it before serving a browser.
+A missing or ambiguous marker is a failure: do not replay the request through
+the ordinary proxy, since a mutation may already have executed. Use the ordinary
+heartbeat and proxy path when the capability is absent or false. Clients that
+cache capabilities must upgrade every Hub replica before opting in, and return
+to the ordinary path before downgrading Hub.
+
 ## Versions and operations
 
 Synced notebooks load their immutable version workspace.
