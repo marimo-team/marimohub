@@ -373,6 +373,16 @@ describe('Session routes', () => {
 		}
 	});
 
+	it('reads an absent editor claim once before creating a session', async () => {
+		const api = createTestApi({ bucket, compute: makeFakeCompute() });
+		const readClaim = vi.spyOn(api.deps.services.sessions, 'getEditorClaim');
+
+		const session = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+
+		expect(session.status).toBe('running');
+		expect(readClaim).toHaveBeenCalledExactlyOnceWith(pid, nid);
+	});
+
 	it('POST /sessions with a non-existent notebook returns 404 and does not provision', async () => {
 		// Use a notebook id that was never created in this project.
 		const bogusNid = createNotebookId();

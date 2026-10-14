@@ -1488,7 +1488,9 @@ export async function startNotebookSession(input: {
 
 	const editorReuse =
 		mode === 'edit'
-			? await sessions.findReusableEditor(pid, nid, user.id, sharing, ephemeral)
+			? await sessions.findReusableEditor(pid, nid, user.id, sharing, ephemeral, {
+					claim: existingEditorClaim,
+				})
 			: undefined;
 	if (editorReuse?.takeoverInProgress) throw new TakeoverInProgressError();
 	if (editorReuse?.ownedByOther) {
@@ -1611,7 +1613,11 @@ export async function startNotebookSession(input: {
 	}
 
 	const client = sessionClientFor(user.credential.kind, request.via ?? 'rest');
-	if (mode === 'edit' && !ephemeral && (await sessions.isClaimRetiring(pid, nid, user.id))) {
+	if (
+		mode === 'edit' &&
+		!ephemeral &&
+		(await sessions.isClaimRetiring(pid, nid, user.id, { claim: existingEditorClaim }))
+	) {
 		deps.metrics?.increment('sessions.editor_claim.lost', 1, { phase: 'preflight' });
 		logEvent({
 			event: 'session_provision',

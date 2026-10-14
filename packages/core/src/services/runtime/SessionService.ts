@@ -873,6 +873,7 @@ export class SessionService {
 		userId: UserId,
 		sharing: EditorSandboxSharing,
 		temporary: boolean,
+		known?: { claim: EditorClaim | undefined },
 	): Promise<{
 		session?: Session;
 		ownedByOther?: Session;
@@ -892,7 +893,7 @@ export class SessionService {
 					.sort((a, b) => b.last_heartbeat.localeCompare(a.last_heartbeat))[0],
 			};
 		}
-		const claim = await this.getEditorClaim(projectId, notebookId);
+		const claim = known ? known.claim : await this.getEditorClaim(projectId, notebookId);
 		if (!claim?.session_id) {
 			const persistent = live.filter((session) => !session.ephemeral);
 			if (persistent.length > 1) {
@@ -1077,8 +1078,9 @@ export class SessionService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		requestedBy: UserId,
+		known?: { claim: EditorClaim | undefined },
 	): Promise<boolean> {
-		const claim = await this.getEditorClaim(projectId, notebookId);
+		const claim = known ? known.claim : await this.getEditorClaim(projectId, notebookId);
 		if (!claim) return false;
 		const holder = await this.getLiveEditorHolder(
 			projectId,
