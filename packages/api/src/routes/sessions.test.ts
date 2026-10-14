@@ -24,6 +24,7 @@ import {
 	makeFakeSandbox,
 	makeSession,
 	MemoryNotifier,
+	RecordingBucket,
 	uid,
 } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
@@ -380,6 +381,71 @@ describe('Session routes', () => {
 			log.mockRestore();
 		}
 	});
+
+	it('resolves integrations before writing the session record and skips resolution on reuse', async () => {
+		const recording = new RecordingBucket(bucket);
+		const sessionWrites = () =>
+			recording.calls.put.filter(({ key }) => key.startsWith(paths.sessionsForProject(pid))).length;
+		const writesAtResolution: number[] = [];
+		const resolveForSession = vi.fn(async () => {
+			writesAtResolution.push(sessionWrites());
+			return { files: [], vars: {}, attachments: [], warnings: [] };
+		});
+		const api = createTestApi({
+			bucket,
+			compute: makeFakeCompute(),
+			deps: {
+				bucket: recording,
+				services: createServices(recording),
+				integrations: { resolveForSession } as never,
+			},
+		});
+
+		const session = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+		expect(session.status).toBe('running');
+		expect(writesAtResolution).toEqual([0]);
+		expect(sessionWrites()).toBeGreaterThan(0);
+
+		const reused = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+		expect(reused.session_id).toBe(session.session_id);
+		expect(reused.reused).toBe(true);
+		expect(resolveForSession).toHaveBeenCalledOnce();
+	});
+
+	it.each(['record', 'handle', 'boot'] as const)(
+		'handles an early integration failure while %s is pending or fails',
+		async (phase) => {
+			const { instance, calls } = makeFakeSandbox();
+			const compute = fakeComputeFrom(instance);
+			const resolveForSession = vi.fn().mockRejectedValue(new Error('secret backend unavailable'));
+			const api = createTestApi({
+				bucket,
+				compute,
+				deps: { integrations: { resolveForSession } as never },
+			});
+			if (phase === 'record') {
+				vi.spyOn(api.deps.services.sessions, 'createSession').mockRejectedValue(
+					new Error('record failed'),
+				);
+			} else if (phase === 'handle') {
+				vi.spyOn(compute, 'create').mockImplementation(() => {
+					throw new Error('handle failed');
+				});
+			} else {
+				const exec = instance.exec.bind(instance);
+				vi.spyOn(instance, 'exec').mockImplementationOnce(async (...args) => {
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					return exec(...args);
+				});
+			}
+
+			await expectError(await api.request('POST', sessionsPath()), phase === 'boot' ? 503 : 500);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(resolveForSession).toHaveBeenCalledOnce();
+			expect(calls.startProcess).toEqual([]);
+			if (phase === 'boot') expect(calls.destroy).toBeGreaterThan(0);
+		},
+	);
 
 	it('reads an absent editor claim once before creating a session', async () => {
 		const api = createTestApi({ bucket, compute: makeFakeCompute() });

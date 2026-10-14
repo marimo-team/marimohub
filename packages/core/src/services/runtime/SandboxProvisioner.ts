@@ -122,6 +122,7 @@ function setupDiagnostics(stdout: string, stderr: string): SetupDiagnostics {
 
 function logSlowSetup(
 	options: ProvisionOptions,
+	launchStrategy: MarimoLaunchStrategyName | undefined,
 	setupMs: number,
 	diagnostics: SetupDiagnostics,
 ): void {
@@ -136,7 +137,7 @@ function logSlowSetup(
 			sandbox_id: options.sandboxId,
 			project_id: options.projectId,
 			notebook_id: options.notebookId,
-			launch_strategy: options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY,
+			launch_strategy: launchStrategy ?? DEFAULT_LAUNCH_STRATEGY,
 			provision_setup_ms: setupMs,
 			...timingFields,
 			setup_stderr_tail: utf8Tail(diagnostics.stderr, SETUP_OUTPUT_TAIL_BYTES),
@@ -262,7 +263,7 @@ export interface ProvisionOptions {
 	/** Workspace-relative notebook file marimo should open. Defaults to `notebook.py`. */
 	entryNotebook?: string;
 	/** Per-source launch strategy (see launchStrategy.ts). Defaults to the project-managed env. */
-	launchStrategy?: MarimoLaunchStrategyName;
+	launchStrategy?: MarimoLaunchStrategyName | Promise<MarimoLaunchStrategyName>;
 	/**
 	 * How long Python-environment setup and the kernel-port wait may take in total
 	 * before failing the provision. Defaults to `DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS`.
@@ -776,6 +777,8 @@ export class SandboxProvisioner {
 		sw: Stopwatch;
 		mountPath: string;
 	}> {
+		const launchStrategy = Promise.resolve(options.launchStrategy);
+		launchStrategy.catch(() => {});
 		const nb = paths.project(options.projectId).notebook(options.notebookId);
 		const layout = sandboxWorkspaceLayout(
 			options.workdir ?? DEFAULT_WORKDIR,
@@ -807,8 +810,10 @@ export class SandboxProvisioner {
 			});
 		const injectSessionEnv = () =>
 			withSandboxSpan(sw, 'inject', (time) => this.injectSessionEnv(sandbox, options, time));
-		const setupEnvironment = () => this.setupEnvironment(sandbox, options, mountPath, sw);
-		const uploadBridge = () => this.uploadNotebookBridge(sandbox, options, sw);
+		const setupEnvironment = async () =>
+			this.setupEnvironment(sandbox, options, mountPath, sw, await launchStrategy);
+		const uploadBridge = async () =>
+			this.uploadNotebookBridge(sandbox, options, sw, await launchStrategy);
 
 		// Prefetch overlaps boot; files timing includes readiness waits.
 		const { load, setup, bridge } = await all({
@@ -844,13 +849,14 @@ export class SandboxProvisioner {
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
 		sw: Stopwatch,
+		launchStrategy: MarimoLaunchStrategyName | undefined,
 	): Promise<string | undefined> {
 		const payload = options.notebookBridge;
 		if (
 			!payload ||
 			!options.bridgeParentOrigin ||
 			options.launchMode === 'job' ||
-			options.launchStrategy === 'uv-sandbox'
+			launchStrategy === 'uv-sandbox'
 		)
 			return;
 		const directory = `/tmp/marimohub-bridge/${options.sandboxId}`;
@@ -1228,6 +1234,7 @@ export class SandboxProvisioner {
 		options: ProvisionOptions,
 		mountPath: string,
 		sw: Stopwatch,
+		launchStrategy: MarimoLaunchStrategyName | undefined,
 	): Promise<MarimoStartup> {
 		const startup: MarimoStartup = {
 			plan: buildMarimoLaunch(
@@ -1242,7 +1249,7 @@ export class SandboxProvisioner {
 						options.kernelAuthToken !== undefined ? KERNEL_AUTH_TOKEN_FILE : undefined,
 					watch: options.marimoWatch,
 				},
-				options.launchStrategy,
+				launchStrategy,
 			),
 			deadline: {
 				startedAt: Date.now(),
@@ -1271,13 +1278,13 @@ export class SandboxProvisioner {
 					}
 					if (!result.success) throw pythonEnvironmentSetupFailure(result);
 				},
-				{ launch_strategy: options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY },
+				{ launch_strategy: launchStrategy ?? DEFAULT_LAUNCH_STRATEGY },
 			);
 		} catch (error) {
 			if (error instanceof PythonEnvironmentSetupError) throw error;
 			throw provisionFailure('preparing the notebook Python environment', error);
 		} finally {
-			if (diagnostics) logSlowSetup(options, sw.timings.setup, diagnostics);
+			if (diagnostics) logSlowSetup(options, launchStrategy, sw.timings.setup, diagnostics);
 		}
 		return startup;
 	}

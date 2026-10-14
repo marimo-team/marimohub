@@ -773,6 +773,34 @@ describe('SandboxProvisioner', () => {
 			expect(calls.startProcess[0].cmd).not.toContain('uv sync');
 		});
 
+		it('writes session files before the launch strategy resolves', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const strategy = deferred<'uv-script-pins'>();
+			const writeFiles = instance.writeFiles.bind(instance);
+			vi.spyOn(instance, 'writeFiles').mockImplementationOnce(async (files) => {
+				const result = await writeFiles(files);
+				expect(calls.exec.length).toBeGreaterThan(0);
+				expect(calls.startProcess).toEqual([]);
+				strategy.resolve('uv-script-pins');
+				return result;
+			});
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				entryNotebook: 'apps/dash.py',
+				launchStrategy: strategy.promise,
+				sessionEnv: { files: [{ path: '/config', content: 'configured' }] },
+			});
+			expect(instance.writeFiles).toHaveBeenCalled();
+			expect(
+				calls.exec.some((command) => command.includes("uv export --script 'apps/dash.py'")),
+			).toBe(true);
+			expect(calls.startProcess[0].cmd).toContain("marimo --quiet edit 'apps/dash.py'");
+		});
+
 		it('records setup step timings and logs bounded uv output when setup is slow', async () => {
 			vi.useFakeTimers();
 			vi.setSystemTime(new Date('2026-08-26T13:47:00Z'));

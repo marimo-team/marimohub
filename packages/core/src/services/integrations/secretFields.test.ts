@@ -133,6 +133,39 @@ describe('sealConfig / openConfig / redactConfig', () => {
 		expect((opened.auth as { password: unknown }).password).toBe('resolved:teams/data#password');
 	});
 
+	it('resolves reference fields concurrently and preserves their slots', async () => {
+		const stored = {
+			secrets: ['A', 'B', 'C'].map((name) => ({
+				name,
+				value: { $secret: { kind: 'reference', backend: 'vault', locator: name } },
+			})),
+		};
+		const original = structuredClone(stored);
+		const releases: (() => void)[] = [];
+		let inFlight = 0;
+		const opened = openConfig({
+			stored,
+			paths,
+			open: {
+				...fakeOpen,
+				resolve(ref, at) {
+					inFlight++;
+					expect(at).toBe('secrets.*.value');
+					return new Promise<string>((resolve) => {
+						releases.push(() => resolve(`resolved:${ref.locator}`));
+					});
+				},
+			},
+		});
+		await Promise.resolve();
+		expect(inFlight).toBe(3);
+		for (const release of releases.reverse()) release();
+		await expect(opened).resolves.toEqual({
+			secrets: ['A', 'B', 'C'].map((name) => ({ name, value: `resolved:${name}` })),
+		});
+		expect(stored).toEqual(original);
+	});
+
 	it('redacts every managed secret without exposing its envelope', async () => {
 		const stored = await sealConfig({ schema, paths, authoring, seal: fakeSeal() });
 		const redacted = redactConfig(stored, paths);
