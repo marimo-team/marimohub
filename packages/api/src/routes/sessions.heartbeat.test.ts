@@ -5,50 +5,26 @@ import {
 	ProjectId,
 	NotFoundError,
 	UnavailableError,
-	createServices,
 	paths,
 } from '@marimo-hub/core';
-import type { AppVisit, SessionId, TokenGrant } from '@marimo-hub/core';
-import {
-	ACTOR,
-	localResourceSecurity,
-	makeFakeCompute,
-	makeSubjectContext,
-} from '@marimo-hub/core/testing';
-import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
+import type { TokenGrant } from '@marimo-hub/core';
+import { ACTOR } from '@marimo-hub/core/testing';
+import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
+import { expectError, expectOk } from '../testing';
+import { createAppSessionFixture, makeHeartbeatDue } from '../testing/appSession';
 
-async function fixture() {
-	const bucket = await createInitializedBucket();
-	const services = createServices(bucket);
-	const project = await services.projects.createProject({ name: 'P', description: '' }, ACTOR);
-	const notebook = await services.notebooks.createNotebook(
-		project.id,
-		{ title: 'App', description: '', code: 'original' },
-		ACTOR,
-	);
-	const resourceSecurity = localResourceSecurity(['PUBLIC', 'SECRET'], makeSubjectContext());
-	const client = createTestApi({ bucket, compute: makeFakeCompute(), deps: { resourceSecurity } });
-	const path = `/projects/${project.id}/notebooks/${notebook.id}/sessions`;
-	const admission = await expectOk<{ session_id: SessionId; app_assignment: AppVisit }>(
-		await client.request('POST', path, { mode: 'app', app_visit_id: 'tab' }),
-	);
-	const session = await services.sessions.getSession(project.id, admission.session_id);
-	const heartbeat = () =>
-		client.request('POST', `${path}/${admission.session_id}/heartbeat`, admission.app_assignment);
-	const poolKey = paths.appPool(project.id, notebook.id);
-	const sessionKey = paths.session(project.id, admission.session_id);
+const fixture = () => createAppSessionFixture(new MemoryBucket());
+
+function deferredRead<T>() {
+	const result = Promise.withResolvers<T>();
+	const started = Promise.withResolvers<void>();
 	return {
-		bucket,
-		services,
-		project,
-		notebook,
-		client,
-		session,
-		admission,
-		heartbeat,
-		poolKey,
-		sessionKey,
-		resourceSecurity,
+		...result,
+		started: started.promise,
+		read: () => {
+			started.resolve();
+			return result.promise;
+		},
 	};
 }
 
@@ -60,23 +36,15 @@ afterEach(() => {
 describe('heartbeat read scheduling', () => {
 	it('starts project and session reads before either resolves, then preserves authorization order', async () => {
 		const f = await fixture();
-		const projectRead = Promise.withResolvers<typeof f.project>();
-		const sessionRead = Promise.withResolvers<typeof f.session>();
-		const projectStarted = Promise.withResolvers<void>();
-		const sessionStarted = Promise.withResolvers<void>();
-		vi.spyOn(f.client.deps.services.projects, 'getProject').mockImplementation(() => {
-			projectStarted.resolve();
-			return projectRead.promise;
-		});
-		vi.spyOn(f.client.deps.services.sessions, 'getSession').mockImplementation(() => {
-			sessionStarted.resolve();
-			return sessionRead.promise;
-		});
+		const projectRead = deferredRead<typeof f.project>();
+		const sessionRead = deferredRead<typeof f.session>();
+		vi.spyOn(f.client.deps.services.projects, 'getProject').mockImplementation(projectRead.read);
+		vi.spyOn(f.client.deps.services.sessions, 'getSession').mockImplementation(sessionRead.read);
 		const labels = vi.spyOn(f.client.deps.services.notebooks, 'getSecurityLabels');
 		const authorize = vi.spyOn(AuthorizationService.prototype, 'authorize');
 		const pending = f.heartbeat();
 		try {
-			await Promise.all([projectStarted.promise, sessionStarted.promise]);
+			await Promise.all([projectRead.started, sessionRead.started]);
 			expect(authorize).not.toHaveBeenCalled();
 			expect(labels).not.toHaveBeenCalled();
 			sessionRead.resolve(f.session);
@@ -97,19 +65,15 @@ describe('heartbeat read scheduling', () => {
 		'returns project denial without waiting for the session and handles its %s rejection',
 		async (timing) => {
 			const f = await fixture();
-			const sessionRead = Promise.withResolvers<typeof f.session>();
-			const sessionStarted = Promise.withResolvers<void>();
-			vi.spyOn(f.client.deps.services.sessions, 'getSession').mockImplementation(() => {
-				sessionStarted.resolve();
-				return sessionRead.promise;
-			});
+			const sessionRead = deferredRead<typeof f.session>();
+			vi.spyOn(f.client.deps.services.sessions, 'getSession').mockImplementation(sessionRead.read);
 			const authz = AuthorizationService.prototype;
 			const authorize = authz.authorize;
 			vi.spyOn(authz, 'authorize').mockImplementation(async function (
 				this: AuthorizationService,
 				...args
 			) {
-				await sessionStarted.promise;
+				await sessionRead.started;
 				if (timing === 'early') sessionRead.reject(new UnavailableError('private session failure'));
 				return args[1] === 'project.read'
 					? { allowed: false, category: 'visibility', role: null }
@@ -131,7 +95,7 @@ describe('heartbeat read scheduling', () => {
 		new UnavailableError('Project storage unavailable'),
 	])('preserves project storage failure precedence: $code', async (error) => {
 		const f = await fixture();
-		const sessionRead = Promise.withResolvers<typeof f.session>();
+		const sessionRead = deferredRead<typeof f.session>();
 		vi.spyOn(f.client.deps.services.sessions, 'getSession').mockReturnValue(sessionRead.promise);
 		vi.spyOn(f.client.deps.services.projects, 'getProject').mockRejectedValue(error);
 		const labels = vi.spyOn(f.client.deps.services.notebooks, 'getSecurityLabels');
@@ -273,9 +237,7 @@ describe('heartbeat dependency failures', () => {
 		async (record) => {
 			const f = await fixture();
 			const beforePool = await (await f.bucket.get(f.poolKey))!.text();
-			const now = Date.now();
-			vi.useFakeTimers({ toFake: ['Date'] });
-			vi.setSystemTime(now + 61_000);
+			makeHeartbeatDue();
 			const keyToFail = record === 'pool' ? f.poolKey : f.sessionKey;
 			const put = f.bucket.put.bind(f.bucket);
 			const failure = vi.spyOn(f.bucket, 'put').mockImplementation((key, value, options) => {
@@ -340,9 +302,7 @@ describe('due heartbeat races', () => {
 		'rechecks CAS state when %s wins before renewal writes',
 		async (race) => {
 			const f = await fixture();
-			const now = Date.now();
-			vi.useFakeTimers({ toFake: ['Date'] });
-			vi.setSystemTime(now + 61_000);
+			makeHeartbeatDue();
 			const entered = Promise.withResolvers<void>();
 			const release = Promise.withResolvers<void>();
 			const keyToPause = race === 'leave' ? f.poolKey : f.sessionKey;

@@ -1,26 +1,11 @@
 import { writeFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-	AuthorizationService,
-	CatalogService,
-	PreconditionFailedError,
-	ProxyExposure,
-	createServices,
-	paths,
-	signProxyToken,
-} from '@marimo-hub/core';
-import type { AppVisit, SessionId } from '@marimo-hub/core';
+import { AuthorizationService, PreconditionFailedError, paths } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
-import {
-	ACTOR,
-	localResourceSecurity,
-	makeFakeCompute,
-	makeSubjectContext,
-} from '@marimo-hub/core/testing';
-import { authorizeProxyRequest } from './sandboxProxy';
-import { createTestApi, expectOk } from './testing';
+import { ACTOR } from '@marimo-hub/core/testing';
+import { expectOk } from './testing';
+import { createAppSessionFixture, makeHeartbeatDue } from './testing/appSession';
 
-const SECRET = 'app-performance-test-secret-at-least-32-bytes';
 const pause = async (ms: number) => {
 	if (ms) await new Promise((resolve) => setTimeout(resolve, ms));
 };
@@ -31,21 +16,23 @@ class MeasuredBucket extends MemoryBucket {
 	operations: Operation[] = [];
 	delay: (method: string, key: string) => number = () => 0;
 
+	private async record(operation: Operation) {
+		this.operations.push(operation);
+		await pause(this.delay(operation.method, operation.key));
+	}
+
 	override async get(key: string) {
-		this.operations.push({ method: 'get', key });
-		await pause(this.delay('get', key));
+		await this.record({ method: 'get', key });
 		return super.get(key);
 	}
 
 	override async head(key: string) {
-		this.operations.push({ method: 'head', key });
-		await pause(this.delay('head', key));
+		await this.record({ method: 'head', key });
 		return super.head(key);
 	}
 
 	override async list(options?: Parameters<MemoryBucket['list']>[0]) {
-		this.operations.push({ method: 'list', key: options?.prefix ?? '' });
-		await pause(this.delay('list', options?.prefix ?? ''));
+		await this.record({ method: 'list', key: options?.prefix ?? '' });
 		return super.list(options);
 	}
 
@@ -55,8 +42,7 @@ class MeasuredBucket extends MemoryBucket {
 			key: args[0],
 			conditional: Boolean(args[2]?.onlyIfEtagMatches || args[2]?.onlyIfNotExists),
 		};
-		this.operations.push(operation);
-		await pause(this.delay('put', args[0]));
+		await this.record(operation);
 		try {
 			return await super.put(...args);
 		} catch (error) {
@@ -67,77 +53,13 @@ class MeasuredBucket extends MemoryBucket {
 
 	override async delete(key: string | string[]) {
 		for (const item of Array.isArray(key) ? key : [key]) {
-			this.operations.push({ method: 'delete', key: item });
-			await pause(this.delay('delete', item));
+			await this.record({ method: 'delete', key: item });
 		}
 		return super.delete(key);
 	}
 }
 
-async function fixture(labeled = false) {
-	const bucket = new MeasuredBucket();
-	await new CatalogService(bucket).initialize(ACTOR);
-	const services = createServices(bucket);
-	const project = await services.projects.createProject(
-		{ name: 'Performance', description: '' },
-		ACTOR,
-	);
-	const notebook = await services.notebooks.createNotebook(
-		project.id,
-		{ title: 'App', description: '', code: 'original' },
-		ACTOR,
-	);
-	const resourceSecurity = localResourceSecurity(['PUBLIC', 'SECRET'], makeSubjectContext());
-	const newClient = () =>
-		createTestApi({
-			bucket,
-			compute: makeFakeCompute(),
-			deps: {
-				resourceSecurity,
-				sandbox: {
-					bucket: { name: 'test', endpoint: '' },
-					hostname: 'localhost',
-					workdir: '/workspace',
-					persistWorkspace: 'source',
-					exposure: new ProxyExposure(SECRET),
-				},
-			},
-		});
-	const client = newClient();
-	const path = `/projects/${project.id}/notebooks/${notebook.id}/sessions`;
-	const admission = await expectOk<{ session_id: SessionId; app_assignment: AppVisit }>(
-		await client.request('POST', path, { mode: 'app', app_visit_id: 'tab' }),
-	);
-	if (labeled)
-		await services.projects.setSecurityLabels(
-			project.id,
-			{ classification: 'SECRET', compartments: [] },
-			ACTOR,
-		);
-	const token = await signProxyToken(project.id, admission.session_id, SECRET);
-	const heartbeat = async (api = client) =>
-		api.request('POST', `${path}/${admission.session_id}/heartbeat`, admission.app_assignment);
-	const proxy = (upgrade = false) =>
-		authorizeProxyRequest(
-			new Request(
-				`http://hub.test/proxy/${token}/`,
-				upgrade ? { headers: { Upgrade: 'websocket', Connection: 'Upgrade' } } : undefined,
-			),
-			client.deps,
-		);
-	return {
-		bucket,
-		client,
-		newClient,
-		project,
-		notebook,
-		admission,
-		path,
-		heartbeat,
-		proxy,
-		resourceSecurity,
-	};
-}
+const fixture = (labeled = false) => createAppSessionFixture(new MeasuredBucket(), labeled);
 
 function counts(operations: Operation[]) {
 	const reads = operations.filter((op) => ['get', 'head', 'list'].includes(op.method));
@@ -214,9 +136,7 @@ describe('app operation budgets', () => {
 			}
 			return value;
 		});
-		const now = Date.now();
-		vi.useFakeTimers({ toFake: ['Date'] });
-		vi.setSystemTime(now + 61_000);
+		makeHeartbeatDue();
 		f.bucket.operations = [];
 		const responses = await Promise.all(clients.map((client) => f.heartbeat(client)));
 		for (const response of responses) expect((await expectOk(response)).status).toBe('running');
@@ -282,21 +202,14 @@ it.skipIf(!reportPath)(
 							: key === paths.project(f.project.id).meta
 								? profile.projectMs
 								: profile.metadataMs;
-					if (workload.includes('due')) {
-						const now = Date.now();
-						vi.useFakeTimers({ toFake: ['Date'] });
-						vi.setSystemTime(now + 61_000);
-					}
+					if (workload.includes('due')) makeHeartbeatDue();
 					f.bucket.operations = [];
 					const start = performance.now();
 					if (workload === 'proxy' || workload === 'websocket-authorization')
 						expect(await f.proxy(workload === 'websocket-authorization')).toMatchObject({
 							kind: 'forward',
 						});
-					else if (workload === 'reconnect')
-						await expectOk(
-							await f.client.request('POST', f.path, { mode: 'app', app_visit_id: 'tab' }),
-						);
+					else if (workload === 'reconnect') await expectOk(await f.admit());
 					else if (workload === 'concurrent-due-heartbeats') {
 						for (const response of await Promise.all(clients.map((client) => f.heartbeat(client))))
 							await expectOk(response);

@@ -51,18 +51,13 @@ Use the returned `app_assignment` for heartbeats and departure.
 Without an ID, callers share the legacy `api` visit for their account.
 The response fields `users`, `max_users`, and `max_users_per_session` retain their names but count visit slots.
 
-Proxy HTTP requests and WebSocket upgrades require an account assignment to the requested sandbox.
-An account can have assignments to several sandboxes. Direct kernel URLs bypass managed-page admission.
-Occupancy therefore measures managed page visits, not exact kernel connections.
-
-Heartbeats use the existing session heartbeat endpoint. Kernel HTTP requests and WebSocket upgrades use `/proxy/<token>/…`.
-Proxy traffic does not renew session or visit leases. WebSocket messages do not replace heartbeats.
-A heartbeat failure does not authorize a client to replay a kernel mutation.
+Kernel HTTP requests and WebSocket upgrades use `/proxy/<token>/…` and require an account assignment to the sandbox.
+They do not renew leases or replace periodic heartbeats. A heartbeat failure must not trigger replay of a kernel mutation.
 
 Proxy authorization checks the account assignment, not an exact visit and generation.
-A departed tab can retain account-level access while another tab keeps the same sandbox assigned.
-A gateway that requires exact-visit validation on every request must retain that check.
-Periodic heartbeats replace redundant presence maintenance only, not that security requirement.
+A departed tab can retain access while another tab keeps the same sandbox assigned.
+Gateways that require per-request exact-visit validation must retain that check.
+Direct kernel URLs bypass managed-page admission, so occupancy counts managed visits rather than kernel connections.
 
 ## Versions and operations
 

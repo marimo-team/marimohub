@@ -48,27 +48,19 @@ Operation-count tests cover these budgets, not remote bucket latency.
 
 ## Heartbeat scheduling
 
-The heartbeat handler starts its session read while it loads and authorizes the project.
-It consumes the project result first, so project denials retain precedence and do not wait for session storage.
-The speculative session read handles rejection immediately, even if the project gate returns first.
+Project authorization and the initial session read overlap. Project failures take precedence without waiting for session storage.
+The session promise handles rejection immediately, including after a project denial.
+Notebook and preview checks still precede attach authorization. Pool and session renewal retain their CAS checks, including the session reread.
+Response grants use the updated session.
 
-Notebook scope, preview liveness, notebook visibility, and attach authorization retain their order.
-Pool renewal still uses `AppPoolService.heartbeat`. Session renewal still rereads the record through `SessionService.heartbeat` and its CAS retries.
-Response grants use the updated session. Neither renewal can restore a departed visit or terminated session.
+The storage table counts pool operations only. An unlabeled API heartbeat uses six metadata operations:
+a catalog HEAD, project GET, notebook GET, pool GET, and two session GETs.
+A due heartbeat adds two conditional writes without conflicts. Identity I/O and policy calls are additional.
+Denied projects incur one extra speculative session GET and no renewal writes.
 
-The storage-cost table counts pool operations only. The API harness also counts catalog, project, notebook, and session operations.
-A fresh heartbeat uses six metadata operations: a catalog HEAD, project GET, initial session GET, notebook GET, pool GET, and session mutation GET.
-A due heartbeat adds two conditional writes without conflicts. Identity I/O and policy-provider calls add separate costs.
-Project denials add one speculative session GET compared with the serial handler, but no renewal writes.
+### Measurements
 
-The built-in UI already sends periodic heartbeats. This scheduling change does not reduce the number of client requests.
-It needs no API change, capability negotiation, lease change, or coordinated client upgrade.
-Reverting the handler scheduling does not require a client change.
-
-### Measured result
-
-A local macOS arm64 run with Node 24.21.0 measured the following results on 2026-10-14.
-The remote profile injected 10 ms per metadata operation. Counts did not change on successful heartbeat requests.
+On 2026-10-14, macOS arm64 / Node 24.21.0, with 10 ms injected per metadata operation:
 
 | Workload                       | Serial p50 / p95 (ms) | Overlapped p50 / p95 (ms) |
 | ------------------------------ | --------------------: | ------------------------: |
@@ -78,29 +70,23 @@ The remote profile injected 10 ms per metadata operation. Counts did not change 
 | HTTP proxy authorization       |           33.3 / 34.0 |               33.3 / 33.7 |
 | Existing-visit admission       |         111.6 / 113.2 |             111.1 / 112.1 |
 
-The slow-project/policy profile reduced fresh heartbeat p50 from 173.0 ms to 163.6 ms.
-The in-memory profile showed no meaningful improvement. Proxy scheduling and client behavior remain unchanged.
-No external gateway or real-kernel deployment was available for validation.
-These measurements establish a heartbeat scheduling improvement only.
+Successful-path operation counts did not change. The in-memory profile showed no meaningful improvement.
+Client and proxy scheduling remain unchanged. No API negotiation or coordinated client upgrade is required.
 
-### Reproduce measurements
-
-From the repository root, run:
+Run the optional harness from the repository root:
 
 ```sh
 APP_PERFORMANCE_REPORT="$PWD/.context/app-performance.json" \
   pnpm --filter @marimo-hub/api test src/appPerformance.test.ts
 ```
 
-The optional harness reports p50/p95, operation counts, authentication calls, authorization calls, subject-context calls, and constraint calls.
-It uses two warm-ups and 20 samples per workload and latency profile.
-Each sample creates an admitted app before measurement. Concurrent samples use four service instances over one bucket.
-The profiles inject 0 or 10 ms per metadata operation, plus a profile with 30 ms project reads and 10 ms per policy-provider call.
-Identity operations have no injected delay. Existing identity caches and first-request identity writes remain part of the measured behavior.
+The harness records p50/p95, bucket operations, authentication, authorization, and policy-provider calls over two warm-ups and 20 samples per workload/profile.
+Each sample starts with an admitted app. Concurrent samples use four service instances sharing one bucket.
+Profiles inject 0 or 10 ms per metadata operation, plus one with 30 ms project reads and 10 ms per policy-provider call.
+Identity I/O has no injected delay. Existing identity caches and first-request writes remain enabled.
 
-Compute is simulated. Proxy samples measure HTTP and WebSocket authorization only. Reconnect samples measure repeated admission for an existing visit.
-These results do not measure browser refresh, kernel forwarding, or a real WebSocket connection.
-Ordinary CI runs deterministic operation and scheduling assertions without latency thresholds.
+Compute is simulated. Proxy samples measure authorization. Reconnect samples repeat admission for the same visit.
+Real browser/kernel refresh and reconnect remain unvalidated. Ordinary CI has no latency thresholds.
 
 ## Code
 
