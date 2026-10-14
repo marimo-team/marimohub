@@ -293,6 +293,7 @@ export async function assertSessionNotebookVisible(
 	const labels = await deps.services.notebooks.getSecurityLabels(
 		project.id,
 		sessionResourceNotebookId(session),
+		{ consistency: 'validated' },
 	);
 	if (options.requireActivePreview !== false)
 		await assertSessionPreviewActive(deps, project.id, session);
@@ -718,7 +719,7 @@ export async function loadSessionProject(
 	subject: AuthSubject,
 	deps: AuthzDeps = {},
 ): Promise<Project> {
-	const project = await projects.getProject(pid);
+	const project = await projects.getProject(pid, { consistency: 'validated' });
 	const action = authorizationService(deps).appReadAction(subject, project);
 	await assertProjectActionOn(project, subject, action, deps);
 	return project;

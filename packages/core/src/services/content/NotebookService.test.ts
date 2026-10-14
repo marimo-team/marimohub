@@ -57,6 +57,125 @@ describe('NotebookService', () => {
 		projectId = project.id;
 	});
 
+	describe('cached meta reads', () => {
+		it('keeps default reads fresh and caches opt-in reads', async () => {
+			const notebook = await notebooks.createNotebook(
+				projectId,
+				{ title: 'N', description: '', code: '' },
+				ACTOR,
+			);
+			const get = vi.spyOn(bucket, 'get');
+			const reads = () =>
+				get.mock.calls.filter(
+					([key]) => key === paths.project(projectId).notebook(notebook.id).meta,
+				);
+			await notebooks.getNotebookMeta(projectId, notebook.id);
+			await notebooks.getNotebookMeta(projectId, notebook.id);
+			expect(reads()).toHaveLength(2);
+			get.mockClear();
+			await notebooks.getNotebookMeta(projectId, notebook.id, { consistency: 'validated' });
+			await notebooks.getNotebookMeta(projectId, notebook.id, { consistency: 'validated' });
+			expect(reads()).toHaveLength(1);
+		});
+
+		it('revalidates security labels and preserves includeDeleted', async () => {
+			const notebook = await notebooks.createNotebook(
+				projectId,
+				{ title: 'N', description: '', code: '' },
+				ACTOR,
+			);
+			await notebooks.getSecurityLabels(projectId, notebook.id, { consistency: 'validated' });
+			const labels = { classification: 'secret', compartments: [] };
+			await notebooks.setSecurityLabels(projectId, notebook.id, labels, ACTOR);
+			const get = vi.spyOn(bucket, 'get');
+			expect(
+				await notebooks.getSecurityLabels(projectId, notebook.id, { consistency: 'validated' }),
+			).toEqual(labels);
+			expect(get).toHaveBeenCalledTimes(1);
+			await notebooks.deleteNotebook(projectId, notebook.id, ACTOR);
+			await expect(
+				notebooks.getSecurityLabels(projectId, notebook.id, { consistency: 'validated' }),
+			).rejects.toThrow(NotFoundError);
+			expect(
+				await notebooks.getSecurityLabels(projectId, notebook.id, {
+					consistency: 'validated',
+					includeDeleted: true,
+				}),
+			).toEqual(labels);
+		});
+
+		it('revalidates a deletion from another replica on the next read', async () => {
+			const notebook = await notebooks.createNotebook(
+				projectId,
+				{ title: 'N', description: '', code: '' },
+				ACTOR,
+			);
+			await notebooks.getNotebookMeta(projectId, notebook.id, { consistency: 'validated' });
+			await new NotebookService(bucket, catalog).deleteNotebook(projectId, notebook.id, ACTOR);
+			expect(
+				(await notebooks.getNotebookMeta(projectId, notebook.id, { consistency: 'validated' }))
+					.status,
+			).toBe('deleted');
+		});
+
+		it.each(['head', 'get'] as const)(
+			'fails closed when %s fails during revalidation',
+			async (method) => {
+				const notebook = await notebooks.createNotebook(
+					projectId,
+					{ title: 'N', description: '', code: '' },
+					ACTOR,
+				);
+				await notebooks.getSecurityLabels(projectId, notebook.id, { consistency: 'validated' });
+				await new NotebookService(bucket, catalog).setSecurityLabels(
+					projectId,
+					notebook.id,
+					{ classification: 'secret', compartments: [] },
+					ACTOR,
+				);
+				vi.spyOn(bucket, method).mockRejectedValueOnce(new Error('storage unavailable'));
+				await expect(
+					notebooks.getSecurityLabels(projectId, notebook.id, { consistency: 'validated' }),
+				).rejects.toThrow('storage unavailable');
+				expect(
+					await notebooks.getSecurityLabels(projectId, notebook.id, { consistency: 'validated' }),
+				).toEqual({ classification: 'secret', compartments: [] });
+			},
+		);
+
+		it('does not serve cached notebook metadata after removal', async () => {
+			const notebook = await notebooks.createNotebook(
+				projectId,
+				{ title: 'N', description: '', code: '' },
+				ACTOR,
+			);
+			await notebooks.getNotebookMeta(projectId, notebook.id, { consistency: 'validated' });
+			await bucket.delete(paths.project(projectId).notebook(notebook.id).meta);
+			await expect(
+				notebooks.getNotebookMeta(projectId, notebook.id, { consistency: 'validated' }),
+			).rejects.toThrow(NotFoundError);
+		});
+
+		it('does not cache missing notebook metadata', async () => {
+			const notebookId = createNotebookId();
+			await expect(
+				notebooks.getNotebookMeta(projectId, notebookId, { consistency: 'validated' }),
+			).rejects.toThrow(NotFoundError);
+			const notebook = await notebooks.createNotebook(
+				projectId,
+				{ title: 'N', description: '', code: '' },
+				ACTOR,
+			);
+			await bucket.put(
+				paths.project(projectId).notebook(notebookId).meta,
+				JSON.stringify({ ...notebook, id: notebookId }),
+			);
+			expect(
+				(await notebooks.getNotebookMeta(projectId, notebookId, { consistency: 'validated' })).id,
+			).toBe(notebookId);
+		});
+	});
+
 	describe('source updates during sessions', () => {
 		it.each(['update', 'deps', 'restore', 'notebook.py', 'pyproject.toml'] as const)(
 			'blocks %s during editing and permits retry after the editor fails without a sandbox',

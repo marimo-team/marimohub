@@ -272,11 +272,15 @@ async function loadAdmission(
 		);
 	}
 
-	const projectRead = deps.services.projects.getProject(projectId);
+	const projectRead = deps.services.projects.getProject(projectId, { consistency: 'validated' });
 	// Handle notebook failures even when a project failure returns before this read settles.
 	const notebookRead = (async () => {
 		await assertSessionPreviewActive(deps, projectId, session);
-		return deps.services.notebooks.getSecurityLabels(projectId, sessionResourceNotebookId(session));
+		return deps.services.notebooks.getSecurityLabels(
+			projectId,
+			sessionResourceNotebookId(session),
+			{ consistency: 'validated' },
+		);
 	})().then(
 		(value) => ({ status: 'fulfilled' as const, value }),
 		(reason: unknown) => ({ status: 'rejected' as const, reason }),

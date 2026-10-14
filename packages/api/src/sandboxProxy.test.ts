@@ -551,6 +551,66 @@ describe('authorizeProxyRequest', () => {
 		}
 	});
 
+	it('caches metadata for app requests while reading the session on every request', async () => {
+		const { d, recorded, sessionReads } = recordedDeps();
+		const editor = await d.services.sessions.getSession(pid, sessionId);
+		const app = await d.services.sessions.createSession({
+			project_id: pid,
+			notebook_id: editor.notebook_id,
+			user_id: ACTOR,
+			mode: 'app',
+		});
+		sessionId = app.session_id;
+		await d.services.sessions.setRunning(pid, sessionId, '/proxy/x/', false, ORIGIN);
+		token = await signProxyToken(pid, sessionId, SECRET);
+		recorded.calls.get.length = 0;
+		for (let i = 0; i < 2; i++) {
+			expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({ kind: 'forward' });
+		}
+		expect(recorded.calls.get.filter((key) => key === paths.project(pid).meta)).toHaveLength(1);
+		expect(
+			recorded.calls.get.filter(
+				(key) => key === paths.project(pid).notebook(editor.notebook_id).meta,
+			),
+		).toHaveLength(1);
+		expect(sessionReads()).toBe(2);
+	});
+
+	it.each(['membership', 'project', 'notebook', 'labels'] as const)(
+		'revalidates app proxy access immediately after a replica changes %s',
+		async (change) => {
+			const writer = createServices(bucket);
+			await writer.projects.addMember(pid, { user_id: STRANGER }, 'app-user', ACTOR);
+			const { d } = recordedDeps(STRANGER);
+			const editor = await writer.sessions.getSession(pid, sessionId);
+			const app = await writer.sessions.createSession({
+				project_id: pid,
+				notebook_id: editor.notebook_id,
+				user_id: ACTOR,
+				mode: 'app',
+			});
+			await writer.sessions.setRunning(pid, app.session_id, '/proxy/x/', false, ORIGIN);
+			const appToken = await signProxyToken(pid, app.session_id, SECRET);
+			const request = () => req(`/proxy/${appToken}/`);
+			expect(await authorizeProxyRequest(request(), d)).toMatchObject({ kind: 'forward' });
+			if (change === 'membership') await writer.projects.removeMember(pid, STRANGER, ACTOR);
+			if (change === 'project') await writer.projects.deleteProject(pid, ACTOR);
+			if (change === 'notebook')
+				await writer.notebooks.deleteNotebook(pid, editor.notebook_id, ACTOR);
+			if (change === 'labels')
+				await writer.notebooks.setSecurityLabels(
+					pid,
+					editor.notebook_id,
+					{ classification: 'secret', compartments: [] },
+					ACTOR,
+				);
+			expect(await authorizeProxyRequest(request(), d)).toMatchObject({
+				kind: 'reject',
+				status: change === 'membership' ? 403 : 404,
+			});
+		},
+	);
+
 	it('loads project and notebook permissions concurrently after loading the session', async () => {
 		const d = deps(ACTOR);
 		const session = await d.services.sessions.getSession(pid, sessionId);
@@ -574,7 +634,7 @@ describe('authorizeProxyRequest', () => {
 		expect(notebookSpy).not.toHaveBeenCalled();
 		sessionRead.resolve(session);
 		await notebookStarted.promise;
-		expect(projectSpy).toHaveBeenCalledWith(pid);
+		expect(projectSpy).toHaveBeenCalledWith(pid, { consistency: 'validated' });
 		projectRead.resolve(project);
 		expect(await decision).toMatchObject({ kind: 'forward' });
 	});

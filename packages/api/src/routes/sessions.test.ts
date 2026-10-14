@@ -2776,6 +2776,35 @@ describe('Session routes', () => {
 		await expectError(await stranger('POST', sessionsPath(`/${sid}/heartbeat`)), 404, 'NOT_FOUND');
 	});
 
+	it('reuses project metadata across heartbeats', async () => {
+		const sid = await startSession();
+		const recording = new RecordingBucket(bucket);
+		const api = createTestApi({
+			bucket,
+			deps: { bucket: recording, services: createServices(recording) },
+		});
+		await expectOk(await api.request('POST', sessionsPath(`/${sid}/heartbeat`)));
+		await expectOk(await api.request('POST', sessionsPath(`/${sid}/heartbeat`)));
+		expect(recording.calls.get.filter((key) => key === paths.project(pid).meta)).toHaveLength(1);
+	});
+
+	it.each(['local', 'replica'] as const)(
+		'rejects the next heartbeat after %s membership revocation',
+		async (writer) => {
+			const api = createTestApi({ bucket, userId: STRANGER, compute: makeFakeCompute() });
+			await api.deps.services.projects.addMember(pid, { user_id: STRANGER }, 'editor', ACTOR);
+			const session = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			const heartbeat = sessionsPath(`/${session.session_id}/heartbeat`);
+			await expectOk(await api.request('POST', heartbeat));
+			await (writer === 'local' ? api.deps.services : createServices(bucket)).projects.removeMember(
+				pid,
+				STRANGER,
+				ACTOR,
+			);
+			await expectError(await api.request('POST', heartbeat), 404, 'NOT_FOUND');
+		},
+	);
+
 	it('POST /sessions/{sid}/heartbeat happy path as the owner returns 200', async () => {
 		const sid = await startSession();
 		const data = await expectOk<ApiSession>(await owner('POST', sessionsPath(`/${sid}/heartbeat`)));

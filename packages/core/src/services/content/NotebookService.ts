@@ -1,3 +1,5 @@
+import { EtagRecordCache } from '../../etagRecordCache';
+import type { ReadConsistency } from './ProjectService';
 import { NotebookImportService } from './NotebookImportService';
 import { PreviewStore } from './PreviewStore';
 import { previewKey, PreviewRecordSchema } from './notebookPreviews';
@@ -153,6 +155,9 @@ export interface CommitSessionResult {
 }
 
 export class NotebookService {
+	// Only stored metadata is cached; ETags and preview validity are checked on every read.
+	private readonly metaCache = new EtagRecordCache<NotebookMeta>(50_000);
+
 	readonly synced: SyncedNotebookService;
 	readonly thumbnails: ThumbnailService;
 	readonly workspace: NotebookWorkspaceService;
@@ -286,18 +291,42 @@ export class NotebookService {
 	private async readNotebookMeta(
 		projectId: ProjectId,
 		notebookId: NotebookId,
+		options: { consistency?: ReadConsistency } = {},
 	): Promise<NotebookMeta> {
 		const nb = paths.project(projectId).notebook(notebookId);
+		if (
+			options.consistency === 'validated' &&
+			(this.metaCache.has(nb.meta) || this.metaCache.has(nb.previewMeta))
+		) {
+			const head = (await this.bucket.head(nb.meta)) ?? (await this.bucket.head(nb.previewMeta));
+			if (!head) {
+				this.metaCache.delete(nb.meta);
+				this.metaCache.delete(nb.previewMeta);
+				throw new NotFoundError(`Notebook ${notebookId} not found`);
+			}
+			const cached = this.metaCache.get(head.key, head.etag);
+			if (cached) return cached;
+		}
 		const normal = await this.bucket.get(nb.meta);
-		if (normal) return readStored(NotebookMetaSchema, normal, nb.meta);
 		// Old replicas cannot strip the preview marker by rewriting ordinary meta.json.
-		const object = await this.bucket.get(nb.previewMeta);
+		const object = normal ?? (await this.bucket.get(nb.previewMeta));
 		if (!object) throw new NotFoundError(`Notebook ${notebookId} not found`);
-		return readStored(PreviewRuntimeMetaSchema, object, nb.previewMeta);
+		const meta = normal
+			? await readStored(NotebookMetaSchema, object, nb.meta)
+			: await readStored(PreviewRuntimeMetaSchema, object, nb.previewMeta);
+		if (options.consistency === 'validated') this.metaCache.set(object.key, object.etag, meta);
+		return meta;
 	}
 
-	async getNotebookMeta(projectId: ProjectId, notebookId: NotebookId): Promise<NotebookMeta> {
-		return this.resolvePreviewMeta(projectId, await this.readNotebookMeta(projectId, notebookId));
+	async getNotebookMeta(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		options: { consistency?: ReadConsistency } = {},
+	): Promise<NotebookMeta> {
+		return this.resolvePreviewMeta(
+			projectId,
+			await this.readNotebookMeta(projectId, notebookId, options),
+		);
 	}
 
 	private async resolvePreviewMeta(
@@ -354,9 +383,9 @@ export class NotebookService {
 	async getSecurityLabels(
 		projectId: ProjectId,
 		notebookId: NotebookId,
-		options: { includeDeleted?: boolean } = {},
+		options: { includeDeleted?: boolean; consistency?: ReadConsistency } = {},
 	): Promise<ResourceSecurityLabels | null> {
-		const meta = await this.getNotebookMeta(projectId, notebookId);
+		const meta = await this.getNotebookMeta(projectId, notebookId, options);
 		if (meta.status === 'deleted' && !options.includeDeleted) {
 			throw new NotFoundError(`Notebook ${notebookId} not found`);
 		}

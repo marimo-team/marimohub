@@ -1,3 +1,4 @@
+import { EtagRecordCache } from '../../etagRecordCache';
 import { nextIsoTimestamp } from '../../utcDate';
 import { projectActionMinRole } from '../authorization/actions';
 import { tokenGrantAllowsProject } from '../../tokenGrants';
@@ -65,6 +66,8 @@ import type { ProjectListFilters } from './listFilters';
 
 /** Grace period before a soft-deleted project's storage is purged by the GC sweep. */
 export const DEFAULT_DELETED_PROJECT_RETENTION_MS = Millis.days(30);
+
+export type ReadConsistency = 'fresh' | 'validated';
 
 export interface CreateProjectInput {
 	name: string;
@@ -227,6 +230,9 @@ function normalizeProjectName(name: string): string {
 }
 
 export class ProjectService {
+	// Validate against storage on every cache read so revocations cross replicas immediately.
+	private readonly projectCache = new EtagRecordCache<Project>();
+
 	constructor(
 		private bucket: Bucket,
 		private catalog: CatalogService,
@@ -347,12 +353,27 @@ export class ProjectService {
 		return hasAppRole;
 	}
 
-	async getProject(id: ProjectId): Promise<Project> {
-		const obj = await this.bucket.get(paths.project(id).meta);
+	async getProject(
+		id: ProjectId,
+		options: { consistency?: ReadConsistency } = {},
+	): Promise<Project> {
+		const key = paths.project(id).meta;
+		if (options.consistency === 'validated' && this.projectCache.has(key)) {
+			const head = await this.bucket.head(key);
+			if (!head) {
+				this.projectCache.delete(key);
+				throw new NotFoundError(`Project ${id} not found`);
+			}
+			const cached = this.projectCache.get(key, head.etag);
+			if (cached) return cached;
+		}
+		const obj = await this.bucket.get(key);
 		if (!obj) {
 			throw new NotFoundError(`Project ${id} not found`);
 		}
-		return readStored(ProjectSchema, obj, paths.project(id).meta);
+		const project = await readStored(ProjectSchema, obj, key);
+		if (options.consistency === 'validated') this.projectCache.set(key, obj.etag, project);
+		return project;
 	}
 
 	async createProject(input: CreateProjectInput, actor: UserId): Promise<Project> {

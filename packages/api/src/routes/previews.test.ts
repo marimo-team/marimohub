@@ -628,32 +628,40 @@ describe('Notebook previews', () => {
 		).toBe('deleting');
 	});
 
-	it('inherits live parent labels and rejects sessions after parent deletion', async () => {
-		const record = await create();
-		const child = record.current!.notebook_id;
-		const key = paths.project(pid).notebook(nid).meta;
-		const object = (await api.bucket.get(key))!;
-		const meta = await readStored(NotebookMetaSchema, object, key);
-		await api.bucket.put(
-			key,
-			JSON.stringify({
-				...meta,
-				security_labels: { classification: 'restricted', compartments: ['review'] },
-			}),
-		);
-		expect(await api.deps.services.notebooks.getSecurityLabels(pid, child)).toEqual({
-			classification: 'restricted',
-			compartments: ['review'],
-		});
-		await api.bucket.put(key, JSON.stringify({ ...meta, status: 'deleted' }));
-		await expectError(
-			await api.request('POST', `${base}/${record.id}/sessions`, { mode: 'app' }),
-			404,
-		);
-		await expect(api.deps.services.notebooks.getSecurityLabels(pid, child)).rejects.toThrow();
-		await sweepPreviews(api.deps);
-		expect((await api.deps.services.previews.get(pid, nid, record.id)).state).toBe('deleted');
-	});
+	it.each(['fresh', 'validated'] as const)(
+		'inherits live parent labels and rejects parent deletion with %s reads',
+		async (consistency) => {
+			const record = await create();
+			const child = record.current!.notebook_id;
+			await api.deps.services.notebooks.getSecurityLabels(pid, child, { consistency });
+			const key = paths.project(pid).notebook(nid).meta;
+			const object = (await api.bucket.get(key))!;
+			const meta = await readStored(NotebookMetaSchema, object, key);
+			await api.bucket.put(
+				key,
+				JSON.stringify({
+					...meta,
+					security_labels: { classification: 'restricted', compartments: ['review'] },
+				}),
+			);
+			expect(
+				await api.deps.services.notebooks.getSecurityLabels(pid, child, { consistency }),
+			).toEqual({
+				classification: 'restricted',
+				compartments: ['review'],
+			});
+			await api.bucket.put(key, JSON.stringify({ ...meta, status: 'deleted' }));
+			await expectError(
+				await api.request('POST', `${base}/${record.id}/sessions`, { mode: 'app' }),
+				404,
+			);
+			await expect(
+				api.deps.services.notebooks.getSecurityLabels(pid, child, { consistency }),
+			).rejects.toThrow();
+			await sweepPreviews(api.deps);
+			expect((await api.deps.services.previews.get(pid, nid, record.id)).state).toBe('deleted');
+		},
+	);
 	it('enforces token actions before resolving refs or starting preview code', async () => {
 		const record = await create();
 		const tokenApi = (actions: AuthorizationAction[], projects: ProjectId[] = [pid]) =>
@@ -1081,6 +1089,16 @@ describe('Preview failure recovery and boundaries', () => {
 		expect(record.revisions.map((revision) => revision.notebook_id)).toEqual([]);
 		expect(reader.getBranchHead).not.toHaveBeenCalled();
 		expect(reader.fetchWorkspace).not.toHaveBeenCalled();
+	});
+
+	it('rejects an expired preview even when its runtime metadata is cached', async () => {
+		const record = await create();
+		const child = record.current!.notebook_id;
+		await api.deps.services.notebooks.getNotebookMeta(pid, child, { consistency: 'validated' });
+		vi.spyOn(Date, 'now').mockReturnValue(Date.parse(record.expires_at));
+		await expect(
+			api.deps.services.notebooks.getNotebookMeta(pid, child, { consistency: 'validated' }),
+		).rejects.toThrow('Preview not found');
 	});
 
 	it('accepts the maximum lifetime but denies access at the exact expiry before cleanup runs', async () => {

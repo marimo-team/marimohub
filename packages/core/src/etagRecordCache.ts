@@ -15,6 +15,10 @@ export class EtagRecordCache<T> {
 		return this.entries.size;
 	}
 
+	has(key: string): boolean {
+		return this.entries.has(key);
+	}
+
 	get(key: string, etag: string): T | undefined {
 		const entry = this.entries.get(key);
 		if (!entry || entry.etag !== etag) return undefined;

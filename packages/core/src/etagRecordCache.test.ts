@@ -10,7 +10,9 @@ describe('EtagRecordCache', () => {
 	it('misses unknown keys and mismatched ETags', () => {
 		const cache = new EtagRecordCache<number>();
 		expect(cache.get('a', 'v1')).toBeUndefined();
+		expect(cache.has('a')).toBe(false);
 		cache.set('a', 'v1', 1);
+		expect(cache.has('a')).toBe(true);
 		expect(cache.get('a', 'v2')).toBeUndefined();
 		expect(cache.get('a', 'v1')).toBe(1);
 	});

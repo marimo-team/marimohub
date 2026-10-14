@@ -1274,7 +1274,7 @@ export async function startNotebookSession(input: {
 	// Consume notebook errors after authorization so role denials retain their 403.
 	const notebookRead = notebooks.getNotebook(pid, nid);
 	notebookRead.catch(() => {});
-	const project = await projects.getProject(pid);
+	const project = await projects.getProject(pid, { consistency: 'validated' });
 	if (project.status === 'deleted') {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
