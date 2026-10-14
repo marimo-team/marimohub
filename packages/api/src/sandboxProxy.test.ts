@@ -20,6 +20,7 @@ import {
 	localResourceSecurity,
 	makeFakeCompute,
 	makeSubjectContext,
+	RecordingBucket,
 	TEST_KERNEL_AUTH_TOKEN,
 	uid,
 } from '@marimo-hub/core/testing';
@@ -102,6 +103,281 @@ describe('authorizeProxyRequest', () => {
 	function req(path: string): Request {
 		return new Request(`https://hub.example.com${path}`);
 	}
+
+	function recordedDeps(userId: UserId | null = ACTOR) {
+		const recorded = new RecordingBucket(bucket);
+		const d = { ...deps(userId), bucket: recorded, services: createServices(recorded) };
+		const sessionReads = () =>
+			recorded.calls.get.filter((key) => key === `_system/sessions/${pid}/${sessionId}.json`)
+				.length;
+		return { d, recorded, sessionReads };
+	}
+
+	it('starts a cold session read while the suspension check is pending', async () => {
+		const { d, sessionReads } = recordedDeps();
+		const suspension = Promise.withResolvers<boolean>();
+		vi.spyOn(d.services.identities, 'isSuspended').mockReturnValue(suspension.promise);
+		const decision = authorizeProxyRequest(req(`/proxy/${token}/`), d);
+		await vi.waitFor(() => expect(sessionReads()).toBe(1));
+		suspension.resolve(false);
+		expect(await decision).toMatchObject({ kind: 'forward' });
+	});
+
+	it('preserves suspension precedence when the speculative session read fails', async () => {
+		const d = deps(ACTOR);
+		vi.spyOn(d.services.sessions, 'getSession').mockRejectedValue(new Error('missing'));
+		vi.spyOn(d.services.identities, 'isSuspended').mockResolvedValue(true);
+		expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+			kind: 'reject',
+			status: 403,
+			code: 'USER_SUSPENDED',
+		});
+	});
+
+	it('reuses admission reads for five seconds while routing each path and query independently', async () => {
+		const { d, sessionReads } = recordedDeps();
+		const projectRead = vi.spyOn(d.services.projects, 'getProject');
+		const labelsRead = vi.spyOn(d.services.notebooks, 'getSecurityLabels');
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+		try {
+			for (const path of ['/assets/a.js?v=1', '/api/kernel?cell=2']) {
+				expect(await authorizeProxyRequest(req(`/proxy/${token}${path}`), d)).toMatchObject({
+					kind: 'forward',
+					targetUrl: `${ORIGIN}/proxy/${token}${path}`,
+				});
+			}
+			expect(sessionReads()).toBe(1);
+			expect(projectRead).toHaveBeenCalledTimes(1);
+			expect(labelsRead).toHaveBeenCalledTimes(1);
+			clock.mockReturnValue(Date.now() + 5_000);
+			expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+				kind: 'forward',
+			});
+			expect(sessionReads()).toBe(2);
+			expect(projectRead).toHaveBeenCalledTimes(2);
+			expect(labelsRead).toHaveBeenCalledTimes(2);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	it('refreshes an admission that expires while suspension verification is pending', async () => {
+		const { d } = recordedDeps();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+		const suspension = Promise.withResolvers<boolean>();
+		try {
+			await authorizeProxyRequest(req(`/proxy/${token}/`), d);
+			await d.services.sessions.terminate(pid, sessionId as never);
+			vi.spyOn(d.services.identities, 'isSuspended').mockReturnValue(suspension.promise);
+			const decision = authorizeProxyRequest(req(`/proxy/${token}/`), d);
+			await vi.waitFor(() => expect(d.services.identities.isSuspended).toHaveBeenCalled());
+			clock.mockReturnValue(Date.now() + 5_000);
+			suspension.resolve(false);
+			expect(await decision).toMatchObject({ kind: 'reject', status: 410 });
+		} finally {
+			suspension.resolve(false);
+			clock.mockRestore();
+		}
+	});
+
+	it.each(['entitlementsExpiresAt', 'credential'] as const)(
+		'caps admission freshness at the %s expiry',
+		async (field) => {
+			const { d, sessionReads } = recordedDeps();
+			const now = Date.now();
+			const user = (await d.authenticator.authenticate(req('/')))!;
+			const expiry = new Date(now + 1000).toISOString();
+			vi.spyOn(d.authenticator, 'authenticate').mockResolvedValue({
+				...user,
+				...(field === 'credential'
+					? { credential: { ...user.credential, expiresAt: expiry } }
+					: { entitlementsExpiresAt: expiry }),
+			});
+			const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+			try {
+				await authorizeProxyRequest(req(`/proxy/${token}/`), d);
+				clock.mockReturnValue(now + 1000);
+				await authorizeProxyRequest(req(`/proxy/${token}/`), d);
+				expect(sessionReads()).toBe(2);
+			} finally {
+				clock.mockRestore();
+			}
+		},
+	);
+
+	it('does not share a successful admission with another user', async () => {
+		const { d, sessionReads } = recordedDeps();
+		expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+			kind: 'forward',
+		});
+		d.authenticator = authAs(STRANGER);
+		expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+			kind: 'reject',
+			status: 403,
+		});
+		expect(sessionReads()).toBe(2);
+	});
+
+	it('does not share admissions across dependency instances', async () => {
+		const first = recordedDeps();
+		const second = recordedDeps();
+		await authorizeProxyRequest(req(`/proxy/${token}/`), first.d);
+		await authorizeProxyRequest(req(`/proxy/${token}/`), second.d);
+		expect(first.sessionReads()).toBe(1);
+		expect(second.sessionReads()).toBe(1);
+	});
+
+	it.each([
+		{ actions: ['project.read'], projects: '*', status: 403 },
+		{ actions: '*', projects: [ProjectId.parse('proj-0000000000000002')], status: 404 },
+	] satisfies (TokenGrant & { status: number })[])(
+		'does not reuse a browser admission for a restricted credential ($status)',
+		async ({ actions, projects, status }) => {
+			const { d, sessionReads } = recordedDeps();
+			expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+				kind: 'forward',
+			});
+			d.authenticator = authWithGrant({ actions, projects });
+			expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+				kind: 'reject',
+				status,
+			});
+			expect(sessionReads()).toBe(2);
+		},
+	);
+
+	it.each(['email', 'credential', 'groups', 'entitlements', 'entitlementsExpiresAt'] as const)(
+		'partitions admissions when the principal %s changes',
+		async (field) => {
+			const { d, sessionReads } = recordedDeps();
+			const user = (await d.authenticator.authenticate(req('/')))!;
+			const values = {
+				email: 'changed@example.com',
+				credential: { ...user.credential, subjectContextRef: 'another-context' },
+				groups: ['another-group'],
+				entitlements: ['project-creator'] as const,
+				entitlementsExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+			};
+			await authorizeProxyRequest(req(`/proxy/${token}/`), d);
+			vi.spyOn(d.authenticator, 'authenticate').mockResolvedValue({
+				...user,
+				[field]: values[field],
+			});
+			await authorizeProxyRequest(req(`/proxy/${token}/`), d);
+			expect(sessionReads()).toBe(2);
+		},
+	);
+
+	it('does not cache a denial after membership is granted', async () => {
+		const { d, sessionReads } = recordedDeps(STRANGER);
+		expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+			kind: 'reject',
+			status: 403,
+		});
+		await d.services.projects.addMember(pid, { user_id: STRANGER }, 'editor', ACTOR);
+		expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+			kind: 'forward',
+		});
+		expect(sessionReads()).toBe(2);
+	});
+
+	it.each(['stop', 'delete', 'revoke', 'labels'] as const)(
+		'enforces %s after the admission window',
+		async (change) => {
+			const { d } = recordedDeps(STRANGER);
+			await d.services.projects.addMember(pid, { user_id: STRANGER }, 'editor', ACTOR);
+			const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+			try {
+				expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+					kind: 'forward',
+				});
+				if (change === 'stop') await d.services.sessions.terminate(pid, sessionId as never);
+				else if (change === 'delete') await d.services.projects.deleteProject(pid, ACTOR);
+				else if (change === 'revoke') await d.services.projects.removeMember(pid, STRANGER, ACTOR);
+				else
+					await d.services.projects.setSecurityLabels(
+						pid,
+						{ classification: 'SECRET', compartments: [] },
+						ACTOR,
+					);
+				expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+					kind: 'forward',
+				});
+				clock.mockReturnValue(Date.now() + 5_000);
+				expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+					kind: 'reject',
+				});
+			} finally {
+				clock.mockRestore();
+			}
+		},
+	);
+
+	it.each(['unauthenticated', 'suspended', 'unavailable'] as const)(
+		'enforces %s on a cached admission',
+		async (state) => {
+			const { d, sessionReads } = recordedDeps();
+			await authorizeProxyRequest(req(`/proxy/${token}/`), d);
+			if (state === 'unauthenticated') d.authenticator = authAs(null);
+			else if (state === 'suspended')
+				vi.spyOn(d.services.identities, 'isSuspended').mockResolvedValue(true);
+			else
+				vi.spyOn(d.services.identities, 'isSuspended').mockRejectedValue(
+					new UnavailableError('down'),
+				);
+			expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+				kind: 'reject',
+				status: state === 'unauthenticated' ? 401 : state === 'suspended' ? 403 : 503,
+			});
+			expect(sessionReads()).toBe(1);
+		},
+	);
+
+	it('keeps kernel and surface admissions separate and rebuilds surface URLs on hits', async () => {
+		const { d, sessionReads } = recordedDeps();
+		await d.services.sessions.setSurfaceState(pid, sessionId as never, 'vscode', {
+			status: 'ready',
+			origin_url: 'http://vscode.internal:8443',
+			proxy_path: 'strip-prefix',
+		});
+		const before = sessionReads();
+		await authorizeProxyRequest(req(`/proxy/${token}/assets/a.js`), d);
+		for (const path of ['/stable/a.js?v=1', '/stable/b.js?v=2']) {
+			const decision = await authorizeProxyRequest(req(`/surface-proxy/${token}/vscode${path}`), d);
+			expect(decision).toMatchObject({
+				kind: 'forward',
+				targetUrl: `http://vscode.internal:8443${path}`,
+			});
+			expect(decision).not.toHaveProperty('kernelAuthToken');
+		}
+		expect(sessionReads() - before).toBe(2);
+	});
+
+	it('rejects a cached admission at its authorization deadline before five seconds elapse', async () => {
+		const { d, sessionReads } = recordedDeps();
+		const session = await d.services.sessions.getSession(pid, sessionId as never);
+		const deadline = Date.now() + 1000;
+		vi.spyOn(d.services.sessions, 'getSession').mockResolvedValue({
+			...session,
+			authorization_expires_at: new Date(deadline).toISOString(),
+		});
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(deadline - 1000);
+		try {
+			expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+				kind: 'forward',
+				authorizationDeadline: deadline,
+			});
+			clock.mockReturnValue(deadline);
+			expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+				kind: 'reject',
+				status: 410,
+			});
+			expect(d.services.sessions.getSession).toHaveBeenCalledTimes(1);
+			expect(sessionReads()).toBe(1);
+		} finally {
+			clock.mockRestore();
+		}
+	});
 
 	it('loads project and notebook permissions concurrently after loading the session', async () => {
 		const d = deps(ACTOR);

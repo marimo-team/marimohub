@@ -13,6 +13,7 @@
 import type { MiddlewareHandler } from 'hono';
 import {
 	AppPoolService,
+	LazyMap,
 	sessionMode,
 	sessionResourceNotebookId,
 	NotFoundError,
@@ -20,6 +21,7 @@ import {
 	UnavailableError,
 	verifyProxyToken,
 } from '@marimo-hub/core';
+import type { AuthenticatedPrincipal, ProjectId, SessionId } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
 import { assertSessionPreviewActive, authorizationService, fail } from './shared';
@@ -47,6 +49,39 @@ export type ProxyDecision =
 			authorizationDeadline?: number;
 	  };
 
+type Rejection = Extract<ProxyDecision, { kind: 'reject' }>;
+type Admission = Omit<Extract<ProxyDecision, { kind: 'forward' }>, 'targetUrl'> & {
+	originUrl: string;
+	proxyPath: 'strip-prefix' | 'preserve-prefix';
+	cacheable: boolean;
+};
+type CachedAdmission = { admission: Admission; expiresAt: number };
+type Session = Awaited<ReturnType<ApiDeps['services']['sessions']['getSession']>>;
+
+const ADMISSION_CACHES = new WeakMap<ApiDeps, LazyMap<string, CachedAdmission>>();
+const ADMISSION_TTL_MS = 5_000;
+
+class AdmissionRejectedError extends Error {
+	constructor(readonly decision: Rejection) {
+		super(decision.message);
+		this.name = 'AdmissionRejectedError';
+	}
+}
+
+function admissionCache(deps: ApiDeps): LazyMap<string, CachedAdmission> {
+	let cache = ADMISSION_CACHES.get(deps);
+	if (!cache) {
+		cache = new LazyMap(
+			async () => {
+				throw new Error('An admission load function is required.');
+			},
+			{ maxSize: 10_000 },
+		);
+		ADMISSION_CACHES.set(deps, cache);
+	}
+	return cache;
+}
+
 const PROXY_PREFIX = /^\/proxy\/([^/]+)/;
 const SURFACE_PROXY_PREFIX = /^\/surface-proxy\/([^/]+)\/([^/]+)/;
 
@@ -61,7 +96,11 @@ function trimTrailingSlash(s: string): string {
  * `reject` with an HTTP status to deny, or `forward` with the kernel target.
  *
  * Order matters: token signature first (cheap, no I/O), then authentication, then
- * session liveness, then the per-session role check.
+ * suspension, then session liveness and the per-session role check. Successful
+ * editor admissions are cached for up to 5 s: stops, role revocations, project
+ * deletion, and label changes can lag by that window. Apps and previews require
+ * fresh checks for pool invalidation, label changes, and preview revocation.
+ * Suspension has its own 10 s cache; explicit authorization deadlines never lag.
  */
 export async function authorizeProxyRequest(
 	request: Request,
@@ -98,6 +137,31 @@ export async function authorizeProxyRequest(
 		};
 	}
 
+	const surfaceId = surfaceMatch?.[2];
+	const cache = admissionCache(deps);
+	// Grants, groups, email-based admin policy, and context references can differ
+	// between credentials belonging to the same user.
+	const key = JSON.stringify([
+		projectId,
+		sessionId,
+		surfaceId,
+		user.id,
+		user.email,
+		user.credential,
+		user.entitlements,
+		user.groups,
+		user.entitlementsExpiresAt,
+	]);
+	const startedAt = Date.now();
+	let cached = cache.getIfPresent(key);
+	if (cached && cached.expiresAt <= startedAt) {
+		cache.delete(key);
+		cached = undefined;
+	}
+	const sessionRead = cached ? undefined : deps.services.sessions.getSession(projectId, sessionId);
+	// Suspension can return before this speculative read settles.
+	void sessionRead?.catch(() => {});
+
 	// Proxy traffic bypasses the API auth middleware, so both HTTP and WebSocket
 	// forwarding enforce suspension here.
 	try {
@@ -121,9 +185,70 @@ export async function authorizeProxyRequest(
 		throw err;
 	}
 
+	const current = cache.getIfPresent(key);
+	if (current && current.expiresAt <= Date.now()) cache.delete(key);
+
+	let admission: Admission;
+	try {
+		const loaded = await cache.getOrLoad(key, async () => {
+			const result = await loadAdmission(
+				deps,
+				user,
+				projectId,
+				sessionId,
+				surfaceId,
+				sessionRead ?? deps.services.sessions.getSession(projectId, sessionId),
+			);
+			if (result.kind === 'reject') throw new AdmissionRejectedError(result);
+			const principalDeadlines = [user.entitlementsExpiresAt, user.credential.expiresAt]
+				.filter((expiry): expiry is string => expiry !== undefined)
+				.map((expiry) => Date.parse(expiry))
+				.filter(Number.isFinite);
+			return {
+				admission: result,
+				expiresAt: Math.min(
+					startedAt + (result.cacheable ? ADMISSION_TTL_MS : 0),
+					...principalDeadlines,
+				),
+			};
+		});
+		admission = loaded.admission;
+	} catch (error) {
+		if (error instanceof AdmissionRejectedError) return error.decision;
+		throw error;
+	}
+	if (
+		admission.authorizationDeadline !== undefined &&
+		Date.now() >= admission.authorizationDeadline
+	) {
+		cache.delete(key);
+		return {
+			kind: 'reject',
+			status: 410,
+			code: 'GONE',
+			message: 'Session authorization has expired',
+		};
+	}
+	const { originUrl, proxyPath, cacheable, ...forward } = admission;
+	if (!cacheable) cache.delete(key);
+	const upstreamPath =
+		surfaceMatch && proxyPath === 'strip-prefix'
+			? url.pathname.slice(surfaceMatch[0].length) || '/'
+			: url.pathname;
+	return { ...forward, targetUrl: `${trimTrailingSlash(originUrl)}${upstreamPath}${url.search}` };
+}
+
+async function loadAdmission(
+	deps: ApiDeps,
+	user: AuthenticatedPrincipal,
+	projectId: ProjectId,
+	sessionId: SessionId,
+	surfaceId: string | undefined,
+	sessionRead: Promise<Session>,
+): Promise<Admission | Rejection> {
 	let session;
 	try {
-		session = await deps.services.sessions.getSession(projectId, sessionId);
+		session = await sessionRead;
 	} catch {
 		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
 	}
@@ -143,7 +268,6 @@ export async function authorizeProxyRequest(
 		};
 	}
 
-	const surfaceId = surfaceMatch?.[2];
 	const surfaceState = surfaceId ? session.surfaces?.[surfaceId] : undefined;
 	const originUrl = surfaceId
 		? surfaceState?.status === 'ready'
@@ -196,14 +320,7 @@ export async function authorizeProxyRequest(
 		};
 	}
 	const notebookLabels = notebookResult.value;
-	// ONE decision covers the whole gate: lifecycle (a soft-deleted project's
-	// kernels go dark immediately — this is the only thing in the
-	// browser→kernel path, and the sandbox may still be alive), session
-	// admission (role re-checked per request, so a revoked membership cuts
-	// kernel access), and the label constraints (project labels + notebook
-	// override — one subject-context resolve and one adapter round-trip, not
-	// one per gate). Lifecycle and constraint denials mask as a missing
-	// session; membership and session denials keep the historical 403.
+	// Lifecycle and label denials mask as missing; membership denials remain 403.
 	const decision = await authorizationService(deps).authorize(
 		user,
 		surfaceId ? 'session.surface' : 'session.proxy',
@@ -270,16 +387,13 @@ export async function authorizeProxyRequest(
 		(surfaceId === 'vscode' && deps.sandbox.surfaces?.vscode?.flavor === 'openvscode'
 			? 'preserve-prefix'
 			: 'strip-prefix');
-	const upstreamPath =
-		surfaceMatch && proxyPath === 'strip-prefix'
-			? url.pathname.slice(surfaceMatch[0].length) || '/'
-			: url.pathname;
-	const targetUrl = `${trimTrailingSlash(originUrl)}${upstreamPath}${url.search}`;
 	return {
 		kind: 'forward',
-		targetUrl,
+		originUrl,
+		proxyPath,
+		cacheable: sessionMode(session) !== 'app' && session.origin?.type !== 'preview',
 		sessionId,
-		...(kernelMatch && session.kernel_auth_token
+		...(!surfaceId && session.kernel_auth_token
 			? { kernelAuthToken: session.kernel_auth_token }
 			: {}),
 		...(effectiveDeadline !== undefined ? { authorizationDeadline: effectiveDeadline } : {}),
@@ -354,9 +468,9 @@ function requestHeaders(
 
 function responseHeaders(headers: Headers): Headers {
 	const out = new Headers();
-	// `fetch` transparently decodes a compressed response body but leaves the
-	// original content-encoding/length headers in place — forwarding them would
-	// make the browser double-decode (or truncate) the already-decoded body.
+	// The Node entrypoint requests identity upstream and compresses downstream.
+	// If an upstream still encodes its body, fetch decodes it but retains these
+	// headers; drop them to prevent double decoding or truncation.
 	const decoded = headers.has('content-encoding');
 	headers.forEach((value, key) => {
 		const k = key.toLowerCase();
