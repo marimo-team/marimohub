@@ -2,7 +2,7 @@ import { once } from 'node:events';
 import { createServer, get } from 'node:http';
 import type { Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { serve } from '@hono/node-server';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createInitializedBucket, makeTestDeps } from '@marimo-hub/api/testing';
@@ -14,10 +14,10 @@ import type { BootstrapHandle } from './bootstrap';
 const SECRET = 'a-test-signing-secret-at-least-32-bytes-long!!';
 const JAVASCRIPT = 'console.log("kernel asset");\n'.repeat(200);
 
-function rawGet(url: string, encoding: string) {
+function rawGet(url: string, encoding: string, method = 'GET') {
 	return new Promise<{ status: number; headers: Record<string, unknown>; body: Buffer }>(
 		(resolve, reject) => {
-			get(url, { headers: { 'accept-encoding': encoding } }, (response) => {
+			get(url, { method, headers: { 'accept-encoding': encoding } }, (response) => {
 				const chunks: Buffer[] = [];
 				response.on('data', (chunk: Buffer) => chunks.push(chunk));
 				response.on('error', reject);
@@ -40,10 +40,37 @@ describe('Node proxy compression', () => {
 	let token: string;
 	let eventStream: ServerResponse | undefined;
 	let upstreamEncoding: string | undefined;
+	let upstreamRequests = 0;
 
 	beforeAll(async () => {
 		upstream = createServer((request, response) => {
 			upstreamEncoding = request.headers['accept-encoding'];
+			upstreamRequests++;
+			if (request.url?.endsWith('/disconnect')) {
+				request.socket.destroy();
+				return;
+			}
+			if (request.url?.endsWith('/encoded')) {
+				const body = gzipSync(JAVASCRIPT);
+				response.writeHead(200, {
+					'content-type': 'text/javascript',
+					'content-encoding': 'gzip',
+					'content-length': body.length,
+				});
+				response.end(body);
+				return;
+			}
+			if (request.url?.endsWith('/small')) {
+				response.writeHead(200, { 'content-type': 'text/javascript', 'content-length': 2 });
+				response.end('ok');
+				return;
+			}
+			if (request.url?.endsWith('/empty')) {
+				response.writeHead(204, { 'content-type': 'text/javascript' });
+				response.end();
+				return;
+			}
+
 			if (request.url?.endsWith('/echo')) {
 				response.writeHead(200, { 'content-type': 'text/plain' });
 				request.pipe(response);
@@ -55,14 +82,17 @@ describe('Node proxy compression', () => {
 				response.write('data: first\n\n');
 				return;
 			}
-			response.writeHead(request.url?.endsWith('/partial') ? 206 : 200, {
-				'content-type': 'text/javascript',
-				'content-length': Buffer.byteLength(JAVASCRIPT),
-				...(request.url?.endsWith('/no-transform') ? { 'cache-control': 'no-transform' } : {}),
-				...(request.url?.endsWith('/partial')
-					? { 'content-range': `bytes 0-${JAVASCRIPT.length - 1}/${JAVASCRIPT.length * 2}` }
-					: {}),
-			});
+			response.writeHead(
+				request.url?.endsWith('/partial') ? 206 : request.url?.endsWith('/unavailable') ? 503 : 200,
+				{
+					'content-type': 'text/javascript',
+					'content-length': Buffer.byteLength(JAVASCRIPT),
+					...(request.url?.endsWith('/no-transform') ? { 'cache-control': 'no-transform' } : {}),
+					...(request.url?.endsWith('/partial')
+						? { 'content-range': `bytes 0-${JAVASCRIPT.length - 1}/${JAVASCRIPT.length * 2}` }
+						: {}),
+				},
+			);
 			response.end(JAVASCRIPT);
 		});
 		upstream.listen(0, '127.0.0.1');
@@ -134,6 +164,7 @@ describe('Node proxy compression', () => {
 	afterEach(() => {
 		eventStream?.end();
 		eventStream = undefined;
+		upstreamRequests = 0;
 	});
 
 	afterAll(async () => {
@@ -210,6 +241,69 @@ describe('Node proxy compression', () => {
 		expect(response.status).toBe(path === 'partial' ? 206 : 200);
 		expect(response.headers['content-encoding']).toBeUndefined();
 		expect(response.body.toString()).toBe(JAVASCRIPT);
+	});
+
+	it('handles an upstream that sends gzip despite the identity request without double encoding', async () => {
+		const response = await rawGet(`${origin}/proxy/${token}/encoded`, 'gzip');
+		expect(response.status).toBe(200);
+		expect(response.headers['content-encoding']).toBe('gzip');
+		expect(response.headers['content-length']).toBeUndefined();
+		expect(gunzipSync(response.body).toString()).toBe(JAVASCRIPT);
+		expect(upstreamEncoding).toBe('identity');
+	});
+
+	it('leaves a body below the compression threshold unchanged', async () => {
+		const response = await rawGet(`${origin}/proxy/${token}/small`, 'gzip');
+		expect(response.headers['content-encoding']).toBeUndefined();
+		expect(response.headers['content-length']).toBe('2');
+		expect(response.body.toString()).toBe('ok');
+	});
+
+	it('preserves HEAD metadata without sending or compressing a body', async () => {
+		const response = await rawGet(`${origin}/proxy/${token}/assets/index.js`, 'gzip', 'HEAD');
+		expect(response.status).toBe(200);
+		expect(response.headers['content-encoding']).toBeUndefined();
+		expect(response.headers['content-length']).toBe(String(Buffer.byteLength(JAVASCRIPT)));
+		expect(response.body.length).toBe(0);
+	});
+
+	it('preserves an empty 204 response', async () => {
+		const response = await rawGet(`${origin}/proxy/${token}/empty`, 'gzip');
+		expect(response.status).toBe(204);
+		expect(response.headers['content-encoding']).toBeUndefined();
+		expect(response.body.length).toBe(0);
+	});
+
+	it('preserves upstream error status and body through compression without retrying', async () => {
+		const response = await rawGet(`${origin}/proxy/${token}/unavailable`, 'gzip');
+		expect(response.status).toBe(503);
+		expect(response.headers['content-encoding']).toBe('gzip');
+		expect(gunzipSync(response.body).toString()).toBe(JAVASCRIPT);
+		expect(upstreamRequests).toBe(1);
+	});
+
+	it('returns a gateway error after exhausting connection retries', async () => {
+		const response = await fetch(`${origin}/proxy/${token}/disconnect`, {
+			headers: { 'accept-encoding': 'gzip' },
+		});
+		expect(response.status).toBe(502);
+		expect(await response.json()).toEqual({
+			success: false,
+			error: { code: 'SERVICE_UNAVAILABLE', message: 'Kernel unavailable' },
+		});
+		expect(upstreamRequests).toBe(2);
+	});
+
+	it('rejects an invalid token without contacting the upstream', async () => {
+		const response = await fetch(`${origin}/proxy/invalid/assets/index.js`, {
+			headers: { 'accept-encoding': 'gzip' },
+		});
+		expect(response.status).toBe(403);
+		expect(await response.json()).toEqual({
+			success: false,
+			error: { code: 'FORBIDDEN', message: 'Invalid sandbox token' },
+		});
+		expect(upstreamRequests).toBe(0);
 	});
 
 	it('leaves non-proxy responses uncompressed', async () => {

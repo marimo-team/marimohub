@@ -205,6 +205,120 @@ describe('authorizeProxyRequest', () => {
 		},
 	);
 
+	it.each(['session', 'project', 'labels'] as const)(
+		'fails closed on a %s refresh error and retries without retaining the denial',
+		async (stage) => {
+			const { d, sessionReads } = recordedDeps();
+			const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+			try {
+				expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+					kind: 'forward',
+				});
+				if (stage === 'session')
+					vi.spyOn(d.services.sessions, 'getSession').mockRejectedValueOnce(
+						new UnavailableError('storage down'),
+					);
+				else if (stage === 'project')
+					vi.spyOn(d.services.projects, 'getProject').mockRejectedValueOnce(
+						new UnavailableError('storage down'),
+					);
+				else
+					vi.spyOn(d.services.notebooks, 'getSecurityLabels').mockRejectedValueOnce(
+						new UnavailableError('storage down'),
+					);
+				clock.mockReturnValue(Date.now() + 5_000);
+				expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+					kind: 'reject',
+					status: stage === 'labels' ? 503 : 404,
+				});
+				expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+					kind: 'forward',
+				});
+				expect(sessionReads()).toBe(stage === 'session' ? 2 : 3);
+			} finally {
+				clock.mockRestore();
+			}
+		},
+	);
+
+	it.each([false, true])(
+		'coalesces concurrent admissions and recovers after a failed load (failure: %s)',
+		async (fails) => {
+			const { d } = recordedDeps();
+			const project = await d.services.projects.getProject(pid);
+			const projectRead = Promise.withResolvers<typeof project>();
+			const projectSpy = vi
+				.spyOn(d.services.projects, 'getProject')
+				.mockReturnValueOnce(projectRead.promise);
+			const suspensionSpy = vi.spyOn(d.services.identities, 'isSuspended');
+			const paths = ['/assets/one.js?v=1', '/assets/two.js?v=2'];
+			const decisions = paths.map((path) =>
+				authorizeProxyRequest(req(`/proxy/${token}${path}`), d),
+			);
+			try {
+				await vi.waitFor(() => expect(suspensionSpy).toHaveBeenCalledTimes(2));
+				if (fails) projectRead.reject(new UnavailableError('storage down'));
+				else projectRead.resolve(project);
+				for (const [index, decision] of (await Promise.all(decisions)).entries()) {
+					expect(decision).toMatchObject(
+						fails
+							? { kind: 'reject', status: 404 }
+							: { kind: 'forward', targetUrl: `${ORIGIN}/proxy/${token}${paths[index]}` },
+					);
+				}
+				expect(projectSpy).toHaveBeenCalledTimes(1);
+				expect(await authorizeProxyRequest(req(`/proxy/${token}/retry`), d)).toMatchObject({
+					kind: 'forward',
+				});
+				expect(projectSpy).toHaveBeenCalledTimes(fails ? 2 : 1);
+			} finally {
+				projectRead.resolve(project);
+				await Promise.all(decisions);
+			}
+		},
+	);
+
+	it('does not extend the cache window by the time spent loading admission', async () => {
+		const { d, sessionReads } = recordedDeps();
+		const project = await d.services.projects.getProject(pid);
+		const projectRead = Promise.withResolvers<typeof project>();
+		const projectSpy = vi
+			.spyOn(d.services.projects, 'getProject')
+			.mockReturnValueOnce(projectRead.promise);
+		const startedAt = Date.now();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+		const decision = authorizeProxyRequest(req(`/proxy/${token}/`), d);
+		try {
+			await vi.waitFor(() => expect(projectSpy).toHaveBeenCalledTimes(1));
+			clock.mockReturnValue(startedAt + 4_000);
+			projectRead.resolve(project);
+			expect(await decision).toMatchObject({ kind: 'forward' });
+			clock.mockReturnValue(startedAt + 4_999);
+			await authorizeProxyRequest(req(`/proxy/${token}/`), d);
+			expect(sessionReads()).toBe(1);
+			clock.mockReturnValue(startedAt + 5_000);
+			await authorizeProxyRequest(req(`/proxy/${token}/`), d);
+			expect(sessionReads()).toBe(2);
+		} finally {
+			projectRead.resolve(project);
+			await decision;
+			clock.mockRestore();
+		}
+	});
+
+	it('rejects a forged signature even when the user and session have a cached admission', async () => {
+		const { d, sessionReads } = recordedDeps();
+		const authenticate = vi.spyOn(d.authenticator, 'authenticate');
+		await authorizeProxyRequest(req(`/proxy/${token}/`), d);
+		const forged = await signProxyToken(pid, sessionId as never, 'another-secret');
+		expect(await authorizeProxyRequest(req(`/proxy/${forged}/`), d)).toMatchObject({
+			kind: 'reject',
+			status: 403,
+		});
+		expect(authenticate).toHaveBeenCalledTimes(1);
+		expect(sessionReads()).toBe(1);
+	});
+
 	it('does not share a successful admission with another user', async () => {
 		const { d, sessionReads } = recordedDeps();
 		expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
