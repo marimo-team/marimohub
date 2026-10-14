@@ -14,7 +14,7 @@ import type { BootstrapHandle } from './bootstrap';
 const SECRET = 'a-test-signing-secret-at-least-32-bytes-long!!';
 const JAVASCRIPT = 'console.log("kernel asset");\n'.repeat(200);
 
-function rawGet(url: string, encoding: string, method = 'GET') {
+function rawRequest(url: string, encoding: string, method = 'GET') {
 	return new Promise<{ status: number; headers: Record<string, unknown>; body: Buffer }>(
 		(resolve, reject) => {
 			get(url, { method, headers: { 'accept-encoding': encoding } }, (response) => {
@@ -41,6 +41,11 @@ describe('Node proxy compression', () => {
 	let eventStream: ServerResponse | undefined;
 	let upstreamEncoding: string | undefined;
 	let upstreamRequests = 0;
+
+	function proxyUrl(path: string, route = 'proxy'): string {
+		const prefix = route === 'proxy' ? `/proxy/${token}` : `/surface-proxy/${token}/vscode`;
+		return `${origin}${prefix}${path}`;
+	}
 
 	beforeAll(async () => {
 		upstream = createServer((request, response) => {
@@ -176,8 +181,7 @@ describe('Node proxy compression', () => {
 	it.each(['proxy', 'surface-proxy'])(
 		'gzips large JavaScript on /%s while requesting identity upstream',
 		async (route) => {
-			const path = route === 'proxy' ? `/proxy/${token}` : `/surface-proxy/${token}/vscode`;
-			const response = await rawGet(`${origin}${path}/assets/index.js`, 'gzip');
+			const response = await rawRequest(proxyUrl('/assets/index.js', route), 'gzip');
 			expect(response.status).toBe(200);
 			expect(response.headers['content-encoding']).toBe('gzip');
 			expect(response.headers['content-length']).toBeUndefined();
@@ -191,8 +195,7 @@ describe('Node proxy compression', () => {
 	it.each(['proxy', 'surface-proxy'])(
 		'delivers the first /%s SSE chunk before the upstream closes',
 		async (route) => {
-			const path = route === 'proxy' ? `/proxy/${token}` : `/surface-proxy/${token}/vscode`;
-			const response = await fetch(`${origin}${path}/events`, {
+			const response = await fetch(proxyUrl('/events', route), {
 				headers: { 'accept-encoding': 'gzip' },
 			});
 			expect(response.status).toBe(200);
@@ -219,7 +222,7 @@ describe('Node proxy compression', () => {
 	);
 
 	it('preserves POST bodies through the Node wrapper', async () => {
-		const response = await fetch(`${origin}/proxy/${token}/echo`, {
+		const response = await fetch(proxyUrl('/echo'), {
 			method: 'POST',
 			headers: { 'accept-encoding': 'gzip' },
 			body: 'cell=42&value=updated',
@@ -230,21 +233,21 @@ describe('Node proxy compression', () => {
 	});
 
 	it('honors a client declining compression', async () => {
-		const response = await rawGet(`${origin}/proxy/${token}/assets/index.js`, 'gzip;q=0, identity');
+		const response = await rawRequest(proxyUrl('/assets/index.js'), 'gzip;q=0, identity');
 		expect(response.headers['content-encoding']).toBeUndefined();
 		expect(response.body.toString()).toBe(JAVASCRIPT);
 		expect(upstreamEncoding).toBe('identity');
 	});
 
 	it.each(['no-transform', 'partial'])('preserves %s responses', async (path) => {
-		const response = await rawGet(`${origin}/proxy/${token}/${path}`, 'gzip');
+		const response = await rawRequest(proxyUrl(`/${path}`), 'gzip');
 		expect(response.status).toBe(path === 'partial' ? 206 : 200);
 		expect(response.headers['content-encoding']).toBeUndefined();
 		expect(response.body.toString()).toBe(JAVASCRIPT);
 	});
 
 	it('handles an upstream that sends gzip despite the identity request without double encoding', async () => {
-		const response = await rawGet(`${origin}/proxy/${token}/encoded`, 'gzip');
+		const response = await rawRequest(proxyUrl('/encoded'), 'gzip');
 		expect(response.status).toBe(200);
 		expect(response.headers['content-encoding']).toBe('gzip');
 		expect(response.headers['content-length']).toBeUndefined();
@@ -253,14 +256,14 @@ describe('Node proxy compression', () => {
 	});
 
 	it('leaves a body below the compression threshold unchanged', async () => {
-		const response = await rawGet(`${origin}/proxy/${token}/small`, 'gzip');
+		const response = await rawRequest(proxyUrl('/small'), 'gzip');
 		expect(response.headers['content-encoding']).toBeUndefined();
 		expect(response.headers['content-length']).toBe('2');
 		expect(response.body.toString()).toBe('ok');
 	});
 
 	it('preserves HEAD metadata without sending or compressing a body', async () => {
-		const response = await rawGet(`${origin}/proxy/${token}/assets/index.js`, 'gzip', 'HEAD');
+		const response = await rawRequest(proxyUrl('/assets/index.js'), 'gzip', 'HEAD');
 		expect(response.status).toBe(200);
 		expect(response.headers['content-encoding']).toBeUndefined();
 		expect(response.headers['content-length']).toBe(String(Buffer.byteLength(JAVASCRIPT)));
@@ -268,14 +271,14 @@ describe('Node proxy compression', () => {
 	});
 
 	it('preserves an empty 204 response', async () => {
-		const response = await rawGet(`${origin}/proxy/${token}/empty`, 'gzip');
+		const response = await rawRequest(proxyUrl('/empty'), 'gzip');
 		expect(response.status).toBe(204);
 		expect(response.headers['content-encoding']).toBeUndefined();
 		expect(response.body.length).toBe(0);
 	});
 
 	it('preserves upstream error status and body through compression without retrying', async () => {
-		const response = await rawGet(`${origin}/proxy/${token}/unavailable`, 'gzip');
+		const response = await rawRequest(proxyUrl('/unavailable'), 'gzip');
 		expect(response.status).toBe(503);
 		expect(response.headers['content-encoding']).toBe('gzip');
 		expect(gunzipSync(response.body).toString()).toBe(JAVASCRIPT);
@@ -283,7 +286,7 @@ describe('Node proxy compression', () => {
 	});
 
 	it('returns a gateway error after exhausting connection retries', async () => {
-		const response = await fetch(`${origin}/proxy/${token}/disconnect`, {
+		const response = await fetch(proxyUrl('/disconnect'), {
 			headers: { 'accept-encoding': 'gzip' },
 		});
 		expect(response.status).toBe(502);
@@ -307,7 +310,7 @@ describe('Node proxy compression', () => {
 	});
 
 	it('leaves non-proxy responses uncompressed', async () => {
-		const response = await rawGet(`${origin}/api/health`, 'gzip');
+		const response = await rawRequest(`${origin}/api/health`, 'gzip');
 		expect(response.status).toBe(200);
 		expect(response.headers['content-encoding']).toBeUndefined();
 		expect(response.headers.vary).toBeUndefined();

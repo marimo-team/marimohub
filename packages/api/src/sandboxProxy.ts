@@ -1,14 +1,6 @@
 /**
- * Request-time forwarding for `proxy` sandbox-exposure mode.
- *
- * The browser reaches a kernel via `…/proxy/<token>/…` on the app's origin. Each
- * HTTP request is authenticated and authorized per-session (the caller must hold
- * the project role that starting a session requires), then streamed to the
- * kernel's origin. The kernel runs under `--base-url=/proxy/<token>`, so the full
- * path is forwarded unchanged. `authorizeProxyRequest` is shared with the
- * WebSocket path (the Node entrypoint) so the two transports authorize
- * identically. Entitlement-backed sessions also return a fixed deadline that
- * the Node relay uses to close an established socket.
+ * HTTP and WebSocket proxies share admission checks. Each request keeps its own
+ * path and query. The Node relay closes sockets at the returned authorization deadline.
  */
 import type { MiddlewareHandler } from 'hono';
 import {
@@ -56,9 +48,10 @@ type Admission = Omit<Extract<ProxyDecision, { kind: 'forward' }>, 'targetUrl'> 
 	cacheable: boolean;
 };
 type CachedAdmission = { admission: Admission; expiresAt: number };
+type AdmissionCache = LazyMap<string, CachedAdmission>;
 type Session = Awaited<ReturnType<ApiDeps['services']['sessions']['getSession']>>;
 
-const ADMISSION_CACHES = new WeakMap<ApiDeps, LazyMap<string, CachedAdmission>>();
+const ADMISSION_CACHES = new WeakMap<ApiDeps, AdmissionCache>();
 const ADMISSION_TTL_MS = 5_000;
 
 class AdmissionRejectedError extends Error {
@@ -68,7 +61,7 @@ class AdmissionRejectedError extends Error {
 	}
 }
 
-function admissionCache(deps: ApiDeps): LazyMap<string, CachedAdmission> {
+function admissionCache(deps: ApiDeps): AdmissionCache {
 	let cache = ADMISSION_CACHES.get(deps);
 	if (!cache) {
 		cache = new LazyMap(
@@ -82,6 +75,27 @@ function admissionCache(deps: ApiDeps): LazyMap<string, CachedAdmission> {
 	return cache;
 }
 
+function getFreshAdmission(
+	cache: AdmissionCache,
+	key: string,
+	now?: number,
+): CachedAdmission | undefined {
+	const cached = cache.getIfPresent(key);
+	if (cached && cached.expiresAt <= (now ?? Date.now())) {
+		cache.delete(key);
+		return undefined;
+	}
+	return cached;
+}
+
+function rejectProxy(
+	status: Rejection['status'],
+	code: Rejection['code'],
+	message: string,
+): Rejection {
+	return { kind: 'reject', status, code, message };
+}
+
 const PROXY_PREFIX = /^\/proxy\/([^/]+)/;
 const SURFACE_PROXY_PREFIX = /^\/surface-proxy\/([^/]+)\/([^/]+)/;
 
@@ -91,16 +105,11 @@ function trimTrailingSlash(s: string): string {
 }
 
 /**
- * Resolve and authorize a possible `/proxy/<token>/…` request without forwarding
- * it. Returns `pass` when the path isn't a proxy path (caller continues normally),
- * `reject` with an HTTP status to deny, or `forward` with the kernel target.
- *
- * Order matters: token signature first (cheap, no I/O), then authentication, then
- * suspension, then session liveness and the per-session role check. Successful
- * editor admissions are cached for up to 5 s: stops, role revocations, project
- * deletion, and label changes can lag by that window. Apps and previews require
- * fresh checks for pool invalidation, label changes, and preview revocation.
- * Suspension has its own 10 s cache; explicit authorization deadlines never lag.
+ * Token, authentication, and suspension checks run on every request.
+ * Successful editor admissions expire after 5 s. Stops, role revocations,
+ * project deletion, and label changes can take that long to block access.
+ * Apps and previews require fresh checks. Suspension uses its separate 10 s
+ * cache. Session and subject-context deadlines apply even on cache hits.
  */
 export async function authorizeProxyRequest(
 	request: Request,
@@ -123,18 +132,13 @@ export async function authorizeProxyRequest(
 	const token = (kernelMatch ?? surfaceMatch)![1];
 	const verified = await verifyProxyToken(token, secret);
 	if (!verified) {
-		return { kind: 'reject', status: 403, code: 'FORBIDDEN', message: 'Invalid sandbox token' };
+		return rejectProxy(403, 'FORBIDDEN', 'Invalid sandbox token');
 	}
 	const { projectId, sessionId } = verified;
 
 	const user = await deps.authenticator.authenticate(request);
 	if (!user) {
-		return {
-			kind: 'reject',
-			status: 401,
-			code: 'UNAUTHORIZED',
-			message: 'Authentication required',
-		};
+		return rejectProxy(401, 'UNAUTHORIZED', 'Authentication required');
 	}
 
 	const surfaceId = surfaceMatch?.[2];
@@ -153,11 +157,7 @@ export async function authorizeProxyRequest(
 		user.entitlementsExpiresAt,
 	]);
 	const startedAt = Date.now();
-	let cached = cache.getIfPresent(key);
-	if (cached && cached.expiresAt <= startedAt) {
-		cache.delete(key);
-		cached = undefined;
-	}
+	const cached = getFreshAdmission(cache, key, startedAt);
 	const sessionRead = cached ? undefined : deps.services.sessions.getSession(projectId, sessionId);
 	// Suspension can return before this speculative read settles.
 	void sessionRead?.catch(() => {});
@@ -166,27 +166,17 @@ export async function authorizeProxyRequest(
 	// forwarding enforce suspension here.
 	try {
 		if (await deps.services.identities.isSuspended(user.id)) {
-			return {
-				kind: 'reject',
-				status: 403,
-				code: 'USER_SUSPENDED',
-				message: 'User account is suspended',
-			};
+			return rejectProxy(403, 'USER_SUSPENDED', 'User account is suspended');
 		}
 	} catch (err) {
 		if (err instanceof UnavailableError) {
-			return {
-				kind: 'reject',
-				status: 503,
-				code: 'SERVICE_UNAVAILABLE',
-				message: 'Unable to verify account suspension status',
-			};
+			return rejectProxy(503, 'SERVICE_UNAVAILABLE', 'Unable to verify account suspension status');
 		}
 		throw err;
 	}
 
-	const current = cache.getIfPresent(key);
-	if (current && current.expiresAt <= Date.now()) cache.delete(key);
+	// Suspension verification can outlast the cached admission.
+	getFreshAdmission(cache, key);
 
 	let admission: Admission;
 	try {
@@ -222,12 +212,7 @@ export async function authorizeProxyRequest(
 		Date.now() >= admission.authorizationDeadline
 	) {
 		cache.delete(key);
-		return {
-			kind: 'reject',
-			status: 410,
-			code: 'GONE',
-			message: 'Session authorization has expired',
-		};
+		return rejectProxy(410, 'GONE', 'Session authorization has expired');
 	}
 	const { originUrl, proxyPath, cacheable, ...forward } = admission;
 	if (!cacheable) cache.delete(key);
@@ -250,22 +235,17 @@ async function loadAdmission(
 	try {
 		session = await sessionRead;
 	} catch {
-		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
+		return rejectProxy(404, 'NOT_FOUND', 'Session not found');
 	}
 
 	if (session.status !== 'running') {
-		return { kind: 'reject', status: 410, code: 'GONE', message: 'Session is no longer running' };
+		return rejectProxy(410, 'GONE', 'Session is no longer running');
 	}
 	const authorizationDeadline = session.authorization_expires_at
 		? Date.parse(session.authorization_expires_at)
 		: undefined;
 	if (authorizationDeadline !== undefined && Date.now() >= authorizationDeadline) {
-		return {
-			kind: 'reject',
-			status: 410,
-			code: 'GONE',
-			message: 'Session authorization has expired',
-		};
+		return rejectProxy(410, 'GONE', 'Session authorization has expired');
 	}
 
 	const surfaceState = surfaceId ? session.surfaces?.[surfaceId] : undefined;
@@ -277,14 +257,13 @@ async function loadAdmission(
 	if (!originUrl) {
 		// Running but no origin recorded — the session was provisioned under a
 		// different exposure mode. Not reachable via the proxy.
-		return {
-			kind: 'reject',
-			status: 503,
-			code: 'SERVICE_UNAVAILABLE',
-			message: surfaceId
+		return rejectProxy(
+			503,
+			'SERVICE_UNAVAILABLE',
+			surfaceId
 				? 'Session surface is not reachable via the proxy'
 				: 'Session is not reachable via the proxy',
-		};
+		);
 	}
 
 	const projectRead = deps.services.projects.getProject(projectId);
@@ -301,26 +280,18 @@ async function loadAdmission(
 		project = await projectRead;
 	} catch {
 		// A session whose project is gone is unreachable, like a missing session.
-		return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
+		return rejectProxy(404, 'NOT_FOUND', 'Session not found');
 	}
-	// The notebook's label override rides on every proxy decision: a caller who
-	// satisfies the project labels but not the override must not reach the
-	// kernel. A missing notebook masks; a transient meta failure fails closed as
-	// unavailable rather than pretending the session is gone.
+	// Storage outages must not look like missing notebooks.
 	const notebookResult = await notebookRead;
 	if (notebookResult.status === 'rejected') {
 		if (notebookResult.reason instanceof NotFoundError) {
-			return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
+			return rejectProxy(404, 'NOT_FOUND', 'Session not found');
 		}
-		return {
-			kind: 'reject',
-			status: 503,
-			code: 'SERVICE_UNAVAILABLE',
-			message: 'Session authorization could not be verified',
-		};
+		return rejectProxy(503, 'SERVICE_UNAVAILABLE', 'Session authorization could not be verified');
 	}
 	const notebookLabels = notebookResult.value;
-	// Lifecycle and label denials mask as missing; membership denials remain 403.
+	// Hide resource existence for lifecycle, label, and credential denials.
 	const decision = await authorizationService(deps).authorize(
 		user,
 		surfaceId ? 'session.surface' : 'session.proxy',
@@ -332,16 +303,15 @@ async function loadAdmission(
 			decision.category === 'constraint' ||
 			decision.category === 'credential-resource'
 		) {
-			return { kind: 'reject', status: 404, code: 'NOT_FOUND', message: 'Session not found' };
+			return rejectProxy(404, 'NOT_FOUND', 'Session not found');
 		}
-		return {
-			kind: 'reject',
-			status: 403,
-			code: 'FORBIDDEN',
-			message: surfaceId
+		return rejectProxy(
+			403,
+			'FORBIDDEN',
+			surfaceId
 				? 'Not authorized to use this session surface'
 				: 'Not authorized to attach this session',
-		};
+		);
 	}
 
 	if (sessionMode(session) === 'app') {
@@ -353,24 +323,13 @@ async function loadAdmission(
 				deps.metrics,
 			).canAccess(projectId, session.notebook_id, user.id, sessionId, !session.app_pool);
 			if (!allowed) {
-				return {
-					kind: 'reject',
-					status: 410,
-					code: 'GONE',
-					message: 'The app assignment expired. Open the app again.',
-				};
+				return rejectProxy(410, 'GONE', 'The app assignment expired. Open the app again.');
 			}
 		} catch {
-			return {
-				kind: 'reject',
-				status: 503,
-				code: 'SERVICE_UNAVAILABLE',
-				message: 'Session authorization could not be verified',
-			};
+			return rejectProxy(503, 'SERVICE_UNAVAILABLE', 'Session authorization could not be verified');
 		}
 	}
-	// The CURRENT context expiry can be earlier than the deadline stamped at
-	// session start — an established socket must not outlive either.
+	// Sockets must close at the earlier session or subject-context deadline.
 	const contextDeadline =
 		decision.subjectContextExpiresAt !== undefined
 			? Date.parse(decision.subjectContextExpiresAt)
@@ -380,8 +339,7 @@ async function loadAdmission(
 			? Math.min(authorizationDeadline, contextDeadline)
 			: (authorizationDeadline ?? contextDeadline);
 
-	// Records written before `proxy_path` was persisted route by the configured
-	// VS Code flavor; code-server (the default) strips the prefix.
+	// Legacy records without proxy_path use the configured VS Code flavor.
 	const proxyPath =
 		surfaceState?.proxy_path ??
 		(surfaceId === 'vscode' && deps.sandbox.surfaces?.vscode?.flavor === 'openvscode'
@@ -414,14 +372,9 @@ const HOP_BY_HOP = new Set([
 ]);
 
 /**
- * Hub credentials must never reach the kernel. Notebook code can read request
- * headers (`mo.app_meta().request`), so forwarding them would expose each
- * caller's credential to the notebook author. The proxy adds only the
- * session-scoped marimo token after this filter.
- * `cf-access-jwt-assertion` is exactly that under the Cloudflare Access
- * authenticator (it is the whole proof of identity), and the `cf-access-client-*`
- * service-token pair mints one. Access's `CF_Authorization` cookie is covered by
- * `cookie`. The WS forwarder filters on this same set.
+ * Notebook code can read request headers. HTTP and WebSocket proxies strip hub
+ * credentials, including Access assertions, service tokens, and cookies.
+ * Only the session's kernel token reaches the notebook.
  */
 export const CREDENTIAL_HEADERS = new Set([
 	'cookie',
@@ -434,11 +387,7 @@ export const CREDENTIAL_HEADERS = new Set([
 	'cf-access-client-secret',
 ]);
 
-/**
- * In `proxy` exposure the kernel answers on the APP's origin, so a `Set-Cookie`
- * it emits is written for the hub — letting notebook-author code overwrite the
- * caller's hub session. The WS forwarder strips the same set from its 101.
- */
+/** Kernel cookies share the hub origin and can overwrite the caller's hub session. */
 export const UNSAFE_RESPONSE_HEADERS = new Set(['set-cookie', 'set-cookie2']);
 
 export function isCredentialHeader(name: string, additional: readonly string[] = []): boolean {
@@ -485,15 +434,9 @@ function responseHeaders(headers: Headers): Headers {
 const GATEWAY_STATUSES = new Set([502, 503, 504]);
 
 /**
- * Forward an authorized HTTP request to the kernel and return its response,
- * streaming the body. WebSocket upgrades are handled separately (the Node
- * entrypoint) since `fetch` can't carry them on every runtime.
- *
- * GET/HEAD get one immediate retry when the fetch itself throws: the common
- * cause is the kernel (uvicorn, ~5s keep-alive) closing a pooled connection
- * the hub is about to reuse — a race that bursts of parallel asset requests
- * hit, and that a fresh connection resolves. Requests with a body are never
- * retried (the stream is already consumed).
+ * Stream HTTP responses. The Node entrypoint handles WebSocket upgrades.
+ * GET and HEAD retry once after transport errors, such as closed keep-alive
+ * connections. Other methods cannot retry because their body stream is consumed.
  */
 export async function forwardHttp(
 	request: Request,
@@ -566,11 +509,7 @@ export async function forwardHttp(
 	});
 }
 
-/**
- * Hono middleware that serves `proxy`-mode kernel traffic. A no-op in `subdomain`
- * mode (and for any non-`/proxy` path). Mounted on `*` ahead of the app's own
- * routes so kernel asset/API requests never fall through to the SPA or `/api`.
- */
+/** Mount before API and SPA routes so proxy requests cannot fall through to them. */
 export function sandboxProxyMiddleware(deps: ApiDeps): MiddlewareHandler<HonoEnv> {
 	return async (c, next) => {
 		if (deps.sandbox.exposure?.mode !== 'proxy') return next();
