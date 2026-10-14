@@ -686,17 +686,19 @@ describe('SandboxProvisioner', () => {
 	});
 
 	describe('provision', () => {
+		const provisionOptions = {
+			sandboxId,
+			projectId,
+			notebookId,
+			hostname: 'localhost',
+			bucket: bucketConfig,
+		};
+
 		it('happy path with mount: usedFallback false, returns exposed url, starts marimo on port 2718', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 
-			const result = await provisioner.provision({
-				sandboxId,
-				projectId,
-				notebookId,
-				hostname: 'localhost',
-				bucket: bucketConfig,
-			});
+			const result = await provisioner.provision(provisionOptions);
 
 			expect(result.usedFallback).toBe(false);
 			expect(result.url).toBe(EXPOSED_URL);
@@ -745,11 +747,7 @@ describe('SandboxProvisioner', () => {
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 
 			await provisioner.provision({
-				sandboxId,
-				projectId,
-				notebookId,
-				hostname: 'localhost',
-				bucket: bucketConfig,
+				...provisionOptions,
 				entryNotebook: 'apps/dash.py',
 				launchStrategy: 'uv-script-pins',
 			});
@@ -785,11 +783,7 @@ describe('SandboxProvisioner', () => {
 				return result;
 			});
 			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
-				sandboxId,
-				projectId,
-				notebookId,
-				hostname: 'localhost',
-				bucket: bucketConfig,
+				...provisionOptions,
 				entryNotebook: 'apps/dash.py',
 				launchStrategy: strategy.promise,
 				sessionEnv: { files: [{ path: '/config', content: 'configured' }] },
@@ -814,11 +808,7 @@ describe('SandboxProvisioner', () => {
 				const strategy = deferred<'uv-script-pins'>();
 				const error = new Error('strategy unavailable');
 				const pending = new SandboxProvisioner(fakeComputeFrom(instance))[operation]({
-					sandboxId,
-					projectId,
-					notebookId,
-					hostname: 'localhost',
-					bucket: bucketConfig,
+					...provisionOptions,
 					launchStrategy: strategy.promise,
 				});
 				const rejected = expect(pending).rejects.toBe(error);

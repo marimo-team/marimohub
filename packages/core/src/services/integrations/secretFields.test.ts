@@ -94,6 +94,8 @@ describe('sealConfig / openConfig / redactConfig', () => {
 		],
 	};
 
+	const storedConfig = () => sealConfig({ schema, paths, authoring, seal: fakeSeal() });
+
 	it('round-trips authoring → stored → resolved, applying defaults', async () => {
 		const seal = fakeSeal();
 		const stored = await sealConfig({ schema, paths, authoring, seal });
@@ -169,7 +171,7 @@ describe('sealConfig / openConfig / redactConfig', () => {
 	it.each(['throw', 'reject'] as const)(
 		'preserves stored values when a resolver fails with %s',
 		async (failure) => {
-			const stored = await sealConfig({ schema, paths, authoring, seal: fakeSeal() });
+			const stored = await storedConfig();
 			const original = structuredClone(stored);
 			const error = new Error('secret backend unavailable');
 			const decrypt = vi.fn((envelope: SecretEnvelope, at: string) => {
@@ -189,7 +191,7 @@ describe('sealConfig / openConfig / redactConfig', () => {
 	);
 
 	it('observes sibling rejections after one concurrent resolution fails', async () => {
-		const stored = await sealConfig({ schema, paths, authoring, seal: fakeSeal() });
+		const stored = await storedConfig();
 		const pending = Array.from({ length: 3 }, () => Promise.withResolvers<string>());
 		let index = 0;
 		const opened = openConfig({
@@ -207,7 +209,7 @@ describe('sealConfig / openConfig / redactConfig', () => {
 	});
 
 	it('validates all stored slots before starting secret resolution', async () => {
-		const stored = await sealConfig({ schema, paths, authoring, seal: fakeSeal() });
+		const stored = await storedConfig();
 		(stored.secrets as Record<string, unknown>[])[1].value = { $secret: { kind: 'future' } };
 		const decrypt = vi.fn(fakeOpen.decrypt);
 		const resolve = vi.fn(fakeOpen.resolve);
@@ -220,7 +222,7 @@ describe('sealConfig / openConfig / redactConfig', () => {
 	});
 
 	it('redacts every managed secret without exposing its envelope', async () => {
-		const stored = await sealConfig({ schema, paths, authoring, seal: fakeSeal() });
+		const stored = await storedConfig();
 		const redacted = redactConfig(stored, paths);
 		expect(redacted.auth).toEqual({ method: 'basic', user: 'admin', password: REDACTED_SECRET });
 		expect((redacted.secrets as unknown[])[0]).toEqual({ name: 'A', value: REDACTED_SECRET });
@@ -228,7 +230,7 @@ describe('sealConfig / openConfig / redactConfig', () => {
 	});
 
 	it('keep-markers reuse the stored value, matching array entries by name across a reorder', async () => {
-		const previous = await sealConfig({ schema, paths, authoring, seal: fakeSeal() });
+		const previous = await storedConfig();
 		const edited = {
 			host: 'db.internal',
 			auth: { method: 'basic', user: 'admin', password: { $secret: { set: true } } },
@@ -323,7 +325,7 @@ describe('sealConfig / openConfig / redactConfig', () => {
 	});
 
 	it('fails closed on an unsupported stored secret shape at open time', async () => {
-		const stored = await sealConfig({ schema, paths, authoring, seal: fakeSeal() });
+		const stored = await storedConfig();
 		(stored.auth as Record<string, unknown>).password = { $secret: { kind: 'future' } };
 		await expect(openConfig({ stored, paths, open: fakeOpen })).rejects.toThrow(
 			/unsupported stored shape/,

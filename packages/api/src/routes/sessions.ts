@@ -1690,8 +1690,7 @@ export async function startNotebookSession(input: {
 		mode,
 	});
 	try {
-		// WIF + integrations share `sandboxEnv.ts` with the job runner, so the
-		// two injection paths cannot drift. Never for a viewer sandbox.
+		// Sessions and jobs share credential resolution. Viewer sandboxes exclude project credentials.
 		const sessionWorkload: WorkloadRef = { kind: 'session', id: sessionId };
 		const federatedCredentials = federatedCredentialsFor(deps, project, sessionWorkload, {
 			restricted: restrictedViewerCredentials,
@@ -1755,8 +1754,7 @@ export async function startNotebookSession(input: {
 			return marimoConfigToSessionEnv(contributors);
 		};
 
-		// Viewer sandboxes are restricted; temporary editor sandboxes retain
-		// editor credentials.
+		// Temporary editors retain editor credentials.
 		const resolveIntegrationEnv = () =>
 			resolveIntegrationRender(deps, {
 				projectId: pid,
@@ -1807,6 +1805,7 @@ export async function startNotebookSession(input: {
 				return resolved;
 			},
 		});
+		// Admission can fail before provisioning consumes the environment.
 		envGroup.catch(() => {});
 		if (replacementTarget) {
 			await retireSelectedSession(deps, replacementTarget);
@@ -1954,104 +1953,93 @@ export async function startNotebookSession(input: {
 						kernelAuthToken,
 						appBaseUrl,
 					};
-					const env = envGroup;
-					const { provision } = await all({
-						async provision() {
-							// A failed sibling may already have retired the record while these dependencies resolved.
-							if (this.$signal.aborted) throw this.$signal.reason;
-							if (warmClaim) {
-								try {
-									await deps.warmPool!.handoff(warmClaim);
-								} catch (error) {
-									if (!(error instanceof WarmPoolClaimExpiredError)) throw error;
-									const expired = warmClaim;
-									await deps.warmPool!.abandon(expired).catch(() => {});
-									// A late pool cleanup must never target the cold replacement.
-									sandboxId = createSandboxId();
-									sandboxMayExist = false;
-									if (admission) {
-										await appPool.bindWarmSandbox(
-											pid,
-											nid,
-											sessionId,
-											admission.member.operation_token,
-											sandboxId,
-										);
-									}
-									session = await sessions.replaceStartingSandbox(
-										pid,
-										sessionId,
-										expired.member.sandbox_id,
-										sandboxId,
-									);
-									warmClaim = undefined;
-									exposureCtx.sandboxId = sandboxId;
-									observer.tag('sandbox_id', sandboxId);
-									observer.tag('warm_pool_hit', false);
-									observer.tag('warm_pool_fallback', 'claim_expired');
-								}
+					if (warmClaim) {
+						try {
+							await deps.warmPool!.handoff(warmClaim);
+						} catch (error) {
+							if (!(error instanceof WarmPoolClaimExpiredError)) throw error;
+							const expired = warmClaim;
+							await deps.warmPool!.abandon(expired).catch(() => {});
+							// A late pool cleanup must never target the cold replacement.
+							sandboxId = createSandboxId();
+							sandboxMayExist = false;
+							if (admission) {
+								await appPool.bindWarmSandbox(
+									pid,
+									nid,
+									sessionId,
+									admission.member.operation_token,
+									sandboxId,
+								);
 							}
-							const { baseUrl, publicUrl } = await sandboxExposure.prepare(exposureCtx);
-							preparedContextFile =
-								publicUrl === undefined
-									? undefined
-									: sandboxContextFile(sandboxId, contextFor(publicUrl));
-							if (this.$signal.aborted) throw this.$signal.reason;
-							sandboxMayExist = true;
-							const sessionEnv = env.then((r) => r.sessionEnv);
-							const launchStrategy = env.then((r) => r.launchStrategy.strategy);
-							// Boot or handle creation can fail before the provisioner consumes these promises.
-							sessionEnv.catch(() => {});
-							launchStrategy.catch(() => {});
-							return provisioner.provision({
-								existingSandbox: warmClaim?.sandbox,
-								onSandboxDestroyed: recordSandboxCleanup,
+							session = await sessions.replaceStartingSandbox(
+								pid,
+								sessionId,
+								expired.member.sandbox_id,
 								sandboxId,
-								projectId: pid,
-								userId: user.id,
-								notebookId: nid,
-								hostname,
-								bucket: sandbox.bucket,
-								bucketHandle,
-								workdir: sandbox.workdir,
-								assetUrl: sandbox.assetUrl,
-								notebookBridge: sandbox.notebookBridge,
-								bridgeParentOrigin: new URL(appBaseUrl).origin,
-								startupTimeoutMs: sandbox.startupTimeoutMs,
-								baseUrl,
-								kernelAuthToken,
-								contextFile: preparedContextFile ?? { path: sandboxContextPath(sandboxId) },
-								// A second editor writes the notebook file, so marimo must reload it.
-								marimoWatch:
-									mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
-								restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
-								image,
-								resources: requestedComputeProfile.resources,
-								userHome,
-								sessionIdleTimeoutMs: isPreview
-									? (previewIdleTimeout(
-											sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
-										) as Millis)
-									: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
-								sessionEnv,
-								entryNotebook: workspacePolicy.entryNotebook,
-								launchStrategy,
-								launchMode: mode,
-								// Ephemeral and app sandboxes never mount the live workspace: a mount
-								// writes straight through to the bucket (bypassing every persistEdits
-								// guard), puts the deployment's bucket credentials inside a viewer's
-								// sandbox, and — for apps — would race the edit kernel's autosaves on
-								// the same objects. Copy-only loads the files server-side.
-								workspaceLoadMode:
-									ephemeral || MODE_POLICY[mode].workspaceLoad === 'copy-only'
-										? 'copy-only'
-										: workspacePolicy.loadMode,
-								workspacePrefix,
-								...pullSourceGit,
-								workspaceArchive,
-								workspaceOverlay: launchSource.workspaceOverlay,
-							});
-						},
+							);
+							warmClaim = undefined;
+							exposureCtx.sandboxId = sandboxId;
+							observer.tag('sandbox_id', sandboxId);
+							observer.tag('warm_pool_hit', false);
+							observer.tag('warm_pool_fallback', 'claim_expired');
+						}
+					}
+					const { baseUrl, publicUrl } = await sandboxExposure.prepare(exposureCtx);
+					preparedContextFile =
+						publicUrl === undefined
+							? undefined
+							: sandboxContextFile(sandboxId, contextFor(publicUrl));
+					sandboxMayExist = true;
+					const sessionEnv = envGroup.then((r) => r.sessionEnv);
+					const launchStrategy = envGroup.then((r) => r.launchStrategy.strategy);
+					// Boot or handle creation can fail before the provisioner consumes these promises.
+					for (const pending of [sessionEnv, launchStrategy]) pending.catch(() => {});
+					const provision = await provisioner.provision({
+						existingSandbox: warmClaim?.sandbox,
+						onSandboxDestroyed: recordSandboxCleanup,
+						sandboxId,
+						projectId: pid,
+						userId: user.id,
+						notebookId: nid,
+						hostname,
+						bucket: sandbox.bucket,
+						bucketHandle,
+						workdir: sandbox.workdir,
+						assetUrl: sandbox.assetUrl,
+						notebookBridge: sandbox.notebookBridge,
+						bridgeParentOrigin: new URL(appBaseUrl).origin,
+						startupTimeoutMs: sandbox.startupTimeoutMs,
+						baseUrl,
+						kernelAuthToken,
+						contextFile: preparedContextFile ?? { path: sandboxContextPath(sandboxId) },
+						// A second editor writes the notebook file, so marimo must reload it.
+						marimoWatch:
+							mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
+						restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
+						image,
+						resources: requestedComputeProfile.resources,
+						userHome,
+						sessionIdleTimeoutMs: isPreview
+							? (previewIdleTimeout(sandbox.sessionLifetime?.idleTimeoutMsByMode[mode]) as Millis)
+							: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
+						sessionEnv,
+						entryNotebook: workspacePolicy.entryNotebook,
+						launchStrategy,
+						launchMode: mode,
+						// Ephemeral and app sandboxes never mount the live workspace: a mount
+						// writes straight through to the bucket (bypassing every persistEdits
+						// guard), puts the deployment's bucket credentials inside a viewer's
+						// sandbox, and — for apps — would race the edit kernel's autosaves on
+						// the same objects. Copy-only loads the files server-side.
+						workspaceLoadMode:
+							ephemeral || MODE_POLICY[mode].workspaceLoad === 'copy-only'
+								? 'copy-only'
+								: workspacePolicy.loadMode,
+						workspacePrefix,
+						...pullSourceGit,
+						workspaceArchive,
+						workspaceOverlay: launchSource.workspaceOverlay,
 					});
 					({ url, usedFallback } = provision);
 					provisionedSandbox = provision.sandbox;

@@ -122,7 +122,7 @@ function setupDiagnostics(stdout: string, stderr: string): SetupDiagnostics {
 
 function logSlowSetup(
 	options: ProvisionOptions,
-	launchStrategy: MarimoLaunchStrategyName | undefined,
+	launchStrategy: MarimoLaunchStrategyName,
 	setupMs: number,
 	diagnostics: SetupDiagnostics,
 ): void {
@@ -137,7 +137,7 @@ function logSlowSetup(
 			sandbox_id: options.sandboxId,
 			project_id: options.projectId,
 			notebook_id: options.notebookId,
-			launch_strategy: launchStrategy ?? DEFAULT_LAUNCH_STRATEGY,
+			launch_strategy: launchStrategy,
 			provision_setup_ms: setupMs,
 			...timingFields,
 			setup_stderr_tail: utf8Tail(diagnostics.stderr, SETUP_OUTPUT_TAIL_BYTES),
@@ -247,13 +247,8 @@ export interface ProvisionOptions {
 	/** Control-plane idle deadline used by providers to derive an orphan backstop. */
 	sessionIdleTimeoutMs?: Millis;
 	/**
-	 * Environment + files to inject into the sandbox BEFORE dependency setup — the
-	 * assembled output of the workload-identity broker (federated S3 creds) and/or
-	 * the secrets provider. The provisioner stays vendor-agnostic: it only sets env
-	 * + writes files; it never mints tokens or reads secrets. Never logged.
-	 *
-	 * Accepts a promise: it is awaited only at the inject phase, so the caller's
-	 * credential resolution overlaps the (dominant) sandbox create.
+	 * Environment variables and files to inject before dependency setup. Never logged.
+	 * Promises let credential resolution overlap sandbox boot. The caller resolves credentials.
 	 */
 	sessionEnv?: SessionEnv | Promise<SessionEnv | undefined>;
 	/** Interactive marimo credential. Scheduled-job preparation omits it. */
@@ -262,7 +257,10 @@ export interface ProvisionOptions {
 	contextFile?: { path: string; content?: string };
 	/** Workspace-relative notebook file marimo should open. Defaults to `notebook.py`. */
 	entryNotebook?: string;
-	/** Per-source launch strategy (see launchStrategy.ts). Defaults to the project-managed env. */
+	/**
+	 * Source launch strategy. Resolution overlaps sandbox boot.
+	 * Defaults to the project-managed environment.
+	 */
 	launchStrategy?: MarimoLaunchStrategyName | Promise<MarimoLaunchStrategyName>;
 	/**
 	 * How long Python-environment setup and the kernel-port wait may take in total
@@ -777,7 +775,7 @@ export class SandboxProvisioner {
 		sw: Stopwatch;
 		mountPath: string;
 	}> {
-		const launchStrategy = Promise.resolve(options.launchStrategy);
+		const launchStrategy = Promise.resolve(options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY);
 		launchStrategy.catch(() => {});
 		const nb = paths.project(options.projectId).notebook(options.notebookId);
 		const layout = sandboxWorkspaceLayout(
@@ -849,7 +847,7 @@ export class SandboxProvisioner {
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
 		sw: Stopwatch,
-		launchStrategy: MarimoLaunchStrategyName | undefined,
+		launchStrategy: MarimoLaunchStrategyName,
 	): Promise<string | undefined> {
 		const payload = options.notebookBridge;
 		if (
@@ -1234,7 +1232,7 @@ export class SandboxProvisioner {
 		options: ProvisionOptions,
 		mountPath: string,
 		sw: Stopwatch,
-		launchStrategy: MarimoLaunchStrategyName | undefined,
+		launchStrategy: MarimoLaunchStrategyName,
 	): Promise<MarimoStartup> {
 		const startup: MarimoStartup = {
 			plan: buildMarimoLaunch(
@@ -1278,7 +1276,7 @@ export class SandboxProvisioner {
 					}
 					if (!result.success) throw pythonEnvironmentSetupFailure(result);
 				},
-				{ launch_strategy: launchStrategy ?? DEFAULT_LAUNCH_STRATEGY },
+				{ launch_strategy: launchStrategy },
 			);
 		} catch (error) {
 			if (error instanceof PythonEnvironmentSetupError) throw error;
