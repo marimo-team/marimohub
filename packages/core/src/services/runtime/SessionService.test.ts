@@ -14,6 +14,7 @@ import {
 	expectNotFound,
 	makeLocalSource,
 	MemoryBucket,
+	RecordingBucket,
 	restoreClock,
 	TEST_KERNEL_AUTH_TOKEN,
 	uid,
@@ -431,6 +432,67 @@ describe('SessionService', () => {
 
 			putSpy.mockRestore();
 		});
+
+		it.each([10_000, 61_000])('uses a known heartbeat snapshot at age %i ms', async (ageMs) => {
+			const recording = new RecordingBucket(bucket);
+			const service = new SessionService(recording);
+			const created = await service.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+			});
+			const known = await service.setRunning(
+				projectId,
+				created.session_id,
+				'https://sandbox.example',
+			);
+			recording.calls.get.length = 0;
+			recording.calls.put.length = 0;
+			advanceTime(ageMs);
+			try {
+				const result = await service.heartbeat(projectId, known.session_id, known);
+				if (ageMs < 60_000) {
+					expect(result).toBe(known);
+					expect(recording.calls.get).toEqual([]);
+					expect(recording.calls.put).toEqual([]);
+				} else {
+					expect(recording.calls.get).toEqual([paths.session(projectId, known.session_id)]);
+					expect(recording.calls.put.map(({ key }) => key)).toEqual([
+						paths.session(projectId, known.session_id),
+					]);
+					expect(Date.parse(result.last_heartbeat)).toBeGreaterThan(
+						Date.parse(known.last_heartbeat),
+					);
+				}
+			} finally {
+				restoreClock();
+			}
+		});
+
+		it.each(['starting', 'terminated', 'authorization-expired'] as const)(
+			'reads the current record for a fresh %s snapshot',
+			async (state) => {
+				const created = await sessions.createSession({
+					notebook_id: notebookId,
+					project_id: projectId,
+					user_id: ACTOR,
+					authorization_expires_at:
+						state === 'authorization-expired' ? new Date(Date.now() - 1).toISOString() : undefined,
+				});
+				const known =
+					state === 'starting'
+						? created
+						: state === 'terminated'
+							? await sessions.terminate(projectId, created.session_id)
+							: await sessions.setRunning(projectId, created.session_id, 'https://sandbox.example');
+				const get = vi.spyOn(bucket, 'get');
+				const put = vi.spyOn(bucket, 'put');
+				const result = await sessions.heartbeat(projectId, created.session_id, known);
+				expect(get.mock.calls).toEqual([[paths.session(projectId, created.session_id)]]);
+				expect(put).not.toHaveBeenCalled();
+				expect(result).toEqual(known);
+			},
+		);
 
 		it('does not refresh a running session after authorization expires', async () => {
 			const created = await sessions.createSession({

@@ -1527,6 +1527,7 @@ export async function startNotebookSession(input: {
 		: undefined;
 	const reusableApp = async () => {
 		if (admission?.kind !== 'reuse') return;
+		if (admission.session) return admission.session;
 		for (let attempt = 0; attempt < 20; attempt++) {
 			try {
 				return await sessions.getSession(pid, admission.member.session_id);
@@ -2388,7 +2389,7 @@ app.openapi(heartbeatSession, async (c) => {
 		}
 	}
 
-	const updated = await sessions.heartbeat(pid, sid);
+	const updated = await sessions.heartbeat(pid, sid, existing);
 	const response = toSessionResponse(
 		updated,
 		await sessionGrantsFor(project, user, updated, deps, labels),

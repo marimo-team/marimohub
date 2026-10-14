@@ -66,6 +66,16 @@ describe('app pool HTTP integration', () => {
 		expect(old.app_pool).toMatchObject({ state: 'draining', users: 4, max_users: 4 });
 	});
 
+	it('reads a reused member session once when admitting a second viewer', async () => {
+		const first = await start();
+		const get = vi.spyOn(bucket, 'get');
+		const second = await start('bob');
+		expect(second.session_id).toBe(first.session_id);
+		expect(
+			get.mock.calls.filter(([key]) => key === paths.session(pid, first.session_id)),
+		).toHaveLength(1);
+	});
+
 	it('reads a pool once per session listing regardless of its sandbox count', async () => {
 		await start();
 		for (const user of ['bob', 'charlie', 'dan', 'eve']) await start(user);

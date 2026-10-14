@@ -141,6 +141,15 @@ describe('app pool admission and lifecycle', () => {
 		expect(cleanup.retire).not.toHaveBeenCalled();
 	});
 
+	it('reuses a running member with one pool read before the routing CAS', async () => {
+		const first = await ready(await admit());
+		const get = vi.spyOn(bucket, 'get');
+		const second = await admit('bob');
+		expect(second.kind).toBe('reuse');
+		expect(second.member.session_id).toBe(first.member.session_id);
+		expect(get.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(2);
+	});
+
 	it.each(['ready', 'draining'] as const)(
 		'retires a missing %s session before re-admission',
 		async (state) => {
@@ -236,7 +245,6 @@ describe('app pool admission and lifecycle', () => {
 			poolKey,
 			sessionKey,
 			poolKey,
-			poolKey,
 			paths.project(pid).notebook(nid).source,
 			paths.project(pid).notebook(nid).source,
 		]);
@@ -245,7 +253,7 @@ describe('app pool admission and lifecycle', () => {
 		put.mockClear();
 		await pool.reconcile(pid, nid, effects());
 		expect(list).not.toHaveBeenCalled();
-		expect(get.mock.calls.map(([key]) => key)).toEqual([poolKey, sessionKey, poolKey]);
+		expect(get.mock.calls.map(([key]) => key)).toEqual([poolKey, sessionKey]);
 		expect(put).not.toHaveBeenCalled();
 	});
 

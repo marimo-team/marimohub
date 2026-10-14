@@ -578,7 +578,14 @@ export class SessionService {
 	 * Coalesced to ~1 write/60s; never revives a terminal/terminating session.
 	 * Provisioning owns the `starting` to `running` transition so a heartbeat
 	 * cannot create a claim-holding session without a sandbox URL. */
-	async heartbeat(projectId: ProjectId, id: SessionId): Promise<Session> {
+	async heartbeat(projectId: ProjectId, id: SessionId, known?: Session): Promise<Session> {
+		const now = Date.now();
+		if (
+			known?.status === 'running' &&
+			!isPastAuthorizationDeadline(known, now) &&
+			now - new Date(known.last_heartbeat).getTime() < HEARTBEAT_PERSIST_INTERVAL_MS
+		)
+			return known;
 		return this.mutate(projectId, id, (session) => {
 			if (session.status !== 'running') return null;
 			if (isPastAuthorizationDeadline(session, Date.now())) return null;
