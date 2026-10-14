@@ -686,14 +686,14 @@ describe('SandboxProvisioner', () => {
 	});
 
 	describe('provision', () => {
-		async function overlayFixture() {
+		async function overlayFixture(loaders?: WorkspaceLoadStrategies) {
 			const sandbox = makeFakeSandbox();
 			const bucketHandle = new MemoryBucket();
 			const nb = paths.project(projectId).notebook(notebookId);
 			const version = nb.version(createVersionId());
 			await bucketHandle.put(nb.workspaceFile('nb.py'), 'draft');
 			await bucketHandle.put(version.code, 'committed');
-			const provisioner = new SandboxProvisioner(fakeComputeFrom(sandbox.instance));
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(sandbox.instance), loaders);
 			return {
 				...sandbox,
 				bucketHandle,
@@ -714,22 +714,125 @@ describe('SandboxProvisioner', () => {
 			};
 		}
 
-		it('writes the committed notebook once in the copy-only workspace batch', async () => {
-			const { calls, bucketHandle, nb, provision } = await overlayFixture();
-			await bucketHandle.put(nb.workspaceFile('data.csv'), 'data');
+		it.each([false, true])(
+			'writes the committed notebook once in the copy-only batch (Git: %s)',
+			async (withGit) => {
+				const { calls, bucketHandle, nb, version, provision } = await overlayFixture();
+				await bucketHandle.put(nb.workspaceFile('data.csv'), 'data');
+				if (withGit) await bucketHandle.put(version.gitFile('HEAD'), 'ref: refs/heads/main');
 
-			await provision();
+				const result = await provision(withGit ? { gitPrefix: version.gitPrefix } : {});
 
-			const notebookWrites = calls.writeFiles.filter((files) =>
-				files.some(({ path }) => path === `${MOUNT_PATH}/nb.py`),
-			);
-			expect(notebookWrites).toEqual([
-				[
+				const notebookWrites = calls.writeFiles.filter((files) =>
+					files.some(({ path }) => path === `${MOUNT_PATH}/nb.py`),
+				);
+				expect(notebookWrites).toEqual([
+					[
+						{ path: `${MOUNT_PATH}/nb.py`, content: new TextEncoder().encode('committed') },
+						{ path: `${MOUNT_PATH}/data.csv`, content: new TextEncoder().encode('data') },
+					],
+				]);
+				expect(calls.mountBucket).toEqual([]);
+				expect(result.counters.files_objects).toBe(withGit ? 3 : 2);
+			},
+		);
+
+		it.each([undefined, false])(
+			'applies the overlay when an injected copy loader does not report it (%s)',
+			async (overlayApplied) => {
+				const load = vi.fn<WorkspaceLoadStrategies['copyOnly']['load']>(async (ctx) => {
+					await ctx.sandbox.writeFiles([{ path: `${ctx.mountPath}/nb.py`, content: 'draft' }]);
+					return { usedFallback: true, overlayApplied };
+				});
+				const { calls, provision } = await overlayFixture({
+					copyOnly: { load },
+					mountOrCopy: { load },
+				});
+
+				await provision();
+
+				expect(load).toHaveBeenCalledOnce();
+				expect(
+					calls.writeFiles.flat().filter(({ path }) => path === `${MOUNT_PATH}/nb.py`),
+				).toEqual([
+					{ path: `${MOUNT_PATH}/nb.py`, content: 'draft' },
 					{ path: `${MOUNT_PATH}/nb.py`, content: new TextEncoder().encode('committed') },
-					{ path: `${MOUNT_PATH}/data.csv`, content: new TextEncoder().encode('data') },
-				],
+				]);
+			},
+		);
+
+		it.each(['copy-only', 'mount-or-copy'] as const)(
+			'does not repeat an overlay applied by an injected %s loader',
+			async (workspaceLoadMode) => {
+				const load = vi.fn<WorkspaceLoadStrategies['copyOnly']['load']>(async (ctx) => {
+					expect(ctx.overlay).toHaveLength(1);
+					await ctx.sandbox.writeFiles([{ path: `${ctx.mountPath}/nb.py`, content: 'committed' }]);
+					return { usedFallback: true, overlayApplied: true };
+				});
+				const { calls, bucketHandle, provision } = await overlayFixture({
+					copyOnly: { load },
+					mountOrCopy: { load },
+				});
+				const get = vi.spyOn(bucketHandle, 'get');
+
+				await provision({ workspaceLoadMode });
+
+				expect(
+					calls.writeFiles.flat().filter(({ path }) => path === `${MOUNT_PATH}/nb.py`),
+				).toEqual([{ path: `${MOUNT_PATH}/nb.py`, content: 'committed' }]);
+				expect(get).not.toHaveBeenCalled();
+			},
+		);
+
+		it.each(['sandbox', 'bucket', 'mount failure'] as const)(
+			'merges the overlay when mount-or-copy falls back because of %s',
+			async (reason) => {
+				const { instance, calls, bucketHandle, nb, version, provision } = await overlayFixture();
+				await bucketHandle.put(nb.workspaceFile('data.csv'), 'data');
+				if (reason === 'sandbox') {
+					Object.defineProperty(instance, 'supportsBucketMount', { value: false });
+				}
+				const mount = vi.spyOn(instance, 'mountBucket');
+				if (reason === 'mount failure') mount.mockRejectedValue(new Error('mount unsupported'));
+				const get = vi.spyOn(bucketHandle, 'get');
+
+				await provision({
+					workspaceLoadMode: undefined,
+					bucket: { ...bucketConfig, mountable: reason !== 'bucket' },
+				});
+
+				expect(
+					calls.writeFiles.filter((files) =>
+						files.some(({ path }) => path === `${MOUNT_PATH}/nb.py`),
+					),
+				).toEqual([
+					[
+						{ path: `${MOUNT_PATH}/nb.py`, content: new TextEncoder().encode('committed') },
+						{ path: `${MOUNT_PATH}/data.csv`, content: new TextEncoder().encode('data') },
+					],
+				]);
+				expect(get).not.toHaveBeenCalledWith(nb.workspaceFile('nb.py'));
+				expect(get.mock.calls.filter(([key]) => key === version.code)).toHaveLength(1);
+				expect(mount).toHaveBeenCalledTimes(reason === 'mount failure' ? 1 : 0);
+			},
+		);
+
+		it('applies the overlay after a successful mount', async () => {
+			const { instance, calls, provision } = await overlayFixture();
+			const write = instance.writeFiles.bind(instance);
+			instance.writeFiles = async (files) => {
+				if (files.some(({ path }) => path === `${MOUNT_PATH}/nb.py`)) {
+					expect(calls.mountBucket).toHaveLength(1);
+				}
+				await write(files);
+			};
+
+			const result = await provision({ workspaceLoadMode: undefined });
+
+			expect(result.usedFallback).toBe(false);
+			expect(calls.writeFiles.flat().filter(({ path }) => path === `${MOUNT_PATH}/nb.py`)).toEqual([
+				{ path: `${MOUNT_PATH}/nb.py`, content: new TextEncoder().encode('committed') },
 			]);
-			expect(calls.mountBucket).toEqual([]);
 		});
 
 		it.each(['missing', 'write'] as const)(

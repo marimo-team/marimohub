@@ -507,6 +507,8 @@ export interface WorkspaceLoadContext {
 export interface WorkspaceLoadResult {
 	/** Files were copied in (true) rather than bucket-mounted (false). */
 	usedFallback: boolean;
+	/** True when this load applies ctx.overlay. Otherwise the provisioner applies it afterward. */
+	overlayApplied?: boolean;
 	/** What the copy moved; absent when the workspace was mounted instead. */
 	stats?: WorkspaceRestoreStats;
 	archiveStatus?: 'used' | 'missing' | 'failed';
@@ -550,7 +552,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 				waitUntilReady,
 				prefetchBudget,
 			});
-			return { usedFallback: true, stats };
+			return { usedFallback: true, overlayApplied: true, stats };
 		} catch (err) {
 			throw provisionFailure('restoring the notebook workspace into the sandbox', err);
 		}
@@ -799,8 +801,7 @@ export class SandboxProvisioner {
 						options.workspacePrefix ?? nb.workspacePrefix,
 						waitUntilReady,
 					);
-					// Mounts and archives bypass object-copy batching.
-					if (options.workspaceLoadMode !== 'copy-only' || loaded.archiveStatus === 'used') {
+					if (!loaded.overlayApplied) {
 						await this.applyWorkspaceOverlay(sandbox, options, mountPath);
 					}
 					return loaded;
@@ -1088,7 +1089,7 @@ export class SandboxProvisioner {
 				: this.workspaceLoadStrategies.mountOrCopy;
 		if (!strategy.supportsPrefetch) await waitUntilReady();
 		const load = strategy.load({
-			...(options.workspaceLoadMode === 'copy-only' ? { overlay: options.workspaceOverlay } : {}),
+			overlay: options.workspaceOverlay,
 			sandbox,
 			projectId: options.projectId,
 			notebookId: options.notebookId,
