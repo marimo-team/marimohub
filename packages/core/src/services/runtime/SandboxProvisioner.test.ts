@@ -718,6 +718,94 @@ describe('SandboxProvisioner', () => {
 			expect(calls.mountBucket).toEqual([]);
 		});
 
+		it.each(['missing', 'write'] as const)(
+			'destroys the sandbox without launching when the app overlay fails (%s)',
+			async (failure) => {
+				const { instance, calls } = makeFakeSandbox();
+				const bucketHandle = new MemoryBucket();
+				const nb = paths.project(projectId).notebook(notebookId);
+				const version = nb.version(createVersionId());
+				await bucketHandle.put(nb.workspaceFile('nb.py'), 'draft');
+				if (failure === 'write') await bucketHandle.put(version.code, 'committed');
+				const writeFiles = instance.writeFiles.bind(instance);
+				instance.writeFiles = async (files) => {
+					if (files.some(({ path }) => path === `${MOUNT_PATH}/nb.py`)) {
+						throw new Error('overlay write failed');
+					}
+					await writeFiles(files);
+				};
+
+				await expect(
+					new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+						sandboxId,
+						projectId,
+						notebookId,
+						hostname: 'localhost',
+						bucket: bucketConfig,
+						bucketHandle,
+						workspaceLoadMode: 'copy-only',
+						workspaceOverlay: [{ path: 'nb.py', key: version.code }],
+					}),
+				).rejects.toMatchObject({
+					message: expect.stringContaining(
+						'Failed to start sandbox while restoring the notebook workspace',
+					),
+					cause: expect.objectContaining({
+						message:
+							failure === 'missing'
+								? `Workspace source ${version.code} not found`
+								: 'overlay write failed',
+					}),
+				});
+				expect(calls.startProcess).toEqual([]);
+				expect(calls.exec.some((command) => command.includes('uv sync'))).toBe(false);
+				expect(calls.destroy).toBe(1);
+			},
+		);
+
+		it.each([false, true])(
+			'preserves the overlay with a configured archive (present: %s)',
+			async (present) => {
+				const { instance, calls } = makeFakeSandbox();
+				const bucketHandle = new MemoryBucket();
+				const nb = paths.project(projectId).notebook(notebookId);
+				const version = nb.version(createVersionId());
+				await bucketHandle.put(nb.workspaceFile('nb.py'), 'draft');
+				await bucketHandle.put(version.code, 'committed');
+				if (present)
+					await bucketHandle.put(version.workspaceArchive, new Uint8Array([80, 75, 3, 4]));
+				const get = vi.spyOn(bucketHandle, 'get');
+				const writeFiles = instance.writeFiles.bind(instance);
+				instance.writeFiles = async (files) => {
+					if (present && files.some(({ path }) => path === `${MOUNT_PATH}/nb.py`)) {
+						expect(calls.exec.some((command) => command.startsWith('python3 '))).toBe(true);
+					}
+					await writeFiles(files);
+				};
+
+				await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					bucketHandle,
+					workspaceLoadMode: 'copy-only',
+					workspaceArchive: version.workspaceArchive,
+					workspaceOverlay: [{ path: 'nb.py', key: version.code }],
+				});
+
+				expect(
+					calls.writeFiles.flat().filter(({ path }) => path === `${MOUNT_PATH}/nb.py`),
+				).toEqual([
+					{ path: `${MOUNT_PATH}/nb.py`, content: new TextEncoder().encode('committed') },
+				]);
+				expect(get.mock.calls.filter(([key]) => key === version.code)).toHaveLength(1);
+				expect(get).not.toHaveBeenCalledWith(nb.workspaceFile('nb.py'));
+				expect(calls.startProcess).toHaveLength(1);
+			},
+		);
+
 		it('happy path with mount: usedFallback false, returns exposed url, starts marimo on port 2718', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));

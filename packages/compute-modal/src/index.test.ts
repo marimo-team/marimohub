@@ -352,6 +352,55 @@ describe('ModalCompute', () => {
 		expect(world.created[0].sandbox.execCalls).toEqual([]);
 	});
 
+	it.each([false, true])(
+		'shares pending creation across concurrent readiness calls (failure: %s)',
+		async (failure) => {
+			const world = makeWorld();
+			const created = Promise.withResolvers<Sandbox>();
+			const started = Promise.withResolvers<void>();
+			vi.mocked(world.client.sandboxes.create).mockImplementation(() => {
+				started.resolve();
+				return created.promise;
+			});
+			const sandbox = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+			const results = Promise.allSettled([sandbox.ready!(), sandbox.ready!()]);
+			await started.promise;
+			expect(world.client.sandboxes.create).toHaveBeenCalledTimes(1);
+			const backing = new FakeSandbox();
+			const error = new InvalidError('creation failed');
+			if (failure) created.reject(error);
+			else created.resolve(backing);
+
+			expect(await results).toEqual(
+				failure
+					? [
+							{ status: 'rejected', reason: error },
+							{ status: 'rejected', reason: error },
+						]
+					: [
+							{ status: 'fulfilled', value: undefined },
+							{ status: 'fulfilled', value: undefined },
+						],
+			);
+			expect(world.client.sandboxes.create).toHaveBeenCalledTimes(1);
+			expect(backing.execCalls).toEqual([]);
+		},
+	);
+
+	it('readies a reused sandbox without creating or executing', async () => {
+		const world = makeWorld();
+		const existing = new FakeSandbox();
+		world.existing.set(SANDBOX_ID, existing);
+		const sandbox = makeCompute(world).create(SANDBOX_ID, { reuse: true });
+
+		await sandbox.ready!();
+		await sandbox.ready!();
+
+		expect(world.client.sandboxes.fromName).toHaveBeenCalledTimes(1);
+		expect(world.client.sandboxes.create).not.toHaveBeenCalled();
+		expect(existing.execCalls).toEqual([]);
+	});
+
 	it('propagates lazy creation errors from readiness', async () => {
 		const world = makeWorld();
 		const error = new InvalidError('Sandbox creation failed');

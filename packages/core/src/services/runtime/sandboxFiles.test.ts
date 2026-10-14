@@ -140,6 +140,137 @@ describe('restoreWorkspace', () => {
 		expect(calls.writeFiles).toEqual([]);
 	});
 
+	it('restores an empty overlay file into a workspace with no listed objects', async () => {
+		const bucket = new RecordingBucket();
+		await bucket.put('version/empty.py', '');
+		const { instance, calls } = makeFakeSandbox();
+
+		await expect(
+			restoreWorkspace(instance, bucket, 'workspace/', MOUNT, {
+				overlay: [{ path: 'nested/empty.py', key: 'version/empty.py' }],
+			}),
+		).resolves.toEqual({ objectCount: 1, bytes: 0 });
+
+		expect(calls.writeFiles).toEqual([
+			[{ path: `${MOUNT}/nested/empty.py`, content: new Uint8Array() }],
+		]);
+		expect(calls.exec).toEqual([]);
+		expect(bucket.calls.get).toEqual(['version/empty.py']);
+	});
+
+	it.each(['missing', 'get', 'bytes'] as const)(
+		'does not restore draft files or partial overlays when an overlay fails at %s',
+		async (failure) => {
+			const { nb } = nbCtx();
+			const bucket = new MemoryBucket();
+			await bucket.put(nb.workspaceFile('nb.py'), 'draft');
+			await bucket.put(nb.workspaceFile('pyproject.toml'), 'draft deps');
+			await bucket.put('version/code.py', 'committed');
+			await bucket.put('version/deps.toml', 'committed deps');
+			const error = new Error('bucket unavailable');
+			const get = bucket.get.bind(bucket);
+			vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				if (key !== 'version/deps.toml') return get(key);
+				if (failure === 'missing') return null;
+				if (failure === 'get') throw error;
+				const object = (await get(key))!;
+				vi.spyOn(object, 'bytes').mockRejectedValue(error);
+				return object;
+			});
+			const { instance, calls } = makeFakeSandbox();
+
+			await expect(
+				restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
+					overlay: [
+						{ path: 'nb.py', key: 'version/code.py' },
+						{ path: 'pyproject.toml', key: 'version/deps.toml' },
+					],
+				}),
+			).rejects.toThrow(
+				failure === 'missing' ? 'Workspace source version/deps.toml not found' : error,
+			);
+			expect(calls.writeFiles).toEqual([]);
+			expect(calls.exec).toEqual([]);
+			expect(bucket.get).not.toHaveBeenCalledWith(nb.workspaceFile('nb.py'));
+			expect(bucket.get).not.toHaveBeenCalledWith(nb.workspaceFile('pyproject.toml'));
+		},
+	);
+
+	it('does not write prefetched overlays when readiness rejects', async () => {
+		const bucket = new RecordingBucket();
+		await bucket.put('version/code.py', 'committed');
+		const { instance, calls } = makeFakeSandbox();
+		const ready = Promise.withResolvers<void>();
+		const entered = Promise.withResolvers<void>();
+		const error = new Error('sandbox boot failed');
+		const pending = restoreWorkspace(instance, bucket, 'workspace/', MOUNT, {
+			overlay: [{ path: 'nb.py', key: 'version/code.py' }],
+			waitUntilReady: () => {
+				entered.resolve();
+				return ready.promise;
+			},
+		});
+		const rejected = expect(pending).rejects.toBe(error);
+		await entered.promise;
+		expect(bucket.calls.get).toEqual(['version/code.py']);
+		expect(calls.writeFiles).toEqual([]);
+		ready.reject(error);
+		await rejected;
+		expect(calls.writeFiles).toEqual([]);
+		expect(calls.exec).toEqual([]);
+	});
+
+	it('retries the complete overlay batch without fetching it or counting it twice', async () => {
+		const bucket = new RecordingBucket();
+		await bucket.put('workspace/data.txt', 'data');
+		await bucket.put('version/code.py', 'committed');
+		const { instance, calls } = makeFakeSandbox();
+		const writeFiles = instance.writeFiles.bind(instance);
+		const write = vi.spyOn(instance, 'writeFiles').mockImplementation(async (files) => {
+			await writeFiles(files);
+			if (calls.writeFiles.length === 1) throw new Error('connection reset after partial write');
+		});
+
+		await expect(
+			restoreWorkspace(instance, bucket, 'workspace/', MOUNT, {
+				overlay: [{ path: 'nb.py', key: 'version/code.py' }],
+			}),
+		).resolves.toEqual({ objectCount: 2, bytes: 13 });
+		expect(write).toHaveBeenCalledTimes(2);
+		expect(calls.writeFiles[0]).toEqual(calls.writeFiles[1]);
+		expect(calls.writeFiles[1]).toHaveLength(2);
+		expect(bucket.calls.get).toEqual(['version/code.py', 'workspace/data.txt']);
+	});
+
+	it.each(['mkdir', 'write'] as const)(
+		'rejects when concurrent %s exhausts retries without repeating the successful operation',
+		async (failure) => {
+			const { nb } = nbCtx();
+			const bucket = new MemoryBucket();
+			await bucket.put(nb.workspaceFile('nb.py'), 'source');
+			await bucket.put(nb.workspaceFile(workspaceDirectoryMarkerPath('empty')), '');
+			const { instance } = makeFakeSandbox();
+			const written = Promise.withResolvers<void>();
+			const mkdirStarted = Promise.withResolvers<void>();
+			const exec = vi.spyOn(instance, 'exec').mockImplementation(async () => {
+				mkdirStarted.resolve();
+				await written.promise;
+				return execResult(failure !== 'mkdir', '', 'mkdir denied');
+			});
+			const write = vi.spyOn(instance, 'writeFiles').mockImplementation(async () => {
+				written.resolve();
+				await mkdirStarted.promise;
+				if (failure === 'write') throw new Error('write denied');
+			});
+
+			await expect(restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT)).rejects.toThrow(
+				failure === 'mkdir' ? 'sandbox mkdir failed: mkdir denied' : 'write denied',
+			);
+			expect(exec).toHaveBeenCalledTimes(failure === 'mkdir' ? 3 : 1);
+			expect(write).toHaveBeenCalledTimes(failure === 'write' ? 3 : 1);
+		},
+	);
+
 	it('prefetches only one byte-bounded batch and gates directories and writes on readiness', async () => {
 		const { nb } = nbCtx();
 		const bucket = new MemoryBucket();
