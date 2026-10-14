@@ -101,7 +101,7 @@ describe('app operation budgets', () => {
 			putAttempts: 0,
 			deletes: 0,
 		});
-		expect(heartbeatReads).toBe(4);
+		expect(heartbeatReads).toBe(5);
 	});
 
 	it('reads changed notebook constraints on the next proxy request', async () => {

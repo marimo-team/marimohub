@@ -1527,10 +1527,12 @@ export async function startNotebookSession(input: {
 		: undefined;
 	const reusableApp = async () => {
 		if (admission?.kind !== 'reuse') return;
-		if (admission.session) return admission.session;
 		for (let attempt = 0; attempt < 20; attempt++) {
 			try {
-				return await sessions.getSession(pid, admission.member.session_id);
+				const session = await sessions.getSession(pid, admission.member.session_id);
+				if (session.status !== 'running' && session.status !== 'starting')
+					throw new ConflictError('The app session ended. Retry shortly.');
+				return session;
 			} catch (error) {
 				if (!(error instanceof NotFoundError)) throw error;
 			}
@@ -2389,7 +2391,7 @@ app.openapi(heartbeatSession, async (c) => {
 		}
 	}
 
-	const updated = await sessions.heartbeat(pid, sid, existing);
+	const updated = await sessions.heartbeat(pid, sid);
 	const response = toSessionResponse(
 		updated,
 		await sessionGrantsFor(project, user, updated, deps, labels),

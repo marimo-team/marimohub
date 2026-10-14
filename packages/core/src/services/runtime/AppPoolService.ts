@@ -88,8 +88,8 @@ export class AppPoolService {
 			pool: AppPool;
 			decision: T | { kind: 'busy' };
 		},
-	): Promise<T & { session?: Session }> {
-		const { sessions } = await this.synchronize(input.projectId, input.notebookId);
+	): Promise<T> {
+		await this.synchronize(input.projectId, input.notebookId);
 		const now = this.now();
 		const reservation: AppPoolMember = {
 			session_id: createSessionId(),
@@ -162,12 +162,7 @@ export class AppPoolService {
 			decision: decision.kind,
 		});
 		if (decision.kind === 'busy') throw new ResourceExhaustedError('App is busy. Retry shortly.');
-		return decision.kind === 'reuse'
-			? {
-					...decision,
-					session: sessions.find((session) => session.session_id === decision.member.session_id),
-				}
-			: decision;
+		return decision;
 	}
 
 	private async assertCommittedVersion(
@@ -405,7 +400,7 @@ export class AppPoolService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		observedSessions?: readonly Session[],
-	): Promise<{ pool: AppPool; sessions: Session[] }> {
+	): Promise<AppPool> {
 		let sessions: Session[] | undefined;
 		const absent = new Set<SessionId>();
 		return this.store.mutate(projectId, notebookId, async (pool) => {
@@ -414,7 +409,7 @@ export class AppPoolService {
 				pool.members.length === 0 &&
 				(observedSessions?.length ?? 0) === 0
 			)
-				return { pool, value: { pool, sessions: sessions ?? [] } };
+				return { pool, value: pool };
 			if (!sessions) {
 				// Legacy writers stop before rollout. Only an empty pool needs discovery.
 				const candidates =
@@ -474,7 +469,7 @@ export class AppPoolService {
 				}
 			}
 			expireAppPresence(pool, this.now());
-			return { pool, value: { pool, sessions } };
+			return { pool, value: pool };
 		});
 	}
 
@@ -486,7 +481,7 @@ export class AppPoolService {
 			retire: (member: AppPoolMember, session: Session | null) => Promise<boolean>;
 		},
 	): Promise<void> {
-		const { pool: snapshot } = await this.synchronize(projectId, notebookId);
+		const snapshot = await this.synchronize(projectId, notebookId);
 		let changed = false;
 		for (const candidate of snapshot.members) {
 			try {

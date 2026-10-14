@@ -121,11 +121,6 @@ const TAKEOVER_DRAIN_PROGRESS_TIMEOUT_MS = Millis.minutes(30);
 // The interval limits writes and leaves time before the reaper TTL.
 const HEARTBEAT_PERSIST_INTERVAL_MS = Millis.seconds(60);
 
-function heartbeatRenewalState(session: Session, now: number) {
-	if (session.status !== 'running' || isPastAuthorizationDeadline(session, now)) return 'inactive';
-	return now - Date.parse(session.last_heartbeat) < HEARTBEAT_PERSIST_INTERVAL_MS ? 'fresh' : 'due';
-}
-
 /** Sentinel for a session object that vanished between list and read. */
 const SKIP = Symbol('missing-session');
 
@@ -576,18 +571,13 @@ export class SessionService {
 		}));
 	}
 
-	/**
-	 * Heartbeats persist at most once per 60 seconds. Only provisioning promotes starting sessions.
-	 * If supplied, `known` must be this session's snapshot from the current request.
-	 * Only fresh, authorized running sessions skip storage. Due renewals recheck the record under CAS.
-	 */
-	async heartbeat(projectId: ProjectId, id: SessionId, known?: Session): Promise<Session> {
-		if (known && heartbeatRenewalState(known, Date.now()) === 'fresh') return known;
+	/** Heartbeats persist at most once per 60 seconds, but always recheck the session's status. */
+	async heartbeat(projectId: ProjectId, id: SessionId): Promise<Session> {
 		return this.mutate(projectId, id, (session) => {
 			const now = Date.now();
-			return heartbeatRenewalState(session, now) === 'due'
-				? { ...session, last_heartbeat: new Date(now).toISOString() }
-				: null;
+			if (session.status !== 'running' || isPastAuthorizationDeadline(session, now)) return null;
+			if (now - Date.parse(session.last_heartbeat) < HEARTBEAT_PERSIST_INTERVAL_MS) return null;
+			return { ...session, last_heartbeat: new Date(now).toISOString() };
 		});
 	}
 

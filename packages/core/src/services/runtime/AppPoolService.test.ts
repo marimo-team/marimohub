@@ -150,13 +150,25 @@ describe('app pool admission and lifecycle', () => {
 		expect(get.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(2);
 	});
 
-	it('caches session reads across a sync CAS retry without overwriting concurrent members', async () => {
+	it('caches session reads across a sync CAS retry without overwriting a concurrent ready member', async () => {
 		const first = await ready(await admit());
 		const concurrent = {
 			...first.member,
 			session_id: createSessionId(),
 			sandbox_id: createSandboxId(),
+			state: 'ready' as const,
 		};
+		await sessions.createSession({
+			project_id: pid,
+			notebook_id: nid,
+			user_id: concurrent.user_id,
+			mode: 'app',
+			app_pool: true,
+			session_id: concurrent.session_id,
+			sandbox_id: concurrent.sandbox_id,
+			source_version_id: concurrent.source_version_id,
+		});
+		await sessions.setRunning(pid, concurrent.session_id, 'https://concurrent.example');
 		now += policy.userLeaseMs + policy.reconnectGraceMs + 1;
 		const getSession = sessions.getSession.bind(sessions);
 		const read = vi.spyOn(sessions, 'getSession').mockImplementationOnce(async (...args) => {
@@ -172,14 +184,11 @@ describe('app pool admission and lifecycle', () => {
 		const synchronized = await pool.synchronize(pid, nid);
 		expect(read.mock.calls).toEqual([[pid, first.member.session_id]]);
 		expect(put.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(3);
-		expect(synchronized.sessions).toMatchObject([
-			{ session_id: first.member.session_id, status: 'running' },
-		]);
-		expect(synchronized.pool.members).toMatchObject([
+		expect(synchronized.members).toMatchObject([
 			{ session_id: first.member.session_id, state: 'retiring' },
-			{ session_id: concurrent.session_id, state: 'starting' },
+			{ session_id: concurrent.session_id, state: 'ready' },
 		]);
-		expect(await pool.store.read(pid, nid)).toEqual(synchronized.pool);
+		expect(await pool.store.read(pid, nid)).toEqual(synchronized);
 	});
 
 	it('fails admission without changing the pool when a member read is unavailable', async () => {
@@ -193,7 +202,7 @@ describe('app pool admission and lifecycle', () => {
 		expect(await pool.store.read(pid, nid)).toEqual(before);
 		expect(await admit('bob')).toMatchObject({
 			kind: 'reuse',
-			session: { session_id: first.member.session_id, status: 'running' },
+			member: { session_id: first.member.session_id, state: 'ready' },
 		});
 	});
 

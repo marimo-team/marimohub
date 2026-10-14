@@ -7,6 +7,7 @@ import {
 	AppPoolService,
 	UnavailableError,
 	createSandboxId,
+	createSessionId,
 	signProxyToken,
 } from '@marimo-hub/core';
 import type { NotebookId, ProjectId, SessionId } from '@marimo-hub/core';
@@ -67,14 +68,98 @@ describe('app pool HTTP integration', () => {
 		expect(old.app_pool).toMatchObject({ state: 'draining', users: 4, max_users: 4 });
 	});
 
-	it('reads a reused member session once when admitting a second viewer', async () => {
+	it('rechecks a reused member session after admitting a second viewer', async () => {
 		const first = await start();
 		const get = vi.spyOn(bucket, 'get');
 		const second = await start('bob');
 		expect(second.session_id).toBe(first.session_id);
 		expect(
 			get.mock.calls.filter(([key]) => key === paths.session(pid, first.session_id)),
-		).toHaveLength(1);
+		).toHaveLength(2);
+	});
+
+	it.each(['terminating', 'terminated', 'missing'] as const)(
+		'rejects reuse when the session becomes %s during admission',
+		async (state) => {
+			const first = await start();
+			const sessions = createServices(bucket).sessions;
+			const put = bucket.put.bind(bucket);
+			let interrupted = false;
+			vi.spyOn(bucket, 'put').mockImplementation(async (...args) => {
+				if (args[0] === paths.appPool(pid, nid) && !interrupted) {
+					interrupted = true;
+					if (state === 'missing') await bucket.delete(paths.session(pid, first.session_id));
+					else if (state === 'terminating') await sessions.beginTerminating(pid, first.session_id);
+					else await sessions.terminate(pid, first.session_id);
+				}
+				return put(...args);
+			});
+			await expectError(
+				await api('bob').request('POST', path(), { mode: 'app', app_visit_id: 'tab' }),
+				409,
+				'CONFLICT',
+			);
+			expect(interrupted).toBe(true);
+		},
+	);
+
+	it('reads a concurrently published ready member after a synchronization CAS retry', async () => {
+		const first = await start();
+		const client = api('bob');
+		const sessions = client.deps.services.sessions;
+		const pool = new AppPoolService(bucket, sessions, policy);
+		await pool.store.mutate(pid, nid, (snapshot) => {
+			snapshot.assignments[0].visits[0].expires_at = Date.now() - 1;
+			return { pool: snapshot, value: undefined };
+		});
+		const concurrent = {
+			...(await pool.store.read(pid, nid))!.members[0],
+			session_id: createSessionId(),
+			sandbox_id: createSandboxId(),
+		};
+		const getSession = sessions.getSession.bind(sessions);
+		const read = vi.spyOn(sessions, 'getSession').mockImplementationOnce(async (...args) => {
+			const session = await getSession(...args);
+			await sessions.createSession({
+				project_id: pid,
+				notebook_id: nid,
+				user_id: concurrent.user_id,
+				mode: 'app',
+				app_pool: true,
+				session_id: concurrent.session_id,
+				sandbox_id: concurrent.sandbox_id,
+				source_version_id: concurrent.source_version_id,
+			});
+			await sessions.setRunning(pid, concurrent.session_id, 'https://concurrent.example');
+			await pool.store.mutate(pid, nid, (snapshot) => {
+				snapshot.members[0].state = 'retiring';
+				snapshot.members.push(concurrent);
+				return { pool: snapshot, value: undefined };
+			});
+			return session;
+		});
+		const put = vi.spyOn(bucket, 'put');
+		const response = await expectOk<any>(
+			await client.request('POST', path(), { mode: 'app', app_visit_id: 'tab' }),
+		);
+		expect(response).toMatchObject({
+			session_id: concurrent.session_id,
+			status: 'running',
+			sandbox_url: 'https://concurrent.example',
+			reused: true,
+		});
+		expect(read.mock.calls).toEqual([
+			[pid, first.session_id],
+			[pid, concurrent.session_id],
+		]);
+		expect(put.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(4);
+		expect((await pool.store.read(pid, nid))?.assignments).toMatchObject([
+			{
+				user_id: uid('bob'),
+				session_id: concurrent.session_id,
+				generation: response.app_assignment.generation,
+			},
+		]);
 	});
 
 	it.each(['published', 'missing', 'unavailable'] as const)(

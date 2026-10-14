@@ -206,7 +206,7 @@ describe('heartbeat authorization boundaries', () => {
 });
 
 describe('heartbeat dependency failures', () => {
-	it.each(['notebook', 'pool', 'session mutation'] as const)(
+	it.each(['notebook', 'pool', 'fresh session mutation', 'session mutation'] as const)(
 		'fails without writes when the %s read fails, then recovers on retry',
 		async (record) => {
 			const f = await fixture();
@@ -229,7 +229,7 @@ describe('heartbeat dependency failures', () => {
 			const get = f.bucket.get.bind(f.bucket);
 			let reads = 0;
 			const failure = vi.spyOn(f.bucket, 'get').mockImplementation((key) => {
-				if (key === keyToFail && ++reads === (record === 'session mutation' ? 2 : 1))
+				if (key === keyToFail && ++reads === (record.endsWith('session mutation') ? 2 : 1))
 					throw new UnavailableError('Storage temporarily unavailable');
 				return get(key);
 			});
@@ -305,6 +305,43 @@ describe('heartbeat dependency failures', () => {
 			expect(failure.message).not.toContain('Provider unavailable');
 			expect(renew).not.toHaveBeenCalled();
 			expect(put).not.toHaveBeenCalled();
+		},
+	);
+});
+
+describe('fresh heartbeat races', () => {
+	it.each(['terminate', 'delete'] as const)(
+		'rechecks the session when %s wins after the initial session read',
+		async (race) => {
+			const f = await fixture();
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const get = f.bucket.get.bind(f.bucket);
+			let paused = false;
+			vi.spyOn(f.bucket, 'get').mockImplementation(async (key) => {
+				if (key === f.poolKey && !paused) {
+					paused = true;
+					entered.resolve();
+					await release.promise;
+				}
+				return get(key);
+			});
+			const pending = f.heartbeat();
+			await entered.promise;
+			try {
+				if (race === 'terminate')
+					await f.services.sessions.terminate(f.project.id, f.admission.session_id);
+				else await f.bucket.delete(f.sessionKey);
+			} finally {
+				release.resolve();
+			}
+			if (race === 'delete') await expectError(await pending, 404, 'NOT_FOUND');
+			else {
+				const response = await expectOk(await pending);
+				expect(response.status).toBe('terminated');
+				expect(response.sandbox_url).toBeUndefined();
+				expect(response.can.attach).toBe(false);
+			}
 		},
 	);
 });
