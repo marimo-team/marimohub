@@ -42,6 +42,7 @@ import {
 	makeTestWif,
 } from '../testing';
 import type { TestWifOptions } from '../testing';
+import { makeFakeSnapshotCompute } from '../testing/snapshotCompute';
 
 const STRANGER = uid('user_stranger');
 const MANAGER = uid('user_manager');
@@ -629,14 +630,7 @@ describe('Session routes', () => {
 	});
 
 	it('preserves surface validation errors when speculative session reads fail', async () => {
-		const { instance } = makeFakeSandbox();
-		const compute = {
-			...fakeComputeFrom(instance),
-			filesystemSnapshotsEnabled: true,
-			createFromSnapshot: () => instance,
-			captureSnapshot: async () => ({ snapshotId: 'unused' }),
-			deleteSnapshot: async () => {},
-		};
+		const compute = makeFakeSnapshotCompute();
 		const api = createTestApi({ bucket, compute });
 		const reuse = vi
 			.spyOn(api.deps.services.sessions, 'findReusableEditor')
@@ -658,14 +652,7 @@ describe('Session routes', () => {
 	it.each(['reuse', 'snapshot'] as const)(
 		'fails before provisioning when the speculative %s read rejects',
 		async (failure) => {
-			const { instance } = makeFakeSandbox();
-			const compute = {
-				...fakeComputeFrom(instance),
-				filesystemSnapshotsEnabled: true,
-				createFromSnapshot: () => instance,
-				captureSnapshot: async () => ({ snapshotId: 'unused' }),
-				deleteSnapshot: async () => {},
-			};
+			const compute = makeFakeSnapshotCompute();
 			const create = vi.spyOn(compute, 'create');
 			const api = createTestApi({ bucket, compute });
 			const { sessions, notebooks } = api.deps.services;
@@ -1274,27 +1261,14 @@ describe('Session routes', () => {
 			captured_at: '2026-07-01T00:00:00.000Z',
 			owner_user_id: STRANGER,
 		});
-		const { instance } = makeFakeSandbox();
-		const restored: string[] = [];
-		const compute = {
-			...fakeComputeFrom(instance),
-			filesystemSnapshotsEnabled: true,
-			createFromSnapshot(_id: string, snapshotId: string) {
-				restored.push(snapshotId);
-				return instance;
-			},
-			async captureSnapshot() {
-				return { snapshotId: 'unused' };
-			},
-			async deleteSnapshot() {},
-		};
+		const compute = makeFakeSnapshotCompute();
 		const exclusiveOther = exclusiveApi(STRANGER, compute);
 
 		const data = await expectOk<ApiSession>(
 			await exclusiveOther('POST', sessionsPath(), { edit_intent: 'temporary' }),
 		);
 		expect(data.ephemeral).toBe(true);
-		expect(restored).toEqual([]);
+		expect(compute.createFromSnapshot).not.toHaveBeenCalled();
 		expect(data.compute_from_snapshot).toBeUndefined();
 	});
 
@@ -2061,29 +2035,26 @@ describe('Session routes', () => {
 					captured_at: new Date().toISOString(),
 				});
 			}
-			const { instance } = makeFakeSandbox();
-			const restore = vi.fn(() => instance);
-			const compute = {
-				...fakeComputeFrom(instance),
-				filesystemSnapshotsEnabled: true,
-				createFromSnapshot: restore,
-				captureSnapshot: async () => ({ snapshotId: 'snap-retired' }),
-				deleteSnapshot: async () => {},
-			};
+			const compute = makeFakeSnapshotCompute();
+			compute.captureSnapshot.mockResolvedValue({ snapshotId: 'snap-retired' });
 			const api = createTestApi({
 				bucket,
 				compute,
 				deps: { kernelProbe: async () => 'dead' },
 			});
 			const first = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
-			restore.mockClear();
+			compute.createFromSnapshot.mockClear();
 
 			const replacement = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
 			const stored = await services.sessions.getSession(pid, replacement.session_id);
 
 			expect(replacement.session_id).not.toBe(first.session_id);
 			expect(replacement.compute_from_snapshot).toBe(true);
-			expect(restore).toHaveBeenCalledWith(stored.sandbox_id, 'snap-retired', expect.anything());
+			expect(compute.createFromSnapshot).toHaveBeenCalledExactlyOnceWith(
+				stored.sandbox_id,
+				'snap-retired',
+				expect.anything(),
+			);
 		},
 	);
 
@@ -2096,20 +2067,7 @@ describe('Session routes', () => {
 			compute_profile: 'small',
 			compute_resources: { cpu: 1, memory_bytes: 2 * 1024 ** 3 },
 		});
-		const { instance } = makeFakeSandbox();
-		const restored: string[] = [];
-		const compute = {
-			...fakeComputeFrom(instance),
-			filesystemSnapshotsEnabled: true,
-			createFromSnapshot(_id: string, snapshotId: string) {
-				restored.push(snapshotId);
-				return instance;
-			},
-			async captureSnapshot() {
-				return { snapshotId: 'unused' };
-			},
-			async deleteSnapshot() {},
-		};
+		const compute = makeFakeSnapshotCompute();
 		const request = createTestApi({
 			bucket,
 			userId: ACTOR,
@@ -2126,7 +2084,11 @@ describe('Session routes', () => {
 		}).request;
 
 		const data = await expectOk<ApiSession>(await request('POST', sessionsPath()));
-		expect(restored).toEqual(['snap-old']);
+		expect(compute.createFromSnapshot).toHaveBeenCalledExactlyOnceWith(
+			expect.any(String),
+			'snap-old',
+			expect.anything(),
+		);
 		expect(data.compute_profile).toBe('small');
 		expect(data.compute_resources).toEqual({
 			cpu: 1,

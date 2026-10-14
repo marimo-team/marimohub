@@ -20,6 +20,7 @@ import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 import { authorizeProxyRequest } from '../sandboxProxy';
 import { sweepAppPools } from '../appPools';
+import { makeFakeSnapshotCompute } from '../testing/snapshotCompute';
 
 describe('app pool HTTP integration', () => {
 	let bucket: MemoryBucket;
@@ -300,13 +301,7 @@ describe('app pool HTTP integration', () => {
 		async (replacement) => {
 			const selected = replacement ? await start() : undefined;
 			const fake = makeFakeSandbox();
-			const compute = {
-				...fakeComputeFrom(fake.instance),
-				filesystemSnapshotsEnabled: true,
-				createFromSnapshot: () => fake.instance,
-				captureSnapshot: async () => ({ snapshotId: 'unused' }),
-				deleteSnapshot: async () => {},
-			};
+			const compute = makeFakeSnapshotCompute(fake.instance);
 			const client = createTestApi({
 				bucket,
 				userId: uid('alice'),
