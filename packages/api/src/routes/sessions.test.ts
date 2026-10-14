@@ -439,10 +439,73 @@ describe('Session routes', () => {
 			ACTOR,
 		);
 		const path = `/projects/${pid}/notebooks/${meta.id}/sessions`;
+		const compute = makeFakeCompute();
+		const create = vi.spyOn(compute, 'create');
+		const api = createTestApi({ bucket, compute, deps: { services } });
+		const scan = vi.spyOn(services.sessions, 'findReusableEditor');
 
-		await expectError(await owner('POST', path), 409, 'CONFLICT');
+		const error = await expectError(await api.request('POST', path), 409, 'CONFLICT');
+		expect(error.message).toBe('Synced notebook has not been synced yet');
+		expect(scan).not.toHaveBeenCalled();
+		expect(create).not.toHaveBeenCalled();
 		expect(await services.sessions.listSessions(meta.id)).toHaveLength(0);
 	});
+
+	it('preserves surface validation errors when speculative session reads fail', async () => {
+		const { instance } = makeFakeSandbox();
+		const compute = {
+			...fakeComputeFrom(instance),
+			filesystemSnapshotsEnabled: true,
+			createFromSnapshot: () => instance,
+			captureSnapshot: async () => ({ snapshotId: 'unused' }),
+			deleteSnapshot: async () => {},
+		};
+		const api = createTestApi({ bucket, compute });
+		const reuse = vi
+			.spyOn(api.deps.services.sessions, 'findReusableEditor')
+			.mockRejectedValueOnce(new Error('session scan unavailable'));
+		const snapshot = vi
+			.spyOn(api.deps.services.notebooks, 'getFsSnapshot')
+			.mockRejectedValueOnce(new Error('snapshot storage unavailable'));
+
+		await expectError(
+			await api.request('POST', sessionsPath(), { surfaces: ['vscode'] }),
+			409,
+			'SURFACE_NOT_ENABLED',
+		);
+		expect(reuse).toHaveBeenCalledOnce();
+		expect(snapshot).toHaveBeenCalledOnce();
+		expect(await api.deps.services.sessions.listSessions(nid)).toHaveLength(0);
+	});
+
+	it.each(['reuse', 'snapshot'] as const)(
+		'fails before provisioning when the speculative %s read rejects',
+		async (failure) => {
+			const { instance } = makeFakeSandbox();
+			const compute = {
+				...fakeComputeFrom(instance),
+				filesystemSnapshotsEnabled: true,
+				createFromSnapshot: () => instance,
+				captureSnapshot: async () => ({ snapshotId: 'unused' }),
+				deleteSnapshot: async () => {},
+			};
+			const create = vi.spyOn(compute, 'create');
+			const api = createTestApi({ bucket, compute });
+			const { sessions, notebooks } = api.deps.services;
+			const error = new ConflictError(`${failure} read failed`);
+			if (failure === 'reuse') {
+				vi.spyOn(sessions, 'findReusableEditor').mockRejectedValueOnce(error);
+			} else {
+				vi.spyOn(notebooks, 'getFsSnapshot').mockRejectedValueOnce(error);
+			}
+
+			const response = await expectError(await api.request('POST', sessionsPath()), 409, 'CONFLICT');
+
+			expect(response.message).toBe(error.message);
+			expect(create).not.toHaveBeenCalled();
+			expect(await sessions.listSessions(nid)).toHaveLength(0);
+		},
+	);
 
 	describe('launch strategy inference', () => {
 		const enc = (s: string) => new TextEncoder().encode(s);

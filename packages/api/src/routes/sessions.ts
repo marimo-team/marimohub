@@ -1356,20 +1356,39 @@ export async function startNotebookSession(input: {
 		throw new BadRequestError('Temporary editor sessions are only available in exclusive mode');
 	}
 	const ephemeral = authorization.ephemeral || editorTemporary || (isPreview && mode === 'edit');
-	const surfaceGrant = (
-		await sessionGrantsFor(
-			project,
-			user,
-			{
-				mode,
-				ephemeral,
-				user_id: user.id,
-				editor_sandbox_sharing: sharing,
-			},
-			deps,
-			notebook.meta.security_labels ?? null,
-		)
-	).surface;
+	const { compute, bucket: bucketHandle, sandbox } = deps;
+	const workspacePolicy = workspaceSourcePolicy(notebook.source);
+	const syncedVersionId = workspacePolicy.persistSessionEdits
+		? undefined
+		: notebook.source.current_version_id;
+	const surfaceGrantRead = sessionGrantsFor(
+		project,
+		user,
+		{
+			mode,
+			ephemeral,
+			user_id: user.id,
+			editor_sandbox_sharing: sharing,
+		},
+		deps,
+		notebook.meta.security_labels ?? null,
+	);
+	// Unsynced notebooks must fail validation before any session scan.
+	const editorReuseRead =
+		mode === 'edit' && (workspacePolicy.persistSessionEdits || syncedVersionId)
+			? sessions.findReusableEditor(pid, nid, user.id, sharing, ephemeral, {
+					claim: existingEditorClaim,
+				})
+			: Promise.resolve(undefined);
+	const restoreSnapshotRead =
+		!ephemeral && workspacePolicy.restoreFilesystemSnapshot
+			? resolveRestoreSnapshot(compute, notebooks, pid, nid, {
+					sharing: mode === 'edit' ? sharing : 'shared',
+					userId: user.id,
+				})
+			: Promise.resolve(undefined);
+	for (const read of [surfaceGrantRead, editorReuseRead, restoreSnapshotRead]) read.catch(() => {});
+	const surfaceGrant = (await surfaceGrantRead).surface;
 	const requestedSurfaces = body?.surfaces ?? [];
 	if (requestedSurfaces.length > 0 && mode !== 'edit') {
 		throw new BadRequestError('Session surfaces are only valid for edit sessions');
@@ -1406,12 +1425,8 @@ export async function startNotebookSession(input: {
 		return current;
 	};
 
-	const workspacePolicy = workspaceSourcePolicy(notebook.source);
 	// Synced sources are read-only mirrors served from the immutable workspace of the
 	// version the source currently points at; a session can't start before a push.
-	const syncedVersionId = workspacePolicy.persistSessionEdits
-		? undefined
-		: notebook.source.current_version_id;
 	if (!workspacePolicy.persistSessionEdits && !syncedVersionId) {
 		throw new ConflictError('Synced notebook has not been synced yet');
 	}
@@ -1462,7 +1477,6 @@ export async function startNotebookSession(input: {
 			recovered: true,
 		});
 
-	const { compute, bucket: bucketHandle, sandbox } = deps;
 	const sandboxExposure = sandbox.exposure ?? new SubdomainExposure();
 	const hostname = sandbox.hostname || request.hostname;
 	const { appBaseUrl } = request;
@@ -1488,12 +1502,7 @@ export async function startNotebookSession(input: {
 	);
 	const provisioner = new SandboxProvisioner(compute);
 
-	const editorReuse =
-		mode === 'edit'
-			? await sessions.findReusableEditor(pid, nid, user.id, sharing, ephemeral, {
-					claim: existingEditorClaim,
-				})
-			: undefined;
+	const editorReuse = await editorReuseRead;
 	if (editorReuse?.takeoverInProgress) throw new TakeoverInProgressError();
 	if (editorReuse?.ownedByOther) {
 		throw new EditSessionOwnedError(
@@ -1706,13 +1715,7 @@ export async function startNotebookSession(input: {
 			if (!retired.sandbox_reclaimed_at)
 				throw new ConflictError('The selected app is still stopping. Retry shortly.');
 		}
-		const restoreFilesystemSnapshot =
-			!ephemeral && workspacePolicy.restoreFilesystemSnapshot
-				? await resolveRestoreSnapshot(compute, notebooks, pid, nid, {
-						sharing: mode === 'edit' ? sharing : 'shared',
-						userId: user.id,
-					})
-				: undefined;
+		const restoreFilesystemSnapshot = await restoreSnapshotRead;
 		const appliedComputeProfile = restoreFilesystemSnapshot
 			? {
 					name: restoreFilesystemSnapshot.compute_profile,
