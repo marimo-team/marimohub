@@ -250,11 +250,6 @@ export function useVersionQuery() {
 	});
 }
 
-/**
- * Deployment capability flags (e.g. whether WIF is configured). Never throws
- * into the error boundary: consumers (NotebookPage, Project) deliberately treat
- * a failed probe as "grant nothing" rather than crashing the page.
- */
 export function capabilitiesQueryOptions() {
 	return queryOptions({
 		queryKey: systemKeys.capabilities(),
@@ -263,6 +258,7 @@ export function capabilitiesQueryOptions() {
 	});
 }
 
+/** Consumers treat failed capability queries as no grants, without an error boundary. */
 export function useCapabilitiesQuery(enabled = true) {
 	return useQuery({ ...capabilitiesQueryOptions(), enabled });
 }

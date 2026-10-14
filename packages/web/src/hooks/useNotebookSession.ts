@@ -86,11 +86,7 @@ export function useNotebookSession(
 		enabled?: boolean;
 		mode?: 'edit' | 'app';
 		editIntent?: 'temporary';
-		/**
-		 * The deployment's sandbox-startup timeout
-		 * (`capabilities.sandbox_startup_timeout_seconds`); a still-`starting`
-		 * session older than this (plus grace) is failed instead of polled forever.
-		 */
+		/** Fail startup after this deployment timeout plus a 30-second grace period. */
 		startupTimeoutSeconds?: number;
 		appHeartbeatIntervalSeconds?: number;
 	} = {},
@@ -286,11 +282,7 @@ export function useNotebookSession(
 		[startFailedMessage, commitSession, generation],
 	);
 
-	/**
-	 * Re-read the watched session under a staleness guard. A 404 means the record
-	 * is gone — a terminal answer, so it gets its own branch; every other failure
-	 * is transient and the next tick retries.
-	 */
+	// Ignore stale responses. Retry request failures except 404 on the next tick.
 	const pollSession = useCallback(
 		(sessionId: string, onNext: (next: Session) => void, onGone: () => void) => {
 			const gen = generation.current();
@@ -311,24 +303,20 @@ export function useNotebookSession(
 		[projectId, notebookId, generation],
 	);
 
-	// A start that reuses an in-flight `starting` session (a concurrent refresh was
-	// already provisioning) returns before the kernel is up. Poll until it is
-	// `running` (connect) or terminal (surface an error). Normal starts return
-	// `running` directly, so the interval is paused (`null`) and never runs.
+	// Reused sessions can return before provisioning finishes, so watch them until ready.
 	useInterval(
 		() => {
 			if (session?.status !== 'starting') return;
-			if (startingSinceRef.current !== null && Date.now() - startingSinceRef.current > 30_000) {
+			const elapsed =
+				startingSinceRef.current === null ? null : Date.now() - startingSinceRef.current;
+			if (elapsed !== null && elapsed > 30_000) {
 				setStartPollInterval(5_000);
 			}
-			// Watched longer than the deployment's startup timeout (plus grace) means
-			// whichever request was provisioning has died without failing the record —
-			// give up instead of polling forever. The message names the CONFIGURED
-			// timeout, matching the server's own timeout error; the grace is an
-			// implementation detail.
+			// A lost provisioning request can leave the record starting indefinitely.
+			// Match the server's timeout message, which excludes the grace period.
 			const timeoutSeconds = startupTimeoutSeconds ?? DEFAULT_STARTUP_TIMEOUT_S;
 			const deadlineMs = sessionStartupDeadlineMs(timeoutSeconds);
-			if (startingSinceRef.current !== null && Date.now() - startingSinceRef.current > deadlineMs) {
+			if (elapsed !== null && elapsed > deadlineMs) {
 				failStart({
 					code: 'STARTUP_TIMEOUT',
 					message: `${mode === 'app' ? 'The app' : 'The kernel'} did not start within ${timeoutSeconds}s.`,

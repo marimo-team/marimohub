@@ -9,6 +9,7 @@ import type { Theme } from '@/context/ThemeContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { projectKeys } from '@/api/queryKeys';
 import { renderWithClient } from '@/test/render';
+import { createQueryClient } from '@/api/queryClient';
 import { AppsPage, ProjectEntryPage } from './AppsPage';
 import { AppEntryPage } from './AppEntryPage';
 import {
@@ -29,12 +30,22 @@ const app = {
 	can: { run: true },
 };
 
+function deferredRequest() {
+	let finish!: () => void;
+	const ready = new Promise<void>((resolve) => {
+		finish = resolve;
+	});
+	return { ready, finish };
+}
+
 function setup(
 	entry = '/apps',
 	items = [app],
 	options: Partial<Parameters<typeof makeFetch>[0]> & {
 		colorMode?: Theme;
 		appStatus?: number;
+		appReady?: Promise<void>;
+		client?: QueryClient;
 		projectStatus?: number;
 		projectReload?: Promise<void>;
 		appsResponse?: (url: URL) => Response;
@@ -48,6 +59,7 @@ function setup(
 	let projectReads = 0;
 	const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = new URL(input instanceof Request ? input.url : String(input), 'http://localhost');
+		if (url.pathname.endsWith(`/notebooks/${NID}/app`)) await options.appReady;
 		if (url.pathname === `/api/v1/projects/${PID}` && ++projectReads > 1)
 			await options.projectReload;
 		const status = url.pathname.endsWith(`/notebooks/${NID}/app`)
@@ -80,9 +92,11 @@ function setup(
 		return existing(input, init);
 	});
 	vi.stubGlobal('fetch', fetch);
-	const client = new QueryClient({
-		defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-	});
+	const client =
+		options.client ??
+		new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
 	const result = renderWithClient(
 		<ThemeProvider>
 			<Suspense fallback={<p>Loading…</p>}>
@@ -272,11 +286,54 @@ describe('stakeholder apps', () => {
 		},
 	);
 
-	it('keeps the authoring fallback mounted during a background project refresh', async () => {
-		let finish = () => {};
-		const projectReload = new Promise<void>((resolve) => {
-			finish = resolve;
+	it('prefetches project and capabilities while app details are still pending', async () => {
+		const { ready, finish } = deferredRequest();
+		const { fetch, existing, container } = setup(app.url, [app], {
+			role: 'editor',
+			appReady: ready,
 		});
+		try {
+			await waitFor(() =>
+				expect(fetch.mock.calls.map(([input]) => String(input))).toEqual(
+					expect.arrayContaining([`/api/v1/projects/${PID}`, '/api/v1/capabilities']),
+				),
+			);
+			expect(screen.getByText('Opening app…')).toBeVisible();
+			expect(sessionPosts(existing)).toHaveLength(0);
+		} finally {
+			await act(async () => finish());
+		}
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		expect(sessionPosts(existing)).toHaveLength(1);
+	});
+
+	it('opens an authorized app when project prefetch is forbidden without an error toast', async () => {
+		const errorToast = vi.spyOn(toast, 'error');
+		const client = createQueryClient();
+		const { ready, finish } = deferredRequest();
+		const { container, existing } = setup(app.url, [app], {
+			appOnly: false,
+			projectStatus: 403,
+			appReady: ready,
+			client,
+		});
+		try {
+			await waitFor(() =>
+				expect(client.getQueryState(projectKeys.detail(PID))?.status).toBe('error'),
+			);
+			expect(screen.getByText('Opening app…')).toBeVisible();
+			expect(errorToast).not.toHaveBeenCalled();
+		} finally {
+			await act(async () => finish());
+		}
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		expect(sessionPosts(existing)).toHaveLength(1);
+		expect(errorToast).not.toHaveBeenCalled();
+		expect(screen.queryByRole('alert')).toBeNull();
+	});
+
+	it('keeps the authoring fallback mounted during a background project refresh', async () => {
+		const { ready: projectReload, finish } = deferredRequest();
 		const { container, fetch, client } = setup(app.url, [app], {
 			role: 'editor',
 			appStatus: 503,
