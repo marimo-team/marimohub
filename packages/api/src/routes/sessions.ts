@@ -1559,7 +1559,11 @@ export async function startNotebookSession(input: {
 	};
 	const reusableCandidate = mode === 'edit' ? editorReuse?.session : await reusableApp();
 	if (reusableCandidate) {
-		let reusable = await tightenAuthorizationDeadline(reusableCandidate);
+		const [reusableTightened, reusableGrants] = await Promise.all([
+			tightenAuthorizationDeadline(reusableCandidate),
+			grants(reusableCandidate),
+		]);
+		let reusable = reusableTightened;
 		const authorizationExpired = isPastAuthorizationDeadline(reusable, Date.now());
 		// Role changes must not reuse a kernel with the previous credential policy.
 		const classMismatch =
@@ -1568,7 +1572,6 @@ export async function startNotebookSession(input: {
 				(reusable.restricted_viewer_credentials === true) !== restrictedViewerCredentials);
 		// Reuse does not grant control: a failed probe must not let a viewer
 		// tear down another caller's app.
-		const reusableGrants = await grants(reusable);
 		const mayRetire = reusableGrants.stop;
 		// Only a `running` reconnect can hit a dead kernel; a `starting` reuse has no
 		// kernel yet. Probe what the browser would hit (origin in proxy mode, else url).

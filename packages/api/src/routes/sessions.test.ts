@@ -2831,6 +2831,30 @@ describe('Session routes', () => {
 		});
 	});
 
+	it('does not probe or retire a reused editor when tightening authorization fails', async () => {
+		const first = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
+		const { instance, calls } = makeFakeSandbox();
+		const probe = vi.fn(async () => 'dead' as const);
+		const api = createTestApi({
+			bucket,
+			compute: fakeComputeFrom(instance),
+			subject: { entitlementsExpiresAt: new Date(Date.now() + Millis.hours(1)).toISOString() },
+			deps: { kernelProbe: probe },
+		});
+		vi.spyOn(api.deps.services.sessions, 'tightenAuthorizationDeadline').mockRejectedValueOnce(
+			new ConflictError('authorization update failed'),
+		);
+
+		const error = await expectError(await api.request('POST', sessionsPath()), 409, 'CONFLICT');
+
+		expect(error.message).toBe('authorization update failed');
+		expect(probe).not.toHaveBeenCalled();
+		expect(calls.destroy).toBe(0);
+		expect(await api.deps.services.sessions.getSession(pid, first.session_id)).toMatchObject({
+			status: 'running',
+		});
+	});
+
 	it('rejects editor reuse when authorization expires during the kernel probe', async () => {
 		const services = createServices(bucket);
 		const kernelProbe = vi.fn<NonNullable<ApiDeps['kernelProbe']>>();
@@ -3015,11 +3039,12 @@ describe('Session routes', () => {
 
 		it('does not retire an edit session when the PAT omits session.stop', async () => {
 			const { instance, calls } = makeFakeSandbox();
+			const probe = vi.fn(async () => 'dead' as const);
 			const scoped = createTestApi({
 				bucket,
 				compute: fakeComputeFrom(instance),
 				deps: {
-					kernelProbe: async () => 'dead' as const,
+					kernelProbe: probe,
 					authenticator: {
 						authenticate: async () => ({
 							id: ACTOR,
@@ -3042,6 +3067,7 @@ describe('Session routes', () => {
 			expect(second.session_id).toBe(first.session_id);
 			expect(second.reused).toBe(true);
 			expect(calls.destroy).toBe(0);
+			expect(probe).not.toHaveBeenCalled();
 		});
 
 		it('resumes a healthy reused session without reprovisioning (probe alive)', async () => {
