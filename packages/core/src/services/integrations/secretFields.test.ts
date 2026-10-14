@@ -96,6 +96,13 @@ describe('sealConfig / openConfig / redactConfig', () => {
 
 	const storedConfig = () => sealConfig({ schema, paths, authoring, seal: fakeSeal() });
 
+	const referenceConfig = (names: string[]) => ({
+		secrets: names.map((name) => ({
+			name,
+			value: { $secret: { kind: 'reference', backend: 'vault', locator: name } },
+		})),
+	});
+
 	it('round-trips authoring → stored → resolved, applying defaults', async () => {
 		const seal = fakeSeal();
 		const stored = await sealConfig({ schema, paths, authoring, seal });
@@ -136,12 +143,7 @@ describe('sealConfig / openConfig / redactConfig', () => {
 	});
 
 	it('resolves reference fields concurrently and preserves their slots', async () => {
-		const stored = {
-			secrets: ['A', 'B', 'C'].map((name) => ({
-				name,
-				value: { $secret: { kind: 'reference', backend: 'vault', locator: name } },
-			})),
-		};
+		const stored = referenceConfig(['A', 'B', 'C']);
 		const original = structuredClone(stored);
 		const releases: (() => void)[] = [];
 		let inFlight = 0;
@@ -165,6 +167,72 @@ describe('sealConfig / openConfig / redactConfig', () => {
 		await expect(opened).resolves.toEqual({
 			secrets: ['A', 'B', 'C'].map((name) => ({ name, value: `resolved:${name}` })),
 		});
+		expect(stored).toEqual(original);
+	});
+
+	it('bounds secret lookups and refills each slot without waiting for its siblings', async () => {
+		const names = Array.from({ length: 20 }, (_, i) => String(i));
+		const stored = referenceConfig(names);
+		const original = structuredClone(stored);
+		const pending = names.map(() => Promise.withResolvers<string>());
+		const started = names.map(() => Promise.withResolvers<void>());
+		let inFlight = 0;
+		let peak = 0;
+		const resolve = vi.fn(async (ref: SecretRef) => {
+			const index = Number(ref.locator);
+			peak = Math.max(peak, ++inFlight);
+			started[index].resolve();
+			try {
+				return await pending[index].promise;
+			} finally {
+				inFlight--;
+			}
+		});
+		const opened = openConfig({ stored, paths, open: { ...fakeOpen, resolve } });
+
+		await started[7].promise;
+		expect(resolve).toHaveBeenCalledTimes(8);
+		expect(inFlight).toBe(8);
+		pending[7].resolve('resolved:7');
+		await started[8].promise;
+		expect(resolve).toHaveBeenCalledTimes(9);
+		expect(inFlight).toBe(8);
+		for (let i = pending.length - 1; i >= 0; i--) pending[i].resolve(`resolved:${i}`);
+
+		await expect(opened).resolves.toEqual({
+			secrets: names.map((name) => ({ name, value: `resolved:${name}` })),
+		});
+		expect(peak).toBe(8);
+		expect(inFlight).toBe(0);
+		expect(stored).toEqual(original);
+	});
+
+	it('releases failed lookup slots and observes failures from queued work', async () => {
+		const names = Array.from({ length: 10 }, (_, i) => String(i));
+		const stored = referenceConfig(names);
+		const original = structuredClone(stored);
+		const pending = names.map(() => Promise.withResolvers<string>());
+		const started = names.map(() => Promise.withResolvers<void>());
+		const resolve = vi.fn((ref: SecretRef) => {
+			const index = Number(ref.locator);
+			started[index].resolve();
+			return pending[index].promise;
+		});
+		const opened = openConfig({ stored, paths, open: { ...fakeOpen, resolve } });
+		const error = new Error('secret backend unavailable');
+		const rejected = expect(opened).rejects.toBe(error);
+
+		await started[7].promise;
+		pending[0].reject(error);
+		await rejected;
+		await started[8].promise;
+		expect(resolve).toHaveBeenCalledTimes(9);
+		pending[8].reject(new Error('queued lookup failed'));
+		await started[9].promise;
+		expect(resolve).toHaveBeenCalledTimes(10);
+		pending[9].reject(new Error('another queued lookup failed'));
+		for (let i = 1; i < 8; i++) pending[i].resolve(`resolved:${i}`);
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(stored).toEqual(original);
 	});
 
@@ -201,6 +269,7 @@ describe('sealConfig / openConfig / redactConfig', () => {
 		});
 		const error = new Error('first failure');
 		const rejected = expect(opened).rejects.toBe(error);
+		await Promise.resolve();
 		pending[1].reject(error);
 		await rejected;
 		pending[0].reject(new Error('later failure'));

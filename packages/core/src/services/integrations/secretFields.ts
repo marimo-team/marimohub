@@ -1,6 +1,7 @@
 // Encryption uses wildcard field paths rather than array indexes so envelopes
 // remain valid when array entries are reordered.
 import { z } from 'zod';
+import { mapWithConcurrency } from '../../concurrency';
 import { ValidationError } from '../../errors';
 import type { SecretEnvelope, SecretRef } from '../../ports/secrets';
 
@@ -20,6 +21,7 @@ export const zSecret = () =>
 
 /** Prevents plaintext secrets from appearing in structural validation errors. */
 const PLACEHOLDER = '__marimohub_secret__';
+const SECRET_RESOLUTION_CONCURRENCY = 8;
 
 export type ManagedStoredSecretValue = {
 	$secret: { kind: 'managed'; envelope: SecretEnvelope };
@@ -404,12 +406,13 @@ export async function openConfig(options: {
 			pending.push({ concrete, at: dotted(path), value });
 		}
 	}
-	const values = await Promise.all(
-		pending.map(async ({ value, at }) =>
+	const values = await mapWithConcurrency(
+		pending,
+		SECRET_RESOLUTION_CONCURRENCY,
+		async ({ value, at }) =>
 			isManagedStoredSecret(value)
 				? open.decrypt(value.$secret.envelope, at)
 				: open.resolve({ backend: value.$secret.backend, locator: value.$secret.locator }, at),
-		),
 	);
 	pending.forEach(({ concrete }, i) => setAt(resolved, concrete, values[i]));
 	return resolved;
