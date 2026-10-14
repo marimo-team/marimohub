@@ -801,6 +801,42 @@ describe('SandboxProvisioner', () => {
 			expect(calls.startProcess[0].cmd).toContain("marimo --quiet edit 'apps/dash.py'");
 		});
 
+		it.each(['provision', 'prepare'] as const)(
+			'%s cleans up a strategy rejection that arrives before boot finishes',
+			async (operation) => {
+				const { instance, calls } = makeFakeSandbox();
+				const ready = deferred<void>();
+				const started = deferred<void>();
+				instance.ready = () => {
+					started.resolve();
+					return ready.promise;
+				};
+				const strategy = deferred<'uv-script-pins'>();
+				const error = new Error('strategy unavailable');
+				const pending = new SandboxProvisioner(fakeComputeFrom(instance))[operation]({
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					launchStrategy: strategy.promise,
+				});
+				const rejected = expect(pending).rejects.toBe(error);
+				await started.promise;
+				try {
+					strategy.reject(error);
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					expect(calls.startProcess).toEqual([]);
+				} finally {
+					ready.resolve();
+				}
+				await rejected;
+				expect(calls.destroy).toBe(1);
+				expect(calls.startProcess).toEqual([]);
+				expect(calls.exec.some((command) => command.includes('uv sync'))).toBe(false);
+			},
+		);
+
 		it('records setup step timings and logs bounded uv output when setup is slow', async () => {
 			vi.useFakeTimers();
 			vi.setSystemTime(new Date('2026-08-26T13:47:00Z'));

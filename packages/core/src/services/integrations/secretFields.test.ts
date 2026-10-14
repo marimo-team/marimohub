@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ValidationError } from '../../errors';
 import type { SecretEnvelope, SecretRef } from '../../ports/secrets';
@@ -164,6 +164,59 @@ describe('sealConfig / openConfig / redactConfig', () => {
 			secrets: ['A', 'B', 'C'].map((name) => ({ name, value: `resolved:${name}` })),
 		});
 		expect(stored).toEqual(original);
+	});
+
+	it.each(['throw', 'reject'] as const)(
+		'preserves stored values when a resolver fails with %s',
+		async (failure) => {
+			const stored = await sealConfig({ schema, paths, authoring, seal: fakeSeal() });
+			const original = structuredClone(stored);
+			const error = new Error('secret backend unavailable');
+			const decrypt = vi.fn((envelope: SecretEnvelope, at: string) => {
+				if (at === 'auth.password') {
+					if (failure === 'throw') throw error;
+					return Promise.reject(error);
+				}
+				return fakeOpen.decrypt(envelope);
+			});
+
+			await expect(openConfig({ stored, paths, open: { ...fakeOpen, decrypt } })).rejects.toBe(
+				error,
+			);
+			expect(decrypt).toHaveBeenCalledTimes(3);
+			expect(stored).toEqual(original);
+		},
+	);
+
+	it('observes sibling rejections after one concurrent resolution fails', async () => {
+		const stored = await sealConfig({ schema, paths, authoring, seal: fakeSeal() });
+		const pending = Array.from({ length: 3 }, () => Promise.withResolvers<string>());
+		let index = 0;
+		const opened = openConfig({
+			stored,
+			paths,
+			open: { ...fakeOpen, decrypt: () => pending[index++].promise },
+		});
+		const error = new Error('first failure');
+		const rejected = expect(opened).rejects.toBe(error);
+		pending[1].reject(error);
+		await rejected;
+		pending[0].reject(new Error('later failure'));
+		pending[2].reject(new Error('another later failure'));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	});
+
+	it('validates all stored slots before starting secret resolution', async () => {
+		const stored = await sealConfig({ schema, paths, authoring, seal: fakeSeal() });
+		(stored.secrets as Record<string, unknown>[])[1].value = { $secret: { kind: 'future' } };
+		const decrypt = vi.fn(fakeOpen.decrypt);
+		const resolve = vi.fn(fakeOpen.resolve);
+
+		await expect(openConfig({ stored, paths, open: { decrypt, resolve } })).rejects.toThrow(
+			'Secret field "secrets.1.value" holds an unsupported stored shape.',
+		);
+		expect(decrypt).not.toHaveBeenCalled();
+		expect(resolve).not.toHaveBeenCalled();
 	});
 
 	it('redacts every managed secret without exposing its envelope', async () => {
