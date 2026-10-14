@@ -9,7 +9,12 @@ import {
 	paths,
 } from '@marimo-hub/core';
 import type { AppVisit, SessionId, TokenGrant } from '@marimo-hub/core';
-import { ACTOR, makeFakeCompute } from '@marimo-hub/core/testing';
+import {
+	ACTOR,
+	localResourceSecurity,
+	makeFakeCompute,
+	makeSubjectContext,
+} from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 
 async function fixture() {
@@ -21,7 +26,8 @@ async function fixture() {
 		{ title: 'App', description: '', code: 'original' },
 		ACTOR,
 	);
-	const client = createTestApi({ bucket, compute: makeFakeCompute() });
+	const resourceSecurity = localResourceSecurity(['PUBLIC', 'SECRET'], makeSubjectContext());
+	const client = createTestApi({ bucket, compute: makeFakeCompute(), deps: { resourceSecurity } });
 	const path = `/projects/${project.id}/notebooks/${notebook.id}/sessions`;
 	const admission = await expectOk<{ session_id: SessionId; app_assignment: AppVisit }>(
 		await client.request('POST', path, { mode: 'app', app_visit_id: 'tab' }),
@@ -42,6 +48,7 @@ async function fixture() {
 		heartbeat,
 		poolKey,
 		sessionKey,
+		resourceSecurity,
 	};
 }
 
@@ -118,6 +125,29 @@ describe('heartbeat read scheduling', () => {
 			}
 		},
 	);
+
+	it.each([
+		new NotFoundError('Project missing'),
+		new UnavailableError('Project storage unavailable'),
+	])('preserves project storage failure precedence: $code', async (error) => {
+		const f = await fixture();
+		const sessionRead = Promise.withResolvers<typeof f.session>();
+		vi.spyOn(f.client.deps.services.sessions, 'getSession').mockReturnValue(sessionRead.promise);
+		vi.spyOn(f.client.deps.services.projects, 'getProject').mockRejectedValue(error);
+		const labels = vi.spyOn(f.client.deps.services.notebooks, 'getSecurityLabels');
+		const renew = vi.spyOn(f.client.deps.services.sessions, 'heartbeat');
+		const put = vi.spyOn(f.bucket, 'put');
+		try {
+			const failure = await expectError(await f.heartbeat(), error.status, error.code);
+			expect(failure.message).toBe(error.message);
+			expect(labels).not.toHaveBeenCalled();
+			expect(renew).not.toHaveBeenCalled();
+			expect(put).not.toHaveBeenCalled();
+		} finally {
+			sessionRead.reject(new UnavailableError('Private session failure'));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		}
+	});
 
 	it.each([new NotFoundError('Session missing'), new UnavailableError('Session unavailable')])(
 		'preserves the session error after project authorization: $code',
@@ -209,6 +239,100 @@ describe('heartbeat authorization boundaries', () => {
 			put.mock.calls.filter(([key]) => key === f.poolKey || key === f.sessionKey),
 		).toHaveLength(0);
 	});
+});
+
+describe('heartbeat dependency failures', () => {
+	it.each(['notebook', 'pool', 'session mutation'] as const)(
+		'fails without writes when the %s read fails, then recovers on retry',
+		async (record) => {
+			const f = await fixture();
+			const keyToFail =
+				record === 'notebook'
+					? paths.project(f.project.id).notebook(f.notebook.id).meta
+					: record === 'pool'
+						? f.poolKey
+						: f.sessionKey;
+			const get = f.bucket.get.bind(f.bucket);
+			let reads = 0;
+			const failure = vi.spyOn(f.bucket, 'get').mockImplementation((key) => {
+				if (key === keyToFail && ++reads === (record === 'session mutation' ? 2 : 1))
+					throw new UnavailableError('Storage temporarily unavailable');
+				return get(key);
+			});
+			const put = vi.spyOn(f.bucket, 'put');
+			await expectError(await f.heartbeat(), 503, 'SERVICE_UNAVAILABLE');
+			expect(put).not.toHaveBeenCalled();
+			failure.mockRestore();
+			expect((await expectOk(await f.heartbeat())).status).toBe('running');
+			expect(put).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(['pool', 'session'] as const)(
+		'does not acknowledge a failed %s renewal write, and safely retries a partial renewal',
+		async (record) => {
+			const f = await fixture();
+			const beforePool = await (await f.bucket.get(f.poolKey))!.text();
+			const now = Date.now();
+			vi.useFakeTimers({ toFake: ['Date'] });
+			vi.setSystemTime(now + 61_000);
+			const keyToFail = record === 'pool' ? f.poolKey : f.sessionKey;
+			const put = f.bucket.put.bind(f.bucket);
+			const failure = vi.spyOn(f.bucket, 'put').mockImplementation((key, value, options) => {
+				if (key === keyToFail) throw new UnavailableError('Renewal persistence failed');
+				return put(key, value, options);
+			});
+			await expectError(await f.heartbeat(), 503, 'SERVICE_UNAVAILABLE');
+			expect(
+				(await f.services.sessions.getSession(f.project.id, f.session.session_id)).last_heartbeat,
+			).toBe(f.session.last_heartbeat);
+			if (record === 'pool') {
+				expect(await (await f.bucket.get(f.poolKey))!.text()).toBe(beforePool);
+				expect(failure.mock.calls.some(([key]) => key === f.sessionKey)).toBe(false);
+			} else expect(await (await f.bucket.get(f.poolKey))!.text()).not.toBe(beforePool);
+			failure.mockRestore();
+			const retryWrites = vi.spyOn(f.bucket, 'put');
+			const retried = await expectOk(await f.heartbeat());
+			expect(retried.status).toBe('running');
+			expect(retried.last_heartbeat).toBe(new Date().toISOString());
+			expect(retryWrites.mock.calls.map(([key]) => key)).toEqual(
+				record === 'pool' ? [f.poolKey, f.sessionKey] : [f.sessionKey],
+			);
+			expect(retryWrites.mock.calls.every(([, , options]) => options?.onlyIfEtagMatches)).toBe(
+				true,
+			);
+		},
+	);
+
+	it.each([
+		['project', 'context'],
+		['project', 'constraints'],
+		['notebook', 'context'],
+		['notebook', 'constraints'],
+	] as const)(
+		'fails closed when %s authorization loses its %s provider',
+		async (scope, provider) => {
+			const f = await fixture();
+			const labels = { classification: 'SECRET', compartments: [] };
+			if (scope === 'project')
+				await f.services.projects.setSecurityLabels(f.project.id, labels, ACTOR);
+			else await f.services.notebooks.setSecurityLabels(f.project.id, f.notebook.id, labels, ACTOR);
+			if (provider === 'context')
+				vi.spyOn(f.resourceSecurity.subjectContext!, 'resolve').mockRejectedValue(
+					new Error('Provider unavailable'),
+				);
+			else
+				vi.spyOn(f.resourceSecurity.constraints, 'evaluate').mockRejectedValue(
+					new Error('Provider unavailable'),
+				);
+			const renew = vi.spyOn(f.client.deps.services.sessions, 'heartbeat');
+			const put = vi.spyOn(f.bucket, 'put');
+			const failure = await expectError(await f.heartbeat(), 404, 'NOT_FOUND');
+			expect(failure.message).not.toContain('Provider unavailable');
+			expect(renew).not.toHaveBeenCalled();
+			expect(put).not.toHaveBeenCalled();
+		},
+	);
 });
 
 describe('due heartbeat races', () => {
