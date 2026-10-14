@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { EtagRecordCache } from './etagRecordCache';
+import { EtagRecordCache } from '@marimo-hub/core/etag-record-cache';
+import { EtagRecordCache as PublicEtagRecordCache } from '@marimo-hub/core';
 
 describe('EtagRecordCache', () => {
+	it('exposes the same cache through the root and focused package exports', () => {
+		expect(PublicEtagRecordCache).toBe(EtagRecordCache);
+	});
+
 	it('misses unknown keys and mismatched ETags', () => {
 		const cache = new EtagRecordCache<number>();
 		expect(cache.get('a', 'v1')).toBeUndefined();
