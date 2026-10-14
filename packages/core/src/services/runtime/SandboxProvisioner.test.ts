@@ -893,17 +893,19 @@ describe('SandboxProvisioner', () => {
 			},
 		);
 
+		const provisionOptions = {
+			sandboxId,
+			projectId,
+			notebookId,
+			hostname: 'localhost',
+			bucket: bucketConfig,
+		};
+
 		it('happy path with mount: usedFallback false, returns exposed url, starts marimo on port 2718', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 
-			const result = await provisioner.provision({
-				sandboxId,
-				projectId,
-				notebookId,
-				hostname: 'localhost',
-				bucket: bucketConfig,
-			});
+			const result = await provisioner.provision(provisionOptions);
 
 			expect(result.usedFallback).toBe(false);
 			expect(result.url).toBe(EXPOSED_URL);
@@ -952,11 +954,7 @@ describe('SandboxProvisioner', () => {
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 
 			await provisioner.provision({
-				sandboxId,
-				projectId,
-				notebookId,
-				hostname: 'localhost',
-				bucket: bucketConfig,
+				...provisionOptions,
 				entryNotebook: 'apps/dash.py',
 				launchStrategy: 'uv-script-pins',
 			});
@@ -979,6 +977,112 @@ describe('SandboxProvisioner', () => {
 			expect(calls.setEnvVars).toContainEqual({ PYTHONPATH: MOUNT_PATH });
 			expect(calls.startProcess[0].cmd).not.toContain('uv sync');
 		});
+
+		it('writes session files before the launch strategy resolves', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const strategy = deferred<'uv-script-pins'>();
+			const writeFiles = instance.writeFiles.bind(instance);
+			vi.spyOn(instance, 'writeFiles').mockImplementationOnce(async (files) => {
+				const result = await writeFiles(files);
+				expect(calls.exec.length).toBeGreaterThan(0);
+				expect(calls.startProcess).toEqual([]);
+				strategy.resolve('uv-script-pins');
+				return result;
+			});
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...provisionOptions,
+				entryNotebook: 'apps/dash.py',
+				launchStrategy: strategy.promise,
+				sessionEnv: { files: [{ path: '/config', content: 'configured' }] },
+			});
+			expect(instance.writeFiles).toHaveBeenCalled();
+			expect(
+				calls.exec.some((command) => command.includes("uv export --script 'apps/dash.py'")),
+			).toBe(true);
+			expect(calls.startProcess[0].cmd).toContain("marimo --quiet edit 'apps/dash.py'");
+		});
+
+		it.each(['provision', 'prepare'] as const)(
+			'%s cleans up a strategy rejection that arrives before boot finishes',
+			async (operation) => {
+				const { instance, calls } = makeFakeSandbox();
+				const ready = deferred<void>();
+				const started = deferred<void>();
+				instance.ready = () => {
+					started.resolve();
+					return ready.promise;
+				};
+				const strategy = deferred<'uv-script-pins'>();
+				const error = new Error('strategy unavailable');
+				const pending = new SandboxProvisioner(fakeComputeFrom(instance))[operation]({
+					...provisionOptions,
+					launchStrategy: strategy.promise,
+				});
+				const rejected = expect(pending).rejects.toBe(error);
+				await started.promise;
+				try {
+					strategy.reject(error);
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					expect(calls.startProcess).toEqual([]);
+				} finally {
+					ready.resolve();
+				}
+				await rejected;
+				expect(calls.destroy).toBe(1);
+				expect(calls.startProcess).toEqual([]);
+				expect(calls.exec.some((command) => command.includes('uv sync'))).toBe(false);
+			},
+		);
+
+		it.each([
+			{ operation: 'provision', first: 'load' },
+			{ operation: 'provision', first: 'inject' },
+			{ operation: 'prepare', first: 'load' },
+			{ operation: 'prepare', first: 'inject' },
+		] as const)(
+			'$operation waits for workspace loading and injection before strategy failure cleanup ($first first)',
+			async ({ operation, first }) => {
+				const { instance, calls } = makeFakeSandbox();
+				const work = { load: deferred<void>(), inject: deferred<void>() };
+				const started = { load: deferred<void>(), inject: deferred<void>() };
+				vi.spyOn(instance, 'mountBucket').mockImplementation(async () => {
+					started.load.resolve();
+					await work.load.promise;
+				});
+				vi.spyOn(instance, 'setEnvVars').mockImplementation(async () => {
+					started.inject.resolve();
+					await work.inject.promise;
+				});
+				const strategy = deferred<'uv-script-pins'>();
+				const error = new Error('strategy unavailable');
+				const onSandboxDestroyed = vi.fn();
+				const pending = new SandboxProvisioner(fakeComputeFrom(instance))[operation]({
+					...provisionOptions,
+					launchStrategy: strategy.promise,
+					sessionEnv: { vars: { TOKEN: 'secret' } },
+					onSandboxDestroyed,
+				});
+				const rejected = expect(pending).rejects.toBe(error);
+				await Promise.all([started.load.promise, started.inject.promise]);
+				try {
+					strategy.reject(error);
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					expect(calls.destroy).toBe(0);
+					work[first].resolve();
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					expect(calls.destroy).toBe(0);
+					expect(onSandboxDestroyed).not.toHaveBeenCalled();
+				} finally {
+					work.load.resolve();
+					work.inject.resolve();
+					await rejected;
+				}
+				expect(calls.destroy).toBe(1);
+				expect(onSandboxDestroyed).toHaveBeenCalledOnce();
+				expect(calls.startProcess).toEqual([]);
+				expect(calls.exec.some((command) => command.includes('uv sync'))).toBe(false);
+			},
+		);
 
 		it('records setup step timings and logs bounded uv output when setup is slow', async () => {
 			vi.useFakeTimers();

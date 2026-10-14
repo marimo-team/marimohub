@@ -1690,6 +1690,118 @@ export async function startNotebookSession(input: {
 		mode,
 	});
 	try {
+		// Sessions and jobs share credential resolution. Viewer sandboxes exclude project credentials.
+		const sessionWorkload: WorkloadRef = { kind: 'session', id: sessionId };
+		const federatedCredentials = federatedCredentialsFor(deps, project, sessionWorkload, {
+			restricted: restrictedViewerCredentials,
+		});
+		const resolveWifVars = () =>
+			resolveFederatedVars(deps, {
+				project,
+				workload: sessionWorkload,
+				restricted: restrictedViewerCredentials,
+				federatedCredentials,
+				onError: (err) => {
+					observer.tag('wif_exchange_failed', true);
+					observer.tag(
+						'wif_exchange_error',
+						err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+					);
+				},
+			});
+
+		const resolveMarimoConfigEnv = async () => {
+			if (!MODE_POLICY[mode].injectEditorConfig) return;
+			const contributors: MarimoConfigContributor[] = [
+				marimoNotebookDefaults,
+				marimoSharingDisabled,
+			];
+			if (userHome) {
+				contributors.push(() => ({
+					file_browser: { folders: [{ path: userHome.path, name: 'Personal files' }] },
+				}));
+			}
+			if (deps.ai) {
+				try {
+					const token = await mintAiSessionToken(
+						deps.ai.signingSecret,
+						{
+							projectId: pid,
+							notebookId: nid,
+							sessionId,
+							userId: user.id,
+						},
+						{ ttlSeconds: deps.ai.tokenTtlSeconds },
+					);
+					contributors.push(
+						marimoAiContributor({
+							baseUrl: joinUrlPath(appBaseUrl, '/api/ai/v1'),
+							apiKey: token,
+							model: deps.ai.model,
+							enabled: true,
+							maxTokens: deps.ai.maxTokens,
+							rules: deps.ai.rules,
+						}),
+					);
+				} catch (err) {
+					observer.tag('ai_inject_failed', true);
+					observer.tag(
+						'ai_inject_error',
+						err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+					);
+				}
+			}
+			return marimoConfigToSessionEnv(contributors);
+		};
+
+		// Temporary editors retain editor credentials.
+		const resolveIntegrationEnv = () =>
+			resolveIntegrationRender(deps, {
+				projectId: pid,
+				project,
+				workload: sessionWorkload,
+				principal: { userId: user.id, email: user.email },
+				restricted: restrictedViewerCredentials,
+				federatedCredentials,
+				onRendered: (render) => {
+					observer.tag('integrations_rendered_count', render.attachments.length);
+					if (render.warnings.length > 0) {
+						observer.tag('integration_warnings', render.warnings);
+						observer.tag('integration_warning_count', render.warnings.length);
+					}
+					integrationAttachments = render.attachments;
+				},
+				onError: (err) => {
+					observer.tag('integration_render_failed', true);
+					for (const [key, value] of Object.entries(errorMetadata(err))) {
+						observer.tag(`integrations_${key}`, value);
+					}
+				},
+			});
+
+		const sessionEnv = all({
+			wifVars: resolveWifVars,
+			marimoEnv: resolveMarimoConfigEnv,
+			integrationEnv: resolveIntegrationEnv,
+		}).then(({ wifVars, marimoEnv, integrationEnv }): SessionEnv | undefined => {
+			let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
+			if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
+			// Integration values are the base; WIF and marimo configuration win collisions.
+			if (integrationEnv) {
+				env = mergeSessionEnv(projectSessionEnv(integrationEnv), env ?? {});
+			}
+			return env;
+		});
+		const launchStrategy = resolveLaunchStrategyForSession({
+			entryNotebookKey: launchSource.entryNotebookKey,
+			bucket: bucketHandle,
+		}).then((resolved) => {
+			observer.tag('launch_strategy', resolved.strategy);
+			observer.tag('launch_strategy_detection_failed', resolved.detectionFailed);
+			return resolved.strategy;
+		});
+		// Admission or boot can fail before provisioning consumes these independent promises.
+		for (const pending of [sessionEnv, launchStrategy]) pending.catch(() => {});
 		if (replacementTarget) {
 			await retireSelectedSession(deps, replacementTarget);
 			const retired = await sessions.getSession(pid, replacementTarget.session_id);
@@ -1836,214 +1948,89 @@ export async function startNotebookSession(input: {
 						kernelAuthToken,
 						appBaseUrl,
 					};
-					// WIF + integrations share `sandboxEnv.ts` with the job runner, so the
-					// two injection paths cannot drift. Never for a viewer sandbox.
-					const sessionWorkload: WorkloadRef = { kind: 'session', id: session!.session_id };
-					const federatedCredentials = federatedCredentialsFor(deps, project, sessionWorkload, {
-						restricted: restrictedViewerCredentials,
-					});
-					const resolveWifVars = () =>
-						resolveFederatedVars(deps, {
-							project,
-							workload: sessionWorkload,
-							restricted: restrictedViewerCredentials,
-							federatedCredentials,
-							onError: (err) => {
-								observer.tag('wif_exchange_failed', true);
-								observer.tag(
-									'wif_exchange_error',
-									err instanceof Error ? `${err.name}: ${err.message}` : String(err),
-								);
-							},
-						});
-
-					const resolveMarimoConfigEnv = async () => {
-						if (!MODE_POLICY[mode].injectEditorConfig) return;
-						const contributors: MarimoConfigContributor[] = [
-							marimoNotebookDefaults,
-							marimoSharingDisabled,
-						];
-						if (userHome) {
-							contributors.push(() => ({
-								file_browser: { folders: [{ path: userHome.path, name: 'Personal files' }] },
-							}));
-						}
-						if (deps.ai) {
-							try {
-								const token = await mintAiSessionToken(
-									deps.ai.signingSecret,
-									{
-										projectId: pid,
-										notebookId: nid,
-										sessionId: session!.session_id,
-										userId: user.id,
-									},
-									{ ttlSeconds: deps.ai.tokenTtlSeconds },
-								);
-								contributors.push(
-									marimoAiContributor({
-										baseUrl: joinUrlPath(appBaseUrl, '/api/ai/v1'),
-										apiKey: token,
-										model: deps.ai.model,
-										enabled: true,
-										maxTokens: deps.ai.maxTokens,
-										rules: deps.ai.rules,
-									}),
-								);
-							} catch (err) {
-								observer.tag('ai_inject_failed', true);
-								observer.tag(
-									'ai_inject_error',
-									err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+					if (warmClaim) {
+						try {
+							await deps.warmPool!.handoff(warmClaim);
+						} catch (error) {
+							if (!(error instanceof WarmPoolClaimExpiredError)) throw error;
+							const expired = warmClaim;
+							await deps.warmPool!.abandon(expired).catch(() => {});
+							// A late pool cleanup must never target the cold replacement.
+							sandboxId = createSandboxId();
+							sandboxMayExist = false;
+							if (admission) {
+								await appPool.bindWarmSandbox(
+									pid,
+									nid,
+									sessionId,
+									admission.member.operation_token,
+									sandboxId,
 								);
 							}
-						}
-						return marimoConfigToSessionEnv(contributors);
-					};
-
-					// Viewer sandboxes are restricted; temporary editor sandboxes retain
-					// editor credentials.
-					const resolveIntegrationEnv = () =>
-						resolveIntegrationRender(deps, {
-							projectId: pid,
-							project,
-							workload: sessionWorkload,
-							principal: { userId: user.id, email: user.email },
-							restricted: restrictedViewerCredentials,
-							federatedCredentials,
-							onRendered: (render) => {
-								observer.tag('integrations_rendered_count', render.attachments.length);
-								if (render.warnings.length > 0) {
-									observer.tag('integration_warnings', render.warnings);
-									observer.tag('integration_warning_count', render.warnings.length);
-								}
-								integrationAttachments = render.attachments;
-							},
-							onError: (err) => {
-								observer.tag('integration_render_failed', true);
-								for (const [key, value] of Object.entries(errorMetadata(err))) {
-									observer.tag(`integrations_${key}`, value);
-								}
-							},
-						});
-
-					const { provision } = await all({
-						wifVars: resolveWifVars,
-						marimoEnv: resolveMarimoConfigEnv,
-						integrationEnv: resolveIntegrationEnv,
-						async sessionEnv(): Promise<SessionEnv | undefined> {
-							const wifVars = await this.$.wifVars;
-							const marimoEnv = await this.$.marimoEnv;
-							const integrationEnv = await this.$.integrationEnv;
-							let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
-							if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
-							// Integration values are the base; WIF and marimo configuration win collisions.
-							if (integrationEnv) {
-								env = mergeSessionEnv(projectSessionEnv(integrationEnv), env ?? {});
-							}
-							return env;
-						},
-						launchStrategy: async () => {
-							const resolved = await resolveLaunchStrategyForSession({
-								entryNotebookKey: launchSource.entryNotebookKey,
-								bucket: bucketHandle,
-							});
-							observer.tag('launch_strategy', resolved.strategy);
-							observer.tag('launch_strategy_detection_failed', resolved.detectionFailed);
-							return resolved;
-						},
-						async provision() {
-							const launchStrategy = await this.$.launchStrategy;
-							// A failed sibling may already have retired the record while these dependencies resolved.
-							if (this.$signal.aborted) throw this.$signal.reason;
-							if (warmClaim) {
-								try {
-									await deps.warmPool!.handoff(warmClaim);
-								} catch (error) {
-									if (!(error instanceof WarmPoolClaimExpiredError)) throw error;
-									const expired = warmClaim;
-									await deps.warmPool!.abandon(expired).catch(() => {});
-									// A late pool cleanup must never target the cold replacement.
-									sandboxId = createSandboxId();
-									sandboxMayExist = false;
-									if (admission) {
-										await appPool.bindWarmSandbox(
-											pid,
-											nid,
-											sessionId,
-											admission.member.operation_token,
-											sandboxId,
-										);
-									}
-									session = await sessions.replaceStartingSandbox(
-										pid,
-										sessionId,
-										expired.member.sandbox_id,
-										sandboxId,
-									);
-									warmClaim = undefined;
-									exposureCtx.sandboxId = sandboxId;
-									observer.tag('sandbox_id', sandboxId);
-									observer.tag('warm_pool_hit', false);
-									observer.tag('warm_pool_fallback', 'claim_expired');
-								}
-							}
-							const { baseUrl, publicUrl } = await sandboxExposure.prepare(exposureCtx);
-							preparedContextFile =
-								publicUrl === undefined
-									? undefined
-									: sandboxContextFile(sandboxId, contextFor(publicUrl));
-							if (this.$signal.aborted) throw this.$signal.reason;
-							sandboxMayExist = true;
-							return provisioner.provision({
-								existingSandbox: warmClaim?.sandbox,
-								onSandboxDestroyed: recordSandboxCleanup,
+							session = await sessions.replaceStartingSandbox(
+								pid,
+								sessionId,
+								expired.member.sandbox_id,
 								sandboxId,
-								projectId: pid,
-								userId: user.id,
-								notebookId: nid,
-								hostname,
-								bucket: sandbox.bucket,
-								bucketHandle,
-								workdir: sandbox.workdir,
-								assetUrl: sandbox.assetUrl,
-								notebookBridge: sandbox.notebookBridge,
-								bridgeParentOrigin: new URL(appBaseUrl).origin,
-								startupTimeoutMs: sandbox.startupTimeoutMs,
-								baseUrl,
-								kernelAuthToken,
-								contextFile: preparedContextFile ?? { path: sandboxContextPath(sandboxId) },
-								// A second editor writes the notebook file, so marimo must reload it.
-								marimoWatch:
-									mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
-								restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
-								image,
-								resources: requestedComputeProfile.resources,
-								userHome,
-								sessionIdleTimeoutMs: isPreview
-									? (previewIdleTimeout(
-											sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
-										) as Millis)
-									: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
-								sessionEnv: this.$.sessionEnv,
-								entryNotebook: workspacePolicy.entryNotebook,
-								launchStrategy: launchStrategy.strategy,
-								launchMode: mode,
-								// Ephemeral and app sandboxes never mount the live workspace: a mount
-								// writes straight through to the bucket (bypassing every persistEdits
-								// guard), puts the deployment's bucket credentials inside a viewer's
-								// sandbox, and — for apps — would race the edit kernel's autosaves on
-								// the same objects. Copy-only loads the files server-side.
-								workspaceLoadMode:
-									ephemeral || MODE_POLICY[mode].workspaceLoad === 'copy-only'
-										? 'copy-only'
-										: workspacePolicy.loadMode,
-								workspacePrefix,
-								...pullSourceGit,
-								workspaceArchive,
-								workspaceOverlay: launchSource.workspaceOverlay,
-							});
-						},
+							);
+							warmClaim = undefined;
+							exposureCtx.sandboxId = sandboxId;
+							observer.tag('sandbox_id', sandboxId);
+							observer.tag('warm_pool_hit', false);
+							observer.tag('warm_pool_fallback', 'claim_expired');
+						}
+					}
+					const { baseUrl, publicUrl } = await sandboxExposure.prepare(exposureCtx);
+					preparedContextFile =
+						publicUrl === undefined
+							? undefined
+							: sandboxContextFile(sandboxId, contextFor(publicUrl));
+					sandboxMayExist = true;
+					const provision = await provisioner.provision({
+						existingSandbox: warmClaim?.sandbox,
+						onSandboxDestroyed: recordSandboxCleanup,
+						sandboxId,
+						projectId: pid,
+						userId: user.id,
+						notebookId: nid,
+						hostname,
+						bucket: sandbox.bucket,
+						bucketHandle,
+						workdir: sandbox.workdir,
+						assetUrl: sandbox.assetUrl,
+						notebookBridge: sandbox.notebookBridge,
+						bridgeParentOrigin: new URL(appBaseUrl).origin,
+						startupTimeoutMs: sandbox.startupTimeoutMs,
+						baseUrl,
+						kernelAuthToken,
+						contextFile: preparedContextFile ?? { path: sandboxContextPath(sandboxId) },
+						// A second editor writes the notebook file, so marimo must reload it.
+						marimoWatch:
+							mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
+						restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
+						image,
+						resources: requestedComputeProfile.resources,
+						userHome,
+						sessionIdleTimeoutMs: isPreview
+							? (previewIdleTimeout(sandbox.sessionLifetime?.idleTimeoutMsByMode[mode]) as Millis)
+							: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
+						sessionEnv,
+						entryNotebook: workspacePolicy.entryNotebook,
+						launchStrategy,
+						launchMode: mode,
+						// Ephemeral and app sandboxes never mount the live workspace: a mount
+						// writes straight through to the bucket (bypassing every persistEdits
+						// guard), puts the deployment's bucket credentials inside a viewer's
+						// sandbox, and — for apps — would race the edit kernel's autosaves on
+						// the same objects. Copy-only loads the files server-side.
+						workspaceLoadMode:
+							ephemeral || MODE_POLICY[mode].workspaceLoad === 'copy-only'
+								? 'copy-only'
+								: workspacePolicy.loadMode,
+						workspacePrefix,
+						...pullSourceGit,
+						workspaceArchive,
+						workspaceOverlay: launchSource.workspaceOverlay,
 					});
 					({ url, usedFallback } = provision);
 					provisionedSandbox = provision.sandbox;

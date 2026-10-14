@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ValidationError } from '../../errors';
 import type { SecretEnvelope, SecretRef } from '../../ports/secrets';
@@ -94,6 +94,15 @@ describe('sealConfig / openConfig / redactConfig', () => {
 		],
 	};
 
+	const storedConfig = () => sealConfig({ schema, paths, authoring, seal: fakeSeal() });
+
+	const referenceConfig = (names: string[]) => ({
+		secrets: names.map((name) => ({
+			name,
+			value: { $secret: { kind: 'reference', backend: 'vault', locator: name } },
+		})),
+	});
+
 	it('round-trips authoring → stored → resolved, applying defaults', async () => {
 		const seal = fakeSeal();
 		const stored = await sealConfig({ schema, paths, authoring, seal });
@@ -133,8 +142,156 @@ describe('sealConfig / openConfig / redactConfig', () => {
 		expect((opened.auth as { password: unknown }).password).toBe('resolved:teams/data#password');
 	});
 
+	it('resolves reference fields concurrently and preserves their slots', async () => {
+		const stored = referenceConfig(['A', 'B', 'C']);
+		const original = structuredClone(stored);
+		const releases: (() => void)[] = [];
+		let inFlight = 0;
+		const opened = openConfig({
+			stored,
+			paths,
+			open: {
+				...fakeOpen,
+				resolve(ref, at) {
+					inFlight++;
+					expect(at).toBe('secrets.*.value');
+					return new Promise<string>((resolve) => {
+						releases.push(() => resolve(`resolved:${ref.locator}`));
+					});
+				},
+			},
+		});
+		await Promise.resolve();
+		expect(inFlight).toBe(3);
+		for (const release of releases.reverse()) release();
+		await expect(opened).resolves.toEqual({
+			secrets: ['A', 'B', 'C'].map((name) => ({ name, value: `resolved:${name}` })),
+		});
+		expect(stored).toEqual(original);
+	});
+
+	it('bounds secret lookups and refills each slot without waiting for its siblings', async () => {
+		const names = Array.from({ length: 20 }, (_, i) => String(i));
+		const stored = referenceConfig(names);
+		const original = structuredClone(stored);
+		const pending = names.map(() => Promise.withResolvers<string>());
+		const started = names.map(() => Promise.withResolvers<void>());
+		let inFlight = 0;
+		let peak = 0;
+		const resolve = vi.fn(async (ref: SecretRef) => {
+			const index = Number(ref.locator);
+			peak = Math.max(peak, ++inFlight);
+			started[index].resolve();
+			try {
+				return await pending[index].promise;
+			} finally {
+				inFlight--;
+			}
+		});
+		const opened = openConfig({ stored, paths, open: { ...fakeOpen, resolve } });
+
+		await started[7].promise;
+		expect(resolve).toHaveBeenCalledTimes(8);
+		expect(inFlight).toBe(8);
+		pending[7].resolve('resolved:7');
+		await started[8].promise;
+		expect(resolve).toHaveBeenCalledTimes(9);
+		expect(inFlight).toBe(8);
+		for (let i = pending.length - 1; i >= 0; i--) pending[i].resolve(`resolved:${i}`);
+
+		await expect(opened).resolves.toEqual({
+			secrets: names.map((name) => ({ name, value: `resolved:${name}` })),
+		});
+		expect(peak).toBe(8);
+		expect(inFlight).toBe(0);
+		expect(stored).toEqual(original);
+	});
+
+	it('releases failed lookup slots and observes failures from queued work', async () => {
+		const names = Array.from({ length: 10 }, (_, i) => String(i));
+		const stored = referenceConfig(names);
+		const original = structuredClone(stored);
+		const pending = names.map(() => Promise.withResolvers<string>());
+		const started = names.map(() => Promise.withResolvers<void>());
+		const resolve = vi.fn((ref: SecretRef) => {
+			const index = Number(ref.locator);
+			started[index].resolve();
+			return pending[index].promise;
+		});
+		const opened = openConfig({ stored, paths, open: { ...fakeOpen, resolve } });
+		const error = new Error('secret backend unavailable');
+		const rejected = expect(opened).rejects.toBe(error);
+
+		await started[7].promise;
+		pending[0].reject(error);
+		await rejected;
+		await started[8].promise;
+		expect(resolve).toHaveBeenCalledTimes(9);
+		pending[8].reject(new Error('queued lookup failed'));
+		await started[9].promise;
+		expect(resolve).toHaveBeenCalledTimes(10);
+		pending[9].reject(new Error('another queued lookup failed'));
+		for (let i = 1; i < 8; i++) pending[i].resolve(`resolved:${i}`);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(stored).toEqual(original);
+	});
+
+	it.each(['throw', 'reject'] as const)(
+		'preserves stored values when a resolver fails with %s',
+		async (failure) => {
+			const stored = await storedConfig();
+			const original = structuredClone(stored);
+			const error = new Error('secret backend unavailable');
+			const decrypt = vi.fn((envelope: SecretEnvelope, at: string) => {
+				if (at === 'auth.password') {
+					if (failure === 'throw') throw error;
+					return Promise.reject(error);
+				}
+				return fakeOpen.decrypt(envelope);
+			});
+
+			await expect(openConfig({ stored, paths, open: { ...fakeOpen, decrypt } })).rejects.toBe(
+				error,
+			);
+			expect(decrypt).toHaveBeenCalledTimes(3);
+			expect(stored).toEqual(original);
+		},
+	);
+
+	it('observes sibling rejections after one concurrent resolution fails', async () => {
+		const stored = await storedConfig();
+		const pending = Array.from({ length: 3 }, () => Promise.withResolvers<string>());
+		let index = 0;
+		const opened = openConfig({
+			stored,
+			paths,
+			open: { ...fakeOpen, decrypt: () => pending[index++].promise },
+		});
+		const error = new Error('first failure');
+		const rejected = expect(opened).rejects.toBe(error);
+		await Promise.resolve();
+		pending[1].reject(error);
+		await rejected;
+		pending[0].reject(new Error('later failure'));
+		pending[2].reject(new Error('another later failure'));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	});
+
+	it('validates all stored slots before starting secret resolution', async () => {
+		const stored = await storedConfig();
+		(stored.secrets as Record<string, unknown>[])[1].value = { $secret: { kind: 'future' } };
+		const decrypt = vi.fn(fakeOpen.decrypt);
+		const resolve = vi.fn(fakeOpen.resolve);
+
+		await expect(openConfig({ stored, paths, open: { decrypt, resolve } })).rejects.toThrow(
+			'Secret field "secrets.1.value" holds an unsupported stored shape.',
+		);
+		expect(decrypt).not.toHaveBeenCalled();
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
 	it('redacts every managed secret without exposing its envelope', async () => {
-		const stored = await sealConfig({ schema, paths, authoring, seal: fakeSeal() });
+		const stored = await storedConfig();
 		const redacted = redactConfig(stored, paths);
 		expect(redacted.auth).toEqual({ method: 'basic', user: 'admin', password: REDACTED_SECRET });
 		expect((redacted.secrets as unknown[])[0]).toEqual({ name: 'A', value: REDACTED_SECRET });
@@ -142,7 +299,7 @@ describe('sealConfig / openConfig / redactConfig', () => {
 	});
 
 	it('keep-markers reuse the stored value, matching array entries by name across a reorder', async () => {
-		const previous = await sealConfig({ schema, paths, authoring, seal: fakeSeal() });
+		const previous = await storedConfig();
 		const edited = {
 			host: 'db.internal',
 			auth: { method: 'basic', user: 'admin', password: { $secret: { set: true } } },
@@ -237,7 +394,7 @@ describe('sealConfig / openConfig / redactConfig', () => {
 	});
 
 	it('fails closed on an unsupported stored secret shape at open time', async () => {
-		const stored = await sealConfig({ schema, paths, authoring, seal: fakeSeal() });
+		const stored = await storedConfig();
 		(stored.auth as Record<string, unknown>).password = { $secret: { kind: 'future' } };
 		await expect(openConfig({ stored, paths, open: fakeOpen })).rejects.toThrow(
 			/unsupported stored shape/,

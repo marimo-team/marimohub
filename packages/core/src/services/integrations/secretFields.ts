@@ -1,6 +1,7 @@
 // Encryption uses wildcard field paths rather than array indexes so envelopes
 // remain valid when array entries are reordered.
 import { z } from 'zod';
+import { mapWithConcurrency } from '../../concurrency';
 import { ValidationError } from '../../errors';
 import type { SecretEnvelope, SecretRef } from '../../ports/secrets';
 
@@ -20,6 +21,7 @@ export const zSecret = () =>
 
 /** Prevents plaintext secrets from appearing in structural validation errors. */
 const PLACEHOLDER = '__marimohub_secret__';
+const SECRET_RESOLUTION_CONCURRENCY = 8;
 
 export type ManagedStoredSecretValue = {
 	$secret: { kind: 'managed'; envelope: SecretEnvelope };
@@ -391,6 +393,7 @@ export async function openConfig(options: {
 }): Promise<Record<string, unknown>> {
 	const { stored, paths, open } = options;
 	const resolved = structuredClone(stored);
+	const pending: { concrete: (string | number)[]; at: string; value: StoredSecretValue }[] = [];
 	for (const path of paths) {
 		for (const concrete of expandPath(resolved, path)) {
 			const value = getAt(resolved, concrete);
@@ -400,20 +403,18 @@ export async function openConfig(options: {
 					`Secret field "${dotted(concrete)}" holds an unsupported stored shape.`,
 				);
 			}
-			if (isManagedStoredSecret(value)) {
-				setAt(resolved, concrete, await open.decrypt(value.$secret.envelope, dotted(path)));
-			} else {
-				setAt(
-					resolved,
-					concrete,
-					await open.resolve(
-						{ backend: value.$secret.backend, locator: value.$secret.locator },
-						dotted(path),
-					),
-				);
-			}
+			pending.push({ concrete, at: dotted(path), value });
 		}
 	}
+	const values = await mapWithConcurrency(
+		pending,
+		SECRET_RESOLUTION_CONCURRENCY,
+		async ({ value, at }) =>
+			isManagedStoredSecret(value)
+				? open.decrypt(value.$secret.envelope, at)
+				: open.resolve({ backend: value.$secret.backend, locator: value.$secret.locator }, at),
+	);
+	pending.forEach(({ concrete }, i) => setAt(resolved, concrete, values[i]));
 	return resolved;
 }
 
