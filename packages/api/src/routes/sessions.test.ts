@@ -382,13 +382,15 @@ describe('Session routes', () => {
 		}
 	});
 
-	it('resolves integrations before writing the session record and skips resolution on reuse', async () => {
+	it('overlaps integration resolution with the session write and skips resolution on reuse', async () => {
 		const recording = new RecordingBucket(bucket);
 		const sessionWrites = () =>
 			recording.calls.put.filter(({ key }) => key.startsWith(paths.sessionsForProject(pid))).length;
 		const writesAtResolution: number[] = [];
+		const releaseRender = Promise.withResolvers<void>();
 		const resolveForSession = vi.fn(async () => {
 			writesAtResolution.push(sessionWrites());
+			await releaseRender.promise;
 			return { files: [], vars: {}, attachments: [], warnings: [] };
 		});
 		const api = createTestApi({
@@ -401,16 +403,82 @@ describe('Session routes', () => {
 			},
 		});
 
-		const session = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+		const pending = api.request('POST', sessionsPath());
+		try {
+			await vi.waitFor(() => expect(sessionWrites()).toBeGreaterThan(0));
+			expect(writesAtResolution).toEqual([0]);
+		} finally {
+			releaseRender.resolve();
+		}
+		const session = await expectOk<ApiSession>(await pending);
 		expect(session.status).toBe('running');
-		expect(writesAtResolution).toEqual([0]);
-		expect(sessionWrites()).toBeGreaterThan(0);
 
 		const reused = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
 		expect(reused.session_id).toBe(session.session_id);
 		expect(reused.reused).toBe(true);
 		expect(resolveForSession).toHaveBeenCalledOnce();
 	});
+
+	it.each(['integration rendering', 'launch detection'] as const)(
+		'continues independent provisioning work while %s is pending',
+		async (delayed) => {
+			const release = Promise.withResolvers<void>();
+			const { instance, calls } = makeFakeSandbox();
+			const entryKey = paths.project(pid).notebook(nid).workspaceFile('notebook.py');
+			const get = bucket.get.bind(bucket);
+			let entryReadPending = false;
+			vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				if (delayed === 'launch detection' && key === entryKey && !entryReadPending) {
+					entryReadPending = true;
+					await release.promise;
+				}
+				return get(key);
+			});
+			const api = createTestApi({
+				bucket,
+				compute: fakeComputeFrom(instance),
+				deps: {
+					sandbox: sandboxConfig({
+						notebookBridge: {
+							launcher: 'marimo-bridge.py',
+							files: [{ name: 'marimo-bridge.py', content: 'bridge' }],
+						},
+					}),
+					integrations: {
+						resolveForSession: async () => {
+							if (delayed === 'integration rendering') await release.promise;
+							return {
+								files: [],
+								vars: { TEST_INTEGRATION: 'ready' },
+								attachments: [],
+								warnings: [],
+							};
+						},
+					} as never,
+				},
+			});
+			const pending = api.request('POST', sessionsPath());
+			try {
+				await vi.waitFor(() => {
+					if (delayed === 'integration rendering') {
+						expect(
+							calls.writeFiles.flat().some((file) => file.path.endsWith('/marimo-bridge.py')),
+						).toBe(true);
+					} else {
+						expect(entryReadPending).toBe(true);
+						expect(calls.setEnvVars).toContainEqual(
+							expect.objectContaining({ TEST_INTEGRATION: 'ready' }),
+						);
+					}
+				});
+				expect(calls.startProcess).toEqual([]);
+			} finally {
+				release.resolve();
+			}
+			const session = await expectOk<ApiSession>(await pending);
+			expect(session.status).toBe('running');
+		},
+	);
 
 	it.each(['record', 'handle', 'boot'] as const)(
 		'handles an early integration failure while %s is pending or fails',

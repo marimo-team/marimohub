@@ -1779,34 +1779,29 @@ export async function startNotebookSession(input: {
 				},
 			});
 
-		const envGroup = all({
+		const sessionEnv = all({
 			wifVars: resolveWifVars,
 			marimoEnv: resolveMarimoConfigEnv,
 			integrationEnv: resolveIntegrationEnv,
-			async sessionEnv(): Promise<SessionEnv | undefined> {
-				const wifVars = await this.$.wifVars;
-				const marimoEnv = await this.$.marimoEnv;
-				const integrationEnv = await this.$.integrationEnv;
-				let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
-				if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
-				// Integration values are the base; WIF and marimo configuration win collisions.
-				if (integrationEnv) {
-					env = mergeSessionEnv(projectSessionEnv(integrationEnv), env ?? {});
-				}
-				return env;
-			},
-			launchStrategy: async () => {
-				const resolved = await resolveLaunchStrategyForSession({
-					entryNotebookKey: launchSource.entryNotebookKey,
-					bucket: bucketHandle,
-				});
-				observer.tag('launch_strategy', resolved.strategy);
-				observer.tag('launch_strategy_detection_failed', resolved.detectionFailed);
-				return resolved;
-			},
+		}).then(({ wifVars, marimoEnv, integrationEnv }): SessionEnv | undefined => {
+			let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
+			if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
+			// Integration values are the base; WIF and marimo configuration win collisions.
+			if (integrationEnv) {
+				env = mergeSessionEnv(projectSessionEnv(integrationEnv), env ?? {});
+			}
+			return env;
 		});
-		// Admission can fail before provisioning consumes the environment.
-		envGroup.catch(() => {});
+		const launchStrategy = resolveLaunchStrategyForSession({
+			entryNotebookKey: launchSource.entryNotebookKey,
+			bucket: bucketHandle,
+		}).then((resolved) => {
+			observer.tag('launch_strategy', resolved.strategy);
+			observer.tag('launch_strategy_detection_failed', resolved.detectionFailed);
+			return resolved.strategy;
+		});
+		// Admission or boot can fail before provisioning consumes these independent promises.
+		for (const pending of [sessionEnv, launchStrategy]) pending.catch(() => {});
 		if (replacementTarget) {
 			await retireSelectedSession(deps, replacementTarget);
 			const retired = await sessions.getSession(pid, replacementTarget.session_id);
@@ -1991,10 +1986,6 @@ export async function startNotebookSession(input: {
 							? undefined
 							: sandboxContextFile(sandboxId, contextFor(publicUrl));
 					sandboxMayExist = true;
-					const sessionEnv = envGroup.then((r) => r.sessionEnv);
-					const launchStrategy = envGroup.then((r) => r.launchStrategy.strategy);
-					// Boot or handle creation can fail before the provisioner consumes these promises.
-					for (const pending of [sessionEnv, launchStrategy]) pending.catch(() => {});
 					const provision = await provisioner.provision({
 						existingSandbox: warmClaim?.sandbox,
 						onSandboxDestroyed: recordSandboxCleanup,
