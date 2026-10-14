@@ -1270,13 +1270,15 @@ export async function startNotebookSession(input: {
 	// The loaded project is reused below (federation opt-in), not re-fetched.
 	// A soft-deleted project reads as gone here as it does on every read route: its
 	// bytes linger until GC, but no new kernel may serve them.
+	const notebookRead = notebooks.getNotebook(pid, nid);
+	notebookRead.catch(() => {});
 	const project = await projects.getProject(pid);
 	if (project.status === 'deleted') {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
-	// The start gate runs BEFORE the notebook load so a role denial keeps its
-	// canonical 403 even for a bogus or deleted notebook id — only admitted
-	// callers learn whether the notebook exists.
+	// Await the speculative notebook read after the gate so a role denial keeps
+	// its 403 even for a bogus or deleted notebook id. Only admitted callers
+	// learn whether the notebook exists.
 	let authorization = await authorizeSessionStart(project, user, mode, deps);
 	const appUser = authorization.role === 'app-user';
 	if (
@@ -1294,7 +1296,7 @@ export async function startNotebookSession(input: {
 	// would serve deleted content — and, for `app`, recreate the pool
 	// claim that deleteNotebook just cleaned up, permanently (its cleanup never
 	// runs again).
-	const notebook = await notebooks.getNotebook(pid, nid);
+	const notebook = await notebookRead;
 	if (
 		notebook.meta.preview &&
 		(input.preview?.id !== notebook.meta.preview.preview_id ||

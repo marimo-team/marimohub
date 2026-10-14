@@ -394,6 +394,37 @@ describe('Session routes', () => {
 		expect(all).toHaveLength(0);
 	});
 
+	it('returns 403 for a caller without a role even when the notebook does not exist', async () => {
+		const compute = makeFakeCompute();
+		const create = vi.spyOn(compute, 'create');
+		const api = createTestApi({ bucket, userId: STRANGER, compute });
+		const bogusNid = createNotebookId();
+
+		await expectError(
+			await api.request('POST', `/projects/${pid}/notebooks/${bogusNid}/sessions`),
+			403,
+			'FORBIDDEN',
+		);
+		expect(create).not.toHaveBeenCalled();
+	});
+
+	it('consumes an early notebook read failure while project authorization is pending', async () => {
+		const api = createTestApi({ bucket, userId: STRANGER, compute: makeFakeCompute() });
+		const project = await api.deps.services.projects.getProject(pid);
+		const projectRead = Promise.withResolvers<typeof project>();
+		vi.spyOn(api.deps.services.projects, 'getProject').mockReturnValueOnce(projectRead.promise);
+		const notebookRead = vi
+			.spyOn(api.deps.services.notebooks, 'getNotebook')
+			.mockRejectedValueOnce(new Error('notebook storage unavailable'));
+		const pending = api.request('POST', sessionsPath());
+		try {
+			await vi.waitFor(() => expect(notebookRead).toHaveBeenCalledOnce());
+		} finally {
+			projectRead.resolve(project);
+		}
+		await expectError(await pending, 403, 'FORBIDDEN');
+	});
+
 	it('POST /sessions for an unsynced GitHub notebook returns 409 and does not provision', async () => {
 		const services = createServices(bucket);
 		const { meta } = await services.notebooks.synced.create(
