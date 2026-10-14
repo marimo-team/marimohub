@@ -127,6 +127,62 @@ describe('authorizeProxyRequest', () => {
 		expect(await decision).toMatchObject({ kind: 'forward' });
 	});
 
+	it.each([4_999, 5_000, 10_000])(
+		'bounds speculative session reuse to five seconds (suspension delay: %i ms)',
+		async (delay) => {
+			const d = deps(ACTOR);
+			const session = await d.services.sessions.getSession(pid, sessionId);
+			const sessionRead = vi
+				.spyOn(d.services.sessions, 'getSession')
+				.mockResolvedValueOnce(session);
+			const suspension = Promise.withResolvers<boolean>();
+			vi.spyOn(d.services.identities, 'isSuspended').mockReturnValue(suspension.promise);
+			const startedAt = Date.now();
+			const clock = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+			const decision = authorizeProxyRequest(proxyRequest(), d);
+			try {
+				await vi.waitFor(() => expect(sessionRead).toHaveBeenCalledTimes(1));
+				await createServices(bucket).sessions.terminate(pid, sessionId);
+				clock.mockReturnValue(startedAt + delay);
+				suspension.resolve(false);
+				expect(await decision).toMatchObject(
+					delay < 5_000 ? { kind: 'forward' } : { kind: 'reject', status: 410 },
+				);
+				expect(sessionRead).toHaveBeenCalledTimes(delay < 5_000 ? 1 : 2);
+			} finally {
+				suspension.resolve(false);
+				await decision;
+				clock.mockRestore();
+			}
+		},
+	);
+
+	it('fails closed when speculative session revalidation fails and retries on the next request', async () => {
+		const d = deps(ACTOR);
+		const session = await d.services.sessions.getSession(pid, sessionId);
+		const sessionRead = vi
+			.spyOn(d.services.sessions, 'getSession')
+			.mockResolvedValueOnce(session)
+			.mockRejectedValueOnce(new UnavailableError('storage down'));
+		const suspension = Promise.withResolvers<boolean>();
+		vi.spyOn(d.services.identities, 'isSuspended').mockReturnValue(suspension.promise);
+		const startedAt = Date.now();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+		const decision = authorizeProxyRequest(proxyRequest(), d);
+		try {
+			await vi.waitFor(() => expect(sessionRead).toHaveBeenCalledTimes(1));
+			clock.mockReturnValue(startedAt + 5_000);
+			suspension.resolve(false);
+			expect(await decision).toMatchObject({ kind: 'reject', status: 404 });
+			expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({ kind: 'forward' });
+			expect(sessionRead).toHaveBeenCalledTimes(3);
+		} finally {
+			suspension.resolve(false);
+			await decision;
+			clock.mockRestore();
+		}
+	});
+
 	it('preserves suspension precedence when the speculative session read fails', async () => {
 		const d = deps(ACTOR);
 		vi.spyOn(d.services.sessions, 'getSession').mockRejectedValue(new Error('missing'));

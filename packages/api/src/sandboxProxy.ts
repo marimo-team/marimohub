@@ -181,13 +181,18 @@ export async function authorizeProxyRequest(
 	let admission: Admission;
 	try {
 		const loaded = await cache.getOrLoad(key, async () => {
+			// Suspension latency must not extend the speculative read's freshness window.
+			const freshSessionRead =
+				sessionRead && Date.now() < startedAt + ADMISSION_TTL_MS
+					? sessionRead
+					: deps.services.sessions.getSession(projectId, sessionId);
 			const result = await loadAdmission(
 				deps,
 				user,
 				projectId,
 				sessionId,
 				surfaceId,
-				sessionRead ?? deps.services.sessions.getSession(projectId, sessionId),
+				freshSessionRead,
 			);
 			if (result.kind === 'reject') throw new AdmissionRejectedError(result);
 			const principalDeadlines = [user.entitlementsExpiresAt, user.credential.expiresAt]
