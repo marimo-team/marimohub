@@ -2452,6 +2452,55 @@ describe('Session routes', () => {
 		expect(userQueue).toHaveBeenCalledTimes(1);
 	});
 
+	it.each(['project', 'user'] as const)(
+		'fails closed when the %s cap recheck fails and allows a retry',
+		async (scope) => {
+			const compute = makeFakeCompute();
+			const provision = vi.spyOn(compute, 'create');
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute,
+				deps: { policy: { maxAppsPerProject: 1, maxConcurrentSessionsPerUser: 1 } },
+			});
+			const { sessions } = api.deps.services;
+			const error = new Error('cap storage unavailable');
+			if (scope === 'project') {
+				vi.spyOn(sessions, 'listActiveAppsForProject')
+					.mockResolvedValueOnce([])
+					.mockRejectedValueOnce(error);
+			} else {
+				vi.spyOn(sessions, 'listActiveForUser').mockRejectedValueOnce(error);
+			}
+
+			await expectError(await api.request('POST', sessionsPath(), { mode: 'app' }), 500);
+			expect(provision).not.toHaveBeenCalled();
+			const rejected = await sessions.listSessions(nid);
+			expect(rejected).toHaveLength(1);
+			expect(rejected[0].status).toBe('failed');
+			expect(await sessions.listActiveAppsForProject(pid)).toEqual([]);
+			const retry = await expectOk<ApiSession>(
+				await api.request('POST', sessionsPath(), { mode: 'app' }),
+			);
+			expect(retry.status).toBe('running');
+			expect(retry.session_id).not.toBe(rejected[0].session_id);
+		},
+	);
+
+	it.each([0, -1, undefined])('does not read disabled app cap queues (%s)', async (max) => {
+		const api = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: makeFakeCompute(),
+			deps: { policy: { maxAppsPerProject: max, maxConcurrentSessionsPerUser: max } },
+		});
+		const projectQueue = vi.spyOn(api.deps.services.sessions, 'listActiveAppsForProject');
+		const userQueue = vi.spyOn(api.deps.services.sessions, 'listActiveForUser');
+		await expectOk(await api.request('POST', sessionsPath(), { mode: 'app' }));
+		expect(projectQueue).not.toHaveBeenCalled();
+		expect(userQueue).not.toHaveBeenCalled();
+	});
+
 	it('scans deployment-wide sessions once when enforcing the per-user cap', async () => {
 		const services = createServices(bucket);
 		const unrelatedProject = createProjectId();

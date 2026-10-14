@@ -121,15 +121,111 @@ describe('SessionService scan cache', () => {
 		expect(cache.size).toBe(0);
 	});
 
-	it('does not cache corrupt records or suppress strict scan errors', async () => {
+	it('rejects a failed later listing page instead of returning cached partial results', async () => {
+		const created = [await create(), await create(), await create()];
+		const list = bucket.list.bind(bucket);
+		const paginated = vi
+			.spyOn(bucket, 'list')
+			.mockImplementation((options) => list({ ...options, limit: 2 }));
+		const first = await sessions.listSessions();
+		expect(first).toHaveLength(created.length);
+		const gets = bucket.calls.get.length;
+		const error = new Error('second page unavailable');
+		paginated
+			.mockImplementationOnce((options) => list({ ...options, limit: 2 }))
+			.mockRejectedValueOnce(error);
+		await expect(sessions.listSessions()).rejects.toBe(error);
+		expect(await sessions.listSessions()).toEqual(first);
+		expect(sessionGetsSince(gets)).toEqual([]);
+	});
+
+	it('propagates GET failures instead of using a cached older version, then retries', async () => {
+		const session = await create();
+		await sessions.listSessions();
+		await sessions.setRunning(session.project_id, session.session_id, 'https://sandbox.example');
+		const error = new Error('storage unavailable');
+		const get = vi.spyOn(bucket, 'get').mockRejectedValueOnce(error);
+		await expect(sessions.listSessions()).rejects.toBe(error);
+		expect((await sessions.listSessions())[0].status).toBe('running');
+		expect(get).toHaveBeenCalledTimes(2);
+		await sessions.listSessions();
+		expect(get).toHaveBeenCalledTimes(2);
+	});
+
+	it('preserves a concurrent heartbeat when expiry uses a cached stale ETag', async () => {
 		const session = await create();
 		const key = paths.session(session.project_id, session.session_id);
+		advanceTime(6 * 60 * 1000);
 		await sessions.listSessions();
-		await bucket.put(key, '{}');
 		const gets = bucket.calls.get.length;
-		expect(await sessions.listSessions()).toEqual([]);
-		expect(await sessions.listSessions()).toEqual([]);
-		await expect(sessions.listByProject(session.project_id)).rejects.toThrow();
-		expect(sessionGetsSince(gets)).toEqual([key, key, key]);
+		const put = bucket.put.bind(bucket);
+		const refreshed = { ...session, last_heartbeat: new Date().toISOString() };
+		vi.spyOn(bucket, 'put').mockImplementationOnce(async (writeKey, value, options) => {
+			await put(key, JSON.stringify(refreshed));
+			return put(writeKey, value, options);
+		});
+		expect(await sessions.expireStale()).toBe(0);
+		expect(sessionGetsSince(gets)).toEqual([]);
+		expect(await sessions.getSession(session.project_id, session.session_id)).toEqual(refreshed);
+		expect(await sessions.expireStale()).toBe(0);
 	});
+
+	it('returns every record when the scan exceeds cache capacity', async () => {
+		cache = new EtagRecordCache(1);
+		sessions = new SessionService(bucket, undefined, cache);
+		await create();
+		await create();
+		await create();
+		const first = await sessions.listSessions();
+		expect(first).toHaveLength(3);
+		expect(cache.size).toBe(1);
+		expect(await sessions.listSessions()).toEqual(first);
+		expect(cache.size).toBe(1);
+	});
+
+	it('revalidates after an older in-flight read overwrites a newer cache entry', async () => {
+		const session = await create();
+		const key = paths.session(session.project_id, session.session_id);
+		const get = bucket.get.bind(bucket);
+		const fetched = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		vi.spyOn(bucket, 'get').mockImplementationOnce(async (readKey) => {
+			const body = await get(readKey);
+			fetched.resolve();
+			await release.promise;
+			return body;
+		});
+		const olderScan = sessions.listSessions();
+		await fetched.promise;
+		try {
+			await bucket.put(key, JSON.stringify({ ...session, status: 'running' }));
+			expect((await sessions.listSessions())[0].status).toBe('running');
+		} finally {
+			release.resolve();
+			await olderScan;
+		}
+		const gets = bucket.calls.get.length;
+		expect((await sessions.listSessions())[0].status).toBe('running');
+		expect(sessionGetsSince(gets)).toEqual([key]);
+	});
+
+	it.each(['{}', '{invalid json'])(
+		'retries corrupt records (%s) and recovers after repair',
+		async (invalid) => {
+			const session = await create();
+			const key = paths.session(session.project_id, session.session_id);
+			await sessions.listSessions();
+			await bucket.put(key, invalid);
+			const gets = bucket.calls.get.length;
+			expect(await sessions.listSessions()).toEqual([]);
+			expect(await sessions.listSessions()).toEqual([]);
+			await expect(sessions.listByProject(session.project_id)).rejects.toThrow();
+			expect(sessionGetsSince(gets)).toEqual([key, key, key]);
+			await bucket.put(key, JSON.stringify(session));
+			expect(await sessions.listByProject(session.project_id)).toEqual([session]);
+			const repairedGets = bucket.calls.get.length;
+			expect(await sessions.listSessions()).toEqual([session]);
+			expect(sessionGetsSince(repairedGets)).toEqual([]);
+		},
+	);
 });
