@@ -109,8 +109,10 @@ function trimTrailingSlash(s: string): string {
  * Token, authentication, and suspension checks run on every request.
  * Successful editor admissions expire after 5 s. Stops, role revocations,
  * project deletion, and label changes can take that long to block access.
- * Apps and previews require fresh checks. Suspension uses its separate 10 s
- * cache. Session and subject-context deadlines apply even on cache hits.
+ * Apps and previews require fresh checks. Suspension uses IdentityService's
+ * stale-while-revalidate cache (`ACTIVE_SUSPENSION_FRESH_MS` fresh,
+ * `ACTIVE_SUSPENSION_MAX_AGE_MS` maximum age). Session and subject-context
+ * deadlines apply even on cache hits.
  */
 export async function authorizeProxyRequest(
 	request: Request,
@@ -159,7 +161,11 @@ export async function authorizeProxyRequest(
 	]);
 	const startedAt = Date.now();
 	const cached = getFreshAdmission(cache, key, startedAt);
-	const sessionRead = cached ? undefined : deps.services.sessions.getSession(projectId, sessionId);
+	// A request joining an in-flight load reuses that load's session read.
+	const sessionRead =
+		cached || cache.hasPending(key)
+			? undefined
+			: deps.services.sessions.getSession(projectId, sessionId);
 	// Suspension can return before this speculative read settles.
 	void sessionRead?.catch(() => {});
 

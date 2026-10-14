@@ -1,5 +1,6 @@
 import { vi } from 'vitest';
 import {
+	APP_PRESENCE_PERSIST_INTERVAL_MS,
 	CatalogService,
 	ProxyExposure,
 	createServices,
@@ -92,5 +93,5 @@ export async function createAppSessionFixture<T extends MemoryBucket>(bucket: T,
 export function makeHeartbeatDue() {
 	const now = Date.now();
 	vi.useFakeTimers({ toFake: ['Date'] });
-	vi.setSystemTime(now + 61_000);
+	vi.setSystemTime(now + APP_PRESENCE_PERSIST_INTERVAL_MS + 1_000);
 }

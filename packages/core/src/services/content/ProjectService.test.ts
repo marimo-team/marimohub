@@ -304,32 +304,6 @@ describe('ProjectService', () => {
 			expect(metaReads(get, project.id)).toHaveLength(1);
 		});
 
-		it('revalidates changes from another replica on the next read', async () => {
-			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
-			await projects.getProject(project.id, { consistency: 'validated' });
-			const replica = new ProjectService(bucket, catalog);
-			await replica.updateProject(project.id, { name: 'New' }, ACTOR);
-			expect((await projects.getProject(project.id, { consistency: 'validated' })).name).toBe(
-				'New',
-			);
-		});
-
-		it.each(['head', 'get'] as const)(
-			'fails closed when %s fails during revalidation',
-			async (method) => {
-				const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
-				await projects.getProject(project.id, { consistency: 'validated' });
-				await new ProjectService(bucket, catalog).deleteProject(project.id, ACTOR);
-				vi.spyOn(bucket, method).mockRejectedValueOnce(new Error('storage unavailable'));
-				await expect(projects.getProject(project.id, { consistency: 'validated' })).rejects.toThrow(
-					'storage unavailable',
-				);
-				expect((await projects.getProject(project.id, { consistency: 'validated' })).status).toBe(
-					'deleted',
-				);
-			},
-		);
-
 		it('caches the fetched ETag when a write races between HEAD and GET', async () => {
 			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
 			await projects.getProject(project.id, { consistency: 'validated' });

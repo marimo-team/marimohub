@@ -39,3 +39,39 @@ describe('MetadataCache fallback keys', () => {
 		},
 	);
 });
+
+describe('MetadataCache validated reads', () => {
+	it('always downloads when the store reports an empty ETag', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put('meta', 'value');
+		const get = bucket.get.bind(bucket);
+		const head = bucket.head.bind(bucket);
+		vi.spyOn(bucket, 'head').mockImplementation(async (key) => {
+			const object = await head(key);
+			return object && { ...object, etag: '' };
+		});
+		const getSpy = vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			const object = await get(key);
+			return object && Object.assign(object, { etag: '' });
+		});
+		const cache = new MetadataCache<string>(bucket);
+		const read = () => cache.read(['meta'], (object) => object.text(), 'validated');
+		expect(await read()).toBe('value');
+		await bucket.put('meta', 'changed');
+		expect(await read()).toBe('changed');
+		expect(await read()).toBe('changed');
+		expect(getSpy).toHaveBeenCalledTimes(3);
+	});
+
+	it('returns copies that callers cannot use to mutate the cache', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put('meta', JSON.stringify({ tags: ['a'] }));
+		const cache = new MetadataCache<{ tags: string[] }>(bucket);
+		const read = () => cache.read(['meta'], (object) => object.json(), 'validated');
+		(await read())!.tags.push('miss');
+		const hit = await read();
+		expect(hit).toEqual({ tags: ['a'] });
+		hit!.tags.push('hit');
+		expect(await read()).toEqual({ tags: ['a'] });
+	});
+});

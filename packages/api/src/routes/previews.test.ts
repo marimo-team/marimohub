@@ -2079,31 +2079,34 @@ describe('preview session resource identity', () => {
 	});
 });
 
-it('blocks proxy access immediately after preview revocation without consulting runtime metadata', async () => {
-	api = createTestApi({
-		bucket: api.bucket,
-		compute: api.deps.compute,
-		deps: {
-			...api.deps,
-			sandbox: {
-				...api.deps.sandbox,
-				appBaseUrl: 'https://hub.example.com',
-				exposure: new ProxyExposure('preview-provenance-secret'),
+it.each(['app', 'edit'] as const)(
+	'blocks %s proxy access immediately after preview revocation without consulting runtime metadata',
+	async (mode) => {
+		api = createTestApi({
+			bucket: api.bucket,
+			compute: api.deps.compute,
+			deps: {
+				...api.deps,
+				sandbox: {
+					...api.deps.sandbox,
+					appBaseUrl: 'https://hub.example.com',
+					exposure: new ProxyExposure('preview-provenance-secret'),
+				},
 			},
-		},
-	});
-	const record = await create();
-	const started = await expectOk<Session>(
-		await api.request('POST', `${base}/${record.id}/sessions`, { mode: 'app' }),
-	);
-	const request = new Request(started.sandbox_url!);
-	expect((await authorizeProxyRequest(request, api.deps)).kind).toBe('forward');
-	await api.deps.services.previews.retire(record);
-	expect(await authorizeProxyRequest(request, api.deps)).toMatchObject({
-		kind: 'reject',
-		status: 404,
-	});
-});
+		});
+		const record = await create();
+		const started = await expectOk<Session>(
+			await api.request('POST', `${base}/${record.id}/sessions`, { mode }),
+		);
+		const request = new Request(started.sandbox_url!);
+		expect((await authorizeProxyRequest(request, api.deps)).kind).toBe('forward');
+		await api.deps.services.previews.retire(record);
+		expect(await authorizeProxyRequest(request, api.deps)).toMatchObject({
+			kind: 'reject',
+			status: 404,
+		});
+	},
+);
 
 it('pins session provenance to the loaded runtime when the branch advances during launch', async () => {
 	const record = await create();

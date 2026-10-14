@@ -8,6 +8,7 @@ import {
 	createVersionId,
 	UserId,
 } from '../../ids';
+import { UnavailableError } from '../../errors';
 import { paths } from '../../paths';
 import { readFileFailure } from '../../ports/sandbox';
 import { expectFileResult } from '../../testing/resultAssertions';
@@ -833,6 +834,22 @@ describe('SandboxProvisioner', () => {
 			expect(calls.writeFiles.flat().filter(({ path }) => path === `${MOUNT_PATH}/nb.py`)).toEqual([
 				{ path: `${MOUNT_PATH}/nb.py`, content: new TextEncoder().encode('committed') },
 			]);
+		});
+
+		it('reports a missing overlay object after a successful mount like the copy path', async () => {
+			const { calls, bucketHandle, version, provision } = await overlayFixture();
+			await bucketHandle.delete(version.code);
+
+			const rejected = provision({ workspaceLoadMode: undefined });
+
+			await expect(rejected).rejects.toBeInstanceOf(UnavailableError);
+			await expect(rejected).rejects.toMatchObject({
+				message:
+					'Failed to start sandbox while restoring the notebook workspace into the sandbox NotFoundError [NOT_FOUND]',
+				cause: expect.objectContaining({ message: `Workspace source ${version.code} not found` }),
+			});
+			expect(calls.mountBucket).toHaveLength(1);
+			expect(calls.startProcess).toEqual([]);
 		});
 
 		it.each(['missing', 'write'] as const)(

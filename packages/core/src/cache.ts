@@ -29,15 +29,12 @@ interface Pending<V> {
 	state: { superseded: boolean };
 }
 
-export class LazyMap<K, V> {
+/** Map bounded to `maxSize` entries that evicts the least recently used on insert. */
+export class BoundedLruMap<K, V> {
 	private readonly values = new Map<K, V>();
-	private readonly pending = new Map<K, Pending<V>>();
 
-	constructor(
-		private readonly loadValue: (key: K) => Promise<V>,
-		private readonly options: LazyMapOptions,
-	) {
-		if (!Number.isInteger(options.maxSize) || options.maxSize <= 0) {
+	constructor(private readonly maxSize: number) {
+		if (!Number.isInteger(maxSize) || maxSize <= 0) {
 			throw new RangeError('maxSize must be a positive integer');
 		}
 	}
@@ -46,12 +43,60 @@ export class LazyMap<K, V> {
 		return this.values.size;
 	}
 
-	getIfPresent(key: K): V | undefined {
+	has(key: K): boolean {
+		return this.values.has(key);
+	}
+
+	/** Returns the value and marks it most recently used. */
+	get(key: K): V | undefined {
 		if (!this.values.has(key)) return undefined;
 		const value = this.values.get(key) as V;
 		this.values.delete(key);
 		this.values.set(key, value);
 		return value;
+	}
+
+	/** Returns the value without changing eviction order. */
+	peek(key: K): V | undefined {
+		return this.values.get(key);
+	}
+
+	set(key: K, value: V): void {
+		this.values.delete(key);
+		this.values.set(key, value);
+		while (this.values.size > this.maxSize) {
+			const oldest = this.values.keys().next();
+			if (oldest.done) return;
+			this.values.delete(oldest.value);
+		}
+	}
+
+	delete(key: K): boolean {
+		return this.values.delete(key);
+	}
+
+	clear(): void {
+		this.values.clear();
+	}
+}
+
+export class LazyMap<K, V> {
+	private readonly values: BoundedLruMap<K, V>;
+	private readonly pending = new Map<K, Pending<V>>();
+
+	constructor(
+		private readonly loadValue: (key: K) => Promise<V>,
+		options: LazyMapOptions,
+	) {
+		this.values = new BoundedLruMap(options.maxSize);
+	}
+
+	get size(): number {
+		return this.values.size;
+	}
+
+	getIfPresent(key: K): V | undefined {
+		return this.values.get(key);
 	}
 
 	async get(key: K): Promise<V> {
@@ -69,7 +114,7 @@ export class LazyMap<K, V> {
 			.then(() => (options.load ?? this.loadValue)(key))
 			.then((loaded) => {
 				if (!state.superseded) {
-					this.store(key, loaded);
+					this.values.set(key, loaded);
 					return loaded;
 				}
 				return this.values.has(key) ? (this.getIfPresent(key) as V) : loaded;
@@ -93,7 +138,7 @@ export class LazyMap<K, V> {
 	set(key: K, value: V): void {
 		const pending = this.pending.get(key);
 		if (pending) pending.state.superseded = true;
-		this.store(key, value);
+		this.values.set(key, value);
 	}
 
 	delete(key: K): boolean {
@@ -106,16 +151,6 @@ export class LazyMap<K, V> {
 		for (const pending of this.pending.values()) pending.state.superseded = true;
 		this.pending.clear();
 		this.values.clear();
-	}
-
-	private store(key: K, value: V): void {
-		this.values.delete(key);
-		this.values.set(key, value);
-		while (this.values.size > this.options.maxSize) {
-			const entry = this.values.keys().next();
-			if (entry.done) return;
-			this.values.delete(entry.value);
-		}
 	}
 }
 

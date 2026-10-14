@@ -700,7 +700,7 @@ export class SessionService {
 		return this.scanPrefix(paths.sessionsPrefix, handle);
 	}
 
-	/** Project scans avoid listing unrelated sessions. */
+	/** Project-scoped scans cost O(that project's sessions), not O(all sessions). */
 	private async scanProject<T>(
 		projectId: ProjectId,
 		handle: (session: Session, obj: BucketObject, etag: string) => T | Promise<T>,

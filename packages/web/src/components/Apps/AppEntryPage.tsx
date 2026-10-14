@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { useAppQuery } from '@/api/apps';
+import { ApiRequestError } from '@/api/client';
 import {
 	capabilitiesQueryOptions,
 	projectQueryOptions,
@@ -89,15 +90,27 @@ function NotebookFallback({
 		setProjectReady(true);
 	if (user.isPending || (canLoadProject && !projectReady && project.isFetching))
 		return <p className="p-6">Opening notebook…</p>;
+	// Once open, only a confirmed loss of access closes the notebook; a transient refresh
+	// failure keeps the last successful user and project data.
+	const projectFailed = projectReady ? isAccessError(project.error, [403, 404]) : project.isError;
+	const userFailed = projectReady ? isAccessError(user.error, [401, 403]) : user.isError;
 	if (
-		user.isError ||
+		userFailed ||
 		user.data?.app_only ||
-		project.isError ||
+		projectFailed ||
 		!project.data?.your_role ||
 		project.data.your_role === 'app-user'
 	)
 		return <AppAccessError error={error} />;
 	return <NotebookPage variant={variant} target={{ projectId: pid, notebookId: nid }} />;
+}
+
+function isAccessError(error: unknown, statuses: number[]): boolean {
+	return (
+		error instanceof ApiRequestError &&
+		error.status !== undefined &&
+		statuses.includes(error.status)
+	);
 }
 
 function StakeholderApp({

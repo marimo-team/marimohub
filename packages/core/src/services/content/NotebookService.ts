@@ -8,7 +8,7 @@ import { ThumbnailService } from './ThumbnailService';
 import { all } from 'better-all';
 import type { Bucket } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
-import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { BUCKET_SCAN_CONCURRENCY, NOTEBOOK_META_CACHE_MAX_ENTRIES } from '../../constants';
 import { Millis } from '../../duration';
 import {
 	assertVersionMatch,
@@ -170,7 +170,7 @@ export class NotebookService {
 		private deepLinks = new DeepLinkService(bucket, metrics),
 		repositoryHosts?: GitProviderHosts,
 	) {
-		this.metaCache = new MetadataCache(bucket, 50_000);
+		this.metaCache = new MetadataCache(bucket, NOTEBOOK_META_CACHE_MAX_ENTRIES);
 		this.thumbnails = new ThumbnailService(bucket, this);
 		this.imports = new NotebookImportService(bucket, this);
 		this.synced = new SyncedNotebookService(bucket, catalog, metrics, {

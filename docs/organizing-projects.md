@@ -25,12 +25,13 @@ The API stores tags as supplied, without normalization.
 The project list shows one section per top-level namespace by default. A project appears in each matching namespace. The total counts each project once.
 Each namespace section previews up to five projects.
 Projects without path tags appear under **Ungrouped**.
-If no projects have path tags, the list stays flat.
+If no loaded project has a path tag, the list stays flat.
 
 - Select a namespace name or **Show all X** to open the namespace.
 - Select the chevron to collapse or expand a namespace section.
 - Use the breadcrumb to return to a parent namespace or **All projects**.
 - Turn off **Group by namespace** for a flat list. Your browser remembers this choice.
+  The toggle appears only when at least one loaded project has a path tag, even if a search filter hides that project.
 
 Projects tagged exactly with the current namespace appear before its child namespaces.
 The browser loads all results before it shows the namespaces.

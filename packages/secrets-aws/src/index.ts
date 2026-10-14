@@ -103,7 +103,10 @@ export class AwsSecretsManagerResolver implements SecretResolver {
 			: selectJsonKey(result.SecretString, jsonKey);
 	}
 
-	/** Sibling `#key` selections share in-flight reads even when the cache TTL is zero. */
+	/**
+	 * Keyed by SECRET ID, not the full locator, so sibling `#key` selections share
+	 * one GetSecretValue call, in flight or cached, even when the cache TTL is zero.
+	 */
 	private async fetchCached(secretId: string): Promise<GetSecretValueResult> {
 		if (this.cacheTtlMs > 0) {
 			const hit = this.cache.get(secretId);

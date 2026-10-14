@@ -3,6 +3,8 @@ import { NotFoundError } from '../../errors';
 import { paths } from '../../paths';
 import { StoredObjectError } from '../../schema';
 import type { ReadConsistency } from './metadataCache';
+import { NotebookService } from './NotebookService';
+import { ProjectService } from './ProjectService';
 import { ACTOR, setupTestEnv } from '../../testing';
 
 async function setup(kind: 'project' | 'notebook', warm = true) {
@@ -21,8 +23,12 @@ async function setup(kind: 'project' | 'notebook', warm = true) {
 		kind === 'project'
 			? env.projects.getProject(project.id, options)
 			: env.notebooks.getNotebookMeta(project.id, notebook.id, options);
+	const deleteFromReplica = () =>
+		kind === 'project'
+			? new ProjectService(env.bucket, env.catalog).deleteProject(project.id, ACTOR)
+			: new NotebookService(env.bucket, env.catalog).deleteNotebook(project.id, notebook.id, ACTOR);
 	const original = await read(warm ? { consistency: 'validated' } : {});
-	return { ...env, project, notebook, key, read, original };
+	return { ...env, project, notebook, key, read, original, deleteFromReplica };
 }
 
 describe.each(['project', 'notebook'] as const)('%s metadata cache', (kind) => {
@@ -39,6 +45,34 @@ describe.each(['project', 'notebook'] as const)('%s metadata cache', (kind) => {
 		await read();
 		expect(get.mock.calls.filter(([requestedKey]) => requestedKey === key)).toHaveLength(1);
 		expect(head).toHaveBeenCalledWith(key);
+	});
+
+	it('revalidates a deletion from another replica on the next read', async () => {
+		const { read, deleteFromReplica } = await setup(kind);
+		await deleteFromReplica();
+		expect((await read()).status).toBe('deleted');
+	});
+
+	it.each(['head', 'get'] as const)(
+		'fails closed when %s fails during revalidation',
+		async (method) => {
+			const { bucket, read, deleteFromReplica } = await setup(kind);
+			await deleteFromReplica();
+			vi.spyOn(bucket, method).mockRejectedValueOnce(new Error('storage unavailable'));
+			await expect(read()).rejects.toThrow('storage unavailable');
+			expect((await read()).status).toBe('deleted');
+		},
+	);
+
+	it('serves concurrent validated misses and caches the current record', async () => {
+		const { bucket, key, read, original } = await setup(kind);
+		const updated = { ...original, description: 'Concurrent' };
+		await bucket.put(key, JSON.stringify(updated));
+		const get = vi.spyOn(bucket, 'get');
+		expect(await Promise.all([read(), read()])).toEqual([updated, updated]);
+		get.mockClear();
+		expect(await read()).toEqual(updated);
+		expect(get.mock.calls.filter(([requestedKey]) => requestedKey === key)).toHaveLength(0);
 	});
 
 	it.each([false, true])(

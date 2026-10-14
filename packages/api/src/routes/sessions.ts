@@ -697,7 +697,11 @@ function capsFor(deps: ApiDeps, mode: SessionMode, pid: ProjectId, userId: UserI
 }
 
 /** Preserve cap precedence even when a later queue fails. */
-async function* loadCapQueues(caps: ReturnType<typeof capsFor>, excludedSessionId?: SessionId) {
+async function checkCapQueues(
+	caps: ReturnType<typeof capsFor>,
+	excludedSessionId: SessionId | undefined,
+	check: (cap: { max: number; message: string; sessions: Session[] }) => void,
+): Promise<void> {
 	const results = await Promise.allSettled(
 		caps.flatMap(({ max, message, queue }) => {
 			if (!max || max <= 0) return [];
@@ -714,7 +718,7 @@ async function* loadCapQueues(caps: ReturnType<typeof capsFor>, excludedSessionI
 	);
 	for (const result of results) {
 		if (result.status === 'rejected') throw result.reason;
-		yield result.value;
+		check(result.value);
 	}
 }
 
@@ -730,9 +734,9 @@ async function enforceSessionCap(
 	excludedSessionId?: SessionId,
 ): Promise<void> {
 	const caps = capsFor(deps, mode, pid, userId).filter((cap) => cap.preflight);
-	for await (const cap of loadCapQueues(caps, excludedSessionId)) {
+	await checkCapQueues(caps, excludedSessionId, (cap) => {
 		if (cap.sessions.length >= cap.max) throw new ResourceExhaustedError(cap.message);
-	}
+	});
 }
 
 /**
@@ -748,11 +752,11 @@ async function assertCapAfterCreate(
 	excludedSessionId?: SessionId,
 ): Promise<void> {
 	const caps = capsFor(deps, mode, pid, userId);
-	for await (const cap of loadCapQueues(caps, excludedSessionId)) {
+	await checkCapQueues(caps, excludedSessionId, (cap) => {
 		const rank = cap.sessions.findIndex((session) => session.session_id === sessionId);
 		// A missing session is already terminal and no longer consumes capacity.
 		if (rank >= cap.max) throw new ResourceExhaustedError(cap.message);
-	}
+	});
 }
 
 const app = createApp();
@@ -1274,6 +1278,7 @@ export async function startNotebookSession(input: {
 	// Consume notebook errors after authorization so role denials retain their 403.
 	const notebookRead = notebooks.getNotebook(pid, nid);
 	notebookRead.catch(() => {});
+	// A soft-deleted project's bytes linger until GC, but no new kernel may serve them.
 	const project = await projects.getProject(pid, { consistency: 'validated' });
 	if (project.status === 'deleted') {
 		throw new NotFoundError(`Project ${pid} not found`);
@@ -1288,6 +1293,7 @@ export async function startNotebookSession(input: {
 	) {
 		throw new ForbiddenError('App users cannot customize sessions');
 	}
+	// Only admitted callers learn whether the notebook exists.
 	// Deleted notebooks remain readable until GC. New sessions must not serve
 	// their content or recreate app-pool claims after deletion cleanup.
 	const notebook = await notebookRead;
@@ -1301,7 +1307,6 @@ export async function startNotebookSession(input: {
 	if (notebook.meta.status === 'deleted') {
 		throw new NotFoundError(`Notebook ${nid} not found`);
 	}
-	// Notebook labels can further restrict authorization for the project.
 	if (notebook.meta.security_labels !== undefined) {
 		authorization = await authorizeSessionStart(
 			project,
@@ -1754,7 +1759,6 @@ export async function startNotebookSession(input: {
 			return marimoConfigToSessionEnv(contributors);
 		};
 
-		// Temporary editors retain editor credentials.
 		const resolveIntegrationEnv = () =>
 			resolveIntegrationRender(deps, {
 				projectId: pid,
@@ -1779,29 +1783,35 @@ export async function startNotebookSession(input: {
 				},
 			});
 
-		const sessionEnv = all({
-			wifVars: resolveWifVars,
-			marimoEnv: resolveMarimoConfigEnv,
-			integrationEnv: resolveIntegrationEnv,
-		}).then(({ wifVars, marimoEnv, integrationEnv }): SessionEnv | undefined => {
-			let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
-			if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
-			// Integration values are the base; WIF and marimo configuration win collisions.
-			if (integrationEnv) {
-				env = mergeSessionEnv(projectSessionEnv(integrationEnv), env ?? {});
-			}
-			return env;
-		});
-		const launchStrategy = resolveLaunchStrategyForSession({
-			entryNotebookKey: launchSource.entryNotebookKey,
-			bucket: bucketHandle,
-		}).then((resolved) => {
-			observer.tag('launch_strategy', resolved.strategy);
-			observer.tag('launch_strategy_detection_failed', resolved.detectionFailed);
-			return resolved.strategy;
-		});
-		// Admission or boot can fail before provisioning consumes these independent promises.
-		for (const pending of [sessionEnv, launchStrategy]) pending.catch(() => {});
+		// Credential exchange and secret reads wait for the capacity check so capped callers
+		// cannot drive STS or secret-store traffic; they still overlap the record phase.
+		const startEnvResolution = () => {
+			const sessionEnv = all({
+				wifVars: resolveWifVars,
+				marimoEnv: resolveMarimoConfigEnv,
+				integrationEnv: resolveIntegrationEnv,
+			}).then(({ wifVars, marimoEnv, integrationEnv }): SessionEnv | undefined => {
+				let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
+				if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
+				// Integration values are the base; WIF and marimo configuration win collisions.
+				if (integrationEnv) {
+					env = mergeSessionEnv(projectSessionEnv(integrationEnv), env ?? {});
+				}
+				return env;
+			});
+			const launchStrategy = resolveLaunchStrategyForSession({
+				entryNotebookKey: launchSource.entryNotebookKey,
+				bucket: bucketHandle,
+			}).then((resolved) => {
+				observer.tag('launch_strategy', resolved.strategy);
+				observer.tag('launch_strategy_detection_failed', resolved.detectionFailed);
+				return resolved.strategy;
+			});
+			// Record-phase or boot failures can reject before provisioning consumes these.
+			for (const pending of [sessionEnv, launchStrategy]) pending.catch(() => {});
+			return { sessionEnv, launchStrategy };
+		};
+		let envResolution: ReturnType<typeof startEnvResolution> | undefined;
 		if (replacementTarget) {
 			await retireSelectedSession(deps, replacementTarget);
 			const retired = await sessions.getSession(pid, replacementTarget.session_id);
@@ -1840,9 +1850,10 @@ export async function startNotebookSession(input: {
 				});
 				await deps.services.previews.reserveAdmission(reaped, nid, sessionId, PREVIEW_MAX_SESSIONS);
 			})
-			.step('capacity', () =>
-				enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id),
-			)
+			.step('capacity', async () => {
+				await enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id);
+				envResolution = startEnvResolution();
+			})
 			.step('warm_sandbox', async () => {
 				warmClaim = await deps.warmPool?.claim({
 					profile: requestedComputeProfile.name,
@@ -2014,9 +2025,9 @@ export async function startNotebookSession(input: {
 						sessionIdleTimeoutMs: isPreview
 							? (previewIdleTimeout(sandbox.sessionLifetime?.idleTimeoutMsByMode[mode]) as Millis)
 							: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
-						sessionEnv,
+						sessionEnv: envResolution!.sessionEnv,
 						entryNotebook: workspacePolicy.entryNotebook,
-						launchStrategy,
+						launchStrategy: envResolution!.launchStrategy,
 						launchMode: mode,
 						// Ephemeral and app sandboxes never mount the live workspace: a mount
 						// writes straight through to the bucket (bypassing every persistEdits
@@ -2254,7 +2265,8 @@ export async function startNotebookSession(input: {
 	}
 
 	// App sessions can expose integration secrets and WIF credentials to their audience.
-	// The audit records who started the session.
+	// The audit records who started the session. Best-effort like every audit append; deferred
+	// so it adds no response latency, and graceful drain still flushes it.
 	if (MODE_POLICY[mode].sharedApp) {
 		const audit = appendAudit({ ...request, userId: user.id }, 'app.start', () =>
 			deps.services.events.append({

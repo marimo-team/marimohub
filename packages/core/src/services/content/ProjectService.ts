@@ -20,7 +20,7 @@ import {
 } from '../../identityMatch';
 import type { MemberSelector } from '../../identityMatch';
 import { mapWithConcurrency } from '../../concurrency';
-import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { BUCKET_SCAN_CONCURRENCY, METADATA_CACHE_MAX_ENTRIES } from '../../constants';
 import type { AssignableRole, Role } from '../../constants';
 import { Millis } from '../../duration';
 import {
@@ -238,7 +238,7 @@ export class ProjectService {
 		private resolveIdentitiesByEmail: InviteIdentityResolver = async () => new Map(),
 		private deepLinks = new DeepLinkService(bucket, metrics),
 	) {
-		this.projectCache = new MetadataCache(bucket);
+		this.projectCache = new MetadataCache(bucket, METADATA_CACHE_MAX_ENTRIES);
 	}
 
 	/** Apply role, token, and label restrictions before the caller paginates. */

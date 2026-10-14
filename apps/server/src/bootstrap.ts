@@ -209,10 +209,11 @@ export async function bootstrap(
 				// and negotiate compression using the original client request here.
 				const headers = new Headers(c.req.raw.headers);
 				headers.set('accept-encoding', 'identity');
-				return app.fetch(new Request(c.req.raw, { headers }));
+				return app.fetch(new Request(c.req.raw, { headers }), c.env);
 			});
 		}
-		proxyApp.all('*', (c) => app.fetch(c.req.raw));
+		// Node bindings in env back getConnInfo for routes behind this wrapper.
+		proxyApp.all('*', (c) => app.fetch(c.req.raw, c.env));
 		serverFetch = proxyApp.fetch;
 	}
 

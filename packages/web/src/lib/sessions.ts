@@ -3,6 +3,8 @@ import type { Session } from '@/types';
 export const EDITOR_HEARTBEAT_INTERVAL_MS = 120_000;
 export const SESSION_STATUS_INTERVAL_MS = 30_000;
 export const SESSION_START_POLL_INTERVAL_MS = 2_000;
+export const SESSION_START_SLOW_POLL_AFTER_MS = 30_000;
+export const SESSION_START_SLOW_POLL_INTERVAL_MS = 5_000;
 
 export function sessionStartupDeadlineMs(timeoutSeconds = 120): number {
 	// Allow the server time to report its own startup failure before giving up locally.

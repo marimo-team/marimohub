@@ -1,5 +1,10 @@
 export interface BucketObject {
 	key: string;
+	/**
+	 * Non-empty version tag that `get`, `head`, and `list` report identically for an
+	 * unchanged object and that changes on every overwrite. ETag-validated caches rely
+	 * on it; an adapter that cannot supply one returns `''`, which disables caching.
+	 */
 	etag: string;
 	size: number;
 	uploaded: Date;

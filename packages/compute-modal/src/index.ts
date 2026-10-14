@@ -213,6 +213,7 @@ class ModalSandboxInstance implements SandboxInstance {
 	private sandboxPromise?: Promise<Sandbox>;
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
+	private reusedSandbox?: Sandbox;
 
 	constructor(
 		private readonly id: SandboxId,
@@ -272,6 +273,7 @@ class ModalSandboxInstance implements SandboxInstance {
 				if (this.existingOnly && (await sandbox.poll()) !== null) {
 					throw new NotFoundError(`Sandbox ${this.id} is no longer available`);
 				}
+				if (!this.existingOnly) this.reusedSandbox = sandbox;
 				return sandbox;
 			})
 			.catch((error) => {
@@ -282,7 +284,12 @@ class ModalSandboxInstance implements SandboxInstance {
 	}
 
 	async ready(): Promise<void> {
-		await this.getSandbox();
+		const sandbox = await this.getSandbox();
+		// `fromName` resolves terminated sandboxes too; without this check a dead reused
+		// sandbox surfaces later as a workspace restore failure instead of unavailable.
+		if (sandbox === this.reusedSandbox && (await sandbox.poll()) !== null) {
+			throw new NotFoundError(`Sandbox ${this.id} is no longer available`);
+		}
 	}
 
 	private async spawn(

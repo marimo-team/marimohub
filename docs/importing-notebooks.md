@@ -9,7 +9,7 @@ Each imported notebook gets an independent copy of the included files. Edits in 
 
 ## Choose notebooks and files
 
-1. Open a project and select **Import notebooks**.
+1. Open a project, select the arrow next to **New Notebook**, and select **Import notebooks**.
 2. Choose the common parent folder of your notebooks, Python modules, and data.
 3. Select the notebooks to create and edit their names.
 4. Expand **Included files** to review supporting files and exclusions.

@@ -394,6 +394,21 @@ describe('ModalCompute', () => {
 		expect(existing.execCalls).toEqual([]);
 	});
 
+	it('rejects readiness for a terminated reused sandbox without creating', async () => {
+		const world = makeWorld();
+		const existing = new FakeSandbox();
+		await existing.terminate();
+		world.existing.set(SANDBOX_ID, existing);
+		const sandbox = makeCompute(world).create(SANDBOX_ID, { reuse: true });
+
+		await expect(sandbox.ready!()).rejects.toMatchObject({
+			name: 'NotFoundError',
+			message: `Sandbox ${SANDBOX_ID} is no longer available`,
+		});
+		expect(world.client.sandboxes.create).not.toHaveBeenCalled();
+		expect(existing.execCalls).toEqual([]);
+	});
+
 	it('propagates lazy creation errors from readiness', async () => {
 		const world = makeWorld();
 		const error = new InvalidError('Sandbox creation failed');

@@ -19,7 +19,6 @@
 		"./deep-link-slug": "./src/deepLinkSlug.ts",
 		"./duration": "./src/duration.ts",
 		"./errors": "./src/errors.ts",
-		"./etag-record-cache": "./src/etagRecordCache.ts",
 		"./ids": "./src/ids.ts",
 		"./identity-match": "./src/identityMatch.ts",
 		"./jobs": "./src/services/jobs/public.ts",

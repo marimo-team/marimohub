@@ -16,6 +16,8 @@ import {
 	EDITOR_HEARTBEAT_INTERVAL_MS,
 	SESSION_STATUS_INTERVAL_MS,
 	SESSION_START_POLL_INTERVAL_MS,
+	SESSION_START_SLOW_POLL_AFTER_MS,
+	SESSION_START_SLOW_POLL_INTERVAL_MS,
 	sessionStartupDeadlineMs,
 } from '@/lib/sessions';
 
@@ -86,7 +88,7 @@ export function useNotebookSession(
 		enabled?: boolean;
 		mode?: 'edit' | 'app';
 		editIntent?: 'temporary';
-		/** Fail startup after this deployment timeout plus a 30-second grace period. */
+		/** Fail startup after this deployment timeout plus the grace in `sessionStartupDeadlineMs`. */
 		startupTimeoutSeconds?: number;
 		appHeartbeatIntervalSeconds?: number;
 	} = {},
@@ -309,8 +311,8 @@ export function useNotebookSession(
 			if (session?.status !== 'starting') return;
 			const elapsed =
 				startingSinceRef.current === null ? null : Date.now() - startingSinceRef.current;
-			if (elapsed !== null && elapsed > 30_000) {
-				setStartPollInterval(5_000);
+			if (elapsed !== null && elapsed > SESSION_START_SLOW_POLL_AFTER_MS) {
+				setStartPollInterval(SESSION_START_SLOW_POLL_INTERVAL_MS);
 			}
 			// A lost provisioning request can leave the record starting indefinitely.
 			// Match the server's timeout message, which excludes the grace period.
@@ -396,10 +398,7 @@ export function useNotebookSession(
 				}),
 			)
 				.then((next) => {
-					if (mode !== 'app' || !generation.isCurrent(gen)) return;
-					if (session.status === 'running' || session.status === 'starting') {
-						updateRunningSession(next);
-					}
+					if (mode === 'app' && generation.isCurrent(gen)) updateRunningSession(next);
 				})
 				.catch((error: unknown) => {
 					if (mode !== 'app' || !generation.isCurrent(gen)) return;

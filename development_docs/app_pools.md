@@ -53,25 +53,14 @@ The session promise handles rejection immediately, including after a project den
 Notebook and preview checks still precede attach authorization. Pool and session renewal retain their CAS checks, including the session reread.
 Response grants use the updated session.
 
-The table covers storage costs for app pools. An unlabeled API heartbeat uses six metadata operations:
-a catalog HEAD, project GET, notebook GET, pool GET, and two session GETs.
+An unlabeled API heartbeat uses five metadata reads: a project read, notebook
+GET, pool GET, and two session GETs. It does not HEAD the catalog. A warm
+project read is a validated HEAD that reuses the cached record when the ETag
+matches. `appPerformance.test.ts` asserts this budget.
 A due heartbeat adds two conditional writes without conflicts. Identity I/O and policy calls are additional.
 Denied projects incur one extra speculative session GET and no renewal writes.
 
 ### Measurements
-
-On 2026-10-14, macOS arm64 / Node 24.21.0, with 10 ms injected per metadata operation:
-
-| Workload                       | Serial p50 / p95 (ms) | Overlapped p50 / p95 (ms) |
-| ------------------------------ | --------------------: | ------------------------: |
-| Fresh heartbeat                |           66.9 / 67.6 |               56.0 / 56.4 |
-| Due heartbeat                  |           89.3 / 90.5 |               77.9 / 79.0 |
-| Four concurrent due heartbeats |         121.1 / 123.7 |             109.5 / 114.0 |
-| HTTP proxy authorization       |           33.3 / 34.0 |               33.3 / 33.7 |
-| Existing-visit admission       |         111.6 / 113.2 |             111.1 / 112.1 |
-
-Successful-path operation counts did not change. The in-memory profile showed no meaningful improvement.
-Client and proxy scheduling remain unchanged. No API negotiation or coordinated client upgrade is required.
 
 Run the optional harness from the repository root:
 

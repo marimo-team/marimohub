@@ -256,6 +256,9 @@ describe('authorizeProxyRequest', () => {
 			const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
 			try {
 				await authorizeProxyRequest(proxyRequest(), d);
+				clock.mockReturnValue(now + 999);
+				await authorizeProxyRequest(proxyRequest(), d);
+				expect(sessionReads()).toBe(1);
 				clock.mockReturnValue(now + 1000);
 				await authorizeProxyRequest(proxyRequest(), d);
 				expect(sessionReads()).toBe(2);
@@ -335,6 +338,31 @@ describe('authorizeProxyRequest', () => {
 			}
 		},
 	);
+
+	it('does not start a session read for a request that joins an in-flight admission load', async () => {
+		const { d, sessionReads } = recordedDeps();
+		const project = await d.services.projects.getProject(pid);
+		const projectRead = Promise.withResolvers<typeof project>();
+		const projectSpy = vi
+			.spyOn(d.services.projects, 'getProject')
+			.mockReturnValueOnce(projectRead.promise);
+		const suspensionSpy = vi.spyOn(d.services.identities, 'isSuspended');
+		const first = authorizeProxyRequest(proxyRequest('/one'), d);
+		let second: Promise<unknown> | undefined;
+		try {
+			await vi.waitFor(() => expect(projectSpy).toHaveBeenCalledTimes(1));
+			second = authorizeProxyRequest(proxyRequest('/two'), d);
+			await vi.waitFor(() => expect(suspensionSpy).toHaveBeenCalledTimes(2));
+			projectRead.resolve(project);
+			expect(await first).toMatchObject({ kind: 'forward' });
+			expect(await second).toMatchObject({ kind: 'forward' });
+			expect(sessionReads()).toBe(1);
+			expect(projectSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			projectRead.resolve(project);
+			await Promise.all([first, second]);
+		}
+	});
 
 	it('does not extend the cache window by the time spent loading admission', async () => {
 		const { d, sessionReads } = recordedDeps();

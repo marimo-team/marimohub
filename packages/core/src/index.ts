@@ -16,7 +16,6 @@ export * from './rateLimit';
 export * from './tokenGrants';
 export * from './concurrency';
 export * from './cache';
-export * from './etagRecordCache';
 export * from './async';
 export * from './text';
 

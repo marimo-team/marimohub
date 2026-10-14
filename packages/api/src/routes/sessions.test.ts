@@ -515,6 +515,124 @@ describe('Session routes', () => {
 		},
 	);
 
+	it('rejects a capped start before exchanging credentials or reading integration secrets', async () => {
+		await createServices(bucket).projects.updateProject(
+			pid,
+			{ federation: { enabled: true } },
+			ACTOR,
+		);
+		const exchange = vi.fn(async () => ({
+			accessKeyId: 'CWAK',
+			secretAccessKey: 'sk',
+			sessionToken: 'tok',
+		}));
+		const resolveForSession = vi.fn(async () => ({
+			files: [],
+			vars: {},
+			attachments: [],
+			warnings: [],
+		}));
+		const apiWith = (maxAppsPerProject?: number) => {
+			const compute = makeFakeCompute();
+			const create = vi.spyOn(compute, 'create');
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute,
+				deps: {
+					...(maxAppsPerProject ? { policy: { maxAppsPerProject } } : {}),
+					integrations: { resolveForSession } as never,
+					wif: makeTestWif({
+						exchange,
+						mint: async () => 'jwt.value',
+						audience: 'coreweave-object-storage',
+						storage: { endpoint: 'https://cwobject.com', region: 'us-east-1' },
+					}),
+				},
+			});
+			return { api, create };
+		};
+		const capped = apiWith(1);
+		const { sessions } = capped.api.deps.services;
+		const incumbent = await sessions.createSession({
+			project_id: pid,
+			notebook_id: createNotebookId(),
+			user_id: ACTOR,
+			mode: 'app',
+		});
+		await sessions.setRunning(pid, incumbent.session_id, 'https://sandbox.example');
+
+		await expectError(
+			await capped.api.request('POST', sessionsPath(), { mode: 'app' }),
+			429,
+			'RESOURCE_EXHAUSTED',
+		);
+		expect(exchange).not.toHaveBeenCalled();
+		expect(resolveForSession).not.toHaveBeenCalled();
+		expect(capped.create).not.toHaveBeenCalled();
+
+		// The same start without the cap does resolve both, so the assertions above are not vacuous.
+		const uncapped = apiWith();
+		await expectOk(await uncapped.api.request('POST', sessionsPath(), { mode: 'app' }));
+		expect(exchange).toHaveBeenCalledOnce();
+		expect(resolveForSession).toHaveBeenCalledOnce();
+	});
+
+	it('returns a lost editor claim when env resolution later rejects', async () => {
+		const unhandled = vi.fn();
+		process.on('unhandledRejection', unhandled);
+		const renderStarted = Promise.withResolvers<void>();
+		const failRender = Promise.withResolvers<void>();
+		const resolveForSession = vi.fn(async () => {
+			renderStarted.resolve();
+			await failRender.promise;
+			throw new Error('secret backend unavailable');
+		});
+		const compute = makeFakeCompute();
+		const create = vi.spyOn(compute, 'create');
+		const api = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute,
+			deps: { integrations: { resolveForSession } as never },
+		});
+		const { sessions } = api.deps.services;
+		vi.spyOn(sessions, 'claimEditor').mockImplementationOnce(async () => {
+			await renderStarted.promise;
+			// A wedged competitor wins while this start's env resolution is still pending.
+			const startedAt = new Date(Date.now() - Millis.minutes(6)).toISOString();
+			const holder = makeSession({
+				project_id: pid,
+				notebook_id: nid,
+				user_id: STRANGER,
+				status: 'starting',
+				started_at: startedAt,
+				last_heartbeat: startedAt,
+			});
+			await bucket.put(paths.session(pid, holder.session_id), JSON.stringify(holder));
+			return {
+				claimed: false,
+				claim: {
+					session_id: holder.session_id,
+					sharing: 'shared',
+					claimed_at: holder.started_at,
+				},
+			};
+		});
+		try {
+			await expectError(await api.request('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
+			failRender.resolve();
+			await vi.waitFor(() => expect(resolveForSession).toHaveBeenCalledOnce());
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(unhandled).not.toHaveBeenCalled();
+			expect(create).not.toHaveBeenCalled();
+			expect(await sessions.listActiveForUser(ACTOR)).toEqual([]);
+		} finally {
+			failRender.resolve();
+			process.off('unhandledRejection', unhandled);
+		}
+	});
+
 	it('reads an absent editor claim once before creating a session', async () => {
 		const api = createTestApi({ bucket, compute: makeFakeCompute() });
 		const readClaim = vi.spyOn(api.deps.services.sessions, 'getEditorClaim');

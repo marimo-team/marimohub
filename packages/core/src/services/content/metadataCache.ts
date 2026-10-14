@@ -1,15 +1,19 @@
+import { METADATA_CACHE_MAX_ENTRIES } from '../../constants';
 import { EtagRecordCache } from '../../etagRecordCache';
 import type { Bucket, BucketObjectBody } from '../../ports/bucket';
 
 export type ReadConsistency = 'fresh' | 'validated';
 
-/** Reuses parsed metadata only after storage confirms its ETag. Never serves stale on error. */
+/**
+ * Reuses parsed metadata only after storage confirms its ETag. Never serves stale on error.
+ * Validated reads return a clone so callers cannot mutate the cached record.
+ */
 export class MetadataCache<T> {
 	private readonly entries: EtagRecordCache<T>;
 
 	constructor(
 		private readonly bucket: Bucket,
-		maxSize = 10_000,
+		maxSize = METADATA_CACHE_MAX_ENTRIES,
 	) {
 		this.entries = new EtagRecordCache(maxSize);
 	}
@@ -26,14 +30,15 @@ export class MetadataCache<T> {
 				return null;
 			}
 			const cached = this.entries.get(head.key, head.etag);
-			if (cached !== undefined) return cached;
+			if (cached !== undefined) return structuredClone(cached);
 		}
 		const object = await firstExisting(keys, (key) => this.bucket.get(key));
 		if (!object) return null;
 		const value = await parse(object);
 		// A write can occur between HEAD and GET, so use the fetched ETag.
-		if (consistency === 'validated') this.entries.set(object.key, object.etag, value);
-		return value;
+		if (consistency !== 'validated') return value;
+		this.entries.set(object.key, object.etag, value);
+		return structuredClone(value);
 	}
 }
 

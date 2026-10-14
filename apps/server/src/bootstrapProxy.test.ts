@@ -70,6 +70,16 @@ describe('Node proxy compression', () => {
 				response.end('ok');
 				return;
 			}
+			if (request.url?.endsWith('/not-modified')) {
+				response.writeHead(304, { 'content-type': 'text/javascript', etag: '"asset"' });
+				response.end();
+				return;
+			}
+			if (request.url?.endsWith('/truncated')) {
+				response.writeHead(200, { 'content-type': 'text/javascript' });
+				response.write(JAVASCRIPT, () => setTimeout(() => request.socket.destroy(), 20));
+				return;
+			}
 			if (request.url?.endsWith('/empty')) {
 				response.writeHead(204, { 'content-type': 'text/javascript' });
 				response.end();
@@ -275,6 +285,30 @@ describe('Node proxy compression', () => {
 		expect(response.status).toBe(204);
 		expect(response.headers['content-encoding']).toBeUndefined();
 		expect(response.body.length).toBe(0);
+	});
+
+	it('preserves a 304 without a body or content encoding', async () => {
+		const response = await rawRequest(proxyUrl('/not-modified'), 'gzip');
+		expect(response.status).toBe(304);
+		expect(response.headers['content-encoding']).toBeUndefined();
+		expect(response.headers.etag).toBe('"asset"');
+		expect(response.body.length).toBe(0);
+	});
+
+	it('closes the client response when the upstream fails mid-body while gzipping', async () => {
+		const outcome = await new Promise<{ status: number; completed: boolean }>((resolve, reject) => {
+			get(proxyUrl('/truncated'), { headers: { 'accept-encoding': 'gzip' } }, (response) => {
+				let completed = false;
+				response.resume();
+				response.on('end', () => (completed = true));
+				response.on('error', () => {});
+				response.on('close', () => resolve({ status: response.statusCode!, completed }));
+			}).on('error', reject);
+		});
+		expect(outcome).toEqual({ status: 200, completed: false });
+		expect(handle.server.listening).toBe(true);
+		const next = await rawRequest(proxyUrl('/assets/index.js'), 'gzip');
+		expect(gunzipSync(next.body).toString()).toBe(JAVASCRIPT);
 	});
 
 	it('preserves upstream error status and body through compression without retrying', async () => {

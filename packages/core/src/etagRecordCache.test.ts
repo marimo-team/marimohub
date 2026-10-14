@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { EtagRecordCache } from '@marimo-hub/core/etag-record-cache';
-import { EtagRecordCache as PublicEtagRecordCache } from '@marimo-hub/core';
+import { EtagRecordCache } from './etagRecordCache';
 
 describe('EtagRecordCache', () => {
-	it('exposes the same cache through the root and focused package exports', () => {
-		expect(PublicEtagRecordCache).toBe(EtagRecordCache);
-	});
-
 	it('misses unknown keys and mismatched ETags', () => {
 		const cache = new EtagRecordCache<number>();
 		expect(cache.get('a', 'v1')).toBeUndefined();
@@ -62,6 +57,22 @@ describe('EtagRecordCache', () => {
 		cache.set('a', 'v1', 1);
 		cache.delete('a');
 		cache.delete('missing');
+		expect(cache.get('a', 'v1')).toBeUndefined();
+		expect(cache.size).toBe(0);
+	});
+
+	it('never matches an empty ETag', () => {
+		const cache = new EtagRecordCache<number>();
+		cache.set('a', '', 1);
+		expect(cache.has('a')).toBe(false);
+		expect(cache.get('a', '')).toBeUndefined();
+	});
+
+	it('drops an existing entry when overwritten with an empty ETag', () => {
+		const cache = new EtagRecordCache<number>();
+		cache.set('a', 'v1', 1);
+		cache.set('a', '', 2);
+		expect(cache.has('a')).toBe(false);
 		expect(cache.get('a', 'v1')).toBeUndefined();
 		expect(cache.size).toBe(0);
 	});

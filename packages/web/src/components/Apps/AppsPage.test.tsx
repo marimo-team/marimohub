@@ -3,14 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
-import { QueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import { Route, Routes } from 'react-router-dom';
 import type { Theme } from '@/context/ThemeContext';
 import { ThemeProvider } from '@/context/ThemeContext';
-import { projectKeys } from '@/api/queryKeys';
+import { projectKeys, userKeys } from '@/api/queryKeys';
 import { projectQueryOptions } from '@/api/hooks';
-import { renderWithClient } from '@/test/render';
-import { createQueryClient } from '@/api/queryClient';
+import { deferred } from '@/test/deferred';
+import { createTestQueryClient, renderWithClient } from '@/test/render';
 import { AppsPage, ProjectEntryPage } from './AppsPage';
 import { AppEntryPage } from './AppEntryPage';
 import {
@@ -31,14 +31,6 @@ const app = {
 	can: { run: true },
 };
 
-function deferredRequest() {
-	let finish!: () => void;
-	const ready = new Promise<void>((resolve) => {
-		finish = resolve;
-	});
-	return { ready, finish };
-}
-
 function setup(
 	entry = '/apps',
 	items = [app],
@@ -50,6 +42,9 @@ function setup(
 		projectStatus?: number;
 		projectReady?: Promise<void>;
 		projectReload?: Promise<void>;
+		projectReloadStatus?: number;
+		projectReloadRole?: string;
+		userReloadStatus?: number;
 		appsResponse?: (url: URL) => Response;
 	} = {},
 ) {
@@ -59,18 +54,28 @@ function setup(
 		...options,
 	});
 	let projectReads = 0;
+	let userReads = 0;
 	const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = new URL(input instanceof Request ? input.url : String(input), 'http://localhost');
+		if (url.pathname === '/api/v1/me' && ++userReads > 1 && options.userReloadStatus)
+			return Response.json(
+				{ success: false, error: { code: 'UNAVAILABLE', message: 'Unavailable' } },
+				{ status: options.userReloadStatus },
+			);
 		if (url.pathname.endsWith(`/notebooks/${NID}/app`)) await options.appReady;
-		if (url.pathname === `/api/v1/projects/${PID}`) {
+		const isProject = url.pathname === `/api/v1/projects/${PID}`;
+		const isReload = isProject && ++projectReads > 1;
+		if (isProject) {
 			await options.projectReady;
-			if (++projectReads > 1) await options.projectReload;
+			if (isReload) await options.projectReload;
 		}
 		const status = url.pathname.endsWith(`/notebooks/${NID}/app`)
 			? options.appStatus
-			: url.pathname === `/api/v1/projects/${PID}`
-				? options.projectStatus
-				: undefined;
+			: isReload && options.projectReloadStatus
+				? options.projectReloadStatus
+				: isProject
+					? options.projectStatus
+					: undefined;
 		if (status)
 			return new Response(
 				JSON.stringify({ success: false, error: { code: 'NOT_FOUND', message: 'Unavailable' } }),
@@ -93,14 +98,19 @@ function setup(
 				{ headers: { 'content-type': 'application/json' } },
 			);
 		}
+		if (isReload && options.projectReloadRole) {
+			const body = (await (await existing(input, init)).json()) as {
+				data: Record<string, unknown>;
+			};
+			return Response.json({
+				success: true,
+				data: { ...body.data, your_role: options.projectReloadRole },
+			});
+		}
 		return existing(input, init);
 	});
 	vi.stubGlobal('fetch', fetch);
-	const client =
-		options.client ??
-		new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
+	const client = options.client ?? createTestQueryClient();
 	const result = renderWithClient(
 		<ThemeProvider>
 			<Suspense fallback={<p>Loading…</p>}>
@@ -291,10 +301,10 @@ describe('stakeholder apps', () => {
 	);
 
 	it('prefetches project and capabilities while app details are still pending', async () => {
-		const { ready, finish } = deferredRequest();
+		const appGate = deferred();
 		const { fetch, existing, container } = setup(app.url, [app], {
 			role: 'editor',
-			appReady: ready,
+			appReady: appGate.promise,
 		});
 		try {
 			await waitFor(() =>
@@ -305,7 +315,7 @@ describe('stakeholder apps', () => {
 			expect(screen.getByText('Opening app…')).toBeVisible();
 			expect(sessionPosts(existing)).toHaveLength(0);
 		} finally {
-			await act(async () => finish());
+			await act(async () => appGate.resolve());
 		}
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 		expect(sessionPosts(existing)).toHaveLength(1);
@@ -313,13 +323,11 @@ describe('stakeholder apps', () => {
 
 	it('opens an authorized app when project prefetch is forbidden without an error toast', async () => {
 		const errorToast = vi.spyOn(toast, 'error');
-		const client = createQueryClient();
-		const { ready, finish } = deferredRequest();
-		const { container, existing } = setup(app.url, [app], {
+		const appGate = deferred();
+		const { client, container, existing } = setup(app.url, [app], {
 			appOnly: false,
 			projectStatus: 403,
-			appReady: ready,
-			client,
+			appReady: appGate.promise,
 		});
 		try {
 			await waitFor(() =>
@@ -328,7 +336,7 @@ describe('stakeholder apps', () => {
 			expect(screen.getByText('Opening app…')).toBeVisible();
 			expect(errorToast).not.toHaveBeenCalled();
 		} finally {
-			await act(async () => finish());
+			await act(async () => appGate.resolve());
 		}
 		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 		expect(sessionPosts(existing)).toHaveLength(1);
@@ -345,27 +353,25 @@ describe('stakeholder apps', () => {
 	] as const)(
 		'waits for cached project access to refresh: $role, $projectStatus',
 		async ({ role, projectStatus }) => {
-			const client = new QueryClient({
-				defaultOptions: { queries: { staleTime: 60_000, retry: false } },
-			});
+			const client = createTestQueryClient();
 			makeFetch({ role: 'editor' });
 			await client.fetchQuery(projectQueryOptions(PID));
 			await client.invalidateQueries({ queryKey: projectKeys.detail(PID) });
-			const { ready: projectReady, finish } = deferredRequest();
+			const projectGate = deferred();
 			const { container, existing } = setup(app.url, [app], {
 				client,
 				role,
 				appOnly: false,
 				appStatus: 503,
 				projectStatus,
-				projectReady,
+				projectReady: projectGate.promise,
 			});
 			try {
 				expect(await screen.findByText('Opening notebook…')).toBeVisible();
 				expect(container.querySelector('iframe')).toBeNull();
 				expect(sessionPosts(existing)).toHaveLength(0);
 			} finally {
-				await act(async () => finish());
+				await act(async () => projectGate.resolve());
 			}
 			if (role === 'editor' && !projectStatus) {
 				await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
@@ -378,13 +384,15 @@ describe('stakeholder apps', () => {
 		},
 	);
 
-	it('keeps the authoring fallback mounted during a background project refresh', async () => {
-		const { ready: projectReload, finish } = deferredRequest();
-		const { container, fetch, client } = setup(app.url, [app], {
+	async function refreshOpenFallback(options: Parameters<typeof setup>[2] = {}) {
+		const reload = deferred();
+		const result = setup(app.url, [app], {
 			role: 'editor',
 			appStatus: 503,
-			projectReload,
+			projectReload: reload.promise,
+			...options,
 		});
+		const { container, fetch, client } = result;
 		try {
 			await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 			act(() => {
@@ -398,10 +406,61 @@ describe('stakeholder apps', () => {
 			await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 			expect(screen.queryByText('Opening notebook…')).toBeNull();
 		} finally {
-			await act(async () => {
-				finish();
-			});
+			await act(async () => reload.resolve());
 		}
+		await waitFor(() =>
+			expect(client.getQueryState(projectKeys.detail(PID))?.fetchStatus).toBe('idle'),
+		);
+		return result;
+	}
+
+	it('keeps the authoring fallback mounted during a background project refresh', async () => {
+		const { container } = await refreshOpenFallback();
+		expect(container.querySelector('iframe')).not.toBeNull();
+		expect(screen.queryByRole('alert')).toBeNull();
+	});
+
+	it('keeps the authoring fallback open when a background project refresh fails', async () => {
+		const { container, client } = await refreshOpenFallback({ projectReloadStatus: 503 });
+		expect(client.getQueryState(projectKeys.detail(PID))?.status).toBe('error');
+		expect(container.querySelector('iframe')).not.toBeNull();
+		expect(screen.queryByText('Unavailable')).toBeNull();
+	});
+
+	it.each([
+		{ projectReloadStatus: 403 },
+		{ projectReloadStatus: 404 },
+		{ projectReloadRole: 'app-user' },
+	])(
+		'closes the authoring fallback when a background refresh revokes access: %o',
+		async (reload) => {
+			const { container } = await refreshOpenFallback(reload);
+			expect(await screen.findByRole('alert')).toHaveTextContent('Unavailable');
+			expect(container.querySelector('iframe')).toBeNull();
+		},
+	);
+
+	async function refreshUserOnOpenFallback(userReloadStatus: number) {
+		const result = setup(app.url, [app], { role: 'editor', appStatus: 503, userReloadStatus });
+		const { container, client } = result;
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		act(() => {
+			void client.invalidateQueries({ queryKey: userKeys.me() });
+		});
+		await waitFor(() => expect(client.getQueryState(userKeys.me())?.status).toBe('error'));
+		return result;
+	}
+
+	it('keeps the authoring fallback open when a background user refresh fails', async () => {
+		const { container } = await refreshUserOnOpenFallback(503);
+		expect(container.querySelector('iframe')).not.toBeNull();
+		expect(screen.queryByText('Unavailable')).toBeNull();
+	});
+
+	it('closes the authoring fallback when a background user refresh is forbidden', async () => {
+		const { container } = await refreshUserOnOpenFallback(403);
+		expect(await screen.findByRole('alert')).toHaveTextContent('Unavailable');
+		expect(container.querySelector('iframe')).toBeNull();
 	});
 
 	it('shows app capacity rejection with an explicit retry', async () => {

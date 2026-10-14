@@ -953,7 +953,11 @@ export class SandboxProvisioner {
 		if (!overlay || overlay.length === 0) return;
 		const bucket = options.bucketHandle;
 		if (!bucket) throw new UnavailableError('Bucket access is required for workspace overlay');
-		await sandbox.writeFiles(await loadWorkspaceOverlay(bucket, mountPath, overlay));
+		try {
+			await sandbox.writeFiles(await loadWorkspaceOverlay(bucket, mountPath, overlay));
+		} catch (err) {
+			throw provisionFailure('restoring the notebook workspace into the sandbox', err);
+		}
 	}
 
 	private async ensureReachable(sandbox: SandboxInstance, sw: Stopwatch): Promise<void> {
