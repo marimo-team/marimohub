@@ -333,7 +333,7 @@ describe('app pool HTTP integration', () => {
 			});
 			const failure = vi
 				.spyOn(client.deps.services.notebooks, 'getFsSnapshot')
-				.mockRejectedValueOnce(new Error('snapshot storage unavailable'));
+				.mockRejectedValue(new Error('snapshot storage unavailable'));
 			try {
 				expect((await client.request('POST', path(), body)).status).toBe(500);
 			} finally {

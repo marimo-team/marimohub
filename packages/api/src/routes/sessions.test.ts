@@ -484,7 +484,11 @@ describe('Session routes', () => {
 			expect(calls.destroy).toBe(0);
 		} else {
 			const claimLost = failure === 'claim';
-			const error = await expectError(response, claimLost ? 409 : 404, claimLost ? 'CONFLICT' : 'NOT_FOUND');
+			const error = await expectError(
+				response,
+				claimLost ? 409 : 404,
+				claimLost ? 'CONFLICT' : 'NOT_FOUND',
+			);
 			expect(error.message).toBe(
 				claimLost
 					? 'The editor session changed. Retry shortly.'
@@ -531,10 +535,12 @@ describe('Session routes', () => {
 		});
 		const startedOn = new Date().toISOString().slice(0, 10);
 		let responded = false;
-		const pending = api.request('POST', sessionsPath(), { mode: 'app' }).then((response) => {
-			responded = true;
-			return response;
-		});
+		const pending = Promise.resolve(api.request('POST', sessionsPath(), { mode: 'app' })).then(
+			(response) => {
+				responded = true;
+				return response;
+			},
+		);
 		await auditStarted.promise;
 		try {
 			if (deferred) await vi.waitFor(() => expect(responded).toBe(true));
@@ -670,7 +676,11 @@ describe('Session routes', () => {
 				vi.spyOn(notebooks, 'getFsSnapshot').mockRejectedValueOnce(error);
 			}
 
-			const response = await expectError(await api.request('POST', sessionsPath()), 409, 'CONFLICT');
+			const response = await expectError(
+				await api.request('POST', sessionsPath()),
+				409,
+				'CONFLICT',
+			);
 
 			expect(response.message).toBe(error.message);
 			expect(create).not.toHaveBeenCalled();
@@ -2040,6 +2050,42 @@ describe('Session routes', () => {
 		expect(data.compute_profile).toBe('large');
 		expect(compute.lastCreateOptions?.resources).toEqual({ cpu: 8 });
 	});
+
+	it.each([false, true])(
+		'restores the snapshot captured while retiring a dead editor (previous snapshot: %s)',
+		async (previousSnapshot) => {
+			const services = createServices(bucket);
+			if (previousSnapshot) {
+				await services.notebooks.setFsSnapshot(pid, nid, {
+					snapshot_id: 'snap-old',
+					captured_at: new Date().toISOString(),
+				});
+			}
+			const { instance } = makeFakeSandbox();
+			const restore = vi.fn(() => instance);
+			const compute = {
+				...fakeComputeFrom(instance),
+				filesystemSnapshotsEnabled: true,
+				createFromSnapshot: restore,
+				captureSnapshot: async () => ({ snapshotId: 'snap-retired' }),
+				deleteSnapshot: async () => {},
+			};
+			const api = createTestApi({
+				bucket,
+				compute,
+				deps: { kernelProbe: async () => 'dead' },
+			});
+			const first = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			restore.mockClear();
+
+			const replacement = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			const stored = await services.sessions.getSession(pid, replacement.session_id);
+
+			expect(replacement.session_id).not.toBe(first.session_id);
+			expect(replacement.compute_from_snapshot).toBe(true);
+			expect(restore).toHaveBeenCalledWith(stored.sandbox_id, 'snap-retired', expect.anything());
+		},
+	);
 
 	it('reports the compute provenance restored from a filesystem snapshot', async () => {
 		const services = createServices(bucket);

@@ -1380,13 +1380,14 @@ export async function startNotebookSession(input: {
 					claim: existingEditorClaim,
 				})
 			: Promise.resolve(undefined);
-	const restoreSnapshotRead =
+	const readRestoreSnapshot = () =>
 		!ephemeral && workspacePolicy.restoreFilesystemSnapshot
 			? resolveRestoreSnapshot(compute, notebooks, pid, nid, {
 					sharing: mode === 'edit' ? sharing : 'shared',
 					userId: user.id,
 				})
 			: Promise.resolve(undefined);
+	const restoreSnapshotRead = readRestoreSnapshot();
 	for (const read of [surfaceGrantRead, editorReuseRead, restoreSnapshotRead]) read.catch(() => {});
 	const surfaceGrant = (await surfaceGrantRead).surface;
 	const requestedSurfaces = body?.surfaces ?? [];
@@ -1718,7 +1719,10 @@ export async function startNotebookSession(input: {
 			if (!retired.sandbox_reclaimed_at)
 				throw new ConflictError('The selected app is still stopping. Retry shortly.');
 		}
-		const restoreFilesystemSnapshot = await restoreSnapshotRead;
+		// Retirement can publish a newer snapshot than the speculative read.
+		const restoreFilesystemSnapshot = await (reusableCandidate || replacementTarget
+			? readRestoreSnapshot()
+			: restoreSnapshotRead);
 		const appliedComputeProfile = restoreFilesystemSnapshot
 			? {
 					name: restoreFilesystemSnapshot.compute_profile,
