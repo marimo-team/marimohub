@@ -5,7 +5,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import { Hono } from 'hono';
 import { compress, COMPRESSIBLE_CONTENT_TYPE_REGEX } from 'hono/compress';
 import type { ApiDeps } from '@marimo-hub/api';
-import { createApi } from '@marimo-hub/api';
+import { createApi, SANDBOX_PROXY_PREFIXES } from '@marimo-hub/api';
 import { createFromEnvAsync, isConfigError } from '@marimo-hub/config';
 import { disposeNotifier, InFlightWork } from '@marimo-hub/core';
 import {
@@ -201,7 +201,8 @@ export async function bootstrap(
 				!/^\s*text\/event-stream(?:[;\s]|$)/i.test(type) &&
 				COMPRESSIBLE_CONTENT_TYPE_REGEX.test(type),
 		});
-		for (const path of ['/proxy/*', '/surface-proxy/*']) {
+		for (const prefix of Object.values(SANDBOX_PROXY_PREFIXES)) {
+			const path = `${prefix}/*`;
 			proxyApp.use(path, compressProxy);
 			proxyApp.all(path, (c) => {
 				// Node fetch adds accept-encoding when absent. Request identity upstream

@@ -16,6 +16,7 @@ import {
 import type { AuthenticatedPrincipal, ProjectId, SessionId } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
+import { SANDBOX_PROXY_PREFIXES } from './proxyRoutes';
 import { assertSessionPreviewActive, authorizationService, fail } from './shared';
 
 /** Outcome of routing a `/proxy/<token>/…` request. */
@@ -96,8 +97,8 @@ function rejectProxy(
 	return { kind: 'reject', status, code, message };
 }
 
-const PROXY_PREFIX = /^\/proxy\/([^/]+)/;
-const SURFACE_PROXY_PREFIX = /^\/surface-proxy\/([^/]+)\/([^/]+)/;
+const PROXY_PREFIX = new RegExp(`^${SANDBOX_PROXY_PREFIXES.kernel}/([^/]+)`);
+const SURFACE_PROXY_PREFIX = new RegExp(`^${SANDBOX_PROXY_PREFIXES.surface}/([^/]+)/([^/]+)`);
 
 /** Strip a trailing slash so we can concatenate an origin with a path cleanly. */
 function trimTrailingSlash(s: string): string {
