@@ -59,7 +59,7 @@ describe('EtagRecordCache', () => {
 		expect(cache.size).toBe(0);
 	});
 
-	it.each([0, -1, 1.5, Infinity, NaN])('rejects invalid capacity %s', (maxSize) => {
+	it.each([0, -1, 1.5, Infinity, Number.NaN])('rejects invalid capacity %s', (maxSize) => {
 		expect(() => new EtagRecordCache(maxSize)).toThrow(RangeError);
 	});
 });

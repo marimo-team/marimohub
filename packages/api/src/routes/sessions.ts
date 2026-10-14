@@ -719,9 +719,7 @@ async function enforceSessionCap(
 	);
 	const queues = await Promise.all(caps.map((cap) => cap.queue()));
 	caps.forEach((cap, index) => {
-		const queued = queues[index].filter(
-			(session) => session.session_id !== excludedSessionId,
-		);
+		const queued = queues[index].filter((session) => session.session_id !== excludedSessionId);
 		if (queued.length >= cap.max!) {
 			throw new ResourceExhaustedError(cap.message(cap.max!));
 		}

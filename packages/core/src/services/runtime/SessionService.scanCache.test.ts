@@ -62,7 +62,9 @@ describe('SessionService scan cache', () => {
 		const gets = bucket.calls.get.length;
 		const result = await sessions.listActiveForUser(ACTOR);
 		expect(sessionGetsSince(gets)).toEqual([paths.session(changed.project_id, changed.session_id)]);
-		expect(result.find((session) => session.session_id === changed.session_id)?.status).toBe('running');
+		expect(result.find((session) => session.session_id === changed.session_id)?.status).toBe(
+			'running',
+		);
 	});
 
 	it('omits deleted records without retrying their GET', async () => {
@@ -84,7 +86,9 @@ describe('SessionService scan cache', () => {
 		const gets = bucket.calls.get.length;
 		expect(await sessions.expireStale()).toBe(1);
 		expect(sessionGetsSince(gets)).toEqual([]);
-		expect((await sessions.getSession(session.project_id, session.session_id)).status).toBe('expired');
+		expect((await sessions.getSession(session.project_id, session.session_id)).status).toBe(
+			'expired',
+		);
 	});
 
 	it('caches the fetched ETag when a record changes after listing', async () => {
