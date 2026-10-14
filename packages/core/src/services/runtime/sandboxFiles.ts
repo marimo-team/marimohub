@@ -1,5 +1,6 @@
 import type { ByteBudget } from './byteBudget';
 import type { Bucket } from '../../ports/bucket';
+import { NotFoundError } from '../../errors';
 import { mapWithConcurrency } from '../../concurrency';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
@@ -197,6 +198,7 @@ export interface WorkspaceRestoreStats {
 }
 
 export interface WorkspaceRestoreOptions {
+	overlay?: readonly { path: string; key: string }[];
 	requireComplete?: boolean;
 	/** Storage reads may precede readiness; sandbox mutations must wait. */
 	waitUntilReady?: () => Promise<void>;
@@ -228,7 +230,7 @@ export async function restoreWorkspace(
 	// before `bucket.get()` buffers its body — the size check must never use the
 	// fetched object.
 	const objects = await listAllObjects(bucket, sourcePrefix);
-	const wanted: { key: string; dest: string; size: number }[] = [];
+	let wanted: { key: string; dest: string; size: number }[] = [];
 	const directories: string[] = [];
 	for (const obj of objects) {
 		const rel = obj.key.slice(sourcePrefix.length);
@@ -283,10 +285,20 @@ export async function restoreWorkspace(
 		wanted.push({ key: obj.key, dest: `${workingDir}/${rel}`, size: obj.size });
 	}
 
+	const overlayDestinations = new Set(options.overlay?.map(({ path }) => `${workingDir}/${path}`));
+	wanted = wanted.filter(({ dest }) => !overlayDestinations.has(dest));
+	const overlayFiles = await Promise.all(
+		(options.overlay ?? []).map(async ({ path, key }) => {
+			const object = await bucket.get(key);
+			if (!object) throw new NotFoundError(`Workspace source ${key} not found`);
+			return { path: `${workingDir}/${path}`, content: await object.bytes() };
+		}),
+	);
+
 	// `writeFiles` creates parent directories (port contract), so the only case
 	// still needing an explicit mkdir is an empty workspace — nothing gets written,
 	// yet marimo still needs the cwd it runs in to exist.
-	if (wanted.length === 0) {
+	if (wanted.length === 0 && overlayFiles.length === 0) {
 		await options.waitUntilReady?.();
 		await createSandboxDirectories(sandbox, directories.length > 0 ? directories : [workingDir]);
 		return { objectCount: 0, bytes: 0 };
@@ -298,7 +310,8 @@ export async function restoreWorkspace(
 	let objectCount = 0;
 	let bytes = 0;
 	let ready = !options.waitUntilReady;
-	for (const batch of batchByBytes(wanted, RESTORE_BATCH_BYTES)) {
+	const batches = wanted.length > 0 ? batchByBytes(wanted, RESTORE_BATCH_BYTES) : [[]];
+	for (const batch of batches) {
 		using prefetched =
 			ready || !options.prefetchBudget
 				? undefined
@@ -317,14 +330,13 @@ export async function restoreWorkspace(
 			}
 			return { path: f.dest, content: await body.bytes() };
 		});
-		const files = fetched.filter((f) => f !== undefined);
+		const files = [...overlayFiles.splice(0), ...fetched.filter((f) => f !== undefined)];
 		await options.waitUntilReady?.();
 		ready = true;
-		if (directories.length > 0) {
-			await createSandboxDirectories(sandbox, directories);
-			directories.length = 0;
-		}
-		if (files.length > 0) await withRetry(() => sandbox.writeFiles(files));
+		await Promise.all([
+			directories.length > 0 ? createSandboxDirectories(sandbox, directories.splice(0)) : undefined,
+			files.length > 0 ? withRetry(() => sandbox.writeFiles(files)) : undefined,
+		]);
 		objectCount += files.length;
 		for (const f of files) bytes += f.content.byteLength;
 	}

@@ -281,6 +281,10 @@ class ModalSandboxInstance implements SandboxInstance {
 		return this.sandboxPromise;
 	}
 
+	async ready(): Promise<void> {
+		await this.getSandbox();
+	}
+
 	private async spawn(
 		command: string[],
 		options?: {

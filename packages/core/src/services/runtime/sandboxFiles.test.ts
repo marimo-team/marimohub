@@ -59,6 +59,87 @@ class VanishingObjectBucket extends MemoryBucket {
 }
 
 describe('restoreWorkspace', () => {
+	it('writes files while directory marker creation is still pending', async () => {
+		const { nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile('nb.py'), 'source');
+		await bucket.put(nb.workspaceFile(workspaceDirectoryMarkerPath('empty')), '');
+		const { instance, calls } = makeFakeSandbox();
+		const written = Promise.withResolvers<void>();
+		const exec = instance.exec.bind(instance);
+		const writeFiles = instance.writeFiles.bind(instance);
+		instance.exec = async (...args) => {
+			const result = await exec(...args);
+			await written.promise;
+			return result;
+		};
+		instance.writeFiles = async (files) => {
+			await writeFiles(files);
+			written.resolve();
+		};
+
+		await expect(restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT)).resolves.toEqual({
+			objectCount: 1,
+			bytes: 6,
+		});
+		expect(calls.exec).toEqual(["mkdir -p '/workspace/empty'"]);
+		expect(calls.writeFiles).toHaveLength(1);
+	});
+
+	it.each([false, true])(
+		'restores overlays in the first batch (other files: %s)',
+		async (otherFiles) => {
+			const { nb } = nbCtx();
+			const bucket = new RecordingBucket();
+			const overlay = [
+				{ path: 'nb.py', key: 'version/code.py' },
+				{ path: 'pyproject.toml', key: 'version/deps.toml' },
+			];
+			for (const { path, key } of overlay) {
+				await bucket.put(nb.workspaceFile(path), 'draft');
+				await bucket.put(key, `committed ${path}`);
+			}
+			if (otherFiles) {
+				await bucket.put(nb.workspaceFile('a.bin'), bytesOfSize(5 * 1024 * 1024));
+				await bucket.put(nb.workspaceFile('b.bin'), bytesOfSize(5 * 1024 * 1024));
+			}
+			const { instance, calls } = makeFakeSandbox();
+
+			const stats = await restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
+				overlay,
+			});
+
+			expect(calls.writeFiles).toHaveLength(otherFiles ? 2 : 1);
+			for (const { path, key } of overlay) {
+				expect(bucket.calls.get.filter((fetched) => fetched === key)).toHaveLength(1);
+				expect(bucket.calls.get).not.toContain(nb.workspaceFile(path));
+				expect(calls.writeFiles[0]).toContainEqual({
+					path: `${MOUNT}/${path}`,
+					content: new TextEncoder().encode(`committed ${path}`),
+				});
+				expect(
+					calls.writeFiles.flat().filter((file) => file.path === `${MOUNT}/${path}`),
+				).toHaveLength(1);
+			}
+			expect(stats).toEqual({
+				objectCount: otherFiles ? 4 : 2,
+				bytes:
+					overlay.reduce((sum, { path }) => sum + `committed ${path}`.length, 0) +
+					(otherFiles ? 10 * 1024 * 1024 : 0),
+			});
+		},
+	);
+
+	it('fails when an overlay object is missing', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		await expect(
+			restoreWorkspace(instance, new MemoryBucket(), 'workspace/', MOUNT, {
+				overlay: [{ path: 'nb.py', key: 'missing.py' }],
+			}),
+		).rejects.toThrow('Workspace source missing.py not found');
+		expect(calls.writeFiles).toEqual([]);
+	});
+
 	it('prefetches only one byte-bounded batch and gates directories and writes on readiness', async () => {
 		const { nb } = nbCtx();
 		const bucket = new MemoryBucket();

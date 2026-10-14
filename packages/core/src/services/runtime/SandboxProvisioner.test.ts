@@ -686,6 +686,38 @@ describe('SandboxProvisioner', () => {
 	});
 
 	describe('provision', () => {
+		it('writes the committed notebook once in the copy-only workspace batch', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const nb = paths.project(projectId).notebook(notebookId);
+			const version = nb.version(createVersionId());
+			await bucketHandle.put(nb.workspaceFile('nb.py'), 'draft');
+			await bucketHandle.put(nb.workspaceFile('data.csv'), 'data');
+			await bucketHandle.put(version.code, 'committed');
+
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				workspaceLoadMode: 'copy-only',
+				workspaceOverlay: [{ path: 'nb.py', key: version.code }],
+			});
+
+			const notebookWrites = calls.writeFiles.filter((files) =>
+				files.some(({ path }) => path === `${MOUNT_PATH}/nb.py`),
+			);
+			expect(notebookWrites).toEqual([
+				[
+					{ path: `${MOUNT_PATH}/nb.py`, content: new TextEncoder().encode('committed') },
+					{ path: `${MOUNT_PATH}/data.csv`, content: new TextEncoder().encode('data') },
+				],
+			]);
+			expect(calls.mountBucket).toEqual([]);
+		});
+
 		it('happy path with mount: usedFallback false, returns exposed url, starts marimo on port 2718', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
@@ -2074,13 +2106,11 @@ describe('SandboxProvisioner', () => {
 			expect(restored).toContain(`${MOUNT_PATH}/python/apps/app.py`);
 			expect(restored).toContain(`${MOUNT_PATH}/.git/HEAD`);
 			expect(result.counters).toMatchObject({ files_objects: 2 });
-			expect(calls.exec).toContainEqual(
-				expect.stringContaining("git config --global --add safe.directory '/workspace'"),
-			);
-			expect(calls.exec).toContainEqual(
-				expect.stringContaining(
-					"cd '/workspace' && git -c 'safe.directory=/workspace' sparse-checkout set --cone -- 'python/apps'",
-				),
+			const gitCommands = calls.exec.filter((command) => command.includes('safe.directory'));
+			expect(gitCommands).toHaveLength(1);
+			expect(gitCommands[0]).toContain("git config --global --add safe.directory '/workspace'\n");
+			expect(gitCommands[0]).toContain(
+				"cd '/workspace' && git -c 'safe.directory=/workspace' sparse-checkout set --cone -- 'python/apps'",
 			);
 			const sparseCheckout = calls.exec.findIndex((command) => command.includes('sparse-checkout'));
 			expect(calls.execOptions[sparseCheckout]?.timeout).toBe(60_000);

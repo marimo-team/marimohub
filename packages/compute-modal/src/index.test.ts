@@ -341,6 +341,26 @@ describe('ModalCompute', () => {
 		expect(world.created[0].sandbox.execCalls[0].command).toEqual(['sh', '-lc', 'true']);
 	});
 
+	it('resolves readiness once without executing a command', async () => {
+		const world = makeWorld();
+		const sandbox = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+
+		await sandbox.ready!();
+		await sandbox.ready!();
+
+		expect(world.client.sandboxes.create).toHaveBeenCalledTimes(1);
+		expect(world.created[0].sandbox.execCalls).toEqual([]);
+	});
+
+	it('propagates lazy creation errors from readiness', async () => {
+		const world = makeWorld();
+		const error = new InvalidError('Sandbox creation failed');
+		vi.mocked(world.client.sandboxes.create).mockRejectedValue(error);
+		const sandbox = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+
+		await expect(sandbox.ready!()).rejects.toBe(error);
+	});
+
 	it.each([
 		{ name: 'marimo-sandbox:v1', reuse: false },
 		{ name: 'marimo-sandbox:v1', reuse: true },

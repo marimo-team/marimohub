@@ -490,6 +490,7 @@ async function withSandboxSpan<T>(
 }
 
 export interface WorkspaceLoadContext {
+	overlay?: readonly { path: string; key: string }[];
 	sandbox: SandboxInstance;
 	projectId: ProjectId;
 	notebookId: NotebookId;
@@ -533,6 +534,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		excludeRelativeRoots,
 		waitUntilReady,
 		prefetchBudget,
+		overlay,
 	}: WorkspaceLoadContext): Promise<WorkspaceLoadResult> {
 		if (!bucketHandle) {
 			throw provisionFailure(
@@ -542,6 +544,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		}
 		try {
 			const stats = await restoreWorkspace(sandbox, bucketHandle, workspacePrefix, mountPath, {
+				overlay,
 				excludeRelativeRoots,
 				waitUntilReady,
 				prefetchBudget,
@@ -795,7 +798,9 @@ export class SandboxProvisioner {
 						options.workspacePrefix ?? nb.workspacePrefix,
 						waitUntilReady,
 					);
-					await this.applyWorkspaceOverlay(sandbox, options, mountPath);
+					if (options.workspaceLoadMode !== 'copy-only' || loaded.archiveStatus === 'used') {
+						await this.applyWorkspaceOverlay(sandbox, options, mountPath);
+					}
 					return loaded;
 				});
 				span.setAttributes({
@@ -978,8 +983,7 @@ export class SandboxProvisioner {
 		);
 		await waitUntilReady();
 		if (options.gitPrefix) {
-			await this.markGitWorkdirTrusted(sandbox, layout.gitRoot);
-			if (layout.rootPath) await this.configureSparseCheckout(sandbox, options, layout);
+			await this.configureGitWorkdir(sandbox, options, layout);
 		}
 		return loaded;
 	}
@@ -1042,29 +1046,26 @@ export class SandboxProvisioner {
 		return this.loadWorkspaceObjects(sandbox, options, layout, workspacePrefix, waitUntilReady);
 	}
 
-	private async markGitWorkdirTrusted(sandbox: SandboxInstance, workdir: string): Promise<void> {
-		// Restored `.git` is often a different uid than the kernel user (Modal).
-		await sandbox.exec(
-			`if command -v git >/dev/null 2>&1; then git config --global --add safe.directory ${shellQuote(workdir)}; fi`,
-		);
-	}
-
-	/**
-	 * Narrow the checkout to the mirrored subtree so `git status` in the session
-	 * is clean instead of reporting the rest of the repository as deleted.
-	 * Best-effort: proposal capture scopes its own diff to the subtree, so a
-	 * missing or old `git` only costs the cosmetic cleanliness.
-	 */
-	private async configureSparseCheckout(
+	private async configureGitWorkdir(
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
 		layout: SandboxWorkspaceLayout,
 	): Promise<void> {
-		const result = await sandbox.exec(
-			`if command -v git >/dev/null 2>&1; then cd ${shellQuote(layout.gitRoot)} && git -c ${shellQuote(`safe.directory=${layout.gitRoot}`)} sparse-checkout set --cone -- ${shellQuote(layout.rootPath)}; fi`,
-			{ timeout: GIT_SPARSE_CHECKOUT_TIMEOUT_MS },
-		);
-		if (result.success) return;
+		// Restored `.git` may have a different owner; sparse checkout keeps subtree status clean.
+		const commands = [
+			'if command -v git >/dev/null 2>&1; then',
+			`git config --global --add safe.directory ${shellQuote(layout.gitRoot)}`,
+		];
+		if (layout.rootPath) {
+			commands.push(
+				`cd ${shellQuote(layout.gitRoot)} && git -c ${shellQuote(`safe.directory=${layout.gitRoot}`)} sparse-checkout set --cone -- ${shellQuote(layout.rootPath)}`,
+			);
+		}
+		commands.push('fi');
+		const result = await sandbox.exec(commands.join('\n'), {
+			timeout: GIT_SPARSE_CHECKOUT_TIMEOUT_MS,
+		});
+		if (result.success || !layout.rootPath) return;
 		logOperationalError(
 			'git_sparse_checkout_failed',
 			{
@@ -1092,6 +1093,7 @@ export class SandboxProvisioner {
 				: this.workspaceLoadStrategies.mountOrCopy;
 		if (!strategy.supportsPrefetch) await waitUntilReady();
 		const load = strategy.load({
+			...(options.workspaceLoadMode === 'copy-only' ? { overlay: options.workspaceOverlay } : {}),
 			sandbox,
 			projectId: options.projectId,
 			notebookId: options.notebookId,

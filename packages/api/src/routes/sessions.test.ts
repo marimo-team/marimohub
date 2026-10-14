@@ -780,10 +780,11 @@ describe('Session routes', () => {
 					command.includes('/workspace/.marimohub-packed-restore/extract.py'),
 			)!;
 			expect(extract).toMatch(/ '\/workspace' 1 'python'$/);
-			expect(sb.calls.exec).toContainEqual(
-				expect.stringContaining(
-					"cd '/workspace' && git -c 'safe.directory=/workspace' sparse-checkout set --cone -- 'python'",
-				),
+			const gitCommands = sb.calls.exec.filter((command) => command.includes('safe.directory'));
+			expect(gitCommands).toHaveLength(1);
+			expect(gitCommands[0]).toContain("git config --global --add safe.directory '/workspace'\n");
+			expect(gitCommands[0]).toContain(
+				"cd '/workspace' && git -c 'safe.directory=/workspace' sparse-checkout set --cone -- 'python'",
 			);
 			const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
 			expect(setup).toContain("cd '/workspace/python'");
