@@ -191,33 +191,43 @@ function captureTier(rel: string): number {
 	return 0;
 }
 
-/** What a workspace restore actually moved into the sandbox. */
 export interface WorkspaceRestoreStats {
 	objectCount: number;
 	bytes: number;
 }
 
+/** Trusted workspace-relative paths and their immutable source keys. */
+export type WorkspaceOverlay = readonly { path: string; key: string }[];
+
+export async function loadWorkspaceOverlay(
+	bucket: Bucket,
+	workingDir: string,
+	overlay: WorkspaceOverlay = [],
+) {
+	return Promise.all(
+		overlay.map(async ({ path, key }) => {
+			const object = await bucket.get(key);
+			if (!object) throw new NotFoundError(`Workspace source ${key} not found`);
+			return { path: `${workingDir}/${path}`, content: await object.bytes() };
+		}),
+	);
+}
+
 export interface WorkspaceRestoreOptions {
-	overlay?: readonly { path: string; key: string }[];
+	/** Replaces matching workspace files in the first write batch. */
+	overlay?: WorkspaceOverlay;
 	requireComplete?: boolean;
-	/** Storage reads may precede readiness; sandbox mutations must wait. */
+	/** Bucket reads can precede readiness. Sandbox writes must wait. */
 	waitUntilReady?: () => Promise<void>;
-	/** Bounds bytes fetched before readiness; over budget, a batch is read after it. */
+	/** Limits prefetch for listed workspace files. Over-budget batches wait for readiness. */
 	prefetchBudget?: ByteBudget;
 	/** Relative path roots owned by another restore and therefore skipped. */
 	excludeRelativeRoots?: readonly string[];
 }
 
 /**
- * Restore a workspace mirror (every key under `sourcePrefix`) from the bucket into
- * the sandbox working directory. Unconditional and binary-safe: every object is
- * read as raw bytes and written back to its file inside `workingDir`, recreating
- * parent directories as needed. `sourcePrefix` is the local notebook's mutable
- * `workspace/` for editable sources, or an immutable `versions/{vid}/workspace/`
- * for synced read-only sources — the restore logic is identical either way.
- *
- * Returns what was copied, so the provisioning wide event can attribute a slow
- * `files` phase to workspace size rather than leaving it to guesswork.
+ * Copy workspace objects as raw bytes in batches. Overlays replace matching files in the first batch.
+ * File writes create parent directories. Directory markers restore empty directories.
  */
 export async function restoreWorkspace(
 	sandbox: SandboxInstance,
@@ -287,17 +297,9 @@ export async function restoreWorkspace(
 
 	const overlayDestinations = new Set(options.overlay?.map(({ path }) => `${workingDir}/${path}`));
 	wanted = wanted.filter(({ dest }) => !overlayDestinations.has(dest));
-	const overlayFiles = await Promise.all(
-		(options.overlay ?? []).map(async ({ path, key }) => {
-			const object = await bucket.get(key);
-			if (!object) throw new NotFoundError(`Workspace source ${key} not found`);
-			return { path: `${workingDir}/${path}`, content: await object.bytes() };
-		}),
-	);
+	const overlayFiles = await loadWorkspaceOverlay(bucket, workingDir, options.overlay);
 
-	// `writeFiles` creates parent directories (port contract), so the only case
-	// still needing an explicit mkdir is an empty workspace — nothing gets written,
-	// yet marimo still needs the cwd it runs in to exist.
+	// File writes create parents, but an empty workspace still needs a working directory.
 	if (wanted.length === 0 && overlayFiles.length === 0) {
 		await options.waitUntilReady?.();
 		await createSandboxDirectories(sandbox, directories.length > 0 ? directories : [workingDir]);

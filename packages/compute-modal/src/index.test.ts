@@ -371,17 +371,10 @@ describe('ModalCompute', () => {
 			if (failure) created.reject(error);
 			else created.resolve(backing);
 
-			expect(await results).toEqual(
-				failure
-					? [
-							{ status: 'rejected', reason: error },
-							{ status: 'rejected', reason: error },
-						]
-					: [
-							{ status: 'fulfilled', value: undefined },
-							{ status: 'fulfilled', value: undefined },
-						],
-			);
+			const expected = failure
+				? { status: 'rejected', reason: error }
+				: { status: 'fulfilled', value: undefined };
+			expect(await results).toEqual([expected, expected]);
 			expect(world.client.sandboxes.create).toHaveBeenCalledTimes(1);
 			expect(backing.execCalls).toEqual([]);
 		},

@@ -59,6 +59,20 @@ class VanishingObjectBucket extends MemoryBucket {
 }
 
 describe('restoreWorkspace', () => {
+	async function overlayFixture() {
+		const { nb } = nbCtx();
+		const bucket = new RecordingBucket();
+		const overlay = [
+			{ path: 'nb.py', key: 'version/code.py' },
+			{ path: 'pyproject.toml', key: 'version/deps.toml' },
+		];
+		for (const { path, key } of overlay) {
+			await bucket.put(nb.workspaceFile(path), 'draft');
+			await bucket.put(key, `committed ${path}`);
+		}
+		return { ...makeFakeSandbox(), nb, bucket, overlay };
+	}
+
 	it('writes files while directory marker creation is still pending', async () => {
 		const { nb } = nbCtx();
 		const bucket = new MemoryBucket();
@@ -89,21 +103,11 @@ describe('restoreWorkspace', () => {
 	it.each([false, true])(
 		'restores overlays in the first batch (other files: %s)',
 		async (otherFiles) => {
-			const { nb } = nbCtx();
-			const bucket = new RecordingBucket();
-			const overlay = [
-				{ path: 'nb.py', key: 'version/code.py' },
-				{ path: 'pyproject.toml', key: 'version/deps.toml' },
-			];
-			for (const { path, key } of overlay) {
-				await bucket.put(nb.workspaceFile(path), 'draft');
-				await bucket.put(key, `committed ${path}`);
-			}
+			const { instance, calls, nb, bucket, overlay } = await overlayFixture();
 			if (otherFiles) {
 				await bucket.put(nb.workspaceFile('a.bin'), bytesOfSize(5 * 1024 * 1024));
 				await bucket.put(nb.workspaceFile('b.bin'), bytesOfSize(5 * 1024 * 1024));
 			}
-			const { instance, calls } = makeFakeSandbox();
 
 			const stats = await restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
 				overlay,
@@ -161,12 +165,7 @@ describe('restoreWorkspace', () => {
 	it.each(['missing', 'get', 'bytes'] as const)(
 		'does not restore draft files or partial overlays when an overlay fails at %s',
 		async (failure) => {
-			const { nb } = nbCtx();
-			const bucket = new MemoryBucket();
-			await bucket.put(nb.workspaceFile('nb.py'), 'draft');
-			await bucket.put(nb.workspaceFile('pyproject.toml'), 'draft deps');
-			await bucket.put('version/code.py', 'committed');
-			await bucket.put('version/deps.toml', 'committed deps');
+			const { instance, calls, nb, bucket, overlay } = await overlayFixture();
 			const error = new Error('bucket unavailable');
 			const get = bucket.get.bind(bucket);
 			vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
@@ -177,14 +176,10 @@ describe('restoreWorkspace', () => {
 				vi.spyOn(object, 'bytes').mockRejectedValue(error);
 				return object;
 			});
-			const { instance, calls } = makeFakeSandbox();
 
 			await expect(
 				restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
-					overlay: [
-						{ path: 'nb.py', key: 'version/code.py' },
-						{ path: 'pyproject.toml', key: 'version/deps.toml' },
-					],
+					overlay,
 				}),
 			).rejects.toThrow(
 				failure === 'missing' ? 'Workspace source version/deps.toml not found' : error,

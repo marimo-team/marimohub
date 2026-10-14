@@ -30,7 +30,7 @@ import type {
 } from '../../ports/sandbox';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
-import type { BucketConfig, WorkspaceLoadStrategies } from './SandboxProvisioner';
+import type { BucketConfig, ProvisionOptions, WorkspaceLoadStrategies } from './SandboxProvisioner';
 import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { sandboxContextPath } from './sandboxContext';
 
@@ -686,25 +686,39 @@ describe('SandboxProvisioner', () => {
 	});
 
 	describe('provision', () => {
-		it('writes the committed notebook once in the copy-only workspace batch', async () => {
-			const { instance, calls } = makeFakeSandbox();
+		async function overlayFixture() {
+			const sandbox = makeFakeSandbox();
 			const bucketHandle = new MemoryBucket();
 			const nb = paths.project(projectId).notebook(notebookId);
 			const version = nb.version(createVersionId());
 			await bucketHandle.put(nb.workspaceFile('nb.py'), 'draft');
-			await bucketHandle.put(nb.workspaceFile('data.csv'), 'data');
 			await bucketHandle.put(version.code, 'committed');
-
-			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
-				sandboxId,
-				projectId,
-				notebookId,
-				hostname: 'localhost',
-				bucket: bucketConfig,
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(sandbox.instance));
+			return {
+				...sandbox,
 				bucketHandle,
-				workspaceLoadMode: 'copy-only',
-				workspaceOverlay: [{ path: 'nb.py', key: version.code }],
-			});
+				nb,
+				version,
+				provision: (overrides: Partial<ProvisionOptions> = {}) =>
+					provisioner.provision({
+						sandboxId,
+						projectId,
+						notebookId,
+						hostname: 'localhost',
+						bucket: bucketConfig,
+						bucketHandle,
+						workspaceLoadMode: 'copy-only',
+						workspaceOverlay: [{ path: 'nb.py', key: version.code }],
+						...overrides,
+					}),
+			};
+		}
+
+		it('writes the committed notebook once in the copy-only workspace batch', async () => {
+			const { calls, bucketHandle, nb, provision } = await overlayFixture();
+			await bucketHandle.put(nb.workspaceFile('data.csv'), 'data');
+
+			await provision();
 
 			const notebookWrites = calls.writeFiles.filter((files) =>
 				files.some(({ path }) => path === `${MOUNT_PATH}/nb.py`),
@@ -721,12 +735,8 @@ describe('SandboxProvisioner', () => {
 		it.each(['missing', 'write'] as const)(
 			'destroys the sandbox without launching when the app overlay fails (%s)',
 			async (failure) => {
-				const { instance, calls } = makeFakeSandbox();
-				const bucketHandle = new MemoryBucket();
-				const nb = paths.project(projectId).notebook(notebookId);
-				const version = nb.version(createVersionId());
-				await bucketHandle.put(nb.workspaceFile('nb.py'), 'draft');
-				if (failure === 'write') await bucketHandle.put(version.code, 'committed');
+				const { instance, calls, bucketHandle, version, provision } = await overlayFixture();
+				if (failure === 'missing') await bucketHandle.delete(version.code);
 				const writeFiles = instance.writeFiles.bind(instance);
 				instance.writeFiles = async (files) => {
 					if (files.some(({ path }) => path === `${MOUNT_PATH}/nb.py`)) {
@@ -735,18 +745,7 @@ describe('SandboxProvisioner', () => {
 					await writeFiles(files);
 				};
 
-				await expect(
-					new SandboxProvisioner(fakeComputeFrom(instance)).provision({
-						sandboxId,
-						projectId,
-						notebookId,
-						hostname: 'localhost',
-						bucket: bucketConfig,
-						bucketHandle,
-						workspaceLoadMode: 'copy-only',
-						workspaceOverlay: [{ path: 'nb.py', key: version.code }],
-					}),
-				).rejects.toMatchObject({
+				await expect(provision()).rejects.toMatchObject({
 					message: expect.stringContaining(
 						'Failed to start sandbox while restoring the notebook workspace',
 					),
@@ -766,12 +765,7 @@ describe('SandboxProvisioner', () => {
 		it.each([false, true])(
 			'preserves the overlay with a configured archive (present: %s)',
 			async (present) => {
-				const { instance, calls } = makeFakeSandbox();
-				const bucketHandle = new MemoryBucket();
-				const nb = paths.project(projectId).notebook(notebookId);
-				const version = nb.version(createVersionId());
-				await bucketHandle.put(nb.workspaceFile('nb.py'), 'draft');
-				await bucketHandle.put(version.code, 'committed');
+				const { instance, calls, bucketHandle, nb, version, provision } = await overlayFixture();
 				if (present)
 					await bucketHandle.put(version.workspaceArchive, new Uint8Array([80, 75, 3, 4]));
 				const get = vi.spyOn(bucketHandle, 'get');
@@ -783,17 +777,7 @@ describe('SandboxProvisioner', () => {
 					await writeFiles(files);
 				};
 
-				await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
-					sandboxId,
-					projectId,
-					notebookId,
-					hostname: 'localhost',
-					bucket: bucketConfig,
-					bucketHandle,
-					workspaceLoadMode: 'copy-only',
-					workspaceArchive: version.workspaceArchive,
-					workspaceOverlay: [{ path: 'nb.py', key: version.code }],
-				});
+				await provision({ workspaceArchive: version.workspaceArchive });
 
 				expect(
 					calls.writeFiles.flat().filter(({ path }) => path === `${MOUNT_PATH}/nb.py`),

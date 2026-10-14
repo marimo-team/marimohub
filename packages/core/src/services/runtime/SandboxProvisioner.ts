@@ -7,7 +7,7 @@ import type { NotebookBridgeRuntime } from '../../ports/notebookBridge';
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
 import { Millis } from '../../duration';
-import { NotFoundError, PythonEnvironmentSetupError, UnavailableError } from '../../errors';
+import { PythonEnvironmentSetupError, UnavailableError } from '../../errors';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { effectivePersistenceMode } from './sessionPersistence';
 import {
@@ -38,11 +38,12 @@ import { shellQuote } from './shell';
 import type { NotebookService } from '../content/NotebookService';
 import {
 	captureWorkspace,
+	loadWorkspaceOverlay,
 	readSessionArtifacts,
 	restoreWorkspace,
 	sharedWorkspaceListing,
 } from './sandboxFiles';
-import type { WorkspaceRestoreStats } from './sandboxFiles';
+import type { WorkspaceOverlay, WorkspaceRestoreStats } from './sandboxFiles';
 import { restorePackedWorkspace } from './packedWorkspaceRestore';
 import { sandboxWorkspaceLayout } from './workspaceLayout';
 import type { SandboxWorkspaceLayout } from './workspaceLayout';
@@ -282,8 +283,8 @@ export interface ProvisionOptions {
 	 * `versions/{vid}/workspace/` prefix instead.
 	 */
 	workspacePrefix?: string;
-	/** Trusted workspace-relative files copied from immutable bucket objects after workspace restore. */
-	workspaceOverlay?: { path: string; key: string }[];
+	/** Overrides workspace files. Object restores include these files in the first batch. */
+	workspaceOverlay?: WorkspaceOverlay;
 	/** Pull-source Git metadata restored into `<workdir>/.git`. */
 	gitPrefix?: string;
 	/**
@@ -490,7 +491,7 @@ async function withSandboxSpan<T>(
 }
 
 export interface WorkspaceLoadContext {
-	overlay?: readonly { path: string; key: string }[];
+	overlay?: WorkspaceOverlay;
 	sandbox: SandboxInstance;
 	projectId: ProjectId;
 	notebookId: NotebookId;
@@ -798,6 +799,7 @@ export class SandboxProvisioner {
 						options.workspacePrefix ?? nb.workspacePrefix,
 						waitUntilReady,
 					);
+					// Mounts and archives bypass object-copy batching.
 					if (options.workspaceLoadMode !== 'copy-only' || loaded.archiveStatus === 'used') {
 						await this.applyWorkspaceOverlay(sandbox, options, mountPath);
 					}
@@ -942,14 +944,7 @@ export class SandboxProvisioner {
 		if (!overlay || overlay.length === 0) return;
 		const bucket = options.bucketHandle;
 		if (!bucket) throw new UnavailableError('Bucket access is required for workspace overlay');
-		const files = await Promise.all(
-			overlay.map(async ({ path, key }) => {
-				const object = await bucket.get(key);
-				if (!object) throw new NotFoundError(`Workspace source ${key} not found`);
-				return { path: `${mountPath}/${path}`, content: await object.bytes() };
-			}),
-		);
-		await sandbox.writeFiles(files);
+		await sandbox.writeFiles(await loadWorkspaceOverlay(bucket, mountPath, overlay));
 	}
 
 	private async ensureReachable(sandbox: SandboxInstance, sw: Stopwatch): Promise<void> {
