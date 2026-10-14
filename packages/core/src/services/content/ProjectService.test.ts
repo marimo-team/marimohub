@@ -290,18 +290,6 @@ describe('ProjectService', () => {
 	});
 
 	describe('getProject', () => {
-		it('keeps default reads fresh and deduplicates cached reads', async () => {
-			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
-			const get = vi.spyOn(bucket, 'get');
-			await projects.getProject(project.id);
-			await projects.getProject(project.id);
-			expect(metaReads(get, project.id)).toHaveLength(2);
-			get.mockClear();
-			await projects.getProject(project.id, { consistency: 'validated' });
-			await projects.getProject(project.id, { consistency: 'validated' });
-			expect(metaReads(get, project.id)).toHaveLength(1);
-		});
-
 		it('revalidates local updates even if the catalog projection fails', async () => {
 			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
 			await projects.getProject(project.id, { consistency: 'validated' });
@@ -342,15 +330,6 @@ describe('ProjectService', () => {
 			},
 		);
 
-		it('does not serve a cached project after its metadata is removed', async () => {
-			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
-			await projects.getProject(project.id, { consistency: 'validated' });
-			await bucket.delete(paths.project(project.id).meta);
-			await expect(projects.getProject(project.id, { consistency: 'validated' })).rejects.toThrow(
-				NotFoundError,
-			);
-		});
-
 		it('caches the fetched ETag when a write races between HEAD and GET', async () => {
 			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
 			await projects.getProject(project.id, { consistency: 'validated' });
@@ -373,17 +352,6 @@ describe('ProjectService', () => {
 				'New',
 			);
 			expect(metaReads(get, project.id)).toHaveLength(0);
-		});
-
-		it('does not cache missing projects', async () => {
-			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
-			const key = paths.project(project.id).meta;
-			await bucket.delete(key);
-			await expect(projects.getProject(project.id, { consistency: 'validated' })).rejects.toThrow(
-				NotFoundError,
-			);
-			await bucket.put(key, JSON.stringify(project));
-			expect(await projects.getProject(project.id, { consistency: 'validated' })).toEqual(project);
 		});
 
 		it('returns the project by id', async () => {

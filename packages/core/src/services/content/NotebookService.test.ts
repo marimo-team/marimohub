@@ -58,26 +58,6 @@ describe('NotebookService', () => {
 	});
 
 	describe('cached meta reads', () => {
-		it('keeps default reads fresh and caches opt-in reads', async () => {
-			const notebook = await notebooks.createNotebook(
-				projectId,
-				{ title: 'N', description: '', code: '' },
-				ACTOR,
-			);
-			const get = vi.spyOn(bucket, 'get');
-			const reads = () =>
-				get.mock.calls.filter(
-					([key]) => key === paths.project(projectId).notebook(notebook.id).meta,
-				);
-			await notebooks.getNotebookMeta(projectId, notebook.id);
-			await notebooks.getNotebookMeta(projectId, notebook.id);
-			expect(reads()).toHaveLength(2);
-			get.mockClear();
-			await notebooks.getNotebookMeta(projectId, notebook.id, { consistency: 'validated' });
-			await notebooks.getNotebookMeta(projectId, notebook.id, { consistency: 'validated' });
-			expect(reads()).toHaveLength(1);
-		});
-
 		it('revalidates security labels and preserves includeDeleted', async () => {
 			const notebook = await notebooks.createNotebook(
 				projectId,
@@ -142,38 +122,6 @@ describe('NotebookService', () => {
 				).toEqual({ classification: 'secret', compartments: [] });
 			},
 		);
-
-		it('does not serve cached notebook metadata after removal', async () => {
-			const notebook = await notebooks.createNotebook(
-				projectId,
-				{ title: 'N', description: '', code: '' },
-				ACTOR,
-			);
-			await notebooks.getNotebookMeta(projectId, notebook.id, { consistency: 'validated' });
-			await bucket.delete(paths.project(projectId).notebook(notebook.id).meta);
-			await expect(
-				notebooks.getNotebookMeta(projectId, notebook.id, { consistency: 'validated' }),
-			).rejects.toThrow(NotFoundError);
-		});
-
-		it('does not cache missing notebook metadata', async () => {
-			const notebookId = createNotebookId();
-			await expect(
-				notebooks.getNotebookMeta(projectId, notebookId, { consistency: 'validated' }),
-			).rejects.toThrow(NotFoundError);
-			const notebook = await notebooks.createNotebook(
-				projectId,
-				{ title: 'N', description: '', code: '' },
-				ACTOR,
-			);
-			await bucket.put(
-				paths.project(projectId).notebook(notebookId).meta,
-				JSON.stringify({ ...notebook, id: notebookId }),
-			);
-			expect(
-				(await notebooks.getNotebookMeta(projectId, notebookId, { consistency: 'validated' })).id,
-			).toBe(notebookId);
-		});
 	});
 
 	describe('source updates during sessions', () => {

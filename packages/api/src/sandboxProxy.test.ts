@@ -551,27 +551,30 @@ describe('authorizeProxyRequest', () => {
 		}
 	});
 
-	it('caches metadata for app requests while reading the session on every request', async () => {
-		const { d, recorded, sessionReads } = recordedDeps();
-		const editor = await d.services.sessions.getSession(pid, sessionId);
-		const app = await d.services.sessions.createSession({
+	async function runningApp(services: ReturnType<typeof createServices>) {
+		const { notebook_id: notebookId } = await services.sessions.getSession(pid, sessionId);
+		const app = await services.sessions.createSession({
 			project_id: pid,
-			notebook_id: editor.notebook_id,
+			notebook_id: notebookId,
 			user_id: ACTOR,
 			mode: 'app',
 		});
-		sessionId = app.session_id;
-		await d.services.sessions.setRunning(pid, sessionId, '/proxy/x/', false, ORIGIN);
-		token = await signProxyToken(pid, sessionId, SECRET);
+		await services.sessions.setRunning(pid, app.session_id, '/proxy/x/', false, ORIGIN);
+		const appToken = await signProxyToken(pid, app.session_id, SECRET);
+		return { notebookId, sessionId: app.session_id, request: () => req(`/proxy/${appToken}/`) };
+	}
+
+	it('caches metadata for app requests while reading the session on every request', async () => {
+		const { d, recorded, sessionReads } = recordedDeps();
+		const app = await runningApp(d.services);
+		sessionId = app.sessionId;
 		recorded.calls.get.length = 0;
 		for (let i = 0; i < 2; i++) {
-			expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({ kind: 'forward' });
+			expect(await authorizeProxyRequest(app.request(), d)).toMatchObject({ kind: 'forward' });
 		}
 		expect(recorded.calls.get.filter((key) => key === paths.project(pid).meta)).toHaveLength(1);
 		expect(
-			recorded.calls.get.filter(
-				(key) => key === paths.project(pid).notebook(editor.notebook_id).meta,
-			),
+			recorded.calls.get.filter((key) => key === paths.project(pid).notebook(app.notebookId).meta),
 		).toHaveLength(1);
 		expect(sessionReads()).toBe(2);
 	});
@@ -580,21 +583,12 @@ describe('authorizeProxyRequest', () => {
 		'rejects a warm app admission during %s storage failure and retries after recovery',
 		async (resource) => {
 			const { d } = recordedDeps();
-			const editor = await d.services.sessions.getSession(pid, sessionId);
-			const app = await d.services.sessions.createSession({
-				project_id: pid,
-				notebook_id: editor.notebook_id,
-				user_id: ACTOR,
-				mode: 'app',
-			});
-			await d.services.sessions.setRunning(pid, app.session_id, '/proxy/x/', false, ORIGIN);
-			const appToken = await signProxyToken(pid, app.session_id, SECRET);
-			const request = () => req(`/proxy/${appToken}/`);
-			expect(await authorizeProxyRequest(request(), d)).toMatchObject({ kind: 'forward' });
+			const app = await runningApp(d.services);
+			expect(await authorizeProxyRequest(app.request(), d)).toMatchObject({ kind: 'forward' });
 			const key =
 				resource === 'project'
 					? paths.project(pid).meta
-					: paths.project(pid).notebook(editor.notebook_id).meta;
+					: paths.project(pid).notebook(app.notebookId).meta;
 			const head = d.bucket.head.bind(d.bucket);
 			const failure = vi.spyOn(d.bucket, 'head').mockImplementation(async (requestedKey) => {
 				if (requestedKey === key) throw new UnavailableError('Storage unavailable');
@@ -602,7 +596,7 @@ describe('authorizeProxyRequest', () => {
 			});
 			try {
 				for (let attempt = 0; attempt < 2; attempt++) {
-					expect(await authorizeProxyRequest(request(), d)).toMatchObject({
+					expect(await authorizeProxyRequest(app.request(), d)).toMatchObject({
 						kind: 'reject',
 						status: resource === 'project' ? 404 : 503,
 					});
@@ -610,7 +604,7 @@ describe('authorizeProxyRequest', () => {
 			} finally {
 				failure.mockRestore();
 			}
-			expect(await authorizeProxyRequest(request(), d)).toMatchObject({ kind: 'forward' });
+			expect(await authorizeProxyRequest(app.request(), d)).toMatchObject({ kind: 'forward' });
 		},
 	);
 
@@ -620,29 +614,19 @@ describe('authorizeProxyRequest', () => {
 			const writer = createServices(bucket);
 			await writer.projects.addMember(pid, { user_id: STRANGER }, 'app-user', ACTOR);
 			const { d } = recordedDeps(STRANGER);
-			const editor = await writer.sessions.getSession(pid, sessionId);
-			const app = await writer.sessions.createSession({
-				project_id: pid,
-				notebook_id: editor.notebook_id,
-				user_id: ACTOR,
-				mode: 'app',
-			});
-			await writer.sessions.setRunning(pid, app.session_id, '/proxy/x/', false, ORIGIN);
-			const appToken = await signProxyToken(pid, app.session_id, SECRET);
-			const request = () => req(`/proxy/${appToken}/`);
-			expect(await authorizeProxyRequest(request(), d)).toMatchObject({ kind: 'forward' });
+			const app = await runningApp(writer);
+			expect(await authorizeProxyRequest(app.request(), d)).toMatchObject({ kind: 'forward' });
 			if (change === 'membership') await writer.projects.removeMember(pid, STRANGER, ACTOR);
 			if (change === 'project') await writer.projects.deleteProject(pid, ACTOR);
-			if (change === 'notebook')
-				await writer.notebooks.deleteNotebook(pid, editor.notebook_id, ACTOR);
+			if (change === 'notebook') await writer.notebooks.deleteNotebook(pid, app.notebookId, ACTOR);
 			if (change === 'labels')
 				await writer.notebooks.setSecurityLabels(
 					pid,
-					editor.notebook_id,
+					app.notebookId,
 					{ classification: 'secret', compartments: [] },
 					ACTOR,
 				);
-			expect(await authorizeProxyRequest(request(), d)).toMatchObject({
+			expect(await authorizeProxyRequest(app.request(), d)).toMatchObject({
 				kind: 'reject',
 				status: change === 'membership' ? 403 : 404,
 			});

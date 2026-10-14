@@ -1,4 +1,5 @@
-import { EtagRecordCache } from '../../etagRecordCache';
+import { MetadataCache } from './metadataCache';
+import type { ReadConsistency } from './metadataCache';
 import { nextIsoTimestamp } from '../../utcDate';
 import { projectActionMinRole } from '../authorization/actions';
 import { tokenGrantAllowsProject } from '../../tokenGrants';
@@ -66,8 +67,6 @@ import type { ProjectListFilters } from './listFilters';
 
 /** Grace period before a soft-deleted project's storage is purged by the GC sweep. */
 export const DEFAULT_DELETED_PROJECT_RETENTION_MS = Millis.days(30);
-
-export type ReadConsistency = 'fresh' | 'validated';
 
 export interface CreateProjectInput {
 	name: string;
@@ -230,8 +229,7 @@ function normalizeProjectName(name: string): string {
 }
 
 export class ProjectService {
-	// Validate against storage on every cache read so revocations cross replicas immediately.
-	private readonly projectCache = new EtagRecordCache<Project>();
+	private readonly projectCache: MetadataCache<Project>;
 
 	constructor(
 		private bucket: Bucket,
@@ -239,7 +237,9 @@ export class ProjectService {
 		private metrics: Metrics = noopMetrics,
 		private resolveIdentitiesByEmail: InviteIdentityResolver = async () => new Map(),
 		private deepLinks = new DeepLinkService(bucket, metrics),
-	) {}
+	) {
+		this.projectCache = new MetadataCache(bucket);
+	}
 
 	/** Apply role, token, and label restrictions before the caller paginates. */
 	async listProjects(
@@ -358,21 +358,12 @@ export class ProjectService {
 		options: { consistency?: ReadConsistency } = {},
 	): Promise<Project> {
 		const key = paths.project(id).meta;
-		if (options.consistency === 'validated' && this.projectCache.has(key)) {
-			const head = await this.bucket.head(key);
-			if (!head) {
-				this.projectCache.delete(key);
-				throw new NotFoundError(`Project ${id} not found`);
-			}
-			const cached = this.projectCache.get(key, head.etag);
-			if (cached) return cached;
-		}
-		const obj = await this.bucket.get(key);
-		if (!obj) {
-			throw new NotFoundError(`Project ${id} not found`);
-		}
-		const project = await readStored(ProjectSchema, obj, key);
-		if (options.consistency === 'validated') this.projectCache.set(key, obj.etag, project);
+		const project = await this.projectCache.read(
+			[key],
+			(object) => readStored(ProjectSchema, object, key),
+			options.consistency,
+		);
+		if (!project) throw new NotFoundError(`Project ${id} not found`);
 		return project;
 	}
 

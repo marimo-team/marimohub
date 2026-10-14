@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { NotFoundError } from '../../errors';
 import { paths } from '../../paths';
 import { StoredObjectError } from '../../schema';
+import type { ReadConsistency } from './metadataCache';
 import { ACTOR, setupTestEnv } from '../../testing';
 
-async function setup(kind: 'project' | 'notebook') {
+async function setup(kind: 'project' | 'notebook', warm = true) {
 	const env = await setupTestEnv();
 	const project = await env.projects.createProject({ name: 'P', description: '' }, ACTOR);
 	const notebook = await env.notebooks.createNotebook(
@@ -16,15 +17,41 @@ async function setup(kind: 'project' | 'notebook') {
 		kind === 'project'
 			? paths.project(project.id).meta
 			: paths.project(project.id).notebook(notebook.id).meta;
-	const read = () =>
+	const read = (options: { consistency?: ReadConsistency } = { consistency: 'validated' }) =>
 		kind === 'project'
-			? env.projects.getProject(project.id, { consistency: 'validated' })
-			: env.notebooks.getNotebookMeta(project.id, notebook.id, { consistency: 'validated' });
-	const original = await read();
+			? env.projects.getProject(project.id, options)
+			: env.notebooks.getNotebookMeta(project.id, notebook.id, options);
+	const original = await read(warm ? { consistency: 'validated' } : {});
 	return { ...env, project, notebook, key, read, original };
 }
 
-describe.each(['project', 'notebook'] as const)('%s metadata cache failures', (kind) => {
+describe.each(['project', 'notebook'] as const)('%s metadata cache', (kind) => {
+	it('keeps default reads fresh and validates cached reads without downloading again', async () => {
+		const { bucket, key, read } = await setup(kind, false);
+		const get = vi.spyOn(bucket, 'get');
+		const head = vi.spyOn(bucket, 'head');
+		await read({});
+		await read({});
+		expect(get.mock.calls.filter(([requestedKey]) => requestedKey === key)).toHaveLength(2);
+		get.mockClear();
+		await read();
+		expect(head).not.toHaveBeenCalled();
+		await read();
+		expect(get.mock.calls.filter(([requestedKey]) => requestedKey === key)).toHaveLength(1);
+		expect(head).toHaveBeenCalledWith(key);
+	});
+
+	it.each([false, true])(
+		'rejects missing metadata and sees recreation (warm: %s)',
+		async (warm) => {
+			const { bucket, key, read, original } = await setup(kind, warm);
+			await bucket.delete(key);
+			await expect(read()).rejects.toThrow(NotFoundError);
+			await bucket.put(key, JSON.stringify(original));
+			expect(await read()).toEqual(original);
+		},
+	);
+
 	it.each([
 		['invalid JSON', '{'],
 		['invalid schema', '{}'],
