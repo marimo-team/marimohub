@@ -48,9 +48,11 @@ Kernel traffic is forwarded **through the app** at
 marimohub's auth and a per-session role check; `<token>` is an HMAC of the
 session id signed with `MARIMOHUB_AUTH_SESSION_SECRET`. No separate kernel domain
 is needed. Each process caches a successful editor admission for up to 5 seconds,
-so stopping a session or revoking a role can take that long to block an editor
-connection that was already admitted. The token signature, sign-in, and
-suspension checks still run on every request.
+so stopping a session or revoking a role can take that long to block the next
+request or WebSocket upgrade from an editor that was already admitted. An
+established WebSocket is not re-authorized; it closes at its authorization
+deadline when the session has one. The token signature, sign-in, and suspension
+checks still run on every request.
 
 The cost: the kernel is **same-origin** with the app, so a malicious notebook can
 script the control plane (XSS). Proxy mode is for **trusted environments only**

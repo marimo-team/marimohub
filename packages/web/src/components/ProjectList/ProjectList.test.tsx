@@ -185,6 +185,19 @@ describe('ProjectList', () => {
 		expect(await screen.findByRole('button', { name: 'Group by namespace' })).toBeVisible();
 	});
 
+	it('keeps namespace grouping available when only deleted projects are namespaced', async () => {
+		renderList(
+			[
+				project('Old Vision', '', { tags: ['research/vision'], status: 'deleted' }),
+				project('Loose'),
+			],
+			'/?status=deleted',
+		);
+		await waitForLoaded();
+		expect(screen.getByRole('status')).toHaveTextContent('1 project');
+		expect(await screen.findByRole('button', { name: 'Group by namespace' })).toBeVisible();
+	});
+
 	it('still groups and toggles when browser storage is unavailable', async () => {
 		vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
 			throw new DOMException('Storage disabled', 'SecurityError');

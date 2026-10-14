@@ -681,7 +681,8 @@ export async function ensureInitialized(
 		return;
 	const exists = await bucket.head(paths.catalog);
 	if (exists && options.createDefaultProject === false) return;
-	if (exists && cached?.etag === exists.etag) {
+	// An empty ETag (adapter fallback) would match forever and hide a storage reset.
+	if (exists?.etag && cached?.etag === exists.etag) {
 		populatedCatalogEtags.set(bucket, { etag: exists.etag, checkedAt });
 		return;
 	}
@@ -695,7 +696,7 @@ export async function ensureInitialized(
 
 	const snapshot = await services.catalog.getCurrentSnapshot();
 	// Empty catalogs must retry authorization for a later caller with project creation access.
-	if (snapshot.projects.length > 0 && exists) {
+	if (snapshot.projects.length > 0 && exists?.etag) {
 		populatedCatalogEtags.set(bucket, { etag: exists.etag, checkedAt });
 	}
 	if (snapshot.projects.length === 0) {

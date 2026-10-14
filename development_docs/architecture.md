@@ -335,9 +335,13 @@ The Node proxy also caches a successful editor admission, including VS Code and
 other surface proxies, for up to five seconds per process. The entry expires
 sooner when the credential or entitlements expire. Token signature, sign-in,
 suspension, and session and subject-context authorization deadlines are still
-checked on every request. App and preview admissions are never cached. Stopping
-a session, revoking a role, deleting a project, or changing labels can take up
-to five seconds to block an editor connection that was already admitted.
+checked on every request. The suspension check reads `IdentityService`'s
+stale-while-revalidate cache, so an active result can lag a suspension by up to
+its 30 s maximum age; that window predates the admission cache. App and preview
+admissions are never cached. Stopping a session, revoking a role, deleting a
+project, or changing labels can take up to five seconds to block the next
+request or WebSocket upgrade from an editor that was already admitted; an
+established WebSocket closes only at its authorization deadline.
 
 > **Scaling note.** The global catalog snapshot lists projects by `owner` only;
 > per-project `members` live in `project.json`. Authorized listing for a

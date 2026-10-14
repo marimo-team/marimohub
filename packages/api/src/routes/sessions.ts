@@ -1783,8 +1783,10 @@ export async function startNotebookSession(input: {
 				},
 			});
 
-		// Credential exchange and secret reads wait for the capacity check so capped callers
-		// cannot drive STS or secret-store traffic; they still overlap the record phase.
+		// Credential exchange and secret reads wait for the preflight (per-project app) cap so
+		// callers it rejects cannot drive STS or secret-store traffic; they still overlap the
+		// record phase. Per-user caps need a deployment-wide scan and are enforced only at
+		// cap_recheck, after resolution has started.
 		const startEnvResolution = () => {
 			const sessionEnv = all({
 				wifVars: resolveWifVars,

@@ -161,6 +161,23 @@ describe('ensureInitialized', () => {
 		expect(await services.projects.listProjects()).toHaveLength(1);
 	});
 
+	it('never reuses a populated catalog whose backend reports an empty ETag', async () => {
+		const inner = new MemoryBucket();
+		const bucket = new RecordingBucket(inner);
+		const blankEtag = <T extends { etag: string } | null>(result: T): T =>
+			result ? { ...result, etag: '' } : result;
+		vi.spyOn(bucket, 'head').mockImplementation(async (key) => blankEtag(await inner.head(key)));
+		vi.spyOn(bucket, 'get').mockImplementation(async (key) => blankEtag(await inner.get(key)));
+		await ensureInitialized(bucket, ACTOR);
+		await ensureInitialized(bucket, ACTOR);
+		advanceTime(30_000);
+		const get = vi.spyOn(bucket, 'get');
+
+		await ensureInitialized(bucket, ACTOR);
+
+		expect(get).toHaveBeenCalledWith(paths.catalog);
+	});
+
 	it('rechecks a changed catalog and initializes again after a storage reset', async () => {
 		const bucket = new MemoryBucket();
 		await ensureInitialized(bucket, ACTOR);

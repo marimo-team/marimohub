@@ -39,7 +39,7 @@ Because there is no database, the object store itself must provide the guarantee
 
 - **Strong read-after-write consistency** — a read (or list) immediately following a write reflects the latest data, so a writer always sees the snapshot it just committed.
 - **Conditional writes (compare-and-swap)** — `If-Match` on ETag for the atomic `catalog.json` swap, returning `412 Precondition Failed` on mismatch; `If-None-Match: *` (create-if-absent) for first-write bootstrapping.
-- **Stable ETags** — `head`, `list`, and `get` return the same non-empty ETag for an unchanged object, and the ETag changes on every write. The per-process metadata and session caches rely on this to skip downloads. A backend that cannot supply an ETag returns `''`, and the caches never store such an entry.
+- **Stable ETags** — `head`, `list`, and `get` return the same non-empty ETag for an unchanged object, and the ETag changes whenever the contents change (a content-hash backend such as `storage-fs` may keep it across an identical rewrite). The per-process metadata and session caches, and the `ensureInitialized` catalog check, rely on this to skip downloads. A backend that cannot supply an ETag returns `''`, and none of these caches store or match such a value.
 
 AWS S3 provides both (strong read-after-write consistency since 2020; `If-Match` / `If-None-Match` on `PutObject` since 2024). **Verify these for any other S3-compatible target** (MinIO, Ceph RGW, Backblaze B2, Tigris, …) — conditional-write support in particular varies by implementation and version. This is the single most important portability constraint for the design.
 
