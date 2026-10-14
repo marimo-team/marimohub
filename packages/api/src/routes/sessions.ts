@@ -2127,36 +2127,39 @@ export async function startNotebookSession(input: {
 					providerDeadline === undefined ? undefined : new Date(providerDeadline).toISOString(),
 				);
 			})
-			.step('editor_claim_recheck', async () => {
-				if (mode !== 'edit' || ephemeral) return;
-				if (replacingAfterTakeover && existingEditorClaim?.transfer) {
-					await sessions.completeTakeover(
-						pid,
-						nid,
-						existingEditorClaim.transfer.takeover_id,
-						session!.session_id,
-					);
-					return;
-				}
-				const result = await sessions.claimEditor(pid, nid, session!.session_id, sharing, user.id);
-				if (!result.claimed && result.claim.session_id) {
-					throw new EditorClaimLostError(result.claim.session_id);
-				}
-			})
 			// A delete during provisioning can miss the starting sandbox. Recheck after
 			// publishing running so either the deletion path or saga compensation retires it.
-			.step('notebook_recheck', async () => {
-				const current = await notebooks.getNotebook(pid, nid).catch(() => null);
-				if (!current || current.meta.status === 'deleted') {
+			// The same race one level up needs a project check: a soft-deleted project
+			// keeps its notebooks readable until GC.
+			.step('running_rechecks', async () => {
+				const rechecks = await all({
+					claim: async () => {
+						if (mode !== 'edit' || ephemeral) return;
+						if (replacingAfterTakeover && existingEditorClaim?.transfer) {
+							await sessions.completeTakeover(
+								pid,
+								nid,
+								existingEditorClaim.transfer.takeover_id,
+								session!.session_id,
+							);
+							return;
+						}
+						return sessions.claimEditor(pid, nid, session!.session_id, sharing, user.id);
+					},
+					notebook: () =>
+						(isPreview
+							? notebooks.getNotebook(pid, nid).then((current) => current.meta)
+							: notebooks.getNotebookMeta(pid, nid)
+						).catch(() => null),
+					project: () => projects.getProject(pid).catch(() => null),
+				});
+				if (rechecks.claim && !rechecks.claim.claimed && rechecks.claim.claim.session_id) {
+					throw new EditorClaimLostError(rechecks.claim.claim.session_id);
+				}
+				if (!rechecks.notebook || rechecks.notebook.status === 'deleted') {
 					throw new NotFoundError(`Notebook ${nid} not found`);
 				}
-			})
-			// The same race one level up, which the check above does NOT cover: a
-			// soft-deleted project keeps its notebooks readable until GC, so
-			// `getNotebook` still answers `active`.
-			.step('project_recheck', async () => {
-				const current = await projects.getProject(pid).catch(() => null);
-				if (!current || current.status === 'deleted') {
+				if (!rechecks.project || rechecks.project.status === 'deleted') {
 					throw new NotFoundError(`Project ${pid} not found`);
 				}
 			})

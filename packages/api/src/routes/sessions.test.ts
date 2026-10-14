@@ -408,6 +408,101 @@ describe('Session routes', () => {
 		expect(await sessions.listSessions(nid)).toMatchObject([{ status: 'failed' }]);
 	});
 
+	it.each([
+		'none',
+		'claim',
+		'notebook',
+		'project',
+		'both',
+		'notebook read',
+		'project read',
+	] as const)('overlaps running rechecks and handles %s failure', async (failure) => {
+		const { instance, calls } = makeFakeSandbox();
+		const api = createTestApi({ bucket, compute: fakeComputeFrom(instance) });
+		const { sessions, notebooks, projects } = api.deps.services;
+		let running = false;
+		const setRunning = sessions.setRunning.bind(sessions);
+		vi.spyOn(sessions, 'setRunning').mockImplementation(async (...args) => {
+			const session = await setRunning(...args);
+			running = true;
+			return session;
+		});
+		const started = new Set<string>();
+		const releaseClaim = Promise.withResolvers<void>();
+		const claimEditor = sessions.claimEditor.bind(sessions);
+		vi.spyOn(sessions, 'claimEditor').mockImplementation(async (...args) => {
+			if (!running) return claimEditor(...args);
+			started.add('claim');
+			await releaseClaim.promise;
+			if (failure === 'claim') {
+				return {
+					claimed: false,
+					claim: {
+						session_id: makeSession().session_id,
+						sharing: 'shared',
+						claimed_at: new Date().toISOString(),
+					},
+				};
+			}
+			return claimEditor(...args);
+		});
+		const getMeta = notebooks.getNotebookMeta.bind(notebooks);
+		vi.spyOn(notebooks, 'getNotebookMeta').mockImplementation(async (...args) => {
+			const meta = await getMeta(...args);
+			if (!running) return meta;
+			started.add('notebook');
+			if (failure === 'notebook read') throw new Error('notebook read failed');
+			return ['claim', 'notebook', 'both'].includes(failure)
+				? { ...meta, status: 'deleted' }
+				: meta;
+		});
+		const getProject = projects.getProject.bind(projects);
+		vi.spyOn(projects, 'getProject').mockImplementation(async (...args) => {
+			const project = await getProject(...args);
+			if (!running) return project;
+			started.add('project');
+			if (failure === 'project read') throw new Error('project read failed');
+			return ['claim', 'project', 'both'].includes(failure)
+				? { ...project, status: 'deleted' }
+				: project;
+		});
+		const getNotebook = notebooks.getNotebook.bind(notebooks);
+		vi.spyOn(notebooks, 'getNotebook').mockImplementation((...args) => {
+			expect(running).toBe(false);
+			return getNotebook(...args);
+		});
+
+		const pending = api.request('POST', sessionsPath());
+		try {
+			await vi.waitFor(() => expect(started).toEqual(new Set(['claim', 'notebook', 'project'])));
+		} finally {
+			releaseClaim.resolve();
+		}
+		const response = await pending;
+		if (failure === 'none') {
+			expect(await expectOk<ApiSession>(response)).toMatchObject({ status: 'running' });
+			expect(calls.destroy).toBe(0);
+		} else {
+			const claimLost = failure === 'claim';
+			const error = await expectError(response, claimLost ? 409 : 404, claimLost ? 'CONFLICT' : 'NOT_FOUND');
+			expect(error.message).toBe(
+				claimLost
+					? 'The editor session changed. Retry shortly.'
+					: failure.startsWith('project')
+						? `Project ${pid} not found`
+						: `Notebook ${nid} not found`,
+			);
+			expect(calls.destroy).toBe(1);
+			expect(await sessions.listSessions(nid)).toMatchObject([
+				{
+					status: claimLost ? 'terminated' : 'failed',
+					sandbox_reclaimed_at: expect.any(String),
+				},
+			]);
+			expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
+		}
+	});
+
 	it('POST /sessions with a non-existent notebook returns 404 and does not provision', async () => {
 		// Use a notebook id that was never created in this project.
 		const bogusNid = createNotebookId();
