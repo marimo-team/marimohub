@@ -710,7 +710,7 @@ export class SessionService {
 
 	/**
 	 * Each scan lists current ETags and fetches cache misses. Handlers receive
-	 * the record's ETag for CAS writes and must not mutate the shared record.
+	 * isolated records so caller mutations cannot poison later scans or CAS writes.
 	 */
 	private async scanPrefix<T>(
 		prefix: string,
@@ -720,7 +720,7 @@ export class SessionService {
 		const objects = await listAllObjects(this.bucket, prefix);
 		const scanned = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (obj) => {
 			const cached = this.recordCache.get(obj.key, obj.etag);
-			if (cached) return handle(cached, obj, obj.etag);
+			if (cached) return handle(structuredClone(cached), obj, obj.etag);
 			const body = await this.bucket.get(obj.key);
 			if (!body) {
 				this.recordCache.delete(obj.key);
@@ -740,7 +740,7 @@ export class SessionService {
 				return SKIP;
 			}
 			this.recordCache.set(obj.key, body.etag, session);
-			return handle(session, obj, body.etag);
+			return handle(structuredClone(session), obj, body.etag);
 		});
 		return scanned.filter((r): r is Awaited<T> => r !== SKIP);
 	}

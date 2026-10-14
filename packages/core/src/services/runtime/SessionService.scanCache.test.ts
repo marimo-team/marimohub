@@ -67,6 +67,41 @@ describe('SessionService scan cache', () => {
 		);
 	});
 
+	it.each(['cold', 'warm'] as const)(
+		'isolates mutations of %s scan results from later reads and expiry writes',
+		async (cacheState) => {
+			const created = await sessions.createSession({
+				project_id: projects[0],
+				notebook_id: createNotebookId(),
+				user_id: ACTOR,
+				runtime: { python_version: '3.13' },
+			});
+			const expected = await sessions.getSession(created.project_id, created.session_id);
+			if (cacheState === 'warm') await sessions.listSessions();
+			const [returned] = await sessions.listSessions();
+			returned.status = 'terminated';
+			if (!returned.runtime) throw new Error('Expected session runtime');
+			returned.runtime.python_version = '3.12';
+
+			const gets = bucket.calls.get.length;
+			expect(await sessions.listSessions()).toEqual([expected]);
+			expect(await sessions.listActiveForUser(ACTOR)).toEqual([expected]);
+			expect(await sessions.listByProject(created.project_id)).toEqual([expected]);
+			expect(await sessions.listActiveByProject(created.project_id)).toEqual([expected]);
+			expect(sessionGetsSince(gets)).toEqual([]);
+			expect(await sessions.getSession(created.project_id, created.session_id)).toEqual(expected);
+
+			advanceTime(6 * 60 * 1000);
+			const expiryGets = bucket.calls.get.length;
+			expect(await sessions.expireStale()).toBe(1);
+			expect(sessionGetsSince(expiryGets)).toEqual([]);
+			expect(await sessions.getSession(created.project_id, created.session_id)).toEqual({
+				...expected,
+				status: 'expired',
+			});
+		},
+	);
+
 	it('omits deleted records without retrying their GET', async () => {
 		const deleted = await create();
 		const survivor = await create();
