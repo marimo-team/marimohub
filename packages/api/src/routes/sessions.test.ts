@@ -2776,6 +2776,50 @@ describe('Session routes', () => {
 		await expectError(await stranger('POST', sessionsPath(`/${sid}/heartbeat`)), 404, 'NOT_FOUND');
 	});
 
+	it.each(['project', 'notebook'] as const)(
+		'shows %s edits, fresh save preconditions, and deletion immediately across replicas with warm session caches',
+		async (resource) => {
+			const reader = createTestApi({ bucket, compute: makeFakeCompute() });
+			const writer = createTestApi({ bucket, compute: reader.deps.compute });
+			const session = await expectOk<ApiSession>(await reader.request('POST', sessionsPath()));
+			await expectOk(
+				await reader.request('POST', sessionsPath(`/${session.session_id}/heartbeat`)),
+			);
+			const path =
+				resource === 'project' ? `/projects/${pid}` : `/projects/${pid}/notebooks/${nid}`;
+			const listPath = resource === 'project' ? '/projects' : `/projects/${pid}/notebooks`;
+			const id = resource === 'project' ? pid : nid;
+			const edit =
+				resource === 'project'
+					? { name: 'Renamed', tags: ['updated'] }
+					: { title: 'Renamed', tags: ['updated'] };
+			const before = await reader.request('GET', path);
+			const oldEtag = before.headers.get('ETag')!;
+			await expectOk(before);
+			await expectOk(await writer.request('PATCH', path, edit));
+			const after = await reader.request('GET', path);
+			const newEtag = after.headers.get('ETag')!;
+			expect(newEtag).not.toBe(oldEtag);
+			expect(await expectOk(after)).toMatchObject(resource === 'project' ? edit : { meta: edit });
+			expect(await expectPage(await reader.request('GET', listPath))).toContainEqual(
+				expect.objectContaining({ id, ...edit }),
+			);
+			await expectError(
+				await reader.request('PATCH', path, { description: 'Next edit' }, { 'If-Match': oldEtag }),
+				412,
+				'PRECONDITION_FAILED',
+			);
+			await expectOk(
+				await reader.request('PATCH', path, { description: 'Next edit' }, { 'If-Match': newEtag }),
+			);
+			await expectOk(await writer.request('DELETE', path));
+			await expectError(await reader.request('GET', path), 404, 'NOT_FOUND');
+			expect(await expectPage(await reader.request('GET', listPath))).not.toContainEqual(
+				expect.objectContaining({ id }),
+			);
+		},
+	);
+
 	it('reuses project metadata across heartbeats', async () => {
 		const sid = await startSession();
 		const recording = new RecordingBucket(bucket);
@@ -2802,6 +2846,13 @@ describe('Session routes', () => {
 				ACTOR,
 			);
 			await expectError(await api.request('POST', heartbeat), 404, 'NOT_FOUND');
+			await (writer === 'local' ? api.deps.services : createServices(bucket)).projects.addMember(
+				pid,
+				{ user_id: STRANGER },
+				'editor',
+				ACTOR,
+			);
+			await expectOk(await api.request('POST', heartbeat));
 		},
 	);
 
