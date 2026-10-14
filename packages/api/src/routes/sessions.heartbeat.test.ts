@@ -210,6 +210,16 @@ describe('heartbeat dependency failures', () => {
 		'fails without writes when the %s read fails, then recovers on retry',
 		async (record) => {
 			const f = await fixture();
+			if (record === 'session mutation') {
+				makeHeartbeatDue();
+				await new AppPoolService(f.bucket, f.services.sessions).heartbeat(
+					f.project.id,
+					f.notebook.id,
+					ACTOR,
+					f.session.session_id,
+					f.admission.app_assignment,
+				);
+			}
 			const keyToFail =
 				record === 'notebook'
 					? paths.project(f.project.id).notebook(f.notebook.id).meta
@@ -228,7 +238,9 @@ describe('heartbeat dependency failures', () => {
 			expect(put).not.toHaveBeenCalled();
 			failure.mockRestore();
 			expect((await expectOk(await f.heartbeat())).status).toBe('running');
-			expect(put).not.toHaveBeenCalled();
+			expect(put.mock.calls.map(([key]) => key)).toEqual(
+				record === 'session mutation' ? [f.sessionKey] : [],
+			);
 		},
 	);
 

@@ -13,7 +13,7 @@ import { SessionService } from './SessionService';
 import { AppPoolService } from './AppPoolService';
 import { makeLocalSource } from '../../testing/fixtures';
 import { paths } from '../../paths';
-import { NotFoundError } from '../../errors';
+import { NotFoundError, UnavailableError } from '../../errors';
 import { DEFAULT_APP_POOL_POLICY } from './AppPoolRouter';
 import type { AppPoolPolicy } from './AppPoolRouter';
 
@@ -148,6 +148,53 @@ describe('app pool admission and lifecycle', () => {
 		expect(second.kind).toBe('reuse');
 		expect(second.member.session_id).toBe(first.member.session_id);
 		expect(get.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(2);
+	});
+
+	it('caches session reads across a sync CAS retry without overwriting concurrent members', async () => {
+		const first = await ready(await admit());
+		const concurrent = {
+			...first.member,
+			session_id: createSessionId(),
+			sandbox_id: createSandboxId(),
+		};
+		now += policy.userLeaseMs + policy.reconnectGraceMs + 1;
+		const getSession = sessions.getSession.bind(sessions);
+		const read = vi.spyOn(sessions, 'getSession').mockImplementationOnce(async (...args) => {
+			const session = await getSession(...args);
+			await pool.store.mutate(pid, nid, (snapshot) => {
+				snapshot.members[0].state = 'retiring';
+				snapshot.members.push(concurrent);
+				return { pool: snapshot, value: undefined };
+			});
+			return session;
+		});
+		const put = vi.spyOn(bucket, 'put');
+		const synchronized = await pool.synchronize(pid, nid);
+		expect(read.mock.calls).toEqual([[pid, first.member.session_id]]);
+		expect(put.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(3);
+		expect(synchronized.sessions).toMatchObject([
+			{ session_id: first.member.session_id, status: 'running' },
+		]);
+		expect(synchronized.pool.members).toMatchObject([
+			{ session_id: first.member.session_id, state: 'retiring' },
+			{ session_id: concurrent.session_id, state: 'starting' },
+		]);
+		expect(await pool.store.read(pid, nid)).toEqual(synchronized.pool);
+	});
+
+	it('fails admission without changing the pool when a member read is unavailable', async () => {
+		const first = await ready(await admit());
+		const before = await pool.store.read(pid, nid);
+		const error = new UnavailableError('Storage temporarily unavailable');
+		vi.spyOn(sessions, 'getSession').mockRejectedValueOnce(error);
+		const put = vi.spyOn(bucket, 'put');
+		await expect(admit('bob')).rejects.toBe(error);
+		expect(put).not.toHaveBeenCalled();
+		expect(await pool.store.read(pid, nid)).toEqual(before);
+		expect(await admit('bob')).toMatchObject({
+			kind: 'reuse',
+			session: { session_id: first.member.session_id, status: 'running' },
+		});
 	});
 
 	it.each(['ready', 'draining'] as const)(

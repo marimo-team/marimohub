@@ -5,6 +5,7 @@ import {
 	paths,
 	ProxyExposure,
 	AppPoolService,
+	UnavailableError,
 	createSandboxId,
 	signProxyToken,
 } from '@marimo-hub/core';
@@ -75,6 +76,50 @@ describe('app pool HTTP integration', () => {
 			get.mock.calls.filter(([key]) => key === paths.session(pid, first.session_id)),
 		).toHaveLength(1);
 	});
+
+	it.each(['published', 'missing', 'unavailable'] as const)(
+		'handles a %s session record after reusing an unobserved startup',
+		async (state) => {
+			const first = await start();
+			const pool = new AppPoolService(bucket, createServices(bucket).sessions, policy);
+			await pool.store.mutate(pid, nid, (snapshot) => {
+				snapshot.members[0].state = 'starting';
+				return { pool: snapshot, value: undefined };
+			});
+			const get = bucket.get.bind(bucket);
+			let sessionReads = 0;
+			vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				if (key === paths.session(pid, first.session_id)) {
+					sessionReads++;
+					if (sessionReads === 1) return null;
+					if (state === 'unavailable')
+						throw new UnavailableError('Storage temporarily unavailable');
+					if (state === 'missing' || sessionReads === 2) return null;
+				}
+				return get(key);
+			});
+			const response = await api('bob').request('POST', path(), {
+				mode: 'app',
+				app_visit_id: 'tab',
+			});
+			if (state === 'published') {
+				expect(await expectOk(response)).toMatchObject({
+					session_id: first.session_id,
+					status: 'running',
+				});
+				expect(sessionReads).toBe(3);
+			} else if (state === 'missing') {
+				await expectError(response, 409, 'CONFLICT');
+				expect(sessionReads).toBe(21);
+			} else {
+				await expectError(response, 503, 'SERVICE_UNAVAILABLE');
+				expect(sessionReads).toBe(2);
+			}
+			expect((await pool.store.read(pid, nid))?.members).toMatchObject([
+				{ session_id: first.session_id },
+			]);
+		},
+	);
 
 	it('reads a pool once per session listing regardless of its sandbox count', async () => {
 		await start();
