@@ -6,6 +6,7 @@ import { BUCKET_SCAN_CONCURRENCY, MARIMO_PORT } from '../../constants';
 import type { EditorSandboxSharing, SessionMode } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
+import { EtagRecordCache } from '../../etagRecordCache';
 import {
 	ConflictError,
 	EditSessionChangedError,
@@ -155,6 +156,7 @@ export class SessionService {
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
+		private readonly recordCache: EtagRecordCache<Session> = new EtagRecordCache(),
 	) {}
 
 	/**
@@ -725,8 +727,13 @@ export class SessionService {
 	): Promise<Awaited<T>[]> {
 		const objects = await listAllObjects(this.bucket, prefix);
 		const scanned = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (obj) => {
+			const cached = this.recordCache.get(obj.key, obj.etag);
+			if (cached) return handle(cached, obj, obj.etag);
 			const body = await this.bucket.get(obj.key);
-			if (!body) return SKIP;
+			if (!body) {
+				this.recordCache.delete(obj.key);
+				return SKIP;
+			}
 			// A single corrupt/legacy record must not abort a deployment-wide scan
 			// (listing, reuse, reaper). Skip it (logged) so the good records survive.
 			let session: Session;
@@ -741,6 +748,7 @@ export class SessionService {
 				);
 				return SKIP;
 			}
+			this.recordCache.set(obj.key, body.etag, session);
 			return handle(session, obj, body.etag);
 		});
 		return scanned.filter((r): r is Awaited<T> => r !== SKIP);
