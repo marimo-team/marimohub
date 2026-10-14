@@ -51,8 +51,9 @@ Use the returned `app_assignment` for heartbeats and departure.
 Without an ID, callers share the legacy `api` visit for their account.
 The response fields `users`, `max_users`, and `max_users_per_session` retain their names but count visit slots.
 
-Kernel HTTP requests and WebSocket upgrades use `/proxy/<token>/…` and require an account assignment to the sandbox.
-They do not renew leases or replace periodic heartbeats. A heartbeat failure must not trigger replay of a kernel mutation.
+In proxy exposure mode, kernel HTTP requests and WebSocket upgrades use `/proxy/<token>/…` and require an account assignment to the sandbox.
+Subdomain deployments use the direct sandbox URL.
+Kernel traffic does not renew leases or replace periodic heartbeats. A heartbeat failure must not trigger replay of a kernel mutation.
 
 Proxy authorization checks the account assignment, not an exact visit and generation.
 A departed tab can retain access while another tab keeps the same sandbox assigned.

@@ -53,7 +53,7 @@ The session promise handles rejection immediately, including after a project den
 Notebook and preview checks still precede attach authorization. Pool and session renewal retain their CAS checks, including the session reread.
 Response grants use the updated session.
 
-The storage table counts pool operations only. An unlabeled API heartbeat uses six metadata operations:
+The table covers storage costs for app pools. An unlabeled API heartbeat uses six metadata operations:
 a catalog HEAD, project GET, notebook GET, pool GET, and two session GETs.
 A due heartbeat adds two conditional writes without conflicts. Identity I/O and policy calls are additional.
 Denied projects incur one extra speculative session GET and no renewal writes.
@@ -76,6 +76,7 @@ Client and proxy scheduling remain unchanged. No API negotiation or coordinated 
 Run the optional harness from the repository root:
 
 ```sh
+mkdir -p "$PWD/.context"
 APP_PERFORMANCE_REPORT="$PWD/.context/app-performance.json" \
   pnpm --filter @marimo-hub/api test src/appPerformance.test.ts
 ```
