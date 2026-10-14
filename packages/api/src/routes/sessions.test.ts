@@ -2416,42 +2416,72 @@ describe('Session routes', () => {
 		});
 	});
 
-	it('loads app cap queues concurrently and reports the project cap first', async () => {
+	it.each(['full', 'rejected', 'thrown'] as const)(
+		'loads app cap queues concurrently and reports the project cap before a %s user queue',
+		async (userResult) => {
+			const api = cappedAppApi();
+			const { sessions } = api.deps.services;
+			const incumbent = await sessions.createSession({
+				project_id: pid,
+				notebook_id: createNotebookId(),
+				user_id: ACTOR,
+				mode: 'app',
+			});
+			await sessions.setRunning(pid, incumbent.session_id, 'https://sandbox.example');
+			const listProject = sessions.listActiveAppsForProject.bind(sessions);
+			const listUser = sessions.listActiveForUser.bind(sessions);
+			const userQueueStarted = Promise.withResolvers<void>();
+			const projectQueue = vi
+				.spyOn(sessions, 'listActiveAppsForProject')
+				// Model a competing start that becomes visible after preflight.
+				.mockResolvedValueOnce([])
+				.mockImplementationOnce(async (projectId) => {
+					await userQueueStarted.promise;
+					return listProject(projectId);
+				});
+			const userQueue = vi
+				.spyOn(sessions, 'listActiveForUser')
+				.mockImplementationOnce((...args) => {
+					userQueueStarted.resolve();
+					if (userResult === 'rejected') return Promise.reject(new Error('User scan failed'));
+					if (userResult === 'thrown') throw new Error('User scan failed');
+					return listUser(...args);
+				});
+
+			const error = await expectError(
+				await api.request('POST', sessionsPath(), { mode: 'app' }),
+				429,
+				'RESOURCE_EXHAUSTED',
+			);
+			expect(error.message).toBe(
+				'Concurrent app limit reached for this project (1). Stop an app before starting another.',
+			);
+			expect(projectQueue).toHaveBeenCalledTimes(2);
+			expect(userQueue).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it('preserves project scan errors when the user scan rejects first', async () => {
 		const api = cappedAppApi();
 		const { sessions } = api.deps.services;
-		const incumbent = await sessions.createSession({
-			project_id: pid,
-			notebook_id: createNotebookId(),
-			user_id: ACTOR,
-			mode: 'app',
-		});
-		await sessions.setRunning(pid, incumbent.session_id, 'https://sandbox.example');
-		const listProject = sessions.listActiveAppsForProject.bind(sessions);
-		const listUser = sessions.listActiveForUser.bind(sessions);
 		const userQueueStarted = Promise.withResolvers<void>();
-		const projectQueue = vi
-			.spyOn(sessions, 'listActiveAppsForProject')
-			// Model a competing start that becomes visible after preflight.
+		vi.spyOn(sessions, 'listActiveAppsForProject')
 			.mockResolvedValueOnce([])
-			.mockImplementationOnce(async (projectId) => {
+			.mockImplementationOnce(async () => {
 				await userQueueStarted.promise;
-				return listProject(projectId);
+				throw new ConflictError('Project scan failed');
 			});
-		const userQueue = vi.spyOn(sessions, 'listActiveForUser').mockImplementationOnce((...args) => {
+		vi.spyOn(sessions, 'listActiveForUser').mockImplementationOnce(async () => {
 			userQueueStarted.resolve();
-			return listUser(...args);
+			throw new Error('User scan failed');
 		});
 
 		const error = await expectError(
 			await api.request('POST', sessionsPath(), { mode: 'app' }),
-			429,
-			'RESOURCE_EXHAUSTED',
+			409,
+			'CONFLICT',
 		);
-		expect(error.message).toBe(
-			'Concurrent app limit reached for this project (1). Stop an app before starting another.',
-		);
-		expect(projectQueue).toHaveBeenCalledTimes(2);
-		expect(userQueue).toHaveBeenCalledTimes(1);
+		expect(error.message).toBe('Project scan failed');
 	});
 
 	it.each(['project', 'user'] as const)(

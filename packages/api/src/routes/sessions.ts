@@ -695,20 +695,26 @@ function capsFor(deps: ApiDeps, mode: SessionMode, pid: ProjectId, userId: UserI
 	];
 }
 
-/** Preserve cap order so the project limit takes precedence over the user limit. */
-async function loadCapQueues(caps: ReturnType<typeof capsFor>, excludedSessionId?: SessionId) {
-	return Promise.all(
+/** Preserve cap precedence even when a later queue fails. */
+async function* loadCapQueues(caps: ReturnType<typeof capsFor>, excludedSessionId?: SessionId) {
+	const results = await Promise.allSettled(
 		caps.flatMap(({ max, message, queue }) => {
 			if (!max || max <= 0) return [];
 			return [
-				queue().then((sessions) => ({
-					max,
-					message: message(max),
-					sessions: sessions.filter((session) => session.session_id !== excludedSessionId),
-				})),
+				Promise.resolve()
+					.then(queue)
+					.then((sessions) => ({
+						max,
+						message: message(max),
+						sessions: sessions.filter((session) => session.session_id !== excludedSessionId),
+					})),
 			];
 		}),
 	);
+	for (const result of results) {
+		if (result.status === 'rejected') throw result.reason;
+		yield result.value;
+	}
 }
 
 /**
@@ -723,7 +729,7 @@ async function enforceSessionCap(
 	excludedSessionId?: SessionId,
 ): Promise<void> {
 	const caps = capsFor(deps, mode, pid, userId).filter((cap) => cap.preflight);
-	for (const cap of await loadCapQueues(caps, excludedSessionId)) {
+	for await (const cap of loadCapQueues(caps, excludedSessionId)) {
 		if (cap.sessions.length >= cap.max) throw new ResourceExhaustedError(cap.message);
 	}
 }
@@ -741,7 +747,7 @@ async function assertCapAfterCreate(
 	excludedSessionId?: SessionId,
 ): Promise<void> {
 	const caps = capsFor(deps, mode, pid, userId);
-	for (const cap of await loadCapQueues(caps, excludedSessionId)) {
+	for await (const cap of loadCapQueues(caps, excludedSessionId)) {
 		const rank = cap.sessions.findIndex((session) => session.session_id === sessionId);
 		// A missing session is already terminal and no longer consumes capacity.
 		if (rank >= cap.max) throw new ResourceExhaustedError(cap.message);
