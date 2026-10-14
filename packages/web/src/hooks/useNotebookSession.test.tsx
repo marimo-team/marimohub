@@ -178,6 +178,71 @@ describe('useNotebookSession', () => {
 		expect(result.current.sandboxUrl).toBeUndefined();
 	});
 
+	it('uses an app startup heartbeat to reach running and preserves its visit lease', async () => {
+		vi.useFakeTimers();
+		const assignment = { visit_id: 'visit', generation: 'generation' };
+		const fetchMock = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) =>
+			jsonOk(
+				makeSession(
+					String(url).endsWith('/heartbeat')
+						? {}
+						: {
+								status: 'starting',
+								sandbox_url: undefined,
+								app_assignment: assignment,
+							},
+				),
+			),
+		);
+		vi.stubGlobal('fetch', fetchMock);
+		const { result } = renderHookWithClient(
+			() => useNotebookSession(PID, NID, { mode: 'app', appHeartbeatIntervalSeconds: 1 }),
+			{ toaster: false },
+		);
+		await settleHook();
+		expect(result.current.isProvisioning).toBe(true);
+
+		await act(() => vi.advanceTimersByTimeAsync(1_000));
+
+		expect(result.current.isRunning).toBe(true);
+		expect(result.current.session?.app_assignment).toEqual(assignment);
+		const heartbeat = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/heartbeat'));
+		expect(JSON.parse(heartbeat![1]!.body as string)).toEqual(assignment);
+		expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/sessions/sess-1'))).toBe(
+			false,
+		);
+	});
+
+	it.each(['edit', 'app'] as const)(
+		'slows %s startup polling after 30 seconds under StrictMode',
+		async (mode) => {
+			vi.useFakeTimers();
+			const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
+				jsonOk(makeSession({ status: 'starting', sandbox_url: undefined })),
+			);
+			vi.stubGlobal('fetch', fetchMock);
+			const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode }), {
+				toaster: false,
+				reactStrictMode: true,
+			});
+			await settleHook();
+			const polls = () =>
+				fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/sessions/sess-1'));
+			for (let tick = 0; tick < 16; tick += 1) {
+				await act(() => vi.advanceTimersByTimeAsync(2_000));
+			}
+			expect(polls()).toHaveLength(16);
+			await act(() => vi.advanceTimersByTimeAsync(4_999));
+			expect(polls()).toHaveLength(16);
+			await act(() => vi.advanceTimersByTimeAsync(1));
+			expect(polls()).toHaveLength(17);
+
+			fetchMock.mockResolvedValue(jsonOk(makeSession()));
+			await act(() => vi.advanceTimersByTimeAsync(5_000));
+			expect(result.current.isRunning).toBe(true);
+		},
+	);
+
 	it('captures the error message when start fails', async () => {
 		vi.stubGlobal(
 			'fetch',
@@ -488,7 +553,7 @@ describe('useNotebookSession', () => {
 		expect(result.current.session?.status).toBe('starting');
 
 		await act(async () => {
-			await vi.advanceTimersByTimeAsync(4_000);
+			await vi.advanceTimersByTimeAsync(5_000);
 		});
 		expect(result.current.error).toEqual({
 			code: 'STARTUP_TIMEOUT',
@@ -503,14 +568,14 @@ describe('useNotebookSession', () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-				if (init?.method === 'POST') {
+				if (init?.method === 'POST' && String(url).endsWith('/sessions')) {
 					posts += 1;
 					// First start wedges in `starting`; the retry comes up immediately.
 					return posts === 1
 						? jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }))
 						: jsonOk(makeSession());
 				}
-				if (String(url).endsWith('/sessions/sess-1')) {
+				if (String(url).endsWith('/sessions/sess-1') || String(url).endsWith('/heartbeat')) {
 					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
 				}
 				throw new Error(`unexpected fetch: ${String(url)}`);

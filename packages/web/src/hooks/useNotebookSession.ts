@@ -110,6 +110,7 @@ export function useNotebookSession(
 	// StrictMode can orphan the mutation observer during its mount/remount cycle,
 	// leaving `startSession.isPending` stuck. Track this request independently.
 	const [starting, setStarting] = useState(false);
+	const [startPollInterval, setStartPollInterval] = useState(SESSION_START_POLL_INTERVAL_MS);
 	// Keep the loading panel visible while teardown or replacement precedes admission.
 	const [restarting, setRestarting] = useState(false);
 	const sessionRef = useRef<Session | null>(null);
@@ -134,6 +135,7 @@ export function useNotebookSession(
 			sessionRef.current?.session_id !== next.session_id
 		) {
 			startingSinceRef.current = Date.now();
+			setStartPollInterval(SESSION_START_POLL_INTERVAL_MS);
 		}
 		const committed =
 			next && next.session_id === sessionRef.current?.session_id && !next.app_assignment
@@ -316,6 +318,9 @@ export function useNotebookSession(
 	useInterval(
 		() => {
 			if (session?.status !== 'starting') return;
+			if (startingSinceRef.current !== null && Date.now() - startingSinceRef.current > 30_000) {
+				setStartPollInterval(5_000);
+			}
 			// Watched longer than the deployment's startup timeout (plus grace) means
 			// whichever request was provisioning has died without failing the record —
 			// give up instead of polling forever. The message names the CONFIGURED
@@ -345,7 +350,7 @@ export function useNotebookSession(
 				() => failStart(undefined, 'NOT_FOUND'),
 			);
 		},
-		session?.status === 'starting' ? SESSION_START_POLL_INTERVAL_MS : null,
+		session?.status === 'starting' ? startPollInterval : null,
 	);
 
 	const concludeSession = useCallback(
@@ -403,8 +408,10 @@ export function useNotebookSession(
 				}),
 			)
 				.then((next) => {
-					if (mode !== 'app' || !generation.isCurrent(gen) || session.status !== 'running') return;
-					updateRunningSession(next);
+					if (mode !== 'app' || !generation.isCurrent(gen)) return;
+					if (session.status === 'running' || session.status === 'starting') {
+						updateRunningSession(next);
+					}
 				})
 				.catch((error: unknown) => {
 					if (mode !== 'app' || !generation.isCurrent(gen)) return;

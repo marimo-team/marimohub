@@ -255,13 +255,16 @@ export function useVersionQuery() {
  * into the error boundary: consumers (NotebookPage, Project) deliberately treat
  * a failed probe as "grant nothing" rather than crashing the page.
  */
-export function useCapabilitiesQuery(enabled = true) {
-	return useQuery({
+export function capabilitiesQueryOptions() {
+	return queryOptions({
 		queryKey: systemKeys.capabilities(),
 		queryFn: () => apiData(apiClient.GET('/api/v1/capabilities')),
-		enabled,
 		...IMMUTABLE_QUERY,
 	});
+}
+
+export function useCapabilitiesQuery(enabled = true) {
+	return useQuery({ ...capabilitiesQueryOptions(), enabled });
 }
 
 /** A map of user id → resolved identity. Unknown ids are simply absent. */

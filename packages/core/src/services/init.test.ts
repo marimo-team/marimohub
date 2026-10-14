@@ -1,10 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
-import { ACTOR, MemoryBucket } from '../testing';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { ACTOR, advanceTime, MemoryBucket, RecordingBucket, restoreClock } from '../testing';
 import { paths } from '../paths';
 import { UserId } from '../ids';
 import { createServices, ensureInitialized } from '.';
 
 describe('ensureInitialized', () => {
+	afterEach(restoreClock);
 	it('creates catalog and default project on empty bucket', async () => {
 		const bucket = new MemoryBucket();
 		await ensureInitialized(bucket, ACTOR);
@@ -71,6 +72,39 @@ describe('ensureInitialized', () => {
 		expect(get).not.toHaveBeenCalled();
 	});
 
+	it('skips catalog HEADs for 30 seconds after finding a populated catalog', async () => {
+		advanceTime(0);
+		const inner = new MemoryBucket();
+		await ensureInitialized(inner, ACTOR);
+		const bucket = new RecordingBucket(inner);
+
+		await ensureInitialized(bucket, ACTOR);
+		advanceTime(29_999);
+		await ensureInitialized(bucket, ACTOR);
+
+		expect(bucket.calls.head).toEqual([paths.catalog]);
+	});
+
+	it('rechecks and refreshes the populated catalog cache when its TTL expires', async () => {
+		advanceTime(0);
+		const inner = new MemoryBucket();
+		await ensureInitialized(inner, ACTOR);
+		const bucket = new RecordingBucket(inner);
+		await ensureInitialized(bucket, ACTOR);
+		bucket.calls.get.length = 0;
+
+		advanceTime(30_000);
+		await ensureInitialized(bucket, ACTOR);
+		expect(bucket.calls.head).toEqual([paths.catalog, paths.catalog]);
+		expect(bucket.calls.get).toEqual([]);
+
+		advanceTime(29_999);
+		await ensureInitialized(bucket, ACTOR);
+		expect(bucket.calls.head).toHaveLength(2);
+		await ensureInitialized(bucket, ACTOR, { createDefaultProject: false });
+		expect(bucket.calls.head).toHaveLength(3);
+	});
+
 	it('rechecks a changed catalog and initializes again after a storage reset', async () => {
 		const bucket = new MemoryBucket();
 		await ensureInitialized(bucket, ACTOR);
@@ -79,11 +113,13 @@ describe('ensureInitialized', () => {
 		await services.projects.createProject({ name: 'Another project', description: '' }, ACTOR);
 		const get = vi.spyOn(bucket, 'get');
 
+		advanceTime(30_000);
 		await ensureInitialized(bucket, ACTOR);
 		expect(get).toHaveBeenCalledWith(paths.catalog);
 		expect(await services.projects.listProjects()).toHaveLength(2);
 
 		await bucket.delete(paths.catalog);
+		advanceTime(30_000);
 		await ensureInitialized(bucket, ACTOR);
 		expect(await services.projects.listProjects()).toHaveLength(1);
 	});
