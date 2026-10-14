@@ -2362,12 +2362,18 @@ app.openapi(heartbeatSession, async (c) => {
 	const user = c.get('user');
 	const { pid, nid, sid } = c.req.valid('param');
 
-	// Project visibility FIRST (404 when hidden) — see the delete route.
+	// Preserve project-denial precedence without waiting for speculative session I/O.
+	const sessionRead = sessions.getSession(pid, sid).then(
+		(value) => ({ status: 'fulfilled' as const, value }),
+		(reason: unknown) => ({ status: 'rejected' as const, reason }),
+	);
 	const project = await loadSessionProject(projects, pid, user, deps);
 
 	// Scope-check: the project-scoped key 404s a cross-project id; the notebook
 	// check keeps a same-project/other-notebook id out of scope.
-	const existing = await sessions.getSession(pid, sid);
+	const sessionResult = await sessionRead;
+	if (sessionResult.status === 'rejected') throw sessionResult.reason;
+	const existing = sessionResult.value;
 	if (sessionResourceNotebookId(existing) !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}

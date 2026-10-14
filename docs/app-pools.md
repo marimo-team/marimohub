@@ -27,7 +27,8 @@ These limits can block a new version from starting. Full pools return HTTP 429 w
 
 ## Presence and departure
 
-Each page sends a heartbeat every 30 seconds and a departure request on navigation or closure.
+Each open page sends periodic heartbeats, including while idle, and a departure request on navigation or closure.
+Clients use the advertised `app_pool.heartbeat_interval_seconds`, which defaults to 30 seconds.
 A persisted lease lasts 120 seconds. Heartbeats renew it at most once per minute, with at least 60 seconds of durable coverage.
 Missed departures and browser crashes release slots through lease expiry.
 
@@ -53,6 +54,15 @@ The response fields `users`, `max_users`, and `max_users_per_session` retain the
 Proxy HTTP requests and WebSocket upgrades require an account assignment to the requested sandbox.
 An account can have assignments to several sandboxes. Direct kernel URLs bypass managed-page admission.
 Occupancy therefore measures managed page visits, not exact kernel connections.
+
+Heartbeats use the existing session heartbeat endpoint. Kernel HTTP requests and WebSocket upgrades use `/proxy/<token>/…`.
+Proxy traffic does not renew session or visit leases. WebSocket messages do not replace heartbeats.
+A heartbeat failure does not authorize a client to replay a kernel mutation.
+
+Proxy authorization checks the account assignment, not an exact visit and generation.
+A departed tab can retain account-level access while another tab keeps the same sandbox assigned.
+A gateway that requires exact-visit validation on every request must retain that check.
+Periodic heartbeats replace redundant presence maintenance only, not that security requirement.
 
 ## Versions and operations
 
