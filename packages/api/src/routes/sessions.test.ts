@@ -2409,6 +2409,49 @@ describe('Session routes', () => {
 		});
 	});
 
+	it('loads app cap queues concurrently and reports the project cap first', async () => {
+		const api = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: makeFakeCompute(),
+			deps: { policy: { maxAppsPerProject: 1, maxConcurrentSessionsPerUser: 1 } },
+		});
+		const { sessions } = api.deps.services;
+		const incumbent = await sessions.createSession({
+			project_id: pid,
+			notebook_id: createNotebookId(),
+			user_id: ACTOR,
+			mode: 'app',
+		});
+		await sessions.setRunning(pid, incumbent.session_id, 'https://sandbox.example');
+		const listProject = sessions.listActiveAppsForProject.bind(sessions);
+		const listUser = sessions.listActiveForUser.bind(sessions);
+		const userQueueStarted = Promise.withResolvers<void>();
+		const projectQueue = vi
+			.spyOn(sessions, 'listActiveAppsForProject')
+			// Model a competing start that becomes visible after preflight.
+			.mockResolvedValueOnce([])
+			.mockImplementationOnce(async (projectId) => {
+				await userQueueStarted.promise;
+				return listProject(projectId);
+			});
+		const userQueue = vi.spyOn(sessions, 'listActiveForUser').mockImplementationOnce((...args) => {
+			userQueueStarted.resolve();
+			return listUser(...args);
+		});
+
+		const error = await expectError(
+			await api.request('POST', sessionsPath(), { mode: 'app' }),
+			429,
+			'RESOURCE_EXHAUSTED',
+		);
+		expect(error.message).toBe(
+			'Concurrent app limit reached for this project (1). Stop an app before starting another.',
+		);
+		expect(projectQueue).toHaveBeenCalledTimes(2);
+		expect(userQueue).toHaveBeenCalledTimes(1);
+	});
+
 	it('scans deployment-wide sessions once when enforcing the per-user cap', async () => {
 		const services = createServices(bucket);
 		const unrelatedProject = createProjectId();

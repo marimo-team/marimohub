@@ -714,15 +714,18 @@ async function enforceSessionCap(
 	userId: UserId,
 	excludedSessionId?: SessionId,
 ): Promise<void> {
-	for (const cap of capsFor(deps, mode, pid, userId)) {
-		if (!cap.preflight || !cap.max || cap.max <= 0) continue;
-		const queued = (await cap.queue()).filter(
+	const caps = capsFor(deps, mode, pid, userId).filter(
+		(cap) => cap.preflight && !!cap.max && cap.max > 0,
+	);
+	const queues = await Promise.all(caps.map((cap) => cap.queue()));
+	caps.forEach((cap, index) => {
+		const queued = queues[index].filter(
 			(session) => session.session_id !== excludedSessionId,
 		);
-		if (queued.length >= cap.max) {
-			throw new ResourceExhaustedError(cap.message(cap.max));
+		if (queued.length >= cap.max!) {
+			throw new ResourceExhaustedError(cap.message(cap.max!));
 		}
-	}
+	});
 }
 
 /**
@@ -740,14 +743,15 @@ async function assertCapAfterCreate(
 	sessionId: SessionId,
 	excludedSessionId?: SessionId,
 ): Promise<void> {
-	for (const cap of capsFor(deps, mode, pid, userId)) {
-		if (!cap.max || cap.max <= 0) continue;
-		const rank = (await cap.queue())
+	const caps = capsFor(deps, mode, pid, userId).filter((cap) => !!cap.max && cap.max > 0);
+	const queues = await Promise.all(caps.map((cap) => cap.queue()));
+	caps.forEach((cap, index) => {
+		const rank = queues[index]
 			.filter((session) => session.session_id !== excludedSessionId)
 			.findIndex((s) => s.session_id === sessionId);
 		// rank < 0: our record went terminal underneath us — nothing left to cap.
-		if (rank >= cap.max) throw new ResourceExhaustedError(cap.message(cap.max));
-	}
+		if (rank >= cap.max!) throw new ResourceExhaustedError(cap.message(cap.max!));
+	});
 }
 
 const app = createApp();
