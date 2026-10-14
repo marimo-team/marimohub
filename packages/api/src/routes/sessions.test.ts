@@ -503,6 +503,57 @@ describe('Session routes', () => {
 		}
 	});
 
+	it.each([
+		{ deferred: true, fails: false },
+		{ deferred: true, fails: true },
+		{ deferred: false, fails: false },
+		{ deferred: false, fails: true },
+	])('handles a slow app audit store (%j)', async ({ deferred, fails }) => {
+		const tasks: Promise<unknown>[] = [];
+		const api = createTestApi({
+			bucket,
+			compute: makeFakeCompute(),
+			deps: {
+				backgroundTasks: deferred ? { defer: (task) => tasks.push(task) } : undefined,
+			},
+		});
+		const { events } = api.deps.services;
+		const append = events.append.bind(events);
+		const auditStarted = Promise.withResolvers<void>();
+		const releaseAudit = Promise.withResolvers<void>();
+		vi.spyOn(events, 'append').mockImplementation(async (event) => {
+			if (event.event === 'app.start') {
+				auditStarted.resolve();
+				await releaseAudit.promise;
+				if (fails) throw new Error('audit store unavailable');
+			}
+			return append(event);
+		});
+		const startedOn = new Date().toISOString().slice(0, 10);
+		let responded = false;
+		const pending = api.request('POST', sessionsPath(), { mode: 'app' }).then((response) => {
+			responded = true;
+			return response;
+		});
+		await auditStarted.promise;
+		try {
+			if (deferred) await vi.waitFor(() => expect(responded).toBe(true));
+			else expect(responded).toBe(false);
+			expect(tasks).toHaveLength(deferred ? 1 : 0);
+		} finally {
+			releaseAudit.resolve();
+			await Promise.all(tasks);
+		}
+		const session = await expectOk<ApiSession>(await pending);
+		expect(session.status).toBe('running');
+		const days = [...new Set([startedOn, new Date().toISOString().slice(0, 10)])];
+		const starts = (await Promise.all(days.map((day) => events.getEvents(day))))
+			.flat()
+			.filter((event) => event.event === 'app.start');
+		expect(starts).toHaveLength(fails ? 0 : 1);
+		if (!fails) expect(starts[0]).toMatchObject({ actor: ACTOR, session_id: session.session_id });
+	});
+
 	it('POST /sessions with a non-existent notebook returns 404 and does not provision', async () => {
 		// Use a notebook id that was never created in this project.
 		const bogusNid = createNotebookId();

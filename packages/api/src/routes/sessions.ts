@@ -2291,7 +2291,7 @@ export async function startNotebookSession(input: {
 	// whole admitted audience, so who started it belongs in the project's event log.
 	// Best-effort like every audit append.
 	if (MODE_POLICY[mode].sharedApp) {
-		await appendAudit({ ...request, userId: user.id }, 'app.start', () =>
+		const audit = appendAudit({ ...request, userId: user.id }, 'app.start', () =>
 			deps.services.events.append({
 				event: 'app.start',
 				actor: user.id,
@@ -2301,6 +2301,8 @@ export async function startNotebookSession(input: {
 				session_id: session!.session_id,
 			}),
 		);
+		if (deps.backgroundTasks) deps.backgroundTasks.defer(audit);
+		else await audit;
 	}
 
 	return {
