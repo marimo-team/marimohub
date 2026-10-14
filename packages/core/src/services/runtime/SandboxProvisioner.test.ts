@@ -827,6 +827,56 @@ describe('SandboxProvisioner', () => {
 			},
 		);
 
+		it.each([
+			{ operation: 'provision', first: 'load' },
+			{ operation: 'provision', first: 'inject' },
+			{ operation: 'prepare', first: 'load' },
+			{ operation: 'prepare', first: 'inject' },
+		] as const)(
+			'$operation waits for workspace loading and injection before strategy failure cleanup ($first first)',
+			async ({ operation, first }) => {
+				const { instance, calls } = makeFakeSandbox();
+				const work = { load: deferred<void>(), inject: deferred<void>() };
+				const started = { load: deferred<void>(), inject: deferred<void>() };
+				vi.spyOn(instance, 'mountBucket').mockImplementation(async () => {
+					started.load.resolve();
+					await work.load.promise;
+				});
+				vi.spyOn(instance, 'setEnvVars').mockImplementation(async () => {
+					started.inject.resolve();
+					await work.inject.promise;
+				});
+				const strategy = deferred<'uv-script-pins'>();
+				const error = new Error('strategy unavailable');
+				const onSandboxDestroyed = vi.fn();
+				const pending = new SandboxProvisioner(fakeComputeFrom(instance))[operation]({
+					...provisionOptions,
+					launchStrategy: strategy.promise,
+					sessionEnv: { vars: { TOKEN: 'secret' } },
+					onSandboxDestroyed,
+				});
+				const rejected = expect(pending).rejects.toBe(error);
+				await Promise.all([started.load.promise, started.inject.promise]);
+				try {
+					strategy.reject(error);
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					expect(calls.destroy).toBe(0);
+					work[first].resolve();
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					expect(calls.destroy).toBe(0);
+					expect(onSandboxDestroyed).not.toHaveBeenCalled();
+				} finally {
+					work.load.resolve();
+					work.inject.resolve();
+					await rejected;
+				}
+				expect(calls.destroy).toBe(1);
+				expect(onSandboxDestroyed).toHaveBeenCalledOnce();
+				expect(calls.startProcess).toEqual([]);
+				expect(calls.exec.some((command) => command.includes('uv sync'))).toBe(false);
+			},
+		);
+
 		it('records setup step timings and logs bounded uv output when setup is slow', async () => {
 			vi.useFakeTimers();
 			vi.setSystemTime(new Date('2026-08-26T13:47:00Z'));

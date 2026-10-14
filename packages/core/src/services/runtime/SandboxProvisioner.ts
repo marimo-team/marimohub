@@ -810,8 +810,12 @@ export class SandboxProvisioner {
 			withSandboxSpan(sw, 'inject', (time) => this.injectSessionEnv(sandbox, options, time));
 		const setupEnvironment = async () =>
 			this.setupEnvironment(sandbox, options, mountPath, sw, await launchStrategy);
-		const uploadBridge = async () =>
-			this.uploadNotebookBridge(sandbox, options, sw, await launchStrategy);
+		const uploadBridge = () =>
+			launchStrategy.then(
+				(strategy) => this.uploadNotebookBridge(sandbox, options, sw, strategy),
+				// Setup reports strategy failures after workspace loading and injection finish.
+				() => {},
+			);
 
 		// Prefetch overlaps boot; files timing includes readiness waits.
 		const { load, setup, bridge } = await all({
