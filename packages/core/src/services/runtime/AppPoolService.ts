@@ -416,7 +416,7 @@ export class AppPoolService {
 			)
 				return { pool, value: { pool, sessions: sessions ?? [] } };
 			if (!sessions) {
-				// Legacy writers are stopped before rollout; only an empty pool needs discovery.
+				// Legacy writers stop before rollout. Only an empty pool needs discovery.
 				const candidates =
 					observedSessions ??
 					(pool.members.length === 0 &&
@@ -428,7 +428,7 @@ export class AppPoolService {
 									return await this.sessions.getSession(projectId, member.session_id);
 								} catch (error) {
 									if (!(error instanceof NotFoundError)) throw error;
-									// A live reservation may publish its record before a CAS retry.
+									// A starting reservation can publish its session before a CAS retry.
 									if (member.state !== 'starting') absent.add(member.session_id);
 									return null;
 								}
@@ -441,17 +441,10 @@ export class AppPoolService {
 						sessionMode(session) === 'app',
 				);
 			}
-			const missing = new Set(
-				pool.members
-					.filter((member) => member.state !== 'starting' && absent.has(member.session_id))
-					.map((member) => member.session_id),
-			);
 			for (const member of pool.members) {
-				if (
-					missing.has(member.session_id) ||
-					(member.state === 'starting' && member.operation_expires_at <= this.now())
-				)
-					member.state = 'retiring';
+				const missing = member.state !== 'starting' && absent.has(member.session_id);
+				const expired = member.state === 'starting' && member.operation_expires_at <= this.now();
+				if (missing || expired) member.state = 'retiring';
 			}
 			for (const session of sessions) {
 				const member = pool.members.find((item) => item.session_id === session.session_id);

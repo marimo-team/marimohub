@@ -383,6 +383,16 @@ describe('SessionService', () => {
 	});
 
 	describe('heartbeat', () => {
+		const createRunningSession = async (service = sessions, authorizationExpiresAt?: string) => {
+			const created = await service.createSession({
+				notebook_id: notebookId,
+				project_id: projectId,
+				user_id: ACTOR,
+				authorization_expires_at: authorizationExpiresAt,
+			});
+			return service.setRunning(projectId, created.session_id, 'https://sandbox.example');
+		};
+
 		it('does not promote a starting session', async () => {
 			const created = await sessions.createSession({
 				notebook_id: notebookId,
@@ -438,16 +448,7 @@ describe('SessionService', () => {
 			async (ageMs) => {
 				const recording = new RecordingBucket(bucket);
 				const service = new SessionService(recording);
-				const created = await service.createSession({
-					notebook_id: notebookId,
-					project_id: projectId,
-					user_id: ACTOR,
-				});
-				const known = await service.setRunning(
-					projectId,
-					created.session_id,
-					'https://sandbox.example',
-				);
+				const known = await createRunningSession(service);
 				recording.calls.get.length = 0;
 				recording.calls.put.length = 0;
 				advanceTime(ageMs);
@@ -501,16 +502,7 @@ describe('SessionService', () => {
 		it.each(['terminated', 'deleted'] as const)(
 			'reads past a due running snapshot when the stored session was %s',
 			async (state) => {
-				const created = await sessions.createSession({
-					notebook_id: notebookId,
-					project_id: projectId,
-					user_id: ACTOR,
-				});
-				const known = await sessions.setRunning(
-					projectId,
-					created.session_id,
-					'https://sandbox.example',
-				);
+				const known = await createRunningSession();
 				if (state === 'terminated') await sessions.terminate(projectId, known.session_id);
 				else await bucket.delete(paths.session(projectId, known.session_id));
 				advanceTime(61_000);
@@ -528,17 +520,7 @@ describe('SessionService', () => {
 
 		it('rechecks a fresh snapshot at its exact authorization deadline', async () => {
 			const deadline = Date.now() + 30_000;
-			const created = await sessions.createSession({
-				notebook_id: notebookId,
-				project_id: projectId,
-				user_id: ACTOR,
-				authorization_expires_at: new Date(deadline).toISOString(),
-			});
-			const known = await sessions.setRunning(
-				projectId,
-				created.session_id,
-				'https://sandbox.example',
-			);
+			const known = await createRunningSession(sessions, new Date(deadline).toISOString());
 			await sessions.terminate(projectId, known.session_id);
 			advanceTime(30_000);
 			vi.setSystemTime(deadline);

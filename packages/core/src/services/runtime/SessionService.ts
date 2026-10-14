@@ -118,11 +118,13 @@ const TAKEOVER_REQUEST_TTL_MS = Millis.minutes(5);
 const TAKEOVER_DRAIN_LEASE_MS = Millis.minutes(10);
 const TAKEOVER_DRAIN_PROGRESS_TIMEOUT_MS = Millis.minutes(30);
 
-// Coalesce heartbeat persistence: an already-running session is only re-written
-// once its stored heartbeat is older than this. Bounds heartbeat writes to
-// ~1/interval/session regardless of client cadence, while staying well within
-// HEARTBEAT_TTL_MS so a live session is never spuriously expired.
+// The interval limits writes and leaves time before the reaper TTL.
 const HEARTBEAT_PERSIST_INTERVAL_MS = Millis.seconds(60);
+
+function heartbeatRenewalState(session: Session, now: number) {
+	if (session.status !== 'running' || isPastAuthorizationDeadline(session, now)) return 'inactive';
+	return now - Date.parse(session.last_heartbeat) < HEARTBEAT_PERSIST_INTERVAL_MS ? 'fresh' : 'due';
+}
 
 /** Sentinel for a session object that vanished between list and read. */
 const SKIP = Symbol('missing-session');
@@ -574,24 +576,18 @@ export class SessionService {
 		}));
 	}
 
-	/** Refresh a running session's heartbeat (keeps it off the TTL reaper).
-	 * Coalesced to ~1 write/60s; never revives a terminal/terminating session.
-	 * Provisioning owns the `starting` to `running` transition so a heartbeat
-	 * cannot create a claim-holding session without a sandbox URL. */
+	/**
+	 * Heartbeats persist at most once per 60 seconds. Only provisioning promotes starting sessions.
+	 * If supplied, `known` must be this session's snapshot from the current request.
+	 * Only fresh, authorized running sessions skip storage. Due renewals recheck the record under CAS.
+	 */
 	async heartbeat(projectId: ProjectId, id: SessionId, known?: Session): Promise<Session> {
-		const now = Date.now();
-		if (
-			known?.status === 'running' &&
-			!isPastAuthorizationDeadline(known, now) &&
-			now - new Date(known.last_heartbeat).getTime() < HEARTBEAT_PERSIST_INTERVAL_MS
-		)
-			return known;
+		if (known && heartbeatRenewalState(known, Date.now()) === 'fresh') return known;
 		return this.mutate(projectId, id, (session) => {
-			if (session.status !== 'running') return null;
-			if (isPastAuthorizationDeadline(session, Date.now())) return null;
-			const ageMs = Date.now() - new Date(session.last_heartbeat).getTime();
-			if (ageMs < HEARTBEAT_PERSIST_INTERVAL_MS) return null;
-			return { ...session, last_heartbeat: new Date().toISOString() };
+			const now = Date.now();
+			return heartbeatRenewalState(session, now) === 'due'
+				? { ...session, last_heartbeat: new Date(now).toISOString() }
+				: null;
 		});
 	}
 
