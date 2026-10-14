@@ -89,6 +89,7 @@ describe('app operation budgets', () => {
 		await expectOk(await f.heartbeat());
 		expect(counts(f.bucket.operations)).toMatchObject({ putAttempts: 0, deletes: 0 });
 		const heartbeatReads = counts(f.bucket.operations).metadataReads;
+		expect(f.bucket.operations).not.toContainEqual({ method: 'head', key: paths.catalog });
 		const renew = vi.spyOn(f.client.deps.services.sessions, 'heartbeat');
 		f.bucket.operations = [];
 		for (let i = 0; i < 20; i++) expect(await f.proxy()).toMatchObject({ kind: 'forward' });
@@ -100,7 +101,7 @@ describe('app operation budgets', () => {
 			putAttempts: 0,
 			deletes: 0,
 		});
-		expect(heartbeatReads).toBe(6);
+		expect(heartbeatReads).toBe(5);
 	});
 
 	it('reads changed notebook constraints on the next proxy request', async () => {

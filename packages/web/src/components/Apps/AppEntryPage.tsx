@@ -1,7 +1,7 @@
 import { hasNotebookPreviews } from '@/api/previews';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { useAppQuery } from '@/api/apps';
 import {
@@ -40,7 +40,14 @@ export function AppEntryPage({
 	}, [queryClient, pid, prefetchProject]);
 	if (query.isError)
 		return (
-			<NotebookFallback pid={pid} nid={nid} variant={variant} error={query.error} user={user} />
+			<NotebookFallback
+				key={`${pid}/${nid}`}
+				pid={pid}
+				nid={nid}
+				variant={variant}
+				error={query.error}
+				user={user}
+			/>
 		);
 	if (!query.data) return <p className="p-6">Opening app…</p>;
 	if (query.data.your_role !== 'app-user')
@@ -70,12 +77,17 @@ function NotebookFallback({
 	error: Error;
 	user: ReturnType<typeof useUserQuery>;
 }) {
+	const canLoadProject = !!user.data && !user.data.app_only;
+	const [projectReady, setProjectReady] = useState(false);
 	const project = useQuery({
 		...projectQueryOptions(pid),
-		enabled: !!user.data && !user.data.app_only,
+		enabled: canLoadProject,
 		retry: false,
 	});
-	if (user.isPending || (user.data && !user.data.app_only && !project.data && project.isFetching))
+	// Wait for initial access validation without interrupting later background refreshes.
+	if (!projectReady && canLoadProject && project.isSuccess && !project.isFetching)
+		setProjectReady(true);
+	if (user.isPending || (canLoadProject && !projectReady && project.isFetching))
 		return <p className="p-6">Opening notebook…</p>;
 	if (
 		user.isError ||

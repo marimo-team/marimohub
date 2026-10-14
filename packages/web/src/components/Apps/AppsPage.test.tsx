@@ -8,6 +8,7 @@ import { Route, Routes } from 'react-router-dom';
 import type { Theme } from '@/context/ThemeContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { projectKeys } from '@/api/queryKeys';
+import { projectQueryOptions } from '@/api/hooks';
 import { renderWithClient } from '@/test/render';
 import { createQueryClient } from '@/api/queryClient';
 import { AppsPage, ProjectEntryPage } from './AppsPage';
@@ -47,6 +48,7 @@ function setup(
 		appReady?: Promise<void>;
 		client?: QueryClient;
 		projectStatus?: number;
+		projectReady?: Promise<void>;
 		projectReload?: Promise<void>;
 		appsResponse?: (url: URL) => Response;
 	} = {},
@@ -60,8 +62,10 @@ function setup(
 	const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = new URL(input instanceof Request ? input.url : String(input), 'http://localhost');
 		if (url.pathname.endsWith(`/notebooks/${NID}/app`)) await options.appReady;
-		if (url.pathname === `/api/v1/projects/${PID}` && ++projectReads > 1)
-			await options.projectReload;
+		if (url.pathname === `/api/v1/projects/${PID}`) {
+			await options.projectReady;
+			if (++projectReads > 1) await options.projectReload;
+		}
 		const status = url.pathname.endsWith(`/notebooks/${NID}/app`)
 			? options.appStatus
 			: url.pathname === `/api/v1/projects/${PID}`
@@ -331,6 +335,48 @@ describe('stakeholder apps', () => {
 		expect(errorToast).not.toHaveBeenCalled();
 		expect(screen.queryByRole('alert')).toBeNull();
 	});
+
+	it.each([
+		{ role: 'editor', projectStatus: 403 },
+		{ role: 'editor', projectStatus: 404 },
+		{ role: 'editor', projectStatus: 503 },
+		{ role: 'app-user', projectStatus: undefined },
+		{ role: 'editor', projectStatus: undefined },
+	] as const)(
+		'waits for cached project access to refresh: $role, $projectStatus',
+		async ({ role, projectStatus }) => {
+			const client = new QueryClient({
+				defaultOptions: { queries: { staleTime: 60_000, retry: false } },
+			});
+			makeFetch({ role: 'editor' });
+			await client.fetchQuery(projectQueryOptions(PID));
+			await client.invalidateQueries({ queryKey: projectKeys.detail(PID) });
+			const { ready: projectReady, finish } = deferredRequest();
+			const { container, existing } = setup(app.url, [app], {
+				client,
+				role,
+				appOnly: false,
+				appStatus: 503,
+				projectStatus,
+				projectReady,
+			});
+			try {
+				expect(await screen.findByText('Opening notebook…')).toBeVisible();
+				expect(container.querySelector('iframe')).toBeNull();
+				expect(sessionPosts(existing)).toHaveLength(0);
+			} finally {
+				await act(async () => finish());
+			}
+			if (role === 'editor' && !projectStatus) {
+				await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+				expect(sessionPosts(existing)).toHaveLength(1);
+			} else {
+				expect(await screen.findByRole('alert')).toHaveTextContent('Unavailable');
+				expect(container.querySelector('iframe')).toBeNull();
+				expect(sessionPosts(existing)).toHaveLength(0);
+			}
+		},
+	);
 
 	it('keeps the authoring fallback mounted during a background project refresh', async () => {
 		const { ready: projectReload, finish } = deferredRequest();
