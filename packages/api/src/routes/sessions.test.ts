@@ -90,6 +90,13 @@ describe('Session routes', () => {
 	});
 
 	const sessionsPath = (suffix = '') => `/projects/${pid}/notebooks/${nid}/sessions${suffix}`;
+	const cappedAppApi = (compute = makeFakeCompute()) =>
+		createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute,
+			deps: { policy: { maxAppsPerProject: 1, maxConcurrentSessionsPerUser: 1 } },
+		});
 	const editorSessionPath = (suffix = '') =>
 		`/projects/${pid}/notebooks/${nid}/editor-session${suffix}`;
 	const sandboxConfig = (overrides: Partial<ApiDeps['sandbox']> = {}): ApiDeps['sandbox'] => ({
@@ -2410,12 +2417,7 @@ describe('Session routes', () => {
 	});
 
 	it('loads app cap queues concurrently and reports the project cap first', async () => {
-		const api = createTestApi({
-			bucket,
-			userId: ACTOR,
-			compute: makeFakeCompute(),
-			deps: { policy: { maxAppsPerProject: 1, maxConcurrentSessionsPerUser: 1 } },
-		});
+		const api = cappedAppApi();
 		const { sessions } = api.deps.services;
 		const incumbent = await sessions.createSession({
 			project_id: pid,
@@ -2457,12 +2459,7 @@ describe('Session routes', () => {
 		async (scope) => {
 			const compute = makeFakeCompute();
 			const provision = vi.spyOn(compute, 'create');
-			const api = createTestApi({
-				bucket,
-				userId: ACTOR,
-				compute,
-				deps: { policy: { maxAppsPerProject: 1, maxConcurrentSessionsPerUser: 1 } },
-			});
+			const api = cappedAppApi(compute);
 			const { sessions } = api.deps.services;
 			const error = new Error('cap storage unavailable');
 			if (scope === 'project') {

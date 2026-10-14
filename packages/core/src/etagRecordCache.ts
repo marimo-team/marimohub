@@ -1,7 +1,6 @@
 /**
- * Bounded LRU of parsed records. Callers validate against a freshly listed ETag
- * and store the fetched ETag, which may differ if a write races the listing.
- * Values are shared references and must not be mutated by callers.
+ * Bounded LRU cache. Reads require the current ETag, and writes use the fetched
+ * ETag. Values are shared references that callers must not mutate.
  */
 export class EtagRecordCache<T> {
 	private readonly entries = new Map<string, { etag: string; value: T }>();
