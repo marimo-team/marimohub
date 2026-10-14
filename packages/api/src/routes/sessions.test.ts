@@ -383,6 +383,31 @@ describe('Session routes', () => {
 		expect(readClaim).toHaveBeenCalledExactlyOnceWith(pid, nid);
 	});
 
+	it('rejects a session record whose workspace lease was lost before publication completed', async () => {
+		const compute = makeFakeCompute();
+		const create = vi.spyOn(compute, 'create');
+		const api = createTestApi({ bucket, compute });
+		const { sessions } = api.deps.services;
+		const createSession = sessions.createSession.bind(sessions);
+		vi.spyOn(sessions, 'createSession').mockImplementationOnce(async (input) => {
+			const session = await createSession(input);
+			await bucket.put(
+				paths.project(pid).notebook(nid).workspaceMutationClaim,
+				JSON.stringify({
+					holder: 'another-writer',
+					expires_at: new Date(Date.now() + Millis.minutes(2)).toISOString(),
+				}),
+			);
+			return session;
+		});
+
+		const error = await expectError(await api.request('POST', sessionsPath()), 409, 'CONFLICT');
+
+		expect(error.message).toBe('Workspace mutation lease was lost; retry the operation');
+		expect(create).not.toHaveBeenCalled();
+		expect(await sessions.listSessions(nid)).toMatchObject([{ status: 'failed' }]);
+	});
+
 	it('POST /sessions with a non-existent notebook returns 404 and does not provision', async () => {
 		// Use a notebook id that was never created in this project.
 		const bogusNid = createNotebookId();

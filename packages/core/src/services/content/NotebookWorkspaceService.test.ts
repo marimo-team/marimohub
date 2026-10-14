@@ -397,6 +397,32 @@ describe('NotebookWorkspaceService', () => {
 		await expect(service.stat(PROJECT_ID, NOTEBOOK_ID, 'late.txt')).rejects.toThrow('not found');
 	});
 
+	it.each([false, true])(
+		'renews before mutation only after a mutability check (check: %s)',
+		async (check) => {
+			const put = vi.spyOn(bucket, 'put');
+			const assertMutable = check ? vi.fn(async () => {}) : undefined;
+			await service.withMutation(PROJECT_ID, NOTEBOOK_ID, { assertMutable }, async () => {
+				expect(put.mock.calls.filter(([key]) => key === CLAIM_KEY)).toHaveLength(check ? 2 : 1);
+				expect((await readClaim(bucket)).holder).not.toBeNull();
+			});
+			if (assertMutable) expect(assertMutable).toHaveBeenCalledOnce();
+			expect(await readClaim(bucket)).toEqual({ holder: null, expires_at: null });
+		},
+	);
+
+	it('releases a fresh lease after mutation failure and allows a retry', async () => {
+		await expect(
+			service.withMutation(PROJECT_ID, NOTEBOOK_ID, {}, async () => {
+				throw new Error('mutation failed');
+			}),
+		).rejects.toThrow('mutation failed');
+		expect(await readClaim(bucket)).toEqual({ holder: null, expires_at: null });
+		await expect(
+			service.withMutation(PROJECT_ID, NOTEBOOK_ID, {}, async () => 'retried'),
+		).resolves.toBe('retried');
+	});
+
 	it('renews the lease while the session check waits', async () => {
 		vi.useFakeTimers();
 		const entered = Promise.withResolvers<void>();
@@ -527,8 +553,8 @@ describe('NotebookWorkspaceService', () => {
 			const claims = observing.claimWrites.map((body) =>
 				WorkspaceMutationClaimSchema.parse(JSON.parse(body)),
 			);
-			expect(claims.map((claim) => claim.holder !== null)).toEqual([true, true, true, false]);
-			const [acquired, , renewed] = claims;
+			expect(claims.map((claim) => claim.holder !== null)).toEqual([true, true, false]);
+			const [acquired, renewed] = claims;
 			expect(Date.parse(renewed?.expires_at ?? '')).toBeGreaterThan(
 				Date.parse(acquired?.expires_at ?? ''),
 			);
@@ -536,7 +562,7 @@ describe('NotebookWorkspaceService', () => {
 
 			observing.claimWrites = [];
 			await service.delete(PROJECT_ID, NOTEBOOK_ID, 'target');
-			expect(observing.claimWrites).toHaveLength(4);
+			expect(observing.claimWrites).toHaveLength(3);
 			expect((await service.list(PROJECT_ID, NOTEBOOK_ID)).items.map((item) => item.path)).toEqual([
 				'source',
 			]);
