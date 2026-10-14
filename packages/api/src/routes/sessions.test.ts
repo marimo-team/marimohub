@@ -1272,6 +1272,44 @@ describe('Session routes', () => {
 		expect(data.compute_from_snapshot).toBeUndefined();
 	});
 
+	it.each(['running', 'reclaimed'] as const)(
+		'allows startup when a requested takeover expires during the scan of a %s holder',
+		async (holderState) => {
+			const request = exclusiveApi(ACTOR);
+			const persistent = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+			const { sessions } = createServices(bucket);
+			const claim = await sessions.reserveTakeover(pid, nid, {
+				takeoverId: 'scan-expiry',
+				requestedBy: STRANGER,
+				expectedHolder: persistent.session_id,
+				expectedActivity: 'idle',
+			});
+			if (holderState === 'reclaimed') {
+				await sessions.markTerminated(pid, persistent.session_id);
+				await sessions.markSandboxReclaimed(pid, persistent.session_id, new Date().toISOString());
+			}
+			vi.useFakeTimers({ toFake: ['Date'] });
+			const list = bucket.list.bind(bucket);
+			const scan = vi.spyOn(bucket, 'list').mockImplementation(async (options) => {
+				if (options?.prefix === paths.sessionsForProject(pid)) {
+					vi.setSystemTime(Date.parse(claim.transfer!.requested_at) + Millis.minutes(5));
+				}
+				return list(options);
+			});
+			try {
+				vi.setSystemTime(Date.parse(claim.transfer!.requested_at) + Millis.minutes(5) - 1);
+				const result = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				expect(result.status).toBe('running');
+				if (holderState === 'running') expect(result.session_id).toBe(persistent.session_id);
+				else expect(result.session_id).not.toBe(persistent.session_id);
+				expect((await sessions.getEditorClaim(pid, nid))?.transfer).toBeUndefined();
+			} finally {
+				scan.mockRestore();
+				vi.useRealTimers();
+			}
+		},
+	);
+
 	it('reports exclusive ownership and completes a warned takeover before replacement', async () => {
 		const ownerCompute = makeFakeCompute();
 		const otherCompute = makeFakeCompute();
