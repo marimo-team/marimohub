@@ -53,6 +53,7 @@ export class AwsSecretsManagerResolver implements SecretResolver {
 	private readonly cacheTtlMs: number;
 	private readonly now: () => number;
 	private readonly cache = new Map<string, CacheEntry>();
+	private readonly inFlight = new Map<string, Promise<GetSecretValueResult>>();
 	private readonly allowedSecrets?: readonly ProjectResourceRule[];
 
 	constructor(opts: AwsSecretsManagerResolverOptions) {
@@ -102,16 +103,25 @@ export class AwsSecretsManagerResolver implements SecretResolver {
 			: selectJsonKey(result.SecretString, jsonKey);
 	}
 
-	/**
-	 * Fetch one secret, cached by SECRET ID (not the full locator) so sibling
-	 * `#key` selections and a JSON fan-out of the same secret share a single
-	 * GetSecretValue call.
-	 */
+	/** Sibling `#key` selections share in-flight reads even when the cache TTL is zero. */
 	private async fetchCached(secretId: string): Promise<GetSecretValueResult> {
 		if (this.cacheTtlMs > 0) {
 			const hit = this.cache.get(secretId);
 			if (hit && hit.expires > this.now()) return hit.result;
 		}
+		const pending = this.inFlight.get(secretId);
+		if (pending) return pending;
+
+		const fetch = this.fetchAndCache(secretId);
+		this.inFlight.set(secretId, fetch);
+		try {
+			return await fetch;
+		} finally {
+			this.inFlight.delete(secretId);
+		}
+	}
+
+	private async fetchAndCache(secretId: string): Promise<GetSecretValueResult> {
 		let result: GetSecretValueResult;
 		try {
 			result = await this.fetch(secretId);

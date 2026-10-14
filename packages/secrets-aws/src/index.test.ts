@@ -127,6 +127,80 @@ describe('AwsSecretsManagerResolver', () => {
 		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 
+	it.each([0, 1000])('shares in-flight sibling reads with TTL %i', async (cacheTtlMs) => {
+		const pending = Promise.withResolvers<GetSecretValueResult>();
+		const fetch = vi.fn(() => pending.promise);
+		const r = resolver(fetch, cacheTtlMs);
+		const values = Promise.all([
+			r.resolve(ref('bundle#A')),
+			r.resolve(ref('bundle#B')),
+			r.resolve(ref('bundle')),
+		]);
+		expect(fetch).toHaveBeenCalledExactlyOnceWith('bundle');
+
+		const SecretString = JSON.stringify({ A: '1', B: '2' });
+		pending.resolve({ SecretString });
+		await expect(values).resolves.toEqual(['1', '2', SecretString]);
+		await r.resolve(ref('bundle#A'));
+		expect(fetch).toHaveBeenCalledTimes(cacheTtlMs === 0 ? 2 : 1);
+	});
+
+	it('fetches distinct secret IDs independently while other reads are pending', async () => {
+		const pending = Promise.withResolvers<GetSecretValueResult>();
+		const fetch = vi.fn((id: string) =>
+			id === 'slow' ? pending.promise : Promise.resolve({ SecretString: 'ready' }),
+		);
+		const r = resolver(fetch);
+		const slow = r.resolve(ref('slow'));
+
+		await expect(r.resolve(ref('fast'))).resolves.toBe('ready');
+		expect(fetch).toHaveBeenCalledTimes(2);
+		pending.resolve({ SecretString: 'eventually' });
+		await expect(slow).resolves.toBe('eventually');
+	});
+
+	it.each([0, 1000])('clears a shared failed fetch for retry with TTL %i', async (cacheTtlMs) => {
+		const pending = Promise.withResolvers<GetSecretValueResult>();
+		const fetch = vi
+			.fn<SecretFetcher>()
+			.mockReturnValueOnce(pending.promise)
+			.mockResolvedValue({
+				SecretString: JSON.stringify({ A: '1', B: '2' }),
+			});
+		const r = resolver(fetch, cacheTtlMs);
+		const first = expect(r.resolve(ref('bundle#A'))).rejects.toMatchObject({
+			reason: 'unavailable',
+			message: 'AWS Secrets Manager resolution failed: ThrottlingException',
+		});
+		const second = expect(r.resolve(ref('bundle#B'))).rejects.toMatchObject({
+			reason: 'unavailable',
+			message: 'AWS Secrets Manager resolution failed: ThrottlingException',
+		});
+		expect(fetch).toHaveBeenCalledTimes(1);
+		pending.reject(Object.assign(new Error(SECRET), { name: 'ThrottlingException' }));
+		await Promise.all([first, second]);
+
+		await expect(
+			Promise.all([r.resolve(ref('bundle#A')), r.resolve(ref('bundle#B'))]),
+		).resolves.toEqual(['1', '2']);
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it('isolates JSON selection errors between callers sharing a fetch', async () => {
+		const pending = Promise.withResolvers<GetSecretValueResult>();
+		const fetch = vi.fn(() => pending.promise);
+		const r = resolver(fetch);
+		const missing = expect(r.resolve(ref('bundle#missing'))).rejects.toMatchObject({
+			reason: 'invalid_value',
+		});
+		const valid = r.resolve(ref('bundle#A'));
+		pending.resolve({ SecretString: JSON.stringify({ A: SECRET }) });
+
+		await missing;
+		await expect(valid).resolves.toBe(SECRET);
+		expect(fetch).toHaveBeenCalledTimes(1);
+	});
+
 	it('does not memoize a failed fetch (a later attempt can still succeed)', async () => {
 		let calls = 0;
 		const fetch = vi.fn(async () => {
@@ -246,6 +320,23 @@ describe('project policies', () => {
 		});
 		expect(fetch).toHaveBeenCalledTimes(1);
 	});
+	it('checks access before joining an in-flight fetch', async () => {
+		const pending = Promise.withResolvers<GetSecretValueResult>();
+		const fetch = vi.fn(() => pending.promise);
+		const r = new AwsSecretsManagerResolver({
+			fetch,
+			allowedSecrets: [{ resource: 'prod/bundle', projects: [projectId] }],
+		});
+		const allowed = r.resolve(ref('prod/bundle#token'), context);
+		await expect(r.resolve(ref('prod/bundle#token'), { scope: 'org' })).rejects.toMatchObject({
+			reason: 'forbidden',
+		});
+
+		pending.resolve({ SecretString: JSON.stringify({ token: SECRET }) });
+		await expect(allowed).resolves.toBe(SECRET);
+		expect(fetch).toHaveBeenCalledTimes(1);
+	});
+
 	it('supports explicitly shared org secrets without fetching during authorization', async () => {
 		const fetch = vi.fn(async () => ({ SecretString: SECRET }));
 		const r = new AwsSecretsManagerResolver({
