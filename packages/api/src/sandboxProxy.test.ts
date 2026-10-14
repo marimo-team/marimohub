@@ -576,6 +576,44 @@ describe('authorizeProxyRequest', () => {
 		expect(sessionReads()).toBe(2);
 	});
 
+	it.each(['project', 'notebook'] as const)(
+		'rejects a warm app admission during %s storage failure and retries after recovery',
+		async (resource) => {
+			const { d } = recordedDeps();
+			const editor = await d.services.sessions.getSession(pid, sessionId);
+			const app = await d.services.sessions.createSession({
+				project_id: pid,
+				notebook_id: editor.notebook_id,
+				user_id: ACTOR,
+				mode: 'app',
+			});
+			await d.services.sessions.setRunning(pid, app.session_id, '/proxy/x/', false, ORIGIN);
+			const appToken = await signProxyToken(pid, app.session_id, SECRET);
+			const request = () => req(`/proxy/${appToken}/`);
+			expect(await authorizeProxyRequest(request(), d)).toMatchObject({ kind: 'forward' });
+			const key =
+				resource === 'project'
+					? paths.project(pid).meta
+					: paths.project(pid).notebook(editor.notebook_id).meta;
+			const head = d.bucket.head.bind(d.bucket);
+			const failure = vi.spyOn(d.bucket, 'head').mockImplementation(async (requestedKey) => {
+				if (requestedKey === key) throw new UnavailableError('Storage unavailable');
+				return head(requestedKey);
+			});
+			try {
+				for (let attempt = 0; attempt < 2; attempt++) {
+					expect(await authorizeProxyRequest(request(), d)).toMatchObject({
+						kind: 'reject',
+						status: resource === 'project' ? 404 : 503,
+					});
+				}
+			} finally {
+				failure.mockRestore();
+			}
+			expect(await authorizeProxyRequest(request(), d)).toMatchObject({ kind: 'forward' });
+		},
+	);
+
 	it.each(['membership', 'project', 'notebook', 'labels'] as const)(
 		'revalidates app proxy access immediately after a replica changes %s',
 		async (change) => {
