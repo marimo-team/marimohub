@@ -40,4 +40,70 @@ describe('catalog recovery command', () => {
 		).toMatchObject({ projects: 1 });
 		expect((await services.projects.listProjects())[0].id).toBe(project.id);
 	});
+	it.each([
+		['--unknown'],
+		['--snapshot', 'not-a-snapshot-id'],
+		['--snapshot'],
+		['--rebuild', '--apply', '', '--writers-stopped', '--actor', ACTOR],
+		['--rebuild', '--apply', 'token', '--writers-stopped'],
+		['--rebuild', '--apply', 'token', '--actor', ACTOR],
+		['--rebuild', 'unexpected-positional-argument'],
+	])('rejects invalid arguments before opening storage: %j', async (...args) => {
+		const makeBucket = vi.fn(() => new MemoryBucket());
+		await expect(runCatalogRecovery(args, makeBucket)).rejects.toThrow();
+		expect(makeBucket).not.toHaveBeenCalled();
+	});
+
+	it('does not apply a report with unaccepted warnings or a stale token', async () => {
+		const bucket = new MemoryBucket();
+		const catalog = new CatalogService(bucket);
+		await catalog.initialize(ACTOR);
+		const { token } = await catalog.planRecovery({ mode: 'rebuild' });
+		const put = vi.spyOn(bucket, 'put');
+		await expect(
+			runCatalogRecovery(
+				['--rebuild', '--apply', token, '--writers-stopped', '--actor', ACTOR],
+				() => bucket,
+			),
+		).rejects.toThrow('warnings');
+		await expect(
+			runCatalogRecovery(
+				[
+					'--rebuild',
+					'--apply',
+					'stale-token',
+					'--writers-stopped',
+					'--actor',
+					ACTOR,
+					'--accept-warnings',
+				],
+				() => bucket,
+			),
+		).rejects.toThrow('stale');
+		expect(put).not.toHaveBeenCalled();
+	});
+
+	it('applies a selected snapshot report without reconstructing later projects', async () => {
+		const bucket = new MemoryBucket();
+		const services = createServices(bucket);
+		await services.catalog.initialize(ACTOR);
+		const original = await services.projects.createProject(
+			{ name: 'Original', description: '' },
+			ACTOR,
+		);
+		const selected = await services.catalog.getCurrentSnapshot();
+		await services.projects.createProject({ name: 'Later', description: '' }, ACTOR);
+		const source = { mode: 'snapshot', snapshotId: selected.snapshot_id } as const;
+		const { token } = await services.catalog.planRecovery(source);
+		expect(
+			await runCatalogRecovery(['--snapshot', selected.snapshot_id], () => bucket),
+		).toMatchObject({ token, projects: [{ id: original.id }] });
+		await runCatalogRecovery(
+			['--snapshot', selected.snapshot_id, '--apply', token, '--writers-stopped', '--actor', ACTOR],
+			() => bucket,
+		);
+		expect((await services.projects.listProjects()).map((project) => project.id)).toEqual([
+			original.id,
+		]);
+	});
 });

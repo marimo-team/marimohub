@@ -362,4 +362,280 @@ describe('catalog recovery', () => {
 		expect(put.mock.calls.every(([key]) => key.startsWith('_system/'))).toBe(true);
 		expect((await services.catalog.getCurrentSnapshot()).projects).toHaveLength(1);
 	});
+	it('blocks recovery when storage cannot provide ETags', async () => {
+		const { bucket, services, project } = await fixture();
+		const list = bucket.list.bind(bucket);
+		vi.spyOn(bucket, 'list').mockImplementation(async (options) => {
+			const result = await list(options);
+			return { ...result, objects: result.objects.map((object) => ({ ...object, etag: '' })) };
+		});
+		const report = await services.catalog.planRecovery(SOURCE);
+		expect(report.issues).toContainEqual(
+			expect.objectContaining({
+				key: paths.project(project.id).meta,
+				severity: 'error',
+				message: 'Storage must provide non-empty ETags for recovery.',
+			}),
+		);
+		const put = vi.spyOn(bucket, 'put');
+		const remove = vi.spyOn(bucket, 'delete');
+		await expect(
+			services.catalog.recover(SOURCE, ACTOR, {
+				token: report.token,
+				writersStopped: true,
+				acceptWarnings: true,
+			}),
+		).rejects.toThrow('blocked');
+		expect(put).not.toHaveBeenCalled();
+		expect(remove).not.toHaveBeenCalled();
+	});
+
+	it.each(['invalid JSON', 'wrong schema', 'mismatched ID'])(
+		'reports a snapshot with %s without selecting it or replacing the catalog',
+		async (corruption) => {
+			const { bucket, services } = await fixture();
+			const id = createSnapshotId();
+			const key = paths.snapshot(id);
+			const body =
+				corruption === 'invalid JSON'
+					? '{'
+					: JSON.stringify(corruption === 'wrong schema' ? {} : makeSnapshot());
+			await bucket.put(key, body);
+			const originalCatalog = await (await bucket.get(paths.catalog))!.text();
+			const put = vi.spyOn(bucket, 'put');
+			const rebuild = await services.catalog.planRecovery(SOURCE);
+			expect(rebuild.issues).toContainEqual(expect.objectContaining({ key, severity: 'warning' }));
+			expect(rebuild.issues.filter((issue) => issue.severity === 'error')).toEqual([]);
+			expect(rebuild.candidates.map((candidate) => candidate.id)).not.toContain(id);
+			const source = { mode: 'snapshot', snapshotId: id } as const;
+			const report = await services.catalog.planRecovery(source);
+			await expect(
+				services.catalog.recover(source, ACTOR, {
+					token: report.token,
+					writersStopped: true,
+					acceptWarnings: true,
+				}),
+			).rejects.toThrow('blocked');
+			expect(put).not.toHaveBeenCalled();
+			expect(await (await bucket.get(paths.catalog))!.text()).toBe(originalCatalog);
+		},
+	);
+
+	it.each(['preparing', 'publishing', 'complete', 'expired'])(
+		'recovers only the completed import attempt when its receipt is %s',
+		async (state) => {
+			const { bucket, services, project, notebook } = await fixture();
+			const previousId = createNotebookId();
+			const currentId = createNotebookId();
+			for (const id of [previousId, currentId])
+				await services.notebooks.stageImportNotebook(project.id, id, INPUT, ACTOR);
+			await bucket.put(
+				paths.project(project.id).notebookImport(createImportId()).item('entry'),
+				JSON.stringify({
+					actor: ACTOR,
+					input: { entry_notebook: 'notebook.py', title: 'Imported' },
+					notebook_id: currentId,
+					attempts: [previousId, currentId],
+					state,
+					lease_until: 0,
+				}),
+			);
+			await eraseIndex(bucket);
+			const report = await services.catalog.planRecovery(SOURCE);
+			const expected = state === 'complete' ? [notebook.id, currentId] : [notebook.id];
+			expect(report.projects[0].notebooks.map((entry) => entry.id).sort()).toEqual(expected.sort());
+			expect(report.projects[0].notebook_count).toBe(expected.length);
+			expect(report.issues.filter((issue) => issue.severity === 'error')).toEqual([]);
+			await services.catalog.recover(SOURCE, ACTOR, {
+				token: report.token,
+				writersStopped: true,
+				acceptWarnings: true,
+			});
+			expect(
+				(await services.catalog.getCurrentSnapshot()).projects[0].notebooks
+					.map((entry) => entry.id)
+					.sort(),
+			).toEqual(expected.sort());
+		},
+	);
+
+	it('blocks reconstruction if an import receipt cannot prove which attempt completed', async () => {
+		const { bucket, services, project } = await fixture();
+		const receipt = paths.project(project.id).notebookImport(createImportId()).item('entry');
+		await bucket.put(receipt, JSON.stringify({ state: 'complete' }));
+		const report = await services.catalog.planRecovery(SOURCE);
+		expect(report.issues).toContainEqual(
+			expect.objectContaining({ key: receipt, severity: 'error' }),
+		);
+		const put = vi.spyOn(bucket, 'put');
+		await expect(
+			services.catalog.recover(SOURCE, ACTOR, {
+				token: report.token,
+				writersStopped: true,
+				acceptWarnings: true,
+			}),
+		).rejects.toThrow('blocked');
+		expect(put).not.toHaveBeenCalled();
+	});
+
+	it.each(['draft', 'active'] as const)(
+		'handles an unsynced Git notebook with status %s',
+		async (status) => {
+			const { bucket, services, project } = await fixture();
+			const { meta } = await services.notebooks.synced.create(
+				project.id,
+				{
+					title: 'Synced',
+					description: '',
+					repo: 'owner/repo',
+					branch: 'main',
+					root_path: '',
+					entry_notebook: 'app.py',
+				},
+				ACTOR,
+			);
+			const nb = paths.project(project.id).notebook(meta.id);
+			await bucket.put(nb.meta, JSON.stringify({ ...meta, status }));
+			const report = await services.catalog.planRecovery(SOURCE);
+			const errors = report.issues.filter((issue) => issue.severity === 'error');
+			if (status === 'draft') {
+				expect(errors).toEqual([]);
+				await services.catalog.recover(SOURCE, ACTOR, {
+					token: report.token,
+					writersStopped: true,
+					acceptWarnings: true,
+				});
+				expect((await services.catalog.getCurrentSnapshot()).projects[0].notebooks).toContainEqual(
+					expect.objectContaining({ id: meta.id, status: 'draft', source_type: 'git' }),
+				);
+			} else {
+				expect(errors).toContainEqual(
+					expect.objectContaining({
+						key: nb.source,
+						message: 'Published synced notebook has no current version.',
+					}),
+				);
+				const put = vi.spyOn(bucket, 'put');
+				await expect(
+					services.catalog.recover(SOURCE, ACTOR, {
+						token: report.token,
+						writersStopped: true,
+						acceptWarnings: true,
+					}),
+				).rejects.toThrow('blocked');
+				expect(put).not.toHaveBeenCalled();
+			}
+		},
+	);
+
+	it.each(['snapshot', 'catalog'])(
+		'preserves the old pointer when the recovery %s write fails',
+		async (phase) => {
+			const { bucket, services } = await fixture();
+			const original = await services.catalog.getCurrentSnapshot();
+			const originalCatalog = await (await bucket.get(paths.catalog))!.text();
+			const report = await services.catalog.planRecovery(SOURCE);
+			const put = bucket.put.bind(bucket);
+			const attempts: string[] = [];
+			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				attempts.push(key);
+				if (phase === 'snapshot' ? key.startsWith(paths.snapshotsPrefix) : key === paths.catalog)
+					throw new Error('Storage write unavailable');
+				return put(key, value, options);
+			});
+			const remove = vi.spyOn(bucket, 'delete');
+			await expect(
+				services.catalog.recover(SOURCE, ACTOR, {
+					token: report.token,
+					writersStopped: true,
+					acceptWarnings: true,
+				}),
+			).rejects.toThrow('Storage write unavailable');
+			expect(await (await bucket.get(paths.catalog))!.text()).toBe(originalCatalog);
+			expect((await services.catalog.getCurrentSnapshot()).snapshot_id).toBe(original.snapshot_id);
+			expect(attempts.filter((key) => key === paths.catalog)).toHaveLength(
+				phase === 'snapshot' ? 0 : 1,
+			);
+			expect(remove).not.toHaveBeenCalled();
+		},
+	);
+
+	it('rejects reusing a report after a successful recovery', async () => {
+		const { bucket, services } = await fixture();
+		const report = await services.catalog.planRecovery(SOURCE);
+		const recovered = await services.catalog.recover(SOURCE, ACTOR, {
+			token: report.token,
+			writersStopped: true,
+			acceptWarnings: true,
+		});
+		const put = vi.spyOn(bucket, 'put');
+		await expect(
+			services.catalog.recover(SOURCE, ACTOR, {
+				token: report.token,
+				writersStopped: true,
+				acceptWarnings: true,
+			}),
+		).rejects.toThrow('stale');
+		expect(put).not.toHaveBeenCalled();
+		expect((await services.catalog.getCurrentSnapshot()).snapshot_id).toBe(recovered.snapshot_id);
+	});
+
+	it('uses current job settings only for jobs in the selected snapshot', async () => {
+		const { services, project, notebook } = await fixture();
+		const selectedJob = await services.jobs.createJob(
+			project.id,
+			notebook.id,
+			{ name: 'Selected', schedule: { cron: '0 0 * * *', timezone: 'UTC' } },
+			ACTOR,
+		);
+		const selected = await services.catalog.getCurrentSnapshot();
+		await services.jobs.updateJob(
+			project.id,
+			notebook.id,
+			selectedJob.id,
+			{ enabled: false, schedule: { cron: '0 12 * * *', timezone: 'UTC' } },
+			ACTOR,
+		);
+		await services.jobs.createJob(project.id, notebook.id, { name: 'Later' }, ACTOR);
+		const report = await services.catalog.planRecovery({
+			mode: 'snapshot',
+			snapshotId: selected.snapshot_id,
+		});
+		expect(report.projects[0].notebooks[0].jobs).toEqual([
+			expect.objectContaining({
+				id: selectedJob.id,
+				enabled: false,
+				schedule: { cron: '0 12 * * *', timezone: 'UTC' },
+			}),
+		]);
+	});
+
+	it('blocks recovery of a job whose history index is missing', async () => {
+		const { bucket, services, project, notebook } = await fixture();
+		const job = await services.jobs.createJob(
+			project.id,
+			notebook.id,
+			{ name: 'Incomplete' },
+			ACTOR,
+		);
+		await bucket.delete(
+			paths.project(project.id).notebook(notebook.id).jobIndex(job.created_at, job.id),
+		);
+		const report = await services.catalog.planRecovery(SOURCE);
+		expect(report.issues).toContainEqual(
+			expect.objectContaining({
+				severity: 'error',
+				message: 'Job history index is missing; repair it before catalog recovery.',
+			}),
+		);
+		const put = vi.spyOn(bucket, 'put');
+		await expect(
+			services.catalog.recover(SOURCE, ACTOR, {
+				token: report.token,
+				writersStopped: true,
+				acceptWarnings: true,
+			}),
+		).rejects.toThrow('blocked');
+		expect(put).not.toHaveBeenCalled();
+	});
 });
