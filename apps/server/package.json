@@ -6,6 +6,7 @@
 	"type": "module",
 	"scripts": {
 		"start": "node dist/index.mjs",
+		"catalog:recover": "tsx src/catalog-recovery.ts",
 		"test": "vp test",
 		"typecheck": "tsc --noEmit"
 	},

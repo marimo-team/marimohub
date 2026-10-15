@@ -147,18 +147,16 @@ describe('ensureInitialized', () => {
 		expect(await createServices(bucket).projects.listProjects()).toHaveLength(1);
 	});
 
-	it('invalidates the populated cache when a caller disables seeding after a reset', async () => {
+	it('refuses to bootstrap over existing data when seeding is disabled', async () => {
 		const bucket = new MemoryBucket();
 		await ensureInitialized(bucket, ACTOR);
 		await ensureInitialized(bucket, ACTOR);
 		await bucket.delete(paths.catalog);
 
-		await ensureInitialized(bucket, ACTOR, { createDefaultProject: false });
-		const services = createServices(bucket);
-		expect(await services.projects.listProjects()).toEqual([]);
-
-		await ensureInitialized(bucket, ACTOR);
-		expect(await services.projects.listProjects()).toHaveLength(1);
+		await expect(ensureInitialized(bucket, ACTOR, { createDefaultProject: false })).rejects.toThrow(
+			'Catalog recovery required',
+		);
+		expect(await bucket.head(paths.catalog)).toBeNull();
 	});
 
 	it('never reuses a populated catalog whose backend reports an empty ETag', async () => {
@@ -178,7 +176,7 @@ describe('ensureInitialized', () => {
 		expect(get).toHaveBeenCalledWith(paths.catalog);
 	});
 
-	it('rechecks a changed catalog and initializes again after a storage reset', async () => {
+	it('rechecks a changed catalog and refuses to hide existing projects after pointer loss', async () => {
 		const bucket = new MemoryBucket();
 		await ensureInitialized(bucket, ACTOR);
 		await ensureInitialized(bucket, ACTOR);
@@ -193,8 +191,9 @@ describe('ensureInitialized', () => {
 
 		await bucket.delete(paths.catalog);
 		advanceTime(30_000);
-		await ensureInitialized(bucket, ACTOR);
-		expect(await services.projects.listProjects()).toHaveLength(1);
+		const put = vi.spyOn(bucket, 'put');
+		await expect(ensureInitialized(bucket, ACTOR)).rejects.toThrow('Catalog recovery required');
+		expect(put).not.toHaveBeenCalled();
 	});
 
 	it("lets a later authorized user seed an app-only user's empty catalog", async () => {

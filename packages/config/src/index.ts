@@ -113,6 +113,7 @@ import { parseExperiments } from './experiments';
 import { postgresDataAccessFeatures } from './postgresFeatures';
 import { surfacesFromEnv } from './surfaces';
 
+export { makeStorage, storageBackend } from './storage';
 export { ConfigError, isConfigError } from './errors';
 export type { ConfigErrorOptions } from './errors';
 export { createDuckDBHttpSessionFactory } from './duckdbHttpBroker';

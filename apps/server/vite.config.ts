@@ -17,7 +17,12 @@ export default defineConfig({
 		},
 	},
 	pack: {
-		entry: ['src/index.ts', 'src/duckdbWorker.ts', 'src/postgresWorker.ts'],
+		entry: [
+			'src/index.ts',
+			'src/duckdbWorker.ts',
+			'src/postgresWorker.ts',
+			'src/catalog-recovery.ts',
+		],
 		platform: 'node',
 		format: ['esm'],
 		dts: false,

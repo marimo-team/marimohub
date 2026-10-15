@@ -1,7 +1,13 @@
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
-import { NotFoundError, NotInitializedError, PreconditionFailedError } from '../../errors';
+import {
+	ConflictError,
+	NotFoundError,
+	NotInitializedError,
+	PreconditionFailedError,
+	ValidationError,
+} from '../../errors';
 import { createSnapshotId } from '../../ids';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import { paths } from '../../paths';
@@ -17,6 +23,8 @@ import {
 } from '../../schema';
 import type { Catalog, Snapshot, SnapshotNotebookEntry, SnapshotProjectEntry } from '../../schema';
 import { withCasRetry } from './cas';
+import { planCatalogRecovery } from './recovery';
+import type { CatalogRecoverySource } from './recovery';
 import type { CasRetryOptions } from './cas';
 import type { EventService } from './EventService';
 
@@ -69,6 +77,18 @@ export class CatalogService {
 		const existing = await this.bucket.get(paths.catalog);
 		if (existing) {
 			return this.getCurrentSnapshot();
+		}
+
+		const remnants = await Promise.all(
+			['projects/', paths.snapshotsPrefix].map((prefix) => this.bucket.list({ prefix, limit: 1 })),
+		);
+		if (
+			remnants.some((result) => result.objects.length > 0 || result.delimitedPrefixes.length > 0)
+		) {
+			if (await this.bucket.head(paths.catalog)) return this.getCurrentSnapshot();
+			throw new NotInitializedError(
+				'Catalog recovery required: catalog.json is missing but stored projects or snapshots remain. Run catalog recovery before restarting the service.',
+			);
 		}
 
 		const snapshotId = createSnapshotId();
@@ -209,11 +229,68 @@ export class CatalogService {
 	private async readSnapshot(catalog: Catalog): Promise<Snapshot> {
 		const snapshotObj = await this.bucket.get(catalog.current_snapshot_key);
 		if (!snapshotObj) {
-			throw new NotInitializedError(`Snapshot ${catalog.current_snapshot_id} not found`);
+			throw new NotInitializedError(
+				`Catalog recovery required: snapshot ${catalog.current_snapshot_id} not found`,
+			);
 		}
 
 		return upgradeSnapshot(
 			await readStored(SnapshotSchema, snapshotObj, catalog.current_snapshot_key),
+		);
+	}
+
+	planRecovery(source: CatalogRecoverySource) {
+		return planCatalogRecovery(this.bucket, source);
+	}
+
+	async recover(
+		source: CatalogRecoverySource,
+		actor: UserId,
+		options: { token: string; writersStopped: true; acceptWarnings?: boolean },
+	): Promise<Snapshot> {
+		if (!options.writersStopped) {
+			throw new ValidationError(
+				'Stop all API, scheduler, maintenance, and sandbox writers before recovery.',
+			);
+		}
+		const report = await this.planRecovery(source);
+		if (report.token !== options.token) {
+			throw new ConflictError(
+				'Recovery report is stale. Inspect storage again before applying recovery.',
+			);
+		}
+		if (report.issues.some((issue) => issue.severity === 'error')) {
+			throw new ValidationError(
+				'Recovery is blocked by invalid or missing records. Review the report.',
+			);
+		}
+		if (!options.acceptWarnings && report.issues.some((issue) => issue.severity === 'warning')) {
+			throw new ValidationError(
+				'Review recovery warnings and explicitly accept them before applying.',
+			);
+		}
+		const snapshot = SnapshotSchema.parse({
+			...report.snapshot,
+			snapshot_id: createSnapshotId(),
+			schema_version: Math.max(CURRENT_SNAPSHOT_VERSION, report.snapshot?.schema_version ?? 1),
+			created_at: new Date().toISOString(),
+			operation: 'system.recover',
+			actor,
+			projects: report.projects,
+		});
+		return this.mutateSnapshot(
+			'system.recover',
+			actor,
+			() => snapshot,
+			{ source },
+			{
+				snapshot,
+				expectedCatalogEtag: report.catalogEtag,
+				previousSnapshotId:
+					report.candidates.find((candidate) => candidate.reference === 'current')?.id ??
+					report.snapshot?.snapshot_id ??
+					null,
+			},
 		);
 	}
 
@@ -226,6 +303,11 @@ export class CatalogService {
 		actor: UserId,
 		mutateFn: (snapshot: Snapshot) => Awaitable<Snapshot>,
 		context?: Record<string, unknown>,
+		recovery?: {
+			snapshot: Snapshot;
+			expectedCatalogEtag: string | null;
+			previousSnapshotId: Snapshot['snapshot_id'] | null;
+		},
 	): Promise<Snapshot> {
 		// One CAS attempt: read the catalog + its current snapshot, write a new
 		// snapshot, and conditionally swap the catalog pointer onto it. The retry
@@ -234,21 +316,23 @@ export class CatalogService {
 			this.bucket,
 			async (cas) => {
 				const catalogObj = await this.bucket.get(paths.catalog);
-				if (!catalogObj) {
-					throw new NotInitializedError('Catalog not found — call initialize() first');
+				let currentSnapshot: Snapshot;
+				let previousSnapshotId: Snapshot['snapshot_id'] | null = null;
+				if (recovery) {
+					if ((catalogObj?.etag ?? null) !== recovery.expectedCatalogEtag) {
+						throw new ConflictError(
+							'Catalog changed after recovery inspection. Inspect storage again.',
+						);
+					}
+					currentSnapshot = recovery.snapshot;
+					previousSnapshotId = recovery.previousSnapshotId;
+				} else {
+					if (!catalogObj)
+						throw new NotInitializedError('Catalog not found — call initialize() first');
+					const catalog = await readStored(CatalogSchema, catalogObj, paths.catalog);
+					currentSnapshot = await this.readSnapshot(catalog);
+					previousSnapshotId = catalog.current_snapshot_id;
 				}
-
-				const catalogEtag = catalogObj.etag;
-				const catalog = await readStored(CatalogSchema, catalogObj, paths.catalog);
-
-				const snapshotObj = await this.bucket.get(catalog.current_snapshot_key);
-				if (!snapshotObj) {
-					throw new NotInitializedError(`Snapshot ${catalog.current_snapshot_id} not found`);
-				}
-
-				const currentSnapshot = upgradeSnapshot(
-					await readStored(SnapshotSchema, snapshotObj, catalog.current_snapshot_key),
-				);
 
 				const newSnapshotId = createSnapshotId();
 				const now = new Date().toISOString();
@@ -269,36 +353,34 @@ export class CatalogService {
 					actor,
 				};
 
-				await this.bucket.put(paths.snapshot(newSnapshotId), JSON.stringify(newSnapshot));
+				await this.bucket.put(paths.snapshot(newSnapshotId), JSON.stringify(newSnapshot), {
+					onlyIfNotExists: true,
+				});
 
 				const newCatalog: Catalog = {
 					version: 1,
 					updated_at: now,
 					current_snapshot_id: newSnapshotId,
 					current_snapshot_key: paths.snapshot(newSnapshotId),
-					previous_snapshot_id: catalog.current_snapshot_id,
+					previous_snapshot_id: previousSnapshotId,
 				};
 
 				try {
-					await cas.put(paths.catalog, JSON.stringify(newCatalog), {
-						onlyIfEtagMatches: catalogEtag,
-					});
+					await cas.put(
+						paths.catalog,
+						JSON.stringify(newCatalog),
+						catalogObj ? { onlyIfEtagMatches: catalogObj.etag } : { onlyIfNotExists: true },
+					);
 					return newSnapshot;
 				} catch (err) {
-					// The catalog swap failed (lost the race, or a transient error), so the
-					// snapshot we just wrote is unreferenced. Delete it (best-effort) so a
-					// failed attempt never leaves an orphan a prefix-listing could mistake
-					// for the head, then rethrow (the CAS writer marks a lost race for retry).
-					//
-					// INVARIANT (corruption safety): `newSnapshotId` was created in this
-					// attempt and the catalog never pointed at it, so this only ever deletes
-					// a snapshot this writer wrote and never committed.
-					await this.bucket.delete(paths.snapshot(newSnapshotId)).catch(() => {});
+					// Recovery may have committed despite a lost response. Keep its snapshot.
+					if (!recovery) await this.bucket.delete(paths.snapshot(newSnapshotId)).catch(() => {});
 					throw err;
 				}
 			},
 			{
 				...this.casRetry,
+				...(recovery ? { retries: 1, backoffMs: () => 0 } : {}),
 				onAttempt: () => this.metrics.increment('catalog.cas.attempt'),
 				onConflict: () => this.metrics.increment('catalog.cas.conflict'),
 				onExhausted: () => this.metrics.increment('catalog.cas.exhausted'),

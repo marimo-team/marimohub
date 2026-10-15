@@ -34,6 +34,7 @@ export {
 } from './runtime/RuntimeInspectionService';
 export { DeepLinkService } from './content/DeepLinkService';
 export { CatalogService } from './catalog/CatalogService';
+export type { CatalogRecoverySource, CatalogRecoveryReport } from './catalog/recovery';
 export { EventService, MAX_EVENT_RANGE_DAYS } from './catalog/EventService';
 export { IdempotencyService } from './catalog/IdempotencyService';
 export { SyncedNotebookService } from './content/SyncedNotebookService';

@@ -417,3 +417,19 @@ Compute backends differ in cost model — pick per [Compute](/compute):
   orphan backstops.
 - `kubernetes` / `docker`: you own the nodes; cap per-kernel CPU/memory/GPU.
 - `MARIMOHUB_MAX_SESSIONS_PER_USER` bounds concurrent kernels per user.
+
+## Catalog recovery
+
+If the catalog is missing but project objects or snapshots remain, the service
+requires recovery. It does not initialize an empty replacement catalog.
+
+Use the offline recovery command to inspect surviving snapshots or reconstruct
+the index from records. Dry-run is the default:
+
+```bash
+pnpm --filter @marimo-hub/server catalog:recover --rebuild
+```
+
+Stop all writers before inspection and apply. Follow the
+[catalog recovery procedure](https://github.com/marimo-team/marimohub/blob/main/development_docs/operations.md#inspect-and-recover-the-catalog)
+for snapshot selection, report review, and conditional apply.
