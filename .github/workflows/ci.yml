@@ -180,15 +180,6 @@ jobs:
       # The build task restores dist/ when its cache hits.
       - run: node scripts/check-bundle-size.mjs
 
-      # The release workflow only runs from a tag, so a broken SEA build or
-      # launcher would otherwise surface mid-release. Reuses the dist/ output
-      # the build step above produced.
-      - name: Build and smoke test the server binary
-        run: |
-          node scripts/build-sea.mjs --no-build
-          scripts/smoke-sea.sh apps/server/dist/sea/marimohub-linux-x64 \
-            "$(node -p 'require("./package.json").version')"
-
       - name: Save Vite Task cache
         if: success() && github.event_name == 'push'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -196,12 +187,23 @@ jobs:
           path: node_modules/.vite/task-cache
           key: ${{ steps.vite-task-cache.outputs.cache-primary-key }}
 
+  server-binary:
+    uses: ./.github/workflows/server-binary.yml
+
   server-image:
-    name: Build server image
-    runs-on: ubuntu-latest
+    name: Build server image (${{ matrix.platform.arch }})
+    runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 30
     env:
       VERSION: 0.0.0-ci
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -215,15 +217,15 @@ jobs:
         with:
           context: .
           file: apps/server/Dockerfile
-          platforms: linux/amd64
+          platforms: linux/${{ matrix.platform.arch }}
           push: false
           load: true
           tags: marimohub:ci
           build-args: |
             MARIMOHUB_VERSION=${{ env.VERSION }}
-          cache-from: type=gha
+          cache-from: type=gha,scope=server-${{ matrix.platform.arch }}
           # Forks get a read-only token, so only same-repo runs may write the cache.
-          cache-to: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && 'type=gha,mode=max' || '' }}
+          cache-to: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && format('type=gha,mode=max,scope=server-{0}', matrix.platform.arch) || '' }}
 
       - name: Boot and check
         id: boot

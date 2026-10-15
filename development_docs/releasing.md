@@ -24,20 +24,18 @@ Releases are cut via a PR, never by pushing to `main` or hand-pushing tags.
 The x86-64 Linux build uses a glibc 2.28 image. Each native archive contains
 shell completions and man pages.
 
-The release also attaches `marimohub-linux-x64`, a standalone server binary
-built with Node's single executable application (SEA) support by
-[`scripts/build-sea.mjs`](../scripts/build-sea.mjs). It is the runner's `node`
-with the server bundle and the SPA injected as assets; on first start it unpacks
-them to a cache directory and loads the bundle from there. The container image
-stays the primary distribution; the binary is a convenience for hosts without
-Node. It carries its own `.sha256` and a build provenance attestation (verify
-with `gh attestation verify marimohub-linux-x64 --repo marimo-team/marimohub`),
-but it is not in the CLI `SHA256SUMS` or SBOM, and the recovery workflow does
-not rebuild it.
-Build it locally with `pnpm build:sea` (outputs
-`apps/server/dist/sea/marimohub-<platform>-<arch>`) and check it with
-`scripts/smoke-sea.sh <binary>`. CI's `verify` job runs both on every PR, so a
-broken build or launcher fails there rather than halfway through a release.
+The `marimohub` image supports `linux/amd64` and `linux/arm64` under the same tags.
+Releases also include `marimohub-linux-x64` and `marimohub-linux-arm64`, standalone
+Node SEA binaries with the server and SPA embedded. Each has a `.sha256` file
+and provenance attestation. These binaries are separate from the CLI checksums,
+SBOM, and recovery workflow.
+
+Build a binary for the local OS and architecture with `pnpm build:sea`.
+The output is `apps/server/dist/sea/marimohub-<platform>-<arch>`.
+Run `scripts/smoke-sea.sh <binary>` to check it, or
+`gh attestation verify <binary> --repo marimo-team/marimohub` to check release provenance.
+CI and releases share the [binary workflow](../.github/workflows/server-binary.yml),
+which builds and checks both Linux architectures.
 
 [`apps/cli/dist-workspace.toml`](../apps/cli/dist-workspace.toml) defines shell,
 PowerShell, Homebrew, and npm installers. It also defines the standalone

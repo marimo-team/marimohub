@@ -10,6 +10,7 @@ on:
       # Surface env names are a contract with the bundled marimo-pair skill.
       - 'packages/core/src/services/runtime/surfaces/**'
       - '.github/workflows/publish-sandbox-image.yml'
+      - 'scripts/publish-image-manifest.sh'
   pull_request:
     paths:
       - 'images/marimo-sandbox/**'
@@ -18,6 +19,7 @@ on:
       # Surface env names are a contract with the bundled marimo-pair skill.
       - 'packages/core/src/services/runtime/surfaces/**'
       - '.github/workflows/publish-sandbox-image.yml'
+      - 'scripts/publish-image-manifest.sh'
 
 permissions:
   contents: read
@@ -28,12 +30,29 @@ concurrency:
 
 jobs:
   image:
-    name: Build, test, and publish
-    runs-on: ubuntu-latest
+    name: Sandbox (${{ matrix.variant.target }}, ${{ matrix.platform.arch }})
+    runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - target: release
+            suffix: ''
+          - target: vscode
+            suffix: '-vscode'
+          - target: opencode
+            suffix: '-opencode'
+          - target: tools
+            suffix: '-tools'
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -43,17 +62,8 @@ jobs:
         id: buildx
 
       - name: Test OpenCode verification deadlines
+        if: matrix.variant.target == 'release'
         run: python3 images/marimo-sandbox/test-opencode-check.py
-
-      - name: Read marimo version
-        id: version
-        run: |
-          VERSION="$(sed -n 's/^ARG MARIMO_VERSION=//p' images/marimo-sandbox/Dockerfile)"
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid MARIMO_VERSION: $VERSION"
-            exit 1
-          fi
-          echo "marimo=$VERSION" >> "$GITHUB_OUTPUT"
 
       # Computed once so every verify build and publish build share one epoch;
       # otherwise a run spanning a week boundary would publish an unverified rebuild.
@@ -68,18 +78,22 @@ jobs:
           context: images/marimo-sandbox
           build-contexts: notebook_bridge=packages/notebook-bridge
           build-args: CACHE_EPOCH=${{ steps.epoch.outputs.value }}
-          target: release
-          platforms: linux/amd64
+          target: ${{ matrix.variant.target }}
+          platforms: linux/${{ matrix.platform.arch }}
           load: true
           tags: marimo-sandbox:ci
-          cache-from: type=gha,scope=marimo-sandbox
+          cache-from: type=gha,scope=marimo-sandbox-${{ matrix.platform.arch }}
+          # The tools target includes every variant's build stages.
+          cache-to: ${{ github.event_name == 'push' && matrix.variant.target == 'tools' && format('type=gha,scope=marimo-sandbox-{0},mode=max,timeout=3m,ignore-error=true', matrix.platform.arch) || '' }}
 
       - name: Run acceptance tests
+        if: matrix.variant.target == 'release'
         run: examples/sandbox-image/acceptance-test.sh marimo-sandbox:ci images/marimo-sandbox
         env:
           SKIP_BUILD: '1'
 
       - name: Verify pre-installed bridge identity
+        if: matrix.variant.target == 'release'
         run: |
           expected=$(sed -n "s/^export const ARTIFACT_ID = '\([^']*\)';/\1/p" packages/notebook-bridge/src/runtime.generated.ts)
           actual=$(docker run --rm marimo-sandbox:ci python -c 'import importlib.resources; print(importlib.resources.files("marimohub_notebook_bridge").joinpath("identity").read_text())')
@@ -87,84 +101,34 @@ jobs:
           test "$actual" = "$expected"
 
       - name: Verify bridge reinstall and uv cache ownership as sandbox user
+        if: matrix.variant.target == 'release'
         run: |
           docker run --rm --network none -i \
             --mount "type=bind,src=${PWD}/packages/notebook-bridge/src/runtime.generated.ts,dst=/tmp/notebook-bridge.ts,readonly" \
             marimo-sandbox:ci python < images/marimo-sandbox/test-bridge.py
 
-      - name: Build VS Code variant
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          builder: ${{ steps.buildx.outputs.name }}
-          context: images/marimo-sandbox
-          build-contexts: notebook_bridge=packages/notebook-bridge
-          build-args: CACHE_EPOCH=${{ steps.epoch.outputs.value }}
-          target: vscode
-          platforms: linux/amd64
-          load: true
-          tags: marimo-sandbox:vscode-ci
-          cache-from: type=gha,scope=marimo-sandbox
-
       - name: Verify VS Code variant
+        if: matrix.variant.target == 'vscode' || matrix.variant.target == 'tools'
         run: |
-          docker run --rm marimo-sandbox:vscode-ci code-server --version
-          docker run --rm marimo-sandbox:vscode-ci sh -c '
+          docker run --rm marimo-sandbox:ci code-server --version
+          docker run --rm marimo-sandbox:ci sh -c '
             installed="$(code-server --list-extensions --extensions-dir /opt/marimohub/vscode-extensions)"
             for extension in marimo-team.vscode-marimo detachhead.basedpyright charliermarsh.ruff tamasfe.even-better-toml; do
               printf "%s\n" "$installed" | grep -Fx "$extension"
             done
           '
 
-      - name: Build OpenCode variant
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          builder: ${{ steps.buildx.outputs.name }}
-          context: images/marimo-sandbox
-          build-contexts: notebook_bridge=packages/notebook-bridge
-          build-args: CACHE_EPOCH=${{ steps.epoch.outputs.value }}
-          target: opencode
-          platforms: linux/amd64
-          load: true
-          tags: marimo-sandbox:opencode-ci
-          cache-from: type=gha,scope=marimo-sandbox
-
       - name: Verify OpenCode variant
+        if: matrix.variant.target == 'opencode' || matrix.variant.target == 'tools'
         timeout-minutes: 3
         run: |
-          docker run --rm marimo-sandbox:opencode-ci opencode --version | grep -F '1.18.17'
-          docker run --rm marimo-sandbox:opencode-ci jq --version
-          docker run --rm marimo-sandbox:opencode-ci test -f /home/appuser/.agents/skills/marimo-pair/SKILL.md
-          docker run --rm -v "$PWD/images/marimo-sandbox/test-marimo-pair.py:/tmp/test-marimo-pair.py:ro" marimo-sandbox:opencode-ci python /tmp/test-marimo-pair.py
+          docker run --rm marimo-sandbox:ci opencode --version | grep -F '1.18.17'
+          docker run --rm marimo-sandbox:ci jq --version
+          docker run --rm marimo-sandbox:ci test -f /home/appuser/.agents/skills/marimo-pair/SKILL.md
+          docker run --rm -v "$PWD/images/marimo-sandbox/test-marimo-pair.py:/tmp/test-marimo-pair.py:ro" marimo-sandbox:ci python /tmp/test-marimo-pair.py
           docker run --rm \
             --mount "type=bind,src=${PWD}/images/marimo-sandbox/check-opencode.sh,dst=/tmp/check-opencode.sh,readonly" \
-            marimo-sandbox:opencode-ci timeout --kill-after=5s 120s bash /tmp/check-opencode.sh
-
-      - name: Build combined tools variant
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          builder: ${{ steps.buildx.outputs.name }}
-          context: images/marimo-sandbox
-          build-contexts: notebook_bridge=packages/notebook-bridge
-          build-args: CACHE_EPOCH=${{ steps.epoch.outputs.value }}
-          target: tools
-          platforms: linux/amd64
-          load: true
-          tags: marimo-sandbox:tools-ci
-          cache-from: type=gha,scope=marimo-sandbox
-          # The tools target includes the base, VS Code, and OpenCode stages.
-          cache-to: ${{ github.event_name == 'push' && 'type=gha,scope=marimo-sandbox,mode=max,timeout=3m,ignore-error=true' || '' }}
-
-      - name: Verify combined tools variant
-        timeout-minutes: 3
-        run: |
-          docker run --rm marimo-sandbox:tools-ci code-server --version
-          docker run --rm marimo-sandbox:tools-ci opencode --version | grep -F '1.18.17'
-          docker run --rm marimo-sandbox:tools-ci jq --version
-          docker run --rm marimo-sandbox:tools-ci test -f /home/appuser/.agents/skills/marimo-pair/SKILL.md
-          docker run --rm -v "$PWD/images/marimo-sandbox/test-marimo-pair.py:/tmp/test-marimo-pair.py:ro" marimo-sandbox:tools-ci python /tmp/test-marimo-pair.py
-          docker run --rm \
-            --mount "type=bind,src=${PWD}/images/marimo-sandbox/check-opencode.sh,dst=/tmp/check-opencode.sh,readonly" \
-            marimo-sandbox:tools-ci timeout --kill-after=5s 120s bash /tmp/check-opencode.sh
+            marimo-sandbox:ci timeout --kill-after=5s 120s bash /tmp/check-opencode.sh
 
       - name: Log in to GHCR
         if: github.event_name == 'push'
@@ -182,58 +146,51 @@ jobs:
           context: images/marimo-sandbox
           build-contexts: notebook_bridge=packages/notebook-bridge
           build-args: CACHE_EPOCH=${{ steps.epoch.outputs.value }}
-          target: release
-          platforms: linux/amd64
+          target: ${{ matrix.variant.target }}
+          platforms: linux/${{ matrix.platform.arch }}
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:latest
-            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:py3.13-marimo${{ steps.version.outputs.marimo }}
-            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}
+          tags: ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}${{ matrix.variant.suffix }}-${{ matrix.platform.arch }}
 
-      - name: Publish VS Code variant
-        if: github.event_name == 'push'
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+  publish:
+    name: Publish multi-platform manifests
+    if: github.event_name == 'push'
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          builder: ${{ steps.buildx.outputs.name }}
-          context: images/marimo-sandbox
-          build-contexts: notebook_bridge=packages/notebook-bridge
-          build-args: CACHE_EPOCH=${{ steps.epoch.outputs.value }}
-          target: vscode
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:latest-vscode
-            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:py3.13-marimo${{ steps.version.outputs.marimo }}-vscode
-            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}-vscode
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish OpenCode variant
-        if: github.event_name == 'push'
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          builder: ${{ steps.buildx.outputs.name }}
-          context: images/marimo-sandbox
-          build-contexts: notebook_bridge=packages/notebook-bridge
-          build-args: CACHE_EPOCH=${{ steps.epoch.outputs.value }}
-          target: opencode
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:latest-opencode
-            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:py3.13-marimo${{ steps.version.outputs.marimo }}-opencode
-            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}-opencode
+      - name: Read marimo version
+        id: version
+        run: |
+          VERSION="$(sed -n 's/^ARG MARIMO_VERSION=//p' images/marimo-sandbox/Dockerfile)"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid MARIMO_VERSION: $VERSION"
+            exit 1
+          fi
+          echo "marimo=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Publish combined tools variant
-        if: github.event_name == 'push'
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          builder: ${{ steps.buildx.outputs.name }}
-          context: images/marimo-sandbox
-          build-contexts: notebook_bridge=packages/notebook-bridge
-          build-args: CACHE_EPOCH=${{ steps.epoch.outputs.value }}
-          target: tools
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:latest-tools
-            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:py3.13-marimo${{ steps.version.outputs.marimo }}-tools
-            ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}-tools
+      - name: Publish manifests
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/marimo-sandbox
+          REVISION: ${{ github.sha }}
+          MARIMO_VERSION: ${{ steps.version.outputs.marimo }}
+        run: |
+          for variant in '' -vscode -opencode -tools; do
+            printf '%s\n' \
+              "$IMAGE:latest$variant" \
+              "$IMAGE:py3.13-marimo$MARIMO_VERSION$variant" \
+              "$IMAGE:sha-$REVISION$variant" \
+              | scripts/publish-image-manifest.sh "$IMAGE:sha-$REVISION$variant"
+          done

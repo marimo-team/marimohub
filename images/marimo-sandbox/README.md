@@ -1,9 +1,8 @@
 # Maintained sandbox image
 
-All targets require the `notebook_bridge` named build context to preinstall the
-bundled notebook bridge. Older build commands without this context fail.
+All tags, including `vscode`, `opencode`, and `tools`, support `linux/amd64` and `linux/arm64`.
 
-From the repository root, use:
+Build from the repository root with the required `notebook_bridge` context:
 
 ```sh
 docker build --build-context notebook_bridge=packages/notebook-bridge \

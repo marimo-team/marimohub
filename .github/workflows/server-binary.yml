@@ -1,0 +1,65 @@
+name: Server binary
+
+on:
+  workflow_call:
+    inputs:
+      expected-version:
+        type: string
+        default: ''
+      upload:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  server-binary:
+    name: Build server binary (linux-${{ matrix.platform.arch }})
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - arch: x64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          version: 0.3.0
+          node-version-file: '.node-version'
+          sfw: true
+          cache: true
+          run-install: |
+            - args: ['--frozen-lockfile']
+
+      - name: Build web and server
+        run: vp run --fail-if-no-match --filter @marimo-hub/web --filter @marimo-hub/server build
+
+      - name: Build binary
+        run: node scripts/build-sea.mjs --no-build
+
+      - name: Smoke test
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected-version }}
+        run: |
+          version="${EXPECTED_VERSION:-$(node -p 'require("./package.json").version')}"
+          scripts/smoke-sea.sh apps/server/dist/sea/marimohub-linux-${{ matrix.platform.arch }} "${version#v}"
+
+      - name: Checksum
+        if: inputs.upload
+        working-directory: apps/server/dist/sea
+        run: sha256sum marimohub-linux-${{ matrix.platform.arch }} > marimohub-linux-${{ matrix.platform.arch }}.sha256
+
+      - if: inputs.upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: marimohub-linux-${{ matrix.platform.arch }}
+          path: |
+            apps/server/dist/sea/marimohub-linux-${{ matrix.platform.arch }}
+            apps/server/dist/sea/marimohub-linux-${{ matrix.platform.arch }}.sha256
+          if-no-files-found: error

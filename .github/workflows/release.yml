@@ -1,14 +1,6 @@
 name: Release
 
-# Triggered by a semver tag, normally pushed by release-tag.yml when a
-# "release: X.Y.Z" PR is merged (see development_docs/releasing.md).
-# This publishes the container image and Helm chart to GHCR, builds native CLI
-# archives and binary wheels plus a standalone Linux x64 server binary, and
-# creates a GitHub release with checksums, provenance, an SBOM, and a changelog
-# generated from commits since the prior tag. The chart version, appVersion,
-# and image tag are pinned to the git tag.
-#   helm upgrade --install marimohub oci://ghcr.io/marimo-team/charts/marimohub \
-#     --version 1.4.2 -n marimohub -f values.yaml
+# release-tag.yml creates tags after a release PR merges. See development_docs/releasing.md.
 on:
   push:
     tags:
@@ -195,52 +187,30 @@ jobs:
           if-no-files-found: error
 
   server-binary:
-    name: Build server binary (linux-x64)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    uses: ./.github/workflows/server-binary.yml
     permissions:
       contents: read
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
-        with:
-          version: 0.3.0
-          node-version-file: '.node-version'
-          sfw: true
-          cache: true
-          run-install: |
-            - args: ['--frozen-lockfile']
+    with:
+      expected-version: ${{ github.ref_name }}
+      upload: true
 
-      - name: Build web and server
-        run: vp run --fail-if-no-match --filter @marimo-hub/web --filter @marimo-hub/server build
-
-      # A Node single-executable (SEA): the runner's `node` with the server
-      # bundle and SPA injected as assets. See scripts/build-sea.mjs.
-      - name: Build binary
-        run: node scripts/build-sea.mjs --no-build
-
-      - name: Smoke test
-        run: scripts/smoke-sea.sh apps/server/dist/sea/marimohub-linux-x64 "${GITHUB_REF_NAME#v}"
-
-      - name: Checksum
-        working-directory: apps/server/dist/sea
-        run: sha256sum marimohub-linux-x64 > marimohub-linux-x64.sha256
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: marimohub-linux-x64
-          path: |
-            apps/server/dist/sea/marimohub-linux-x64
-            apps/server/dist/sea/marimohub-linux-x64.sha256
-          if-no-files-found: error
-
-  image:
-    name: Build & push image
-    runs-on: ubuntu-latest
+  image-build:
+    name: Build & push image (${{ matrix.platform.arch }})
+    outputs:
+      tags: ${{ steps.meta.outputs.tags }}
+    runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -284,14 +254,37 @@ jobs:
         with:
           context: .
           file: apps/server/Dockerfile
-          platforms: linux/amd64
+          platforms: linux/${{ matrix.platform.arch }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ env.IMAGE }}:sha-${{ github.sha }}-${{ matrix.platform.arch }}
           labels: ${{ steps.meta.outputs.labels }}
           # Only args the Dockerfile declares; undeclared build args are silently dropped.
           build-args: |
             MARIMOHUB_VERSION=${{ steps.v.outputs.version }}
             MARIMOHUB_IMAGE=${{ env.IMAGE }}:${{ steps.v.outputs.version }}
+
+  image:
+    name: Publish multi-platform image
+    needs: image-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish manifests
+        env:
+          TAGS: ${{ needs.image-build.outputs.tags }}
+          REVISION: ${{ github.sha }}
+        run: scripts/publish-image-manifest.sh "$IMAGE:sha-$REVISION" <<< "$TAGS"
 
   chart:
     name: Package & push Helm chart
@@ -398,10 +391,10 @@ jobs:
           release-assets/* --clobber
 
   publish-server-binary:
-    name: Attach server binary
+    name: Attach server binaries
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # The CLI job creates the release; this only adds one more asset to it.
+    # The CLI job creates the release; this adds the server binaries to it.
     needs: [server-binary, publish-cli-release]
     permissions:
       contents: write
@@ -412,24 +405,27 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: marimohub-linux-x64
+          pattern: marimohub-linux-*
+          merge-multiple: true
           path: server-binary
 
       - name: Verify checksum
         working-directory: server-binary
-        run: sha256sum -c marimohub-linux-x64.sha256
+        run: sha256sum -c marimohub-linux-*.sha256
 
       - name: Attest server binary
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          subject-path: server-binary/marimohub-linux-x64
+          subject-path: |
+            server-binary/marimohub-linux-x64
+            server-binary/marimohub-linux-arm64
 
-      - name: Attach server binary
+      - name: Attach server binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >-
           scripts/retry.sh gh release upload "$GITHUB_REF_NAME"
-          server-binary/marimohub-linux-x64 server-binary/marimohub-linux-x64.sha256 --clobber
+          server-binary/marimohub-linux-* --clobber
 
   cli-release-metadata:
     name: Publish CLI release metadata
@@ -484,6 +480,7 @@ jobs:
         cli-linux-x64,
         cli-installers,
         server-binary,
+        image-build,
         image,
         chart,
         publish-cli-release,

@@ -372,4 +372,43 @@ grep -q '"version": "1.2.4"' "$release_repo/package.json" || fail 'package versi
 grep -q 'version = "1.2.4"' "$release_repo/apps/cli/Cargo.toml" || fail 'Cargo version was not updated'
 grep -q "version: '1.2.4'" "$release_repo/docs/cli.md" || fail 'CLI docs version was not updated'
 
+manifest_bin="$temporary/manifest-bin"
+mkdir "$manifest_bin"
+cat >"$manifest_bin/docker" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$MOCK_DOCKER_LOG"
+case "$3" in
+  create) exit "${MOCK_CREATE_EXIT:-0}" ;;
+  inspect) printf '%s\n' "$MOCK_MANIFEST" ;;
+  *) exit 1 ;;
+esac
+MOCK
+chmod +x "$manifest_bin/docker"
+(
+	export PATH="$manifest_bin:$PATH" MOCK_DOCKER_LOG="$temporary/docker.log"
+	export MOCK_MANIFEST='{"manifests":[{"platform":{"os":"linux","architecture":"arm64"}},{"platform":{"os":"unknown","architecture":"unknown"}},{"platform":{"os":"linux","architecture":"amd64"}}]}'
+	printf 'example/image:latest\nexample/image:1.0.0' | "$repo_root/scripts/publish-image-manifest.sh" example/image:sha-123
+	grep -Fx 'buildx imagetools create --tag example/image:latest --tag example/image:1.0.0 example/image:sha-123-amd64 example/image:sha-123-arm64' "$MOCK_DOCKER_LOG" || fail 'manifest tags or sources differ'
+
+	: >"$MOCK_DOCKER_LOG"
+	if "$repo_root/scripts/publish-image-manifest.sh" example/image:sha-123 </dev/null; then
+		fail 'empty destination tags were accepted'
+	fi
+	[[ ! -s "$MOCK_DOCKER_LOG" ]] || fail 'empty tags triggered Docker'
+
+	export MOCK_CREATE_EXIT=1
+	if "$repo_root/scripts/publish-image-manifest.sh" example/image:sha-123 <<< 'example/image:latest'; then
+		fail 'failed manifest creation was accepted'
+	fi
+	unset MOCK_CREATE_EXIT
+
+	for arch in amd64 arm64; do
+		export MOCK_MANIFEST="{\"manifests\":[{\"platform\":{\"os\":\"linux\",\"architecture\":\"$arch\"}}]}"
+		if "$repo_root/scripts/publish-image-manifest.sh" example/image:sha-123 <<< 'example/image:latest'; then
+			fail "single-architecture manifest ($arch) was accepted"
+		fi
+	done
+)
+
 echo 'release helper tests passed'

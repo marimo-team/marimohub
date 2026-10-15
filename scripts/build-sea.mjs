@@ -7,9 +7,8 @@
 // Output: apps/server/dist/sea/marimohub-<platform>-<arch> (plus the
 // intermediate blob/config). Always targets the host: the executable is a copy
 // of the running `node` with the SEA blob injected, and there is no
-// cross-building, so run this on the target OS and architecture. Releases only
-// ship marimohub-linux-x64; macOS is for local testing. Windows is refused
-// below.
+// cross-building, so run this on the target OS and architecture. Releases ship
+// Linux x64 and arm64 binaries; macOS is for local testing. Windows is refused below.
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
