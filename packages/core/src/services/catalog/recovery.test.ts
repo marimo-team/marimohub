@@ -5,10 +5,19 @@ import { createServices } from '../index';
 import { createImportId, createNotebookId, createSnapshotId } from '../../ids';
 import { paths } from '../../paths';
 import { CatalogService } from './CatalogService';
+import type { CatalogRecoveryReport } from './recovery';
 import { listAllObjects } from './storage';
 
 const SOURCE = { mode: 'rebuild' } as const;
 const INPUT = { title: 'Recovered notebook', description: '', code: 'print(1)' };
+
+function applyRecovery(catalog: CatalogService, report: CatalogRecoveryReport) {
+	return catalog.recover(report.source, ACTOR, {
+		token: report.token,
+		writersStopped: true,
+		acceptWarnings: true,
+	});
+}
 
 async function fixture() {
 	const bucket = new MemoryBucket();
@@ -73,11 +82,7 @@ describe('catalog recovery', () => {
 				notebooks: [{ id: notebook.id, jobs: [{ id: job.id, enabled: true }] }],
 			},
 		]);
-		await services.catalog.recover(SOURCE, ACTOR, {
-			token: report.token,
-			writersStopped: true,
-			acceptWarnings: true,
-		});
+		await applyRecovery(services.catalog, report);
 		expect((await services.projects.listProjects()).map((entry) => entry.id)).toEqual([project.id]);
 		expect((await services.notebooks.getNotebook(project.id, notebook.id)).meta.id).toBe(
 			notebook.id,
@@ -105,11 +110,7 @@ describe('catalog recovery', () => {
 				notebooks: [{ id: notebook.id, status: 'deleted' }],
 			},
 		]);
-		await services.catalog.recover(source, ACTOR, {
-			token: report.token,
-			writersStopped: true,
-			acceptWarnings: true,
-		});
+		await applyRecovery(services.catalog, report);
 		expect((await services.catalog.getCurrentSnapshot()).projects).toHaveLength(1);
 	});
 
@@ -162,13 +163,7 @@ describe('catalog recovery', () => {
 		await bucket.put(paths.project(project.id).notebook(notebook.id).source, '{');
 		const broken = await services.catalog.planRecovery(SOURCE);
 		const put = vi.spyOn(bucket, 'put');
-		await expect(
-			services.catalog.recover(SOURCE, ACTOR, {
-				token: broken.token,
-				writersStopped: true,
-				acceptWarnings: true,
-			}),
-		).rejects.toThrow('blocked');
+		await expect(applyRecovery(services.catalog, broken)).rejects.toThrow('blocked');
 		expect(put).not.toHaveBeenCalled();
 	});
 
@@ -186,13 +181,7 @@ describe('catalog recovery', () => {
 				);
 			else await bucket.put(`projects/${project.id}/new-object`, 'changed');
 			const put = vi.spyOn(bucket, 'put');
-			await expect(
-				services.catalog.recover(SOURCE, ACTOR, {
-					token: report.token,
-					writersStopped: true,
-					acceptWarnings: true,
-				}),
-			).rejects.toThrow('stale');
+			await expect(applyRecovery(services.catalog, report)).rejects.toThrow('stale');
 			expect(put).not.toHaveBeenCalled();
 		},
 	);
@@ -209,13 +198,7 @@ describe('catalog recovery', () => {
 				if (key === paths.catalog) await put(key, winner);
 				return put(key, value, options);
 			});
-			await expect(
-				services.catalog.recover(SOURCE, ACTOR, {
-					token: report.token,
-					writersStopped: true,
-					acceptWarnings: true,
-				}),
-			).rejects.toThrow('conflict');
+			await expect(applyRecovery(services.catalog, report)).rejects.toThrow('conflict');
 			expect(await (await bucket.get(paths.catalog))!.text()).toBe(winner);
 		},
 	);
@@ -230,13 +213,7 @@ describe('catalog recovery', () => {
 			if (key === paths.catalog) throw new Error('Response lost');
 			return result;
 		});
-		await expect(
-			services.catalog.recover(SOURCE, ACTOR, {
-				token: report.token,
-				writersStopped: true,
-				acceptWarnings: true,
-			}),
-		).rejects.toThrow('Response lost');
+		await expect(applyRecovery(services.catalog, report)).rejects.toThrow('Response lost');
 		expect((await services.catalog.getCurrentSnapshot()).projects).toHaveLength(1);
 	});
 
@@ -348,11 +325,7 @@ describe('catalog recovery', () => {
 		await bucket.put(paths.catalog, 'broken');
 		const report = await services.catalog.planRecovery(SOURCE);
 		const put = vi.spyOn(bucket, 'put');
-		await services.catalog.recover(SOURCE, ACTOR, {
-			token: report.token,
-			writersStopped: true,
-			acceptWarnings: true,
-		});
+		await applyRecovery(services.catalog, report);
 		expect(
 			put.mock.calls.some(
 				([key, , options]) =>
@@ -379,13 +352,7 @@ describe('catalog recovery', () => {
 		);
 		const put = vi.spyOn(bucket, 'put');
 		const remove = vi.spyOn(bucket, 'delete');
-		await expect(
-			services.catalog.recover(SOURCE, ACTOR, {
-				token: report.token,
-				writersStopped: true,
-				acceptWarnings: true,
-			}),
-		).rejects.toThrow('blocked');
+		await expect(applyRecovery(services.catalog, report)).rejects.toThrow('blocked');
 		expect(put).not.toHaveBeenCalled();
 		expect(remove).not.toHaveBeenCalled();
 	});
@@ -409,13 +376,7 @@ describe('catalog recovery', () => {
 			expect(rebuild.candidates.map((candidate) => candidate.id)).not.toContain(id);
 			const source = { mode: 'snapshot', snapshotId: id } as const;
 			const report = await services.catalog.planRecovery(source);
-			await expect(
-				services.catalog.recover(source, ACTOR, {
-					token: report.token,
-					writersStopped: true,
-					acceptWarnings: true,
-				}),
-			).rejects.toThrow('blocked');
+			await expect(applyRecovery(services.catalog, report)).rejects.toThrow('blocked');
 			expect(put).not.toHaveBeenCalled();
 			expect(await (await bucket.get(paths.catalog))!.text()).toBe(originalCatalog);
 		},
@@ -446,11 +407,7 @@ describe('catalog recovery', () => {
 			expect(report.projects[0].notebooks.map((entry) => entry.id).sort()).toEqual(expected.sort());
 			expect(report.projects[0].notebook_count).toBe(expected.length);
 			expect(report.issues.filter((issue) => issue.severity === 'error')).toEqual([]);
-			await services.catalog.recover(SOURCE, ACTOR, {
-				token: report.token,
-				writersStopped: true,
-				acceptWarnings: true,
-			});
+			await applyRecovery(services.catalog, report);
 			expect(
 				(await services.catalog.getCurrentSnapshot()).projects[0].notebooks
 					.map((entry) => entry.id)
@@ -468,13 +425,7 @@ describe('catalog recovery', () => {
 			expect.objectContaining({ key: receipt, severity: 'error' }),
 		);
 		const put = vi.spyOn(bucket, 'put');
-		await expect(
-			services.catalog.recover(SOURCE, ACTOR, {
-				token: report.token,
-				writersStopped: true,
-				acceptWarnings: true,
-			}),
-		).rejects.toThrow('blocked');
+		await expect(applyRecovery(services.catalog, report)).rejects.toThrow('blocked');
 		expect(put).not.toHaveBeenCalled();
 	});
 
@@ -500,11 +451,7 @@ describe('catalog recovery', () => {
 			const errors = report.issues.filter((issue) => issue.severity === 'error');
 			if (status === 'draft') {
 				expect(errors).toEqual([]);
-				await services.catalog.recover(SOURCE, ACTOR, {
-					token: report.token,
-					writersStopped: true,
-					acceptWarnings: true,
-				});
+				await applyRecovery(services.catalog, report);
 				expect((await services.catalog.getCurrentSnapshot()).projects[0].notebooks).toContainEqual(
 					expect.objectContaining({ id: meta.id, status: 'draft', source_type: 'git' }),
 				);
@@ -516,13 +463,7 @@ describe('catalog recovery', () => {
 					}),
 				);
 				const put = vi.spyOn(bucket, 'put');
-				await expect(
-					services.catalog.recover(SOURCE, ACTOR, {
-						token: report.token,
-						writersStopped: true,
-						acceptWarnings: true,
-					}),
-				).rejects.toThrow('blocked');
+				await expect(applyRecovery(services.catalog, report)).rejects.toThrow('blocked');
 				expect(put).not.toHaveBeenCalled();
 			}
 		},
@@ -544,13 +485,9 @@ describe('catalog recovery', () => {
 				return put(key, value, options);
 			});
 			const remove = vi.spyOn(bucket, 'delete');
-			await expect(
-				services.catalog.recover(SOURCE, ACTOR, {
-					token: report.token,
-					writersStopped: true,
-					acceptWarnings: true,
-				}),
-			).rejects.toThrow('Storage write unavailable');
+			await expect(applyRecovery(services.catalog, report)).rejects.toThrow(
+				'Storage write unavailable',
+			);
 			expect(await (await bucket.get(paths.catalog))!.text()).toBe(originalCatalog);
 			expect((await services.catalog.getCurrentSnapshot()).snapshot_id).toBe(original.snapshot_id);
 			expect(attempts.filter((key) => key === paths.catalog)).toHaveLength(
@@ -563,19 +500,9 @@ describe('catalog recovery', () => {
 	it('rejects reusing a report after a successful recovery', async () => {
 		const { bucket, services } = await fixture();
 		const report = await services.catalog.planRecovery(SOURCE);
-		const recovered = await services.catalog.recover(SOURCE, ACTOR, {
-			token: report.token,
-			writersStopped: true,
-			acceptWarnings: true,
-		});
+		const recovered = await applyRecovery(services.catalog, report);
 		const put = vi.spyOn(bucket, 'put');
-		await expect(
-			services.catalog.recover(SOURCE, ACTOR, {
-				token: report.token,
-				writersStopped: true,
-				acceptWarnings: true,
-			}),
-		).rejects.toThrow('stale');
+		await expect(applyRecovery(services.catalog, report)).rejects.toThrow('stale');
 		expect(put).not.toHaveBeenCalled();
 		expect((await services.catalog.getCurrentSnapshot()).snapshot_id).toBe(recovered.snapshot_id);
 	});
@@ -608,6 +535,19 @@ describe('catalog recovery', () => {
 				schedule: { cron: '0 12 * * *', timezone: 'UTC' },
 			}),
 		]);
+		await services.jobs.updateJob(
+			project.id,
+			notebook.id,
+			selectedJob.id,
+			{ schedule: null },
+			ACTOR,
+		);
+		const cleared = await services.catalog.planRecovery(report.source);
+		const recovered = await applyRecovery(services.catalog, cleared);
+		expect(recovered.projects[0].notebooks[0].jobs).toEqual([
+			expect.objectContaining({ id: selectedJob.id, enabled: false }),
+		]);
+		expect(recovered.projects[0].notebooks[0].jobs![0].schedule).toBeUndefined();
 	});
 
 	it('blocks recovery of a job whose history index is missing', async () => {
@@ -629,13 +569,7 @@ describe('catalog recovery', () => {
 			}),
 		);
 		const put = vi.spyOn(bucket, 'put');
-		await expect(
-			services.catalog.recover(SOURCE, ACTOR, {
-				token: report.token,
-				writersStopped: true,
-				acceptWarnings: true,
-			}),
-		).rejects.toThrow('blocked');
+		await expect(applyRecovery(services.catalog, report)).rejects.toThrow('blocked');
 		expect(put).not.toHaveBeenCalled();
 	});
 });

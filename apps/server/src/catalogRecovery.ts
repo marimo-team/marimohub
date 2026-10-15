@@ -4,8 +4,7 @@ import type { Bucket, CatalogRecoverySource } from '@marimo-hub/core';
 
 export const CATALOG_RECOVERY_HELP = `Usage: catalog-recovery --rebuild | --snapshot <snapshot-id>
 
-Dry-run is the default. The JSON report includes surviving snapshot candidates,
-recovered entries, issues, and a token binding approval to the inspected storage.
+Dry-run is the default. Review the JSON report before applying its token.
 
   --rebuild                Discover projects, notebooks, and jobs from records
   --snapshot <id>          Use a selected snapshot's membership with current metadata
@@ -16,8 +15,8 @@ recovered entries, issues, and a token binding approval to the inspected storage
   --help                   Show this help
 
 Use the deployment's MARIMOHUB_STORAGE_* environment variables.
-Stop API replicas, background workers, scheduled triggers, and sandbox writers
-before inspection and apply. Recovery changes only the catalog and its snapshots.`;
+Keep API replicas, background workers, scheduled triggers, and sandbox writers
+stopped through inspection and apply. Only the catalog and snapshots are written.`;
 
 export async function runCatalogRecovery(
 	args: string[],

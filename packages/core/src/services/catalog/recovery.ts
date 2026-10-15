@@ -1,8 +1,8 @@
 import type { z } from 'zod';
-import type { Bucket } from '../../ports/bucket';
+import type { Bucket, BucketObjectBody } from '../../ports/bucket';
 import { ConflictError } from '../../errors';
 import { NotebookId, ProjectId, UserId } from '../../ids';
-import type { SnapshotId } from '../../ids';
+import type { IdBrand, SnapshotId } from '../../ids';
 import { paths } from '../../paths';
 import { workspaceSourcePolicy } from '../../integrations/remoteWorkspace';
 import {
@@ -19,6 +19,7 @@ import { NotebookImportItemSchema } from '../content/NotebookImportService';
 import { buildNotebookEntry } from '../content/notebookMeta';
 import { projectCatalogPatch } from '../content/catalogProjection';
 import { listAllObjects } from './storage';
+import { jobIndexEntry } from '../jobs/JobsService';
 
 export type CatalogRecoverySource =
 	| { mode: 'rebuild' }
@@ -45,6 +46,35 @@ export interface CatalogRecoveryReport {
 	issues: CatalogRecoveryIssue[];
 	projects: SnapshotProjectEntry[];
 	snapshot?: Snapshot;
+}
+
+async function decodeRecord<T>(
+	object: BucketObjectBody | null,
+	schema: z.ZodType<T>,
+): Promise<{ data: T; error?: never } | { data?: never; error: string }> {
+	if (!object) return { error: 'Required record is missing.' };
+	let raw: unknown;
+	try {
+		raw = await object.json();
+	} catch {
+		return { error: 'Record is not valid JSON.' };
+	}
+	const parsed = schema.safeParse(raw);
+	return parsed.success ? { data: parsed.data } : { error: 'Record does not match its schema.' };
+}
+
+function childIds<T extends string>(
+	keys: ReadonlySet<string>,
+	prefix: string,
+	id: IdBrand<T>,
+): T[] {
+	const children = new Set<T>();
+	for (const key of keys) {
+		if (!key.startsWith(prefix)) continue;
+		const child = key.slice(prefix.length).split('/')[0];
+		if (id.is(child)) children.add(child);
+	}
+	return [...children].sort();
 }
 
 async function inventory(bucket: Bucket) {
@@ -75,48 +105,22 @@ export async function planCatalogRecovery(
 			issue(object.key, 'error', 'Storage must provide non-empty ETags for recovery.');
 	}
 	async function read<T>(key: string, schema: z.ZodType<T>): Promise<T | undefined> {
-		const object = await bucket.get(key);
-		if (!object) {
-			issue(key, 'error', 'Required record is missing.');
-			return;
-		}
-		let raw: unknown;
-		try {
-			raw = await object.json();
-		} catch {
-			issue(key, 'error', 'Record is not valid JSON.');
-			return;
-		}
-		const parsed = schema.safeParse(raw);
-		if (!parsed.success) {
-			issue(key, 'error', 'Record does not match its schema.');
-			return;
-		}
-		return parsed.data;
+		const result = await decodeRecord(await bucket.get(key), schema);
+		if (result.error) issue(key, 'error', result.error);
+		return result.data;
 	}
 
 	// A damaged pointer must not prevent inspecting the surviving snapshots.
 	const catalogObject = await bucket.get(paths.catalog);
-	let catalog;
-	if (catalogObject) {
-		try {
-			catalog = CatalogSchema.safeParse(await catalogObject.json()).data;
-		} catch {
-			// The report below identifies the corrupt pointer without echoing its contents.
-		}
-		if (!catalog) issue(paths.catalog, 'warning', 'Catalog is corrupt; recovery will replace it.');
+	const { data: catalog } = await decodeRecord(catalogObject, CatalogSchema);
+	if (catalogObject && !catalog) {
+		issue(paths.catalog, 'warning', 'Catalog is corrupt; recovery will replace it.');
 	}
 	const candidates: CatalogRecoveryCandidate[] = [];
 	let selected: Snapshot | undefined;
 	for (const key of keys) {
 		if (!key.startsWith(paths.snapshotsPrefix)) continue;
-		const object = await bucket.get(key);
-		let snapshot: Snapshot | undefined;
-		try {
-			snapshot = SnapshotSchema.safeParse(await object?.json()).data;
-		} catch {
-			// Unrelated corrupt history does not block recovery from intact records.
-		}
+		const { data: snapshot } = await decodeRecord(await bucket.get(key), SnapshotSchema);
 		if (!snapshot || paths.snapshot(snapshot.snapshot_id) !== key) {
 			issue(key, 'warning', 'Snapshot is invalid and cannot be selected.');
 			continue;
@@ -160,9 +164,7 @@ export async function planCatalogRecovery(
 	const projectIds =
 		source.mode === 'snapshot'
 			? (selected?.projects.map((project) => project.id) ?? [])
-			: [
-					...new Set([...keys].map((key) => key.split('/')[1]).filter((id) => ProjectId.is(id))),
-				].sort();
+			: childIds(keys, 'projects/', ProjectId);
 	for (const projectId of projectIds) {
 		const projectPaths = paths.project(projectId);
 		const project = await read(projectPaths.meta, ProjectSchema);
@@ -200,14 +202,7 @@ export async function planCatalogRecovery(
 		const notebookIds =
 			source.mode === 'snapshot'
 				? (previous?.notebooks.map((notebook) => notebook.id) ?? [])
-				: [
-						...new Set(
-							[...keys]
-								.filter((key) => key.startsWith(notebookPrefix))
-								.map((key) => key.split('/')[3])
-								.filter((id) => NotebookId.is(id)),
-						),
-					].sort();
+				: childIds(keys, notebookPrefix, NotebookId);
 		for (const notebookId of notebookIds) {
 			const nb = projectPaths.notebook(notebookId);
 			if (keys.has(nb.previewMeta)) {
@@ -293,10 +288,7 @@ export async function planCatalogRecovery(
 				}
 				notebook.jobs!.push({
 					...old?.jobs?.find((entry) => entry.id === job.id),
-					id: job.id,
-					enabled: job.enabled,
-					schedule: job.schedule,
-					updated_at: job.updated_at,
+					...jobIndexEntry(job),
 				});
 			}
 		}

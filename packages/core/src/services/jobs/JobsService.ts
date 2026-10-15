@@ -90,11 +90,11 @@ function validateTimeout(timeoutSeconds: number | undefined, limits: JobLimits):
 	}
 }
 
-function toIndexEntry(job: JobDefinition): SnapshotJobEntry {
+export function jobIndexEntry(job: JobDefinition): SnapshotJobEntry {
 	return {
 		id: job.id,
 		enabled: job.enabled,
-		...(job.schedule ? { schedule: job.schedule } : {}),
+		schedule: job.schedule,
 		updated_at: job.updated_at,
 	};
 }
@@ -237,7 +237,7 @@ export class JobsService {
 		await this.bucket.put(key, JSON.stringify(job), { onlyIfNotExists: true });
 		try {
 			await this.bucket.put(indexKey, '', { onlyIfNotExists: true });
-			await this.syncIndex('job.create', actor, job, toIndexEntry(job), limits.maxPerNotebook);
+			await this.syncIndex('job.create', actor, job, jobIndexEntry(job), limits.maxPerNotebook);
 		} catch (err) {
 			await this.bucket.delete([key, indexKey]).catch(() => {});
 			throw err;
@@ -281,7 +281,7 @@ export class JobsService {
 			{ notFound: () => new NotFoundError(`Job ${jobId} not found`) },
 		);
 		try {
-			await this.syncIndex('job.update', actor, updated, toIndexEntry(updated));
+			await this.syncIndex('job.update', actor, updated, jobIndexEntry(updated));
 		} catch (err) {
 			const prior = previous;
 			if (prior) {
@@ -299,7 +299,7 @@ export class JobsService {
 					return null;
 				});
 				if (rollback?.written) {
-					await this.syncIndex('job.update.rollback', actor, prior, toIndexEntry(prior)).catch(
+					await this.syncIndex('job.update.rollback', actor, prior, jobIndexEntry(prior)).catch(
 						(rollbackError) => {
 							logOperationalError(
 								'job_update_index_rollback_failed',

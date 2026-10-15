@@ -71,35 +71,22 @@ Pitfalls:
 
 ## 2. Corruption recovery
 
-**Deletion invariant (state it, rely on it):** _a writer only ever deletes a
-snapshot it itself wrote and never committed._
+A missing catalog returns `NOT_INITIALIZED` with `Catalog recovery required` when
+project objects or snapshots remain. A missing current snapshot also blocks
+catalog reads. Only fresh storage initializes automatically.
 
-- The loser of a CAS race deletes the orphan snapshot it just wrote, before
-  retrying (`CatalogService.mutateSnapshot`, `initialize`).
-- Retention never deletes the snapshot `catalog.json` points at or its
-  `previous_snapshot_id` (`MaintenanceService.expireSnapshots`).
-
-Retention protects the current and previous snapshots. Older committed snapshots
-can expire. Out-of-band deletion can still leave a dangling pointer. Recovery
-requires a surviving snapshot or enough underlying records to reconstruct the
-index.
-
-### Missing catalog or snapshots
-
-If `_system/catalog.json` is missing, initialization checks for surviving project
-objects and snapshots. Existing data blocks initialization with a
-`NOT_INITIALIZED` error containing `Catalog recovery required`. An empty bucket
-still initializes normally. A missing current snapshot also requires recovery.
-Neither case automatically selects a snapshot or creates a replacement index.
+Retention protects the current and previous snapshots. Older snapshots can
+expire, so recovery requires a surviving snapshot or enough records to rebuild
+the index.
 
 ### Inspect and recover the catalog
 
-**Stop all writers before inspection and recovery.** Stop API replicas,
+**Keep all writers stopped through inspection and apply:** API replicas,
 maintenance workers, scheduled triggers, and sandbox processes that persist
-notebook changes. The catalog CAS protects the pointer. It cannot freeze writes
-to individual metadata records.
+notebook changes. The final CAS protects the catalog pointer, not individual
+metadata records.
 
-1. Back up the affected storage before recovery.
+1. Back up the affected storage.
 2. Set the deployment's `MARIMOHUB_STORAGE_*` environment variables.
 3. From the repository root, generate a dry-run report:
 
@@ -107,65 +94,50 @@ to individual metadata records.
    pnpm --filter @marimo-hub/server catalog:recover --rebuild
    ```
 
-   The command only reads storage unless `--apply` is present. It supports `s3`,
-   `gcs`, `azure`, and `fs`. Library and Workers adapters can call
-   `CatalogService.planRecovery` and `CatalogService.recover` with their bucket.
-   The server build also includes `dist/catalog-recovery.mjs` for direct Node use.
-   The command does not start the API, compute adapters, or maintenance workers.
-
 4. Review `candidates`, `projects`, and `issues` in the JSON report.
-5. If a suitable snapshot survives, generate a report for that snapshot:
+5. If a suitable snapshot survives, inspect it with its actual ID:
 
    ```bash
-   pnpm --filter @marimo-hub/server catalog:recover --snapshot snap-EXAMPLE
+   pnpm --filter @marimo-hub/server catalog:recover --snapshot SNAPSHOT_ID
    ```
 
-   Replace `snap-EXAMPLE` with an actual candidate ID. Prefer the surviving
-   `current` or `previous` reference when appropriate. An `unverified` candidate
-   might be an uncommitted write. Creation time and key order do not prove commit.
+   Prefer a suitable `current` or `previous` candidate. An `unverified` snapshot
+   can be an uncommitted write. Neither creation time nor key order proves commit.
 
-6. Apply the selected report with its exact `token` and the same mode:
+6. Apply the report with its exact `token` and the same mode:
 
    ```bash
    pnpm --filter @marimo-hub/server catalog:recover \
-     --snapshot snap-EXAMPLE --apply REPORT_TOKEN \
+     --snapshot SNAPSHOT_ID --apply REPORT_TOKEN \
      --writers-stopped --actor OPERATOR_ID
    ```
 
-   For record reconstruction, replace `--snapshot snap-EXAMPLE` with `--rebuild`.
-   If the report contains warnings, review them before adding `--accept-warnings`.
-   Errors always block recovery. Changed storage invalidates the report token.
+   For record reconstruction, use `--rebuild` instead of `--snapshot SNAPSHOT_ID`.
+   If warnings are acceptable, add `--accept-warnings`. Errors always block apply.
+   Changed storage invalidates the token. If apply fails, inspect again before retrying.
 
-7. Check the recovered project list and notebook contents before restarting writers.
+7. Check recovered projects and notebook contents before restarting writers.
 
-Recovery writes a new immutable snapshot through `CatalogService.mutateSnapshot`.
-An existing pointer requires its inspected ETag. A missing pointer requires
-create-if-absent. A competing writer stops recovery instead of triggering a retry
-against different state. An uncertain write response leaves the snapshot intact.
-If apply fails, inspect storage again before retrying.
+The command defaults to dry-run and supports `s3`, `gcs`, `azure`, and `fs`.
+The server bundle provides `node dist/catalog-recovery.mjs` with the same arguments.
+Other adapters can use `CatalogService.planRecovery` and `CatalogService.recover`.
 
 ### Recovery limits
 
-Snapshot mode restores the selected membership with current authoritative
-metadata. It preserves current deletion status, memberships, and security labels.
-It does not restore notebook content or recover objects absent from the selected
-snapshot. Newer definitions of selected jobs supply their current schedules.
+- **Snapshot mode** restores selected membership with current metadata, including
+  deletion status, permissions, security labels, and job schedules.
+- **Rebuild mode** discovers surviving records but cannot prove publication.
+  Review every entry: failed creates and expired import receipts can leave
+  ambiguous records.
+- Preview runtimes, known incomplete import attempts, and jobs with deletion
+  fences are excluded. Deleted projects and notebooks retain their status.
+- Missing or invalid metadata, referenced notebook content, or job history
+  indexes block apply. Recovery does not repair these objects or restore history.
 
-Rebuild mode discovers projects, notebooks, and job definitions from surviving
-records. It cannot prove that each record was published. Review every recovered
-entry before accepting this warning. Failed creates can leave orphaned records.
-Import receipts expire, so older unpublished imports can also be ambiguous.
-
-The report excludes preview runtimes, import attempts without a completed
-receipt, and jobs with deletion fences. Imports without surviving receipts remain
-subject to the rebuild warning. Deleted projects and notebooks retain their
-status. Missing or invalid metadata and missing referenced notebook content block
-apply. Recovery does not create missing job history indexes, repair notebook
-contents, or restore catalog history.
-
-Keep every writer stopped through apply. Inventory checks detect changes during
-inspection and between dry-run and apply. They do not provide a transaction over
-all storage records. The final CAS protects only the catalog pointer.
+Recovery writes a new immutable snapshot through `CatalogService.mutateSnapshot`.
+It updates an existing pointer with its inspected ETag or creates a missing pointer
+conditionally. It does not retry against changed state. Uncertain write responses
+leave the snapshot intact for inspection.
 
 ---
 
