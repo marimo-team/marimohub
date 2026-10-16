@@ -223,6 +223,10 @@ export async function planCatalogRecovery(
 				issue(nb.meta, 'error', 'Notebook IDs do not match its storage path.');
 				continue;
 			}
+			if (!UserId.is(meta.author)) {
+				issue(nb.meta, 'error', 'Notebook author is invalid.');
+				continue;
+			}
 			const notebookSource = await read(nb.source, SourceSchema);
 			if (!notebookSource) continue;
 			if (meta.status !== 'deleted') {
@@ -251,7 +255,7 @@ export async function planCatalogRecovery(
 			const old = previous?.notebooks.find((notebook) => notebook.id === notebookId);
 			const notebook: SnapshotProjectEntry['notebooks'][number] = {
 				...old,
-				...buildNotebookEntry(meta, notebookSource.type, nb.base, UserId.parse(meta.author)),
+				...buildNotebookEntry(meta, notebookSource.type, nb.base, meta.author),
 				last_run_at: meta.last_run_at,
 				security_labels_pending: undefined,
 				jobs: [],

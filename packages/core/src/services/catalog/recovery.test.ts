@@ -248,7 +248,7 @@ describe('catalog recovery', () => {
 		);
 		await bucket.put(
 			paths.project(project.id).notebook(notebook.id).meta,
-			JSON.stringify(makeNotebookMeta()),
+			JSON.stringify(makeNotebookMeta({ project_id: project.id })),
 		);
 		expect((await services.catalog.planRecovery(SOURCE)).issues).toContainEqual(
 			expect.objectContaining({
@@ -261,6 +261,34 @@ describe('catalog recovery', () => {
 			expect.objectContaining({ key: paths.project(project.id).meta, severity: 'error' }),
 		);
 	});
+
+	it.each(['rebuild', 'snapshot'] as const)(
+		'reports an empty notebook author and blocks %s recovery',
+		async (mode) => {
+			const { bucket, services, project, notebook } = await fixture();
+			const healthy = await services.notebooks.createNotebook(project.id, INPUT, ACTOR);
+			const selected = await services.catalog.getCurrentSnapshot();
+			const key = paths.project(project.id).notebook(notebook.id).meta;
+			await bucket.put(
+				key,
+				JSON.stringify(makeNotebookMeta({ id: notebook.id, project_id: project.id, author: '' })),
+			);
+			const put = vi.spyOn(bucket, 'put');
+			const remove = vi.spyOn(bucket, 'delete');
+			const report = await services.catalog.planRecovery(
+				mode === 'rebuild' ? SOURCE : { mode, snapshotId: selected.snapshot_id },
+			);
+			expect(report.issues).toContainEqual({
+				key,
+				severity: 'error',
+				message: 'Notebook author is invalid.',
+			});
+			expect(report.projects[0].notebooks.map((entry) => entry.id)).toEqual([healthy.id]);
+			await expect(applyRecovery(services.catalog, report)).rejects.toThrow('blocked');
+			expect(put).not.toHaveBeenCalled();
+			expect(remove).not.toHaveBeenCalled();
+		},
+	);
 
 	it('paginates inventory instead of losing projects past the first page', async () => {
 		const { bucket, services } = await fixture();

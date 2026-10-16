@@ -55,8 +55,9 @@ Pitfalls:
 - Restoring the pointer alone, to a snapshot that was later pruned by retention
   (§5), yields a dangling pointer — see §2.
 - Restoring the index to time _T_ does **not** roll back `notebook.py`, which is
-  overwritten in place. To roll back code you must also restore the relevant
-  immutable `versions/{vid}/` objects (or rely on object versioning).
+  overwritten in place. For local notebooks, use the version-restore operation.
+  It copies the selected version's code and dependencies into the workspace and writes a new version.
+  Restoring immutable `versions/{vid}/` objects alone does not change the workspace.
 
 ### Test-restore procedure (do this before you need it)
 
@@ -113,7 +114,9 @@ metadata records.
    ```
 
    For record reconstruction, use `--rebuild` instead of `--snapshot SNAPSHOT_ID`.
-   If warnings are acceptable, add `--accept-warnings`. Errors always block apply.
+   Rebuild always warns that record discovery cannot prove publication.
+   After reviewing and accepting this warning, add `--accept-warnings` to the rebuild apply command.
+   Snapshot reports with accepted warnings also require `--accept-warnings`. Errors always block apply.
    Changed storage invalidates the token. If apply fails, inspect again before retrying.
 
 7. Check recovered projects and notebook contents before restarting writers.
