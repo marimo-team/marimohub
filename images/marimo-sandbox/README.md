@@ -1,6 +1,8 @@
 # Maintained sandbox image
 
-All tags, including `vscode`, `opencode`, and `tools`, support `linux/amd64` and `linux/arm64`.
+The manifest tags `latest`, `py3.13-marimo<version>`, and `sha-<commit>` support
+`linux/amd64` and `linux/arm64`, as do their `-vscode`, `-opencode`, and `-tools` variants.
+Source tags ending in `-amd64` or `-arm64` contain only that architecture.
 
 Build from the repository root with the required `notebook_bridge` context:
 

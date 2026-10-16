@@ -30,7 +30,7 @@ Node SEA binaries with the server and SPA embedded. Each has a `.sha256` file
 and provenance attestation. These binaries are separate from the CLI checksums,
 SBOM, and recovery workflow.
 
-Build a binary for the local OS and architecture with `pnpm build:sea`.
+On Linux or macOS, build a binary for the local architecture with `pnpm build:sea`.
 The output is `apps/server/dist/sea/marimohub-<platform>-<arch>`.
 Run `scripts/smoke-sea.sh <binary>` to check it, or
 `gh attestation verify <binary> --repo marimo-team/marimohub` to check release provenance.
