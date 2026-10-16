@@ -1679,6 +1679,109 @@ describe('Session routes', () => {
 		expect(otherCompute.lastCreateOptions?.owner).toEqual({ projectId: pid, userId: ACTOR });
 	});
 
+	it.each([
+		{ age: 0, connections: 0 },
+		{ age: 29_999, connections: 2 },
+	])(
+		'reuses editor activity at age $age ms without compute or writes',
+		async ({ age, connections }) => {
+			const persistent = await expectOk<ApiSession>(
+				await exclusiveApi(ACTOR)('POST', sessionsPath()),
+			);
+			const now = Date.now();
+			const checkedAt = new Date(now - age).toISOString();
+			await createServices(bucket).sessions.markConnections(
+				pid,
+				persistent.session_id,
+				connections,
+				checkedAt,
+			);
+			const compute = makeFakeCompute();
+			const create = vi.spyOn(compute, 'create').mockImplementation(() => {
+				throw new Error('Compute unavailable');
+			});
+			const put = vi.spyOn(bucket, 'put');
+			const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+			try {
+				const request = exclusiveApi(STRANGER, compute);
+				for (let i = 0; i < 2; i++) {
+					const state = await expectOk<EditorState>(await request('GET', editorSessionPath()));
+					expect(state.holder?.activity).toEqual({
+						state: connections > 0 ? 'active' : 'idle',
+						active_connections: connections,
+						checked_at: checkedAt,
+					});
+				}
+				expect(create).not.toHaveBeenCalled();
+				expect(
+					put.mock.calls.filter(([key]) => key === paths.session(pid, persistent.session_id)),
+				).toEqual([]);
+			} finally {
+				clock.mockRestore();
+			}
+		},
+	);
+
+	it.each([30_000, 30_001, -1])('refreshes editor activity at age %i ms', async (age) => {
+		const persistent = await expectOk<ApiSession>(
+			await exclusiveApi(ACTOR)('POST', sessionsPath()),
+		);
+		const now = Date.now();
+		await createServices(bucket).sessions.markConnections(
+			pid,
+			persistent.session_id,
+			0,
+			new Date(now - age).toISOString(),
+		);
+		const activity = makeFakeSandbox();
+		activity.instance.exec = vi.fn().mockResolvedValue({ success: true, stdout: '2', stderr: '' });
+		const request = exclusiveApi(STRANGER, fakeComputeFrom(activity.instance));
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+		try {
+			const state = await expectOk<EditorState>(await request('GET', editorSessionPath()));
+			expect(state.holder?.activity).toMatchObject({ state: 'active', active_connections: 2 });
+			expect(activity.instance.exec).toHaveBeenCalledTimes(1);
+			const stored = await createServices(bucket).sessions.getSession(pid, persistent.session_id);
+			expect(stored.active_connections).toBe(2);
+			expect(Date.parse(stored.connections_checked_at!)).toBeGreaterThanOrEqual(now);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	it('checks live activity on takeover even when the displayed idle count is fresh', async () => {
+		const persistent = await expectOk<ApiSession>(
+			await exclusiveApi(ACTOR)('POST', sessionsPath()),
+		);
+		const services = createServices(bucket);
+		await services.sessions.markConnections(
+			pid,
+			persistent.session_id,
+			0,
+			new Date().toISOString(),
+		);
+		const activity = makeFakeSandbox();
+		activity.instance.exec = vi.fn().mockResolvedValue({ success: true, stdout: '1', stderr: '' });
+		const request = exclusiveApi(STRANGER, fakeComputeFrom(activity.instance));
+		const state = await expectOk<EditorState>(await request('GET', editorSessionPath()));
+		expect(state.holder?.activity.state).toBe('idle');
+		expect(activity.instance.exec).not.toHaveBeenCalled();
+		await expectError(
+			await request('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'takeover-cached-idle',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: state.holder!.activity.state,
+				acknowledge_disruption: true,
+			}),
+			409,
+			'EDIT_SESSION_CHANGED',
+		);
+		expect(activity.instance.exec).toHaveBeenCalledTimes(1);
+		expect(activity.calls.destroy).toBe(0);
+		expect((await services.sessions.getSession(pid, persistent.session_id)).status).toBe('running');
+		expect((await services.sessions.getEditorClaim(pid, nid))?.transfer).toBeUndefined();
+	});
+
 	it('reports unknown editor activity when the holder sandbox is gone', async () => {
 		const gone = makeFakeSandbox();
 		gone.instance.exec = async () => {

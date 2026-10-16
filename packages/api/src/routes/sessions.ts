@@ -970,6 +970,25 @@ app.openapi(getSession, async (c) => {
 	);
 });
 
+const EDITOR_ACTIVITY_MAX_AGE_MS = 30_000;
+
+function cachedEditorActivity(session: Session) {
+	if (
+		session.status !== 'running' ||
+		!session.sandbox_id ||
+		session.active_connections === undefined ||
+		!session.connections_checked_at
+	)
+		return;
+	const age = Date.now() - Date.parse(session.connections_checked_at);
+	if (!(age >= 0 && age < EDITOR_ACTIVITY_MAX_AGE_MS)) return;
+	return {
+		state: session.active_connections > 0 ? ('active' as const) : ('idle' as const),
+		active_connections: session.active_connections,
+		checked_at: session.connections_checked_at,
+	};
+}
+
 async function inspectEditorActivity(deps: ApiDeps, session: Session) {
 	if (session.status === 'starting') return { state: 'starting' as const };
 	if (session.status !== 'running' || !session.sandbox_id) {
@@ -1029,7 +1048,7 @@ app.openapi(getEditorSession, async (c) => {
 				activity:
 					holder.user_id === user.id
 						? { state: holder.status === 'starting' ? ('starting' as const) : ('unknown' as const) }
-						: await inspectEditorActivity(deps, holder),
+						: (cachedEditorActivity(holder) ?? (await inspectEditorActivity(deps, holder))),
 			}
 		: null;
 	return c.json(

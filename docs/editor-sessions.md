@@ -44,6 +44,9 @@ owner and the connection state before they start more compute:
 - **Unknown:** marimohub cannot read the connection count. Treat the sandbox as
   active.
 
+The displayed connection state can use a stored observation less than 30 seconds old.
+Before a takeover, marimohub always checks live activity. If the activity changed, you must confirm the takeover again.
+
 A second editor can start an isolated temporary sandbox or take over the
 persistent sandbox. A temporary sandbox uses the normal editor compute profile.
 Unlike a restricted viewer sandbox, it receives integration configuration,
