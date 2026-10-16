@@ -5,8 +5,9 @@ import type {
 	UpdateChangeRequestInput,
 } from '@marimo-hub/core/ports/source-control';
 
-export function validateCommit(value: string): void {
+export function normalizeCommit(value: string): string {
 	if (!/^[0-9a-f]{40}$/i.test(value)) throw new ValidationError('Invalid Azure DevOps commit SHA');
+	return value.toLowerCase();
 }
 export function validateBranch(value: string): void {
 	if (
@@ -24,10 +25,11 @@ export function validateBranch(value: string): void {
 		throw new ValidationError('Invalid Git branch name');
 	}
 }
-export function validatePublication(
-	input: OpenChangeRequestInput | UpdateChangeRequestInput,
-): string {
-	validateCommit(input.baseCommit);
+export function validatePublication(input: OpenChangeRequestInput | UpdateChangeRequestInput): {
+	branch: string;
+	baseCommit: string;
+} {
+	const baseCommit = normalizeCommit(input.baseCommit);
 	validateBranch(input.baseBranch);
 	const branch = 'headBranch' in input ? input.headBranch : input.changeRequest.headBranch;
 	validateBranch(branch);
@@ -57,7 +59,7 @@ export function validatePublication(
 			/[<>\u2028\u2029]/.test(author.name + author.email))
 	)
 		throw new ValidationError('Invalid commit co-author');
-	return branch;
+	return { branch, baseCommit };
 }
 
 export function hasControlCharacter(value: string): boolean {

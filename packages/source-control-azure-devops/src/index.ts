@@ -22,7 +22,7 @@ import { parseAzureRepository } from './repository';
 import type { AzureRepository } from './repository';
 import { AzureTrees, sameTree } from './trees';
 import type { FileTree } from './trees';
-import { validateBranch, validateCommit, validatePublication } from './validation';
+import { validateBranch, normalizeCommit, validatePublication } from './validation';
 export { parseAzureRepository, validateOrganization } from './repository';
 export type { AzureDevOpsOptions, AzureDevOpsRuntime, AzureCredential } from './client';
 export { ClientSecretCredential } from '@azure/identity';
@@ -48,7 +48,11 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 		try {
 			return await action();
 		} catch (error) {
-			throw markSourceControlPublishFailure(error, { provider: this.provider, stage });
+			const status =
+				typeof (error as { providerStatus?: unknown })?.providerStatus === 'number'
+					? (error as { providerStatus: number }).providerStatus
+					: undefined;
+			throw markSourceControlPublishFailure(error, { provider: this.provider, stage, status });
 		}
 	}
 	private async head(
@@ -62,9 +66,7 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 		);
 		const ref = refs.find((item) => stringField(item, 'name') === `refs/heads/${branch}`);
 		if (!ref) return null;
-		const commit = stringField(ref, 'objectId');
-		validateCommit(commit);
-		return commit;
+		return normalizeCommit(stringField(ref, 'objectId'));
 	}
 	async getBranchHead(repository: string, branch: string, options: SourceReadOptions = {}) {
 		const commit = await this.head(this.repository(repository), branch, options);
@@ -84,13 +86,13 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 		);
 	}
 	async fetchGitDirectory(repository: string, commit: string, branch: string) {
-		validateCommit(commit);
+		const normalizedCommit = normalizeCommit(commit);
 		validateBranch(branch);
 		const repo = this.repository(repository);
 		return materializeGitDirectory({
 			repository: repo.url,
 			remoteUrl: repo.url,
-			commit,
+			commit: normalizedCommit,
 			branch,
 			authorization: await this.client.authorization(),
 			fetcher: (url, init) => {
@@ -135,7 +137,8 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 			return (
 				Array.isArray(commit.parents) &&
 				commit.parents.length === 1 &&
-				commit.parents[0] === parent &&
+				typeof commit.parents[0] === 'string' &&
+				normalizeCommit(commit.parents[0]) === parent &&
 				sameTree(await trees.files(head), desired)
 			);
 		});
@@ -187,16 +190,14 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 		const commits = record(payload).commits;
 		if (!Array.isArray(commits) || commits.length !== 1)
 			throw new UnavailableError('Invalid Azure DevOps push result');
-		const sha = stringField(commits[0], 'commitId');
-		validateCommit(sha);
-		return sha;
+		return normalizeCommit(stringField(commits[0], 'commitId'));
 	}
 	async openChangeRequest(input: OpenChangeRequestInput): Promise<OpenChangeRequestResult> {
-		const branch = validatePublication(input);
+		const { branch, baseCommit } = validatePublication(input);
 		const repo = this.repository(input.repository);
 		const trees = new AzureTrees(this.client, repo);
 		const { desired, changes } = await this.stage('push', async () => {
-			const base = await trees.files(input.baseCommit);
+			const base = await trees.files(baseCommit);
 			const desired = trees.desired(base, input.changes);
 			const changes = await trees.delta(base, desired, input.changes);
 			if (changes.length === 0) throw new ConflictError('Proposal contains no changes');
@@ -216,7 +217,7 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 								{
 									name: `refs/heads/${branch}`,
 									oldObjectId: '0'.repeat(40),
-									newObjectId: input.baseCommit,
+									newObjectId: baseCommit,
 								},
 							]),
 						},
@@ -231,12 +232,10 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 			head = await this.stage('branch', () => this.head(repo, branch));
 		}
 		if (!head) throw this.branchChanged(true);
-		if (head === input.baseCommit) {
-			head = await this.stage('push', () =>
-				this.push(repo, branch, input.baseCommit, input, changes),
-			);
+		if (head === baseCommit) {
+			head = await this.stage('push', () => this.push(repo, branch, baseCommit, input, changes));
 		}
-		if (!(await this.matches(trees, head, input.baseCommit, desired)))
+		if (!(await this.matches(trees, head, baseCommit, desired)))
 			throw new ProposalRetryRequiredError(
 				'The Azure DevOps branch no longer matches the proposal; retry with a new idempotency key',
 			);
@@ -264,7 +263,7 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 				if (
 					(value.status === 'completed' || value.status === 'abandoned') &&
 					source &&
-					stringField(source, 'commitId') === publishedHead
+					normalizeCommit(stringField(source, 'commitId')) === publishedHead
 				)
 					closedMatch ??= existing;
 			}
@@ -292,9 +291,9 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 		});
 	}
 	async updateChangeRequest(input: UpdateChangeRequestInput): Promise<OpenChangeRequestResult> {
-		const branch = validatePublication(input);
+		const { branch, baseCommit } = validatePublication(input);
 		const repo = this.repository(input.repository);
-		validateCommit(input.changeRequest.headCommit);
+		const expected = normalizeCommit(input.changeRequest.headCommit);
 		const id = input.changeRequest.number;
 		if (
 			!Number.isSafeInteger(id) ||
@@ -303,14 +302,13 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 		)
 			throw new ConflictError('Invalid Azure DevOps pull request identity');
 		const pull = await this.stage('pr', () => this.client.json(repo, `/pullrequests/${id}`));
-		this.result(repo, pull, branch, input.baseBranch, input.changeRequest.headCommit, id);
+		this.result(repo, pull, branch, input.baseBranch, expected, id);
 		if (record(pull).status !== 'active')
 			throw new ConflictError('Azure DevOps pull request is closed; create a new pull request');
 		const trees = new AzureTrees(this.client, repo);
 		const desired = await this.stage('push', async () =>
-			trees.desired(await trees.files(input.baseCommit), input.changes),
+			trees.desired(await trees.files(baseCommit), input.changes),
 		);
-		const expected = input.changeRequest.headCommit;
 		let head = await this.stage('branch', () => this.head(repo, branch));
 		if (!head) throw this.branchChanged(true);
 		if (head !== expected) {

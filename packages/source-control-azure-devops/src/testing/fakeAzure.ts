@@ -91,14 +91,14 @@ export class FakeAzure {
 				}),
 			});
 		}
-		if (path.startsWith('/commits/')) {
+		if (path.startsWith('/commits/') && method === 'GET') {
 			const id = path.slice('/commits/'.length);
 			const commit = this.commits.get(id);
 			return commit
 				? json({ commitId: id, treeId: commit.treeId, parents: commit.parents })
 				: json({}, 404);
 		}
-		if (path.startsWith('/trees/')) {
+		if (path.startsWith('/trees/') && method === 'GET') {
 			const commit = [...this.commits.values()].find(
 				(c) => c.treeId === path.slice('/trees/'.length),
 			);
@@ -113,13 +113,13 @@ export class FakeAzure {
 				})),
 			});
 		}
-		if (path.startsWith('/blobs/')) {
+		if (path.startsWith('/blobs/') && method === 'GET') {
 			const file = [...this.commits.values()]
 				.flatMap((commit) => [...commit.files.values()])
 				.find((item) => blobId(item.bytes) === path.slice('/blobs/'.length));
 			return file ? new Response(Buffer.from(file.bytes)) : json({}, 404);
 		}
-		if (path === '/pushes') {
+		if (path === '/pushes' && method === 'POST') {
 			const body = JSON.parse(String(init?.body)) as PushBody;
 			const ref = body.refUpdates[0];
 			if (this.racePush || this.refs.get(ref.name) !== ref.oldObjectId) return json({}, 409);
@@ -165,7 +165,7 @@ export class FakeAzure {
 			}
 			return json(pull);
 		}
-		if (path.startsWith('/pullrequests/')) {
+		if (path.startsWith('/pullrequests/') && (method === 'GET' || method === 'PATCH')) {
 			const pull = this.pulls.find((item) => item.pullRequestId === Number(path.split('/').at(-1)));
 			if (!pull) return json({}, 404);
 			if (method === 'PATCH') Object.assign(pull, JSON.parse(String(init?.body)));

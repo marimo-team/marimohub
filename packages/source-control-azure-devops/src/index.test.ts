@@ -578,3 +578,74 @@ describe('Azure publication retries and errors', () => {
 		},
 	);
 });
+
+describe('Azure DevOps commit casing', () => {
+	function uppercaseResponses(fake: FakeAzure) {
+		const original = fake.fetcher.getMockImplementation()!;
+		fake.fetcher.mockImplementation(async (url, init) => {
+			const response = await original(url, init);
+			if (!response.headers.get('content-type')?.includes('application/json')) return response;
+			return new Response(
+				JSON.stringify(await response.json(), (_key, value: unknown) =>
+					typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value) ? value.toUpperCase() : value,
+				),
+				{ status: response.status, headers: response.headers },
+			);
+		});
+	}
+	it('normalizes uppercase commit, tree, blob, and branch responses for workspace reads', async () => {
+		const { adapter, fake } = setup();
+		uppercaseResponses(fake);
+		expect(await adapter.getBranchHead(repository, 'main')).toEqual({ commit: fake.base });
+		expect(await adapter.fetchWorkspace(repository, fake.base.toUpperCase(), 'apps')).toEqual([
+			{ path: 'main.py', bytes: bytes('print(1)') },
+		]);
+	});
+	it.each([false, true])(
+		'publishes and retries uppercase input commits with uppercase responses=%s',
+		async (uppercase) => {
+			const { adapter, fake, input } = setup();
+			if (uppercase) uppercaseResponses(fake);
+			const publication = Object.freeze({ ...input, baseCommit: fake.base.toUpperCase() });
+			const first = await adapter.openChangeRequest(publication);
+			expect(first.headCommit).toBe(fake.refs.get(`refs/heads/${input.headBranch}`));
+			expect(await adapter.openChangeRequest(publication)).toEqual(first);
+			const update = Object.freeze({
+				...publication,
+				changeRequest: Object.freeze({ ...first, headCommit: first.headCommit.toUpperCase() }),
+				changes: [{ path: 'README.md', operation: 'delete' as const }],
+			});
+			const second = await adapter.updateChangeRequest(update);
+			expect(second.headCommit).toBe(fake.refs.get(`refs/heads/${input.headBranch}`));
+			expect(second.headCommit).not.toBe(first.headCommit);
+			expect(await adapter.updateChangeRequest(update)).toEqual(second);
+			expect(fake.messages).toHaveLength(2);
+			expect(fake.pulls).toHaveLength(1);
+			expect(publication.baseCommit).toBe(fake.base.toUpperCase());
+			expect(update.changeRequest.headCommit).toBe(first.headCommit.toUpperCase());
+		},
+	);
+	it('recovers a closed PR whose last merge source commit uses uppercase hex', async () => {
+		const { adapter, fake, input } = setup();
+		const first = await adapter.openChangeRequest(input);
+		fake.pulls[0].status = 'completed';
+		fake.pulls[0].lastMergeSourceCommit = { commitId: first.headCommit.toUpperCase() };
+		expect(await adapter.openChangeRequest(input)).toEqual(first);
+		expect(fake.messages).toHaveLength(1);
+		expect(fake.pulls).toHaveLength(1);
+	});
+});
+
+describe('Azure DevOps HTTP publication telemetry', () => {
+	it.each([401, 403, 409, 503])('preserves HTTP %s through stage annotation', async (status) => {
+		const { adapter, fake, input } = setup();
+		fake.fetcher.mockImplementationOnce(async () => new Response('secret details', { status }));
+		const error = await adapter.openChangeRequest(input).catch((error: unknown) => error);
+		expect(sourceControlPublishFailure(error)).toMatchObject({
+			provider: 'azure-devops',
+			stage: 'push',
+			status,
+		});
+		expect(String(error)).not.toContain('secret details');
+	});
+});

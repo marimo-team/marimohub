@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { AzureDevOpsSourceControl } from './index';
 
-it('fetches a real Git tree over authenticated smart HTTP without persisting credentials', async () => {
+it('fetches an uppercase commit over authenticated smart HTTP without persisting credentials', async () => {
 	const root = await mkdtemp(join(tmpdir(), 'azure-git-test-'));
 	const source = join(root, 'source');
 	const restored = join(root, 'restored');
@@ -67,7 +67,7 @@ it('fetches a real Git tree over authenticated smart HTTP without persisting cre
 				},
 			},
 		);
-		const files = await adapter.fetchGitDirectory(repository, commit, 'main');
+		const files = await adapter.fetchGitDirectory(repository, commit.toUpperCase(), 'main');
 		for (const file of files) {
 			const destination = join(restored, '.git', file.path);
 			await mkdir(dirname(destination), { recursive: true });

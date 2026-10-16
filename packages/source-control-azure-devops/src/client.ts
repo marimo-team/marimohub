@@ -83,6 +83,26 @@ export function values(value: unknown): unknown[] {
 	return result;
 }
 
+function requestError(status: number): Error & { providerStatus: number } {
+	let error: Error;
+	switch (status) {
+		case 404:
+			error = new NotFoundError('Azure DevOps repository, branch, or object was not found');
+			break;
+		case 401:
+		case 403:
+			error = new ForbiddenError('Azure DevOps access was denied');
+			break;
+		case 409:
+		case 412:
+			error = new ConflictError('Azure DevOps branch changed while publishing');
+			break;
+		default:
+			error = new UnavailableError(`Azure DevOps request failed with status ${status}`);
+	}
+	return Object.assign(error, { providerStatus: status });
+}
+
 export class AzureClient {
 	readonly organization: string;
 	readonly fetcher: (url: string, init?: RequestInit) => Promise<Response>;
@@ -145,13 +165,7 @@ export class AzureClient {
 		}
 		if (!response.ok) {
 			await response.body?.cancel().catch(() => {});
-			if (response.status === 404)
-				throw new NotFoundError('Azure DevOps repository, branch, or object was not found');
-			if (response.status === 401 || response.status === 403)
-				throw new ForbiddenError('Azure DevOps access was denied');
-			if (response.status === 409 || response.status === 412)
-				throw new ConflictError('Azure DevOps branch changed while publishing');
-			throw new UnavailableError(`Azure DevOps request failed with status ${response.status}`);
+			throw requestError(response.status);
 		}
 		return response;
 	}

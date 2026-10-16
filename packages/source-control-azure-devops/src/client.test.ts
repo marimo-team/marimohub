@@ -93,6 +93,8 @@ describe('Azure HTTP failure handling', () => {
 		expect(String(error)).not.toContain('private-token');
 	});
 	it.each([
+		[401, ForbiddenError],
+		[403, ForbiddenError],
 		[404, NotFoundError],
 		[409, ConflictError],
 		[412, ConflictError],
@@ -105,6 +107,7 @@ describe('Azure HTTP failure handling', () => {
 		fetcher.mockResolvedValue(new Response(body, { status }));
 		const error = await client.json(repo, '/refs').catch((error: unknown) => error);
 		expect(error).toBeInstanceOf(expected);
+		expect(error).toHaveProperty('providerStatus', status);
 		expect(String(error)).not.toContain('private server details');
 		expect(cancel).toHaveBeenCalledOnce();
 		expect(fetcher).toHaveBeenCalledOnce();

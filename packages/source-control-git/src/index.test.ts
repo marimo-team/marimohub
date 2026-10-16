@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm, symlink, truncate, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -186,23 +186,54 @@ describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 		expect(git(restored, ['branch', '--show-current'])).toBe(branch);
 		expect(git(restored, ['status', '--porcelain'])).toBe('');
 	});
-
-	it('rejects a smart-HTTP response beyond the Git pack limit', async () => {
-		const fetcher: GitFetch = async () =>
-			new Response('too large', {
-				headers: { 'content-length': String(MAX_GIT_FETCH_BYTES + 1) },
-			});
-		await expect(
-			materializeGitDirectory({
-				repository: 'owner/large-repo',
-				remoteUrl: 'https://github.com/owner/large-repo.git',
-				commit: 'a'.repeat(40),
-				branch: 'main',
-				authorization: 'Bearer token',
-				fetcher,
-			}),
-		).rejects.toBeInstanceOf(BadRequestError);
+	it('materializes a native Git pack containing delta-compressed files', async () => {
+		const source = await temporaryDirectory('marimohub-git-delta-source-');
+		git(source, ['init', '-b', 'main']);
+		const contents = Array.from({ length: 5000 }, (_, index) => `line ${index}\n`).join('');
+		await writeFile(join(source, 'first.txt'), contents);
+		await writeFile(join(source, 'second.txt'), contents.replace('line 100', 'changed 100'));
+		git(source, ['add', '.']);
+		git(source, ['commit', '-m', 'Similar files']);
+		git(source, ['repack', '-adf']);
+		const packdir = join(source, '.git', 'objects', 'pack');
+		const idx = (await readdir(packdir)).find((path) => path.endsWith('.idx'))!;
+		expect(git(source, ['verify-pack', '-v', join(packdir, idx)])).toMatch(
+			/ blob\s+\d+ \d+ \d+ \d+ [a-f0-9]{40}/,
+		);
+		const files = await materializeGitDirectory({
+			repository: 'owner/deltas',
+			remoteUrl: 'https://github.com/owner/deltas.git',
+			commit: git(source, ['rev-parse', 'HEAD']),
+			branch: 'main',
+			authorization: 'Bearer token',
+			fetcher: uploadPackFetcher(source),
+		});
+		expect(files.map((file) => file.path)).toContain('index');
 	});
+
+	it.each([false, true])(
+		'cancels an oversized HTTP response even if cancellation fails: %s',
+		async (failCancellation) => {
+			const cancel = vi.fn(async () => {
+				if (failCancellation) throw new Error('Cancellation failed');
+			});
+			const fetcher: GitFetch = async () =>
+				new Response(new ReadableStream({ cancel }), {
+					headers: { 'content-length': String(MAX_GIT_FETCH_BYTES + 1) },
+				});
+			await expect(
+				materializeGitDirectory({
+					repository: 'owner/large-repo',
+					remoteUrl: 'https://github.com/owner/large-repo.git',
+					commit: 'a'.repeat(40),
+					branch: 'main',
+					authorization: 'Bearer token',
+					fetcher,
+				}),
+			).rejects.toBeInstanceOf(BadRequestError);
+			expect(cancel).toHaveBeenCalledOnce();
+		},
+	);
 
 	it.each([
 		{
@@ -234,6 +265,7 @@ describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 		git(source, ['add', '.']);
 		git(source, ['commit', '-m', 'Oversized tree']);
 		const checkout = vi.spyOn(isomorphicGit, 'checkout');
+		const readCommit = vi.spyOn(isomorphicGit, 'readCommit');
 		try {
 			await expect(
 				materializeGitDirectory({
@@ -246,8 +278,10 @@ describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 				}),
 			).rejects.toThrow(limit);
 			expect(checkout).not.toHaveBeenCalled();
+			if (size > MAX_WORKSPACE_FILE_BYTES) expect(readCommit).not.toHaveBeenCalled();
 		} finally {
 			checkout.mockRestore();
+			readCommit.mockRestore();
 		}
 	});
 

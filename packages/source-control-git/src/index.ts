@@ -13,6 +13,7 @@ import {
 } from '@marimo-hub/core/ports/source-control';
 import { MAX_WORKSPACE_FILE_BYTES } from '@marimo-hub/core/constants';
 import type { SourceWorkspaceFile } from '@marimo-hub/core/ports/source-control';
+import { assertGitPackLimits } from './packLimits';
 export type GitFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 function repositorySizeError(repository: string, limit: number): BadRequestError {
@@ -90,7 +91,12 @@ function gitHttp(fetcher: GitFetch, repository: string): HttpClient {
 			});
 			const contentLength = Number(response.headers.get('content-length'));
 			if (Number.isFinite(contentLength) && contentLength >= 0) {
-				limit.assertFits(contentLength);
+				try {
+					limit.assertFits(contentLength);
+				} catch (error) {
+					await response.body?.cancel().catch(() => {});
+					throw error;
+				}
 			}
 			return {
 				url: response.url || request.url,
@@ -209,11 +215,26 @@ export async function materializeGitDirectory(options: {
 	const directory = await mkdtemp(join(tmpdir(), 'marimohub-git-'));
 	const gitdir = join(directory, '.git');
 	const remoteUrl = options.remoteUrl;
+	// Fetch indexes the pack after writing it; reject unsafe expansion at that boundary.
+	const guardedFs = {
+		promises: {
+			...fs.promises,
+			writeFile: async (...args: Parameters<typeof fs.promises.writeFile>) => {
+				const [path, data] = args;
+				if (typeof path !== 'string') throw new BadRequestError('Invalid Git file path');
+				if (path.endsWith('.pack')) {
+					if (!(data instanceof Uint8Array)) throw new BadRequestError('Invalid Git pack');
+					await assertGitPackLimits(data, options.repository);
+				}
+				return fs.promises.writeFile(...args);
+			},
+		},
+	};
 	try {
 		await git.init({ fs, dir: directory, defaultBranch: options.branch });
 		await git.addRemote({ fs, dir: directory, remote: 'origin', url: remoteUrl });
 		const result = await git.fetch({
-			fs,
+			fs: guardedFs,
 			http: gitHttp(options.fetcher, options.repository),
 			dir: directory,
 			url: remoteUrl,
