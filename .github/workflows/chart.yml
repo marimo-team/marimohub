@@ -1,17 +1,20 @@
 name: Chart
 
-# Lint and validate the Helm chart. Scoped to chart + workflow changes so it
-# stays off unrelated PRs.
+# Lint and validate the Helm chart and Kubernetes deployment examples.
 on:
   push:
     branches: [main]
     paths:
       - 'charts/**'
       - '.github/workflows/chart.yml'
+      - 'apps/server/k8s/deployment.yaml'
+      - 'examples/kubernetes/deployment.yaml'
   pull_request:
     paths:
       - 'charts/**'
       - '.github/workflows/chart.yml'
+      - 'apps/server/k8s/deployment.yaml'
+      - 'examples/kubernetes/deployment.yaml'
 
 permissions:
   contents: read

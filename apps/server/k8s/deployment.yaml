@@ -55,6 +55,7 @@ spec:
     metadata:
       labels: { app: marimohub-maintenance }
     spec:
+      terminationGracePeriodSeconds: 140
       containers:
         - name: marimohub
           image: ghcr.io/orgname/marimohub:latest
@@ -64,6 +65,8 @@ spec:
           env:
             - name: MARIMOHUB_RUN_MAINTENANCE
               value: 'true'
+            - name: MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS
+              value: '120'
           livenessProbe:
             httpGet: { path: /api/health/maintenance, port: 3000 }
             initialDelaySeconds: 10

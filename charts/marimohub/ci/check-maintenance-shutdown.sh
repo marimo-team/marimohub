@@ -24,17 +24,34 @@ for timeout in 1 120 300 86400; do
 done
 
 for invalid in 0 -1 1.5 86401 abc; do
-  if helm template test charts/marimohub --set "maintenance.shutdownTimeoutSeconds=$invalid" >/dev/null 2>&1; then
+  if error=$(helm template test charts/marimohub --set "maintenance.shutdownTimeoutSeconds=$invalid" 2>&1); then
     echo "Accepted invalid shutdown timeout: $invalid" >&2
     exit 1
   fi
+  grep -Fq 'maintenance.shutdownTimeoutSeconds must be between 1 and 86400' <<< "$error"
 done
 
-if helm template test charts/marimohub \
-  --set 'extraEnv[0].name=MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS' \
-  --set-string 'extraEnv[0].value=300' >/dev/null 2>&1; then
-  echo 'Accepted shutdown timeout through extraEnv' >&2
-  exit 1
-fi
+for maintenance in true false; do
+  if error=$(helm template test charts/marimohub \
+    --set "maintenance.enabled=$maintenance" \
+    --set 'extraEnv[0].name=MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS' \
+    --set-string 'extraEnv[0].value=300' 2>&1); then
+    echo "Accepted shutdown timeout through extraEnv (maintenance.enabled=$maintenance)" >&2
+    exit 1
+  fi
+  grep -Fq 'Use maintenance.shutdownTimeoutSeconds instead of extraEnv for the shutdown timeout' <<< "$error"
+done
+
+ruby -ryaml -e '
+  ARGV.each do |path|
+    documents = YAML.load_stream(File.read(path)).compact
+    deployment = documents.find { |doc| doc["kind"] == "Deployment" && doc.dig("metadata", "name") == "marimohub-maintenance" }
+    abort "missing maintenance Deployment: #{path}" unless deployment
+    pod = deployment.dig("spec", "template", "spec")
+    env = pod["containers"].first["env"].to_h { |entry| [entry["name"], entry["value"]] }
+    abort "incorrect maintenance drain timeout: #{path}" unless env["MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS"] == "120"
+    abort "insufficient maintenance termination grace: #{path}" unless pod["terminationGracePeriodSeconds"] == 140
+  end
+' apps/server/k8s/deployment.yaml examples/kubernetes/deployment.yaml
 
 echo 'Maintenance shutdown checks passed.'
