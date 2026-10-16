@@ -79,6 +79,12 @@ export class GitLabTrees {
 		return tree.build();
 	}
 	async blob(entry: TreeEntry, limit: number, options: SourceReadOptions = {}) {
+		const bytes = await this.unverifiedBlob(entry, limit, options);
+		assertBlobContents(bytes, entry.objectId, 'GitLab');
+		return bytes;
+	}
+	// readTreeWorkspace verifies blob contents itself.
+	private async unverifiedBlob(entry: TreeEntry, limit: number, options: SourceReadOptions) {
 		const { bytes } = await this.client.data(
 			this.repo,
 			`/repository/blobs/${entry.objectId}/raw`,
@@ -86,7 +92,6 @@ export class GitLabTrees {
 			options,
 			limit,
 		);
-		assertBlobContents(bytes, entry.objectId, 'GitLab');
 		return bytes;
 	}
 	async workspace(
@@ -98,7 +103,7 @@ export class GitLabTrees {
 			provider: 'GitLab',
 			rootPath,
 			tree: () => this.files(sha, options),
-			blob: (entry, limit) => this.blob(entry, limit, options),
+			blob: (entry, limit) => this.unverifiedBlob(entry, limit, options),
 		});
 	}
 

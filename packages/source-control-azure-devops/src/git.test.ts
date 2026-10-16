@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { git, smartHttpResponse } from '@marimo-hub/source-control-git/testing/fake-git-server';
 import { AzureDevOpsSourceControl } from './index';
 
@@ -48,3 +48,22 @@ it('fetches an uppercase commit over authenticated smart HTTP without persisting
 		await rm(root, { recursive: true, force: true });
 	}
 }, 15_000);
+
+it('honors caller cancellation while acquiring the token', async () => {
+	const fetcher = vi.fn<typeof fetch>();
+	const adapter = new AzureDevOpsSourceControl(
+		{ organization: 'acme', credential: { getToken: () => new Promise(() => {}) } },
+		{ fetcher },
+	);
+	const caller = new AbortController();
+	const reason = new Error('Canceled by caller');
+	const pending = adapter.fetchGitDirectory(
+		'https://dev.azure.com/acme/Project/_git/notebooks',
+		'a'.repeat(40),
+		'main',
+		{ signal: caller.signal },
+	);
+	caller.abort(reason);
+	await expect(pending).rejects.toBe(reason);
+	expect(fetcher).not.toHaveBeenCalled();
+});

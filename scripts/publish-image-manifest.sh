@@ -26,10 +26,21 @@ if [[ ${#tags[@]} -eq 0 ]]; then
 	exit 1
 fi
 
-# Fail before any destination tag (latest included) moves.
+# Before any destination tag (latest included) moves, every source must resolve to an
+# index and their linux entries together must be exactly amd64 and arm64, the same
+# predicate the post-create check applies. Attestation entries (unknown/unknown) are
+# ignored. build-push-action's provenance attestation makes each per-arch digest an index.
+source_manifests=''
 for source in "$@"; do
-	"$retry" docker buildx imagetools inspect "$source" >/dev/null
+	source_manifests+=$("$retry" docker buildx imagetools inspect "$source" --raw)
+	source_manifests+=$'\n'
 done
+if ! jq -se '
+  [.[].manifests[].platform | select(.os == "linux") | .architecture] | sort == ["amd64", "arm64"]
+' <<<"$source_manifests" >/dev/null; then
+	echo 'Source digests must together cover exactly linux/amd64 and linux/arm64' >&2
+	exit 1
+fi
 
 # create is idempotent for the same sources, so retrying a transient registry error is safe.
 "$retry" docker buildx imagetools create "${tags[@]}" "$@"

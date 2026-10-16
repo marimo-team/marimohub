@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { CatalogService, EventService, createServices } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { ACTOR } from '@marimo-hub/core/testing';
-import { blockedRecoveryMessage, runCatalogRecovery } from './catalogRecovery';
+import { blockedRecoveryMessage, catalogRecoveryMain, runCatalogRecovery } from './catalogRecovery';
 
 describe('catalog recovery command', () => {
 	it('prints help and rejects ambiguous modes without opening storage', async () => {
@@ -49,7 +49,7 @@ describe('catalog recovery command', () => {
 		);
 	});
 
-	it('explains a dry-run report with blocking errors so the entrypoint exits 2', async () => {
+	it('describes the blocking errors of a dry-run report and nothing for help output', async () => {
 		const bucket = new MemoryBucket();
 		const services = createServices(bucket);
 		await services.catalog.initialize(ACTOR);
@@ -64,6 +64,29 @@ describe('catalog recovery command', () => {
 		expect(blockedRecoveryMessage(await runCatalogRecovery(['--help'], () => bucket))).toBe(
 			undefined,
 		);
+	});
+
+	it('exits 2 on a blocked dry-run, 1 on failure, and 0 otherwise', async () => {
+		const bucket = new MemoryBucket();
+		const services = createServices(bucket);
+		await services.catalog.initialize(ACTOR);
+		const project = await services.projects.createProject(
+			{ name: 'Broken', description: '' },
+			ACTOR,
+		);
+		await bucket.delete('_system/catalog.json');
+		const io = { log: vi.fn(), error: vi.fn() };
+		expect(await catalogRecoveryMain(['--rebuild'], () => bucket, io)).toBe(0);
+		expect(io.error).not.toHaveBeenCalled();
+
+		await bucket.put(`projects/${project.id}/project.json`, '{');
+		expect(await catalogRecoveryMain(['--rebuild'], () => bucket, io)).toBe(2);
+		expect(io.error).toHaveBeenLastCalledWith(
+			expect.stringContaining(`projects/${project.id}/project.json`),
+		);
+
+		expect(await catalogRecoveryMain(['--bogus'], () => bucket, io)).toBe(1);
+		expect(io.log).toHaveBeenCalledTimes(2);
 	});
 
 	it('removes its uncommitted snapshot when another writer wins the catalog CAS', async () => {

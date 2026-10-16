@@ -73,3 +73,27 @@ export function blockedRecoveryMessage(result: unknown): string | undefined {
 		...errors.map((issue) => `  ${issue.key}: ${issue.message}`),
 	].join('\n');
 }
+
+export interface CatalogRecoveryIo {
+	log(line: string): void;
+	error(line: string): void;
+}
+
+/** Runs the command end to end and returns the process exit code. */
+export async function catalogRecoveryMain(
+	args: string[],
+	makeBucket: () => Bucket,
+	io: CatalogRecoveryIo,
+): Promise<number> {
+	try {
+		const result = await runCatalogRecovery(args, makeBucket);
+		io.log(typeof result === 'string' ? result : JSON.stringify(result, null, 2));
+		const blocked = blockedRecoveryMessage(result);
+		if (!blocked) return 0;
+		io.error(blocked);
+		return CATALOG_RECOVERY_BLOCKED_EXIT_CODE;
+	} catch (error) {
+		io.error(error instanceof Error ? error.message : 'Catalog recovery failed');
+		return 1;
+	}
+}

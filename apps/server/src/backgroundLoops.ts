@@ -152,6 +152,8 @@ export class BackgroundLoops {
 				return undefined;
 			}
 			try {
+				// A stop that landed while a setup step was pending must still release the lease.
+				if (state.stopped) throw new LoopStoppedError(`${name} stopped`);
 				return { value: await options.run(context) };
 			} finally {
 				// After a deadline, leave the lease to expire instead of releasing it late.
@@ -199,7 +201,9 @@ export class BackgroundLoops {
 								? 'skipped'
 								: 'failed';
 				}
-				const cancelled = outcome === 'failed' && stopping.signal.aborted;
+				// A stop is not progress: recording it would reset failures and fake a success.
+				const cancelled =
+					error instanceof LoopStoppedError || (outcome === 'failed' && stopping.signal.aborted);
 				if (cancelled) outcome = 'skipped';
 				const report = (fn: () => void) => {
 					try {

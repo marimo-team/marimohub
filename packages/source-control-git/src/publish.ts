@@ -97,11 +97,12 @@ export async function pushGitTree(
 			force: true,
 		});
 		await assertGitTreeLimits(dir, commit, options.repository);
+		const http = gitTransport(options);
 		const result = await git
 			.push({
 				fs,
 				dir,
-				http: gitTransport(options),
+				http,
 				url: options.remoteUrl,
 				ref: `refs/heads/${options.headBranch}`,
 				remoteRef: `refs/heads/${options.headBranch}`,
@@ -120,7 +121,7 @@ export async function pushGitTree(
 				)
 					throw new ConflictError('Git server rejected the proposal branch update');
 				options.signal?.throwIfAborted();
-				throw gitTransportError(error, 'Git proposal branch could not be pushed');
+				throw gitTransportError(error, 'Git proposal branch could not be pushed', http);
 			});
 		if (!result.ok || !result.refs[`refs/heads/${options.headBranch}`]?.ok)
 			throw new ConflictError('Git server rejected the proposal branch update');

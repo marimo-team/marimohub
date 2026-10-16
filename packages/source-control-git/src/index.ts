@@ -158,13 +158,14 @@ export async function withFetchedGit<T>(
 			},
 		},
 	};
+	const http = gitTransport(options);
 	try {
 		try {
 			await git.init({ fs, dir: directory, defaultBranch: options.branch });
 			await git.addRemote({ fs, dir: directory, remote: 'origin', url: remoteUrl });
 			const result = await git.fetch({
 				fs: guardedFs,
-				http: gitTransport(options),
+				http,
 				dir: directory,
 				url: remoteUrl,
 				ref: options.branch,
@@ -196,7 +197,7 @@ export async function withFetchedGit<T>(
 			await assertGitTreeLimits(directory, options.commit, options.repository);
 		} catch (error) {
 			options.signal?.throwIfAborted();
-			throw gitTransportError(error, 'Git data could not be fetched');
+			throw gitTransportError(error, 'Git data could not be fetched', http);
 		}
 		return await action(directory);
 	} finally {

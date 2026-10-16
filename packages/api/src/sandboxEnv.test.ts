@@ -190,14 +190,22 @@ describe('resolveFederatedVars', () => {
 
 		it('still returns the endpoint env when priming fails', async () => {
 			const logs = vi.spyOn(console, 'log').mockImplementation(() => {});
-			const exchange = vi.fn(async () => {
-				throw new Error('broker down');
-			});
-			const config = makeTestWif({ exchange, credentialsEndpoint: true });
-			const env = await resolve(config, createSessionId());
-			expect(env).toHaveProperty('AWS_CONTAINER_CREDENTIALS_FULL_URI');
-			await vi.waitFor(() => expect(exchange).toHaveBeenCalledOnce());
-			logs.mockRestore();
+			try {
+				const exchange = vi.fn(async () => {
+					throw new Error('broker down');
+				});
+				const config = makeTestWif({ exchange, credentialsEndpoint: true });
+				const env = await resolve(config, createSessionId());
+				expect(env).toHaveProperty('AWS_CONTAINER_CREDENTIALS_FULL_URI');
+				await vi.waitFor(() =>
+					expect(
+						logs.mock.calls.some((c) => String(c[0]).includes('"wif_credentials_prime_failed"')),
+					).toBe(true),
+				);
+				expect(exchange).toHaveBeenCalledOnce();
+			} finally {
+				logs.mockRestore();
+			}
 		});
 	});
 });
@@ -640,6 +648,22 @@ describe('composeSessionEnv', () => {
 			AWS_CONTAINER_CREDENTIALS_FULL_URI: 'https://hub.example.com/api/wif/v1/credentials',
 			AWS_CONTAINER_AUTHORIZATION_TOKEN: 'tok',
 		});
+		expect(env?.defaults).toEqual({});
+	});
+
+	it('strips web-identity inputs from other layers under endpoint delivery', () => {
+		const webIdentity = {
+			AWS_ROLE_ARN: 'arn:aws:iam::123456789012:role/attacker',
+			AWS_WEB_IDENTITY_TOKEN_FILE: '/tmp/token',
+			AWS_ROLE_SESSION_NAME: 'steal',
+		};
+		const env = composeSessionEnv({
+			endpointDelivery: true,
+			wifVars: { AWS_CONTAINER_AUTHORIZATION_TOKEN: 'tok' },
+			integrationEnv: { ...integrationEnv, vars: webIdentity },
+			marimoEnv: { defaults: webIdentity },
+		});
+		expect(env?.vars).toEqual({ AWS_CONTAINER_AUTHORIZATION_TOKEN: 'tok' });
 		expect(env?.defaults).toEqual({});
 	});
 

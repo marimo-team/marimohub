@@ -9,6 +9,7 @@ import {
 } from '../../testing/fixtures';
 import { createServices } from '../index';
 import { createImportId, createNotebookId, createSnapshotId } from '../../ids';
+import { PreconditionFailedError } from '../../errors';
 import { paths } from '../../paths';
 import { CatalogService } from './CatalogService';
 import type { CatalogRecoveryReport } from './recovery';
@@ -753,6 +754,52 @@ describe('catalog recovery', () => {
 			return put(key, value, options);
 		});
 		await expect(applyRecovery(services.catalog, report)).rejects.toThrow('conflict');
+		expect((await listAllObjects(bucket, paths.snapshotsPrefix)).map((o) => o.key)).toEqual(before);
+	});
+	it('warns about snapshot keys that snapshot mode skips because their ID is invalid', async () => {
+		const { bucket, services } = await fixture();
+		const selected = await services.catalog.getCurrentSnapshot();
+		const stray = `${paths.snapshotsPrefix}not-a-snapshot-id.json`;
+		await bucket.put(stray, '{}');
+		const report = await services.catalog.planRecovery({
+			mode: 'snapshot',
+			snapshotId: selected.snapshot_id,
+		});
+		expect(report.issues).toContainEqual({
+			key: stray,
+			severity: 'warning',
+			message: 'Snapshot is invalid and cannot be selected.',
+		});
+	});
+
+	it('keeps a mutation snapshot when the pointer write fails for a reason other than a lost CAS', async () => {
+		const { bucket, services } = await fixture();
+		const put = bucket.put.bind(bucket);
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+			const result = await put(key, value, options);
+			if (key === paths.catalog) throw new Error('Response lost');
+			return result;
+		});
+		await expect(services.catalog.mutateSnapshot('lost', ACTOR, (s) => s)).rejects.toThrow(
+			'Response lost',
+		);
+		vi.restoreAllMocks();
+		expect((await services.catalog.getCurrentSnapshot()).operation).toBe('lost');
+	});
+
+	it('deletes a mutation snapshot when the pointer write loses the CAS', async () => {
+		const { bucket } = await fixture();
+		const before = (await listAllObjects(bucket, paths.snapshotsPrefix)).map((o) => o.key);
+		const put = bucket.put.bind(bucket);
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+			if (key === paths.catalog) throw new PreconditionFailedError();
+			return put(key, value, options);
+		});
+		const catalog = new CatalogService(bucket, undefined, undefined, {
+			retries: 2,
+			backoffMs: () => 0,
+		});
+		await expect(catalog.mutateSnapshot('lost', ACTOR, (s) => s)).rejects.toThrow('conflict');
 		expect((await listAllObjects(bucket, paths.snapshotsPrefix)).map((o) => o.key)).toEqual(before);
 	});
 });

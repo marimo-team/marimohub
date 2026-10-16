@@ -418,7 +418,15 @@ printf '%s\n' "$*" >> "$MOCK_DOCKER_LOG"
 case "$3" in
   create) exit "${MOCK_CREATE_EXIT:-0}" ;;
   inspect)
-    if [[ "$4" == *@sha256:* ]]; then exit "${MOCK_SOURCE_INSPECT_EXIT:-0}"; fi
+    if [[ "$4" == *@sha256:* ]]; then
+      [[ "${MOCK_SOURCE_INSPECT_EXIT:-0}" == 0 ]] || exit "$MOCK_SOURCE_INSPECT_EXIT"
+      case "$4" in
+        *@sha256:a*) arch="${MOCK_AMD64_SOURCE_ARCH:-amd64}" ;;
+        *) arch="${MOCK_ARM64_SOURCE_ARCH:-arm64}" ;;
+      esac
+      printf '{"manifests":[{"platform":{"os":"linux","architecture":"%s"}},{"platform":{"os":"unknown","architecture":"unknown"}}]}\n' "$arch"
+      exit 0
+    fi
     if [[ -n "${MOCK_INSPECT_STATE:-}" ]]; then
       inspect_attempt=1
       [[ ! -f "$MOCK_INSPECT_STATE" ]] || read -r inspect_attempt < "$MOCK_INSPECT_STATE"
@@ -438,8 +446,8 @@ publish_manifest() {
 	export PATH="$manifest_bin:$PATH" MOCK_DOCKER_LOG="$temporary/docker.log" RETRY_DELAY_SECONDS=0
 	export MOCK_MANIFEST='{"manifests":[{"platform":{"os":"linux","architecture":"arm64"}},{"platform":{"os":"unknown","architecture":"unknown"}},{"platform":{"os":"linux","architecture":"amd64"}}]}'
 	printf 'example/image:latest\nexample/image:1.0.0' | publish_manifest >/dev/null
-	expected_log="buildx imagetools inspect $amd64_digest
-buildx imagetools inspect $arm64_digest
+	expected_log="buildx imagetools inspect $amd64_digest --raw
+buildx imagetools inspect $arm64_digest --raw
 buildx imagetools create --tag example/image:latest --tag example/image:1.0.0 $amd64_digest $arm64_digest
 buildx imagetools inspect example/image:latest --raw"
 	[[ "$(<"$MOCK_DOCKER_LOG")" == "$expected_log" ]] || \
@@ -463,6 +471,20 @@ buildx imagetools inspect example/image:latest --raw"
 	fi
 	! grep -q ' create ' "$MOCK_DOCKER_LOG" || fail 'a missing source image still moved tags'
 	unset MOCK_SOURCE_INSPECT_EXIT RETRY_ATTEMPTS
+
+	: >"$MOCK_DOCKER_LOG"
+	export MOCK_ARM64_SOURCE_ARCH=amd64
+	if publish_manifest <<<'example/image:latest' >/dev/null 2>&1; then
+		fail 'a source set missing arm64 was accepted'
+	fi
+	[[ "$(grep -c ' inspect .*@sha256:.* --raw$' "$MOCK_DOCKER_LOG")" == 2 ]] || \
+		fail 'source platforms were not inspected'
+	! grep -q ' create ' "$MOCK_DOCKER_LOG" || fail 'a source set missing arm64 still moved tags'
+	unset MOCK_ARM64_SOURCE_ARCH
+
+	: >"$MOCK_DOCKER_LOG"
+	publish_manifest <<<'example/image:latest' >/dev/null || fail 'a complete source set was rejected'
+	[[ "$(grep -c ' create ' "$MOCK_DOCKER_LOG")" == 1 ]] || fail 'a complete source set did not create'
 
 	: >"$MOCK_DOCKER_LOG"
 	export MOCK_CREATE_EXIT=1 RETRY_ATTEMPTS=2

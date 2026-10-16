@@ -79,14 +79,27 @@ describe('Azure tree response validation', () => {
 		[{ ...entry, gitObjectType: 'tree', mode: '040000' }, entry],
 	])('rejects duplicate paths even across object types', async (...entries) => {
 		const { fake, trees } = withEntries(entries);
-		await expect(trees.files(fake.base)).rejects.toThrow('duplicate');
+		await expect(trees.files(fake.base)).rejects.toThrow(
+			new UnavailableError('Azure DevOps tree has a duplicate path'),
+		);
 	});
 	it('rejects a file used as a parent directory', async () => {
 		const { fake, trees } = withEntries([
 			{ ...entry, relativePath: 'apps' },
 			{ ...entry, relativePath: 'apps/main.py' },
 		]);
-		await expect(trees.files(fake.base)).rejects.toThrow('overlapping');
+		await expect(trees.files(fake.base)).rejects.toThrow(
+			new BadRequestError('Azure DevOps tree has overlapping file and directory paths'),
+		);
+	});
+	it('rejects a file used as the parent of a directory entry', async () => {
+		const { fake, trees } = withEntries([
+			{ ...entry, relativePath: 'apps' },
+			{ ...entry, relativePath: 'apps/lib', gitObjectType: 'tree', mode: '040000' },
+		]);
+		await expect(trees.files(fake.base)).rejects.toThrow(
+			new BadRequestError('Azure DevOps tree has overlapping file and directory paths'),
+		);
 	});
 	it('rejects a response for a different commit', async () => {
 		const { fake, trees } = setup();

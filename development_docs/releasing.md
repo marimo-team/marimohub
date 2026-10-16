@@ -32,7 +32,9 @@ The `validate-tag` job runs first, and every release job depends on it. It runs
 `scripts/release-tag.sh validate TAG`, which prints the version without the
 leading `v` or exits 1. Only stable `vMAJOR.MINOR.PATCH` tags without leading
 zeros pass (`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`).
-`v1.2.3-rc.1`, `v1.2`, `v01.2.3`, and `1.2.3` fail, and the workflow publishes nothing.
+Tags such as `v1.2` and `1.2.3` do not match the `v*.*.*` trigger, so no Release
+run starts. Tags such as `v1.2.3-rc.1` and `v01.2.3` match the trigger and start a
+run, but `validate-tag` fails and the workflow publishes nothing.
 
 ### Floating image tags
 
@@ -47,8 +49,10 @@ Prerelease tags never count. A backport patch to an older line therefore never
 moves `latest`, `X`, or `X.Y` backwards.
 
 The `image` job creates each manifest list from the per-architecture build
-digests (`@sha256:…`), never from mutable tags. It inspects each source digest
-before it creates the list, and it retries create and inspect. The job holds the
+digests (`@sha256:…`), never from mutable tags. Before it creates the list, it inspects
+each source digest and requires that their linux platforms together are exactly
+`linux/amd64` and `linux/arm64`, so a bad source set fails before any tag moves.
+It checks the created list again, and it retries create and inspect. The job holds the
 `release-image-manifest` concurrency lock, so two releases cannot interleave tag moves.
 
 The x86-64 Linux build uses a glibc 2.28 image. Each native archive contains

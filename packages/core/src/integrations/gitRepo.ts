@@ -291,11 +291,22 @@ export function detectProvider(repo: string, hosts?: GitProviderHosts): GitProvi
 	return url ? providerForUrl(url, hosts) : null;
 }
 
-/** The `group/subgroup/repo` path of a repo, host stripped. */
+// URLs carry percent-encoded segments (`My%20Project`) while CI-supplied paths carry them raw.
+// A segment that is malformed or would decode to a separator stays as written.
+function decodeSegment(segment: string): string {
+	try {
+		const decoded = decodeURIComponent(segment);
+		return decoded.includes('/') ? segment : decoded;
+	} catch {
+		return segment;
+	}
+}
+
+/** The decoded `group/subgroup/repo` path of a repo, host stripped. */
 export function repoPath(repo: string, hosts?: GitProviderHosts): string {
 	const url = parseRepoUrl(repo);
-	if (!url) return repo;
-	return pathSegments(url, hosts).join('/');
+	const segments = url ? pathSegments(url, hosts) : repo.split('/');
+	return segments.map(decodeSegment).join('/');
 }
 
 /** The `host[:port]` a stored repo lives on: github.com for shorthand. */

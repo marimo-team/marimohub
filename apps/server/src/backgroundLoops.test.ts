@@ -500,6 +500,48 @@ describe('BackgroundLoops', () => {
 		});
 	});
 
+	it('skips the run when stop lands while the lease acquire is pending', async () => {
+		const acquired = Promise.withResolvers<boolean>();
+		vi.spyOn(lock, 'acquire').mockReturnValue(acquired.promise);
+		const release = vi.spyOn(lock, 'release');
+		const run = vi.fn(async () => {});
+		const handle = start(run, { lock, deadlineMs: 10_000 });
+		await vi.advanceTimersByTimeAsync(0);
+		handle.stop();
+		acquired.resolve(true);
+		await handle.drain();
+		expect(run).not.toHaveBeenCalled();
+		expect(release).toHaveBeenCalledOnce();
+		expect(events()).toEqual([]);
+	});
+
+	it('does not record a stopped attempt as progress', async () => {
+		let calls = 0;
+		const first = Promise.withResolvers<void>();
+		const handle = start(async ({ step }) => {
+			if (++calls <= 2) throw new Error('boom');
+			await step(() => first.promise);
+			await step(async () => {});
+		});
+		await vi.advanceTimersByTimeAsync(200);
+		expect(loops.health().loops.test).toMatchObject({
+			consecutive_failures: 2,
+			last_success_at: null,
+		});
+		const completed = loops.health().loops.test.last_completed_at;
+		await vi.advanceTimersByTimeAsync(0);
+		handle.stop();
+		first.resolve();
+		await handle.drain();
+		expect(loops.health().loops.test).toMatchObject({
+			status: 'stopping',
+			consecutive_failures: 2,
+			last_success_at: null,
+			last_completed_at: completed,
+		});
+		expect(calls).toBe(3);
+	});
+
 	it('aborts abortOnStop work without logging a failure', async () => {
 		const run = vi.fn<LoopOptions['run']>(
 			({ signal }) =>
@@ -603,18 +645,23 @@ describe('BackgroundLoops tracing', () => {
 	it('records an attempt stopped between steps as skipped', async () => {
 		const loops = new BackgroundLoops();
 		const first = Promise.withResolvers<void>();
+		const firstStep = vi.fn(() => first.promise);
+		const second = vi.fn(async () => {});
 		const handle = loops.start({
 			name: 'test',
 			intervalMs: 100,
 			run: async ({ step }) => {
-				await step(() => first.promise);
-				await step(async () => {});
+				await step(firstStep);
+				await step(second);
 			},
 		});
 		stop = handle.stop;
+		await vi.advanceTimersByTimeAsync(0);
+		expect(firstStep).toHaveBeenCalledOnce();
 		handle.stop();
 		first.resolve();
 		await handle.drain();
+		expect(second).not.toHaveBeenCalled();
 		const [loop] = exporter.getFinishedSpans();
 		expect(loop.attributes['marimohub.loop.outcome']).toBe('skipped');
 		expect(loop.status.code).not.toBe(SpanStatusCode.ERROR);

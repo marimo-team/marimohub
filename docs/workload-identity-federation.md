@@ -157,8 +157,10 @@ fetch fresh cloud credentials from outside the sandbox while the session is live
 End the session, remove the member, or disable federation for the project to stop it.
 :::
 
-- **Session limit:** seven days, or an earlier authorization deadline. Active
-  connections and lifetime extensions cannot extend this limit; start a new session.
+- **Session limit:** seven days, or an earlier authorization deadline. An
+  expiring launch credential, such as a personal access token, also sets the
+  limit. Active connections and lifetime extensions cannot extend this limit;
+  start a new session.
 - **Revocation:** on every call, the endpoint rejects ended sessions, suspended
   owners, owners who are no longer project members or lost the required role, and
   projects that disable federation. Each process caches an allow verdict for up
@@ -173,9 +175,13 @@ End the session, remove the member, or disable federation for the project to sto
   first SDK request usually gets cached credentials. The cache is per replica: a
   request that reaches another replica runs its own exchange. Policy failures
   surface as SDK errors.
-- **Reserved names:** users cannot set `AWS_CONTAINER_*` variables through
-  integrations or session environment, so they cannot redirect or replace the
-  credential endpoint.
+- **Reserved names:** users cannot set these variables through integrations or
+  session environment, so they cannot redirect or bypass the credential endpoint:
+  - Container provider: `AWS_CONTAINER_CREDENTIALS_FULL_URI`,
+    `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, `AWS_CONTAINER_AUTHORIZATION_TOKEN`,
+    and `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`.
+  - Web identity: `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE`, and
+    `AWS_ROLE_SESSION_NAME`. AWS SDKs try these before the container provider.
 - **S3 integrations:** endpoint delivery removes the static AWS keys from
   [S3 integration](integrations.md#s3) variables, even when they target another
   store. The integration's `AWS_ENDPOINT_URL_S3` and `AWS_REGION` stay unless WIF

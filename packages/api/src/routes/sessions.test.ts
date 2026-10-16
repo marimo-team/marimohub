@@ -53,7 +53,7 @@ import {
 	expectPage,
 	makeTestWif,
 } from '../testing';
-import type { TestWifOptions } from '../testing';
+import type { TestApiOptions, TestWifOptions } from '../testing';
 import { makeFakeSnapshotCompute } from '../testing/snapshotCompute';
 import { WIF_ELIGIBILITY_TTL_MS, wifCredentialCacheFor } from '../wifCredentialCache';
 
@@ -4265,12 +4265,14 @@ describe('Session routes', () => {
 					expiration,
 				})),
 				userId = ACTOR,
+				subject?: TestApiOptions['subject'],
 			) => {
 				await enableFederation();
 				const { instance, calls } = makeFakeSandbox();
 				const api = createTestApi({
 					bucket,
 					userId,
+					subject,
 					compute: fakeComputeFrom(instance),
 					deps: {
 						sandbox: sandboxConfig({ appBaseUrl: 'https://hub.example.com' }),
@@ -4480,6 +4482,28 @@ describe('Session routes', () => {
 				expect(
 					(await services.sessions.getSession(pid, session.session_id)).authorization_expires_at,
 				).toBe(stored.authorization_expires_at);
+			});
+
+			it('bounds the token and session by an expiring launch credential', async () => {
+				const credentialExpiresAt = Date.now() + 2 * 60 * 60_000;
+				const { env, session, fetchCreds } = await endpointApi(undefined, ACTOR, {
+					credential: {
+						kind: 'development',
+						expiresAt: new Date(credentialExpiresAt).toISOString(),
+					},
+				});
+				const claims = JSON.parse(
+					Buffer.from(env.AWS_CONTAINER_AUTHORIZATION_TOKEN.split('.')[1], 'base64url').toString(),
+				) as { exp: number };
+				expect(claims.exp * 1000).toBeLessThanOrEqual(credentialExpiresAt);
+				const stored = await createServices(bucket).sessions.getSession(pid, session.session_id);
+				expect(Date.parse(stored.authorization_expires_at!)).toBeLessThanOrEqual(
+					credentialExpiresAt,
+				);
+				expect((await fetchCreds()).status).toBe(200);
+				// The token expires no later than the session deadline, so it is rejected first.
+				vi.spyOn(Date, 'now').mockReturnValue(credentialExpiresAt);
+				await expectError(await fetchCreds(), 401, 'UNAUTHORIZED');
 			});
 
 			it('rejects a missing or forged token', async () => {

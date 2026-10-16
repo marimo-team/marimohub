@@ -242,14 +242,14 @@ Recover with the offline `catalog-recovery` command from the published image:
 1. [Back up](#backups-restore) the bucket.
 2. Stop all writers: API replicas, maintenance processes, scheduled triggers, and running notebook sandboxes.
 3. Generate a dry-run report with the deployment's `MARIMOHUB_STORAGE_*` variables. Use `--rebuild` to rebuild from records, or `--snapshot SNAPSHOT_ID` to restore a surviving snapshot.
-4. Review the JSON report. In `--snapshot` mode, `excluded` issues list each project, notebook, and job that exists in storage but is absent from the selected snapshot.
+4. Review the JSON report. `excluded` issues list records that recovery leaves out of the catalog: preview runtime notebooks, import attempts that are not confirmed complete, and jobs with a deletion fence. In `--snapshot` mode they also list each project, notebook, and job that exists in storage but is absent from the selected snapshot.
 5. Run the same command again with `--apply REPORT_TOKEN --writers-stopped --actor USER_ID`.
 6. Check the recovered projects and notebooks, then restart the writers.
 
 The command is a dry-run by default. Apply requires the report's `token`, `--writers-stopped`, and `--actor`.
 `--actor` takes a valid marimohub user ID for the operator who runs the recovery. The ID is written to the recovery snapshot and to a `system.recover` audit event.
 Rebuild reports always contain a warning, because record discovery cannot prove that a record was published. Add `--accept-warnings` after you review it.
-Errors always block apply. The token is a digest of the storage inventory, so any storage change after the dry-run makes it stale.
+Errors always block apply. The token is a digest of the report and of the objects that recovery inventories: everything under `projects/`, `_system/snapshots/`, and `_system/job-deletions/`, plus `_system/catalog.json`. A change to any of these objects after the dry-run makes the token stale.
 If another writer changes the catalog pointer during apply, the command deletes the snapshot it wrote and exits with a conflict error. Run the dry-run again.
 
 | Exit code | Meaning                                                                                                                                         |

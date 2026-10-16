@@ -129,6 +129,7 @@ export {
 	assertValidEnvironmentName,
 	AWS_CONTAINER_CREDENTIAL_ENV,
 	STATIC_AWS_CREDENTIAL_ENV,
+	WEB_IDENTITY_AWS_CREDENTIAL_ENV,
 } from './integrations/environmentName';
 export {
 	MAX_INTEGRATIONS_PER_SCOPE,

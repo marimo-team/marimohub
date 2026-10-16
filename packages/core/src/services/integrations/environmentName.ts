@@ -40,6 +40,16 @@ export const AWS_CONTAINER_CREDENTIAL_ENV = [
 	'AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE',
 ] as const;
 
+/**
+ * AWS web-identity inputs. SDK chains try them before the container provider,
+ * so they could bypass WIF endpoint delivery.
+ */
+export const WEB_IDENTITY_AWS_CREDENTIAL_ENV = [
+	'AWS_ROLE_ARN',
+	'AWS_WEB_IDENTITY_TOKEN_FILE',
+	'AWS_ROLE_SESSION_NAME',
+] as const;
+
 /** Shell basics whose meaning the sandbox depends on. */
 export const SHELL_BASICS_ENV = ['PATH', 'HOME', 'PWD', 'LANG', 'IFS'] as const;
 
@@ -52,6 +62,7 @@ const RESERVED_NAMES = new Set<string>([
 	...CODE_EXECUTION_ENV,
 	...STATIC_AWS_CREDENTIAL_ENV,
 	...AWS_CONTAINER_CREDENTIAL_ENV,
+	...WEB_IDENTITY_AWS_CREDENTIAL_ENV,
 	'AWS_ENDPOINT_URL_S3',
 	'AWS_REGION',
 	...HUB_XDG_ENV,

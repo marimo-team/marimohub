@@ -347,7 +347,7 @@ Removing the member stops new credentials within 10 seconds, the lifetime of
 the per-process allow verdict. Credentials already issued stay valid until they
 expire, up to about one hour. The token embeds a signed snapshot of the launching
 user, including IdP group names, which notebook code can decode. Users cannot
-set the `AWS_CONTAINER_*` variable names. See
+set the container-provider or web-identity variable names. See
 [Workload Identity Federation](workload-identity-federation.md#refreshable-credentials).
 
 Environment preparation adds one remote command per new set of values, including

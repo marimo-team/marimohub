@@ -56,6 +56,16 @@ export class AzureTrees {
 		limit: number,
 		options: SourceReadOptions = {},
 	): Promise<Uint8Array> {
+		const bytes = await this.unverifiedBlob(entry, limit, options);
+		assertBlobContents(bytes, entry.objectId, 'Azure DevOps');
+		return bytes;
+	}
+	// readTreeWorkspace verifies blob contents itself.
+	private async unverifiedBlob(
+		entry: TreeEntry,
+		limit: number,
+		options: SourceReadOptions,
+	): Promise<Uint8Array> {
 		if (entry.size !== undefined && entry.size > limit)
 			throw new BadRequestError('Azure DevOps file exceeds the workspace limit');
 		const response = await this.client.request(
@@ -64,9 +74,7 @@ export class AzureTrees {
 			{ $format: 'octetstream' },
 			{ ...options, headers: { accept: 'application/octet-stream' } },
 		);
-		const bytes = await boundedBytes(response, limit, options.signal);
-		assertBlobContents(bytes, entry.objectId, 'Azure DevOps');
-		return bytes;
+		return boundedBytes(response, limit, options.signal);
 	}
 	async workspace(
 		commit: string,
@@ -77,7 +85,7 @@ export class AzureTrees {
 			provider: 'Azure DevOps',
 			rootPath,
 			tree: () => this.files(commit, options),
-			blob: (entry, limit) => this.blob(entry, limit, options),
+			blob: (entry, limit) => this.unverifiedBlob(entry, limit, options),
 		});
 	}
 

@@ -5,6 +5,7 @@ import {
 	ForbiddenError,
 	NotFoundError,
 	UnavailableError,
+	ValidationError,
 } from '@marimo-hub/core/errors';
 import type { DomainError } from '@marimo-hub/core/errors';
 
@@ -39,6 +40,7 @@ export function providerHttpError(
 		error = new ConflictError(
 			options.conflictMessage ?? `${provider} rejected a conflicting change`,
 		);
+	else if (status === 422) error = new ValidationError(`${provider} rejected the request`);
 	else if (status === 429) error = new UnavailableError(`${provider} rate limit exceeded`);
 	else error = new UnavailableError(`${provider} request failed with status ${status}`);
 	const retryAfter =

@@ -74,9 +74,10 @@ An [S3 integration](./integrations.md#s3) keeps its `AWS_ENDPOINT_URL_S3` and `A
 Jobs always use `env` delivery.
 
 In endpoint delivery, `AWS_CONTAINER_AUTHORIZATION_TOKEN` is a bearer token that is valid for the session, up to seven days.
-It works from outside the sandbox. The endpoint checks session liveness, owner suspension, and project membership and role on every call.
+Notebook code can read it, and a copied token fetches cloud credentials from outside the sandbox until the session ends.
+The endpoint checks session liveness, owner suspension, and project membership and role on every call.
 The hub starts the first credential exchange when the session starts.
-`AWS_CONTAINER_*` names are reserved; integrations and session variables cannot set them.
+The container-provider and web-identity variable names are reserved; integrations and session variables cannot set them.
 See [Refreshable credentials](./workload-identity-federation.md#refreshable-credentials).
 
 ## Testing and failures

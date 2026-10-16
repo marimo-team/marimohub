@@ -19,12 +19,21 @@ export function assertBlobContents(bytes: Uint8Array, objectId: string, provider
 		throw new UnavailableError(`${provider} returned different blob contents`);
 }
 
-// Mirrors Git's own checkout guards (HFS/NTFS aliases of `.git` included) so a regression in
-// isomorphic-git cannot let a provider tree plant files inside the repository metadata.
+// HFS+ ignores these code points when comparing names, so `.git\u200c` opens `.git` (Git's
+// is_hfs_dotgit strips the same set).
+const HFS_IGNORABLE = /[\u200C-\u200F\u202A-\u202E\u206A-\u206F\uFEFF]/g;
+
+// Mirrors Git's own checkout guards so a regression in isomorphic-git cannot let a provider tree
+// plant files inside the repository metadata: HFS+ ignorable code points, and on NTFS an
+// alternate data stream suffix (`.git:x`), trailing dots/spaces, and the `git~1` short name.
 export function isSafeGitEntryName(name: string): boolean {
 	if (!name || name === '.' || name === '..' || /[/\\]/.test(name) || name.includes('\0'))
 		return false;
-	const normalized = name.toLowerCase().replace(/[. ]+$/, '');
+	const stream = name.indexOf(':');
+	const normalized = (stream === -1 ? name : name.slice(0, stream))
+		.replace(HFS_IGNORABLE, '')
+		.toLowerCase()
+		.replace(/[. ]+$/, '');
 	return normalized !== '.git' && !/^\.?git~[1-9]$/.test(normalized);
 }
 
@@ -51,7 +60,8 @@ export class FileTreeBuilder {
 		const mode = String(entry.mode);
 		if (!isSafeGitTreePath(path)) throw new BadRequestError(`Unsafe ${this.provider} tree path`);
 		if (this.paths.has(path))
-			throw new BadRequestError(`${this.provider} tree has a duplicate path`);
+			// Git trees cannot hold two entries with one name, so this is a provider fault.
+			throw new UnavailableError(`${this.provider} tree has a duplicate path`);
 		this.paths.add(path);
 		if (this.paths.size > MAX_TREE_ENTRIES)
 			throw new BadRequestError(`${this.provider} tree has too many entries`);
@@ -66,7 +76,7 @@ export class FileTreeBuilder {
 	}
 
 	build(): FileTree {
-		for (const path of this.files.keys()) {
+		for (const path of this.paths) {
 			const parts = path.split('/');
 			for (let i = 1; i < parts.length; i++) {
 				if (this.files.has(parts.slice(0, i).join('/')))

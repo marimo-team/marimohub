@@ -96,7 +96,7 @@ export async function mintWifCredentialsToken(
 		iat,
 		exp: Math.min(
 			iat + (opts.ttlSeconds ?? DEFAULT_TOKEN_TTL_SECONDS),
-			opts.expiresAt ? Date.parse(opts.expiresAt) / 1000 : Infinity,
+			opts.expiresAt ? Math.floor(Date.parse(opts.expiresAt) / 1000) : Infinity,
 		),
 	};
 	return signHs256Token(await deriveSecret(keyMaterial), payload);

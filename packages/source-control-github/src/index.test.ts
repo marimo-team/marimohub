@@ -1977,3 +1977,24 @@ describe('GitHubAppPublisher', () => {
 		expect(fetcher.mock.calls.some(([url]) => url.endsWith('/git/blobs'))).toBe(false);
 	});
 });
+
+describe('GitHubAppPublisher.fetchGitDirectory', () => {
+	it('honors caller cancellation while acquiring the installation token', async () => {
+		const fetcher = vi.fn((_url: string, init?: RequestInit) => {
+			return new Promise<Response>((_resolve, reject) => {
+				init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+			});
+		});
+		const caller = new AbortController();
+		const reason = new Error('Canceled by caller');
+		const pending = publisher(fetcher).fetchGitDirectory('owner/repo', 'a'.repeat(40), 'main', {
+			signal: caller.signal,
+		});
+		await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+		caller.abort(reason);
+		await expect(pending).rejects.toBe(reason);
+		expect(new URL(fetcher.mock.calls[0]?.[0] ?? '').pathname).toBe(
+			'/repos/owner/repo/installation',
+		);
+	});
+});

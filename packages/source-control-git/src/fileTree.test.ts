@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { BadRequestError } from '@marimo-hub/core/errors';
+import { BadRequestError, UnavailableError } from '@marimo-hub/core/errors';
 import type * as remoteWorkspace from '@marimo-hub/core/remote-workspace';
 import { applyChanges, blobId, FileTreeBuilder } from './fileTree';
 import type { FileTree } from './fileTree';
@@ -63,6 +63,11 @@ describe('FileTreeBuilder', () => {
 		'sub/.GIT/hooks',
 		'git~1/config',
 		'.git./config',
+		'.git\u200c/config',
+		'\ufeff.g\u200dit/config',
+		'.git:foo/config',
+		'.GIT. /config',
+		'GIT~1/config',
 		'a\0b',
 		'a\\b',
 	])('rejects unsafe path %j', (path) => {
@@ -74,7 +79,13 @@ describe('FileTreeBuilder', () => {
 	it('rejects duplicate paths across files and directories', () => {
 		const builder = new FileTreeBuilder('Provider');
 		builder.add({ path: 'a', type: 'tree', mode: '040000', objectId: oid });
-		expect(() => builder.add(blob('a'))).toThrow('duplicate');
+		expect(() => builder.add(blob('a'))).toThrow(
+			new UnavailableError('Provider tree has a duplicate path'),
+		);
+	});
+
+	it.each(['a:b', 'gitx', '.github/workflows'])('accepts safe path %j', (path) => {
+		expect(() => new FileTreeBuilder('Provider').add(blob(path))).not.toThrow();
 	});
 
 	it('rejects overlapping file and directory paths', () => {
@@ -82,6 +93,13 @@ describe('FileTreeBuilder', () => {
 		builder.add(blob('a'));
 		builder.add(blob('a/b'));
 		expect(() => builder.build()).toThrow('overlapping');
+	});
+
+	it('rejects a file that is also the parent of a directory entry', () => {
+		const builder = new FileTreeBuilder('Provider');
+		builder.add(blob('a'));
+		builder.add({ path: 'a/b', type: 'tree', mode: '040000', objectId: oid });
+		expect(() => builder.build()).toThrow(BadRequestError);
 	});
 
 	it.each([

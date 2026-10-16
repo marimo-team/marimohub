@@ -55,6 +55,8 @@ export interface CatalogRecoveryReport {
 const ABSENT_FROM_SNAPSHOT =
 	'Present on storage but absent from the selected snapshot; recovery leaves it out of the catalog.';
 
+const INVALID_SNAPSHOT = 'Snapshot is invalid and cannot be selected.';
+
 async function decodeRecord<T>(
 	object: BucketObjectBody | null,
 	schema: z.ZodType<T>,
@@ -171,7 +173,10 @@ export async function planCatalogRecovery(
 		const snapshot = snapshotBodies[index];
 		if (snapshot === undefined) {
 			const id = object.key.slice(paths.snapshotsPrefix.length).replace(/\.json$/, '');
-			if (!SnapshotId.is(id) || paths.snapshot(id) !== object.key) return;
+			if (!SnapshotId.is(id) || paths.snapshot(id) !== object.key) {
+				issue(object.key, 'warning', INVALID_SNAPSHOT);
+				return;
+			}
 			candidates.push({
 				id,
 				createdAt: object.uploaded.toISOString(),
@@ -180,7 +185,7 @@ export async function planCatalogRecovery(
 			return;
 		}
 		if (!snapshot || paths.snapshot(snapshot.snapshot_id) !== object.key) {
-			issue(object.key, 'warning', 'Snapshot is invalid and cannot be selected.');
+			issue(object.key, 'warning', INVALID_SNAPSHOT);
 			return;
 		}
 		candidates.push({

@@ -73,6 +73,22 @@ describe('Git transport guard', () => {
 		expect(transportSignal?.aborted).toBe(true);
 	});
 
+	it('extends the response deadline for uploading a large request body', async () => {
+		const fetcher: GitFetch = async () => {
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			return new Response(new Uint8Array([1]));
+		};
+		const response = await client(fetcher).request({
+			url: `${remoteUrl}/git-receive-pack`,
+			method: 'POST',
+			headers: {},
+			body: (async function* () {
+				yield new Uint8Array(64 * 1024);
+			})(),
+		});
+		expect(await drain(response.body)).toBe(1);
+	});
+
 	it('times out a stalled body and cancels its stream', async () => {
 		const cancel = vi.fn();
 		const response = await client(async () => new Response(stalledStream(cancel))).request({
@@ -144,6 +160,6 @@ describe('Git transport guard', () => {
 				timeouts,
 				fetcher: async () => new Response(stalledStream()),
 			}),
-		).rejects.toBeInstanceOf(UnavailableError);
+		).rejects.toThrow(new UnavailableError('Git server stopped sending data'));
 	});
 });

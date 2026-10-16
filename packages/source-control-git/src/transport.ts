@@ -1,6 +1,6 @@
 import git from 'isomorphic-git';
-import type { GitHttpRequest, HttpClient } from 'isomorphic-git';
-import { withAbortSignal } from '@marimo-hub/core/async';
+import type { GitHttpRequest, GitHttpResponse, HttpClient } from 'isomorphic-git';
+import { MAX_TIMER_DELAY_MS, withAbortSignal } from '@marimo-hub/core/async';
 import {
 	BadRequestError,
 	DomainError,
@@ -25,6 +25,15 @@ export const DEFAULT_GIT_TRANSPORT_TIMEOUTS: GitTransportTimeouts = {
 	headersMs: 60_000,
 	idleMs: 60_000,
 };
+
+// The headers timer also covers uploading a buffered request body (a push pack), so a large push
+// on a slow link would abort while still progressing. Grant extra time for the body at a 64 KiB/s
+// floor rate instead.
+const MIN_UPLOAD_BYTES_PER_MS = (64 * 1024) / 1000;
+
+function headersTimeoutMs(headersMs: number, bodyBytes: number): number {
+	return Math.min(MAX_TIMER_DELAY_MS, headersMs + Math.ceil(bodyBytes / MIN_UPLOAD_BYTES_PER_MS));
+}
 
 function repositorySizeError(repository: string, limit: number): BadRequestError {
 	return new BadRequestError(
@@ -84,6 +93,7 @@ function responseBody(
 	transfer: AbortController,
 	signal: AbortSignal,
 	idleMs: number,
+	onError: (error: unknown) => void,
 ): AsyncIterableIterator<Uint8Array> {
 	const body = response.body;
 	return (async function* () {
@@ -102,6 +112,9 @@ function responseBody(
 				recordBytes(next.value.byteLength);
 				yield next.value;
 			}
+		} catch (error) {
+			onError(error);
+			throw error;
 		} finally {
 			await reader.cancel().catch(() => {});
 		}
@@ -133,70 +146,94 @@ function assertGitEndpoint(url: string, remote: URL): void {
 		throw new BadRequestError('Invalid Git endpoint');
 }
 
+export interface GitHttpClient extends HttpClient {
+	/**
+	 * isomorphic-git replaces some transport errors with its own (a stalled ref advertisement
+	 * surfaces as a SmartHttpError), so callers report this first transport failure instead.
+	 */
+	failure(): DomainError | undefined;
+}
+
 /**
  * Credentials ride on every request, so each one is pinned to the remote repository and
  * redirects are refused rather than followed to a host that would receive the token.
  */
-export function gitHttp(options: GitHttpOptions): HttpClient {
+export function gitHttp(options: GitHttpOptions): GitHttpClient {
 	const limit = new GitFetchByteLimit(options.repository);
 	const remote = new URL(options.remoteUrl);
 	const timeouts = options.timeouts ?? DEFAULT_GIT_TRANSPORT_TIMEOUTS;
-	return {
-		request: async (request) => {
-			assertGitEndpoint(request.url, remote);
-			options.signal?.throwIfAborted();
-			const body = await requestBody(request.body);
-			const transfer = new AbortController();
-			const signal = options.signal
-				? AbortSignal.any([options.signal, transfer.signal])
-				: transfer.signal;
-			const timer = startTimer(transfer, timeouts.headersMs, 'Git server did not respond in time');
-			let response: Response;
-			try {
-				response = await withAbortSignal(
-					options.fetcher(request.url, {
-						method: request.method,
-						headers: request.headers,
-						body: body?.buffer,
-						redirect: 'error',
-						signal,
-					}),
-					signal,
-				);
-			} finally {
-				clearTimeout(timer);
-			}
-			if (response.redirected || (response.status >= 300 && response.status < 400)) {
-				await response.body?.cancel().catch(() => {});
-				throw Object.assign(new UnavailableError('Git server redirected the request'), {
-					providerStatus: response.status,
-				});
-			}
-			const contentLength = Number(response.headers.get('content-length'));
-			if (Number.isFinite(contentLength) && contentLength >= 0) {
-				try {
-					limit.assertFits(contentLength);
-				} catch (error) {
-					await response.body?.cancel().catch(() => {});
-					throw error;
-				}
-			}
-			return {
-				url: response.url || request.url,
-				method: request.method,
-				statusCode: response.status,
-				statusMessage: response.statusText,
-				headers: Object.fromEntries(response.headers.entries()),
-				body: responseBody(
-					response,
-					(size) => limit.record(size),
-					transfer,
-					signal,
-					timeouts.idleMs,
-				),
-			};
-		},
+	let failure: DomainError | undefined;
+	const remember = (error: unknown) => {
+		if (error instanceof DomainError) failure ??= error;
 	};
+	return {
+		failure: () => failure,
+		request: (request) =>
+			send(request).catch((error: unknown) => {
+				remember(error);
+				throw error;
+			}),
+	};
+
+	async function send(request: GitHttpRequest): Promise<GitHttpResponse> {
+		assertGitEndpoint(request.url, remote);
+		options.signal?.throwIfAborted();
+		const body = await requestBody(request.body);
+		const transfer = new AbortController();
+		const signal = options.signal
+			? AbortSignal.any([options.signal, transfer.signal])
+			: transfer.signal;
+		const timer = startTimer(
+			transfer,
+			headersTimeoutMs(timeouts.headersMs, body?.byteLength ?? 0),
+			'Git server did not respond in time',
+		);
+		let response: Response;
+		try {
+			response = await withAbortSignal(
+				options.fetcher(request.url, {
+					method: request.method,
+					headers: request.headers,
+					body: body?.buffer,
+					redirect: 'error',
+					signal,
+				}),
+				signal,
+			);
+		} finally {
+			clearTimeout(timer);
+		}
+		if (response.redirected || (response.status >= 300 && response.status < 400)) {
+			await response.body?.cancel().catch(() => {});
+			throw Object.assign(new UnavailableError('Git server redirected the request'), {
+				providerStatus: response.status,
+			});
+		}
+		const contentLength = Number(response.headers.get('content-length'));
+		if (Number.isFinite(contentLength) && contentLength >= 0) {
+			try {
+				limit.assertFits(contentLength);
+			} catch (error) {
+				await response.body?.cancel().catch(() => {});
+				throw error;
+			}
+		}
+		return {
+			url: response.url || request.url,
+			method: request.method,
+			statusCode: response.status,
+			statusMessage: response.statusText,
+			headers: Object.fromEntries(response.headers.entries()),
+			body: responseBody(
+				response,
+				(size) => limit.record(size),
+				transfer,
+				signal,
+				timeouts.idleMs,
+				remember,
+			),
+		};
+	}
 }
 
 function httpStatus(error: unknown): number | undefined {
@@ -205,8 +242,14 @@ function httpStatus(error: unknown): number | undefined {
 	return typeof status === 'number' ? status : undefined;
 }
 
-export function gitTransportError(error: unknown, message: string): Error {
+export function gitTransportError(
+	error: unknown,
+	message: string,
+	transport?: GitHttpClient,
+): Error {
 	if (error instanceof DomainError) return error;
+	const failure = transport?.failure();
+	if (failure) return failure;
 	if (error instanceof git.Errors.UnsafeFilepathError)
 		return new BadRequestError('Git tree contains an unsafe path');
 	const status = httpStatus(error);

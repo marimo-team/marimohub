@@ -166,6 +166,21 @@ describe('repoPath', () => {
 });
 
 describe('reposMatch', () => {
+	it('compares percent-encoded and raw path segments as equal', () => {
+		const url = 'https://dev.azure.com/acme/My%20Project/_git/repo';
+		expect(reposMatch(url, 'acme/My Project/_git/repo')).toBe(true);
+		expect(
+			reposMatch('https://dev.azure.com/acme/My Project/_git/repo', 'acme/My%20Project/_git/repo'),
+		).toBe(true);
+		expect(reposMatch(url, 'acme/my project/_git/REPO')).toBe(true);
+		expect(reposMatch(url, 'acme/Other Project/_git/repo')).toBe(false);
+	});
+
+	it('tolerates malformed or separator-encoding segments', () => {
+		expect(repoPath('acme/100%/repo')).toBe('acme/100%/repo');
+		expect(reposMatch('https://gitlab.com/group/sub/project', 'group%2Fsub/project')).toBe(false);
+	});
+
 	it('matches identical values and path-only restatements', () => {
 		expect(reposMatch('acme/analytics', 'acme/analytics')).toBe(true);
 		expect(reposMatch('https://gitlab.com/group/sub/project', 'group/sub/project')).toBe(true);

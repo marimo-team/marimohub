@@ -1955,7 +1955,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_TENANT_ID',
 						name: 'Azure tenant ID',
 						description:
-							'Microsoft Entra tenant for service-principal authentication. Set together with client ID and client secret. Omit all three to use DefaultAzureCredential, which reads the same ambient `AZURE_*` environment as Azure storage, so both share one identity.',
+							'Microsoft Entra tenant for service-principal authentication. Set together with client ID and client secret. Omit all three to use DefaultAzureCredential, which reads the ambient `AZURE_*` environment; when Azure storage or object browsing also rely on DefaultAzureCredential, both share that identity (connection-string and account-key modes do not).',
 						optIn: true,
 						example: '00000000-0000-0000-0000-000000000000',
 					},

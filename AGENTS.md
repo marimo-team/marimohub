@@ -119,9 +119,10 @@ adapter task caches. Service-backed integration tests can use the focused
 pointer in the catalog snapshot chain. All writes to this object go through
 `CatalogService.mutateSnapshot`
 (`packages/core/src/services/catalog/CatalogService.ts`). This method uses an
-ETag compare-and-swap (conditional PUT) with retries. The one exception is
-the private `CatalogService.commitRecovery`, reached only from `recover()` with
-writers stopped; it also uses ETag CAS.
+ETag compare-and-swap (conditional PUT) with retries. There are two exceptions:
+`CatalogService.initialize()` creates the pointer once with create-if-absent, and the
+private `CatalogService.commitRecovery`, reached only from `recover()` with writers
+stopped, replaces it with one ETag CAS.
 
 These CAS-managed records also have one writer each:
 

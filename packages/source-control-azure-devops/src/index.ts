@@ -1,3 +1,4 @@
+import { deadlineSignal } from '@marimo-hub/core/async';
 import { createPublishStage } from '@marimo-hub/source-control-git/publication';
 import {
 	BadRequestError,
@@ -91,12 +92,19 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 		const normalizedCommit = normalizeCommit(commit);
 		validateBranch(branch);
 		const repo = this.repository(repository);
+		let authorization: string;
+		try {
+			authorization = await this.client.authorization(deadlineSignal(60_000, options.signal));
+		} catch (error) {
+			options.signal?.throwIfAborted();
+			throw error;
+		}
 		return materializeGitDirectory({
 			repository: repo.url,
 			remoteUrl: repo.url,
 			commit: normalizedCommit,
 			branch,
-			authorization: await this.client.authorization(),
+			authorization,
 			fetcher: this.client.fetcher,
 			signal: options.signal,
 		});

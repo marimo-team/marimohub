@@ -54,6 +54,18 @@ describe('WIF credentials token', () => {
 		expect(await verifyWifCredentialsToken('secret', token, () => Date.parse(deadline))).toBeNull();
 	});
 
+	it('rounds a fractional deadline down so the token never outlives it', async () => {
+		const issued = Date.parse('2026-01-01T00:00:00Z');
+		const deadline = '2026-01-01T01:00:00.900Z';
+		const token = await mintWifCredentialsToken('secret', CLAIMS, {
+			now: () => issued,
+			expiresAt: deadline,
+		});
+		const floored = Date.parse('2026-01-01T01:00:00Z');
+		expect(await verifyWifCredentialsToken('secret', token, () => floored - 1)).toEqual(CLAIMS);
+		expect(await verifyWifCredentialsToken('secret', token, () => floored)).toBeNull();
+	});
+
 	it.each([60, 8 * 24 * 60 * 60])(
 		'uses the earlier of an explicit deadline and the seven-day limit (%s seconds)',
 		async (seconds) => {

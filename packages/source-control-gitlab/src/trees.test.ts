@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type * as remoteWorkspace from '@marimo-hub/core/remote-workspace';
-import { UnavailableError } from '@marimo-hub/core/errors';
+import { BadRequestError, UnavailableError } from '@marimo-hub/core/errors';
 import { blobId } from '@marimo-hub/source-control-git/file-tree';
 import { GitLabClient } from './client';
 import { parseGitLabRepository } from './repository';
@@ -61,15 +61,26 @@ describe('GitLab tree boundaries', () => {
 	});
 	it('rejects duplicate paths before downloading blobs', async () => {
 		const { trees, fetcher } = setup([file('a.py', 'a'), file('a.py', 'b')]);
-		await expect(trees.workspace(commit, '')).rejects.toThrow('duplicate');
+		await expect(trees.workspace(commit, '')).rejects.toThrow(
+			new UnavailableError('GitLab tree has a duplicate path'),
+		);
 		expect(fetcher).toHaveBeenCalledTimes(2);
+	});
+	it('rejects a file used as the parent of a directory entry', async () => {
+		const tree = { path: 'apps/lib', mode: '040000', type: 'tree', id: 'b'.repeat(40) };
+		const { trees } = setup([file('apps', 'a'), { ...tree, bytes: new Uint8Array() }]);
+		await expect(trees.workspace(commit, '')).rejects.toThrow(
+			new BadRequestError('GitLab tree has overlapping file and directory paths'),
+		);
 	});
 	it.each([false, true])(
 		'rejects a file used as a parent directory (reversed: %s)',
 		async (reversed) => {
 			const entries = [file('apps', 'a'), file('apps/main.py', 'b')];
 			const { trees, fetcher } = setup(reversed ? entries.reverse() : entries);
-			await expect(trees.workspace(commit, '')).rejects.toThrow('overlapping');
+			await expect(trees.workspace(commit, '')).rejects.toThrow(
+				new BadRequestError('GitLab tree has overlapping file and directory paths'),
+			);
 			expect(fetcher).toHaveBeenCalledTimes(2);
 		},
 	);

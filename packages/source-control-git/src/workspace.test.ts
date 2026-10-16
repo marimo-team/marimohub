@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import { BadRequestError } from '@marimo-hub/core/errors';
+import { WORKSPACE_LIMITS } from '@marimo-hub/core/remote-workspace';
 import { blobId } from './fileTree';
 import type { FileTree } from './fileTree';
 import { readTreeWorkspace } from './workspace';
 
 const bytes = new TextEncoder().encode('print(1)');
 
-function read(tree: FileTree, blob = async () => bytes, rootPath = '') {
+function read(
+	tree: FileTree,
+	blob: (entry: unknown, limit: number) => Promise<Uint8Array> = async () => bytes,
+	rootPath = '',
+) {
 	return readTreeWorkspace({ provider: 'Provider', rootPath, tree: async () => tree, blob });
 }
 
@@ -26,6 +32,19 @@ describe('readTreeWorkspace', () => {
 			await expect(read(tree)).rejects.toThrow('Unsafe Provider tree path');
 		},
 	);
+
+	it('rejects a blob callback that returns more bytes than the limit', async () => {
+		const tree: FileTree = new Map([['main.py', { objectId: blobId(bytes), mode: '100644' }]]);
+		let requested = 0;
+		const oversized = async (_entry: unknown, limit: number) => {
+			requested = limit;
+			return new Uint8Array(limit + 1);
+		};
+		await expect(read(tree, oversized)).rejects.toThrow(
+			new BadRequestError('Provider workspace exceeds the size limit'),
+		);
+		expect(requested).toBe(WORKSPACE_LIMITS.maxFileBytes);
+	});
 
 	it('verifies blob contents against the tree object id', async () => {
 		const tree: FileTree = new Map([['main.py', { objectId: 'a'.repeat(40), mode: '100644' }]]);

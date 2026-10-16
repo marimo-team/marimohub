@@ -135,7 +135,9 @@ export class CatalogService {
 				//
 				// INVARIANT (corruption safety): a writer only ever deletes a snapshot
 				// it itself just wrote and never committed (`snapshotId` here is local to
-				// this call and was never pointed at by catalog.json). No code path
+				// this call and was never pointed at by catalog.json). Only a
+				// PreconditionFailedError proves that; after any other catalog write error
+				// the write may have committed, so the snapshot is kept. No code path
 				// deletes a committed snapshot, so the pointer can never be left dangling
 				// by a writer. Snapshot retention (MaintenanceService) upholds the same
 				// rule by refusing to delete the current/previous snapshot.
@@ -433,7 +435,12 @@ export class CatalogService {
 					});
 					return newSnapshot;
 				} catch (err) {
-					await this.bucket.delete(paths.snapshot(newSnapshotId)).catch(() => {});
+					// Only a lost CAS proves the pointer never moved; any other error may follow a
+					// commit whose response was lost, so the snapshot is kept (see initialize()).
+					// `cas.put` wraps the PreconditionFailedError so withCasRetry can retry it.
+					if (err instanceof Error && err.cause instanceof PreconditionFailedError) {
+						await this.bucket.delete(paths.snapshot(newSnapshotId)).catch(() => {});
+					}
 					throw err;
 				}
 			},

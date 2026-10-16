@@ -1668,7 +1668,8 @@ export async function startNotebookSession(input: {
 		? {
 				url: joinUrlPath(appBaseUrl, WIF_CREDENTIALS_PATH),
 				principal: user,
-				expiresAt: wifCredentialsDeadline(),
+				// A bounded launch credential (e.g. an expiring PAT) must not keep refreshing storage access.
+				expiresAt: earliestDeadline(wifCredentialsDeadline(), user.credential.expiresAt)!,
 			}
 		: undefined;
 	if (credentialsEndpoint) validateWifCredentialsUrl(credentialsEndpoint.url);

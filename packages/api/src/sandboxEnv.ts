@@ -8,6 +8,7 @@ import {
 	STATIC_AWS_CREDENTIAL_ENV,
 	UnavailableError,
 	ValidationError,
+	WEB_IDENTITY_AWS_CREDENTIAL_ENV,
 	wifCredentialsSubject,
 } from '@marimo-hub/core';
 import type {
@@ -34,7 +35,11 @@ export function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): 
 	};
 }
 
-const ENDPOINT_DELIVERY_OWNED_ENV = [...STATIC_AWS_CREDENTIAL_ENV, ...AWS_CONTAINER_CREDENTIAL_ENV];
+const ENDPOINT_DELIVERY_OWNED_ENV = [
+	...STATIC_AWS_CREDENTIAL_ENV,
+	...AWS_CONTAINER_CREDENTIAL_ENV,
+	...WEB_IDENTITY_AWS_CREDENTIAL_ENV,
+];
 
 // Integrations are the base; WIF and marimo config win collisions.
 export function composeSessionEnv(layers: {
@@ -48,8 +53,8 @@ export function composeSessionEnv(layers: {
 	if (layers.integrationEnv) {
 		env = mergeSessionEnv(projectSessionEnv(layers.integrationEnv), env ?? {});
 	}
-	// Static keys and other container-provider inputs must not bypass or redirect endpoint
-	// delivery, even if token minting failed.
+	// Static keys, web-identity inputs, and other container-provider inputs must not bypass
+	// or redirect endpoint delivery, even if token minting failed.
 	if (env && layers.endpointDelivery) {
 		for (const name of ENDPOINT_DELIVERY_OWNED_ENV) {
 			if (layers.wifVars?.[name] === undefined) delete env.vars?.[name];

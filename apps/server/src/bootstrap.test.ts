@@ -14,6 +14,8 @@ import {
 	startWarmPools,
 } from './cron';
 import type { OtelHandle } from './otel';
+import { attachSandboxProxyUpgrade } from './sandboxProxyWs';
+import type * as SandboxProxyWs from './sandboxProxyWs';
 
 vi.mock('./cron', () => ({
 	startPreviewPreparation: vi.fn(() => vi.fn()),
@@ -22,6 +24,11 @@ vi.mock('./cron', () => ({
 	startSessionLifecycle: vi.fn(() => vi.fn()),
 	startJobScheduler: vi.fn(() => ({ stop: vi.fn(), drain: vi.fn(async () => {}) })),
 }));
+
+vi.mock('./sandboxProxyWs', async (importOriginal) => {
+	const actual = await importOriginal<typeof SandboxProxyWs>();
+	return { attachSandboxProxyUpgrade: vi.fn(actual.attachSandboxProxyUpgrade) };
+});
 
 type Signal = 'SIGTERM' | 'SIGINT';
 type PreflightReport = Awaited<ReturnType<NonNullable<ApiDeps['preflight']>>>;
@@ -386,6 +393,24 @@ describe('bootstrap', () => {
 		expect(closeAllConnections).toHaveBeenCalledOnce();
 		expect(dispose).toHaveBeenCalledOnce();
 		expect(shutdown).toHaveBeenCalledOnce();
+		expect(harness.exit).toHaveBeenCalledWith(0);
+		expect(console.log).not.toHaveBeenCalledWith(
+			expect.stringContaining('"event":"drain_timeout"'),
+		);
+	});
+
+	it('destroys held proxy WebSockets at the forced-close mark', async () => {
+		const harness = makeHarness(deps, { closeImmediately: false });
+		const destroyAll = vi.fn(() => harness.finishClose());
+		vi.mocked(attachSandboxProxyUpgrade).mockReturnValueOnce({ destroyAll, size: 1 });
+		await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
+
+		harness.signals.get('SIGTERM')?.();
+		await vi.advanceTimersByTimeAsync(9_999);
+		expect(destroyAll).not.toHaveBeenCalled();
+
+		await vi.advanceTimersByTimeAsync(1);
+		expect(destroyAll).toHaveBeenCalledOnce();
 		expect(harness.exit).toHaveBeenCalledWith(0);
 		expect(console.log).not.toHaveBeenCalledWith(
 			expect.stringContaining('"event":"drain_timeout"'),

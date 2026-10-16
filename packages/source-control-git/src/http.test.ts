@@ -5,6 +5,7 @@ import {
 	ForbiddenError,
 	NotFoundError,
 	UnavailableError,
+	ValidationError,
 } from '@marimo-hub/core/errors';
 import { providerHttpError, readResponseBytes, responseFields, retryAfterSeconds } from './http';
 const boundedBytes = (response: Response, limit: number, signal?: AbortSignal) =>
@@ -96,6 +97,7 @@ describe('providerHttpError', () => {
 		{ status: 404, type: NotFoundError },
 		{ status: 409, type: ConflictError },
 		{ status: 412, type: ConflictError },
+		{ status: 422, type: ValidationError },
 		{ status: 429, type: UnavailableError },
 		{ status: 302, type: UnavailableError },
 		{ status: 503, type: UnavailableError },
@@ -104,6 +106,12 @@ describe('providerHttpError', () => {
 		expect(error).toBeInstanceOf(type);
 		expect(error.providerStatus).toBe(status);
 		expect(error).not.toHaveProperty('retryAfterSeconds');
+	});
+
+	it('reports a semantically rejected request as a validation error', () => {
+		const error = providerHttpError('Provider', 422);
+		expect(error).toBeInstanceOf(ValidationError);
+		expect(error.message).toBe('Provider rejected the request');
 	});
 
 	it('carries Retry-After seconds or dates on rate limits', () => {

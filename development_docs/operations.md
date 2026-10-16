@@ -100,9 +100,11 @@ metadata records.
    Docker and Kubernetes examples. The SEA binaries have no recovery entrypoint.
 
 4. Review `candidates`, `projects`, and `issues` in the JSON report. A dry-run
-   whose report has blocking errors exits 2. In `--snapshot` mode, `excluded`
-   issues list projects, notebooks, and jobs that exist on storage but are absent
-   from the selected snapshot.
+   whose report has blocking errors exits 2. `excluded` issues list records that
+   recovery leaves out of the catalog: preview runtime notebooks, import attempts
+   that are not confirmed complete, and jobs with a deletion fence. In
+   `--snapshot` mode they also list projects, notebooks, and jobs that exist on
+   storage but are absent from the selected snapshot.
 5. If a suitable snapshot survives, inspect it with its actual ID:
 
    ```bash
