@@ -47,7 +47,12 @@ Kernel traffic is forwarded **through the app** at
 `https://hub.example.com/proxy/<token>/…`, so each request goes through
 marimohub's auth and a per-session role check; `<token>` is an HMAC of the
 session id signed with `MARIMOHUB_AUTH_SESSION_SECRET`. No separate kernel domain
-is needed.
+is needed. Each process caches a successful editor admission for up to 5 seconds,
+so stopping a session or revoking a role can take that long to block the next
+request or WebSocket upgrade from an editor that was already admitted. An
+established WebSocket is not re-authorized; it closes at its authorization
+deadline when the session has one. The token signature, sign-in, and suspension
+checks still run on every request.
 
 The cost: the kernel is **same-origin** with the app, so a malicious notebook can
 script the control plane (XSS). Proxy mode is for **trusted environments only**
@@ -119,7 +124,8 @@ shell commands and read the notebook credentials. Only users who can attach to
 the edit session can use these surfaces. App sessions and viewer-owned ephemeral
 sessions cannot use them.
 
-VS Code proxy exposure authorizes each HTTP request and WebSocket upgrade.
+VS Code proxy exposure checks each HTTP request and WebSocket upgrade. Like the
+kernel proxy, it reuses a successful editor admission for up to 5 seconds.
 OpenCode supports only subdomain exposure because its client requires root
 paths. Each subdomain URL is an access capability. Do not publish these URLs.
 
@@ -167,8 +173,10 @@ Every resource decision — project guards, session gates, kernel proxies, and
 list filtering — flows through one authorization service over a bounded action
 vocabulary, so an allow or deny cannot differ between surfaces. Routes outside
 the standard API guard carry their own scoped capability instead: the sandbox
-proxies re-run the full session authorization per request (including the
-WebSocket path, which force-closes at the authorization deadline), the managed
+proxies check the token, sign-in, and suspension on every request and reuse a
+successful editor admission for up to 5 seconds per process (app and preview
+admissions are never reused; the WebSocket path force-closes at the
+authorization deadline), the managed
 AI proxy and git sync accept only their own short-lived minted tokens, and the
 CLI token exchange is bound by PKCE and rate budgets.
 

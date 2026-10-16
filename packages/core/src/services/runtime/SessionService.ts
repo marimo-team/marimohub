@@ -6,6 +6,7 @@ import { BUCKET_SCAN_CONCURRENCY, MARIMO_PORT } from '../../constants';
 import type { EditorSandboxSharing, SessionMode } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { Millis } from '../../duration';
+import { EtagRecordCache } from '../../etagRecordCache';
 import {
 	ConflictError,
 	EditSessionChangedError,
@@ -117,10 +118,7 @@ const TAKEOVER_REQUEST_TTL_MS = Millis.minutes(5);
 const TAKEOVER_DRAIN_LEASE_MS = Millis.minutes(10);
 const TAKEOVER_DRAIN_PROGRESS_TIMEOUT_MS = Millis.minutes(30);
 
-// Coalesce heartbeat persistence: an already-running session is only re-written
-// once its stored heartbeat is older than this. Bounds heartbeat writes to
-// ~1/interval/session regardless of client cadence, while staying well within
-// HEARTBEAT_TTL_MS so a live session is never spuriously expired.
+// The interval limits writes and leaves time before the reaper TTL.
 const HEARTBEAT_PERSIST_INTERVAL_MS = Millis.seconds(60);
 
 /** Sentinel for a session object that vanished between list and read. */
@@ -155,6 +153,7 @@ export class SessionService {
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
+		private readonly recordCache: EtagRecordCache<Session> = new EtagRecordCache(),
 	) {}
 
 	/**
@@ -572,17 +571,13 @@ export class SessionService {
 		}));
 	}
 
-	/** Refresh a running session's heartbeat (keeps it off the TTL reaper).
-	 * Coalesced to ~1 write/60s; never revives a terminal/terminating session.
-	 * Provisioning owns the `starting` to `running` transition so a heartbeat
-	 * cannot create a claim-holding session without a sandbox URL. */
+	/** Heartbeats persist at most once per 60 seconds, but always recheck the session's status. */
 	async heartbeat(projectId: ProjectId, id: SessionId): Promise<Session> {
 		return this.mutate(projectId, id, (session) => {
-			if (session.status !== 'running') return null;
-			if (isPastAuthorizationDeadline(session, Date.now())) return null;
-			const ageMs = Date.now() - new Date(session.last_heartbeat).getTime();
-			if (ageMs < HEARTBEAT_PERSIST_INTERVAL_MS) return null;
-			return { ...session, last_heartbeat: new Date().toISOString() };
+			const now = Date.now();
+			if (session.status !== 'running' || isPastAuthorizationDeadline(session, now)) return null;
+			if (now - Date.parse(session.last_heartbeat) < HEARTBEAT_PERSIST_INTERVAL_MS) return null;
+			return { ...session, last_heartbeat: new Date(now).toISOString() };
 		});
 	}
 
@@ -704,25 +699,13 @@ export class SessionService {
 		return { session: result.value, transitioned: result.written };
 	}
 
-	/**
-	 * List + read every session record under the sessions prefix, handing each to
-	 * `handle` in bounded-parallel (records that vanished between list and read are
-	 * skipped). `etag` is the freshly-read ETag, for a caller doing a conditional
-	 * write within the same pass. Backs every session scan — the request path
-	 * (listActiveByProject on each notebook-table render, findReusable/
-	 * countActiveForUser on create) and the reaper passes.
-	 */
 	private async scanSessions<T>(
 		handle: (session: Session, obj: BucketObject, etag: string) => T | Promise<T>,
 	): Promise<Awaited<T>[]> {
 		return this.scanPrefix(paths.sessionsPrefix, handle);
 	}
 
-	/**
-	 * Scope a scan to a single project's prefix (`_system/sessions/{pid}/`) — the
-	 * partition introduced so the interactive reads (`listActiveByProject`,
-	 * `findReusable`) cost O(that project's sessions), not O(all sessions).
-	 */
+	/** Project-scoped scans cost O(that project's sessions), not O(all sessions). */
 	private async scanProject<T>(
 		projectId: ProjectId,
 		handle: (session: Session, obj: BucketObject, etag: string) => T | Promise<T>,
@@ -730,6 +713,10 @@ export class SessionService {
 		return this.scanPrefix(paths.sessionsForProject(projectId), handle);
 	}
 
+	/**
+	 * Each scan lists current ETags and fetches cache misses. Handlers receive
+	 * isolated records so caller mutations cannot poison later scans or CAS writes.
+	 */
 	private async scanPrefix<T>(
 		prefix: string,
 		handle: (session: Session, obj: BucketObject, etag: string) => T | Promise<T>,
@@ -737,10 +724,14 @@ export class SessionService {
 	): Promise<Awaited<T>[]> {
 		const objects = await listAllObjects(this.bucket, prefix);
 		const scanned = await mapWithConcurrency(objects, BUCKET_SCAN_CONCURRENCY, async (obj) => {
+			const cached = this.recordCache.get(obj.key, obj.etag);
+			if (cached) return handle(structuredClone(cached), obj, obj.etag);
 			const body = await this.bucket.get(obj.key);
-			if (!body) return SKIP;
-			// A single corrupt/legacy record must not abort a deployment-wide scan
-			// (listing, reuse, reaper). Skip it (logged) so the good records survive.
+			if (!body) {
+				this.recordCache.delete(obj.key);
+				return SKIP;
+			}
+			// Tolerant scans keep valid records when another record is corrupt.
 			let session: Session;
 			try {
 				session = await readStored(SessionSchema, body, obj.key);
@@ -753,7 +744,8 @@ export class SessionService {
 				);
 				return SKIP;
 			}
-			return handle(session, obj, body.etag);
+			this.recordCache.set(obj.key, body.etag, session);
+			return handle(structuredClone(session), obj, body.etag);
 		});
 		return scanned.filter((r): r is Awaited<T> => r !== SKIP);
 	}
@@ -885,6 +877,7 @@ export class SessionService {
 		userId: UserId,
 		sharing: EditorSandboxSharing,
 		temporary: boolean,
+		known?: { claim: EditorClaim | undefined },
 	): Promise<{
 		session?: Session;
 		ownedByOther?: Session;
@@ -904,7 +897,7 @@ export class SessionService {
 					.sort((a, b) => b.last_heartbeat.localeCompare(a.last_heartbeat))[0],
 			};
 		}
-		const claim = await this.getEditorClaim(projectId, notebookId);
+		const claim = await this.resolveEditorClaim(projectId, notebookId, known);
 		if (!claim?.session_id) {
 			const persistent = live.filter((session) => !session.ephemeral);
 			if (persistent.length > 1) {
@@ -1073,6 +1066,16 @@ export class SessionService {
 		return claim;
 	}
 
+	private async resolveEditorClaim(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		known?: { claim: EditorClaim | undefined },
+	): Promise<EditorClaim | undefined> {
+		// Requested transfers can expire or enter draining while other reads run.
+		if (known && known.claim?.transfer?.phase !== 'requested') return known.claim;
+		return this.getEditorClaim(projectId, notebookId);
+	}
+
 	private editorClaimHolder(
 		claim: EditorClaim,
 		requestedBy?: UserId,
@@ -1089,8 +1092,9 @@ export class SessionService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		requestedBy: UserId,
+		known?: { claim: EditorClaim | undefined },
 	): Promise<boolean> {
-		const claim = await this.getEditorClaim(projectId, notebookId);
+		const claim = await this.resolveEditorClaim(projectId, notebookId, known);
 		if (!claim) return false;
 		const holder = await this.getLiveEditorHolder(
 			projectId,

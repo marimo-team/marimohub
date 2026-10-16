@@ -31,6 +31,34 @@ export function bucketContract(name: string, makeBucket: () => Bucket | Promise<
 			expect(got!.etag).toBe(put.etag);
 		});
 
+		it('list reports the same etag as get for an unchanged object', async () => {
+			const put = await bucket.put('etag/list.json', '{"v":1}');
+			const listed = (await bucket.list({ prefix: 'etag/' })).objects.find(
+				(object) => object.key === 'etag/list.json',
+			);
+			expect(listed?.etag).toBe(put.etag);
+			expect((await bucket.get('etag/list.json'))?.etag).toBe(listed?.etag);
+			await bucket.put('etag/list.json', '{"v":2}');
+			const relisted = (await bucket.list({ prefix: 'etag/' })).objects.find(
+				(object) => object.key === 'etag/list.json',
+			);
+			expect(relisted).toBeDefined();
+			expect(relisted?.etag).not.toBe(listed?.etag);
+			expect((await bucket.get('etag/list.json'))?.etag).toBe(relisted?.etag);
+		});
+
+		it('head reports a non-empty etag equal to get and changes on overwrite', async () => {
+			await bucket.put('etag/head.json', '{"v":1}');
+			const head = await bucket.head('etag/head.json');
+			expect(head?.etag).toBeTruthy();
+			expect((await bucket.get('etag/head.json'))?.etag).toBe(head?.etag);
+			await bucket.put('etag/head.json', '{"v":2}');
+			const reheaded = await bucket.head('etag/head.json');
+			expect(reheaded?.etag).toBeTruthy();
+			expect(reheaded?.etag).not.toBe(head?.etag);
+			expect((await bucket.get('etag/head.json'))?.etag).toBe(reheaded?.etag);
+		});
+
 		it('binary round-trip: put Uint8Array, bytes() returns identical bytes', async () => {
 			// A non-UTF-8 byte sequence (0xff 0xfe ... 0x00) that text() would mangle.
 			const data = new Uint8Array([0xff, 0xfe, 0x00, 0x01, 0x80, 0x7f, 0x00, 0xab]);

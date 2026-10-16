@@ -2,8 +2,10 @@ import { serve } from '@hono/node-server';
 import type { ServerType } from '@hono/node-server';
 import { httpInstrumentationMiddleware } from '@hono/otel';
 import { secureHeaders } from 'hono/secure-headers';
+import { Hono } from 'hono';
+import { compress, COMPRESSIBLE_CONTENT_TYPE_REGEX } from 'hono/compress';
 import type { ApiDeps } from '@marimo-hub/api';
-import { createApi } from '@marimo-hub/api';
+import { createApi, SANDBOX_PROXY_PREFIXES } from '@marimo-hub/api';
 import { createFromEnvAsync, isConfigError } from '@marimo-hub/config';
 import { disposeNotifier, InFlightWork } from '@marimo-hub/core';
 import {
@@ -191,8 +193,32 @@ export async function bootstrap(
 	const port = Number(validatedEnv.PORT ?? 3000);
 	// Unset listens on every interface, which a container needs to publish the port.
 	const hostname = overrides.hostname ?? validatedEnv.MARIMOHUB_BIND_HOST;
+	let serverFetch = app.fetch;
+	if (deps.sandbox.exposure?.mode === 'proxy') {
+		const proxyApp = new Hono();
+		const compressProxy = compress({
+			contentTypeFilter: (type) =>
+				!/^\s*text\/event-stream(?:[;\s]|$)/i.test(type) &&
+				COMPRESSIBLE_CONTENT_TYPE_REGEX.test(type),
+		});
+		for (const prefix of Object.values(SANDBOX_PROXY_PREFIXES)) {
+			const path = `${prefix}/*`;
+			proxyApp.use(path, compressProxy);
+			proxyApp.all(path, (c) => {
+				// Node fetch adds accept-encoding when absent. Request identity upstream
+				// and negotiate compression using the original client request here.
+				const headers = new Headers(c.req.raw.headers);
+				headers.set('accept-encoding', 'identity');
+				return app.fetch(new Request(c.req.raw, { headers }), c.env);
+			});
+		}
+		// Node bindings in env back getConnInfo for routes behind this wrapper.
+		proxyApp.all('*', (c) => app.fetch(c.req.raw, c.env));
+		serverFetch = proxyApp.fetch;
+	}
+
 	const serverOptions = {
-		fetch: app.fetch,
+		fetch: serverFetch,
 		port,
 		...(hostname ? { hostname } : {}),
 	};

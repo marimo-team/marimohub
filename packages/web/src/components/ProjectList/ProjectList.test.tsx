@@ -76,6 +76,15 @@ function Location() {
 	return <span data-testid="location">{useLocation().search}</span>;
 }
 
+function requestsWithNamespace(
+	fetchMock: ReturnType<typeof renderList>['fetchMock'],
+	namespace: string | null,
+) {
+	return fetchMock.mock.calls
+		.map(([input]) => new URL(String(input), 'http://localhost'))
+		.filter((url) => url.searchParams.get('tag_namespace') === namespace);
+}
+
 async function waitForLoaded() {
 	await waitFor(() => expect(screen.getByRole('status')).not.toHaveTextContent('Loading'));
 }
@@ -166,6 +175,29 @@ describe('ProjectList', () => {
 		expect(screen.getByRole('status')).toHaveTextContent(`${projects.length} project`);
 	});
 
+	it('keeps namespace grouping available when a search matches only untagged projects', async () => {
+		renderList(
+			[project('Vision', '', { tags: ['research/vision'] }), project('Loose')],
+			'/?q=loose',
+		);
+		await waitForLoaded();
+		expect(screen.getByRole('status')).toHaveTextContent('1 project');
+		expect(await screen.findByRole('button', { name: 'Group by namespace' })).toBeVisible();
+	});
+
+	it('keeps namespace grouping available when only deleted projects are namespaced', async () => {
+		renderList(
+			[
+				project('Old Vision', '', { tags: ['research/vision'], status: 'deleted' }),
+				project('Loose'),
+			],
+			'/?status=deleted',
+		);
+		await waitForLoaded();
+		expect(screen.getByRole('status')).toHaveTextContent('1 project');
+		expect(await screen.findByRole('button', { name: 'Group by namespace' })).toBeVisible();
+	});
+
 	it('still groups and toggles when browser storage is unavailable', async () => {
 		vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
 			throw new DOMException('Storage disabled', 'SecurityError');
@@ -224,7 +256,8 @@ describe('ProjectList', () => {
 			const tag = route === '/' ? 'scale' : 'scale/team';
 			const { fetchMock } = renderList(scaleProjects(7, tag), route, true, 3);
 			await waitForLoaded();
-			expect(fetchMock).toHaveBeenCalledTimes(3);
+			const namespace = new URLSearchParams(route.slice(1)).get('tag_namespace');
+			expect(requestsWithNamespace(fetchMock, namespace)).toHaveLength(3);
 			expect(screen.getAllByTestId('project-row')).toHaveLength(5);
 			await user.click(screen.getByRole('button', { name: 'Show all 7' }));
 			await waitFor(() => expect(screen.getAllByTestId('project-row')).toHaveLength(7));
@@ -352,10 +385,10 @@ describe('ProjectList', () => {
 		expect(screen.getAllByText('First')).toHaveLength(2);
 		expect(screen.getByText('Second')).toBeInTheDocument();
 		expect(screen.getByRole('status')).toHaveTextContent('2 projects');
-		expect(fetchMock).toHaveBeenCalledTimes(2);
-		for (const [input] of fetchMock.mock.calls) {
-			const params = new URL(String(input), 'http://localhost').searchParams;
-			expect(Object.fromEntries(params)).toMatchObject({
+		const pages = requestsWithNamespace(fetchMock, 'research');
+		expect(pages).toHaveLength(2);
+		for (const url of pages) {
+			expect(Object.fromEntries(url.searchParams)).toMatchObject({
 				tag_namespace: 'research',
 				tag: 'shared',
 				q: 'match',
@@ -363,7 +396,7 @@ describe('ProjectList', () => {
 				limit: '500',
 			});
 		}
-		expect(String(fetchMock.mock.calls[1][0])).toContain('cursor=1');
+		expect(pages[1].searchParams.get('cursor')).toBe('1');
 	});
 
 	it('renders the fetched projects', async () => {

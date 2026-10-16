@@ -662,16 +662,30 @@ export function createServices(
 	};
 }
 
-const populatedCatalogEtags = new WeakMap<Bucket, string>();
+// Storage resets can remain undetected until this cache expires.
+const CATALOG_POPULATED_TTL_MS = 30_000;
+const populatedCatalogEtags = new WeakMap<Bucket, { etag: string; checkedAt: number }>();
 
 export async function ensureInitialized(
 	bucket: Bucket,
 	actor: UserId,
 	options: { createDefaultProject?: boolean | (() => Promise<boolean>) } = {},
 ): Promise<void> {
+	const cached = populatedCatalogEtags.get(bucket);
+	const checkedAt = Date.now();
+	if (
+		options.createDefaultProject !== false &&
+		cached &&
+		checkedAt - cached.checkedAt < CATALOG_POPULATED_TTL_MS
+	)
+		return;
 	const exists = await bucket.head(paths.catalog);
 	if (exists && options.createDefaultProject === false) return;
-	if (exists && populatedCatalogEtags.get(bucket) === exists.etag) return;
+	// An empty ETag (adapter fallback) would match forever and hide a storage reset.
+	if (exists?.etag && cached?.etag === exists.etag) {
+		populatedCatalogEtags.set(bucket, { etag: exists.etag, checkedAt });
+		return;
+	}
 	if (!exists) populatedCatalogEtags.delete(bucket);
 
 	const services = createServices(bucket);
@@ -682,7 +696,9 @@ export async function ensureInitialized(
 
 	const snapshot = await services.catalog.getCurrentSnapshot();
 	// Empty catalogs must retry authorization for a later caller with project creation access.
-	if (snapshot.projects.length > 0 && exists) populatedCatalogEtags.set(bucket, exists.etag);
+	if (snapshot.projects.length > 0 && exists?.etag) {
+		populatedCatalogEtags.set(bucket, { etag: exists.etag, checkedAt });
+	}
 	if (snapshot.projects.length === 0) {
 		if (
 			typeof options.createDefaultProject === 'function' &&

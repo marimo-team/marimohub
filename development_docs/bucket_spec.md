@@ -39,6 +39,7 @@ Because there is no database, the object store itself must provide the guarantee
 
 - **Strong read-after-write consistency** — a read (or list) immediately following a write reflects the latest data, so a writer always sees the snapshot it just committed.
 - **Conditional writes (compare-and-swap)** — `If-Match` on ETag for the atomic `catalog.json` swap, returning `412 Precondition Failed` on mismatch; `If-None-Match: *` (create-if-absent) for first-write bootstrapping.
+- **Stable ETags** — `head`, `list`, and `get` return the same non-empty ETag for an unchanged object, and the ETag changes whenever the contents change (a content-hash backend such as `storage-fs` may keep it across an identical rewrite). The per-process metadata and session caches, and the `ensureInitialized` catalog check, rely on this to skip downloads. A backend that cannot supply an ETag returns `''`, and none of these caches store or match such a value.
 
 AWS S3 provides both (strong read-after-write consistency since 2020; `If-Match` / `If-None-Match` on `PutObject` since 2024). **Verify these for any other S3-compatible target** (MinIO, Ceph RGW, Backblaze B2, Tigris, …) — conditional-write support in particular varies by implementation and version. This is the single most important portability constraint for the design.
 
@@ -57,6 +58,8 @@ only file ever mutated in place
 ```
 
 `catalog.json` is a tiny pointer file — it names the current snapshot. Every write operation clones the current snapshot, applies changes, writes a new immutable snapshot, then atomically swaps `catalog.json` to point at it using a conditional PUT on ETag. If two writers race, one gets a `412 Precondition Failed` and retries. No corruption is possible.
+
+`ensureInitialized` caches a positive "catalog populated" result for 30 seconds per process. A wiped or reset bucket can take up to 30 seconds per replica to be detected and re-initialized.
 
 A single GET on the current snapshot returns the complete project and notebook listing — all metadata, no code. At 10 projects × 100 notebooks with ~200 bytes of metadata per notebook, the snapshot is roughly 200KB. That's the entire index in one fast GET.
 
@@ -711,6 +714,10 @@ They filter the records by user after the scan. The scan includes expired
 records. The 20-token live-token cap does not bound this storage cost.
 
 **Mutability & write semantics.** Creation is a plain PUT to a fresh, unique token-id key. The only rewrite is the `last_used_at` refresh, and it is **conditional** — an `If-Match` on the ETag read at load time — so a token revoked (deleted) between load and the touch is not resurrected by a stale write; the touch is also coalesced to once per UTC day, keeping the request hot path read-only. Revocation is a plain DELETE. Positive verifications are cached per process with a short TTL (`TokenService.CACHE_TTL_MS`), which also bounds the cross-replica revocation lag.
+
+The Node proxy has a similar per-process cache for successful editor admissions, including VS Code and other surface proxies. An entry lives up to 5 seconds, or less when the credential or entitlements expire sooner. Token signature, sign-in, suspension, and authorization deadlines are checked on every request. So stopping a session, revoking a role, deleting a project, or changing labels can take up to 5 seconds to block an editor connection that was already admitted. App and preview admissions are never cached.
+
+Known limitation: Docker and Podman give each kernel a random local port. When `MARIMOHUB_SANDBOX_AUTH` is off, a new session could in theory reuse the port of a session stopped within that 5-second window, and a cached admission for the stopped session would then reach the new kernel.
 
 ### 4.11.1 CLI authorization records
 

@@ -603,8 +603,10 @@ export class NotebookWorkspaceService {
 				}, WORKSPACE_MUTATION_LEASE_MS / 3);
 				let result: T;
 				try {
-					await options.assertMutable?.();
-					await heartbeat();
+					if (options.assertMutable) {
+						await options.assertMutable();
+						await heartbeat();
+					}
 					result = await mutation({ heartbeat });
 				} finally {
 					clearInterval(renewalTimer);

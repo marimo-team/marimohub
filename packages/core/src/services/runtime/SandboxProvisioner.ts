@@ -7,7 +7,7 @@ import type { NotebookBridgeRuntime } from '../../ports/notebookBridge';
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
 import { Millis } from '../../duration';
-import { NotFoundError, PythonEnvironmentSetupError, UnavailableError } from '../../errors';
+import { PythonEnvironmentSetupError, UnavailableError } from '../../errors';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { effectivePersistenceMode } from './sessionPersistence';
 import {
@@ -38,11 +38,12 @@ import { shellQuote } from './shell';
 import type { NotebookService } from '../content/NotebookService';
 import {
 	captureWorkspace,
+	loadWorkspaceOverlay,
 	readSessionArtifacts,
 	restoreWorkspace,
 	sharedWorkspaceListing,
 } from './sandboxFiles';
-import type { WorkspaceRestoreStats } from './sandboxFiles';
+import type { WorkspaceOverlay, WorkspaceRestoreStats } from './sandboxFiles';
 import { restorePackedWorkspace } from './packedWorkspaceRestore';
 import { sandboxWorkspaceLayout } from './workspaceLayout';
 import type { SandboxWorkspaceLayout } from './workspaceLayout';
@@ -122,6 +123,7 @@ function setupDiagnostics(stdout: string, stderr: string): SetupDiagnostics {
 
 function logSlowSetup(
 	options: ProvisionOptions,
+	launchStrategy: MarimoLaunchStrategyName,
 	setupMs: number,
 	diagnostics: SetupDiagnostics,
 ): void {
@@ -136,7 +138,7 @@ function logSlowSetup(
 			sandbox_id: options.sandboxId,
 			project_id: options.projectId,
 			notebook_id: options.notebookId,
-			launch_strategy: options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY,
+			launch_strategy: launchStrategy,
 			provision_setup_ms: setupMs,
 			...timingFields,
 			setup_stderr_tail: utf8Tail(diagnostics.stderr, SETUP_OUTPUT_TAIL_BYTES),
@@ -246,13 +248,8 @@ export interface ProvisionOptions {
 	/** Control-plane idle deadline used by providers to derive an orphan backstop. */
 	sessionIdleTimeoutMs?: Millis;
 	/**
-	 * Environment + files to inject into the sandbox BEFORE dependency setup — the
-	 * assembled output of the workload-identity broker (federated S3 creds) and/or
-	 * the secrets provider. The provisioner stays vendor-agnostic: it only sets env
-	 * + writes files; it never mints tokens or reads secrets. Never logged.
-	 *
-	 * Accepts a promise: it is awaited only at the inject phase, so the caller's
-	 * credential resolution overlaps the (dominant) sandbox create.
+	 * Environment variables and files to inject before dependency setup. Never logged.
+	 * Promises let credential resolution overlap sandbox boot. The caller resolves credentials.
 	 */
 	sessionEnv?: SessionEnv | Promise<SessionEnv | undefined>;
 	/** Interactive marimo credential. Scheduled-job preparation omits it. */
@@ -261,8 +258,11 @@ export interface ProvisionOptions {
 	contextFile?: { path: string; content?: string };
 	/** Workspace-relative notebook file marimo should open. Defaults to `notebook.py`. */
 	entryNotebook?: string;
-	/** Per-source launch strategy (see launchStrategy.ts). Defaults to the project-managed env. */
-	launchStrategy?: MarimoLaunchStrategyName;
+	/**
+	 * Source launch strategy. Resolution overlaps sandbox boot.
+	 * Defaults to the project-managed environment.
+	 */
+	launchStrategy?: MarimoLaunchStrategyName | Promise<MarimoLaunchStrategyName>;
 	/**
 	 * How long Python-environment setup and the kernel-port wait may take in total
 	 * before failing the provision. Defaults to `DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS`.
@@ -282,8 +282,8 @@ export interface ProvisionOptions {
 	 * `versions/{vid}/workspace/` prefix instead.
 	 */
 	workspacePrefix?: string;
-	/** Trusted workspace-relative files copied from immutable bucket objects after workspace restore. */
-	workspaceOverlay?: { path: string; key: string }[];
+	/** Overrides workspace files. Object restores include these files in the first batch. */
+	workspaceOverlay?: WorkspaceOverlay;
 	/** Pull-source Git metadata restored into `<workdir>/.git`. */
 	gitPrefix?: string;
 	/**
@@ -490,6 +490,7 @@ async function withSandboxSpan<T>(
 }
 
 export interface WorkspaceLoadContext {
+	overlay?: WorkspaceOverlay;
 	sandbox: SandboxInstance;
 	projectId: ProjectId;
 	notebookId: NotebookId;
@@ -505,6 +506,8 @@ export interface WorkspaceLoadContext {
 export interface WorkspaceLoadResult {
 	/** Files were copied in (true) rather than bucket-mounted (false). */
 	usedFallback: boolean;
+	/** True when this load applies ctx.overlay. Otherwise the provisioner applies it afterward. */
+	overlayApplied?: boolean;
 	/** What the copy moved; absent when the workspace was mounted instead. */
 	stats?: WorkspaceRestoreStats;
 	archiveStatus?: 'used' | 'missing' | 'failed';
@@ -533,6 +536,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		excludeRelativeRoots,
 		waitUntilReady,
 		prefetchBudget,
+		overlay,
 	}: WorkspaceLoadContext): Promise<WorkspaceLoadResult> {
 		if (!bucketHandle) {
 			throw provisionFailure(
@@ -542,11 +546,12 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		}
 		try {
 			const stats = await restoreWorkspace(sandbox, bucketHandle, workspacePrefix, mountPath, {
+				overlay,
 				excludeRelativeRoots,
 				waitUntilReady,
 				prefetchBudget,
 			});
-			return { usedFallback: true, stats };
+			return { usedFallback: true, overlayApplied: true, stats };
 		} catch (err) {
 			throw provisionFailure('restoring the notebook workspace into the sandbox', err);
 		}
@@ -776,6 +781,8 @@ export class SandboxProvisioner {
 		sw: Stopwatch;
 		mountPath: string;
 	}> {
+		const launchStrategy = Promise.resolve(options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY);
+		launchStrategy.catch(() => {});
 		const nb = paths.project(options.projectId).notebook(options.notebookId);
 		const layout = sandboxWorkspaceLayout(
 			options.workdir ?? DEFAULT_WORKDIR,
@@ -795,7 +802,9 @@ export class SandboxProvisioner {
 						options.workspacePrefix ?? nb.workspacePrefix,
 						waitUntilReady,
 					);
-					await this.applyWorkspaceOverlay(sandbox, options, mountPath);
+					if (!loaded.overlayApplied) {
+						await this.applyWorkspaceOverlay(sandbox, options, mountPath);
+					}
 					return loaded;
 				});
 				span.setAttributes({
@@ -807,8 +816,14 @@ export class SandboxProvisioner {
 			});
 		const injectSessionEnv = () =>
 			withSandboxSpan(sw, 'inject', (time) => this.injectSessionEnv(sandbox, options, time));
-		const setupEnvironment = () => this.setupEnvironment(sandbox, options, mountPath, sw);
-		const uploadBridge = () => this.uploadNotebookBridge(sandbox, options, sw);
+		const setupEnvironment = async () =>
+			this.setupEnvironment(sandbox, options, mountPath, sw, await launchStrategy);
+		const uploadBridge = () =>
+			launchStrategy.then(
+				(strategy) => this.uploadNotebookBridge(sandbox, options, sw, strategy),
+				// Setup reports strategy failures after workspace loading and injection finish.
+				() => {},
+			);
 
 		// Prefetch overlaps boot; files timing includes readiness waits.
 		const { load, setup, bridge } = await all({
@@ -844,13 +859,14 @@ export class SandboxProvisioner {
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
 		sw: Stopwatch,
+		launchStrategy: MarimoLaunchStrategyName,
 	): Promise<string | undefined> {
 		const payload = options.notebookBridge;
 		if (
 			!payload ||
 			!options.bridgeParentOrigin ||
 			options.launchMode === 'job' ||
-			options.launchStrategy === 'uv-sandbox'
+			launchStrategy === 'uv-sandbox'
 		)
 			return;
 		const directory = `/tmp/marimohub-bridge/${options.sandboxId}`;
@@ -937,14 +953,11 @@ export class SandboxProvisioner {
 		if (!overlay || overlay.length === 0) return;
 		const bucket = options.bucketHandle;
 		if (!bucket) throw new UnavailableError('Bucket access is required for workspace overlay');
-		const files = await Promise.all(
-			overlay.map(async ({ path, key }) => {
-				const object = await bucket.get(key);
-				if (!object) throw new NotFoundError(`Workspace source ${key} not found`);
-				return { path: `${mountPath}/${path}`, content: await object.bytes() };
-			}),
-		);
-		await sandbox.writeFiles(files);
+		try {
+			await sandbox.writeFiles(await loadWorkspaceOverlay(bucket, mountPath, overlay));
+		} catch (err) {
+			throw provisionFailure('restoring the notebook workspace into the sandbox', err);
+		}
 	}
 
 	private async ensureReachable(sandbox: SandboxInstance, sw: Stopwatch): Promise<void> {
@@ -978,8 +991,7 @@ export class SandboxProvisioner {
 		);
 		await waitUntilReady();
 		if (options.gitPrefix) {
-			await this.markGitWorkdirTrusted(sandbox, layout.gitRoot);
-			if (layout.rootPath) await this.configureSparseCheckout(sandbox, options, layout);
+			await this.configureGitWorkdir(sandbox, options, layout);
 		}
 		return loaded;
 	}
@@ -1042,29 +1054,26 @@ export class SandboxProvisioner {
 		return this.loadWorkspaceObjects(sandbox, options, layout, workspacePrefix, waitUntilReady);
 	}
 
-	private async markGitWorkdirTrusted(sandbox: SandboxInstance, workdir: string): Promise<void> {
-		// Restored `.git` is often a different uid than the kernel user (Modal).
-		await sandbox.exec(
-			`if command -v git >/dev/null 2>&1; then git config --global --add safe.directory ${shellQuote(workdir)}; fi`,
-		);
-	}
-
-	/**
-	 * Narrow the checkout to the mirrored subtree so `git status` in the session
-	 * is clean instead of reporting the rest of the repository as deleted.
-	 * Best-effort: proposal capture scopes its own diff to the subtree, so a
-	 * missing or old `git` only costs the cosmetic cleanliness.
-	 */
-	private async configureSparseCheckout(
+	private async configureGitWorkdir(
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
 		layout: SandboxWorkspaceLayout,
 	): Promise<void> {
-		const result = await sandbox.exec(
-			`if command -v git >/dev/null 2>&1; then cd ${shellQuote(layout.gitRoot)} && git -c ${shellQuote(`safe.directory=${layout.gitRoot}`)} sparse-checkout set --cone -- ${shellQuote(layout.rootPath)}; fi`,
-			{ timeout: GIT_SPARSE_CHECKOUT_TIMEOUT_MS },
-		);
-		if (result.success) return;
+		// Restored `.git` may have a different owner; sparse checkout keeps subtree status clean.
+		const commands = [
+			'if command -v git >/dev/null 2>&1; then',
+			`git config --global --add safe.directory ${shellQuote(layout.gitRoot)}`,
+		];
+		if (layout.rootPath) {
+			commands.push(
+				`cd ${shellQuote(layout.gitRoot)} && git -c ${shellQuote(`safe.directory=${layout.gitRoot}`)} sparse-checkout set --cone -- ${shellQuote(layout.rootPath)}`,
+			);
+		}
+		commands.push('fi');
+		const result = await sandbox.exec(commands.join('\n'), {
+			timeout: GIT_SPARSE_CHECKOUT_TIMEOUT_MS,
+		});
+		if (result.success || !layout.rootPath) return;
 		logOperationalError(
 			'git_sparse_checkout_failed',
 			{
@@ -1092,6 +1101,7 @@ export class SandboxProvisioner {
 				: this.workspaceLoadStrategies.mountOrCopy;
 		if (!strategy.supportsPrefetch) await waitUntilReady();
 		const load = strategy.load({
+			overlay: options.workspaceOverlay,
 			sandbox,
 			projectId: options.projectId,
 			notebookId: options.notebookId,
@@ -1228,6 +1238,7 @@ export class SandboxProvisioner {
 		options: ProvisionOptions,
 		mountPath: string,
 		sw: Stopwatch,
+		launchStrategy: MarimoLaunchStrategyName,
 	): Promise<MarimoStartup> {
 		const startup: MarimoStartup = {
 			plan: buildMarimoLaunch(
@@ -1242,7 +1253,7 @@ export class SandboxProvisioner {
 						options.kernelAuthToken !== undefined ? KERNEL_AUTH_TOKEN_FILE : undefined,
 					watch: options.marimoWatch,
 				},
-				options.launchStrategy,
+				launchStrategy,
 			),
 			deadline: {
 				startedAt: Date.now(),
@@ -1271,13 +1282,13 @@ export class SandboxProvisioner {
 					}
 					if (!result.success) throw pythonEnvironmentSetupFailure(result);
 				},
-				{ launch_strategy: options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY },
+				{ launch_strategy: launchStrategy },
 			);
 		} catch (error) {
 			if (error instanceof PythonEnvironmentSetupError) throw error;
 			throw provisionFailure('preparing the notebook Python environment', error);
 		} finally {
-			if (diagnostics) logSlowSetup(options, sw.timings.setup, diagnostics);
+			if (diagnostics) logSlowSetup(options, launchStrategy, sw.timings.setup, diagnostics);
 		}
 		return startup;
 	}

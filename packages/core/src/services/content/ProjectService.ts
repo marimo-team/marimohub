@@ -1,3 +1,5 @@
+import { MetadataCache } from './metadataCache';
+import type { ReadConsistency } from './metadataCache';
 import { nextIsoTimestamp } from '../../utcDate';
 import { projectActionMinRole } from '../authorization/actions';
 import { tokenGrantAllowsProject } from '../../tokenGrants';
@@ -18,7 +20,7 @@ import {
 } from '../../identityMatch';
 import type { MemberSelector } from '../../identityMatch';
 import { mapWithConcurrency } from '../../concurrency';
-import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { BUCKET_SCAN_CONCURRENCY, METADATA_CACHE_MAX_ENTRIES } from '../../constants';
 import type { AssignableRole, Role } from '../../constants';
 import { Millis } from '../../duration';
 import {
@@ -227,13 +229,17 @@ function normalizeProjectName(name: string): string {
 }
 
 export class ProjectService {
+	private readonly projectCache: MetadataCache<Project>;
+
 	constructor(
 		private bucket: Bucket,
 		private catalog: CatalogService,
 		private metrics: Metrics = noopMetrics,
 		private resolveIdentitiesByEmail: InviteIdentityResolver = async () => new Map(),
 		private deepLinks = new DeepLinkService(bucket, metrics),
-	) {}
+	) {
+		this.projectCache = new MetadataCache(bucket, METADATA_CACHE_MAX_ENTRIES);
+	}
 
 	/** Apply role, token, and label restrictions before the caller paginates. */
 	async listProjects(
@@ -347,12 +353,18 @@ export class ProjectService {
 		return hasAppRole;
 	}
 
-	async getProject(id: ProjectId): Promise<Project> {
-		const obj = await this.bucket.get(paths.project(id).meta);
-		if (!obj) {
-			throw new NotFoundError(`Project ${id} not found`);
-		}
-		return readStored(ProjectSchema, obj, paths.project(id).meta);
+	async getProject(
+		id: ProjectId,
+		options: { consistency?: ReadConsistency } = {},
+	): Promise<Project> {
+		const key = paths.project(id).meta;
+		const project = await this.projectCache.read(
+			[key],
+			(object) => readStored(ProjectSchema, object, key),
+			options.consistency,
+		);
+		if (!project) throw new NotFoundError(`Project ${id} not found`);
+		return project;
 	}
 
 	async createProject(input: CreateProjectInput, actor: UserId): Promise<Project> {

@@ -119,6 +119,14 @@ describe('Project — Notebook Actions: files and sessions', () => {
 		expect(await screen.findByRole('heading', { name: 'Import notebooks' })).toBeInTheDocument();
 	});
 
+	it('hides notebook creation from viewers', async () => {
+		makeFetch({ role: 'viewer' });
+		await renderProject();
+
+		expect(screen.queryByRole('button', { name: 'More create options' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'New Notebook' })).not.toBeInTheDocument();
+	});
+
 	it("a git row's source tile opens a popover with GitHub links", async () => {
 		const user = userEvent.setup();
 		makeFetch({ notebooks: [{ ...notebook(), source_type: 'git' }] });

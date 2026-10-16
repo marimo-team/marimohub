@@ -17,6 +17,7 @@ import type {
 	MarimoConfigContributor,
 	SessionEnv,
 	Session,
+	SessionAdmissionRecord,
 	SessionMode,
 	SandboxInstance,
 	SessionRender,
@@ -665,13 +666,7 @@ const CAP_REACHED = {
 		`Concurrent session limit reached (${max}). Terminate a session before starting another.`,
 };
 
-/**
- * The caps that apply to `mode`, each with the queue it bounds. Edit sessions
- * consume the per-user cap. Apps are capped per project AND per starter: without
- * the latter, a user could escape the cost bound entirely by fanning apps out
- * across (freely creatable) projects. Shared apps are few per person, so the
- * starter bound rarely binds on legitimate use.
- */
+/** App caps also apply per user so separate projects cannot bypass the cost limit. */
 function capsFor(deps: ApiDeps, mode: SessionMode, pid: ProjectId, userId: UserId) {
 	const { sessions } = deps.services;
 	const maxSessions = deps.policy.maxConcurrentSessionsPerUser;
@@ -701,11 +696,35 @@ function capsFor(deps: ApiDeps, mode: SessionMode, pid: ProjectId, userId: UserI
 	];
 }
 
+/** Preserve cap precedence even when a later queue fails. */
+async function checkCapQueues(
+	caps: ReturnType<typeof capsFor>,
+	excludedSessionId: SessionId | undefined,
+	check: (cap: { max: number; message: string; sessions: Session[] }) => void,
+): Promise<void> {
+	const results = await Promise.allSettled(
+		caps.flatMap(({ max, message, queue }) => {
+			if (!max || max <= 0) return [];
+			return [
+				Promise.resolve()
+					.then(queue)
+					.then((sessions) => ({
+						max,
+						message: message(max),
+						sessions: sessions.filter((session) => session.session_id !== excludedSessionId),
+					})),
+			];
+		}),
+	);
+	for (const result of results) {
+		if (result.status === 'rejected') throw result.reason;
+		check(result.value);
+	}
+}
+
 /**
- * Cost-DoS guards, checked after reuse so a reconnect/attach never trips them.
- * The project-scoped app cap gets a cheap pre-flight before any record exists.
- * User caps skip it because their queue scans every retained session in the
- * deployment; `assertCapAfterCreate` is the authoritative guard for all caps.
+ * Reuse bypasses cap checks. Only the project cap runs before record creation
+ * because user queues require a deployment-wide scan.
  */
 async function enforceSessionCap(
 	deps: ApiDeps,
@@ -714,23 +733,15 @@ async function enforceSessionCap(
 	userId: UserId,
 	excludedSessionId?: SessionId,
 ): Promise<void> {
-	for (const cap of capsFor(deps, mode, pid, userId)) {
-		if (!cap.preflight || !cap.max || cap.max <= 0) continue;
-		const queued = (await cap.queue()).filter(
-			(session) => session.session_id !== excludedSessionId,
-		);
-		if (queued.length >= cap.max) {
-			throw new ResourceExhaustedError(cap.message(cap.max));
-		}
-	}
+	const caps = capsFor(deps, mode, pid, userId).filter((cap) => cap.preflight);
+	await checkCapQueues(caps, excludedSessionId, (cap) => {
+		if (cap.sessions.length >= cap.max) throw new ResourceExhaustedError(cap.message);
+	});
 }
 
 /**
- * Close the count-then-create window: N concurrent creates all clear the
- * pre-flight check, because none of their records exists yet. Once the record IS
- * written every racer reads the same set, so ranking by start order admits
- * exactly `max` of them — the rest abort and compensate. Ranking (not counting)
- * is what avoids the other failure mode, where each racer rejects every other.
+ * Concurrent starts can pass preflight together. After creation, queue rank
+ * admits the earliest sessions instead of rejecting every competing start.
  */
 async function assertCapAfterCreate(
 	deps: ApiDeps,
@@ -740,14 +751,12 @@ async function assertCapAfterCreate(
 	sessionId: SessionId,
 	excludedSessionId?: SessionId,
 ): Promise<void> {
-	for (const cap of capsFor(deps, mode, pid, userId)) {
-		if (!cap.max || cap.max <= 0) continue;
-		const rank = (await cap.queue())
-			.filter((session) => session.session_id !== excludedSessionId)
-			.findIndex((s) => s.session_id === sessionId);
-		// rank < 0: our record went terminal underneath us — nothing left to cap.
-		if (rank >= cap.max) throw new ResourceExhaustedError(cap.message(cap.max));
-	}
+	const caps = capsFor(deps, mode, pid, userId);
+	await checkCapQueues(caps, excludedSessionId, (cap) => {
+		const rank = cap.sessions.findIndex((session) => session.session_id === sessionId);
+		// A missing session is already terminal and no longer consumes capacity.
+		if (rank >= cap.max) throw new ResourceExhaustedError(cap.message);
+	});
 }
 
 const app = createApp();
@@ -1266,17 +1275,14 @@ export async function startNotebookSession(input: {
 	if (body?.replace_app_session_id && body.app_visit_id)
 		throw new BadRequestError('Replacement does not admit a visit. Open the app separately.');
 
-	// Starting a session runs code — see authorizeSessionStart for the matrix.
-	// The loaded project is reused below (federation opt-in), not re-fetched.
-	// A soft-deleted project reads as gone here as it does on every read route: its
-	// bytes linger until GC, but no new kernel may serve them.
-	const project = await projects.getProject(pid);
+	// Consume notebook errors after authorization so role denials retain their 403.
+	const notebookRead = notebooks.getNotebook(pid, nid);
+	notebookRead.catch(() => {});
+	// A soft-deleted project's bytes linger until GC, but no new kernel may serve them.
+	const project = await projects.getProject(pid, { consistency: 'validated' });
 	if (project.status === 'deleted') {
 		throw new NotFoundError(`Project ${pid} not found`);
 	}
-	// The start gate runs BEFORE the notebook load so a role denial keeps its
-	// canonical 403 even for a bogus or deleted notebook id — only admitted
-	// callers learn whether the notebook exists.
 	let authorization = await authorizeSessionStart(project, user, mode, deps);
 	const appUser = authorization.role === 'app-user';
 	if (
@@ -1287,14 +1293,10 @@ export async function startNotebookSession(input: {
 	) {
 		throw new ForbiddenError('App users cannot customize sessions');
 	}
-	// Verify the notebook exists in this project — throws NotFoundError (→ 404)
-	// otherwise. Prevents provisioning a billable sandbox for a bogus notebook
-	// id. A soft-deleted notebook is treated as missing: getNotebook still
-	// serves it (the delete/GC paths need that), but starting a session on it
-	// would serve deleted content — and, for `app`, recreate the pool
-	// claim that deleteNotebook just cleaned up, permanently (its cleanup never
-	// runs again).
-	const notebook = await notebooks.getNotebook(pid, nid);
+	// Only admitted callers learn whether the notebook exists.
+	// Deleted notebooks remain readable until GC. New sessions must not serve
+	// their content or recreate app-pool claims after deletion cleanup.
+	const notebook = await notebookRead;
 	if (
 		notebook.meta.preview &&
 		(input.preview?.id !== notebook.meta.preview.preview_id ||
@@ -1305,9 +1307,6 @@ export async function startNotebookSession(input: {
 	if (notebook.meta.status === 'deleted') {
 		throw new NotFoundError(`Notebook ${nid} not found`);
 	}
-	// A notebook security-label override joins the decision only once one
-	// exists — re-run the gate with it (the label-free pass above already
-	// settled role and project labels).
 	if (notebook.meta.security_labels !== undefined) {
 		authorization = await authorizeSessionStart(
 			project,
@@ -1317,9 +1316,6 @@ export async function startNotebookSession(input: {
 			notebook.meta.security_labels,
 		);
 	}
-	// The session deadline is the earliest of the entitlement credential expiry
-	// and the subject security context expiry that satisfied any labels — an
-	// active session must not outlive either.
 	const previewRecord = isPreview
 		? await deps.services.previews.get(
 				pid,
@@ -1332,6 +1328,7 @@ export async function startNotebookSession(input: {
 		(previewRecord.state !== 'active' || Date.parse(previewRecord.expires_at) <= Date.now())
 	)
 		throw new NotFoundError('Preview not found');
+	// Sessions must end before their credentials, security context, or preview expires.
 	const authorizationExpiresAt = earliestDeadline(
 		entitlementAuthorizationDeadline(user),
 		earliestDeadline(authorization.subjectContextExpiresAt, previewRecord?.expires_at),
@@ -1354,20 +1351,37 @@ export async function startNotebookSession(input: {
 		throw new BadRequestError('Temporary editor sessions are only available in exclusive mode');
 	}
 	const ephemeral = authorization.ephemeral || editorTemporary || (isPreview && mode === 'edit');
-	const surfaceGrant = (
-		await sessionGrantsFor(
-			project,
-			user,
-			{
-				mode,
-				ephemeral,
-				user_id: user.id,
-				editor_sandbox_sharing: sharing,
-			},
-			deps,
-			notebook.meta.security_labels ?? null,
-		)
-	).surface;
+	const { compute, bucket: bucketHandle, sandbox } = deps;
+	const workspacePolicy = workspaceSourcePolicy(notebook.source);
+	const syncedVersionId = workspacePolicy.persistSessionEdits
+		? undefined
+		: notebook.source.current_version_id;
+	const unsyncedSource = !workspacePolicy.persistSessionEdits && !syncedVersionId;
+	const grants = (session: SessionAdmissionRecord) =>
+		sessionGrantsFor(project, user, session, deps, notebook.meta.security_labels ?? null);
+	const surfaceGrantRead = grants({
+		mode,
+		ephemeral,
+		user_id: user.id,
+		editor_sandbox_sharing: sharing,
+	});
+	// Unsynced notebooks must fail validation before any session scan.
+	const editorReuseRead =
+		mode === 'edit' && !unsyncedSource
+			? sessions.findReusableEditor(pid, nid, user.id, sharing, ephemeral, {
+					claim: existingEditorClaim,
+				})
+			: Promise.resolve(undefined);
+	const readRestoreSnapshot = () =>
+		!ephemeral && workspacePolicy.restoreFilesystemSnapshot
+			? resolveRestoreSnapshot(compute, notebooks, pid, nid, {
+					sharing: mode === 'edit' ? sharing : 'shared',
+					userId: user.id,
+				})
+			: Promise.resolve(undefined);
+	const restoreSnapshotRead = readRestoreSnapshot();
+	for (const read of [surfaceGrantRead, editorReuseRead, restoreSnapshotRead]) read.catch(() => {});
+	const surfaceGrant = (await surfaceGrantRead).surface;
 	const requestedSurfaces = body?.surfaces ?? [];
 	if (requestedSurfaces.length > 0 && mode !== 'edit') {
 		throw new BadRequestError('Session surfaces are only valid for edit sessions');
@@ -1387,8 +1401,6 @@ export async function startNotebookSession(input: {
 			: undefined;
 	const profileOverrideEligible = authorization.profileOverrideEligible;
 	const restrictedViewerCredentials = authorization.restrictedViewerCredentials;
-	const grants = (session: Session) =>
-		sessionGrantsFor(project, user, session, deps, notebook.meta.security_labels ?? null);
 	const tightenAuthorizationDeadline = (session: Session) =>
 		authorizationExpiresAt
 			? sessions.tightenAuthorizationDeadline(pid, session.session_id, authorizationExpiresAt)
@@ -1404,13 +1416,7 @@ export async function startNotebookSession(input: {
 		return current;
 	};
 
-	const workspacePolicy = workspaceSourcePolicy(notebook.source);
-	// Synced sources are read-only mirrors served from the immutable workspace of the
-	// version the source currently points at; a session can't start before a push.
-	const syncedVersionId = workspacePolicy.persistSessionEdits
-		? undefined
-		: notebook.source.current_version_id;
-	if (!workspacePolicy.persistSessionEdits && !syncedVersionId) {
+	if (unsyncedSource) {
 		throw new ConflictError('Synced notebook has not been synced yet');
 	}
 	const notebookPaths = paths.project(pid).notebook(nid);
@@ -1419,11 +1425,7 @@ export async function startNotebookSession(input: {
 	const workspaceArchive = syncedVersionPaths?.workspaceArchive;
 	const pullSourceGit = pullSourceGitOptions(notebook.source, syncedVersionPaths);
 	const workspaceDir = sessionWorkspaceDir(notebook.source, deps.sandbox.workdir);
-	// Staleness provenance: a session that serves a frozen snapshot — a
-	// non-persisting mode (`app`), or any mode on a synced source (a read-only
-	// mirror, even under `edit`) — is stamped with the head committed version it
-	// was provisioned from. The client compares it against the live head for the
-	// "session is stale" banners.
+	// Apps and synced notebooks retain their source version so clients can detect stale sessions.
 	const sourceVersionId =
 		syncedVersionId ??
 		(MODE_POLICY[mode].persistsEdits
@@ -1460,7 +1462,6 @@ export async function startNotebookSession(input: {
 			recovered: true,
 		});
 
-	const { compute, bucket: bucketHandle, sandbox } = deps;
 	const sandboxExposure = sandbox.exposure ?? new SubdomainExposure();
 	const hostname = sandbox.hostname || request.hostname;
 	const { appBaseUrl } = request;
@@ -1486,10 +1487,7 @@ export async function startNotebookSession(input: {
 	);
 	const provisioner = new SandboxProvisioner(compute);
 
-	const editorReuse =
-		mode === 'edit'
-			? await sessions.findReusableEditor(pid, nid, user.id, sharing, ephemeral)
-			: undefined;
+	const editorReuse = await editorReuseRead;
 	if (editorReuse?.takeoverInProgress) throw new TakeoverInProgressError();
 	if (editorReuse?.ownedByOther) {
 		throw new EditSessionOwnedError(
@@ -1536,7 +1534,10 @@ export async function startNotebookSession(input: {
 		if (admission?.kind !== 'reuse') return;
 		for (let attempt = 0; attempt < 20; attempt++) {
 			try {
-				return await sessions.getSession(pid, admission.member.session_id);
+				const session = await sessions.getSession(pid, admission.member.session_id);
+				if (session.status !== 'running' && session.status !== 'starting')
+					throw new ConflictError('The app session ended. Retry shortly.');
+				return session;
 			} catch (error) {
 				if (!(error instanceof NotFoundError)) throw error;
 			}
@@ -1546,7 +1547,11 @@ export async function startNotebookSession(input: {
 	};
 	const reusableCandidate = mode === 'edit' ? editorReuse?.session : await reusableApp();
 	if (reusableCandidate) {
-		let reusable = await tightenAuthorizationDeadline(reusableCandidate);
+		const [reusableTightened, reusableGrants] = await Promise.all([
+			tightenAuthorizationDeadline(reusableCandidate),
+			grants(reusableCandidate),
+		]);
+		let reusable = reusableTightened;
 		const authorizationExpired = isPastAuthorizationDeadline(reusable, Date.now());
 		// Role changes must not reuse a kernel with the previous credential policy.
 		const classMismatch =
@@ -1555,7 +1560,6 @@ export async function startNotebookSession(input: {
 				(reusable.restricted_viewer_credentials === true) !== restrictedViewerCredentials);
 		// Reuse does not grant control: a failed probe must not let a viewer
 		// tear down another caller's app.
-		const reusableGrants = await grants(reusable);
 		const mayRetire = reusableGrants.stop;
 		// Only a `running` reconnect can hit a dead kernel; a `starting` reuse has no
 		// kernel yet. Probe what the browser would hit (origin in proxy mode, else url).
@@ -1611,7 +1615,11 @@ export async function startNotebookSession(input: {
 	}
 
 	const client = sessionClientFor(user.credential.kind, request.via ?? 'rest');
-	if (mode === 'edit' && !ephemeral && (await sessions.isClaimRetiring(pid, nid, user.id))) {
+	if (
+		mode === 'edit' &&
+		!ephemeral &&
+		(await sessions.isClaimRetiring(pid, nid, user.id, { claim: existingEditorClaim }))
+	) {
 		deps.metrics?.increment('sessions.editor_claim.lost', 1, { phase: 'preflight' });
 		logEvent({
 			event: 'session_provision',
@@ -1638,11 +1646,9 @@ export async function startNotebookSession(input: {
 	let warmClaim: WarmPoolClaim | undefined;
 	const kernelAuthToken = sandbox.auth === 'on' ? createKernelAuthToken() : undefined;
 
-	// Provision as a saga: if a later step fails, completed steps compensate in
-	// reverse — the session record is terminated (so it does not linger in
-	// `starting` and the reaper collects it) and a provisioned sandbox is
-	// destroyed. Cold provisioning self-cleans on failure; warm claims are
-	// abandoned by the outer catch so pool ownership survives failed cleanup.
+	// Saga compensation retires the session and destroys its sandbox.
+	// Cold provisioning cleans up its own failures. The outer catch abandons warm
+	// claims so the pool retains ownership after failed cleanup.
 	let session: Session | undefined;
 	let sessionRecordAttempted = false;
 	let sandboxMayExist = false;
@@ -1692,19 +1698,135 @@ export async function startNotebookSession(input: {
 		mode,
 	});
 	try {
+		// Sessions and jobs share credential resolution. Viewer sandboxes exclude project credentials.
+		const sessionWorkload: WorkloadRef = { kind: 'session', id: sessionId };
+		const federatedCredentials = federatedCredentialsFor(deps, project, sessionWorkload, {
+			restricted: restrictedViewerCredentials,
+		});
+		const resolveWifVars = () =>
+			resolveFederatedVars(deps, {
+				project,
+				workload: sessionWorkload,
+				restricted: restrictedViewerCredentials,
+				federatedCredentials,
+				onError: (err) => {
+					observer.tag('wif_exchange_failed', true);
+					observer.tag(
+						'wif_exchange_error',
+						err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+					);
+				},
+			});
+
+		const resolveMarimoConfigEnv = async () => {
+			if (!MODE_POLICY[mode].injectEditorConfig) return;
+			const contributors: MarimoConfigContributor[] = [
+				marimoNotebookDefaults,
+				marimoSharingDisabled,
+			];
+			if (userHome) {
+				contributors.push(() => ({
+					file_browser: { folders: [{ path: userHome.path, name: 'Personal files' }] },
+				}));
+			}
+			if (deps.ai) {
+				try {
+					const token = await mintAiSessionToken(
+						deps.ai.signingSecret,
+						{
+							projectId: pid,
+							notebookId: nid,
+							sessionId,
+							userId: user.id,
+						},
+						{ ttlSeconds: deps.ai.tokenTtlSeconds },
+					);
+					contributors.push(
+						marimoAiContributor({
+							baseUrl: joinUrlPath(appBaseUrl, '/api/ai/v1'),
+							apiKey: token,
+							model: deps.ai.model,
+							enabled: true,
+							maxTokens: deps.ai.maxTokens,
+							rules: deps.ai.rules,
+						}),
+					);
+				} catch (err) {
+					observer.tag('ai_inject_failed', true);
+					observer.tag(
+						'ai_inject_error',
+						err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+					);
+				}
+			}
+			return marimoConfigToSessionEnv(contributors);
+		};
+
+		const resolveIntegrationEnv = () =>
+			resolveIntegrationRender(deps, {
+				projectId: pid,
+				project,
+				workload: sessionWorkload,
+				principal: { userId: user.id, email: user.email },
+				restricted: restrictedViewerCredentials,
+				federatedCredentials,
+				onRendered: (render) => {
+					observer.tag('integrations_rendered_count', render.attachments.length);
+					if (render.warnings.length > 0) {
+						observer.tag('integration_warnings', render.warnings);
+						observer.tag('integration_warning_count', render.warnings.length);
+					}
+					integrationAttachments = render.attachments;
+				},
+				onError: (err) => {
+					observer.tag('integration_render_failed', true);
+					for (const [key, value] of Object.entries(errorMetadata(err))) {
+						observer.tag(`integrations_${key}`, value);
+					}
+				},
+			});
+
+		// Credential exchange and secret reads wait for the preflight (per-project app) cap so
+		// callers it rejects cannot drive STS or secret-store traffic; they still overlap the
+		// record phase. Per-user caps need a deployment-wide scan and are enforced only at
+		// cap_recheck, after resolution has started.
+		const startEnvResolution = () => {
+			const sessionEnv = all({
+				wifVars: resolveWifVars,
+				marimoEnv: resolveMarimoConfigEnv,
+				integrationEnv: resolveIntegrationEnv,
+			}).then(({ wifVars, marimoEnv, integrationEnv }): SessionEnv | undefined => {
+				let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
+				if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
+				// Integration values are the base; WIF and marimo configuration win collisions.
+				if (integrationEnv) {
+					env = mergeSessionEnv(projectSessionEnv(integrationEnv), env ?? {});
+				}
+				return env;
+			});
+			const launchStrategy = resolveLaunchStrategyForSession({
+				entryNotebookKey: launchSource.entryNotebookKey,
+				bucket: bucketHandle,
+			}).then((resolved) => {
+				observer.tag('launch_strategy', resolved.strategy);
+				observer.tag('launch_strategy_detection_failed', resolved.detectionFailed);
+				return resolved.strategy;
+			});
+			// Record-phase or boot failures can reject before provisioning consumes these.
+			for (const pending of [sessionEnv, launchStrategy]) pending.catch(() => {});
+			return { sessionEnv, launchStrategy };
+		};
+		let envResolution: ReturnType<typeof startEnvResolution> | undefined;
 		if (replacementTarget) {
 			await retireSelectedSession(deps, replacementTarget);
 			const retired = await sessions.getSession(pid, replacementTarget.session_id);
 			if (!retired.sandbox_reclaimed_at)
 				throw new ConflictError('The selected app is still stopping. Retry shortly.');
 		}
-		const restoreFilesystemSnapshot =
-			!ephemeral && workspacePolicy.restoreFilesystemSnapshot
-				? await resolveRestoreSnapshot(compute, notebooks, pid, nid, {
-						sharing: mode === 'edit' ? sharing : 'shared',
-						userId: user.id,
-					})
-				: undefined;
+		// Retirement can publish a newer snapshot than the speculative read.
+		const restoreFilesystemSnapshot = await (reusableCandidate || replacementTarget
+			? readRestoreSnapshot()
+			: restoreSnapshotRead);
 		const appliedComputeProfile = restoreFilesystemSnapshot
 			? {
 					name: restoreFilesystemSnapshot.compute_profile,
@@ -1733,9 +1855,10 @@ export async function startNotebookSession(input: {
 				});
 				await deps.services.previews.reserveAdmission(reaped, nid, sessionId, PREVIEW_MAX_SESSIONS);
 			})
-			.step('capacity', () =>
-				enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id),
-			)
+			.step('capacity', async () => {
+				await enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id);
+				envResolution = startEnvResolution();
+			})
 			.step('warm_sandbox', async () => {
 				warmClaim = await deps.warmPool?.claim({
 					profile: requestedComputeProfile.name,
@@ -1841,214 +1964,89 @@ export async function startNotebookSession(input: {
 						kernelAuthToken,
 						appBaseUrl,
 					};
-					// WIF + integrations share `sandboxEnv.ts` with the job runner, so the
-					// two injection paths cannot drift. Never for a viewer sandbox.
-					const sessionWorkload: WorkloadRef = { kind: 'session', id: session!.session_id };
-					const federatedCredentials = federatedCredentialsFor(deps, project, sessionWorkload, {
-						restricted: restrictedViewerCredentials,
-					});
-					const resolveWifVars = () =>
-						resolveFederatedVars(deps, {
-							project,
-							workload: sessionWorkload,
-							restricted: restrictedViewerCredentials,
-							federatedCredentials,
-							onError: (err) => {
-								observer.tag('wif_exchange_failed', true);
-								observer.tag(
-									'wif_exchange_error',
-									err instanceof Error ? `${err.name}: ${err.message}` : String(err),
-								);
-							},
-						});
-
-					const resolveMarimoConfigEnv = async () => {
-						if (!MODE_POLICY[mode].injectEditorConfig) return;
-						const contributors: MarimoConfigContributor[] = [
-							marimoNotebookDefaults,
-							marimoSharingDisabled,
-						];
-						if (userHome) {
-							contributors.push(() => ({
-								file_browser: { folders: [{ path: userHome.path, name: 'Personal files' }] },
-							}));
-						}
-						if (deps.ai) {
-							try {
-								const token = await mintAiSessionToken(
-									deps.ai.signingSecret,
-									{
-										projectId: pid,
-										notebookId: nid,
-										sessionId: session!.session_id,
-										userId: user.id,
-									},
-									{ ttlSeconds: deps.ai.tokenTtlSeconds },
-								);
-								contributors.push(
-									marimoAiContributor({
-										baseUrl: joinUrlPath(appBaseUrl, '/api/ai/v1'),
-										apiKey: token,
-										model: deps.ai.model,
-										enabled: true,
-										maxTokens: deps.ai.maxTokens,
-										rules: deps.ai.rules,
-									}),
-								);
-							} catch (err) {
-								observer.tag('ai_inject_failed', true);
-								observer.tag(
-									'ai_inject_error',
-									err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+					if (warmClaim) {
+						try {
+							await deps.warmPool!.handoff(warmClaim);
+						} catch (error) {
+							if (!(error instanceof WarmPoolClaimExpiredError)) throw error;
+							const expired = warmClaim;
+							await deps.warmPool!.abandon(expired).catch(() => {});
+							// A late pool cleanup must never target the cold replacement.
+							sandboxId = createSandboxId();
+							sandboxMayExist = false;
+							if (admission) {
+								await appPool.bindWarmSandbox(
+									pid,
+									nid,
+									sessionId,
+									admission.member.operation_token,
+									sandboxId,
 								);
 							}
-						}
-						return marimoConfigToSessionEnv(contributors);
-					};
-
-					// Viewer sandboxes are restricted; temporary editor sandboxes retain
-					// editor credentials.
-					const resolveIntegrationEnv = () =>
-						resolveIntegrationRender(deps, {
-							projectId: pid,
-							project,
-							workload: sessionWorkload,
-							principal: { userId: user.id, email: user.email },
-							restricted: restrictedViewerCredentials,
-							federatedCredentials,
-							onRendered: (render) => {
-								observer.tag('integrations_rendered_count', render.attachments.length);
-								if (render.warnings.length > 0) {
-									observer.tag('integration_warnings', render.warnings);
-									observer.tag('integration_warning_count', render.warnings.length);
-								}
-								integrationAttachments = render.attachments;
-							},
-							onError: (err) => {
-								observer.tag('integration_render_failed', true);
-								for (const [key, value] of Object.entries(errorMetadata(err))) {
-									observer.tag(`integrations_${key}`, value);
-								}
-							},
-						});
-
-					const { provision } = await all({
-						wifVars: resolveWifVars,
-						marimoEnv: resolveMarimoConfigEnv,
-						integrationEnv: resolveIntegrationEnv,
-						async sessionEnv(): Promise<SessionEnv | undefined> {
-							const wifVars = await this.$.wifVars;
-							const marimoEnv = await this.$.marimoEnv;
-							const integrationEnv = await this.$.integrationEnv;
-							let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
-							if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
-							// Integration values are the base; WIF and marimo configuration win collisions.
-							if (integrationEnv) {
-								env = mergeSessionEnv(projectSessionEnv(integrationEnv), env ?? {});
-							}
-							return env;
-						},
-						launchStrategy: async () => {
-							const resolved = await resolveLaunchStrategyForSession({
-								entryNotebookKey: launchSource.entryNotebookKey,
-								bucket: bucketHandle,
-							});
-							observer.tag('launch_strategy', resolved.strategy);
-							observer.tag('launch_strategy_detection_failed', resolved.detectionFailed);
-							return resolved;
-						},
-						async provision() {
-							const launchStrategy = await this.$.launchStrategy;
-							// A failed sibling may already have retired the record while these dependencies resolved.
-							if (this.$signal.aborted) throw this.$signal.reason;
-							if (warmClaim) {
-								try {
-									await deps.warmPool!.handoff(warmClaim);
-								} catch (error) {
-									if (!(error instanceof WarmPoolClaimExpiredError)) throw error;
-									const expired = warmClaim;
-									await deps.warmPool!.abandon(expired).catch(() => {});
-									// A late pool cleanup must never target the cold replacement.
-									sandboxId = createSandboxId();
-									sandboxMayExist = false;
-									if (admission) {
-										await appPool.bindWarmSandbox(
-											pid,
-											nid,
-											sessionId,
-											admission.member.operation_token,
-											sandboxId,
-										);
-									}
-									session = await sessions.replaceStartingSandbox(
-										pid,
-										sessionId,
-										expired.member.sandbox_id,
-										sandboxId,
-									);
-									warmClaim = undefined;
-									exposureCtx.sandboxId = sandboxId;
-									observer.tag('sandbox_id', sandboxId);
-									observer.tag('warm_pool_hit', false);
-									observer.tag('warm_pool_fallback', 'claim_expired');
-								}
-							}
-							const { baseUrl, publicUrl } = await sandboxExposure.prepare(exposureCtx);
-							preparedContextFile =
-								publicUrl === undefined
-									? undefined
-									: sandboxContextFile(sandboxId, contextFor(publicUrl));
-							if (this.$signal.aborted) throw this.$signal.reason;
-							sandboxMayExist = true;
-							return provisioner.provision({
-								existingSandbox: warmClaim?.sandbox,
-								onSandboxDestroyed: recordSandboxCleanup,
+							session = await sessions.replaceStartingSandbox(
+								pid,
+								sessionId,
+								expired.member.sandbox_id,
 								sandboxId,
-								projectId: pid,
-								userId: user.id,
-								notebookId: nid,
-								hostname,
-								bucket: sandbox.bucket,
-								bucketHandle,
-								workdir: sandbox.workdir,
-								assetUrl: sandbox.assetUrl,
-								notebookBridge: sandbox.notebookBridge,
-								bridgeParentOrigin: new URL(appBaseUrl).origin,
-								startupTimeoutMs: sandbox.startupTimeoutMs,
-								baseUrl,
-								kernelAuthToken,
-								contextFile: preparedContextFile ?? { path: sandboxContextPath(sandboxId) },
-								// A second editor writes the notebook file, so marimo must reload it.
-								marimoWatch:
-									mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
-								restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
-								image,
-								resources: requestedComputeProfile.resources,
-								userHome,
-								sessionIdleTimeoutMs: isPreview
-									? (previewIdleTimeout(
-											sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
-										) as Millis)
-									: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
-								sessionEnv: this.$.sessionEnv,
-								entryNotebook: workspacePolicy.entryNotebook,
-								launchStrategy: launchStrategy.strategy,
-								launchMode: mode,
-								// Ephemeral and app sandboxes never mount the live workspace: a mount
-								// writes straight through to the bucket (bypassing every persistEdits
-								// guard), puts the deployment's bucket credentials inside a viewer's
-								// sandbox, and — for apps — would race the edit kernel's autosaves on
-								// the same objects. Copy-only loads the files server-side.
-								workspaceLoadMode:
-									ephemeral || MODE_POLICY[mode].workspaceLoad === 'copy-only'
-										? 'copy-only'
-										: workspacePolicy.loadMode,
-								workspacePrefix,
-								...pullSourceGit,
-								workspaceArchive,
-								workspaceOverlay: launchSource.workspaceOverlay,
-							});
-						},
+							);
+							warmClaim = undefined;
+							exposureCtx.sandboxId = sandboxId;
+							observer.tag('sandbox_id', sandboxId);
+							observer.tag('warm_pool_hit', false);
+							observer.tag('warm_pool_fallback', 'claim_expired');
+						}
+					}
+					const { baseUrl, publicUrl } = await sandboxExposure.prepare(exposureCtx);
+					preparedContextFile =
+						publicUrl === undefined
+							? undefined
+							: sandboxContextFile(sandboxId, contextFor(publicUrl));
+					sandboxMayExist = true;
+					const provision = await provisioner.provision({
+						existingSandbox: warmClaim?.sandbox,
+						onSandboxDestroyed: recordSandboxCleanup,
+						sandboxId,
+						projectId: pid,
+						userId: user.id,
+						notebookId: nid,
+						hostname,
+						bucket: sandbox.bucket,
+						bucketHandle,
+						workdir: sandbox.workdir,
+						assetUrl: sandbox.assetUrl,
+						notebookBridge: sandbox.notebookBridge,
+						bridgeParentOrigin: new URL(appBaseUrl).origin,
+						startupTimeoutMs: sandbox.startupTimeoutMs,
+						baseUrl,
+						kernelAuthToken,
+						contextFile: preparedContextFile ?? { path: sandboxContextPath(sandboxId) },
+						// A second editor writes the notebook file, so marimo must reload it.
+						marimoWatch:
+							mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
+						restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
+						image,
+						resources: requestedComputeProfile.resources,
+						userHome,
+						sessionIdleTimeoutMs: isPreview
+							? (previewIdleTimeout(sandbox.sessionLifetime?.idleTimeoutMsByMode[mode]) as Millis)
+							: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
+						sessionEnv: envResolution!.sessionEnv,
+						entryNotebook: workspacePolicy.entryNotebook,
+						launchStrategy: envResolution!.launchStrategy,
+						launchMode: mode,
+						// Ephemeral and app sandboxes never mount the live workspace: a mount
+						// writes straight through to the bucket (bypassing every persistEdits
+						// guard), puts the deployment's bucket credentials inside a viewer's
+						// sandbox, and — for apps — would race the edit kernel's autosaves on
+						// the same objects. Copy-only loads the files server-side.
+						workspaceLoadMode:
+							ephemeral || MODE_POLICY[mode].workspaceLoad === 'copy-only'
+								? 'copy-only'
+								: workspacePolicy.loadMode,
+						workspacePrefix,
+						...pullSourceGit,
+						workspaceArchive,
+						workspaceOverlay: launchSource.workspaceOverlay,
 					});
 					({ url, usedFallback } = provision);
 					provisionedSandbox = provision.sandbox;
@@ -2113,36 +2111,37 @@ export async function startNotebookSession(input: {
 					providerDeadline === undefined ? undefined : new Date(providerDeadline).toISOString(),
 				);
 			})
-			.step('editor_claim_recheck', async () => {
-				if (mode !== 'edit' || ephemeral) return;
-				if (replacingAfterTakeover && existingEditorClaim?.transfer) {
-					await sessions.completeTakeover(
-						pid,
-						nid,
-						existingEditorClaim.transfer.takeover_id,
-						session!.session_id,
-					);
-					return;
+			// Deletion can miss a starting sandbox. Rechecks after mark_running close that race.
+			// The project needs a separate check because its notebooks remain readable until GC.
+			.step('running_rechecks', async () => {
+				const rechecks = await all({
+					claim: async () => {
+						if (mode !== 'edit' || ephemeral) return;
+						if (replacingAfterTakeover && existingEditorClaim?.transfer) {
+							await sessions.completeTakeover(
+								pid,
+								nid,
+								existingEditorClaim.transfer.takeover_id,
+								session!.session_id,
+							);
+							return;
+						}
+						return sessions.claimEditor(pid, nid, session!.session_id, sharing, user.id);
+					},
+					notebook: () =>
+						(isPreview
+							? notebooks.getNotebook(pid, nid).then((current) => current.meta)
+							: notebooks.getNotebookMeta(pid, nid)
+						).catch(() => null),
+					project: () => projects.getProject(pid).catch(() => null),
+				});
+				if (rechecks.claim && !rechecks.claim.claimed && rechecks.claim.claim.session_id) {
+					throw new EditorClaimLostError(rechecks.claim.claim.session_id);
 				}
-				const result = await sessions.claimEditor(pid, nid, session!.session_id, sharing, user.id);
-				if (!result.claimed && result.claim.session_id) {
-					throw new EditorClaimLostError(result.claim.session_id);
-				}
-			})
-			// A delete during provisioning can miss the starting sandbox. Recheck after
-			// publishing running so either the deletion path or saga compensation retires it.
-			.step('notebook_recheck', async () => {
-				const current = await notebooks.getNotebook(pid, nid).catch(() => null);
-				if (!current || current.meta.status === 'deleted') {
+				if (!rechecks.notebook || rechecks.notebook.status === 'deleted') {
 					throw new NotFoundError(`Notebook ${nid} not found`);
 				}
-			})
-			// The same race one level up, which the check above does NOT cover: a
-			// soft-deleted project keeps its notebooks readable until GC, so
-			// `getNotebook` still answers `active`.
-			.step('project_recheck', async () => {
-				const current = await projects.getProject(pid).catch(() => null);
-				if (!current || current.status === 'deleted') {
+				if (!rechecks.project || rechecks.project.status === 'deleted') {
 					throw new NotFoundError(`Project ${pid} not found`);
 				}
 			})
@@ -2270,11 +2269,11 @@ export async function startNotebookSession(input: {
 		});
 	}
 
-	// An app start can put integration secrets and WIF credentials in front of the
-	// whole admitted audience, so who started it belongs in the project's event log.
-	// Best-effort like every audit append.
+	// App sessions can expose integration secrets and WIF credentials to their audience.
+	// The audit records who started the session. Best-effort like every audit append; deferred
+	// so it adds no response latency, and graceful drain still flushes it.
 	if (MODE_POLICY[mode].sharedApp) {
-		await appendAudit({ ...request, userId: user.id }, 'app.start', () =>
+		const audit = appendAudit({ ...request, userId: user.id }, 'app.start', () =>
 			deps.services.events.append({
 				event: 'app.start',
 				actor: user.id,
@@ -2284,6 +2283,8 @@ export async function startNotebookSession(input: {
 				session_id: session!.session_id,
 			}),
 		);
+		if (deps.backgroundTasks) deps.backgroundTasks.defer(audit);
+		else await audit;
 	}
 
 	return {
@@ -2362,12 +2363,18 @@ app.openapi(heartbeatSession, async (c) => {
 	const user = c.get('user');
 	const { pid, nid, sid } = c.req.valid('param');
 
-	// Project visibility FIRST (404 when hidden) — see the delete route.
+	// Preserve project-denial precedence without waiting for speculative session I/O.
+	const sessionRead = sessions.getSession(pid, sid).then(
+		(value) => ({ status: 'fulfilled' as const, value }),
+		(reason: unknown) => ({ status: 'rejected' as const, reason }),
+	);
 	const project = await loadSessionProject(projects, pid, user, deps);
 
 	// Scope-check: the project-scoped key 404s a cross-project id; the notebook
 	// check keeps a same-project/other-notebook id out of scope.
-	const existing = await sessions.getSession(pid, sid);
+	const sessionResult = await sessionRead;
+	if (sessionResult.status === 'rejected') throw sessionResult.reason;
+	const existing = sessionResult.value;
 	if (sessionResourceNotebookId(existing) !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}

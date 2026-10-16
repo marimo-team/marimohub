@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { LazyMap, StaleWhileRevalidateCache, ttlState } from './cache';
+import { BoundedLruMap, LazyMap, StaleWhileRevalidateCache, ttlState } from './cache';
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -43,6 +43,37 @@ describe('ttlState', () => {
 
 	it.each([-1, Number.NaN, -Infinity])('rejects an invalid stale duration: %s', (staleForMs) => {
 		expect(() => ttlState(0, 0, { freshForMs: 0, staleForMs })).toThrow(RangeError);
+	});
+});
+
+describe('BoundedLruMap', () => {
+	it('evicts the least recently used entry; get refreshes and peek does not', () => {
+		const map = new BoundedLruMap<string, number>(2);
+		map.set('a', 1);
+		map.set('b', 2);
+		expect(map.peek('a')).toBe(1);
+		map.set('c', 3);
+		expect(map.has('a')).toBe(false);
+		expect(map.get('b')).toBe(2);
+		map.set('d', 4);
+		expect(map.has('c')).toBe(false);
+		expect([map.get('b'), map.get('d'), map.size]).toEqual([2, 4, 2]);
+	});
+
+	it('replaces, deletes, and clears entries', () => {
+		const map = new BoundedLruMap<string, number>(2);
+		map.set('a', 1);
+		map.set('a', 2);
+		expect([map.get('a'), map.size]).toEqual([2, 1]);
+		expect(map.delete('a')).toBe(true);
+		expect(map.delete('a')).toBe(false);
+		map.set('b', 1);
+		map.clear();
+		expect(map.size).toBe(0);
+	});
+
+	it.each([0, -1, 1.5, Infinity, Number.NaN])('rejects invalid capacity %s', (maxSize) => {
+		expect(() => new BoundedLruMap(maxSize)).toThrow(RangeError);
 	});
 });
 

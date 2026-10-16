@@ -220,8 +220,10 @@ differences:
 **Apps are editor-only by default; viewer access is a deployment opt-in.**
 Under the default `MARIMOHUB_VIEWER_MODE=static`, viewers cannot start, open,
 or reach an app: session create, heartbeat, and stop require editor+, the
-proxy re-authorizes every HTTP request (WebSockets at each upgrade — an
-established socket lives until it closes) in `proxy` exposure. In `subdomain`
+proxy authorizes every HTTP request and WebSocket upgrade in `proxy` exposure
+(an established socket lives until it closes). App admissions are never
+cached; only editor admissions reuse the five-second cache described in
+[Metadata reads](#metadata-reads). In `subdomain`
 exposure, [native kernel authentication](../docs/security.md#native-kernel-authentication)
 is optional (`MARIMOHUB_SANDBOX_AUTH=on`, default `off`). Session read projections
 (list/get) withhold `sandbox_url` from callers the kernel gates would reject.
@@ -305,6 +307,41 @@ allowed = current user authority ∧ resource security ∧ credential grant
 It masks an out-of-grant project as 404 and returns 403 for an omitted action.
 Lifecycle, visibility, and label masking still take precedence. See
 [`auth.md`](./auth.md#personal-access-token-grants) for grant semantics.
+
+#### Metadata reads
+
+Project and notebook metadata reads default to `consistency: 'fresh'`.
+Session and proxy authorization can opt into `consistency: 'validated'`.
+Fresh reads use GET. Validated reads follow these rules:
+
+- A cold cache uses GET. A warm cache uses HEAD and reuses parsed metadata only
+  when the ETag matches.
+- A changed ETag requires GET before the read completes. The cache stores the
+  GET response's ETag because another write can occur after HEAD.
+- Missing records, storage errors, and invalid metadata never return cached data.
+- An empty ETag from the backend is never cached.
+
+Session prefix scans reuse parsed session records when the listing's ETag
+matches the cached entry, so an unchanged record is not downloaded again.
+
+These caches are per Node process, bounded by entry count, and have no TTL.
+They reduce downloads and parsing without adding a revocation delay. Subject
+context and app-only decisions stay fresh. Preview validity, expiry, and parent
+authorization stay live checks. Detail reads, list reads, and provisioning
+rechecks use fresh reads. The Cloudflare Workers example builds its services
+per request, so its caches are always cold.
+
+The Node proxy also caches a successful editor admission, including VS Code and
+other surface proxies, for up to five seconds per process. The entry expires
+sooner when the credential or entitlements expire. Token signature, sign-in,
+suspension, and session and subject-context authorization deadlines are still
+checked on every request. The suspension check reads `IdentityService`'s
+stale-while-revalidate cache, so an active result can lag a suspension by up to
+its 30 s maximum age; that window predates the admission cache. App and preview
+admissions are never cached. Stopping a session, revoking a role, deleting a
+project, or changing labels can take up to five seconds to block the next
+request or WebSocket upgrade from an editor that was already admitted; an
+established WebSocket closes only at its authorization deadline.
 
 > **Scaling note.** The global catalog snapshot lists projects by `owner` only;
 > per-project `members` live in `project.json`. Authorized listing for a

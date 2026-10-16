@@ -8,18 +8,20 @@ import {
 	createServices,
 	KERNEL_AUTH_TOKEN_PATTERN,
 	NotFoundError,
+	paths,
 	ProjectId,
 	ProxyExposure,
 	signProxyToken,
 	SubdomainExposure,
 	UnavailableError,
 } from '@marimo-hub/core';
-import type { Authenticator, TokenGrant, UserId } from '@marimo-hub/core';
+import type { Authenticator, SessionId, TokenGrant, UserId } from '@marimo-hub/core';
 import {
 	ACTOR,
 	localResourceSecurity,
 	makeFakeCompute,
 	makeSubjectContext,
+	RecordingBucket,
 	TEST_KERNEL_AUTH_TOKEN,
 	uid,
 } from '@marimo-hub/core/testing';
@@ -58,7 +60,7 @@ function authWithGrant(grant: TokenGrant): Authenticator {
 describe('authorizeProxyRequest', () => {
 	let bucket: MemoryBucket;
 	let pid: ProjectId;
-	let sessionId: string;
+	let sessionId: SessionId;
 	let token: string;
 
 	beforeEach(async () => {
@@ -83,7 +85,7 @@ describe('authorizeProxyRequest', () => {
 		sessionId = session.session_id;
 		// Mark running with a server-reachable origin (proxy-mode provisioning).
 		await services.sessions.setRunning(pid, session.session_id, '/proxy/x/', false, ORIGIN);
-		token = await signProxyToken(pid, sessionId as never, SECRET);
+		token = await signProxyToken(pid, sessionId, SECRET);
 	});
 
 	function deps(userId: UserId | null) {
@@ -103,9 +105,565 @@ describe('authorizeProxyRequest', () => {
 		return new Request(`https://hub.example.com${path}`);
 	}
 
+	function proxyRequest(path = '/'): Request {
+		return req(`/proxy/${token}${path}`);
+	}
+
+	function recordedDeps(userId: UserId | null = ACTOR) {
+		const recorded = new RecordingBucket(bucket);
+		const d = { ...deps(userId), bucket: recorded, services: createServices(recorded) };
+		const sessionReads = () =>
+			recorded.calls.get.filter((key) => key === paths.session(pid, sessionId)).length;
+		return { d, recorded, sessionReads };
+	}
+
+	it('starts a cold session read while the suspension check is pending', async () => {
+		const { d, sessionReads } = recordedDeps();
+		const suspension = Promise.withResolvers<boolean>();
+		vi.spyOn(d.services.identities, 'isSuspended').mockReturnValue(suspension.promise);
+		const decision = authorizeProxyRequest(proxyRequest(), d);
+		await vi.waitFor(() => expect(sessionReads()).toBe(1));
+		suspension.resolve(false);
+		expect(await decision).toMatchObject({ kind: 'forward' });
+	});
+
+	it.each([4_999, 5_000, 10_000])(
+		'bounds speculative session reuse to five seconds (suspension delay: %i ms)',
+		async (delay) => {
+			const d = deps(ACTOR);
+			const session = await d.services.sessions.getSession(pid, sessionId);
+			const sessionRead = vi
+				.spyOn(d.services.sessions, 'getSession')
+				.mockResolvedValueOnce(session);
+			const suspension = Promise.withResolvers<boolean>();
+			vi.spyOn(d.services.identities, 'isSuspended').mockReturnValue(suspension.promise);
+			const startedAt = Date.now();
+			const clock = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+			const decision = authorizeProxyRequest(proxyRequest(), d);
+			try {
+				await vi.waitFor(() => expect(sessionRead).toHaveBeenCalledTimes(1));
+				await createServices(bucket).sessions.terminate(pid, sessionId);
+				clock.mockReturnValue(startedAt + delay);
+				suspension.resolve(false);
+				expect(await decision).toMatchObject(
+					delay < 5_000 ? { kind: 'forward' } : { kind: 'reject', status: 410 },
+				);
+				expect(sessionRead).toHaveBeenCalledTimes(delay < 5_000 ? 1 : 2);
+			} finally {
+				suspension.resolve(false);
+				await decision;
+				clock.mockRestore();
+			}
+		},
+	);
+
+	it('fails closed when speculative session revalidation fails and retries on the next request', async () => {
+		const d = deps(ACTOR);
+		const session = await d.services.sessions.getSession(pid, sessionId);
+		const sessionRead = vi
+			.spyOn(d.services.sessions, 'getSession')
+			.mockResolvedValueOnce(session)
+			.mockRejectedValueOnce(new UnavailableError('storage down'));
+		const suspension = Promise.withResolvers<boolean>();
+		vi.spyOn(d.services.identities, 'isSuspended').mockReturnValue(suspension.promise);
+		const startedAt = Date.now();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+		const decision = authorizeProxyRequest(proxyRequest(), d);
+		try {
+			await vi.waitFor(() => expect(sessionRead).toHaveBeenCalledTimes(1));
+			clock.mockReturnValue(startedAt + 5_000);
+			suspension.resolve(false);
+			expect(await decision).toMatchObject({ kind: 'reject', status: 404 });
+			expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({ kind: 'forward' });
+			expect(sessionRead).toHaveBeenCalledTimes(3);
+		} finally {
+			suspension.resolve(false);
+			await decision;
+			clock.mockRestore();
+		}
+	});
+
+	it('preserves suspension precedence when the speculative session read fails', async () => {
+		const d = deps(ACTOR);
+		vi.spyOn(d.services.sessions, 'getSession').mockRejectedValue(new Error('missing'));
+		vi.spyOn(d.services.identities, 'isSuspended').mockResolvedValue(true);
+		expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+			kind: 'reject',
+			status: 403,
+			code: 'USER_SUSPENDED',
+		});
+	});
+
+	it('reuses admission reads for five seconds while routing each path and query independently', async () => {
+		const { d, sessionReads } = recordedDeps();
+		const projectRead = vi.spyOn(d.services.projects, 'getProject');
+		const labelsRead = vi.spyOn(d.services.notebooks, 'getSecurityLabels');
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+		try {
+			for (const path of ['/assets/a.js?v=1', '/api/kernel?cell=2']) {
+				expect(await authorizeProxyRequest(proxyRequest(path), d)).toMatchObject({
+					kind: 'forward',
+					targetUrl: `${ORIGIN}/proxy/${token}${path}`,
+				});
+			}
+			expect(sessionReads()).toBe(1);
+			expect(projectRead).toHaveBeenCalledTimes(1);
+			expect(labelsRead).toHaveBeenCalledTimes(1);
+			clock.mockReturnValue(Date.now() + 5_000);
+			expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+				kind: 'forward',
+			});
+			expect(sessionReads()).toBe(2);
+			expect(projectRead).toHaveBeenCalledTimes(2);
+			expect(labelsRead).toHaveBeenCalledTimes(2);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	it('refreshes an admission that expires while suspension verification is pending', async () => {
+		const { d } = recordedDeps();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+		const suspension = Promise.withResolvers<boolean>();
+		try {
+			await authorizeProxyRequest(proxyRequest(), d);
+			await d.services.sessions.terminate(pid, sessionId);
+			vi.spyOn(d.services.identities, 'isSuspended').mockReturnValue(suspension.promise);
+			const decision = authorizeProxyRequest(proxyRequest(), d);
+			await vi.waitFor(() => expect(d.services.identities.isSuspended).toHaveBeenCalled());
+			clock.mockReturnValue(Date.now() + 5_000);
+			suspension.resolve(false);
+			expect(await decision).toMatchObject({ kind: 'reject', status: 410 });
+		} finally {
+			suspension.resolve(false);
+			clock.mockRestore();
+		}
+	});
+
+	it.each(['entitlementsExpiresAt', 'credential'] as const)(
+		'caps admission freshness at the %s expiry',
+		async (field) => {
+			const { d, sessionReads } = recordedDeps();
+			const now = Date.now();
+			const user = (await d.authenticator.authenticate(req('/')))!;
+			const expiry = new Date(now + 1000).toISOString();
+			vi.spyOn(d.authenticator, 'authenticate').mockResolvedValue({
+				...user,
+				...(field === 'credential'
+					? { credential: { ...user.credential, expiresAt: expiry } }
+					: { entitlementsExpiresAt: expiry }),
+			});
+			const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+			try {
+				await authorizeProxyRequest(proxyRequest(), d);
+				clock.mockReturnValue(now + 999);
+				await authorizeProxyRequest(proxyRequest(), d);
+				expect(sessionReads()).toBe(1);
+				clock.mockReturnValue(now + 1000);
+				await authorizeProxyRequest(proxyRequest(), d);
+				expect(sessionReads()).toBe(2);
+			} finally {
+				clock.mockRestore();
+			}
+		},
+	);
+
+	it.each(['session', 'project', 'labels'] as const)(
+		'fails closed on a %s refresh error and retries without retaining the denial',
+		async (stage) => {
+			const { d, sessionReads } = recordedDeps();
+			const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+			try {
+				expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+					kind: 'forward',
+				});
+				if (stage === 'session')
+					vi.spyOn(d.services.sessions, 'getSession').mockRejectedValueOnce(
+						new UnavailableError('storage down'),
+					);
+				else if (stage === 'project')
+					vi.spyOn(d.services.projects, 'getProject').mockRejectedValueOnce(
+						new UnavailableError('storage down'),
+					);
+				else
+					vi.spyOn(d.services.notebooks, 'getSecurityLabels').mockRejectedValueOnce(
+						new UnavailableError('storage down'),
+					);
+				clock.mockReturnValue(Date.now() + 5_000);
+				expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+					kind: 'reject',
+					status: stage === 'labels' ? 503 : 404,
+				});
+				expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+					kind: 'forward',
+				});
+				expect(sessionReads()).toBe(stage === 'session' ? 2 : 3);
+			} finally {
+				clock.mockRestore();
+			}
+		},
+	);
+
+	it.each([false, true])(
+		'coalesces concurrent admissions and recovers after a failed load (failure: %s)',
+		async (fails) => {
+			const { d } = recordedDeps();
+			const project = await d.services.projects.getProject(pid);
+			const projectRead = Promise.withResolvers<typeof project>();
+			const projectSpy = vi
+				.spyOn(d.services.projects, 'getProject')
+				.mockReturnValueOnce(projectRead.promise);
+			const suspensionSpy = vi.spyOn(d.services.identities, 'isSuspended');
+			const paths = ['/assets/one.js?v=1', '/assets/two.js?v=2'];
+			const decisions = paths.map((path) => authorizeProxyRequest(proxyRequest(path), d));
+			try {
+				await vi.waitFor(() => expect(suspensionSpy).toHaveBeenCalledTimes(2));
+				if (fails) projectRead.reject(new UnavailableError('storage down'));
+				else projectRead.resolve(project);
+				for (const [index, decision] of (await Promise.all(decisions)).entries()) {
+					expect(decision).toMatchObject(
+						fails
+							? { kind: 'reject', status: 404 }
+							: { kind: 'forward', targetUrl: `${ORIGIN}/proxy/${token}${paths[index]}` },
+					);
+				}
+				expect(projectSpy).toHaveBeenCalledTimes(1);
+				expect(await authorizeProxyRequest(proxyRequest('/retry'), d)).toMatchObject({
+					kind: 'forward',
+				});
+				expect(projectSpy).toHaveBeenCalledTimes(fails ? 2 : 1);
+			} finally {
+				projectRead.resolve(project);
+				await Promise.all(decisions);
+			}
+		},
+	);
+
+	it('does not start a session read for a request that joins an in-flight admission load', async () => {
+		const { d, sessionReads } = recordedDeps();
+		const project = await d.services.projects.getProject(pid);
+		const projectRead = Promise.withResolvers<typeof project>();
+		const projectSpy = vi
+			.spyOn(d.services.projects, 'getProject')
+			.mockReturnValueOnce(projectRead.promise);
+		const suspensionSpy = vi.spyOn(d.services.identities, 'isSuspended');
+		const first = authorizeProxyRequest(proxyRequest('/one'), d);
+		let second: Promise<unknown> | undefined;
+		try {
+			await vi.waitFor(() => expect(projectSpy).toHaveBeenCalledTimes(1));
+			second = authorizeProxyRequest(proxyRequest('/two'), d);
+			await vi.waitFor(() => expect(suspensionSpy).toHaveBeenCalledTimes(2));
+			projectRead.resolve(project);
+			expect(await first).toMatchObject({ kind: 'forward' });
+			expect(await second).toMatchObject({ kind: 'forward' });
+			expect(sessionReads()).toBe(1);
+			expect(projectSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			projectRead.resolve(project);
+			await Promise.all([first, second]);
+		}
+	});
+
+	it('does not extend the cache window by the time spent loading admission', async () => {
+		const { d, sessionReads } = recordedDeps();
+		const project = await d.services.projects.getProject(pid);
+		const projectRead = Promise.withResolvers<typeof project>();
+		const projectSpy = vi
+			.spyOn(d.services.projects, 'getProject')
+			.mockReturnValueOnce(projectRead.promise);
+		const startedAt = Date.now();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+		const decision = authorizeProxyRequest(proxyRequest(), d);
+		try {
+			await vi.waitFor(() => expect(projectSpy).toHaveBeenCalledTimes(1));
+			clock.mockReturnValue(startedAt + 4_000);
+			projectRead.resolve(project);
+			expect(await decision).toMatchObject({ kind: 'forward' });
+			clock.mockReturnValue(startedAt + 4_999);
+			await authorizeProxyRequest(proxyRequest(), d);
+			expect(sessionReads()).toBe(1);
+			clock.mockReturnValue(startedAt + 5_000);
+			await authorizeProxyRequest(proxyRequest(), d);
+			expect(sessionReads()).toBe(2);
+		} finally {
+			projectRead.resolve(project);
+			await decision;
+			clock.mockRestore();
+		}
+	});
+
+	it('rejects a forged signature even when the user and session have a cached admission', async () => {
+		const { d, sessionReads } = recordedDeps();
+		const authenticate = vi.spyOn(d.authenticator, 'authenticate');
+		await authorizeProxyRequest(proxyRequest(), d);
+		const forged = await signProxyToken(pid, sessionId, 'another-secret');
+		expect(await authorizeProxyRequest(req(`/proxy/${forged}/`), d)).toMatchObject({
+			kind: 'reject',
+			status: 403,
+		});
+		expect(authenticate).toHaveBeenCalledTimes(1);
+		expect(sessionReads()).toBe(1);
+	});
+
+	it('does not share a successful admission with another user', async () => {
+		const { d, sessionReads } = recordedDeps();
+		expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+			kind: 'forward',
+		});
+		d.authenticator = authAs(STRANGER);
+		expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+			kind: 'reject',
+			status: 403,
+		});
+		expect(sessionReads()).toBe(2);
+	});
+
+	it('does not share admissions across dependency instances', async () => {
+		const first = recordedDeps();
+		const second = recordedDeps();
+		await authorizeProxyRequest(proxyRequest(), first.d);
+		await authorizeProxyRequest(proxyRequest(), second.d);
+		expect(first.sessionReads()).toBe(1);
+		expect(second.sessionReads()).toBe(1);
+	});
+
+	it.each([
+		{ actions: ['project.read'], projects: '*', status: 403 },
+		{ actions: '*', projects: [ProjectId.parse('proj-0000000000000002')], status: 404 },
+	] satisfies (TokenGrant & { status: number })[])(
+		'does not reuse a browser admission for a restricted credential ($status)',
+		async ({ actions, projects, status }) => {
+			const { d, sessionReads } = recordedDeps();
+			expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+				kind: 'forward',
+			});
+			d.authenticator = authWithGrant({ actions, projects });
+			expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+				kind: 'reject',
+				status,
+			});
+			expect(sessionReads()).toBe(2);
+		},
+	);
+
+	it.each(['email', 'credential', 'groups', 'entitlements', 'entitlementsExpiresAt'] as const)(
+		'partitions admissions when the principal %s changes',
+		async (field) => {
+			const { d, sessionReads } = recordedDeps();
+			const user = (await d.authenticator.authenticate(req('/')))!;
+			const values = {
+				email: 'changed@example.com',
+				credential: { ...user.credential, subjectContextRef: 'another-context' },
+				groups: ['another-group'],
+				entitlements: ['project-creator'] as const,
+				entitlementsExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+			};
+			await authorizeProxyRequest(proxyRequest(), d);
+			vi.spyOn(d.authenticator, 'authenticate').mockResolvedValue({
+				...user,
+				[field]: values[field],
+			});
+			await authorizeProxyRequest(proxyRequest(), d);
+			expect(sessionReads()).toBe(2);
+		},
+	);
+
+	it('does not cache a denial after membership is granted', async () => {
+		const { d, sessionReads } = recordedDeps(STRANGER);
+		expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+			kind: 'reject',
+			status: 403,
+		});
+		await d.services.projects.addMember(pid, { user_id: STRANGER }, 'editor', ACTOR);
+		expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+			kind: 'forward',
+		});
+		expect(sessionReads()).toBe(2);
+	});
+
+	it.each(['stop', 'delete', 'revoke', 'labels'] as const)(
+		'enforces %s after the admission window',
+		async (change) => {
+			const { d } = recordedDeps(STRANGER);
+			await d.services.projects.addMember(pid, { user_id: STRANGER }, 'editor', ACTOR);
+			const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+			try {
+				expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+					kind: 'forward',
+				});
+				if (change === 'stop') await d.services.sessions.terminate(pid, sessionId);
+				else if (change === 'delete') await d.services.projects.deleteProject(pid, ACTOR);
+				else if (change === 'revoke') await d.services.projects.removeMember(pid, STRANGER, ACTOR);
+				else
+					await d.services.projects.setSecurityLabels(
+						pid,
+						{ classification: 'SECRET', compartments: [] },
+						ACTOR,
+					);
+				expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+					kind: 'forward',
+				});
+				clock.mockReturnValue(Date.now() + 5_000);
+				expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+					kind: 'reject',
+				});
+			} finally {
+				clock.mockRestore();
+			}
+		},
+	);
+
+	it.each(['unauthenticated', 'suspended', 'unavailable'] as const)(
+		'enforces %s on a cached admission',
+		async (state) => {
+			const { d, sessionReads } = recordedDeps();
+			await authorizeProxyRequest(proxyRequest(), d);
+			if (state === 'unauthenticated') d.authenticator = authAs(null);
+			else if (state === 'suspended')
+				vi.spyOn(d.services.identities, 'isSuspended').mockResolvedValue(true);
+			else
+				vi.spyOn(d.services.identities, 'isSuspended').mockRejectedValue(
+					new UnavailableError('down'),
+				);
+			expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+				kind: 'reject',
+				status: state === 'unauthenticated' ? 401 : state === 'suspended' ? 403 : 503,
+			});
+			expect(sessionReads()).toBe(1);
+		},
+	);
+
+	it('keeps kernel and surface admissions separate and rebuilds surface URLs on hits', async () => {
+		const { d, sessionReads } = recordedDeps();
+		await d.services.sessions.setSurfaceState(pid, sessionId, 'vscode', {
+			status: 'ready',
+			origin_url: 'http://vscode.internal:8443',
+			proxy_path: 'strip-prefix',
+		});
+		const before = sessionReads();
+		await authorizeProxyRequest(proxyRequest('/assets/a.js'), d);
+		for (const path of ['/stable/a.js?v=1', '/stable/b.js?v=2']) {
+			const decision = await authorizeProxyRequest(req(`/surface-proxy/${token}/vscode${path}`), d);
+			expect(decision).toMatchObject({
+				kind: 'forward',
+				targetUrl: `http://vscode.internal:8443${path}`,
+			});
+			expect(decision).not.toHaveProperty('kernelAuthToken');
+		}
+		expect(sessionReads() - before).toBe(2);
+	});
+
+	it('rejects a cached admission at its authorization deadline before five seconds elapse', async () => {
+		const { d, sessionReads } = recordedDeps();
+		const session = await d.services.sessions.getSession(pid, sessionId);
+		const deadline = Date.now() + 1000;
+		vi.spyOn(d.services.sessions, 'getSession').mockResolvedValue({
+			...session,
+			authorization_expires_at: new Date(deadline).toISOString(),
+		});
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(deadline - 1000);
+		try {
+			expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+				kind: 'forward',
+				authorizationDeadline: deadline,
+			});
+			clock.mockReturnValue(deadline);
+			expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+				kind: 'reject',
+				status: 410,
+			});
+			expect(d.services.sessions.getSession).toHaveBeenCalledTimes(1);
+			expect(sessionReads()).toBe(1);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	async function runningApp(services: ReturnType<typeof createServices>) {
+		const { notebook_id: notebookId } = await services.sessions.getSession(pid, sessionId);
+		const app = await services.sessions.createSession({
+			project_id: pid,
+			notebook_id: notebookId,
+			user_id: ACTOR,
+			mode: 'app',
+		});
+		await services.sessions.setRunning(pid, app.session_id, '/proxy/x/', false, ORIGIN);
+		const appToken = await signProxyToken(pid, app.session_id, SECRET);
+		return { notebookId, sessionId: app.session_id, request: () => req(`/proxy/${appToken}/`) };
+	}
+
+	it('caches metadata for app requests while reading the session on every request', async () => {
+		const { d, recorded, sessionReads } = recordedDeps();
+		const app = await runningApp(d.services);
+		sessionId = app.sessionId;
+		recorded.calls.get.length = 0;
+		for (let i = 0; i < 2; i++) {
+			expect(await authorizeProxyRequest(app.request(), d)).toMatchObject({ kind: 'forward' });
+		}
+		expect(recorded.calls.get.filter((key) => key === paths.project(pid).meta)).toHaveLength(1);
+		expect(
+			recorded.calls.get.filter((key) => key === paths.project(pid).notebook(app.notebookId).meta),
+		).toHaveLength(1);
+		expect(sessionReads()).toBe(2);
+	});
+
+	it.each(['project', 'notebook'] as const)(
+		'rejects a warm app admission during %s storage failure and retries after recovery',
+		async (resource) => {
+			const { d } = recordedDeps();
+			const app = await runningApp(d.services);
+			expect(await authorizeProxyRequest(app.request(), d)).toMatchObject({ kind: 'forward' });
+			const key =
+				resource === 'project'
+					? paths.project(pid).meta
+					: paths.project(pid).notebook(app.notebookId).meta;
+			const head = d.bucket.head.bind(d.bucket);
+			const failure = vi.spyOn(d.bucket, 'head').mockImplementation(async (requestedKey) => {
+				if (requestedKey === key) throw new UnavailableError('Storage unavailable');
+				return head(requestedKey);
+			});
+			try {
+				for (let attempt = 0; attempt < 2; attempt++) {
+					expect(await authorizeProxyRequest(app.request(), d)).toMatchObject({
+						kind: 'reject',
+						status: resource === 'project' ? 404 : 503,
+					});
+				}
+			} finally {
+				failure.mockRestore();
+			}
+			expect(await authorizeProxyRequest(app.request(), d)).toMatchObject({ kind: 'forward' });
+		},
+	);
+
+	it.each(['membership', 'project', 'notebook', 'labels'] as const)(
+		'revalidates app proxy access immediately after a replica changes %s',
+		async (change) => {
+			const writer = createServices(bucket);
+			await writer.projects.addMember(pid, { user_id: STRANGER }, 'app-user', ACTOR);
+			const { d } = recordedDeps(STRANGER);
+			const app = await runningApp(writer);
+			expect(await authorizeProxyRequest(app.request(), d)).toMatchObject({ kind: 'forward' });
+			if (change === 'membership') await writer.projects.removeMember(pid, STRANGER, ACTOR);
+			if (change === 'project') await writer.projects.deleteProject(pid, ACTOR);
+			if (change === 'notebook') await writer.notebooks.deleteNotebook(pid, app.notebookId, ACTOR);
+			if (change === 'labels')
+				await writer.notebooks.setSecurityLabels(
+					pid,
+					app.notebookId,
+					{ classification: 'secret', compartments: [] },
+					ACTOR,
+				);
+			expect(await authorizeProxyRequest(app.request(), d)).toMatchObject({
+				kind: 'reject',
+				status: change === 'membership' ? 403 : 404,
+			});
+		},
+	);
+
 	it('loads project and notebook permissions concurrently after loading the session', async () => {
 		const d = deps(ACTOR);
-		const session = await d.services.sessions.getSession(pid, sessionId as never);
+		const session = await d.services.sessions.getSession(pid, sessionId);
 		const project = await d.services.projects.getProject(pid);
 		const sessionRead = Promise.withResolvers<typeof session>();
 		const projectRead = Promise.withResolvers<typeof project>();
@@ -120,13 +678,13 @@ describe('authorizeProxyRequest', () => {
 				notebookStarted.resolve();
 				return null;
 			});
-		const decision = authorizeProxyRequest(req(`/proxy/${token}/`), d);
+		const decision = authorizeProxyRequest(proxyRequest(), d);
 		await vi.waitFor(() => expect(d.services.sessions.getSession).toHaveBeenCalled());
 		expect(projectSpy).not.toHaveBeenCalled();
 		expect(notebookSpy).not.toHaveBeenCalled();
 		sessionRead.resolve(session);
 		await notebookStarted.promise;
-		expect(projectSpy).toHaveBeenCalledWith(pid);
+		expect(projectSpy).toHaveBeenCalledWith(pid, { consistency: 'validated' });
 		projectRead.resolve(project);
 		expect(await decision).toMatchObject({ kind: 'forward' });
 	});
@@ -143,7 +701,7 @@ describe('authorizeProxyRequest', () => {
 				notebookStarted.resolve();
 				throw new UnavailableError('Notebook storage unavailable');
 			});
-			const decision = authorizeProxyRequest(req(`/proxy/${token}/`), d);
+			const decision = authorizeProxyRequest(proxyRequest(), d);
 			await notebookStarted.promise;
 			if (projectFails) projectRead.reject(new Error('Project storage unavailable'));
 			else projectRead.resolve(project);
@@ -167,7 +725,7 @@ describe('authorizeProxyRequest', () => {
 			return notebookRead.promise;
 		});
 		const settled = vi.fn();
-		const decision = authorizeProxyRequest(req(`/proxy/${token}/`), d).then(settled);
+		const decision = authorizeProxyRequest(proxyRequest(), d).then(settled);
 		await notebookStarted.promise;
 		try {
 			await vi.waitFor(() =>
@@ -190,7 +748,7 @@ describe('authorizeProxyRequest', () => {
 		vi.spyOn(d.services.notebooks, 'getSecurityLabels').mockRejectedValue(
 			new NotFoundError('Notebook missing'),
 		);
-		expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+		expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
 			kind: 'reject',
 			status: 404,
 			message: 'Session not found',
@@ -201,7 +759,7 @@ describe('authorizeProxyRequest', () => {
 		'does not read project or notebook permissions for a %s session',
 		async (state) => {
 			const d = deps(ACTOR);
-			const session = await d.services.sessions.getSession(pid, sessionId as never);
+			const session = await d.services.sessions.getSession(pid, sessionId);
 			const sessionSpy = vi.spyOn(d.services.sessions, 'getSession');
 			if (state === 'missing') sessionSpy.mockRejectedValue(new NotFoundError('Session missing'));
 			else
@@ -213,7 +771,7 @@ describe('authorizeProxyRequest', () => {
 				});
 			const projectSpy = vi.spyOn(d.services.projects, 'getProject');
 			const notebookSpy = vi.spyOn(d.services.notebooks, 'getSecurityLabels');
-			expect(await authorizeProxyRequest(req(`/proxy/${token}/`), d)).toMatchObject({
+			expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
 				kind: 'reject',
 				status: state === 'missing' ? 404 : state === 'unreachable' ? 503 : 410,
 			});
@@ -249,7 +807,7 @@ describe('authorizeProxyRequest', () => {
 
 	it('passes through when proxy mode is not configured (no signing secret)', async () => {
 		const d = await authorizeProxyRequest(
-			req(`/proxy/${token}/`),
+			proxyRequest(),
 			makeTestDeps(bucket, {
 				authenticator: authAs(ACTOR),
 				sandbox: {
@@ -270,17 +828,17 @@ describe('authorizeProxyRequest', () => {
 	});
 
 	it('rejects an unauthenticated request with 401', async () => {
-		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), deps(null));
+		const d = await authorizeProxyRequest(proxyRequest(), deps(null));
 		expect(d).toMatchObject({ kind: 'reject', status: 401 });
 	});
 
 	it('rejects a caller without project access with 403', async () => {
-		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), deps(STRANGER));
+		const d = await authorizeProxyRequest(proxyRequest(), deps(STRANGER));
 		expect(d).toMatchObject({ kind: 'reject', status: 403 });
 	});
 
 	it('applies project and action grants to the sandbox proxy', async () => {
-		const selectedElsewhere = await authorizeProxyRequest(req(`/proxy/${token}/`), {
+		const selectedElsewhere = await authorizeProxyRequest(proxyRequest(), {
 			...deps(ACTOR),
 			authenticator: authWithGrant({
 				actions: '*',
@@ -289,7 +847,7 @@ describe('authorizeProxyRequest', () => {
 		});
 		expect(selectedElsewhere).toMatchObject({ kind: 'reject', status: 404 });
 
-		const missingAction = await authorizeProxyRequest(req(`/proxy/${token}/`), {
+		const missingAction = await authorizeProxyRequest(proxyRequest(), {
 			...deps(ACTOR),
 			authenticator: authWithGrant({ actions: ['project.read'], projects: [pid] }),
 		});
@@ -301,10 +859,10 @@ describe('authorizeProxyRequest', () => {
 		await d.services.identities.upsert({ id: ACTOR, email: `${ACTOR}@example.com`, name: 'A' });
 		await d.services.identities.setSuspension(ACTOR, true);
 
-		const decision = await authorizeProxyRequest(req(`/proxy/${token}/`), d);
+		const decision = await authorizeProxyRequest(proxyRequest(), d);
 		expect(decision).toMatchObject({ kind: 'reject', status: 403, code: 'USER_SUSPENDED' });
 		// The kernel process is not torn down — the session stays running.
-		expect((await createServices(bucket).sessions.getSession(pid, sessionId as never)).status).toBe(
+		expect((await createServices(bucket).sessions.getSession(pid, sessionId)).status).toBe(
 			'running',
 		);
 	});
@@ -313,12 +871,12 @@ describe('authorizeProxyRequest', () => {
 		const d = deps(ACTOR);
 		vi.spyOn(d.services.identities, 'isSuspended').mockRejectedValue(new UnavailableError('down'));
 
-		const decision = await authorizeProxyRequest(req(`/proxy/${token}/`), d);
+		const decision = await authorizeProxyRequest(proxyRequest(), d);
 		expect(decision).toMatchObject({ kind: 'reject', status: 503, code: 'SERVICE_UNAVAILABLE' });
 	});
 
 	it('forwards a non-member super admin to the kernel', async () => {
-		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), {
+		const d = await authorizeProxyRequest(proxyRequest(), {
 			...deps(STRANGER),
 			policy: { superAdmins: [STRANGER] },
 		});
@@ -335,7 +893,7 @@ describe('authorizeProxyRequest', () => {
 		const security = localResourceSecurity(['UNCLASSIFIED', 'SECRET']);
 		// Wired but contextless, and unwired entirely: both fail closed and mask.
 		for (const override of [{ resourceSecurity: security }, {}]) {
-			const d = await authorizeProxyRequest(req(`/proxy/${token}/`), {
+			const d = await authorizeProxyRequest(proxyRequest(), {
 				...deps(ACTOR),
 				...override,
 			});
@@ -353,7 +911,7 @@ describe('authorizeProxyRequest', () => {
 			{ classification: 'SECRET', compartments: ['element-x'] },
 			ACTOR,
 		);
-		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), {
+		const d = await authorizeProxyRequest(proxyRequest(), {
 			...deps(ACTOR),
 			resourceSecurity: localResourceSecurity(['UNCLASSIFIED', 'SECRET']),
 		});
@@ -450,7 +1008,7 @@ describe('authorizeProxyRequest', () => {
 				expect((await authorizeProxyRequest(req(`/proxy/${appToken}/`), appDeps)).kind).toBe(
 					'forward',
 				);
-				expect(await authorizeProxyRequest(req(`/proxy/${token}/`), appDeps)).toMatchObject({
+				expect(await authorizeProxyRequest(proxyRequest(), appDeps)).toMatchObject({
 					kind: 'reject',
 					status: 403,
 				});
@@ -479,10 +1037,7 @@ describe('authorizeProxyRequest', () => {
 		});
 
 		it('never admits a viewer to another user’s EDIT kernel, whatever the viewer mode', async () => {
-			const d = await authorizeProxyRequest(
-				req(`/proxy/${token}/`),
-				viewerDeps('ephemeral-sandbox'),
-			);
+			const d = await authorizeProxyRequest(proxyRequest(), viewerDeps('ephemeral-sandbox'));
 			expect(d).toMatchObject({ kind: 'reject', status: 403 });
 		});
 
@@ -496,7 +1051,7 @@ describe('authorizeProxyRequest', () => {
 	});
 
 	it('forwards an authorized request to the kernel origin, preserving the full path', async () => {
-		const d = await authorizeProxyRequest(req(`/proxy/${token}/assets/app.js?v=1`), deps(ACTOR));
+		const d = await authorizeProxyRequest(proxyRequest('/assets/app.js?v=1'), deps(ACTOR));
 		expect(d).toMatchObject({
 			kind: 'forward',
 			targetUrl: `${ORIGIN}/proxy/${token}/assets/app.js?v=1`,
@@ -507,7 +1062,7 @@ describe('authorizeProxyRequest', () => {
 
 	it('forwards legacy tokenless sessions without a kernel credential', async () => {
 		const services = createServices(bucket);
-		const current = await services.sessions.getSession(pid, sessionId as never);
+		const current = await services.sessions.getSession(pid, sessionId);
 		const legacy = await services.sessions.createSession({
 			notebook_id: current.notebook_id,
 			project_id: pid,
@@ -524,7 +1079,7 @@ describe('authorizeProxyRequest', () => {
 
 	it('authorizes a VS Code surface separately and strips the code-server proxy prefix', async () => {
 		const services = createServices(bucket);
-		await services.sessions.setSurfaceState(pid, sessionId as never, 'vscode', {
+		await services.sessions.setSurfaceState(pid, sessionId, 'vscode', {
 			status: 'ready',
 			origin_url: 'http://vscode.internal:8443',
 		});
@@ -547,7 +1102,7 @@ describe('authorizeProxyRequest', () => {
 
 	it('maps the code-server surface root to the upstream root and preserves its query', async () => {
 		const services = createServices(bucket);
-		await services.sessions.setSurfaceState(pid, sessionId as never, 'vscode', {
+		await services.sessions.setSurfaceState(pid, sessionId, 'vscode', {
 			status: 'ready',
 			origin_url: 'http://vscode.internal:8443',
 		});
@@ -564,7 +1119,7 @@ describe('authorizeProxyRequest', () => {
 	it.each(['starting', 'failed', 'stopped'] as const)(
 		'rejects a %s VS Code surface before forwarding',
 		async (status) => {
-			await createServices(bucket).sessions.setSurfaceState(pid, sessionId as never, 'vscode', {
+			await createServices(bucket).sessions.setSurfaceState(pid, sessionId, 'vscode', {
 				status,
 				origin_url: 'http://vscode.internal:8443',
 			});
@@ -585,7 +1140,7 @@ describe('authorizeProxyRequest', () => {
 
 	it('preserves the proxy prefix configured as the OpenVSCode server base path', async () => {
 		const services = createServices(bucket);
-		await services.sessions.setSurfaceState(pid, sessionId as never, 'vscode', {
+		await services.sessions.setSurfaceState(pid, sessionId, 'vscode', {
 			status: 'ready',
 			origin_url: 'http://vscode.internal:8443',
 		});
@@ -623,7 +1178,7 @@ describe('authorizeProxyRequest', () => {
 		},
 	])('uses persisted $persisted routing during a change to $configured', async (testCase) => {
 		const services = createServices(bucket);
-		await services.sessions.setSurfaceState(pid, sessionId as never, 'vscode', {
+		await services.sessions.setSurfaceState(pid, sessionId, 'vscode', {
 			status: 'ready',
 			origin_url: 'http://vscode.internal:8443',
 			proxy_path: testCase.persisted,
@@ -656,7 +1211,7 @@ describe('authorizeProxyRequest', () => {
 	});
 
 	it('strips the prefix for any surface whose persisted routing says so', async () => {
-		await createServices(bucket).sessions.setSurfaceState(pid, sessionId as never, 'opencode', {
+		await createServices(bucket).sessions.setSurfaceState(pid, sessionId, 'opencode', {
 			status: 'ready',
 			origin_url: 'http://opencode.internal:4096',
 			proxy_path: 'strip-prefix',
@@ -674,8 +1229,8 @@ describe('authorizeProxyRequest', () => {
 	});
 
 	it('rejects a terminated session with 410', async () => {
-		await createServices(bucket).sessions.terminate(pid, sessionId as never);
-		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), deps(ACTOR));
+		await createServices(bucket).sessions.terminate(pid, sessionId);
+		const d = await authorizeProxyRequest(proxyRequest(), deps(ACTOR));
 		expect(d).toMatchObject({ kind: 'reject', status: 410 });
 	});
 
@@ -747,7 +1302,7 @@ describe('authorizeProxyRequest', () => {
 		// Deleting a project must cut kernel access immediately — the sandbox may
 		// still be alive, and in proxy mode this is the only gate in its path.
 		await createServices(bucket).projects.deleteProject(pid, ACTOR);
-		const d = await authorizeProxyRequest(req(`/proxy/${token}/`), deps(ACTOR));
+		const d = await authorizeProxyRequest(proxyRequest(), deps(ACTOR));
 		expect(d.kind).not.toBe('forward');
 	});
 

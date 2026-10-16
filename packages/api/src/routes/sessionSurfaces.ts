@@ -27,6 +27,7 @@ import {
 } from '@marimo-hub/core';
 import type { ApiDeps, SandboxConfig } from '../context';
 import { errorMetadata, logEvent } from '../log';
+import { SANDBOX_PROXY_PREFIXES } from '../proxyRoutes';
 import {
 	assertSessionControl,
 	assertSessionNotebookVisible,
@@ -236,7 +237,7 @@ export async function beginSessionSurface(input: BeginSurfaceInput) {
 			session.session_id,
 			exposure.signingSecret,
 		);
-		basePath = `/surface-proxy/${token}/${id}`;
+		basePath = `${SANDBOX_PROXY_PREFIXES.surface}/${token}/${id}`;
 		clientBaseUrl = `${joinUrlPath(appBaseUrl, basePath)}/`;
 	}
 	const manager = await createSurfaceManager({ deps, user, session, appBaseUrl, startingId: id });

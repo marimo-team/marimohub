@@ -107,6 +107,7 @@ it('advertises the contract and forwards the exact app with four fresh metadata 
 		app_pool: { proxy_renewal: true },
 	});
 	const get = vi.spyOn(f.bucket, 'get');
+	const head = vi.spyOn(f.bucket, 'head');
 	const put = vi.spyOn(f.bucket, 'put');
 	const decision = await authorizeProxyRequest(f.request(f.assignment, '/health?x=1'), f.api.deps);
 	expect(decision).toMatchObject({ kind: 'forward', sessionId: f.sessionId });
@@ -115,7 +116,7 @@ it('advertises the contract and forwards the exact app with four fresh metadata 
 		`/proxy/${await signProxyToken(f.project.id, f.sessionId, f.secret)}/health`,
 	);
 	expect(new URL(decision.targetUrl).search).toBe('?x=1');
-	expect(get.mock.calls.map(([key]) => key)).toEqual(
+	expect([...get.mock.calls, ...head.mock.calls].map(([key]) => key)).toEqual(
 		expect.arrayContaining([
 			paths.session(f.project.id, f.sessionId),
 			paths.project(f.project.id).meta,
@@ -123,7 +124,7 @@ it('advertises the contract and forwards the exact app with four fresh metadata 
 			paths.appPool(f.project.id, f.notebook.id),
 		]),
 	);
-	expect(get).toHaveBeenCalledTimes(4);
+	expect(get.mock.calls.length + head.mock.calls.length).toBe(4);
 	expect(put).not.toHaveBeenCalled();
 	expect(isCredentialHeader(APP_VISIT_HEADER)).toBe(true);
 	expect(isCredentialHeader(APP_GENERATION_HEADER)).toBe(true);

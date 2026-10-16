@@ -8,6 +8,7 @@ import {
 	createVersionId,
 	UserId,
 } from '../../ids';
+import { UnavailableError } from '../../errors';
 import { paths } from '../../paths';
 import { readFileFailure } from '../../ports/sandbox';
 import { expectFileResult } from '../../testing/resultAssertions';
@@ -30,7 +31,7 @@ import type {
 } from '../../ports/sandbox';
 import type { NotebookService } from '../content/NotebookService';
 import { SandboxProvisioner } from './SandboxProvisioner';
-import type { BucketConfig, WorkspaceLoadStrategies } from './SandboxProvisioner';
+import type { BucketConfig, ProvisionOptions, WorkspaceLoadStrategies } from './SandboxProvisioner';
 import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { sandboxContextPath } from './sandboxContext';
 
@@ -686,17 +687,242 @@ describe('SandboxProvisioner', () => {
 	});
 
 	describe('provision', () => {
+		async function overlayFixture(loaders?: WorkspaceLoadStrategies) {
+			const sandbox = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const nb = paths.project(projectId).notebook(notebookId);
+			const version = nb.version(createVersionId());
+			await bucketHandle.put(nb.workspaceFile('nb.py'), 'draft');
+			await bucketHandle.put(version.code, 'committed');
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(sandbox.instance), loaders);
+			return {
+				...sandbox,
+				bucketHandle,
+				nb,
+				version,
+				provision: (overrides: Partial<ProvisionOptions> = {}) =>
+					provisioner.provision({
+						sandboxId,
+						projectId,
+						notebookId,
+						hostname: 'localhost',
+						bucket: bucketConfig,
+						bucketHandle,
+						workspaceLoadMode: 'copy-only',
+						workspaceOverlay: [{ path: 'nb.py', key: version.code }],
+						...overrides,
+					}),
+			};
+		}
+
+		it.each([false, true])(
+			'writes the committed notebook once in the copy-only batch (Git: %s)',
+			async (withGit) => {
+				const { calls, bucketHandle, nb, version, provision } = await overlayFixture();
+				await bucketHandle.put(nb.workspaceFile('data.csv'), 'data');
+				if (withGit) await bucketHandle.put(version.gitFile('HEAD'), 'ref: refs/heads/main');
+
+				const result = await provision(withGit ? { gitPrefix: version.gitPrefix } : {});
+
+				const notebookWrites = calls.writeFiles.filter((files) =>
+					files.some(({ path }) => path === `${MOUNT_PATH}/nb.py`),
+				);
+				expect(notebookWrites).toEqual([
+					[
+						{ path: `${MOUNT_PATH}/nb.py`, content: new TextEncoder().encode('committed') },
+						{ path: `${MOUNT_PATH}/data.csv`, content: new TextEncoder().encode('data') },
+					],
+				]);
+				expect(calls.mountBucket).toEqual([]);
+				expect(result.counters.files_objects).toBe(withGit ? 3 : 2);
+			},
+		);
+
+		it.each([undefined, false])(
+			'applies the overlay when an injected copy loader does not report it (%s)',
+			async (overlayApplied) => {
+				const load = vi.fn<WorkspaceLoadStrategies['copyOnly']['load']>(async (ctx) => {
+					await ctx.sandbox.writeFiles([{ path: `${ctx.mountPath}/nb.py`, content: 'draft' }]);
+					return { usedFallback: true, overlayApplied };
+				});
+				const { calls, provision } = await overlayFixture({
+					copyOnly: { load },
+					mountOrCopy: { load },
+				});
+
+				await provision();
+
+				expect(load).toHaveBeenCalledOnce();
+				expect(
+					calls.writeFiles.flat().filter(({ path }) => path === `${MOUNT_PATH}/nb.py`),
+				).toEqual([
+					{ path: `${MOUNT_PATH}/nb.py`, content: 'draft' },
+					{ path: `${MOUNT_PATH}/nb.py`, content: new TextEncoder().encode('committed') },
+				]);
+			},
+		);
+
+		it.each(['copy-only', 'mount-or-copy'] as const)(
+			'does not repeat an overlay applied by an injected %s loader',
+			async (workspaceLoadMode) => {
+				const load = vi.fn<WorkspaceLoadStrategies['copyOnly']['load']>(async (ctx) => {
+					expect(ctx.overlay).toHaveLength(1);
+					await ctx.sandbox.writeFiles([{ path: `${ctx.mountPath}/nb.py`, content: 'committed' }]);
+					return { usedFallback: true, overlayApplied: true };
+				});
+				const { calls, bucketHandle, provision } = await overlayFixture({
+					copyOnly: { load },
+					mountOrCopy: { load },
+				});
+				const get = vi.spyOn(bucketHandle, 'get');
+
+				await provision({ workspaceLoadMode });
+
+				expect(
+					calls.writeFiles.flat().filter(({ path }) => path === `${MOUNT_PATH}/nb.py`),
+				).toEqual([{ path: `${MOUNT_PATH}/nb.py`, content: 'committed' }]);
+				expect(get).not.toHaveBeenCalled();
+			},
+		);
+
+		it.each(['sandbox', 'bucket', 'mount failure'] as const)(
+			'merges the overlay when mount-or-copy falls back because of %s',
+			async (reason) => {
+				const { instance, calls, bucketHandle, nb, version, provision } = await overlayFixture();
+				await bucketHandle.put(nb.workspaceFile('data.csv'), 'data');
+				if (reason === 'sandbox') {
+					Object.defineProperty(instance, 'supportsBucketMount', { value: false });
+				}
+				const mount = vi.spyOn(instance, 'mountBucket');
+				if (reason === 'mount failure') mount.mockRejectedValue(new Error('mount unsupported'));
+				const get = vi.spyOn(bucketHandle, 'get');
+
+				await provision({
+					workspaceLoadMode: undefined,
+					bucket: { ...bucketConfig, mountable: reason !== 'bucket' },
+				});
+
+				expect(
+					calls.writeFiles.filter((files) =>
+						files.some(({ path }) => path === `${MOUNT_PATH}/nb.py`),
+					),
+				).toEqual([
+					[
+						{ path: `${MOUNT_PATH}/nb.py`, content: new TextEncoder().encode('committed') },
+						{ path: `${MOUNT_PATH}/data.csv`, content: new TextEncoder().encode('data') },
+					],
+				]);
+				expect(get).not.toHaveBeenCalledWith(nb.workspaceFile('nb.py'));
+				expect(get.mock.calls.filter(([key]) => key === version.code)).toHaveLength(1);
+				expect(mount).toHaveBeenCalledTimes(reason === 'mount failure' ? 1 : 0);
+			},
+		);
+
+		it('applies the overlay after a successful mount', async () => {
+			const { instance, calls, provision } = await overlayFixture();
+			const write = instance.writeFiles.bind(instance);
+			instance.writeFiles = async (files) => {
+				if (files.some(({ path }) => path === `${MOUNT_PATH}/nb.py`)) {
+					expect(calls.mountBucket).toHaveLength(1);
+				}
+				await write(files);
+			};
+
+			const result = await provision({ workspaceLoadMode: undefined });
+
+			expect(result.usedFallback).toBe(false);
+			expect(calls.writeFiles.flat().filter(({ path }) => path === `${MOUNT_PATH}/nb.py`)).toEqual([
+				{ path: `${MOUNT_PATH}/nb.py`, content: new TextEncoder().encode('committed') },
+			]);
+		});
+
+		it('reports a missing overlay object after a successful mount like the copy path', async () => {
+			const { calls, bucketHandle, version, provision } = await overlayFixture();
+			await bucketHandle.delete(version.code);
+
+			const rejected = provision({ workspaceLoadMode: undefined });
+
+			await expect(rejected).rejects.toBeInstanceOf(UnavailableError);
+			await expect(rejected).rejects.toMatchObject({
+				message:
+					'Failed to start sandbox while restoring the notebook workspace into the sandbox NotFoundError [NOT_FOUND]',
+				cause: expect.objectContaining({ message: `Workspace source ${version.code} not found` }),
+			});
+			expect(calls.mountBucket).toHaveLength(1);
+			expect(calls.startProcess).toEqual([]);
+		});
+
+		it.each(['missing', 'write'] as const)(
+			'destroys the sandbox without launching when the app overlay fails (%s)',
+			async (failure) => {
+				const { instance, calls, bucketHandle, version, provision } = await overlayFixture();
+				if (failure === 'missing') await bucketHandle.delete(version.code);
+				const writeFiles = instance.writeFiles.bind(instance);
+				instance.writeFiles = async (files) => {
+					if (files.some(({ path }) => path === `${MOUNT_PATH}/nb.py`)) {
+						throw new Error('overlay write failed');
+					}
+					await writeFiles(files);
+				};
+
+				await expect(provision()).rejects.toMatchObject({
+					message: expect.stringContaining(
+						'Failed to start sandbox while restoring the notebook workspace',
+					),
+					cause: expect.objectContaining({
+						message:
+							failure === 'missing'
+								? `Workspace source ${version.code} not found`
+								: 'overlay write failed',
+					}),
+				});
+				expect(calls.startProcess).toEqual([]);
+				expect(calls.exec.some((command) => command.includes('uv sync'))).toBe(false);
+				expect(calls.destroy).toBe(1);
+			},
+		);
+
+		it.each([false, true])(
+			'preserves the overlay with a configured archive (present: %s)',
+			async (present) => {
+				const { instance, calls, bucketHandle, nb, version, provision } = await overlayFixture();
+				if (present)
+					await bucketHandle.put(version.workspaceArchive, new Uint8Array([80, 75, 3, 4]));
+				const get = vi.spyOn(bucketHandle, 'get');
+				const writeFiles = instance.writeFiles.bind(instance);
+				instance.writeFiles = async (files) => {
+					if (present && files.some(({ path }) => path === `${MOUNT_PATH}/nb.py`)) {
+						expect(calls.exec.some((command) => command.startsWith('python3 '))).toBe(true);
+					}
+					await writeFiles(files);
+				};
+
+				await provision({ workspaceArchive: version.workspaceArchive });
+
+				expect(
+					calls.writeFiles.flat().filter(({ path }) => path === `${MOUNT_PATH}/nb.py`),
+				).toEqual([
+					{ path: `${MOUNT_PATH}/nb.py`, content: new TextEncoder().encode('committed') },
+				]);
+				expect(get.mock.calls.filter(([key]) => key === version.code)).toHaveLength(1);
+				expect(get).not.toHaveBeenCalledWith(nb.workspaceFile('nb.py'));
+				expect(calls.startProcess).toHaveLength(1);
+			},
+		);
+
+		const provisionOptions = {
+			sandboxId,
+			projectId,
+			notebookId,
+			hostname: 'localhost',
+			bucket: bucketConfig,
+		};
+
 		it('happy path with mount: usedFallback false, returns exposed url, starts marimo on port 2718', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 
-			const result = await provisioner.provision({
-				sandboxId,
-				projectId,
-				notebookId,
-				hostname: 'localhost',
-				bucket: bucketConfig,
-			});
+			const result = await provisioner.provision(provisionOptions);
 
 			expect(result.usedFallback).toBe(false);
 			expect(result.url).toBe(EXPOSED_URL);
@@ -745,11 +971,7 @@ describe('SandboxProvisioner', () => {
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 
 			await provisioner.provision({
-				sandboxId,
-				projectId,
-				notebookId,
-				hostname: 'localhost',
-				bucket: bucketConfig,
+				...provisionOptions,
 				entryNotebook: 'apps/dash.py',
 				launchStrategy: 'uv-script-pins',
 			});
@@ -772,6 +994,112 @@ describe('SandboxProvisioner', () => {
 			expect(calls.setEnvVars).toContainEqual({ PYTHONPATH: MOUNT_PATH });
 			expect(calls.startProcess[0].cmd).not.toContain('uv sync');
 		});
+
+		it('writes session files before the launch strategy resolves', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const strategy = deferred<'uv-script-pins'>();
+			const writeFiles = instance.writeFiles.bind(instance);
+			vi.spyOn(instance, 'writeFiles').mockImplementationOnce(async (files) => {
+				const result = await writeFiles(files);
+				expect(calls.exec.length).toBeGreaterThan(0);
+				expect(calls.startProcess).toEqual([]);
+				strategy.resolve('uv-script-pins');
+				return result;
+			});
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...provisionOptions,
+				entryNotebook: 'apps/dash.py',
+				launchStrategy: strategy.promise,
+				sessionEnv: { files: [{ path: '/config', content: 'configured' }] },
+			});
+			expect(instance.writeFiles).toHaveBeenCalled();
+			expect(
+				calls.exec.some((command) => command.includes("uv export --script 'apps/dash.py'")),
+			).toBe(true);
+			expect(calls.startProcess[0].cmd).toContain("marimo --quiet edit 'apps/dash.py'");
+		});
+
+		it.each(['provision', 'prepare'] as const)(
+			'%s cleans up a strategy rejection that arrives before boot finishes',
+			async (operation) => {
+				const { instance, calls } = makeFakeSandbox();
+				const ready = deferred<void>();
+				const started = deferred<void>();
+				instance.ready = () => {
+					started.resolve();
+					return ready.promise;
+				};
+				const strategy = deferred<'uv-script-pins'>();
+				const error = new Error('strategy unavailable');
+				const pending = new SandboxProvisioner(fakeComputeFrom(instance))[operation]({
+					...provisionOptions,
+					launchStrategy: strategy.promise,
+				});
+				const rejected = expect(pending).rejects.toBe(error);
+				await started.promise;
+				try {
+					strategy.reject(error);
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					expect(calls.startProcess).toEqual([]);
+				} finally {
+					ready.resolve();
+				}
+				await rejected;
+				expect(calls.destroy).toBe(1);
+				expect(calls.startProcess).toEqual([]);
+				expect(calls.exec.some((command) => command.includes('uv sync'))).toBe(false);
+			},
+		);
+
+		it.each([
+			{ operation: 'provision', first: 'load' },
+			{ operation: 'provision', first: 'inject' },
+			{ operation: 'prepare', first: 'load' },
+			{ operation: 'prepare', first: 'inject' },
+		] as const)(
+			'$operation waits for workspace loading and injection before strategy failure cleanup ($first first)',
+			async ({ operation, first }) => {
+				const { instance, calls } = makeFakeSandbox();
+				const work = { load: deferred<void>(), inject: deferred<void>() };
+				const started = { load: deferred<void>(), inject: deferred<void>() };
+				vi.spyOn(instance, 'mountBucket').mockImplementation(async () => {
+					started.load.resolve();
+					await work.load.promise;
+				});
+				vi.spyOn(instance, 'setEnvVars').mockImplementation(async () => {
+					started.inject.resolve();
+					await work.inject.promise;
+				});
+				const strategy = deferred<'uv-script-pins'>();
+				const error = new Error('strategy unavailable');
+				const onSandboxDestroyed = vi.fn();
+				const pending = new SandboxProvisioner(fakeComputeFrom(instance))[operation]({
+					...provisionOptions,
+					launchStrategy: strategy.promise,
+					sessionEnv: { vars: { TOKEN: 'secret' } },
+					onSandboxDestroyed,
+				});
+				const rejected = expect(pending).rejects.toBe(error);
+				await Promise.all([started.load.promise, started.inject.promise]);
+				try {
+					strategy.reject(error);
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					expect(calls.destroy).toBe(0);
+					work[first].resolve();
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					expect(calls.destroy).toBe(0);
+					expect(onSandboxDestroyed).not.toHaveBeenCalled();
+				} finally {
+					work.load.resolve();
+					work.inject.resolve();
+					await rejected;
+				}
+				expect(calls.destroy).toBe(1);
+				expect(onSandboxDestroyed).toHaveBeenCalledOnce();
+				expect(calls.startProcess).toEqual([]);
+				expect(calls.exec.some((command) => command.includes('uv sync'))).toBe(false);
+			},
+		);
 
 		it('records setup step timings and logs bounded uv output when setup is slow', async () => {
 			vi.useFakeTimers();
@@ -2074,13 +2402,11 @@ describe('SandboxProvisioner', () => {
 			expect(restored).toContain(`${MOUNT_PATH}/python/apps/app.py`);
 			expect(restored).toContain(`${MOUNT_PATH}/.git/HEAD`);
 			expect(result.counters).toMatchObject({ files_objects: 2 });
-			expect(calls.exec).toContainEqual(
-				expect.stringContaining("git config --global --add safe.directory '/workspace'"),
-			);
-			expect(calls.exec).toContainEqual(
-				expect.stringContaining(
-					"cd '/workspace' && git -c 'safe.directory=/workspace' sparse-checkout set --cone -- 'python/apps'",
-				),
+			const gitCommands = calls.exec.filter((command) => command.includes('safe.directory'));
+			expect(gitCommands).toHaveLength(1);
+			expect(gitCommands[0]).toContain("git config --global --add safe.directory '/workspace'\n");
+			expect(gitCommands[0]).toContain(
+				"cd '/workspace' && git -c 'safe.directory=/workspace' sparse-checkout set --cone -- 'python/apps'",
 			);
 			const sparseCheckout = calls.exec.findIndex((command) => command.includes('sparse-checkout'));
 			expect(calls.execOptions[sparseCheckout]?.timeout).toBe(60_000);

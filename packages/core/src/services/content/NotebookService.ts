@@ -1,3 +1,5 @@
+import { MetadataCache } from './metadataCache';
+import type { ReadConsistency } from './metadataCache';
 import { NotebookImportService } from './NotebookImportService';
 import { PreviewStore } from './PreviewStore';
 import { previewKey, PreviewRecordSchema } from './notebookPreviews';
@@ -6,7 +8,7 @@ import { ThumbnailService } from './ThumbnailService';
 import { all } from 'better-all';
 import type { Bucket } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
-import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { BUCKET_SCAN_CONCURRENCY, NOTEBOOK_META_CACHE_MAX_ENTRIES } from '../../constants';
 import { Millis } from '../../duration';
 import {
 	assertVersionMatch,
@@ -153,6 +155,8 @@ export interface CommitSessionResult {
 }
 
 export class NotebookService {
+	private readonly metaCache: MetadataCache<NotebookMeta>;
+
 	readonly synced: SyncedNotebookService;
 	readonly thumbnails: ThumbnailService;
 	readonly workspace: NotebookWorkspaceService;
@@ -166,6 +170,7 @@ export class NotebookService {
 		private deepLinks = new DeepLinkService(bucket, metrics),
 		repositoryHosts?: GitProviderHosts,
 	) {
+		this.metaCache = new MetadataCache(bucket, NOTEBOOK_META_CACHE_MAX_ENTRIES);
 		this.thumbnails = new ThumbnailService(bucket, this);
 		this.imports = new NotebookImportService(bucket, this);
 		this.synced = new SyncedNotebookService(bucket, catalog, metrics, {
@@ -286,18 +291,31 @@ export class NotebookService {
 	private async readNotebookMeta(
 		projectId: ProjectId,
 		notebookId: NotebookId,
+		options: { consistency?: ReadConsistency } = {},
 	): Promise<NotebookMeta> {
 		const nb = paths.project(projectId).notebook(notebookId);
-		const normal = await this.bucket.get(nb.meta);
-		if (normal) return readStored(NotebookMetaSchema, normal, nb.meta);
-		// Old replicas cannot strip the preview marker by rewriting ordinary meta.json.
-		const object = await this.bucket.get(nb.previewMeta);
-		if (!object) throw new NotFoundError(`Notebook ${notebookId} not found`);
-		return readStored(PreviewRuntimeMetaSchema, object, nb.previewMeta);
+		// Separate preview metadata keeps old replicas from stripping the preview marker.
+		const meta = await this.metaCache.read(
+			[nb.meta, nb.previewMeta],
+			(object) =>
+				object.key === nb.meta
+					? readStored(NotebookMetaSchema, object, nb.meta)
+					: readStored(PreviewRuntimeMetaSchema, object, nb.previewMeta),
+			options.consistency,
+		);
+		if (!meta) throw new NotFoundError(`Notebook ${notebookId} not found`);
+		return meta;
 	}
 
-	async getNotebookMeta(projectId: ProjectId, notebookId: NotebookId): Promise<NotebookMeta> {
-		return this.resolvePreviewMeta(projectId, await this.readNotebookMeta(projectId, notebookId));
+	async getNotebookMeta(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		options: { consistency?: ReadConsistency } = {},
+	): Promise<NotebookMeta> {
+		return this.resolvePreviewMeta(
+			projectId,
+			await this.readNotebookMeta(projectId, notebookId, options),
+		);
 	}
 
 	private async resolvePreviewMeta(
@@ -354,9 +372,9 @@ export class NotebookService {
 	async getSecurityLabels(
 		projectId: ProjectId,
 		notebookId: NotebookId,
-		options: { includeDeleted?: boolean } = {},
+		options: { includeDeleted?: boolean; consistency?: ReadConsistency } = {},
 	): Promise<ResourceSecurityLabels | null> {
-		const meta = await this.getNotebookMeta(projectId, notebookId);
+		const meta = await this.getNotebookMeta(projectId, notebookId, options);
 		if (meta.status === 'deleted' && !options.includeDeleted) {
 			throw new NotFoundError(`Notebook ${notebookId} not found`);
 		}

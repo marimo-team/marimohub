@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import type { Session } from '@/types';
+import { deferred } from '@/test/deferred';
 import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
+import {
+	SESSION_START_POLL_INTERVAL_MS,
+	SESSION_START_SLOW_POLL_AFTER_MS,
+	SESSION_START_SLOW_POLL_INTERVAL_MS,
+} from '@/lib/sessions';
 import { useNotebookSession } from './useNotebookSession';
 
 const PID = 'proj-1';
@@ -25,6 +31,36 @@ async function settleHook(): Promise<void> {
 		await act(async () => {
 			await Promise.resolve();
 		});
+	}
+}
+
+async function setupAppHeartbeat(
+	heartbeat: () => Response | Promise<Response>,
+	initial: Partial<Session> = {},
+) {
+	vi.useFakeTimers();
+	const fetchMock = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) =>
+		String(url).endsWith('/heartbeat')
+			? heartbeat()
+			: jsonOk(
+					makeSession({ mode: 'app', status: 'starting', sandbox_url: undefined, ...initial }),
+				),
+	);
+	vi.stubGlobal('fetch', fetchMock);
+	const hook = renderHookWithClient(
+		() => useNotebookSession(PID, NID, { mode: 'app', appHeartbeatIntervalSeconds: 1 }),
+		{ toaster: false },
+	);
+	await settleHook();
+	return { ...hook, fetchMock };
+}
+
+const FAST_START_POLLS = SESSION_START_SLOW_POLL_AFTER_MS / SESSION_START_POLL_INTERVAL_MS + 1;
+
+async function advanceStartupPastBackoff() {
+	// Flush React between ticks so delay changes take effect.
+	for (let tick = 0; tick < FAST_START_POLLS; tick++) {
+		await act(() => vi.advanceTimersByTimeAsync(SESSION_START_POLL_INTERVAL_MS));
 	}
 }
 
@@ -52,12 +88,9 @@ describe('useNotebookSession', () => {
 	});
 
 	it('releases an admission that completes after the page unmounts', async () => {
-		let complete!: (response: Response) => void;
-		const pending = new Promise<Response>((resolve) => {
-			complete = resolve;
-		});
+		const pending = deferred<Response>();
 		const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
-			String(input).endsWith('/leave') ? jsonOk({}) : pending,
+			String(input).endsWith('/leave') ? jsonOk({}) : pending.promise,
 		);
 		vi.stubGlobal('fetch', fetchMock);
 		const { unmount } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
@@ -66,7 +99,7 @@ describe('useNotebookSession', () => {
 		await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 		unmount();
 		await act(async () =>
-			complete(
+			pending.resolve(
 				jsonOk(makeSession({ app_assignment: { visit_id: 'tab', generation: 'generation' } })),
 			),
 		);
@@ -178,6 +211,125 @@ describe('useNotebookSession', () => {
 		expect(result.current.sandboxUrl).toBeUndefined();
 	});
 
+	it('starts an app from its heartbeat and preserves the visit lease', async () => {
+		const assignment = { visit_id: 'visit', generation: 'generation' };
+		const { result, fetchMock } = await setupAppHeartbeat(() => jsonOk(makeSession()), {
+			app_assignment: assignment,
+		});
+		expect(result.current.isProvisioning).toBe(true);
+
+		await act(() => vi.advanceTimersByTimeAsync(1_000));
+
+		expect(result.current.isRunning).toBe(true);
+		expect(result.current.session?.app_assignment).toEqual(assignment);
+		const heartbeat = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/heartbeat'));
+		expect(JSON.parse(heartbeat![1]!.body as string)).toEqual(assignment);
+		expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/sessions/sess-1'))).toBe(
+			false,
+		);
+	});
+
+	it.each([
+		{ response: { status: 'failed' }, ended: 'failed' },
+		{ response: { status: 'terminated' }, ended: 'terminated' },
+		{ response: { status: 'expired' }, ended: 'expired' },
+		{ response: { status: 'running', sandbox_url: undefined }, ended: 'access_lost' },
+	] satisfies { response: Partial<Session>; ended: string }[])(
+		'ends startup when a heartbeat reports $ended',
+		async ({ response, ended }) => {
+			const { result, fetchMock } = await setupAppHeartbeat(() => jsonOk(makeSession(response)));
+			await act(() => vi.advanceTimersByTimeAsync(1_000));
+			expect(result.current.ended).toBe(ended);
+			expect(result.current.session).toBeNull();
+			expect(result.current.isProvisioning).toBe(false);
+			fetchMock.mockClear();
+			await act(() => vi.advanceTimersByTimeAsync(30_000));
+			expect(fetchMock).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(['network', 'server'])(
+		'recovers from a transient %s error in a startup heartbeat',
+		async (failure) => {
+			let heartbeats = 0;
+			const { result } = await setupAppHeartbeat(() => {
+				if (++heartbeats > 1) return jsonOk(makeSession());
+				if (failure === 'network') throw new TypeError('Failed to fetch');
+				return jsonError('UNAVAILABLE', 'Try again', 503);
+			});
+			await act(() => vi.advanceTimersByTimeAsync(1_000));
+			expect(result.current.isProvisioning).toBe(true);
+			expect(result.current.error).toBeNull();
+			expect(result.current.ended).toBeNull();
+			await act(() => vi.advanceTimersByTimeAsync(1_000));
+			expect(result.current.isRunning).toBe(true);
+		},
+	);
+
+	it.each(['edit', 'app'] as const)(
+		'resets %s polling backoff for a new startup attempt',
+		async (mode) => {
+			vi.useFakeTimers();
+			let creates = 0;
+			const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+				if (String(url).endsWith('/sessions') && init?.method === 'POST') creates++;
+				return jsonOk(
+					makeSession({
+						session_id: `sess-${creates}`,
+						status: 'starting',
+						sandbox_url: undefined,
+					}),
+				);
+			});
+			vi.stubGlobal('fetch', fetchMock);
+			const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode }), {
+				toaster: false,
+			});
+			await settleHook();
+			await advanceStartupPastBackoff();
+			act(() => result.current.stop());
+			await settleHook();
+			act(() => result.current.start());
+			await settleHook();
+			expect(result.current.session?.session_id).toBe('sess-2');
+			fetchMock.mockClear();
+			await act(() => vi.advanceTimersByTimeAsync(SESSION_START_POLL_INTERVAL_MS - 1));
+			expect(fetchMock).not.toHaveBeenCalled();
+			await act(() => vi.advanceTimersByTimeAsync(1));
+			expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+				`/api/v1/projects/${PID}/notebooks/${NID}/sessions/sess-2`,
+			]);
+		},
+	);
+
+	it.each(['edit', 'app'] as const)(
+		'slows %s startup polling after 30 seconds under StrictMode',
+		async (mode) => {
+			vi.useFakeTimers();
+			const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
+				jsonOk(makeSession({ status: 'starting', sandbox_url: undefined })),
+			);
+			vi.stubGlobal('fetch', fetchMock);
+			const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode }), {
+				toaster: false,
+				reactStrictMode: true,
+			});
+			await settleHook();
+			const polls = () =>
+				fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/sessions/sess-1'));
+			await advanceStartupPastBackoff();
+			expect(polls()).toHaveLength(FAST_START_POLLS);
+			await act(() => vi.advanceTimersByTimeAsync(SESSION_START_SLOW_POLL_INTERVAL_MS - 1));
+			expect(polls()).toHaveLength(FAST_START_POLLS);
+			await act(() => vi.advanceTimersByTimeAsync(1));
+			expect(polls()).toHaveLength(FAST_START_POLLS + 1);
+
+			fetchMock.mockResolvedValue(jsonOk(makeSession()));
+			await act(() => vi.advanceTimersByTimeAsync(SESSION_START_SLOW_POLL_INTERVAL_MS));
+			expect(result.current.isRunning).toBe(true);
+		},
+	);
+
 	it('captures the error message when start fails', async () => {
 		vi.stubGlobal(
 			'fetch',
@@ -193,14 +345,12 @@ describe('useNotebookSession', () => {
 
 	it('keeps temporary intent and provisioning visible during the one-shot Default retry', async () => {
 		let postCount = 0;
-		let resolveDefault!: (response: Response) => void;
+		const defaultResponse = deferred<Response>();
 		const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
 			if (init?.method !== 'POST') throw new Error('unexpected request');
 			postCount += 1;
 			if (postCount === 1) return jsonError('RESOURCE_EXHAUSTED', 'profile too large', 429);
-			return new Promise<Response>((resolve) => {
-				resolveDefault = resolve;
-			});
+			return defaultResponse.promise;
 		});
 		vi.stubGlobal('fetch', fetchMock);
 
@@ -225,7 +375,7 @@ describe('useNotebookSession', () => {
 		});
 
 		await act(async () => {
-			resolveDefault(jsonError('RESOURCE_EXHAUSTED', 'default unavailable', 429));
+			defaultResponse.resolve(jsonError('RESOURCE_EXHAUSTED', 'default unavailable', 429));
 		});
 		await waitFor(() => expect(result.current.error?.message).toBe('default unavailable'));
 		expect(result.current.isProvisioning).toBe(false);
@@ -488,7 +638,7 @@ describe('useNotebookSession', () => {
 		expect(result.current.session?.status).toBe('starting');
 
 		await act(async () => {
-			await vi.advanceTimersByTimeAsync(4_000);
+			await vi.advanceTimersByTimeAsync(5_000);
 		});
 		expect(result.current.error).toEqual({
 			code: 'STARTUP_TIMEOUT',
@@ -503,14 +653,14 @@ describe('useNotebookSession', () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-				if (init?.method === 'POST') {
+				if (init?.method === 'POST' && String(url).endsWith('/sessions')) {
 					posts += 1;
 					// First start wedges in `starting`; the retry comes up immediately.
 					return posts === 1
 						? jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }))
 						: jsonOk(makeSession());
 				}
-				if (String(url).endsWith('/sessions/sess-1')) {
+				if (String(url).endsWith('/sessions/sess-1') || String(url).endsWith('/heartbeat')) {
 					return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
 				}
 				throw new Error(`unexpected fetch: ${String(url)}`);
@@ -561,26 +711,30 @@ describe('useNotebookSession', () => {
 		}
 	});
 
-	it.each([403, 409])('ends an app on heartbeat rejection %s', async (status) => {
-		vi.useFakeTimers();
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async (url: RequestInfo | URL) =>
-				String(url).endsWith('/heartbeat')
-					? jsonError(status === 403 ? 'FORBIDDEN' : 'CONFLICT', 'assignment unavailable', status)
-					: jsonOk(makeSession({ mode: 'app' })),
-			),
-		);
-		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
-			toaster: false,
-		});
-		await settleHook();
-		await act(async () => {
-			await vi.advanceTimersByTimeAsync(30_000);
-		});
-		expect(result.current.session).toBeNull();
-		expect(result.current.ended).toBe(status === 403 ? 'access_lost' : 'expired');
-	});
+	it.each(
+		(['starting', 'running'] as const).flatMap((sessionStatus) =>
+			[
+				{ status: 403, code: 'FORBIDDEN', ended: 'access_lost' },
+				{ status: 404, code: 'NOT_FOUND', ended: 'gone' },
+				{ status: 409, code: 'CONFLICT', ended: 'expired' },
+			].map((failure) => ({ sessionStatus, ...failure })),
+		),
+	)(
+		'ends a $sessionStatus app on heartbeat rejection $status',
+		async ({ sessionStatus, status, code, ended }) => {
+			const { result, fetchMock } = await setupAppHeartbeat(
+				() => jsonError(code, 'assignment unavailable', status),
+				makeSession({ mode: 'app', status: sessionStatus }),
+			);
+			await act(() => vi.advanceTimersByTimeAsync(1_000));
+			expect(result.current.session).toBeNull();
+			expect(result.current.ended).toBe(ended);
+			expect(result.current.isProvisioning).toBe(false);
+			fetchMock.mockClear();
+			await act(() => vi.advanceTimersByTimeAsync(30_000));
+			expect(fetchMock).not.toHaveBeenCalled();
+		},
+	);
 
 	it('sends fenced app presence during startup and releases the visit on departure', async () => {
 		vi.useFakeTimers();
@@ -670,10 +824,7 @@ describe('useNotebookSession', () => {
 
 	it('a late poll response cannot resurrect a session after the startup timeout', async () => {
 		vi.useFakeTimers();
-		let releasePoll!: (response: Response) => void;
-		const held = new Promise<Response>((resolve) => {
-			releasePoll = resolve;
-		});
+		const held = deferred<Response>();
 		let polls = 0;
 		vi.stubGlobal(
 			'fetch',
@@ -685,7 +836,7 @@ describe('useNotebookSession', () => {
 					polls += 1;
 					// The first poll hangs until after the timeout has concluded.
 					return polls === 1
-						? held
+						? held.promise
 						: jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
 				}
 				throw new Error(`unexpected fetch: ${String(url)}`);
@@ -705,7 +856,7 @@ describe('useNotebookSession', () => {
 
 		// The stale in-flight poll finally answers `running` — and must be ignored.
 		await act(async () => {
-			releasePoll(jsonOk(makeSession()));
+			held.resolve(jsonOk(makeSession()));
 			await Promise.resolve();
 		});
 		await settleHook();
@@ -1032,10 +1183,7 @@ describe('useNotebookSession (app mode)', () => {
 	});
 
 	it('replaces the selected app before readmitting this page with a new visit', async () => {
-		let finishReplacement!: () => void;
-		const pending = new Promise<void>((resolve) => {
-			finishReplacement = resolve;
-		});
+		const replacement = deferred();
 		const requests: { method: string; body: Record<string, string> }[] = [];
 		vi.stubGlobal(
 			'fetch',
@@ -1044,7 +1192,7 @@ describe('useNotebookSession (app mode)', () => {
 				const body = JSON.parse(String(init?.body)) as Record<string, string>;
 				requests.push({ method: init?.method ?? 'GET', body });
 				if (body.replace_app_session_id) {
-					await pending;
+					await replacement.promise;
 					return jsonOk(makeSession({ session_id: 'replacement', mode: 'app' }));
 				}
 				return jsonOk(
@@ -1065,7 +1213,7 @@ describe('useNotebookSession (app mode)', () => {
 		expect(requests[1].body).toEqual({ mode: 'app', replace_app_session_id: 'original' });
 		expect(result.current.isProvisioning).toBe(true);
 		expect(result.current.session).toBeNull();
-		await act(async () => finishReplacement());
+		await act(async () => replacement.resolve());
 		await waitFor(() => expect(result.current.session?.session_id).toBe('admitted'));
 		expect(requests).toHaveLength(3);
 		expect(requests.map((request) => request.method)).toEqual(['POST', 'POST', 'POST']);
@@ -1101,15 +1249,12 @@ describe('useNotebookSession (app mode)', () => {
 	);
 
 	it('reports provisioning while a restart’s stop half is still in flight', async () => {
-		let resolveDelete!: () => void;
-		const deletePending = new Promise<void>((resolve) => {
-			resolveDelete = resolve;
-		});
+		const deletePending = deferred();
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
 				if (init?.method === 'DELETE') {
-					await deletePending;
+					await deletePending.promise;
 					return jsonOk(undefined);
 				}
 				return jsonOk(makeSession({ mode: 'edit' }));
@@ -1128,7 +1273,7 @@ describe('useNotebookSession (app mode)', () => {
 		expect(result.current.session).toBeNull();
 		expect(result.current.error).toBeNull();
 
-		resolveDelete();
+		deletePending.resolve();
 		await waitFor(() => expect(result.current.isRunning).toBe(true));
 	});
 
@@ -1197,17 +1342,14 @@ describe('useNotebookSession (app mode)', () => {
 		'ignores a late running response after a %s session ends',
 		async (mode) => {
 			vi.useFakeTimers();
-			let release!: (response: Response) => void;
-			const pending = new Promise<Response>((resolve) => {
-				release = resolve;
-			});
+			const pending = deferred<Response>();
 			let watches = 0;
 			vi.stubGlobal(
 				'fetch',
 				vi.fn(async (url: RequestInfo | URL) => {
 					if (String(url).endsWith('/sessions')) return jsonOk(makeSession({ mode }));
 					watches++;
-					if (watches === 1) return pending;
+					if (watches === 1) return pending.promise;
 					return jsonOk(
 						makeSession({
 							mode,
@@ -1229,74 +1371,80 @@ describe('useNotebookSession (app mode)', () => {
 			expect(result.current.ended).toBe(mode === 'edit' ? 'takeover' : 'terminated');
 			expect(result.current.endedByUserId).toBe(mode === 'edit' ? 'new-owner' : null);
 			expect(result.current.session).toBeNull();
-			await act(async () => release(jsonOk(makeSession({ mode }))));
+			await act(async () => pending.resolve(jsonOk(makeSession({ mode }))));
 			await settleHook();
 			expect(result.current.session).toBeNull();
 			expect(result.current.isRunning).toBe(false);
 		},
 	);
 
-	it('a heartbeat that lands after a restart does not resurrect the old session', async () => {
-		vi.useFakeTimers();
-		let releaseWatch!: () => void;
-		const watchGate = new Promise<void>((resolve) => {
-			releaseWatch = resolve;
-		});
-		let creates = 0;
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-				const method = init?.method ?? 'GET';
-				if (String(url).endsWith('/sessions/sess-1/heartbeat')) {
-					await watchGate;
-					return jsonOk(makeSession({ session_id: 'sess-1', mode: 'app' }));
-				}
-				if (
-					method === 'POST' &&
-					(JSON.parse(String(init?.body)) as { replace_app_session_id?: string })
-						.replace_app_session_id
-				)
+	it.each(['starting', 'running'] as const)(
+		'a late %s heartbeat cannot resurrect a session after restart',
+		async (initialStatus) => {
+			vi.useFakeTimers();
+			const watchGate = deferred();
+			let creates = 0;
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+					const method = init?.method ?? 'GET';
+					if (String(url).endsWith('/sessions/sess-1/heartbeat')) {
+						await watchGate.promise;
+						return jsonOk(makeSession({ session_id: 'sess-1', mode: 'app' }));
+					}
+					if (
+						method === 'POST' &&
+						(JSON.parse(String(init?.body)) as { replace_app_session_id?: string })
+							.replace_app_session_id
+					)
+						return jsonOk(makeSession({ session_id: 'sess-2', mode: 'app' }));
+					if (method === 'POST') {
+						creates += 1;
+						return jsonOk(
+							makeSession({
+								session_id: `sess-${creates}`,
+								mode: 'app',
+								status: creates === 1 ? initialStatus : 'running',
+							}),
+						);
+					}
+					if (method === 'DELETE') return jsonOk(undefined);
 					return jsonOk(makeSession({ session_id: 'sess-2', mode: 'app' }));
-				if (method === 'POST') {
-					creates += 1;
-					return jsonOk(makeSession({ session_id: `sess-${creates}`, mode: 'app' }));
-				}
-				if (method === 'DELETE') return jsonOk(undefined);
-				return jsonOk(makeSession({ session_id: 'sess-2', mode: 'app' }));
-			}),
-		);
+				}),
+			);
 
-		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode: 'app' }), {
-			toaster: false,
-		});
-		await settleHook();
-		expect(result.current.session?.session_id).toBe('sess-1');
+			const { result } = renderHookWithClient(
+				() => useNotebookSession(PID, NID, { mode: 'app', appHeartbeatIntervalSeconds: 1 }),
+				{
+					toaster: false,
+				},
+			);
+			await settleHook();
+			expect(result.current.session?.session_id).toBe('sess-1');
 
-		await act(async () => {
-			await vi.advanceTimersByTimeAsync(30_000);
-		});
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(1_000);
+			});
 
-		act(() => result.current.restart());
-		await act(async () => {
-			await vi.advanceTimersByTimeAsync(0);
-		});
-		await settleHook();
-		expect(result.current.session?.session_id).toBe('sess-2');
+			act(() => result.current.restart());
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			await settleHook();
+			expect(result.current.session?.session_id).toBe('sess-2');
 
-		releaseWatch();
-		await settleHook();
+			watchGate.resolve();
+			await settleHook();
 
-		expect(result.current.session?.session_id).toBe('sess-2');
-		expect(result.current.ended).toBeNull();
-		expect(result.current.error).toBeNull();
-	});
+			expect(result.current.session?.session_id).toBe('sess-2');
+			expect(result.current.ended).toBeNull();
+			expect(result.current.error).toBeNull();
+		},
+	);
 
 	it('a start poll that lands after a restart does not fail the fresh session', async () => {
 		vi.useFakeTimers();
-		let releasePoll!: () => void;
-		const pollGate = new Promise<void>((resolve) => {
-			releasePoll = resolve;
-		});
+		const pollGate = deferred();
 		let creates = 0;
 		vi.stubGlobal(
 			'fetch',
@@ -1317,7 +1465,7 @@ describe('useNotebookSession (app mode)', () => {
 				}
 				if (method === 'DELETE') return jsonOk(undefined);
 				if (String(url).endsWith('/sessions/sess-1')) {
-					await pollGate;
+					await pollGate.promise;
 					return jsonOk(makeSession({ mode: 'app', status: 'failed', sandbox_url: undefined }));
 				}
 				return jsonOk(makeSession({ session_id: 'sess-2', mode: 'app' }));
@@ -1343,7 +1491,7 @@ describe('useNotebookSession (app mode)', () => {
 
 		// The abandoned session's terminal answer must not fail the app that
 		// replaced it.
-		releasePoll();
+		pollGate.resolve();
 		await settleHook();
 
 		expect(result.current.session?.session_id).toBe('sess-2');

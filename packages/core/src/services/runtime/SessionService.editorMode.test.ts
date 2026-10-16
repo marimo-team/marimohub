@@ -63,6 +63,82 @@ describe('SessionService editor claims', () => {
 		expect(exclusive.ownedByOther?.session_id).toBe(owner.session_id);
 	});
 
+	it.each(['reuse', 'preflight'] as const)(
+		'refreshes a cached requested transfer that expires before %s',
+		async (check) => {
+			vi.useFakeTimers();
+			const owner = await running(USER_A);
+			await sessions.claimEditor(projectId, notebookId, owner.session_id, 'exclusive', USER_A);
+			const claim = await sessions.reserveTakeover(projectId, notebookId, {
+				takeoverId: 'expiring-request',
+				requestedBy: USER_B,
+				expectedHolder: owner.session_id,
+				expectedActivity: 'idle',
+			});
+			vi.advanceTimersByTime(5 * 60 * 1000 - 1);
+			if (check === 'reuse') {
+				const list = bucket.list.bind(bucket);
+				vi.spyOn(bucket, 'list').mockImplementationOnce(async (options) => {
+					vi.advanceTimersByTime(1);
+					return list(options);
+				});
+				const result = await sessions.findReusableEditor(
+					projectId,
+					notebookId,
+					USER_A,
+					'exclusive',
+					false,
+					{ claim },
+				);
+				expect(result.session?.session_id).toBe(owner.session_id);
+				expect(result.takeoverInProgress).toBeUndefined();
+			} else {
+				vi.advanceTimersByTime(1);
+				await expect(
+					sessions.isClaimRetiring(projectId, notebookId, USER_A, { claim }),
+				).resolves.toBe(false);
+			}
+			expect(
+				await (await bucket.get(paths.editorClaim(projectId, notebookId)))?.json(),
+			).not.toHaveProperty('transfer');
+		},
+	);
+
+	it.each(['reuse', 'preflight'] as const)(
+		'preserves a transfer that entered draining after the cached claim before %s',
+		async (check) => {
+			vi.useFakeTimers();
+			const owner = await running(USER_A);
+			await sessions.claimEditor(projectId, notebookId, owner.session_id, 'exclusive', USER_A);
+			const claim = await sessions.reserveTakeover(projectId, notebookId, {
+				takeoverId: 'draining-request',
+				requestedBy: USER_B,
+				expectedHolder: owner.session_id,
+				expectedActivity: 'idle',
+			});
+			await sessions.setTakeoverPhase(projectId, notebookId, 'draining-request', 'draining');
+			vi.advanceTimersByTime(5 * 60 * 1000);
+			if (check === 'reuse') {
+				const result = await sessions.findReusableEditor(
+					projectId,
+					notebookId,
+					USER_A,
+					'exclusive',
+					false,
+					{ claim },
+				);
+				expect(result.takeoverInProgress).toBe(true);
+			} else {
+				await expect(
+					sessions.isClaimRetiring(projectId, notebookId, USER_A, { claim }),
+				).rejects.toMatchObject({ code: 'TAKEOVER_IN_PROGRESS' });
+			}
+			expect((await sessions.getEditorClaim(projectId, notebookId))?.transfer?.phase).toBe(
+				'draining',
+			);
+		},
+	);
+
 	it('keeps temporary editor sessions outside the persistent claim', async () => {
 		const owner = await running(USER_A);
 		await sessions.claimEditor(projectId, notebookId, owner.session_id, 'exclusive', USER_A);

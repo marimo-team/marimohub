@@ -24,6 +24,7 @@ import {
 	makeFakeSandbox,
 	makeSession,
 	MemoryNotifier,
+	RecordingBucket,
 	uid,
 } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
@@ -42,6 +43,7 @@ import {
 	makeTestWif,
 } from '../testing';
 import type { TestWifOptions } from '../testing';
+import { makeFakeSnapshotCompute } from '../testing/snapshotCompute';
 
 const STRANGER = uid('user_stranger');
 const MANAGER = uid('user_manager');
@@ -90,6 +92,13 @@ describe('Session routes', () => {
 	});
 
 	const sessionsPath = (suffix = '') => `/projects/${pid}/notebooks/${nid}/sessions${suffix}`;
+	const cappedAppApi = (compute = makeFakeCompute()) =>
+		createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute,
+			deps: { policy: { maxAppsPerProject: 1, maxConcurrentSessionsPerUser: 1 } },
+		});
 	const editorSessionPath = (suffix = '') =>
 		`/projects/${pid}/notebooks/${nid}/editor-session${suffix}`;
 	const sandboxConfig = (overrides: Partial<ApiDeps['sandbox']> = {}): ApiDeps['sandbox'] => ({
@@ -373,6 +382,444 @@ describe('Session routes', () => {
 		}
 	});
 
+	it('overlaps integration resolution with the session write and skips resolution on reuse', async () => {
+		const recording = new RecordingBucket(bucket);
+		const sessionWrites = () =>
+			recording.calls.put.filter(({ key }) => key.startsWith(paths.sessionsForProject(pid))).length;
+		const writesAtResolution: number[] = [];
+		const releaseRender = Promise.withResolvers<void>();
+		const resolveForSession = vi.fn(async () => {
+			writesAtResolution.push(sessionWrites());
+			await releaseRender.promise;
+			return { files: [], vars: {}, attachments: [], warnings: [] };
+		});
+		const api = createTestApi({
+			bucket,
+			compute: makeFakeCompute(),
+			deps: {
+				bucket: recording,
+				services: createServices(recording),
+				integrations: { resolveForSession } as never,
+			},
+		});
+
+		const pending = api.request('POST', sessionsPath());
+		try {
+			await vi.waitFor(() => expect(sessionWrites()).toBeGreaterThan(0));
+			expect(writesAtResolution).toEqual([0]);
+		} finally {
+			releaseRender.resolve();
+		}
+		const session = await expectOk<ApiSession>(await pending);
+		expect(session.status).toBe('running');
+
+		const reused = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+		expect(reused.session_id).toBe(session.session_id);
+		expect(reused.reused).toBe(true);
+		expect(resolveForSession).toHaveBeenCalledOnce();
+	});
+
+	it.each(['integration rendering', 'launch detection'] as const)(
+		'continues independent provisioning work while %s is pending',
+		async (delayed) => {
+			const release = Promise.withResolvers<void>();
+			const { instance, calls } = makeFakeSandbox();
+			const entryKey = paths.project(pid).notebook(nid).workspaceFile('notebook.py');
+			const get = bucket.get.bind(bucket);
+			let entryReadPending = false;
+			vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				if (delayed === 'launch detection' && key === entryKey && !entryReadPending) {
+					entryReadPending = true;
+					await release.promise;
+				}
+				return get(key);
+			});
+			const api = createTestApi({
+				bucket,
+				compute: fakeComputeFrom(instance),
+				deps: {
+					sandbox: sandboxConfig({
+						notebookBridge: {
+							launcher: 'marimo-bridge.py',
+							files: [{ name: 'marimo-bridge.py', content: 'bridge' }],
+						},
+					}),
+					integrations: {
+						resolveForSession: async () => {
+							if (delayed === 'integration rendering') await release.promise;
+							return {
+								files: [],
+								vars: { TEST_INTEGRATION: 'ready' },
+								attachments: [],
+								warnings: [],
+							};
+						},
+					} as never,
+				},
+			});
+			const pending = api.request('POST', sessionsPath());
+			try {
+				await vi.waitFor(() => {
+					if (delayed === 'integration rendering') {
+						expect(
+							calls.writeFiles.flat().some((file) => file.path.endsWith('/marimo-bridge.py')),
+						).toBe(true);
+					} else {
+						expect(entryReadPending).toBe(true);
+						expect(calls.setEnvVars).toContainEqual(
+							expect.objectContaining({ TEST_INTEGRATION: 'ready' }),
+						);
+					}
+				});
+				expect(calls.startProcess).toEqual([]);
+			} finally {
+				release.resolve();
+			}
+			const session = await expectOk<ApiSession>(await pending);
+			expect(session.status).toBe('running');
+		},
+	);
+
+	it.each(['record', 'handle', 'boot'] as const)(
+		'handles an early integration failure while %s is pending or fails',
+		async (phase) => {
+			const { instance, calls } = makeFakeSandbox();
+			const compute = fakeComputeFrom(instance);
+			const resolveForSession = vi.fn().mockRejectedValue(new Error('secret backend unavailable'));
+			const api = createTestApi({
+				bucket,
+				compute,
+				deps: { integrations: { resolveForSession } as never },
+			});
+			if (phase === 'record') {
+				vi.spyOn(api.deps.services.sessions, 'createSession').mockRejectedValue(
+					new Error('record failed'),
+				);
+			} else if (phase === 'handle') {
+				vi.spyOn(compute, 'create').mockImplementation(() => {
+					throw new Error('handle failed');
+				});
+			} else {
+				const exec = instance.exec.bind(instance);
+				vi.spyOn(instance, 'exec').mockImplementationOnce(async (...args) => {
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					return exec(...args);
+				});
+			}
+
+			await expectError(await api.request('POST', sessionsPath()), phase === 'boot' ? 503 : 500);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(resolveForSession).toHaveBeenCalledOnce();
+			expect(calls.startProcess).toEqual([]);
+			if (phase === 'boot') expect(calls.destroy).toBeGreaterThan(0);
+		},
+	);
+
+	it('rejects a capped start before exchanging credentials or reading integration secrets', async () => {
+		await createServices(bucket).projects.updateProject(
+			pid,
+			{ federation: { enabled: true } },
+			ACTOR,
+		);
+		const exchange = vi.fn(async () => ({
+			accessKeyId: 'CWAK',
+			secretAccessKey: 'sk',
+			sessionToken: 'tok',
+		}));
+		const resolveForSession = vi.fn(async () => ({
+			files: [],
+			vars: {},
+			attachments: [],
+			warnings: [],
+		}));
+		const apiWith = (maxAppsPerProject?: number) => {
+			const compute = makeFakeCompute();
+			const create = vi.spyOn(compute, 'create');
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute,
+				deps: {
+					...(maxAppsPerProject ? { policy: { maxAppsPerProject } } : {}),
+					integrations: { resolveForSession } as never,
+					wif: makeTestWif({
+						exchange,
+						mint: async () => 'jwt.value',
+						audience: 'coreweave-object-storage',
+						storage: { endpoint: 'https://cwobject.com', region: 'us-east-1' },
+					}),
+				},
+			});
+			return { api, create };
+		};
+		const capped = apiWith(1);
+		const { sessions } = capped.api.deps.services;
+		const incumbent = await sessions.createSession({
+			project_id: pid,
+			notebook_id: createNotebookId(),
+			user_id: ACTOR,
+			mode: 'app',
+		});
+		await sessions.setRunning(pid, incumbent.session_id, 'https://sandbox.example');
+
+		await expectError(
+			await capped.api.request('POST', sessionsPath(), { mode: 'app' }),
+			429,
+			'RESOURCE_EXHAUSTED',
+		);
+		expect(exchange).not.toHaveBeenCalled();
+		expect(resolveForSession).not.toHaveBeenCalled();
+		expect(capped.create).not.toHaveBeenCalled();
+
+		// The same start without the cap does resolve both, so the assertions above are not vacuous.
+		const uncapped = apiWith();
+		await expectOk(await uncapped.api.request('POST', sessionsPath(), { mode: 'app' }));
+		expect(exchange).toHaveBeenCalledOnce();
+		expect(resolveForSession).toHaveBeenCalledOnce();
+	});
+
+	it('returns a lost editor claim when env resolution later rejects', async () => {
+		const unhandled = vi.fn();
+		process.on('unhandledRejection', unhandled);
+		const renderStarted = Promise.withResolvers<void>();
+		const failRender = Promise.withResolvers<void>();
+		const resolveForSession = vi.fn(async () => {
+			renderStarted.resolve();
+			await failRender.promise;
+			throw new Error('secret backend unavailable');
+		});
+		const compute = makeFakeCompute();
+		const create = vi.spyOn(compute, 'create');
+		const api = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute,
+			deps: { integrations: { resolveForSession } as never },
+		});
+		const { sessions } = api.deps.services;
+		vi.spyOn(sessions, 'claimEditor').mockImplementationOnce(async () => {
+			await renderStarted.promise;
+			// A wedged competitor wins while this start's env resolution is still pending.
+			const startedAt = new Date(Date.now() - Millis.minutes(6)).toISOString();
+			const holder = makeSession({
+				project_id: pid,
+				notebook_id: nid,
+				user_id: STRANGER,
+				status: 'starting',
+				started_at: startedAt,
+				last_heartbeat: startedAt,
+			});
+			await bucket.put(paths.session(pid, holder.session_id), JSON.stringify(holder));
+			return {
+				claimed: false,
+				claim: {
+					session_id: holder.session_id,
+					sharing: 'shared',
+					claimed_at: holder.started_at,
+				},
+			};
+		});
+		try {
+			await expectError(await api.request('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
+			failRender.resolve();
+			await vi.waitFor(() => expect(resolveForSession).toHaveBeenCalledOnce());
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(unhandled).not.toHaveBeenCalled();
+			expect(create).not.toHaveBeenCalled();
+			expect(await sessions.listActiveForUser(ACTOR)).toEqual([]);
+		} finally {
+			failRender.resolve();
+			process.off('unhandledRejection', unhandled);
+		}
+	});
+
+	it('reads an absent editor claim once before creating a session', async () => {
+		const api = createTestApi({ bucket, compute: makeFakeCompute() });
+		const readClaim = vi.spyOn(api.deps.services.sessions, 'getEditorClaim');
+
+		const session = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+
+		expect(session.status).toBe('running');
+		expect(readClaim).toHaveBeenCalledExactlyOnceWith(pid, nid);
+	});
+
+	it('rejects a session record whose workspace lease was lost before publication completed', async () => {
+		const compute = makeFakeCompute();
+		const create = vi.spyOn(compute, 'create');
+		const api = createTestApi({ bucket, compute });
+		const { sessions } = api.deps.services;
+		const createSession = sessions.createSession.bind(sessions);
+		vi.spyOn(sessions, 'createSession').mockImplementationOnce(async (input) => {
+			const session = await createSession(input);
+			await bucket.put(
+				paths.project(pid).notebook(nid).workspaceMutationClaim,
+				JSON.stringify({
+					holder: 'another-writer',
+					expires_at: new Date(Date.now() + Millis.minutes(2)).toISOString(),
+				}),
+			);
+			return session;
+		});
+
+		const error = await expectError(await api.request('POST', sessionsPath()), 409, 'CONFLICT');
+
+		expect(error.message).toBe('Workspace mutation lease was lost; retry the operation');
+		expect(create).not.toHaveBeenCalled();
+		expect(await sessions.listSessions(nid)).toMatchObject([{ status: 'failed' }]);
+	});
+
+	it.each([
+		'none',
+		'claim',
+		'notebook',
+		'project',
+		'both',
+		'notebook read',
+		'project read',
+	] as const)('overlaps running rechecks and handles %s failure', async (failure) => {
+		const { instance, calls } = makeFakeSandbox();
+		const api = createTestApi({ bucket, compute: fakeComputeFrom(instance) });
+		const { sessions, notebooks, projects } = api.deps.services;
+		let running = false;
+		const setRunning = sessions.setRunning.bind(sessions);
+		vi.spyOn(sessions, 'setRunning').mockImplementation(async (...args) => {
+			const session = await setRunning(...args);
+			running = true;
+			return session;
+		});
+		const started = new Set<string>();
+		const releaseClaim = Promise.withResolvers<void>();
+		const claimEditor = sessions.claimEditor.bind(sessions);
+		vi.spyOn(sessions, 'claimEditor').mockImplementation(async (...args) => {
+			if (!running) return claimEditor(...args);
+			started.add('claim');
+			await releaseClaim.promise;
+			if (failure === 'claim') {
+				return {
+					claimed: false,
+					claim: {
+						session_id: makeSession().session_id,
+						sharing: 'shared',
+						claimed_at: new Date().toISOString(),
+					},
+				};
+			}
+			return claimEditor(...args);
+		});
+		const getMeta = notebooks.getNotebookMeta.bind(notebooks);
+		vi.spyOn(notebooks, 'getNotebookMeta').mockImplementation(async (...args) => {
+			const meta = await getMeta(...args);
+			if (!running) return meta;
+			started.add('notebook');
+			if (failure === 'notebook read') throw new Error('notebook read failed');
+			return ['claim', 'notebook', 'both'].includes(failure)
+				? { ...meta, status: 'deleted' }
+				: meta;
+		});
+		const getProject = projects.getProject.bind(projects);
+		vi.spyOn(projects, 'getProject').mockImplementation(async (...args) => {
+			const project = await getProject(...args);
+			if (!running) return project;
+			started.add('project');
+			if (failure === 'project read') throw new Error('project read failed');
+			return ['claim', 'project', 'both'].includes(failure)
+				? { ...project, status: 'deleted' }
+				: project;
+		});
+		const getNotebook = notebooks.getNotebook.bind(notebooks);
+		vi.spyOn(notebooks, 'getNotebook').mockImplementation((...args) => {
+			expect(running).toBe(false);
+			return getNotebook(...args);
+		});
+
+		const pending = api.request('POST', sessionsPath());
+		try {
+			await vi.waitFor(() => expect(started).toEqual(new Set(['claim', 'notebook', 'project'])));
+		} finally {
+			releaseClaim.resolve();
+		}
+		const response = await pending;
+		if (failure === 'none') {
+			expect(await expectOk<ApiSession>(response)).toMatchObject({ status: 'running' });
+			expect(calls.destroy).toBe(0);
+		} else {
+			const claimLost = failure === 'claim';
+			const error = await expectError(
+				response,
+				claimLost ? 409 : 404,
+				claimLost ? 'CONFLICT' : 'NOT_FOUND',
+			);
+			expect(error.message).toBe(
+				claimLost
+					? 'The editor session changed. Retry shortly.'
+					: failure.startsWith('project')
+						? `Project ${pid} not found`
+						: `Notebook ${nid} not found`,
+			);
+			expect(calls.destroy).toBe(1);
+			expect(await sessions.listSessions(nid)).toMatchObject([
+				{
+					status: claimLost ? 'terminated' : 'failed',
+					sandbox_reclaimed_at: expect.any(String),
+				},
+			]);
+			expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
+		}
+	});
+
+	it.each([
+		{ deferred: true, fails: false },
+		{ deferred: true, fails: true },
+		{ deferred: false, fails: false },
+		{ deferred: false, fails: true },
+	])('handles a slow app audit store (%j)', async ({ deferred, fails }) => {
+		const tasks: Promise<unknown>[] = [];
+		const api = createTestApi({
+			bucket,
+			compute: makeFakeCompute(),
+			deps: {
+				backgroundTasks: deferred ? { defer: (task) => tasks.push(task) } : undefined,
+			},
+		});
+		const { events } = api.deps.services;
+		const append = events.append.bind(events);
+		const auditStarted = Promise.withResolvers<void>();
+		const releaseAudit = Promise.withResolvers<void>();
+		vi.spyOn(events, 'append').mockImplementation(async (event) => {
+			if (event.event === 'app.start') {
+				auditStarted.resolve();
+				await releaseAudit.promise;
+				if (fails) throw new Error('audit store unavailable');
+			}
+			return append(event);
+		});
+		const startedOn = new Date().toISOString().slice(0, 10);
+		let responded = false;
+		const pending = Promise.resolve(api.request('POST', sessionsPath(), { mode: 'app' })).then(
+			(response) => {
+				responded = true;
+				return response;
+			},
+		);
+		await auditStarted.promise;
+		try {
+			if (deferred) await vi.waitFor(() => expect(responded).toBe(true));
+			else expect(responded).toBe(false);
+			expect(tasks).toHaveLength(deferred ? 1 : 0);
+		} finally {
+			releaseAudit.resolve();
+			await Promise.all(tasks);
+		}
+		const session = await expectOk<ApiSession>(await pending);
+		expect(session.status).toBe('running');
+		const days = [...new Set([startedOn, new Date().toISOString().slice(0, 10)])];
+		const starts = (await Promise.all(days.map((day) => events.getEvents(day))))
+			.flat()
+			.filter((event) => event.event === 'app.start');
+		expect(starts).toHaveLength(fails ? 0 : 1);
+		if (!fails) expect(starts[0]).toMatchObject({ actor: ACTOR, session_id: session.session_id });
+	});
+
 	it('POST /sessions with a non-existent notebook returns 404 and does not provision', async () => {
 		// Use a notebook id that was never created in this project.
 		const bogusNid = createNotebookId();
@@ -382,6 +829,37 @@ describe('Session routes', () => {
 		// No session record should have been created.
 		const all = await createServices(bucket).sessions.listSessions(bogusNid);
 		expect(all).toHaveLength(0);
+	});
+
+	it('returns 403 for a caller without a role even when the notebook does not exist', async () => {
+		const compute = makeFakeCompute();
+		const create = vi.spyOn(compute, 'create');
+		const api = createTestApi({ bucket, userId: STRANGER, compute });
+		const bogusNid = createNotebookId();
+
+		await expectError(
+			await api.request('POST', `/projects/${pid}/notebooks/${bogusNid}/sessions`),
+			403,
+			'FORBIDDEN',
+		);
+		expect(create).not.toHaveBeenCalled();
+	});
+
+	it('consumes an early notebook read failure while project authorization is pending', async () => {
+		const api = createTestApi({ bucket, userId: STRANGER, compute: makeFakeCompute() });
+		const project = await api.deps.services.projects.getProject(pid);
+		const projectRead = Promise.withResolvers<typeof project>();
+		vi.spyOn(api.deps.services.projects, 'getProject').mockReturnValueOnce(projectRead.promise);
+		const notebookRead = vi
+			.spyOn(api.deps.services.notebooks, 'getNotebook')
+			.mockRejectedValueOnce(new Error('notebook storage unavailable'));
+		const pending = api.request('POST', sessionsPath());
+		try {
+			await vi.waitFor(() => expect(notebookRead).toHaveBeenCalledOnce());
+		} finally {
+			projectRead.resolve(project);
+		}
+		await expectError(await pending, 403, 'FORBIDDEN');
 	});
 
 	it('POST /sessions for an unsynced GitHub notebook returns 409 and does not provision', async () => {
@@ -398,10 +876,63 @@ describe('Session routes', () => {
 			ACTOR,
 		);
 		const path = `/projects/${pid}/notebooks/${meta.id}/sessions`;
+		const compute = makeFakeCompute();
+		const create = vi.spyOn(compute, 'create');
+		const api = createTestApi({ bucket, compute, deps: { services } });
+		const scan = vi.spyOn(services.sessions, 'findReusableEditor');
 
-		await expectError(await owner('POST', path), 409, 'CONFLICT');
+		const error = await expectError(await api.request('POST', path), 409, 'CONFLICT');
+		expect(error.message).toBe('Synced notebook has not been synced yet');
+		expect(scan).not.toHaveBeenCalled();
+		expect(create).not.toHaveBeenCalled();
 		expect(await services.sessions.listSessions(meta.id)).toHaveLength(0);
 	});
+
+	it('preserves surface validation errors when speculative session reads fail', async () => {
+		const compute = makeFakeSnapshotCompute();
+		const api = createTestApi({ bucket, compute });
+		const reuse = vi
+			.spyOn(api.deps.services.sessions, 'findReusableEditor')
+			.mockRejectedValueOnce(new Error('session scan unavailable'));
+		const snapshot = vi
+			.spyOn(api.deps.services.notebooks, 'getFsSnapshot')
+			.mockRejectedValueOnce(new Error('snapshot storage unavailable'));
+
+		await expectError(
+			await api.request('POST', sessionsPath(), { surfaces: ['vscode'] }),
+			409,
+			'SURFACE_NOT_ENABLED',
+		);
+		expect(reuse).toHaveBeenCalledOnce();
+		expect(snapshot).toHaveBeenCalledOnce();
+		expect(await api.deps.services.sessions.listSessions(nid)).toHaveLength(0);
+	});
+
+	it.each(['reuse', 'snapshot'] as const)(
+		'fails before provisioning when the speculative %s read rejects',
+		async (failure) => {
+			const compute = makeFakeSnapshotCompute();
+			const create = vi.spyOn(compute, 'create');
+			const api = createTestApi({ bucket, compute });
+			const { sessions, notebooks } = api.deps.services;
+			const error = new ConflictError(`${failure} read failed`);
+			if (failure === 'reuse') {
+				vi.spyOn(sessions, 'findReusableEditor').mockRejectedValueOnce(error);
+			} else {
+				vi.spyOn(notebooks, 'getFsSnapshot').mockRejectedValueOnce(error);
+			}
+
+			const response = await expectError(
+				await api.request('POST', sessionsPath()),
+				409,
+				'CONFLICT',
+			);
+
+			expect(response.message).toBe(error.message);
+			expect(create).not.toHaveBeenCalled();
+			expect(await sessions.listSessions(nid)).toHaveLength(0);
+		},
+	);
 
 	describe('launch strategy inference', () => {
 		const enc = (s: string) => new TextEncoder().encode(s);
@@ -501,10 +1032,11 @@ describe('Session routes', () => {
 					command.includes('/workspace/.marimohub-packed-restore/extract.py'),
 			)!;
 			expect(extract).toMatch(/ '\/workspace' 1 'python'$/);
-			expect(sb.calls.exec).toContainEqual(
-				expect.stringContaining(
-					"cd '/workspace' && git -c 'safe.directory=/workspace' sparse-checkout set --cone -- 'python'",
-				),
+			const gitCommands = sb.calls.exec.filter((command) => command.includes('safe.directory'));
+			expect(gitCommands).toHaveLength(1);
+			expect(gitCommands[0]).toContain("git config --global --add safe.directory '/workspace'\n");
+			expect(gitCommands[0]).toContain(
+				"cd '/workspace' && git -c 'safe.directory=/workspace' sparse-checkout set --cone -- 'python'",
 			);
 			const setup = sb.calls.exec.find((command) => command.includes('uv sync --inexact'))!;
 			expect(setup).toContain("cd '/workspace/python'");
@@ -989,29 +1521,54 @@ describe('Session routes', () => {
 			captured_at: '2026-07-01T00:00:00.000Z',
 			owner_user_id: STRANGER,
 		});
-		const { instance } = makeFakeSandbox();
-		const restored: string[] = [];
-		const compute = {
-			...fakeComputeFrom(instance),
-			filesystemSnapshotsEnabled: true,
-			createFromSnapshot(_id: string, snapshotId: string) {
-				restored.push(snapshotId);
-				return instance;
-			},
-			async captureSnapshot() {
-				return { snapshotId: 'unused' };
-			},
-			async deleteSnapshot() {},
-		};
+		const compute = makeFakeSnapshotCompute();
 		const exclusiveOther = exclusiveApi(STRANGER, compute);
 
 		const data = await expectOk<ApiSession>(
 			await exclusiveOther('POST', sessionsPath(), { edit_intent: 'temporary' }),
 		);
 		expect(data.ephemeral).toBe(true);
-		expect(restored).toEqual([]);
+		expect(compute.createFromSnapshot).not.toHaveBeenCalled();
 		expect(data.compute_from_snapshot).toBeUndefined();
 	});
+
+	it.each(['running', 'reclaimed'] as const)(
+		'allows startup when a requested takeover expires during the scan of a %s holder',
+		async (holderState) => {
+			const request = exclusiveApi(ACTOR);
+			const persistent = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+			const { sessions } = createServices(bucket);
+			const claim = await sessions.reserveTakeover(pid, nid, {
+				takeoverId: 'scan-expiry',
+				requestedBy: STRANGER,
+				expectedHolder: persistent.session_id,
+				expectedActivity: 'idle',
+			});
+			if (holderState === 'reclaimed') {
+				await sessions.markTerminated(pid, persistent.session_id);
+				await sessions.markSandboxReclaimed(pid, persistent.session_id, new Date().toISOString());
+			}
+			vi.useFakeTimers({ toFake: ['Date'] });
+			const list = bucket.list.bind(bucket);
+			const scan = vi.spyOn(bucket, 'list').mockImplementation(async (options) => {
+				if (options?.prefix === paths.sessionsForProject(pid)) {
+					vi.setSystemTime(Date.parse(claim.transfer!.requested_at) + Millis.minutes(5));
+				}
+				return list(options);
+			});
+			try {
+				vi.setSystemTime(Date.parse(claim.transfer!.requested_at) + Millis.minutes(5) - 1);
+				const result = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				expect(result.status).toBe('running');
+				if (holderState === 'running') expect(result.session_id).toBe(persistent.session_id);
+				else expect(result.session_id).not.toBe(persistent.session_id);
+				expect((await sessions.getEditorClaim(pid, nid))?.transfer).toBeUndefined();
+			} finally {
+				scan.mockRestore();
+				vi.useRealTimers();
+			}
+		},
+	);
 
 	it('reports exclusive ownership and completes a warned takeover before replacement', async () => {
 		const ownerCompute = makeFakeCompute();
@@ -1766,6 +2323,39 @@ describe('Session routes', () => {
 		expect(compute.lastCreateOptions?.resources).toEqual({ cpu: 8 });
 	});
 
+	it.each([false, true])(
+		'restores the snapshot captured while retiring a dead editor (previous snapshot: %s)',
+		async (previousSnapshot) => {
+			const services = createServices(bucket);
+			if (previousSnapshot) {
+				await services.notebooks.setFsSnapshot(pid, nid, {
+					snapshot_id: 'snap-old',
+					captured_at: new Date().toISOString(),
+				});
+			}
+			const compute = makeFakeSnapshotCompute();
+			compute.captureSnapshot.mockResolvedValue({ snapshotId: 'snap-retired' });
+			const api = createTestApi({
+				bucket,
+				compute,
+				deps: { kernelProbe: async () => 'dead' },
+			});
+			const first = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			compute.createFromSnapshot.mockClear();
+
+			const replacement = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			const stored = await services.sessions.getSession(pid, replacement.session_id);
+
+			expect(replacement.session_id).not.toBe(first.session_id);
+			expect(replacement.compute_from_snapshot).toBe(true);
+			expect(compute.createFromSnapshot).toHaveBeenCalledExactlyOnceWith(
+				stored.sandbox_id,
+				'snap-retired',
+				expect.anything(),
+			);
+		},
+	);
+
 	it('reports the compute provenance restored from a filesystem snapshot', async () => {
 		const services = createServices(bucket);
 		await services.notebooks.updateNotebook(pid, nid, { compute_profile: 'large' }, ACTOR);
@@ -1775,20 +2365,7 @@ describe('Session routes', () => {
 			compute_profile: 'small',
 			compute_resources: { cpu: 1, memory_bytes: 2 * 1024 ** 3 },
 		});
-		const { instance } = makeFakeSandbox();
-		const restored: string[] = [];
-		const compute = {
-			...fakeComputeFrom(instance),
-			filesystemSnapshotsEnabled: true,
-			createFromSnapshot(_id: string, snapshotId: string) {
-				restored.push(snapshotId);
-				return instance;
-			},
-			async captureSnapshot() {
-				return { snapshotId: 'unused' };
-			},
-			async deleteSnapshot() {},
-		};
+		const compute = makeFakeSnapshotCompute();
 		const request = createTestApi({
 			bucket,
 			userId: ACTOR,
@@ -1805,7 +2382,11 @@ describe('Session routes', () => {
 		}).request;
 
 		const data = await expectOk<ApiSession>(await request('POST', sessionsPath()));
-		expect(restored).toEqual(['snap-old']);
+		expect(compute.createFromSnapshot).toHaveBeenCalledExactlyOnceWith(
+			expect.any(String),
+			'snap-old',
+			expect.anything(),
+		);
 		expect(data.compute_profile).toBe('small');
 		expect(data.compute_resources).toEqual({
 			cpu: 1,
@@ -2313,6 +2894,86 @@ describe('Session routes', () => {
 		await expectError(await stranger('POST', sessionsPath(`/${sid}/heartbeat`)), 404, 'NOT_FOUND');
 	});
 
+	it.each(['project', 'notebook'] as const)(
+		'shows %s edits, fresh save preconditions, and deletion immediately across replicas with warm session caches',
+		async (resource) => {
+			const reader = createTestApi({ bucket, compute: makeFakeCompute() });
+			const writer = createTestApi({ bucket, compute: reader.deps.compute });
+			const session = await expectOk<ApiSession>(await reader.request('POST', sessionsPath()));
+			await expectOk(
+				await reader.request('POST', sessionsPath(`/${session.session_id}/heartbeat`)),
+			);
+			const path =
+				resource === 'project' ? `/projects/${pid}` : `/projects/${pid}/notebooks/${nid}`;
+			const listPath = resource === 'project' ? '/projects' : `/projects/${pid}/notebooks`;
+			const id = resource === 'project' ? pid : nid;
+			const edit =
+				resource === 'project'
+					? { name: 'Renamed', tags: ['updated'] }
+					: { title: 'Renamed', tags: ['updated'] };
+			const before = await reader.request('GET', path);
+			const oldEtag = before.headers.get('ETag')!;
+			await expectOk(before);
+			await expectOk(await writer.request('PATCH', path, edit));
+			const after = await reader.request('GET', path);
+			const newEtag = after.headers.get('ETag')!;
+			expect(newEtag).not.toBe(oldEtag);
+			expect(await expectOk(after)).toMatchObject(resource === 'project' ? edit : { meta: edit });
+			expect(await expectPage(await reader.request('GET', listPath))).toContainEqual(
+				expect.objectContaining({ id, ...edit }),
+			);
+			await expectError(
+				await reader.request('PATCH', path, { description: 'Next edit' }, { 'If-Match': oldEtag }),
+				412,
+				'PRECONDITION_FAILED',
+			);
+			await expectOk(
+				await reader.request('PATCH', path, { description: 'Next edit' }, { 'If-Match': newEtag }),
+			);
+			await expectOk(await writer.request('DELETE', path));
+			await expectError(await reader.request('GET', path), 404, 'NOT_FOUND');
+			expect(await expectPage(await reader.request('GET', listPath))).not.toContainEqual(
+				expect.objectContaining({ id }),
+			);
+		},
+	);
+
+	it('reuses project metadata across heartbeats', async () => {
+		const sid = await startSession();
+		const recording = new RecordingBucket(bucket);
+		const api = createTestApi({
+			bucket,
+			deps: { bucket: recording, services: createServices(recording) },
+		});
+		await expectOk(await api.request('POST', sessionsPath(`/${sid}/heartbeat`)));
+		await expectOk(await api.request('POST', sessionsPath(`/${sid}/heartbeat`)));
+		expect(recording.calls.get.filter((key) => key === paths.project(pid).meta)).toHaveLength(1);
+	});
+
+	it.each(['local', 'replica'] as const)(
+		'rejects the next heartbeat after %s membership revocation',
+		async (writer) => {
+			const api = createTestApi({ bucket, userId: STRANGER, compute: makeFakeCompute() });
+			await api.deps.services.projects.addMember(pid, { user_id: STRANGER }, 'editor', ACTOR);
+			const session = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			const heartbeat = sessionsPath(`/${session.session_id}/heartbeat`);
+			await expectOk(await api.request('POST', heartbeat));
+			await (writer === 'local' ? api.deps.services : createServices(bucket)).projects.removeMember(
+				pid,
+				STRANGER,
+				ACTOR,
+			);
+			await expectError(await api.request('POST', heartbeat), 404, 'NOT_FOUND');
+			await (writer === 'local' ? api.deps.services : createServices(bucket)).projects.addMember(
+				pid,
+				{ user_id: STRANGER },
+				'editor',
+				ACTOR,
+			);
+			await expectOk(await api.request('POST', heartbeat));
+		},
+	);
+
 	it('POST /sessions/{sid}/heartbeat happy path as the owner returns 200', async () => {
 		const sid = await startSession();
 		const data = await expectOk<ApiSession>(await owner('POST', sessionsPath(`/${sid}/heartbeat`)));
@@ -2407,6 +3068,118 @@ describe('Session routes', () => {
 			status: 'failed',
 			error: { code: 'RESOURCE_EXHAUSTED' },
 		});
+	});
+
+	it.each(['full', 'rejected', 'thrown'] as const)(
+		'loads app cap queues concurrently and reports the project cap before a %s user queue',
+		async (userResult) => {
+			const api = cappedAppApi();
+			const { sessions } = api.deps.services;
+			const incumbent = await sessions.createSession({
+				project_id: pid,
+				notebook_id: createNotebookId(),
+				user_id: ACTOR,
+				mode: 'app',
+			});
+			await sessions.setRunning(pid, incumbent.session_id, 'https://sandbox.example');
+			const listProject = sessions.listActiveAppsForProject.bind(sessions);
+			const listUser = sessions.listActiveForUser.bind(sessions);
+			const userQueueStarted = Promise.withResolvers<void>();
+			const projectQueue = vi
+				.spyOn(sessions, 'listActiveAppsForProject')
+				// Model a competing start that becomes visible after preflight.
+				.mockResolvedValueOnce([])
+				.mockImplementationOnce(async (projectId) => {
+					await userQueueStarted.promise;
+					return listProject(projectId);
+				});
+			const userQueue = vi
+				.spyOn(sessions, 'listActiveForUser')
+				.mockImplementationOnce((...args) => {
+					userQueueStarted.resolve();
+					if (userResult === 'rejected') return Promise.reject(new Error('User scan failed'));
+					if (userResult === 'thrown') throw new Error('User scan failed');
+					return listUser(...args);
+				});
+
+			const error = await expectError(
+				await api.request('POST', sessionsPath(), { mode: 'app' }),
+				429,
+				'RESOURCE_EXHAUSTED',
+			);
+			expect(error.message).toBe(
+				'Concurrent app limit reached for this project (1). Stop an app before starting another.',
+			);
+			expect(projectQueue).toHaveBeenCalledTimes(2);
+			expect(userQueue).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it('preserves project scan errors when the user scan rejects first', async () => {
+		const api = cappedAppApi();
+		const { sessions } = api.deps.services;
+		const userQueueStarted = Promise.withResolvers<void>();
+		vi.spyOn(sessions, 'listActiveAppsForProject')
+			.mockResolvedValueOnce([])
+			.mockImplementationOnce(async () => {
+				await userQueueStarted.promise;
+				throw new ConflictError('Project scan failed');
+			});
+		vi.spyOn(sessions, 'listActiveForUser').mockImplementationOnce(async () => {
+			userQueueStarted.resolve();
+			throw new Error('User scan failed');
+		});
+
+		const error = await expectError(
+			await api.request('POST', sessionsPath(), { mode: 'app' }),
+			409,
+			'CONFLICT',
+		);
+		expect(error.message).toBe('Project scan failed');
+	});
+
+	it.each(['project', 'user'] as const)(
+		'fails closed when the %s cap recheck fails and allows a retry',
+		async (scope) => {
+			const compute = makeFakeCompute();
+			const provision = vi.spyOn(compute, 'create');
+			const api = cappedAppApi(compute);
+			const { sessions } = api.deps.services;
+			const error = new Error('cap storage unavailable');
+			if (scope === 'project') {
+				vi.spyOn(sessions, 'listActiveAppsForProject')
+					.mockResolvedValueOnce([])
+					.mockRejectedValueOnce(error);
+			} else {
+				vi.spyOn(sessions, 'listActiveForUser').mockRejectedValueOnce(error);
+			}
+
+			await expectError(await api.request('POST', sessionsPath(), { mode: 'app' }), 500);
+			expect(provision).not.toHaveBeenCalled();
+			const rejected = await sessions.listSessions(nid);
+			expect(rejected).toHaveLength(1);
+			expect(rejected[0].status).toBe('failed');
+			expect(await sessions.listActiveAppsForProject(pid)).toEqual([]);
+			const retry = await expectOk<ApiSession>(
+				await api.request('POST', sessionsPath(), { mode: 'app' }),
+			);
+			expect(retry.status).toBe('running');
+			expect(retry.session_id).not.toBe(rejected[0].session_id);
+		},
+	);
+
+	it.each([0, -1, undefined])('does not read disabled app cap queues (%s)', async (max) => {
+		const api = createTestApi({
+			bucket,
+			userId: ACTOR,
+			compute: makeFakeCompute(),
+			deps: { policy: { maxAppsPerProject: max, maxConcurrentSessionsPerUser: max } },
+		});
+		const projectQueue = vi.spyOn(api.deps.services.sessions, 'listActiveAppsForProject');
+		const userQueue = vi.spyOn(api.deps.services.sessions, 'listActiveForUser');
+		await expectOk(await api.request('POST', sessionsPath(), { mode: 'app' }));
+		expect(projectQueue).not.toHaveBeenCalled();
+		expect(userQueue).not.toHaveBeenCalled();
 	});
 
 	it('scans deployment-wide sessions once when enforcing the per-user cap', async () => {
@@ -2727,6 +3500,30 @@ describe('Session routes', () => {
 		});
 	});
 
+	it('does not probe or retire a reused editor when tightening authorization fails', async () => {
+		const first = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
+		const { instance, calls } = makeFakeSandbox();
+		const probe = vi.fn(async () => 'dead' as const);
+		const api = createTestApi({
+			bucket,
+			compute: fakeComputeFrom(instance),
+			subject: { entitlementsExpiresAt: new Date(Date.now() + Millis.hours(1)).toISOString() },
+			deps: { kernelProbe: probe },
+		});
+		vi.spyOn(api.deps.services.sessions, 'tightenAuthorizationDeadline').mockRejectedValueOnce(
+			new ConflictError('authorization update failed'),
+		);
+
+		const error = await expectError(await api.request('POST', sessionsPath()), 409, 'CONFLICT');
+
+		expect(error.message).toBe('authorization update failed');
+		expect(probe).not.toHaveBeenCalled();
+		expect(calls.destroy).toBe(0);
+		expect(await api.deps.services.sessions.getSession(pid, first.session_id)).toMatchObject({
+			status: 'running',
+		});
+	});
+
 	it('rejects editor reuse when authorization expires during the kernel probe', async () => {
 		const services = createServices(bucket);
 		const kernelProbe = vi.fn<NonNullable<ApiDeps['kernelProbe']>>();
@@ -2911,11 +3708,12 @@ describe('Session routes', () => {
 
 		it('does not retire an edit session when the PAT omits session.stop', async () => {
 			const { instance, calls } = makeFakeSandbox();
+			const probe = vi.fn(async () => 'dead' as const);
 			const scoped = createTestApi({
 				bucket,
 				compute: fakeComputeFrom(instance),
 				deps: {
-					kernelProbe: async () => 'dead' as const,
+					kernelProbe: probe,
 					authenticator: {
 						authenticate: async () => ({
 							id: ACTOR,
@@ -2938,6 +3736,7 @@ describe('Session routes', () => {
 			expect(second.session_id).toBe(first.session_id);
 			expect(second.reused).toBe(true);
 			expect(calls.destroy).toBe(0);
+			expect(probe).not.toHaveBeenCalled();
 		});
 
 		it('resumes a healthy reused session without reprovisioning (probe alive)', async () => {

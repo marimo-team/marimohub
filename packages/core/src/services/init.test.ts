@@ -1,10 +1,17 @@
-import { describe, it, expect, vi } from 'vitest';
-import { ACTOR, MemoryBucket } from '../testing';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { ACTOR, advanceTime, MemoryBucket, RecordingBucket, restoreClock } from '../testing';
 import { paths } from '../paths';
 import { UserId } from '../ids';
 import { createServices, ensureInitialized } from '.';
 
+async function populatedCatalog() {
+	const inner = new MemoryBucket();
+	await ensureInitialized(inner, ACTOR);
+	return new RecordingBucket(inner);
+}
+
 describe('ensureInitialized', () => {
+	afterEach(restoreClock);
 	it('creates catalog and default project on empty bucket', async () => {
 		const bucket = new MemoryBucket();
 		await ensureInitialized(bucket, ACTOR);
@@ -71,6 +78,106 @@ describe('ensureInitialized', () => {
 		expect(get).not.toHaveBeenCalled();
 	});
 
+	it('skips catalog HEADs for 30 seconds after finding a populated catalog', async () => {
+		advanceTime(0);
+		const bucket = await populatedCatalog();
+
+		await ensureInitialized(bucket, ACTOR);
+		advanceTime(29_999);
+		await ensureInitialized(bucket, ACTOR);
+
+		expect(bucket.calls.head).toEqual([paths.catalog]);
+	});
+
+	it('rechecks and refreshes the populated catalog cache when its TTL expires', async () => {
+		advanceTime(0);
+		const bucket = await populatedCatalog();
+		await ensureInitialized(bucket, ACTOR);
+		bucket.calls.get.length = 0;
+
+		advanceTime(30_000);
+		await ensureInitialized(bucket, ACTOR);
+		expect(bucket.calls.head).toEqual([paths.catalog, paths.catalog]);
+		expect(bucket.calls.get).toEqual([]);
+
+		advanceTime(29_999);
+		await ensureInitialized(bucket, ACTOR);
+		expect(bucket.calls.head).toHaveLength(2);
+		await ensureInitialized(bucket, ACTOR, { createDefaultProject: false });
+		expect(bucket.calls.head).toHaveLength(3);
+	});
+
+	it('does not share a populated catalog cache with another bucket', async () => {
+		const populated = new MemoryBucket();
+		await ensureInitialized(populated, ACTOR);
+		await ensureInitialized(populated, ACTOR);
+		const empty = new RecordingBucket();
+
+		await ensureInitialized(empty, ACTOR);
+
+		expect(empty.calls.head).toContain(paths.catalog);
+		expect(await createServices(empty).projects.listProjects()).toHaveLength(1);
+	});
+
+	it('retries a failed HEAD without extending the populated catalog TTL', async () => {
+		advanceTime(0);
+		const bucket = new MemoryBucket();
+		await ensureInitialized(bucket, ACTOR);
+		await ensureInitialized(bucket, ACTOR);
+		const head = vi.spyOn(bucket, 'head').mockRejectedValueOnce(new Error('Storage unavailable'));
+		advanceTime(30_000);
+
+		await expect(ensureInitialized(bucket, ACTOR)).rejects.toThrow('Storage unavailable');
+		await ensureInitialized(bucket, ACTOR);
+		expect(head).toHaveBeenCalledTimes(2);
+
+		await ensureInitialized(bucket, ACTOR);
+		expect(head).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not cache a catalog whose snapshot could not be read', async () => {
+		const bucket = await populatedCatalog();
+		vi.spyOn(bucket, 'get').mockRejectedValueOnce(new Error('Snapshot unavailable'));
+
+		await expect(ensureInitialized(bucket, ACTOR)).rejects.toThrow('Snapshot unavailable');
+		await ensureInitialized(bucket, ACTOR);
+
+		expect(bucket.calls.head).toEqual([paths.catalog, paths.catalog]);
+		expect(bucket.calls.get).toContain(paths.catalog);
+		expect(await createServices(bucket).projects.listProjects()).toHaveLength(1);
+	});
+
+	it('invalidates the populated cache when a caller disables seeding after a reset', async () => {
+		const bucket = new MemoryBucket();
+		await ensureInitialized(bucket, ACTOR);
+		await ensureInitialized(bucket, ACTOR);
+		await bucket.delete(paths.catalog);
+
+		await ensureInitialized(bucket, ACTOR, { createDefaultProject: false });
+		const services = createServices(bucket);
+		expect(await services.projects.listProjects()).toEqual([]);
+
+		await ensureInitialized(bucket, ACTOR);
+		expect(await services.projects.listProjects()).toHaveLength(1);
+	});
+
+	it('never reuses a populated catalog whose backend reports an empty ETag', async () => {
+		const inner = new MemoryBucket();
+		const bucket = new RecordingBucket(inner);
+		const blankEtag = <T extends { etag: string } | null>(result: T): T =>
+			result ? { ...result, etag: '' } : result;
+		vi.spyOn(bucket, 'head').mockImplementation(async (key) => blankEtag(await inner.head(key)));
+		vi.spyOn(bucket, 'get').mockImplementation(async (key) => blankEtag(await inner.get(key)));
+		await ensureInitialized(bucket, ACTOR);
+		await ensureInitialized(bucket, ACTOR);
+		advanceTime(30_000);
+		const get = vi.spyOn(bucket, 'get');
+
+		await ensureInitialized(bucket, ACTOR);
+
+		expect(get).toHaveBeenCalledWith(paths.catalog);
+	});
+
 	it('rechecks a changed catalog and initializes again after a storage reset', async () => {
 		const bucket = new MemoryBucket();
 		await ensureInitialized(bucket, ACTOR);
@@ -79,11 +186,13 @@ describe('ensureInitialized', () => {
 		await services.projects.createProject({ name: 'Another project', description: '' }, ACTOR);
 		const get = vi.spyOn(bucket, 'get');
 
+		advanceTime(30_000);
 		await ensureInitialized(bucket, ACTOR);
 		expect(get).toHaveBeenCalledWith(paths.catalog);
 		expect(await services.projects.listProjects()).toHaveLength(2);
 
 		await bucket.delete(paths.catalog);
+		advanceTime(30_000);
 		await ensureInitialized(bucket, ACTOR);
 		expect(await services.projects.listProjects()).toHaveLength(1);
 	});

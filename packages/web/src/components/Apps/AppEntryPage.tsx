@@ -1,9 +1,16 @@
 import { hasNotebookPreviews } from '@/api/previews';
 import { PageTitle } from '@/components/ui/PageTitle';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { useAppQuery } from '@/api/apps';
-import { projectQueryOptions, useCapabilitiesQuery, useUserQuery } from '@/api/hooks';
+import { ApiRequestError } from '@/api/client';
+import {
+	capabilitiesQueryOptions,
+	projectQueryOptions,
+	useCapabilitiesQuery,
+	useUserQuery,
+} from '@/api/hooks';
 import { NotebookPage } from '@/components/NotebookPage/NotebookPage';
 import { NotebookFrame } from '@/components/NotebookPage/NotebookFrame';
 import { ShareUrlMenu } from '@/components/NotebookPage/ShareMenu';
@@ -25,8 +32,24 @@ export function AppEntryPage({
 	const nid = target?.notebookId ?? params.nid ?? '';
 	const location = useLocation();
 	const query = useAppQuery(pid, nid);
+	const user = useUserQuery();
+	const prefetchProject = !!user.data && !user.data.app_only;
+	const queryClient = useQueryClient();
+	useEffect(() => {
+		if (prefetchProject) void queryClient.prefetchQuery(projectQueryOptions(pid));
+		void queryClient.prefetchQuery(capabilitiesQueryOptions());
+	}, [queryClient, pid, prefetchProject]);
 	if (query.isError)
-		return <NotebookFallback pid={pid} nid={nid} variant={variant} error={query.error} />;
+		return (
+			<NotebookFallback
+				key={`${pid}/${nid}`}
+				pid={pid}
+				nid={nid}
+				variant={variant}
+				error={query.error}
+				user={user}
+			/>
+		);
 	if (!query.data) return <p className="p-6">Opening app…</p>;
 	if (query.data.your_role !== 'app-user')
 		return <NotebookPage variant={variant} target={{ projectId: pid, notebookId: nid }} />;
@@ -47,32 +70,47 @@ function NotebookFallback({
 	nid,
 	variant,
 	error,
+	user,
 }: {
 	pid: string;
 	nid: string;
 	variant: 'app' | 'edit';
 	error: Error;
+	user: ReturnType<typeof useUserQuery>;
 }) {
-	const user = useUserQuery();
+	const canLoadProject = !!user.data && !user.data.app_only;
+	const [projectReady, setProjectReady] = useState(false);
 	const project = useQuery({
 		...projectQueryOptions(pid),
-		enabled: !!user.data && !user.data.app_only,
+		enabled: canLoadProject,
 		retry: false,
 	});
-	if (
-		user.isPending ||
-		(user.data && !user.data.app_only && !project.isFetchedAfterMount && project.isFetching)
-	)
+	// Wait for initial access validation without interrupting later background refreshes.
+	if (!projectReady && canLoadProject && project.isSuccess && !project.isFetching)
+		setProjectReady(true);
+	if (user.isPending || (canLoadProject && !projectReady && project.isFetching))
 		return <p className="p-6">Opening notebook…</p>;
+	// Once open, only a confirmed loss of access closes the notebook; a transient refresh
+	// failure keeps the last successful user and project data.
+	const projectFailed = projectReady ? isAccessError(project.error, [403, 404]) : project.isError;
+	const userFailed = projectReady ? isAccessError(user.error, [401, 403]) : user.isError;
 	if (
-		user.isError ||
+		userFailed ||
 		user.data?.app_only ||
-		project.isError ||
+		projectFailed ||
 		!project.data?.your_role ||
 		project.data.your_role === 'app-user'
 	)
 		return <AppAccessError error={error} />;
 	return <NotebookPage variant={variant} target={{ projectId: pid, notebookId: nid }} />;
+}
+
+function isAccessError(error: unknown, statuses: number[]): boolean {
+	return (
+		error instanceof ApiRequestError &&
+		error.status !== undefined &&
+		statuses.includes(error.status)
+	);
 }
 
 function StakeholderApp({

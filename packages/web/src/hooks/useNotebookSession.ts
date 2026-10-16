@@ -16,6 +16,8 @@ import {
 	EDITOR_HEARTBEAT_INTERVAL_MS,
 	SESSION_STATUS_INTERVAL_MS,
 	SESSION_START_POLL_INTERVAL_MS,
+	SESSION_START_SLOW_POLL_AFTER_MS,
+	SESSION_START_SLOW_POLL_INTERVAL_MS,
 	sessionStartupDeadlineMs,
 } from '@/lib/sessions';
 
@@ -86,11 +88,7 @@ export function useNotebookSession(
 		enabled?: boolean;
 		mode?: 'edit' | 'app';
 		editIntent?: 'temporary';
-		/**
-		 * The deployment's sandbox-startup timeout
-		 * (`capabilities.sandbox_startup_timeout_seconds`); a still-`starting`
-		 * session older than this (plus grace) is failed instead of polled forever.
-		 */
+		/** Fail startup after this deployment timeout plus the grace in `sessionStartupDeadlineMs`. */
 		startupTimeoutSeconds?: number;
 		appHeartbeatIntervalSeconds?: number;
 	} = {},
@@ -110,6 +108,7 @@ export function useNotebookSession(
 	// StrictMode can orphan the mutation observer during its mount/remount cycle,
 	// leaving `startSession.isPending` stuck. Track this request independently.
 	const [starting, setStarting] = useState(false);
+	const [startPollInterval, setStartPollInterval] = useState(SESSION_START_POLL_INTERVAL_MS);
 	// Keep the loading panel visible while teardown or replacement precedes admission.
 	const [restarting, setRestarting] = useState(false);
 	const sessionRef = useRef<Session | null>(null);
@@ -134,6 +133,7 @@ export function useNotebookSession(
 			sessionRef.current?.session_id !== next.session_id
 		) {
 			startingSinceRef.current = Date.now();
+			setStartPollInterval(SESSION_START_POLL_INTERVAL_MS);
 		}
 		const committed =
 			next && next.session_id === sessionRef.current?.session_id && !next.app_assignment
@@ -284,11 +284,7 @@ export function useNotebookSession(
 		[startFailedMessage, commitSession, generation],
 	);
 
-	/**
-	 * Re-read the watched session under a staleness guard. A 404 means the record
-	 * is gone — a terminal answer, so it gets its own branch; every other failure
-	 * is transient and the next tick retries.
-	 */
+	// Ignore stale responses. Retry request failures except 404 on the next tick.
 	const pollSession = useCallback(
 		(sessionId: string, onNext: (next: Session) => void, onGone: () => void) => {
 			const gen = generation.current();
@@ -309,21 +305,20 @@ export function useNotebookSession(
 		[projectId, notebookId, generation],
 	);
 
-	// A start that reuses an in-flight `starting` session (a concurrent refresh was
-	// already provisioning) returns before the kernel is up. Poll until it is
-	// `running` (connect) or terminal (surface an error). Normal starts return
-	// `running` directly, so the interval is paused (`null`) and never runs.
+	// Reused sessions can return before provisioning finishes, so watch them until ready.
 	useInterval(
 		() => {
 			if (session?.status !== 'starting') return;
-			// Watched longer than the deployment's startup timeout (plus grace) means
-			// whichever request was provisioning has died without failing the record —
-			// give up instead of polling forever. The message names the CONFIGURED
-			// timeout, matching the server's own timeout error; the grace is an
-			// implementation detail.
+			const elapsed =
+				startingSinceRef.current === null ? null : Date.now() - startingSinceRef.current;
+			if (elapsed !== null && elapsed > SESSION_START_SLOW_POLL_AFTER_MS) {
+				setStartPollInterval(SESSION_START_SLOW_POLL_INTERVAL_MS);
+			}
+			// A lost provisioning request can leave the record starting indefinitely.
+			// Match the server's timeout message, which excludes the grace period.
 			const timeoutSeconds = startupTimeoutSeconds ?? DEFAULT_STARTUP_TIMEOUT_S;
 			const deadlineMs = sessionStartupDeadlineMs(timeoutSeconds);
-			if (startingSinceRef.current !== null && Date.now() - startingSinceRef.current > deadlineMs) {
+			if (elapsed !== null && elapsed > deadlineMs) {
 				failStart({
 					code: 'STARTUP_TIMEOUT',
 					message: `${mode === 'app' ? 'The app' : 'The kernel'} did not start within ${timeoutSeconds}s.`,
@@ -345,7 +340,7 @@ export function useNotebookSession(
 				() => failStart(undefined, 'NOT_FOUND'),
 			);
 		},
-		session?.status === 'starting' ? SESSION_START_POLL_INTERVAL_MS : null,
+		session?.status === 'starting' ? startPollInterval : null,
 	);
 
 	const concludeSession = useCallback(
@@ -403,8 +398,7 @@ export function useNotebookSession(
 				}),
 			)
 				.then((next) => {
-					if (mode !== 'app' || !generation.isCurrent(gen) || session.status !== 'running') return;
-					updateRunningSession(next);
+					if (mode === 'app' && generation.isCurrent(gen)) updateRunningSession(next);
 				})
 				.catch((error: unknown) => {
 					if (mode !== 'app' || !generation.isCurrent(gen)) return;

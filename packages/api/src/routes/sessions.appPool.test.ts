@@ -5,7 +5,9 @@ import {
 	paths,
 	ProxyExposure,
 	AppPoolService,
+	UnavailableError,
 	createSandboxId,
+	createSessionId,
 	signProxyToken,
 } from '@marimo-hub/core';
 import type { NotebookId, ProjectId, SessionId } from '@marimo-hub/core';
@@ -20,6 +22,7 @@ import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 import { authorizeProxyRequest } from '../sandboxProxy';
 import { sweepAppPools } from '../appPools';
+import { makeFakeSnapshotCompute } from '../testing/snapshotCompute';
 
 describe('app pool HTTP integration', () => {
 	let bucket: MemoryBucket;
@@ -64,6 +67,144 @@ describe('app pool HTTP integration', () => {
 		const old = await expectOk<any>(await api().request('GET', path(`/${first.session_id}`)));
 		expect(old.app_pool).toMatchObject({ state: 'draining', users: 4, max_users: 4 });
 	});
+
+	it('rechecks a reused member session after admitting a second viewer', async () => {
+		const first = await start();
+		const get = vi.spyOn(bucket, 'get');
+		const second = await start('bob');
+		expect(second.session_id).toBe(first.session_id);
+		expect(
+			get.mock.calls.filter(([key]) => key === paths.session(pid, first.session_id)),
+		).toHaveLength(2);
+	});
+
+	it.each(['terminating', 'terminated', 'missing'] as const)(
+		'rejects reuse when the session becomes %s during admission',
+		async (state) => {
+			const first = await start();
+			const sessions = createServices(bucket).sessions;
+			const put = bucket.put.bind(bucket);
+			let interrupted = false;
+			vi.spyOn(bucket, 'put').mockImplementation(async (...args) => {
+				if (args[0] === paths.appPool(pid, nid) && !interrupted) {
+					interrupted = true;
+					if (state === 'missing') await bucket.delete(paths.session(pid, first.session_id));
+					else if (state === 'terminating') await sessions.beginTerminating(pid, first.session_id);
+					else await sessions.terminate(pid, first.session_id);
+				}
+				return put(...args);
+			});
+			await expectError(
+				await api('bob').request('POST', path(), { mode: 'app', app_visit_id: 'tab' }),
+				409,
+				'CONFLICT',
+			);
+			expect(interrupted).toBe(true);
+		},
+	);
+
+	it('reads a concurrently published ready member after a synchronization CAS retry', async () => {
+		const first = await start();
+		const client = api('bob');
+		const sessions = client.deps.services.sessions;
+		const pool = new AppPoolService(bucket, sessions, policy);
+		await pool.store.mutate(pid, nid, (snapshot) => {
+			snapshot.assignments[0].visits[0].expires_at = Date.now() - 1;
+			return { pool: snapshot, value: undefined };
+		});
+		const concurrent = {
+			...(await pool.store.read(pid, nid))!.members[0],
+			session_id: createSessionId(),
+			sandbox_id: createSandboxId(),
+		};
+		const getSession = sessions.getSession.bind(sessions);
+		const read = vi.spyOn(sessions, 'getSession').mockImplementationOnce(async (...args) => {
+			const session = await getSession(...args);
+			await sessions.createSession({
+				project_id: pid,
+				notebook_id: nid,
+				user_id: concurrent.user_id,
+				mode: 'app',
+				app_pool: true,
+				session_id: concurrent.session_id,
+				sandbox_id: concurrent.sandbox_id,
+				source_version_id: concurrent.source_version_id,
+			});
+			await sessions.setRunning(pid, concurrent.session_id, 'https://concurrent.example');
+			await pool.store.mutate(pid, nid, (snapshot) => {
+				snapshot.members[0].state = 'retiring';
+				snapshot.members.push(concurrent);
+				return { pool: snapshot, value: undefined };
+			});
+			return session;
+		});
+		const put = vi.spyOn(bucket, 'put');
+		const response = await expectOk<any>(
+			await client.request('POST', path(), { mode: 'app', app_visit_id: 'tab' }),
+		);
+		expect(response).toMatchObject({
+			session_id: concurrent.session_id,
+			status: 'running',
+			sandbox_url: 'https://concurrent.example',
+			reused: true,
+		});
+		expect(read.mock.calls).toEqual([
+			[pid, first.session_id],
+			[pid, concurrent.session_id],
+		]);
+		expect(put.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(4);
+		expect((await pool.store.read(pid, nid))?.assignments).toMatchObject([
+			{
+				user_id: uid('bob'),
+				session_id: concurrent.session_id,
+				generation: response.app_assignment.generation,
+			},
+		]);
+	});
+
+	it.each(['published', 'missing', 'unavailable'] as const)(
+		'handles a %s session record after reusing an unobserved startup',
+		async (state) => {
+			const first = await start();
+			const pool = new AppPoolService(bucket, createServices(bucket).sessions, policy);
+			await pool.store.mutate(pid, nid, (snapshot) => {
+				snapshot.members[0].state = 'starting';
+				return { pool: snapshot, value: undefined };
+			});
+			const get = bucket.get.bind(bucket);
+			let sessionReads = 0;
+			vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				if (key === paths.session(pid, first.session_id)) {
+					sessionReads++;
+					if (sessionReads === 1) return null;
+					if (state === 'unavailable')
+						throw new UnavailableError('Storage temporarily unavailable');
+					if (state === 'missing' || sessionReads === 2) return null;
+				}
+				return get(key);
+			});
+			const response = await api('bob').request('POST', path(), {
+				mode: 'app',
+				app_visit_id: 'tab',
+			});
+			if (state === 'published') {
+				expect(await expectOk(response)).toMatchObject({
+					session_id: first.session_id,
+					status: 'running',
+				});
+				expect(sessionReads).toBe(3);
+			} else if (state === 'missing') {
+				await expectError(response, 409, 'CONFLICT');
+				expect(sessionReads).toBe(21);
+			} else {
+				await expectError(response, 503, 'SERVICE_UNAVAILABLE');
+				expect(sessionReads).toBe(2);
+			}
+			expect((await pool.store.read(pid, nid))?.members).toMatchObject([
+				{ session_id: first.session_id },
+			]);
+		},
+	);
 
 	it('reads a pool once per session listing regardless of its sandbox count', async () => {
 		await start();
@@ -300,13 +441,7 @@ describe('app pool HTTP integration', () => {
 		async (replacement) => {
 			const selected = replacement ? await start() : undefined;
 			const fake = makeFakeSandbox();
-			const compute = {
-				...fakeComputeFrom(fake.instance),
-				filesystemSnapshotsEnabled: true,
-				createFromSnapshot: () => fake.instance,
-				captureSnapshot: async () => ({ snapshotId: 'unused' }),
-				deleteSnapshot: async () => {},
-			};
+			const compute = makeFakeSnapshotCompute(fake.instance);
 			const client = createTestApi({
 				bucket,
 				userId: uid('alice'),
@@ -321,20 +456,24 @@ describe('app pool HTTP integration', () => {
 			};
 			const pool = new AppPoolService(bucket, client.deps.services.sessions, policy);
 			let reservedSessionId: SessionId | undefined;
-			const get = bucket.get.bind(bucket);
-			const failure = vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
-				if (key === paths.project(pid).notebook(nid).fsSnapshot) {
-					reservedSessionId = (await pool.store.read(pid, nid))?.members.find(
+			const put = bucket.put.bind(bucket);
+			const reservation = vi.spyOn(bucket, 'put').mockImplementation(async (...args) => {
+				const result = await put(...args);
+				if (args[0] === paths.appPool(pid, nid)) {
+					reservedSessionId ??= (await pool.store.read(pid, nid))?.members.find(
 						(member) => member.session_id !== selected?.session_id,
 					)?.session_id;
-					throw new Error('snapshot storage unavailable');
 				}
-				return get(key);
+				return result;
 			});
+			const failure = vi
+				.spyOn(client.deps.services.notebooks, 'getFsSnapshot')
+				.mockRejectedValue(new Error('snapshot storage unavailable'));
 			try {
 				expect((await client.request('POST', path(), body)).status).toBe(500);
 			} finally {
 				failure.mockRestore();
+				reservation.mockRestore();
 			}
 			const stored = await pool.store.read(pid, nid);
 			expect(reservedSessionId).toBeDefined();

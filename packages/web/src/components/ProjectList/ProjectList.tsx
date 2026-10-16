@@ -58,7 +58,11 @@ export function ProjectList() {
 	});
 
 	const { data: projects = [], isPending, isFetching } = useProjectsQuery(filters);
-	const hasNamespaces = projects.some((project) => project.tags.some(isPathTag));
+	// Read namespaces from the unfiltered roster so the toggle does not flicker as filters
+	// narrow the results; with no filters this shares the query above. The roster omits
+	// deleted projects, so the displayed results count too.
+	const { data: roster = [] } = useProjectsQuery({}, { throwOnError: false });
+	const hasNamespaces = [...roster, ...projects].some((project) => project.tags.some(isPathTag));
 	const createProject = useCreateProject();
 
 	const createForm = useAppForm({

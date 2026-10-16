@@ -144,6 +144,12 @@ export const BUCKET_SCAN_CONCURRENCY = 16;
  */
 export const BUCKET_WRITE_CONCURRENCY = 16;
 
+/** Max parsed records held by each ETag-validated metadata or session-record cache. */
+export const METADATA_CACHE_MAX_ENTRIES = 10_000;
+
+/** Notebook metadata outnumbers projects, so its validated cache holds more entries. */
+export const NOTEBOOK_META_CACHE_MAX_ENTRIES = 50_000;
+
 export const APP_HEARTBEAT_INTERVAL_MS = 30_000;
 export const APP_USER_LEASE_MS = 120_000;
 export const APP_PRESENCE_PERSIST_INTERVAL_MS = 60_000;

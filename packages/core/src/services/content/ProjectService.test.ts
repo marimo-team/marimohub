@@ -290,6 +290,44 @@ describe('ProjectService', () => {
 	});
 
 	describe('getProject', () => {
+		it('revalidates local updates even if the catalog projection fails', async () => {
+			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
+			await projects.getProject(project.id, { consistency: 'validated' });
+			vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(new Error('projection failed'));
+			await expect(projects.updateProject(project.id, { name: 'New' }, ACTOR)).rejects.toThrow(
+				'projection failed',
+			);
+			const get = vi.spyOn(bucket, 'get');
+			expect((await projects.getProject(project.id, { consistency: 'validated' })).name).toBe(
+				'New',
+			);
+			expect(metaReads(get, project.id)).toHaveLength(1);
+		});
+
+		it('caches the fetched ETag when a write races between HEAD and GET', async () => {
+			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
+			await projects.getProject(project.id, { consistency: 'validated' });
+			await new ProjectService(bucket, catalog).updateProject(
+				project.id,
+				{ name: 'Intermediate' },
+				ACTOR,
+			);
+			const head = bucket.head.bind(bucket);
+			vi.spyOn(bucket, 'head').mockImplementationOnce(async (key) => {
+				const before = await head(key);
+				await new ProjectService(bucket, catalog).updateProject(project.id, { name: 'New' }, ACTOR);
+				return before;
+			});
+			expect((await projects.getProject(project.id, { consistency: 'validated' })).name).toBe(
+				'New',
+			);
+			const get = vi.spyOn(bucket, 'get');
+			expect((await projects.getProject(project.id, { consistency: 'validated' })).name).toBe(
+				'New',
+			);
+			expect(metaReads(get, project.id)).toHaveLength(0);
+		});
+
 		it('returns the project by id', async () => {
 			const created = await projects.createProject({ name: 'Test', description: 'D' }, ACTOR);
 			const fetched = await projects.getProject(created.id);

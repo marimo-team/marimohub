@@ -400,46 +400,46 @@ export class AppPoolService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		observedSessions?: readonly Session[],
-	) {
-		const snapshot = await this.store.read(projectId, notebookId);
-		if (
-			snapshot?.deleted_at !== undefined &&
-			snapshot.members.length === 0 &&
-			(observedSessions?.length ?? 0) === 0
-		)
-			return snapshot;
-		const missing = new Set<SessionId>();
-		// Legacy writers are stopped before rollout, so discovery is needed only before a pool exists.
-		const candidates =
-			observedSessions ??
-			(snapshot
-				? await mapWithConcurrency(snapshot.members, BUCKET_SCAN_CONCURRENCY, async (member) => {
-						try {
-							return await this.sessions.getSession(projectId, member.session_id);
-						} catch (error) {
-							if (error instanceof NotFoundError) {
-								// A live reservation may precede its session record; readiness may not.
-								if (member.state !== 'starting') missing.add(member.session_id);
-								return null;
-							}
-							throw error;
-						}
-					})
-				: await this.sessions.listActiveByProject(projectId));
-		const sessions = candidates.filter(
-			(session): session is Session =>
-				!!session &&
-				session.project_id === projectId &&
-				session.notebook_id === notebookId &&
-				sessionMode(session) === 'app',
-		);
-		return this.store.mutate(projectId, notebookId, (pool) => {
+	): Promise<AppPool> {
+		let sessions: Session[] | undefined;
+		const absent = new Set<SessionId>();
+		return this.store.mutate(projectId, notebookId, async (pool) => {
+			if (
+				pool.deleted_at !== undefined &&
+				pool.members.length === 0 &&
+				(observedSessions?.length ?? 0) === 0
+			)
+				return { pool, value: pool };
+			if (!sessions) {
+				// Legacy writers stop before rollout. Only an empty pool needs discovery.
+				const candidates =
+					observedSessions ??
+					(pool.members.length === 0 &&
+					pool.assignments.length === 0 &&
+					pool.deleted_at === undefined
+						? await this.sessions.listActiveByProject(projectId)
+						: await mapWithConcurrency(pool.members, BUCKET_SCAN_CONCURRENCY, async (member) => {
+								try {
+									return await this.sessions.getSession(projectId, member.session_id);
+								} catch (error) {
+									if (!(error instanceof NotFoundError)) throw error;
+									// A starting reservation can publish its session before a CAS retry.
+									if (member.state !== 'starting') absent.add(member.session_id);
+									return null;
+								}
+							}));
+				sessions = candidates.filter(
+					(session): session is Session =>
+						!!session &&
+						session.project_id === projectId &&
+						session.notebook_id === notebookId &&
+						sessionMode(session) === 'app',
+				);
+			}
 			for (const member of pool.members) {
-				if (
-					missing.has(member.session_id) ||
-					(member.state === 'starting' && member.operation_expires_at <= this.now())
-				)
-					member.state = 'retiring';
+				const missing = member.state !== 'starting' && absent.has(member.session_id);
+				const expired = member.state === 'starting' && member.operation_expires_at <= this.now();
+				if (missing || expired) member.state = 'retiring';
 			}
 			for (const session of sessions) {
 				const member = pool.members.find((item) => item.session_id === session.session_id);
