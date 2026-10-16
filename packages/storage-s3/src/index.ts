@@ -118,8 +118,19 @@ export class S3Storage implements Bucket {
 					new GetObjectCommand({ Bucket: this.bucket, Key: key }),
 					{ abortSignal },
 				);
-				const bodyBytes = res.Body ? await res.Body.transformToByteArray() : new Uint8Array(0);
-				return { res, bodyBytes };
+				const body = res.Body;
+				const pending = body ? body.transformToByteArray() : Promise.resolve(new Uint8Array(0));
+				// Checksum wrappers can outlive an aborted socket without forwarding its error.
+				const abortBody = () => {
+					if (body && 'destroy' in body) body.destroy(abortSignal.reason);
+				};
+				abortSignal.addEventListener('abort', abortBody, { once: true });
+				if (abortSignal.aborted) abortBody();
+				try {
+					return { res, bodyBytes: await pending };
+				} finally {
+					abortSignal.removeEventListener('abort', abortBody);
+				}
 			});
 			let bodyText: string | undefined;
 			const decode = () => (bodyText ??= new TextDecoder().decode(bodyBytes));
@@ -209,10 +220,8 @@ export class S3Storage implements Bucket {
 
 	async delete(key: string | string[]): Promise<void> {
 		if (Array.isArray(key)) {
-			// A batch delete returns HTTP 200 even when individual keys fail; the per-key
-			// failures come back in Errors[]. Collect them across ALL chunks (never abort
-			// early — one inaccessible object must not block retention cleanup for the
-			// rest) and reject only once every batch has been attempted.
+			// HTTP 200 can include per-key Errors[]. Continue other batches so an inaccessible
+			// object does not block retention cleanup; request failures and timeouts stop the loop.
 			const errors: { Key?: string; Code?: string; Message?: string }[] = [];
 			for (const batch of chunk(key, 1000)) {
 				if (batch.length === 0) continue;
