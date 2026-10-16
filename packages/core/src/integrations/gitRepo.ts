@@ -29,7 +29,7 @@ export const AZURE_DEVOPS_ORGANIZATION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,49}
 export function gitLabRepositoryUrl(input: string): string | null {
 	try {
 		const value = input.trim();
-		if (!/^https:\/\//i.test(value) || /[\\\s]/.test(value)) return null;
+		if (!/^https:\/\/[^/]/i.test(value) || /[\\\s]/.test(value)) return null;
 		const url = new URL(value);
 		if (url.username || url.password || url.search || url.hash) return null;
 		const path = value

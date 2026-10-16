@@ -1,7 +1,12 @@
 import fs from 'node:fs';
 import git from 'isomorphic-git';
 import type { TreeEntry as GitTreeEntry } from 'isomorphic-git';
-import { BadRequestError, ConflictError } from '@marimo-hub/core/errors';
+import {
+	BadRequestError,
+	ConflictError,
+	DomainError,
+	UnavailableError,
+} from '@marimo-hub/core/errors';
 import { isSafeWorkspaceRootPath, WORKSPACE_LIMITS } from '@marimo-hub/core/remote-workspace';
 import { assertGitTreeLimits, gitHttp, withFetchedGit } from './index';
 import type { GitFetchOptions } from './index';
@@ -117,7 +122,8 @@ export async function pushGitTree(
 					error instanceof git.Errors.PushRejectedError
 				)
 					throw new ConflictError('Git server rejected the proposal branch update');
-				throw error;
+				if (error instanceof DomainError) throw error;
+				throw new UnavailableError('Git proposal branch could not be pushed', { cause: error });
 			});
 		if (!result.ok || !result.refs[`refs/heads/${options.headBranch}`]?.ok)
 			throw new ConflictError('Git server rejected the proposal branch update');

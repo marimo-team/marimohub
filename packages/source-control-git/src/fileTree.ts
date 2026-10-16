@@ -47,6 +47,8 @@ export function applyChanges(base: FileTree, changes: readonly SourceControlChan
 			});
 		}
 	}
+	if (desired.size > WORKSPACE_LIMITS.maxFiles)
+		throw new BadRequestError('Too many proposal files');
 	for (const path of desired.keys()) {
 		const parts = path.split('/');
 		for (let i = 1; i < parts.length; i++) {

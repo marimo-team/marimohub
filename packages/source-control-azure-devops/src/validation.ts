@@ -1,5 +1,6 @@
 export {
 	normalizeCommit,
+	normalizeProviderCommit,
 	validateBranch,
 	validatePublication,
 	hasControlCharacter,

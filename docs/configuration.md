@@ -531,7 +531,7 @@ Connect GitLab.com or a self-managed HTTPS origin. Use a project, group, or pers
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN` 🔒 | Access token used for repository reads, Git pushes, and merge requests. Never injected into notebook sandboxes. | — | — | — |
+| `MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN` 🔒 | Required to enable GitLab. Setting SERVER_URL without a token is a startup error. Used for repository reads, Git pushes, and merge requests. Never injected into notebook sandboxes. | — | — | — |
 | `MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL` | HTTPS origin without a path. Repository URLs must use this origin. | — | `https://gitlab.com` | `https://git.acme.corp` |
 | `MARIMOHUB_SOURCE_CONTROL_GITLAB_ALLOWED_REPOSITORIES` | Optional JSON array of {resource, projects} rules using full repository URLs. Unset permits shared access. [] denies all. See [Repository project policies](syncing.md#repository-project-policies). | — | — | `[{"resource":"https://gitlab.com/team/notebooks","projects":"*"}]` |
 

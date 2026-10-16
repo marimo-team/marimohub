@@ -51,6 +51,16 @@ export class FakeGitLab {
 			.toString()
 			.trim();
 	}
+	private refreshMerge(mr: Record<string, unknown>): Record<string, unknown> {
+		// Closed and merged requests retain their final diff head.
+		if (mr.state !== 'opened') return mr;
+		try {
+			mr.sha = this.head(stringField(mr, 'source_branch'));
+		} catch {
+			// GitLab retains the last commit when the source branch is deleted.
+		}
+		return mr;
+	}
 	readonly fetcher = vi.fn(async (input: string, init: RequestInit = {}): Promise<Response> => {
 		const url = new URL(input);
 		const method = init.method ?? 'GET';
@@ -83,6 +93,7 @@ export class FakeGitLab {
 			if (service === 'git-receive-pack') this.beforePush?.();
 			const body = new Uint8Array(await new Response(init.body).arrayBuffer());
 			const result = git(this.dir, [service.slice(4), '--stateless-rpc', this.dir], body);
+			if (service === 'git-receive-pack') this.merges.forEach((mr) => this.refreshMerge(mr));
 			if (service === 'git-receive-pack' && this.lostPush) {
 				this.lostPush = false;
 				throw new Error('Lost push response');
@@ -138,11 +149,13 @@ export class FakeGitLab {
 			return new Response(new Uint8Array(git(this.dir, ['cat-file', 'blob', route.split('/')[3]])));
 		if (route === '/merge_requests' && method === 'GET')
 			return Response.json(
-				this.merges.filter(
-					(mr) =>
-						mr.source_branch === url.searchParams.get('source_branch') &&
-						mr.target_branch === url.searchParams.get('target_branch'),
-				),
+				this.merges
+					.filter(
+						(mr) =>
+							mr.source_branch === url.searchParams.get('source_branch') &&
+							mr.target_branch === url.searchParams.get('target_branch'),
+					)
+					.map((mr) => this.refreshMerge(mr)),
 				{ headers: { 'x-next-page': '' } },
 			);
 		if (route === '/merge_requests' && method === 'POST') {
@@ -168,8 +181,11 @@ export class FakeGitLab {
 		if (/^\/merge_requests\/\d+$/.test(route) && ['GET', 'PUT'].includes(method)) {
 			const mr = this.merges.find((item) => item.iid === Number(route.split('/').at(-1)));
 			if (!mr) return Response.json({}, { status: 404 });
-			if (method === 'PUT') Object.assign(mr, JSON.parse(String(init.body)));
-			return Response.json(mr);
+			if (method === 'PUT') {
+				Object.assign(mr, JSON.parse(String(init.body)));
+				mr.draft = stringField(mr, 'title').startsWith('Draft: ');
+			}
+			return Response.json(this.refreshMerge(mr));
 		}
 		throw new Error(`Unexpected ${method} ${path}`);
 	});

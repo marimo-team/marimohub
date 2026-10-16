@@ -8,7 +8,10 @@ import type {
 } from '@marimo-hub/core/ports/source-control';
 import { blobId } from '@marimo-hub/source-control-git/file-tree';
 import type { FileTree, TreeEntry } from '@marimo-hub/source-control-git/file-tree';
-import { normalizeCommit } from '@marimo-hub/source-control-git/validation';
+import {
+	normalizeCommit,
+	normalizeProviderCommit,
+} from '@marimo-hub/source-control-git/validation';
 import { record, stringField } from './client';
 import type { GitLabClient } from './client';
 import type { GitLabRepository } from './repository';
@@ -49,7 +52,7 @@ export class GitLabTrees {
 		const value = record(
 			(await this.client.json(this.repo, `/repository/commits/${id}`, {}, options)).value,
 		);
-		if (normalizeCommit(stringField(value, 'id')) !== id)
+		if (normalizeProviderCommit(stringField(value, 'id')) !== id)
 			throw new UnavailableError('GitLab returned a different commit');
 		return value;
 	}
@@ -72,7 +75,7 @@ export class GitLabTrees {
 			if (!path || !isSafeWorkspaceRootPath(path) || paths.has(path))
 				throw new BadRequestError('Unsafe or duplicate GitLab tree path');
 			paths.add(path);
-			const objectId = normalizeCommit(stringField(entry, 'id'));
+			const objectId = normalizeProviderCommit(stringField(entry, 'id'));
 			if (entry.type === 'tree' && mode === '040000') continue;
 			if (
 				!(

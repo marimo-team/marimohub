@@ -1916,7 +1916,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN',
 						name: 'GitLab access token',
 						description:
-							'Access token used for repository reads, Git pushes, and merge requests. Never injected into notebook sandboxes.',
+							'Required to enable GitLab. Setting SERVER_URL without a token is a startup error. Used for repository reads, Git pushes, and merge requests. Never injected into notebook sandboxes.',
 						secret: true,
 						optIn: true,
 					},

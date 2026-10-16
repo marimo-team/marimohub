@@ -4,7 +4,13 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import isomorphicGit from 'isomorphic-git';
-import { BadRequestError } from '@marimo-hub/core/errors';
+import {
+	BadRequestError,
+	ConflictError,
+	ForbiddenError,
+	NotFoundError,
+	UnavailableError,
+} from '@marimo-hub/core/errors';
 import {
 	MAX_GIT_DIRECTORY_BYTES,
 	MAX_GIT_DIRECTORY_FILES,
@@ -15,6 +21,7 @@ import {
 import { MAX_WORKSPACE_FILE_BYTES } from '@marimo-hub/core/constants';
 import type { GitFetch } from './index';
 import { collectGitDirectoryFiles, GitFetchByteLimit, materializeGitDirectory } from './index';
+import { pushGitTree } from './publish';
 
 const temporaryDirectories: string[] = [];
 
@@ -101,6 +108,30 @@ const ORIGINS = [
 
 // Git subprocess tests; need headroom when the whole suite shares the CPU.
 describe('materializeGitDirectory', { timeout: 15_000 }, () => {
+	it.each([
+		new ConflictError('GitLab rejected the request'),
+		new ForbiddenError('GitLab access was denied'),
+		new NotFoundError('GitLab object was not found'),
+	])('classifies provider fetch failures as unavailable: %s', async (cause) => {
+		Object.assign(cause, { providerStatus: 409 });
+		const error = await materializeGitDirectory({
+			repository: 'owner/repo',
+			remoteUrl: 'https://gitlab.com/owner/repo.git',
+			commit: 'a'.repeat(40),
+			branch: 'main',
+			authorization: 'Bearer token',
+			fetcher: async () => {
+				throw cause;
+			},
+		}).catch((error: unknown) => error);
+		expect(error).toBeInstanceOf(UnavailableError);
+		expect(error).toMatchObject({
+			message: 'Git data could not be fetched',
+			cause,
+			providerStatus: 409,
+		});
+	});
+
 	it('caps the combined bytes from all smart-HTTP responses', () => {
 		const limit = new GitFetchByteLimit('owner/repo');
 		limit.record(Math.ceil(MAX_GIT_FETCH_BYTES / 2));
@@ -374,5 +405,53 @@ describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 		}
 
 		expect(git(restored, ['status', '--porcelain'])).toBe('D app-link.py');
+	});
+});
+
+describe('pushGitTree failure classification', () => {
+	it.each([
+		{
+			cause: new Error('Connection reset'),
+			message: 'Git proposal branch could not be pushed',
+			type: UnavailableError,
+		},
+		{
+			cause: new ConflictError('Git proposal branch changed while publishing'),
+			message: 'Git proposal branch changed while publishing',
+			type: ConflictError,
+		},
+		{
+			cause: Object.assign(new ForbiddenError('GitLab access was denied'), { providerStatus: 403 }),
+			message: 'GitLab access was denied',
+			type: ForbiddenError,
+		},
+	])('reports $message', async ({ cause, message, type }) => {
+		const source = await temporaryDirectory('marimohub-git-push-error-');
+		git(source, ['init', '-b', 'main']);
+		const tree = git(source, ['mktree'], '');
+		const commit = git(source, ['commit-tree', tree, '-m', 'Initial commit']);
+		git(source, ['update-ref', 'refs/heads/main', commit]);
+		const push = vi.spyOn(isomorphicGit, 'push').mockRejectedValue(cause);
+		try {
+			const error = await pushGitTree({
+				repository: 'owner/repo',
+				remoteUrl: 'https://gitlab.com/owner/repo.git',
+				commit,
+				branch: 'main',
+				authorization: 'Bearer token',
+				fetcher: uploadPackFetcher(source),
+				headBranch: 'proposal',
+				expectedHead: null,
+				tree: new Map(),
+				contents: new Map(),
+				message: 'Propose changes',
+			}).catch((error: unknown) => error);
+			expect(error).toBeInstanceOf(type);
+			expect(error).toMatchObject({ message });
+			if (type === UnavailableError) expect(error).toHaveProperty('cause', cause);
+			else expect(error).toBe(cause);
+		} finally {
+			push.mockRestore();
+		}
 	});
 });

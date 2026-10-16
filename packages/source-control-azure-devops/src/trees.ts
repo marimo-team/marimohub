@@ -9,7 +9,7 @@ import type {
 import { boundedBytes, record, stringField } from './client';
 import type { AzureClient } from './client';
 import type { AzureRepository } from './repository';
-import { normalizeCommit } from './validation';
+import { normalizeCommit, normalizeProviderCommit } from './validation';
 
 export { blobId, sameTree } from '@marimo-hub/source-control-git/file-tree';
 export type { FileTree } from '@marimo-hub/source-control-git/file-tree';
@@ -26,13 +26,13 @@ export class AzureTrees {
 		const result = record(
 			await this.client.json(this.repo, `/commits/${normalizedSha}`, {}, options),
 		);
-		if (normalizeCommit(stringField(result, 'commitId')) !== normalizedSha)
+		if (normalizeProviderCommit(stringField(result, 'commitId')) !== normalizedSha)
 			throw new UnavailableError('Azure DevOps returned a different commit');
 		return result;
 	}
 	async files(sha: string, options: SourceReadOptions = {}): Promise<FileTree> {
 		const commit = await this.commit(sha, options);
-		const treeId = normalizeCommit(stringField(commit, 'treeId'));
+		const treeId = normalizeProviderCommit(stringField(commit, 'treeId'));
 		const response = record(
 			await this.client.json(this.repo, `/trees/${treeId}`, { recursive: 'true' }, options),
 		);
@@ -54,7 +54,7 @@ export class AzureTrees {
 			if (!validMode || paths.has(path))
 				throw new UnavailableError('Invalid Azure DevOps tree entry');
 			paths.add(path);
-			const objectId = normalizeCommit(stringField(entry, 'objectId'));
+			const objectId = normalizeProviderCommit(stringField(entry, 'objectId'));
 			if (type === 'tree') continue;
 			const size = entry.size;
 			if (

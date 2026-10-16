@@ -93,7 +93,7 @@ describe('GitLab HTTP boundaries', () => {
 		);
 		await expect(list(client, repo, '/repository/tree', {})).rejects.toThrow('pagination');
 	});
-	it('caps endless pagination', async () => {
+	it('caps pagination entries', async () => {
 		const fetcher = vi.fn(async (url: string) =>
 			Response.json(
 				Array.from({ length: 100 }, () => ({})),
@@ -103,6 +103,18 @@ describe('GitLab HTTP boundaries', () => {
 		await expect(
 			list(new GitLabClient({ token: 'secret' }, { fetcher }), repo, '/repository/tree', {}),
 		).rejects.toThrow('too many entries');
+		expect(fetcher).toHaveBeenCalledTimes(21);
+	});
+	it.each([0, 1])('caps endless pagination with %s entries per page', async (count) => {
+		const fetcher = vi.fn(async (url: string) =>
+			Response.json(
+				Array.from({ length: count }, () => ({})),
+				{ headers: { 'x-next-page': String(Number(new URL(url).searchParams.get('page')) + 1) } },
+			),
+		);
+		await expect(
+			list(new GitLabClient({ token: 'secret' }, { fetcher }), repo, '/repository/tree', {}),
+		).rejects.toThrow('too many pages');
 		expect(fetcher).toHaveBeenCalledTimes(21);
 	});
 });
@@ -153,7 +165,8 @@ describe('GitLab request failures', () => {
 			expect(cancel).toHaveBeenCalledOnce();
 		},
 	);
-	it('sanitizes body-stream failures', async () => {
+	it('sanitizes body-stream failures while preserving their cause', async () => {
+		const cause = new Error('secret transport details');
 		const client = new GitLabClient(
 			{ token: 'secret' },
 			{
@@ -161,15 +174,15 @@ describe('GitLab request failures', () => {
 					new Response(
 						new ReadableStream({
 							start(controller) {
-								controller.error(new Error('secret transport details'));
+								controller.error(cause);
 							},
 						}),
 					),
 			},
 		);
-		await expect(client.json(repo, '/repository/tree')).rejects.toThrow(
-			'GitLab response could not be read',
-		);
+		const error = await client.data(repo, '/repository/tree').catch((error: unknown) => error);
+		expect(error).toMatchObject({ message: 'GitLab response could not be read', cause });
+		expect(String(error)).not.toContain('secret transport details');
 	});
 	it('continues a full page when pagination headers are missing', async () => {
 		const fetcher = vi
@@ -187,5 +200,65 @@ describe('GitLab request failures', () => {
 			{ fetcher: async () => Response.json(value) },
 		);
 		await expect(list(client, repo, '/repository/tree', {})).rejects.toThrow('Invalid GitLab list');
+	});
+});
+
+describe('GitLab Git transport deadlines', () => {
+	it('allows transfer bodies past the header deadline and preserves caller cancellation', async () => {
+		vi.useFakeTimers();
+		const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((delay) => {
+			const controller = new AbortController();
+			setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), delay);
+			return controller.signal;
+		});
+		const caller = new AbortController();
+		let transportSignal: AbortSignal | undefined;
+		const client = new GitLabClient(
+			{ token: 'secret' },
+			{
+				fetcher: async (_url, init) => {
+					transportSignal = init?.signal ?? undefined;
+					return new Response(
+						new ReadableStream({
+							start(controller) {
+								transportSignal?.addEventListener('abort', () =>
+									controller.error(transportSignal?.reason),
+								);
+							},
+						}),
+					);
+				},
+			},
+		);
+		try {
+			const response = await client.gitFetch(repo)(`${repo.remoteUrl}/git-upload-pack`, {
+				signal: caller.signal,
+			});
+			await vi.advanceTimersByTimeAsync(60_001);
+			expect(transportSignal?.aborted).toBe(false);
+			const reason = new Error('Canceled transfer');
+			const body = response.arrayBuffer();
+			caller.abort(reason);
+			await expect(body).rejects.toBe(reason);
+		} finally {
+			timeout.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+	it('still times out waiting for Git response headers', async () => {
+		vi.useFakeTimers();
+		const client = new GitLabClient(
+			{ token: 'secret' },
+			{ fetcher: () => new Promise<Response>(() => {}) },
+		);
+		try {
+			const pending = expect(
+				client.gitFetch(repo)(`${repo.remoteUrl}/git-upload-pack`),
+			).rejects.toThrow('GitLab is unavailable');
+			await vi.advanceTimersByTimeAsync(60_001);
+			await pending;
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

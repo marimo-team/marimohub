@@ -20,6 +20,7 @@ import { applyChanges, sameTree } from '@marimo-hub/source-control-git/file-tree
 import type { FileTree } from '@marimo-hub/source-control-git/file-tree';
 import {
 	normalizeCommit,
+	normalizeProviderCommit,
 	validateBranch,
 	validatePublication,
 } from '@marimo-hub/source-control-git/validation';
@@ -66,7 +67,7 @@ export class GitLabSourceControl implements SourceControlReader, SourceControlPu
 			).value;
 			if (stringField(branchData, 'name') !== branch)
 				throw new UnavailableError('GitLab returned a different branch');
-			return normalizeCommit(stringField(record(branchData).commit, 'id'));
+			return normalizeProviderCommit(stringField(record(branchData).commit, 'id'));
 		} catch (error) {
 			if (error instanceof NotFoundError) return null;
 			throw error;
@@ -122,7 +123,7 @@ export class GitLabSourceControl implements SourceControlReader, SourceControlPu
 				Array.isArray(commit.parent_ids) &&
 				commit.parent_ids.length === 1 &&
 				typeof commit.parent_ids[0] === 'string' &&
-				normalizeCommit(commit.parent_ids[0]) === parent &&
+				normalizeProviderCommit(commit.parent_ids[0]) === parent &&
 				sameTree(await trees.files(head), desired)
 			);
 		});
@@ -217,7 +218,7 @@ export class GitLabSourceControl implements SourceControlReader, SourceControlPu
 				const result = this.result(repo, candidate, branch, input.baseBranch, publishedHead);
 				const mr = record(candidate);
 				if (mr.state === 'opened') return result;
-				if (typeof mr.sha === 'string' && normalizeCommit(mr.sha) === publishedHead)
+				if (typeof mr.sha === 'string' && normalizeProviderCommit(mr.sha) === publishedHead)
 					closed ??= result;
 			}
 			if (closed) return closed;

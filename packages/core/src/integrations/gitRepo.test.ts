@@ -1,5 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { detectProvider, normalizeRepo, repoPath, reposMatch } from './gitRepo';
+import {
+	detectProvider,
+	gitLabRepositoryUrl,
+	normalizeRepo,
+	repoPath,
+	reposMatch,
+} from './gitRepo';
+
+describe('gitLabRepositoryUrl', () => {
+	it.each(['https:///gitlab.com/g/r', 'https:////gitlab.com/g/r', 'https://'])(
+		'rejects a missing authority in %s',
+		(value) => expect(gitLabRepositoryUrl(value)).toBeNull(),
+	);
+
+	it('canonicalizes the host without changing the project path', () => {
+		expect(gitLabRepositoryUrl('HTTPS://GitLab.COM/Group/Sub/Project.git')).toBe(
+			'https://gitlab.com/Group/Sub/Project',
+		);
+	});
+});
 
 describe('normalizeRepo', () => {
 	it('keeps owner/repo shorthand as-is', () => {

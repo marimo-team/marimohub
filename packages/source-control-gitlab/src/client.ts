@@ -1,5 +1,5 @@
 import { readResponseBytes } from '@marimo-hub/source-control-git/http';
-import { deadlineSignal, withAbortSignal } from '@marimo-hub/core/async';
+import { deadlineSignal, withDeadline } from '@marimo-hub/core/async';
 import {
 	BadRequestError,
 	ConflictError,
@@ -47,12 +47,16 @@ export class GitLabClient {
 	}
 	async fetch(url: string, init: RequestInit): Promise<Response> {
 		init.signal?.throwIfAborted();
-		const signal = deadlineSignal(60_000, init.signal ?? undefined);
 		let response: Response;
 		try {
-			response = await withAbortSignal(
-				this.fetcher(url, { ...init, signal, redirect: 'error' }),
-				signal,
+			response = await withDeadline(
+				(signal) => this.fetcher(url, { ...init, signal, redirect: 'error' }),
+				{
+					timeoutMs: 60_000,
+					signal: init.signal ?? undefined,
+					timeoutError: () => new UnavailableError('GitLab is unavailable'),
+					unref: true,
+				},
 			);
 		} catch {
 			init.signal?.throwIfAborted();
@@ -96,8 +100,8 @@ export class GitLabClient {
 			};
 		} catch (error) {
 			init.signal?.throwIfAborted();
-			if (error instanceof BadRequestError) throw error;
-			throw new UnavailableError('GitLab response could not be read');
+			if (error instanceof BadRequestError || error instanceof UnavailableError) throw error;
+			throw new UnavailableError('GitLab response could not be read', { cause: error });
 		}
 	}
 	async json(

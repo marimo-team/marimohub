@@ -55,14 +55,16 @@ describe('bounded source-control responses', () => {
 	});
 	it('does not return partial data or expose details after a stream failure', async () => {
 		let pulls = 0;
+		const cause = new Error('private connection details');
 		const body = new ReadableStream<Uint8Array>({
 			pull(controller) {
 				if (pulls++ === 0) controller.enqueue(new Uint8Array([1]));
-				else controller.error(new Error('private connection details'));
+				else controller.error(cause);
 			},
 		});
 		const error = await boundedBytes(new Response(body), 10).catch((error: unknown) => error);
 		expect(error).toBeInstanceOf(UnavailableError);
+		expect(error).toHaveProperty('cause', cause);
 		expect(String(error)).not.toContain('private connection details');
 	});
 	it('aborts a stalled body and cancels its stream', async () => {
@@ -74,8 +76,8 @@ describe('bounded source-control responses', () => {
 			'Provider',
 			controller.signal,
 		);
-		controller.abort();
-		await expect(reading).rejects.toThrow();
+		controller.abort(new Error('Stop reading Git response'));
+		await expect(reading).rejects.toBe(controller.signal.reason);
 		expect(cancel).toHaveBeenCalledOnce();
 	});
 });

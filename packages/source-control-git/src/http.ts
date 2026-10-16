@@ -28,7 +28,7 @@ export async function readResponseBytes(
 	} catch (error) {
 		signal?.throwIfAborted();
 		if (error instanceof BadRequestError) throw error;
-		throw new UnavailableError(`${provider} response could not be read`);
+		throw new UnavailableError(`${provider} response could not be read`, { cause: error });
 	} finally {
 		await reader.cancel().catch(() => {});
 	}

@@ -72,20 +72,33 @@ describe('GitLab reader', { timeout: 30_000 }, () => {
 		expect(fake.fetcher).not.toHaveBeenCalled();
 	});
 	it.each([
-		{ path: '../escape', mode: '100644', type: 'blob' },
-		{ path: '.git/config', mode: '100644', type: 'blob' },
-		{ path: 'apps/main.py', mode: '999999', type: 'blob' },
-		{ path: 'apps/main.py', mode: '100644', type: 'tree' },
-	])('rejects unsafe or inconsistent tree entries: $path $mode $type', async (entry) => {
-		const { fake, adapter } = await setup();
-		const real = fake.fetcher.getMockImplementation()!;
-		fake.fetcher.mockImplementation((url, init) =>
-			url.includes('/repository/tree?')
-				? Promise.resolve(Response.json([{ ...entry, id: 'a'.repeat(40) }]))
-				: real(url, init),
-		);
-		await expect(adapter.fetchWorkspace(repository, fake.base, '')).rejects.toThrow();
-	});
+		{
+			path: '../escape',
+			mode: '100644',
+			type: 'blob',
+			error: 'Unsafe or duplicate GitLab tree path',
+		},
+		{
+			path: '.git/config',
+			mode: '100644',
+			type: 'blob',
+			error: 'Unsafe or duplicate GitLab tree path',
+		},
+		{ path: 'apps/main.py', mode: '999999', type: 'blob', error: 'Invalid GitLab tree entry' },
+		{ path: 'apps/main.py', mode: '100644', type: 'tree', error: 'Invalid GitLab tree entry' },
+	])(
+		'rejects unsafe or inconsistent tree entries: $path $mode $type',
+		async ({ error, ...entry }) => {
+			const { fake, adapter } = await setup();
+			const real = fake.fetcher.getMockImplementation()!;
+			fake.fetcher.mockImplementation((url, init) =>
+				url.includes('/repository/tree?')
+					? Promise.resolve(Response.json([{ ...entry, id: 'a'.repeat(40) }]))
+					: real(url, init),
+			);
+			await expect(adapter.fetchWorkspace(repository, fake.base, '')).rejects.toThrow(error);
+		},
+	);
 
 	it('rejects a blob that does not match its object ID', async () => {
 		const { fake, adapter } = await setup();
@@ -158,10 +171,69 @@ describe('GitLab publisher', { timeout: 30_000 }, () => {
 				.toString()
 				.trim(),
 		).toBe(first.headCommit);
-		expect(fake.merges[0].title).toBe('Draft: Updated');
+		expect(fake.merges[0]).toMatchObject({ title: 'Draft: Updated', sha: second.headCommit });
 		expect(await adapter.updateChangeRequest(update)).toEqual(second);
 		expect(await adapter.updateChangeRequest({ ...update, changeRequest: second })).toEqual(second);
 	});
+	it.each(['', '/1'])('refreshes MR commits when reading /merge_requests%s', async (suffix) => {
+		const { fake, adapter, input } = await setup();
+		await adapter.openChangeRequest(input);
+		git(fake.dir, ['update-ref', `refs/heads/${input.headBranch}`, fake.base]);
+		const query = new URLSearchParams({
+			source_branch: input.headBranch,
+			target_branch: input.baseBranch,
+		});
+		const response = await fake.fetcher(
+			`https://gitlab.com/api/v4/projects/team%2Fsubgroup%2Fnotebooks/merge_requests${suffix}?${query}`,
+			{ headers: { 'PRIVATE-TOKEN': token } },
+		);
+		const value = await response.json();
+		expect(value).toMatchObject(suffix ? { sha: fake.base } : [{ sha: fake.base }]);
+	});
+	it.each(['closed', 'merged'])('retains the final diff head for a %s MR', async (state) => {
+		const { fake, adapter, input } = await setup();
+		const first = await adapter.openChangeRequest(input);
+		fake.merges[0].state = state;
+		git(fake.dir, ['update-ref', `refs/heads/${input.headBranch}`, fake.base]);
+		const path = 'https://gitlab.com/api/v4/projects/team%2Fsubgroup%2Fnotebooks/merge_requests';
+		for (const method of ['GET', 'PUT']) {
+			const response = await fake.fetcher(`${path}/1`, {
+				method,
+				headers: { 'PRIVATE-TOKEN': token },
+				...(method === 'PUT' ? { body: JSON.stringify({ title: 'Updated metadata' }) } : {}),
+			});
+			expect(await response.json()).toHaveProperty('sha', first.headCommit);
+		}
+		const query = new URLSearchParams({
+			source_branch: input.headBranch,
+			target_branch: input.baseBranch,
+		});
+		const response = await fake.fetcher(`${path}?${query}`, {
+			headers: { 'PRIVATE-TOKEN': token },
+		});
+		expect(await response.json()).toMatchObject([{ sha: first.headCommit }]);
+	});
+	it.each([false, true])(
+		'preserves draft state after an external title change to draft=%s',
+		async (draft) => {
+			const { fake, adapter, input } = await setup();
+			const first = await adapter.openChangeRequest({ ...input, draft: !draft });
+			await fake.fetcher(
+				'https://gitlab.com/api/v4/projects/team%2Fsubgroup%2Fnotebooks/merge_requests/1',
+				{
+					method: 'PUT',
+					headers: { 'PRIVATE-TOKEN': token },
+					body: JSON.stringify({ title: draft ? 'Draft: External title' : 'External title' }),
+				},
+			);
+			expect(fake.merges[0].draft).toBe(draft);
+			await adapter.updateChangeRequest({ ...input, changeRequest: first, title: 'Updated title' });
+			expect(fake.merges[0]).toMatchObject({
+				draft,
+				title: draft ? 'Draft: Updated title' : 'Updated title',
+			});
+		},
+	);
 	it.each(['lostPush', 'lostMerge'] as const)(
 		'recovers after %s without duplicate publication',
 		async (failure) => {

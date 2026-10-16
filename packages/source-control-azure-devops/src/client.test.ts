@@ -198,7 +198,7 @@ it('cancels a stalled Azure response body', async () => {
 	const controller = new AbortController();
 	const pending = client.json(repo, '/refs', {}, { signal: controller.signal });
 	await vi.waitFor(() => expect(reader).toHaveBeenCalled());
-	controller.abort();
-	await expect(pending).rejects.toThrow();
+	controller.abort(new Error('Stop reading Azure response'));
+	await expect(pending).rejects.toBe(controller.signal.reason);
 	expect(cancel).toHaveBeenCalledOnce();
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type * as remoteWorkspace from '@marimo-hub/core/remote-workspace';
+import { UnavailableError } from '@marimo-hub/core/errors';
 import { blobId } from '@marimo-hub/source-control-git/file-tree';
 import { GitLabClient } from './client';
 import { parseGitLabRepository } from './repository';
@@ -48,10 +49,16 @@ describe('GitLab tree boundaries', () => {
 		async (value) => {
 			const { trees, fetcher } = setup([]);
 			fetcher.mockResolvedValueOnce(Response.json(value));
-			await expect(trees.workspace(commit, '')).rejects.toThrow();
+			const pending = trees.workspace(commit, '');
+			await expect(pending).rejects.toBeInstanceOf(UnavailableError);
+			await expect(pending).rejects.toThrow(/Invalid|different/);
 			expect(fetcher).toHaveBeenCalledOnce();
 		},
 	);
+	it('rejects a malformed tree object ID as a provider failure', async () => {
+		const { trees } = setup([{ ...file('a.py', 'a'), id: 'invalid' }]);
+		await expect(trees.workspace(commit, '')).rejects.toBeInstanceOf(UnavailableError);
+	});
 	it('rejects duplicate paths before downloading blobs', async () => {
 		const { trees, fetcher } = setup([file('a.py', 'a'), file('a.py', 'b')]);
 		await expect(trees.workspace(commit, '')).rejects.toThrow('duplicate');
