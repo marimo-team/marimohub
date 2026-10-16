@@ -34,6 +34,7 @@ const STATIC_AWS_CREDENTIALS = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'A
 // Integrations are the base; WIF and marimo config win collisions.
 export function composeSessionEnv(layers: {
 	wifVars?: Record<string, string>;
+	endpointDelivery?: boolean;
 	marimoEnv?: SessionEnv;
 	integrationEnv?: SessionRender;
 }): SessionEnv | undefined {
@@ -42,8 +43,8 @@ export function composeSessionEnv(layers: {
 	if (layers.integrationEnv) {
 		env = mergeSessionEnv(projectSessionEnv(layers.integrationEnv), env ?? {});
 	}
-	// Static keys shadow the container provider in SDK credential chains.
-	if (env && layers.wifVars?.AWS_CONTAINER_CREDENTIALS_FULL_URI) {
+	// Static keys must not bypass endpoint delivery, even if token minting failed.
+	if (env && layers.endpointDelivery) {
 		for (const name of STATIC_AWS_CREDENTIALS) {
 			delete env.vars?.[name];
 			delete env.defaults?.[name];

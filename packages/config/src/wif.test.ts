@@ -195,17 +195,23 @@ describe('deployment federation default', () => {
 });
 
 describe('makeWif credential delivery', () => {
-	it('defaults to one-shot env credentials', () => {
-		expect(makeWif(fullEnv).wif?.credentialsEndpoint).toBeUndefined();
-		expect(
-			makeWif({ ...fullEnv, MARIMOHUB_WIF_CREDENTIALS_DELIVERY: 'env' }).wif?.credentialsEndpoint,
-		).toBeUndefined();
-	});
+	it.each([undefined, '', ' \t\n ', 'env', 'ENV', ' env '])(
+		'uses one-shot env credentials for delivery %j',
+		(delivery) => {
+			expect(
+				makeWif({ ...fullEnv, MARIMOHUB_WIF_CREDENTIALS_DELIVERY: delivery }).wif
+					?.credentialsEndpoint,
+			).toBeUndefined();
+		},
+	);
 
-	it('enables the refreshable endpoint keyed off the signing key', () => {
-		const { wif } = makeWif({ ...fullEnv, MARIMOHUB_WIF_CREDENTIALS_DELIVERY: 'endpoint' });
-		expect(wif?.credentialsEndpoint).toEqual({ keyMaterial: FAKE_PEM });
-	});
+	it.each(['endpoint', 'ENDPOINT', ' endpoint ', ' \tEndPoint\n '])(
+		'enables the refreshable endpoint for delivery %j',
+		(delivery) => {
+			const { wif } = makeWif({ ...fullEnv, MARIMOHUB_WIF_CREDENTIALS_DELIVERY: delivery });
+			expect(wif?.credentialsEndpoint).toEqual({ keyMaterial: FAKE_PEM });
+		},
+	);
 
 	it.each([
 		undefined,
@@ -218,15 +224,22 @@ describe('makeWif credential delivery', () => {
 		expect(() =>
 			makeWif({
 				...fullEnv,
-				MARIMOHUB_WIF_CREDENTIALS_DELIVERY: 'endpoint',
+				MARIMOHUB_WIF_CREDENTIALS_DELIVERY: ' ENDPOINT ',
 				MARIMOHUB_APP_BASE_URL: baseUrl,
 			}),
 		).toThrow(/MARIMOHUB_APP_BASE_URL/);
 	});
 
-	it('rejects an unknown delivery mode', () => {
-		expect(() => makeWif({ ...fullEnv, MARIMOHUB_WIF_CREDENTIALS_DELIVERY: 'file' })).toThrow(
-			/MARIMOHUB_WIF_CREDENTIALS_DELIVERY/,
+	it.each(['file', ' EndpointS ', 'env endpoint'])('rejects unknown delivery %j', (delivery) => {
+		expect(() => makeWif({ ...fullEnv, MARIMOHUB_WIF_CREDENTIALS_DELIVERY: delivery })).toThrow(
+			expect.objectContaining({
+				name: 'ConfigError',
+				message: `Invalid MARIMOHUB_WIF_CREDENTIALS_DELIVERY: ${delivery} (expected env, endpoint)`,
+				opts: {
+					variable: 'MARIMOHUB_WIF_CREDENTIALS_DELIVERY',
+					docs: 'docs/workload-identity-federation.md',
+				},
+			}),
 		);
 	});
 });

@@ -1828,7 +1828,9 @@ export async function startNotebookSession(input: {
 				wifVars: resolveWifVars,
 				marimoEnv: resolveMarimoConfigEnv,
 				integrationEnv: resolveIntegrationEnv,
-			}).then(composeSessionEnv);
+			}).then((layers) =>
+				composeSessionEnv({ ...layers, endpointDelivery: credentialsEndpoint !== undefined }),
+			);
 			const launchStrategy = resolveLaunchStrategyForSession({
 				entryNotebookKey: launchSource.entryNotebookKey,
 				bucket: bucketHandle,

@@ -4,7 +4,7 @@ import { AwsStsWifBroker } from '@marimo-hub/credentials-aws';
 import { CoreWeaveWifBroker } from '@marimo-hub/credentials-coreweave';
 import type { ApiDeps } from '@marimo-hub/api';
 import { usesSandboxNativeObjectStorage } from './compute';
-import { parseBool, required } from './env';
+import { parseBool, parseEnumOr, required } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 
@@ -31,18 +31,6 @@ function makeWifBroker(env: Env): CredentialBroker {
 				{ variable: 'MARIMOHUB_WIF_BROKER', docs: 'docs/configuration.md' },
 			);
 	}
-}
-
-function credentialsDelivery(env: Env): 'env' | 'endpoint' {
-	const value = env.MARIMOHUB_WIF_CREDENTIALS_DELIVERY ?? 'env';
-	if (value === 'env' || value === 'endpoint') return value;
-	throw new ConfigError(
-		`Unknown MARIMOHUB_WIF_CREDENTIALS_DELIVERY: ${value} (supported: env, endpoint).`,
-		{
-			variable: 'MARIMOHUB_WIF_CREDENTIALS_DELIVERY',
-			docs: 'docs/workload-identity-federation.md',
-		},
-	);
 }
 
 /**
@@ -139,7 +127,13 @@ export function makeWif(env: Env): Pick<ApiDeps, 'wif'> {
 		},
 	};
 
-	const delivery = credentialsDelivery(env);
+	const delivery = parseEnumOr(
+		env,
+		'MARIMOHUB_WIF_CREDENTIALS_DELIVERY',
+		['env', 'endpoint'],
+		'env',
+		{ docs: 'docs/workload-identity-federation.md' },
+	);
 	if (delivery === 'endpoint') {
 		try {
 			validateWifCredentialsUrl(env.MARIMOHUB_APP_BASE_URL ?? '');

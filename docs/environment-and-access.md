@@ -14,7 +14,7 @@ Cloud access supplies credentials to notebook sessions. It does not control proj
 
 ## Choose a method
 
-| Requirement                                           | Use                                   | The hub stores                                |
+| Requirement                                           | Use                                   | The hub persists                              |
 | ----------------------------------------------------- | ------------------------------------- | --------------------------------------------- |
 | Configure a supported service                         | Typed integration                     | Versioned configuration                       |
 | Add project-specific variables                        | **Environment variables** integration | Plain values and secret fields                |
@@ -37,7 +37,7 @@ pins (see [Sandbox environment](#sandbox-environment)). Shell, startup hook, and
 credential restrictions also apply. Saving a variable with a reserved name fails, and a
 secret bundle that expands to a reserved name stops the session start.
 
-When the cloud provider supports WIF, use it. WIF supplies temporary credentials and does not store a cloud key.
+When the cloud provider supports WIF, use it. WIF supplies temporary credentials without a long-lived cloud key.
 
 ## When changes apply
 
@@ -55,17 +55,22 @@ includes marimo settings that come from an **Environment variables** integration
 
 The hub sets these variables in a sandbox. Notebook code can read them; projects cannot set them.
 
-| Variable                                                                                                        | Purpose                                                                                                                                | Sessions                                                         |
-| --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `MARIMOHUB_CONTEXT_FILE`                                                                                        | Path to the JSON [publication context](./apps.md#published-urls-inside-the-sandbox) with the public and notebook URLs.                 | Editor, app, preview, surfaces                                   |
-| `MARIMOHUB_INTEGRATIONS_DIR`                                                                                    | Directory with the rendered [integration](./integrations.md#using-an-integration-in-a-notebook) files and `manifest.json`.             | Editor, app, preview, job, surfaces; when an integration renders |
-| `MARIMOHUB_KERNEL_URL`                                                                                          | URL of the session's marimo kernel, reachable from inside the sandbox.                                                                 | Surfaces only                                                    |
-| `MARIMOHUB_KERNEL_TOKEN_FILE`                                                                                   | Path to the kernel access token. Empty when sandbox authentication is off.                                                             | Surfaces only                                                    |
-| `MARIMOHUB_BRIDGE_PARENT_ORIGIN`, `MARIMOHUB_BRIDGE_INSTALL_TIMEOUT_MS`, `MARIMOHUB_BRIDGE_STARTUP_DEADLINE_MS` | Configuration for the [notebook bridge](./apps.md#notebooks-with-query-parameters) that syncs query parameters and paths with the hub. | Editor, app, preview                                             |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_ENDPOINT_URL_S3`, `AWS_REGION`          | Temporary credentials from [Workload Identity Federation](./workload-identity-federation.md#what-the-notebook-receives).               | Editor, app, preview, job, surfaces; when WIF is enabled         |
-| `XDG_CONFIG_HOME`                                                                                               | Location of the hub-written `marimo.toml`. The hub always sets it.                                                                     | Editor                                                           |
-| `XDG_CACHE_HOME`, `XDG_STATE_HOME`                                                                              | marimo logs and state under `/tmp`, outside the workspace. The sandbox image can set its own values.                                   | Editor                                                           |
-| `MARIMO_VERSION`, `MARIMO_SKIP_UPDATE_CHECK`, `_MARIMO_APP_OVERLOAD_AUTO_DOWNLOAD`                              | Pinned by the reference [sandbox image](./sandbox-image.md), not by the hub process.                                                   | All                                                              |
+| Variable                                                                                                        | Purpose                                                                                                                                | Sessions                                                                                                  |
+| --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `MARIMOHUB_CONTEXT_FILE`                                                                                        | Path to the JSON [publication context](./apps.md#published-urls-inside-the-sandbox) with the public and notebook URLs.                 | Editor, app, preview, surfaces                                                                            |
+| `MARIMOHUB_INTEGRATIONS_DIR`                                                                                    | Directory with the rendered [integration](./integrations.md#using-an-integration-in-a-notebook) files and `manifest.json`.             | Editor, app, preview, job, surfaces; when an integration renders                                          |
+| `MARIMOHUB_KERNEL_URL`                                                                                          | URL of the session's marimo kernel, reachable from inside the sandbox.                                                                 | Surfaces only                                                                                             |
+| `MARIMOHUB_KERNEL_TOKEN_FILE`                                                                                   | Path to the kernel access token. Empty when sandbox authentication is off.                                                             | Surfaces only                                                                                             |
+| `MARIMOHUB_BRIDGE_PARENT_ORIGIN`, `MARIMOHUB_BRIDGE_INSTALL_TIMEOUT_MS`, `MARIMOHUB_BRIDGE_STARTUP_DEADLINE_MS` | Configuration for the [notebook bridge](./apps.md#notebooks-with-query-parameters) that syncs query parameters and paths with the hub. | Editor, app, preview                                                                                      |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`                                               | Temporary credentials from [WIF](./workload-identity-federation.md#what-the-notebook-receives), without refresh.                       | With WIF enabled: editor, app, preview, surfaces in `env` delivery; jobs in either delivery mode          |
+| `AWS_CONTAINER_CREDENTIALS_FULL_URI`, `AWS_CONTAINER_AUTHORIZATION_TOKEN`                                       | URL and bearer token for the [refreshable credential provider](./workload-identity-federation.md#refreshable-credentials).             | With WIF enabled: editor, app, preview, surfaces in `endpoint` delivery                                   |
+| `AWS_ENDPOINT_URL_S3`, `AWS_REGION`                                                                             | Optional WIF storage endpoint and region.                                                                                              | With WIF enabled and these values configured: editor, app, preview, job, surfaces in either delivery mode |
+| `XDG_CONFIG_HOME`                                                                                               | Location of the hub-written `marimo.toml`. The hub always sets it.                                                                     | Editor                                                                                                    |
+| `XDG_CACHE_HOME`, `XDG_STATE_HOME`                                                                              | marimo logs and state under `/tmp`, outside the workspace. The sandbox image can set its own values.                                   | Editor                                                                                                    |
+| `MARIMO_VERSION`, `MARIMO_SKIP_UPDATE_CHECK`, `_MARIMO_APP_OVERLOAD_AUTO_DOWNLOAD`                              | Pinned by the reference [sandbox image](./sandbox-image.md), not by the hub process.                                                   | All                                                                                                       |
+
+Endpoint delivery removes static AWS credential keys from integration variables and defaults, so SDKs use the container provider.
+Jobs always use `env` delivery.
 
 ## Testing and failures
 

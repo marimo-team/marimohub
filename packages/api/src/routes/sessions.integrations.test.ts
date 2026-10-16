@@ -13,7 +13,15 @@ import type { NotebookId, ProjectId } from '@marimo-hub/core';
 import { ACTOR, fakeComputeFrom, makeFakeSandbox, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { mergeSessionEnv } from '../sandboxEnv';
-import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
+import {
+	createInitializedBucket,
+	createTestApi,
+	expectError,
+	expectOk,
+	makeTestDeps,
+	makeTestWif,
+} from '../testing';
+import type { WifConfig } from '../context';
 
 const codec = new AesGcmSecretCodec({ kek: 'sBN3HR4/RHc81JkWZ794UoUuUnPEHvt7zvkBjjbTWk0=' });
 
@@ -41,6 +49,7 @@ describe('Session provisioning with integrations', () => {
 			userId?: ReturnType<typeof uid>;
 			ephemeralViewer?: boolean;
 			exclusiveEditor?: boolean;
+			wif?: WifConfig;
 		} = {},
 	) {
 		const sandbox = makeFakeSandbox();
@@ -50,6 +59,8 @@ describe('Session provisioning with integrations', () => {
 			compute: fakeComputeFrom(sandbox.instance),
 			deps: {
 				integrations: store,
+				wif: options.wif,
+				sandbox: { ...makeTestDeps(bucket).sandbox, appBaseUrl: 'https://hub.example.com' },
 				...(options.ephemeralViewer
 					? { policy: { defaultRole: 'viewer' as const, viewerMode: 'ephemeral-sandbox' as const } }
 					: options.exclusiveEditor
@@ -142,6 +153,60 @@ describe('Session provisioning with integrations', () => {
 		expect(resolve).not.toHaveBeenCalled();
 		expect(Object.assign({}, ...calls.setEnvVars).UV_INDEX_PRIVATE_PASSWORD).toBeUndefined();
 	});
+
+	it.each(['endpoint', 'mint failure', 'disabled', 'env'] as const)(
+		'preserves WIF precedence over ambient S3 keys (%s)',
+		async (delivery) => {
+			await createServices(bucket).projects.updateProject(
+				pid,
+				{ federation: { enabled: delivery !== 'disabled' } },
+				ACTOR,
+			);
+			const store = makeStore();
+			await store.create(
+				pid,
+				{
+					kind: 's3',
+					name: 'lake',
+					config: {
+						ambient_env: true,
+						region: 'us-east-1',
+						auth: {
+							method: 'static',
+							access_key_id: 'integration-ak',
+							secret_access_key: 'integration-sk',
+							session_token: 'integration-token',
+						},
+					},
+				},
+				ACTOR,
+			);
+			const exchange = vi.fn(async () => ({ accessKeyId: 'wif-ak', secretAccessKey: 'wif-sk' }));
+			const wif = makeTestWif({ credentialsEndpoint: delivery !== 'env', exchange });
+			// Web Crypto rejects an empty HMAC key, exercising the best-effort mint failure path.
+			if (delivery === 'mint failure') wif.credentialsEndpoint!.keyMaterial = '';
+			const { request, calls } = api(store, { wif });
+			await expectOk(await request('POST', `/projects/${pid}/notebooks/${nid}/sessions`));
+			const env = Object.assign({}, ...calls.setEnvVars);
+			if (delivery === 'endpoint' || delivery === 'mint failure') {
+				for (const key of ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN']) {
+					expect(env).not.toHaveProperty(key);
+				}
+			} else {
+				expect(env.AWS_ACCESS_KEY_ID).toBe(delivery === 'env' ? 'wif-ak' : 'integration-ak');
+			}
+			if (delivery === 'endpoint') {
+				expect(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBe(
+					'https://hub.example.com/api/wif/v1/credentials',
+				);
+				expect(env.AWS_CONTAINER_AUTHORIZATION_TOKEN).toEqual(expect.any(String));
+			} else {
+				expect(env).not.toHaveProperty('AWS_CONTAINER_CREDENTIALS_FULL_URI');
+				expect(env).not.toHaveProperty('AWS_CONTAINER_AUTHORIZATION_TOKEN');
+			}
+			expect(exchange).toHaveBeenCalledTimes(delivery === 'env' ? 1 : 0);
+		},
+	);
 
 	it('injects integration env + files into the sandbox and pins the audit trail', async () => {
 		const store = makeStore();

@@ -5,10 +5,10 @@ description: Exchange notebook session identity for short-lived cloud credential
 # Workload Identity Federation
 
 Give a project's notebooks access to cloud resources **without creating any long-lived access key**.
-marimohub becomes an OIDC issuer: per session it mints a short-lived,
-project-scoped token and exchanges it server-side for **temporary** cloud
-credentials, which it injects into the sandbox — they expire on their own.
-Nothing is stored: not in the hub, not in the sandbox, not in notebook code.
+marimohub acts as an OIDC issuer. It exchanges short-lived, project-scoped tokens
+for **temporary** cloud credentials. Sandboxes receive credentials through
+environment variables or the [refreshable credential provider](#refreshable-credentials).
+The hub does not persist exchanged cloud credentials, but endpoint delivery caches them in memory.
 
 The cloud side is selected by a **broker** (`MARIMOHUB_WIF_BROKER`):
 
@@ -20,6 +20,8 @@ The cloud side is selected by a **broker** (`MARIMOHUB_WIF_BROKER`):
 GCP is planned — see [the GCP example](#example-gcp-gcs-bigquery).
 
 ## How it works
+
+With the default `env` delivery:
 
 1. The hub publishes an OIDC discovery document and a public JWKS at
    `/.well-known/openid-configuration` and `/.well-known/jwks.json`. The issuer
@@ -38,7 +40,7 @@ GCP is planned — see [the GCP example](#example-gcp-gcs-bigquery).
 
 Because `sub` is the project id, **which project can reach what is decided by
 the cloud's policy** (a CAIOS access policy, an IAM trust policy) — granting or
-revoking access is a policy edit, no redeploy. If an exchange fails, the reason
+revoking access is a policy edit, no redeploy. If an `env` delivery exchange fails, the reason
 is recorded in the `wif_exchange_error` log field and the notebook starts
 without federated credentials rather than failing to launch.
 
@@ -143,6 +145,10 @@ The hub injects `AWS_CONTAINER_CREDENTIALS_FULL_URI` and
 `AWS_CONTAINER_AUTHORIZATION_TOKEN`. AWS SDKs and the CLI use the
 [container credential provider](https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html)
 to fetch credentials from `/api/wif/v1/credentials` and refresh them before expiry.
+
+Each hub replica caches exchanged credentials in process memory to reuse them across SDK requests.
+The hub does not persist these credentials. Cache cleanup occurs during later credential requests,
+so entries can remain in memory after expiry.
 
 - **Session limit:** seven days, or an earlier authorization deadline. Active
   connections and lifetime extensions cannot extend this limit; start a new session.

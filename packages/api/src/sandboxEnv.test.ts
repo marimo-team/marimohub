@@ -525,6 +525,7 @@ describe('composeSessionEnv', () => {
 
 	it('drops integration static keys under endpoint delivery', () => {
 		const env = composeSessionEnv({
+			endpointDelivery: true,
 			wifVars: {
 				AWS_CONTAINER_CREDENTIALS_FULL_URI: 'https://hub.example.com/api/wif/v1/credentials',
 				AWS_CONTAINER_AUTHORIZATION_TOKEN: 'tok',
@@ -541,6 +542,34 @@ describe('composeSessionEnv', () => {
 			AWS_CONTAINER_AUTHORIZATION_TOKEN: 'tok',
 			AWS_REGION: 'us-east-1',
 		});
+	});
+
+	it.each([undefined, {}])('drops static keys when endpoint resolution yields %j', (wifVars) => {
+		const staticKeys = {
+			AWS_ACCESS_KEY_ID: 'ak',
+			AWS_SECRET_ACCESS_KEY: 'sk',
+			AWS_SESSION_TOKEN: 'token',
+		};
+		const env = composeSessionEnv({
+			endpointDelivery: true,
+			wifVars,
+			integrationEnv,
+			marimoEnv: {
+				vars: { ...staticKeys, KEEP: 'value' },
+				defaults: { ...staticKeys, OTHER: 'default' },
+			},
+		});
+		for (const key of Object.keys(staticKeys)) {
+			expect(env?.vars).not.toHaveProperty(key);
+			expect(env?.defaults).not.toHaveProperty(key);
+		}
+		expect(env?.vars).toEqual({ AWS_REGION: 'us-east-1', KEEP: 'value' });
+		expect(env?.defaults).toEqual({ OTHER: 'default' });
+		expect(integrationEnv.vars.AWS_ACCESS_KEY_ID).toBe('integration');
+	});
+
+	it('returns no environment when endpoint resolution fails without other layers', () => {
+		expect(composeSessionEnv({ endpointDelivery: true })).toBeUndefined();
 	});
 
 	it('leaves integration keys alone without WIF', () => {
