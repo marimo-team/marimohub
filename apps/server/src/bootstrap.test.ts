@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiDeps } from '@marimo-hub/api';
 import { createInitializedBucket, makeTestDeps } from '@marimo-hub/api/testing';
 import { ConfigError } from '@marimo-hub/config';
-import { ProxyExposure, SubdomainExposure } from '@marimo-hub/core';
+import { InFlightWork, ProxyExposure, SubdomainExposure } from '@marimo-hub/core';
 import { bootstrap } from './bootstrap';
 import type { BootstrapOverrides } from './bootstrap';
 import {
@@ -614,6 +614,51 @@ describe('bootstrap', () => {
 		expect(dispose).toHaveBeenCalledOnce();
 	});
 
+	it.each(['resolve', 'reject'] as const)(
+		'waits for jobs dispatched by a timed-out tick until they %s',
+		async (outcome) => {
+			const tick = Promise.withResolvers<void>();
+			const job = Promise.withResolvers<void>();
+			const runs = new InFlightWork();
+			vi.mocked(startJobScheduler).mockImplementationOnce((_deps, _metrics, loops) => {
+				const loop = loops!.start({
+					name: 'job_scheduler',
+					intervalMs: 60_000,
+					deadlineMs: 1000,
+					run: async () => {
+						await tick.promise;
+						void runs.track(job.promise).catch(() => {});
+					},
+				});
+				return {
+					stop: loop.stop,
+					drain: async () => {
+						await loop.drain();
+						await runs.drain();
+					},
+				};
+			});
+			const dispose = vi.fn(async () => {});
+			const harness = makeHarness({
+				...deps,
+				compute: { ...deps.compute, [Symbol.asyncDispose]: dispose },
+			});
+			await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
+			await vi.advanceTimersByTimeAsync(1000);
+			harness.signals.get('SIGTERM')?.();
+			await vi.advanceTimersByTimeAsync(0);
+			tick.resolve();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(dispose).not.toHaveBeenCalled();
+			expect(harness.exit).not.toHaveBeenCalled();
+			if (outcome === 'resolve') job.resolve();
+			else job.reject(new Error('job failed'));
+			await vi.advanceTimersByTimeAsync(0);
+			expect(dispose).toHaveBeenCalledOnce();
+			expect(harness.exit).toHaveBeenCalledWith(0);
+		},
+	);
+
 	it('disposes compute only after the job scheduler is drained', async () => {
 		let finishSchedulerDrain!: () => void;
 		const schedulerDrain = vi.fn(
@@ -636,7 +681,7 @@ describe('bootstrap', () => {
 		);
 
 		const draining = handle?.drain();
-		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(0);
 		expect(stopScheduler).toHaveBeenCalledOnce();
 		expect(schedulerDrain).toHaveBeenCalledOnce();
 		expect(stopScheduler.mock.invocationCallOrder[0]).toBeLessThan(

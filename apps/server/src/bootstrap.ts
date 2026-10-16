@@ -262,8 +262,12 @@ export async function bootstrap(
 			if ('closeIdleConnections' in server) server.closeIdleConnections();
 			const disposeCompute = deps.compute[Symbol.asyncDispose];
 			const runtimeDrained = Promise.allSettled([
-				loops.drain(),
-				...runtimeDrains.map((drain) => Promise.resolve().then(drain)),
+				// Timed-out ticks can still dispatch jobs until their actual work settles.
+				loops
+					.drain()
+					.then(() =>
+						Promise.allSettled(runtimeDrains.map((drain) => Promise.resolve().then(drain))),
+					),
 				closed.then(waitForBackgroundTasks),
 			]);
 			const resourcesClosed = Promise.allSettled([
