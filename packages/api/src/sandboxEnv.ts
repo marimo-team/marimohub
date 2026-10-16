@@ -21,13 +21,6 @@ import { federationFor } from './federation';
 import type { ApiDeps } from './context';
 import { errorMetadata, logEvent } from './log';
 
-/**
- * The credential layers a sandbox receives before its kernel (or a job's
- * export) starts. Shared by the session create route and the job runner so the
- * two injection paths cannot drift: a job runs the same notebook code with the
- * same resolved secrets an app session would carry.
- */
-
 export function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): SessionEnv {
 	return {
 		files: [...(base?.files ?? []), ...(add.files ?? [])],
@@ -38,11 +31,7 @@ export function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): 
 
 const STATIC_AWS_CREDENTIALS = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'];
 
-/**
- * Layers a session's env: integrations are the base, WIF and marimo config win
- * collisions. With endpoint delivery, static AWS keys from any layer are dropped
- * because they would shadow the container provider.
- */
+// Integrations are the base; WIF and marimo config win collisions.
 export function composeSessionEnv(layers: {
 	wifVars?: Record<string, string>;
 	marimoEnv?: SessionEnv;
@@ -53,6 +42,7 @@ export function composeSessionEnv(layers: {
 	if (layers.integrationEnv) {
 		env = mergeSessionEnv(projectSessionEnv(layers.integrationEnv), env ?? {});
 	}
+	// Static keys shadow the container provider in SDK credential chains.
 	if (env && layers.wifVars?.AWS_CONTAINER_CREDENTIALS_FULL_URI) {
 		for (const name of STATIC_AWS_CREDENTIALS) {
 			delete env.vars?.[name];
@@ -109,8 +99,8 @@ export async function resolveFederatedVars(
 	const wif = federationFor(options.project, deps.wif, { restricted: options.restricted });
 	if (!wif) return;
 	const endpoint = options.credentialsEndpoint;
-	if (wif.credentialsEndpoint && endpoint && options.workload.kind === 'session') {
-		try {
+	try {
+		if (wif.credentialsEndpoint && endpoint && options.workload.kind === 'session') {
 			const token = await mintWifCredentialsToken(
 				wif.credentialsEndpoint.keyMaterial,
 				{ sessionId: options.workload.id, projectId: options.project.id, userId: endpoint.userId },
@@ -122,16 +112,11 @@ export async function resolveFederatedVars(
 				wif.target.storage.endpoint,
 				wif.target.storage.region,
 			);
-		} catch (err) {
-			options.onError?.(err);
-			return;
 		}
-	}
-	const credentials =
-		options.federatedCredentials ??
-		federatedCredentialsFor(deps, options.project, options.workload, options);
-	if (!credentials) return;
-	try {
+		const credentials =
+			options.federatedCredentials ??
+			federatedCredentialsFor(deps, options.project, options.workload, options);
+		if (!credentials) return;
 		return s3CredsToEnv(
 			await credentials(),
 			wif.target.storage.endpoint,
@@ -243,7 +228,5 @@ export async function resolveJobSandboxEnv(
 				}),
 		}),
 	]);
-	let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
-	if (render) env = mergeSessionEnv(projectSessionEnv(render), env ?? {});
-	return env;
+	return composeSessionEnv({ wifVars, integrationEnv: render });
 }

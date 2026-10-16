@@ -20,7 +20,14 @@ import {
 	sandboxContextPath,
 	paths,
 } from '@marimo-hub/core';
-import type { NotebookId, ProjectId, SandboxInstance, Session, SessionId } from '@marimo-hub/core';
+import type {
+	NotebookId,
+	ProjectId,
+	SandboxInstance,
+	Session,
+	SessionId,
+	WifCredentialsTokenClaims,
+} from '@marimo-hub/core';
 import {
 	ACTOR,
 	fakeComputeFrom,
@@ -4251,12 +4258,13 @@ describe('Session routes', () => {
 		describe('refreshable credentials endpoint', () => {
 			afterEach(() => vi.restoreAllMocks());
 			const expiration = new Date(Date.now() + 60 * 60_000).toISOString();
-			const endpointApi = (
+			const endpointApi = async (
 				exchange: Mock<NonNullable<TestWifOptions['exchange']>> = vi.fn(async () => ({
 					...(await goodExchange()),
 					expiration,
 				})),
 			) => {
+				await enableFederation();
 				const { instance, calls } = makeFakeSandbox();
 				const api = createTestApi({
 					bucket,
@@ -4272,21 +4280,26 @@ describe('Session routes', () => {
 						}),
 					},
 				});
+				const session = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+				const env = calls.setEnvVars.find((vars) => vars.AWS_CONTAINER_CREDENTIALS_FULL_URI)!;
+				const signToken = (overrides: Partial<WifCredentialsTokenClaims>) =>
+					mintWifCredentialsToken(api.deps.wif!.credentialsEndpoint!.keyMaterial, {
+						projectId: pid,
+						sessionId: session.session_id,
+						userId: ACTOR,
+						...overrides,
+					});
 				const fetchCreds = (authorization?: string) => {
-					const env = calls.setEnvVars.find((vars) => vars.AWS_CONTAINER_CREDENTIALS_FULL_URI);
-					const url = new URL(env!.AWS_CONTAINER_CREDENTIALS_FULL_URI);
+					const url = new URL(env.AWS_CONTAINER_CREDENTIALS_FULL_URI);
 					return api.app.request(url.pathname, {
-						headers: { Authorization: authorization ?? env!.AWS_CONTAINER_AUTHORIZATION_TOKEN },
+						headers: { Authorization: authorization ?? env.AWS_CONTAINER_AUTHORIZATION_TOKEN },
 					});
 				};
-				return { ...api, calls, exchange, fetchCreds };
+				return { ...api, calls, exchange, fetchCreds, session, env, signToken };
 			};
 
 			it('injects the endpoint and a session token instead of static keys', async () => {
-				await enableFederation();
-				const { request, calls, exchange } = endpointApi();
-				await expectOk<ApiSession>(await request('POST', sessionsPath()));
-				const env = calls.setEnvVars.find((vars) => vars.AWS_CONTAINER_CREDENTIALS_FULL_URI)!;
+				const { calls, exchange, env } = await endpointApi();
 				expect(new URL(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).pathname).toBe(
 					'/api/wif/v1/credentials',
 				);
@@ -4297,9 +4310,7 @@ describe('Session routes', () => {
 			});
 
 			it('serves container credentials and reuses cached credentials', async () => {
-				await enableFederation();
-				const { request, exchange, fetchCreds } = endpointApi();
-				await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				const { exchange, fetchCreds } = await endpointApi();
 
 				const res = await fetchCreds();
 				expect(res.status).toBe(200);
@@ -4317,11 +4328,9 @@ describe('Session routes', () => {
 			it.each([undefined, 'invalid', '2020-01-01T00:00:00Z'])(
 				'rejects unusable broker expiration: %s',
 				async (expiration) => {
-					await enableFederation();
-					const { request, fetchCreds } = endpointApi(
+					const { fetchCreds } = await endpointApi(
 						vi.fn(async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', expiration })),
 					);
-					await expectOk<ApiSession>(await request('POST', sessionsPath()));
 					expect((await fetchCreds()).status).toBe(503);
 				},
 			);
@@ -4329,9 +4338,7 @@ describe('Session routes', () => {
 			it.each([false, true])(
 				'enforces authorization expiry before the lifecycle sweep (cached: %s)',
 				async (cached) => {
-					await enableFederation();
-					const { request, fetchCreds, exchange } = endpointApi();
-					const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+					const { fetchCreds, exchange, session } = await endpointApi();
 					if (cached) expect((await fetchCreds()).status).toBe(200);
 					const deadline = Date.now() + 1_000;
 					await createServices(bucket).sessions.tightenAuthorizationDeadline(
@@ -4346,9 +4353,7 @@ describe('Session routes', () => {
 			);
 
 			it('rejects a suspended owner after a cache hit', async () => {
-				await enableFederation();
-				const { request, fetchCreds, exchange, deps } = endpointApi();
-				await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				const { fetchCreds, exchange, deps } = await endpointApi();
 				expect((await fetchCreds()).status).toBe(200);
 				await deps.services.identities.setSuspension(ACTOR, true);
 				expect((await fetchCreds()).status).toBe(403);
@@ -4356,12 +4361,8 @@ describe('Session routes', () => {
 			});
 
 			it('bounds session authorization by token expiry even when its lifetime is extended', async () => {
-				await enableFederation();
-				const { request, calls } = endpointApi();
-				const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
-				const token = calls.setEnvVars.find(
-					(vars) => vars.AWS_CONTAINER_AUTHORIZATION_TOKEN,
-				)!.AWS_CONTAINER_AUTHORIZATION_TOKEN;
+				const { request, env, session } = await endpointApi();
+				const token = env.AWS_CONTAINER_AUTHORIZATION_TOKEN;
 				const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()) as {
 					exp: number;
 					iat: number;
@@ -4384,9 +4385,7 @@ describe('Session routes', () => {
 			});
 
 			it('rejects a missing or forged token', async () => {
-				await enableFederation();
-				const { request, fetchCreds } = endpointApi();
-				await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				const { fetchCreds } = await endpointApi();
 				expect((await fetchCreds('')).status).toBe(401);
 				expect((await fetchCreds('a.b.c')).status).toBe(401);
 			});
@@ -4405,42 +4404,23 @@ describe('Session routes', () => {
 			it.each([{ projectId: 'invalid' }, { sessionId: 'invalid' }, { userId: '' }])(
 				'rejects signed tokens with invalid identifiers: %j',
 				async (overrides) => {
-					await enableFederation();
-					const { request, fetchCreds, exchange, deps } = endpointApi();
-					const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
-					const token = await mintWifCredentialsToken(deps.wif!.credentialsEndpoint!.keyMaterial, {
-						projectId: pid,
-						sessionId: session.session_id,
-						userId: ACTOR,
-						...overrides,
-					});
+					const { fetchCreds, exchange, signToken } = await endpointApi();
+					const token = await signToken(overrides);
 					await expectError(await fetchCreds(token), 401, 'UNAUTHORIZED');
 					expect(exchange).not.toHaveBeenCalled();
 				},
 			);
 
 			it('rejects a valid token bound to a different owner', async () => {
-				await enableFederation();
-				const { request, fetchCreds, exchange, deps } = endpointApi();
-				const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
-				const token = await mintWifCredentialsToken(deps.wif!.credentialsEndpoint!.keyMaterial, {
-					projectId: pid,
-					sessionId: session.session_id,
-					userId: STRANGER,
-				});
+				const { fetchCreds, exchange, signToken } = await endpointApi();
+				const token = await signToken({ userId: STRANGER });
 				await expectError(await fetchCreds(token), 403, 'FORBIDDEN');
 				expect(exchange).not.toHaveBeenCalled();
 			});
 
 			it('rejects a valid token for a missing session', async () => {
-				await enableFederation();
-				const { request, fetchCreds, exchange, deps } = endpointApi();
-				await expectOk<ApiSession>(await request('POST', sessionsPath()));
-				const token = await mintWifCredentialsToken(deps.wif!.credentialsEndpoint!.keyMaterial, {
-					projectId: pid,
-					sessionId: createSessionId(),
-					userId: ACTOR,
-				});
+				const { fetchCreds, exchange, signToken } = await endpointApi();
+				const token = await signToken({ sessionId: createSessionId() });
 				await expectError(await fetchCreds(token), 403, 'FORBIDDEN');
 				expect(exchange).not.toHaveBeenCalled();
 			});
@@ -4448,9 +4428,7 @@ describe('Session routes', () => {
 			it.each(['session', 'identity', 'project'] as const)(
 				'fails closed when the %s read fails despite cached credentials',
 				async (source) => {
-					await enableFederation();
-					const { request, fetchCreds, exchange, deps } = endpointApi();
-					await expectOk<ApiSession>(await request('POST', sessionsPath()));
+					const { fetchCreds, exchange, deps } = await endpointApi();
 					expect((await fetchCreds()).status).toBe(200);
 					const error = new UnavailableError('storage unavailable');
 					if (source === 'session')
@@ -4466,9 +4444,7 @@ describe('Session routes', () => {
 			);
 
 			it('exchanges fresh credentials after suspension is lifted', async () => {
-				await enableFederation();
-				const { request, fetchCreds, exchange, deps } = endpointApi();
-				await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				const { fetchCreds, exchange, deps } = await endpointApi();
 				expect((await fetchCreds()).status).toBe(200);
 				await deps.services.identities.setSuspension(ACTOR, true);
 				await expectError(await fetchCreds(), 403, 'FORBIDDEN');
@@ -4478,18 +4454,14 @@ describe('Session routes', () => {
 			});
 
 			it('stops serving once the session ends', async () => {
-				await enableFederation();
-				const { request, fetchCreds } = endpointApi();
-				const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				const { request, fetchCreds, session } = await endpointApi();
 				expect((await fetchCreds()).status).toBe(200);
 				await expectOk(await request('DELETE', sessionsPath(`/${session.session_id}`)));
 				expect((await fetchCreds()).status).toBe(403);
 			});
 
 			it('stops serving once the project opts out of federation', async () => {
-				await enableFederation();
-				const { request, fetchCreds } = endpointApi();
-				await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				const { fetchCreds } = await endpointApi();
 				await createServices(bucket).projects.updateProject(
 					pid,
 					{ federation: { enabled: false } },
@@ -4499,13 +4471,11 @@ describe('Session routes', () => {
 			});
 
 			it('reports an exchange failure as unavailable and retries next time', async () => {
-				await enableFederation();
 				const exchange = vi
 					.fn()
 					.mockRejectedValueOnce(new Error('policy denied'))
 					.mockResolvedValue({ accessKeyId: 'AK', secretAccessKey: 'SK', expiration });
-				const { request, fetchCreds } = endpointApi(exchange);
-				await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				const { fetchCreds } = await endpointApi(exchange);
 				expect((await fetchCreds()).status).toBe(503);
 				expect((await fetchCreds()).status).toBe(200);
 			});

@@ -1,7 +1,8 @@
 import { ValidationError } from '../../errors';
 import { Millis, Seconds } from '../../duration';
-import { fromBase64Url, toBase64Url, utf8ToBase64Url } from '../../internal/base64url';
-import { hmacSha256, timingSafeEqual } from '../../internal/hmac';
+import { toBase64Url } from '../../internal/base64url';
+import { signHs256Token, verifyHs256Token } from '../../internal/hs256';
+import { hmacSha256 } from '../../internal/hmac';
 import type { TempS3Creds } from '../../ports/credentialBroker';
 
 const TOKEN_USE = 'wif-container-credentials';
@@ -56,11 +57,7 @@ export async function mintWifCredentialsToken(
 			opts.expiresAt ? Date.parse(opts.expiresAt) / 1000 : Infinity,
 		),
 	};
-	const signingInput = `${utf8ToBase64Url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))}.${utf8ToBase64Url(
-		JSON.stringify(payload),
-	)}`;
-	const sig = await hmacSha256(await deriveSecret(keyMaterial), signingInput);
-	return `${signingInput}.${toBase64Url(sig)}`;
+	return signHs256Token(await deriveSecret(keyMaterial), payload);
 }
 
 export async function verifyWifCredentialsToken(
@@ -68,29 +65,8 @@ export async function verifyWifCredentialsToken(
 	token: string,
 	now: () => number = () => Date.now(),
 ): Promise<WifCredentialsTokenClaims | null> {
-	const parts = token.split('.');
-	if (parts.length !== 3) return null;
-	const [headerB64, payloadB64, sigB64] = parts;
-	let providedSig: Uint8Array;
-	try {
-		providedSig = fromBase64Url(sigB64);
-	} catch {
-		return null;
-	}
-	const expectedSig = await hmacSha256(
-		await deriveSecret(keyMaterial),
-		`${headerB64}.${payloadB64}`,
-	);
-	if (!timingSafeEqual(expectedSig, providedSig)) return null;
-
-	let payload: Record<string, unknown>;
-	try {
-		const parsed: unknown = JSON.parse(new TextDecoder().decode(fromBase64Url(payloadB64)));
-		if (typeof parsed !== 'object' || parsed === null) return null;
-		payload = parsed as Record<string, unknown>;
-	} catch {
-		return null;
-	}
+	const payload = await verifyHs256Token(await deriveSecret(keyMaterial), token);
+	if (!payload) return null;
 	if (payload.use !== TOKEN_USE) return null;
 	if (
 		typeof payload.exp !== 'number' ||

@@ -10,8 +10,7 @@
  * Workers, keeping `core` vendor- and runtime-agnostic.
  */
 import { Millis, Seconds } from '../../duration';
-import { fromBase64Url, toBase64Url, utf8ToBase64Url } from '../../internal/base64url';
-import { hmacSha256, timingSafeEqual } from '../../internal/hmac';
+import { signHs256Token, verifyHs256Token } from '../../internal/hs256';
 import { serializeMarimoToml } from '../marimoConfig';
 import type { MarimoConfigContributor, TomlTable } from '../marimoConfig';
 
@@ -83,7 +82,6 @@ export async function mintAiSessionToken(
 	const now = opts.now ?? (() => Date.now());
 	const iat = Millis.toSeconds(Millis.of(now()));
 	const exp = iat + (opts.ttlSeconds ?? DEFAULT_AI_TOKEN_TTL_SECONDS);
-	const header = { alg: 'HS256', typ: 'JWT' };
 	const payload = {
 		sub: claims.sessionId,
 		project_id: claims.projectId,
@@ -92,11 +90,7 @@ export async function mintAiSessionToken(
 		iat,
 		exp,
 	};
-	const signingInput = `${utf8ToBase64Url(JSON.stringify(header))}.${utf8ToBase64Url(
-		JSON.stringify(payload),
-	)}`;
-	const sig = await hmacSha256(secret, signingInput);
-	return `${signingInput}.${toBase64Url(sig)}`;
+	return signHs256Token(secret, payload);
 }
 
 /**
@@ -108,26 +102,8 @@ export async function verifyAiSessionToken(
 	token: string,
 	now: () => number = () => Date.now(),
 ): Promise<AiTokenClaims | null> {
-	const parts = token.split('.');
-	if (parts.length !== 3) return null;
-	const [headerB64, payloadB64, sigB64] = parts;
-	let providedSig: Uint8Array;
-	try {
-		providedSig = fromBase64Url(sigB64);
-	} catch {
-		return null;
-	}
-	const expectedSig = await hmacSha256(secret, `${headerB64}.${payloadB64}`);
-	if (!timingSafeEqual(expectedSig, providedSig)) return null;
-
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(new TextDecoder().decode(fromBase64Url(payloadB64)));
-	} catch {
-		return null;
-	}
-	if (typeof parsed !== 'object' || parsed === null) return null;
-	const payload = parsed as Record<string, unknown>;
+	const payload = await verifyHs256Token(secret, token);
+	if (!payload) return null;
 	if (typeof payload.exp !== 'number' || payload.exp < Millis.toSeconds(Millis.of(now()))) {
 		return null;
 	}
