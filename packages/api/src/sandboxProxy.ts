@@ -17,11 +17,32 @@ import type { AuthenticatedPrincipal, ProjectId, SessionId } from '@marimo-hub/c
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
 import { SANDBOX_PROXY_PREFIXES } from './proxyRoutes';
-import { assertSessionPreviewActive, authorizationService, fail } from './shared';
+import {
+	assertSessionPreviewActive,
+	authorizationService,
+	fail,
+	resolvePublicBaseUrl,
+} from './shared';
+import {
+	authorizeAppProxyRequest,
+	appProxyResponse,
+	APP_PROXY_PREFIX,
+	APP_VISIT_HEADER,
+	APP_GENERATION_HEADER,
+	APP_STATUS_HEADER,
+	APP_PROXY_HEADER,
+} from './appProxy';
+export {
+	APP_PROXY_HEADER,
+	APP_STATUS_HEADER,
+	APP_VISIT_HEADER,
+	APP_GENERATION_HEADER,
+} from './appProxy';
 
 /** Outcome of routing a `/proxy/<token>/…` request. */
 export type ProxyDecision =
 	| { kind: 'pass' } // Not a proxy path — let the normal app handle it.
+	| { kind: 'starting' }
 	| {
 			kind: 'reject';
 			status: 401 | 403 | 404 | 410 | 503;
@@ -40,6 +61,7 @@ export type ProxyDecision =
 			sessionId: string;
 			kernelAuthToken?: string;
 			authorizationDeadline?: number;
+			appProxyBaseUrl?: string;
 	  };
 
 type Rejection = Extract<ProxyDecision, { kind: 'reject' }>;
@@ -119,6 +141,9 @@ export async function authorizeProxyRequest(
 	deps: ApiDeps,
 ): Promise<ProxyDecision> {
 	const url = new URL(request.url);
+	if (APP_PROXY_PREFIX.test(url.pathname)) {
+		return authorizeAppProxyRequest(request, deps);
+	}
 	const kernelMatch = PROXY_PREFIX.exec(url.pathname);
 	const surfaceMatch = SURFACE_PROXY_PREFIX.exec(url.pathname);
 	if (!kernelMatch && !surfaceMatch) return { kind: 'pass' };
@@ -393,6 +418,10 @@ const HOP_BY_HOP = new Set([
  * Only the session's kernel token reaches the notebook.
  */
 export const CREDENTIAL_HEADERS = new Set([
+	APP_PROXY_HEADER,
+	APP_STATUS_HEADER,
+	APP_VISIT_HEADER,
+	APP_GENERATION_HEADER,
 	'cookie',
 	'authorization',
 	'x-goog-iap-jwt-assertion',
@@ -404,7 +433,14 @@ export const CREDENTIAL_HEADERS = new Set([
 ]);
 
 /** Kernel cookies share the hub origin and can overwrite the caller's hub session. */
-export const UNSAFE_RESPONSE_HEADERS = new Set(['set-cookie', 'set-cookie2']);
+export const UNSAFE_RESPONSE_HEADERS = new Set([
+	'set-cookie',
+	'set-cookie2',
+	APP_PROXY_HEADER,
+	APP_STATUS_HEADER,
+	APP_VISIT_HEADER,
+	APP_GENERATION_HEADER,
+]);
 
 export function isCredentialHeader(name: string, additional: readonly string[] = []): boolean {
 	const lower = name.toLowerCase();
@@ -529,17 +565,33 @@ export async function forwardHttp(
 export function sandboxProxyMiddleware(deps: ApiDeps): MiddlewareHandler<HonoEnv> {
 	return async (c, next) => {
 		if (deps.sandbox.exposure?.mode !== 'proxy') return next();
+		const appRoute = APP_PROXY_PREFIX.test(new URL(c.req.url).pathname);
 		const decision = await authorizeProxyRequest(c.req.raw, deps);
 		if (decision.kind === 'pass') return next();
+		if (appRoute) c.header(APP_PROXY_HEADER, '1');
 		if (decision.kind === 'reject') {
 			return fail(c, decision.code, decision.message, decision.status);
 		}
-		return forwardHttp(
+		if (decision.kind === 'starting') {
+			c.header(APP_STATUS_HEADER, 'starting');
+			return fail(c, 'SERVICE_UNAVAILABLE', 'App session is starting', 503);
+		}
+		const response = await forwardHttp(
 			c.req.raw,
 			decision.targetUrl,
 			decision.sessionId,
 			decision.kernelAuthToken,
 			deps.sandbox.credentialHeaders,
 		);
+		if (!decision.appProxyBaseUrl) return response;
+		const forwarded = await appProxyResponse(
+			response,
+			c.req.url,
+			decision.targetUrl,
+			decision.appProxyBaseUrl,
+			resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl),
+		);
+		forwarded.headers.set(APP_PROXY_HEADER, '1');
+		return forwarded;
 	};
 }

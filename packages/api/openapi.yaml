@@ -353,6 +353,8 @@ components:
             heartbeat_interval_seconds:
               type: number
               exclusiveMinimum: 0
+            proxy_renewal:
+              type: boolean
           required:
             - heartbeat_interval_seconds
         editor_sandbox_sharing:

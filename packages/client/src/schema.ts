@@ -2390,6 +2390,7 @@ export interface components {
 			viewer_session_modes: ('edit' | 'app')[];
 			app_pool?: {
 				heartbeat_interval_seconds: number;
+				proxy_renewal?: boolean;
 			};
 			/** @enum {string} */
 			editor_sandbox_sharing: 'shared' | 'exclusive';

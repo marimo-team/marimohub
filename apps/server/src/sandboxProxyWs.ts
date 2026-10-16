@@ -11,6 +11,7 @@ import https from 'node:https';
 import type { Duplex } from 'node:stream';
 import {
 	authorizeProxyRequest,
+	APP_PROXY_HEADER,
 	isCredentialHeader,
 	UNSAFE_RESPONSE_HEADERS,
 } from '@marimo-hub/api';
@@ -62,6 +63,10 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 				if (decision.kind === 'pass') return;
 				if (decision.kind === 'reject') {
 					rejectUpgrade(clientSocket, decision.status, decision.code);
+					return;
+				}
+				if (decision.kind === 'starting') {
+					rejectUpgrade(clientSocket, 503, 'SERVICE_UNAVAILABLE');
 					return;
 				}
 				const remainingAuthorizationMs =
@@ -145,6 +150,7 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 						if (Array.isArray(value)) for (const v of value) headerLines.push(`${key}: ${v}`);
 						else headerLines.push(`${key}: ${value}`);
 					}
+					if (decision.appProxyBaseUrl) headerLines.push(`${APP_PROXY_HEADER}: 1`);
 					clientSocket.write(`${headerLines.join('\r\n')}\r\n\r\n`);
 					if (kernelHead?.length) clientSocket.write(kernelHead);
 					if (head?.length) connectedKernelSocket.write(head);
