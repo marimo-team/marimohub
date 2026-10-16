@@ -115,6 +115,47 @@ describe('createFromEnv auth backend selection', () => {
 			expect((await app.request('/api/v1/me', { headers: credential })).status).toBe(401);
 	});
 
+	it.each(['sso', 'pat'])(
+		'returns 401 during an invitation outage for %s requests',
+		async (kind) => {
+			const deps = createFromEnv({
+				...baseEnv,
+				MARIMOHUB_AUTH_BACKEND: 'proxy-header',
+				MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
+				MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS: 'on',
+			});
+			const proxyHeaders = {
+				'X-Forwarded-Email': 'guest@outside.com',
+				'X-Forwarded-User': 'guest',
+			};
+			await deps.services.authInvitations.invite('guest@outside.com', ACTOR);
+			const guest = await deps.authenticator.authenticate(
+				new Request('https://hub.example.com', { headers: proxyHeaders }),
+			);
+			expect(guest).not.toBeNull();
+			await deps.services.identities.upsert(guest!);
+			const { token } = await deps.services.tokens.create({ name: 'guest-cli' }, guest!.id);
+			const headers = kind === 'sso' ? proxyHeaders : { authorization: `Bearer ${token}` };
+			const app = createApi(deps);
+			const get = deps.bucket.get.bind(deps.bucket);
+			const lookup = vi.spyOn(deps.bucket, 'get');
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			try {
+				lookup.mockImplementation(async (key) => {
+					if (key.startsWith('_system/auth-invitations/'))
+						throw new Error('invitation storage unavailable');
+					return get(key);
+				});
+				expect((await app.request('/api/v1/me', { headers })).status).toBe(401);
+				lookup.mockImplementation(get);
+				expect((await app.request('/api/v1/me', { headers })).status).toBe(200);
+			} finally {
+				lookup.mockRestore();
+				log.mockRestore();
+			}
+		},
+	);
+
 	it('parses compute profiles during boot and rejects typos', () => {
 		expect(() =>
 			createFromEnv({

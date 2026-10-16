@@ -77,8 +77,10 @@ describe('invitation failure paths', () => {
 		expect(await service.get('guest+two@outside.com')).not.toBeNull();
 	});
 
-	it('does not authorize a record stored under another email', async () => {
+	it('does not authorize or list a record stored under another email', async () => {
 		const bucket = new MemoryBucket();
+		const service = new AuthInvitationService(bucket);
+		const valid = await service.invite('valid@outside.com', actor);
 		await bucket.put(
 			paths.authInvitation(email),
 			JSON.stringify({
@@ -87,7 +89,56 @@ describe('invitation failure paths', () => {
 				created_by: actor,
 			}),
 		);
-		expect(await new AuthInvitationService(bucket).get(email)).toBeNull();
+		expect(await service.get(email)).toBeNull();
+		expect(await service.list()).toEqual([valid]);
+	});
+
+	it('skips corrupt objects while listing valid invitations and logs each failure', async () => {
+		const bucket = new MemoryBucket();
+		const service = new AuthInvitationService(bucket);
+		const valid = await service.invite(email, actor);
+		await bucket.put(paths.authInvitation('bad-json@outside.com'), '{');
+		await bucket.put(paths.authInvitation('bad-schema@outside.com'), '{}');
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			expect(await service.list()).toEqual([valid]);
+			expect(log).toHaveBeenCalledTimes(2);
+			expect(log.mock.calls.map(([line]) => JSON.parse(line))).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						event: 'stored_object_skipped',
+						object: paths.authInvitation('bad-json@outside.com'),
+					}),
+					expect.objectContaining({
+						event: 'stored_object_skipped',
+						object: paths.authInvitation('bad-schema@outside.com'),
+					}),
+				]),
+			);
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it('does not list noncanonical emails even when they match their storage key', async () => {
+		const bucket = new MemoryBucket();
+		await bucket.put(
+			paths.authInvitation('Guest@Outside.com'),
+			JSON.stringify({
+				email: 'Guest@Outside.com',
+				created_at: new Date().toISOString(),
+				created_by: actor,
+			}),
+		);
+		expect(await new AuthInvitationService(bucket).list()).toEqual([]);
+	});
+
+	it('propagates storage outages instead of returning an incomplete directory', async () => {
+		const bucket = new MemoryBucket();
+		const service = new AuthInvitationService(bucket);
+		await service.invite(email, actor);
+		vi.spyOn(bucket, 'get').mockRejectedValue(new Error('storage unavailable'));
+		await expect(service.list()).rejects.toThrow('storage unavailable');
 	});
 
 	it('preserves invitations after a failed delete, permits retry, and can re-invite', async () => {

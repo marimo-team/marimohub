@@ -5,7 +5,10 @@ import type { Authenticator } from '@marimo-hub/core/ports/auth';
 import { createAdmissionPolicy, admitOidcIdentityWithInvitations } from './admission';
 import type { OidcAdmissionConfig } from './admission';
 import { createOidcDiscovery, oidcIssuerUrl } from './discovery';
-import { principalFromVerifiedAccessToken } from './accessTokenClaims';
+import {
+	accessTokenCredentialFromVerifiedClaims,
+	principalFromAccessTokenCredential,
+} from './accessTokenClaims';
 import type { AccessTokenRejection } from './accessTokenClaims';
 
 const SIGNING_ALGORITHMS = [
@@ -93,12 +96,17 @@ export function createOidcAccessTokenAuthenticator(config: OidcAccessTokenConfig
 			} catch {
 				return reject('verification_failed');
 			}
-			const result = principalFromVerifiedAccessToken(
+			const tokenResult = accessTokenCredentialFromVerifiedClaims(
 				verified.payload,
 				verified.protectedHeader.typ,
 				policy,
 				Math.floor(Date.now() / 1000),
+			);
+			if ('error' in tokenResult) return reject(tokenResult.error);
+			const result = principalFromAccessTokenCredential(
+				tokenResult.credential,
 				await admitOidcIdentityWithInvitations(verified.payload, policy.admission),
+				policy.admission,
 			);
 			if (!('error' in result)) return result.principal;
 			if (result.error === 'membership_groups_exceeded') {

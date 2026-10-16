@@ -92,6 +92,7 @@ export function AdminInvitations() {
 				title="Remove invitation"
 				description={`Remove the domain exception for ${removing ?? 'this email'}? Access through an allowed domain is unaffected. Running sandbox sessions are not terminated.`}
 				confirmLabel="Remove invitation"
+				pendingLabel="Removing…"
 				variant="danger"
 				isPending={revoke.isPending}
 				onConfirm={() => {

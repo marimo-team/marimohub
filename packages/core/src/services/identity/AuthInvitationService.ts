@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
 import type { UserId } from '../../ids';
-import { UserIdSchema, EmailAddressSchema, readStored } from '../../schema';
+import { UserIdSchema, EmailAddressSchema, readStored, StoredObjectError } from '../../schema';
 import { normalizeEmail } from '../../identityMatch';
 import { paths } from '../../paths';
+import { logOperationalError } from '../../operationalLog';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { listAllKeys } from '../catalog/storage';
@@ -24,12 +25,17 @@ export class AuthInvitationService {
 	constructor(private readonly bucket: Bucket) {}
 
 	async get(email: string) {
-		const normalized = AuthInvitationEmailSchema.parse(email);
-		const key = paths.authInvitation(normalized);
+		return this.read(paths.authInvitation(AuthInvitationEmailSchema.parse(email)));
+	}
+
+	private async read(key: string) {
 		const obj = await this.bucket.get(key);
 		if (!obj) return null;
 		const record = await readStored(AuthInvitationSchema, obj, key);
-		return record.email === normalized ? record : null;
+		return record.email === normalizeEmail(record.email) &&
+			paths.authInvitation(record.email) === key
+			? record
+			: null;
 	}
 
 	async invite(email: string, actor: UserId) {
@@ -56,8 +62,17 @@ export class AuthInvitationService {
 	async list() {
 		const keys = await listAllKeys(this.bucket, paths.authInvitationsPrefix);
 		const records = await mapWithConcurrency(keys, BUCKET_SCAN_CONCURRENCY, async (key) => {
-			const obj = await this.bucket.get(key);
-			return obj ? readStored(AuthInvitationSchema, obj, key) : null;
+			try {
+				return await this.read(key);
+			} catch (error) {
+				if (!(error instanceof StoredObjectError)) throw error;
+				logOperationalError(
+					'stored_object_skipped',
+					{ operation: 'AuthInvitationService.list', object: key },
+					error,
+				);
+				return null;
+			}
 		});
 		return records
 			.filter((record) => record !== null)

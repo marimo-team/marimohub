@@ -247,7 +247,6 @@ describe('Admin routes', () => {
 		it.each(['get', 'put', 'delete'] as const)(
 			'returns a sanitized error when storage %s fails, without a success audit',
 			async (operation) => {
-				vi.spyOn(console, 'error').mockImplementation(() => {});
 				const { request, deps } = superAdminApi({
 					policy: { superAdmins: [ACTOR], authInvitationsEnabled: true },
 				});
@@ -257,25 +256,35 @@ describe('Admin routes', () => {
 				const fault = vi
 					.spyOn(deps.services.authInvitations, serviceMethod)
 					.mockRejectedValueOnce(new Error('secret-storage-detail'));
-				const method = operation === 'get' ? 'GET' : operation === 'put' ? 'POST' : 'DELETE';
-				const path =
-					operation === 'delete' ? '/admin/invitations/guest%40outside.com' : '/admin/invitations';
-				const response = await request(
-					method,
-					path,
-					operation === 'put' ? { email: 'new@outside.com' } : undefined,
-				);
-				const error = await expectError(response, 500, 'INTERNAL_ERROR');
-				expect(JSON.stringify(error)).not.toContain('secret-storage-detail');
-				fault.mockRestore();
-				expect(await deps.services.authInvitations.get('guest@outside.com')).not.toBeNull();
-				expect(await deps.services.authInvitations.get('new@outside.com')).toBeNull();
-				const events = await deps.services.events.getEvents(new Date().toISOString().slice(0, 10));
-				expect(
-					events.some(
-						(event) => event.event === 'user.invited' || event.event === 'user.invitation_revoked',
-					),
-				).toBe(false);
+				const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+				try {
+					const method = operation === 'get' ? 'GET' : operation === 'put' ? 'POST' : 'DELETE';
+					const path =
+						operation === 'delete'
+							? '/admin/invitations/guest%40outside.com'
+							: '/admin/invitations';
+					const response = await request(
+						method,
+						path,
+						operation === 'put' ? { email: 'new@outside.com' } : undefined,
+					);
+					const error = await expectError(response, 500, 'INTERNAL_ERROR');
+					expect(JSON.stringify(error)).not.toContain('secret-storage-detail');
+					expect(await deps.services.authInvitations.get('guest@outside.com')).not.toBeNull();
+					expect(await deps.services.authInvitations.get('new@outside.com')).toBeNull();
+					const events = await deps.services.events.getEvents(
+						new Date().toISOString().slice(0, 10),
+					);
+					expect(
+						events.some(
+							(event) =>
+								event.event === 'user.invited' || event.event === 'user.invitation_revoked',
+						),
+					).toBe(false);
+				} finally {
+					fault.mockRestore();
+					errorLog.mockRestore();
+				}
 			},
 		);
 

@@ -1,5 +1,6 @@
 import { isAuthGroupId, MAX_AUTH_GROUP_ID_LENGTH } from '@marimo-hub/core/ports/auth';
 import type { Authenticator } from '@marimo-hub/core';
+import { logOperationalError } from '@marimo-hub/core/operational-log';
 import {
 	normalizeEmailDomains,
 	emailAllowedWithInvitations,
@@ -566,7 +567,12 @@ export function withPatEmailAdmission(
 		async authenticate(request) {
 			const principal = await authenticator.authenticate(request);
 			if (principal?.credential.kind !== 'personal-access-token') return principal;
-			return (await emailAllowed(principal.email)) ? principal : null;
+			try {
+				return (await emailAllowed(principal.email)) ? principal : null;
+			} catch (error) {
+				logOperationalError('pat_invitation_lookup_failed', {}, error);
+				return null;
+			}
 		},
 		...(authenticator.logoutUrl ? { logoutUrl: authenticator.logoutUrl.bind(authenticator) } : {}),
 	};

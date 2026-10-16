@@ -4,6 +4,7 @@ import {
 	emailAllowedWithInvitations,
 } from '@marimo-hub/core/email-admission';
 import { UserId } from '@marimo-hub/core/ids';
+import { logOperationalError } from '@marimo-hub/core/operational-log';
 import type { AuthenticatedPrincipal, Authenticator } from '@marimo-hub/core/ports/auth';
 
 const DEFAULT_HEADERS = ['X-Forwarded-Email', 'X-Forwarded-User'] as const;
@@ -128,10 +129,15 @@ export class ProxyHeaderAuthenticator implements Authenticator {
 		if (!validEmail(email) || !validUserId(userId)) {
 			return null;
 		}
-		if (
-			!(await emailAllowedWithInvitations(email, this.allowedDomains, this.config.isEmailInvited))
-		)
+		try {
+			if (
+				!(await emailAllowedWithInvitations(email, this.allowedDomains, this.config.isEmailInvited))
+			)
+				return null;
+		} catch (error) {
+			logOperationalError('proxy_invitation_lookup_failed', {}, error);
 			return null;
+		}
 		return {
 			id: UserId.parse(userId),
 			email,

@@ -1,6 +1,6 @@
 import { UserId } from '@marimo-hub/core/ids';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core/ports/auth';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { makeAuth, projectCreationRestricted, withPatEmailAdmission } from './auth';
 import { ConfigError } from './errors';
 
@@ -1061,6 +1061,37 @@ describe('external invitation configuration', () => {
 		const { authenticator } = makeAuth(proxyHeaderEnv, undefined, async () => true);
 		await expect(authenticator.authenticate(req)).resolves.toBeNull();
 	});
+	it.each([oidcEnv, proxyHeaderEnv])(
+		'fails PAT admission closed during an invitation outage for $MARIMOHUB_AUTH_BACKEND',
+		async (env) => {
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			try {
+				const lookup = vi.fn().mockRejectedValue(new Error('private storage failure'));
+				const { emailAllowed } = makeAuth(
+					{ ...env, MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS: 'on' },
+					undefined,
+					lookup,
+				);
+				const principal: AuthenticatedPrincipal = {
+					id: UserId.parse('guest'),
+					email: 'guest@outside.com',
+					credential: { kind: 'personal-access-token' },
+				};
+				const auth = withPatEmailAdmission({ authenticate: async () => principal }, emailAllowed);
+				await expect(auth.authenticate(req)).resolves.toBeNull();
+				expect(log).toHaveBeenCalledWith(expect.stringContaining('pat_invitation_lookup_failed'));
+				expect(log.mock.calls.flat().join(' ')).not.toContain('private storage failure');
+				principal.email = 'user@example.com';
+				await expect(auth.authenticate(req)).resolves.toBe(principal);
+				expect(lookup).toHaveBeenCalledTimes(1);
+				principal.email = 'guest@outside.com';
+				lookup.mockResolvedValue(true);
+				await expect(auth.authenticate(req)).resolves.toBe(principal);
+			} finally {
+				log.mockRestore();
+			}
+		},
+	);
 	it('requires explicit opt-in and rejects unsupported backends and invalid values', () => {
 		expect(() =>
 			makeAuth({ ...proxyHeaderEnv, MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS: 'on' }),

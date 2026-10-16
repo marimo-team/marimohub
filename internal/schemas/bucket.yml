@@ -36,7 +36,7 @@ tags:
   - name: job
     description: Notebook job definitions, runs, and active-run markers
   - name: auth
-    description: Identities and personal access tokens
+    description: Identities, external invitations, and personal access tokens
   - name: ops
     description: Operational records
 paths:
@@ -1588,14 +1588,15 @@ paths:
         '204':
           description: Stored.
   /_system/auth-invitations/{email}.json:
-    summary: Admin-managed email exception to the authentication domain allowlist.
+    summary: Create-once email exception to the authentication domain allowlist,
+      deleted on revocation.
     parameters:
       - name: email
         in: path
         required: true
         schema:
           type: string
-    x-mutability: last-writer-wins
+    x-mutability: immutable
     x-owner: AuthInvitationService
     get:
       operationId: read_system_auth_invitations_json
