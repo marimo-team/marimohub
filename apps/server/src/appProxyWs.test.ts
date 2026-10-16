@@ -10,7 +10,7 @@ import type { AppVisit, SessionId } from '@marimo-hub/core';
 import { ACTOR, makeFakeCompute } from '@marimo-hub/core/testing';
 import { attachSandboxProxyUpgrade } from './sandboxProxyWs';
 
-it('fences a combined upgrade, strips protocol headers and closes at the renewed deadline', async () => {
+it.each(['', '/marimohub'])('preserves routing and lease limits under %s', async (prefix) => {
 	const bucket = await createInitializedBucket();
 	const services = createServices(bucket);
 	const project = await services.projects.createProject({ name: 'Proxy', description: '' }, ACTOR);
@@ -24,6 +24,7 @@ it('fences a combined upgrade, strips protocol headers and closes at the renewed
 		compute: makeFakeCompute(),
 		deps: {
 			sandbox: {
+				appBaseUrl: `https://hub.example${prefix}`,
 				bucket: { name: 'test', endpoint: '' },
 				hostname: 'localhost',
 				workdir: '/workspace',
@@ -44,8 +45,10 @@ it('fences a combined upgrade, strips protocol headers and closes at the renewed
 	const upgrader = createServer();
 	let upstream: Duplex | undefined;
 	let seen: http.IncomingHttpHeaders | undefined;
+	let seenPath: string | undefined;
 	upgrader.on('upgrade', (req, socket) => {
 		seen = req.headers;
+		seenPath = req.url;
 		upstream = socket;
 		socket.write(
 			'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nx-marimohub-app-proxy: forged\r\nx-marimohub-app-generation: secret\r\n\r\n',
@@ -101,6 +104,8 @@ it('fences a combined upgrade, strips protocol headers and closes at the renewed
 			expect(Buffer.concat(output).toString()).toContain('101 Switching Protocols'),
 		);
 		expect(seen).toBeDefined();
+		const session = await api.deps.services.sessions.getSession(project.id, sid);
+		expect(seenPath).toBe(`${new URL(session.sandbox_url!).pathname}ws`);
 		expect(Object.keys(seen!).filter((name) => name.startsWith('x-marimohub-app-'))).toEqual([]);
 		const response = Buffer.concat(output).toString();
 		expect(response).toContain('x-marimohub-app-proxy: 1\r\n');

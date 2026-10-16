@@ -39,7 +39,7 @@ function deferred<T>() {
 	return { promise, resolve, reject };
 }
 
-async function fixture() {
+async function fixture(appBaseUrl?: string) {
 	const bucket = await createInitializedBucket();
 	const services = createServices(bucket);
 	const project = await services.projects.createProject(
@@ -57,6 +57,7 @@ async function fixture() {
 		compute: makeFakeCompute(),
 		deps: {
 			sandbox: {
+				appBaseUrl,
 				bucket: { name: 'test', endpoint: '' },
 				hostname: 'localhost',
 				workdir: '/workspace',
@@ -130,6 +131,33 @@ it('advertises the contract and forwards the exact app with four fresh metadata 
 	expect(isCredentialHeader(APP_GENERATION_HEADER)).toBe(true);
 });
 
+it('forwards HTTP to the persisted kernel prefix even if the public base changes', async () => {
+	const f = await fixture('https://hub.example/marimohub');
+	f.api.deps.sandbox.appBaseUrl = 'https://hub.example/moved';
+	const token = await signProxyToken(f.project.id, f.sessionId, f.secret);
+	const session = await f.api.deps.services.sessions.getSession(f.project.id, f.sessionId);
+	expect(session.sandbox_url).toBe(`https://hub.example/marimohub/proxy/${token}/`);
+	const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('kernel'));
+	const response = await f.api.app.fetch(f.request(f.assignment, '/health?x=1'));
+	expect(response.status).toBe(200);
+	expect(await response.text()).toBe('kernel');
+	expect(response.headers.get(APP_PROXY_HEADER)).toBe('1');
+	expect(fetch).toHaveBeenCalledTimes(1);
+	expect(fetch.mock.calls[0][0]).toBe(
+		`${session.sandbox_origin_url}/marimohub/proxy/${token}/health?x=1`,
+	);
+});
+
+it('retains the signed route fallback for sessions without a persisted sandbox URL', async () => {
+	const f = await fixture();
+	await f.patch(paths.session(f.project.id, f.sessionId), { sandbox_url: undefined });
+	const token = await signProxyToken(f.project.id, f.sessionId, f.secret);
+	const decision = await authorizeProxyRequest(f.request(f.assignment, '/health?x=1'), f.api.deps);
+	if (decision.kind !== 'forward') throw new Error('Expected forward');
+	const session = await f.api.deps.services.sessions.getSession(f.project.id, f.sessionId);
+	expect(decision.targetUrl).toBe(`${session.sandbox_origin_url}/proxy/${token}/health?x=1`);
+});
+
 it('reports starting only after authorizing and renewing the exact app visit', async () => {
 	const f = await fixture();
 	await f.patch(paths.session(f.project.id, f.sessionId), {
@@ -153,11 +181,33 @@ it('reports starting only after authorizing and renewing the exact app visit', a
 	expect(revoked.headers.get(APP_STATUS_HEADER)).toBeNull();
 });
 
-it.each(['absolute', 'root-relative', 'relative', 'query', 'outside', 'other-session'])(
-	'handles %s kernel redirects in canonical app route space',
-	async (shape) => {
-		const f = await fixture();
+it.each(
+	[
+		{ name: 'root', appBaseUrl: undefined, publicBase: 'http://hub', headers: {} },
+		{
+			name: 'forwarded HTTPS',
+			appBaseUrl: undefined,
+			publicBase: 'https://hub.example',
+			headers: { host: 'hub.example', 'x-forwarded-proto': 'https, http' },
+		},
+		{
+			name: 'prefixed HTTPS',
+			appBaseUrl: 'https://hub.example/marimohub/',
+			publicBase: 'https://hub.example/marimohub',
+			headers: { host: 'api.internal', 'x-forwarded-proto': 'http' },
+		},
+	].flatMap((deployment) =>
+		['absolute', 'root-relative', 'relative', 'query', 'outside', 'other-session'].map((shape) => ({
+			...deployment,
+			shape,
+		})),
+	),
+)(
+	'handles $shape kernel redirects with $name deployment',
+	async ({ shape, appBaseUrl, publicBase, headers }) => {
+		const f = await fixture(appBaseUrl);
 		const request = f.request(f.assignment, '/nested/page');
+		for (const [name, value] of Object.entries(headers)) request.headers.set(name, value);
 		const decision = await authorizeProxyRequest(request, f.api.deps);
 		if (decision.kind !== 'forward') throw new Error('Expected forward');
 		const kernel = new URL(decision.targetUrl);
@@ -181,7 +231,7 @@ it.each(['absolute', 'root-relative', 'relative', 'query', 'outside', 'other-ses
 		} else {
 			expect(response.status).toBe(307);
 			expect(response.headers.get('location')).toBe(
-				`http://hub${f.path}/nested/${shape === 'query' ? 'page' : 'next'}?x=1#part`,
+				`${publicBase}${f.path}/nested/${shape === 'query' ? 'page' : 'next'}?x=1#part`,
 			);
 		}
 		expect(fetch).toHaveBeenCalledTimes(1);

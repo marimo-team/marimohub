@@ -17,7 +17,12 @@ import type { AuthenticatedPrincipal, ProjectId, SessionId } from '@marimo-hub/c
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
 import { SANDBOX_PROXY_PREFIXES } from './proxyRoutes';
-import { assertSessionPreviewActive, authorizationService, fail } from './shared';
+import {
+	assertSessionPreviewActive,
+	authorizationService,
+	fail,
+	resolvePublicBaseUrl,
+} from './shared';
 import {
 	authorizeAppProxyRequest,
 	appProxyResponse,
@@ -584,6 +589,7 @@ export function sandboxProxyMiddleware(deps: ApiDeps): MiddlewareHandler<HonoEnv
 			c.req.url,
 			decision.targetUrl,
 			decision.appProxyBaseUrl,
+			resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl),
 		);
 		forwarded.headers.set(APP_PROXY_HEADER, '1');
 		return forwarded;

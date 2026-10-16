@@ -1,6 +1,8 @@
 import {
 	AppPoolService,
 	AppVisitSchema,
+	joinUrlPath,
+	kernelBasePathFromUrl,
 	NotebookId,
 	ProjectId,
 	SessionId,
@@ -311,7 +313,10 @@ export async function authorizeAppProxyRequest(
 		};
 	}
 
-	const appKernelBase = `/proxy/${await signProxyToken(projectId, sessionId, secret)}`;
+	// Keep the base path used when this kernel was provisioned, even if deployment config changes.
+	const appKernelBase =
+		kernelBasePathFromUrl(session.sandbox_url) ||
+		`/proxy/${await signProxyToken(projectId, sessionId, secret)}`;
 	const upstreamPath = `${appKernelBase}${url.pathname.slice(appMatch[0].length) || '/'}`;
 	const targetUrl = `${trimTrailingSlash(originUrl)}${upstreamPath}${url.search}`;
 	return {
@@ -329,6 +334,7 @@ export async function appProxyResponse(
 	requestUrl: string,
 	targetUrl: string,
 	baseUrl: string,
+	publicBaseUrl: string,
 ): Promise<Response> {
 	const location = response.headers.get('location');
 	if (location === null) return response;
@@ -359,7 +365,7 @@ export async function appProxyResponse(
 	const headers = new Headers(response.headers);
 	headers.set(
 		'location',
-		`${request.origin}${appBase}${redirect.pathname.slice(kernelBase.length)}${redirect.search}${redirect.hash}`,
+		`${joinUrlPath(publicBaseUrl, `${appBase}${redirect.pathname.slice(kernelBase.length)}`)}${redirect.search}${redirect.hash}`,
 	);
 	return new Response(response.body, {
 		status: response.status,
