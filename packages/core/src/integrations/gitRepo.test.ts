@@ -211,3 +211,21 @@ it('detects hosted Azure DevOps without matching lookalike hosts', () => {
 	expect(detectProvider('https://dev.azure.com/acme/project/_git/notebooks')).toBe('azure-devops');
 	expect(detectProvider('https://dev.azure.com.evil.test/acme/project/_git/notebooks')).toBeNull();
 });
+
+it.each([
+	['https://dev.azure.com:443/acme/project/_git/notebooks', 'azure-devops'],
+	['https://dev.azure.com:8443/acme/project/_git/notebooks', null],
+	['http://dev.azure.com/acme/project/_git/notebooks', null],
+])('detects Azure only at its hosted HTTPS origin: %s', (repo, provider) => {
+	expect(detectProvider(repo)).toBe(provider);
+});
+
+it('preserves Azure repository names ending in .git through normalization and comparison', () => {
+	const repo = 'https://dev.azure.com/acme/project/_git/notebooks.git';
+	expect(normalizeRepo(`${repo}/`)).toBe(repo);
+	expect(repoPath(repo)).toBe('acme/project/_git/notebooks.git');
+	expect(reposMatch(repo, `${repo}/`)).toBe(true);
+	expect(reposMatch(repo, 'acme/project/_git/notebooks.git')).toBe(true);
+	expect(reposMatch(repo, 'https://dev.azure.com/acme/project/_git/notebooks')).toBe(false);
+	expect(reposMatch(repo, 'acme/project/_git/notebooks')).toBe(false);
+});

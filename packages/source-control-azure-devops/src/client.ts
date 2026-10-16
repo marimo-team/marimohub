@@ -1,3 +1,4 @@
+import { deadlineSignal, withAbortSignal } from '@marimo-hub/core/async';
 import { DefaultAzureCredential } from '@azure/identity';
 import {
 	BadRequestError,
@@ -11,7 +12,10 @@ import type { AzureRepository } from './repository';
 import { validateOrganization } from './repository';
 
 export interface AzureCredential {
-	getToken(scope: string): Promise<{ token: string } | null>;
+	getToken(
+		scope: string,
+		options?: { abortSignal?: AbortSignal },
+	): Promise<{ token: string } | null>;
 }
 export interface AzureDevOpsOptions {
 	organization: string;
@@ -88,9 +92,13 @@ export class AzureClient {
 		this.credential = options.credential ?? new DefaultAzureCredential();
 		this.fetcher = runtime.fetcher ?? fetch;
 	}
-	async authorization(): Promise<string> {
+	async authorization(signal = deadlineSignal(60_000)): Promise<string> {
 		try {
-			const result = await this.credential.getToken(AZURE_DEVOPS_SCOPE);
+			signal.throwIfAborted();
+			const result = await withAbortSignal(
+				this.credential.getToken(AZURE_DEVOPS_SCOPE, { abortSignal: signal }),
+				signal,
+			);
 			if (!result?.token) throw new Error('Missing access token');
 			return `Bearer ${result.token}`;
 		} catch {
@@ -109,18 +117,28 @@ export class AzureClient {
 		init.signal?.throwIfAborted();
 		const url = `${repo.apiUrl}${path}?${new URLSearchParams({ ...query, 'api-version': '7.1' })}`;
 		const headers = new Headers(init.headers);
-		headers.set('authorization', await this.authorization());
+		const signal = deadlineSignal(60_000, init.signal ?? undefined);
+		try {
+			headers.set('authorization', await this.authorization(signal));
+		} catch (error) {
+			init.signal?.throwIfAborted();
+			throw error;
+		}
 		init.signal?.throwIfAborted();
 		headers.set('accept', headers.get('accept') ?? 'application/json');
 		if (init.body) headers.set('content-type', 'application/json');
 		let response: Response;
 		try {
-			response = await this.fetcher(url, {
-				...init,
-				headers,
-				redirect: 'error',
-				signal: init.signal ?? AbortSignal.timeout(60_000),
-			});
+			signal.throwIfAborted();
+			response = await withAbortSignal(
+				this.fetcher(url, {
+					...init,
+					headers,
+					redirect: 'error',
+					signal,
+				}),
+				signal,
+			);
 		} catch {
 			init.signal?.throwIfAborted();
 			throw new UnavailableError('Azure DevOps is unavailable');

@@ -195,3 +195,13 @@ describe('configured GitHub hosts', () => {
 		});
 	});
 });
+
+it('preserves Azure repository identity when creating and updating a source', () => {
+	const repo = 'https://dev.azure.com/acme/project/_git/notebooks.git';
+	const source = createGitSource({ title: 'Dash', description: '', ...ACTIVE, repo });
+	expect(source).toMatchObject({ repo, provider: 'azure-devops' });
+	expect(applyGitSourceUpdate(syncedSource(), { ...ACTIVE, repo })).toMatchObject({
+		repo,
+		provider: 'azure-devops',
+	});
+});

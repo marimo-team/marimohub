@@ -2,7 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import isomorphicGit from 'isomorphic-git';
 import { BadRequestError } from '@marimo-hub/core/errors';
 import {
 	MAX_GIT_DIRECTORY_BYTES,
@@ -13,12 +14,7 @@ import {
 } from '@marimo-hub/core/ports/source-control';
 import { MAX_WORKSPACE_FILE_BYTES } from '@marimo-hub/core/constants';
 import type { GitFetch } from './index';
-import {
-	assertGitCheckoutLimits,
-	collectGitDirectoryFiles,
-	GitFetchByteLimit,
-	materializeGitDirectory,
-} from './index';
+import { collectGitDirectoryFiles, GitFetchByteLimit, materializeGitDirectory } from './index';
 
 const temporaryDirectories: string[] = [];
 
@@ -208,41 +204,90 @@ describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 		).rejects.toBeInstanceOf(BadRequestError);
 	});
 
-	it('rejects a file beyond the expanded-object per-file cap', async () => {
-		const checkout = await temporaryDirectory('marimohub-git-expanded-file-');
-		const file = join(checkout, 'large.bin');
-		await writeFile(file, '');
-		await truncate(file, MAX_WORKSPACE_FILE_BYTES + 1);
-
-		await expect(assertGitCheckoutLimits(checkout, 'owner/expanded')).rejects.toThrow(
-			`${MAX_WORKSPACE_FILE_BYTES}-byte limit`,
-		);
-	});
-
-	it('rejects too many files after Git pack expansion', async () => {
-		const checkout = await temporaryDirectory('marimohub-git-expanded-files-');
-		for (let index = 0; index < MAX_GIT_EXPANDED_FILES + 1; index++) {
-			await writeFile(join(checkout, `file-${index}`), '');
+	it.each([
+		{
+			kind: 'large file',
+			count: 1,
+			size: MAX_WORKSPACE_FILE_BYTES + 1,
+			limit: `${MAX_WORKSPACE_FILE_BYTES}-byte`,
+		},
+		{
+			kind: 'many files',
+			count: MAX_GIT_EXPANDED_FILES + 1,
+			size: 0,
+			limit: `${MAX_GIT_EXPANDED_FILES}-file`,
+		},
+		{
+			kind: 'cumulative bytes',
+			count: 5,
+			size: Math.floor(MAX_GIT_EXPANDED_BYTES / 5) + 1,
+			limit: `${MAX_GIT_EXPANDED_BYTES}-byte`,
+		},
+	])('rejects compressed $kind before writing a checkout', async ({ count, size, limit }) => {
+		const source = await temporaryDirectory('marimohub-git-expansion-source-');
+		git(source, ['init', '-b', 'main']);
+		for (let index = 0; index < count; index++) {
+			const file = join(source, `file-${index}`);
+			await writeFile(file, '');
+			await truncate(file, size);
 		}
-
-		await expect(assertGitCheckoutLimits(checkout, 'owner/expanded')).rejects.toThrow(
-			`${MAX_GIT_EXPANDED_FILES}-file limit`,
-		);
-	});
-
-	it('rejects cumulative bytes after Git pack expansion', async () => {
-		const checkout = await temporaryDirectory('marimohub-git-expanded-bytes-');
-		const fileSize = Math.floor(MAX_GIT_EXPANDED_BYTES / 5) + 1;
-		for (let index = 0; index < 5; index++) {
-			const path = join(checkout, `file-${index}`);
-			await writeFile(path, '');
-			await truncate(path, fileSize);
+		git(source, ['add', '.']);
+		git(source, ['commit', '-m', 'Oversized tree']);
+		const checkout = vi.spyOn(isomorphicGit, 'checkout');
+		try {
+			await expect(
+				materializeGitDirectory({
+					repository: 'owner/expanded',
+					remoteUrl: 'https://github.com/owner/expanded.git',
+					commit: git(source, ['rev-parse', 'HEAD']),
+					branch: 'main',
+					authorization: 'Bearer token',
+					fetcher: uploadPackFetcher(source),
+				}),
+			).rejects.toThrow(limit);
+			expect(checkout).not.toHaveBeenCalled();
+		} finally {
+			checkout.mockRestore();
 		}
-
-		await expect(assertGitCheckoutLimits(checkout, 'owner/expanded')).rejects.toThrow(
-			`${MAX_GIT_EXPANDED_BYTES}-byte limit`,
-		);
 	});
+
+	it.each(['tree', 'commit'] as const)(
+		'rejects repeated %s entries before creating checkout directories',
+		async (type) => {
+			const source = await temporaryDirectory('marimohub-git-directory-expansion-');
+			git(source, ['init', '-b', 'main']);
+			const empty = git(source, ['mktree'], '');
+			const object =
+				type === 'tree' ? empty : git(source, ['commit-tree', empty, '-m', 'Submodule']);
+			const mode = type === 'tree' ? '040000' : '160000';
+			const tree = git(
+				source,
+				['mktree'],
+				Array.from(
+					{ length: MAX_GIT_EXPANDED_FILES + 1 },
+					(_, index) => `${mode} ${type} ${object}\tdirectory-${index}\n`,
+				).join(''),
+			);
+			const commit = git(source, ['commit-tree', tree, '-m', 'Many empty directories']);
+			git(source, ['update-ref', 'refs/heads/main', commit]);
+			const checkout = vi.spyOn(isomorphicGit, 'checkout');
+			try {
+				await expect(
+					materializeGitDirectory({
+						repository: 'owner/expanded',
+						remoteUrl: 'https://github.com/owner/expanded.git',
+						commit,
+						branch: 'main',
+						authorization: 'Bearer token',
+						fetcher: uploadPackFetcher(source),
+					}),
+				).rejects.toThrow(`${MAX_GIT_EXPANDED_FILES}-directory limit`);
+				expect(checkout).not.toHaveBeenCalled();
+			} finally {
+				checkout.mockRestore();
+			}
+		},
+	);
 
 	it('rejects a materialized Git directory beyond the file-count cap', async () => {
 		const gitdir = await temporaryDirectory('marimohub-git-many-files-');

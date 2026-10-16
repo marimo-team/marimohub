@@ -130,13 +130,15 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 		parent: string,
 		desired: FileTree,
 	): Promise<boolean> {
-		const commit = await trees.commit(head);
-		return (
-			Array.isArray(commit.parents) &&
-			commit.parents.length === 1 &&
-			commit.parents[0] === parent &&
-			sameTree(await trees.files(head), desired)
-		);
+		return this.stage('push', async () => {
+			const commit = await trees.commit(head);
+			return (
+				Array.isArray(commit.parents) &&
+				commit.parents.length === 1 &&
+				commit.parents[0] === parent &&
+				sameTree(await trees.files(head), desired)
+			);
+		});
 	}
 	private result(
 		repo: AzureRepository,
@@ -167,7 +169,7 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 		changes: unknown[],
 	): Promise<string> {
 		const trailer = input.coAuthor
-			? `Co-authored-by: ${input.coAuthor.name} <${input.coAuthor.email}>`
+			? `Co-authored-by: ${input.coAuthor.name.trim()} <${input.coAuthor.email}>`
 			: '';
 		const comment = [input.title, input.body, trailer].filter(Boolean).join('\n\n');
 		const payload = await this.client.json(
@@ -193,8 +195,13 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 		const branch = validatePublication(input);
 		const repo = this.repository(input.repository);
 		const trees = new AzureTrees(this.client, repo);
-		const base = await this.stage('push', () => trees.files(input.baseCommit));
-		const desired = trees.desired(base, input.changes);
+		const { desired, changes } = await this.stage('push', async () => {
+			const base = await trees.files(input.baseCommit);
+			const desired = trees.desired(base, input.changes);
+			const changes = await trees.delta(base, desired, input.changes);
+			if (changes.length === 0) throw new ConflictError('Proposal contains no changes');
+			return { desired, changes };
+		});
 		let head = await this.stage('branch', () => this.head(repo, branch));
 		if (!head) {
 			await this.stage('branch', async () => {
@@ -221,12 +228,10 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 						throw new ConflictError('Azure DevOps could not create the proposal branch');
 				}
 			});
-			head = await this.head(repo, branch);
+			head = await this.stage('branch', () => this.head(repo, branch));
 		}
 		if (!head) throw this.branchChanged(true);
 		if (head === input.baseCommit) {
-			const changes = await trees.delta(base, desired, input.changes);
-			if (changes.length === 0) throw new ConflictError('Proposal contains no changes');
 			head = await this.stage('push', () =>
 				this.push(repo, branch, input.baseCommit, input, changes),
 			);
@@ -237,7 +242,8 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 			);
 		const publishedHead = head;
 		return this.stage('pr', async () => {
-			if ((await this.head(repo, branch)) !== publishedHead) throw this.branchChanged();
+			if ((await this.stage('branch', () => this.head(repo, branch))) !== publishedHead)
+				throw this.branchChanged();
 			const candidates = values(
 				await this.client.json(repo, '/pullrequests', {
 					'searchCriteria.sourceRefName': `refs/heads/${branch}`,
@@ -248,14 +254,25 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 			);
 			if (candidates.length >= 100)
 				throw new BadRequestError('Too many pull requests for the proposal branch');
+			let closedMatch: OpenChangeRequestResult | undefined;
 			for (const candidate of candidates) {
 				const existing = this.result(repo, candidate, branch, input.baseBranch, publishedHead);
-				const source = record(candidate).lastMergeSourceCommit;
-				if (source && stringField(source, 'commitId') === publishedHead) return existing;
+				const value = record(candidate);
+				// Merge metadata can lag an active PR; the live source ref was checked above.
+				if (value.status === 'active') return existing;
+				const source = value.lastMergeSourceCommit;
+				if (
+					(value.status === 'completed' || value.status === 'abandoned') &&
+					source &&
+					stringField(source, 'commitId') === publishedHead
+				)
+					closedMatch ??= existing;
+			}
+			if (closedMatch) return closedMatch;
+			if (candidates.length > 0)
 				throw new ProposalRetryRequiredError(
 					'The existing Azure DevOps pull request does not match the proposal; retry with a new idempotency key',
 				);
-			}
 			const pull = await this.client.json(
 				repo,
 				'/pullrequests',
@@ -290,22 +307,26 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 		if (record(pull).status !== 'active')
 			throw new ConflictError('Azure DevOps pull request is closed; create a new pull request');
 		const trees = new AzureTrees(this.client, repo);
-		const base = await trees.files(input.baseCommit);
-		const desired = trees.desired(base, input.changes);
+		const desired = await this.stage('push', async () =>
+			trees.desired(await trees.files(input.baseCommit), input.changes),
+		);
 		const expected = input.changeRequest.headCommit;
-		let head = await this.head(repo, branch);
+		let head = await this.stage('branch', () => this.head(repo, branch));
 		if (!head) throw this.branchChanged(true);
 		if (head !== expected) {
 			if (!(await this.matches(trees, head, expected, desired))) throw this.branchChanged();
 		} else {
-			const current = await trees.files(expected);
-			const changes = await trees.delta(current, desired, input.changes);
+			const changes = await this.stage('push', async () =>
+				trees.delta(await trees.files(expected), desired, input.changes),
+			);
 			if (changes.length > 0)
 				head = await this.stage('push', () => this.push(repo, branch, expected, input, changes));
 		}
 		const publishedHead = head;
-		if (!sameTree(await trees.files(head), desired)) throw this.branchChanged();
-		if ((await this.head(repo, branch)) !== head) throw this.branchChanged();
+		if (!sameTree(await this.stage('push', () => trees.files(publishedHead)), desired))
+			throw this.branchChanged();
+		if ((await this.stage('branch', () => this.head(repo, branch))) !== head)
+			throw this.branchChanged();
 		const updated = await this.stage('pr', () =>
 			this.client.json(
 				repo,

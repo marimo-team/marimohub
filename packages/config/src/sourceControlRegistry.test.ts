@@ -185,12 +185,25 @@ describe('multiple source-control registrations', () => {
 		expect(authorize).toHaveBeenCalledExactlyOnceWith('team/repo', projectId);
 		expect(denied.getBranchHead).not.toHaveBeenCalled();
 	});
-	it('rejects conflicting host mappings instead of silently replacing them', () => {
+	it('preserves host names that collide with Object prototype properties', () => {
+		const registry = new ConfiguredSourceControlRegistry([
+			{ repositoryHosts: { ['__proto__']: 'github', constructor: 'gitlab' as const } },
+		]);
+		expect(Object.entries(registry.repositoryHosts)).toEqual([
+			['__proto__', 'github'],
+			['constructor', 'gitlab'],
+		]);
+		expect(JSON.parse(JSON.stringify(registry.repositoryHosts))).toEqual({
+			['__proto__']: 'github',
+			constructor: 'gitlab',
+		});
+	});
+	it.each(['git.example.com', '__proto__'])('rejects conflicting mappings for %s', (host) => {
 		expect(
 			() =>
 				new ConfiguredSourceControlRegistry([
-					{ repositoryHosts: { 'git.example.com': 'github' } },
-					{ repositoryHosts: { 'git.example.com': 'gitlab' } },
+					{ repositoryHosts: { [host]: 'github' } },
+					{ repositoryHosts: { [host]: 'gitlab' } },
 				]),
 		).toThrow('conflicting providers');
 	});

@@ -11,10 +11,10 @@ description: Sync read-only notebooks into marimohub from external Git repositor
 marimohub can serve a notebook whose source of truth is an external **Git
 repository**. Choose a source mode when you create the notebook:
 
-| Mode   | Primary sync path               | Credential        | Supported path   | Git metadata                    |
-| ------ | ------------------------------- | ----------------- | ---------------- | ------------------------------- |
-| `push` | CI upload or **Sync now**       | Sync token        | Root or subtree  | Only when the upload has `.git` |
-| `pull` | Create request and **Sync now** | Provider identity | Any subdirectory | Included in every version       |
+| Mode   | Primary sync path               | Credential                                             | Supported path   | Git metadata                    |
+| ------ | ------------------------------- | ------------------------------------------------------ | ---------------- | ------------------------------- |
+| `push` | CI upload or **Sync now**       | Sync token (uploads), provider identity (**Sync now**) | Root or subtree  | Only when the upload has `.git` |
+| `pull` | Create request and **Sync now** | Provider identity                                      | Any subdirectory | Included in every version       |
 
 The source mode cannot change after creation. For a push source, **Sync now**
 updates the files but does not add Git metadata to the version.

@@ -193,3 +193,46 @@ describe('Azure bounded response streams', () => {
 		expect(String(error)).not.toContain('private connection details');
 	});
 });
+
+describe('Azure credential cancellation', () => {
+	it('cancels a stalled credential even when it ignores the abort signal', async () => {
+		const { client, credential, fetcher } = setup();
+		const controller = new AbortController();
+		const reason = new Error('Stop reading');
+		credential.getToken.mockImplementation(() => new Promise(() => {}));
+		const pending = client.json(repo, '/refs', {}, { signal: controller.signal });
+		const rejected = expect(pending).rejects.toBe(reason);
+		expect(credential.getToken).toHaveBeenCalledOnce();
+		const signal = credential.getToken.mock.calls[0][1]?.abortSignal;
+		controller.abort(reason);
+		await rejected;
+		expect(signal?.aborted).toBe(true);
+		expect(fetcher).not.toHaveBeenCalled();
+	});
+	it('starts the deadline before acquiring credentials even with a caller signal', async () => {
+		const timeout = new AbortController();
+		const spy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeout.signal);
+		try {
+			const { client, credential, fetcher } = setup();
+			credential.getToken.mockImplementation(() => new Promise(() => {}));
+			const pending = client.json(repo, '/refs', {}, { signal: new AbortController().signal });
+			const error = pending.catch((error: unknown) => error);
+			timeout.abort(new DOMException('Timeout', 'TimeoutError'));
+			expect(sourceControlPublishFailure(await error)).toEqual({
+				provider: 'azure-devops',
+				stage: 'auth',
+			});
+			expect(spy).toHaveBeenCalledWith(60_000);
+			expect(fetcher).not.toHaveBeenCalled();
+		} finally {
+			spy.mockRestore();
+		}
+	});
+	it('shares one deadline between credentials and the HTTP request', async () => {
+		const { client, credential, fetcher } = setup();
+		await client.json(repo, '/refs');
+		expect(credential.getToken.mock.calls[0][1]?.abortSignal).toBe(
+			fetcher.mock.calls[0][1]?.signal,
+		);
+	});
+});

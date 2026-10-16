@@ -71,7 +71,9 @@ describe('Azure DevOps reader', () => {
 		expect(
 			(await adapter.fetchWorkspace(repository, fake.base, '')).map((file) => file.path),
 		).toEqual(['apps/main.py', 'README.md']);
-		expect(credential.getToken).toHaveBeenCalledWith(AZURE_DEVOPS_SCOPE);
+		expect(credential.getToken).toHaveBeenCalledWith(AZURE_DEVOPS_SCOPE, {
+			abortSignal: expect.any(AbortSignal),
+		});
 		for (const [, init] of fake.fetcher.mock.calls) {
 			expect(new Headers(init?.headers).get('authorization')).toBe('Bearer test-token');
 			expect(init?.redirect).toBe('error');
@@ -175,7 +177,9 @@ describe('Azure DevOps publishing', () => {
 	);
 	it('refuses to reuse a proposal branch containing unrelated changes', async () => {
 		const { adapter, fake, input } = setup();
-		const foreign = fake.commit(new Map(fake.commits.get(fake.base)!.files), [fake.base]);
+		const foreignFiles = new Map(fake.commits.get(fake.base)!.files);
+		foreignFiles.set('foreign.py', { bytes: bytes('foreign changes'), mode: '100644' });
+		const foreign = fake.commit(foreignFiles, [fake.base]);
 		fake.refs.set(`refs/heads/${input.headBranch}`, foreign);
 		await expect(adapter.openChangeRequest(input)).rejects.toBeInstanceOf(
 			ProposalRetryRequiredError,
@@ -323,6 +327,8 @@ describe('Azure DevOps publication failures', () => {
 		expect(fake.messages).toHaveLength(0);
 		expect(fake.pulls).toHaveLength(0);
 		expect(fake.refs.get('refs/heads/main')).toBe(fake.base);
+		expect(fake.refs.has(`refs/heads/${input.headBranch}`)).toBe(false);
+		expect(fake.fetcher.mock.calls.every(([, init]) => !init?.method)).toBe(true);
 	});
 	it('stops when Azure denies proposal branch creation', async () => {
 		const { adapter, fake, input } = setup();
@@ -482,4 +488,93 @@ describe('Azure DevOps publication failures', () => {
 		expect(fake.pulls).toHaveLength(1);
 		expect(fake.pulls[0].title).toBe('New title');
 	});
+});
+
+describe('Azure publication retries and errors', () => {
+	it.each([undefined, { commitId: 'a'.repeat(40) }])(
+		'recovers an active PR with missing or stale merge metadata: %j',
+		async (lastMergeSourceCommit) => {
+			const { adapter, fake, input } = setup();
+			fake.failPrOnce = true;
+			await expect(adapter.openChangeRequest(input)).rejects.toThrow('unavailable');
+			fake.pulls[0].lastMergeSourceCommit = lastMergeSourceCommit;
+			const result = await adapter.openChangeRequest(input);
+			expect(result.number).toBe(1);
+			expect(fake.messages).toHaveLength(1);
+			expect(fake.pulls).toHaveLength(1);
+		},
+	);
+	it('skips older unmatched PRs and recovers a later active candidate', async () => {
+		const { adapter, fake, input } = setup();
+		const first = await adapter.openChangeRequest(input);
+		fake.pulls.unshift({
+			...fake.pulls[0],
+			pullRequestId: 99,
+			status: 'abandoned',
+			lastMergeSourceCommit: { commitId: fake.base },
+		});
+		expect(await adapter.openChangeRequest(input)).toEqual(first);
+		expect(fake.pulls).toHaveLength(2);
+		expect(fake.messages).toHaveLength(1);
+	});
+	it('fails after all closed candidates mismatch without opening a duplicate PR', async () => {
+		const { adapter, fake, input } = setup();
+		await adapter.openChangeRequest(input);
+		fake.pulls[0].status = 'abandoned';
+		fake.pulls[0].lastMergeSourceCommit = { commitId: fake.base };
+		await expect(adapter.openChangeRequest(input)).rejects.toBeInstanceOf(
+			ProposalRetryRequiredError,
+		);
+		expect(fake.pulls).toHaveLength(1);
+	});
+	it('filters PR candidates by target as well as source', async () => {
+		const { adapter, fake, input } = setup();
+		await adapter.openChangeRequest(input);
+		fake.pulls[0].targetRefName = 'refs/heads/other';
+		const result = await adapter.openChangeRequest(input);
+		expect(result.number).toBe(2);
+		expect(fake.pulls).toHaveLength(2);
+		expect(fake.messages).toHaveLength(1);
+	});
+	it('trims co-author names when formatting attribution', async () => {
+		const { adapter, fake, input } = setup();
+		await adapter.openChangeRequest({
+			...input,
+			coAuthor: { name: '  Alice  ', email: 'alice@example.com' },
+		});
+		expect(fake.messages[0]).toContain('Co-authored-by: Alice <alice@example.com>');
+	});
+	it.each([
+		{ operation: 'open', endpoint: '/refs?', occurrence: 2, stage: 'branch' },
+		{ operation: 'open', endpoint: '/refs?', occurrence: 3, stage: 'branch' },
+		{ operation: 'open', endpoint: '/commits/', occurrence: 2, stage: 'push' },
+		{ operation: 'update', endpoint: '/refs?', occurrence: 1, stage: 'branch' },
+		{ operation: 'update', endpoint: '/refs?', occurrence: 2, stage: 'branch' },
+		{ operation: 'update', endpoint: '/commits/', occurrence: 1, stage: 'push' },
+		{ operation: 'update', endpoint: '/commits/', occurrence: 2, stage: 'push' },
+		{ operation: 'update', endpoint: '/commits/', occurrence: 3, stage: 'push' },
+		{ operation: 'update', endpoint: '/blobs/', occurrence: 1, stage: 'push' },
+	])(
+		'classifies $operation $endpoint read failure $occurrence as $stage',
+		async ({ operation, endpoint, occurrence, stage }) => {
+			const { adapter, fake, input } = setup();
+			const first = operation === 'update' ? await adapter.openChangeRequest(input) : undefined;
+			const original = fake.fetcher.getMockImplementation()!;
+			let count = 0;
+			fake.fetcher.mockImplementation((url, init) => {
+				if (!init?.method && url.includes(endpoint) && ++count === occurrence)
+					return Promise.reject(new Error('Transport failure'));
+				return original(url, init);
+			});
+			const promise = first
+				? adapter.updateChangeRequest({
+						...input,
+						changeRequest: first,
+						changes: [{ path: 'README.md', operation: 'delete' }],
+					})
+				: adapter.openChangeRequest(input);
+			const error = await promise.catch((error: unknown) => error);
+			expect(sourceControlPublishFailure(error)).toMatchObject({ provider: 'azure-devops', stage });
+		},
+	);
 });

@@ -29,7 +29,7 @@ export class ConfiguredSourceControlRegistry implements SourceControlRegistry {
 	readonly repositoryHosts: GitProviderHosts;
 
 	constructor(registrations: readonly SourceControlRegistration[]) {
-		const hosts: Record<string, GitProvider> = {};
+		const hosts: Record<string, GitProvider> = Object.create(null);
 		for (const registration of registrations) {
 			const { reader, publisher } = registration;
 			if (reader) {

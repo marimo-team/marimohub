@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+	AZURE_DEVOPS_ORGANIZATION_PATTERN,
 	detectProvider,
 	isGitProvider,
 	normalizeRepo,
@@ -52,16 +53,13 @@ function parseStoredRepo(
 		return null;
 	}
 	if (!url.hostname || url.username || url.password) return null;
-	const segments = url.pathname
-		.replace(/\/+$/, '')
-		.replace(/\.git$/, '')
-		.split('/')
-		.filter(Boolean);
-	if (segments.length < 2) return null;
-	if (segments.some((s) => s === '.' || s === '..')) return null;
+	const baseUrl = normalizeRepo(repo);
+	if (!baseUrl) return null;
 	// A recognizable host takes precedence over unverified metadata on old records.
-	const provider = detectProvider(repo) ?? (isGitProvider(claim) ? claim : null);
-	return { baseUrl: `${url.protocol}//${url.host}/${segments.join('/')}`, provider };
+	const provider =
+		detectProvider(repo) ??
+		(isGitProvider(claim) && PROVIDER_UI[claim].allowUnrecognizedHost ? claim : null);
+	return { baseUrl, provider };
 }
 
 /**
@@ -222,6 +220,7 @@ export function isAzureDevOpsRepoInput(input: string): boolean {
 			!url.hash &&
 			parts.length === 4 &&
 			parts[2] === '_git' &&
+			AZURE_DEVOPS_ORGANIZATION_PATTERN.test(decodeURIComponent(parts[0] ?? '')) &&
 			parts.every((part) => {
 				const value = decodeURIComponent(part);
 				return (
@@ -244,6 +243,7 @@ interface PullInput {
 }
 interface ProviderUI {
 	label: string;
+	allowUnrecognizedHost: boolean;
 	changeRequest: { kind: string; abbreviation: string };
 	pullInput: PullInput | null;
 	commitUrl: (baseUrl: string, commit: string) => string;
@@ -263,6 +263,7 @@ const pullRequest = { kind: 'pull request', abbreviation: 'PR' };
 const PROVIDER_UI: Record<GitProvider, ProviderUI> = {
 	github: {
 		label: 'GitHub',
+		allowUnrecognizedHost: true,
 		changeRequest: pullRequest,
 		pullInput: {
 			validate: isGitHubRepoInput,
@@ -273,12 +274,14 @@ const PROVIDER_UI: Record<GitProvider, ProviderUI> = {
 	},
 	gitlab: {
 		label: 'GitLab',
+		allowUnrecognizedHost: true,
 		changeRequest: { kind: 'merge request', abbreviation: 'MR' },
 		pullInput: null,
 		...pathLinks('/-'),
 	},
 	'azure-devops': {
 		label: 'Azure DevOps',
+		allowUnrecognizedHost: false,
 		changeRequest: pullRequest,
 		pullInput: {
 			validate: isAzureDevOpsRepoInput,
@@ -306,9 +309,10 @@ export function changeRequestTerms(provider: string) {
 }
 
 export function pullRepositoryInput(providers: readonly string[]) {
-	const supported = providers
-		.filter(isGitProvider)
-		.filter((provider) => PROVIDER_UI[provider].pullInput !== null);
+	const supported = providers.filter(
+		(provider): provider is GitProvider =>
+			isGitProvider(provider) && PROVIDER_UI[provider].pullInput !== null,
+	);
 	const inputs = supported.flatMap((provider) => PROVIDER_UI[provider].pullInput ?? []);
 	return {
 		available: supported.length > 0,

@@ -19,6 +19,7 @@ interface Pull {
 	title: string;
 	description: string;
 	isDraft: boolean;
+	lastMergeSourceCommit?: { commitId: string };
 }
 interface PushBody {
 	refUpdates: { name: string; oldObjectId: string; newObjectId?: string }[];
@@ -148,14 +149,11 @@ export class FakeAzure {
 		}
 		if (path === '/pullrequests' && method === 'GET')
 			return json({
-				value: this.pulls
-					.filter(
-						(pull) => pull.sourceRefName === url.searchParams.get('searchCriteria.sourceRefName'),
-					)
-					.map((pull) => ({
-						...pull,
-						lastMergeSourceCommit: { commitId: this.refs.get(pull.sourceRefName) },
-					})),
+				value: this.pulls.filter(
+					(pull) =>
+						pull.sourceRefName === url.searchParams.get('searchCriteria.sourceRefName') &&
+						pull.targetRefName === url.searchParams.get('searchCriteria.targetRefName'),
+				),
 			});
 		if (path === '/pullrequests' && method === 'POST') {
 			const input = JSON.parse(String(init?.body)) as Omit<Pull, 'pullRequestId' | 'status'>;

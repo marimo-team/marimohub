@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { lstat, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import git from 'isomorphic-git';
@@ -104,31 +104,51 @@ function gitHttp(fetcher: GitFetch, repository: string): HttpClient {
 	};
 }
 
-export async function assertGitCheckoutLimits(root: string, repository: string): Promise<void> {
+async function assertGitTreeLimits(
+	directory: string,
+	commit: string,
+	repository: string,
+): Promise<void> {
 	let fileCount = 0;
+	let directoryCount = 0;
 	let totalBytes = 0;
-	async function scan(directory: string): Promise<void> {
-		for (const entry of await readdir(directory, { withFileTypes: true })) {
-			if (directory === root && entry.name === '.git') continue;
-			const path = join(directory, entry.name);
-			if (entry.isDirectory()) {
-				await scan(path);
+	const { commit: head } = await git.readCommit({ fs, dir: directory, oid: commit });
+	const pending = [head.tree];
+	const sizes = new Map<string, number>();
+	while (pending.length > 0) {
+		const oid = pending.pop()!;
+		const { tree } = await git.readTree({ fs, dir: directory, oid });
+		for (const entry of tree) {
+			if (entry.type === 'tree' || entry.type === 'commit') {
+				// Empty trees and submodules create directories without adding blob entries.
+				directoryCount += 1;
+				if (directoryCount > MAX_GIT_EXPANDED_FILES) {
+					throw new BadRequestError(
+						`The expanded Git data for ${repository} exceeds the ${MAX_GIT_EXPANDED_FILES}-directory limit; reduce the repository history or use push sync`,
+					);
+				}
+				if (entry.type === 'tree') pending.push(entry.oid);
 				continue;
 			}
-			if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-			const info = await lstat(path);
+			if (entry.type !== 'blob') continue;
 			fileCount += 1;
-			totalBytes += info.size;
-			if (info.size > MAX_WORKSPACE_FILE_BYTES) {
-				throw new BadRequestError(
-					`The expanded Git data for ${repository} contains a file beyond the ${MAX_WORKSPACE_FILE_BYTES}-byte limit; reduce the repository history or use push sync`,
-				);
-			}
 			if (fileCount > MAX_GIT_EXPANDED_FILES) {
 				throw new BadRequestError(
 					`The expanded Git data for ${repository} exceeds the ${MAX_GIT_EXPANDED_FILES}-file limit; reduce the repository history or use push sync`,
 				);
 			}
+			let size = sizes.get(entry.oid);
+			if (size === undefined) {
+				const { blob } = await git.readBlob({ fs, dir: directory, oid: entry.oid });
+				size = blob.byteLength;
+				sizes.set(entry.oid, size);
+			}
+			if (size > MAX_WORKSPACE_FILE_BYTES) {
+				throw new BadRequestError(
+					`The expanded Git data for ${repository} contains a file beyond the ${MAX_WORKSPACE_FILE_BYTES}-byte limit; reduce the repository history or use push sync`,
+				);
+			}
+			totalBytes += size;
 			if (totalBytes > MAX_GIT_EXPANDED_BYTES) {
 				throw new BadRequestError(
 					`The expanded Git data for ${repository} exceeds the ${MAX_GIT_EXPANDED_BYTES}-byte limit; reduce the repository history or use push sync`,
@@ -136,7 +156,6 @@ export async function assertGitCheckoutLimits(root: string, repository: string):
 			}
 		}
 	}
-	await scan(root);
 }
 
 export async function collectGitDirectoryFiles(
@@ -224,8 +243,8 @@ export async function materializeGitDirectory(options: {
 			value: options.commit,
 			force: true,
 		});
+		await assertGitTreeLimits(directory, options.commit, options.repository);
 		await git.checkout({ fs, dir: directory, ref: options.branch, force: true });
-		await assertGitCheckoutLimits(directory, options.repository);
 		return await collectGitDirectoryFiles(gitdir, options.repository);
 	} catch (error) {
 		if (error instanceof BadRequestError || error instanceof UnavailableError) throw error;

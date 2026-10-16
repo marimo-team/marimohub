@@ -1,3 +1,4 @@
+import { AZURE_DEVOPS_ORGANIZATION_PATTERN } from '@marimo-hub/core/git-repo';
 import { ValidationError } from '@marimo-hub/core/errors';
 import { hasControlCharacter } from './validation';
 
@@ -10,7 +11,7 @@ export interface AzureRepository {
 }
 
 export function validateOrganization(value: string): string {
-	if (!/^[a-zA-Z0-9][a-zA-Z0-9-]{0,49}$/.test(value)) {
+	if (!AZURE_DEVOPS_ORGANIZATION_PATTERN.test(value)) {
 		throw new ValidationError('Invalid Azure DevOps organization');
 	}
 	return value.toLowerCase();

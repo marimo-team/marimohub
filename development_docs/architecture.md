@@ -443,24 +443,26 @@ fresh disposable executor. For details, see
 ### 3.9 Source control
 
 `SourceControlReader` and `SourceControlPublisher` are independent ports. The registry
-advertises capabilities from registered adapters, including optional Git downloads and previews.
+advertises pull and publish capabilities from registered adapters, including optional Git downloads.
 Each registration carries its own repository policy and host mappings.
+Preview capabilities currently support GitHub only. A new preview provider also requires changes
+to the capability route and preview flows.
 
 To add a bundled provider:
 
 1. Implement the ports in `packages/source-control-<provider>`. Reuse
    `source-control-git` for credential-free Git directories when appropriate.
-2. Add the provider ID and host matcher in `core/src/integrations/gitRepo.ts`.
-3. Add its factory in `config/src/sourceControl.ts`. Return its reader, publisher,
-   host mappings, and repository policy. Document new environment variables in `config/src/spec.ts`.
-4. Add its UI entry in `web/src/lib/git.ts`: labels, links, change-request terms,
+2. Add the provider ID and host matcher in `packages/core/src/integrations/gitRepo.ts`.
+3. Add its factory in `packages/config/src/sourceControl.ts`. Return its reader, publisher,
+   host mappings, and repository policy. Document new environment variables in `packages/config/src/spec.ts`.
+4. Add its UI entry in `packages/web/src/lib/git.ts`: labels, links, change-request terms,
    and pull-input validation. Use `null` for unsupported pull inputs.
 5. Add adapter and wiring tests, then regenerate configuration docs with
    `pnpm --filter @marimo-hub/config docs:generate`.
 
 The host matcher, configuration factory, and UI tables use exhaustive `Record<GitProvider, …>` mappings.
 A new provider ID produces type errors until each table handles it.
-Shared React components, capability routes, and domain services need no provider-specific branches.
+Shared pull and publish flows need no provider-specific branches.
 Provider IDs on the ports remain strings so library consumers can register custom adapters.
 
 Repository URL resolution and authentication stay in adapters. Azure DevOps Server can later add

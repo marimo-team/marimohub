@@ -9,6 +9,7 @@ import {
 	gitCoords,
 	gitEntryPath,
 	gitSourceUrl,
+	isAzureDevOpsRepoInput,
 	isGitHubRepoInput,
 	isRepoInput,
 	isValidRootPath,
@@ -359,4 +360,41 @@ describe('configured pull providers', () => {
 			open: 'Open change request',
 		});
 	});
+});
+
+describe('Azure repository identity', () => {
+	it.each([
+		'https://code.example.com/collection/project/_git/repo',
+		'https://acme.visualstudio.com/project/_git/repo',
+		'https://dev.azure.com:8443/acme/project/_git/repo',
+		'http://dev.azure.com/acme/project/_git/repo',
+	])('does not trust an Azure claim for an unsupported origin: %s', (repo) => {
+		expect(gitCoords(gitSource({ provider: 'azure-devops', repo }))).toBeNull();
+	});
+
+	it('preserves .git in Azure repository links', () => {
+		const repo = 'https://dev.azure.com/acme/project/_git/notebooks.git';
+		const coords = gitCoords(gitSource({ provider: 'azure-devops', repo }));
+		expect(coords).toMatchObject({ provider: 'azure-devops', baseUrl: repo });
+		expect(pullRepositoryInput(['azure-devops']).validate(repo)).toBe(true);
+		expect(gitSourceUrl(coords!)).toBe(`${repo}?path=%2Fapp.py&version=GCabc123def4567890`);
+	});
+
+	it.each(['-acme', 'acme_org', 'acme%20org', 'acme%2Eorg', 'a'.repeat(51), '%C3%A9quipe'])(
+		'rejects organization names outside the server grammar: %s',
+		(organization) => {
+			const repo = `https://dev.azure.com/${organization}/project/_git/repo`;
+			expect(isAzureDevOpsRepoInput(repo)).toBe(false);
+			expect(pullRepositoryInput(['azure-devops']).validate(repo)).toBe(false);
+		},
+	);
+
+	it.each(['acme', 'Acme-123', '%61cme', 'a'.repeat(50)])(
+		'accepts decoded organization names within the server grammar: %s',
+		(organization) => {
+			expect(
+				isAzureDevOpsRepoInput(`https://dev.azure.com/${organization}/project/_git/repo`),
+			).toBe(true);
+		},
+	);
 });

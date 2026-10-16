@@ -12,11 +12,19 @@ export function isGitProvider(value: unknown): value is GitProvider {
 	return GIT_PROVIDERS.some((provider) => provider === value);
 }
 
-const PROVIDER_HOST_MATCHERS: Record<GitProvider, (host: string) => boolean> = {
-	github: (host) => host.includes('github'),
-	gitlab: (host) => host.includes('gitlab'),
-	'azure-devops': (host) => host === 'dev.azure.com',
+const PROVIDER_REPO_RULES: Record<
+	GitProvider,
+	{ matches: (url: URL) => boolean; stripGitSuffix: boolean }
+> = {
+	github: { matches: (url) => url.hostname.includes('github'), stripGitSuffix: true },
+	gitlab: { matches: (url) => url.hostname.includes('gitlab'), stripGitSuffix: true },
+	'azure-devops': {
+		matches: (url) => url.origin === 'https://dev.azure.com',
+		stripGitSuffix: false,
+	},
 };
+
+export const AZURE_DEVOPS_ORGANIZATION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,49}$/;
 export type GitProviderHosts = Readonly<Record<string, GitProvider>>;
 
 // Plain `owner/repo` coordinates — not a clone URL or `git@` remote (a bare
@@ -38,11 +46,10 @@ function parseRepoUrl(value: string): URL | null {
 }
 
 function pathSegments(url: URL): string[] {
-	return url.pathname
-		.replace(/\/+$/, '')
-		.replace(/\.git$/, '')
-		.split('/')
-		.filter(Boolean);
+	let path = url.pathname.replace(/\/+$/, '');
+	const provider = detectProvider(url.href);
+	if (!provider || PROVIDER_REPO_RULES[provider].stripGitSuffix) path = path.replace(/\.git$/, '');
+	return path.split('/').filter(Boolean);
 }
 
 /**
@@ -88,8 +95,7 @@ export function detectProvider(repo: string, hosts?: GitProviderHosts): GitProvi
 	if (!url) return null;
 	const configured = hosts && Object.hasOwn(hosts, url.host) ? hosts[url.host] : undefined;
 	if (configured) return configured;
-	const host = url.hostname.toLowerCase();
-	return GIT_PROVIDERS.find((provider) => PROVIDER_HOST_MATCHERS[provider](host)) ?? null;
+	return GIT_PROVIDERS.find((provider) => PROVIDER_REPO_RULES[provider].matches(url)) ?? null;
 }
 
 /** The `group/subgroup/repo` path of a repo, host stripped. */
