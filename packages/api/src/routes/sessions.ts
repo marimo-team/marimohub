@@ -105,6 +105,7 @@ import {
 	resolveFederatedVars,
 	resolveIntegrationRender,
 } from '../sandboxEnv';
+import { WIF_CREDENTIALS_PATH } from './wifCredentials';
 import {
 	assertProjectRole,
 	assertSessionAccess,
@@ -1728,6 +1729,10 @@ export async function startNotebookSession(input: {
 				workload: sessionWorkload,
 				restricted: restrictedViewerCredentials,
 				federatedCredentials,
+				credentialsEndpoint: {
+					url: joinUrlPath(appBaseUrl, WIF_CREDENTIALS_PATH),
+					userId: user.id,
+				},
 				onError: (err) => {
 					observer.tag('wif_exchange_failed', true);
 					observer.tag(

@@ -38,6 +38,18 @@ function makeWifBroker(env: Env): CredentialBroker {
  * required vars to enable, or none to disable (a half-config throws). The broker
  * is selected by `MARIMOHUB_WIF_BROKER`; projects may override the default.
  */
+function credentialsDelivery(env: Env): 'env' | 'endpoint' {
+	const value = env.MARIMOHUB_WIF_CREDENTIALS_DELIVERY ?? 'env';
+	if (value === 'env' || value === 'endpoint') return value;
+	throw new ConfigError(
+		`Unknown MARIMOHUB_WIF_CREDENTIALS_DELIVERY: ${value} (supported: env, endpoint).`,
+		{
+			variable: 'MARIMOHUB_WIF_CREDENTIALS_DELIVERY',
+			docs: 'docs/workload-identity-federation.md',
+		},
+	);
+}
+
 export function makeWif(env: Env): Pick<ApiDeps, 'wif'> {
 	const requiredKeys = [
 		'MARIMOHUB_WIF_SIGNING_KEY',
@@ -127,8 +139,10 @@ export function makeWif(env: Env): Pick<ApiDeps, 'wif'> {
 		},
 	};
 
+	const delivery = credentialsDelivery(env);
 	return {
 		wif: {
+			...(delivery === 'endpoint' ? { credentialsEndpoint: { keyMaterial: signingKey } } : {}),
 			defaultEnabled,
 			issuer: new WorkloadIdentityIssuer(signingKey, required(env, 'MARIMOHUB_WIF_KID')),
 			// Strip any trailing slash so the token `iss` and the derived `jwks_uri`

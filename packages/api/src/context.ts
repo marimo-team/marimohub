@@ -52,6 +52,7 @@ export interface WifConfig {
 	issuerUrl: string;
 	/** The federation target (broker + audience + object store) sessions exchange against. */
 	target: FederationTarget;
+	credentialsEndpoint?: { keyMaterial: string };
 }
 
 /**

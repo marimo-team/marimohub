@@ -254,6 +254,14 @@ describe('resolveJobSandboxEnv', () => {
 		expect(await resolveJobSandboxEnv(deps, context())).toBeUndefined();
 	});
 
+	it('keeps one-shot env credentials for jobs in endpoint mode', async () => {
+		const exchange = vi.fn(async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK' }));
+		const config = makeTestWif({ exchange, credentialsEndpoint: true });
+		const env = await resolveJobSandboxEnv({ ...deps, wif: config }, context());
+		expect(env?.vars?.AWS_ACCESS_KEY_ID).toBe('AK');
+		expect(env?.vars).not.toHaveProperty('AWS_CONTAINER_CREDENTIALS_FULL_URI');
+	});
+
 	it('layers federated vars over the integration render', async () => {
 		const { config } = wif();
 		const { service } = integrations({

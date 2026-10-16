@@ -2003,6 +2003,20 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					},
 				],
 			},
+			{
+				name: 'Credential delivery',
+				vars: [
+					{
+						id: 'MARIMOHUB_WIF_CREDENTIALS_DELIVERY',
+						name: 'Credential delivery',
+						description:
+							'`env` injects one-shot `AWS_*` keys that expire with the STS session (~1h). `endpoint` injects `AWS_CONTAINER_CREDENTIALS_FULL_URI` and a session token so AWS SDKs refresh credentials from the hub for the life of the session; sandboxes must reach the hub over HTTPS. Jobs always use `env`.',
+						optIn: true,
+						default: 'env',
+						example: 'endpoint',
+					},
+				],
+			},
 		],
 	},
 	{

@@ -191,3 +191,23 @@ describe('deployment federation default', () => {
 		}
 	});
 });
+
+describe('makeWif credential delivery', () => {
+	it('defaults to one-shot env credentials', () => {
+		expect(makeWif(fullEnv).wif?.credentialsEndpoint).toBeUndefined();
+		expect(
+			makeWif({ ...fullEnv, MARIMOHUB_WIF_CREDENTIALS_DELIVERY: 'env' }).wif?.credentialsEndpoint,
+		).toBeUndefined();
+	});
+
+	it('enables the refreshable endpoint keyed off the signing key', () => {
+		const { wif } = makeWif({ ...fullEnv, MARIMOHUB_WIF_CREDENTIALS_DELIVERY: 'endpoint' });
+		expect(wif?.credentialsEndpoint).toEqual({ keyMaterial: FAKE_PEM });
+	});
+
+	it('rejects an unknown delivery mode', () => {
+		expect(() => makeWif({ ...fullEnv, MARIMOHUB_WIF_CREDENTIALS_DELIVERY: 'file' })).toThrow(
+			/MARIMOHUB_WIF_CREDENTIALS_DELIVERY/,
+		);
+	});
+});

@@ -51,11 +51,15 @@ export interface TestWifOptions {
 	issuerUrl?: string;
 	audience?: string;
 	storage?: FederationTarget['storage'];
+	credentialsEndpoint?: boolean;
 }
 
 /** A fresh `WifConfig` per call; the issuer is a stub exposing only `mint` and `jwks`. */
 export function makeTestWif(options: TestWifOptions = {}): WifConfig {
 	return {
+		...(options.credentialsEndpoint
+			? { credentialsEndpoint: { keyMaterial: 'test-wif-signing-key' } }
+			: {}),
 		defaultEnabled: options.defaultEnabled ?? false,
 		issuer: {
 			mint: options.mint ?? (async () => 'jwt'),

@@ -1,5 +1,7 @@
 import {
+	containerCredentialsEnv,
 	exchangeFederatedStorageCredentials,
+	mintWifCredentialsToken,
 	projectSessionEnv,
 	s3CredsToEnv,
 	UnavailableError,
@@ -66,6 +68,7 @@ export interface FederatedVarsOptions {
 	restricted: boolean;
 	/** Shares the exchange with {@link resolveIntegrationRender}; built per call when absent. */
 	federatedCredentials?: FederatedCredentials;
+	credentialsEndpoint?: { url: string; userId: UserId };
 	onError?: (err: unknown) => void;
 }
 
@@ -79,6 +82,25 @@ export async function resolveFederatedVars(
 ): Promise<Record<string, string> | undefined> {
 	const wif = federationFor(options.project, deps.wif, { restricted: options.restricted });
 	if (!wif) return;
+	const endpoint = options.credentialsEndpoint;
+	if (wif.credentialsEndpoint && endpoint && options.workload.kind === 'session') {
+		try {
+			const token = await mintWifCredentialsToken(wif.credentialsEndpoint.keyMaterial, {
+				sessionId: options.workload.id,
+				projectId: options.project.id,
+				userId: endpoint.userId,
+			});
+			return containerCredentialsEnv(
+				endpoint.url,
+				token,
+				wif.target.storage.endpoint,
+				wif.target.storage.region,
+			);
+		} catch (err) {
+			options.onError?.(err);
+			return;
+		}
+	}
 	const credentials =
 		options.federatedCredentials ??
 		federatedCredentialsFor(deps, options.project, options.workload, options);

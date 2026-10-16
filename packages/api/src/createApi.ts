@@ -22,6 +22,7 @@ import { describeError, errorMetadata, logEvent } from './log';
 import adminApp from './routes/admin';
 import policyAnalyzerApp from './routes/policyAnalyzer';
 import { createAiProxy } from './routes/ai';
+import { createWifCredentials, WIF_CREDENTIALS_PREFIX } from './routes/wifCredentials';
 import eventsApp from './routes/events';
 import gitSyncApp from './routes/gitSync';
 import notebooksApp from './routes/notebooks';
@@ -436,6 +437,7 @@ export function createApi(rawDeps: ApiDeps) {
 	// session token (no app cookie), so it mounts OUTSIDE the `/api/v1/*` cookie-auth
 	// + CSRF guards and authenticates by the token alone (404s when AI is unconfigured).
 	app.route(AI_PROXY_PREFIX, createAiProxy());
+	app.route(WIF_CREDENTIALS_PREFIX, createWifCredentials());
 
 	// External git push-sync (e.g. a CI workflow). Authenticates with a
 	// notebook-scoped bearer token, not the browser cookie, so it lives outside the

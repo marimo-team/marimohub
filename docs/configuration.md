@@ -550,6 +550,12 @@ Optional: let a notebook reach cloud resources (object storage, and for AWS any 
 | `MARIMOHUB_WIF_AWS_ROLE_ARN` | IAM role assumed via STS `AssumeRoleWithWebIdentity`. Required when the broker is `aws`. The role trust policy must trust the hub as an IAM OIDC identity provider and pin the token `aud` to MARIMOHUB_WIF_AUDIENCE (and optionally `sub` to specific project ids). Leave MARIMOHUB_WIF_STORAGE_ENDPOINT unset for AWS S3. | — | — | `arn:aws:iam::123456789012:role/marimohub-wif` |
 | `MARIMOHUB_WIF_AWS_STS_URL` | STS endpoint the exchange POSTs to. Set a regional endpoint (recommended by AWS for latency and fault isolation) or leave unset for the global one. | — | `https://sts.amazonaws.com` | `https://sts.us-east-1.amazonaws.com` |
 
+### Credential delivery
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_WIF_CREDENTIALS_DELIVERY` | `env` injects one-shot `AWS_*` keys that expire with the STS session (~1h). `endpoint` injects `AWS_CONTAINER_CREDENTIALS_FULL_URI` and a session token so AWS SDKs refresh credentials from the hub for the life of the session; sandboxes must reach the hub over HTTPS. Jobs always use `env`. | — | `env` | `endpoint` |
+
 ## Managed AI
 
 Selected by `MARIMOHUB_AI_BACKEND` (default `none`); one of `none`, `bedrock`, `openai-compatible`.

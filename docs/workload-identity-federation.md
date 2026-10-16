@@ -127,10 +127,27 @@ generic `AWS_ENDPOINT_URL`). Then a plain `boto3.client("s3")` reaches the
 store, at the cost of making it the default S3 endpoint/region for the whole
 notebook.
 
-::: warning Credentials expire (~1h)
-They are minted once per session and **not refreshed** — after ~1 hour they
-expire. Restart the session to renew.
+::: warning Credentials expire (~1h) unless delivered by endpoint
+With the default `MARIMOHUB_WIF_CREDENTIALS_DELIVERY=env`, they are minted once
+per session and **not refreshed** — after ~1 hour they expire. Restart the
+session to renew, or use [refreshable credentials](#refreshable-credentials).
 :::
+
+## Refreshable credentials
+
+Set `MARIMOHUB_WIF_CREDENTIALS_DELIVERY=endpoint` and sessions get
+`AWS_CONTAINER_CREDENTIALS_FULL_URI` (the hub's `/api/wif/v1/credentials`) and
+`AWS_CONTAINER_AUTHORIZATION_TOKEN` instead of static keys. AWS SDKs and the AWS
+CLI use the [container credential provider](https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html)
+to fetch and refresh credentials for the life of the session.
+
+- The token stops working when the session ends, its owner is suspended, or the
+  project disables federation.
+- Sandboxes must reach the hub's public URL over HTTPS.
+- The exchange runs on first use, so a policy gap appears as an SDK credential
+  error.
+- Clients that read only static `AWS_*` variables are not refreshed.
+- Jobs keep one-shot delivery.
 
 ## Choosing a CoreWeave option
 
@@ -717,9 +734,11 @@ The analogous setup mirrors AWS:
 
 - **No long-lived credentials** exist anywhere — the JWT is the only thing
   presented to the cloud, and the returned credentials are short-lived.
-- **Credentials are not refreshed mid-session** in this version: they last until
-  their expiration (~1h). Keep sessions shorter than the credential lifetime, or
-  restart the session to re-mint.
+- **One-shot credentials are not refreshed mid-session**: they last until their
+  expiration (~1h). Use [refreshable credentials](#refreshable-credentials), keep
+  sessions shorter than the credential lifetime, or restart the session to re-mint.
+- **Refreshable credentials** put no key material or federation JWT in the
+  sandbox; the session token is HS256 and cannot be used as a federation JWT.
 - **A federation/policy gap is non-fatal**: if the exchange fails (e.g. the
   project is not covered by the cloud-side policy), the notebook starts without
   federated credentials rather than failing to launch.
