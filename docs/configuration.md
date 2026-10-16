@@ -382,6 +382,7 @@ App-native OpenID Connect (the production backend). If the allowlist contains on
 | `MARIMOHUB_AUTH_SESSION_SECRET` 🔒 | Secret that signs the session cookie (HS256; ≥32 bytes). | Yes | — | — |
 | `MARIMOHUB_AUTH_SESSION_TTL_SECONDS` | Signed browser-session lifetime, from 300 to 86400 seconds. | — | `28800` | — |
 | `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` | Comma-separated email-domain allowlist. Set `*` to allow all domains. | Yes | — | `example.com,example.org` |
+| `MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS` | Allow super admins to invite email addresses outside the allowed domains. See [external invitations](./auth.md#invite-people-outside-the-allowed-domains). | — | `off` | `on` |
 | `MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM` | RFC 6901 JSON Pointer to an array of exact provider group IDs. Required for group policy. | — | — | `/groups` |
 | `MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS` | Exact comma-separated group IDs. A user must belong to at least one. Missing or malformed group data fails closed. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS` | Exact comma-separated group IDs mapped to marimohub super-admin. | — | — | — |
@@ -407,6 +408,7 @@ Reads trusted proxy headers or verifies a Google IAP JWT. Isolate header mode be
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` | Comma-separated email-domain allowlist. Set `*` to allow all domains. | Yes | — | `example.com,example.org` |
+| `MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS` | Allow super admins to invite email addresses outside the allowed domains. See [external invitations](./auth.md#invite-people-outside-the-allowed-domains). | — | `off` | `on` |
 | `MARIMOHUB_AUTH_PROXY_HEADER` | Header mode accepts an email header and optional user-ID header. Its defaults are `X-Forwarded-Email,X-Forwarded-User`. JWT mode accepts one assertion header and defaults to `X-Goog-IAP-JWT-Assertion`. | — | — | `Tailscale-User-Login` |
 | `MARIMOHUB_AUTH_PROXY_JWT_ISSUER` | Expected issuer. This variable enables JWT mode and requires the audience. | — | `https://cloud.google.com/iap` | — |
 | `MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE` | Required audience for JWT mode. This variable also enables JWT mode. | — | — | `/projects/123456789/global/backendServices/987654321` |

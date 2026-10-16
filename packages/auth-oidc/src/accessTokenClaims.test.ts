@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { principalFromVerifiedAccessToken, parseAccessTokenScopes } from './accessTokenClaims';
-import { createAdmissionPolicy } from './admission';
+import {
+	accessTokenCredentialFromVerifiedClaims,
+	principalFromAccessTokenCredential,
+	parseAccessTokenScopes,
+} from './accessTokenClaims';
+import type { AccessTokenPolicy } from './accessTokenClaims';
+import { admitOidcIdentity, createAdmissionPolicy } from './admission';
 import { MAX_AUTH_GROUPS } from '@marimo-hub/core/ports/auth';
 import { groupsExceedingBytes, groupsExceedingCount } from '@marimo-hub/core/testing/auth-groups';
 
@@ -21,6 +26,21 @@ const claims = {
 	exp: now + 300,
 	scope: 'marimohub:read',
 };
+function principalFromVerifiedAccessToken(
+	payload: Record<string, unknown>,
+	typ: unknown,
+	tokenPolicy: AccessTokenPolicy,
+	time: number,
+) {
+	const result = accessTokenCredentialFromVerifiedClaims(payload, typ, tokenPolicy, time);
+	return 'error' in result
+		? result
+		: principalFromAccessTokenCredential(
+				result.credential,
+				admitOidcIdentity(payload, tokenPolicy.admission),
+				tokenPolicy.admission,
+			);
+}
 const parse = (overrides: Record<string, unknown> = {}, typ: unknown = 'at+jwt') =>
 	principalFromVerifiedAccessToken({ ...claims, ...overrides }, typ, policy, now);
 

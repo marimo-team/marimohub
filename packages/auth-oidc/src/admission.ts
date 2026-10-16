@@ -1,3 +1,4 @@
+import { logOperationalError } from '@marimo-hub/core/operational-log';
 import { UserId } from '@marimo-hub/core/ids';
 import { normalizeAuthGroups } from '@marimo-hub/core/ports/auth';
 import type { AuthEntitlement, AuthUser } from '@marimo-hub/core/ports/auth';
@@ -22,6 +23,7 @@ import type { EmailVerificationPolicy, OidcGroupPolicy } from './claims';
 export interface OidcAdmissionConfig {
 	/** Exact email-domain allowlist; empty or absent permits any domain. */
 	allowedEmailDomains?: string[];
+	isEmailInvited?: (email: string) => Promise<boolean>;
 	/** Handling for an absent `email_verified` claim (default `required`). */
 	emailVerification?: EmailVerificationPolicy;
 	groups?: OidcGroupPolicy;
@@ -29,6 +31,7 @@ export interface OidcAdmissionConfig {
 
 export interface OidcAdmissionPolicy {
 	allowedDomains: readonly string[];
+	isEmailInvited?: (email: string) => Promise<boolean>;
 	emailVerification: EmailVerificationPolicy;
 	groups?: OidcGroupPolicy;
 	maxGroups: number;
@@ -53,6 +56,7 @@ export function createAdmissionPolicy(config: OidcAdmissionConfig): OidcAdmissio
 		emailVerification,
 		maxGroups,
 		allowedDomains: normalizeEmailDomains(config.allowedEmailDomains),
+		isEmailInvited: config.isEmailInvited,
 		...(config.groups ? { groups: config.groups } : {}),
 	};
 }
@@ -132,4 +136,23 @@ export function admitOidcIdentity(
 			...(memberships !== undefined ? { groups: memberships } : {}),
 		},
 	};
+}
+
+export async function admitOidcIdentityWithInvitations(
+	claims: Record<string, unknown>,
+	policy: OidcAdmissionPolicy,
+	userInfo?: Record<string, unknown>,
+): Promise<AdmissionResult> {
+	const result = admitOidcIdentity(claims, policy, userInfo);
+	if (!('error' in result) || result.error !== 'domain_not_allowed' || !policy.isEmailInvited)
+		return result;
+	// The first admission pass verifies the email and its source before consulting invitations.
+	const email = (userInfo?.email !== undefined ? userInfo.email : claims.email) as string;
+	try {
+		if (!(await policy.isEmailInvited(email))) return result;
+	} catch (error) {
+		logOperationalError('oidc_invitation_lookup_failed', {}, error);
+		return { error: 'auth_failed' };
+	}
+	return admitOidcIdentity(claims, { ...policy, allowedDomains: [] }, userInfo);
 }

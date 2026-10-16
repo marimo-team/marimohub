@@ -21,6 +21,7 @@ import * as oauth from 'oauth4webapi';
 import { AUTH_ENTITLEMENTS, normalizeAuthGroups } from '@marimo-hub/core/ports/auth';
 import { logEvent } from '@marimo-hub/core/logs';
 import { logOperationalError } from '@marimo-hub/core/operational-log';
+import { emailAllowedWithInvitations } from '@marimo-hub/core/email-admission';
 import { UserId } from '@marimo-hub/core/ids';
 import type {
 	AuthenticatedPrincipal,
@@ -39,7 +40,7 @@ import {
 	displayNameClaim,
 	pictureUrlClaim,
 } from './claims';
-import { createAdmissionPolicy, admitOidcIdentity } from './admission';
+import { createAdmissionPolicy, admitOidcIdentityWithInvitations } from './admission';
 import type { OidcAdmissionConfig } from './admission';
 import { createOidcDiscovery, oidcIssuerUrl } from './discovery';
 export type { EmailVerificationPolicy, OidcGroupPolicy } from './claims';
@@ -293,6 +294,10 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 					audience: config.clientId,
 				});
 				if (!validSubject(payload.sub) || !validEmail(payload.email)) return null;
+				if (
+					!(await emailAllowedWithInvitations(payload.email, allowedDomains, config.isEmailInvited))
+				)
+					return null;
 				const name = displayNameClaim(payload.name);
 				const pictureUrl = pictureUrlClaim(payload.picture_url);
 				// Alias into a const: `Array.isArray` narrows a const binding, but not a
@@ -434,7 +439,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		// Hosted-domain hint: when a single domain is allowed, ask Google to
 		// pre-scope the account chooser to it. Best-effort UX only — the callback
 		// re-checks the verified email, since `hd` is client-supplied and spoofable.
-		if (allowedDomains.length === 1) {
+		if (allowedDomains.length === 1 && !config.isEmailInvited) {
 			url.searchParams.set('hd', allowedDomains[0]);
 		}
 		url.searchParams.set('prompt', config.prompt ?? 'select_account');
@@ -518,7 +523,7 @@ export function createOidcAuth(config: OidcConfig): { authenticator: Authenticat
 		}
 
 		if (!claims) return callbackError(c, 'auth_failed', returnTo);
-		const admission = admitOidcIdentity(claims, admissionPolicy, userInfo);
+		const admission = await admitOidcIdentityWithInvitations(claims, admissionPolicy, userInfo);
 		if ('error' in admission) {
 			if (admission.error === 'too_many_groups') {
 				logEvent({

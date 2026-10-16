@@ -585,3 +585,69 @@ it.each([
 	);
 	expect(JSON.stringify(events)).not.toContain('team-');
 });
+
+it('admits invited external-token users and rejects them after revocation', async () => {
+	let invited = true;
+	const auth = createOidcAccessTokenAuthenticator({
+		...config,
+		isEmailInvited: async (email) => invited && email === 'guest@outside.com',
+	});
+	const token = await sign(claims({ email: 'guest@outside.com' }));
+	await expect(auth.authenticate(request(token))).resolves.toHaveProperty(
+		'email',
+		'guest@outside.com',
+	);
+	invited = false;
+	await expect(auth.authenticate(request(token))).resolves.toBeNull();
+	const unverified = await sign(claims({ email: 'guest@outside.com', email_verified: false }));
+	invited = true;
+	await expect(auth.authenticate(request(unverified))).resolves.toBeNull();
+});
+
+it('rejects external tokens during invitation-store outages and recovers on retry', async () => {
+	vi.spyOn(console, 'error').mockImplementation(() => {});
+	const lookup = vi
+		.fn()
+		.mockRejectedValueOnce(new Error('storage unavailable'))
+		.mockResolvedValue(true);
+	const auth = createOidcAccessTokenAuthenticator({ ...config, isEmailInvited: lookup });
+	const token = await sign(claims({ email: 'guest@outside.com' }));
+	await expect(auth.authenticate(request(token))).resolves.toBeNull();
+	await expect(auth.authenticate(request(token))).resolves.toHaveProperty(
+		'email',
+		'guest@outside.com',
+	);
+});
+
+it('never consults invitations for external tokens with invalid signatures', async () => {
+	const lookup = vi.fn(async () => true);
+	const auth = createOidcAccessTokenAuthenticator({ ...config, isEmailInvited: lookup });
+	const token = await sign(claims({ email: 'guest@outside.com' }), nextKey);
+	await expect(auth.authenticate(request(token))).resolves.toBeNull();
+	expect(lookup).not.toHaveBeenCalled();
+});
+
+it.each([
+	{ name: 'confirmation binding', overrides: { cnf: { jkt: 'key' } } },
+	{ name: 'invalid client ID', overrides: { client_id: 42 } },
+	{ name: 'browser audience', overrides: { aud: [audience, 'browser'] } },
+	{ name: 'future issuance', overrides: () => ({ iat: now() + 10 }) },
+	{ name: 'excessive lifetime', overrides: () => ({ exp: now() + 3601 }) },
+	{ name: 'fractional issuance', overrides: () => ({ iat: now() - 0.5 }) },
+	{ name: 'scope array', overrides: { scope: ['marimohub:read'] } },
+	{ name: 'malformed scope', overrides: { scope: 'mcp:tools\tmarimohub:read' } },
+	{ name: 'missing grant', overrides: { scope: 'mcp:tools openid' } },
+	{ name: 'invalid token type', overrides: {}, typ: 'id+jwt' },
+])('never consults invitations for signed tokens with $name', async ({ overrides, typ }) => {
+	const lookup = vi.fn(async () => true);
+	const auth = createOidcAccessTokenAuthenticator({ ...config, isEmailInvited: lookup });
+	const payload = claims({
+		email: 'guest@outside.com',
+		...(typeof overrides === 'function' ? overrides() : overrides),
+	});
+	const token = await new SignJWT(payload)
+		.setProtectedHeader({ alg: 'ES256', kid: 'first', typ: typ ?? 'at+jwt' })
+		.sign(signingKey);
+	await expect(auth.authenticate(request(token))).resolves.toBeNull();
+	expect(lookup).not.toHaveBeenCalled();
+});

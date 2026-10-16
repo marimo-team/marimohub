@@ -1,7 +1,6 @@
 import { externalTokenGrant } from '@marimo-hub/core/token-grants';
-import type { AuthenticatedPrincipal } from '@marimo-hub/core/ports/auth';
-import { admitOidcIdentity } from './admission';
-import type { OidcAdmissionPolicy } from './admission';
+import type { AuthCredential, AuthenticatedPrincipal } from '@marimo-hub/core/ports/auth';
+import type { AdmissionResult, OidcAdmissionPolicy } from './admission';
 import { validSubject } from './claims';
 
 const TOKEN_TYPES = new Set(['jwt', 'at+jwt', 'application/at+jwt']);
@@ -21,6 +20,7 @@ export type AccessTokenRejection =
 	| 'admission_denied'
 	| 'membership_groups_exceeded'
 	| 'missing_grant_scope';
+type AccessTokenCredential = AuthCredential & { expiresAt: string };
 type PrincipalResult =
 	| { principal: AuthenticatedPrincipal }
 	| { error: Exclude<AccessTokenRejection, 'membership_groups_exceeded'> }
@@ -53,12 +53,12 @@ export function parseAccessTokenScopes(value: unknown): string[] | null {
 }
 
 /** Signature, issuer, audience, and nbf must be verified before mapping claims to a principal. */
-export function principalFromVerifiedAccessToken(
+export function accessTokenCredentialFromVerifiedClaims(
 	payload: Record<string, unknown>,
 	typ: unknown,
 	policy: AccessTokenPolicy,
 	now: number,
-): PrincipalResult {
+): { credential: AccessTokenCredential } | { error: 'invalid_claims' | 'missing_grant_scope' } {
 	if (
 		payload.cnf !== undefined ||
 		(typ !== undefined && (typeof typ !== 'string' || !TOKEN_TYPES.has(typ.toLowerCase()))) ||
@@ -72,24 +72,33 @@ export function principalFromVerifiedAccessToken(
 	const expiresAt = tokenExpiry(payload.iat, payload.exp, now, policy.maxLifetimeSeconds);
 	const scopes = parseAccessTokenScopes(payload.scope);
 	if (!expiresAt || !scopes) return { error: 'invalid_claims' };
-	const admission = admitOidcIdentity(payload, policy.admission);
+	const grant = externalTokenGrant(scopes);
+	if (!grant) return { error: 'missing_grant_scope' };
+	return {
+		credential: {
+			kind: 'external-access-token',
+			expiresAt,
+			grant,
+			oauth: { clientId: payload.client_id, resource: policy.audience, scopes },
+		},
+	};
+}
+
+export function principalFromAccessTokenCredential(
+	credential: AccessTokenCredential,
+	admission: AdmissionResult,
+	policy: OidcAdmissionPolicy,
+): PrincipalResult {
 	if ('error' in admission) {
 		if (admission.error === 'too_many_groups')
 			return { error: 'membership_groups_exceeded', retained: admission.retained };
 		return { error: admission.error === 'auth_failed' ? 'invalid_claims' : 'admission_denied' };
 	}
-	const grant = externalTokenGrant(scopes);
-	if (!grant) return { error: 'missing_grant_scope' };
 	return {
 		principal: {
 			...admission.user,
-			...(policy.admission.groups ? { entitlementsExpiresAt: expiresAt } : {}),
-			credential: {
-				kind: 'external-access-token',
-				expiresAt,
-				grant,
-				oauth: { clientId: payload.client_id, resource: policy.audience, scopes },
-			},
+			...(policy.groups ? { entitlementsExpiresAt: credential.expiresAt } : {}),
+			credential,
 		},
 	};
 }

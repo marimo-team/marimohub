@@ -128,6 +128,7 @@ These CAS-managed records also have one writer each:
   notebook-local `deep-links/{slug}.json` index marker. Global records use CAS
   release markers and must not be deleted.
 - `IdentityService` owns each identity at `_system/identities/{user-id}.json`.
+- `AuthInvitationService` owns the removable email exceptions at `_system/auth-invitations/{email}.json`.
 - `CliAuthorizationService` owns each short-lived CLI login grant at
   `_system/cli-authorizations/{authorization-id}.json`.
 - `OAuthClientStore` owns each registered client at

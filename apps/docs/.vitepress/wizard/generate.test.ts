@@ -510,3 +510,18 @@ describe('validateSelection', () => {
 		).toEqual([]);
 	});
 });
+
+describe.each(['default-prod (s3 + modal + oidc)', 's3 + docker + proxy-header'] as const)(
+	'external invitations for %s',
+	(name) => {
+		it.each([generateEnv, generateHelm, generateCompose])(
+			'keeps external invitations opt-in in generated deployments',
+			(generate) => {
+				const selection = CASES[name];
+				const flag = 'MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS';
+				expect(generate(selection)).not.toContain(flag);
+				expect(generate({ ...selection, values: { [flag]: 'on' } })).toContain(flag);
+			},
+		);
+	},
+);

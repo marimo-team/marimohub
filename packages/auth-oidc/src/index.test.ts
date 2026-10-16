@@ -2768,3 +2768,83 @@ describe('membership cookie and callback failures', () => {
 		expect(output).not.toContain('private-team');
 	});
 });
+
+describe('invited OIDC guests', () => {
+	it('allows login without a domain hint, then rejects a revoked invitation or disabled feature', async () => {
+		let invited = true;
+		const { routes, authenticator } = makeOidc({
+			allowedEmailDomains: ['company.com'],
+			isEmailInvited: async (email) => invited && email === 'user@example.com',
+		});
+		const login = await routes.request('/api/auth/login');
+		expect(new URL(login.headers.get('location')!).searchParams.has('hd')).toBe(false);
+		const txn = await beginOidcTransaction(routes);
+		const response = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+		const token = cookiePair(response, SESSION_COOKIE).split('=')[1];
+		await expect(authenticator.authenticate(requestWithCookie(token))).resolves.toHaveProperty(
+			'email',
+			'user@example.com',
+		);
+		invited = false;
+		await expect(authenticator.authenticate(requestWithCookie(token))).resolves.toBeNull();
+		const disabled = makeOidc({ allowedEmailDomains: ['company.com'] });
+		await expect(disabled.authenticator.authenticate(requestWithCookie(token))).resolves.toBeNull();
+	});
+	it('still applies a custom login policy to invited guests', async () => {
+		const { routes } = makeOidc({
+			allowedEmailDomains: ['company.com'],
+			isEmailInvited: async () => true,
+			loginPolicy: { policy: { evaluate: async () => ({ decision: 'deny', reason: 'denied' }) } },
+		});
+		const txn = await beginOidcTransaction(routes);
+		const response = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+			headers: { cookie: txn },
+		});
+		expect(response.status).toBe(302);
+		expect(response.headers.get('location')).toBe('/?auth_error=policy_denied');
+		expect(response.headers.get('set-cookie')).not.toContain('mh_session=');
+	});
+});
+
+it('returns a recoverable login error when the invitation store is unavailable', async () => {
+	vi.spyOn(console, 'error').mockImplementation(() => {});
+	const lookup = vi
+		.fn()
+		.mockRejectedValueOnce(new Error('private-storage-detail'))
+		.mockResolvedValue(true);
+	const { routes } = makeOidc({ allowedEmailDomains: ['company.com'], isEmailInvited: lookup });
+	const txn = await beginOidcTransaction(routes, '/api/auth/login?redirect_url=%2Fprojects');
+	const response = await routes.request('/api/auth/callback?code=abc&state=state-1', {
+		headers: { cookie: txn },
+	});
+	expect(response.status).toBe(302);
+	const location = new URL(response.headers.get('location')!, 'https://hub.example.com');
+	expect(location.searchParams.get('auth_error')).toBe('auth_failed');
+	expect(location.pathname).toBe('/projects');
+	expect(response.headers.get('set-cookie')).not.toContain('mh_session=');
+	expect(response.headers.get('set-cookie')).toContain('mh_oidc_txn=');
+	expect(response.headers.get('location')).not.toContain('private-storage-detail');
+	const retry = await completeOidcTransaction(routes);
+	expect(retry.headers.get('set-cookie')).toContain('mh_session=');
+});
+
+it('fails closed for an existing guest session during a store outage without blocking allowed domains', async () => {
+	vi.spyOn(console, 'error').mockImplementation(() => {});
+	const lookup = vi.fn(async () => {
+		throw new Error('unavailable');
+	});
+	const { authenticator } = makeOidc({
+		allowedEmailDomains: ['company.com'],
+		isEmailInvited: lookup,
+	});
+	const guest = await signSession({ sub: 'guest', email: 'guest@outside.com' });
+	await expect(authenticator.authenticate(requestWithCookie(guest))).resolves.toBeNull();
+	const internal = await signSession({ sub: 'staff', email: 'staff@company.com' });
+	await expect(authenticator.authenticate(requestWithCookie(internal))).resolves.toHaveProperty(
+		'id',
+		'staff',
+	);
+	expect(lookup).toHaveBeenCalledTimes(1);
+});

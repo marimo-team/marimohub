@@ -1,5 +1,10 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import {
+	normalizeEmailDomains,
+	emailAllowedWithInvitations,
+} from '@marimo-hub/core/email-admission';
 import { UserId } from '@marimo-hub/core/ids';
+import { logOperationalError } from '@marimo-hub/core/operational-log';
 import type { AuthenticatedPrincipal, Authenticator } from '@marimo-hub/core/ports/auth';
 
 const DEFAULT_HEADERS = ['X-Forwarded-Email', 'X-Forwarded-User'] as const;
@@ -11,6 +16,7 @@ const MAX_USER_ID_LENGTH = 512;
 
 interface ProxyHeaderBaseConfig {
 	allowedEmailDomains?: readonly string[];
+	isEmailInvited?: (email: string) => Promise<boolean>;
 }
 
 export interface ProxyIdentityHeaderConfig extends ProxyHeaderBaseConfig {
@@ -53,23 +59,6 @@ function validUserId(value: string): boolean {
 	return value.length > 0 && value.length <= MAX_USER_ID_LENGTH && !hasControlCharacters(value);
 }
 
-function normalizeDomains(domains: readonly string[] | undefined): string[] {
-	const entries = (domains ?? []).map((domain) => domain.trim().toLowerCase()).filter(Boolean);
-	if (
-		(domains?.length && entries.length === 0) ||
-		entries.some((domain) => domain === '@' || domain === '@*')
-	) {
-		throw new Error('Email-domain allowlist contains an empty or malformed domain');
-	}
-	const normalized = entries.map((domain) => domain.replace(/^@/, ''));
-	return normalized.length === 1 && normalized[0] === '*' ? [] : normalized;
-}
-
-function emailAllowed(email: string, domains: readonly string[]): boolean {
-	if (domains.length === 0) return true;
-	return domains.includes(email.slice(email.lastIndexOf('@') + 1).toLowerCase());
-}
-
 function checkedHttpsUrl(value: string): URL {
 	try {
 		const url = new URL(value);
@@ -85,7 +74,8 @@ export class ProxyHeaderAuthenticator implements Authenticator {
 	private readonly jwks?: ReturnType<typeof createRemoteJWKSet>;
 
 	constructor(private readonly config: ProxyHeaderConfig) {
-		this.allowedDomains = normalizeDomains(config.allowedEmailDomains);
+		const domains = normalizeEmailDomains(config.allowedEmailDomains);
+		this.allowedDomains = domains.length === 1 && domains[0] === '*' ? [] : domains;
 		if (config.mode === 'jwt') {
 			this.jwks = createRemoteJWKSet(checkedHttpsUrl(config.jwksUrl ?? DEFAULT_IAP_JWKS_URL));
 		}
@@ -117,7 +107,7 @@ export class ProxyHeaderAuthenticator implements Authenticator {
 			) {
 				return null;
 			}
-			return this.user(
+			return await this.user(
 				payload.email.trim(),
 				payload.sub.trim(),
 				new Date(payload.exp * 1000).toISOString(),
@@ -131,8 +121,21 @@ export class ProxyHeaderAuthenticator implements Authenticator {
 		}
 	}
 
-	private user(email: string, userId: string, expiresAt?: string): AuthenticatedPrincipal | null {
-		if (!validEmail(email) || !validUserId(userId) || !emailAllowed(email, this.allowedDomains)) {
+	private async user(
+		email: string,
+		userId: string,
+		expiresAt?: string,
+	): Promise<AuthenticatedPrincipal | null> {
+		if (!validEmail(email) || !validUserId(userId)) {
+			return null;
+		}
+		try {
+			if (
+				!(await emailAllowedWithInvitations(email, this.allowedDomains, this.config.isEmailInvited))
+			)
+				return null;
+		} catch (error) {
+			logOperationalError('proxy_invitation_lookup_failed', {}, error);
 			return null;
 		}
 		return {
