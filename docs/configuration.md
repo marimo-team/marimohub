@@ -511,7 +511,7 @@ Headless notebook runs on a cron schedule or on demand, with a durable run histo
 
 ## Source control publishing
 
-Connect to github.com or one GitHub Enterprise Server host per deployment. Editors can create pull sources and use **Sync now**. Managers can publish session edits as draft PRs. Provider credentials stay on the server. See [Syncing from external sources](./syncing.md) for modes and limits.
+Connect to GitHub and Azure DevOps Services. Editors can create pull sources and use **Sync now**. Managers can publish session edits as draft PRs. Provider credentials stay on the server. See [Syncing from external sources](./syncing.md) for modes and limits.
 
 ### GitHub App
 
@@ -522,7 +522,19 @@ Create a GitHub App with Contents and Pull requests read/write permissions. Inst
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL` | GitHub web origin without a path, such as `https://github.example.com`, not the API URL. GHES sources and allowlist rules require full repository URLs; `owner/repo` still means github.com. | — | `https://github.com` | `https://git.acme.corp` |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID` | Numeric app id from the GitHub App settings page. | — | — | `123456` |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY` 🔒 | PKCS8 or PKCS1 PEM private key downloaded for the GitHub App, or its single-line base64 encoding. Held by the server and never injected into notebook sandboxes. | — | — | `-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----` |
-| `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` | Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax. | — | — | `[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]` |
+| `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` | Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies) for syntax. | — | — | `[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]` |
+
+### Azure DevOps Services
+
+Use a Microsoft Entra service principal or managed identity with repository read, contribute, create branch, and contribute to pull requests permissions. No webhook is required.
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ORGANIZATION` | Hosted organization name. Enables Azure DevOps Services sync and PR publishing. Use full dev.azure.com repository URLs. | — | — | `acme` |
+| `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_TENANT_ID` | Tenant for service-principal authentication. Set together with client ID and client secret. Omit all three to use DefaultAzureCredential. | — | — | — |
+| `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_ID` | Application client ID of the service principal. Add this identity to the Azure DevOps organization. | — | — | — |
+| `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_SECRET` 🔒 | Service-principal secret. Kept on the server; never injected into notebook sandboxes. | — | — | — |
+| `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ALLOWED_REPOSITORIES` | JSON array of `{resource, projects}` rules using full repository URLs. Unset permits shared access. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies). | — | — | `[{"resource":"https://dev.azure.com/acme/analytics/_git/notebooks","projects":"*"}]` |
 
 ## Workload Identity Federation
 

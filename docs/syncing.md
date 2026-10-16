@@ -11,10 +11,10 @@ description: Sync read-only notebooks into marimohub from external Git repositor
 marimohub can serve a notebook whose source of truth is an external **Git
 repository**. Choose a source mode when you create the notebook:
 
-| Mode   | Primary sync path               | Credential | Supported path   | Git metadata                    |
-| ------ | ------------------------------- | ---------- | ---------------- | ------------------------------- |
-| `push` | CI upload or **Sync now**       | Sync token | Root or subtree  | Only when the upload has `.git` |
-| `pull` | Create request and **Sync now** | GitHub App | Any subdirectory | Included in every version       |
+| Mode   | Primary sync path               | Credential        | Supported path   | Git metadata                    |
+| ------ | ------------------------------- | ----------------- | ---------------- | ------------------------------- |
+| `push` | CI upload or **Sync now**       | Sync token        | Root or subtree  | Only when the upload has `.git` |
+| `pull` | Create request and **Sync now** | Provider identity | Any subdirectory | Included in every version       |
 
 The source mode cannot change after creation. For a push source, **Sync now**
 updates the files but does not add Git metadata to the version.
@@ -31,8 +31,8 @@ With the GitHub App configured, managers can also publish a branch or commit as 
 ```
 ┌─────────────┐   CI archive + token   ┌──────────────────┐
 │ your repo   │ ─────────────────────▶ │ POST {sync_url}  │ ──┐
-│             │   GitHub App pull      ├──────────────────┤   │
-│  (GitHub)   │ ─────────────────────▶ │ source/sync API  │ ──┤
+│             │   Provider pull        ├──────────────────┤   │
+│  (Git)      │ ─────────────────────▶ │ source/sync API  │ ──┤
 └─────────────┘                        └──────────────────┘   │
                                                            ▼
                                                 ┌─────────────────────┐
@@ -78,21 +78,21 @@ Content-Type: application/json
 }
 ```
 
-| Field            | Required | Notes                                                                                     |
-| ---------------- | -------- | ----------------------------------------------------------------------------------------- |
-| `provider`       | no       | `github` or `gitlab`. Usually derived from `repo`.                                        |
-| `repo`           | yes      | Repository URL or `owner/name`. Pull mode supports the configured GitHub host.            |
-| `branch`         | yes      | Branch this notebook tracks.                                                              |
-| `root_path`      | no       | Repo subdirectory whose tree is mirrored. Defaults to the repo root (`""`).               |
-| `entry_notebook` | yes      | The notebook to open (`.py`, `.md`, `.markdown`, or `.qmd`), **relative to `root_path`**. |
-| `sync_mode`      | no       | `push` (default) or `pull`. Pull mode is GitHub-only.                                     |
+| Field            | Required | Notes                                                                                               |
+| ---------------- | -------- | --------------------------------------------------------------------------------------------------- |
+| `provider`       | no       | `github`, `gitlab`, or `azure-devops`. Usually derived from `repo`.                                 |
+| `repo`           | yes      | Repository URL or `owner/name`. Pull mode supports configured GitHub and Azure DevOps repositories. |
+| `branch`         | yes      | Branch this notebook tracks.                                                                        |
+| `root_path`      | no       | Repo subdirectory whose tree is mirrored. Defaults to the repo root (`""`).                         |
+| `entry_notebook` | yes      | The notebook to open (`.py`, `.md`, `.markdown`, or `.qmd`), **relative to `root_path`**.           |
+| `sync_mode`      | no       | `push` (default) or `pull`. Pull mode requires a configured provider.                               |
 
 `repo` accepts `owner/repo` or a repository URL. The shorthand refers to GitHub,
 unless `provider` is `gitlab`. GitLab URLs can contain nested groups, such as
 `https://gitlab.example.com/group/subgroup/project`. marimohub converts
 scheme-less and SSH remotes to HTTPS when it stores them.
 
-marimohub derives `provider` from the configured GitHub host or the host name. Set it only when a
+marimohub derives `provider` from configured repository hosts or the host name. Set it only when a
 custom host does not identify the provider. The value controls provider links
 in the web interface. If neither the host nor `provider` identifies a provider,
 the interface shows the sync metadata without links.
@@ -113,7 +113,9 @@ For push mode, the response returns the notebook plus its sync credentials:
 The `sync_token` is shown **once**. Store it as a CI secret. The server keeps
 only a SHA-256 of it.
 
-### Pull mode: connect a GitHub repository
+### Pull mode: connect a repository
+
+<span id="pull-mode-connect-a-github-repository"></span>
 
 Use pull mode when marimohub must sync the repository. Set `sync_mode` to
 `pull`:
@@ -130,13 +132,14 @@ Use pull mode when marimohub must sync the repository. Set `sync_mode` to
 }
 ```
 
-The deployment must list `"github"` in `source_control.pull_source_providers`
-from `GET /api/v1/capabilities`. The create request reads the branch head before
+The deployment must list the repository provider in `source_control.pull_source_providers`
+from `GET /api/v1/capabilities`. Configure a [GitHub App](configuration.md#github-app) or
+[Azure DevOps identity](#azure-devops-services) first. The create request reads the branch head before
 it returns. On success, the response contains an active notebook without
 `sync_url` or `sync_token`.
 
 If the first pull fails, the response contains a draft notebook and
-`sync_error`. Correct the repository coordinates or GitHub App access. Then use
+`sync_error`. Correct the repository coordinates or provider access. Then use
 **Sync now** to retry.
 
 `root_path` selects the subtree to mirror, such as the `python/` directory of a
@@ -151,14 +154,49 @@ it. The sparse checkout is best-effort. If it fails, `git status` reports the
 rest of the repository as deleted. Proposals still contain only changes inside
 the subtree, because capture runs with `--relative`. Session startup fails if
 the Git directory cannot be restored completely.
-The GitHub installation token stays on the server.
+Provider credentials stay on the server.
 
 Git data larger than 25 MB is rejected. Use push mode for a repository that
 exceeds this limit. The stored `.git` covers the whole repository, not only
 `root_path`. Large monorepos, the main use of `root_path`, can exceed this
 limit.
 
-### View or edit sync settings
+## Azure DevOps Services
+
+Hosted Azure DevOps Services supports pull sources, **Sync now**, and draft PR creation and updates.
+GitHub and Azure DevOps can operate in the same deployment with separate credentials and repository policies.
+
+Use full HTTPS URLs: `https://dev.azure.com/organization/project/_git/repository`.
+Azure DevOps Server, `visualstudio.com` aliases, SSH URLs, PAT authentication, webhooks, and notebook previews are not supported.
+
+1. Add a Microsoft Entra service principal or managed identity to your Azure DevOps organization.
+2. Grant repository **Read**, **Contribute**, **Create branch**, and **Contribute to pull requests** permissions.
+3. Set the organization and [repository policy](#repository-project-policies) on the Hub server:
+
+   ```bash
+   MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ORGANIZATION=acme
+   MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ALLOWED_REPOSITORIES='[{"resource":"https://dev.azure.com/acme/analytics/_git/notebooks","projects":["proj-0000000000000000"]}]'
+   ```
+
+4. For client-secret authentication, set all three variables:
+
+   ```bash
+   MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_TENANT_ID=<tenant-id>
+   MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_ID=<application-client-id>
+   MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_SECRET=<client-secret>
+   ```
+
+   Otherwise, omit all three to use `DefaultAzureCredential`, including managed identity, workload identity, or local Azure CLI credentials.
+
+5. Restart Hub and open **Add a git repository**.
+6. Select the connection option and enter the repository URL, branch, folder, and notebook file.
+
+[Pull-mode behavior](#pull-mode-connect-a-repository) and [server-sync limits](#sync-now) apply to Azure DevOps.
+After a merge, **Sync now** imports the merged commit.
+
+See Microsoft's [identity setup guide](https://learn.microsoft.com/en-us/azure/devops/integrate/get-started/authentication/service-principal-managed-identity?view=azure-devops).
+
+## View or edit sync settings
 
 In the project list, open the notebook's actions menu and choose **Sync
 settings**. It shows the repository, branch, repository folder, entry notebook,
@@ -180,8 +218,7 @@ Content-Type: application/json
 For an existing custom-host source, a bare `owner/repo` continues to use that
 host. GitHub.com shorthand remains bare.
 
-The source mode cannot change. A pull source must continue to use a supported
-GitHub repository on the configured host. marimohub rejects unsupported source changes before it
+The source mode cannot change. A pull source must continue to use a repository supported by a configured provider. marimohub rejects unsupported source changes before it
 stores them.
 
 Before the first successful sync, changes take effect immediately. After that,
@@ -191,19 +228,16 @@ the meantime. Editing the source does not change the sync URL or rotate its
 token. Pull sources promote pending settings on the next **Sync now**. Push
 sources promote them on a matching CI upload or server sync.
 
-## Sync now with GitHub
+## Sync now
 
-**Sync now** reads a GitHub branch through the server. Pull sources use this
+<span id="sync-now-with-github"></span>
+
+**Sync now** reads a repository branch through the configured provider. Pull sources use this
 action as their normal sync method. Push sources can use it as an alternative to
 a CI upload.
 
-The deployment must have a configured
-[GitHub App](configuration.md#source-control-publishing). This feature supports github.com or the configured GitHub Enterprise Server host.
-
-The deployment advertises supported providers in
-`source_control.sync_providers` from `GET /api/v1/capabilities`. The list
-contains `"github"` when the GitHub App is configured. The notebook's
-`source.provider` must appear in this list.
+The notebook's provider must appear in `source_control.sync_providers` from
+`GET /api/v1/capabilities`. The server derives this list from configured readers.
 
 The API provides these endpoints:
 
@@ -231,7 +265,7 @@ its `root_path` is small.
 Server sync omits symlinks and other special entries from the workspace. For a
 pull source, proposal capture also ignores these omitted Git index entries.
 
-The repository download is limited to 100 MB compressed and 2 GB uncompressed.
+GitHub archive downloads also have limits of 100 MB compressed and 2 GB uncompressed.
 If no settings are pending and the notebook already points to the commit, the
 endpoint returns `synced: false` and creates no version. A sync against pending
 source settings makes those settings active. The response includes the resolved
@@ -253,8 +287,8 @@ source needs multi-file capture.
 
 ## Push an archive
 
-Use push sync for GitLab, self-hosted Git providers, or deployments without a
-GitHub App. You can also use it for GitHub notebooks that support **Sync now**.
+Use push sync for providers without a configured reader, or when CI must control sync.
+Push sources can also use **Sync now** when their provider supports it.
 
 Upload the tree under `root_path` as the request body. Authenticate with the
 sync token and describe the commit via headers:
@@ -451,16 +485,19 @@ cannot start before the first successful sync (`400` otherwise).
 
 When [source-control publishing](configuration.md#source-control-publishing) is
 configured, a project manager can publish edits from a persistent editor
-session. The current GitHub App integration creates an immutable proposal and a
-draft pull request.
+session. GitHub and Azure DevOps create an immutable proposal and a draft pull request.
 
 After the first publication, the editor shows **View PR** and two more actions:
 
 - **Update PR** publishes a new proposal to the same pull request. It adds a
-  commit when possible. Otherwise, marimohub rebuilds the proposal branch from
-  the synced base. It never overwrites external branch changes.
+  commit without overwriting external branch changes. GitHub can rebuild the
+  proposal branch from the synced base when needed.
 - **Create new PR** opens another pull request and replaces the displayed link.
-  The previous pull request remains on GitHub.
+  The previous pull request remains on the provider.
+
+Azure updates restore files omitted from a new proposal to their original base contents.
+Updates fail if the proposal branch changes externally, disappears, or its PR closes.
+Azure updates cannot change Git file modes. Use **Create new PR** for those changes.
 
 The web interface uses this endpoint:
 
@@ -499,7 +536,7 @@ means github.com; when editing a source, shorthand keeps its current host.
 Without `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES`, every project can
 reach every repository the App installation can access. An App installed across a
 whole GHES organization or instance therefore exposes all of those repositories.
-Set [GitHub project policies](#github-project-policies) to limit each project.
+Set [repository project policies](#repository-project-policies) to limit each project.
 :::
 
 marimohub sends REST requests to `{origin}/api/v3` for any host other than
@@ -514,23 +551,25 @@ For an internal CA, mount its PEM certificate chain and set
 enabled. The Cloudflare Worker entrypoint usually cannot reach an on-premises
 host; use the Node server on a network with access to GHES.
 
-## GitHub project policies
+## Repository project policies
 
-`MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` optionally restricts the
-shared GitHub App by repository and project. Unset or blank policies keep existing
-access with a startup warning. `[]` denies all access. Invalid policies stop startup.
+<span id="github-project-policies"></span>
 
-```bash
-MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES='[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]'
+Each provider has an independent `ALLOWED_REPOSITORIES` policy for its shared credentials:
+
+| Provider     | Variable                                                     | Repository format                                                        |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| GitHub       | `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES`       | `owner/repo` for github.com, or a full HTTPS URL for the configured host |
+| Azure DevOps | `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ALLOWED_REPOSITORIES` | Full `dev.azure.com` URL in the configured organization                  |
+
+```json
+[{ "resource": "https://github.com/team/notebooks", "projects": ["proj-0000000000000000"] }]
 ```
 
-- `resource` matches a GitHub repository URL, including its host, regardless of case.
-  For github.com, `owner/repo` is also accepted. GHES rules require full URLs. `"*"`
-  permits any repository for the listed projects.
+- `resource` matches a repository URL without case sensitivity. `"*"` permits any repository accessible to the provider identity.
 - `projects` lists project IDs. `"*"` shares the repository across projects.
+- `[]` denies all access. An unset or blank policy permits shared access and emits a startup warning.
+- Invalid policies stop startup. Restart Hub to apply changes.
 
-Rules cover branch checks, workspace and Git downloads, preview source reads, and
-pull request creation and updates. The App installation must also allow the repository. The policy does not restrict
-user-supplied credentials.
-
-Restart the hub to apply policy changes.
+Policies cover branch checks, workspace and Git downloads, preview reads, and PR creation and updates.
+The provider identity must also have repository access. These policies do not restrict user-supplied credentials.

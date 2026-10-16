@@ -1,0 +1,158 @@
+import { DefaultAzureCredential } from '@azure/identity';
+import {
+	BadRequestError,
+	ConflictError,
+	ForbiddenError,
+	NotFoundError,
+	UnavailableError,
+} from '@marimo-hub/core/errors';
+import { markSourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
+import type { AzureRepository } from './repository';
+import { validateOrganization } from './repository';
+
+export interface AzureCredential {
+	getToken(scope: string): Promise<{ token: string } | null>;
+}
+export interface AzureDevOpsOptions {
+	organization: string;
+	credential?: AzureCredential;
+}
+export interface AzureDevOpsRuntime {
+	fetcher?: (url: string, init?: RequestInit) => Promise<Response>;
+}
+export const AZURE_DEVOPS_SCOPE = '499b84ac-1321-427f-aa17-267ca6975798/.default';
+
+export async function boundedBytes(
+	response: Response,
+	limit: number,
+	signal?: AbortSignal | null,
+): Promise<Uint8Array> {
+	const declared = Number(response.headers.get('content-length'));
+	if (Number.isFinite(declared) && declared > limit) {
+		await response.body?.cancel().catch(() => {});
+		throw new BadRequestError('Azure DevOps response exceeds the size limit');
+	}
+	if (!response.body) throw new UnavailableError('Azure DevOps returned an empty response');
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	try {
+		for (;;) {
+			signal?.throwIfAborted();
+			const next = await reader.read();
+			signal?.throwIfAborted();
+			if (next.done) break;
+			size += next.value.byteLength;
+			if (size > limit) throw new BadRequestError('Azure DevOps response exceeds the size limit');
+			chunks.push(next.value);
+		}
+	} catch (error) {
+		signal?.throwIfAborted();
+		if (error instanceof BadRequestError) throw error;
+		throw new UnavailableError('Azure DevOps response could not be read');
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
+	const result = new Uint8Array(size);
+	let offset = 0;
+	for (const chunk of chunks) {
+		result.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return result;
+}
+
+export function record(value: unknown): Record<string, unknown> {
+	if (!value || typeof value !== 'object' || Array.isArray(value))
+		throw new UnavailableError('Invalid Azure DevOps response');
+	return value as Record<string, unknown>;
+}
+export function stringField(value: unknown, key: string): string {
+	const result = record(value)[key];
+	if (typeof result !== 'string' || !result)
+		throw new UnavailableError(`Invalid Azure DevOps ${key}`);
+	return result;
+}
+export function values(value: unknown): unknown[] {
+	const result = record(value).value;
+	if (!Array.isArray(result)) throw new UnavailableError('Invalid Azure DevOps response list');
+	return result;
+}
+
+export class AzureClient {
+	readonly organization: string;
+	readonly fetcher: (url: string, init?: RequestInit) => Promise<Response>;
+	private readonly credential: AzureCredential;
+	constructor(options: AzureDevOpsOptions, runtime: AzureDevOpsRuntime = {}) {
+		this.organization = validateOrganization(options.organization);
+		this.credential = options.credential ?? new DefaultAzureCredential();
+		this.fetcher = runtime.fetcher ?? fetch;
+	}
+	async authorization(): Promise<string> {
+		try {
+			const result = await this.credential.getToken(AZURE_DEVOPS_SCOPE);
+			if (!result?.token) throw new Error('Missing access token');
+			return `Bearer ${result.token}`;
+		} catch {
+			throw markSourceControlPublishFailure(
+				new UnavailableError('Azure DevOps authentication failed'),
+				{ provider: 'azure-devops', stage: 'auth' },
+			);
+		}
+	}
+	async request(
+		repo: AzureRepository,
+		path: string,
+		query: Record<string, string> = {},
+		init: RequestInit = {},
+	): Promise<Response> {
+		init.signal?.throwIfAborted();
+		const url = `${repo.apiUrl}${path}?${new URLSearchParams({ ...query, 'api-version': '7.1' })}`;
+		const headers = new Headers(init.headers);
+		headers.set('authorization', await this.authorization());
+		init.signal?.throwIfAborted();
+		headers.set('accept', headers.get('accept') ?? 'application/json');
+		if (init.body) headers.set('content-type', 'application/json');
+		let response: Response;
+		try {
+			response = await this.fetcher(url, {
+				...init,
+				headers,
+				redirect: 'error',
+				signal: init.signal ?? AbortSignal.timeout(60_000),
+			});
+		} catch {
+			init.signal?.throwIfAborted();
+			throw new UnavailableError('Azure DevOps is unavailable');
+		}
+		if (!response.ok) {
+			await response.body?.cancel().catch(() => {});
+			if (response.status === 404)
+				throw new NotFoundError('Azure DevOps repository, branch, or object was not found');
+			if (response.status === 401 || response.status === 403)
+				throw new ForbiddenError('Azure DevOps access was denied');
+			if (response.status === 409 || response.status === 412)
+				throw new ConflictError('Azure DevOps branch changed while publishing');
+			throw new UnavailableError(`Azure DevOps request failed with status ${response.status}`);
+		}
+		return response;
+	}
+	async json(
+		repo: AzureRepository,
+		path: string,
+		query: Record<string, string> = {},
+		init: RequestInit = {},
+	): Promise<unknown> {
+		const response = await this.request(repo, path, query, init);
+		if (response.headers.has('x-ms-continuationtoken')) {
+			await response.body?.cancel().catch(() => {});
+			throw new BadRequestError('Azure DevOps result exceeds the supported page size');
+		}
+		const bytes = await boundedBytes(response, 8 * 1024 * 1024, init.signal);
+		try {
+			return JSON.parse(new TextDecoder().decode(bytes));
+		} catch {
+			throw new UnavailableError('Invalid Azure DevOps JSON response');
+		}
+	}
+}

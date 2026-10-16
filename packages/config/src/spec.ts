@@ -1857,7 +1857,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Source control publishing',
 		description:
-			'Connect to github.com or one GitHub Enterprise Server host per deployment. Editors can create pull sources and use **Sync now**. Managers can publish session edits as draft PRs. Provider credentials stay on the server. See [Syncing from external sources](./syncing.md) for modes and limits.',
+			'Connect to GitHub and Azure DevOps Services. Editors can create pull sources and use **Sync now**. Managers can publish session edits as draft PRs. Provider credentials stay on the server. See [Syncing from external sources](./syncing.md) for modes and limits.',
 		backends: [
 			{
 				name: 'GitHub App',
@@ -1893,9 +1893,55 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES',
 						name: 'GitHub repository project policy',
 						description:
-							'Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [GitHub project policies](syncing.md#github-project-policies) for syntax.',
+							'Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies) for syntax.',
 						example: '[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]',
 						optIn: true,
+					},
+				],
+			},
+			{
+				name: 'Azure DevOps Services',
+				description:
+					'Use a Microsoft Entra service principal or managed identity with repository read, contribute, create branch, and contribute to pull requests permissions. No webhook is required.',
+				vars: [
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ORGANIZATION',
+						name: 'Azure DevOps organization',
+						description:
+							'Hosted organization name. Enables Azure DevOps Services sync and PR publishing. Use full dev.azure.com repository URLs.',
+						optIn: true,
+						example: 'acme',
+					},
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_TENANT_ID',
+						name: 'Azure tenant ID',
+						description:
+							'Tenant for service-principal authentication. Set together with client ID and client secret. Omit all three to use DefaultAzureCredential.',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_ID',
+						name: 'Azure client ID',
+						description:
+							'Application client ID of the service principal. Add this identity to the Azure DevOps organization.',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_SECRET',
+						name: 'Azure client secret',
+						description:
+							'Service-principal secret. Kept on the server; never injected into notebook sandboxes.',
+						optIn: true,
+						secret: true,
+					},
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ALLOWED_REPOSITORIES',
+						name: 'Azure repository project policy',
+						description:
+							'JSON array of `{resource, projects}` rules using full repository URLs. Unset permits shared access. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies).',
+						optIn: true,
+						example:
+							'[{"resource":"https://dev.azure.com/acme/analytics/_git/notebooks","projects":"*"}]',
 					},
 				],
 			},

@@ -12,13 +12,13 @@ import {
 	MAX_GIT_FETCH_BYTES,
 } from '@marimo-hub/core/ports/source-control';
 import { MAX_WORKSPACE_FILE_BYTES } from '@marimo-hub/core/constants';
-import type { GitHubFetch } from './githubClient';
+import type { GitFetch } from './index';
 import {
 	assertGitCheckoutLimits,
 	collectGitDirectoryFiles,
 	GitFetchByteLimit,
 	materializeGitDirectory,
-} from './githubGitDirectory';
+} from './index';
 
 const temporaryDirectories: string[] = [];
 
@@ -59,7 +59,7 @@ function concat(...parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
 	return result;
 }
 
-function uploadPackFetcher(repository: string): GitHubFetch {
+function uploadPackFetcher(repository: string): GitFetch {
 	return async (url, init) => {
 		if (url.includes('/info/refs')) {
 			const advertised = execFileSync('git', [
@@ -97,7 +97,11 @@ afterEach(async () => {
 	);
 });
 
-const ORIGINS = ['https://github.com', 'https://git.acme.corp'];
+const ORIGINS = [
+	'https://github.com',
+	'https://git.acme.corp',
+	'https://dev.azure.com/org/project/_git',
+];
 
 // Git subprocess tests; need headroom when the whole suite shares the CPU.
 describe('materializeGitDirectory', { timeout: 15_000 }, () => {
@@ -131,12 +135,10 @@ describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 
 		const files = await materializeGitDirectory({
 			repository: `${origin}/owner/repo`,
-			origin,
-			owner: 'owner',
-			repo: 'repo',
+			remoteUrl: `${origin}/owner/repo.git`,
 			commit,
 			branch: 'main',
-			token: 'installation-secret',
+			authorization: 'Bearer installation-secret',
 			fetcher: async (url, init) => {
 				expect(url.startsWith(`${origin}/owner/repo.git/`)).toBe(true);
 				return uploadPackFetcher(source)(url, init);
@@ -171,11 +173,10 @@ describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 
 		const files = await materializeGitDirectory({
 			repository: 'owner/repo',
-			owner: 'owner',
-			repo: 'repo',
+			remoteUrl: 'https://github.com/owner/repo.git',
 			commit,
 			branch,
-			token: 'installation-secret',
+			authorization: 'Bearer installation-secret',
 			fetcher: uploadPackFetcher(source),
 		});
 		const restored = await temporaryDirectory('marimohub-git-quoted-branch-restored-');
@@ -191,18 +192,17 @@ describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 	});
 
 	it('rejects a smart-HTTP response beyond the Git pack limit', async () => {
-		const fetcher: GitHubFetch = async () =>
+		const fetcher: GitFetch = async () =>
 			new Response('too large', {
 				headers: { 'content-length': String(MAX_GIT_FETCH_BYTES + 1) },
 			});
 		await expect(
 			materializeGitDirectory({
 				repository: 'owner/large-repo',
-				owner: 'owner',
-				repo: 'large-repo',
+				remoteUrl: 'https://github.com/owner/large-repo.git',
 				commit: 'a'.repeat(40),
 				branch: 'main',
-				token: 'token',
+				authorization: 'Bearer token',
 				fetcher,
 			}),
 		).rejects.toBeInstanceOf(BadRequestError);
@@ -280,11 +280,10 @@ describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 
 		const files = await materializeGitDirectory({
 			repository: 'owner/repo',
-			owner: 'owner',
-			repo: 'repo',
+			remoteUrl: 'https://github.com/owner/repo.git',
 			commit,
 			branch: 'main',
-			token: 'installation-secret',
+			authorization: 'Bearer installation-secret',
 			fetcher: uploadPackFetcher(source),
 		});
 		const restored = await temporaryDirectory('marimohub-git-symlink-restored-');

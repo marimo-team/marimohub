@@ -7,42 +7,7 @@ import {
 } from '@/api/changeRequests';
 import type { PublishChangeRequestAction } from '@/api/changeRequests';
 import { Button, DropdownMenu } from '@/components/ui';
-
-interface ChangeRequestTerms {
-	kind: string;
-	open: string;
-	view: string;
-	update: string;
-	create: string;
-}
-
-function termsForProvider(provider: string): ChangeRequestTerms {
-	if (provider === 'github') {
-		return {
-			kind: 'pull request',
-			open: 'Open PR',
-			view: 'View PR',
-			update: 'Update PR',
-			create: 'Create new PR',
-		};
-	}
-	if (provider === 'gitlab') {
-		return {
-			kind: 'merge request',
-			open: 'Open MR',
-			view: 'View MR',
-			update: 'Update MR',
-			create: 'Create new MR',
-		};
-	}
-	return {
-		kind: 'change request',
-		open: 'Open change request',
-		view: 'View change request',
-		update: 'Update change request',
-		create: 'Create new change request',
-	};
-}
+import { changeRequestTerms } from '@/lib/git';
 
 function openChangeRequestUrl(url: string): void {
 	const opened = window.open(url, '_blank');
@@ -82,7 +47,7 @@ export function ChangeRequestActions({
 	const publishingAvailable = canPublish && !!sessionId && !!provider;
 	if (!activeChangeRequest && !publishingAvailable) return null;
 
-	const terms = termsForProvider(activeChangeRequest?.change_request.provider ?? provider ?? '');
+	const terms = changeRequestTerms(activeChangeRequest?.change_request.provider ?? provider ?? '');
 	const publish = (action: PublishChangeRequestAction) => {
 		if (!sessionId) return;
 		const requestScope = scope;

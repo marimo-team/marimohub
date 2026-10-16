@@ -70,6 +70,7 @@
 		"./workspace-archive": "./src/integrations/workspaceArchive.ts",
 		"./ports/notebook-bridge": "./src/ports/notebookBridge.ts",
 		"./sha256": "./src/internal/sha256.ts",
+		"./git-repo": "./src/integrations/gitRepo.ts",
 		"./host-isolation": "./src/hostIsolation.ts",
 		"./workspace-ignore": "./src/integrations/workspaceIgnore.ts"
 	},

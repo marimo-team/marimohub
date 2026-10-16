@@ -114,6 +114,9 @@ describe('ChangeRequestActions', () => {
 		const { rerender } = render(<ChangeRequestActions {...props} provider="gitlab" />);
 		expect(screen.getByRole('button', { name: 'Open MR' })).toBeEnabled();
 
+		rerender(<ChangeRequestActions {...props} provider="azure-devops" />);
+		expect(screen.getByRole('button', { name: 'Open PR' })).toBeEnabled();
+
 		rerender(<ChangeRequestActions {...props} provider="other" />);
 		expect(screen.getByRole('button', { name: 'Open change request' })).toBeEnabled();
 	});

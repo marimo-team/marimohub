@@ -206,3 +206,8 @@ describe('reposMatch', () => {
 		expect(reposMatch('', '')).toBe(false);
 	});
 });
+
+it('detects hosted Azure DevOps without matching lookalike hosts', () => {
+	expect(detectProvider('https://dev.azure.com/acme/project/_git/notebooks')).toBe('azure-devops');
+	expect(detectProvider('https://dev.azure.com.evil.test/acme/project/_git/notebooks')).toBeNull();
+});

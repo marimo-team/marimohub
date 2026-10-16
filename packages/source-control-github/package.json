@@ -19,8 +19,8 @@
 	},
 	"dependencies": {
 		"@marimo-hub/core": "workspace:*",
-		"fflate": "catalog:",
-		"isomorphic-git": "catalog:"
+		"@marimo-hub/source-control-git": "workspace:*",
+		"fflate": "catalog:"
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",

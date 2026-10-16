@@ -346,7 +346,7 @@ restores them into the sandbox. Keep credentials in
 ## Shared deployment credentials
 
 [AWS](integration-secrets.md#aws-project-policies) and
-[GitHub](syncing.md#github-project-policies) project policies are optional. Unset
+[source-control](syncing.md#repository-project-policies) project policies are optional. Unset
 or blank policies keep existing access with a startup warning. The hub enforces
 configured rules before it uses shared credentials.
 
@@ -376,4 +376,4 @@ Configuring the [GitHub App](configuration.md#github-app) enables previews.
 
 Protect previewed branches with GitHub branch protection or rulesets, so that only
 trusted people can push to them. Restrict the App's repositories with
-[GitHub project policies](syncing.md#github-project-policies).
+[GitHub project policies](syncing.md#repository-project-policies).

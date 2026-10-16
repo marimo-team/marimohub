@@ -7,6 +7,7 @@ import { Toaster } from 'sonner';
 import { SyncedNotebookDialog } from './SyncedNotebookDialog';
 
 interface ResourceOptions {
+	pullProviders?: string[];
 	sandboxImages?: string[];
 	computeProfiles?: { name: string; cpu?: number; memory_bytes?: number }[];
 	computeProfileOverride?: 'none' | 'editors';
@@ -27,7 +28,7 @@ function renderDialog(
 						success: true,
 						data: {
 							source_control: {
-								pull_source_providers: available ? ['github'] : [],
+								pull_source_providers: resources.pullProviders ?? (available ? ['github'] : []),
 							},
 							sandbox_images: resources.sandboxImages ?? [],
 							compute_profiles: resources.computeProfiles ?? [],
@@ -305,4 +306,17 @@ describe('SyncedNotebookDialog', () => {
 		expect(screen.getByText(/Use owner\/repo for github\.com/i)).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
 	});
+});
+
+it('offers Azure pull mode without GitHub configuration', async () => {
+	const user = userEvent.setup();
+	renderDialog(vi.fn(), true, { pullProviders: ['azure-devops'] });
+	expect(await screen.findByText('Connect to Azure DevOps')).toBeInTheDocument();
+	await user.type(screen.getByLabelText('Notebook name'), 'Azure notebook');
+	await user.type(
+		screen.getByLabelText('Repository'),
+		'https://dev.azure.com/acme/analytics/_git/notebooks',
+	);
+	await user.type(screen.getByLabelText('Notebook file'), 'app.py');
+	expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
 });

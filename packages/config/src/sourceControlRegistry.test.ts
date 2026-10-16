@@ -56,7 +56,9 @@ describe('ConfiguredSourceControlRegistry', () => {
 	it('keeps adapter receivers and forwards project authorization for every operation', async () => {
 		const adapter = new Provider();
 		const authorize = vi.fn();
-		const registry = new ConfiguredSourceControlRegistry([adapter], [adapter], authorize);
+		const registry = new ConfiguredSourceControlRegistry([
+			{ reader: adapter, publisher: adapter, authorize },
+		]);
 		const reader = registry.getReader('test', projectId)!;
 		const publisher = registry.getPublisher('test', projectId)!;
 		expect(reader.supportsRepository(input.repository)).toBe(true);
@@ -85,7 +87,10 @@ describe('ConfiguredSourceControlRegistry', () => {
 			openChangeRequest: vi.fn(),
 		};
 		const authorize = vi.fn();
-		const registry = new ConfiguredSourceControlRegistry([publisher], [reader], authorize);
+		const registry = new ConfiguredSourceControlRegistry([
+			{ publisher, authorize },
+			{ reader, authorize },
+		]);
 		expect(registry.readerProviders()).toEqual(['read-only']);
 		expect(registry.publisherProviders()).toEqual(['publish-only']);
 		expect(registry.pullSourceProviders()).toEqual([]);
@@ -113,7 +118,7 @@ describe('ConfiguredSourceControlRegistry', () => {
 		const authorize = vi.fn(() => {
 			throw new Error('Repository denied');
 		});
-		const reader = new ConfiguredSourceControlRegistry([], [adapter], authorize).getReader(
+		const reader = new ConfiguredSourceControlRegistry([{ reader: adapter, authorize }]).getReader(
 			'github',
 			projectId,
 		)!;
@@ -134,7 +139,7 @@ describe('ConfiguredSourceControlRegistry', () => {
 
 	it('returns the original adapters when policies are omitted', () => {
 		const adapter = new Provider();
-		const registry = new ConfiguredSourceControlRegistry([adapter], [adapter]);
+		const registry = new ConfiguredSourceControlRegistry([{ reader: adapter, publisher: adapter }]);
 		expect(registry.getReader('test', projectId)).toBe(adapter);
 		expect(registry.getPublisher('test', projectId)).toBe(adapter);
 		expect(registry.pullSourceProviders()).toEqual(['test']);
@@ -143,11 +148,50 @@ describe('ConfiguredSourceControlRegistry', () => {
 	it.each(['reader', 'publisher'])('rejects duplicate %s provider ids', (kind) => {
 		const adapters = [new Provider(), new Provider()];
 		expect(
-			() =>
-				new ConfiguredSourceControlRegistry(
-					kind === 'publisher' ? adapters : [],
-					kind === 'reader' ? adapters : [],
-				),
+			() => new ConfiguredSourceControlRegistry(adapters.map((adapter) => ({ [kind]: adapter }))),
 		).toThrow('provider ids must be unique');
+	});
+});
+
+describe('multiple source-control registrations', () => {
+	it('isolates policies and discovers capabilities from each registration', async () => {
+		const allowed = new Provider();
+		const denied = {
+			provider: 'denied',
+			supportsRepository: () => true,
+			getBranchHead: vi.fn(),
+			fetchWorkspace: vi.fn(),
+		};
+		const authorize = vi.fn(() => {
+			throw new Error('Repository denied');
+		});
+		const registry = new ConfiguredSourceControlRegistry([
+			{ reader: allowed, publisher: allowed, repositoryHosts: { 'github.com': 'github' } },
+			{ reader: denied, authorize, repositoryHosts: { 'dev.azure.com': 'azure-devops' } },
+		]);
+		expect(registry.readerProviders()).toEqual(['test', 'denied']);
+		expect(registry.publisherProviders()).toEqual(['test']);
+		expect(registry.pullSourceProviders()).toEqual(['test']);
+		expect(registry.repositoryHosts).toEqual({
+			'github.com': 'github',
+			'dev.azure.com': 'azure-devops',
+		});
+		await expect(
+			registry.getReader('test', projectId)!.getBranchHead('team/repo', 'main'),
+		).resolves.toEqual({ commit: 'abc' });
+		await expect(
+			registry.getReader('denied', projectId)!.getBranchHead('team/repo', 'main'),
+		).rejects.toThrow('Repository denied');
+		expect(authorize).toHaveBeenCalledExactlyOnceWith('team/repo', projectId);
+		expect(denied.getBranchHead).not.toHaveBeenCalled();
+	});
+	it('rejects conflicting host mappings instead of silently replacing them', () => {
+		expect(
+			() =>
+				new ConfiguredSourceControlRegistry([
+					{ repositoryHosts: { 'git.example.com': 'github' } },
+					{ repositoryHosts: { 'git.example.com': 'gitlab' } },
+				]),
+		).toThrow('conflicting providers');
 	});
 });

@@ -121,6 +121,40 @@ describe('Source drift and sync-now routes', () => {
 		return { request, services, reader, nid: created.notebook.id, repository };
 	}
 
+	it('creates and syncs an Azure pull source without a provider hint', async () => {
+		const repository = 'https://dev.azure.com/acme/analytics/_git/notebooks';
+		const reader = stubReader({
+			provider: 'azure-devops',
+			supportsRepository: (repo) => repo === repository,
+			getBranchHead: vi.fn(async () => ({ commit: HEAD })),
+			fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('ref: refs/heads/main\n') }],
+		});
+		const { request } = api(reader);
+		const created = await expectOk<{
+			notebook: { id: NotebookId };
+			sync_error?: unknown;
+		}>(
+			await request('POST', `/projects/${projectId}/notebooks/git`, {
+				title: 'Azure notebook',
+				description: '',
+				repo: repository,
+				branch: 'main',
+				entry_notebook: 'app.py',
+				sync_mode: 'pull',
+			}),
+			201,
+		);
+		expect(created.sync_error).toBeUndefined();
+		expect(
+			(await createServices(bucket).notebooks.getNotebook(projectId, created.notebook.id)).source,
+		).toMatchObject({ provider: 'azure-devops' });
+		const nid = created.notebook.id;
+		vi.mocked(reader.getBranchHead).mockResolvedValue({ commit: 'b'.repeat(40) });
+		await expectOk(await request('POST', `/projects/${projectId}/notebooks/${nid}/source/sync`));
+		const notebook = await createServices(bucket).notebooks.getNotebook(projectId, nid);
+		expect(notebook.source).toMatchObject({ provider: 'azure-devops', commit: 'b'.repeat(40) });
+	});
+
 	it('creates, checks drift, and syncs an enterprise source without a provider hint', async () => {
 		const { request, services, reader, nid, repository } = await createEnterpriseNotebook();
 		expect((await services.notebooks.getNotebook(projectId, nid)).source).toMatchObject({

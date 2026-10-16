@@ -13,8 +13,7 @@ import { useCapabilitiesQuery, useCreateSyncedNotebook } from '@/api/hooks';
 import {
 	ENTRY_NOTEBOOK_HINT,
 	ENTRY_NOTEBOOK_PATTERN,
-	GITHUB_REPO_INPUT_HINT,
-	isGitHubRepoInput,
+	pullRepositoryInput,
 	isRepoInput,
 	normalizeRootPathInput,
 	REPO_INPUT_HINT,
@@ -38,26 +37,30 @@ export interface SyncedNotebookDialogProps {
 	onCreated: (result: SyncedNotebookCreated) => void;
 }
 
-const syncedSchema = z
-	.object({
-		syncMode: z.enum(['push', 'pull']),
-		title: requiredText('Notebook name'),
-		repo: requiredText('Repository').refine(isRepoInput, REPO_INPUT_HINT),
-		branch: requiredText('Branch'),
-		rootPath: rootPathText(),
-		entryNotebook: requiredText('Notebook file').regex(ENTRY_NOTEBOOK_PATTERN, ENTRY_NOTEBOOK_HINT),
-		baseImage: z.string(),
-		computeProfile: z.string(),
-	})
-	.superRefine((value, context) => {
-		if (value.syncMode === 'pull' && isRepoInput(value.repo) && !isGitHubRepoInput(value.repo)) {
-			context.addIssue({
-				code: 'custom',
-				path: ['repo'],
-				message: GITHUB_REPO_INPUT_HINT,
-			});
-		}
-	});
+const syncedSchema = (pullInput: ReturnType<typeof pullRepositoryInput>) =>
+	z
+		.object({
+			syncMode: z.enum(['push', 'pull']),
+			title: requiredText('Notebook name'),
+			repo: requiredText('Repository').refine(isRepoInput, REPO_INPUT_HINT),
+			branch: requiredText('Branch'),
+			rootPath: rootPathText(),
+			entryNotebook: requiredText('Notebook file').regex(
+				ENTRY_NOTEBOOK_PATTERN,
+				ENTRY_NOTEBOOK_HINT,
+			),
+			baseImage: z.string(),
+			computeProfile: z.string(),
+		})
+		.superRefine((value, context) => {
+			if (value.syncMode === 'pull' && isRepoInput(value.repo) && !pullInput.validate(value.repo)) {
+				context.addIssue({
+					code: 'custom',
+					path: ['repo'],
+					message: pullInput.hint || 'No pull source provider is configured',
+				});
+			}
+		});
 
 const emptyValues = (syncMode: 'push' | 'pull') => ({
 	syncMode,
@@ -77,9 +80,10 @@ export function SyncedNotebookDialog({
 	onCreated,
 }: SyncedNotebookDialogProps) {
 	const { data: capabilities } = useCapabilitiesQuery();
-	const pullAvailable = (capabilities?.source_control?.pull_source_providers ?? []).includes(
-		'github',
-	);
+	const pullProviders = capabilities?.source_control?.pull_source_providers ?? [];
+	const pullInput = pullRepositoryInput(pullProviders);
+	const pullAvailable = pullInput.available;
+	const pullLabel = pullInput.label;
 	const sandboxImages = capabilities?.sandbox_images ?? [];
 	const offersImageChoice = sandboxImages.length > 1;
 	const computeProfiles = capabilities?.compute_profiles ?? [];
@@ -89,7 +93,7 @@ export function SyncedNotebookDialog({
 	const createSynced = useCreateSyncedNotebook(projectId);
 	const form = useAppForm({
 		defaultValues: initialValues,
-		validators: schemaValidators(syncedSchema),
+		validators: schemaValidators(syncedSchema(pullInput)),
 		onSubmit: async ({ value }) => {
 			try {
 				const data = await createSynced.mutateAsync({
@@ -149,7 +153,7 @@ export function SyncedNotebookDialog({
 							options={[
 								{
 									value: 'pull',
-									label: 'Connect to GitHub',
+									label: pullLabel,
 									description: 'The server pulls the repository; no CI setup is required.',
 								},
 								{
@@ -185,7 +189,7 @@ export function SyncedNotebookDialog({
 						label="Repository"
 						placeholder={
 							syncMode === 'pull'
-								? 'owner/repo'
+								? pullInput.placeholder
 								: 'owner/repo or https://gitlab.example.com/group/project'
 						}
 					/>

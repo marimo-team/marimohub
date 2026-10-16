@@ -5,7 +5,18 @@
 
 import { parseHttpUrl } from '../url';
 
-export type GitProvider = 'github' | 'gitlab';
+export const GIT_PROVIDERS = ['github', 'gitlab', 'azure-devops'] as const;
+export type GitProvider = (typeof GIT_PROVIDERS)[number];
+
+export function isGitProvider(value: unknown): value is GitProvider {
+	return GIT_PROVIDERS.some((provider) => provider === value);
+}
+
+const PROVIDER_HOST_MATCHERS: Record<GitProvider, (host: string) => boolean> = {
+	github: (host) => host.includes('github'),
+	gitlab: (host) => host.includes('gitlab'),
+	'azure-devops': (host) => host === 'dev.azure.com',
+};
 export type GitProviderHosts = Readonly<Record<string, GitProvider>>;
 
 // Plain `owner/repo` coordinates — not a clone URL or `git@` remote (a bare
@@ -78,9 +89,7 @@ export function detectProvider(repo: string, hosts?: GitProviderHosts): GitProvi
 	const configured = hosts && Object.hasOwn(hosts, url.host) ? hosts[url.host] : undefined;
 	if (configured) return configured;
 	const host = url.hostname.toLowerCase();
-	if (host.includes('github')) return 'github';
-	if (host.includes('gitlab')) return 'gitlab';
-	return null;
+	return GIT_PROVIDERS.find((provider) => PROVIDER_HOST_MATCHERS[provider](host)) ?? null;
 }
 
 /** The `group/subgroup/repo` path of a repo, host stripped. */

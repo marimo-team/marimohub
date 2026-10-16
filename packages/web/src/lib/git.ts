@@ -1,12 +1,14 @@
-// Host-link builders for git-synced notebooks. The stored `repo` is either
-// `owner/repo` (GitHub shorthand) or a repository URL; links are built only
-// when the host's URL layout is known (GitHub or GitLab) — an unrecognized
-// host degrades to "no link", never a wrong one.
-
 import { z } from 'zod';
+import {
+	detectProvider,
+	isGitProvider,
+	normalizeRepo,
+	OWNER_REPO_PATTERN,
+} from '@marimo-hub/core/git-repo';
+import type { GitProvider } from '@marimo-hub/core/git-repo';
 import type { NotebookDetail, NotebookVersion } from '@/types';
 
-export type GitProvider = 'github' | 'gitlab';
+export type { GitProvider } from '@marimo-hub/core/git-repo';
 
 /** The git-source coordinates the link builders need (a subset of GitSource). */
 export interface GitSourceCoords {
@@ -19,56 +21,10 @@ export interface GitSourceCoords {
 	commit: string | null;
 }
 
-// Server-validated on new sources; older or API-written records may carry
-// other shapes, which must degrade to "no link". Mirrors the server's
-// OWNER_REPO_PATTERN (core gitRepo.ts), including the dot-only repo-name
-// rejection (`owner/..` would escape the owner in a built URL).
-const OWNER_REPO_PATTERN = /^[A-Za-z0-9_-]+\/(?!\.+$)[A-Za-z0-9._-]+$/;
 // Pull support is narrower than the generic source shape. Keep these rules in
 // sync with source-control-github's parseRepository boundary.
 const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const GITHUB_REPO_PATTERN = /^(?!\.+$)[A-Za-z0-9_.-]{1,100}$/;
-
-interface ParsedRepoInput {
-	path: string;
-	url: URL | null;
-}
-
-function parseRepoInput(input: string): ParsedRepoInput | null {
-	const trimmed = input.trim();
-	if (!trimmed) return null;
-	const bare = trimmed.replace(/\.git$/, '');
-	if (OWNER_REPO_PATTERN.test(bare)) return { path: bare, url: null };
-
-	let candidate = trimmed;
-	const ssh =
-		/^ssh:\/\/git@([^/:\s]+)(?::\d+)?\/(.+)$/i.exec(candidate) ??
-		/^git@([^/:\s]+):(.+)$/.exec(candidate);
-	if (ssh) {
-		candidate = `https://${ssh[1]}/${ssh[2]}`;
-	} else if (!/^https?:\/\//i.test(candidate)) {
-		const [firstSegment] = candidate.split('/', 1);
-		if (!firstSegment?.includes('.')) return null;
-		candidate = `https://${candidate}`;
-	}
-	let url: URL;
-	try {
-		url = new URL(candidate);
-	} catch {
-		return null;
-	}
-	if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
-	if (!url.hostname || url.username || url.password) return null;
-	const segments = url.pathname
-		.replace(/\/+$/, '')
-		.replace(/\.git$/, '')
-		.split('/')
-		.filter(Boolean);
-	if (segments.length < 2 || segments.some((segment) => segment === '.' || segment === '..')) {
-		return null;
-	}
-	return { path: segments.join('/'), url };
-}
 
 /**
  * Percent-encode each segment while keeping `/` separators — branches and
@@ -103,17 +59,8 @@ function parseStoredRepo(
 		.filter(Boolean);
 	if (segments.length < 2) return null;
 	if (segments.some((s) => s === '.' || s === '..')) return null;
-	const host = url.hostname.toLowerCase();
-	// Host-name detection first; the stored provider is an unverified claim,
-	// used only when the host says nothing (e.g. a self-hosted instance whose
-	// name doesn't mention the product).
-	const provider = host.includes('github')
-		? 'github'
-		: host.includes('gitlab')
-			? 'gitlab'
-			: claim === 'github' || claim === 'gitlab'
-				? claim
-				: null;
+	// A recognizable host takes precedence over unverified metadata on old records.
+	const provider = detectProvider(repo) ?? (isGitProvider(claim) ? claim : null);
 	return { baseUrl: `${url.protocol}//${url.host}/${segments.join('/')}`, provider };
 }
 
@@ -137,27 +84,21 @@ export function gitCoords(source: NotebookDetail['source'] | undefined): GitSour
 }
 
 export function providerLabel(provider: GitProvider): string {
-	return provider === 'gitlab' ? 'GitLab' : 'GitHub';
-}
-
-// GitLab namespaces deep links under `/-/` to keep them clear of nested
-// group paths; GitHub nests them directly under the repo.
-function deepLinkBase(coords: Pick<GitSourceCoords, 'provider' | 'baseUrl'>): string {
-	return coords.provider === 'gitlab' ? `${coords.baseUrl}/-` : coords.baseUrl;
+	return PROVIDER_UI[provider].label;
 }
 
 export function gitCommitUrl(
 	coords: Pick<GitSourceCoords, 'provider' | 'baseUrl'>,
 	commit: string,
 ): string {
-	return `${deepLinkBase(coords)}/commit/${encodeURIComponent(commit)}`;
+	return PROVIDER_UI[coords.provider].commitUrl(coords.baseUrl, commit);
 }
 
 export function gitBranchUrl(
 	coords: Pick<GitSourceCoords, 'provider' | 'baseUrl'>,
 	branch: string,
 ): string {
-	return `${deepLinkBase(coords)}/tree/${encodePath(branch)}`;
+	return PROVIDER_UI[coords.provider].branchUrl(coords.baseUrl, branch);
 }
 
 /** The repo-relative path of the synced entry notebook. */
@@ -173,8 +114,7 @@ export function gitEntryPath(
  * first push.
  */
 export function gitSourceUrl(coords: GitSourceCoords): string {
-	const ref = coords.commit ?? coords.branch;
-	return `${deepLinkBase(coords)}/blob/${encodePath(ref)}/${encodePath(gitEntryPath(coords))}`;
+	return PROVIDER_UI[coords.provider].fileUrl(coords);
 }
 
 export function shortCommit(commit: string): string {
@@ -197,7 +137,7 @@ export function versionCommit(version: Pick<NotebookVersion, 'message' | 'commit
  * scheme-less `host.tld/group/repo`, or an SSH remote.
  */
 export function isRepoInput(input: string): boolean {
-	return parseRepoInput(input) !== null;
+	return normalizeRepo(input) !== null;
 }
 
 export const REPO_INPUT_HINT =
@@ -268,4 +208,123 @@ export function isValidRootPath(input: string): boolean {
 /** An optional repository folder field validated with {@link isValidRootPath}. */
 export function rootPathText() {
 	return z.string().refine(isValidRootPath, ROOT_PATH_HINT);
+}
+
+export function isAzureDevOpsRepoInput(input: string): boolean {
+	try {
+		const url = new URL(input.trim());
+		const parts = url.pathname.replace(/\/$/, '').split('/').slice(1);
+		return (
+			url.origin === 'https://dev.azure.com' &&
+			!url.username &&
+			!url.password &&
+			!url.search &&
+			!url.hash &&
+			parts.length === 4 &&
+			parts[2] === '_git' &&
+			parts.every((part) => {
+				const value = decodeURIComponent(part);
+				return (
+					value !== '' &&
+					value !== '.' &&
+					value !== '..' &&
+					!(hasAsciiControlCharacter(value) || /[/\\]/.test(value))
+				);
+			})
+		);
+	} catch {
+		return false;
+	}
+}
+
+interface PullInput {
+	validate: (input: string) => boolean;
+	hint: string;
+	placeholder: string;
+}
+interface ProviderUI {
+	label: string;
+	changeRequest: { kind: string; abbreviation: string };
+	pullInput: PullInput | null;
+	commitUrl: (baseUrl: string, commit: string) => string;
+	branchUrl: (baseUrl: string, branch: string) => string;
+	fileUrl: (coords: GitSourceCoords) => string;
+}
+
+function pathLinks(separator: string): Pick<ProviderUI, 'commitUrl' | 'branchUrl' | 'fileUrl'> {
+	return {
+		commitUrl: (baseUrl, commit) => `${baseUrl}${separator}/commit/${encodeURIComponent(commit)}`,
+		branchUrl: (baseUrl, branch) => `${baseUrl}${separator}/tree/${encodePath(branch)}`,
+		fileUrl: (coords) =>
+			`${coords.baseUrl}${separator}/blob/${encodePath(coords.commit ?? coords.branch)}/${encodePath(gitEntryPath(coords))}`,
+	};
+}
+const pullRequest = { kind: 'pull request', abbreviation: 'PR' };
+const PROVIDER_UI: Record<GitProvider, ProviderUI> = {
+	github: {
+		label: 'GitHub',
+		changeRequest: pullRequest,
+		pullInput: {
+			validate: isGitHubRepoInput,
+			hint: GITHUB_REPO_INPUT_HINT,
+			placeholder: 'owner/repo',
+		},
+		...pathLinks(''),
+	},
+	gitlab: {
+		label: 'GitLab',
+		changeRequest: { kind: 'merge request', abbreviation: 'MR' },
+		pullInput: null,
+		...pathLinks('/-'),
+	},
+	'azure-devops': {
+		label: 'Azure DevOps',
+		changeRequest: pullRequest,
+		pullInput: {
+			validate: isAzureDevOpsRepoInput,
+			hint: 'Use https://dev.azure.com/organization/project/_git/repository for Azure DevOps',
+			placeholder: 'https://dev.azure.com/organization/project/_git/repository',
+		},
+		commitUrl: (baseUrl, commit) => `${baseUrl}/commit/${encodeURIComponent(commit)}`,
+		branchUrl: (baseUrl, branch) => `${baseUrl}?version=${encodeURIComponent(`GB${branch}`)}`,
+		fileUrl: (coords) =>
+			`${coords.baseUrl}?path=${encodeURIComponent(`/${gitEntryPath(coords)}`)}&version=${encodeURIComponent(`${coords.commit ? 'GC' : 'GB'}${coords.commit ?? coords.branch}`)}`,
+	},
+};
+
+export function changeRequestTerms(provider: string) {
+	const { kind, abbreviation } = isGitProvider(provider)
+		? PROVIDER_UI[provider].changeRequest
+		: { kind: 'change request', abbreviation: 'change request' };
+	return {
+		kind,
+		open: `Open ${abbreviation}`,
+		view: `View ${abbreviation}`,
+		update: `Update ${abbreviation}`,
+		create: `Create new ${abbreviation}`,
+	};
+}
+
+export function pullRepositoryInput(providers: readonly string[]) {
+	const supported = providers
+		.filter(isGitProvider)
+		.filter((provider) => PROVIDER_UI[provider].pullInput !== null);
+	const inputs = supported.flatMap((provider) => PROVIDER_UI[provider].pullInput ?? []);
+	return {
+		available: supported.length > 0,
+		label:
+			supported.length === 1
+				? `Connect to ${providerLabel(supported[0])}`
+				: 'Connect to a repository',
+		placeholder: inputs.length === 1 ? inputs[0].placeholder : 'Repository HTTPS URL',
+		hint: inputs.map((input) => input.hint).join('. '),
+		validate: (input: string) => {
+			const normalized = normalizeRepo(input);
+			const detected = normalized ? detectProvider(normalized) : null;
+			return supported.some(
+				(provider) =>
+					(!detected || detected === provider) && PROVIDER_UI[provider].pullInput?.validate(input),
+			);
+		},
+	};
 }

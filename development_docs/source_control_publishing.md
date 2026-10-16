@@ -1,13 +1,13 @@
 # Source-control publishing
 
-marimohub can publish edits from a git-synced notebook as a provider change request. The first
-implementation opens a draft GitHub pull request through a GitHub App. Capture is provider-neutral
+marimohub can publish edits from a git-synced notebook as a provider change request. The
+adapters create draft pull requests through GitHub Apps or Azure DevOps identities. Capture is provider-neutral
 and can include multiple added, modified, or deleted files.
 
 ## Trust boundary
 
 The notebook sandbox is an untrusted content producer. It can supply changed file bytes, but it
-never receives a GitHub private key, installation token, or repository write credential. The
+never receives provider credentials. The
 control plane validates the session and project role, records an immutable proposal, and asks a
 server-side publisher adapter to perform the provider API calls.
 
@@ -49,7 +49,7 @@ Capture selects one of two strategies automatically and records the choice in
   configured entry notebook with the immutable source version, preserving compatibility with
   copy-based sandbox backends.
 
-Pull-mode GitHub sources store a shallow Git directory for the exact synced
+Pull-mode sources store a shallow Git directory for the exact synced
 commit. The control plane restores it when the session starts. Repository
 credentials never enter the sandbox. Pull sources therefore use
 `git-working-tree`. Push sources use this strategy only when the uploaded archive
@@ -73,20 +73,9 @@ entry-notebook-only proposal.
 
 ## GitHub App setup
 
-Create a GitHub App with these repository permissions:
-
-- Contents: read and write
-- Pull requests: read and write
-
-Install the app only on repositories marimohub may publish to or sync from. Configure
-`MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID` and
-`MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY` on the server. Set both variables to enable
-GitHub source control. If only one variable is set, startup fails. The key can be PEM or a
-single-line base64 encoding of the PEM. No GitHub App webhook is required.
-
-For GHES, set `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL` to the instance's HTTPS origin.
-REST uses `/api/v3`, GraphQL uses `/api/graphql`, and Git and PR links use the web origin.
-See [GHES setup](../docs/syncing.md#github-enterprise-server) for App, network, and TLS configuration.
+For credentials, permissions, and repository policies, see the
+[GitHub App configuration](../docs/configuration.md#github-app) and
+[GHES setup](../docs/syncing.md#github-enterprise-server).
 
 GHES must support REST API version `2022-11-28`, draft PRs, and GraphQL `updateRefs`
 for conditional branch replacement. Tests use injected responses; a minimum GHES
@@ -95,7 +84,7 @@ release has not been verified against a live installation. References:
 and [GraphQL](https://docs.github.com/en/enterprise-server%403.19/graphql/guides/using-graphql-clients).
 
 The GitHub App supports publishing and
-[server sync](../docs/syncing.md#sync-now-with-github). Project editors can
+[server sync](../docs/syncing.md#sync-now). Project editors can
 compare a synced notebook with its branch head and pull that commit on demand. Pulls use the same
 workspace parser and limits as pushed archives. The drift and sync endpoints always use the
 source coordinates stored on the notebook. They do not accept a repository from the caller.
@@ -103,7 +92,7 @@ source coordinates stored on the notebook. They do not accept a repository from 
 The App installation limits repository access. The optional
 `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` policy further restricts
 access by project. Rules include the repository host. See
-[GitHub project policies](../docs/syncing.md#github-project-policies).
+[repository project policies](../docs/syncing.md#repository-project-policies).
 
 The adapter discovers the installation for the target repository and creates a short-lived token.
 The token is restricted to that repository and to the configured App permissions. During
@@ -119,6 +108,18 @@ the commit marimohub previously published, so collaborator or automation changes
 overwritten. After the branch update, the adapter also updates the existing pull request's title
 and description. A metadata failure is retryable without creating another commit. A closed pull
 request or deleted branch must be replaced with a new pull request.
+
+## Azure DevOps Services
+
+See [Azure setup](../docs/syncing.md#azure-devops-services) for identity and repository policy configuration.
+The adapter uses REST API 7.1 with Microsoft Entra tokens. Repository URL resolution,
+credentials, and HTTP requests remain separate so Server support can add collection URLs later.
+
+Pushes compare the branch head with the last published commit. Updates calculate the complete
+proposal tree from its original base, including restoration of omitted changes.
+Retries require both the expected parent and matching tree before reusing a commit.
+The adapter rejects external branch changes, closed PRs, and unsupported file-mode changes.
+It never force-pushes. Workspace and Git downloads share the existing size limits.
 
 ## Stored proposal
 
@@ -175,17 +176,18 @@ still race under concurrent requests and is not used as a substitute.
 
 The combined endpoint requires a project manager. A future standalone capture endpoint can permit
 editors to save proposals while retaining manager approval for publication. Provider commits use
-the GitHub App identity as committer and include the authenticated marimohub user in a
+the configured provider identity as committer and include the authenticated marimohub user in a
 `Co-authored-by` trailer. The proposal manifest and audit event retain the user's stable marimohub
 identity.
 
 ## Extension path
 
 Provider support lives behind `SourceControlPublisher`; the API and proposal service do not import
-the GitHub adapter. The port has a required create operation and an optional update operation. A
+concrete adapters. The port has a required create operation and an optional update operation. A
 GitLab, Bitbucket, or other provider adds an adapter and registers it in the configuration
 composition root. The provider owns authentication and API-specific branch/merge request
 operations, while the proposal format and authorization remain unchanged.
+See the [provider extension checklist](architecture.md#39-source-control) for the exhaustive configuration and UI mappings.
 
 Additional capture strategies are capture-policy extensions, not provider rewrites. They must emit
 the same bounded, immutable change model and define how they identify generated or runtime files.

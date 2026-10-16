@@ -1126,6 +1126,9 @@ importers:
       '@marimo-hub/secrets-kubernetes':
         specifier: workspace:*
         version: link:../secrets-kubernetes
+      '@marimo-hub/source-control-azure-devops':
+        specifier: workspace:*
+        version: link:../source-control-azure-devops
       '@marimo-hub/source-control-github':
         specifier: workspace:*
         version: link:../source-control-github
@@ -1663,17 +1666,70 @@ importers:
         specifier: 4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/browser-preview@4.1.11)(@vitest/coverage-v8@4.1.11(@vitest/browser@4.1.11)(vitest@4.1.11))(jsdom@29.1.1)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
 
+  packages/source-control-azure-devops:
+    dependencies:
+      '@azure/identity':
+        specifier: 'catalog:'
+        version: 4.13.1
+      '@marimo-hub/core':
+        specifier: workspace:*
+        version: link:../core
+      '@marimo-hub/source-control-git':
+        specifier: workspace:*
+        version: link:../source-control-git
+    devDependencies:
+      '@marimo-hub/tsconfig':
+        specifier: workspace:*
+        version: link:../ts-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 25.9.3
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vite-plus:
+        specifier: 'catalog:'
+        version: 0.3.0(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.11(@vitest/browser@4.1.11)(vitest@4.1.11))(esbuild@0.28.1)(jiti@2.7.0)(jsdom@29.1.1)(tsx@4.23.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(yaml@2.9.0)
+      vitest:
+        specifier: 4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/browser-preview@4.1.11)(@vitest/coverage-v8@4.1.11(@vitest/browser@4.1.11)(vitest@4.1.11))(jsdom@29.1.1)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
+
+  packages/source-control-git:
+    dependencies:
+      '@marimo-hub/core':
+        specifier: workspace:*
+        version: link:../core
+      isomorphic-git:
+        specifier: 'catalog:'
+        version: 1.40.0
+    devDependencies:
+      '@marimo-hub/tsconfig':
+        specifier: workspace:*
+        version: link:../ts-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 25.9.3
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vite-plus:
+        specifier: 'catalog:'
+        version: 0.3.0(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.11(@vitest/browser@4.1.11)(vitest@4.1.11))(esbuild@0.28.1)(jiti@2.7.0)(jsdom@29.1.1)(tsx@4.23.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(yaml@2.9.0)
+      vitest:
+        specifier: 4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/browser-preview@4.1.11)(@vitest/coverage-v8@4.1.11(@vitest/browser@4.1.11)(vitest@4.1.11))(jsdom@29.1.1)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
+
   packages/source-control-github:
     dependencies:
       '@marimo-hub/core':
         specifier: workspace:*
         version: link:../core
+      '@marimo-hub/source-control-git':
+        specifier: workspace:*
+        version: link:../source-control-git
       fflate:
         specifier: 'catalog:'
         version: 0.8.3
-      isomorphic-git:
-        specifier: 'catalog:'
-        version: 1.40.0
     devDependencies:
       '@marimo-hub/tsconfig':
         specifier: workspace:*

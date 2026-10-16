@@ -12,10 +12,10 @@ Protect previewed branches, or pin a reviewed commit. See [Security model → Pr
 ## Create a preview
 
 Open **Previews** from the notebook menu. Select **Create preview**.
-Previews require a [Git-synced notebook](syncing.md) and a [GitHub App connection](syncing.md#pull-mode-connect-a-github-repository) with access to the notebook's configured repository.
+Previews require a [Git-synced notebook](syncing.md) and a [GitHub App connection](syncing.md#pull-mode-connect-a-repository) with access to the notebook's configured repository.
 Configuring the [GitHub App](configuration.md#github-app) enables previews.
 Previews use the deployment's GitHub host, including a [GitHub Enterprise Server](syncing.md#github-enterprise-server) instance.
-[GitHub project policies](syncing.md#github-project-policies) apply to preview reads.
+[GitHub project policies](syncing.md#repository-project-policies) apply to preview reads.
 Pull request tracking also needs the App's Pull requests read permission, in addition to Contents read.
 
 - **Follow a branch** publishes the current commit and follows new pushes.
