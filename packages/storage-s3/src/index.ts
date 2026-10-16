@@ -19,6 +19,7 @@ import {
 	S3Client,
 } from '@aws-sdk/client-s3';
 import type { PutObjectCommandInput } from '@aws-sdk/client-s3';
+import { assertTimerDelay, withDeadline } from '@marimo-hub/core/async';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
 import { assertValidBucketListLimit } from '@marimo-hub/core/ports/bucket';
 import type {
@@ -43,6 +44,8 @@ export interface S3StorageConfig {
 	};
 	/** `true` for MinIO/Ceph and most non-AWS stores. */
 	forcePathStyle?: boolean;
+	/** Total budget per request, including retries and body reads; defaults to 60 seconds. */
+	requestTimeoutMs?: number;
 }
 
 /** S3 returns ETags wrapped in double quotes; the `Bucket` port stores them bare. */
@@ -81,22 +84,43 @@ function* chunk<T>(items: T[], size: number): Generator<T[]> {
 export class S3Storage implements Bucket {
 	private readonly client: S3Client;
 	private readonly bucket: string;
+	private readonly requestTimeoutMs: number;
 
 	constructor(config: S3StorageConfig) {
 		this.bucket = config.bucket;
+		this.requestTimeoutMs = config.requestTimeoutMs ?? 60_000;
+		assertTimerDelay(this.requestTimeoutMs);
+		if (this.requestTimeoutMs === 0) throw new RangeError('requestTimeoutMs must be positive');
 		this.client = new S3Client({
 			region: config.region ?? 'auto',
 			endpoint: config.endpoint || undefined,
 			credentials: config.credentials,
 			forcePathStyle: config.forcePathStyle ?? false,
+			requestHandler: {
+				connectionTimeout: Math.min(5_000, this.requestTimeoutMs),
+				requestTimeout: this.requestTimeoutMs,
+				throwOnRequestTimeout: true,
+			},
+		});
+	}
+
+	private request<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+		return withDeadline(work, {
+			timeoutMs: this.requestTimeoutMs,
+			timeoutError: () => new DOMException('S3 request timed out', 'TimeoutError'),
 		});
 	}
 
 	async get(key: string): Promise<BucketObjectBody | null> {
 		try {
-			const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
-			// Read the stream once and cache; the port's text()/json()/bytes() are idempotent.
-			const bodyBytes = res.Body ? await res.Body.transformToByteArray() : new Uint8Array(0);
+			const { res, bodyBytes } = await this.request(async (abortSignal) => {
+				const res = await this.client.send(
+					new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+					{ abortSignal },
+				);
+				const bodyBytes = res.Body ? await res.Body.transformToByteArray() : new Uint8Array(0);
+				return { res, bodyBytes };
+			});
 			let bodyText: string | undefined;
 			const decode = () => (bodyText ??= new TextDecoder().decode(bodyBytes));
 			return {
@@ -116,7 +140,9 @@ export class S3Storage implements Bucket {
 
 	async head(key: string): Promise<BucketObject | null> {
 		try {
-			const res = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+			const res = await this.request((abortSignal) =>
+				this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }), { abortSignal }),
+			);
 			return {
 				key,
 				etag: stripETag(res.ETag),
@@ -153,7 +179,9 @@ export class S3Storage implements Bucket {
 		const conditional = matchesEtag || options?.onlyIfNotExists === true;
 
 		try {
-			const res = await this.client.send(new PutObjectCommand(input));
+			const res = await this.request((abortSignal) =>
+				this.client.send(new PutObjectCommand(input), { abortSignal }),
+			);
 			return {
 				key,
 				etag: stripETag(res.ETag),
@@ -188,11 +216,14 @@ export class S3Storage implements Bucket {
 			const errors: { Key?: string; Code?: string; Message?: string }[] = [];
 			for (const batch of chunk(key, 1000)) {
 				if (batch.length === 0) continue;
-				const res = await this.client.send(
-					new DeleteObjectsCommand({
-						Bucket: this.bucket,
-						Delete: { Objects: batch.map((Key) => ({ Key })) },
-					}),
+				const res = await this.request((abortSignal) =>
+					this.client.send(
+						new DeleteObjectsCommand({
+							Bucket: this.bucket,
+							Delete: { Objects: batch.map((Key) => ({ Key })) },
+						}),
+						{ abortSignal },
+					),
 				);
 				if (res.Errors && res.Errors.length > 0) errors.push(...res.Errors);
 			}
@@ -205,20 +236,25 @@ export class S3Storage implements Bucket {
 			}
 			return;
 		}
-		await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
+		await this.request((abortSignal) =>
+			this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }), { abortSignal }),
+		);
 	}
 
 	async list(options?: BucketListOptions): Promise<BucketListResult> {
 		assertValidBucketListLimit(options?.limit);
-		const res = await this.client.send(
-			new ListObjectsV2Command({
-				Bucket: this.bucket,
-				Prefix: options?.prefix,
-				Delimiter: options?.delimiter,
-				MaxKeys: options?.limit,
-				StartAfter: options?.startAfter,
-				ContinuationToken: options?.cursor,
-			}),
+		const res = await this.request((abortSignal) =>
+			this.client.send(
+				new ListObjectsV2Command({
+					Bucket: this.bucket,
+					Prefix: options?.prefix,
+					Delimiter: options?.delimiter,
+					MaxKeys: options?.limit,
+					StartAfter: options?.startAfter,
+					ContinuationToken: options?.cursor,
+				}),
+				{ abortSignal },
+			),
 		);
 
 		return {

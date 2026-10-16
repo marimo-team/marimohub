@@ -6,6 +6,12 @@ class SettleWithinTimeoutError extends Error {
 	readonly name = 'SettleWithinTimeoutError';
 }
 
+export function onceAsync<T>(work: () => T | Promise<T>): () => Promise<T> {
+	let result: Promise<T> | undefined;
+	// Cache rejection too: forced cleanup must not repeat a failed operation.
+	return () => (result ??= Promise.resolve().then(work));
+}
+
 export async function settleAllWithin(
 	promises: Iterable<PromiseLike<unknown>>,
 	timeoutMs: number,

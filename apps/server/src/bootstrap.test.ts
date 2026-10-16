@@ -380,6 +380,167 @@ describe('bootstrap', () => {
 		expect(harness.exit).not.toHaveBeenCalledWith(0);
 	});
 
+	it.each(['maintenance', 'preview_preparation', 'session_lifecycle'])(
+		'waits for %s work before disposing compute and flushing telemetry',
+		async (name) => {
+			const work = Promise.withResolvers<void>();
+			if (name === 'maintenance') {
+				vi.mocked(startMaintenance).mockImplementationOnce(
+					(_deps, _metrics, loops) =>
+						loops!.start({ name: 'maintenance', intervalMs: 60_000, run: () => work.promise }).stop,
+				);
+			} else {
+				const startLoop =
+					name === 'preview_preparation' ? startPreviewPreparation : startSessionLifecycle;
+				vi.mocked(startLoop).mockImplementationOnce(
+					(_deps, loops) =>
+						loops!.start({ name: 'session', intervalMs: 60_000, run: () => work.promise }).stop,
+				);
+			}
+			const dispose = vi.fn(async () => {});
+			const shutdown = vi.fn(async () => {});
+			const harness = makeHarness(
+				{ ...deps, compute: { ...deps.compute, [Symbol.asyncDispose]: dispose } },
+				{
+					otel: { tracing: false, metrics: false, logs: false, shutdown },
+				},
+			);
+			await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
+			await vi.advanceTimersByTimeAsync(0);
+			harness.signals.get('SIGTERM')?.();
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(harness.exit).not.toHaveBeenCalled();
+			expect(dispose).not.toHaveBeenCalled();
+			expect(shutdown).not.toHaveBeenCalled();
+			work.resolve();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(dispose).toHaveBeenCalledOnce();
+			expect(shutdown).toHaveBeenCalledOnce();
+			expect(harness.exit).toHaveBeenCalledWith(0);
+		},
+	);
+
+	it.each([undefined, '5'])(
+		'bounds stalled maintenance shutdown with timeout=%s',
+		async (timeout) => {
+			vi.mocked(startMaintenance).mockImplementationOnce(
+				(_deps, _metrics, loops) =>
+					loops!.start({
+						name: 'maintenance',
+						intervalMs: 60_000,
+						deadlineMs: 1000,
+						run: () => new Promise(() => {}),
+					}).stop,
+			);
+			const dispose = vi.fn(async () => {});
+			const shutdown = vi.fn(async () => {});
+			const harness = makeHarness(
+				{ ...deps, compute: { ...deps.compute, [Symbol.asyncDispose]: dispose } },
+				{
+					otel: { tracing: false, metrics: false, logs: false, shutdown },
+				},
+			);
+			await bootstrap(
+				{
+					...BASE_ENV,
+					MARIMOHUB_RUN_MAINTENANCE: 'true',
+					MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS: timeout,
+				},
+				harness.overrides,
+			);
+			harness.signals.get('SIGTERM')?.();
+			const budget = Number(timeout ?? 120) * 1000;
+			await vi.advanceTimersByTimeAsync(budget - 1);
+			expect(harness.exit).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(harness.exit).toHaveBeenCalledWith(0);
+			expect(dispose).not.toHaveBeenCalled();
+			expect(shutdown).toHaveBeenCalledOnce();
+			expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"event":"drain_timeout"'));
+		},
+	);
+
+	it.each(['throw', 'reject'] as const)(
+		'waits for retained maintenance work when the job drain fails with %s',
+		async (failure) => {
+			const retained = Promise.withResolvers<void>();
+			vi.mocked(startMaintenance).mockImplementationOnce(
+				(_deps, _metrics, loops) =>
+					loops!.start({
+						name: 'maintenance',
+						intervalMs: 60_000,
+						run: async () => {},
+						drain: () => retained.promise,
+					}).stop,
+			);
+			vi.mocked(startJobScheduler).mockReturnValueOnce({
+				stop: vi.fn(),
+				drain: () => {
+					if (failure === 'throw') throw new Error('job drain failed');
+					return Promise.reject(new Error('job drain failed'));
+				},
+			});
+			const dispose = vi.fn(async () => {});
+			const harness = makeHarness({
+				...deps,
+				compute: { ...deps.compute, [Symbol.asyncDispose]: dispose },
+			});
+			await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
+			harness.signals.get('SIGTERM')?.();
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(harness.exit).not.toHaveBeenCalled();
+			expect(dispose).not.toHaveBeenCalled();
+			retained.resolve();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(dispose).toHaveBeenCalledOnce();
+			expect(harness.exit).toHaveBeenCalledWith(0);
+		},
+	);
+
+	it.each(['throw', 'reject'] as const)(
+		'flushes telemetry even when forced cleanup fails with %s',
+		async (failure) => {
+			deps.dataBrowser = {
+				preview: true,
+				close: () => {
+					if (failure === 'throw') throw new Error('cleanup failed');
+					return Promise.reject(new Error('cleanup failed'));
+				},
+			};
+			const shutdown = vi.fn(async () => {});
+			const harness = makeHarness(deps, {
+				closeImmediately: false,
+				otel: { tracing: false, metrics: false, logs: false, shutdown },
+			});
+			await bootstrap(BASE_ENV, harness.overrides);
+			harness.signals.get('SIGTERM')?.();
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(shutdown).toHaveBeenCalledOnce();
+			expect(harness.exit).toHaveBeenCalledWith(0);
+		},
+	);
+
+	it('bounds hung telemetry cleanup and never flushes it twice', async () => {
+		const shutdown = vi.fn(() => new Promise<void>(() => {}));
+		const harness = makeHarness(deps, {
+			otel: { tracing: false, metrics: false, logs: false, shutdown },
+		});
+		const handle = await bootstrap(BASE_ENV, harness.overrides);
+		const first = handle!.drain();
+		const second = handle!.drain();
+		expect(first).toBe(second);
+		await vi.advanceTimersByTimeAsync(19_999);
+		let drained = false;
+		void first.then(() => {
+			drained = true;
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(drained).toBe(false);
+		await vi.advanceTimersByTimeAsync(1);
+		await first;
+		expect(shutdown).toHaveBeenCalledOnce();
+	});
+
 	it('flushes OpenTelemetry during drain', async () => {
 		const shutdown = vi.fn().mockResolvedValue(undefined);
 		const harness = makeHarness(deps, {

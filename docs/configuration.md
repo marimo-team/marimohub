@@ -456,6 +456,7 @@ Server-wide settings; no backend selector.
 | `MARIMOHUB_APP_BASE_URL` | Public URL for browser links and the Node SPA base path. When the app uses a path prefix, set this variable. If unset, links use the request origin and the SPA uses `/`. | — | — | `https://hub.example.com/marimohub` |
 | `MARIMOHUB_STATIC_ROOT` | Directory containing the web UI's static files. | — | `./public` | — |
 | `MARIMOHUB_RUN_MAINTENANCE` | Run background maintenance (expiring old sessions, cleaning up sandboxes) on this replica only. | — | `false` | `true` |
+| `MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` | Shutdown drain budget in seconds (1–86400). Defaults to 120 on maintenance and 10 on API replicas. Allow another 20 seconds in the container termination grace period. | — | — | `120` |
 | `MARIMOHUB_MAX_SESSIONS_PER_USER` | Per-user concurrent session cap (`0` = unlimited). Counts `edit` sessions, and separately bounds the apps a single user may have started — the cost ceiling a user cannot escape by fanning apps out across projects (apps are also capped per project via `MARIMOHUB_MAX_APPS_PER_PROJECT`). | — | `10` | — |
 | `MARIMOHUB_MAX_APPS_PER_PROJECT` | Concurrent app (`mode: app`) sessions per project (`0` = unlimited). Counts physical sandboxes, including replicas and draining versions. | — | `5` | — |
 | `MARIMOHUB_APP_MAX_VISITS_PER_SESSION` | Browser sessions (managed page visits) per sandbox. Each tab consumes a slot, including tabs from the same account. Unset means unlimited. | — | — | — |

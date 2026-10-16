@@ -113,6 +113,18 @@ metadata:
     {{- end }}
   {{- end }}
 spec:
+  {{- if .maintenance }}
+  {{- $shutdown := int $v.maintenance.shutdownTimeoutSeconds }}
+  {{- if or (not (regexMatch "^[0-9]+$" (toString $v.maintenance.shutdownTimeoutSeconds))) (lt $shutdown 1) (gt $shutdown 86400) }}
+  {{- fail "maintenance.shutdownTimeoutSeconds must be between 1 and 86400" }}
+  {{- end }}
+  {{- range $v.extraEnv }}
+  {{- if eq .name "MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS" }}
+  {{- fail "Use maintenance.shutdownTimeoutSeconds instead of extraEnv for the shutdown timeout" }}
+  {{- end }}
+  {{- end }}
+  terminationGracePeriodSeconds: {{ add $shutdown 20 }}
+  {{- end }}
   serviceAccountName: {{ include "marimohub.serviceAccountName" $root }}
   automountServiceAccountToken: {{ $v.serviceAccount.automountServiceAccountToken }}
   enableServiceLinks: false
@@ -178,6 +190,10 @@ spec:
         # explicit env overrides any value coming from the ConfigMap/Secret.
         - name: MARIMOHUB_RUN_MAINTENANCE
           value: {{ if .maintenance }}"true"{{ else }}"false"{{ end }}
+        {{- if .maintenance }}
+        - name: MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS
+          value: {{ $v.maintenance.shutdownTimeoutSeconds | quote }}
+        {{- end }}
         {{- /* API pods only: the Service/ServiceMonitor never scrape the
         maintenance pod, so a listener there would just be an unscraped open
         port. */}}

@@ -36,6 +36,9 @@ jobs:
       - name: Verify image references
         run: bash charts/marimohub/ci/check-images.sh
 
+      - name: Verify maintenance shutdown
+        run: bash charts/marimohub/ci/check-maintenance-shutdown.sh
+
       - name: Verify Deployment annotations
         run: bash charts/marimohub/ci/check-deployment-annotations.sh
 

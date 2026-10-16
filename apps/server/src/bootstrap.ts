@@ -20,11 +20,11 @@ import { BackgroundLoops } from './backgroundLoops';
 import { logEvent } from './log';
 import { fanoutMetrics, OtelMetrics, WideEventMetrics } from './metrics';
 import { buildVersion, startOtel } from './otel';
-import { settleAllWithin } from './promise';
+import { onceAsync, settleAllWithin } from './promise';
 import { serveSpaFallback, serveStaticWithCache } from './staticCache';
 import { attachSandboxProxyUpgrade } from './sandboxProxyWs';
 
-const DRAIN_TIMEOUT_MS = 10_000;
+const CLEANUP_TIMEOUT_MS = 10_000;
 
 type Signal = 'SIGTERM' | 'SIGINT';
 
@@ -91,6 +91,11 @@ export async function bootstrap(
 		}
 		throw err;
 	}
+	const drainTimeoutMs =
+		Number(
+			validatedEnv.MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS ??
+				(validatedEnv.MARIMOHUB_RUN_MAINTENANCE === 'true' ? 120 : 10),
+		) * 1000;
 	deps.sandbox.thumbnailDeadline = () => thumbnailDeadline;
 	const backgroundTasks = new InFlightWork();
 	deps.backgroundTasks = {
@@ -170,13 +175,12 @@ export async function bootstrap(
 	// marimohub-maintenance Deployment). The bucket-CAS leases inside are
 	// defense-in-depth guards.
 	const stops: (() => void)[] = [];
-	let drainJobRuns: () => Promise<void> = () => Promise.resolve();
-	let drainWarmPools: () => Promise<void> = () => Promise.resolve();
+	const runtimeDrains: (() => Promise<void>)[] = [];
 	if (validatedEnv.MARIMOHUB_RUN_MAINTENANCE === 'true') {
 		const warmPools = startWarmPools(deps, loops);
 		if (warmPools) {
 			stops.push(warmPools.stop);
-			drainWarmPools = warmPools.drain;
+			runtimeDrains.push(warmPools.drain);
 		}
 		stops.push(startMaintenance(deps, wideEvents, loops));
 		const stopPreviews = startPreviewPreparation(deps, loops);
@@ -186,7 +190,7 @@ export async function bootstrap(
 		if (deps.jobs) {
 			const jobScheduler = startJobScheduler(deps, wideEvents, loops);
 			stops.push(jobScheduler.stop);
-			drainJobRuns = jobScheduler.drain;
+			runtimeDrains.push(jobScheduler.drain);
 		}
 	}
 
@@ -238,15 +242,15 @@ export async function bootstrap(
 
 	const unregisterSignals: (() => void)[] = [];
 	let drainPromise: Promise<void> | undefined;
-	let notifierClose: Promise<void> | undefined;
 	const waitForBackgroundTasks = (): Promise<void> => backgroundTasks.drain();
-	const closeNotifier = (): Promise<void> => {
-		notifierClose ??= deps.notifier ? disposeNotifier(deps.notifier) : Promise.resolve();
-		return notifierClose;
-	};
+	const closeNotifier = onceAsync(() =>
+		deps.notifier ? disposeNotifier(deps.notifier) : undefined,
+	);
+	const closeDataBrowser = onceAsync(() => deps.dataBrowser?.close?.());
+	const shutdownOtel = onceAsync(() => otel?.shutdown());
 	const drain = (): Promise<void> => {
 		drainPromise ??= (async () => {
-			thumbnailDeadline = Date.now() + DRAIN_TIMEOUT_MS - 1000;
+			thumbnailDeadline = Date.now() + drainTimeoutMs - 1000;
 			for (const unregisterSignal of unregisterSignals.splice(0)) unregisterSignal();
 			// Cancel future ticks first. An in-flight sweep still has the remaining drain
 			// window to release its lease; the lease TTL is the fallback if it outlives it.
@@ -256,36 +260,25 @@ export async function bootstrap(
 				server.close(() => resolve());
 			});
 			if ('closeIdleConnections' in server) server.closeIdleConnections();
-			let dataBrowserClose: Promise<void> | undefined;
-			const closeDataBrowser = (): Promise<void> => {
-				dataBrowserClose ??= deps.dataBrowser?.close?.() ?? Promise.resolve();
-				return dataBrowserClose;
-			};
 			const disposeCompute = deps.compute[Symbol.asyncDispose];
-			const schedulerDrained = Promise.all([drainJobRuns(), drainWarmPools()]);
-			const shutdowns: PromiseLike<unknown>[] = [
-				closed,
-				...(deps.dataBrowser?.close ? [closed.then(closeDataBrowser)] : []),
-				closed.then(waitForBackgroundTasks).then(closeNotifier),
-				// In-flight job runs finish (or hit the drain deadline); the watchdog
-				// reclaims whatever a forced termination leaves behind.
-				schedulerDrained,
-			];
-			if (disposeCompute) {
-				shutdowns.push(schedulerDrained.then(() => disposeCompute.call(deps.compute)));
-			}
-			if (otel) shutdowns.push(Promise.resolve().then(() => otel.shutdown()));
+			const runtimeDrained = Promise.allSettled([
+				loops.drain(),
+				...runtimeDrains.map((drain) => Promise.resolve().then(drain)),
+				closed.then(waitForBackgroundTasks),
+			]);
+			const resourcesClosed = Promise.allSettled([
+				closed.then(closeDataBrowser),
+				runtimeDrained.then(closeNotifier),
+				runtimeDrained.then(() => disposeCompute?.call(deps.compute)),
+			]);
 
-			// Long-lived WebSockets can keep close pending indefinitely. Ten seconds stays
-			// below Kubernetes' default 30-second termination grace period.
-			const result = await settleAllWithin(shutdowns, DRAIN_TIMEOUT_MS);
-			// A timed-out drain still resolves (settleAllWithin never rejects), so surface it
-			// here or the forced termination looks like a clean shutdown.
+			// Kubernetes must allow this budget plus the final cleanup window.
+			const result = await settleAllWithin([resourcesClosed.then(shutdownOtel)], drainTimeoutMs);
 			if (result === 'timed-out') {
-				logEvent({ level: 'warn', event: 'drain_timeout', timeoutMs: DRAIN_TIMEOUT_MS });
+				logEvent({ level: 'warn', event: 'drain_timeout', timeoutMs: drainTimeoutMs });
 				await settleAllWithin(
-					[closeDataBrowser(), waitForBackgroundTasks().then(closeNotifier)],
-					DRAIN_TIMEOUT_MS,
+					[closeDataBrowser(), waitForBackgroundTasks().then(closeNotifier), shutdownOtel()],
+					CLEANUP_TIMEOUT_MS,
 				);
 			}
 		})();

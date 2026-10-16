@@ -29,6 +29,8 @@ const WIRING_SOURCES = [
 	fileURLToPath(new URL('./sourceControl.ts', import.meta.url)),
 	fileURLToPath(new URL('./surfaces.ts', import.meta.url)),
 	fileURLToPath(new URL('../../../apps/server/src/index.ts', import.meta.url)),
+	fileURLToPath(new URL('../../../apps/server/src/bootstrap.ts', import.meta.url)),
+	fileURLToPath(new URL('../../../apps/server/src/env.ts', import.meta.url)),
 ];
 
 // Literals that appear in the wiring sources but aren't config vars.

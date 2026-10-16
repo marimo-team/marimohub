@@ -90,6 +90,19 @@ classes behave differently on purpose:
   dispatches queued runs under the concurrency caps, and reclaims runs past
   their deadline. Jobs are accepted but never run without this replica.
 
+## Shutdown budgets
+
+On SIGTERM or SIGINT, the Node server stops loop ticks and closes its HTTP listener.
+It waits for requests, background tasks, and maintenance work before it disposes compute clients and flushes telemetry.
+This includes capture and destroy operations that outlive their deadlines.
+
+`MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` sets the drain budget: 120 seconds for maintenance or 10 seconds for API replicas by default.
+On expiry, the server logs `drain_timeout` and allows up to 10 seconds for final cleanup.
+A forced exit can interrupt unfinished captures.
+
+Set the container termination grace to at least the drain budget plus 20 seconds.
+The Helm chart derives this from `maintenance.shutdownTimeoutSeconds`. The Kubernetes example uses 140 seconds for maintenance.
+
 ## Background loops
 
 The maintenance replica runs these loops. Each leased loop takes its own

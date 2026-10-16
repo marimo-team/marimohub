@@ -211,6 +211,76 @@ describe('BackgroundLoops', () => {
 		expect(release.mock.calls[0][0]).toBe(acquire.mock.calls[1][0]);
 	});
 
+	it('drains actual work after its deadline before draining retained service work', async () => {
+		const work = Promise.withResolvers<void>();
+		const retained = Promise.withResolvers<void>();
+		const serviceDrain = vi.fn(() => retained.promise);
+		const handle = start(() => work.promise, { drain: serviceDrain });
+		await vi.advanceTimersByTimeAsync(300);
+		handle.stop();
+		const finished = vi.fn();
+		const draining = loops.drain().then(finished);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finished).not.toHaveBeenCalled();
+		expect(serviceDrain).not.toHaveBeenCalled();
+		work.resolve();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(serviceDrain).toHaveBeenCalledOnce();
+		expect(finished).not.toHaveBeenCalled();
+		retained.resolve();
+		await draining;
+		expect(finished).toHaveBeenCalledOnce();
+	});
+
+	it.each(['throw', 'reject'] as const)(
+		'waits for other service drains when one drain fails with %s',
+		async (failure) => {
+			const retained = Promise.withResolvers<void>();
+			const first = start(async () => {}, {
+				drain: () => {
+					if (failure === 'throw') throw new Error('drain failed');
+					return Promise.reject(new Error('drain failed'));
+				},
+			});
+			const secondDrain = vi.fn(() => retained.promise);
+			const second = start(async () => {}, { name: 'second', drain: secondDrain });
+			first.stop();
+			second.stop();
+			const finished = vi.fn();
+			const draining = loops.drain().then(finished);
+			const settled = expect(draining).resolves.toBeUndefined();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(secondDrain).toHaveBeenCalledOnce();
+			expect(finished).not.toHaveBeenCalled();
+			retained.resolve();
+			await settled;
+			expect(finished).toHaveBeenCalledOnce();
+		},
+	);
+
+	it.each(['resolve', 'reject'] as const)(
+		'drains work that ignores stop cancellation until its late %s',
+		async (outcome) => {
+			const work = Promise.withResolvers<void>();
+			const onSuccess = vi.fn();
+			const run = vi.fn(() => work.promise);
+			const handle = start(run, { abortOnStop: true, onSuccess });
+			await vi.advanceTimersByTimeAsync(0);
+			handle.stop();
+			await handle.drain();
+			const finished = vi.fn();
+			const draining = loops.drain().then(finished);
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(finished).not.toHaveBeenCalled();
+			expect(run).toHaveBeenCalledOnce();
+			if (outcome === 'resolve') work.resolve();
+			else work.reject(new Error('late failure'));
+			await draining;
+			expect(onSuccess).not.toHaveBeenCalled();
+			expect(events()).toEqual([]);
+		},
+	);
+
 	it('passes no holder to unleased loops', async () => {
 		const run = vi.fn<LoopOptions['run']>(async () => {});
 		start(run);

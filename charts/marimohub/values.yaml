@@ -90,6 +90,8 @@ surfaces:
 # replica + Recreate. Don't scale it.
 maintenance:
   enabled: true
+  # The pod grace period adds 20 seconds for final cleanup and process exit.
+  shutdownTimeoutSeconds: 120
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { cpu: 250m, memory: 256Mi }

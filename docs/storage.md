@@ -69,6 +69,13 @@ Known-good options:
 
 <!--@include: ./setup/storage/library.md-->
 
+## S3 request timeouts
+
+S3 aborts requests after 60 seconds, including retries and response-body reads.
+Each deletion batch of up to 1,000 keys gets a separate budget.
+For library composition, `S3StorageConfig.requestTimeoutMs` overrides this budget.
+Connection setup has a separate limit: 5 seconds or the request budget, whichever is shorter.
+
 ## Validate it
 
 After deploy:

@@ -28,6 +28,9 @@ describe('validateServerEnv', () => {
 	});
 
 	it.each([
+		['MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS', '0', 'expected an integer from 1 to 86400'],
+		['MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS', '1.5', 'expected an integer from 1 to 86400'],
+		['MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS', '86401', 'expected an integer from 1 to 86400'],
 		['PORT', 'abc', 'expected an integer from 1 to 65535'],
 		['PORT', '0', 'expected an integer from 1 to 65535'],
 		['PORT', '65536', 'expected an integer from 1 to 65535'],

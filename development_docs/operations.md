@@ -371,3 +371,21 @@ The `beginTerminating` CAS coordinates explicit Stop requests; teardown is
 idempotent. Each non-empty sweep emits a `session_lifecycle_sweep` event with
 `snapshotted`, `extended`, `reapedExpired`, `reapedIdle`, and `reclaimed` counts.
 Monitor missing events as described for `maintenance_cycle` in §6.
+
+## Maintenance timeout boundaries
+
+| Operation                   | Bound and recovery                                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| S3 requests                 | [60-second budget](../docs/storage.md#s3-request-timeouts), with HTTP abort.                                  |
+| Kernel connection probe     | HTTP: 3 seconds. Provider exec: 10 seconds. Failure returns unknown, never idle.                              |
+| Session capture and destroy | The reconciler stops waiting after 60 seconds but blocks another reclaim until the operation settles.         |
+| Lifecycle sweep             | Deadline: at least 10 minutes. Unfinished work blocks overlapping sweeps. The health endpoint reports stalls. |
+| Shutdown                    | [Drain budget and cleanup window](../docs/operations.md#shutdown-budgets).                                    |
+
+A capture timeout must retain the editor claim while artifact writes continue.
+Destroy must finish before the session receives `sandbox_reclaimed_at`.
+Calls without cancellation rely on the maintenance liveness restart for recovery.
+
+Other storage adapters still have gaps: GCS reads response bodies outside its 60-second request timeout (two retries).
+Azure has no explicit adapter deadline. R2 and filesystem storage have no request-level abort.
+Unfinished calls rely on the loop watchdog.

@@ -121,6 +121,7 @@ export function startMaintenance(
 	const lock = maintenanceLock(deps);
 	return loops.start({
 		name: 'maintenance',
+		drain: () => reconciler.drain(),
 		intervalMs: FIVE_MINUTES_MS,
 		lock,
 		overlapEvent: 'maintenance_cycle_overlap_skipped',

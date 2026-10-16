@@ -1558,6 +1558,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: 'false',
 					},
 					{
+						id: 'MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS',
+						name: 'Shutdown timeout',
+						description:
+							'Shutdown drain budget in seconds (1–86400). Defaults to 120 on maintenance and 10 on API replicas. Allow another 20 seconds in the container termination grace period.',
+						example: '120',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_MAX_SESSIONS_PER_USER',
 						name: 'Max sessions per user',
 						description:

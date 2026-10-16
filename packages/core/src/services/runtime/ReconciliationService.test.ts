@@ -638,7 +638,13 @@ describe('ReconciliationService', () => {
 			});
 			expect(reclaim).toHaveBeenCalledOnce();
 
+			const drained = vi.fn();
+			const draining = reconciler.drain().then(drained);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(drained).not.toHaveBeenCalled();
 			hung.resolve({ reclaimed: false, reason: 'destroy_failed' });
+			await draining;
+			expect(drained).toHaveBeenCalledOnce();
 			await vi.advanceTimersByTimeAsync(0);
 			reclaim.mockResolvedValue({ reclaimed: true, saved: false });
 			await expect(reconciler.reclaimTerminalSessions()).resolves.toMatchObject({

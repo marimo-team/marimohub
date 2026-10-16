@@ -22,7 +22,7 @@ export async function kernelActiveConnections(
 			'h={"Authorization":"Bearer "+p.read_text().strip()} if p.exists() else {};' +
 			`r=urllib.request.Request(${JSON.stringify(url)},headers=h);` +
 			'print(json.load(urllib.request.urlopen(r,timeout=3))["active"])';
-		const res = await sandbox.exec(`python3 -c ${shellQuote(script)}`);
+		const res = await sandbox.exec(`python3 -c ${shellQuote(script)}`, { timeout: 10_000 });
 		if (!res.success) return null;
 		// Whole output or nothing — `parseInt` would read 2 out of "2garbage", and a
 		// half-parsed answer must count as unknown rather than steer reaping. The

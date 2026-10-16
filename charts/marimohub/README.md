@@ -72,6 +72,7 @@ Updater](https://argocd-image-updater.readthedocs.io/) or
 | `surfaces.vscode.enabled` | `false` | Enable the VS Code surface |
 | `surfaces.opencode.enabled` | `false` | Enable the subdomain-only OpenCode surface |
 | `maintenance.enabled` | `true` | Singleton session reaper |
+| `maintenance.shutdownTimeoutSeconds` | `120` | Drain budget. Pod termination grace adds 20 seconds for cleanup and exit. |
 | `config` | see `values.yaml` | Non-secret `MARIMOHUB_*` → ConfigMap |
 | `secrets.existingSecret` | `""` | Secret you create with the secret vars (recommended) |
 | `secrets.data` | `{}` | Or let the chart create the Secret (dev) |
@@ -95,6 +96,14 @@ baked in, so the chart is portable across any Kubernetes.
 The chart sets `MARIMOHUB_RUN_MAINTENANCE` per deployment (`false` on API pods,
 `true` on the maintenance pod), overriding any value in `config`. The maintenance
 pod is pinned to one replica with the `Recreate` strategy — don't scale it.
+
+### Maintenance shutdown
+
+`maintenance.shutdownTimeoutSeconds` sets the drain budget (default 120 seconds).
+The chart adds 20 seconds for cleanup and process exit, for a default termination grace of 140 seconds.
+Set this chart value directly. The chart rejects `MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` in `extraEnv`.
+API replicas retain their 10-second drain and 30-second termination grace.
+See [shutdown behavior](../../docs/operations.md#shutdown-budgets).
 
 ### Deployment annotations
 

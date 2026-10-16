@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import type { ApiDeps } from '@marimo-hub/api';
-import { withAbortSignal, withDeadline } from '@marimo-hub/core';
+import { InFlightWork, withAbortSignal, withDeadline } from '@marimo-hub/core';
 import type { MaintenanceLock, Metrics } from '@marimo-hub/core';
 import { logEvent } from './log';
 
@@ -53,6 +53,8 @@ interface LoopOptions<T> {
 	notLeaderEvent?: string;
 	shouldRun?: () => Promise<boolean>;
 	run(context: LoopContext): Promise<T>;
+	/** Wait for work that the service retained after its own deadline. */
+	drain?(): Promise<void>;
 	/** Called after the heartbeat is recorded; skipped and timed-out work cannot report success. */
 	onSuccess?(result: T): void;
 }
@@ -79,11 +81,20 @@ function logFailure(event: string, error: unknown, fields: Record<string, unknow
 
 export class BackgroundLoops {
 	private readonly states = new Map<string, LoopState>();
+	private readonly inFlight = new InFlightWork();
+	private readonly serviceDrains = new Set<() => Promise<void>>();
+
+	/** Call after stopping ticks; includes work still settling after a deadline. */
+	async drain(): Promise<void> {
+		await this.inFlight.drain();
+		await Promise.allSettled([...this.serviceDrains].map((drain) => Promise.resolve().then(drain)));
+	}
 
 	constructor(private readonly metrics?: Metrics) {}
 
 	start<T>(options: LoopOptions<T>): LoopHandle {
 		const { name } = options;
+		if (options.drain) this.serviceDrains.add(options.drain);
 		// Provisioning and snapshotting can take minutes even on a five-second cadence.
 		const deadlineMs = options.deadlineMs ?? Math.max(3 * options.intervalMs, 10 * 60_000);
 		const now = Date.now();
@@ -159,14 +170,17 @@ export class BackgroundLoops {
 				let result: { value: T } | undefined;
 				let error: unknown;
 				try {
-					result = await withDeadline((signal) => (pending = work(signal, started, lease)), {
-						timeoutMs: deadlineMs,
-						signal: options.abortOnStop ? stopping.signal : undefined,
-						timeoutError: () =>
-							new LoopDeadlineError(`${name} exceeded its ${deadlineMs} ms deadline`),
-						// An abandoned attempt must not hold the process open after stop().
-						unref: true,
-					});
+					result = await withDeadline(
+						(signal) => (pending = this.inFlight.track(work(signal, started, lease))),
+						{
+							timeoutMs: deadlineMs,
+							signal: options.abortOnStop ? stopping.signal : undefined,
+							timeoutError: () =>
+								new LoopDeadlineError(`${name} exceeded its ${deadlineMs} ms deadline`),
+							// An abandoned attempt must not hold the process open after stop().
+							unref: true,
+						},
+					);
 					outcome = result ? 'success' : 'skipped';
 				} catch (err) {
 					error = err;
@@ -212,7 +226,7 @@ export class BackgroundLoops {
 				if (options.overlapEvent) logEvent({ level: 'debug', event: options.overlapEvent });
 				return;
 			}
-			current = attempt();
+			current = this.inFlight.track(attempt());
 		};
 		tick();
 		const interval = setInterval(tick, options.intervalMs);

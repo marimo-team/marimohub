@@ -76,7 +76,7 @@ export class ReconciliationService {
 	 * waiting), so a later sweep must not start a second capture/destroy for the
 	 * same session until the first settles.
 	 */
-	private readonly timedOutReclaims = new Set<SessionId>();
+	private readonly timedOutReclaims = new Map<SessionId, Promise<ReclaimOutcome>>();
 
 	constructor(
 		private sessions: SessionService,
@@ -105,6 +105,11 @@ export class ReconciliationService {
 			workdir,
 			...thumbnailOptions,
 		});
+	}
+
+	/** Call after stopping reconciliation; deadline expiry does not cancel sandbox work. */
+	async drain(): Promise<void> {
+		await Promise.allSettled(this.timedOutReclaims.values());
 	}
 
 	async reclaimTerminalSessions(
@@ -136,7 +141,7 @@ export class ReconciliationService {
 							{ operation: 'session.reclaim', session_id: session.session_id },
 							error,
 						);
-						this.timedOutReclaims.add(session.session_id);
+						this.timedOutReclaims.set(session.session_id, attempt);
 						const settle = () => this.timedOutReclaims.delete(session.session_id);
 						void attempt.then(settle, settle);
 						return { reclaimed: false, reason: 'timeout' };

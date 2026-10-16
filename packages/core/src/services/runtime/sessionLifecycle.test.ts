@@ -987,6 +987,12 @@ describe('kernelActiveConnections', () => {
 		expect(await kernelActiveConnections(sandbox)).toBeNull();
 	});
 
+	it('bounds provider execution and treats a probe timeout as unknown', async () => {
+		const exec = vi.fn<SandboxInstance['exec']>().mockRejectedValue(new Error('timed out'));
+		expect(await kernelActiveConnections(sandboxWith(exec))).toBeNull();
+		expect(exec).toHaveBeenCalledWith(expect.any(String), { timeout: 10_000 });
+	});
+
 	it('returns null when the exec throws (sandbox unreachable)', async () => {
 		const sandbox = sandboxWith(async () => {
 			throw new Error('unreachable');
