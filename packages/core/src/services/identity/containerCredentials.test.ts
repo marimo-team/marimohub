@@ -10,12 +10,15 @@ import {
 	verifyWifCredentialsToken,
 	validateWifCredentialsUrl,
 	wifCredentialsDeadline,
+	wifCredentialsSubject,
 } from './containerCredentials';
+import { signHs256Token } from '../../internal/hs256';
 
 const CLAIMS = {
 	sessionId: 'sess-0123456789abcdef',
 	projectId: 'proj-0123456789abcdef',
 	userId: 'u1',
+	subject: { email: 'u1@example.com', credential: { kind: 'sso' as const } },
 };
 
 describe('WIF credentials token', () => {
@@ -79,6 +82,53 @@ describe('WIF credentials token', () => {
 		const ai = await mintAiSessionToken('secret', { ...CLAIMS, notebookId: 'nb-0123456789abcdef' });
 		expect(await verifyWifCredentialsToken('secret', ai)).toBeNull();
 	});
+
+	it('round-trips the launch principal snapshot without volatile credential fields', async () => {
+		const subject = wifCredentialsSubject({
+			id: 'u1' as never,
+			email: 'u1@example.com',
+			name: 'U One',
+			groups: ['data-team'],
+			entitlements: ['default-role:editor'],
+			entitlementsExpiresAt: '2026-01-02T00:00:00Z',
+			credential: {
+				kind: 'personal-access-token',
+				id: 'tok-1',
+				expiresAt: '2026-01-02T00:00:00Z',
+				grant: { actions: '*', projects: '*' },
+			},
+		});
+		expect(subject).toEqual({
+			email: 'u1@example.com',
+			groups: ['data-team'],
+			entitlements: ['default-role:editor'],
+			credential: {
+				kind: 'personal-access-token',
+				id: 'tok-1',
+				grant: { actions: '*', projects: '*' },
+			},
+		});
+		const token = await mintWifCredentialsToken('secret', { ...CLAIMS, subject });
+		expect((await verifyWifCredentialsToken('secret', token))?.subject).toEqual(subject);
+	});
+
+	it.each([undefined, { email: 'x' }, { email: 'x', credential: { kind: 'bogus' } }])(
+		'rejects a signed token with an unusable subject %j',
+		async (subject) => {
+			const encoded = (await mintWifCredentialsToken('secret', CLAIMS)).split('.')[1];
+			const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString()) as Record<
+				string,
+				unknown
+			>;
+			const derived = toBase64Url(
+				await hmacSha256('secret', 'marimohub/wif-container-credentials-token/v1'),
+			);
+			const resigned = await signHs256Token(derived, payload);
+			expect(await verifyWifCredentialsToken('secret', resigned)).toEqual(CLAIMS);
+			const forged = await signHs256Token(derived, { ...payload, subject });
+			expect(await verifyWifCredentialsToken('secret', forged)).toBeNull();
+		},
+	);
 
 	it('rejects malformed input', async () => {
 		expect(await verifyWifCredentialsToken('secret', 'not-a-token')).toBeNull();

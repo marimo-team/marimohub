@@ -42,6 +42,15 @@ for maintenance in true false; do
   grep -Fq 'Use maintenance.shutdownTimeoutSeconds instead of extraEnv for the shutdown timeout' <<< "$error"
 done
 
+for source in config secrets.data; do
+  if error=$(helm template test charts/marimohub \
+    --set-string "$source.MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS=300" 2>&1); then
+    echo "Accepted shutdown timeout through $source" >&2
+    exit 1
+  fi
+  grep -Fq "Use maintenance.shutdownTimeoutSeconds instead of $source for the shutdown timeout" <<< "$error"
+done
+
 ruby -ryaml -e '
   ARGV.each do |path|
     documents = YAML.load_stream(File.read(path)).compact

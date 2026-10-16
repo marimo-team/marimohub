@@ -81,6 +81,10 @@ export function validatePublication(input: OpenChangeRequestInput | UpdateChange
 	return { branch, baseCommit };
 }
 
+export function coAuthorTrailer(coAuthor: OpenChangeRequestInput['coAuthor']): string {
+	return coAuthor ? `Co-authored-by: ${coAuthor.name.trim()} <${coAuthor.email}>` : '';
+}
+
 export function hasControlCharacter(value: string): boolean {
 	for (let index = 0; index < value.length; index++) {
 		const code = value.charCodeAt(index);

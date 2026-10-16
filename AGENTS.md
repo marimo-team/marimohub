@@ -87,10 +87,11 @@ adapter task caches. Service-backed integration tests can use the focused
   assertions (`expectExecResult`, `expectFileResult`) are exported from
   `@marimo-hub/core/testing/result-assertions` — prefer them over hand-rolled `{ success, … }` checks.
 - **API response envelope** is always `{ success: true, data }` or
-  `{ success: false, error: { code, message } }` (see `packages/api/src`). Sole
-  exception: routes serving raw content (e.g. the notebook HTML snapshot at
+  `{ success: false, error: { code, message } }` (see `packages/api/src`).
+  Exceptions: routes serving raw content (e.g. the notebook HTML snapshot at
   `GET …/notebooks/{nid}/html`) return the bytes directly on success; their
-  errors still use the envelope.
+  errors still use the envelope. `GET /api/wif/v1/credentials` also returns a
+  raw body: the AWS container credential protocol requires it.
 - **Committed specs.** `packages/api/openapi.yaml` and
   `internal/schemas/{bucket,integrations}.yml` are generated from the zod
   schemas; drift tests fail the build when they are stale. Regenerate with
@@ -118,7 +119,9 @@ adapter task caches. Service-backed integration tests can use the focused
 pointer in the catalog snapshot chain. All writes to this object go through
 `CatalogService.mutateSnapshot`
 (`packages/core/src/services/catalog/CatalogService.ts`). This method uses an
-ETag compare-and-swap (conditional PUT) with retries.
+ETag compare-and-swap (conditional PUT) with retries. The one exception is
+the private `CatalogService.commitRecovery`, reached only from `recover()` with
+writers stopped; it also uses ETag CAS.
 
 These CAS-managed records also have one writer each:
 
@@ -179,7 +182,9 @@ These CAS-managed records also have one writer each:
 - `JobsService` owns each job definition head at
   `projects/{pid}/notebooks/{nid}/jobs/{jid}/job.json`, each immutable
   `job-index/{created-at}_{jid}.json` pagination entry, and the snapshot's
-  per-notebook `jobs` index (written through `mutateSnapshot`).
+  per-notebook `jobs` index (written through `mutateSnapshot`). Sole exception:
+  `CatalogService.recover` rebuilds that index during offline recovery, only when
+  `--writers-stopped` is asserted.
 - `JobRunService` owns each run record at
   `projects/{pid}/notebooks/{nid}/jobs/{jid}/runs/{rid}/run.json`, each
   immutable occurrence claim at `…/jobs/{jid}/occurrences/{key}.json`

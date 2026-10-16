@@ -32,6 +32,8 @@ services:
       "
 
   server:
+    # MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS (120 with maintenance on) + 20 s for cleanup.
+    stop_grace_period: 140s
     build:
       context: ../..
       dockerfile: apps/server/Dockerfile

@@ -365,11 +365,32 @@ describe('configured pull providers', () => {
 describe('Azure repository identity', () => {
 	it.each([
 		'https://code.example.com/collection/project/_git/repo',
-		'https://acme.visualstudio.com/project/_git/repo',
 		'https://dev.azure.com:8443/acme/project/_git/repo',
 		'http://dev.azure.com/acme/project/_git/repo',
 	])('does not trust an Azure claim for an unsupported origin: %s', (repo) => {
 		expect(gitCoords(gitSource({ provider: 'azure-devops', repo }))).toBeNull();
+	});
+
+	it.each([
+		'https://acme.visualstudio.com/project/_git/repo',
+		'https://acme@dev.azure.com/acme/project/_git/repo',
+		'git@ssh.dev.azure.com:v3/acme/project/repo',
+	])('accepts and canonicalizes the Azure form %s', (repo) => {
+		expect(isAzureDevOpsRepoInput(repo)).toBe(true);
+		expect(pullRepositoryInput(['azure-devops']).validate(repo)).toBe(true);
+	});
+
+	it('links legacy visualstudio.com records through dev.azure.com', () => {
+		const coords = gitCoords(
+			gitSource({
+				provider: 'azure-devops',
+				repo: 'https://acme.visualstudio.com/project/_git/repo',
+			}),
+		);
+		expect(coords).toMatchObject({
+			provider: 'azure-devops',
+			baseUrl: 'https://dev.azure.com/acme/project/_git/repo',
+		});
 	});
 
 	it('preserves .git in Azure repository links', () => {

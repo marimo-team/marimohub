@@ -150,13 +150,38 @@ Each hub replica caches exchanged credentials in process memory to reuse them ac
 The hub does not persist these credentials. Cache cleanup occurs during later credential requests,
 so entries can remain in memory after expiry.
 
+::: warning The endpoint token is a bearer credential
+`AWS_CONTAINER_AUTHORIZATION_TOKEN` is valid for the session, up to seven days,
+and has no network binding. Notebook code can read it. Anyone who copies it can
+fetch fresh cloud credentials from outside the sandbox while the session is live.
+End the session, remove the member, or disable federation for the project to stop it.
+:::
+
 - **Session limit:** seven days, or an earlier authorization deadline. Active
   connections and lifetime extensions cannot extend this limit; start a new session.
-- **Revocation:** the endpoint rejects ended sessions, suspended owners, and
-  projects that disable federation. Previously issued cloud credentials remain valid until expiry.
+- **Revocation:** on every call, the endpoint rejects ended sessions, suspended
+  owners, owners who are no longer project members or lost the required role, and
+  projects that disable federation. Each process caches an allow verdict for up
+  to 10 seconds, so a revocation can take that long to block the next refresh.
+  Previously issued cloud credentials remain valid until expiry, up to about one
+  hour. The token carries a signed snapshot of the launching user (email, IdP
+  groups, and entitlements) so the check matches the proxy's; notebook code can
+  read those values from the token.
 - **Broker expiry:** missing, invalid, or expired credentials return HTTP 503.
   Prefer lifetimes above 20 minutes to avoid frequent SDK refresh requests.
-- **Failures:** exchange occurs on first use, so policy failures surface as SDK errors.
+- **First call:** the hub starts the exchange when the session starts, so the
+  first SDK request usually gets cached credentials. The cache is per replica: a
+  request that reaches another replica runs its own exchange. Policy failures
+  surface as SDK errors.
+- **Reserved names:** users cannot set `AWS_CONTAINER_*` variables through
+  integrations or session environment, so they cannot redirect or replace the
+  credential endpoint.
+- **S3 integrations:** endpoint delivery removes the static AWS keys from
+  [S3 integration](integrations.md#s3) variables, even when they target another
+  store. The integration's `AWS_ENDPOINT_URL_S3` and `AWS_REGION` stay unless WIF
+  sets them, so SDKs send WIF credentials to the integration's endpoint. Set
+  `MARIMOHUB_WIF_STORAGE_ENDPOINT` / `MARIMOHUB_WIF_STORAGE_REGION` to control
+  the default endpoint, or use `env` delivery for integrations that need their own keys.
 - **Compatibility:** jobs retain one-shot delivery. Clients that require static
   `AWS_*` keys must use `env` delivery.
 

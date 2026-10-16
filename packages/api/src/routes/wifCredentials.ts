@@ -5,16 +5,17 @@ import {
 	NotFoundError,
 	ProjectId,
 	SessionId,
+	sessionResourceNotebookId,
 	toContainerCredentialsResponse,
 	UserId,
 	verifyWifCredentialsToken,
 } from '@marimo-hub/core';
-import type { Session } from '@marimo-hub/core';
+import type { AuthenticatedPrincipal, Session } from '@marimo-hub/core';
 import type { HonoEnv } from '../context';
 import { federationFor } from '../federation';
 import { errorMetadata, logEvent } from '../log';
-import { fail } from '../shared';
-import { WifCredentialCache } from '../wifCredentialCache';
+import { assertSessionPreviewActive, authorizationService, fail } from '../shared';
+import { wifCredentialCacheFor } from '../wifCredentialCache';
 
 export const WIF_CREDENTIALS_PREFIX = '/api/wif/v1';
 export const WIF_CREDENTIALS_PATH = `${WIF_CREDENTIALS_PREFIX}/credentials`;
@@ -23,7 +24,6 @@ const LIVE_STATUSES: ReadonlySet<Session['status']> = new Set(['starting', 'runn
 
 export function createWifCredentials(): Hono<HonoEnv> {
 	const app = new Hono<HonoEnv>();
-	const cache = new WifCredentialCache();
 
 	app.get('/credentials', async (c) => {
 		const deps = c.get('deps');
@@ -32,6 +32,7 @@ export function createWifCredentials(): Hono<HonoEnv> {
 		if (!wif || !endpoint) {
 			return fail(c, 'NOT_FOUND', 'Refreshable WIF credentials are not enabled', 404);
 		}
+		const cache = wifCredentialCacheFor(wif);
 
 		// AWS SDKs send AWS_CONTAINER_AUTHORIZATION_TOKEN as the raw header value.
 		const token = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '');
@@ -50,20 +51,50 @@ export function createWifCredentials(): Hono<HonoEnv> {
 			return fail(c, 'FORBIDDEN', 'Session is not eligible for federated credentials', 403);
 		};
 
+		let phase: 'eligibility' | 'exchange' = 'eligibility';
 		try {
-			const session = await deps.services.sessions.getSession(projectId, sessionId);
-			if (
-				session.user_id !== userId ||
-				!LIVE_STATUSES.has(session.status) ||
-				isPastAuthorizationDeadline(session, Date.now()) ||
-				session.sandbox_reclaimed_at
-			) {
-				return denied();
+			if (!cache.isEligible(sessionId)) {
+				const session = await deps.services.sessions.getSession(projectId, sessionId);
+				const now = Date.now();
+				if (
+					session.user_id !== userId ||
+					!LIVE_STATUSES.has(session.status) ||
+					isPastAuthorizationDeadline(session, now) ||
+					session.sandbox_reclaimed_at
+				) {
+					return denied();
+				}
+				if (await deps.services.identities.isSuspended(userId)) return denied();
+				const project = await deps.services.projects.getProject(projectId, {
+					consistency: 'validated',
+				});
+				if (!federationFor(project, wif)) return denied();
+				await assertSessionPreviewActive(deps, projectId, session);
+				const notebookLabels = await deps.services.notebooks.getSecurityLabels(
+					projectId,
+					sessionResourceNotebookId(session),
+					{ consistency: 'validated' },
+				);
+				// Same check the sandbox proxy applies, so a removed member or lost role stops minting.
+				const subject: AuthenticatedPrincipal = { id: userId, ...claims.subject };
+				const decision = await authorizationService(deps).authorize(subject, 'session.proxy', {
+					kind: 'session',
+					project,
+					session,
+					notebookLabels,
+				});
+				if (!decision.allowed) return denied();
+				cache.markEligible(
+					sessionId,
+					Math.min(
+						...[session.authorization_expires_at, decision.subjectContextExpiresAt]
+							.filter((deadline): deadline is string => deadline !== undefined)
+							.map((deadline) => Date.parse(deadline)),
+					),
+				);
 			}
-			if (await deps.services.identities.isSuspended(userId)) return denied();
-			const project = await deps.services.projects.getProject(projectId);
-			if (!federationFor(project, wif)) return denied();
 
+			phase = 'exchange';
 			const creds = await cache.get(sessionId, () =>
 				exchangeFederatedStorageCredentials(wif.issuer, wif.issuerUrl, wif.target, projectId, {
 					kind: 'session',
@@ -76,7 +107,10 @@ export function createWifCredentials(): Hono<HonoEnv> {
 			if (err instanceof NotFoundError) return denied();
 			logEvent({
 				level: 'warn',
-				event: 'wif_credentials_exchange_failed',
+				event:
+					phase === 'exchange'
+						? 'wif_credentials_exchange_failed'
+						: 'wif_credentials_eligibility_failed',
 				project_id: projectId,
 				session_id: sessionId,
 				...errorMetadata(err),

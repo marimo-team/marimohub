@@ -523,29 +523,29 @@ Create a GitHub App with Contents and Pull requests read/write permissions. Inst
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL` | GitHub web origin without a path, such as `https://github.example.com`, not the API URL. GHES sources and allowlist rules require full repository URLs; `owner/repo` still means github.com. | — | `https://github.com` | `https://git.acme.corp` |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID` | Numeric app id from the GitHub App settings page. | — | — | `123456` |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY` 🔒 | PKCS8 or PKCS1 PEM private key downloaded for the GitHub App, or its single-line base64 encoding. Held by the server and never injected into notebook sandboxes. | — | — | `-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----` |
-| `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` | Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies) for syntax. | — | — | `[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]` |
+| `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` | Optional JSON array of `{resource, projects}` rules. Resources are `owner/repo` (github.com only) or full repository URLs on `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL`, matched case-insensitively. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies). | — | — | `[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]` |
 
 ### GitLab
 
-Connect GitLab.com or a self-managed HTTPS origin. Use a project, group, or personal token with api and write_repository scopes and Developer access. See [GitLab setup](syncing.md#gitlab).
+Connect GitLab.com or a self-managed HTTPS origin. Prefer a project or group access token (a personal token also works) with api and write_repository scopes and Developer access. See [GitLab setup](syncing.md#gitlab).
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN` 🔒 | Required to enable GitLab. Setting SERVER_URL without a token is a startup error. Used for repository reads, Git pushes, and merge requests. Never injected into notebook sandboxes. | — | — | — |
+| `MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN` 🔒 | Required to enable GitLab. Setting `MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL` without a token is a startup error. Used for repository reads, Git pushes, and merge requests. Prefer a project or group access token: the api scope on a personal token reaches every project that user can see. Never injected into notebook sandboxes. | — | — | — |
 | `MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL` | HTTPS origin without a path. Repository URLs must use this origin. | — | `https://gitlab.com` | `https://git.acme.corp` |
-| `MARIMOHUB_SOURCE_CONTROL_GITLAB_ALLOWED_REPOSITORIES` | Optional JSON array of {resource, projects} rules using full repository URLs. Unset permits shared access. [] denies all. See [Repository project policies](syncing.md#repository-project-policies). | — | — | `[{"resource":"https://gitlab.com/team/notebooks","projects":"*"}]` |
+| `MARIMOHUB_SOURCE_CONTROL_GITLAB_ALLOWED_REPOSITORIES` | Optional JSON array of `{resource, projects}` rules. Resources are full repository URLs on `MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL`, matched case-insensitively. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies). | — | — | `[{"resource":"https://gitlab.com/team/notebooks","projects":"*"}]` |
 
 ### Azure DevOps Services
 
-Use a Microsoft Entra service principal or managed identity with repository read, contribute, create branch, and contribute to pull requests permissions. No webhook is required.
+Use a Microsoft Entra service principal or managed identity with repository read, contribute, create branch, and contribute to pull requests permissions. No webhook is required. See [Azure DevOps setup](syncing.md#azure-devops-services).
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ORGANIZATION` | Hosted organization name. Enables Azure DevOps Services sync and PR publishing. Use full dev.azure.com repository URLs. | — | — | `acme` |
-| `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_TENANT_ID` | Tenant for service-principal authentication. Set together with client ID and client secret. Omit all three to use DefaultAzureCredential. | — | — | — |
-| `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_ID` | Application client ID of the service principal. Add this identity to the Azure DevOps organization. | — | — | — |
+| `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_TENANT_ID` | Microsoft Entra tenant for service-principal authentication. Set together with client ID and client secret. Omit all three to use DefaultAzureCredential, which reads the same ambient `AZURE_*` environment as Azure storage, so both share one identity. | — | — | `00000000-0000-0000-0000-000000000000` |
+| `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_ID` | Application client ID of the service principal. Add this identity to the Azure DevOps organization. | — | — | `11111111-1111-1111-1111-111111111111` |
 | `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_SECRET` 🔒 | Service-principal secret. Kept on the server; never injected into notebook sandboxes. | — | — | — |
-| `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ALLOWED_REPOSITORIES` | JSON array of `{resource, projects}` rules using full repository URLs. Unset permits shared access. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies). | — | — | `[{"resource":"https://dev.azure.com/acme/analytics/_git/notebooks","projects":"*"}]` |
+| `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ALLOWED_REPOSITORIES` | Optional JSON array of `{resource, projects}` rules. Resources are full `https://dev.azure.com/{organization}/{project}/_git/{repository}` URLs in the configured organization, matched case-insensitively. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies). | — | — | `[{"resource":"https://dev.azure.com/acme/analytics/_git/notebooks","projects":"*"}]` |
 
 ## Workload Identity Federation
 
@@ -576,7 +576,7 @@ Optional: let a notebook reach cloud resources (object storage, and for AWS any 
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_WIF_CREDENTIALS_DELIVERY` | `env`: static AWS credentials (~1h). `endpoint`: SDK-managed refresh, with a seven-day session limit. Requires HTTPS `MARIMOHUB_APP_BASE_URL` and a valid broker expiry. Jobs always use `env`. | — | `env` | `endpoint` |
+| `MARIMOHUB_WIF_CREDENTIALS_DELIVERY` | `env`: static AWS credentials (~1h). `endpoint`: SDK-managed refresh through the AWS container credential provider, with a seven-day session limit. Requires HTTPS `MARIMOHUB_APP_BASE_URL` and a valid broker expiry; clients without container-provider support lose access. Jobs always use `env`. | — | `env` | `endpoint` |
 
 ## Managed AI
 

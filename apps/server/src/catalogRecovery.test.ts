@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CatalogService, createServices } from '@marimo-hub/core';
+import { CatalogService, EventService, createServices } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { ACTOR } from '@marimo-hub/core/testing';
-import { runCatalogRecovery } from './catalogRecovery';
+import { blockedRecoveryMessage, runCatalogRecovery } from './catalogRecovery';
 
 describe('catalog recovery command', () => {
 	it('prints help and rejects ambiguous modes without opening storage', async () => {
@@ -39,6 +39,55 @@ describe('catalog recovery command', () => {
 			),
 		).toMatchObject({ projects: 1 });
 		expect((await services.projects.listProjects())[0].id).toBe(project.id);
+		const events = await new EventService(bucket).getEvents(new Date().toISOString().slice(0, 10));
+		expect(events).toContainEqual(
+			expect.objectContaining({
+				event: 'system.recover',
+				actor: ACTOR,
+				source: { mode: 'rebuild' },
+			}),
+		);
+	});
+
+	it('explains a dry-run report with blocking errors so the entrypoint exits 2', async () => {
+		const bucket = new MemoryBucket();
+		const services = createServices(bucket);
+		await services.catalog.initialize(ACTOR);
+		const project = await services.projects.createProject(
+			{ name: 'Broken', description: '' },
+			ACTOR,
+		);
+		await bucket.put(`projects/${project.id}/project.json`, '{');
+		await bucket.delete('_system/catalog.json');
+		const report = await runCatalogRecovery(['--rebuild'], () => bucket);
+		expect(blockedRecoveryMessage(report)).toContain(`projects/${project.id}/project.json`);
+		expect(blockedRecoveryMessage(await runCatalogRecovery(['--help'], () => bucket))).toBe(
+			undefined,
+		);
+	});
+
+	it('removes its uncommitted snapshot when another writer wins the catalog CAS', async () => {
+		const bucket = new MemoryBucket();
+		const services = createServices(bucket);
+		await services.catalog.initialize(ACTOR);
+		await services.projects.createProject({ name: 'Retained', description: '' }, ACTOR);
+		await bucket.delete('_system/catalog.json');
+		const { token } = await new CatalogService(bucket).planRecovery({ mode: 'rebuild' });
+		const snapshotKeys = async () =>
+			(await bucket.list({ prefix: '_system/snapshots/' })).objects.map((object) => object.key);
+		const before = await snapshotKeys();
+		const put = bucket.put.bind(bucket);
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+			if (key === '_system/catalog.json') await put(key, '{}');
+			return put(key, value, options);
+		});
+		await expect(
+			runCatalogRecovery(
+				['--rebuild', '--apply', token, '--writers-stopped', '--actor', ACTOR, '--accept-warnings'],
+				() => bucket,
+			),
+		).rejects.toThrow('conflict');
+		expect(await snapshotKeys()).toEqual(before);
 	});
 	it.each([
 		['--unknown'],

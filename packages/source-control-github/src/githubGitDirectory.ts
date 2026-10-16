@@ -9,6 +9,7 @@ export function materializeGitDirectory(options: {
 	branch: string;
 	token: string;
 	fetcher: GitHubFetch;
+	signal?: AbortSignal;
 }) {
 	return materialize({
 		repository: options.repository,
@@ -17,5 +18,6 @@ export function materializeGitDirectory(options: {
 		branch: options.branch,
 		authorization: `Basic ${Buffer.from(`x-access-token:${options.token}`).toString('base64')}`,
 		fetcher: options.fetcher,
+		signal: options.signal,
 	});
 }

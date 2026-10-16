@@ -85,6 +85,12 @@ Call with: (dict "root" $ "maintenance" true|false)
 {{- fail "Use maintenance.shutdownTimeoutSeconds instead of extraEnv for the shutdown timeout" -}}
 {{- end -}}
 {{- end -}}
+{{- if hasKey ($v.config | default dict) "MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS" -}}
+{{- fail "Use maintenance.shutdownTimeoutSeconds instead of config for the shutdown timeout" -}}
+{{- end -}}
+{{- if hasKey ($v.secrets.data | default dict) "MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS" -}}
+{{- fail "Use maintenance.shutdownTimeoutSeconds instead of secrets.data for the shutdown timeout" -}}
+{{- end -}}
 {{- range $index, $volume := $v.extraVolumes -}}
 {{- if eq $volume.name "tmp" -}}
 {{- fail (printf "extraVolumes[%d].name: tmp is reserved by the chart" $index) -}}

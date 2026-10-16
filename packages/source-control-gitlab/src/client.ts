@@ -1,12 +1,10 @@
-import { readResponseBytes } from '@marimo-hub/source-control-git/http';
-import { deadlineSignal, withDeadline } from '@marimo-hub/core/async';
 import {
-	BadRequestError,
-	ConflictError,
-	ForbiddenError,
-	NotFoundError,
-	UnavailableError,
-} from '@marimo-hub/core/errors';
+	providerHttpError,
+	readResponseBytes,
+	responseFields,
+} from '@marimo-hub/source-control-git/http';
+import { deadlineSignal, withDeadline } from '@marimo-hub/core/async';
+import { BadRequestError, UnavailableError } from '@marimo-hub/core/errors';
 import { hasControlCharacter } from '@marimo-hub/source-control-git/validation';
 import { gitLabOrigin } from './repository';
 import type { GitLabRepository } from './repository';
@@ -19,20 +17,11 @@ export interface GitLabRuntime {
 	fetcher?: (url: string, init?: RequestInit) => Promise<Response>;
 }
 
-export function record(value: unknown): Record<string, unknown> {
-	if (!value || typeof value !== 'object' || Array.isArray(value))
-		throw new UnavailableError('Invalid GitLab response');
-	return value as Record<string, unknown>;
-}
-export function stringField(value: unknown, key: string): string {
-	const field = record(value)[key];
-	if (typeof field !== 'string' || !field) throw new UnavailableError(`Invalid GitLab ${key}`);
-	return field;
-}
+export const { record, stringField } = responseFields('GitLab');
 
 export class GitLabClient {
 	readonly origin: string;
-	private readonly fetcher: NonNullable<GitLabRuntime['fetcher']>;
+	readonly fetcher: NonNullable<GitLabRuntime['fetcher']>;
 	constructor(
 		private readonly options: GitLabOptions,
 		runtime: GitLabRuntime = {},
@@ -64,16 +53,7 @@ export class GitLabClient {
 		}
 		if (!response.ok) {
 			await response.body?.cancel().catch(() => {});
-			const status = response.status;
-			const error =
-				status === 404
-					? new NotFoundError('GitLab repository, branch, or object was not found')
-					: status === 401 || status === 403
-						? new ForbiddenError('GitLab access was denied')
-						: status === 409 || status === 400
-							? new ConflictError('GitLab rejected the request')
-							: new UnavailableError(`GitLab request failed with status ${status}`);
-			throw Object.assign(error, { providerStatus: status });
+			throw providerHttpError('GitLab', response.status, { headers: response.headers });
 		}
 		return response;
 	}
@@ -116,18 +96,5 @@ export class GitLabClient {
 		} catch {
 			throw new UnavailableError('Invalid GitLab JSON response');
 		}
-	}
-	gitFetch(repo: GitLabRepository): NonNullable<GitLabRuntime['fetcher']> {
-		return (url, init) => {
-			const target = new URL(url);
-			if (
-				target.origin !== this.origin ||
-				!target.pathname.startsWith(`${new URL(repo.remoteUrl).pathname}/`) ||
-				target.username ||
-				target.password
-			)
-				throw new BadRequestError('Invalid GitLab Git endpoint');
-			return this.fetch(url, { ...init });
-		};
 	}
 }

@@ -38,8 +38,10 @@ MARIMOHUB_PERSIST_WORKSPACE=source
 
 The container image is the primary distribution. Each
 [GitHub release](https://github.com/marimo-team/marimohub/releases) also
-attaches `marimohub-linux-x64`, a standalone server binary for x86-64 Linux
-hosts without Node. It reads the same `MARIMOHUB_*` variables. It listens on all
+attaches standalone server binaries for Linux hosts without Node:
+`marimohub-linux-x64` for x86-64 and `marimohub-linux-arm64` for ARM64, each with a
+`.sha256` checksum file. The binaries do not include the
+[catalog recovery](./operations.md#catalog-recovery) command; run it from the container image. The binary reads the same `MARIMOHUB_*` variables. It listens on all
 network interfaces unless you set `MARIMOHUB_BIND_HOST`, for example to
 `127.0.0.1` behind a reverse proxy on the same host. On first start it
 unpacks its bundled files to `$XDG_CACHE_HOME/marimohub-sea/<build-id>`
@@ -57,15 +59,19 @@ The example below is a throwaway configuration that keeps all state in memory.
 For a real deployment use the durable variables from the `.env` above.
 
 ```bash
-curl -fsSLO https://github.com/marimo-team/marimohub/releases/latest/download/marimohub-linux-x64
-chmod +x marimohub-linux-x64
-./marimohub-linux-x64 --version
+arch=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')
+base=https://github.com/marimo-team/marimohub/releases/latest/download
+curl -fsSLO "$base/marimohub-linux-$arch"
+curl -fsSLO "$base/marimohub-linux-$arch.sha256"
+sha256sum -c "marimohub-linux-$arch.sha256"
+chmod +x "marimohub-linux-$arch"
+"./marimohub-linux-$arch" --version
 
 export MARIMOHUB_STORAGE_BACKEND=memory
 export MARIMOHUB_ALLOW_EPHEMERAL_STORAGE=true
 export MARIMOHUB_COMPUTE_BACKEND=none
 export MARIMOHUB_AUTH_BACKEND=dev
-./marimohub-linux-x64
+"./marimohub-linux-$arch"
 ```
 
 ## 2. SDK / library composition (the complex case)

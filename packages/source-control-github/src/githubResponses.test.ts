@@ -23,8 +23,8 @@ describe('GitHub response fields', () => {
 	});
 
 	it.each([
-		['a missing string', () => stringField({}, 'sha'), 'invalid sha'],
-		['an empty string', () => stringField({ sha: '' }, 'sha'), 'invalid sha'],
+		['a missing string', () => stringField({}, 'sha'), 'Invalid GitHub sha'],
+		['an empty string', () => stringField({ sha: '' }, 'sha'), 'Invalid GitHub sha'],
 		['a non-integer number', () => numberField({ number: 1.5 }, 'number'), 'invalid number'],
 		['a non-positive number', () => numberField({ number: 0 }, 'number'), 'invalid number'],
 		['a missing nested object', () => nestedString(null, 'head', 'sha'), 'invalid response'],

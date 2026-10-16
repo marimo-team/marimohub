@@ -468,7 +468,7 @@ Shared pull and publish flows need no provider-specific branches.
 
 | Export        | Shared behavior                                               |
 | ------------- | ------------------------------------------------------------- |
-| Root          | Bounded Git fetches and credential-free Git directories       |
+| Root          | Shared Git transport, bounded fetches, credential-free `.git` |
 | `validation`  | Git branch and commit validation, proposal validation         |
 | `file-tree`   | Blob hashes, tree comparison, proposal changes                |
 | `workspace`   | Subtree selection and workspace file/byte limits              |
@@ -476,6 +476,8 @@ Shared pull and publish flows need no provider-specific branches.
 | `publication` | Publication stage and HTTP status metadata                    |
 | `publish`     | Git commit creation and branch updates with an expected head  |
 
+Every provider fetches Git data through the shared transport. It refuses redirects, pins
+requests to the repository's origin and path, and bounds the time to headers and between body chunks.
 Authentication, repository URLs, response schemas, pagination, and publication protocols stay in each adapter.
 GitHub uses repository archives for workspace reads. Azure DevOps and GitLab use the shared tree reader.
 Provider IDs on the ports remain strings so library consumers can register custom adapters.
@@ -702,6 +704,7 @@ packages/
   compute-kubernetes/     Kubernetes adapter (Pod + Service, optional Ingress)
   compute-container/      Docker and Podman adapters (a container per kernel)
   compute-e2b/            E2B sandboxes adapter (bring-your-own e2b SDK)
+  compute-fargate/        AWS ECS Fargate adapter (one task per kernel + agent)
   compute-commons/        vendor-free helpers shared by the compute adapters
   compute-local/          local host-subprocess adapter (dev)
   object-browser-commons/ shared transport, preview, and validation helpers
@@ -709,18 +712,26 @@ packages/
   object-browser-gcs/     Google Cloud Storage object-browser adapter
   object-browser-azure/   Azure Blob Storage object-browser adapter
   duckdb-wasm-runtime/    isolated DuckDB-Wasm preview and query runtime for Node
+  postgres-runtime/       isolated PostgreSQL query worker for the data browser
+  database-browser-bigquery/ BigQuery database-browser adapter
   notify-smtp/            SMTP notification adapter
   notify-slack/           Slack incoming-webhook notification adapter
   notify-webhook/         signed JSON webhook notification adapter
   credentials-aws/        AWS credential broker (OIDC federation) + SigV4 fetch for the Bedrock AI backend
   credentials-coreweave/  CoreWeave CAIOS credential broker (OIDC federation)
   secrets-aws/            AWS Secrets Manager adapter
+  secrets-kubernetes/     Kubernetes Secrets adapter for integration fields
+  source-control-git/     vendor-free Git transport, pack, and publication helpers
+  source-control-github/  GitHub App reader and publisher (github.com + GHES)
+  source-control-gitlab/  GitLab reader and merge-request publisher (gitlab.com + self-managed)
+  source-control-azure-devops/ Azure DevOps Services reader and pull-request publisher
   auth-oidc/              generic OIDC adapter
   auth-proxy-header/      trusted proxy header / Google IAP adapter
   auth-cloudflare-access/ Cloudflare Access adapter
   auth-dev/               dev-bypass authenticator (local only)
   ts-config/              shared tsconfig bases (+ vendored ts-reset)
   web/                    React SPA (frontend assets)
+  notebook-bridge/        in-notebook bridge that syncs paths and query params with the hub
   client/                 TypeScript API client generated from the OpenAPI doc
 apps/
   server/                 Node entrypoint for Docker / Kubernetes (@marimo-hub/server)
@@ -747,9 +758,11 @@ unrelated services and lose cache hits when those services change. Core keeps
 its existing barrel exports for composition consumers. Service-backed adapter
 integration tests still depend on the services they exercise.
 
-Git-synced notebooks use the existing `git` source type. An external workflow
-pushes content to `/api/sync/git/v1`. The hub does not fetch repository content.
-The sync token has notebook scope. See [§3.1](#31-notebook-storage) and the
+Git-synced notebooks use the existing `git` source type. In push mode, an
+external workflow pushes content to `/api/sync/git/v1` with a notebook-scoped
+sync token. In pull mode and for **Sync now**, the hub fetches repository content
+from GitHub, GitLab, or Azure DevOps Services with server credentials, subject to
+the repository project policies. See [§3.1](#31-notebook-storage) and the
 [sync guide](../docs/syncing.md).
 
 ---

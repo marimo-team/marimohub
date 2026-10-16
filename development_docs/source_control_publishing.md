@@ -1,8 +1,9 @@
 # Source-control publishing
 
 marimohub can publish edits from a git-synced notebook as a provider change request. The
-adapters create draft pull requests through GitHub Apps or Azure DevOps identities. Capture is provider-neutral
-and can include multiple added, modified, or deleted files.
+adapters create draft pull requests through GitHub Apps or Azure DevOps identities, and draft merge
+requests through GitLab access tokens. Capture is provider-neutral and can include multiple added,
+modified, or deleted files.
 
 ## Trust boundary
 
@@ -121,6 +122,21 @@ Retries require both the expected parent and matching tree before reusing a comm
 The adapter rejects external branch changes, closed PRs, and unsupported file-mode changes.
 It never force-pushes. Workspace and Git downloads share the existing size limits.
 
+## GitLab
+
+See [GitLab setup](../docs/syncing.md#gitlab) for token and repository policy configuration.
+Prefer a project or group access token; a personal token reaches every project its user can access.
+The adapter uses REST API v4 for branches, trees, and merge requests, and pushes commits over smart
+HTTP through the shared Git transport. It supports gitlab.com and one self-managed origin.
+
+Publication pushes a commit built from the exact synced commit to the deterministic
+`marimohub/<notebook-id>/<proposal-id>` branch, then opens a merge request titled `Draft: …`.
+The push is conditional on the expected branch head, so a retry reuses the existing branch and merge
+request instead of creating a second one. Updates calculate the complete proposal tree from its
+original base, including restoration of omitted changes. The adapter rejects external branch changes,
+deleted branches, and closed merge requests. It never force-pushes. Repository URLs match without
+regard to case. Workspace and Git downloads share the existing size limits.
+
 ## Stored proposal
 
 Proposal content is separate from provider state:
@@ -184,9 +200,9 @@ identity.
 
 Provider support lives behind `SourceControlPublisher`; the API and proposal service do not import
 concrete adapters. The port has a required create operation and an optional update operation. A
-GitLab, Bitbucket, or other provider adds an adapter and registers it in the configuration
-composition root. The provider owns authentication and API-specific branch/merge request
-operations, while the proposal format and authorization remain unchanged.
+new provider adds an adapter and registers it in the configuration composition root. The provider
+owns authentication and API-specific branch and change-request operations, while the proposal
+format and authorization remain unchanged.
 See the [provider extension checklist](architecture.md#39-source-control) for the exhaustive configuration and UI mappings.
 
 Additional capture strategies are capture-policy extensions, not provider rewrites. They must emit

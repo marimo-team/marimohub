@@ -1,13 +1,11 @@
-import { readResponseBytes } from '@marimo-hub/source-control-git/http';
+import {
+	providerHttpError,
+	readResponseBytes,
+	responseFields,
+} from '@marimo-hub/source-control-git/http';
 import { deadlineSignal, withAbortSignal } from '@marimo-hub/core/async';
 import { DefaultAzureCredential } from '@azure/identity';
-import {
-	BadRequestError,
-	ConflictError,
-	ForbiddenError,
-	NotFoundError,
-	UnavailableError,
-} from '@marimo-hub/core/errors';
+import { BadRequestError, UnavailableError } from '@marimo-hub/core/errors';
 import { markSourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import type { AzureRepository } from './repository';
 import { validateOrganization } from './repository';
@@ -35,41 +33,11 @@ export function boundedBytes(
 	return readResponseBytes(response, limit, 'Azure DevOps', signal);
 }
 
-export function record(value: unknown): Record<string, unknown> {
-	if (!value || typeof value !== 'object' || Array.isArray(value))
-		throw new UnavailableError('Invalid Azure DevOps response');
-	return value as Record<string, unknown>;
-}
-export function stringField(value: unknown, key: string): string {
-	const result = record(value)[key];
-	if (typeof result !== 'string' || !result)
-		throw new UnavailableError(`Invalid Azure DevOps ${key}`);
-	return result;
-}
+export const { record, stringField } = responseFields('Azure DevOps');
 export function values(value: unknown): unknown[] {
 	const result = record(value).value;
 	if (!Array.isArray(result)) throw new UnavailableError('Invalid Azure DevOps response list');
 	return result;
-}
-
-function requestError(status: number): Error & { providerStatus: number } {
-	let error: Error;
-	switch (status) {
-		case 404:
-			error = new NotFoundError('Azure DevOps repository, branch, or object was not found');
-			break;
-		case 401:
-		case 403:
-			error = new ForbiddenError('Azure DevOps access was denied');
-			break;
-		case 409:
-		case 412:
-			error = new ConflictError('Azure DevOps branch changed while publishing');
-			break;
-		default:
-			error = new UnavailableError(`Azure DevOps request failed with status ${status}`);
-	}
-	return Object.assign(error, { providerStatus: status });
 }
 
 export class AzureClient {
@@ -134,7 +102,10 @@ export class AzureClient {
 		}
 		if (!response.ok) {
 			await response.body?.cancel().catch(() => {});
-			throw requestError(response.status);
+			throw providerHttpError('Azure DevOps', response.status, {
+				headers: response.headers,
+				conflictMessage: 'Azure DevOps branch changed while publishing',
+			});
 		}
 		return response;
 	}

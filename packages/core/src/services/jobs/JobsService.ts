@@ -94,6 +94,7 @@ export function jobIndexEntry(job: JobDefinition): SnapshotJobEntry {
 	return {
 		id: job.id,
 		enabled: job.enabled,
+		// Keep the key even when undefined: spreading over an old entry must clear its schedule.
 		schedule: job.schedule,
 		updated_at: job.updated_at,
 	};

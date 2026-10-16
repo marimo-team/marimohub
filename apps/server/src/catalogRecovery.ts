@@ -1,17 +1,20 @@
+// Catalog recovery command implementation; the bundled entrypoint is catalog-recovery.ts.
 import { parseArgs } from 'node:util';
-import { CatalogService, SnapshotId, UserId } from '@marimo-hub/core';
-import type { Bucket, CatalogRecoverySource } from '@marimo-hub/core';
+import { CatalogService, EventService, SnapshotId, UserId } from '@marimo-hub/core';
+import type { Bucket, CatalogRecoveryReport, CatalogRecoverySource } from '@marimo-hub/core';
 
 export const CATALOG_RECOVERY_HELP = `Usage: catalog-recovery --rebuild | --snapshot <snapshot-id>
 
 Dry-run is the default. Review the JSON report before applying its token.
+A dry-run exits 2 when the report has blocking errors.
 
   --rebuild                Discover projects, notebooks, and jobs from records
   --snapshot <id>          Use a selected snapshot's membership with current metadata
   --apply <token>          Apply the reviewed report if storage has not changed
   --writers-stopped        Confirm all writers are stopped (required for apply)
   --accept-warnings        Accept the report's warnings (errors always block apply)
-  --actor <id>             Operator identity for the recovery audit (required for apply)
+  --actor <id>             Operator user ID, written to the snapshot and the audit event log
+                           (required for apply)
   --help                   Show this help
 
 Use the deployment's MARIMOHUB_STORAGE_* environment variables.
@@ -47,7 +50,8 @@ export async function runCatalogRecovery(
 	const source: CatalogRecoverySource = values.snapshot
 		? { mode: 'snapshot', snapshotId: SnapshotId.parse(values.snapshot) }
 		: { mode: 'rebuild' };
-	const catalog = new CatalogService(makeBucket());
+	const bucket = makeBucket();
+	const catalog = new CatalogService(bucket, undefined, new EventService(bucket));
 	if (values.apply === undefined) return catalog.planRecovery(source);
 	const snapshot = await catalog.recover(source, UserId.parse(values.actor!), {
 		token: values.apply,
@@ -55,4 +59,17 @@ export async function runCatalogRecovery(
 		acceptWarnings: values['accept-warnings'],
 	});
 	return { snapshotId: snapshot.snapshot_id, projects: snapshot.projects.length };
+}
+
+export const CATALOG_RECOVERY_BLOCKED_EXIT_CODE = 2;
+
+/** Explains why a dry-run report cannot be applied, or returns undefined when it can. */
+export function blockedRecoveryMessage(result: unknown): string | undefined {
+	const issues = (result as Partial<CatalogRecoveryReport> | null)?.issues;
+	const errors = Array.isArray(issues) ? issues.filter((issue) => issue.severity === 'error') : [];
+	if (errors.length === 0) return undefined;
+	return [
+		`Recovery is blocked by ${errors.length} error issue(s); fix them and inspect again:`,
+		...errors.map((issue) => `  ${issue.key}: ${issue.message}`),
+	].join('\n');
 }

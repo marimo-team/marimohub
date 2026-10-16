@@ -22,6 +22,24 @@ export const CODE_EXECUTION_ENV = [
 	'ENV',
 ] as const;
 
+/** Static AWS keys; SDK chains prefer them over the container provider. */
+export const STATIC_AWS_CREDENTIAL_ENV = [
+	'AWS_ACCESS_KEY_ID',
+	'AWS_SECRET_ACCESS_KEY',
+	'AWS_SESSION_TOKEN',
+] as const;
+
+/**
+ * AWS container-provider inputs. SDKs prefer RELATIVE_URI over FULL_URI and
+ * TOKEN_FILE over TOKEN, so any of them can redirect WIF endpoint delivery.
+ */
+export const AWS_CONTAINER_CREDENTIAL_ENV = [
+	'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+	'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+	'AWS_CONTAINER_AUTHORIZATION_TOKEN',
+	'AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE',
+] as const;
+
 /** Shell basics whose meaning the sandbox depends on. */
 export const SHELL_BASICS_ENV = ['PATH', 'HOME', 'PWD', 'LANG', 'IFS'] as const;
 
@@ -32,9 +50,8 @@ export const SHELL_BASICS_ENV = ['PATH', 'HOME', 'PWD', 'LANG', 'IFS'] as const;
 const RESERVED_NAMES = new Set<string>([
 	...SHELL_BASICS_ENV,
 	...CODE_EXECUTION_ENV,
-	'AWS_ACCESS_KEY_ID',
-	'AWS_SECRET_ACCESS_KEY',
-	'AWS_SESSION_TOKEN',
+	...STATIC_AWS_CREDENTIAL_ENV,
+	...AWS_CONTAINER_CREDENTIAL_ENV,
 	'AWS_ENDPOINT_URL_S3',
 	'AWS_REGION',
 	...HUB_XDG_ENV,

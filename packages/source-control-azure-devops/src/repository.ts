@@ -1,6 +1,9 @@
-import { AZURE_DEVOPS_ORGANIZATION_PATTERN } from '@marimo-hub/core/git-repo';
+import {
+	AZURE_DEVOPS_ORGANIZATION_PATTERN,
+	AZURE_DEVOPS_ORIGIN,
+	azureDevOpsRepository,
+} from '@marimo-hub/core/git-repo';
 import { ValidationError } from '@marimo-hub/core/errors';
-import { hasControlCharacter } from './validation';
 
 export interface AzureRepository {
 	organization: string;
@@ -17,56 +20,23 @@ export function validateOrganization(value: string): string {
 	return value.toLowerCase();
 }
 
-// Keep the hosted URL layout here: Server can later supply a collection-based resolver.
+// Hosted layout only: Server can later supply a collection-based resolver.
 export function parseAzureRepository(value: string, organization?: string): AzureRepository {
-	let url: URL;
-	try {
-		url = new URL(value);
-	} catch {
-		throw new ValidationError('Use an Azure DevOps HTTPS repository URL');
-	}
-	if (
-		url.origin !== 'https://dev.azure.com' ||
-		url.username ||
-		url.password ||
-		url.search ||
-		url.hash
-	) {
+	const parsed = azureDevOpsRepository(value);
+	if (!parsed) {
 		throw new ValidationError(
 			'Use https://dev.azure.com/{organization}/{project}/_git/{repository}',
 		);
 	}
-	const parts = url.pathname.replace(/\/$/, '').split('/').slice(1);
-	if (parts.length !== 4 || parts[2] !== '_git')
-		throw new ValidationError('Invalid Azure DevOps repository URL');
-	let decoded: string[];
-	try {
-		decoded = parts.map(decodeURIComponent);
-	} catch {
-		throw new ValidationError('Invalid Azure DevOps repository URL');
-	}
-	const [org, project, , name] = decoded;
-	if (
-		!org ||
-		!project ||
-		!name ||
-		decoded.some(
-			(part) =>
-				!part || part === '.' || part === '..' || hasControlCharacter(part) || /[/\\]/.test(part),
-		)
-	) {
-		throw new ValidationError('Invalid Azure DevOps repository URL');
-	}
-	const canonicalOrg = validateOrganization(org);
-	if (organization && canonicalOrg !== validateOrganization(organization)) {
+	if (organization && parsed.organization !== validateOrganization(organization)) {
 		throw new ValidationError('Repository is outside the configured Azure DevOps organization');
 	}
-	const base = `https://dev.azure.com/${canonicalOrg}/${encodeURIComponent(project)}`;
+	const base = `${AZURE_DEVOPS_ORIGIN}/${parsed.organization}/${encodeURIComponent(parsed.project)}`;
 	return {
-		organization: canonicalOrg,
-		project,
-		name,
-		url: `${base}/_git/${encodeURIComponent(name)}`,
-		apiUrl: `${base}/_apis/git/repositories/${encodeURIComponent(name)}`,
+		organization: parsed.organization,
+		project: parsed.project,
+		name: parsed.name,
+		url: parsed.url,
+		apiUrl: `${base}/_apis/git/repositories/${encodeURIComponent(parsed.name)}`,
 	};
 }

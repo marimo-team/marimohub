@@ -1,5 +1,5 @@
 import { ValidationError } from '@marimo-hub/core/errors';
-import { gitLabRepositoryUrl } from '@marimo-hub/core/git-repo';
+import { gitLabRepository } from '@marimo-hub/core/git-repo';
 
 export function gitLabOrigin(value = 'https://gitlab.com'): string {
 	let url: URL;
@@ -22,11 +22,13 @@ export function gitLabOrigin(value = 'https://gitlab.com'): string {
 }
 
 export function parseGitLabRepository(value: string, origin = 'https://gitlab.com') {
-	const url = gitLabRepositoryUrl(value);
-	if (!url) throw new ValidationError('Repository must be an HTTPS URL with a group/project path');
+	const parsed = gitLabRepository(value);
+	if (!parsed)
+		throw new ValidationError('Repository must be an HTTPS URL with a group/project path');
+	const { url } = parsed;
 	if (new URL(url).origin !== origin)
 		throw new ValidationError('Repository must use the configured GitLab HTTPS origin');
-	const path = new URL(url).pathname.slice(1).split('/').map(decodeURIComponent).join('/');
+	const path = parsed.parts.join('/');
 	return {
 		url,
 		path,

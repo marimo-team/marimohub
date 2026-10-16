@@ -101,7 +101,7 @@ pod is pinned to one replica with the `Recreate` strategy — don't scale it.
 
 `maintenance.shutdownTimeoutSeconds` sets the drain budget (default 120 seconds).
 The chart adds 20 seconds for cleanup and process exit, for a default termination grace of 140 seconds.
-Set this chart value directly. The chart rejects `MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` in `extraEnv`, even with maintenance disabled.
+Set this chart value directly. The chart rejects `MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` in `extraEnv`, `config`, or `secrets.data`, even with maintenance disabled.
 API replicas retain their 10-second drain and 30-second termination grace.
 See [shutdown behavior](../../docs/operations.md#shutdown-budgets).
 

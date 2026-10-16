@@ -20,11 +20,12 @@ import { BackgroundLoops } from './backgroundLoops';
 import { logEvent } from './log';
 import { fanoutMetrics, OtelMetrics, WideEventMetrics } from './metrics';
 import { buildVersion, startOtel } from './otel';
-import { onceAsync, settleAllWithin } from './promise';
+import { onceAsync, settleAllWithin, settleEach } from './promise';
 import { serveSpaFallback, serveStaticWithCache } from './staticCache';
 import { attachSandboxProxyUpgrade } from './sandboxProxyWs';
 
 const CLEANUP_TIMEOUT_MS = 10_000;
+const MAX_HTTP_GRACE_MS = 10_000;
 
 type Signal = 'SIGTERM' | 'SIGINT';
 
@@ -177,11 +178,9 @@ export async function bootstrap(
 	const stops: (() => void)[] = [];
 	const runtimeDrains: (() => Promise<void>)[] = [];
 	if (validatedEnv.MARIMOHUB_RUN_MAINTENANCE === 'true') {
+		// `loops.drain()` already awaits the warm-pool attempt.
 		const warmPools = startWarmPools(deps, loops);
-		if (warmPools) {
-			stops.push(warmPools.stop);
-			runtimeDrains.push(warmPools.drain);
-		}
+		if (warmPools) stops.push(warmPools.stop);
 		stops.push(startMaintenance(deps, wideEvents, loops));
 		const stopPreviews = startPreviewPreparation(deps, loops);
 		if (stopPreviews) stops.push(stopPreviews);
@@ -238,7 +237,7 @@ export async function bootstrap(
 
 	// In `proxy` exposure mode, forward `…/proxy/<token>/` WebSocket upgrades to the
 	// kernel (the HTTP side is handled inside `app.fetch`). A no-op otherwise.
-	attachSandboxProxyUpgrade(server, deps);
+	const proxySockets = attachSandboxProxyUpgrade(server, deps);
 
 	const unregisterSignals: (() => void)[] = [];
 	let drainPromise: Promise<void> | undefined;
@@ -260,14 +259,21 @@ export async function bootstrap(
 				server.close(() => resolve());
 			});
 			if ('closeIdleConnections' in server) server.closeIdleConnections();
+			// Open kernel WebSockets would otherwise hold `closed`, and with it compute
+			// dispose and the telemetry flush, for the whole budget.
+			const forceClose = setTimeout(
+				() => {
+					if ('closeAllConnections' in server) server.closeAllConnections();
+					proxySockets.destroyAll();
+				},
+				Math.min(MAX_HTTP_GRACE_MS, drainTimeoutMs / 2),
+			);
+			forceClose.unref();
+			void closed.then(() => clearTimeout(forceClose));
 			const disposeCompute = deps.compute[Symbol.asyncDispose];
 			const runtimeDrained = Promise.allSettled([
 				// Timed-out ticks can still dispatch jobs until their actual work settles.
-				loops
-					.drain()
-					.then(() =>
-						Promise.allSettled(runtimeDrains.map((drain) => Promise.resolve().then(drain))),
-					),
+				loops.drain().then(() => settleEach(runtimeDrains)),
 				closed.then(waitForBackgroundTasks),
 			]);
 			const resourcesClosed = Promise.allSettled([

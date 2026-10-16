@@ -1,6 +1,7 @@
 import { BadRequestError } from '@marimo-hub/core/errors';
 import { isSafeWorkspaceRootPath, WORKSPACE_LIMITS } from '@marimo-hub/core/remote-workspace';
 import type { SourceWorkspaceFile } from '@marimo-hub/core/ports/source-control';
+import { assertBlobContents, isSafeGitTreePath } from './fileTree';
 import type { FileTree, TreeEntry } from './fileTree';
 
 export async function readTreeWorkspace(options: {
@@ -20,10 +21,13 @@ export async function readTreeWorkspace(options: {
 	const files: SourceWorkspaceFile[] = [];
 	let total = 0;
 	for (const [path, entry] of selected) {
-		const bytes = await options.blob(
-			entry,
-			Math.min(WORKSPACE_LIMITS.maxFileBytes, WORKSPACE_LIMITS.maxTotalBytes - total),
-		);
+		// The tree callback is provider code; do not rely on it having validated paths.
+		if (!isSafeGitTreePath(path)) throw new BadRequestError(`Unsafe ${options.provider} tree path`);
+		const limit = Math.min(WORKSPACE_LIMITS.maxFileBytes, WORKSPACE_LIMITS.maxTotalBytes - total);
+		const bytes = await options.blob(entry, limit);
+		if (bytes.byteLength > limit)
+			throw new BadRequestError(`${options.provider} workspace exceeds the size limit`);
+		assertBlobContents(bytes, entry.objectId, options.provider);
 		total += bytes.byteLength;
 		files.push({ path: path.slice(prefix.length), bytes });
 	}

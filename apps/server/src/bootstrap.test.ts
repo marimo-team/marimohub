@@ -354,6 +354,44 @@ describe('bootstrap', () => {
 		expect(harness.exit).toHaveBeenCalledWith(0);
 	});
 
+	it('removes its signal handlers when the drain starts', async () => {
+		const harness = makeHarness(deps, { closeImmediately: false });
+		await bootstrap(BASE_ENV, harness.overrides);
+
+		harness.signals.get('SIGTERM')?.();
+
+		// A second signal must reach Node's default handler and kill the process.
+		expect(harness.signals.size).toBe(0);
+	});
+
+	it('force-closes held connections so maintenance finishes inside its budget', async () => {
+		const harness = makeHarness(deps, { closeImmediately: false });
+		const closeAllConnections = vi.fn(() => harness.finishClose());
+		Object.assign(harness.server, { closeAllConnections });
+		const dispose = vi.fn(async () => {});
+		const shutdown = vi.fn(async () => {});
+		harness.startOtelFn.mockReturnValue({ tracing: false, metrics: false, logs: false, shutdown });
+		harness.createDeps.mockReturnValue({
+			...deps,
+			compute: { ...deps.compute, [Symbol.asyncDispose]: dispose },
+		});
+		await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
+
+		harness.signals.get('SIGTERM')?.();
+		await vi.advanceTimersByTimeAsync(9_999);
+		expect(closeAllConnections).not.toHaveBeenCalled();
+		expect(dispose).not.toHaveBeenCalled();
+
+		await vi.advanceTimersByTimeAsync(1);
+		expect(closeAllConnections).toHaveBeenCalledOnce();
+		expect(dispose).toHaveBeenCalledOnce();
+		expect(shutdown).toHaveBeenCalledOnce();
+		expect(harness.exit).toHaveBeenCalledWith(0);
+		expect(console.log).not.toHaveBeenCalledWith(
+			expect.stringContaining('"event":"drain_timeout"'),
+		);
+	});
+
 	it('logs a warning and still exits 0 when the drain times out', async () => {
 		const harness = makeHarness(deps, { closeImmediately: false });
 		await bootstrap(BASE_ENV, harness.overrides);

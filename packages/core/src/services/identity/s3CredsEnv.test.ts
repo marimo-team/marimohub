@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { s3CredsToEnv } from './s3CredsEnv';
+import { s3CredsToEnv, s3TargetEnv } from './s3CredsEnv';
 
 describe('s3CredsToEnv', () => {
 	it('maps creds + endpoint, including the session token and region', () => {
@@ -36,5 +36,15 @@ describe('s3CredsToEnv', () => {
 	it('does not set the generic AWS_ENDPOINT_URL (would clobber non-S3 AWS clients)', () => {
 		const env = s3CredsToEnv({ accessKeyId: 'AK', secretAccessKey: 'sk' }, 'https://cwobject.com');
 		expect(env).not.toHaveProperty('AWS_ENDPOINT_URL');
+	});
+});
+
+describe('s3TargetEnv', () => {
+	it('maps only the provided endpoint and region', () => {
+		expect(s3TargetEnv('https://cwobject.com', 'us-east-1')).toEqual({
+			AWS_ENDPOINT_URL_S3: 'https://cwobject.com',
+			AWS_REGION: 'us-east-1',
+		});
+		expect(s3TargetEnv()).toEqual({});
 	});
 });

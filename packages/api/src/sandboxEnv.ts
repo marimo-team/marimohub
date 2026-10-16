@@ -1,13 +1,17 @@
 import {
+	AWS_CONTAINER_CREDENTIAL_ENV,
 	containerCredentialsEnv,
 	exchangeFederatedStorageCredentials,
 	mintWifCredentialsToken,
 	projectSessionEnv,
 	s3CredsToEnv,
+	STATIC_AWS_CREDENTIAL_ENV,
 	UnavailableError,
 	ValidationError,
+	wifCredentialsSubject,
 } from '@marimo-hub/core';
 import type {
+	AuthenticatedPrincipal,
 	Project,
 	ProjectId,
 	SessionEnv,
@@ -20,6 +24,7 @@ import type { JobRunContext } from '@marimo-hub/core/jobs';
 import { federationFor } from './federation';
 import type { ApiDeps } from './context';
 import { errorMetadata, logEvent } from './log';
+import { wifCredentialCacheFor } from './wifCredentialCache';
 
 export function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): SessionEnv {
 	return {
@@ -29,7 +34,7 @@ export function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): 
 	};
 }
 
-const STATIC_AWS_CREDENTIALS = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'];
+const ENDPOINT_DELIVERY_OWNED_ENV = [...STATIC_AWS_CREDENTIAL_ENV, ...AWS_CONTAINER_CREDENTIAL_ENV];
 
 // Integrations are the base; WIF and marimo config win collisions.
 export function composeSessionEnv(layers: {
@@ -43,10 +48,11 @@ export function composeSessionEnv(layers: {
 	if (layers.integrationEnv) {
 		env = mergeSessionEnv(projectSessionEnv(layers.integrationEnv), env ?? {});
 	}
-	// Static keys must not bypass endpoint delivery, even if token minting failed.
+	// Static keys and other container-provider inputs must not bypass or redirect endpoint
+	// delivery, even if token minting failed.
 	if (env && layers.endpointDelivery) {
-		for (const name of STATIC_AWS_CREDENTIALS) {
-			delete env.vars?.[name];
+		for (const name of ENDPOINT_DELIVERY_OWNED_ENV) {
+			if (layers.wifVars?.[name] === undefined) delete env.vars?.[name];
 			delete env.defaults?.[name];
 		}
 	}
@@ -85,7 +91,7 @@ export interface FederatedVarsOptions {
 	restricted: boolean;
 	/** Shares the exchange with {@link resolveIntegrationRender}; built per call when absent. */
 	federatedCredentials?: FederatedCredentials;
-	credentialsEndpoint?: { url: string; userId: UserId; expiresAt: string };
+	credentialsEndpoint?: { url: string; principal: AuthenticatedPrincipal; expiresAt: string };
 	onError?: (err: unknown) => void;
 }
 
@@ -102,11 +108,34 @@ export async function resolveFederatedVars(
 	const endpoint = options.credentialsEndpoint;
 	try {
 		if (wif.credentialsEndpoint && endpoint && options.workload.kind === 'session') {
+			const sessionId = options.workload.id;
 			const token = await mintWifCredentialsToken(
 				wif.credentialsEndpoint.keyMaterial,
-				{ sessionId: options.workload.id, projectId: options.project.id, userId: endpoint.userId },
+				{
+					sessionId,
+					projectId: options.project.id,
+					userId: endpoint.principal.id,
+					subject: wifCredentialsSubject(endpoint.principal),
+				},
 				{ expiresAt: endpoint.expiresAt },
 			);
+			const credentials =
+				options.federatedCredentials ??
+				federatedCredentialsFor(deps, options.project, options.workload);
+			// SDK container providers time out after 1-2 s, so the first fetch must not wait on STS.
+			if (credentials) {
+				wifCredentialCacheFor(wif)
+					.get(sessionId, credentials)
+					.catch((err: unknown) =>
+						logEvent({
+							level: 'debug',
+							event: 'wif_credentials_prime_failed',
+							project_id: options.project.id,
+							session_id: sessionId,
+							...errorMetadata(err),
+						}),
+					);
+			}
 			return containerCredentialsEnv(
 				endpoint.url,
 				token,

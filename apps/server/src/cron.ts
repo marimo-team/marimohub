@@ -21,6 +21,7 @@ import {
 import { JobRunner, JobScheduler } from '@marimo-hub/core/jobs';
 import { logEvent } from './log';
 import { BackgroundLoops } from './backgroundLoops';
+import type { LoopHandle } from './backgroundLoops';
 import type { WideEventMetrics } from './metrics';
 
 const FIVE_MINUTES_MS = Millis.minutes(5);
@@ -328,7 +329,7 @@ export function startJobScheduler(
 export function startWarmPools(
 	deps: ApiDeps,
 	loops = new BackgroundLoops(),
-): JobSchedulerHandle | undefined {
+): LoopHandle | undefined {
 	const service = deps.warmPool;
 	if (!service) return;
 	return loops.start({

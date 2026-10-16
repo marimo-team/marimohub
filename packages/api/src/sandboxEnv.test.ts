@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createRunId, UnavailableError, ValidationError } from '@marimo-hub/core';
+import { createRunId, createSessionId, UnavailableError, ValidationError } from '@marimo-hub/core';
 import type {
 	JobDefinition,
 	JobRun,
 	Project,
 	ProjectIntegrationsService,
+	SessionId,
 	SessionRender,
 } from '@marimo-hub/core';
 import type { JobRunContext } from '@marimo-hub/core/jobs';
@@ -18,6 +19,7 @@ import {
 } from './sandboxEnv';
 import { createInitializedBucket, makeTestDeps, makeTestWif } from './testing';
 import type { ApiDeps } from './context';
+import { wifCredentialCacheFor } from './wifCredentialCache';
 
 const AUTHOR = uid('author-1');
 const TRIGGERER = uid('triggerer-1');
@@ -148,6 +150,55 @@ describe('resolveFederatedVars', () => {
 			),
 		).toBeUndefined();
 		expect(onError).toHaveBeenCalledWith(failure);
+	});
+
+	describe('endpoint delivery', () => {
+		const expiration = () => new Date(Date.now() + 60 * 60_000).toISOString();
+		const endpoint = {
+			url: 'https://hub.example.com/api/wif/v1/credentials',
+			principal: { id: ACTOR, email: 'a@x', credential: { kind: 'sso' as const } },
+			expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+		};
+		const resolve = (config: ReturnType<typeof makeTestWif>, sessionId: SessionId) =>
+			resolveFederatedVars(
+				{ wif: config },
+				{
+					project: makeProject({ federation: { enabled: true } }),
+					workload: { kind: 'session', id: sessionId },
+					restricted: false,
+					credentialsEndpoint: endpoint,
+				},
+			);
+
+		it('primes the shared cache so the first SDK fetch is a hit', async () => {
+			const exchange = vi.fn(async () => ({
+				accessKeyId: 'AK',
+				secretAccessKey: 'SK',
+				expiration: expiration(),
+			}));
+			const config = makeTestWif({ exchange, credentialsEndpoint: true });
+			const sessionId = createSessionId();
+			const env = await resolve(config, sessionId);
+			expect(env).toHaveProperty('AWS_CONTAINER_AUTHORIZATION_TOKEN');
+			expect(env).not.toHaveProperty('AWS_ACCESS_KEY_ID');
+			const cached = await wifCredentialCacheFor(config).get(sessionId, async () => {
+				throw new Error('cache miss');
+			});
+			expect(cached.accessKeyId).toBe('AK');
+			expect(exchange).toHaveBeenCalledOnce();
+		});
+
+		it('still returns the endpoint env when priming fails', async () => {
+			const logs = vi.spyOn(console, 'log').mockImplementation(() => {});
+			const exchange = vi.fn(async () => {
+				throw new Error('broker down');
+			});
+			const config = makeTestWif({ exchange, credentialsEndpoint: true });
+			const env = await resolve(config, createSessionId());
+			expect(env).toHaveProperty('AWS_CONTAINER_CREDENTIALS_FULL_URI');
+			await vi.waitFor(() => expect(exchange).toHaveBeenCalledOnce());
+			logs.mockRestore();
+		});
 	});
 });
 
@@ -566,6 +617,30 @@ describe('composeSessionEnv', () => {
 		expect(env?.vars).toEqual({ AWS_REGION: 'us-east-1', KEEP: 'value' });
 		expect(env?.defaults).toEqual({ OTHER: 'default' });
 		expect(integrationEnv.vars.AWS_ACCESS_KEY_ID).toBe('integration');
+	});
+
+	it('strips or overrides container-provider inputs from other layers under endpoint delivery', () => {
+		const env = composeSessionEnv({
+			endpointDelivery: true,
+			wifVars: {
+				AWS_CONTAINER_CREDENTIALS_FULL_URI: 'https://hub.example.com/api/wif/v1/credentials',
+				AWS_CONTAINER_AUTHORIZATION_TOKEN: 'tok',
+			},
+			integrationEnv: {
+				...integrationEnv,
+				vars: {
+					AWS_CONTAINER_CREDENTIALS_FULL_URI: 'https://attacker.example',
+					AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: '/steal',
+					AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE: '/tmp/token',
+				},
+			},
+			marimoEnv: { defaults: { AWS_CONTAINER_AUTHORIZATION_TOKEN: 'default' } },
+		});
+		expect(env?.vars).toEqual({
+			AWS_CONTAINER_CREDENTIALS_FULL_URI: 'https://hub.example.com/api/wif/v1/credentials',
+			AWS_CONTAINER_AUTHORIZATION_TOKEN: 'tok',
+		});
+		expect(env?.defaults).toEqual({});
 	});
 
 	it('returns no environment when endpoint resolution fails without other layers', () => {

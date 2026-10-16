@@ -39,15 +39,39 @@ function toWebRequest(req: http.IncomingMessage): Request {
 	return new Request(`http://${host}${req.url ?? '/'}`, { method: 'GET', headers });
 }
 
+export interface SandboxProxyHandle {
+	/** Upgraded sockets keep `server.close()` pending, so shutdown must end them explicitly. */
+	destroyAll(): void;
+	readonly size: number;
+}
+
 /**
  * Attach the `/proxy/<token>/…` WebSocket forwarder. A no-op unless proxy exposure
  * is configured; non-proxy upgrade paths are left for any other WS handling.
  */
-export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps): void {
-	if (deps.sandbox.exposure?.mode !== 'proxy') return;
+export function attachSandboxProxyUpgrade(
+	server: UpgradeServer,
+	deps: ApiDeps,
+): SandboxProxyHandle {
+	const sockets = new Set<Duplex>();
+	const handle: SandboxProxyHandle = {
+		destroyAll() {
+			for (const socket of sockets) socket.destroy();
+			sockets.clear();
+		},
+		get size() {
+			return sockets.size;
+		},
+	};
+	const track = (socket: Duplex) => {
+		sockets.add(socket);
+		socket.once('close', () => sockets.delete(socket));
+	};
+	if (deps.sandbox.exposure?.mode !== 'proxy') return handle;
 
 	server.on('upgrade', (req, clientSocket, head) => {
 		clientSocket.on('error', () => clientSocket.destroy());
+		track(clientSocket);
 
 		let request: Request;
 		try {
@@ -137,6 +161,7 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 
 				proxyReq.on('upgrade', (proxyRes, connectedKernelSocket, kernelHead) => {
 					kernelSocket = connectedKernelSocket;
+					track(connectedKernelSocket);
 					const statusLine = `HTTP/1.1 ${proxyRes.statusCode} ${proxyRes.statusMessage}`;
 					const headerLines: string[] = [statusLine];
 					for (const [key, value] of Object.entries(proxyRes.headers)) {
@@ -183,4 +208,5 @@ export function attachSandboxProxyUpgrade(server: UpgradeServer, deps: ApiDeps):
 				rejectUpgrade(clientSocket, 500, 'Internal Server Error');
 			});
 	});
+	return handle;
 }

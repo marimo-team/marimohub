@@ -1,12 +1,12 @@
 import { readTreeWorkspace } from '@marimo-hub/source-control-git/workspace';
 import { BadRequestError, UnavailableError } from '@marimo-hub/core/errors';
-import { isSafeWorkspaceRootPath, WORKSPACE_LIMITS } from '@marimo-hub/core/remote-workspace';
+import { WORKSPACE_LIMITS } from '@marimo-hub/core/remote-workspace';
 import type {
 	SourceControlChange,
 	SourceReadOptions,
 	SourceWorkspaceFile,
 } from '@marimo-hub/core/ports/source-control';
-import { blobId } from '@marimo-hub/source-control-git/file-tree';
+import { assertBlobContents, FileTreeBuilder } from '@marimo-hub/source-control-git/file-tree';
 import type { FileTree, TreeEntry } from '@marimo-hub/source-control-git/file-tree';
 import {
 	normalizeCommit,
@@ -66,34 +66,17 @@ export class GitLabTrees {
 			{ ref, recursive: 'true' },
 			options,
 		);
-		const files: FileTree = new Map();
-		const paths = new Set<string>();
+		const tree = new FileTreeBuilder('GitLab');
 		for (const item of entries) {
 			const entry = record(item);
-			const path = stringField(entry, 'path');
-			const mode = stringField(entry, 'mode');
-			if (!path || !isSafeWorkspaceRootPath(path) || paths.has(path))
-				throw new BadRequestError('Unsafe or duplicate GitLab tree path');
-			paths.add(path);
-			const objectId = normalizeProviderCommit(stringField(entry, 'id'));
-			if (entry.type === 'tree' && mode === '040000') continue;
-			if (
-				!(
-					(entry.type === 'blob' && ['100644', '100755', '120000'].includes(mode)) ||
-					(entry.type === 'commit' && mode === '160000')
-				)
-			)
-				throw new UnavailableError('Invalid GitLab tree entry');
-			files.set(path, { objectId, mode });
+			tree.add({
+				path: stringField(entry, 'path'),
+				type: entry.type,
+				mode: stringField(entry, 'mode'),
+				objectId: entry.id,
+			});
 		}
-		for (const path of paths) {
-			const parts = path.split('/');
-			for (let i = 1; i < parts.length; i++) {
-				if (files.has(parts.slice(0, i).join('/')))
-					throw new BadRequestError('GitLab tree has overlapping file and directory paths');
-			}
-		}
-		return files;
+		return tree.build();
 	}
 	async blob(entry: TreeEntry, limit: number, options: SourceReadOptions = {}) {
 		const { bytes } = await this.client.data(
@@ -103,8 +86,7 @@ export class GitLabTrees {
 			options,
 			limit,
 		);
-		if (blobId(bytes) !== entry.objectId)
-			throw new UnavailableError('GitLab returned different blob contents');
+		assertBlobContents(bytes, entry.objectId, 'GitLab');
 		return bytes;
 	}
 	async workspace(

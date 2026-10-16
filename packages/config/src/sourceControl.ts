@@ -101,8 +101,16 @@ function makeAzureSourceControl(env: Env): SourceControlRegistration | undefined
 		});
 	}
 	if ((tenantId || clientId || clientSecret) && !(tenantId && clientId && clientSecret)) {
+		const missing = (
+			[
+				['MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_TENANT_ID', tenantId],
+				['MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_ID', clientId],
+				['MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_SECRET', clientSecret],
+			] as const
+		).find(([, value]) => !value)![0];
 		throw new ConfigError(
 			'MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_TENANT_ID, CLIENT_ID, and CLIENT_SECRET must be set together',
+			{ variable: missing },
 		);
 	}
 	const azure = new AzureDevOpsSourceControl({
@@ -145,13 +153,14 @@ function repositoryPolicy(
 }
 
 function makeGitLabSourceControl(env: Env): SourceControlRegistration | undefined {
-	const token = env.MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN?.trim();
+	const tokenVariable = 'MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN';
+	const token = env[tokenVariable]?.trim();
 	const variable = 'MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL';
 	if (!token) {
 		if (env[variable]?.trim())
-			throw new ConfigError(
-				'MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN is required when a GitLab server is configured',
-			);
+			throw new ConfigError(`${tokenVariable} is required when a GitLab server is configured`, {
+				variable: tokenVariable,
+			});
 		return undefined;
 	}
 	let origin: string;
@@ -164,7 +173,7 @@ function makeGitLabSourceControl(env: Env): SourceControlRegistration | undefine
 	try {
 		gitlab = new GitLabSourceControl({ token, url: origin });
 	} catch {
-		throw new ConfigError('Invalid MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN');
+		throw new ConfigError(`Invalid ${tokenVariable}`, { variable: tokenVariable });
 	}
 	return {
 		reader: gitlab,
@@ -174,7 +183,7 @@ function makeGitLabSourceControl(env: Env): SourceControlRegistration | undefine
 			env,
 			'MARIMOHUB_SOURCE_CONTROL_GITLAB_ALLOWED_REPOSITORIES',
 			'GitLab',
-			(value) => parseGitLabRepository(value, origin).url,
+			(value) => parseGitLabRepository(value, origin).url.toLowerCase(),
 		),
 	};
 }

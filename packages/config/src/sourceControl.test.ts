@@ -360,7 +360,7 @@ describe('GitLab source control', () => {
 			}),
 		).toThrow('SERVER_URL');
 	});
-	it('enforces project policies before calling the adapter and preserves path case', async () => {
+	it('enforces project policies before calling the adapter, ignoring path case', async () => {
 		const head = vi
 			.spyOn(GitLabSourceControl.prototype, 'getBranchHead')
 			.mockResolvedValue({ commit: 'a'.repeat(40) });
@@ -375,11 +375,27 @@ describe('GitLab source control', () => {
 		).resolves.toEqual({ commit: 'a'.repeat(40) });
 		await expect(
 			registry.getReader('gitlab', projectId)!.getBranchHead(repository.toLowerCase(), 'main'),
-		).rejects.toThrow('not allowed');
+		).resolves.toEqual({ commit: 'a'.repeat(40) });
 		await expect(registry.getReader('gitlab')!.getBranchHead(repository, 'main')).rejects.toThrow(
 			'not allowed',
 		);
-		expect(head).toHaveBeenCalledOnce();
+		expect(head).toHaveBeenCalledTimes(2);
+	});
+	it.each([
+		[
+			{
+				MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL: env.MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL,
+			},
+			'MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN',
+		],
+		[
+			{ ...env, MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN: 'bad\ntoken' },
+			'MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN',
+		],
+	])('names the offending variable', (input, variable) => {
+		expect(() => makeSourceControl(input)).toThrow(
+			expect.objectContaining({ opts: expect.objectContaining({ variable }) }),
+		);
 	});
 	it('rejects allowlists on another host', () => {
 		expect(() =>

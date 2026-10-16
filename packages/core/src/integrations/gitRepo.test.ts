@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+	azureDevOpsRepository,
 	detectProvider,
+	gitHubRepository,
+	gitLabRepository,
 	gitLabRepositoryUrl,
 	normalizeRepo,
 	repoPath,
@@ -179,10 +182,19 @@ describe('reposMatch', () => {
 		expect(reposMatch('  acme/analytics  ', 'acme/analytics.git')).toBe(true);
 	});
 
-	it('folds case only for GitHub, whose paths are case-insensitive', () => {
+	it('folds case for every recognized provider but not unknown hosts', () => {
 		expect(reposMatch('Acme/Analytics', 'acme/analytics')).toBe(true);
 		expect(reposMatch('https://github.com/Acme/Analytics', 'acme/analytics')).toBe(true);
-		expect(reposMatch('https://gitlab.com/Group/Project', 'group/project')).toBe(false);
+		expect(reposMatch('https://gitlab.com/Group/Project', 'group/project')).toBe(true);
+		expect(
+			reposMatch('https://dev.azure.com/acme/Project/_git/Repo', 'Acme/project/_git/repo'),
+		).toBe(true);
+		expect(
+			reposMatch(
+				'https://dev.azure.com/acme/Project/_git/Repo',
+				'https://dev.azure.com/Acme/project/_git/repo',
+			),
+		).toBe(true);
 		expect(reposMatch('https://code.example.com/Team/Repo', 'team/repo')).toBe(false);
 	});
 
@@ -205,8 +217,8 @@ describe('reposMatch', () => {
 		['https://git.acme.corp/Team/Repo', 'https://other.corp/team/repo', false],
 		['https://git.acme.corp/Team/Repo', 'https://git.acme.corp:8443/team/repo', false],
 		['https://git.acme.corp:8443/Team/Repo', 'team/repo', false],
-		['https://gitlab.com/Team/Repo', 'team/repo', false],
-		['https://git.internal/Team/Repo', 'team/repo', false],
+		['https://gitlab.com/Team/Repo', 'team/repo', true],
+		['https://git.internal/Team/Repo', 'team/repo', true],
 		['https://unknown.corp/Team/Repo', 'team/repo', false],
 	])('matches %s against %s using configured hosts: %s', (expected, received, matches) => {
 		expect(
@@ -247,4 +259,160 @@ it('preserves Azure repository names ending in .git through normalization and co
 	expect(reposMatch(repo, 'acme/project/_git/notebooks.git')).toBe(true);
 	expect(reposMatch(repo, 'https://dev.azure.com/acme/project/_git/notebooks')).toBe(false);
 	expect(reposMatch(repo, 'acme/project/_git/notebooks')).toBe(false);
+});
+
+describe('gitHubRepository', () => {
+	it.each([
+		['acme/analytics', 'https://github.com/acme/analytics'],
+		['acme/analytics.GIT', 'https://github.com/acme/analytics'],
+		['github.com/acme/analytics', 'https://github.com/acme/analytics'],
+		['HTTPS://GitHub.COM/acme/analytics.git/', 'https://github.com/acme/analytics'],
+		['https://git.acme.corp:8443/acme/analytics', 'https://git.acme.corp:8443/acme/analytics'],
+	])('parses %s', (input, url) => {
+		expect(gitHubRepository(input)).toMatchObject({ provider: 'github', url });
+	});
+
+	it('returns owner, repo, and origin', () => {
+		expect(gitHubRepository('Acme/Analytics')).toEqual({
+			provider: 'github',
+			url: 'https://github.com/Acme/Analytics',
+			parts: ['Acme', 'Analytics'],
+			origin: 'https://github.com',
+			owner: 'Acme',
+			repo: 'Analytics',
+		});
+	});
+
+	it('pins the origin when one is configured', () => {
+		const ghes = 'https://git.acme.corp';
+		expect(gitHubRepository('https://git.acme.corp/acme/analytics', ghes)?.owner).toBe('acme');
+		expect(gitHubRepository('acme/analytics', ghes)).toBeNull();
+		expect(gitHubRepository('https://github.com/acme/analytics', ghes)).toBeNull();
+		expect(
+			gitHubRepository('https://git.acme.corp/acme/analytics', 'https://github.com'),
+		).toBeNull();
+	});
+
+	it.each([
+		'http://github.com/acme/analytics',
+		'https://github.com/acme/team/analytics',
+		'https://github.com/acme/analytics?tab=readme',
+		'https://github.com/acme/analytics#readme',
+		'https://user@github.com/acme/analytics',
+		'git@github.com:acme/analytics.git',
+		'-acme/analytics',
+		'acme/..',
+		'acme/.git',
+	])('rejects %s', (input) => {
+		expect(gitHubRepository(input)).toBeNull();
+	});
+});
+
+describe('azureDevOpsRepository', () => {
+	const canonical = 'https://dev.azure.com/acme/Project%20One/_git/notebooks';
+
+	it.each([
+		'https://dev.azure.com/acme/Project%20One/_git/notebooks',
+		'https://dev.azure.com/ACME/Project%20One/_git/notebooks/',
+		'https://dev.azure.com:443/acme/Project%20One/_git/notebooks',
+		'https://acme@dev.azure.com/acme/Project%20One/_git/notebooks',
+		'https://acme.visualstudio.com/Project%20One/_git/notebooks',
+		'https://Acme.VisualStudio.com/DefaultCollection/Project%20One/_git/notebooks',
+		'git@ssh.dev.azure.com:v3/acme/Project%20One/notebooks',
+		'ssh://git@ssh.dev.azure.com:22/v3/acme/Project%20One/notebooks',
+	])('canonicalizes %s', (input) => {
+		expect(azureDevOpsRepository(input)).toEqual({
+			provider: 'azure-devops',
+			url: canonical,
+			parts: ['acme', 'Project One', '_git', 'notebooks'],
+			organization: 'acme',
+			project: 'Project One',
+			name: 'notebooks',
+		});
+	});
+
+	it('keeps a .git repository name', () => {
+		expect(azureDevOpsRepository('https://dev.azure.com/acme/p/_git/r.git')?.name).toBe('r.git');
+	});
+
+	it.each([
+		'http://dev.azure.com/acme/p/_git/r',
+		'https://dev.azure.com:8443/acme/p/_git/r',
+		'https://dev.azure.com.evil.test/acme/p/_git/r',
+		'https://evil.acme.visualstudio.com/p/_git/r',
+		'https://other@dev.azure.com/acme/p/_git/r',
+		'https://acme:secret@dev.azure.com/acme/p/_git/r',
+		'https://dev.azure.com/acme/p/_git/r?x=1',
+		'https://dev.azure.com/acme/p/_git/r#x',
+		'https://dev.azure.com/acme/p/_git/a%2Fb',
+		'https://dev.azure.com/acme/p/_git/%ZZ',
+		'https://dev.azure.com/acme/p/r',
+		'https://dev.azure.com/acme_org/p/_git/r',
+		'https://server.test/collection/p/_git/r',
+		'git@ssh.dev.azure.com:v3/acme/p',
+		'git@ssh.dev.azure.com:v2/acme/p/r',
+	])('rejects %s', (input) => {
+		expect(azureDevOpsRepository(input)).toBeNull();
+	});
+
+	it('normalizes every hosted form to the canonical URL', () => {
+		expect(normalizeRepo('https://acme@dev.azure.com/acme/p/_git/r')).toBe(
+			'https://dev.azure.com/acme/p/_git/r',
+		);
+		expect(normalizeRepo('git@ssh.dev.azure.com:v3/acme/p/r')).toBe(
+			'https://dev.azure.com/acme/p/_git/r',
+		);
+		expect(normalizeRepo('https://acme.visualstudio.com/p/_git/r')).toBe(
+			'https://dev.azure.com/acme/p/_git/r',
+		);
+		expect(normalizeRepo('dev.azure.com/Acme/p/_git/r')).toBe(
+			'https://dev.azure.com/acme/p/_git/r',
+		);
+		expect(detectProvider('https://acme.visualstudio.com/p/_git/r')).toBe('azure-devops');
+	});
+});
+
+describe('gitLabRepository', () => {
+	it('returns the canonical URL and decoded path parts', () => {
+		expect(gitLabRepository('https://gitlab.com/Group/Sub/Project.GIT/')).toEqual({
+			provider: 'gitlab',
+			url: 'https://gitlab.com/Group/Sub/Project',
+			parts: ['Group', 'Sub', 'Project'],
+		});
+	});
+});
+
+describe('case and suffix handling', () => {
+	it('strips a .git suffix case-insensitively', () => {
+		expect(normalizeRepo('https://gitlab.com/group/Proj.GIT')).toBe(
+			'https://gitlab.com/group/Proj',
+		);
+		expect(normalizeRepo('acme/analytics.Git')).toBe('acme/analytics');
+	});
+
+	it('treats a configured Azure DevOps host like hosted Azure', () => {
+		const hosts = { 'tfs.acme.corp': 'azure-devops' as const };
+		const repo = 'https://tfs.acme.corp/collection/project/_git/notebooks.git';
+		expect(normalizeRepo(repo, hosts)).toBe(repo);
+		expect(repoPath(repo, hosts)).toBe('collection/project/_git/notebooks.git');
+		expect(reposMatch(repo, 'collection/project/_git/notebooks.git', hosts)).toBe(true);
+		expect(reposMatch(repo, 'collection/project/_git/notebooks', hosts)).toBe(false);
+		expect(repoPath(repo)).toBe('collection/project/_git/notebooks');
+	});
+});
+
+describe('detectProvider host matching', () => {
+	it.each([
+		'https://notgithub.evil.com/acme/analytics',
+		'https://mygitlab.example.com/group/project',
+		'https://github.gitlab.corp/group/project',
+	])('does not match a lookalike or ambiguous host: %s', (repo) => {
+		expect(detectProvider(repo)).toBeNull();
+	});
+
+	it('prefers configured hosts over name heuristics', () => {
+		expect(
+			detectProvider('https://gitlab.acme.corp/group/project', { 'gitlab.acme.corp': 'github' }),
+		).toBe('github');
+	});
 });

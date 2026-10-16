@@ -108,6 +108,7 @@ services:
     build: . # the Dockerfile above
     network_mode: host # serves :3000; reaches kernels on 127.0.0.1
     restart: unless-stopped
+    stop_grace_period: 140s # maintenance drain budget (120 s) + 20 s
     env_file: marimohub.env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -124,6 +125,9 @@ services:
 volumes:
   caddy-data:
 ```
+
+The hub also runs maintenance, so it drains for up to 120 seconds on shutdown.
+Docker's default stop timeout is 10 seconds. `stop_grace_period` gives the drain time to finish. See [Shutdown budgets](../operations.md#shutdown-budgets).
 
 ```text
 # Caddyfile — TLS via Let's Encrypt, websockets proxied automatically

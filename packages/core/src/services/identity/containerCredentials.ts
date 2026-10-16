@@ -1,9 +1,15 @@
+import { z } from 'zod';
 import { ValidationError } from '../../errors';
 import { Millis, Seconds } from '../../duration';
 import { toBase64Url } from '../../internal/base64url';
 import { signHs256Token, verifyHs256Token } from '../../internal/hs256';
 import { hmacSha256 } from '../../internal/hmac';
+import { AUTH_ENTITLEMENTS, CREDENTIAL_KINDS, MAX_AUTH_GROUPS } from '../../ports/auth';
+import type { AuthenticatedPrincipal } from '../../ports/auth';
 import type { TempS3Creds } from '../../ports/credentialBroker';
+import { TokenGrantSchema } from '../../tokenGrants';
+import type { AWS_CONTAINER_CREDENTIAL_ENV } from '../integrations/environmentName';
+import { s3TargetEnv } from './s3CredsEnv';
 
 const TOKEN_USE = 'wif-container-credentials';
 const SECRET_DERIVATION_LABEL = 'marimohub/wif-container-credentials-token/v1';
@@ -28,10 +34,45 @@ export function validateWifCredentialsUrl(value: string): void {
 	}
 }
 
+/**
+ * The launch principal's authorization inputs that storage cannot reproduce.
+ * Project membership is re-read on every fetch; group-derived access is
+ * already bounded by the session's authorization deadline.
+ */
+const WifCredentialsSubjectSchema = z.object({
+	email: z.string(),
+	groups: z.array(z.string()).max(MAX_AUTH_GROUPS).optional(),
+	entitlements: z.array(z.enum(AUTH_ENTITLEMENTS)).optional(),
+	credential: z.object({
+		kind: z.enum(CREDENTIAL_KINDS),
+		id: z.string().optional(),
+		grant: TokenGrantSchema.optional(),
+		subjectContextRef: z.string().optional(),
+	}),
+});
+
+export type WifCredentialsSubject = z.infer<typeof WifCredentialsSubjectSchema>;
+
+export function wifCredentialsSubject(principal: AuthenticatedPrincipal): WifCredentialsSubject {
+	const { kind, id, grant, subjectContextRef } = principal.credential;
+	return {
+		email: principal.email,
+		...(principal.groups?.length ? { groups: [...principal.groups] } : {}),
+		...(principal.entitlements?.length ? { entitlements: [...principal.entitlements] } : {}),
+		credential: {
+			kind,
+			...(id !== undefined ? { id } : {}),
+			...(grant ? { grant } : {}),
+			...(subjectContextRef !== undefined ? { subjectContextRef } : {}),
+		},
+	};
+}
+
 export interface WifCredentialsTokenClaims {
 	sessionId: string;
 	projectId: string;
 	userId: string;
+	subject: WifCredentialsSubject;
 }
 
 // Domain-separated so the token can't be confused with any other HMAC over the signing key.
@@ -51,6 +92,7 @@ export async function mintWifCredentialsToken(
 		sub: claims.sessionId,
 		project_id: claims.projectId,
 		user_id: claims.userId,
+		subject: claims.subject,
 		iat,
 		exp: Math.min(
 			iat + (opts.ttlSeconds ?? DEFAULT_TOKEN_TTL_SECONDS),
@@ -68,6 +110,7 @@ export async function verifyWifCredentialsToken(
 	const payload = await verifyHs256Token(await deriveSecret(keyMaterial), token);
 	if (!payload) return null;
 	if (payload.use !== TOKEN_USE) return null;
+	// RFC 7519: a token must not be accepted on or after `exp`.
 	if (
 		typeof payload.exp !== 'number' ||
 		!Number.isFinite(payload.exp) ||
@@ -79,7 +122,9 @@ export async function verifyWifCredentialsToken(
 	if (typeof sub !== 'string' || typeof project_id !== 'string' || typeof user_id !== 'string') {
 		return null;
 	}
-	return { sessionId: sub, projectId: project_id, userId: user_id };
+	const subject = WifCredentialsSubjectSchema.safeParse(payload.subject);
+	if (!subject.success) return null;
+	return { sessionId: sub, projectId: project_id, userId: user_id, subject: subject.data };
 }
 
 // No static keys: env credentials take precedence over the container provider in SDK chains.
@@ -90,13 +135,11 @@ export function containerCredentialsEnv(
 	region?: string,
 ): Record<string, string> {
 	validateWifCredentialsUrl(credentialsUrl);
-	const env: Record<string, string> = {
+	const env: Partial<Record<(typeof AWS_CONTAINER_CREDENTIAL_ENV)[number], string>> = {
 		AWS_CONTAINER_CREDENTIALS_FULL_URI: credentialsUrl,
 		AWS_CONTAINER_AUTHORIZATION_TOKEN: token,
 	};
-	if (endpoint) env.AWS_ENDPOINT_URL_S3 = endpoint;
-	if (region) env.AWS_REGION = region;
-	return env;
+	return { ...env, ...s3TargetEnv(endpoint, region) };
 }
 
 // botocore and the JS v3 SDK require every field, `Token` included (empty is valid).

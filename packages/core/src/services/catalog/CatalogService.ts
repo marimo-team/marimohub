@@ -1,4 +1,4 @@
-import type { Bucket } from '../../ports/bucket';
+import type { Bucket, BucketListResult } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import {
@@ -8,6 +8,7 @@ import {
 	PreconditionFailedError,
 	ValidationError,
 } from '../../errors';
+import { sleep } from '../../duration';
 import { createSnapshotId } from '../../ids';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import { paths } from '../../paths';
@@ -37,6 +38,9 @@ class NotebookEntryExistsError extends Error {
 }
 
 type Awaitable<T> = T | Promise<T>;
+
+const INITIALIZE_RECHECK_MS = 250;
+const INITIALIZE_SNAPSHOT_SCAN_LIMIT = 20;
 
 /**
  * Lazy-migration seam for snapshots. The read schema is forward-tolerant (it
@@ -71,6 +75,7 @@ export class CatalogService {
 		private events?: EventService,
 		/** Retry timing override; metrics hooks remain owned by this service. */
 		private casRetry?: Pick<CasRetryOptions, 'retries' | 'backoffMs'>,
+		private initializeRecheckMs = INITIALIZE_RECHECK_MS,
 	) {}
 
 	async initialize(actor: UserId): Promise<Snapshot> {
@@ -79,12 +84,15 @@ export class CatalogService {
 			return this.getCurrentSnapshot();
 		}
 
-		const remnants = await Promise.all(
-			['projects/', paths.snapshotsPrefix].map((prefix) => this.bucket.list({ prefix, limit: 1 })),
-		);
-		if (
-			remnants.some((result) => result.objects.length > 0 || result.delimitedPrefixes.length > 0)
-		) {
+		const [projects, snapshots] = await Promise.all([
+			this.bucket.list({ prefix: 'projects/', limit: 1 }),
+			this.bucket.list({ prefix: paths.snapshotsPrefix, limit: INITIALIZE_SNAPSHOT_SCAN_LIMIT }),
+		]);
+		const hasProjects = projects.objects.length > 0 || projects.delimitedPrefixes.length > 0;
+		if (hasProjects || !(await this.onlyEmptyInitializeSnapshots(snapshots))) {
+			if (await this.bucket.head(paths.catalog)) return this.getCurrentSnapshot();
+			// A concurrent initializer may be between its snapshot put and its catalog put.
+			await sleep(this.initializeRecheckMs);
 			if (await this.bucket.head(paths.catalog)) return this.getCurrentSnapshot();
 			throw new NotInitializedError(
 				'Catalog recovery required: catalog.json is missing but stored projects or snapshots remain. Run catalog recovery before restarting the service.',
@@ -136,6 +144,29 @@ export class CatalogService {
 			}
 			throw err;
 		}
+	}
+
+	/**
+	 * Empty `system.initialize` snapshots are left by a concurrent initializer or one that
+	 * crashed before its catalog put. They hold no data, so a fresh boot may proceed; the
+	 * create-if-absent catalog put still picks exactly one winner.
+	 */
+	private async onlyEmptyInitializeSnapshots(listing: BucketListResult): Promise<boolean> {
+		if (listing.truncated || listing.delimitedPrefixes.length > 0) return false;
+		const results = await Promise.all(
+			listing.objects.map(async ({ key }) => {
+				const object = await this.bucket.get(key);
+				// The losing initializer deletes its own snapshot.
+				if (!object) return true;
+				try {
+					const snapshot = await readStored(SnapshotSchema, object, key);
+					return snapshot.operation === 'system.initialize' && snapshot.projects.length === 0;
+				} catch {
+					return false;
+				}
+			}),
+		);
+		return results.every(Boolean);
 	}
 
 	async getCurrentSnapshot(): Promise<Snapshot> {
@@ -278,20 +309,69 @@ export class CatalogService {
 			actor,
 			projects: report.projects,
 		});
-		return this.mutateSnapshot(
-			'system.recover',
-			actor,
-			() => snapshot,
-			{ source },
-			{
-				snapshot,
-				expectedCatalogEtag: report.catalogEtag,
-				previousSnapshotId:
-					report.candidates.find((candidate) => candidate.reference === 'current')?.id ??
-					report.snapshot?.snapshot_id ??
-					null,
-			},
-		);
+		const previousSnapshotId =
+			report.candidates.find((candidate) => candidate.reference === 'current')?.id ??
+			report.snapshot?.snapshot_id ??
+			null;
+		return this.commitRecovery(snapshot, report.catalogEtag, previousSnapshotId, { source });
+	}
+
+	/**
+	 * The only catalog.json writer besides `mutateSnapshot`: offline recovery replaces the
+	 * whole snapshot instead of reading the current one, so it stays private to `recover`.
+	 * One CAS attempt; a lost race means the operator must inspect storage again.
+	 */
+	private async commitRecovery(
+		snapshot: Snapshot,
+		expectedCatalogEtag: string | null,
+		previousSnapshotId: Snapshot['snapshot_id'] | null,
+		context: Record<string, unknown>,
+	): Promise<Snapshot> {
+		this.metrics.increment('catalog.cas.attempt');
+		const catalogObj = await this.bucket.get(paths.catalog);
+		if ((catalogObj?.etag ?? null) !== expectedCatalogEtag) {
+			throw new ConflictError('Catalog changed after recovery inspection. Inspect storage again.');
+		}
+		const key = paths.snapshot(snapshot.snapshot_id);
+		await this.bucket.put(key, JSON.stringify(snapshot), { onlyIfNotExists: true });
+		const catalog: Catalog = {
+			version: 1,
+			updated_at: snapshot.created_at,
+			current_snapshot_id: snapshot.snapshot_id,
+			current_snapshot_key: key,
+			previous_snapshot_id: previousSnapshotId,
+		};
+		try {
+			await this.bucket.put(
+				paths.catalog,
+				JSON.stringify(catalog),
+				catalogObj ? { onlyIfEtagMatches: catalogObj.etag } : { onlyIfNotExists: true },
+			);
+		} catch (err) {
+			// A lost CAS proves the snapshot was never committed, so delete it (see the
+			// initialize() invariant). Any other error may follow a commit whose response was
+			// lost, so the snapshot is kept.
+			if (err instanceof PreconditionFailedError) {
+				this.metrics.increment('catalog.cas.conflict');
+				await this.bucket.delete(key).catch(() => {});
+				throw new ConflictError('Catalog recovery lost a write conflict. Inspect storage again.', {
+					cause: err,
+				});
+			}
+			throw err;
+		}
+		await this.appendAudit(snapshot.operation, snapshot.actor, context);
+		return snapshot;
+	}
+
+	private async appendAudit(operation: string, actor: UserId, context?: Record<string, unknown>) {
+		// Never let a failed append break the committed mutation.
+		if (!this.events) return;
+		try {
+			await this.events.append({ event: operation, actor, ...context });
+		} catch {
+			this.metrics.increment('events.append_failed');
+		}
 	}
 
 	/**
@@ -303,11 +383,6 @@ export class CatalogService {
 		actor: UserId,
 		mutateFn: (snapshot: Snapshot) => Awaitable<Snapshot>,
 		context?: Record<string, unknown>,
-		recovery?: {
-			snapshot: Snapshot;
-			expectedCatalogEtag: string | null;
-			previousSnapshotId: Snapshot['snapshot_id'] | null;
-		},
 	): Promise<Snapshot> {
 		// One CAS attempt: read the catalog + its current snapshot, write a new
 		// snapshot, and conditionally swap the catalog pointer onto it. The retry
@@ -316,23 +391,10 @@ export class CatalogService {
 			this.bucket,
 			async (cas) => {
 				const catalogObj = await this.bucket.get(paths.catalog);
-				let currentSnapshot: Snapshot;
-				let previousSnapshotId: Snapshot['snapshot_id'] | null = null;
-				if (recovery) {
-					if ((catalogObj?.etag ?? null) !== recovery.expectedCatalogEtag) {
-						throw new ConflictError(
-							'Catalog changed after recovery inspection. Inspect storage again.',
-						);
-					}
-					currentSnapshot = recovery.snapshot;
-					previousSnapshotId = recovery.previousSnapshotId;
-				} else {
-					if (!catalogObj)
-						throw new NotInitializedError('Catalog not found — call initialize() first');
-					const catalog = await readStored(CatalogSchema, catalogObj, paths.catalog);
-					currentSnapshot = await this.readSnapshot(catalog);
-					previousSnapshotId = catalog.current_snapshot_id;
-				}
+				if (!catalogObj)
+					throw new NotInitializedError('Catalog not found — call initialize() first');
+				const catalog = await readStored(CatalogSchema, catalogObj, paths.catalog);
+				const currentSnapshot = await this.readSnapshot(catalog);
 
 				const newSnapshotId = createSnapshotId();
 				const now = new Date().toISOString();
@@ -362,39 +424,28 @@ export class CatalogService {
 					updated_at: now,
 					current_snapshot_id: newSnapshotId,
 					current_snapshot_key: paths.snapshot(newSnapshotId),
-					previous_snapshot_id: previousSnapshotId,
+					previous_snapshot_id: catalog.current_snapshot_id,
 				};
 
 				try {
-					await cas.put(
-						paths.catalog,
-						JSON.stringify(newCatalog),
-						catalogObj ? { onlyIfEtagMatches: catalogObj.etag } : { onlyIfNotExists: true },
-					);
+					await cas.put(paths.catalog, JSON.stringify(newCatalog), {
+						onlyIfEtagMatches: catalogObj.etag,
+					});
 					return newSnapshot;
 				} catch (err) {
-					// Recovery may have committed despite a lost response. Keep its snapshot.
-					if (!recovery) await this.bucket.delete(paths.snapshot(newSnapshotId)).catch(() => {});
+					await this.bucket.delete(paths.snapshot(newSnapshotId)).catch(() => {});
 					throw err;
 				}
 			},
 			{
 				...this.casRetry,
-				...(recovery ? { retries: 1, backoffMs: () => 0 } : {}),
 				onAttempt: () => this.metrics.increment('catalog.cas.attempt'),
 				onConflict: () => this.metrics.increment('catalog.cas.conflict'),
 				onExhausted: () => this.metrics.increment('catalog.cas.exhausted'),
 			},
 		);
-		// Audit trail: append once per WINNING commit (never per CAS attempt), and
-		// never let a failed append break the mutation itself.
-		if (this.events) {
-			try {
-				await this.events.append({ event: operation, actor, ...context });
-			} catch {
-				this.metrics.increment('events.append_failed');
-			}
-		}
+		// Audit once per WINNING commit, never per CAS attempt.
+		await this.appendAudit(operation, actor, context);
 		return snapshot;
 	}
 

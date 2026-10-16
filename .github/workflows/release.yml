@@ -13,10 +13,30 @@ env:
   CHART_REGISTRY: oci://ghcr.io/${{ github.repository_owner }}/charts
 
 jobs:
+  validate-tag:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate tag
+        id: v
+        # Every release job needs this one: the `v*.*.*` trigger glob also matches prereleases.
+        run: |
+          version=$(scripts/release-tag.sh validate "$GITHUB_REF_NAME")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   cli-assets:
     name: Test and generate CLI assets
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
+    needs: validate-tag
     permissions:
       contents: read
     steps:
@@ -103,7 +123,7 @@ jobs:
 
   cli-linux-x64:
     name: Build CLI (x86_64-unknown-linux-gnu, glibc 2.28)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: quay.io/pypa/manylinux_2_28_x86_64:latest
     timeout-minutes: 25
     needs: cli-assets
@@ -156,7 +176,7 @@ jobs:
 
   cli-installers:
     name: Build CLI installers
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: [cli-assets, cli, cli-linux-x64]
     permissions:
@@ -187,6 +207,7 @@ jobs:
           if-no-files-found: error
 
   server-binary:
+    needs: validate-tag
     uses: ./.github/workflows/server-binary.yml
     permissions:
       contents: read
@@ -196,8 +217,7 @@ jobs:
 
   image-build:
     name: Build & push image (${{ matrix.platform.arch }})
-    outputs:
-      tags: ${{ steps.meta.outputs.tags }}
+    needs: validate-tag
     runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 30
     permissions:
@@ -208,24 +228,15 @@ jobs:
       matrix:
         platform:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - arch: arm64
             runner: ubuntu-24.04-arm
+    env:
+      VERSION: ${{ needs.validate-tag.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Derive version and build time
-        id: v
-        # Strip the leading "v" from the tag -> semver used for image + chart.
-        # The `v*.*.*` trigger is a glob, not a semver check, and the version is
-        # reused in shell steps, so reject anything but digits and dots.
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid release tag: $GITHUB_REF_NAME"
-            exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        with:
+          persist-credentials: false
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
@@ -236,20 +247,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Image metadata (tags + labels)
+      - name: Image labels
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.IMAGE }}
-          # v1.4.2 -> tags 1.4.2, 1.4, 1, latest, plus the commit SHA.
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha,format=short
-            type=raw,value=latest
+          tags: type=semver,pattern={{version}}
 
       - name: Build & push
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -260,19 +266,67 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           # Only args the Dockerfile declares; undeclared build args are silently dropped.
           build-args: |
-            MARIMOHUB_VERSION=${{ steps.v.outputs.version }}
-            MARIMOHUB_IMAGE=${{ env.IMAGE }}:${{ steps.v.outputs.version }}
+            MARIMOHUB_VERSION=${{ env.VERSION }}
+            MARIMOHUB_IMAGE=${{ env.IMAGE }}:${{ env.VERSION }}
+
+      - name: Record digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ARCH: ${{ matrix.platform.arch }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/digests/$ARCH"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-digest-${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/digests/${{ matrix.platform.arch }}
+          if-no-files-found: error
+          retention-days: 1
 
   image:
     name: Publish multi-platform image
     needs: image-build
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Serialize floating-tag moves across releases. The floating-tag check runs
+    # inside this lock, so a run that waited still sees any newer release tag.
+    concurrency:
+      group: release-image-manifest
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Decide floating tags
+        id: floating
+        run: git tag -l 'v*' | scripts/release-tag.sh floating "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE }}
+          # The default latest=auto tags every stable semver; release-tag.sh decides instead.
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.floating.outputs.minor }}
+            type=semver,pattern={{major}},enable=${{ steps.floating.outputs.major }}
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ steps.floating.outputs.latest }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: image-digest-*
+          merge-multiple: true
+          path: digests
+
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -282,33 +336,29 @@ jobs:
 
       - name: Publish manifests
         env:
-          TAGS: ${{ needs.image-build.outputs.tags }}
-          REVISION: ${{ github.sha }}
-        run: scripts/publish-image-manifest.sh "$IMAGE:sha-$REVISION" <<< "$TAGS"
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          scripts/publish-image-manifest.sh \
+            "$IMAGE@$(<digests/amd64)" "$IMAGE@$(<digests/arm64)" <<< "$TAGS"
 
   chart:
     name: Package & push Helm chart
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
-    needs: image
+    needs: [validate-tag, image]
     permissions:
       contents: read
       packages: write
+    env:
+      VERSION: ${{ needs.validate-tag.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
-
-      - name: Derive version
-        id: v
-        # Same validation as the image job: the tag glob is not a semver check.
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Invalid release tag: $GITHUB_REF_NAME"
-            exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        with:
+          version: v4.3.1
 
       - name: Log in to GHCR (Helm OCI)
         env:
@@ -322,21 +372,17 @@ jobs:
         # Pin chart version AND appVersion to the released tag so a chart version
         # uniquely identifies an image. Defaulting image.tag to appVersion in the
         # chart means end-users get the matching image for free.
-        env:
-          VERSION: ${{ steps.v.outputs.version }}
         run: |
           helm package charts/marimohub \
             --version "$VERSION" \
             --app-version "$VERSION"
 
       - name: Push
-        env:
-          VERSION: ${{ steps.v.outputs.version }}
         run: helm push "marimohub-$VERSION.tgz" "$CHART_REGISTRY"
 
   publish-cli-release:
     name: Publish CLI release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: [cli, cli-linux-x64, cli-installers]
     permissions:
@@ -344,6 +390,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           # changelogithub diffs against the previous release tag, so it needs full history.
           fetch-depth: 0
 
@@ -392,7 +439,7 @@ jobs:
 
   publish-server-binary:
     name: Attach server binaries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # The CLI job creates the release; this adds the server binaries to it.
     needs: [server-binary, publish-cli-release]
@@ -402,6 +449,8 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -429,7 +478,7 @@ jobs:
 
   cli-release-metadata:
     name: Publish CLI release metadata
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: [publish-cli-release]
     permissions:
@@ -438,6 +487,8 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -471,11 +522,12 @@ jobs:
 
   notify:
     name: Notify Slack
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     # Report the overall outcome once every release job has finished.
     needs:
       [
+        validate-tag,
         cli,
         cli-linux-x64,
         cli-installers,

@@ -1,4 +1,8 @@
-import { validateBranch as validateGitBranch } from '@marimo-hub/source-control-git/validation';
+import {
+	coAuthorTrailer as gitCoAuthorTrailer,
+	validateBranch as validateGitBranch,
+} from '@marimo-hub/source-control-git/validation';
+import { GITHUB_ORIGIN, gitHubRepository } from '@marimo-hub/core/git-repo';
 import { isSafeWorkspacePath } from '@marimo-hub/core/remote-workspace';
 import { ValidationError } from '@marimo-hub/core/errors';
 import type {
@@ -40,36 +44,15 @@ export function githubOrigin(value = 'https://github.com'): string {
 	return url.origin;
 }
 
-export function parseRepository(value: unknown, origin = 'https://github.com'): GitHubRepository {
+export function parseRepository(value: unknown, origin = GITHUB_ORIGIN): GitHubRepository {
 	if (typeof value !== 'string') throw new ValidationError('GitHub repository must be owner/repo');
-	let path = value.trim();
-	if (!/^https:\/\//i.test(path) && origin !== 'https://github.com') {
+	const parsed = gitHubRepository(value);
+	if (parsed?.origin === origin) return { owner: parsed.owner, repo: parsed.repo };
+	if (!/^https:\/\//i.test(value.trim()) && origin !== GITHUB_ORIGIN) {
 		throw new ValidationError(`Use a full repository URL for ${origin}`);
 	}
-	if (/^https:\/\//i.test(path)) {
-		let url: URL;
-		try {
-			url = new URL(path);
-		} catch {
-			throw new ValidationError('Invalid GitHub repository URL');
-		}
-		if (url.origin !== origin || url.username || url.password || url.search || url.hash) {
-			throw new ValidationError(`GitHub is configured for ${origin} repositories only`);
-		}
-		path = url.pathname.replaceAll(/^\/+|\/+$/g, '');
-	}
-	const parts = path.replace(/\.git$/, '').split('/');
-	const [owner, repo] = parts;
-	if (
-		parts.length !== 2 ||
-		!owner ||
-		!repo ||
-		!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner) ||
-		!/^(?!\.+$)[A-Za-z0-9_.-]{1,100}$/.test(repo)
-	) {
-		throw new ValidationError('GitHub repository must be owner/repo');
-	}
-	return { owner, repo };
+	if (parsed) throw new ValidationError(`GitHub is configured for ${origin} repositories only`);
+	throw new ValidationError('GitHub repository must be owner/repo');
 }
 
 export function validateBranch(branch: unknown): asserts branch is string {
@@ -151,7 +134,7 @@ export function validateCommitIdentity(
 
 export function coAuthorTrailer(coAuthor: SourceControlCommitIdentity | undefined): string {
 	validateCommitIdentity(coAuthor);
-	return coAuthor ? `Co-authored-by: ${coAuthor.name} <${coAuthor.email}>` : '';
+	return gitCoAuthorTrailer(coAuthor);
 }
 
 function validateCommonInput(

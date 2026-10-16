@@ -50,7 +50,7 @@ jobs:
             suffix: '-tools'
         platform:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - arch: arm64
             runner: ubuntu-24.04-arm
     steps:
@@ -139,6 +139,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish
+        id: publish
         if: github.event_name == 'push'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -151,12 +152,29 @@ jobs:
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/marimo-sandbox:sha-${{ github.sha }}${{ matrix.variant.suffix }}-${{ matrix.platform.arch }}
 
+      - name: Record digest
+        if: github.event_name == 'push'
+        env:
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          NAME: ${{ matrix.variant.target }}-${{ matrix.platform.arch }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/digests/$NAME"
+
+      - if: github.event_name == 'push'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sandbox-digest-${{ matrix.variant.target }}-${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/digests/${{ matrix.variant.target }}-${{ matrix.platform.arch }}
+          if-no-files-found: error
+          retention-days: 1
+
   publish:
     name: Publish multi-platform manifests
     if: github.event_name == 'push'
     needs: image
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: read
       packages: write
@@ -170,6 +188,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: sandbox-digest-*
+          merge-multiple: true
+          path: digests
 
       - name: Read marimo version
         id: version
@@ -187,10 +211,13 @@ jobs:
           REVISION: ${{ github.sha }}
           MARIMO_VERSION: ${{ steps.version.outputs.marimo }}
         run: |
-          for variant in '' -vscode -opencode -tools; do
+          for target in release vscode opencode tools; do
+            variant="-$target"
+            [[ "$target" != release ]] || variant=''
             printf '%s\n' \
               "$IMAGE:latest$variant" \
               "$IMAGE:py3.13-marimo$MARIMO_VERSION$variant" \
               "$IMAGE:sha-$REVISION$variant" \
-              | scripts/publish-image-manifest.sh "$IMAGE:sha-$REVISION$variant"
+              | scripts/publish-image-manifest.sh \
+                "$IMAGE@$(<"digests/$target-amd64")" "$IMAGE@$(<"digests/$target-arm64")"
           done

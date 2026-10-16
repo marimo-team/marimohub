@@ -32,6 +32,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        # `latest` resolves over the network and silently falls back to Helm v3 on
+        # failure; check-images.sh needs v4's client-only dry run. Keep in sync with release.yml.
+        with:
+          version: v4.3.1
 
       - name: helm lint
         run: helm lint --strict charts/marimohub

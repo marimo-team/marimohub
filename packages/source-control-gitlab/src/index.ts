@@ -19,6 +19,7 @@ import { pushGitTree } from '@marimo-hub/source-control-git/publish';
 import { applyChanges, sameTree } from '@marimo-hub/source-control-git/file-tree';
 import type { FileTree } from '@marimo-hub/source-control-git/file-tree';
 import {
+	coAuthorTrailer,
 	normalizeCommit,
 	normalizeProviderCommit,
 	validateBranch,
@@ -31,6 +32,26 @@ import type { GitLabRepository } from './repository';
 import { GitLabTrees, list } from './trees';
 export { gitLabOrigin, parseGitLabRepository } from './repository';
 export type { GitLabOptions, GitLabRuntime } from './client';
+
+// GitLab resolves namespace paths case-insensitively and returns `web_url` in canonical case,
+// which can differ from the case the repository URL was configured with.
+function sameMergeRequestUrl(actual: string, expected: string): boolean {
+	let url: URL;
+	try {
+		url = new URL(actual);
+	} catch {
+		return false;
+	}
+	const want = new URL(expected);
+	return (
+		url.origin === want.origin &&
+		!url.username &&
+		!url.password &&
+		!url.search &&
+		!url.hash &&
+		url.pathname.toLowerCase() === want.pathname.toLowerCase()
+	);
+}
 
 export class GitLabSourceControl implements SourceControlReader, SourceControlPublisher {
 	readonly provider = 'gitlab';
@@ -90,7 +111,12 @@ export class GitLabSourceControl implements SourceControlReader, SourceControlPu
 			options,
 		);
 	}
-	async fetchGitDirectory(repository: string, commit: string, branch: string) {
+	async fetchGitDirectory(
+		repository: string,
+		commit: string,
+		branch: string,
+		options: SourceReadOptions = {},
+	) {
 		validateBranch(branch);
 		const repo = this.repository(repository);
 		return materializeGitDirectory({
@@ -99,7 +125,8 @@ export class GitLabSourceControl implements SourceControlReader, SourceControlPu
 			commit: normalizeCommit(commit),
 			branch,
 			authorization: this.client.gitAuthorization(),
-			fetcher: this.client.gitFetch(repo),
+			fetcher: this.client.fetcher,
+			signal: options.signal,
 		});
 	}
 	private branchChanged(deleted = false) {
@@ -146,7 +173,7 @@ export class GitLabSourceControl implements SourceControlReader, SourceControlPu
 			mr.target_branch !== baseBranch ||
 			typeof mr.source_project_id !== 'number' ||
 			mr.source_project_id !== mr.target_project_id ||
-			stringField(mr, 'web_url') !== `${repo.url}/-/merge_requests/${mr.iid}`
+			!sameMergeRequestUrl(stringField(mr, 'web_url'), `${repo.url}/-/merge_requests/${mr.iid}`)
 		)
 			throw new UnavailableError('GitLab returned a different merge request');
 		return {
@@ -168,9 +195,7 @@ export class GitLabSourceControl implements SourceControlReader, SourceControlPu
 	) {
 		return this.stage('push', async () => {
 			const contents = await trees.contents(current, desired, input.changes);
-			const trailer = input.coAuthor
-				? `Co-authored-by: ${input.coAuthor.name.trim()} <${input.coAuthor.email}>`
-				: '';
+			const trailer = coAuthorTrailer(input.coAuthor);
 			return pushGitTree({
 				repository: repo.url,
 				remoteUrl: repo.remoteUrl,
@@ -182,7 +207,7 @@ export class GitLabSourceControl implements SourceControlReader, SourceControlPu
 				contents,
 				message: [input.title, input.body, trailer].filter(Boolean).join('\n\n'),
 				authorization: this.client.gitAuthorization(),
-				fetcher: this.client.gitFetch(repo),
+				fetcher: this.client.fetcher,
 			});
 		});
 	}

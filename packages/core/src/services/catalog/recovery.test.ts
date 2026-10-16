@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
-import { ACTOR, makeNotebookMeta, makeProject, makeSnapshot } from '../../testing/fixtures';
+import {
+	ACTOR,
+	makeNotebookMeta,
+	makeProject,
+	makeSnapshot,
+	makeSnapshotProjectEntry,
+} from '../../testing/fixtures';
 import { createServices } from '../index';
 import { createImportId, createNotebookId, createSnapshotId } from '../../ids';
 import { paths } from '../../paths';
@@ -31,6 +37,10 @@ async function fixture() {
 	return { bucket, services, project, notebook };
 }
 
+function freshCatalog(bucket: MemoryBucket) {
+	return new CatalogService(bucket, undefined, undefined, undefined, 0);
+}
+
 async function eraseIndex(bucket: MemoryBucket) {
 	await bucket.delete(
 		(await listAllObjects(bucket, paths.snapshotsPrefix)).map((object) => object.key),
@@ -48,10 +58,58 @@ describe('catalog recovery', () => {
 			JSON.stringify(kind === 'projects' ? project : snapshot),
 		);
 		const put = vi.spyOn(bucket, 'put');
-		await expect(new CatalogService(bucket).initialize(ACTOR)).rejects.toThrow(
+		await expect(freshCatalog(bucket).initialize(ACTOR)).rejects.toThrow(
 			'Catalog recovery required',
 		);
 		expect(put).not.toHaveBeenCalled();
+	});
+
+	it('lets a second replica initialize while the first has written only its snapshot', async () => {
+		const bucket = new MemoryBucket();
+		const first = freshCatalog(bucket);
+		const second = freshCatalog(bucket);
+		const put = bucket.put.bind(bucket);
+		let secondResult: Promise<unknown> | undefined;
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+			if (key === paths.catalog && !secondResult) {
+				secondResult = second.initialize(ACTOR);
+				await secondResult;
+			}
+			return put(key, value, options);
+		});
+		const committed = await first.initialize(ACTOR);
+		expect(await secondResult).toEqual(committed);
+		expect(await listAllObjects(bucket, paths.snapshotsPrefix)).toHaveLength(1);
+	});
+
+	it('boots over an empty initialize snapshot orphaned by a crash', async () => {
+		const bucket = new MemoryBucket();
+		const orphan = makeSnapshot({ operation: 'system.initialize' });
+		await bucket.put(paths.snapshot(orphan.snapshot_id), JSON.stringify(orphan));
+		const snapshot = await freshCatalog(bucket).initialize(ACTOR);
+		expect(snapshot.snapshot_id).not.toBe(orphan.snapshot_id);
+		expect(await bucket.head(paths.snapshot(orphan.snapshot_id))).not.toBeNull();
+	});
+
+	it('requires recovery for an initialize snapshot that indexes projects', async () => {
+		const bucket = new MemoryBucket();
+		const snapshot = makeSnapshot({
+			operation: 'system.initialize',
+			projects: [makeSnapshotProjectEntry()],
+		});
+		await bucket.put(paths.snapshot(snapshot.snapshot_id), JSON.stringify(snapshot));
+		await expect(freshCatalog(bucket).initialize(ACTOR)).rejects.toThrow(
+			'Catalog recovery required',
+		);
+	});
+
+	it('returns the catalog another replica commits during the recheck delay', async () => {
+		const { bucket, services } = await fixture();
+		const current = await services.catalog.getCurrentSnapshot();
+		vi.spyOn(bucket, 'get').mockImplementationOnce(async () => null);
+		vi.spyOn(bucket, 'head').mockImplementationOnce(async () => null);
+		const snapshot = await freshCatalog(bucket).initialize(ACTOR);
+		expect(snapshot.snapshot_id).toBe(current.snapshot_id);
 	});
 
 	it('rebuilds projects, notebooks, labels, membership, and scheduled jobs after total index loss', async () => {
@@ -599,5 +657,102 @@ describe('catalog recovery', () => {
 		const put = vi.spyOn(bucket, 'put');
 		await expect(applyRecovery(services.catalog, report)).rejects.toThrow('blocked');
 		expect(put).not.toHaveBeenCalled();
+	});
+	it('reports projects, notebooks, and jobs that a selected snapshot leaves out', async () => {
+		const { bucket, services, project, notebook } = await fixture();
+		const selected = await services.catalog.getCurrentSnapshot();
+		const laterNotebook = await services.notebooks.createNotebook(project.id, INPUT, ACTOR);
+		const laterJob = await services.jobs.createJob(
+			project.id,
+			notebook.id,
+			{ name: 'Later' },
+			ACTOR,
+		);
+		const laterProject = await services.projects.createProject(
+			{ name: 'Later', description: '' },
+			ACTOR,
+		);
+		await bucket.delete(paths.catalog);
+		const report = await services.catalog.planRecovery({
+			mode: 'snapshot',
+			snapshotId: selected.snapshot_id,
+		});
+		const projectPaths = paths.project(project.id);
+		expect(
+			report.issues
+				.filter((entry) => entry.message.includes('absent from the selected snapshot'))
+				.map(({ key, severity }) => ({ key, severity })),
+		).toEqual(
+			expect.arrayContaining([
+				{ key: paths.project(laterProject.id).meta, severity: 'excluded' },
+				{ key: projectPaths.notebook(laterNotebook.id).meta, severity: 'excluded' },
+				{ key: projectPaths.notebook(notebook.id).job(laterJob.id).head, severity: 'excluded' },
+			]),
+		);
+		expect(report.projects.map((entry) => entry.id)).toEqual([project.id]);
+	});
+
+	it('reads only the selected and pointer snapshots in snapshot mode', async () => {
+		const { bucket, services } = await fixture();
+		const selected = await services.catalog.getCurrentSnapshot();
+		await services.catalog.mutateSnapshot('later', ACTOR, (snapshot) => snapshot);
+		await services.catalog.mutateSnapshot('latest', ACTOR, (snapshot) => snapshot);
+		const get = vi.spyOn(bucket, 'get');
+		const report = await services.catalog.planRecovery({
+			mode: 'snapshot',
+			snapshotId: selected.snapshot_id,
+		});
+		const snapshotReads = get.mock.calls
+			.map(([key]) => key)
+			.filter((key) => key.startsWith(paths.snapshotsPrefix));
+		expect(snapshotReads).toHaveLength(3);
+		expect(report.candidates.length).toBeGreaterThan(3);
+		expect(report.candidates.filter((candidate) => candidate.projects === undefined)).not.toEqual(
+			[],
+		);
+	});
+
+	it('keeps records of projects whose IDs share a long prefix apart', async () => {
+		const { bucket, services, project, notebook } = await fixture();
+		await services.jobs.createJob(project.id, notebook.id, { name: 'Daily' }, ACTOR);
+		const sibling = (id: string) => `${id.slice(0, -1)}${id.endsWith('a') ? 'b' : 'a'}`;
+		const otherProject = sibling(project.id);
+		const otherNotebook = sibling(notebook.id);
+		for (const object of await listAllObjects(bucket, `projects/${project.id}/`)) {
+			const body = await (await bucket.get(object.key))!.text();
+			const rename = (value: string) =>
+				value.replaceAll(project.id, otherProject).replaceAll(notebook.id, otherNotebook);
+			await bucket.put(rename(object.key), rename(body));
+		}
+		await eraseIndex(bucket);
+		const report = await services.catalog.planRecovery(SOURCE);
+		expect(report.issues.filter((entry) => entry.severity === 'error')).toEqual([]);
+		expect(
+			report.projects
+				.map((entry) => ({
+					id: entry.id,
+					notebooks: entry.notebooks.map((nb) => ({ id: nb.id, jobs: nb.jobs?.length })),
+				}))
+				.sort((a, b) => a.id.localeCompare(b.id)),
+		).toEqual(
+			[
+				{ id: project.id, notebooks: [{ id: notebook.id, jobs: 1 }] },
+				{ id: otherProject, notebooks: [{ id: otherNotebook, jobs: 1 }] },
+			].sort((a, b) => a.id.localeCompare(b.id)),
+		);
+	});
+
+	it('deletes its uncommitted snapshot when it loses the recovery CAS', async () => {
+		const { bucket, services } = await fixture();
+		await bucket.delete(paths.catalog);
+		const report = await services.catalog.planRecovery(SOURCE);
+		const before = (await listAllObjects(bucket, paths.snapshotsPrefix)).map((o) => o.key);
+		const put = bucket.put.bind(bucket);
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+			if (key === paths.catalog) await put(key, '{}');
+			return put(key, value, options);
+		});
+		await expect(applyRecovery(services.catalog, report)).rejects.toThrow('conflict');
+		expect((await listAllObjects(bucket, paths.snapshotsPrefix)).map((o) => o.key)).toEqual(before);
 	});
 });

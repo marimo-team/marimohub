@@ -298,6 +298,12 @@ Capture never falls back to an unbounded read.
   cross-origins with `MARIMOHUB_ALLOWED_ORIGINS`.
 - **Cost / DoS:** `MARIMOHUB_MAX_SESSIONS_PER_USER` (default 10) caps concurrent
   kernels per user; `0` disables the cap.
+- **Token-authenticated routes:** `/api/ai/v1` ([managed AI](ai.md)),
+  `/api/sync/git/v1` (git sync), and `/api/wif/v1/credentials`
+  ([federated credentials endpoint](workload-identity-federation.md#refreshable-credentials))
+  skip the cookie and CSRF chain and authenticate by bearer token alone.
+  Notebook sandboxes call the managed AI and federated credentials routes on the
+  app origin.
 - **Security headers** (anti-clickjacking, nosniff, HSTS, referrer policy) wrap
   the SPA/static responses.
 - **SPA Content Security Policy:** the Node server sends a report-only policy.
@@ -330,6 +336,20 @@ stdin to private files outside the workspace. Exec arguments contain no
 injected values. Files use mode `0600` in directories with mode `0700` and remain
 until sandbox destruction. Notebook code can read its own credentials.
 
+With `MARIMOHUB_WIF_CREDENTIALS_DELIVERY=endpoint`, the sandbox environment
+contains `AWS_CONTAINER_CREDENTIALS_FULL_URI` and
+`AWS_CONTAINER_AUTHORIZATION_TOKEN`. The token is valid for the life of the
+session, up to seven days, and has no network binding. Anyone who copies it can
+fetch fresh cloud credentials from outside the sandbox while the session is live.
+On every call the endpoint checks that the session is live, that the owner is not
+suspended, and that the owner is still a project member with a sufficient role.
+Removing the member stops new credentials within 10 seconds, the lifetime of
+the per-process allow verdict. Credentials already issued stay valid until they
+expire, up to about one hour. The token embeds a signed snapshot of the launching
+user, including IdP group names, which notebook code can decode. Users cannot
+set the `AWS_CONTAINER_*` variable names. See
+[Workload Identity Federation](workload-identity-federation.md#refreshable-credentials).
+
 Environment preparation adds one remote command per new set of values, including
 process overrides. Commands reuse the file while values stay unchanged.
 Workspace file transfers are unchanged.
@@ -349,6 +369,11 @@ restores them into the sandbox. Keep credentials in
 [source-control](syncing.md#repository-project-policies) project policies are optional. Unset
 or blank policies keep existing access with a startup warning. The hub enforces
 configured rules before it uses shared credentials.
+
+Set a repository policy for every configured source-control provider: GitHub,
+GitLab, and Azure DevOps Services. Without one, every project can use the shared
+GitHub App installation, GitLab token, or Azure DevOps identity for any repository
+that credential can reach.
 
 Ambient object browsing excludes the configured hub bucket or Azure container,
 even with server ambient access enabled. The exclusion matches names within each
@@ -376,4 +401,4 @@ Configuring the [GitHub App](configuration.md#github-app) enables previews.
 
 Protect previewed branches with GitHub branch protection or rulesets, so that only
 trusted people can push to them. Restrict the App's repositories with
-[GitHub project policies](syncing.md#repository-project-policies).
+[repository project policies](syncing.md#repository-project-policies).

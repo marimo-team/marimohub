@@ -1667,7 +1667,7 @@ export async function startNotebookSession(input: {
 	})?.credentialsEndpoint
 		? {
 				url: joinUrlPath(appBaseUrl, WIF_CREDENTIALS_PATH),
-				userId: user.id,
+				principal: user,
 				expiresAt: wifCredentialsDeadline(),
 			}
 		: undefined;

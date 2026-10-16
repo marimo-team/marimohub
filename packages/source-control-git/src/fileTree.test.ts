@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BadRequestError } from '@marimo-hub/core/errors';
 import type * as remoteWorkspace from '@marimo-hub/core/remote-workspace';
-import { applyChanges, blobId } from './fileTree';
+import { applyChanges, blobId, FileTreeBuilder } from './fileTree';
 import type { FileTree } from './fileTree';
 
 vi.mock('@marimo-hub/core/remote-workspace', async (importOriginal) => {
@@ -47,5 +47,74 @@ describe('proposal file count', () => {
 	});
 	it('allows deletions to bring an oversized tree within the limit', () => {
 		expect(applyChanges(tree(4), [{ path: '0.py', operation: 'delete' }]).size).toBe(3);
+	});
+});
+
+describe('FileTreeBuilder', () => {
+	const oid = 'a'.repeat(40);
+	const blob = (path: string, mode = '100644') => ({ path, type: 'blob', mode, objectId: oid });
+
+	it.each([
+		'',
+		'/abs',
+		'../x',
+		'a/../b',
+		'.git/config',
+		'sub/.GIT/hooks',
+		'git~1/config',
+		'.git./config',
+		'a\0b',
+		'a\\b',
+	])('rejects unsafe path %j', (path) => {
+		expect(() => new FileTreeBuilder('Provider').add(blob(path))).toThrow(
+			'Unsafe Provider tree path',
+		);
+	});
+
+	it('rejects duplicate paths across files and directories', () => {
+		const builder = new FileTreeBuilder('Provider');
+		builder.add({ path: 'a', type: 'tree', mode: '040000', objectId: oid });
+		expect(() => builder.add(blob('a'))).toThrow('duplicate');
+	});
+
+	it('rejects overlapping file and directory paths', () => {
+		const builder = new FileTreeBuilder('Provider');
+		builder.add(blob('a'));
+		builder.add(blob('a/b'));
+		expect(() => builder.build()).toThrow('overlapping');
+	});
+
+	it.each([
+		{ type: 'blob', mode: '999999' },
+		{ type: 'tree', mode: '100644' },
+		{ type: 'commit', mode: '100644' },
+		{ type: 'blob', mode: '160000' },
+	])('rejects mode $mode for $type', (entry) => {
+		expect(() =>
+			new FileTreeBuilder('Provider').add({ path: 'a', objectId: oid, ...entry }),
+		).toThrow('Invalid Provider tree entry');
+	});
+
+	it('normalizes object ids, keeps sizes, and omits directories', () => {
+		const builder = new FileTreeBuilder('Provider');
+		builder.add({ path: 'apps', type: 'tree', mode: '40000', objectId: oid });
+		builder.add({
+			path: 'apps/main.py',
+			type: 'blob',
+			mode: '100755',
+			objectId: 'B'.repeat(40),
+			size: 3,
+		});
+		builder.add({ path: 'sub', type: 'commit', mode: '160000', objectId: oid });
+		expect([...builder.build()]).toEqual([
+			['apps/main.py', { objectId: 'b'.repeat(40), mode: '100755', size: 3 }],
+			['sub', { objectId: oid, mode: '160000' }],
+		]);
+	});
+
+	it.each([-1, 1.5, '3'])('rejects invalid size %j', (size) => {
+		expect(() => new FileTreeBuilder('Provider').add({ ...blob('a'), size })).toThrow(
+			'Invalid Provider file size',
+		);
 	});
 });

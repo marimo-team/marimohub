@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
-import { BadRequestError, ConflictError } from '@marimo-hub/core/errors';
-import { WORKSPACE_LIMITS } from '@marimo-hub/core/remote-workspace';
+import { BadRequestError, ConflictError, UnavailableError } from '@marimo-hub/core/errors';
+import { isSafeWorkspaceRootPath, WORKSPACE_LIMITS } from '@marimo-hub/core/remote-workspace';
+import { MAX_GIT_EXPANDED_FILES } from '@marimo-hub/core/ports/source-control';
 import type { SourceControlChange } from '@marimo-hub/core/ports/source-control';
+import { normalizeProviderCommit } from './validation';
 export interface TreeEntry {
 	objectId: string;
 	mode: string;
@@ -12,6 +14,71 @@ export type FileTree = Map<string, TreeEntry>;
 export function blobId(content: Uint8Array): string {
 	return createHash('sha1').update(`blob ${content.byteLength}\0`).update(content).digest('hex');
 }
+export function assertBlobContents(bytes: Uint8Array, objectId: string, provider: string): void {
+	if (blobId(bytes) !== objectId)
+		throw new UnavailableError(`${provider} returned different blob contents`);
+}
+
+// Mirrors Git's own checkout guards (HFS/NTFS aliases of `.git` included) so a regression in
+// isomorphic-git cannot let a provider tree plant files inside the repository metadata.
+export function isSafeGitEntryName(name: string): boolean {
+	if (!name || name === '.' || name === '..' || /[/\\]/.test(name) || name.includes('\0'))
+		return false;
+	const normalized = name.toLowerCase().replace(/[. ]+$/, '');
+	return normalized !== '.git' && !/^\.?git~[1-9]$/.test(normalized);
+}
+
+export function isSafeGitTreePath(path: string): boolean {
+	return !!path && isSafeWorkspaceRootPath(path) && path.split('/').every(isSafeGitEntryName);
+}
+
+const FILE_MODES: Record<string, string> = {
+	'100644': 'blob',
+	'100755': 'blob',
+	'120000': 'blob',
+	'160000': 'commit',
+};
+const TREE_MODES = new Set(['040000', '40000']);
+const MAX_TREE_ENTRIES = 2 * MAX_GIT_EXPANDED_FILES + 1;
+
+export class FileTreeBuilder {
+	private readonly files: FileTree = new Map();
+	private readonly paths = new Set<string>();
+	constructor(private readonly provider: string) {}
+
+	add(entry: { path: string; type: unknown; mode: unknown; objectId: unknown; size?: unknown }) {
+		const { path, type, size } = entry;
+		const mode = String(entry.mode);
+		if (!isSafeGitTreePath(path)) throw new BadRequestError(`Unsafe ${this.provider} tree path`);
+		if (this.paths.has(path))
+			throw new BadRequestError(`${this.provider} tree has a duplicate path`);
+		this.paths.add(path);
+		if (this.paths.size > MAX_TREE_ENTRIES)
+			throw new BadRequestError(`${this.provider} tree has too many entries`);
+		const isTree = type === 'tree' && TREE_MODES.has(mode);
+		if (!isTree && FILE_MODES[mode] !== type)
+			throw new UnavailableError(`Invalid ${this.provider} tree entry`);
+		const objectId = normalizeProviderCommit(entry.objectId);
+		if (isTree) return;
+		if (size !== undefined && (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0))
+			throw new UnavailableError(`Invalid ${this.provider} file size`);
+		this.files.set(path, { objectId, mode, ...(size === undefined ? {} : { size }) });
+	}
+
+	build(): FileTree {
+		for (const path of this.files.keys()) {
+			const parts = path.split('/');
+			for (let i = 1; i < parts.length; i++) {
+				if (this.files.has(parts.slice(0, i).join('/')))
+					throw new BadRequestError(
+						`${this.provider} tree has overlapping file and directory paths`,
+					);
+			}
+		}
+		return this.files;
+	}
+}
+
 export function sameTree(a: FileTree, b: FileTree): boolean {
 	return (
 		a.size === b.size &&

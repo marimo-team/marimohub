@@ -9,7 +9,7 @@ import { JobId } from '../../ids';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { ACTOR, setupTestEnv } from '../../testing';
-import { indexedJobs } from './JobsService';
+import { indexedJobs, jobIndexEntry } from './JobsService';
 
 describe('JobsService', () => {
 	let env: Awaited<ReturnType<typeof setupTestEnv>>;
@@ -327,5 +327,17 @@ describe('JobsService', () => {
 				updated_at: job.updated_at,
 			});
 		});
+	});
+	it('index entries clear a stale schedule when spread over an older entry', async () => {
+		const job = await env.jobs.createJob(
+			pid,
+			nid,
+			{ name: 'nightly', schedule: { cron: '0 6 * * *', timezone: 'UTC' } },
+			ACTOR,
+		);
+		const unscheduled = await env.jobs.updateJob(pid, nid, job.id, { schedule: null }, ACTOR);
+		const entry = jobIndexEntry(unscheduled);
+		expect(Object.hasOwn(entry, 'schedule')).toBe(true);
+		expect({ ...jobIndexEntry(job), ...entry }.schedule).toBeUndefined();
 	});
 });

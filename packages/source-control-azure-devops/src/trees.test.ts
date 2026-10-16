@@ -3,6 +3,7 @@ import { BadRequestError, ConflictError, UnavailableError } from '@marimo-hub/co
 import type * as RemoteWorkspace from '@marimo-hub/core/remote-workspace';
 import { AzureClient } from './client';
 import { parseAzureRepository } from './repository';
+import { applyChanges } from '@marimo-hub/source-control-git/file-tree';
 import { AzureTrees } from './trees';
 import { FakeAzure, repository } from './testing/fakeAzure';
 
@@ -78,7 +79,14 @@ describe('Azure tree response validation', () => {
 		[{ ...entry, gitObjectType: 'tree', mode: '040000' }, entry],
 	])('rejects duplicate paths even across object types', async (...entries) => {
 		const { fake, trees } = withEntries(entries);
-		await expect(trees.files(fake.base)).rejects.toBeInstanceOf(UnavailableError);
+		await expect(trees.files(fake.base)).rejects.toThrow('duplicate');
+	});
+	it('rejects a file used as a parent directory', async () => {
+		const { fake, trees } = withEntries([
+			{ ...entry, relativePath: 'apps' },
+			{ ...entry, relativePath: 'apps/main.py' },
+		]);
+		await expect(trees.files(fake.base)).rejects.toThrow('overlapping');
 	});
 	it('rejects a response for a different commit', async () => {
 		const { fake, trees } = setup();
@@ -162,7 +170,7 @@ describe('Azure proposal tree limits', () => {
 		],
 		['a', 'b', 'c', 'd'].map((path) => ({ path, operation: 'add' as const, content: bytes('') })),
 	])('rejects proposals exceeding workspace limits', (...changes) => {
-		expect(() => setup().trees.desired(new Map(), changes)).toThrow(BadRequestError);
+		expect(() => applyChanges(new Map(), changes)).toThrow(BadRequestError);
 	});
 	it('bounds restored content as well as supplied content during updates', async () => {
 		const { trees, commit } = setup();

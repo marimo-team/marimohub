@@ -1,27 +1,14 @@
-import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
+import { git, smartHttpResponse } from '@marimo-hub/source-control-git/testing/fake-git-server';
 import { AzureDevOpsSourceControl } from './index';
 
 it('fetches an uppercase commit over authenticated smart HTTP without persisting credentials', async () => {
 	const root = await mkdtemp(join(tmpdir(), 'azure-git-test-'));
 	const source = join(root, 'source');
 	const restored = join(root, 'restored');
-	const git = (dir: string, args: string[]) =>
-		execFileSync('git', ['-C', dir, ...args], {
-			encoding: 'utf8',
-			env: {
-				...process.env,
-				GIT_CONFIG_NOSYSTEM: '1',
-				GIT_CONFIG_GLOBAL: '/dev/null',
-				GIT_AUTHOR_NAME: 'Test',
-				GIT_AUTHOR_EMAIL: 'test@example.com',
-				GIT_COMMITTER_NAME: 'Test',
-				GIT_COMMITTER_EMAIL: 'test@example.com',
-			},
-		}).trim();
 	try {
 		await mkdir(source);
 		await mkdir(restored);
@@ -41,29 +28,7 @@ it('fetches an uppercase commit over authenticated smart HTTP without persisting
 					expect(url.startsWith(`${repository}/`)).toBe(true);
 					expect(new Headers(init?.headers).get('authorization')).toBe('Bearer private-test-token');
 					expect(init?.redirect).toBe('error');
-					if (url.includes('/info/refs')) {
-						const advertisement = execFileSync('git', [
-							'upload-pack',
-							'--stateless-rpc',
-							'--advertise-refs',
-							source,
-						]);
-						const service = '# service=git-upload-pack\n';
-						const prefix = `${(Buffer.byteLength(service) + 4).toString(16).padStart(4, '0')}${service}0000`;
-						return new Response(Buffer.concat([Buffer.from(prefix), advertisement]), {
-							headers: { 'content-type': 'application/x-git-upload-pack-advertisement' },
-						});
-					}
-					expect(new URL(url).pathname.endsWith('/git-upload-pack')).toBe(true);
-					const body = init?.body
-						? Buffer.from(await new Response(init.body).arrayBuffer())
-						: undefined;
-					const result = execFileSync('git', ['upload-pack', '--stateless-rpc', source], {
-						input: body,
-					});
-					return new Response(result, {
-						headers: { 'content-type': 'application/x-git-upload-pack-result' },
-					});
+					return smartHttpResponse(source, url, init);
 				},
 			},
 		);

@@ -9,6 +9,10 @@ on:
       upload:
         type: boolean
         default: false
+      # JSON list of {arch, runner}; CI drops x64 because its verify job builds that binary.
+      platforms:
+        type: string
+        default: '[{"arch":"x64","runner":"ubuntu-24.04"},{"arch":"arm64","runner":"ubuntu-24.04-arm"}]'
 
 permissions:
   contents: read
@@ -21,13 +25,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform:
-          - arch: x64
-            runner: ubuntu-latest
-          - arch: arm64
-            runner: ubuntu-24.04-arm
+        platform: ${{ fromJSON(inputs.platforms) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
         with:
           version: 0.3.0

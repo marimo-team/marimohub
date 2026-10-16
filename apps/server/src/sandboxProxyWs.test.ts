@@ -332,6 +332,53 @@ describe('attachSandboxProxyUpgrade', () => {
 			}
 		});
 
+		it.each(['destroyAll', 'natural close'] as const)(
+			'forgets a proxied socket pair after %s',
+			async (ending) => {
+				const upgrader = createServer();
+				let upstreamSocket: Duplex | undefined;
+				upgrader.on('upgrade', (_req, socket) => {
+					upstreamSocket = socket;
+					socket.write(
+						'HTTP/1.1 101 Switching Protocols\r\n' +
+							'Upgrade: websocket\r\n' +
+							'Connection: Upgrade\r\n\r\n',
+					);
+				});
+				await new Promise<void>((resolve) => upgrader.listen(0, '127.0.0.1', resolve));
+				const upgraderOrigin = `http://127.0.0.1:${(upgrader.address() as AddressInfo).port}`;
+
+				try {
+					const { deps, token } = await runningProxySession(upgraderOrigin);
+					const server = fakeUpgradeServer();
+					const proxy = attachSandboxProxyUpgrade(server, deps);
+
+					const socket = new PassThrough();
+					const out = collect(socket);
+					const req = fakeIncomingMessage(`/proxy/${token}/`);
+					req.headers.connection = 'Upgrade';
+					req.headers.upgrade = 'websocket';
+					server.listeners[0](req, socket, Buffer.alloc(0));
+
+					await vi.waitFor(() => expect(out.text()).toMatch(/^HTTP\/1\.1 101/));
+					expect(proxy.size).toBe(2);
+					// The kernel side is half-open after an upgrade, so watch for its FIN.
+					const upstreamEnded = new Promise<void>((resolve) => upstreamSocket!.on('end', resolve));
+					upstreamSocket!.resume();
+
+					if (ending === 'destroyAll') proxy.destroyAll();
+					else socket.destroy();
+
+					await upstreamEnded;
+					expect(socket.destroyed).toBe(true);
+					await vi.waitFor(() => expect(proxy.size).toBe(0));
+				} finally {
+					upstreamSocket?.destroy();
+					await new Promise<void>((resolve) => upgrader.close(() => resolve()));
+				}
+			},
+		);
+
 		it('closes an upgrade that is still waiting on the kernel at the deadline', async () => {
 			const stalled = createServer(() => {});
 			await new Promise<void>((resolve) => stalled.listen(0, '127.0.0.1', resolve));

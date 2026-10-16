@@ -1901,7 +1901,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES',
 						name: 'GitHub repository project policy',
 						description:
-							'Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies) for syntax.',
+							'Optional JSON array of `{resource, projects}` rules. Resources are `owner/repo` (github.com only) or full repository URLs on `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL`, matched case-insensitively. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies).',
 						example: '[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]',
 						optIn: true,
 					},
@@ -1910,13 +1910,13 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 			{
 				name: 'GitLab',
 				description:
-					'Connect GitLab.com or a self-managed HTTPS origin. Use a project, group, or personal token with api and write_repository scopes and Developer access. See [GitLab setup](syncing.md#gitlab).',
+					'Connect GitLab.com or a self-managed HTTPS origin. Prefer a project or group access token (a personal token also works) with api and write_repository scopes and Developer access. See [GitLab setup](syncing.md#gitlab).',
 				vars: [
 					{
 						id: 'MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN',
 						name: 'GitLab access token',
 						description:
-							'Required to enable GitLab. Setting SERVER_URL without a token is a startup error. Used for repository reads, Git pushes, and merge requests. Never injected into notebook sandboxes.',
+							'Required to enable GitLab. Setting `MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL` without a token is a startup error. Used for repository reads, Git pushes, and merge requests. Prefer a project or group access token: the api scope on a personal token reaches every project that user can see. Never injected into notebook sandboxes.',
 						secret: true,
 						optIn: true,
 					},
@@ -1932,7 +1932,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SOURCE_CONTROL_GITLAB_ALLOWED_REPOSITORIES',
 						name: 'GitLab repository project policy',
 						description:
-							'Optional JSON array of {resource, projects} rules using full repository URLs. Unset permits shared access. [] denies all. See [Repository project policies](syncing.md#repository-project-policies).',
+							'Optional JSON array of `{resource, projects}` rules. Resources are full repository URLs on `MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL`, matched case-insensitively. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies).',
 						example: '[{"resource":"https://gitlab.com/team/notebooks","projects":"*"}]',
 						optIn: true,
 					},
@@ -1941,7 +1941,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 			{
 				name: 'Azure DevOps Services',
 				description:
-					'Use a Microsoft Entra service principal or managed identity with repository read, contribute, create branch, and contribute to pull requests permissions. No webhook is required.',
+					'Use a Microsoft Entra service principal or managed identity with repository read, contribute, create branch, and contribute to pull requests permissions. No webhook is required. See [Azure DevOps setup](syncing.md#azure-devops-services).',
 				vars: [
 					{
 						id: 'MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ORGANIZATION',
@@ -1955,8 +1955,9 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_TENANT_ID',
 						name: 'Azure tenant ID',
 						description:
-							'Tenant for service-principal authentication. Set together with client ID and client secret. Omit all three to use DefaultAzureCredential.',
+							'Microsoft Entra tenant for service-principal authentication. Set together with client ID and client secret. Omit all three to use DefaultAzureCredential, which reads the same ambient `AZURE_*` environment as Azure storage, so both share one identity.',
 						optIn: true,
+						example: '00000000-0000-0000-0000-000000000000',
 					},
 					{
 						id: 'MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_ID',
@@ -1964,6 +1965,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'Application client ID of the service principal. Add this identity to the Azure DevOps organization.',
 						optIn: true,
+						example: '11111111-1111-1111-1111-111111111111',
 					},
 					{
 						id: 'MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_SECRET',
@@ -1977,7 +1979,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ALLOWED_REPOSITORIES',
 						name: 'Azure repository project policy',
 						description:
-							'JSON array of `{resource, projects}` rules using full repository URLs. Unset permits shared access. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies).',
+							'Optional JSON array of `{resource, projects}` rules. Resources are full `https://dev.azure.com/{organization}/{project}/_git/{repository}` URLs in the configured organization, matched case-insensitively. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies).',
 						optIn: true,
 						example:
 							'[{"resource":"https://dev.azure.com/acme/analytics/_git/notebooks","projects":"*"}]',
@@ -2087,7 +2089,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_WIF_CREDENTIALS_DELIVERY',
 						name: 'Credential delivery',
 						description:
-							'`env`: static AWS credentials (~1h). `endpoint`: SDK-managed refresh, with a seven-day session limit. Requires HTTPS `MARIMOHUB_APP_BASE_URL` and a valid broker expiry. Jobs always use `env`.',
+							'`env`: static AWS credentials (~1h). `endpoint`: SDK-managed refresh through the AWS container credential provider, with a seven-day session limit. Requires HTTPS `MARIMOHUB_APP_BASE_URL` and a valid broker expiry; clients without container-provider support lose access. Jobs always use `env`.',
 						optIn: true,
 						default: 'env',
 						example: 'endpoint',

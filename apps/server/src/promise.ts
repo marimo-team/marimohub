@@ -12,6 +12,11 @@ export function onceAsync<T>(work: () => T | Promise<T>): () => Promise<T> {
 	return () => (result ??= Promise.resolve().then(work));
 }
 
+export function settleEach(fns: Iterable<() => unknown>): Promise<PromiseSettledResult<unknown>[]> {
+	// A synchronous throw becomes a rejection instead of skipping the remaining fns.
+	return Promise.allSettled([...fns].map((fn) => Promise.resolve().then(fn)));
+}
+
 export async function settleAllWithin(
 	promises: Iterable<PromiseLike<unknown>>,
 	timeoutMs: number,

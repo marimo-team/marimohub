@@ -1631,7 +1631,9 @@ describe('GitHubAppPublisher', () => {
 			const fetcher = vi.fn(async (url: string) =>
 				url.endsWith('/installation') ? response({ id: 42 }) : response(tokenPayload),
 			);
-			await expect(publisher(fetcher).openChangeRequest(input)).rejects.toThrow('invalid token');
+			await expect(publisher(fetcher).openChangeRequest(input)).rejects.toThrow(
+				'Invalid GitHub token',
+			);
 			expect(fetcher).toHaveBeenCalledTimes(2);
 		},
 	);

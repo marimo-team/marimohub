@@ -474,6 +474,32 @@ describe('BackgroundLoops', () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
+	it('skips the remaining steps after stop and still releases the lease', async () => {
+		const first = Promise.withResolvers<void>();
+		const second = vi.fn(async () => {});
+		const release = vi.spyOn(lock, 'release');
+		const onSuccess = vi.fn();
+		const handle = start(
+			async ({ step }) => {
+				await step(() => first.promise);
+				await step(second);
+			},
+			{ lock, deadlineMs: 10_000, onSuccess },
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		handle.stop();
+		first.resolve();
+		await handle.drain();
+		expect(second).not.toHaveBeenCalled();
+		expect(release).toHaveBeenCalledOnce();
+		expect(onSuccess).not.toHaveBeenCalled();
+		expect(events()).toEqual([]);
+		expect(loops.health().loops.test).toMatchObject({
+			status: 'stopping',
+			consecutive_failures: 0,
+		});
+	});
+
 	it('aborts abortOnStop work without logging a failure', async () => {
 		const run = vi.fn<LoopOptions['run']>(
 			({ signal }) =>
@@ -571,6 +597,26 @@ describe('BackgroundLoops tracing', () => {
 			'marimohub.loop.name': 'test',
 			'marimohub.loop.outcome': 'success',
 		});
+		expect(loop.status.code).not.toBe(SpanStatusCode.ERROR);
+	});
+
+	it('records an attempt stopped between steps as skipped', async () => {
+		const loops = new BackgroundLoops();
+		const first = Promise.withResolvers<void>();
+		const handle = loops.start({
+			name: 'test',
+			intervalMs: 100,
+			run: async ({ step }) => {
+				await step(() => first.promise);
+				await step(async () => {});
+			},
+		});
+		stop = handle.stop;
+		handle.stop();
+		first.resolve();
+		await handle.drain();
+		const [loop] = exporter.getFinishedSpans();
+		expect(loop.attributes['marimohub.loop.outcome']).toBe('skipped');
 		expect(loop.status.code).not.toBe(SpanStatusCode.ERROR);
 	});
 

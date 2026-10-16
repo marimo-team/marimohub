@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { vi } from 'vitest';
-import { blobId } from '../trees';
+import { blobId } from '@marimo-hub/source-control-git/file-tree';
 
 interface File {
 	bytes: Uint8Array;

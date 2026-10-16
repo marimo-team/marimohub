@@ -1,29 +1,16 @@
-import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, chmod, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { vi } from 'vitest';
+import {
+	gitBytes as git,
+	smartHttpResponse,
+} from '@marimo-hub/source-control-git/testing/fake-git-server';
 import { record, stringField } from '../client';
 
+export { git };
 export const repository = 'https://gitlab.com/team/subgroup/notebooks';
 export const token = 'test-token';
-export function git(dir: string, args: string[], input?: string | Uint8Array): Buffer {
-	return execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], {
-		cwd: dir,
-		input,
-		stdio: ['pipe', 'pipe', 'pipe'],
-		env: {
-			...process.env,
-			GIT_AUTHOR_NAME: 'Fixture',
-			GIT_AUTHOR_EMAIL: 'fixture@example.com',
-			GIT_COMMITTER_NAME: 'Fixture',
-			GIT_COMMITTER_EMAIL: 'fixture@example.com',
-		},
-	});
-}
-function packet(value: string) {
-	return Buffer.from(`${(Buffer.byteLength(value) + 4).toString(16).padStart(4, '0')}${value}`);
-}
 
 export class FakeGitLab {
 	readonly merges: Record<string, unknown>[] = [];
@@ -66,45 +53,31 @@ export class FakeGitLab {
 		const method = init.method ?? 'GET';
 		if (url.origin !== 'https://gitlab.com') throw new Error('Unexpected host');
 		const headers = new Headers(init.headers);
-		if (url.pathname.startsWith('/team/subgroup/notebooks.git/')) {
+		// GitLab resolves namespace paths case-insensitively.
+		if (url.pathname.toLowerCase().startsWith('/team/subgroup/notebooks.git/')) {
 			if (
 				headers.get('authorization') !==
 				`Basic ${Buffer.from(`oauth2:${token}`).toString('base64')}`
 			)
 				throw new Error('Missing Git credentials');
-			if (url.pathname.endsWith('/info/refs') && method === 'GET') {
-				const service = url.searchParams.get('service');
-				if (!['git-upload-pack', 'git-receive-pack'].includes(service ?? ''))
-					throw new Error('Wrong Git service');
-				const advertised = git(this.dir, [
-					service!.slice(4),
-					'--stateless-rpc',
-					'--advertise-refs',
-					this.dir,
-				]);
-				return new Response(
-					Buffer.concat([packet(`# service=${service}\n`), Buffer.from('0000'), advertised]),
-					{ headers: { 'content-type': `application/x-${service}-advertisement` } },
-				);
+			const push = method === 'POST' && url.pathname.endsWith('/git-receive-pack');
+			if (push) this.beforePush?.();
+			const response = await smartHttpResponse(this.dir, input, init, [
+				'git-upload-pack',
+				'git-receive-pack',
+			]);
+			if (push) {
+				this.merges.forEach((mr) => this.refreshMerge(mr));
+				if (this.lostPush) {
+					this.lostPush = false;
+					throw new Error('Lost push response');
+				}
 			}
-			const service = url.pathname.split('/').at(-1)!;
-			if (method !== 'POST' || !['git-upload-pack', 'git-receive-pack'].includes(service))
-				throw new Error('Wrong Git request');
-			if (service === 'git-receive-pack') this.beforePush?.();
-			const body = new Uint8Array(await new Response(init.body).arrayBuffer());
-			const result = git(this.dir, [service.slice(4), '--stateless-rpc', this.dir], body);
-			if (service === 'git-receive-pack') this.merges.forEach((mr) => this.refreshMerge(mr));
-			if (service === 'git-receive-pack' && this.lostPush) {
-				this.lostPush = false;
-				throw new Error('Lost push response');
-			}
-			return new Response(new Uint8Array(result), {
-				headers: { 'content-type': `application/x-${service}-result` },
-			});
+			return response;
 		}
 		if (
 			headers.get('PRIVATE-TOKEN') !== token ||
-			!url.pathname.startsWith('/api/v4/projects/team%2Fsubgroup%2Fnotebooks/')
+			!url.pathname.toLowerCase().startsWith('/api/v4/projects/team%2fsubgroup%2fnotebooks/')
 		)
 			throw new Error('Unexpected API request');
 		const path = url.pathname.split('/notebooks/').at(-1) ?? '';

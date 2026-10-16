@@ -1,4 +1,5 @@
 import { UnavailableError } from '@marimo-hub/core/errors';
+import { responseFields } from '@marimo-hub/source-control-git/http';
 
 export type GitTreeEntry = {
 	mode: '040000' | '100644' | '100755' | '120000' | '160000';
@@ -9,12 +10,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-export function stringField(value: unknown, field: string): string {
-	if (!isRecord(value) || typeof value[field] !== 'string' || value[field].length === 0) {
-		throw new UnavailableError(`GitHub returned an invalid ${field}`);
-	}
-	return value[field];
-}
+export const { stringField } = responseFields('GitHub');
 
 export function numberField(value: unknown, field: string): number {
 	if (

@@ -3,112 +3,20 @@ import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import git from 'isomorphic-git';
-import type { GitHttpRequest, HttpClient } from 'isomorphic-git';
 import { BadRequestError, UnavailableError } from '@marimo-hub/core/errors';
 import {
 	GitDirectoryLimitTracker,
 	MAX_GIT_EXPANDED_BYTES,
 	MAX_GIT_EXPANDED_FILES,
-	MAX_GIT_FETCH_BYTES,
 } from '@marimo-hub/core/ports/source-control';
 import { MAX_WORKSPACE_FILE_BYTES } from '@marimo-hub/core/constants';
 import type { SourceWorkspaceFile } from '@marimo-hub/core/ports/source-control';
 import { assertGitPackLimits } from './packLimits';
-export type GitFetch = (input: string, init?: RequestInit) => Promise<Response>;
-
-function repositorySizeError(repository: string, limit: number): BadRequestError {
-	return new BadRequestError(
-		`The Git data for ${repository} exceeds the ${limit}-byte pull-source limit; reduce the repository history or use push sync`,
-	);
-}
-
-export class GitFetchByteLimit {
-	private received = 0;
-
-	constructor(private readonly repository: string) {}
-
-	assertFits(size: number): void {
-		if (!Number.isSafeInteger(size) || size < 0 || this.received + size > MAX_GIT_FETCH_BYTES) {
-			throw repositorySizeError(this.repository, MAX_GIT_FETCH_BYTES);
-		}
-	}
-
-	record(size: number): void {
-		this.assertFits(size);
-		this.received += size;
-	}
-}
-
-async function requestBody(
-	body: GitHttpRequest['body'],
-): Promise<Uint8Array<ArrayBuffer> | undefined> {
-	if (!body) return undefined;
-	const chunks: Uint8Array[] = [];
-	let size = 0;
-	for await (const chunk of body) {
-		chunks.push(chunk);
-		size += chunk.byteLength;
-	}
-	const bytes = new Uint8Array(size);
-	let offset = 0;
-	for (const chunk of chunks) {
-		bytes.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-	return bytes;
-}
-
-function responseBody(
-	response: Response,
-	recordBytes: (size: number) => void,
-): AsyncIterableIterator<Uint8Array> {
-	const body = response.body;
-	return (async function* () {
-		if (!body) return;
-		const reader = body.getReader();
-		try {
-			for (;;) {
-				const next = await reader.read();
-				if (next.done) break;
-				recordBytes(next.value.byteLength);
-				yield next.value;
-			}
-		} finally {
-			await reader.cancel().catch(() => {});
-		}
-	})();
-}
-
-export function gitHttp(fetcher: GitFetch, repository: string): HttpClient {
-	const limit = new GitFetchByteLimit(repository);
-	return {
-		request: async (request) => {
-			const body = await requestBody(request.body);
-			const response = await fetcher(request.url, {
-				method: request.method,
-				headers: request.headers,
-				body: body?.buffer,
-			});
-			const contentLength = Number(response.headers.get('content-length'));
-			if (Number.isFinite(contentLength) && contentLength >= 0) {
-				try {
-					limit.assertFits(contentLength);
-				} catch (error) {
-					await response.body?.cancel().catch(() => {});
-					throw error;
-				}
-			}
-			return {
-				url: response.url || request.url,
-				method: request.method,
-				statusCode: response.status,
-				statusMessage: response.statusText,
-				headers: Object.fromEntries(response.headers.entries()),
-				body: responseBody(response, (size) => limit.record(size)),
-			};
-		},
-	};
-}
+import { isSafeGitEntryName } from './fileTree';
+import { gitHttp, gitTransportError } from './transport';
+import type { GitFetch, GitTransportTimeouts } from './transport';
+export { GitFetchByteLimit, gitHttp } from './transport';
+export type { GitFetch, GitHttpOptions, GitTransportTimeouts } from './transport';
 
 export async function assertGitTreeLimits(
 	directory: string,
@@ -124,7 +32,11 @@ export async function assertGitTreeLimits(
 	while (pending.length > 0) {
 		const oid = pending.pop()!;
 		const { tree } = await git.readTree({ fs, dir: directory, oid });
+		const names = new Set<string>();
 		for (const entry of tree) {
+			if (!isSafeGitEntryName(entry.path) || names.has(entry.path))
+				throw new BadRequestError('Git tree contains an unsafe path');
+			names.add(entry.path);
 			if (entry.type === 'tree' || entry.type === 'commit') {
 				// Empty trees and submodules create directories without adding blob entries.
 				directoryCount += 1;
@@ -211,6 +123,18 @@ export interface GitFetchOptions {
 	branch: string;
 	authorization: string;
 	fetcher: GitFetch;
+	signal?: AbortSignal;
+	timeouts?: GitTransportTimeouts;
+}
+
+export function gitTransport(options: GitFetchOptions) {
+	return gitHttp({
+		fetcher: options.fetcher,
+		repository: options.repository,
+		remoteUrl: options.remoteUrl,
+		signal: options.signal,
+		timeouts: options.timeouts,
+	});
 }
 
 export async function withFetchedGit<T>(
@@ -240,7 +164,7 @@ export async function withFetchedGit<T>(
 			await git.addRemote({ fs, dir: directory, remote: 'origin', url: remoteUrl });
 			const result = await git.fetch({
 				fs: guardedFs,
-				http: gitHttp(options.fetcher, options.repository),
+				http: gitTransport(options),
 				dir: directory,
 				url: remoteUrl,
 				ref: options.branch,
@@ -271,10 +195,8 @@ export async function withFetchedGit<T>(
 			});
 			await assertGitTreeLimits(directory, options.commit, options.repository);
 		} catch (error) {
-			if (error instanceof BadRequestError || error instanceof UnavailableError) throw error;
-			throw Object.assign(new UnavailableError('Git data could not be fetched', { cause: error }), {
-				providerStatus: (error as { providerStatus?: unknown } | null)?.providerStatus,
-			});
+			options.signal?.throwIfAborted();
+			throw gitTransportError(error, 'Git data could not be fetched');
 		}
 		return await action(directory);
 	} finally {
@@ -290,8 +212,7 @@ export async function materializeGitDirectory(
 			await git.checkout({ fs, dir: directory, ref: options.branch, force: true });
 			return await collectGitDirectoryFiles(join(directory, '.git'), options.repository);
 		} catch (error) {
-			if (error instanceof BadRequestError || error instanceof UnavailableError) throw error;
-			throw new UnavailableError('Git data could not be materialized', { cause: error });
+			throw gitTransportError(error, 'Git data could not be materialized');
 		}
 	});
 }

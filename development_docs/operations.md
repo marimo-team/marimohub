@@ -89,13 +89,20 @@ metadata records.
 
 1. Back up the affected storage.
 2. Set the deployment's `MARIMOHUB_STORAGE_*` environment variables.
-3. From the repository root, generate a dry-run report:
+3. Generate a dry-run report. From the repository root:
 
    ```bash
    pnpm --filter @marimo-hub/server catalog:recover --rebuild
    ```
 
-4. Review `candidates`, `projects`, and `issues` in the JSON report.
+   From the published image, run `node dist/catalog-recovery.mjs` with the same
+   arguments. The [operator guide](../docs/operations.md#catalog-recovery) has
+   Docker and Kubernetes examples. The SEA binaries have no recovery entrypoint.
+
+4. Review `candidates`, `projects`, and `issues` in the JSON report. A dry-run
+   whose report has blocking errors exits 2. In `--snapshot` mode, `excluded`
+   issues list projects, notebooks, and jobs that exist on storage but are absent
+   from the selected snapshot.
 5. If a suitable snapshot survives, inspect it with its actual ID:
 
    ```bash
@@ -113,6 +120,8 @@ metadata records.
      --writers-stopped --actor OPERATOR_ID
    ```
 
+   `OPERATOR_ID` is a valid marimohub user ID for the operator. It is written to
+   the recovery snapshot and to a `system.recover` audit event.
    For record reconstruction, use `--rebuild` instead of `--snapshot SNAPSHOT_ID`.
    Rebuild always warns that record discovery cannot prove publication.
    After reviewing and accepting this warning, add `--accept-warnings` to the rebuild apply command.
@@ -122,7 +131,9 @@ metadata records.
 7. Check recovered projects and notebook contents before restarting writers.
 
 The command defaults to dry-run and supports `s3`, `gcs`, `azure`, and `fs`.
-The server bundle provides `node dist/catalog-recovery.mjs` with the same arguments.
+Exit codes: 0 for a dry-run without blocking errors or a successful apply, 2 for
+a dry-run with blocking errors (report on stdout, reasons on stderr), and 1 for
+any other failure.
 Other adapters can use `CatalogService.planRecovery` and `CatalogService.recover`.
 
 ### Recovery limits
@@ -137,10 +148,12 @@ Other adapters can use `CatalogService.planRecovery` and `CatalogService.recover
 - Missing or invalid metadata, referenced notebook content, or job history
   indexes block apply. Recovery does not repair these objects or restore history.
 
-Recovery writes a new immutable snapshot through `CatalogService.mutateSnapshot`.
-It updates an existing pointer with its inspected ETag or creates a missing pointer
-conditionally. It does not retry against changed state. Uncertain write responses
-leave the snapshot intact for inspection.
+Recovery writes a new immutable snapshot and commits it through the private
+`CatalogService.commitRecovery`, which only `recover()` reaches. It updates an
+existing pointer with its inspected ETag or creates a missing pointer
+conditionally. It does not retry against changed state. A lost CAS deletes the
+new snapshot and fails with a conflict; run the dry-run again. Uncertain write
+responses leave the snapshot intact for inspection.
 
 ---
 
@@ -177,6 +190,11 @@ settles. A stalled attempt does not release its lease; the lease
 expires at the deadline. Another replica can then take the lease while the
 abandoned work is still running, so calls without cancellation support still
 need adapter request timeouts.
+
+When a shutdown starts, the maintenance cycle finishes its current step, skips
+the remaining steps, and releases its lease, so a replacement replica does not
+wait for the lease to expire. See
+[shutdown budgets](../docs/operations.md#shutdown-budgets).
 
 Lease-release errors log as `<loop>_release_failed` and preserve the attempt's
 outcome. Skipped attempts (`shouldRun` false or lease held elsewhere) count as

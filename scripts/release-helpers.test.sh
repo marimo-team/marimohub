@@ -38,6 +38,8 @@ make_source() {
 	done
 }
 
+bash -n "$repo_root/scripts/publish-image-manifest.sh"
+bash -n "$repo_root/scripts/release-tag.sh"
 bash -n "$repo_root/scripts/retry.sh"
 bash -n "$repo_root/scripts/stage-cli-release-assets.sh"
 bash -n "$repo_root/scripts/upload-release-assets.sh"
@@ -372,6 +374,41 @@ grep -q '"version": "1.2.4"' "$release_repo/package.json" || fail 'package versi
 grep -q 'version = "1.2.4"' "$release_repo/apps/cli/Cargo.toml" || fail 'Cargo version was not updated'
 grep -q "version: '1.2.4'" "$release_repo/docs/cli.md" || fail 'CLI docs version was not updated'
 
+for tag in v1.2.3 v0.0.0 v10.20.30; do
+	[[ "$("$repo_root/scripts/release-tag.sh" validate "$tag")" == "${tag#v}" ]] || \
+		fail "stable release tag $tag was not accepted"
+done
+for tag in v1.2.3-rc.1 v1.2 v01.2.3 v1.02.3 1.2.3 v1.2.3.4 'v1.2.3 ' 'v1.2.3;id'; do
+	if "$repo_root/scripts/release-tag.sh" validate "$tag" >/dev/null 2>&1; then
+		fail "invalid release tag '$tag' was accepted"
+	fi
+done
+if "$repo_root/scripts/release-tag.sh" floating v1.2.3-rc.1 </dev/null >/dev/null 2>&1; then
+	fail 'floating tags were computed for a prerelease tag'
+fi
+
+floating() {
+	printf '%s\n' "${@:2}" | "$repo_root/scripts/release-tag.sh" floating "$1" | tr '\n' ' '
+}
+[[ "$(floating v1.0.0)" == 'latest=true major=true minor=true ' ]] || \
+	fail 'first release did not move every floating tag'
+[[ "$(floating v1.2.4 v1.2.3 v1.1.9 v0.9.0)" == 'latest=true major=true minor=true ' ]] || \
+	fail 'newest release did not move every floating tag'
+[[ "$(floating v1.2.3 v1.2.3 v1.2.2)" == 'latest=true major=true minor=true ' ]] || \
+	fail 'the release tag listing itself changed the result'
+[[ "$(floating v1.2.4 v1.3.0 v1.2.3)" == 'latest=false major=false minor=true ' ]] || \
+	fail 'patch backport moved latest or the major tag'
+[[ "$(floating v1.2.4 v2.0.0 v1.2.3)" == 'latest=false major=true minor=true ' ]] || \
+	fail 'previous-major backport did not move only its own major and minor tags'
+[[ "$(floating v1.2.4 v1.2.5)" == 'latest=false major=false minor=false ' ]] || \
+	fail 'an older patch moved floating tags'
+[[ "$(floating v1.2.4 v1.3.0-rc.1 v2.0.0-rc.1 v1.2.3)" == 'latest=true major=true minor=true ' ]] || \
+	fail 'a prerelease tag outranked a stable release'
+[[ "$(floating v1.9.0 v1.10.0)" == 'latest=false major=false minor=true ' ]] || \
+	fail 'release tags were not compared numerically'
+
+amd64_digest="example/image@sha256:$(printf 'a%.0s' {1..64})"
+arm64_digest="example/image@sha256:$(printf 'b%.0s' {1..64})"
 manifest_bin="$temporary/manifest-bin"
 mkdir "$manifest_bin"
 cat >"$manifest_bin/docker" <<'MOCK'
@@ -380,32 +417,82 @@ set -euo pipefail
 printf '%s\n' "$*" >> "$MOCK_DOCKER_LOG"
 case "$3" in
   create) exit "${MOCK_CREATE_EXIT:-0}" ;;
-  inspect) printf '%s\n' "$MOCK_MANIFEST" ;;
+  inspect)
+    if [[ "$4" == *@sha256:* ]]; then exit "${MOCK_SOURCE_INSPECT_EXIT:-0}"; fi
+    if [[ -n "${MOCK_INSPECT_STATE:-}" ]]; then
+      inspect_attempt=1
+      [[ ! -f "$MOCK_INSPECT_STATE" ]] || read -r inspect_attempt < "$MOCK_INSPECT_STATE"
+      printf '%s\n' "$((inspect_attempt + 1))" > "$MOCK_INSPECT_STATE"
+      if ((inspect_attempt <= ${MOCK_INSPECT_FAILURES:-0})); then exit 1; fi
+    fi
+    printf '%s\n' "$MOCK_MANIFEST"
+    ;;
   *) exit 1 ;;
 esac
 MOCK
 chmod +x "$manifest_bin/docker"
+publish_manifest() {
+	"$repo_root/scripts/publish-image-manifest.sh" "$amd64_digest" "$arm64_digest"
+}
 (
-	export PATH="$manifest_bin:$PATH" MOCK_DOCKER_LOG="$temporary/docker.log"
+	export PATH="$manifest_bin:$PATH" MOCK_DOCKER_LOG="$temporary/docker.log" RETRY_DELAY_SECONDS=0
 	export MOCK_MANIFEST='{"manifests":[{"platform":{"os":"linux","architecture":"arm64"}},{"platform":{"os":"unknown","architecture":"unknown"}},{"platform":{"os":"linux","architecture":"amd64"}}]}'
-	printf 'example/image:latest\nexample/image:1.0.0' | "$repo_root/scripts/publish-image-manifest.sh" example/image:sha-123
-	grep -Fx 'buildx imagetools create --tag example/image:latest --tag example/image:1.0.0 example/image:sha-123-amd64 example/image:sha-123-arm64' "$MOCK_DOCKER_LOG" || fail 'manifest tags or sources differ'
+	printf 'example/image:latest\nexample/image:1.0.0' | publish_manifest >/dev/null
+	expected_log="buildx imagetools inspect $amd64_digest
+buildx imagetools inspect $arm64_digest
+buildx imagetools create --tag example/image:latest --tag example/image:1.0.0 $amd64_digest $arm64_digest
+buildx imagetools inspect example/image:latest --raw"
+	[[ "$(<"$MOCK_DOCKER_LOG")" == "$expected_log" ]] || \
+		fail 'manifest sources were not inspected before create, or tags or sources differ'
 
 	: >"$MOCK_DOCKER_LOG"
-	if "$repo_root/scripts/publish-image-manifest.sh" example/image:sha-123 </dev/null; then
+	if publish_manifest </dev/null >/dev/null 2>&1; then
 		fail 'empty destination tags were accepted'
 	fi
 	[[ ! -s "$MOCK_DOCKER_LOG" ]] || fail 'empty tags triggered Docker'
 
-	export MOCK_CREATE_EXIT=1
-	if "$repo_root/scripts/publish-image-manifest.sh" example/image:sha-123 <<< 'example/image:latest'; then
+	if "$repo_root/scripts/publish-image-manifest.sh" example/image:sha-123-amd64 \
+		<<<'example/image:latest' >/dev/null 2>&1; then
+		fail 'a mutable source tag was accepted'
+	fi
+	[[ ! -s "$MOCK_DOCKER_LOG" ]] || fail 'a mutable source tag triggered Docker'
+
+	export MOCK_SOURCE_INSPECT_EXIT=1 RETRY_ATTEMPTS=2
+	if publish_manifest <<<'example/image:latest' >/dev/null 2>&1; then
+		fail 'a missing source image was accepted'
+	fi
+	! grep -q ' create ' "$MOCK_DOCKER_LOG" || fail 'a missing source image still moved tags'
+	unset MOCK_SOURCE_INSPECT_EXIT RETRY_ATTEMPTS
+
+	: >"$MOCK_DOCKER_LOG"
+	export MOCK_CREATE_EXIT=1 RETRY_ATTEMPTS=2
+	if publish_manifest <<<'example/image:latest' >/dev/null 2>&1; then
 		fail 'failed manifest creation was accepted'
 	fi
-	unset MOCK_CREATE_EXIT
+	[[ "$(grep -c ' create ' "$MOCK_DOCKER_LOG")" == 2 ]] || fail 'manifest creation was not retried'
+	unset MOCK_CREATE_EXIT RETRY_ATTEMPTS
+
+	export MOCK_INSPECT_STATE="$temporary/inspect-attempts" MOCK_INSPECT_FAILURES=1
+	publish_manifest <<<'example/image:latest' >/dev/null 2>&1 || \
+		fail 'a transient destination inspect failure was not retried'
+	rm -f "$MOCK_INSPECT_STATE"
+	export MOCK_INSPECT_FAILURES=99 RETRY_ATTEMPTS=2
+	if publish_manifest <<<'example/image:latest' >/dev/null 2>&1; then
+		fail 'a failed destination inspect was accepted'
+	fi
+	unset MOCK_INSPECT_STATE MOCK_INSPECT_FAILURES RETRY_ATTEMPTS
+
+	export MOCK_MANIFEST='<html>502 Bad Gateway</html>'
+	if publish_manifest <<<'example/image:latest' >/dev/null 2>&1; then
+		fail 'non-JSON inspect output was accepted'
+	fi
+
+	export MOCK_MANIFEST='{"manifests":[{"platform":{"os":"linux","architecture":"amd64"}},{"platform":{"os":"linux","architecture":"arm64","variant":"v8"}}]}'
+	publish_manifest <<<'example/image:latest' >/dev/null || fail 'an arm64/v8 entry was rejected'
 
 	for arch in amd64 arm64; do
 		export MOCK_MANIFEST="{\"manifests\":[{\"platform\":{\"os\":\"linux\",\"architecture\":\"$arch\"}}]}"
-		if "$repo_root/scripts/publish-image-manifest.sh" example/image:sha-123 <<< 'example/image:latest'; then
+		if publish_manifest <<<'example/image:latest' >/dev/null 2>&1; then
 			fail "single-architecture manifest ($arch) was accepted"
 		fi
 	done

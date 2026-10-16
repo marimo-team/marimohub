@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { BadRequestError, UnavailableError } from '@marimo-hub/core/errors';
-import { readResponseBytes } from './http';
+import {
+	BadRequestError,
+	ConflictError,
+	ForbiddenError,
+	NotFoundError,
+	UnavailableError,
+} from '@marimo-hub/core/errors';
+import { providerHttpError, readResponseBytes, responseFields, retryAfterSeconds } from './http';
 const boundedBytes = (response: Response, limit: number, signal?: AbortSignal) =>
 	readResponseBytes(response, limit, 'Provider', signal);
 function openStream(chunk: string, failCancel = false) {
@@ -79,5 +85,39 @@ describe('bounded source-control responses', () => {
 		controller.abort(new Error('Stop reading Git response'));
 		await expect(reading).rejects.toBe(controller.signal.reason);
 		expect(cancel).toHaveBeenCalledOnce();
+	});
+});
+
+describe('providerHttpError', () => {
+	it.each([
+		{ status: 400, type: BadRequestError },
+		{ status: 401, type: ForbiddenError },
+		{ status: 403, type: ForbiddenError },
+		{ status: 404, type: NotFoundError },
+		{ status: 409, type: ConflictError },
+		{ status: 412, type: ConflictError },
+		{ status: 429, type: UnavailableError },
+		{ status: 302, type: UnavailableError },
+		{ status: 503, type: UnavailableError },
+	])('maps $status', ({ status, type }) => {
+		const error = providerHttpError('Provider', status);
+		expect(error).toBeInstanceOf(type);
+		expect(error.providerStatus).toBe(status);
+		expect(error).not.toHaveProperty('retryAfterSeconds');
+	});
+
+	it('carries Retry-After seconds or dates on rate limits', () => {
+		expect(
+			providerHttpError('Provider', 429, { headers: new Headers({ 'retry-after': '30' }) }),
+		).toMatchObject({ retryAfterSeconds: 30 });
+		expect(retryAfterSeconds(new Date(61_000).toUTCString(), 1_000)).toBe(60);
+		expect(retryAfterSeconds('soon')).toBeUndefined();
+	});
+
+	it('validates provider response fields', () => {
+		const { record, stringField } = responseFields('Provider');
+		expect(() => record([])).toThrow('Invalid Provider response');
+		expect(() => stringField({ id: '' }, 'id')).toThrow('Invalid Provider id');
+		expect(stringField({ id: 'x' }, 'id')).toBe('x');
 	});
 });

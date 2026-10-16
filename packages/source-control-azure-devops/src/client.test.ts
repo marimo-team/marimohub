@@ -93,6 +93,7 @@ describe('Azure HTTP failure handling', () => {
 		expect(String(error)).not.toContain('private-token');
 	});
 	it.each([
+		[400, BadRequestError],
 		[401, ForbiddenError],
 		[403, ForbiddenError],
 		[404, NotFoundError],
@@ -111,6 +112,16 @@ describe('Azure HTTP failure handling', () => {
 		expect(String(error)).not.toContain('private server details');
 		expect(cancel).toHaveBeenCalledOnce();
 		expect(fetcher).toHaveBeenCalledOnce();
+	});
+	it('carries Retry-After on rate limits', async () => {
+		const { client, fetcher } = setup();
+		fetcher.mockResolvedValue(
+			new Response(null, { status: 429, headers: { 'retry-after': '12' } }),
+		);
+		await expect(client.json(repo, '/refs')).rejects.toMatchObject({
+			providerStatus: 429,
+			retryAfterSeconds: 12,
+		});
 	});
 	it('preserves an access-denied error when response cleanup fails', async () => {
 		const { client, fetcher } = setup();

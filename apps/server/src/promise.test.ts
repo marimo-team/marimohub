@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { onceAsync, settleAllWithin } from './promise';
+import { onceAsync, settleAllWithin, settleEach } from './promise';
 
 describe('onceAsync', () => {
 	it('shares pending work and its result across calls', async () => {
@@ -26,6 +26,24 @@ describe('onceAsync', () => {
 		expect(run()).toBe(first);
 		await expect(run()).rejects.toBe(error);
 		expect(work).toHaveBeenCalledOnce();
+	});
+});
+
+describe('settleEach', () => {
+	it('runs every function even when an earlier one throws synchronously', async () => {
+		const error = new Error('sync');
+		const later = vi.fn(async () => 'ok');
+		const results = await settleEach([
+			() => {
+				throw error;
+			},
+			later,
+		]);
+		expect(later).toHaveBeenCalledOnce();
+		expect(results).toEqual([
+			{ status: 'rejected', reason: error },
+			{ status: 'fulfilled', value: 'ok' },
+		]);
 	});
 });
 

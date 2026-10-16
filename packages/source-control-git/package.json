@@ -15,7 +15,8 @@
 		"./publish": "./src/publish.ts",
 		"./http": "./src/http.ts",
 		"./publication": "./src/publication.ts",
-		"./workspace": "./src/workspace.ts"
+		"./workspace": "./src/workspace.ts",
+		"./testing/fake-git-server": "./src/testing/fakeGitServer.ts"
 	},
 	"scripts": {
 		"build": "vp pack",

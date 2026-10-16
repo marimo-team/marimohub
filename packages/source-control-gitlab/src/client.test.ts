@@ -1,4 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import {
+	BadRequestError,
+	ConflictError,
+	ForbiddenError,
+	NotFoundError,
+	UnavailableError,
+} from '@marimo-hub/core/errors';
 import { GitLabClient } from './client';
 import { gitLabOrigin, parseGitLabRepository } from './repository';
 import { list } from './trees';
@@ -45,16 +52,6 @@ describe('GitLab repository boundaries', () => {
 		'https://code.example.com#x',
 	])('rejects unsafe origin %s', (value) => {
 		expect(() => gitLabOrigin(value)).toThrow();
-	});
-	it('never sends credentials to another Git host or repository', () => {
-		const fetcher = vi.fn();
-		const client = new GitLabClient({ token: 'secret' }, { fetcher });
-		for (const url of [
-			'https://evil.test/team/project.git/info/refs',
-			'https://gitlab.com/other/project.git/info/refs',
-		])
-			expect(() => client.gitFetch(repo)(url)).toThrow();
-		expect(fetcher).not.toHaveBeenCalled();
 	});
 });
 
@@ -165,6 +162,25 @@ describe('GitLab request failures', () => {
 			expect(cancel).toHaveBeenCalledOnce();
 		},
 	);
+	it.each([
+		{ status: 400, type: BadRequestError },
+		{ status: 401, type: ForbiddenError },
+		{ status: 404, type: NotFoundError },
+		{ status: 409, type: ConflictError },
+		{ status: 412, type: ConflictError },
+		{ status: 429, type: UnavailableError },
+		{ status: 503, type: UnavailableError },
+	])('maps HTTP $status to a domain error', async ({ status, type }) => {
+		const client = new GitLabClient(
+			{ token: 'secret' },
+			{
+				fetcher: async () => new Response(null, { status, headers: { 'retry-after': '7' } }),
+			},
+		);
+		const error = await client.json(repo, '/repository/tree').catch((error: unknown) => error);
+		expect(error).toBeInstanceOf(type);
+		if (status === 429) expect(error).toMatchObject({ retryAfterSeconds: 7 });
+	});
 	it('sanitizes body-stream failures while preserving their cause', async () => {
 		const cause = new Error('secret transport details');
 		const client = new GitLabClient(
@@ -200,65 +216,5 @@ describe('GitLab request failures', () => {
 			{ fetcher: async () => Response.json(value) },
 		);
 		await expect(list(client, repo, '/repository/tree', {})).rejects.toThrow('Invalid GitLab list');
-	});
-});
-
-describe('GitLab Git transport deadlines', () => {
-	it('allows transfer bodies past the header deadline and preserves caller cancellation', async () => {
-		vi.useFakeTimers();
-		const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((delay) => {
-			const controller = new AbortController();
-			setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), delay);
-			return controller.signal;
-		});
-		const caller = new AbortController();
-		let transportSignal: AbortSignal | undefined;
-		const client = new GitLabClient(
-			{ token: 'secret' },
-			{
-				fetcher: async (_url, init) => {
-					transportSignal = init?.signal ?? undefined;
-					return new Response(
-						new ReadableStream({
-							start(controller) {
-								transportSignal?.addEventListener('abort', () =>
-									controller.error(transportSignal?.reason),
-								);
-							},
-						}),
-					);
-				},
-			},
-		);
-		try {
-			const response = await client.gitFetch(repo)(`${repo.remoteUrl}/git-upload-pack`, {
-				signal: caller.signal,
-			});
-			await vi.advanceTimersByTimeAsync(60_001);
-			expect(transportSignal?.aborted).toBe(false);
-			const reason = new Error('Canceled transfer');
-			const body = response.arrayBuffer();
-			caller.abort(reason);
-			await expect(body).rejects.toBe(reason);
-		} finally {
-			timeout.mockRestore();
-			vi.useRealTimers();
-		}
-	});
-	it('still times out waiting for Git response headers', async () => {
-		vi.useFakeTimers();
-		const client = new GitLabClient(
-			{ token: 'secret' },
-			{ fetcher: () => new Promise<Response>(() => {}) },
-		);
-		try {
-			const pending = expect(
-				client.gitFetch(repo)(`${repo.remoteUrl}/git-upload-pack`),
-			).rejects.toThrow('GitLab is unavailable');
-			await vi.advanceTimersByTimeAsync(60_001);
-			await pending;
-		} finally {
-			vi.useRealTimers();
-		}
 	});
 });

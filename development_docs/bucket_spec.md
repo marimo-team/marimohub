@@ -933,6 +933,9 @@ status. See
   scheduler enumerates scheduled jobs from two GETs instead of scanning
   `projects/**`. The timestamp prevents delayed updates from replacing newer
   index entries. `job.json` stays authoritative for the full definition.
+  The only other writer of this index is offline catalog recovery
+  (`CatalogService.recover`, with writers stopped), which rebuilds it from the
+  surviving `job.json` heads.
 - `job-index/{created_at}_{job-id}.json` — empty, create-if-absent entries for
   oldest-first API pagination without materializing every definition.
 - `run.json` — an operational record like a session (§4.8): every status

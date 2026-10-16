@@ -204,7 +204,8 @@ describe('Session provisioning with integrations', () => {
 				expect(env).not.toHaveProperty('AWS_CONTAINER_CREDENTIALS_FULL_URI');
 				expect(env).not.toHaveProperty('AWS_CONTAINER_AUTHORIZATION_TOKEN');
 			}
-			expect(exchange).toHaveBeenCalledTimes(delivery === 'env' ? 1 : 0);
+			// Endpoint mode primes the credential cache at launch, so every successful mint exchanges once.
+			expect(exchange).toHaveBeenCalledTimes(delivery === 'env' || delivery === 'endpoint' ? 1 : 0);
 		},
 	);
 

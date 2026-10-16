@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
-	AZURE_DEVOPS_ORGANIZATION_PATTERN,
+	azureDevOpsRepository,
+	gitHubRepository,
 	gitLabRepositoryUrl,
 	detectProvider,
 	isGitProvider,
@@ -23,11 +24,6 @@ export interface GitSourceCoords {
 	commit: string | null;
 }
 
-// Pull support is narrower than the generic source shape. Keep these rules in
-// sync with source-control-github's parseRepository boundary.
-const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
-const GITHUB_REPO_PATTERN = /^(?!\.+$)[A-Za-z0-9_.-]{1,100}$/;
-
 /**
  * Percent-encode each segment while keeping `/` separators — branches and
  * file paths may carry URL-reserved characters (`#`, `?`, spaces, …) that
@@ -42,7 +38,7 @@ function parseStoredRepo(
 	claim: unknown,
 ): { baseUrl: string; provider: GitProvider | null } | null {
 	// Old records may carry a `.git` suffix the server now strips on write.
-	const bare = repo.replace(/\.git$/, '');
+	const bare = repo.replace(/\.git$/i, '');
 	if (OWNER_REPO_PATTERN.test(bare)) {
 		return { baseUrl: `https://github.com/${encodePath(bare)}`, provider: 'github' };
 	}
@@ -143,26 +139,7 @@ export const REPO_INPUT_HINT =
 	'Use owner/repo or a repository URL, e.g. acme/analytics or https://gitlab.example.com/group/project';
 
 export function isGitHubRepoInput(input: string): boolean {
-	let path = input.trim();
-	if (/^github\.com\//i.test(path)) path = `https://${path}`;
-	if (/^https:\/\//i.test(path)) {
-		let url: URL;
-		try {
-			url = new URL(path);
-		} catch {
-			return false;
-		}
-		if (url.username || url.password || url.search || url.hash) {
-			return false;
-		}
-		path = url.pathname.replaceAll(/^\/+|\/+$/g, '');
-	}
-	const parts = path.replace(/\.git$/, '').split('/');
-	return (
-		parts.length === 2 &&
-		GITHUB_OWNER_PATTERN.test(parts[0] ?? '') &&
-		GITHUB_REPO_PATTERN.test(parts[1] ?? '')
-	);
+	return gitHubRepository(input) !== null;
 }
 
 export const GITHUB_REPO_INPUT_HINT =
@@ -210,31 +187,7 @@ export function rootPathText() {
 }
 
 export function isAzureDevOpsRepoInput(input: string): boolean {
-	try {
-		const url = new URL(input.trim());
-		const parts = url.pathname.replace(/\/$/, '').split('/').slice(1);
-		return (
-			url.origin === 'https://dev.azure.com' &&
-			!url.username &&
-			!url.password &&
-			!url.search &&
-			!url.hash &&
-			parts.length === 4 &&
-			parts[2] === '_git' &&
-			AZURE_DEVOPS_ORGANIZATION_PATTERN.test(decodeURIComponent(parts[0] ?? '')) &&
-			parts.every((part) => {
-				const value = decodeURIComponent(part);
-				return (
-					value !== '' &&
-					value !== '.' &&
-					value !== '..' &&
-					!(hasAsciiControlCharacter(value) || /[/\\]/.test(value))
-				);
-			})
-		);
-	} catch {
-		return false;
-	}
+	return azureDevOpsRepository(input) !== null;
 }
 
 interface PullInput {

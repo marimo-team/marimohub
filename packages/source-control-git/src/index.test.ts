@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readdir, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -22,74 +21,14 @@ import { MAX_WORKSPACE_FILE_BYTES } from '@marimo-hub/core/constants';
 import type { GitFetch } from './index';
 import { collectGitDirectoryFiles, GitFetchByteLimit, materializeGitDirectory } from './index';
 import { pushGitTree } from './publish';
+import { git, uploadPackFetcher } from './testing/fakeGitServer';
 
 const temporaryDirectories: string[] = [];
-
-function git(cwd: string, args: string[], input?: string | Uint8Array): string {
-	return execFileSync('git', args, {
-		cwd,
-		input,
-		encoding: 'utf8',
-		env: {
-			...process.env,
-			GIT_AUTHOR_NAME: 'Test Author',
-			GIT_AUTHOR_EMAIL: 'author@example.com',
-			GIT_COMMITTER_NAME: 'Test Committer',
-			GIT_COMMITTER_EMAIL: 'committer@example.com',
-		},
-	}).trim();
-}
 
 async function temporaryDirectory(prefix: string): Promise<string> {
 	const directory = await mkdtemp(join(tmpdir(), prefix));
 	temporaryDirectories.push(directory);
 	return directory;
-}
-
-function packetLine(text: string): Uint8Array<ArrayBuffer> {
-	return new TextEncoder().encode(
-		`${(Buffer.byteLength(text) + 4).toString(16).padStart(4, '0')}${text}`,
-	);
-}
-
-function concat(...parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
-	const result = new Uint8Array(parts.reduce((sum, part) => sum + part.byteLength, 0));
-	let offset = 0;
-	for (const part of parts) {
-		result.set(part, offset);
-		offset += part.byteLength;
-	}
-	return result;
-}
-
-function uploadPackFetcher(repository: string): GitFetch {
-	return async (url, init) => {
-		if (url.includes('/info/refs')) {
-			const advertised = execFileSync('git', [
-				'upload-pack',
-				'--stateless-rpc',
-				'--advertise-refs',
-				repository,
-			]);
-			const body = concat(
-				packetLine('# service=git-upload-pack\n'),
-				new TextEncoder().encode('0000'),
-				new Uint8Array(advertised),
-			);
-			return new Response(body.buffer, {
-				headers: { 'content-type': 'application/x-git-upload-pack-advertisement' },
-			});
-		}
-		const request = init?.body
-			? new Uint8Array(await new Response(init.body).arrayBuffer())
-			: undefined;
-		const result = execFileSync('git', ['upload-pack', '--stateless-rpc', repository], {
-			input: request,
-		});
-		return new Response(new Uint8Array(result), {
-			headers: { 'content-type': 'application/x-git-upload-pack-result' },
-		});
-	};
 }
 
 afterEach(async () => {
@@ -99,6 +38,14 @@ afterEach(async () => {
 			.map((directory) => rm(directory, { recursive: true, force: true })),
 	);
 });
+
+const fetchOptions = {
+	repository: 'owner/repo',
+	remoteUrl: 'https://gitlab.com/owner/repo.git',
+	commit: 'a'.repeat(40),
+	branch: 'main',
+	authorization: 'Bearer token',
+};
 
 const ORIGINS = [
 	'https://github.com',
@@ -112,24 +59,42 @@ describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 		new ConflictError('GitLab rejected the request'),
 		new ForbiddenError('GitLab access was denied'),
 		new NotFoundError('GitLab object was not found'),
-	])('classifies provider fetch failures as unavailable: %s', async (cause) => {
-		Object.assign(cause, { providerStatus: 409 });
+	])('passes provider domain errors through: %s', async (cause) => {
 		const error = await materializeGitDirectory({
-			repository: 'owner/repo',
-			remoteUrl: 'https://gitlab.com/owner/repo.git',
-			commit: 'a'.repeat(40),
-			branch: 'main',
-			authorization: 'Bearer token',
+			...fetchOptions,
+			fetcher: async () => {
+				throw cause;
+			},
+		}).catch((error: unknown) => error);
+		expect(error).toBe(cause);
+	});
+
+	it.each([
+		{ status: 401, type: ForbiddenError },
+		{ status: 403, type: ForbiddenError },
+		{ status: 404, type: NotFoundError },
+		{ status: 409, type: UnavailableError },
+		{ status: 500, type: UnavailableError },
+	])('classifies Git HTTP $status responses', async ({ status, type }) => {
+		const error = await materializeGitDirectory({
+			...fetchOptions,
+			fetcher: async () => new Response('private upstream details', { status }),
+		}).catch((error: unknown) => error);
+		expect(error).toBeInstanceOf(type);
+		expect(error).toMatchObject({ providerStatus: status });
+		expect(String(error)).not.toContain('private upstream details');
+	});
+
+	it('wraps transport failures as unavailable without exposing them', async () => {
+		const cause = new Error('secret socket details');
+		const error = await materializeGitDirectory({
+			...fetchOptions,
 			fetcher: async () => {
 				throw cause;
 			},
 		}).catch((error: unknown) => error);
 		expect(error).toBeInstanceOf(UnavailableError);
-		expect(error).toMatchObject({
-			message: 'Git data could not be fetched',
-			cause,
-			providerStatus: 409,
-		});
+		expect(error).toMatchObject({ message: 'Git data could not be fetched', cause });
 	});
 
 	it('caps the combined bytes from all smart-HTTP responses', () => {
@@ -168,6 +133,8 @@ describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 			authorization: 'Bearer installation-secret',
 			fetcher: async (url, init) => {
 				expect(url.startsWith(`${origin}/owner/repo.git/`)).toBe(true);
+				expect(init?.redirect).toBe('error');
+				expect(init?.signal).toBeInstanceOf(AbortSignal);
 				return uploadPackFetcher(source)(url, init);
 			},
 		});
@@ -377,6 +344,72 @@ describe('materializeGitDirectory', { timeout: 15_000 }, () => {
 		await expect(collectGitDirectoryFiles(gitdir, 'owner/expanded')).rejects.toThrow(
 			`${MAX_GIT_DIRECTORY_BYTES}-byte limit`,
 		);
+	});
+
+	describe('crafted unsafe trees', () => {
+		function treeObject(entries: { mode: string; name: string; oid: string }[]): Buffer {
+			return Buffer.concat(
+				entries.map(({ mode, name, oid }) =>
+					Buffer.concat([Buffer.from(`${mode} ${name}\0`), Buffer.from(oid, 'hex')]),
+				),
+			);
+		}
+		async function craftedCommit(name: string): Promise<{ source: string; commit: string }> {
+			const source = await temporaryDirectory('marimohub-git-unsafe-tree-');
+			git(source, ['init', '-b', 'main']);
+			const blob = git(source, ['hash-object', '-w', '--stdin'], '[core]\n\tfsmonitor = evil\n');
+			const inner = git(
+				source,
+				['hash-object', '-t', 'tree', '--literally', '-w', '--stdin'],
+				treeObject([{ mode: '100644', name: name === '..' ? 'x' : 'config', oid: blob }]),
+			);
+			const root = git(
+				source,
+				['hash-object', '-t', 'tree', '--literally', '-w', '--stdin'],
+				treeObject([{ mode: '40000', name, oid: inner }]),
+			);
+			const commit = git(source, ['commit-tree', root, '-m', 'Unsafe tree']);
+			git(source, ['update-ref', 'refs/heads/main', commit]);
+			return { source, commit };
+		}
+
+		it.each(['.git', '.GIT', 'git~1', '..'])(
+			'rejects a tree entry named %s before checkout',
+			async (name) => {
+				const { source, commit } = await craftedCommit(name);
+				const checkout = vi.spyOn(isomorphicGit, 'checkout');
+				try {
+					await expect(
+						materializeGitDirectory({
+							...fetchOptions,
+							commit,
+							fetcher: uploadPackFetcher(source),
+						}),
+					).rejects.toThrow(new BadRequestError('Git tree contains an unsafe path'));
+					expect(checkout).not.toHaveBeenCalled();
+				} finally {
+					checkout.mockRestore();
+				}
+			},
+		);
+
+		it('rejects unsafe names even if isomorphic-git stops rejecting them', async () => {
+			const { source, commit } = await craftedCommit('.git');
+			const readTree = vi.spyOn(isomorphicGit, 'readTree').mockResolvedValue({
+				oid: 'b'.repeat(40),
+				tree: [{ mode: '040000', path: '.git', oid: 'c'.repeat(40), type: 'tree' }],
+			});
+			const checkout = vi.spyOn(isomorphicGit, 'checkout');
+			try {
+				await expect(
+					materializeGitDirectory({ ...fetchOptions, commit, fetcher: uploadPackFetcher(source) }),
+				).rejects.toThrow('Git tree contains an unsafe path');
+				expect(checkout).not.toHaveBeenCalled();
+			} finally {
+				readTree.mockRestore();
+				checkout.mockRestore();
+			}
+		});
 	});
 
 	it('preserves a symlink index entry when the workspace omits the symlink', async () => {

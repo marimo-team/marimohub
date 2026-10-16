@@ -27,6 +27,33 @@ describe('Azure source control configuration', () => {
 	])('rejects incomplete or invalid configuration', (env) => {
 		expect(() => makeSourceControl(env)).toThrow('MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_');
 	});
+	it('names the first missing service principal variable', () => {
+		expect(() =>
+			makeSourceControl({
+				...organization,
+				MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_TENANT_ID: 'tenant',
+				MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_SECRET: 'secret',
+			}),
+		).toThrow(
+			expect.objectContaining({
+				opts: { variable: 'MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_CLIENT_ID' },
+			}),
+		);
+	});
+	it('matches policies case-insensitively and accepts portal clone URLs', () => {
+		const project = ProjectId.create();
+		const registry = makeSourceControl({
+			...organization,
+			MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ALLOWED_REPOSITORIES: JSON.stringify([
+				{ resource: 'https://dev.azure.com/ACME/Analytics/_git/Notebooks', projects: [project] },
+			]),
+		}).sourceControl!;
+		const reader = registry.getReader('azure-devops', project)!;
+		expect(reader.supportsRepository(repo)).toBe(true);
+		expect(
+			reader.supportsRepository('https://acme@dev.azure.com/acme/analytics/_git/notebooks'),
+		).toBe(true);
+	});
 	it('checks project policies for both readers and publishers', async () => {
 		const project = ProjectId.create();
 		const registry = makeSourceControl({

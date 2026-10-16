@@ -192,7 +192,12 @@ describe('ensureInitialized', () => {
 		await bucket.delete(paths.catalog);
 		advanceTime(30_000);
 		const put = vi.spyOn(bucket, 'put');
-		await expect(ensureInitialized(bucket, ACTOR)).rejects.toThrow('Catalog recovery required');
+		const result = expect(ensureInitialized(bucket, ACTOR)).rejects.toThrow(
+			'Catalog recovery required',
+		);
+		// Initialization rechecks the pointer after a short delay before refusing.
+		await vi.runAllTimersAsync();
+		await result;
 		expect(put).not.toHaveBeenCalled();
 	});
 

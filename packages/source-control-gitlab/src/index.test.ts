@@ -5,6 +5,7 @@ import {
 	ConflictError,
 	NotFoundError,
 	ProposalRetryRequiredError,
+	UnavailableError,
 } from '@marimo-hub/core/errors';
 import { sourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import type { OpenChangeRequestInput } from '@marimo-hub/core/ports/source-control';
@@ -52,6 +53,24 @@ describe('GitLab reader', { timeout: 30_000 }, () => {
 		).toEqual(['README.md', 'apps/main.py']);
 		for (const [, init] of fake.fetcher.mock.calls) expect(init?.redirect).toBe('error');
 	});
+	it('rejects a Git redirect instead of following it', async () => {
+		const { fake, adapter } = await setup();
+		const real = fake.fetcher.getMockImplementation()!;
+		fake.fetcher.mockImplementation((url, init) =>
+			url.includes('.git/info/refs')
+				? Promise.resolve(
+						new Response(null, {
+							status: 301,
+							headers: { location: 'https://gitlab.com/team/moved.git/info/refs' },
+						}),
+					)
+				: real(url, init),
+		);
+		await expect(adapter.fetchGitDirectory(repository, fake.base, 'main')).rejects.toBeInstanceOf(
+			UnavailableError,
+		);
+		expect(fake.fetcher.mock.calls.filter(([url]) => url.includes('/moved.git'))).toHaveLength(0);
+	});
 	it('materializes a pinned Git directory without credentials', async () => {
 		const { fake, adapter } = await setup();
 		const files = await adapter.fetchGitDirectory(repository, fake.base.toUpperCase(), 'main');
@@ -76,13 +95,13 @@ describe('GitLab reader', { timeout: 30_000 }, () => {
 			path: '../escape',
 			mode: '100644',
 			type: 'blob',
-			error: 'Unsafe or duplicate GitLab tree path',
+			error: 'Unsafe GitLab tree path',
 		},
 		{
 			path: '.git/config',
 			mode: '100644',
 			type: 'blob',
-			error: 'Unsafe or duplicate GitLab tree path',
+			error: 'Unsafe GitLab tree path',
 		},
 		{ path: 'apps/main.py', mode: '999999', type: 'blob', error: 'Invalid GitLab tree entry' },
 		{ path: 'apps/main.py', mode: '100644', type: 'tree', error: 'Invalid GitLab tree entry' },
@@ -303,6 +322,24 @@ describe('GitLab publisher', { timeout: 30_000 }, () => {
 			expect(fake.merges).toHaveLength(first ? 1 : 0);
 		},
 	);
+	it('accepts a canonical-case merge request URL for a mixed-case repository URL', async () => {
+		const { fake, adapter, input } = await setup();
+		const mixed = 'https://gitlab.com/Team/SubGroup/Notebooks';
+		const result = await adapter.openChangeRequest({ ...input, repository: mixed });
+		expect(fake.merges[0].web_url).toBe(`${repository}/-/merge_requests/1`);
+		expect(result.url).toBe(`${mixed}/-/merge_requests/1`);
+		const updated = await adapter.updateChangeRequest({
+			...input,
+			repository: mixed,
+			title: 'Retitled',
+			changeRequest: result,
+		});
+		expect(updated.number).toBe(1);
+		fake.merges[0].web_url = 'https://gitlab.com/team/other/-/merge_requests/1';
+		await expect(
+			adapter.updateChangeRequest({ ...input, repository: mixed, changeRequest: result }),
+		).rejects.toThrow('different merge request');
+	});
 	it('rejects closed or foreign merge requests before pushing', async () => {
 		const { fake, adapter, input } = await setup();
 		const first = await adapter.openChangeRequest(input);

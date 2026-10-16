@@ -125,7 +125,11 @@ export type {
 } from './notifications/ProjectAlertStore';
 export { AesGcmSecretCodec } from './secrets/AesGcmSecretCodec';
 export type { AesGcmSecretCodecOptions } from './secrets/AesGcmSecretCodec';
-export { assertValidEnvironmentName } from './integrations/environmentName';
+export {
+	assertValidEnvironmentName,
+	AWS_CONTAINER_CREDENTIAL_ENV,
+	STATIC_AWS_CREDENTIAL_ENV,
+} from './integrations/environmentName';
 export {
 	MAX_INTEGRATIONS_PER_SCOPE,
 	OrgIntegrationsStore,
@@ -388,7 +392,7 @@ export type {
 } from './runtime/preflight';
 export { WorkloadIdentityIssuer } from './identity/WorkloadIdentityIssuer';
 export type { WifClaims, JwksKey } from './identity/WorkloadIdentityIssuer';
-export { s3CredsToEnv } from './identity/s3CredsEnv';
+export { s3CredsToEnv, s3TargetEnv } from './identity/s3CredsEnv';
 export {
 	containerCredentialsEnv,
 	validateWifCredentialsUrl,
@@ -396,8 +400,12 @@ export {
 	mintWifCredentialsToken,
 	toContainerCredentialsResponse,
 	verifyWifCredentialsToken,
+	wifCredentialsSubject,
 } from './identity/containerCredentials';
-export type { WifCredentialsTokenClaims } from './identity/containerCredentials';
+export type {
+	WifCredentialsSubject,
+	WifCredentialsTokenClaims,
+} from './identity/containerCredentials';
 export {
 	exchangeFederatedStorageCredentials,
 	exchangeFederatedStorageEnv,

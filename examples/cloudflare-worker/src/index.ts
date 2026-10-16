@@ -273,7 +273,7 @@ export default {
 				// Reconcile still reclaims terminal sessions from their records. The Cloudflare
 				// adapter omits listActive() and connectExisting(), so orphan reaping is skipped
 				// and sessions that may need a save wait for an admin discard.
-				await new ReconciliationService(
+				const reconciler = new ReconciliationService(
 					sessions,
 					notebooks,
 					compute,
@@ -282,7 +282,10 @@ export default {
 					undefined,
 					jobRuns,
 					{ automaticThumbnails: env.MARIMOHUB_AUTOMATIC_THUMBNAILS !== 'false' },
-				).reconcile();
+				);
+				await reconciler.reconcile();
+				// Reclaims that outlive their deadline keep running; keep the isolate alive for them.
+				ctx.waitUntil(reconciler.drain());
 				await sessions.reapTerminated();
 				await maintenance.expireSnapshots();
 				await maintenance.pruneEvents();

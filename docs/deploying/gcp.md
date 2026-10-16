@@ -32,6 +32,8 @@ Keep one maintenance process active on GKE or a VM. Alternatively, configure a d
 
 Set `MARIMOHUB_RUN_MAINTENANCE=true` on the dedicated maintenance service. Keep it `false` on the API service. Instance counts and CPU allocation do not enable the maintenance loop.
 
+Cloud Run stops an instance 10 seconds after SIGTERM, and this window cannot be changed. The default maintenance drain budget is 120 seconds. On a Cloud Run maintenance service, set `MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` to 10 or less and expect long work to be cut off on shutdown. To drain fully, run maintenance on GKE or a VM. See [Shutdown budgets](../operations.md#shutdown-budgets).
+
 marimohub has no built-in Cloud Scheduler endpoint for maintenance. A scheduled HTTP request does not replace the maintenance loop or job scheduler.
 
 ## Storage

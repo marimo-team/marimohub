@@ -1,7 +1,10 @@
-import { UnavailableError } from '@marimo-hub/core';
+import { BoundedLruMap, UnavailableError } from '@marimo-hub/core';
 import type { TempS3Creds } from '@marimo-hub/core';
+import type { WifConfig } from './context';
 
 const REFRESH_MARGIN_MS = 20 * 60_000;
+export const WIF_ELIGIBILITY_TTL_MS = 10_000;
+const DEFAULT_MAX_ENTRIES = 10_000;
 
 type DatedCreds = TempS3Creds & { expiration: string };
 
@@ -11,21 +14,39 @@ interface CacheEntry {
 }
 
 export class WifCredentialCache {
-	private readonly entries = new Map<string, CacheEntry>();
+	private readonly entries: BoundedLruMap<string, CacheEntry>;
+	private readonly eligibleUntil: BoundedLruMap<string, number>;
 
-	constructor(private readonly now: () => number = () => Date.now()) {}
+	constructor(
+		private readonly now: () => number = () => Date.now(),
+		maxEntries = DEFAULT_MAX_ENTRIES,
+	) {
+		this.entries = new BoundedLruMap(maxEntries);
+		this.eligibleUntil = new BoundedLruMap(maxEntries);
+	}
 
+	/** Forgets both the credentials and the eligibility verdict. */
 	delete(key: string): void {
 		this.entries.delete(key);
+		this.eligibleUntil.delete(key);
+	}
+
+	isEligible(key: string): boolean {
+		const until = this.eligibleUntil.get(key);
+		if (until === undefined) return false;
+		if (until > this.now()) return true;
+		this.eligibleUntil.delete(key);
+		return false;
+	}
+
+	/** Remembers an allow verdict for at most the TTL, or until `deadline` if sooner. */
+	markEligible(key: string, deadline = Infinity): void {
+		this.eligibleUntil.set(key, Math.min(this.now() + WIF_ELIGIBILITY_TTL_MS, deadline));
 	}
 
 	get(key: string, exchange: () => Promise<TempS3Creds>): Promise<DatedCreds> {
-		const now = this.now();
 		const hit = this.entries.get(key);
-		if (hit && hit.reuseUntil > now) return hit.creds;
-		for (const [id, entry] of this.entries) {
-			if (entry.reuseUntil <= now) this.entries.delete(id);
-		}
+		if (hit && hit.reuseUntil > this.now()) return hit.creds;
 		const entry: CacheEntry = {
 			// Pending exchanges coalesce even if the broker is slow.
 			reuseUntil: Infinity,
@@ -45,9 +66,22 @@ export class WifCredentialCache {
 				}),
 		};
 		entry.creds.catch(() => {
-			if (this.entries.get(key) === entry) this.entries.delete(key);
+			if (this.entries.peek(key) === entry) this.entries.delete(key);
 		});
 		this.entries.set(key, entry);
 		return entry.creds;
 	}
+}
+
+// Keyed by the config object so every createApi() over the same deps (and the
+// session launch path that primes it) shares one cache.
+const caches = new WeakMap<WifConfig, WifCredentialCache>();
+
+export function wifCredentialCacheFor(wif: WifConfig): WifCredentialCache {
+	let cache = caches.get(wif);
+	if (!cache) {
+		cache = new WifCredentialCache();
+		caches.set(wif, cache);
+	}
+	return cache;
 }
