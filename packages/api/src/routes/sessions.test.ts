@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Mock } from 'vitest';
 import {
 	BadRequestError,
+	UnavailableError,
+	mintWifCredentialsToken,
+	createSessionId,
 	AppPoolService,
 	ConflictError,
 	NotFoundError,
@@ -4386,6 +4389,92 @@ describe('Session routes', () => {
 				await expectOk<ApiSession>(await request('POST', sessionsPath()));
 				expect((await fetchCreds('')).status).toBe(401);
 				expect((await fetchCreds('a.b.c')).status).toBe(401);
+			});
+
+			it.each([false, true])(
+				'returns 404 when endpoint delivery is disabled (WIF configured: %s)',
+				async (configured) => {
+					const { app } = createTestApi({
+						bucket,
+						deps: { wif: configured ? makeTestWif() : undefined },
+					});
+					await expectError(await app.request('/api/wif/v1/credentials'), 404, 'NOT_FOUND');
+				},
+			);
+
+			it.each([{ projectId: 'invalid' }, { sessionId: 'invalid' }, { userId: '' }])(
+				'rejects signed tokens with invalid identifiers: %j',
+				async (overrides) => {
+					await enableFederation();
+					const { request, fetchCreds, exchange, deps } = endpointApi();
+					const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+					const token = await mintWifCredentialsToken(deps.wif!.credentialsEndpoint!.keyMaterial, {
+						projectId: pid,
+						sessionId: session.session_id,
+						userId: ACTOR,
+						...overrides,
+					});
+					await expectError(await fetchCreds(token), 401, 'UNAUTHORIZED');
+					expect(exchange).not.toHaveBeenCalled();
+				},
+			);
+
+			it('rejects a valid token bound to a different owner', async () => {
+				await enableFederation();
+				const { request, fetchCreds, exchange, deps } = endpointApi();
+				const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				const token = await mintWifCredentialsToken(deps.wif!.credentialsEndpoint!.keyMaterial, {
+					projectId: pid,
+					sessionId: session.session_id,
+					userId: STRANGER,
+				});
+				await expectError(await fetchCreds(token), 403, 'FORBIDDEN');
+				expect(exchange).not.toHaveBeenCalled();
+			});
+
+			it('rejects a valid token for a missing session', async () => {
+				await enableFederation();
+				const { request, fetchCreds, exchange, deps } = endpointApi();
+				await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				const token = await mintWifCredentialsToken(deps.wif!.credentialsEndpoint!.keyMaterial, {
+					projectId: pid,
+					sessionId: createSessionId(),
+					userId: ACTOR,
+				});
+				await expectError(await fetchCreds(token), 403, 'FORBIDDEN');
+				expect(exchange).not.toHaveBeenCalled();
+			});
+
+			it.each(['session', 'identity', 'project'] as const)(
+				'fails closed when the %s read fails despite cached credentials',
+				async (source) => {
+					await enableFederation();
+					const { request, fetchCreds, exchange, deps } = endpointApi();
+					await expectOk<ApiSession>(await request('POST', sessionsPath()));
+					expect((await fetchCreds()).status).toBe(200);
+					const error = new UnavailableError('storage unavailable');
+					if (source === 'session')
+						vi.spyOn(deps.services.sessions, 'getSession').mockRejectedValueOnce(error);
+					if (source === 'identity')
+						vi.spyOn(deps.services.identities, 'isSuspended').mockRejectedValueOnce(error);
+					if (source === 'project')
+						vi.spyOn(deps.services.projects, 'getProject').mockRejectedValueOnce(error);
+					await expectError(await fetchCreds(), 503, 'SERVICE_UNAVAILABLE');
+					expect(exchange).toHaveBeenCalledOnce();
+					expect((await fetchCreds()).status).toBe(200);
+				},
+			);
+
+			it('exchanges fresh credentials after suspension is lifted', async () => {
+				await enableFederation();
+				const { request, fetchCreds, exchange, deps } = endpointApi();
+				await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				expect((await fetchCreds()).status).toBe(200);
+				await deps.services.identities.setSuspension(ACTOR, true);
+				await expectError(await fetchCreds(), 403, 'FORBIDDEN');
+				await deps.services.identities.setSuspension(ACTOR, false);
+				expect((await fetchCreds()).status).toBe(200);
+				expect(exchange).toHaveBeenCalledTimes(2);
 			});
 
 			it('stops serving once the session ends', async () => {

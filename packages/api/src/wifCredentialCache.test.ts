@@ -100,6 +100,56 @@ describe('WifCredentialCache', () => {
 		expect(exchange).toHaveBeenCalledOnce();
 	});
 
+	it('shares an exchange failure with concurrent callers and retries afterward', async () => {
+		const { cache, exchange } = fixture();
+		const pending = Promise.withResolvers<TempS3Creds>();
+		const run = vi.fn(() => pending.promise);
+		const results = Promise.allSettled([cache.get('session', run), cache.get('session', run)]);
+		const error = new Error('broker unavailable');
+		pending.reject(error);
+		expect(await results).toEqual([
+			{ status: 'rejected', reason: error },
+			{ status: 'rejected', reason: error },
+		]);
+		expect(run).toHaveBeenCalledOnce();
+		expect((await cache.get('session', exchange)).accessKeyId).toBe('AK1');
+	});
+
+	it('recovers from a synchronous broker error', async () => {
+		const { cache, exchange } = fixture();
+		await expect(
+			cache.get('session', () => {
+				throw new Error('broker failed');
+			}),
+		).rejects.toThrow('broker failed');
+		expect((await cache.get('session', exchange)).accessKeyId).toBe('AK1');
+	});
+
+	it('does not serve stale credentials after a refresh fails', async () => {
+		const { cache, exchange, advance } = fixture();
+		await cache.get('session', exchange);
+		advance(60 * MINUTE);
+		exchange.mockRejectedValueOnce(new Error('refresh failed'));
+		await expect(cache.get('session', exchange)).rejects.toThrow('refresh failed');
+		expect((await cache.get('session', exchange)).accessKeyId).toBe('AK3');
+	});
+
+	it('does not let a successful invalidated exchange replace newer credentials', async () => {
+		const { cache, exchange } = fixture();
+		const pending = Promise.withResolvers<TempS3Creds>();
+		const first = cache.get('session', () => pending.promise);
+		cache.delete('session');
+		const replacement = await cache.get('session', exchange);
+		pending.resolve({
+			accessKeyId: 'old',
+			secretAccessKey: 'SK',
+			expiration: replacement.expiration,
+		});
+		await first;
+		expect(await cache.get('session', exchange)).toEqual(replacement);
+		expect(exchange).toHaveBeenCalledOnce();
+	});
+
 	it('isolates sessions and evicts an explicitly invalidated entry', async () => {
 		const { cache, exchange } = fixture();
 		const first = await cache.get('one', exchange);

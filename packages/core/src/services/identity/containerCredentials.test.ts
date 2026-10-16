@@ -51,6 +51,30 @@ describe('WIF credentials token', () => {
 		expect(await verifyWifCredentialsToken('secret', token, () => Date.parse(deadline))).toBeNull();
 	});
 
+	it.each([60, 8 * 24 * 60 * 60])(
+		'uses the earlier of an explicit deadline and the seven-day limit (%s seconds)',
+		async (seconds) => {
+			const issued = Date.parse('2026-01-01T00:00:00Z');
+			const token = await mintWifCredentialsToken('secret', CLAIMS, {
+				now: () => issued,
+				expiresAt: new Date(issued + seconds * 1000).toISOString(),
+			});
+			const effective = issued + Math.min(seconds, 7 * 24 * 60 * 60) * 1000;
+			expect(await verifyWifCredentialsToken('secret', token, () => effective - 1)).toEqual(CLAIMS);
+			expect(await verifyWifCredentialsToken('secret', token, () => effective)).toBeNull();
+		},
+	);
+
+	it('rejects a token whose signed claims were altered', async () => {
+		const token = await mintWifCredentialsToken('secret', CLAIMS);
+		const other = await mintWifCredentialsToken('secret', { ...CLAIMS, userId: 'another-user' });
+		const [header, , signature] = token.split('.');
+		const [, payload] = other.split('.');
+		expect(
+			await verifyWifCredentialsToken('secret', `${header}.${payload}.${signature}`),
+		).toBeNull();
+	});
+
 	it('rejects an AI session token signed with the same secret', async () => {
 		const ai = await mintAiSessionToken('secret', { ...CLAIMS, notebookId: 'nb-0123456789abcdef' });
 		expect(await verifyWifCredentialsToken('secret', ai)).toBeNull();
