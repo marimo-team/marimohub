@@ -26,6 +26,10 @@ session edits to the provider without changing these stored versions.
 With the GitHub App configured, managers can also publish a branch or commit as a
 [notebook preview](notebook-previews.md) without changing the synced versions.
 
+GitHub, GitLab, and Azure DevOps Services support pull sources, **Sync now**, and draft change requests.
+Each provider uses separate server credentials and [repository policies](#repository-project-policies).
+A deployment can configure multiple providers.
+
 ## How it works
 
 ```
@@ -78,14 +82,14 @@ Content-Type: application/json
 }
 ```
 
-| Field            | Required | Notes                                                                                               |
-| ---------------- | -------- | --------------------------------------------------------------------------------------------------- |
-| `provider`       | no       | `github`, `gitlab`, or `azure-devops`. Usually derived from `repo`.                                 |
-| `repo`           | yes      | Repository URL or `owner/name`. Pull mode supports configured GitHub and Azure DevOps repositories. |
-| `branch`         | yes      | Branch this notebook tracks.                                                                        |
-| `root_path`      | no       | Repo subdirectory whose tree is mirrored. Defaults to the repo root (`""`).                         |
-| `entry_notebook` | yes      | The notebook to open (`.py`, `.md`, `.markdown`, or `.qmd`), **relative to `root_path`**.           |
-| `sync_mode`      | no       | `push` (default) or `pull`. Pull mode requires a configured provider.                               |
+| Field            | Required | Notes                                                                                                        |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------ |
+| `provider`       | no       | `github`, `gitlab`, or `azure-devops`. Usually derived from `repo`.                                          |
+| `repo`           | yes      | Repository URL or `owner/name`. Pull mode supports configured GitHub, GitLab, and Azure DevOps repositories. |
+| `branch`         | yes      | Branch this notebook tracks.                                                                                 |
+| `root_path`      | no       | Repo subdirectory whose tree is mirrored. Defaults to the repo root (`""`).                                  |
+| `entry_notebook` | yes      | The notebook to open (`.py`, `.md`, `.markdown`, or `.qmd`), **relative to `root_path`**.                    |
+| `sync_mode`      | no       | `push` (default) or `pull`. Pull mode requires a configured provider.                                        |
 
 `repo` accepts `owner/repo` or a repository URL. The shorthand refers to GitHub,
 unless `provider` is `gitlab`. GitLab URLs can contain nested groups, such as
@@ -133,7 +137,7 @@ Use pull mode when marimohub must sync the repository. Set `sync_mode` to
 ```
 
 The deployment must list the repository provider in `source_control.pull_source_providers`
-from `GET /api/v1/capabilities`. Configure a [GitHub App](configuration.md#github-app) or
+from `GET /api/v1/capabilities`. Configure a [GitHub App](configuration.md#github-app), [GitLab token](#gitlab), or
 [Azure DevOps identity](#azure-devops-services) first. The create request reads the branch head before
 it returns. On success, the response contains an active notebook without
 `sync_url` or `sync_token`.
@@ -161,13 +165,37 @@ exceeds this limit. The stored `.git` covers the whole repository, not only
 `root_path`. Large monorepos, the main use of `root_path`, can exceed this
 limit.
 
+## GitLab
+
+Use a full HTTPS URL, including any nested groups: `https://gitlab.com/group/subgroup/project`.
+
+1. Create a project, group, or personal access token with the `api` and `write_repository` scopes.
+   The token identity needs **Developer** access and permission to push proposal branches.
+2. Set the token and [repository policy](#repository-project-policies) on the Hub server:
+
+   ```bash
+   MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN=<access-token>
+   MARIMOHUB_SOURCE_CONTROL_GITLAB_ALLOWED_REPOSITORIES='[{"resource":"https://gitlab.com/team/notebooks","projects":["proj-0000000000000000"]}]'
+   ```
+
+3. For self-managed GitLab, set `MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL=https://code.example.com`.
+   The default is `https://gitlab.com`. The value accepts an HTTPS origin and optional port, without a URL path.
+   Repository URLs must use this origin.
+4. Restart Hub.
+5. Open **Add a git repository** and enter the repository URL, branch, folder, and notebook file.
+
+The server needs access to the GitLab API and HTTPS Git endpoints.
+For a private CA, set `NODE_EXTRA_CA_CERTS` before you start Node.
+
+GitLab publication downloads a shallow Git snapshot, so [pull limits](#pull-mode-connect-a-repository) apply to the whole repository.
+Webhooks and notebook previews are not supported. [CI uploads](#gitlab-ci-example) remain available.
+See GitLab's [access token scopes](https://docs.gitlab.com/security/tokens/access_token_scopes/).
+
 ## Azure DevOps Services
 
-Hosted Azure DevOps Services supports pull sources, **Sync now**, and draft PR creation and updates.
-GitHub and Azure DevOps can operate in the same deployment with separate credentials and repository policies.
-
 Use full HTTPS URLs: `https://dev.azure.com/organization/project/_git/repository`.
-Azure DevOps Server, `visualstudio.com` aliases, SSH URLs, PAT authentication, webhooks, and notebook previews are not supported.
+This adapter supports hosted Azure DevOps Services only.
+Azure DevOps Server, `visualstudio.com` aliases, SSH, PATs, webhooks, and notebook previews are not supported.
 
 1. Add a Microsoft Entra service principal or managed identity to your Azure DevOps organization.
 2. Grant repository **Read**, **Contribute**, **Create branch**, and **Contribute to pull requests** permissions.
@@ -192,7 +220,6 @@ Azure DevOps Server, `visualstudio.com` aliases, SSH URLs, PAT authentication, w
 6. Select the connection option and enter the repository URL, branch, folder, and notebook file.
 
 [Pull-mode behavior](#pull-mode-connect-a-repository) and [server-sync limits](#sync-now) apply to Azure DevOps.
-After a merge, **Sync now** imports the merged commit.
 
 See Microsoft's [identity setup guide](https://learn.microsoft.com/en-us/azure/devops/integrate/get-started/authentication/service-principal-managed-identity?view=azure-devops).
 
@@ -485,7 +512,9 @@ cannot start before the first successful sync (`400` otherwise).
 
 When [source-control publishing](configuration.md#source-control-publishing) is
 configured, a project manager can publish edits from a persistent editor
-session. GitHub and Azure DevOps create an immutable proposal and a draft pull request.
+session. Each publication stores an immutable proposal.
+The first publication opens a draft pull request (PR), or a draft merge request (MR) on GitLab.
+GitLab actions use **MR** in place of **PR** below.
 
 After the first publication, the editor shows **View PR** and two more actions:
 
@@ -495,9 +524,11 @@ After the first publication, the editor shows **View PR** and two more actions:
 - **Create new PR** opens another pull request and replaces the displayed link.
   The previous pull request remains on the provider.
 
-Azure updates restore files omitted from a new proposal to their original base contents.
-Updates fail if the proposal branch changes externally, disappears, or its PR closes.
-Azure updates cannot change Git file modes. Use **Create new PR** for those changes.
+Azure DevOps and GitLab updates restore omitted files from the original base commit.
+Updates stop if the proposal branch changes externally, disappears, or its change request closes.
+Retries recover completed pushes and change requests after lost responses.
+Azure DevOps rejects updates that need a Git file mode change. Use **Create new PR** for those proposals.
+After a merge, use **Sync now** to import the merged commit.
 
 The web interface uses this endpoint:
 
@@ -560,13 +591,14 @@ Each provider has an independent `ALLOWED_REPOSITORIES` policy for its shared cr
 | Provider     | Variable                                                     | Repository format                                                        |
 | ------------ | ------------------------------------------------------------ | ------------------------------------------------------------------------ |
 | GitHub       | `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES`       | `owner/repo` for github.com, or a full HTTPS URL for the configured host |
+| GitLab       | `MARIMOHUB_SOURCE_CONTROL_GITLAB_ALLOWED_REPOSITORIES`       | Full HTTPS URL on the configured host, including nested groups           |
 | Azure DevOps | `MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ALLOWED_REPOSITORIES` | Full `dev.azure.com` URL in the configured organization                  |
 
 ```json
 [{ "resource": "https://github.com/team/notebooks", "projects": ["proj-0000000000000000"] }]
 ```
 
-- `resource` matches a repository URL without case sensitivity. `"*"` permits any repository accessible to the provider identity.
+- `resource` matches a canonical repository URL. GitHub and Azure DevOps ignore path case; GitLab preserves it. `"*"` permits any repository accessible to the provider identity.
 - `projects` lists project IDs. `"*"` shares the repository across projects.
 - `[]` denies all access. An unset or blank policy permits shared access and emits a startup warning.
 - Invalid policies stop startup. Restart Hub to apply changes.

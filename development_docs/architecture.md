@@ -463,10 +463,24 @@ To add a bundled provider:
 The host matcher, configuration factory, and UI tables use exhaustive `Record<GitProvider, …>` mappings.
 A new provider ID produces type errors until each table handles it.
 Shared pull and publish flows need no provider-specific branches.
+
+`source-control-git` owns the reusable adapter helpers:
+
+| Export        | Shared behavior                                               |
+| ------------- | ------------------------------------------------------------- |
+| Root          | Bounded Git fetches and credential-free Git directories       |
+| `validation`  | Git branch and commit validation, proposal validation         |
+| `file-tree`   | Blob hashes, tree comparison, proposal changes                |
+| `workspace`   | Subtree selection and workspace file/byte limits              |
+| `http`        | Bounded response reads, cancellation, sanitized stream errors |
+| `publication` | Publication stage and HTTP status metadata                    |
+| `publish`     | Git commit creation and branch updates with an expected head  |
+
+Authentication, repository URLs, response schemas, pagination, and publication protocols stay in each adapter.
+GitHub uses repository archives for workspace reads. Azure DevOps and GitLab use the shared tree reader.
 Provider IDs on the ports remain strings so library consumers can register custom adapters.
 
-Repository URL resolution and authentication stay in adapters. Azure DevOps Server can later add
-collection-based URLs and credentials without changing the domain ports.
+Azure DevOps Server can later add collection-based URLs and credentials without changing the domain ports.
 
 ---
 

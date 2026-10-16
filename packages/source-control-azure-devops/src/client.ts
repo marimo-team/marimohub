@@ -1,3 +1,4 @@
+import { readResponseBytes } from '@marimo-hub/source-control-git/http';
 import { deadlineSignal, withAbortSignal } from '@marimo-hub/core/async';
 import { DefaultAzureCredential } from '@azure/identity';
 import {
@@ -26,44 +27,12 @@ export interface AzureDevOpsRuntime {
 }
 export const AZURE_DEVOPS_SCOPE = '499b84ac-1321-427f-aa17-267ca6975798/.default';
 
-export async function boundedBytes(
+export function boundedBytes(
 	response: Response,
 	limit: number,
 	signal?: AbortSignal | null,
 ): Promise<Uint8Array> {
-	const declared = Number(response.headers.get('content-length'));
-	if (Number.isFinite(declared) && declared > limit) {
-		await response.body?.cancel().catch(() => {});
-		throw new BadRequestError('Azure DevOps response exceeds the size limit');
-	}
-	if (!response.body) throw new UnavailableError('Azure DevOps returned an empty response');
-	const reader = response.body.getReader();
-	const chunks: Uint8Array[] = [];
-	let size = 0;
-	try {
-		for (;;) {
-			signal?.throwIfAborted();
-			const next = await reader.read();
-			signal?.throwIfAborted();
-			if (next.done) break;
-			size += next.value.byteLength;
-			if (size > limit) throw new BadRequestError('Azure DevOps response exceeds the size limit');
-			chunks.push(next.value);
-		}
-	} catch (error) {
-		signal?.throwIfAborted();
-		if (error instanceof BadRequestError) throw error;
-		throw new UnavailableError('Azure DevOps response could not be read');
-	} finally {
-		await reader.cancel().catch(() => {});
-	}
-	const result = new Uint8Array(size);
-	let offset = 0;
-	for (const chunk of chunks) {
-		result.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-	return result;
+	return readResponseBytes(response, limit, 'Azure DevOps', signal);
 }
 
 export function record(value: unknown): Record<string, unknown> {

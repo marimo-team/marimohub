@@ -1,3 +1,4 @@
+import { createPublishStage } from '@marimo-hub/source-control-git/publication';
 import { ConflictError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
 import { markSourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
 import type {
@@ -7,7 +8,6 @@ import type {
 	SourceBranchHead,
 	SourcePullRequest,
 	SourceControlPublisher,
-	SourceControlPublishStage,
 	SourceControlReader,
 	SourceWorkspaceFile,
 	UpdateChangeRequestInput,
@@ -47,18 +47,7 @@ export class GitHubAppPublisher implements SourceControlPublisher, SourceControl
 		this.fetcher = runtime.fetcher ?? fetch;
 	}
 
-	private async atStage<T>(stage: SourceControlPublishStage, action: () => Promise<T>): Promise<T> {
-		try {
-			return await action();
-		} catch (error) {
-			const status =
-				typeof (error as { providerStatus?: unknown })?.providerStatus === 'number'
-					? (error as { providerStatus: number }).providerStatus
-					: undefined;
-			throw markSourceControlPublishFailure(error, { provider: 'github', stage, status });
-		}
-	}
-
+	private readonly atStage = createPublishStage(this.provider);
 	private async publicationContext(owner: string, repo: string): Promise<GitHubPublicationContext> {
 		const token = await this.client.installationToken(owner, repo, 'write');
 		const repository = new GitHubRepositoryWriter(this.client, owner, repo, token);

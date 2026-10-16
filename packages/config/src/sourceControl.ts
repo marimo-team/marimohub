@@ -14,6 +14,11 @@ import {
 	validateOrganization,
 } from '@marimo-hub/source-control-azure-devops';
 import type { Env } from './env';
+import {
+	GitLabSourceControl,
+	gitLabOrigin,
+	parseGitLabRepository,
+} from '@marimo-hub/source-control-gitlab';
 import { ConfigError } from './errors';
 import { projectResourceRules } from './projectResourcePolicy';
 import { ConfiguredSourceControlRegistry } from './sourceControlRegistry';
@@ -139,9 +144,44 @@ function repositoryPolicy(
 	};
 }
 
+function makeGitLabSourceControl(env: Env): SourceControlRegistration | undefined {
+	const token = env.MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN?.trim();
+	const variable = 'MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL';
+	if (!token) {
+		if (env[variable]?.trim())
+			throw new ConfigError(
+				'MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN is required when a GitLab server is configured',
+			);
+		return undefined;
+	}
+	let origin: string;
+	try {
+		origin = gitLabOrigin(env[variable]?.trim() || undefined);
+	} catch {
+		throw new ConfigError(`${variable} must be an HTTPS origin without a path`, { variable });
+	}
+	let gitlab: GitLabSourceControl;
+	try {
+		gitlab = new GitLabSourceControl({ token, url: origin });
+	} catch {
+		throw new ConfigError('Invalid MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN');
+	}
+	return {
+		reader: gitlab,
+		publisher: gitlab,
+		repositoryHosts: { [new URL(origin).host]: gitlab.provider },
+		authorize: repositoryPolicy(
+			env,
+			'MARIMOHUB_SOURCE_CONTROL_GITLAB_ALLOWED_REPOSITORIES',
+			'GitLab',
+			(value) => parseGitLabRepository(value, origin).url,
+		),
+	};
+}
+
 const SOURCE_CONTROL_FACTORIES = {
 	github: makeGitHubSourceControl,
-	gitlab: null,
+	gitlab: makeGitLabSourceControl,
 	'azure-devops': makeAzureSourceControl,
 } satisfies Record<GitProvider, ((env: Env) => SourceControlRegistration | undefined) | null>;
 

@@ -512,7 +512,7 @@ Headless notebook runs on a cron schedule or on demand, with a durable run histo
 
 ## Source control publishing
 
-Connect to GitHub and Azure DevOps Services. Editors can create pull sources and use **Sync now**. Managers can publish session edits as draft PRs. Provider credentials stay on the server. See [Syncing from external sources](./syncing.md) for modes and limits.
+Connect to GitHub, GitLab, and Azure DevOps Services. Editors can create pull sources and use **Sync now**. Managers can publish session edits as draft change requests. Provider credentials stay on the server. See [Syncing from external sources](./syncing.md) for modes and limits.
 
 ### GitHub App
 
@@ -524,6 +524,16 @@ Create a GitHub App with Contents and Pull requests read/write permissions. Inst
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_ID` | Numeric app id from the GitHub App settings page. | — | — | `123456` |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_APP_PRIVATE_KEY` 🔒 | PKCS8 or PKCS1 PEM private key downloaded for the GitHub App, or its single-line base64 encoding. Held by the server and never injected into notebook sandboxes. | — | — | `-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----` |
 | `MARIMOHUB_SOURCE_CONTROL_GITHUB_ALLOWED_REPOSITORIES` | Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies) for syntax. | — | — | `[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]` |
+
+### GitLab
+
+Connect GitLab.com or a self-managed HTTPS origin. Use a project, group, or personal token with api and write_repository scopes and Developer access. See [GitLab setup](syncing.md#gitlab).
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN` 🔒 | Access token used for repository reads, Git pushes, and merge requests. Never injected into notebook sandboxes. | — | — | — |
+| `MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL` | HTTPS origin without a path. Repository URLs must use this origin. | — | `https://gitlab.com` | `https://git.acme.corp` |
+| `MARIMOHUB_SOURCE_CONTROL_GITLAB_ALLOWED_REPOSITORIES` | Optional JSON array of {resource, projects} rules using full repository URLs. Unset permits shared access. [] denies all. See [Repository project policies](syncing.md#repository-project-policies). | — | — | `[{"resource":"https://gitlab.com/team/notebooks","projects":"*"}]` |
 
 ### Azure DevOps Services
 

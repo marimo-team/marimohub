@@ -121,23 +121,41 @@ describe('Source drift and sync-now routes', () => {
 		return { request, services, reader, nid: created.notebook.id, repository };
 	}
 
-	it.each(['notebooks', 'notebooks.git'])(
-		'creates and syncs an Azure pull source %s without a provider hint',
-		async (name) => {
-			const repository = `https://dev.azure.com/acme/analytics/_git/${name}`;
+	it.each([
+		{ provider: 'azure-devops', repository: 'https://dev.azure.com/acme/analytics/_git/notebooks' },
+		{
+			provider: 'azure-devops',
+			repository: 'https://dev.azure.com/acme/analytics/_git/notebooks.git',
+		},
+		{ provider: 'gitlab', repository: 'https://gitlab.com/team/subgroup/notebooks' },
+		{ provider: 'gitlab', repository: 'https://code.example.com:8443/team/subgroup/notebooks' },
+	] as const)(
+		'creates and syncs a $provider pull source at $repository without a provider hint',
+		async ({ provider, repository }) => {
 			const reader = stubReader({
-				provider: 'azure-devops',
+				provider,
 				supportsRepository: (repo) => repo === repository,
 				getBranchHead: vi.fn(async () => ({ commit: HEAD })),
 				fetchGitDirectory: async () => [{ path: 'HEAD', bytes: encode('ref: refs/heads/main\n') }],
 			});
-			const { request } = api(reader);
+			const repositoryHosts = { [new URL(repository).host]: provider };
+			const services = createServices(bucket, undefined, { repositoryHosts });
+			const { request } = createTestApi({
+				bucket,
+				deps: {
+					services,
+					sourceControl: {
+						...stubSourceControl({ reader }),
+						repositoryHosts,
+					},
+				},
+			});
 			const created = await expectOk<{
 				notebook: { id: NotebookId };
 				sync_error?: unknown;
 			}>(
 				await request('POST', `/projects/${projectId}/notebooks/git`, {
-					title: 'Azure notebook',
+					title: 'Git notebook',
 					description: '',
 					repo: repository,
 					branch: 'main',
@@ -148,14 +166,14 @@ describe('Source drift and sync-now routes', () => {
 			);
 			expect(created.sync_error).toBeUndefined();
 			expect(
-				(await createServices(bucket).notebooks.getNotebook(projectId, created.notebook.id)).source,
-			).toMatchObject({ provider: 'azure-devops', repo: repository });
+				(await services.notebooks.getNotebook(projectId, created.notebook.id)).source,
+			).toMatchObject({ provider, repo: repository });
 			const nid = created.notebook.id;
 			vi.mocked(reader.getBranchHead).mockResolvedValue({ commit: 'b'.repeat(40) });
 			await expectOk(await request('POST', `/projects/${projectId}/notebooks/${nid}/source/sync`));
-			const notebook = await createServices(bucket).notebooks.getNotebook(projectId, nid);
+			const notebook = await services.notebooks.getNotebook(projectId, nid);
 			expect(notebook.source).toMatchObject({
-				provider: 'azure-devops',
+				provider,
 				repo: repository,
 				commit: 'b'.repeat(40),
 			});

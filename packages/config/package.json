@@ -55,6 +55,7 @@
 		"@marimo-hub/secrets-kubernetes": "workspace:*",
 		"@marimo-hub/source-control-azure-devops": "workspace:*",
 		"@marimo-hub/source-control-github": "workspace:*",
+		"@marimo-hub/source-control-gitlab": "workspace:*",
 		"@marimo-hub/storage-azure": "workspace:*",
 		"@marimo-hub/storage-fs": "workspace:*",
 		"@marimo-hub/storage-gcs": "workspace:*",

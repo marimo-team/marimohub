@@ -9,7 +9,13 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
-		"./package.json": "./package.json"
+		"./package.json": "./package.json",
+		"./validation": "./src/validation.ts",
+		"./file-tree": "./src/fileTree.ts",
+		"./publish": "./src/publish.ts",
+		"./http": "./src/http.ts",
+		"./publication": "./src/publication.ts",
+		"./workspace": "./src/workspace.ts"
 	},
 	"scripts": {
 		"build": "vp pack",

@@ -25,6 +25,28 @@ const PROVIDER_REPO_RULES: Record<
 };
 
 export const AZURE_DEVOPS_ORGANIZATION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,49}$/;
+
+export function gitLabRepositoryUrl(input: string): string | null {
+	try {
+		const value = input.trim();
+		if (!/^https:\/\//i.test(value) || /[\\\s]/.test(value)) return null;
+		const url = new URL(value);
+		if (url.username || url.password || url.search || url.hash) return null;
+		const path = value
+			.slice(value.indexOf('/', 8))
+			.replace(/\/$/, '')
+			.replace(/\.git$/, '');
+		const parts = path.split('/').slice(1).map(decodeURIComponent);
+		if (
+			parts.length < 2 ||
+			parts.some((part) => !/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(part) || part.endsWith('.'))
+		)
+			return null;
+		return `${url.origin}/${parts.map(encodeURIComponent).join('/')}`;
+	} catch {
+		return null;
+	}
+}
 export type GitProviderHosts = Readonly<Record<string, GitProvider>>;
 
 // Plain `owner/repo` coordinates — not a clone URL or `git@` remote (a bare

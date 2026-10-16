@@ -1,3 +1,4 @@
+import { createPublishStage } from '@marimo-hub/source-control-git/publication';
 import {
 	BadRequestError,
 	ConflictError,
@@ -12,7 +13,6 @@ import type {
 	UpdateChangeRequestInput,
 	SourceControlReader,
 	SourceControlPublisher,
-	SourceControlPublishStage,
 	SourceReadOptions,
 } from '@marimo-hub/core/ports/source-control';
 import { materializeGitDirectory } from '@marimo-hub/source-control-git';
@@ -44,17 +44,7 @@ export class AzureDevOpsSourceControl implements SourceControlReader, SourceCont
 			return false;
 		}
 	}
-	private async stage<T>(stage: SourceControlPublishStage, action: () => Promise<T>): Promise<T> {
-		try {
-			return await action();
-		} catch (error) {
-			const status =
-				typeof (error as { providerStatus?: unknown })?.providerStatus === 'number'
-					? (error as { providerStatus: number }).providerStatus
-					: undefined;
-			throw markSourceControlPublishFailure(error, { provider: this.provider, stage, status });
-		}
-	}
+	private readonly stage = createPublishStage(this.provider);
 	private async head(
 		repo: AzureRepository,
 		branch: string,

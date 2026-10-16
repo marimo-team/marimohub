@@ -1865,7 +1865,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Source control publishing',
 		description:
-			'Connect to GitHub and Azure DevOps Services. Editors can create pull sources and use **Sync now**. Managers can publish session edits as draft PRs. Provider credentials stay on the server. See [Syncing from external sources](./syncing.md) for modes and limits.',
+			'Connect to GitHub, GitLab, and Azure DevOps Services. Editors can create pull sources and use **Sync now**. Managers can publish session edits as draft change requests. Provider credentials stay on the server. See [Syncing from external sources](./syncing.md) for modes and limits.',
 		backends: [
 			{
 				name: 'GitHub App',
@@ -1903,6 +1903,37 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'Optional JSON array of `{resource, projects}` rules. `owner/repo` is github.com-only; GHES requires full URLs matching `MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL`. Unset or blank policies keep shared access with a startup warning. `[]` denies all. See [Repository project policies](syncing.md#repository-project-policies) for syntax.',
 						example: '[{"resource":"team/notebooks","projects":["proj-0000000000000000"]}]',
+						optIn: true,
+					},
+				],
+			},
+			{
+				name: 'GitLab',
+				description:
+					'Connect GitLab.com or a self-managed HTTPS origin. Use a project, group, or personal token with api and write_repository scopes and Developer access. See [GitLab setup](syncing.md#gitlab).',
+				vars: [
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN',
+						name: 'GitLab access token',
+						description:
+							'Access token used for repository reads, Git pushes, and merge requests. Never injected into notebook sandboxes.',
+						secret: true,
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL',
+						name: 'GitLab server URL',
+						description: 'HTTPS origin without a path. Repository URLs must use this origin.',
+						default: 'https://gitlab.com',
+						example: 'https://git.acme.corp',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SOURCE_CONTROL_GITLAB_ALLOWED_REPOSITORIES',
+						name: 'GitLab repository project policy',
+						description:
+							'Optional JSON array of {resource, projects} rules using full repository URLs. Unset permits shared access. [] denies all. See [Repository project policies](syncing.md#repository-project-policies).',
+						example: '[{"resource":"https://gitlab.com/team/notebooks","projects":"*"}]',
 						optIn: true,
 					},
 				],

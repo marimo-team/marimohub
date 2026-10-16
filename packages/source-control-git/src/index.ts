@@ -4,7 +4,7 @@ import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import git from 'isomorphic-git';
 import type { GitHttpRequest, HttpClient } from 'isomorphic-git';
-import { BadRequestError, UnavailableError } from '@marimo-hub/core/errors';
+import { BadRequestError, DomainError, UnavailableError } from '@marimo-hub/core/errors';
 import {
 	GitDirectoryLimitTracker,
 	MAX_GIT_EXPANDED_BYTES,
@@ -79,7 +79,7 @@ function responseBody(
 	})();
 }
 
-function gitHttp(fetcher: GitFetch, repository: string): HttpClient {
+export function gitHttp(fetcher: GitFetch, repository: string): HttpClient {
 	const limit = new GitFetchByteLimit(repository);
 	return {
 		request: async (request) => {
@@ -110,7 +110,7 @@ function gitHttp(fetcher: GitFetch, repository: string): HttpClient {
 	};
 }
 
-async function assertGitTreeLimits(
+export async function assertGitTreeLimits(
 	directory: string,
 	commit: string,
 	repository: string,
@@ -204,16 +204,20 @@ export async function collectGitDirectoryFiles(
 	return files;
 }
 
-export async function materializeGitDirectory(options: {
+export interface GitFetchOptions {
 	repository: string;
 	remoteUrl: string;
 	commit: string;
 	branch: string;
 	authorization: string;
 	fetcher: GitFetch;
-}): Promise<SourceWorkspaceFile[]> {
+}
+
+export async function withFetchedGit<T>(
+	options: GitFetchOptions,
+	action: (directory: string) => Promise<T>,
+): Promise<T> {
 	const directory = await mkdtemp(join(tmpdir(), 'marimohub-git-'));
-	const gitdir = join(directory, '.git');
 	const remoteUrl = options.remoteUrl;
 	// Fetch indexes the pack after writing it; reject unsafe expansion at that boundary.
 	const guardedFs = {
@@ -265,12 +269,20 @@ export async function materializeGitDirectory(options: {
 			force: true,
 		});
 		await assertGitTreeLimits(directory, options.commit, options.repository);
-		await git.checkout({ fs, dir: directory, ref: options.branch, force: true });
-		return await collectGitDirectoryFiles(gitdir, options.repository);
+		return await action(directory);
 	} catch (error) {
-		if (error instanceof BadRequestError || error instanceof UnavailableError) throw error;
+		if (error instanceof DomainError) throw error;
 		throw new UnavailableError('Git data could not be fetched', { cause: error });
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
+}
+
+export async function materializeGitDirectory(
+	options: GitFetchOptions,
+): Promise<SourceWorkspaceFile[]> {
+	return withFetchedGit(options, async (directory) => {
+		await git.checkout({ fs, dir: directory, ref: options.branch, force: true });
+		return collectGitDirectoryFiles(join(directory, '.git'), options.repository);
+	});
 }

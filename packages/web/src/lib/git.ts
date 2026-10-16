@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
 	AZURE_DEVOPS_ORGANIZATION_PATTERN,
+	gitLabRepositoryUrl,
 	detectProvider,
 	isGitProvider,
 	normalizeRepo,
@@ -276,7 +277,11 @@ const PROVIDER_UI: Record<GitProvider, ProviderUI> = {
 		label: 'GitLab',
 		allowUnrecognizedHost: true,
 		changeRequest: { kind: 'merge request', abbreviation: 'MR' },
-		pullInput: null,
+		pullInput: {
+			validate: (value) => gitLabRepositoryUrl(value) !== null,
+			hint: 'Use a full HTTPS GitLab repository URL, including any nested groups',
+			placeholder: 'https://gitlab.com/group/project',
+		},
 		...pathLinks('/-'),
 	},
 	'azure-devops': {

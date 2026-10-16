@@ -1,3 +1,4 @@
+import { validateBranch as validateGitBranch } from '@marimo-hub/source-control-git/validation';
 import { isSafeWorkspacePath } from '@marimo-hub/core/remote-workspace';
 import { ValidationError } from '@marimo-hub/core/errors';
 import type {
@@ -71,34 +72,8 @@ export function parseRepository(value: unknown, origin = 'https://github.com'): 
 	return { owner, repo };
 }
 
-function hasForbiddenGitRefCharacter(value: string): boolean {
-	for (let index = 0; index < value.length; index++) {
-		const codeUnit = value.charCodeAt(index);
-		if (codeUnit <= 0x20 || codeUnit === 0x7f || '~^:?*[\\'.includes(value[index] ?? '')) {
-			return true;
-		}
-	}
-	return false;
-}
-
 export function validateBranch(branch: unknown): asserts branch is string {
-	if (typeof branch !== 'string') throw new ValidationError('Invalid GitHub branch name');
-	const components = branch.split('/');
-	if (
-		branch.length === 0 ||
-		branch === '@' ||
-		branch.startsWith('-') ||
-		hasForbiddenGitRefCharacter(branch) ||
-		branch.startsWith('/') ||
-		branch.endsWith('/') ||
-		branch.endsWith('.') ||
-		branch.includes('..') ||
-		branch.includes('//') ||
-		branch.includes('@{') ||
-		components.some((component) => component.startsWith('.') || component.endsWith('.lock'))
-	) {
-		throw new ValidationError('Invalid GitHub branch name');
-	}
+	validateGitBranch(branch, 'Invalid GitHub branch name');
 }
 
 export function refPath(value: string): string {

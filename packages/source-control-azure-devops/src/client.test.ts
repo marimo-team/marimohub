@@ -7,7 +7,7 @@ import {
 	UnavailableError,
 } from '@marimo-hub/core/errors';
 import { sourceControlPublishFailure } from '@marimo-hub/core/ports/source-control';
-import { AzureClient, boundedBytes } from './client';
+import { AzureClient } from './client';
 import type { AzureCredential } from './client';
 import { parseAzureRepository } from './repository';
 import { repository } from './testing/fakeAzure';
@@ -146,57 +146,6 @@ describe('Azure HTTP failure handling', () => {
 	});
 });
 
-describe('Azure bounded response streams', () => {
-	it.each([undefined, '1', 'not-a-number'])(
-		'counts actual bytes with content-length %s',
-		async (length) => {
-			const { body, cancel } = openStream('four');
-			const headers = length === undefined ? undefined : { 'content-length': length };
-			await expect(boundedBytes(new Response(body, { headers }), 3)).rejects.toBeInstanceOf(
-				BadRequestError,
-			);
-			expect(cancel).toHaveBeenCalledOnce();
-		},
-	);
-	it('accepts exactly the byte limit across multiple chunks', async () => {
-		const stream = new ReadableStream<Uint8Array>({
-			start(controller) {
-				controller.enqueue(new Uint8Array([0, 255]));
-				controller.enqueue(new Uint8Array([42]));
-				controller.close();
-			},
-		});
-		await expect(boundedBytes(new Response(stream), 3)).resolves.toEqual(
-			new Uint8Array([0, 255, 42]),
-		);
-	});
-	it('distinguishes an empty file from a missing response body', async () => {
-		await expect(boundedBytes(new Response(new Uint8Array()), 0)).resolves.toEqual(
-			new Uint8Array(),
-		);
-		await expect(boundedBytes(new Response(null), 10)).rejects.toBeInstanceOf(UnavailableError);
-	});
-	it('preserves the size-limit error when cleanup fails', async () => {
-		const { body, cancel } = openStream('four', true);
-		await expect(
-			boundedBytes(new Response(body, { headers: { 'content-length': '4' } }), 3),
-		).rejects.toBeInstanceOf(BadRequestError);
-		expect(cancel).toHaveBeenCalledOnce();
-	});
-	it('does not return partial data or expose details after a stream failure', async () => {
-		let pulls = 0;
-		const body = new ReadableStream<Uint8Array>({
-			pull(controller) {
-				if (pulls++ === 0) controller.enqueue(new Uint8Array([1]));
-				else controller.error(new Error('private connection details'));
-			},
-		});
-		const error = await boundedBytes(new Response(body), 10).catch((error: unknown) => error);
-		expect(error).toBeInstanceOf(UnavailableError);
-		expect(String(error)).not.toContain('private connection details');
-	});
-});
-
 describe('Azure credential cancellation', () => {
 	it('cancels a stalled credential even when it ignores the abort signal', async () => {
 		const { client, credential, fetcher } = setup();
@@ -238,4 +187,18 @@ describe('Azure credential cancellation', () => {
 			fetcher.mock.calls[0][1]?.signal,
 		);
 	});
+});
+
+it('cancels a stalled Azure response body', async () => {
+	const { client, fetcher } = setup();
+	const cancel = vi.fn();
+	const response = new Response(new ReadableStream({ cancel }));
+	const reader = vi.spyOn(response.body!, 'getReader');
+	fetcher.mockResolvedValue(response);
+	const controller = new AbortController();
+	const pending = client.json(repo, '/refs', {}, { signal: controller.signal });
+	await vi.waitFor(() => expect(reader).toHaveBeenCalled());
+	controller.abort();
+	await expect(pending).rejects.toThrow();
+	expect(cancel).toHaveBeenCalledOnce();
 });

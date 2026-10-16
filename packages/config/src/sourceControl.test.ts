@@ -2,6 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectId } from '@marimo-hub/core/ids';
 import { GitHubAppPublisher } from '@marimo-hub/source-control-github';
+import { GitLabSourceControl } from '@marimo-hub/source-control-gitlab';
 import { makeSourceControl } from './sourceControl';
 import { CONFIG_SPEC } from './spec';
 
@@ -316,5 +317,78 @@ describe('GitHub Enterprise configuration', () => {
 		expect(() =>
 			makeSourceControl({ ...credentials, MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL: url }),
 		).toThrow('MARIMOHUB_SOURCE_CONTROL_GITHUB_SERVER_URL');
+	});
+});
+
+describe('GitLab source control', () => {
+	const projectId = ProjectId.parse('proj-0000000000000000');
+	const repository = 'https://code.example.com:8443/Group/Sub/Project';
+	const env = {
+		MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN: 'test-token',
+		MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL: 'https://code.example.com:8443',
+	};
+	it('registers GitLab alongside other configured providers', () => {
+		const registry = makeSourceControl({
+			...env,
+			MARIMOHUB_SOURCE_CONTROL_AZURE_DEVOPS_ORGANIZATION: 'acme',
+		}).sourceControl!;
+		expect(registry.readerProviders()).toEqual(['gitlab', 'azure-devops']);
+		expect(registry.publisherProviders()).toEqual(['gitlab', 'azure-devops']);
+		expect(registry.getReader('gitlab')?.supportsRepository(repository)).toBe(true);
+		expect(
+			registry.getReader('gitlab')?.supportsRepository('https://gitlab.com/Group/Sub/Project'),
+		).toBe(false);
+	});
+	it('defaults to GitLab.com', () => {
+		const registry = makeSourceControl({
+			MARIMOHUB_SOURCE_CONTROL_GITLAB_TOKEN: 'test-token',
+		}).sourceControl!;
+		expect(
+			registry.getReader('gitlab')?.supportsRepository('https://gitlab.com/team/sub/project'),
+		).toBe(true);
+	});
+	it('rejects a host without credentials or a host with a path', () => {
+		expect(() =>
+			makeSourceControl({
+				MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL: env.MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL,
+			}),
+		).toThrow('TOKEN');
+		expect(() =>
+			makeSourceControl({
+				...env,
+				MARIMOHUB_SOURCE_CONTROL_GITLAB_SERVER_URL: 'https://code.example.com/gitlab',
+			}),
+		).toThrow('SERVER_URL');
+	});
+	it('enforces project policies before calling the adapter and preserves path case', async () => {
+		const head = vi
+			.spyOn(GitLabSourceControl.prototype, 'getBranchHead')
+			.mockResolvedValue({ commit: 'a'.repeat(40) });
+		const registry = makeSourceControl({
+			...env,
+			MARIMOHUB_SOURCE_CONTROL_GITLAB_ALLOWED_REPOSITORIES: JSON.stringify([
+				{ resource: `${repository}.git`, projects: [projectId] },
+			]),
+		}).sourceControl!;
+		await expect(
+			registry.getReader('gitlab', projectId)!.getBranchHead(repository, 'main'),
+		).resolves.toEqual({ commit: 'a'.repeat(40) });
+		await expect(
+			registry.getReader('gitlab', projectId)!.getBranchHead(repository.toLowerCase(), 'main'),
+		).rejects.toThrow('not allowed');
+		await expect(registry.getReader('gitlab')!.getBranchHead(repository, 'main')).rejects.toThrow(
+			'not allowed',
+		);
+		expect(head).toHaveBeenCalledOnce();
+	});
+	it('rejects allowlists on another host', () => {
+		expect(() =>
+			makeSourceControl({
+				...env,
+				MARIMOHUB_SOURCE_CONTROL_GITLAB_ALLOWED_REPOSITORIES: JSON.stringify([
+					{ resource: 'https://gitlab.com/team/project', projects: '*' },
+				]),
+			}),
+		).toThrow('invalid GitLab repository');
 	});
 });

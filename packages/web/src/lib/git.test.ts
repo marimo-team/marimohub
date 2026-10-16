@@ -334,8 +334,8 @@ describe('configured pull providers', () => {
 			const input = pullRepositoryInput(providers);
 			expect(input.validate('team/repo')).toBe(github);
 			expect(input.validate(azure)).toBe(supportsAzure);
-			expect(input.validate('https://gitlab.com/team/repo')).toBe(false);
-			expect(input.available).toBe(github || supportsAzure);
+			expect(input.validate('https://gitlab.com/team/repo')).toBe(providers.includes('gitlab'));
+			expect(input.available).toBe(github || supportsAzure || providers.includes('gitlab'));
 		},
 	);
 	it('keeps enterprise URLs available without treating every custom host as GitHub', () => {
@@ -397,4 +397,17 @@ describe('Azure repository identity', () => {
 			).toBe(true);
 		},
 	);
+});
+
+describe('GitLab pull inputs', () => {
+	it('accepts nested groups and self-managed hosts', () => {
+		const input = pullRepositoryInput(['gitlab']);
+		expect(input.label).toBe('Connect to GitLab');
+		expect(input.validate('https://gitlab.com/group/subgroup/project.git')).toBe(true);
+		expect(input.validate('https://code.example.com:8443/group/project')).toBe(true);
+		expect(input.validate('https://github.com/team/repo')).toBe(false);
+		expect(input.validate('git@gitlab.com:team/repo.git')).toBe(false);
+		expect(input.validate('https://secret@gitlab.com/team/repo')).toBe(false);
+		expect(changeRequestTerms('gitlab').open).toBe('Open MR');
+	});
 });
