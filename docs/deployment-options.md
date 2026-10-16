@@ -39,9 +39,9 @@ MARIMOHUB_PERSIST_WORKSPACE=source
 The container image is the primary distribution. Each
 [GitHub release](https://github.com/marimo-team/marimohub/releases) also
 attaches standalone server binaries for Linux hosts without Node:
-`marimohub-linux-x64` for x86-64 and `marimohub-linux-arm64` for ARM64, each with a
-`.sha256` checksum file. The binaries do not include the
-[catalog recovery](./operations.md#catalog-recovery) command; run it from the container image. The binary reads the same `MARIMOHUB_*` variables. It listens on all
+`marimohub-linux-x64` and `marimohub-linux-arm64`, each with a `.sha256` checksum
+file. They omit the [catalog recovery](./operations.md#catalog-recovery) command;
+run it from the container image. The binary reads the same `MARIMOHUB_*` variables. It listens on all
 network interfaces unless you set `MARIMOHUB_BIND_HOST`, for example to
 `127.0.0.1` behind a reverse proxy on the same host. On first start it
 unpacks its bundled files to `$XDG_CACHE_HOME/marimohub-sea/<build-id>`

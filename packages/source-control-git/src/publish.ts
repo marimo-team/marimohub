@@ -7,7 +7,7 @@ import { assertGitTreeLimits, gitTransport, withFetchedGit } from './index';
 import type { GitFetchOptions } from './index';
 import { isSafeGitTreePath } from './fileTree';
 import type { FileTree } from './fileTree';
-import { gitTransportError } from './transport';
+import { PUSH_GIT_TRANSPORT_TIMEOUTS, gitTransportError } from './transport';
 import { normalizeCommit, validateBranch } from './validation';
 
 export async function pushGitTree(
@@ -97,7 +97,7 @@ export async function pushGitTree(
 			force: true,
 		});
 		await assertGitTreeLimits(dir, commit, options.repository);
-		const http = gitTransport(options);
+		const http = gitTransport({ ...options, timeouts: PUSH_GIT_TRANSPORT_TIMEOUTS });
 		const result = await git
 			.push({
 				fs,

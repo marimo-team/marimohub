@@ -384,27 +384,22 @@ for tag in v1.2.3-rc.1 v1.2 v01.2.3 v1.02.3 1.2.3 v1.2.3.4 'v1.2.3 ' 'v1.2.3;id'
 	fi
 done
 if "$repo_root/scripts/release-tag.sh" floating v1.2.3-rc.1 </dev/null >/dev/null 2>&1; then
-	fail 'floating tags were computed for a prerelease tag'
+	fail 'latest was computed for a prerelease tag'
 fi
 
 floating() {
 	printf '%s\n' "${@:2}" | "$repo_root/scripts/release-tag.sh" floating "$1" | tr '\n' ' '
 }
-[[ "$(floating v1.0.0)" == 'latest=true major=true minor=true ' ]] || \
-	fail 'first release did not move every floating tag'
-[[ "$(floating v1.2.4 v1.2.3 v1.1.9 v0.9.0)" == 'latest=true major=true minor=true ' ]] || \
-	fail 'newest release did not move every floating tag'
-[[ "$(floating v1.2.3 v1.2.3 v1.2.2)" == 'latest=true major=true minor=true ' ]] || \
+[[ "$(floating v1.0.0)" == 'latest=true ' ]] || fail 'first release did not move latest'
+[[ "$(floating v1.2.4 v1.2.3 v1.1.9 v0.9.0)" == 'latest=true ' ]] || \
+	fail 'newest release did not move latest'
+[[ "$(floating v1.2.3 v1.2.3 v1.2.2)" == 'latest=true ' ]] || \
 	fail 'the release tag listing itself changed the result'
-[[ "$(floating v1.2.4 v1.3.0 v1.2.3)" == 'latest=false major=false minor=true ' ]] || \
-	fail 'patch backport moved latest or the major tag'
-[[ "$(floating v1.2.4 v2.0.0 v1.2.3)" == 'latest=false major=true minor=true ' ]] || \
-	fail 'previous-major backport did not move only its own major and minor tags'
-[[ "$(floating v1.2.4 v1.2.5)" == 'latest=false major=false minor=false ' ]] || \
-	fail 'an older patch moved floating tags'
-[[ "$(floating v1.2.4 v1.3.0-rc.1 v2.0.0-rc.1 v1.2.3)" == 'latest=true major=true minor=true ' ]] || \
+[[ "$(floating v1.2.4 v1.3.0 v1.2.3)" == 'latest=false ' ]] || fail 'patch backport moved latest'
+[[ "$(floating v1.2.4 v1.2.5)" == 'latest=false ' ]] || fail 'an older patch moved latest'
+[[ "$(floating v1.2.4 v1.3.0-rc.1 v2.0.0-rc.1 v1.2.3)" == 'latest=true ' ]] || \
 	fail 'a prerelease tag outranked a stable release'
-[[ "$(floating v1.9.0 v1.10.0)" == 'latest=false major=false minor=true ' ]] || \
+[[ "$(floating v1.9.0 v1.10.0)" == 'latest=false ' ]] || \
 	fail 'release tags were not compared numerically'
 
 amd64_digest="example/image@sha256:$(printf 'a%.0s' {1..64})"

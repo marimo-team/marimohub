@@ -55,7 +55,6 @@ import {
 } from '../testing';
 import type { TestApiOptions, TestWifOptions } from '../testing';
 import { makeFakeSnapshotCompute } from '../testing/snapshotCompute';
-import { WIF_ELIGIBILITY_TTL_MS, wifCredentialCacheFor } from '../wifCredentialCache';
 
 const STRANGER = uid('user_stranger');
 const MANAGER = uid('user_manager');
@@ -4290,7 +4289,6 @@ describe('Session routes', () => {
 				await new Promise((resolve) => setTimeout(resolve, 0));
 				exchange.mockClear();
 				const env = calls.setEnvVars.find((vars) => vars.AWS_CONTAINER_CREDENTIALS_FULL_URI)!;
-				const cache = wifCredentialCacheFor(api.deps.wif!);
 				const signToken = (overrides: Partial<WifCredentialsTokenClaims>) =>
 					mintWifCredentialsToken(api.deps.wif!.credentialsEndpoint!.keyMaterial, {
 						projectId: pid,
@@ -4305,11 +4303,7 @@ describe('Session routes', () => {
 						headers: { Authorization: authorization ?? env.AWS_CONTAINER_AUTHORIZATION_TOKEN },
 					});
 				};
-				return { ...api, cache, calls, exchange, fetchCreds, session, env, signToken };
-			};
-			const pastEligibilityMemo = () => {
-				const later = Date.now() + WIF_ELIGIBILITY_TTL_MS;
-				vi.spyOn(Date, 'now').mockReturnValue(later);
+				return { ...api, calls, exchange, fetchCreds, session, env, signToken };
 			};
 
 			it('injects the endpoint and a session token instead of static keys', async () => {
@@ -4380,26 +4374,6 @@ describe('Session routes', () => {
 				await expectError(await fetchCreds(), 403, 'FORBIDDEN');
 			});
 
-			it('memoizes eligibility briefly and re-checks after the memo expires', async () => {
-				const { fetchCreds, deps, cache, session } = await endpointApi();
-				const getSession = vi.spyOn(deps.services.sessions, 'getSession');
-				expect((await fetchCreds()).status).toBe(200);
-				expect((await fetchCreds()).status).toBe(200);
-				expect(getSession).toHaveBeenCalledOnce();
-				pastEligibilityMemo();
-				await createServices(bucket).projects.updateProject(
-					pid,
-					{ federation: { enabled: false } },
-					ACTOR,
-				);
-				expect((await fetchCreds()).status).toBe(403);
-				expect(getSession).toHaveBeenCalledTimes(2);
-				expect(cache.isEligible(session.session_id)).toBe(false);
-				await enableFederation();
-				expect((await fetchCreds()).status).toBe(200);
-				expect(getSession).toHaveBeenCalledTimes(3);
-			});
-
 			it('stops minting for a removed member and resumes once re-added', async () => {
 				await createServices(bucket).projects.addMember(
 					pid,
@@ -4407,12 +4381,10 @@ describe('Session routes', () => {
 					'editor',
 					ACTOR,
 				);
-				const { fetchCreds, exchange, cache, session } = await endpointApi(undefined, STRANGER);
+				const { fetchCreds, exchange } = await endpointApi(undefined, STRANGER);
 				expect((await fetchCreds()).status).toBe(200);
 				await createServices(bucket).projects.removeMember(pid, STRANGER, ACTOR);
-				pastEligibilityMemo();
 				await expectError(await fetchCreds(), 403, 'FORBIDDEN');
-				expect(cache.isEligible(session.session_id)).toBe(false);
 				await createServices(bucket).projects.addMember(
 					pid,
 					{ user_id: STRANGER },
@@ -4439,7 +4411,7 @@ describe('Session routes', () => {
 				async (cached) => {
 					const { fetchCreds, exchange, session } = await endpointApi();
 					if (cached) expect((await fetchCreds()).status).toBe(200);
-					const deadline = Date.now() + WIF_ELIGIBILITY_TTL_MS;
+					const deadline = Date.now() + Millis.seconds(10);
 					await createServices(bucket).sessions.tightenAuthorizationDeadline(
 						pid,
 						session.session_id,
@@ -4455,7 +4427,6 @@ describe('Session routes', () => {
 				const { fetchCreds, exchange, deps } = await endpointApi();
 				expect((await fetchCreds()).status).toBe(200);
 				await deps.services.identities.setSuspension(ACTOR, true);
-				pastEligibilityMemo();
 				expect((await fetchCreds()).status).toBe(403);
 				expect(exchange).not.toHaveBeenCalled();
 			});
@@ -4552,7 +4523,6 @@ describe('Session routes', () => {
 				async (source) => {
 					const { fetchCreds, exchange, deps } = await endpointApi();
 					expect((await fetchCreds()).status).toBe(200);
-					pastEligibilityMemo();
 					const error = new UnavailableError('storage unavailable');
 					if (source === 'session')
 						vi.spyOn(deps.services.sessions, 'getSession').mockRejectedValueOnce(error);
@@ -4570,7 +4540,6 @@ describe('Session routes', () => {
 				const { fetchCreds, exchange, deps } = await endpointApi();
 				expect((await fetchCreds()).status).toBe(200);
 				await deps.services.identities.setSuspension(ACTOR, true);
-				pastEligibilityMemo();
 				await expectError(await fetchCreds(), 403, 'FORBIDDEN');
 				await deps.services.identities.setSuspension(ACTOR, false);
 				expect((await fetchCreds()).status).toBe(200);
@@ -4581,7 +4550,6 @@ describe('Session routes', () => {
 				const { request, fetchCreds, session } = await endpointApi();
 				expect((await fetchCreds()).status).toBe(200);
 				await expectOk(await request('DELETE', sessionsPath(`/${session.session_id}`)));
-				pastEligibilityMemo();
 				expect((await fetchCreds()).status).toBe(403);
 			});
 

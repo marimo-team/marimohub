@@ -82,80 +82,21 @@ the index.
 
 ### Inspect and recover the catalog
 
-**Keep all writers stopped through inspection and apply:** API replicas,
-maintenance workers, scheduled triggers, and sandbox processes that persist
-notebook changes. The final CAS protects the catalog pointer, not individual
-metadata records.
+The operator runbook, flags, exit codes, and recovery limits are in
+[catalog recovery](../docs/operations.md#catalog-recovery). Run the command from a
+checkout with `pnpm --filter @marimo-hub/server catalog:recover`, or from the image
+with `node dist/catalog-recovery.mjs`. The SEA binaries have no recovery entrypoint.
+Other adapters can call `CatalogService.planRecovery` and `CatalogService.recover`.
 
-1. Back up the affected storage.
-2. Set the deployment's `MARIMOHUB_STORAGE_*` environment variables.
-3. Generate a dry-run report. From the repository root:
-
-   ```bash
-   pnpm --filter @marimo-hub/server catalog:recover --rebuild
-   ```
-
-   From the published image, run `node dist/catalog-recovery.mjs` with the same
-   arguments. The [operator guide](../docs/operations.md#catalog-recovery) has
-   Docker and Kubernetes examples. The SEA binaries have no recovery entrypoint.
-
-4. Review `candidates`, `projects`, and `issues` in the JSON report. A dry-run
-   whose report has blocking errors exits 2. `excluded` issues list records that
-   recovery leaves out of the catalog: preview runtime notebooks, import attempts
-   that are not confirmed complete, and jobs with a deletion fence. In
-   `--snapshot` mode they also list projects, notebooks, and jobs that exist on
-   storage but are absent from the selected snapshot.
-5. If a suitable snapshot survives, inspect it with its actual ID:
-
-   ```bash
-   pnpm --filter @marimo-hub/server catalog:recover --snapshot SNAPSHOT_ID
-   ```
-
-   Prefer a suitable `current` or `previous` candidate. An `unverified` snapshot
-   can be an uncommitted write. Neither creation time nor key order proves commit.
-
-6. Apply the report with its exact `token` and the same mode:
-
-   ```bash
-   pnpm --filter @marimo-hub/server catalog:recover \
-     --snapshot SNAPSHOT_ID --apply REPORT_TOKEN \
-     --writers-stopped --actor OPERATOR_ID
-   ```
-
-   `OPERATOR_ID` is a valid marimohub user ID for the operator. It is written to
-   the recovery snapshot and to a `system.recover` audit event.
-   For record reconstruction, use `--rebuild` instead of `--snapshot SNAPSHOT_ID`.
-   Rebuild always warns that record discovery cannot prove publication.
-   After reviewing and accepting this warning, add `--accept-warnings` to the rebuild apply command.
-   Snapshot reports with accepted warnings also require `--accept-warnings`. Errors always block apply.
-   Changed storage invalidates the token. If apply fails, inspect again before retrying.
-
-7. Check recovered projects and notebook contents before restarting writers.
-
-The command defaults to dry-run and supports `s3`, `gcs`, `azure`, and `fs`.
-Exit codes: 0 for a dry-run without blocking errors or a successful apply, 2 for
-a dry-run with blocking errors (report on stdout, reasons on stderr), and 1 for
-any other failure.
-Other adapters can use `CatalogService.planRecovery` and `CatalogService.recover`.
-
-### Recovery limits
-
-- **Snapshot mode** restores selected membership with current metadata, including
-  deletion status, permissions, security labels, and job schedules.
-- **Rebuild mode** discovers surviving records but cannot prove publication.
-  Review every entry: failed creates and expired import receipts can leave
-  ambiguous records.
-- Preview runtimes, known incomplete import attempts, and jobs with deletion
-  fences are excluded. Deleted projects and notebooks retain their status.
-- Missing or invalid metadata, referenced notebook content, or job history
-  indexes block apply. Recovery does not repair these objects or restore history.
+Writers must stay stopped through inspection and apply because the final CAS
+protects only the catalog pointer, not individual metadata records.
 
 Recovery writes a new immutable snapshot and commits it through the private
 `CatalogService.commitRecovery`, which only `recover()` reaches. It updates an
 existing pointer with its inspected ETag or creates a missing pointer
 conditionally. It does not retry against changed state. A lost CAS deletes the
-new snapshot and fails with a conflict; run the dry-run again. Uncertain write
-responses leave the snapshot intact for inspection.
+new snapshot and fails with a conflict. Uncertain write responses leave the
+snapshot intact for inspection.
 
 ---
 

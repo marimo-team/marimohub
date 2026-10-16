@@ -1,11 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TempS3Creds } from '@marimo-hub/core';
 import { makeTestWif } from './testing';
-import {
-	WIF_ELIGIBILITY_TTL_MS,
-	WifCredentialCache,
-	wifCredentialCacheFor,
-} from './wifCredentialCache';
+import { WifCredentialCache, wifCredentialCacheFor } from './wifCredentialCache';
 
 const MINUTE = 60_000;
 
@@ -163,52 +159,6 @@ describe('WifCredentialCache', () => {
 		cache.delete('one');
 		expect(await cache.get('two', exchange)).toEqual(second);
 		expect((await cache.get('one', exchange)).accessKeyId).toBe('AK3');
-	});
-});
-
-describe('WifCredentialCache eligibility memo', () => {
-	it('expires an allow verdict after the TTL', () => {
-		const { cache, advance } = fixture();
-		expect(cache.isEligible('session')).toBe(false);
-		cache.markEligible('session');
-		advance(WIF_ELIGIBILITY_TTL_MS - 1);
-		expect(cache.isEligible('session')).toBe(true);
-		advance(1);
-		expect(cache.isEligible('session')).toBe(false);
-	});
-
-	it('never outlives an earlier authorization deadline', () => {
-		const { cache, advance } = fixture();
-		cache.markEligible('session', Date.parse('2026-01-01T00:00:01Z'));
-		expect(cache.isEligible('session')).toBe(true);
-		advance(1_000);
-		expect(cache.isEligible('session')).toBe(false);
-	});
-
-	it('clears the verdict and credentials together', async () => {
-		const { cache, exchange } = fixture();
-		await cache.get('session', exchange);
-		cache.markEligible('session');
-		cache.delete('session');
-		expect(cache.isEligible('session')).toBe(false);
-		await cache.get('session', exchange);
-		expect(exchange).toHaveBeenCalledTimes(2);
-	});
-
-	it('bounds both maps by evicting the least recently used session', async () => {
-		const cache = new WifCredentialCache(() => Date.parse('2026-01-01T00:00:00Z'), 1);
-		const exchange = vi.fn(async () => ({
-			accessKeyId: 'AK',
-			secretAccessKey: 'SK',
-			expiration: '2026-01-01T01:00:00Z',
-		}));
-		await cache.get('one', exchange);
-		cache.markEligible('one');
-		await cache.get('two', exchange);
-		cache.markEligible('two');
-		expect(cache.isEligible('one')).toBe(false);
-		await cache.get('one', exchange);
-		expect(exchange).toHaveBeenCalledTimes(3);
 	});
 });
 

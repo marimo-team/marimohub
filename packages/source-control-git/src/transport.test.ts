@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BadRequestError, UnavailableError } from '@marimo-hub/core/errors';
 import { materializeGitDirectory } from './index';
-import { gitHttp } from './transport';
+import { DEFAULT_GIT_TRANSPORT_TIMEOUTS, PUSH_GIT_TRANSPORT_TIMEOUTS, gitHttp } from './transport';
 import type { GitFetch } from './transport';
 
 const remoteUrl = 'https://gitlab.com/team/project.git';
@@ -73,20 +73,31 @@ describe('Git transport guard', () => {
 		expect(transportSignal?.aborted).toBe(true);
 	});
 
-	it('extends the response deadline for uploading a large request body', async () => {
-		const fetcher: GitFetch = async () => {
-			await new Promise((resolve) => setTimeout(resolve, 200));
-			return new Response(new Uint8Array([1]));
-		};
-		const response = await client(fetcher).request({
-			url: `${remoteUrl}/git-receive-pack`,
-			method: 'POST',
-			headers: {},
-			body: (async function* () {
-				yield new Uint8Array(64 * 1024);
-			})(),
-		});
-		expect(await drain(response.body)).toBe(1);
+	it('gives pushes five minutes to upload the pack and receive headers', async () => {
+		vi.useFakeTimers();
+		try {
+			let transportSignal: AbortSignal | null | undefined;
+			const fetcher: GitFetch = (_url, init) => {
+				transportSignal = init?.signal;
+				return new Promise(() => {});
+			};
+			const request = gitHttp({
+				fetcher,
+				repository: 'team/project',
+				remoteUrl,
+				timeouts: PUSH_GIT_TRANSPORT_TIMEOUTS,
+			}).request({ url: `${remoteUrl}/git-receive-pack`, method: 'POST', headers: {} });
+			const rejection = expect(request).rejects.toThrow(
+				new UnavailableError('Git server did not respond in time'),
+			);
+			await vi.advanceTimersByTimeAsync(DEFAULT_GIT_TRANSPORT_TIMEOUTS.headersMs);
+			expect(transportSignal?.aborted).toBe(false);
+			await vi.advanceTimersByTimeAsync(300_000 - DEFAULT_GIT_TRANSPORT_TIMEOUTS.headersMs);
+			expect(transportSignal?.aborted).toBe(true);
+			await rejection;
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('times out a stalled body and cancels its stream', async () => {

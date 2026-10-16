@@ -336,18 +336,13 @@ stdin to private files outside the workspace. Exec arguments contain no
 injected values. Files use mode `0600` in directories with mode `0700` and remain
 until sandbox destruction. Notebook code can read its own credentials.
 
-With `MARIMOHUB_WIF_CREDENTIALS_DELIVERY=endpoint`, the sandbox environment
-contains `AWS_CONTAINER_CREDENTIALS_FULL_URI` and
-`AWS_CONTAINER_AUTHORIZATION_TOKEN`. The token is valid for the life of the
-session, up to seven days, and has no network binding. Anyone who copies it can
-fetch fresh cloud credentials from outside the sandbox while the session is live.
-On every call the endpoint checks that the session is live, that the owner is not
-suspended, and that the owner is still a project member with a sufficient role.
-Removing the member stops new credentials within 10 seconds, the lifetime of
-the per-process allow verdict. Credentials already issued stay valid until they
-expire, up to about one hour. The token embeds a signed snapshot of the launching
-user, including IdP group names, which notebook code can decode. Users cannot
-set the container-provider or web-identity variable names. See
+With `MARIMOHUB_WIF_CREDENTIALS_DELIVERY=endpoint`, the sandbox gets a bearer
+token that fetches cloud credentials from the hub for the life of the session, up
+to seven days. The token has no network binding: anyone who copies it can fetch
+credentials from outside the sandbox while the session is live. Each request
+re-checks the session, owner, and project, so a revocation blocks the next
+request. Credentials already issued stay valid until they expire, up to about
+one hour. See
 [Workload Identity Federation](workload-identity-federation.md#refreshable-credentials).
 
 Environment preparation adds one remote command per new set of values, including

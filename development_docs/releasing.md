@@ -38,15 +38,9 @@ run, but `validate-tag` fails and the workflow publishes nothing.
 
 ### Floating image tags
 
-Every release pushes the `X.Y.Z` image tag. `scripts/release-tag.sh floating TAG`
-reads the existing tags on stdin and decides which floating tags move:
-
-- `latest` moves only when the released tag is the highest stable tag in the repository.
-- `X` moves only when the released tag is the highest stable tag in major `X`.
-- `X.Y` moves only when the released tag is the highest stable tag in minor `X.Y`.
-
-Prerelease tags never count. A backport patch to an older line therefore never
-moves `latest`, `X`, or `X.Y` backwards.
+Every release pushes the `X.Y.Z`, `X.Y`, and `X` image tags. `latest` moves only
+when the released tag is the highest stable `v*` tag in the repository
+(`scripts/release-tag.sh floating TAG` decides; prerelease tags never count).
 
 The `image` job creates each manifest list from the per-architecture build
 digests (`@sha256:…`), never from mutable tags. Before it creates the list, it inspects

@@ -127,7 +127,7 @@ volumes:
 ```
 
 The hub also runs maintenance, so it drains for up to 120 seconds on shutdown.
-Docker's default stop timeout is 10 seconds. `stop_grace_period` gives the drain time to finish. See [Shutdown budgets](../operations.md#shutdown-budgets).
+`stop_grace_period` raises Docker's 10-second default stop timeout to cover it. See [Shutdown budgets](../operations.md#shutdown-budgets).
 
 ```text
 # Caddyfile — TLS via Let's Encrypt, websockets proxied automatically

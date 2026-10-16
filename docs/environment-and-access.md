@@ -70,15 +70,8 @@ The hub sets these variables in a sandbox. Notebook code can read them; projects
 | `MARIMO_VERSION`, `MARIMO_SKIP_UPDATE_CHECK`, `_MARIMO_APP_OVERLOAD_AUTO_DOWNLOAD`                              | Pinned by the reference [sandbox image](./sandbox-image.md), not by the hub process.                                                   | All                                                                                                       |
 
 Endpoint delivery removes static AWS credential keys from integration variables and defaults, so SDKs use the container provider.
-An [S3 integration](./integrations.md#s3) keeps its `AWS_ENDPOINT_URL_S3` and `AWS_REGION` unless WIF sets them, so SDKs send the WIF credentials to the integration's endpoint.
 Jobs always use `env` delivery.
-
-In endpoint delivery, `AWS_CONTAINER_AUTHORIZATION_TOKEN` is a bearer token that is valid for the session, up to seven days.
-Notebook code can read it, and a copied token fetches cloud credentials from outside the sandbox until the session ends.
-The endpoint checks session liveness, owner suspension, and project membership and role on every call.
-The hub starts the first credential exchange when the session starts.
-The container-provider and web-identity variable names are reserved; integrations and session variables cannot set them.
-See [Refreshable credentials](./workload-identity-federation.md#refreshable-credentials).
+See [Refreshable credentials](./workload-identity-federation.md#refreshable-credentials) for the token lifetime, revocation checks, S3 integration endpoints, and reserved variable names.
 
 ## Testing and failures
 

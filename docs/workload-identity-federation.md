@@ -163,9 +163,8 @@ End the session, remove the member, or disable federation for the project to sto
   start a new session.
 - **Revocation:** on every call, the endpoint rejects ended sessions, suspended
   owners, owners who are no longer project members or lost the required role, and
-  projects that disable federation. Each process caches an allow verdict for up
-  to 10 seconds, so a revocation can take that long to block the next refresh.
-  Previously issued cloud credentials remain valid until expiry, up to about one
+  projects that disable federation. A revocation blocks the next request;
+  previously issued cloud credentials remain valid until expiry, up to about one
   hour. The token carries a signed snapshot of the launching user (email, IdP
   groups, and entitlements) so the check matches the proxy's; notebook code can
   read those values from the token.

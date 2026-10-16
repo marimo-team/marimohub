@@ -169,10 +169,8 @@ limit.
 
 Use a full HTTPS URL, including any nested groups: `https://gitlab.com/group/subgroup/project`.
 
-1. Create a project or group access token with the `api` and `write_repository` scopes.
-   The token identity needs **Developer** access and permission to push proposal branches.
-   A personal access token also works, but with the `api` scope it reaches every project its user can access.
-   Without a repository policy, every marimohub project can use that access.
+1. Create a project or group access token with the `api` and `write_repository` scopes, for an identity with **Developer** access that can push proposal branches.
+   A personal access token also works, but its `api` scope reaches every project its user can access.
 2. Set the token and [repository policy](#repository-project-policies) on the Hub server:
 
    ```bash
@@ -195,15 +193,10 @@ See GitLab's [access token scopes](https://docs.gitlab.com/security/tokens/acces
 
 ## Azure DevOps Services
 
-Use the hosted HTTPS URL: `https://dev.azure.com/organization/project/_git/repository`.
-marimohub also accepts these forms and normalizes them to the hosted HTTPS URL:
-
-- The portal clone URL: `https://organization@dev.azure.com/organization/project/_git/repository`
-- The legacy host: `https://organization.visualstudio.com/project/_git/repository`
-- The SSH remote: `git@ssh.dev.azure.com:v3/organization/project/repository`
-
-This adapter supports hosted Azure DevOps Services only. It always connects over HTTPS.
-Azure DevOps Server, PATs, webhooks, and notebook previews are not supported.
+Use the hosted HTTPS URL, `https://dev.azure.com/organization/project/_git/repository`,
+or the portal clone URL, `https://organization@dev.azure.com/organization/project/_git/repository`.
+This adapter supports hosted Azure DevOps Services only.
+Azure DevOps Server, `visualstudio.com` URLs, SSH remotes, PATs, webhooks, and notebook previews are not supported.
 
 1. Add a Microsoft Entra service principal or managed identity to your Azure DevOps organization.
 2. Grant repository **Read**, **Contribute**, **Create branch**, and **Contribute to pull requests** permissions.
@@ -223,7 +216,7 @@ Azure DevOps Server, PATs, webhooks, and notebook previews are not supported.
    ```
 
    Otherwise, omit all three to use `DefaultAzureCredential`, including managed identity, workload identity, or local Azure CLI credentials.
-   `DefaultAzureCredential` reads the same `AZURE_*` environment as Azure storage and object browsing, so they share one identity.
+   It reads the same `AZURE_*` environment as Azure storage and object browsing, so they share one identity.
 
 5. Restart Hub and open **Add a git repository**.
 6. Select the connection option and enter the repository URL, branch, folder, and notebook file.
@@ -572,10 +565,6 @@ supplies the `github` provider automatically. On creation, `owner/repo` still
 means github.com; when editing a source, shorthand keeps its current host.
 [Notebook previews](notebook-previews.md) use the same host.
 
-An App installed across a whole GHES organization or instance can reach all of
-its repositories. Set a [repository project policy](#repository-project-policies)
-to limit each project.
-
 marimohub sends REST requests to `{origin}/api/v3` for any host other than
 github.com. GHE.com data-residency tenants are not supported yet.
 
@@ -592,13 +581,12 @@ host; use the Node server on a network with access to GHES.
 
 <span id="github-project-policies"></span>
 
-Each provider has an independent `ALLOWED_REPOSITORIES` policy for its shared credentials:
-
 ::: warning Set a repository policy for each provider
-Without a policy, every project can reach every repository the provider credential can access:
-the GitHub App installation, the GitLab token, or the Azure DevOps identity.
-A broad installation, a group or personal GitLab token, or an organization-wide Azure identity therefore exposes all of those repositories.
+Without a policy, every project can reach every repository the provider credential can access.
+A GitHub App installed across an organization or GHES instance, a group or personal GitLab token, or an organization-wide Azure identity exposes all of those repositories.
 :::
+
+Each provider has an independent `ALLOWED_REPOSITORIES` policy for its shared credentials:
 
 | Provider     | Variable                                                     | Repository format                                                        |
 | ------------ | ------------------------------------------------------------ | ------------------------------------------------------------------------ |

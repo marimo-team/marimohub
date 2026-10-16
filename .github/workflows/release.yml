@@ -289,7 +289,7 @@ jobs:
     needs: image-build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # Serialize floating-tag moves across releases. The floating-tag check runs
+    # Serialize floating-tag moves across releases. The latest check runs
     # inside this lock, so a run that waited still sees any newer release tag.
     concurrency:
       group: release-image-manifest
@@ -303,7 +303,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      - name: Decide floating tags
+      - name: Decide latest tag
         id: floating
         run: git tag -l 'v*' | scripts/release-tag.sh floating "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
 
@@ -316,8 +316,8 @@ jobs:
           flavor: latest=false
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.floating.outputs.minor }}
-            type=semver,pattern={{major}},enable=${{ steps.floating.outputs.major }}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
             type=sha,format=short
             type=raw,value=latest,enable=${{ steps.floating.outputs.latest }}
 

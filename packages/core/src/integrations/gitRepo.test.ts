@@ -331,10 +331,6 @@ describe('azureDevOpsRepository', () => {
 		'https://dev.azure.com/ACME/Project%20One/_git/notebooks/',
 		'https://dev.azure.com:443/acme/Project%20One/_git/notebooks',
 		'https://acme@dev.azure.com/acme/Project%20One/_git/notebooks',
-		'https://acme.visualstudio.com/Project%20One/_git/notebooks',
-		'https://Acme.VisualStudio.com/DefaultCollection/Project%20One/_git/notebooks',
-		'git@ssh.dev.azure.com:v3/acme/Project%20One/notebooks',
-		'ssh://git@ssh.dev.azure.com:22/v3/acme/Project%20One/notebooks',
 	])('canonicalizes %s', (input) => {
 		expect(azureDevOpsRepository(input)).toEqual({
 			provider: 'azure-devops',
@@ -354,7 +350,6 @@ describe('azureDevOpsRepository', () => {
 		'http://dev.azure.com/acme/p/_git/r',
 		'https://dev.azure.com:8443/acme/p/_git/r',
 		'https://dev.azure.com.evil.test/acme/p/_git/r',
-		'https://evil.acme.visualstudio.com/p/_git/r',
 		'https://other@dev.azure.com/acme/p/_git/r',
 		'https://acme:secret@dev.azure.com/acme/p/_git/r',
 		'https://dev.azure.com/acme/p/_git/r?x=1',
@@ -364,26 +359,27 @@ describe('azureDevOpsRepository', () => {
 		'https://dev.azure.com/acme/p/r',
 		'https://dev.azure.com/acme_org/p/_git/r',
 		'https://server.test/collection/p/_git/r',
-		'git@ssh.dev.azure.com:v3/acme/p',
-		'git@ssh.dev.azure.com:v2/acme/p/r',
 	])('rejects %s', (input) => {
 		expect(azureDevOpsRepository(input)).toBeNull();
 	});
 
-	it('normalizes every hosted form to the canonical URL', () => {
+	it('does not accept the legacy visualstudio.com form', () => {
+		expect(azureDevOpsRepository('https://acme.visualstudio.com/p/_git/r')).toBeNull();
+		expect(detectProvider('https://acme.visualstudio.com/p/_git/r')).toBeNull();
+	});
+
+	it('does not accept the SSH remote form', () => {
+		expect(azureDevOpsRepository('git@ssh.dev.azure.com:v3/acme/p/r')).toBeNull();
+		expect(azureDevOpsRepository('ssh://git@ssh.dev.azure.com/v3/acme/p/r')).toBeNull();
+	});
+
+	it('normalizes the hosted and clone forms to the canonical URL', () => {
 		expect(normalizeRepo('https://acme@dev.azure.com/acme/p/_git/r')).toBe(
-			'https://dev.azure.com/acme/p/_git/r',
-		);
-		expect(normalizeRepo('git@ssh.dev.azure.com:v3/acme/p/r')).toBe(
-			'https://dev.azure.com/acme/p/_git/r',
-		);
-		expect(normalizeRepo('https://acme.visualstudio.com/p/_git/r')).toBe(
 			'https://dev.azure.com/acme/p/_git/r',
 		);
 		expect(normalizeRepo('dev.azure.com/Acme/p/_git/r')).toBe(
 			'https://dev.azure.com/acme/p/_git/r',
 		);
-		expect(detectProvider('https://acme.visualstudio.com/p/_git/r')).toBe('azure-devops');
 	});
 });
 

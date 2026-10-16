@@ -371,26 +371,19 @@ describe('Azure repository identity', () => {
 		expect(gitCoords(gitSource({ provider: 'azure-devops', repo }))).toBeNull();
 	});
 
-	it.each([
-		'https://acme.visualstudio.com/project/_git/repo',
-		'https://acme@dev.azure.com/acme/project/_git/repo',
-		'git@ssh.dev.azure.com:v3/acme/project/repo',
-	])('accepts and canonicalizes the Azure form %s', (repo) => {
+	it('accepts and canonicalizes the clone form', () => {
+		const repo = 'https://acme@dev.azure.com/acme/project/_git/repo';
 		expect(isAzureDevOpsRepoInput(repo)).toBe(true);
 		expect(pullRepositoryInput(['azure-devops']).validate(repo)).toBe(true);
 	});
 
-	it('links legacy visualstudio.com records through dev.azure.com', () => {
-		const coords = gitCoords(
-			gitSource({
-				provider: 'azure-devops',
-				repo: 'https://acme.visualstudio.com/project/_git/repo',
-			}),
-		);
-		expect(coords).toMatchObject({
-			provider: 'azure-devops',
-			baseUrl: 'https://dev.azure.com/acme/project/_git/repo',
-		});
+	it.each([
+		'https://acme.visualstudio.com/project/_git/repo',
+		'git@ssh.dev.azure.com:v3/acme/project/repo',
+	])('does not recognize the Azure form %s', (repo) => {
+		expect(isAzureDevOpsRepoInput(repo)).toBe(false);
+		expect(pullRepositoryInput(['azure-devops']).validate(repo)).toBe(false);
+		expect(gitCoords(gitSource({ provider: 'azure-devops', repo }))).toBeNull();
 	});
 
 	it('preserves .git in Azure repository links', () => {

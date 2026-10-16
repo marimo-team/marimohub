@@ -476,8 +476,8 @@ Shared pull and publish flows need no provider-specific branches.
 | `publication` | Publication stage and HTTP status metadata                    |
 | `publish`     | Git commit creation and branch updates with an expected head  |
 
-Every provider fetches Git data through the shared transport. It refuses redirects, pins
-requests to the repository's origin and path, and bounds the time to headers and between body chunks.
+Every provider fetches Git data through the shared transport, which refuses redirects, pins
+requests to the repository's origin and path, and bounds time to headers and between body chunks.
 Authentication, repository URLs, response schemas, pagination, and publication protocols stay in each adapter.
 GitHub uses repository archives for workspace reads. Azure DevOps and GitLab use the shared tree reader.
 Provider IDs on the ports remain strings so library consumers can register custom adapters.
@@ -758,11 +758,10 @@ unrelated services and lose cache hits when those services change. Core keeps
 its existing barrel exports for composition consumers. Service-backed adapter
 integration tests still depend on the services they exercise.
 
-Git-synced notebooks use the existing `git` source type. In push mode, an
-external workflow pushes content to `/api/sync/git/v1` with a notebook-scoped
-sync token. In pull mode and for **Sync now**, the hub fetches repository content
-from GitHub, GitLab, or Azure DevOps Services with server credentials, subject to
-the repository project policies. See [§3.1](#31-notebook-storage) and the
+Git-synced notebooks use the `git` source type. In push mode, an external
+workflow pushes content to `/api/sync/git/v1` with a notebook-scoped sync token.
+In pull mode and for **Sync now**, the hub fetches from GitHub, GitLab, or Azure
+DevOps Services with server credentials, subject to repository project policies. See [§3.1](#31-notebook-storage) and the
 [sync guide](../docs/syncing.md).
 
 ---

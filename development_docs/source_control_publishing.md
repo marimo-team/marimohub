@@ -124,18 +124,17 @@ It never force-pushes. Workspace and Git downloads share the existing size limit
 
 ## GitLab
 
-See [GitLab setup](../docs/syncing.md#gitlab) for token and repository policy configuration.
-Prefer a project or group access token; a personal token reaches every project its user can access.
-The adapter uses REST API v4 for branches, trees, and merge requests, and pushes commits over smart
-HTTP through the shared Git transport. It supports gitlab.com and one self-managed origin.
+Token and policy setup is in [GitLab](../docs/syncing.md#gitlab). Prefer a project or group access
+token; a personal token reaches every project its user can access. The adapter uses REST API v4 for
+branches, trees, and merge requests, and pushes commits over smart HTTP through the shared Git
+transport. It supports gitlab.com and one self-managed origin.
 
 Publication pushes a commit built from the exact synced commit to the deterministic
-`marimohub/<notebook-id>/<proposal-id>` branch, then opens a merge request titled `Draft: …`.
-The push is conditional on the expected branch head, so a retry reuses the existing branch and merge
-request instead of creating a second one. Updates calculate the complete proposal tree from its
-original base, including restoration of omitted changes. The adapter rejects external branch changes,
-deleted branches, and closed merge requests. It never force-pushes. Repository URLs match without
-regard to case. Workspace and Git downloads share the existing size limits.
+`marimohub/<notebook-id>/<proposal-id>` branch, then opens a `Draft: …` merge request. The push is
+conditional on the expected branch head, so a retry reuses the branch and merge request. Updates
+compute the complete proposal tree from its original base, restoring omitted changes. The adapter
+rejects external branch changes, deleted branches, and closed merge requests, and never force-pushes.
+Repository URLs match case-insensitively. Workspace and Git downloads share the existing size limits.
 
 ## Stored proposal
 

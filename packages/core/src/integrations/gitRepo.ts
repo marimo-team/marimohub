@@ -94,49 +94,26 @@ export function gitHubRepository(input: string, origin?: string): GitHubReposito
 	};
 }
 
-const AZURE_SSH_PATTERNS = [
-	/^git@ssh\.dev\.azure\.com:v3\/([^?#]+)$/i,
-	/^ssh:\/\/git@ssh\.dev\.azure\.com(?::22)?\/v3\/([^?#]+)$/i,
-];
-
 function azureHostedParts(value: string): string[] | null {
-	for (const pattern of AZURE_SSH_PATTERNS) {
-		const match = pattern.exec(value);
-		if (!match) continue;
-		const parts = match[1].replace(/\/$/, '').split('/');
-		if (parts.length !== 3) return null;
-		const [org, project, name] = parts;
-		return [org, project, '_git', name];
-	}
 	let url: URL;
 	try {
 		url = new URL(value);
 	} catch {
 		return null;
 	}
-	if (url.protocol !== 'https:' || url.port || url.password || url.search || url.hash) return null;
-	const segments = url.pathname.replace(/\/$/, '').split('/').slice(1);
-	let parts: string[];
-	if (url.hostname === 'dev.azure.com') {
-		parts = segments;
-	} else {
-		// Legacy `{org}.visualstudio.com/[DefaultCollection/]{project}/_git/{repo}`.
-		const labels = url.hostname.split('.');
-		if (labels.length !== 3 || !url.hostname.endsWith('.visualstudio.com')) return null;
-		if (segments[0]?.toLowerCase() === 'defaultcollection') segments.shift();
-		parts = [labels[0], ...segments];
-	}
+	if (url.protocol !== 'https:' || url.hostname !== 'dev.azure.com') return null;
+	if (url.port || url.password || url.search || url.hash) return null;
+	const parts = url.pathname.replace(/\/$/, '').split('/').slice(1);
 	// The portal's clone URLs carry the organization as userinfo; nothing else may.
 	if (url.username && url.username.toLowerCase() !== parts[0]?.toLowerCase()) return null;
 	return parts;
 }
 
 /**
- * An Azure DevOps Services repository in any form the portal hands out:
- * `https://dev.azure.com/{org}/{project}/_git/{repo}`, the clone form with
- * `{org}@` userinfo, legacy `https://{org}.visualstudio.com/...`, or the SSH
- * remote `git@ssh.dev.azure.com:v3/{org}/{project}/{repo}`. Repository names
- * may legitimately end in `.git`, so no suffix is stripped.
+ * An Azure DevOps Services repository URL,
+ * `https://dev.azure.com/{org}/{project}/_git/{repo}`, optionally in the
+ * portal's clone form with `{org}@` userinfo. Repository names may
+ * legitimately end in `.git`, so no suffix is stripped.
  */
 export function azureDevOpsRepository(input: string): AzureDevOpsRepositoryRef | null {
 	const raw = azureHostedParts(input.trim());
@@ -207,11 +184,7 @@ const WELL_KNOWN_HOSTS: GitProviderHosts = {
 };
 
 function isHostedAzure(url: URL): boolean {
-	return (
-		url.protocol === 'https:' &&
-		!url.port &&
-		(url.hostname === 'dev.azure.com' || url.hostname.endsWith('.visualstudio.com'))
-	);
+	return url.protocol === 'https:' && !url.port && url.hostname === 'dev.azure.com';
 }
 
 // Self-hosted instances are commonly named after the product (`github.acme.org`,
@@ -249,7 +222,7 @@ function pathSegments(url: URL, hosts?: GitProviderHosts): string[] {
  * Canonicalize a repo input to one of the two stored shapes, or null when it
  * is neither an `owner/repo` pair nor something that resolves to a repository
  * URL with at least an owner and a name in its path. Hosted Azure DevOps
- * inputs of any form become their `https://dev.azure.com/...` URL.
+ * inputs become their canonical `https://dev.azure.com/...` URL.
  */
 export function normalizeRepo(input: string, hosts?: GitProviderHosts): string | null {
 	const trimmed = input.trim();

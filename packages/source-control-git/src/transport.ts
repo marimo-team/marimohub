@@ -1,6 +1,6 @@
 import git from 'isomorphic-git';
 import type { GitHttpRequest, GitHttpResponse, HttpClient } from 'isomorphic-git';
-import { MAX_TIMER_DELAY_MS, withAbortSignal } from '@marimo-hub/core/async';
+import { withAbortSignal } from '@marimo-hub/core/async';
 import {
 	BadRequestError,
 	DomainError,
@@ -26,14 +26,11 @@ export const DEFAULT_GIT_TRANSPORT_TIMEOUTS: GitTransportTimeouts = {
 	idleMs: 60_000,
 };
 
-// The headers timer also covers uploading a buffered request body (a push pack), so a large push
-// on a slow link would abort while still progressing. Grant extra time for the body at a 64 KiB/s
-// floor rate instead.
-const MIN_UPLOAD_BYTES_PER_MS = (64 * 1024) / 1000;
-
-function headersTimeoutMs(headersMs: number, bodyBytes: number): number {
-	return Math.min(MAX_TIMER_DELAY_MS, headersMs + Math.ceil(bodyBytes / MIN_UPLOAD_BYTES_PER_MS));
-}
+// The headers timer also covers uploading the buffered push pack (up to 25 MiB).
+export const PUSH_GIT_TRANSPORT_TIMEOUTS: GitTransportTimeouts = {
+	headersMs: 300_000,
+	idleMs: 60_000,
+};
 
 function repositorySizeError(repository: string, limit: number): BadRequestError {
 	return new BadRequestError(
@@ -183,11 +180,7 @@ export function gitHttp(options: GitHttpOptions): GitHttpClient {
 		const signal = options.signal
 			? AbortSignal.any([options.signal, transfer.signal])
 			: transfer.signal;
-		const timer = startTimer(
-			transfer,
-			headersTimeoutMs(timeouts.headersMs, body?.byteLength ?? 0),
-			'Git server did not respond in time',
-		);
+		const timer = startTimer(transfer, timeouts.headersMs, 'Git server did not respond in time');
 		let response: Response;
 		try {
 			response = await withAbortSignal(

@@ -933,11 +933,10 @@ status. See
   scheduler enumerates scheduled jobs from two GETs instead of scanning
   `projects/**`. The timestamp prevents delayed updates from replacing newer
   index entries. `job.json` stays authoritative for the full definition.
-  The only other writer of this index is offline catalog recovery
-  (`CatalogService.recover`, with writers stopped). Rebuild mode indexes every
-  surviving `job.json` head. Snapshot mode keeps only the jobs listed in the
-  selected snapshot's index, validates each against its surviving head, and
-  reports unlisted heads as `excluded`.
+  Offline catalog recovery (`CatalogService.recover`, writers stopped) is the
+  only other writer. Rebuild mode indexes every surviving `job.json` head.
+  Snapshot mode keeps the jobs in the selected snapshot's index, validates each
+  against its surviving head, and reports unlisted heads as `excluded`.
 - `job-index/{created_at}_{job-id}.json` — empty, create-if-absent entries for
   oldest-first API pagination without materializing every definition.
 - `run.json` — an operational record like a session (§4.8): every status

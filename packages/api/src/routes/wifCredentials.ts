@@ -53,46 +53,35 @@ export function createWifCredentials(): Hono<HonoEnv> {
 
 		let phase: 'eligibility' | 'exchange' = 'eligibility';
 		try {
-			if (!cache.isEligible(sessionId)) {
-				const session = await deps.services.sessions.getSession(projectId, sessionId);
-				const now = Date.now();
-				if (
-					session.user_id !== userId ||
-					!LIVE_STATUSES.has(session.status) ||
-					isPastAuthorizationDeadline(session, now) ||
-					session.sandbox_reclaimed_at
-				) {
-					return denied();
-				}
-				if (await deps.services.identities.isSuspended(userId)) return denied();
-				const project = await deps.services.projects.getProject(projectId, {
-					consistency: 'validated',
-				});
-				if (!federationFor(project, wif)) return denied();
-				await assertSessionPreviewActive(deps, projectId, session);
-				const notebookLabels = await deps.services.notebooks.getSecurityLabels(
-					projectId,
-					sessionResourceNotebookId(session),
-					{ consistency: 'validated' },
-				);
-				// Same check the sandbox proxy applies, so a removed member or lost role stops minting.
-				const subject: AuthenticatedPrincipal = { id: userId, ...claims.subject };
-				const decision = await authorizationService(deps).authorize(subject, 'session.proxy', {
-					kind: 'session',
-					project,
-					session,
-					notebookLabels,
-				});
-				if (!decision.allowed) return denied();
-				cache.markEligible(
-					sessionId,
-					Math.min(
-						...[session.authorization_expires_at, decision.subjectContextExpiresAt]
-							.filter((deadline): deadline is string => deadline !== undefined)
-							.map((deadline) => Date.parse(deadline)),
-					),
-				);
+			const session = await deps.services.sessions.getSession(projectId, sessionId);
+			if (
+				session.user_id !== userId ||
+				!LIVE_STATUSES.has(session.status) ||
+				isPastAuthorizationDeadline(session, Date.now()) ||
+				session.sandbox_reclaimed_at
+			) {
+				return denied();
 			}
+			if (await deps.services.identities.isSuspended(userId)) return denied();
+			const project = await deps.services.projects.getProject(projectId, {
+				consistency: 'validated',
+			});
+			if (!federationFor(project, wif)) return denied();
+			await assertSessionPreviewActive(deps, projectId, session);
+			const notebookLabels = await deps.services.notebooks.getSecurityLabels(
+				projectId,
+				sessionResourceNotebookId(session),
+				{ consistency: 'validated' },
+			);
+			// Same check the sandbox proxy applies, so a removed member or lost role stops minting.
+			const subject: AuthenticatedPrincipal = { id: userId, ...claims.subject };
+			const decision = await authorizationService(deps).authorize(subject, 'session.proxy', {
+				kind: 'session',
+				project,
+				session,
+				notebookLabels,
+			});
+			if (!decision.allowed) return denied();
 
 			phase = 'exchange';
 			const creds = await cache.get(sessionId, () =>
