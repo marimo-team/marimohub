@@ -1,5 +1,7 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
+	AuthInvitationSchema,
+	AuthInvitationEmailSchema,
 	BadRequestError,
 	ConflictError,
 	ProjectId,
@@ -353,6 +355,70 @@ const listUsers = createRoute({
 	},
 });
 
+const InvitationInputSchema = z.object({ email: AuthInvitationEmailSchema });
+const InvitationResponseSchema = z.object(AuthInvitationSchema.shape).openapi('AuthInvitation');
+
+const listInvitations = createRoute({
+	method: 'get',
+	path: '/admin/invitations',
+	operationId: 'admin.invitations.list',
+	tags: ['Admin'],
+	summary: 'List email exceptions to the authentication domain allowlist',
+	security: SESSION_ONLY_SECURITY,
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: z.object({ enabled: z.boolean(), items: z.array(InvitationResponseSchema) }),
+			}),
+			'External invitations and whether they are enabled',
+		),
+		...commonErrors(),
+		...errorResponses(403),
+	},
+});
+
+const createInvitation = createRoute({
+	method: 'post',
+	path: '/admin/invitations',
+	operationId: 'admin.invitations.create',
+	tags: ['Admin'],
+	summary: 'Allow an invited email address through the domain restriction',
+	description:
+		'Super-admin and session-only. Requires external invitations to be enabled. Does not send email or grant project membership. Other authentication policies still apply.',
+	security: SESSION_ONLY_SECURITY,
+	request: {
+		body: { required: true, content: { 'application/json': { schema: InvitationInputSchema } } },
+	},
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: InvitationResponseSchema }),
+			'The invitation',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403),
+	},
+});
+
+const revokeInvitation = createRoute({
+	method: 'delete',
+	path: '/admin/invitations/{email}',
+	operationId: 'admin.invitations.revoke',
+	'x-cli-destructive': true,
+	tags: ['Admin'],
+	summary: 'Remove an email exception to the domain restriction',
+	security: SESSION_ONLY_SECURITY,
+	request: { params: InvitationInputSchema },
+	responses: {
+		200: jsonContent(
+			z.object({ success: z.literal(true), data: z.object({ revoked: z.literal(true) }) }),
+			'Invitation removed',
+		),
+		...commonErrors(),
+		...errorResponses(400, 403),
+	},
+});
+
 const getConfig = createRoute({
 	method: 'get',
 	path: '/admin/config',
@@ -627,6 +693,62 @@ app.openapi(listUsers, async (c) => {
 	// The directory is served whole (same O(low-thousands) bound as user
 	// search); the page envelope reserves room for a real cursor later.
 	return c.json({ success: true, data: { items, next_cursor: null } }, 200);
+});
+
+app.openapi(listInvitations, async (c) => {
+	const deps = c.get('deps');
+	assertSessionAuthenticated(c, 'list invitations');
+	await assertSuperAdmin(c.get('user'), deps);
+	c.header('Cache-Control', 'no-store');
+	return c.json(
+		{
+			success: true,
+			data: {
+				enabled: deps.policy.authInvitationsEnabled ?? false,
+				items: await deps.services.authInvitations.list(),
+			},
+		},
+		200,
+	);
+});
+
+app.openapi(createInvitation, async (c) => {
+	const deps = c.get('deps');
+	const actor = c.get('user');
+	assertSessionAuthenticated(c, 'invite users');
+	await assertSuperAdmin(actor, deps);
+	if (!deps.policy.authInvitationsEnabled)
+		throw new ForbiddenError('External invitations are disabled');
+	const invitation = await deps.services.authInvitations.invite(
+		c.req.valid('json').email,
+		actor.id,
+	);
+	await appendAudit(
+		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: actor.id },
+		'user.invited',
+		() =>
+			deps.services.events.append({
+				event: 'user.invited',
+				actor: actor.id,
+				email: invitation.email,
+			}),
+	);
+	return c.json({ success: true, data: invitation }, 200);
+});
+
+app.openapi(revokeInvitation, async (c) => {
+	const deps = c.get('deps');
+	const actor = c.get('user');
+	assertSessionAuthenticated(c, 'revoke invitations');
+	await assertSuperAdmin(actor, deps);
+	const email = c.req.valid('param').email;
+	await deps.services.authInvitations.revoke(email);
+	await appendAudit(
+		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: actor.id },
+		'user.invitation_revoked',
+		() => deps.services.events.append({ event: 'user.invitation_revoked', actor: actor.id, email }),
+	);
+	return c.json({ success: true, data: { revoked: true } }, 200);
 });
 
 app.openapi(suspendUser, async (c) => {

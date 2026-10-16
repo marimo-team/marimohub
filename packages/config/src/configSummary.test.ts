@@ -97,6 +97,7 @@ describe('buildConfigSummary', () => {
 		expect(auth.backend).toBe('proxy-header');
 		expect(auth.settings.map((setting) => setting.key)).toEqual([
 			'MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS',
+			'MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS',
 			'MARIMOHUB_AUTH_PROXY_HEADER',
 			'MARIMOHUB_AUTH_PROXY_JWT_ISSUER',
 			'MARIMOHUB_AUTH_PROXY_JWT_AUDIENCE',

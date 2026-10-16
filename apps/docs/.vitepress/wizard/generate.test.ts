@@ -510,3 +510,13 @@ describe('validateSelection', () => {
 		).toEqual([]);
 	});
 });
+
+it.each([generateEnv, generateHelm, generateCompose])(
+	'keeps external invitations opt-in in generated deployments',
+	(generate) => {
+		const selection = CASES['default-prod (s3 + modal + oidc)'];
+		const flag = 'MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS';
+		expect(generate(selection)).not.toContain(flag);
+		expect(generate({ ...selection, values: { [flag]: 'on' } })).toContain(flag);
+	},
+);

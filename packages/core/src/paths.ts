@@ -328,6 +328,8 @@ export const paths = {
 	editorClaimsForProject: (projectId: ProjectId) => `_system/editors/${projectId}/`,
 	identity: (userId: UserId) => `_system/identities/${encodeURIComponent(userId)}.json`,
 	identitiesPrefix: '_system/identities/',
+	authInvitation: (email: string) => `_system/auth-invitations/${encodeURIComponent(email)}.json`,
+	authInvitationsPrefix: '_system/auth-invitations/',
 	// One mutable record per personal access token, keyed by the id embedded in
 	// the presented token so verification is a single GET (no index object).
 	token: (tokenId: TokenId) => `_system/tokens/${tokenId}.json`,

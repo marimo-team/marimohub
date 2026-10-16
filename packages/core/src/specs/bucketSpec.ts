@@ -20,6 +20,7 @@ import { AppPoolSchema } from '../services/runtime/AppPoolRouter';
 import { ThumbnailRecordSchema } from '../services/content/ThumbnailService';
 import { DeepLinkRecordSchema } from '../deepLinks';
 import { z } from 'zod';
+import { AuthInvitationSchema } from '../services/identity/AuthInvitationService';
 import type {
 	ImportId,
 	IntegrationId,
@@ -460,6 +461,15 @@ const OBJECTS: BucketObject[] = [
 		mutability: 'cas',
 		owner: 'NotebookWorkspaceService',
 		tag: 'notebook',
+	},
+	{
+		name: 'AuthInvitation',
+		key: template(paths.authInvitation('{email}')),
+		schema: AuthInvitationSchema,
+		summary: 'Admin-managed email exception to the authentication domain allowlist.',
+		mutability: 'last-writer-wins',
+		owner: 'AuthInvitationService',
+		tag: 'auth',
 	},
 	{
 		name: 'Identity',

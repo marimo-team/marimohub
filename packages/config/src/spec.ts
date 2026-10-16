@@ -61,6 +61,16 @@ const AUTH_ALLOWED_EMAIL_DOMAINS: ConfigVar = {
 	required: true,
 };
 
+const AUTH_ALLOW_EXTERNAL_INVITATIONS: ConfigVar = {
+	id: 'MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS',
+	name: 'Allow external invitations',
+	optIn: true,
+	description:
+		'Allow super admins to invite email addresses outside the allowed domains. See [external invitations](./auth.md#invite-people-outside-the-allowed-domains).',
+	default: 'off',
+	example: 'on',
+};
+
 const OIDC_MEMBERSHIP_DESCRIPTION =
 	'Requires `MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM`. Selected groups enter signed, unencrypted browser sessions or authenticated subjects for external OIDC access tokens. Limits: 32 groups and 1280 UTF-8 JSON bytes. Overflow rejects browser login or external-token authentication. Matching project group memberships grant their assigned roles. See [group membership](./auth.md#group-membership).';
 
@@ -1307,6 +1317,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					AUTH_ALLOWED_EMAIL_DOMAINS,
+					AUTH_ALLOW_EXTERNAL_INVITATIONS,
 					{
 						id: 'MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM',
 						name: 'Groups claim pointer',
@@ -1423,6 +1434,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					'Reads trusted proxy headers or verifies a Google IAP JWT. Isolate header mode behind a proxy that removes client-supplied identity headers. Set `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS`. Use `*` to allow all domains.',
 				vars: [
 					AUTH_ALLOWED_EMAIL_DOMAINS,
+					AUTH_ALLOW_EXTERNAL_INVITATIONS,
 					{
 						id: 'MARIMOHUB_AUTH_PROXY_HEADER',
 						name: 'Proxy identity header',

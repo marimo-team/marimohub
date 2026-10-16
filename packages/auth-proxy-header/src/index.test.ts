@@ -430,3 +430,62 @@ describe('ProxyHeaderAuthenticator JWT mode', () => {
 		).toThrow(/HTTPS URL without credentials/);
 	});
 });
+
+it('admits only invited proxy users and rechecks invitations on each request', async () => {
+	let invited = true;
+	const auth = new ProxyHeaderAuthenticator({
+		mode: 'headers',
+		allowedEmailDomains: ['example.com'],
+		isEmailInvited: async (email) => invited && email === 'guest@outside.com',
+	});
+	const req = request({ 'X-Forwarded-Email': 'guest@outside.com', 'X-Forwarded-User': 'guest' });
+	await expect(auth.authenticate(req)).resolves.toHaveProperty('id', 'guest');
+	await expect(
+		auth.authenticate(
+			request({ 'X-Forwarded-Email': 'other@outside.com', 'X-Forwarded-User': 'other' }),
+		),
+	).resolves.toBeNull();
+	invited = false;
+	await expect(auth.authenticate(req)).resolves.toBeNull();
+});
+
+it('never lets an invitation bypass proxy JWT verification', async () => {
+	vi.spyOn(console, 'error').mockImplementation(() => {});
+	const lookup = vi.fn(async () => true);
+	const auth = new ProxyHeaderAuthenticator({
+		mode: 'jwt',
+		audience: 'audience',
+		allowedEmailDomains: ['company.com'],
+		isEmailInvited: lookup,
+	});
+	jwtVerify.mockRejectedValueOnce(new Error('bad signature'));
+	await expect(
+		auth.authenticate(request({ 'X-Goog-IAP-JWT-Assertion': 'forged.jwt.value' })),
+	).resolves.toBeNull();
+	expect(lookup).not.toHaveBeenCalled();
+	jwtVerify.mockResolvedValueOnce({
+		payload: { sub: 'guest', email: 'guest@outside.com', exp: 2_000_000_000, iat: 1 },
+	});
+	await expect(
+		auth.authenticate(request({ 'X-Goog-IAP-JWT-Assertion': 'signed.jwt.value' })),
+	).resolves.toHaveProperty('email', 'guest@outside.com');
+	expect(lookup).toHaveBeenCalledWith('guest@outside.com');
+});
+
+it('rejects a verified proxy JWT when invitation storage fails', async () => {
+	vi.spyOn(console, 'error').mockImplementation(() => {});
+	const auth = new ProxyHeaderAuthenticator({
+		mode: 'jwt',
+		audience: 'audience',
+		allowedEmailDomains: ['company.com'],
+		isEmailInvited: async () => {
+			throw new Error('unavailable');
+		},
+	});
+	jwtVerify.mockResolvedValueOnce({
+		payload: { sub: 'guest', email: 'guest@outside.com', exp: 2_000_000_000, iat: 1 },
+	});
+	await expect(
+		auth.authenticate(request({ 'X-Goog-IAP-JWT-Assertion': 'signed.jwt.value' })),
+	).resolves.toBeNull();
+});

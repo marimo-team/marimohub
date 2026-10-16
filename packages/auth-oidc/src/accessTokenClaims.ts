@@ -1,7 +1,7 @@
 import { externalTokenGrant } from '@marimo-hub/core/token-grants';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core/ports/auth';
 import { admitOidcIdentity } from './admission';
-import type { OidcAdmissionPolicy } from './admission';
+import type { AdmissionResult, OidcAdmissionPolicy } from './admission';
 import { validSubject } from './claims';
 
 const TOKEN_TYPES = new Set(['jwt', 'at+jwt', 'application/at+jwt']);
@@ -58,6 +58,7 @@ export function principalFromVerifiedAccessToken(
 	typ: unknown,
 	policy: AccessTokenPolicy,
 	now: number,
+	admission: AdmissionResult = admitOidcIdentity(payload, policy.admission),
 ): PrincipalResult {
 	if (
 		payload.cnf !== undefined ||
@@ -72,7 +73,6 @@ export function principalFromVerifiedAccessToken(
 	const expiresAt = tokenExpiry(payload.iat, payload.exp, now, policy.maxLifetimeSeconds);
 	const scopes = parseAccessTokenScopes(payload.scope);
 	if (!expiresAt || !scopes) return { error: 'invalid_claims' };
-	const admission = admitOidcIdentity(payload, policy.admission);
 	if ('error' in admission) {
 		if (admission.error === 'too_many_groups')
 			return { error: 'membership_groups_exceeded', retained: admission.retained };

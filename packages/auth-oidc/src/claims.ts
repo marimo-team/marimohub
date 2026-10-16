@@ -3,6 +3,8 @@ import type { AssignableRole } from '@marimo-hub/core/constants';
 import { isAuthGroupId } from '@marimo-hub/core/ports/auth';
 import type { AuthEntitlement } from '@marimo-hub/core/ports/auth';
 
+export { normalizeEmailDomains, emailDomainAllowed } from '@marimo-hub/core/email-admission';
+
 export type EmailVerificationPolicy = 'required' | 'trusted-issuer';
 
 export interface OidcGroupPolicy {
@@ -211,24 +213,6 @@ export function mappedEntitlements(
 		}
 	}
 	return [...entitlements];
-}
-
-export function normalizeEmailDomains(domains: readonly string[] | undefined): string[] {
-	const entries = (domains ?? []).map((domain) => domain.trim().toLowerCase()).filter(Boolean);
-	if (
-		(domains?.length && entries.length === 0) ||
-		entries.some((domain) => domain === '@' || domain === '@*')
-	) {
-		throw new Error('Email-domain allowlist contains an empty or malformed domain');
-	}
-	return entries.map((domain) => domain.replace(/^@/, ''));
-}
-
-/** True when `email`'s domain is one of the (already-normalized) allowed domains. */
-export function emailDomainAllowed(email: string, allowedDomains: readonly string[]): boolean {
-	const at = email.lastIndexOf('@');
-	if (at === -1) return false;
-	return allowedDomains.includes(email.slice(at + 1).toLowerCase());
 }
 
 function isEmailVerified(value: unknown): boolean {

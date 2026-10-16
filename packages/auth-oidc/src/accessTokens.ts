@@ -2,7 +2,7 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { bearerToken } from '@marimo-hub/core/bearer-token';
 import { logEvent } from '@marimo-hub/core/logs';
 import type { Authenticator } from '@marimo-hub/core/ports/auth';
-import { createAdmissionPolicy } from './admission';
+import { createAdmissionPolicy, admitOidcIdentityWithInvitations } from './admission';
 import type { OidcAdmissionConfig } from './admission';
 import { createOidcDiscovery, oidcIssuerUrl } from './discovery';
 import { principalFromVerifiedAccessToken } from './accessTokenClaims';
@@ -98,6 +98,7 @@ export function createOidcAccessTokenAuthenticator(config: OidcAccessTokenConfig
 				verified.protectedHeader.typ,
 				policy,
 				Math.floor(Date.now() / 1000),
+				await admitOidcIdentityWithInvitations(verified.payload, policy.admission),
 			);
 			if (!('error' in result)) return result.principal;
 			if (result.error === 'membership_groups_exceeded') {

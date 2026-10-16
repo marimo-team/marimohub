@@ -97,6 +97,7 @@ describe('App routes', () => {
 						groups: [],
 					});
 				}
+				if (url === '/api/v1/admin/invitations') return jsonOk({ enabled: false, items: [] });
 				if (url === '/api/v1/admin/users') return jsonOk({ items: [] });
 				if (url === '/api/v1/version') return jsonOk({ version: 'test' });
 				throw new Error(`unexpected fetch: ${url}`);
@@ -125,6 +126,7 @@ describe('App routes', () => {
 						groups: [],
 					});
 				}
+				if (url === '/api/v1/admin/invitations') return jsonOk({ enabled: false, items: [] });
 				if (url === '/api/v1/admin/users') {
 					return jsonError('INTERNAL_ERROR', 'Internal server error', 500);
 				}
@@ -156,6 +158,7 @@ describe('App routes', () => {
 						groups: [],
 					});
 				}
+				if (url === '/api/v1/admin/invitations') return jsonOk({ enabled: false, items: [] });
 				if (url === '/api/v1/admin/users') {
 					return jsonOk({
 						items: [

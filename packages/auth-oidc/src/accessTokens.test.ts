@@ -585,3 +585,44 @@ it.each([
 	);
 	expect(JSON.stringify(events)).not.toContain('team-');
 });
+
+it('admits invited external-token users and rejects them after revocation', async () => {
+	let invited = true;
+	const auth = createOidcAccessTokenAuthenticator({
+		...config,
+		isEmailInvited: async (email) => invited && email === 'guest@outside.com',
+	});
+	const token = await sign(claims({ email: 'guest@outside.com' }));
+	await expect(auth.authenticate(request(token))).resolves.toHaveProperty(
+		'email',
+		'guest@outside.com',
+	);
+	invited = false;
+	await expect(auth.authenticate(request(token))).resolves.toBeNull();
+	const unverified = await sign(claims({ email: 'guest@outside.com', email_verified: false }));
+	invited = true;
+	await expect(auth.authenticate(request(unverified))).resolves.toBeNull();
+});
+
+it('rejects external tokens during invitation-store outages and recovers on retry', async () => {
+	vi.spyOn(console, 'error').mockImplementation(() => {});
+	const lookup = vi
+		.fn()
+		.mockRejectedValueOnce(new Error('storage unavailable'))
+		.mockResolvedValue(true);
+	const auth = createOidcAccessTokenAuthenticator({ ...config, isEmailInvited: lookup });
+	const token = await sign(claims({ email: 'guest@outside.com' }));
+	await expect(auth.authenticate(request(token))).resolves.toBeNull();
+	await expect(auth.authenticate(request(token))).resolves.toHaveProperty(
+		'email',
+		'guest@outside.com',
+	);
+});
+
+it('never consults invitations for external tokens with invalid signatures', async () => {
+	const lookup = vi.fn(async () => true);
+	const auth = createOidcAccessTokenAuthenticator({ ...config, isEmailInvited: lookup });
+	const token = await sign(claims({ email: 'guest@outside.com' }), nextKey);
+	await expect(auth.authenticate(request(token))).resolves.toBeNull();
+	expect(lookup).not.toHaveBeenCalled();
+});

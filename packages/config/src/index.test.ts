@@ -1,3 +1,4 @@
+import { createApi } from '@marimo-hub/api';
 import { describe, it, expect, vi } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import {
@@ -56,6 +57,62 @@ describe('createFromEnv auth backend selection', () => {
 			name: 'Alice Example',
 			credential: { kind: 'development' },
 		});
+	});
+
+	it('uses admin invitations for proxy sign-in and revokes existing PAT access', async () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'proxy-header',
+			MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
+			MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS: 'on',
+		});
+		expect(deps.policy.authInvitationsEnabled).toBe(true);
+		const request = new Request('https://hub.example.com', {
+			headers: { 'X-Forwarded-Email': 'guest@outside.com', 'X-Forwarded-User': 'guest' },
+		});
+		await expect(deps.authenticator.authenticate(request)).resolves.toBeNull();
+		await deps.services.authInvitations.invite('GUEST@outside.com', ACTOR);
+		const guest = await deps.authenticator.authenticate(request);
+		expect(guest).toMatchObject({ id: 'guest', email: 'guest@outside.com' });
+		await deps.services.identities.upsert(guest!);
+		const { token } = await deps.services.tokens.create({ name: 'guest-cli' }, guest!.id);
+		const bearer = new Request('https://hub.example.com', {
+			headers: { authorization: `Bearer ${token}` },
+		});
+		await expect(deps.authenticator.authenticate(bearer)).resolves.toHaveProperty('id', 'guest');
+		await deps.services.authInvitations.revoke('guest@outside.com');
+		await expect(deps.authenticator.authenticate(request)).resolves.toBeNull();
+		await expect(deps.authenticator.authenticate(bearer)).resolves.toBeNull();
+	});
+
+	it('does not let invitations bypass account suspension for SSO or personal tokens', async () => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'proxy-header',
+			MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS: 'example.com',
+			MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS: 'on',
+		});
+		const headers = { 'X-Forwarded-Email': 'guest@outside.com', 'X-Forwarded-User': 'guest' };
+		await deps.services.authInvitations.invite('guest@outside.com', ACTOR);
+		const guest = await deps.authenticator.authenticate(
+			new Request('https://hub.example.com', { headers }),
+		);
+		expect(guest).not.toBeNull();
+		await deps.services.identities.upsert(guest!);
+		const { token } = await deps.services.tokens.create({ name: 'guest-cli' }, guest!.id);
+		const app = createApi(deps);
+		const credentials = [headers, { authorization: `Bearer ${token}` }];
+		for (const credential of credentials)
+			expect((await app.request('/api/v1/me', { headers: credential })).status).toBe(200);
+		await deps.services.identities.setSuspension(guest!.id, true);
+		expect((await app.request('/api/v1/me', { headers })).status).toBe(403);
+		expect((await app.request('/api/v1/me', { headers: credentials[1] })).status).toBe(401);
+		await deps.services.identities.setSuspension(guest!.id, false);
+		for (const credential of credentials)
+			expect((await app.request('/api/v1/me', { headers: credential })).status).toBe(200);
+		await deps.services.authInvitations.revoke('guest@outside.com');
+		for (const credential of credentials)
+			expect((await app.request('/api/v1/me', { headers: credential })).status).toBe(401);
 	});
 
 	it('parses compute profiles during boot and rejects typos', () => {
