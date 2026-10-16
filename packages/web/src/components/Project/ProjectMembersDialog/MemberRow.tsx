@@ -32,6 +32,7 @@ export function MemberRow({
 	onRemove,
 }: MemberRowProps) {
 	const key = member.group !== undefined ? `group ${member.group}` : memberLabel(member);
+	const user = member.user_id ? users?.[member.user_id] : undefined;
 	return (
 		<li
 			data-testid="member-row"
@@ -49,12 +50,23 @@ export function MemberRow({
 						<MemberKindBadge kind="group" id={member.group} />
 					</>
 				) : member.user_id ? (
-					<UserLabel
-						user={users?.[member.user_id]}
-						fallbackId={member.user_id}
-						loading={usersLoading}
-						className="min-w-0"
-					/>
+					<span className="flex min-w-0 flex-col">
+						<UserLabel
+							user={user}
+							fallbackId={member.user_id}
+							loading={usersLoading}
+							className="min-w-0"
+						/>
+						{user?.name && user.email && user.name !== user.email ? (
+							<span
+								className="truncate text-xs text-muted-foreground"
+								title={user.email}
+								translate="no"
+							>
+								{user.email}
+							</span>
+						) : null}
+					</span>
 				) : (
 					<>
 						<span className="truncate" translate="no">
