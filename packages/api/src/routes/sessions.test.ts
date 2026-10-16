@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Mock } from 'vitest';
 import {
 	BadRequestError,
@@ -4246,6 +4246,7 @@ describe('Session routes', () => {
 		});
 
 		describe('refreshable credentials endpoint', () => {
+			afterEach(() => vi.restoreAllMocks());
 			const expiration = new Date(Date.now() + 60 * 60_000).toISOString();
 			const endpointApi = (
 				exchange: Mock<NonNullable<TestWifOptions['exchange']>> = vi.fn(async () => ({
@@ -4259,6 +4260,7 @@ describe('Session routes', () => {
 					userId: ACTOR,
 					compute: fakeComputeFrom(instance),
 					deps: {
+						sandbox: sandboxConfig({ appBaseUrl: 'https://hub.example.com' }),
 						wif: makeTestWif({
 							exchange,
 							mint: async () => 'jwt.value',
@@ -4291,7 +4293,7 @@ describe('Session routes', () => {
 				expect(exchange).not.toHaveBeenCalled();
 			});
 
-			it('serves container credentials and reuses them until near expiry', async () => {
+			it('serves container credentials and reuses cached credentials', async () => {
 				await enableFederation();
 				const { request, exchange, fetchCreds } = endpointApi();
 				await expectOk<ApiSession>(await request('POST', sessionsPath()));
@@ -4309,17 +4311,73 @@ describe('Session routes', () => {
 				expect(exchange).toHaveBeenCalledTimes(1);
 			});
 
-			it('synthesizes a short Expiration and empty Token for undated broker creds', async () => {
+			it.each([undefined, 'invalid', '2020-01-01T00:00:00Z'])(
+				'rejects unusable broker expiration: %s',
+				async (expiration) => {
+					await enableFederation();
+					const { request, fetchCreds } = endpointApi(
+						vi.fn(async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK', expiration })),
+					);
+					await expectOk<ApiSession>(await request('POST', sessionsPath()));
+					expect((await fetchCreds()).status).toBe(503);
+				},
+			);
+
+			it.each([false, true])(
+				'enforces authorization expiry before the lifecycle sweep (cached: %s)',
+				async (cached) => {
+					await enableFederation();
+					const { request, fetchCreds, exchange } = endpointApi();
+					const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+					if (cached) expect((await fetchCreds()).status).toBe(200);
+					const deadline = Date.now() + 1_000;
+					await createServices(bucket).sessions.tightenAuthorizationDeadline(
+						pid,
+						session.session_id,
+						new Date(deadline).toISOString(),
+					);
+					vi.spyOn(Date, 'now').mockReturnValue(deadline);
+					expect((await fetchCreds()).status).toBe(403);
+					expect(exchange).toHaveBeenCalledTimes(cached ? 1 : 0);
+				},
+			);
+
+			it('rejects a suspended owner after a cache hit', async () => {
 				await enableFederation();
-				const { request, fetchCreds } = endpointApi(
-					vi.fn(async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK' })),
-				);
+				const { request, fetchCreds, exchange, deps } = endpointApi();
 				await expectOk<ApiSession>(await request('POST', sessionsPath()));
-				const body = (await (await fetchCreds()).json()) as Record<string, string>;
-				expect(body.Token).toBe('');
-				const remaining = Date.parse(body.Expiration) - Date.now();
-				expect(remaining).toBeGreaterThan(10 * 60_000);
-				expect(remaining).toBeLessThanOrEqual(15 * 60_000);
+				expect((await fetchCreds()).status).toBe(200);
+				await deps.services.identities.setSuspension(ACTOR, true);
+				expect((await fetchCreds()).status).toBe(403);
+				expect(exchange).toHaveBeenCalledOnce();
+			});
+
+			it('bounds session authorization by token expiry even when its lifetime is extended', async () => {
+				await enableFederation();
+				const { request, calls } = endpointApi();
+				const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				const token = calls.setEnvVars.find(
+					(vars) => vars.AWS_CONTAINER_AUTHORIZATION_TOKEN,
+				)!.AWS_CONTAINER_AUTHORIZATION_TOKEN;
+				const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()) as {
+					exp: number;
+					iat: number;
+				};
+				const services = createServices(bucket);
+				const stored = await services.sessions.getSession(pid, session.session_id);
+				expect(Date.parse(stored.authorization_expires_at!)).toBe(claims.exp * 1000);
+				expect(claims.exp - claims.iat).toBeLessThanOrEqual(7 * 24 * 60 * 60);
+				expect(claims.exp - claims.iat).toBeGreaterThan(6 * 24 * 60 * 60);
+				const extended = await services.sessions.extendExpiry(
+					pid,
+					session.session_id,
+					new Date((claims.exp + 3600) * 1000).toISOString(),
+				);
+				expect(extended.authorization_expires_at).toBe(stored.authorization_expires_at);
+				await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				expect(
+					(await services.sessions.getSession(pid, session.session_id)).authorization_expires_at,
+				).toBe(stored.authorization_expires_at);
 			});
 
 			it('rejects a missing or forged token', async () => {

@@ -1,3 +1,4 @@
+import { ValidationError } from '../../errors';
 import { Millis, Seconds } from '../../duration';
 import { fromBase64Url, toBase64Url, utf8ToBase64Url } from '../../internal/base64url';
 import { hmacSha256, timingSafeEqual } from '../../internal/hmac';
@@ -7,6 +8,24 @@ const TOKEN_USE = 'wif-container-credentials';
 const SECRET_DERIVATION_LABEL = 'marimohub/wif-container-credentials-token/v1';
 
 const DEFAULT_TOKEN_TTL_SECONDS = Seconds.hours(24 * 7);
+
+export function wifCredentialsDeadline(now = Date.now()): string {
+	return new Date((Math.floor(now / 1000) + DEFAULT_TOKEN_TTL_SECONDS) * 1000).toISOString();
+}
+
+export function validateWifCredentialsUrl(value: string): void {
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		throw new ValidationError('WIF endpoint delivery requires an absolute HTTPS URL');
+	}
+	if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
+		throw new ValidationError(
+			'WIF endpoint delivery requires an HTTPS URL without credentials, query, or fragment',
+		);
+	}
+}
 
 export interface WifCredentialsTokenClaims {
 	sessionId: string;
@@ -22,7 +41,7 @@ async function deriveSecret(keyMaterial: string): Promise<string> {
 export async function mintWifCredentialsToken(
 	keyMaterial: string,
 	claims: WifCredentialsTokenClaims,
-	opts: { ttlSeconds?: Seconds; now?: () => number } = {},
+	opts: { ttlSeconds?: Seconds; expiresAt?: string; now?: () => number } = {},
 ): Promise<string> {
 	const now = opts.now ?? (() => Date.now());
 	const iat = Millis.toSeconds(Millis.of(now()));
@@ -32,7 +51,10 @@ export async function mintWifCredentialsToken(
 		project_id: claims.projectId,
 		user_id: claims.userId,
 		iat,
-		exp: iat + (opts.ttlSeconds ?? DEFAULT_TOKEN_TTL_SECONDS),
+		exp: Math.min(
+			iat + (opts.ttlSeconds ?? DEFAULT_TOKEN_TTL_SECONDS),
+			opts.expiresAt ? Date.parse(opts.expiresAt) / 1000 : Infinity,
+		),
 	};
 	const signingInput = `${utf8ToBase64Url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))}.${utf8ToBase64Url(
 		JSON.stringify(payload),
@@ -70,7 +92,11 @@ export async function verifyWifCredentialsToken(
 		return null;
 	}
 	if (payload.use !== TOKEN_USE) return null;
-	if (typeof payload.exp !== 'number' || payload.exp < Millis.toSeconds(Millis.of(now()))) {
+	if (
+		typeof payload.exp !== 'number' ||
+		!Number.isFinite(payload.exp) ||
+		payload.exp <= Millis.toSeconds(Millis.of(now()))
+	) {
 		return null;
 	}
 	const { sub, project_id, user_id } = payload;
@@ -87,6 +113,7 @@ export function containerCredentialsEnv(
 	endpoint?: string,
 	region?: string,
 ): Record<string, string> {
+	validateWifCredentialsUrl(credentialsUrl);
 	const env: Record<string, string> = {
 		AWS_CONTAINER_CREDENTIALS_FULL_URI: credentialsUrl,
 		AWS_CONTAINER_AUTHORIZATION_TOKEN: token,

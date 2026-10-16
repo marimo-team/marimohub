@@ -8,6 +8,8 @@ import {
 	mintWifCredentialsToken,
 	toContainerCredentialsResponse,
 	verifyWifCredentialsToken,
+	validateWifCredentialsUrl,
+	wifCredentialsDeadline,
 } from './containerCredentials';
 
 const CLAIMS = {
@@ -34,6 +36,19 @@ describe('WIF credentials token', () => {
 			now: () => issued,
 		});
 		expect(await verifyWifCredentialsToken('secret', token, () => issued + 61_000)).toBeNull();
+	});
+
+	it('expires exactly at the session deadline', async () => {
+		const issued = Date.parse('2026-01-01T00:00:00.123Z');
+		const deadline = wifCredentialsDeadline(issued);
+		const token = await mintWifCredentialsToken('secret', CLAIMS, {
+			now: () => issued,
+			expiresAt: deadline,
+		});
+		expect(
+			await verifyWifCredentialsToken('secret', token, () => Date.parse(deadline) - 1),
+		).toEqual(CLAIMS);
+		expect(await verifyWifCredentialsToken('secret', token, () => Date.parse(deadline))).toBeNull();
 	});
 
 	it('rejects an AI session token signed with the same secret', async () => {
@@ -100,5 +115,22 @@ describe('toContainerCredentialsResponse', () => {
 			Token: 'ST',
 			Expiration: '2026-01-01T01:00:00.000Z',
 		});
+	});
+});
+
+describe('validateWifCredentialsUrl', () => {
+	it.each(['https://hub.example.com', 'https://hub.example.com/prefix/'])('accepts %s', (url) => {
+		expect(() => validateWifCredentialsUrl(url)).not.toThrow();
+	});
+	it.each([
+		'',
+		'/api/wif/v1/credentials',
+		'http://hub.example.com',
+		'ftp://hub.example.com',
+		'https://user:secret@hub.example.com',
+		'https://hub.example.com?x=1',
+		'https://hub.example.com/#x',
+	])('rejects %s', (url) => {
+		expect(() => validateWifCredentialsUrl(url)).toThrow(/HTTPS/);
 	});
 });

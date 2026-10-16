@@ -139,11 +139,18 @@ Set `MARIMOHUB_WIF_CREDENTIALS_DELIVERY=endpoint` and sessions get
 `AWS_CONTAINER_CREDENTIALS_FULL_URI` (the hub's `/api/wif/v1/credentials`) and
 `AWS_CONTAINER_AUTHORIZATION_TOKEN` instead of static keys. AWS SDKs and the AWS
 CLI use the [container credential provider](https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html)
-to fetch and refresh credentials for the life of the session.
+to fetch and refresh credentials during the session.
 
 - The token stops working when the session ends, its owner is suspended, or the
   project disables federation.
-- Sandboxes must reach the hub's public URL over HTTPS.
+- Set `MARIMOHUB_APP_BASE_URL` to the public HTTPS URL that sandboxes can reach.
+  Endpoint mode rejects missing URLs, HTTP URLs, credentials, query parameters, and fragments.
+- Sessions that use endpoint delivery have a hard seven-day authorization limit.
+  Active connections and lifetime extensions do not extend this limit. Start a new session after seven days.
+- The broker must return a valid future expiration. Missing, invalid, or expired
+  credentials produce HTTP 503; the hub never fabricates a credential lifetime.
+- Prefer broker credentials with more than 20 minutes of validity. Some SDKs
+  request short-lived credentials on every operation because their refresh window already applies.
 - The exchange runs on first use, so a policy gap appears as an SDK credential
   error.
 - Clients that read only static `AWS_*` variables are not refreshed.
@@ -737,8 +744,8 @@ The analogous setup mirrors AWS:
 - **One-shot credentials are not refreshed mid-session**: they last until their
   expiration (~1h). Use [refreshable credentials](#refreshable-credentials), keep
   sessions shorter than the credential lifetime, or restart the session to re-mint.
-- **Refreshable credentials** put no key material or federation JWT in the
-  sandbox; the session token is HS256 and cannot be used as a federation JWT.
+- **Refreshable credentials** use an HS256 session token that cannot serve as a
+  federation JWT. SDKs fetch temporary cloud credentials into the sandbox when needed.
 - **A federation/policy gap is non-fatal**: if the exchange fails (e.g. the
   project is not covered by the cloud-side policy), the notebook starts without
   federated credentials rather than failing to launch.

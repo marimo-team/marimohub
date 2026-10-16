@@ -554,7 +554,7 @@ Optional: let a notebook reach cloud resources (object storage, and for AWS any 
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_WIF_CREDENTIALS_DELIVERY` | `env` injects one-shot `AWS_*` keys that expire with the STS session (~1h). `endpoint` injects `AWS_CONTAINER_CREDENTIALS_FULL_URI` and a session token so AWS SDKs refresh credentials from the hub for the life of the session; sandboxes must reach the hub over HTTPS. Jobs always use `env`. | — | `env` | `endpoint` |
+| `MARIMOHUB_WIF_CREDENTIALS_DELIVERY` | `env` injects one-shot `AWS_*` keys that expire with the STS session (~1h). `endpoint` injects `AWS_CONTAINER_CREDENTIALS_FULL_URI` and a session token so AWS SDKs refresh credentials from the hub. Requires an HTTPS `MARIMOHUB_APP_BASE_URL` and broker credentials with a valid expiry. Endpoint sessions have a hard seven-day authorization limit. Jobs always use `env`. | — | `env` | `endpoint` |
 
 ## Managed AI
 

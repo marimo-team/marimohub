@@ -94,7 +94,7 @@ export interface FederatedVarsOptions {
 	restricted: boolean;
 	/** Shares the exchange with {@link resolveIntegrationRender}; built per call when absent. */
 	federatedCredentials?: FederatedCredentials;
-	credentialsEndpoint?: { url: string; userId: UserId };
+	credentialsEndpoint?: { url: string; userId: UserId; expiresAt: string };
 	onError?: (err: unknown) => void;
 }
 
@@ -111,11 +111,11 @@ export async function resolveFederatedVars(
 	const endpoint = options.credentialsEndpoint;
 	if (wif.credentialsEndpoint && endpoint && options.workload.kind === 'session') {
 		try {
-			const token = await mintWifCredentialsToken(wif.credentialsEndpoint.keyMaterial, {
-				sessionId: options.workload.id,
-				projectId: options.project.id,
-				userId: endpoint.userId,
-			});
+			const token = await mintWifCredentialsToken(
+				wif.credentialsEndpoint.keyMaterial,
+				{ sessionId: options.workload.id, projectId: options.project.id, userId: endpoint.userId },
+				{ expiresAt: endpoint.expiresAt },
+			);
 			return containerCredentialsEnv(
 				endpoint.url,
 				token,

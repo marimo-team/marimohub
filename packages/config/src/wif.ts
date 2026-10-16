@@ -1,4 +1,4 @@
-import { WorkloadIdentityIssuer } from '@marimo-hub/core';
+import { validateWifCredentialsUrl, WorkloadIdentityIssuer } from '@marimo-hub/core';
 import type { CredentialBroker, FederationTarget } from '@marimo-hub/core';
 import { AwsStsWifBroker } from '@marimo-hub/credentials-aws';
 import { CoreWeaveWifBroker } from '@marimo-hub/credentials-coreweave';
@@ -33,11 +33,6 @@ function makeWifBroker(env: Env): CredentialBroker {
 	}
 }
 
-/**
- * Wire the hub-as-OIDC-issuer + its federation target. All-or-nothing: set the
- * required vars to enable, or none to disable (a half-config throws). The broker
- * is selected by `MARIMOHUB_WIF_BROKER`; projects may override the default.
- */
 function credentialsDelivery(env: Env): 'env' | 'endpoint' {
 	const value = env.MARIMOHUB_WIF_CREDENTIALS_DELIVERY ?? 'env';
 	if (value === 'env' || value === 'endpoint') return value;
@@ -50,6 +45,11 @@ function credentialsDelivery(env: Env): 'env' | 'endpoint' {
 	);
 }
 
+/**
+ * Wire the hub-as-OIDC-issuer + its federation target. All-or-nothing: set the
+ * required vars to enable, or none to disable (a half-config throws). The broker
+ * is selected by `MARIMOHUB_WIF_BROKER`; projects may override the default.
+ */
 export function makeWif(env: Env): Pick<ApiDeps, 'wif'> {
 	const requiredKeys = [
 		'MARIMOHUB_WIF_SIGNING_KEY',
@@ -140,6 +140,17 @@ export function makeWif(env: Env): Pick<ApiDeps, 'wif'> {
 	};
 
 	const delivery = credentialsDelivery(env);
+	if (delivery === 'endpoint') {
+		try {
+			validateWifCredentialsUrl(env.MARIMOHUB_APP_BASE_URL ?? '');
+		} catch {
+			throw new ConfigError('WIF endpoint delivery requires a valid HTTPS MARIMOHUB_APP_BASE_URL', {
+				variable: 'MARIMOHUB_APP_BASE_URL',
+				remediation: 'Set the public hub URL without credentials, query parameters, or a fragment.',
+				docs: 'docs/workload-identity-federation.md',
+			});
+		}
+	}
 	return {
 		wif: {
 			...(delivery === 'endpoint' ? { credentialsEndpoint: { keyMaterial: signingKey } } : {}),

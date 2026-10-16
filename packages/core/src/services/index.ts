@@ -391,6 +391,8 @@ export type { WifClaims, JwksKey } from './identity/WorkloadIdentityIssuer';
 export { s3CredsToEnv } from './identity/s3CredsEnv';
 export {
 	containerCredentialsEnv,
+	validateWifCredentialsUrl,
+	wifCredentialsDeadline,
 	mintWifCredentialsToken,
 	toContainerCredentialsResponse,
 	verifyWifCredentialsToken,

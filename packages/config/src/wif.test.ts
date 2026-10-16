@@ -11,6 +11,7 @@ const FAKE_PEM = '-----BEGIN PRIVATE KEY-----\nQUJD\n-----END PRIVATE KEY-----';
 
 const fullEnv = {
 	MARIMOHUB_WIF_SIGNING_KEY: FAKE_PEM,
+	MARIMOHUB_APP_BASE_URL: 'https://hub.example.com/',
 	MARIMOHUB_WIF_KID: 'kid-1',
 	MARIMOHUB_WIF_ISSUER_URL: 'https://hub.example.com/',
 	MARIMOHUB_WIF_AUDIENCE: 'sts.coreweave',
@@ -122,6 +123,7 @@ describe('makeWif wiring', () => {
 describe('makeWif aws broker', () => {
 	const awsEnv = {
 		MARIMOHUB_WIF_SIGNING_KEY: FAKE_PEM,
+		MARIMOHUB_APP_BASE_URL: 'https://hub.example.com/',
 		MARIMOHUB_WIF_KID: 'kid-1',
 		MARIMOHUB_WIF_ISSUER_URL: 'https://hub.example.com',
 		MARIMOHUB_WIF_AUDIENCE: 'sts.amazonaws.com',
@@ -203,6 +205,23 @@ describe('makeWif credential delivery', () => {
 	it('enables the refreshable endpoint keyed off the signing key', () => {
 		const { wif } = makeWif({ ...fullEnv, MARIMOHUB_WIF_CREDENTIALS_DELIVERY: 'endpoint' });
 		expect(wif?.credentialsEndpoint).toEqual({ keyMaterial: FAKE_PEM });
+	});
+
+	it.each([
+		undefined,
+		'not-a-url',
+		'http://hub.example.com',
+		'https://user:secret@hub.example.com',
+		'https://hub.example.com?query=1',
+		'https://hub.example.com/#fragment',
+	])('rejects an incompatible endpoint base URL: %s', (baseUrl) => {
+		expect(() =>
+			makeWif({
+				...fullEnv,
+				MARIMOHUB_WIF_CREDENTIALS_DELIVERY: 'endpoint',
+				MARIMOHUB_APP_BASE_URL: baseUrl,
+			}),
+		).toThrow(/MARIMOHUB_APP_BASE_URL/);
 	});
 
 	it('rejects an unknown delivery mode', () => {

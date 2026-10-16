@@ -85,6 +85,8 @@ import {
 	SECONDARY_SURFACE_IDS,
 	SurfaceForbiddenError,
 	workspaceSourcePolicy,
+	validateWifCredentialsUrl,
+	wifCredentialsDeadline,
 } from '@marimo-hub/core';
 import { previewAppPoolPolicy, previewIdleTimeout, PREVIEW_MAX_SESSIONS } from '../previewPolicy';
 import { checkComputeProfile } from '../computeProfile';
@@ -103,6 +105,7 @@ import {
 	resolveFederatedVars,
 	resolveIntegrationRender,
 } from '../sandboxEnv';
+import { federationFor } from '../federation';
 import { WIF_CREDENTIALS_PATH } from './wifCredentials';
 import {
 	assertProjectRole,
@@ -1659,6 +1662,17 @@ export async function startNotebookSession(input: {
 		? (await sessions.findReusableEditor(pid, nid, user.id, 'exclusive', true)).session
 		: undefined;
 
+	const credentialsEndpoint = federationFor(project, deps.wif, {
+		restricted: restrictedViewerCredentials,
+	})?.credentialsEndpoint
+		? {
+				url: joinUrlPath(appBaseUrl, WIF_CREDENTIALS_PATH),
+				userId: user.id,
+				expiresAt: wifCredentialsDeadline(),
+			}
+		: undefined;
+	if (credentialsEndpoint) validateWifCredentialsUrl(credentialsEndpoint.url);
+
 	let sandboxId = admission?.member.sandbox_id ?? createSandboxId();
 	const sessionId = admission?.member.session_id ?? createSessionId();
 	let warmClaim: WarmPoolClaim | undefined;
@@ -1727,10 +1741,7 @@ export async function startNotebookSession(input: {
 				workload: sessionWorkload,
 				restricted: restrictedViewerCredentials,
 				federatedCredentials,
-				credentialsEndpoint: {
-					url: joinUrlPath(appBaseUrl, WIF_CREDENTIALS_PATH),
-					userId: user.id,
-				},
+				credentialsEndpoint,
 				onError: (err) => {
 					observer.tag('wif_exchange_failed', true);
 					observer.tag(
@@ -1918,7 +1929,10 @@ export async function startNotebookSession(input: {
 						mode,
 						source_version_id: sourceVersionId,
 						editor_sandbox_sharing: mode === 'edit' ? sharing : undefined,
-						authorization_expires_at: authorizationExpiresAt,
+						authorization_expires_at: earliestDeadline(
+							authorizationExpiresAt,
+							credentialsEndpoint?.expiresAt,
+						),
 					});
 				};
 				// Publish the starting record under the source-mutation lease. Once visible,

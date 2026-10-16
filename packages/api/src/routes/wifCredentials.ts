@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import {
 	exchangeFederatedStorageCredentials,
+	isPastAuthorizationDeadline,
 	NotFoundError,
 	ProjectId,
 	SessionId,
@@ -8,53 +9,21 @@ import {
 	UserId,
 	verifyWifCredentialsToken,
 } from '@marimo-hub/core';
-import type { Session, TempS3Creds } from '@marimo-hub/core';
+import type { Session } from '@marimo-hub/core';
 import type { HonoEnv } from '../context';
 import { federationFor } from '../federation';
 import { errorMetadata, logEvent } from '../log';
 import { fail } from '../shared';
+import { WifCredentialCache } from '../wifCredentialCache';
 
 export const WIF_CREDENTIALS_PREFIX = '/api/wif/v1';
 export const WIF_CREDENTIALS_PATH = `${WIF_CREDENTIALS_PREFIX}/credentials`;
 
-const REFRESH_MARGIN_MS = 20 * 60_000;
-const UNDATED_CACHE_MS = 5 * 60_000;
-const UNDATED_LIFETIME_MS = 15 * 60_000;
-
 const LIVE_STATUSES: ReadonlySet<Session['status']> = new Set(['starting', 'running']);
-
-type DatedCreds = TempS3Creds & { expiration: string };
-
-interface CacheEntry {
-	creds: Promise<DatedCreds>;
-	reuseUntil: number;
-}
 
 export function createWifCredentials(): Hono<HonoEnv> {
 	const app = new Hono<HonoEnv>();
-	const cache = new Map<string, CacheEntry>();
-
-	const exchange = (key: string, run: () => Promise<TempS3Creds>): Promise<DatedCreds> => {
-		const now = Date.now();
-		const hit = cache.get(key);
-		if (hit && hit.reuseUntil > now) return hit.creds;
-		for (const [k, stale] of cache) if (stale.reuseUntil <= now) cache.delete(k);
-		const entry: CacheEntry = {
-			reuseUntil: now + UNDATED_CACHE_MS,
-			creds: run().then((creds) => {
-				const expiry = creds.expiration ? Date.parse(creds.expiration) : Number.NaN;
-				if (creds.expiration && Number.isFinite(expiry)) {
-					entry.reuseUntil = expiry - REFRESH_MARGIN_MS;
-					return { ...creds, expiration: creds.expiration };
-				}
-				// Undated creds get a short synthetic expiry so SDKs keep coming back for fresh ones.
-				return { ...creds, expiration: new Date(now + UNDATED_LIFETIME_MS).toISOString() };
-			}),
-		};
-		entry.creds.catch(() => cache.delete(key));
-		cache.set(key, entry);
-		return entry.creds;
-	};
+	const cache = new WifCredentialCache();
 
 	app.get('/credentials', async (c) => {
 		const deps = c.get('deps');
@@ -86,6 +55,7 @@ export function createWifCredentials(): Hono<HonoEnv> {
 			if (
 				session.user_id !== userId ||
 				!LIVE_STATUSES.has(session.status) ||
+				isPastAuthorizationDeadline(session, Date.now()) ||
 				session.sandbox_reclaimed_at
 			) {
 				return denied();
@@ -94,7 +64,7 @@ export function createWifCredentials(): Hono<HonoEnv> {
 			const project = await deps.services.projects.getProject(projectId);
 			if (!federationFor(project, wif)) return denied();
 
-			const creds = await exchange(sessionId, () =>
+			const creds = await cache.get(sessionId, () =>
 				exchangeFederatedStorageCredentials(wif.issuer, wif.issuerUrl, wif.target, projectId, {
 					kind: 'session',
 					id: sessionId,
