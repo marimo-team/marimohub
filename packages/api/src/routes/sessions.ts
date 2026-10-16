@@ -15,7 +15,6 @@ import type {
 	Project,
 	ProjectId,
 	MarimoConfigContributor,
-	SessionEnv,
 	Session,
 	SessionAdmissionRecord,
 	SessionMode,
@@ -67,7 +66,6 @@ import {
 	sessionPersistsEdits,
 	buildSandboxContext,
 	effectivePersistenceMode,
-	projectSessionEnv,
 	sandboxContextPath,
 	sandboxContextFile,
 	writeSandboxContext,
@@ -100,8 +98,8 @@ import {
 } from '../notifications';
 import type { ApiDeps, SandboxConfig } from '../context';
 import {
+	composeSessionEnv,
 	federatedCredentialsFor,
-	mergeSessionEnv,
 	resolveFederatedVars,
 	resolveIntegrationRender,
 } from '../sandboxEnv';
@@ -1819,15 +1817,7 @@ export async function startNotebookSession(input: {
 				wifVars: resolveWifVars,
 				marimoEnv: resolveMarimoConfigEnv,
 				integrationEnv: resolveIntegrationEnv,
-			}).then(({ wifVars, marimoEnv, integrationEnv }): SessionEnv | undefined => {
-				let env: SessionEnv | undefined = wifVars ? { vars: wifVars } : undefined;
-				if (marimoEnv) env = mergeSessionEnv(env, marimoEnv);
-				// Integration values are the base; WIF and marimo configuration win collisions.
-				if (integrationEnv) {
-					env = mergeSessionEnv(projectSessionEnv(integrationEnv), env ?? {});
-				}
-				return env;
-			});
+			}).then(composeSessionEnv);
 			const launchStrategy = resolveLaunchStrategyForSession({
 				entryNotebookKey: launchSource.entryNotebookKey,
 				bucket: bucketHandle,

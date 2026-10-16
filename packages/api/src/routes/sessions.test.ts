@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import type { Mock } from 'vitest';
 import {
 	BadRequestError,
 	AppPoolService,
@@ -4247,7 +4248,10 @@ describe('Session routes', () => {
 		describe('refreshable credentials endpoint', () => {
 			const expiration = new Date(Date.now() + 60 * 60_000).toISOString();
 			const endpointApi = (
-				exchange = vi.fn(async () => ({ ...(await goodExchange()), expiration })),
+				exchange: Mock<NonNullable<TestWifOptions['exchange']>> = vi.fn(async () => ({
+					...(await goodExchange()),
+					expiration,
+				})),
 			) => {
 				const { instance, calls } = makeFakeSandbox();
 				const api = createTestApi({
@@ -4303,6 +4307,19 @@ describe('Session routes', () => {
 				});
 				expect((await fetchCreds()).status).toBe(200);
 				expect(exchange).toHaveBeenCalledTimes(1);
+			});
+
+			it('synthesizes a short Expiration and empty Token for undated broker creds', async () => {
+				await enableFederation();
+				const { request, fetchCreds } = endpointApi(
+					vi.fn(async () => ({ accessKeyId: 'AK', secretAccessKey: 'SK' })),
+				);
+				await expectOk<ApiSession>(await request('POST', sessionsPath()));
+				const body = (await (await fetchCreds()).json()) as Record<string, string>;
+				expect(body.Token).toBe('');
+				const remaining = Date.parse(body.Expiration) - Date.now();
+				expect(remaining).toBeGreaterThan(10 * 60_000);
+				expect(remaining).toBeLessThanOrEqual(15 * 60_000);
 			});
 
 			it('rejects a missing or forged token', async () => {

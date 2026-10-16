@@ -96,12 +96,14 @@ export function containerCredentialsEnv(
 	return env;
 }
 
-export function toContainerCredentialsResponse(creds: TempS3Creds): Record<string, string> {
-	const body: Record<string, string> = {
+// botocore and the JS v3 SDK require every field, `Token` included (empty is valid).
+export function toContainerCredentialsResponse(
+	creds: TempS3Creds & { expiration: string },
+): Record<string, string> {
+	return {
 		AccessKeyId: creds.accessKeyId,
 		SecretAccessKey: creds.secretAccessKey,
+		Token: creds.sessionToken ?? '',
+		Expiration: creds.expiration,
 	};
-	if (creds.sessionToken) body.Token = creds.sessionToken;
-	if (creds.expiration) body.Expiration = creds.expiration;
-	return body;
 }

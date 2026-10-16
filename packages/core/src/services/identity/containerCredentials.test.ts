@@ -71,6 +71,21 @@ describe('containerCredentialsEnv', () => {
 });
 
 describe('toContainerCredentialsResponse', () => {
+	it('always includes Token, empty when the broker issued none', () => {
+		expect(
+			toContainerCredentialsResponse({
+				accessKeyId: 'AK',
+				secretAccessKey: 'SK',
+				expiration: '2026-01-01T01:00:00.000Z',
+			}),
+		).toEqual({
+			AccessKeyId: 'AK',
+			SecretAccessKey: 'SK',
+			Token: '',
+			Expiration: '2026-01-01T01:00:00.000Z',
+		});
+	});
+
 	it('maps to the container provider body', () => {
 		expect(
 			toContainerCredentialsResponse({

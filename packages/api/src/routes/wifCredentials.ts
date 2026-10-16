@@ -19,11 +19,14 @@ export const WIF_CREDENTIALS_PATH = `${WIF_CREDENTIALS_PREFIX}/credentials`;
 
 const REFRESH_MARGIN_MS = 20 * 60_000;
 const UNDATED_CACHE_MS = 5 * 60_000;
+const UNDATED_LIFETIME_MS = 15 * 60_000;
 
 const LIVE_STATUSES: ReadonlySet<Session['status']> = new Set(['starting', 'running']);
 
+type DatedCreds = TempS3Creds & { expiration: string };
+
 interface CacheEntry {
-	creds: Promise<TempS3Creds>;
+	creds: Promise<DatedCreds>;
 	reuseUntil: number;
 }
 
@@ -31,20 +34,25 @@ export function createWifCredentials(): Hono<HonoEnv> {
 	const app = new Hono<HonoEnv>();
 	const cache = new Map<string, CacheEntry>();
 
-	const exchange = (key: string, run: () => Promise<TempS3Creds>): Promise<TempS3Creds> => {
+	const exchange = (key: string, run: () => Promise<TempS3Creds>): Promise<DatedCreds> => {
 		const now = Date.now();
 		const hit = cache.get(key);
 		if (hit && hit.reuseUntil > now) return hit.creds;
-		for (const [k, entry] of cache) if (entry.reuseUntil <= now) cache.delete(k);
-		const entry: CacheEntry = { creds: run(), reuseUntil: now + UNDATED_CACHE_MS };
-		cache.set(key, entry);
-		entry.creds.then(
-			(creds) => {
+		for (const [k, stale] of cache) if (stale.reuseUntil <= now) cache.delete(k);
+		const entry: CacheEntry = {
+			reuseUntil: now + UNDATED_CACHE_MS,
+			creds: run().then((creds) => {
 				const expiry = creds.expiration ? Date.parse(creds.expiration) : Number.NaN;
-				if (Number.isFinite(expiry)) entry.reuseUntil = expiry - REFRESH_MARGIN_MS;
-			},
-			() => cache.delete(key),
-		);
+				if (creds.expiration && Number.isFinite(expiry)) {
+					entry.reuseUntil = expiry - REFRESH_MARGIN_MS;
+					return { ...creds, expiration: creds.expiration };
+				}
+				// Undated creds get a short synthetic expiry so SDKs keep coming back for fresh ones.
+				return { ...creds, expiration: new Date(now + UNDATED_LIFETIME_MS).toISOString() };
+			}),
+		};
+		entry.creds.catch(() => cache.delete(key));
+		cache.set(key, entry);
 		return entry.creds;
 	};
 

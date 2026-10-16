@@ -36,6 +36,32 @@ export function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): 
 	};
 }
 
+const STATIC_AWS_CREDENTIALS = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'];
+
+/**
+ * Layers a session's env: integrations are the base, WIF and marimo config win
+ * collisions. With endpoint delivery, static AWS keys from any layer are dropped
+ * because they would shadow the container provider.
+ */
+export function composeSessionEnv(layers: {
+	wifVars?: Record<string, string>;
+	marimoEnv?: SessionEnv;
+	integrationEnv?: SessionRender;
+}): SessionEnv | undefined {
+	let env: SessionEnv | undefined = layers.wifVars ? { vars: layers.wifVars } : undefined;
+	if (layers.marimoEnv) env = mergeSessionEnv(env, layers.marimoEnv);
+	if (layers.integrationEnv) {
+		env = mergeSessionEnv(projectSessionEnv(layers.integrationEnv), env ?? {});
+	}
+	if (env && layers.wifVars?.AWS_CONTAINER_CREDENTIALS_FULL_URI) {
+		for (const name of STATIC_AWS_CREDENTIALS) {
+			delete env.vars?.[name];
+			delete env.defaults?.[name];
+		}
+	}
+	return env;
+}
+
 export type FederatedCredentials = () => Promise<TempS3Creds>;
 
 /**

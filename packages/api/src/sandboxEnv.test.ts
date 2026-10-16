@@ -10,7 +10,12 @@ import type {
 import type { JobRunContext } from '@marimo-hub/core/jobs';
 import { ACTOR, makeProject, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
-import { resolveFederatedVars, resolveIntegrationRender, resolveJobSandboxEnv } from './sandboxEnv';
+import {
+	composeSessionEnv,
+	resolveFederatedVars,
+	resolveIntegrationRender,
+	resolveJobSandboxEnv,
+} from './sandboxEnv';
 import { createInitializedBucket, makeTestDeps, makeTestWif } from './testing';
 import type { ApiDeps } from './context';
 
@@ -496,4 +501,51 @@ describe('package registry federation', () => {
 			expect(exchange).not.toHaveBeenCalled();
 		},
 	);
+});
+
+describe('composeSessionEnv', () => {
+	const integrationEnv: SessionRender = {
+		files: [],
+		vars: {
+			AWS_ACCESS_KEY_ID: 'integration',
+			AWS_SECRET_ACCESS_KEY: 'isk',
+			AWS_REGION: 'us-east-1',
+		},
+		attachments: [],
+		warnings: [],
+	};
+
+	it('lets one-shot WIF keys override integration keys', () => {
+		const env = composeSessionEnv({
+			wifVars: { AWS_ACCESS_KEY_ID: 'wif', AWS_SECRET_ACCESS_KEY: 'wsk' },
+			integrationEnv,
+		});
+		expect(env?.vars).toMatchObject({ AWS_ACCESS_KEY_ID: 'wif', AWS_SECRET_ACCESS_KEY: 'wsk' });
+	});
+
+	it('drops integration static keys under endpoint delivery', () => {
+		const env = composeSessionEnv({
+			wifVars: {
+				AWS_CONTAINER_CREDENTIALS_FULL_URI: 'https://hub.example.com/api/wif/v1/credentials',
+				AWS_CONTAINER_AUTHORIZATION_TOKEN: 'tok',
+			},
+			integrationEnv: {
+				...integrationEnv,
+				vars: { ...integrationEnv.vars, AWS_SESSION_TOKEN: 'ist' },
+			},
+		});
+		expect(env?.vars).not.toHaveProperty('AWS_ACCESS_KEY_ID');
+		expect(env?.vars).not.toHaveProperty('AWS_SECRET_ACCESS_KEY');
+		expect(env?.vars).not.toHaveProperty('AWS_SESSION_TOKEN');
+		expect(env?.vars).toMatchObject({
+			AWS_CONTAINER_AUTHORIZATION_TOKEN: 'tok',
+			AWS_REGION: 'us-east-1',
+		});
+	});
+
+	it('leaves integration keys alone without WIF', () => {
+		expect(composeSessionEnv({ integrationEnv })?.vars).toMatchObject({
+			AWS_ACCESS_KEY_ID: 'integration',
+		});
+	});
 });
