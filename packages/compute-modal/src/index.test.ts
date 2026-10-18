@@ -262,23 +262,35 @@ describe('ModalCompute', () => {
 		it.each([
 			{ cpu: 0.001, memoryBytes: 512 * 1024 ** 2 + 1, milliCpu: 1, memoryMiB: 513 },
 			{ cpu: 0.0019, memoryBytes: 512 * 1024 ** 2, milliCpu: 1, memoryMiB: 512 },
-			{ cpu: 4294967.295, memoryBytes: 4503599626321920, milliCpu: 4294967295, memoryMiB: 4294967295 },
-		])('preserves nonzero uint32 caps through SDK conversion: %j', async ({ cpu, memoryBytes, milliCpu, memoryMiB }) => {
-			const world = makeWorld();
-			vi.mocked(world.client.sandboxes.create).mockRestore();
-			const createRpc = vi.spyOn(world.client.cpClient, 'sandboxCreate').mockResolvedValue({ sandboxId: 'sb-sdk' });
+			{
+				cpu: 4294967.295,
+				memoryBytes: 4503599626321920,
+				milliCpu: 4294967295,
+				memoryMiB: 4294967295,
+			},
+		])(
+			'preserves nonzero uint32 caps through SDK conversion: %j',
+			async ({ cpu, memoryBytes, milliCpu, memoryMiB }) => {
+				const world = makeWorld();
+				vi.mocked(world.client.sandboxes.create).mockRestore();
+				const createRpc = vi
+					.spyOn(world.client.cpClient, 'sandboxCreate')
+					.mockResolvedValue({ sandboxId: 'sb-sdk' });
 
-			await makeCompute(world, { limitResources: true, image: 'modal://marimo-sandbox:v1' })
-				.create(SANDBOX_ID, { reuse: false, resources: { cpu, memoryBytes } }).ready!();
+				await makeCompute(world, {
+					limitResources: true,
+					image: 'modal://marimo-sandbox:v1',
+				}).create(SANDBOX_ID, { reuse: false, resources: { cpu, memoryBytes } }).ready!();
 
-			expect(createRpc).toHaveBeenCalledOnce();
-			expect(createRpc.mock.calls[0][0].definition?.resources).toMatchObject({
-				milliCpu,
-				milliCpuMax: milliCpu,
-				memoryMb: memoryMiB,
-				memoryMbMax: memoryMiB,
-			});
-		});
+				expect(createRpc).toHaveBeenCalledOnce();
+				expect(createRpc.mock.calls[0][0].definition?.resources).toMatchObject({
+					milliCpu,
+					milliCpuMax: milliCpu,
+					memoryMb: memoryMiB,
+					memoryMbMax: memoryMiB,
+				});
+			},
+		);
 
 		it.each([
 			{ cpu: 0.0001, memoryBytes: 512 * 1024 ** 2 },
@@ -289,9 +301,13 @@ describe('ModalCompute', () => {
 		])('rejects caps that the SDK would drop or overflow before RPC: %j', async (resources) => {
 			const world = makeWorld();
 			vi.mocked(world.client.sandboxes.create).mockRestore();
-			const createRpc = vi.spyOn(world.client.cpClient, 'sandboxCreate').mockResolvedValue({ sandboxId: 'sb-sdk' });
-			const sandbox = makeCompute(world, { limitResources: true, image: 'modal://marimo-sandbox:v1' })
-				.create(SANDBOX_ID, { reuse: false, resources });
+			const createRpc = vi
+				.spyOn(world.client.cpClient, 'sandboxCreate')
+				.mockResolvedValue({ sandboxId: 'sb-sdk' });
+			const sandbox = makeCompute(world, {
+				limitResources: true,
+				image: 'modal://marimo-sandbox:v1',
+			}).create(SANDBOX_ID, { reuse: false, resources });
 
 			await expect(sandbox.ready!()).rejects.toThrow(/limitResources.*cpu.*memoryBytes/i);
 			expect(createRpc).not.toHaveBeenCalled();
@@ -323,15 +339,24 @@ describe('ModalCompute', () => {
 			{ name: 'no resources' },
 			{ name: 'missing CPU', resources: { memoryBytes: 512 * 1024 ** 2 } },
 			{ name: 'missing memory', resources: { cpu: 0.5 } },
-			...[Number.MIN_VALUE, 0.0001, 4294967.296, 4294967.297, Number.MAX_SAFE_INTEGER, Number.MAX_VALUE].map((cpu) => ({
+			...[
+				Number.MIN_VALUE,
+				0.0001,
+				4294967.296,
+				4294967.297,
+				Number.MAX_SAFE_INTEGER,
+				Number.MAX_VALUE,
+			].map((cpu) => ({
 				name: `unrepresentable CPU ${cpu}`,
 				resources: { cpu, memoryBytes: 512 * 1024 ** 2 },
 			})),
-			...[4503599627370496, 4503599628419072, Number.MAX_SAFE_INTEGER, Number.MAX_VALUE].map((memoryBytes) => ({
-				name: `unrepresentable memory ${memoryBytes}`,
-				resources: { cpu: 0.5, memoryBytes },
-			})),
-			...[0, -1, NaN, Infinity, -Infinity].flatMap((value) => [
+			...[4503599627370496, 4503599628419072, Number.MAX_SAFE_INTEGER, Number.MAX_VALUE].map(
+				(memoryBytes) => ({
+					name: `unrepresentable memory ${memoryBytes}`,
+					resources: { cpu: 0.5, memoryBytes },
+				}),
+			),
+			...[0, -1, Number.NaN, Infinity, -Infinity].flatMap((value) => [
 				{ name: `CPU ${value}`, resources: { cpu: value, memoryBytes: 512 * 1024 ** 2 } },
 				{ name: `memory ${value}`, resources: { cpu: 0.5, memoryBytes: value } },
 			]),

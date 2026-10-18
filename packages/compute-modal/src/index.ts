@@ -105,6 +105,7 @@ const KERNEL_PORT = 2718;
 const MAX_SANDBOX_LIFETIME_MS = 24 * 60 * 60 * 1000;
 const OWNER_TAG = 'marimohub.owner';
 const SANDBOX_ID_TAG = 'marimohub.sandbox-id';
+const MAX_RESOURCE_VALUE = 0xffff_ffff;
 
 export function modalProfileResources(resources: ComputeResources | undefined): {
 	cpu?: number;
@@ -228,17 +229,21 @@ class ModalSandboxInstance implements SandboxInstance {
 
 	private async createSandbox(): Promise<Sandbox> {
 		const { cpu, memoryMiB } = this.resources;
+		// Modal truncates CPU to millicores and encodes both resources as uint32;
+		// zero omits the explicit limit and overflow can wrap it to zero.
+		const milliCpu = Math.trunc((cpu ?? 0) * 1000);
 		if (
 			this.config.limitResources &&
-			(cpu === undefined ||
-				!Number.isFinite(cpu) ||
-				cpu <= 0 ||
+			(!Number.isSafeInteger(milliCpu) ||
+				milliCpu < 1 ||
+				milliCpu > MAX_RESOURCE_VALUE ||
 				memoryMiB === undefined ||
-				!Number.isFinite(memoryMiB) ||
-				memoryMiB <= 0)
+				!Number.isSafeInteger(memoryMiB) ||
+				memoryMiB < 1 ||
+				memoryMiB > MAX_RESOURCE_VALUE)
 		) {
 			throw new Error(
-				'Modal limitResources requires finite positive resources.cpu and resources.memoryBytes. Set both before creating a sandbox.',
+				'Modal limitResources requires finite positive resources.cpu and resources.memoryBytes that fit nonzero uint32 millicores and MiB. Set CPU to at least 0.001 cores and reduce requests above the SDK range.',
 			);
 		}
 		const appName = this.config.appName ?? DEFAULT_APP_NAME;

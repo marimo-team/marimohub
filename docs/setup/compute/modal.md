@@ -61,8 +61,11 @@ const compute = new ModalCompute({
 Every new sandbox then requires finite, positive `resources.cpu` and
 `resources.memoryBytes` in `compute.create(id, options)`. CPU is measured in
 physical cores and can be fractional. Memory is rounded up to whole MiB, and
-that rounded request is also the memory limit. Invalid or missing values fail
-before the adapter resolves an app, image, or secret.
+that rounded request is also the memory limit. The SDK truncates CPU to whole
+millicores (0.001 cores). Both millicores and rounded MiB must fit its unsigned
+32-bit fields: 1 through 4,294,967,295. Invalid or missing values fail before the
+adapter resolves an app, image, or secret. Modal can reject requests within
+this range when they exceed its scheduling limits.
 
 The option is available through library composition, without an environment
 variable. It applies to new sandboxes; attaching to or destroying an existing
