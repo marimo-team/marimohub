@@ -73,6 +73,8 @@ export interface ModalConfig {
 	secretNames?: string[];
 	/** Provider-side fallback, set later than marimohub's graceful idle deadline. */
 	idleFallbackMs?: number;
+	/** Cap CPU and memory at their requests; requires both on new sandboxes. */
+	limitResources?: boolean;
 }
 
 // Modal exposes stdin EOF, but no process signal API. Keep cancellation outside
@@ -225,6 +227,20 @@ class ModalSandboxInstance implements SandboxInstance {
 	) {}
 
 	private async createSandbox(): Promise<Sandbox> {
+		const { cpu, memoryMiB } = this.resources;
+		if (
+			this.config.limitResources &&
+			(cpu === undefined ||
+				!Number.isFinite(cpu) ||
+				cpu <= 0 ||
+				memoryMiB === undefined ||
+				!Number.isFinite(memoryMiB) ||
+				memoryMiB <= 0)
+		) {
+			throw new Error(
+				'Modal limitResources requires finite positive resources.cpu and resources.memoryBytes. Set both before creating a sandbox.',
+			);
+		}
 		const appName = this.config.appName ?? DEFAULT_APP_NAME;
 		const { app, image, secrets } = await all({
 			app: async () => this.client.apps.fromName(appName, { createIfMissing: true }),
@@ -251,6 +267,7 @@ class ModalSandboxInstance implements SandboxInstance {
 				? { idleTimeoutMs: this.config.idleFallbackMs }
 				: {}),
 			...this.resources,
+			...(this.config.limitResources ? { cpuLimit: cpu, memoryLimitMiB: memoryMiB } : {}),
 			...(secrets.length > 0 ? { secrets } : {}),
 		});
 	}

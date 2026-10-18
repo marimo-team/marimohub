@@ -43,6 +43,34 @@ SDK's `cpu`, `memoryMiB`, and `gpu` options. Modal sets its idle timeout to 1.5
 times the effective timeout for each session mode. This fallback gives the hub
 time to save an edit session and stop its sandbox first.
 
+By default, CPU and memory requests allow Modal to burst above them. When you
+[compose the adapter as a library](/deployment-options), set
+`ModalConfig.limitResources` to `true` to cap both at their requests:
+
+```ts
+import { ModalCompute } from '@marimo-hub/compute-modal';
+
+const compute = new ModalCompute({
+	tokenId: '<token-id>',
+	tokenSecret: '<token-secret>',
+	image: 'ghcr.io/example/marimo-sandbox:latest',
+	limitResources: true,
+});
+```
+
+Every new sandbox then requires finite, positive `resources.cpu` and
+`resources.memoryBytes` in `compute.create(id, options)`. CPU is measured in
+physical cores and can be fractional. Memory is rounded up to whole MiB, and
+that rounded request is also the memory limit. Invalid or missing values fail
+before the adapter resolves an app, image, or secret.
+
+The option is available through library composition, without an environment
+variable. It applies to new sandboxes; attaching to or destroying an existing
+sandbox does not require its resource profile or change its limits.
+`connectExisting` never creates a replacement for a missing or stopped sandbox.
+CPU and memory limits do not cap total charges: duration, GPUs, and data
+transfer remain separate.
+
 `MARIMOHUB_COMPUTE_MODAL_SECRETS` accepts comma-separated
 [Modal secret names](https://modal.com/docs/guide/secrets), not secret values.
 Every new editor, app, and job sandbox receives them as environment variables
