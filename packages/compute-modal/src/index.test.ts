@@ -36,6 +36,7 @@ import {
 	scriptContractLaunch,
 } from '@marimo-hub/core/testing/compute-contract';
 import { modalProfileResources, ModalCompute } from './index';
+import type { ModalConfig } from './index';
 
 const SANDBOX_ID = 'sb-abc' as SandboxId;
 
@@ -230,7 +231,7 @@ function makeWorld(client = makeClient()) {
 	return { client, existing, listed, created, appCalls, imageCalls };
 }
 
-function makeCompute(world: ReturnType<typeof makeWorld>, overrides = {}) {
+function makeCompute(world: ReturnType<typeof makeWorld>, overrides: Partial<ModalConfig> = {}) {
 	return new ModalCompute(
 		{
 			tokenId: 'token-id',
@@ -259,7 +260,17 @@ function deferLookups(world: ReturnType<typeof makeWorld>) {
 
 describe('ModalCompute', () => {
 	describe('resource limits', () => {
+		function makeSdkWorld() {
+			const world = makeWorld();
+			vi.mocked(world.client.sandboxes.create).mockRestore();
+			const createRpc = vi
+				.spyOn(world.client.cpClient, 'sandboxCreate')
+				.mockResolvedValue({ sandboxId: 'sb-sdk' });
+			return { ...world, createRpc };
+		}
+
 		it.each([
+			{ cpu: 0.001, memoryBytes: 1, milliCpu: 1, memoryMiB: 1 },
 			{ cpu: 0.001, memoryBytes: 512 * 1024 ** 2 + 1, milliCpu: 1, memoryMiB: 513 },
 			{ cpu: 0.0019, memoryBytes: 512 * 1024 ** 2, milliCpu: 1, memoryMiB: 512 },
 			{
@@ -271,19 +282,15 @@ describe('ModalCompute', () => {
 		])(
 			'preserves nonzero uint32 caps through SDK conversion: %j',
 			async ({ cpu, memoryBytes, milliCpu, memoryMiB }) => {
-				const world = makeWorld();
-				vi.mocked(world.client.sandboxes.create).mockRestore();
-				const createRpc = vi
-					.spyOn(world.client.cpClient, 'sandboxCreate')
-					.mockResolvedValue({ sandboxId: 'sb-sdk' });
+				const world = makeSdkWorld();
 
 				await makeCompute(world, {
 					limitResources: true,
 					image: 'modal://marimo-sandbox:v1',
 				}).create(SANDBOX_ID, { reuse: false, resources: { cpu, memoryBytes } }).ready!();
 
-				expect(createRpc).toHaveBeenCalledOnce();
-				expect(createRpc.mock.calls[0][0].definition?.resources).toMatchObject({
+				expect(world.createRpc).toHaveBeenCalledOnce();
+				expect(world.createRpc.mock.calls[0][0].definition?.resources).toMatchObject({
 					milliCpu,
 					milliCpuMax: milliCpu,
 					memoryMb: memoryMiB,
@@ -291,29 +298,6 @@ describe('ModalCompute', () => {
 				});
 			},
 		);
-
-		it.each([
-			{ cpu: 0.0001, memoryBytes: 512 * 1024 ** 2 },
-			{ cpu: 4294967.296, memoryBytes: 512 * 1024 ** 2 },
-			{ cpu: Number.MAX_VALUE, memoryBytes: 512 * 1024 ** 2 },
-			{ cpu: 0.5, memoryBytes: 4503599627370496 },
-			{ cpu: 0.5, memoryBytes: Number.MAX_VALUE },
-		])('rejects caps that the SDK would drop or overflow before RPC: %j', async (resources) => {
-			const world = makeWorld();
-			vi.mocked(world.client.sandboxes.create).mockRestore();
-			const createRpc = vi
-				.spyOn(world.client.cpClient, 'sandboxCreate')
-				.mockResolvedValue({ sandboxId: 'sb-sdk' });
-			const sandbox = makeCompute(world, {
-				limitResources: true,
-				image: 'modal://marimo-sandbox:v1',
-			}).create(SANDBOX_ID, { reuse: false, resources });
-
-			await expect(sandbox.ready!()).rejects.toThrow(/limitResources.*cpu.*memoryBytes/i);
-			expect(createRpc).not.toHaveBeenCalled();
-			expect(world.appCalls).toHaveLength(0);
-			expect(world.client.images.fromName).not.toHaveBeenCalled();
-		});
 
 		it.each([false, true])(
 			'caps CPU and rounded memory requests on allocation (reuse: %s)',
@@ -342,6 +326,7 @@ describe('ModalCompute', () => {
 			...[
 				Number.MIN_VALUE,
 				0.0001,
+				0.001 - Number.EPSILON,
 				4294967.296,
 				4294967.297,
 				Number.MAX_SAFE_INTEGER,
@@ -350,12 +335,16 @@ describe('ModalCompute', () => {
 				name: `unrepresentable CPU ${cpu}`,
 				resources: { cpu, memoryBytes: 512 * 1024 ** 2 },
 			})),
-			...[4503599627370496, 4503599628419072, Number.MAX_SAFE_INTEGER, Number.MAX_VALUE].map(
-				(memoryBytes) => ({
-					name: `unrepresentable memory ${memoryBytes}`,
-					resources: { cpu: 0.5, memoryBytes },
-				}),
-			),
+			...[
+				Number.MIN_VALUE,
+				4503599626321921,
+				4503599627370496,
+				Number.MAX_SAFE_INTEGER,
+				Number.MAX_VALUE,
+			].map((memoryBytes) => ({
+				name: `unrepresentable memory ${memoryBytes}`,
+				resources: { cpu: 0.5, memoryBytes },
+			})),
 			...[0, -1, Number.NaN, Infinity, -Infinity].flatMap((value) => [
 				{ name: `CPU ${value}`, resources: { cpu: value, memoryBytes: 512 * 1024 ** 2 } },
 				{ name: `memory ${value}`, resources: { cpu: 0.5, memoryBytes: value } },
@@ -365,20 +354,36 @@ describe('ModalCompute', () => {
 		it.each(invalidResources.flatMap((test) => [false, true].map((reuse) => ({ ...test, reuse }))))(
 			'rejects $name before allocating or resolving dependencies (reuse: $reuse)',
 			async ({ resources, reuse }) => {
-				const world = makeWorld();
+				const world = makeSdkWorld();
 				const sandbox = makeCompute(world, {
 					limitResources: true,
 					image: 'modal://marimo-sandbox:v1',
 					secretNames: ['shared-credentials'],
 				}).create(SANDBOX_ID, { resources, reuse });
 
-				await expect(sandbox.ready!()).rejects.toThrow(
-					/limitResources.*finite positive.*cpu.*memoryBytes/i,
-				);
-				expect(world.created).toHaveLength(0);
+				await expect(sandbox.ready!()).rejects.toThrow(/limitResources.*cpu.*memoryBytes/i);
+				expect(world.createRpc).not.toHaveBeenCalled();
 				expect(world.appCalls).toHaveLength(0);
 				expect(world.client.images.fromName).not.toHaveBeenCalled();
+				expect(world.client.images.fromRegistry).not.toHaveBeenCalled();
 				expect(world.client.secrets.fromName).not.toHaveBeenCalled();
+			},
+		);
+
+		it.each([false, true])(
+			'preserves an SDK creation error without retrying (reuse: %s)',
+			async (reuse) => {
+				const world = makeSdkWorld();
+				const error = new InvalidError('Requested resources exceed the scheduling limit');
+				world.createRpc.mockRejectedValue(error);
+				const sandbox = makeCompute(world, {
+					limitResources: true,
+					image: 'modal://marimo-sandbox:v1',
+				}).create(SANDBOX_ID, { reuse, resources: { cpu: 0.5, memoryBytes: 512 * 1024 ** 2 } });
+
+				await expect(sandbox.ready!()).rejects.toBe(error);
+				await expect(sandbox.ready!()).rejects.toBe(error);
+				expect(world.createRpc).toHaveBeenCalledOnce();
 			},
 		);
 
@@ -591,20 +596,23 @@ describe('ModalCompute', () => {
 		expect(existing.execCalls).toEqual([]);
 	});
 
-	it('rejects readiness for a terminated reused sandbox without creating', async () => {
-		const world = makeWorld();
-		const existing = new FakeSandbox();
-		await existing.terminate();
-		world.existing.set(SANDBOX_ID, existing);
-		const sandbox = makeCompute(world).create(SANDBOX_ID, { reuse: true });
+	it.each([false, true])(
+		'rejects a terminated reused sandbox without creating (limitResources: %s)',
+		async (limitResources) => {
+			const world = makeWorld();
+			const existing = new FakeSandbox();
+			await existing.terminate();
+			world.existing.set(SANDBOX_ID, existing);
+			const sandbox = makeCompute(world, { limitResources }).create(SANDBOX_ID, { reuse: true });
 
-		await expect(sandbox.ready!()).rejects.toMatchObject({
-			name: 'NotFoundError',
-			message: `Sandbox ${SANDBOX_ID} is no longer available`,
-		});
-		expect(world.client.sandboxes.create).not.toHaveBeenCalled();
-		expect(existing.execCalls).toEqual([]);
-	});
+			await expect(sandbox.ready!()).rejects.toMatchObject({
+				name: 'NotFoundError',
+				message: `Sandbox ${SANDBOX_ID} is no longer available`,
+			});
+			expect(world.client.sandboxes.create).not.toHaveBeenCalled();
+			expect(existing.execCalls).toEqual([]);
+		},
+	);
 
 	it('propagates lazy creation errors from readiness', async () => {
 		const world = makeWorld();
@@ -979,22 +987,25 @@ describe('ModalCompute', () => {
 		expect(world.created).toHaveLength(1);
 	});
 
-	it('does not provision a replacement when reuse lookup fails with a permission error', async () => {
-		const world = makeWorld();
-		const error = new Error('Permission denied');
-		vi.spyOn(world.client.sandboxes, 'fromName').mockRejectedValue(error);
-		const create = vi.spyOn(world.client.sandboxes, 'create');
+	it.each([false, true])(
+		'preserves reuse lookup permission errors (limitResources: %s)',
+		async (limitResources) => {
+			const world = makeWorld();
+			const error = new Error('Permission denied');
+			vi.spyOn(world.client.sandboxes, 'fromName').mockRejectedValue(error);
+			const create = vi.spyOn(world.client.sandboxes, 'create');
 
-		await expect(
-			makeCompute(world, { secretNames: ['shared-credentials'] })
-				.create(SANDBOX_ID)
-				.exec('true'),
-		).rejects.toBe(error);
+			await expect(
+				makeCompute(world, { limitResources, secretNames: ['shared-credentials'] })
+					.create(SANDBOX_ID)
+					.exec('true'),
+			).rejects.toBe(error);
 
-		expect(world.appCalls).toHaveLength(0);
-		expect(world.client.secrets.fromName).not.toHaveBeenCalled();
-		expect(create).not.toHaveBeenCalled();
-	});
+			expect(world.appCalls).toHaveLength(0);
+			expect(world.client.secrets.fromName).not.toHaveBeenCalled();
+			expect(create).not.toHaveBeenCalled();
+		},
+	);
 
 	it('maps process output and passes accumulated environment variables', async () => {
 		const world = makeWorld();

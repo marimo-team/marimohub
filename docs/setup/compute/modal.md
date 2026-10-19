@@ -58,21 +58,18 @@ const compute = new ModalCompute({
 });
 ```
 
-Every new sandbox then requires finite, positive `resources.cpu` and
-`resources.memoryBytes` in `compute.create(id, options)`. CPU is measured in
-physical cores and can be fractional. Memory is rounded up to whole MiB, and
-that rounded request is also the memory limit. The SDK truncates CPU to whole
-millicores (0.001 cores). Both millicores and rounded MiB must fit its unsigned
-32-bit fields: 1 through 4,294,967,295. Invalid or missing values fail before the
-adapter resolves an app, image, or secret. Modal can reject requests within
-this range when they exceed its scheduling limits.
+With this option, each new sandbox requires `resources.cpu` and `resources.memoryBytes`
+in `compute.create(id, options)`. CPU uses physical cores, and the SDK truncates it
+to millicores (0.001 cores). The adapter rounds memory up to whole MiB.
+These converted values become both the requests and limits.
+Each value must be between 1 and 4,294,967,295. Invalid values fail before app,
+image, or secret resolution. Modal can reject values that exceed its scheduling limits.
 
-The option is available through library composition, without an environment
-variable. It applies to new sandboxes; attaching to or destroying an existing
-sandbox does not require its resource profile or change its limits.
-`connectExisting` never creates a replacement for a missing or stopped sandbox.
-CPU and memory limits do not cap total charges: duration, GPUs, and data
-transfer remain separate.
+This option is available only through library composition. It has no environment
+variable. Existing sandboxes keep their limits and need no resource profile for
+attachment or destruction. `connectExisting` never creates a replacement.
+Resource limits do not cap total charges, which also depend on duration, GPUs,
+and data transfer.
 
 `MARIMOHUB_COMPUTE_MODAL_SECRETS` accepts comma-separated
 [Modal secret names](https://modal.com/docs/guide/secrets), not secret values.
