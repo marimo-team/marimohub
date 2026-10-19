@@ -185,6 +185,7 @@ export const auditKeys = {
 export const adminKeys = {
 	all: ['admin'] as const,
 	users: () => [...adminKeys.all, 'users'] as const,
+	invitations: () => [...adminKeys.all, 'invitations'] as const,
 	runtime: () => [...adminKeys.all, 'runtime'] as const,
 	config: () => [...adminKeys.all, 'config'] as const,
 	policyAnalyzer: () => [...adminKeys.all, 'policy-analyzer'] as const,

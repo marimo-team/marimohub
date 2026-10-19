@@ -1,12 +1,16 @@
 import { isAuthGroupId, MAX_AUTH_GROUP_ID_LENGTH } from '@marimo-hub/core/ports/auth';
 import type { Authenticator } from '@marimo-hub/core';
+import { logOperationalError } from '@marimo-hub/core/operational-log';
+import {
+	normalizeEmailDomains,
+	emailAllowedWithInvitations,
+} from '@marimo-hub/core/email-admission';
 import { basePathFromUrl } from '@marimo-hub/core/url';
 import {
 	createOidcAuth,
 	createOidcAccessTokenAuthenticator,
 	MAX_MEMBERSHIP_GROUP_PREFIXES,
 	MAX_MEMBERSHIP_GROUPS,
-	normalizeEmailDomains,
 } from '@marimo-hub/auth-oidc';
 import type {
 	EmailVerificationPolicy,
@@ -527,6 +531,7 @@ function makeExternalAuthenticator(env: Env, config: OidcConfig): Authenticator 
 			clientId: config.clientId,
 			...(jwksUrl !== undefined ? { jwksUrl } : {}),
 			allowedEmailDomains: config.allowedEmailDomains,
+			isEmailInvited: config.isEmailInvited,
 			emailVerification: config.emailVerification,
 			groups: config.groups,
 			maxLifetimeSeconds: config.groups ? Math.min(3600, config.sessionTtlSeconds ?? 3600) : 3600,
@@ -543,16 +548,63 @@ function makeExternalAuthenticator(env: Env, config: OidcConfig): Authenticator 
 	}
 }
 
+export function authInvitationsEnabled(env: Env): boolean {
+	const enabled = parseOnOff(env, 'MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS', { fallback: false });
+	if (enabled && !['oidc', 'proxy-header'].includes(authBackend(env) ?? '')) {
+		throw new ConfigError('External invitations require the oidc or proxy-header auth backend.', {
+			variable: 'MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS',
+		});
+	}
+	return enabled;
+}
+
+export function withPatEmailAdmission(
+	authenticator: Authenticator,
+	emailAllowed?: (email: string) => Promise<boolean>,
+): Authenticator {
+	if (!emailAllowed) return authenticator;
+	return {
+		async authenticate(request) {
+			const principal = await authenticator.authenticate(request);
+			if (principal?.credential.kind !== 'personal-access-token') return principal;
+			try {
+				return (await emailAllowed(principal.email)) ? principal : null;
+			} catch (error) {
+				logOperationalError('pat_invitation_lookup_failed', {}, error);
+				return null;
+			}
+		},
+		...(authenticator.logoutUrl ? { logoutUrl: authenticator.logoutUrl.bind(authenticator) } : {}),
+	};
+}
+
 export function makeAuth(
 	env: Env,
 	libraries?: LoadedAdapterLibraries,
+	invitationLookup?: (email: string) => Promise<boolean>,
 ): {
 	authenticator: Authenticator;
 	authRoutes?: Hono;
 	externalAuthenticator?: Authenticator;
 	externalIssuer?: string;
+	emailAllowed?: (email: string) => Promise<boolean>;
 } {
 	const backend = authBackend(env);
+	const invitationsEnabled = authInvitationsEnabled(env);
+	if (invitationsEnabled && !invitationLookup)
+		throw new ConfigError('External invitations require an invitation store.', {
+			variable: 'MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS',
+		});
+	const isEmailInvited = invitationsEnabled ? invitationLookup : undefined;
+	const allowedEmailDomains =
+		backend === 'oidc' || backend === 'proxy-header'
+			? parseEmailDomains(env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS)
+			: undefined;
+	const domains = normalizeEmailDomains(allowedEmailDomains);
+	const emailAllowed =
+		backend === 'oidc' || backend === 'proxy-header'
+			? (email: string) => emailAllowedWithInvitations(email, domains, isEmailInvited)
+			: undefined;
 	const externalTokens = externalTokensEnabled(env, backend);
 	if (!backend) {
 		throw new ConfigError(
@@ -609,7 +661,8 @@ export function makeAuth(
 				),
 				sessionSecret: oidc('MARIMOHUB_AUTH_SESSION_SECRET'),
 				sessionTtlSeconds: Math.min(sessionTtlSeconds, derivedSessionTtlSeconds),
-				allowedEmailDomains: parseEmailDomains(env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS),
+				allowedEmailDomains,
+				isEmailInvited,
 				prompt: env.MARIMOHUB_AUTH_OIDC_PROMPT?.trim() || undefined,
 				postLoginRedirect: appRedirectPath(env.MARIMOHUB_APP_BASE_URL),
 				...(groups ? { groups } : {}),
@@ -622,20 +675,22 @@ export function makeAuth(
 			return {
 				authenticator,
 				authRoutes: routes,
+				emailAllowed,
 				...(externalAuthenticator ? { externalAuthenticator, externalIssuer: config.issuer } : {}),
 			};
 		}
 		case 'proxy-header': {
-			const allowedEmailDomains = parseEmailDomains(env.MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS);
 			if (proxyJwtConfigured(env)) {
 				const headers = parseProxyHeaders(env.MARIMOHUB_AUTH_PROXY_HEADER, 'jwt');
 				const issuer = env.MARIMOHUB_AUTH_PROXY_JWT_ISSUER?.trim();
 				const jwksUrl = proxyJwksUrl(env.MARIMOHUB_AUTH_PROXY_JWKS_URL);
 				return {
+					emailAllowed,
 					authenticator: new ProxyHeaderAuthenticator({
 						mode: 'jwt',
 						audience: proxyJwtAudience(env),
 						allowedEmailDomains,
+						isEmailInvited,
 						...(headers ? { header: headers[0] } : {}),
 						...(issuer ? { issuer } : {}),
 						...(jwksUrl ? { jwksUrl } : {}),
@@ -644,9 +699,11 @@ export function makeAuth(
 			}
 			const headers = parseProxyHeaders(env.MARIMOHUB_AUTH_PROXY_HEADER, 'headers');
 			return {
+				emailAllowed,
 				authenticator: new ProxyHeaderAuthenticator({
 					mode: 'headers',
 					allowedEmailDomains,
+					isEmailInvited,
 					...(headers ? { headers } : {}),
 				}),
 			};

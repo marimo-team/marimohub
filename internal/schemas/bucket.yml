@@ -36,7 +36,7 @@ tags:
   - name: job
     description: Notebook job definitions, runs, and active-run markers
   - name: auth
-    description: Identities and personal access tokens
+    description: Identities, external invitations, and personal access tokens
   - name: ops
     description: Operational records
 paths:
@@ -1584,6 +1584,43 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/WorkspaceMutationClaim'
+      responses:
+        '204':
+          description: Stored.
+  /_system/auth-invitations/{email}.json:
+    summary: Create-once email exception to the authentication domain allowlist,
+      deleted on revocation.
+    parameters:
+      - name: email
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: AuthInvitationService
+    get:
+      operationId: read_system_auth_invitations_json
+      summary: Read AuthInvitation
+      tags:
+        - auth
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthInvitation'
+    put:
+      operationId: write_system_auth_invitations_json
+      summary: Write AuthInvitation
+      tags:
+        - auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthInvitation'
       responses:
         '204':
           description: Stored.
@@ -4923,6 +4960,21 @@ components:
           required:
             - holder
             - expires_at
+    AuthInvitation:
+      type: object
+      properties:
+        email:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        created_by:
+          type: string
+      required:
+        - email
+        - created_at
+        - created_by
     Identity:
       type: object
       properties:

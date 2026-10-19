@@ -351,6 +351,30 @@ export function useAdminUsersQuery() {
 	});
 }
 
+export function useAdminInvitationsQuery() {
+	return useSuspenseQuery({
+		queryKey: adminKeys.invitations(),
+		queryFn: () => apiData(apiClient.GET('/api/v1/admin/invitations')),
+	});
+}
+
+export function useInviteUser() {
+	return useApiMutation(
+		(email: string) => apiData(apiClient.POST('/api/v1/admin/invitations', { body: { email } })),
+		() => [adminKeys.invitations()],
+	);
+}
+
+export function useRevokeInvitation() {
+	return useApiMutation(
+		(email: string) =>
+			apiData(
+				apiClient.DELETE('/api/v1/admin/invitations/{email}', { params: { path: { email } } }),
+			),
+		() => [adminKeys.invitations()],
+	);
+}
+
 export function useSetUserSuspension() {
 	return useApiMutation(
 		({ userId, suspended }: { userId: string; suspended: boolean }): Promise<AdminUser> =>

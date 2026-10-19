@@ -1,3 +1,4 @@
+import { AdminInvitations } from './AdminInvitations';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { Ban, SearchX, ShieldCheck, UserCheck, Users } from 'lucide-react';
 import { toast } from 'sonner';
@@ -70,6 +71,8 @@ export default function AdminUsersPage() {
 					</p>
 				</div>
 			</PageHeader>
+
+			<AdminInvitations />
 
 			<div className="mb-4">
 				<SearchField

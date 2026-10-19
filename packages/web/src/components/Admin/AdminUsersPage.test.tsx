@@ -42,6 +42,7 @@ function setup(items: AdminUser[] = USERS, currentUserId = 'user-self') {
 		vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 			const url = String(input);
 			if (url === '/api/v1/me') return jsonOk(me);
+			if (url === '/api/v1/admin/invitations') return jsonOk({ enabled: false, items: [] });
 			if (url === '/api/v1/admin/users') return jsonOk({ items: current, next_cursor: null });
 			const match = /^\/api\/v1\/admin\/users\/([^/]+)\/suspension$/.exec(url);
 			if (match) {

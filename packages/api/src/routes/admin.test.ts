@@ -93,6 +93,7 @@ describe('Admin routes', () => {
 		);
 		for (const path of [
 			'/api/v1/admin/users',
+			'/api/v1/admin/invitations',
 			'/api/v1/admin/config',
 			'/api/v1/admin/runtime',
 			`/api/v1/admin/users/${uid('target')}/suspension`,
@@ -110,6 +111,201 @@ describe('Admin routes', () => {
 			});
 			await expectError(res, 403, 'FORBIDDEN');
 		}
+		for (const method of ['POST', 'DELETE']) {
+			const path =
+				method === 'POST'
+					? '/api/v1/admin/invitations'
+					: '/api/v1/admin/invitations/guest%40outside.com';
+			await expectError(
+				await composed.request(path, {
+					method,
+					headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+					...(method === 'POST' ? { body: JSON.stringify({ email: 'guest@outside.com' }) } : {}),
+				}),
+				403,
+				'FORBIDDEN',
+			);
+		}
+	});
+
+	describe('external invitations', () => {
+		it('defaults off and rejects direct API creation', async () => {
+			const { request } = superAdminApi();
+			expect(await expectOk(await request('GET', '/admin/invitations'))).toEqual({
+				enabled: false,
+				items: [],
+			});
+			await expectError(
+				await request('POST', '/admin/invitations', { email: 'guest@outside.com' }),
+				403,
+				'FORBIDDEN',
+			);
+		});
+		it('lets super admins add, list, and remove exact email invitations with audit events', async () => {
+			const { request, deps } = superAdminApi({
+				policy: { superAdmins: [ACTOR], authInvitationsEnabled: true },
+			});
+			const invitation = await expectOk(
+				await request('POST', '/admin/invitations', { email: ' Guest@Outside.com ' }),
+			);
+			expect(invitation).toMatchObject({ email: 'guest@outside.com', created_by: ACTOR });
+			expect(await expectOk(await request('GET', '/admin/invitations'))).toEqual({
+				enabled: true,
+				items: [invitation],
+			});
+			await expectOk(await request('DELETE', '/admin/invitations/guest%40outside.com'));
+			expect(await deps.services.authInvitations.get('guest@outside.com')).toBeNull();
+			const events = await deps.services.events.getEvents(new Date().toISOString().slice(0, 10));
+			expect(events.map((event) => event.event)).toEqual(
+				expect.arrayContaining(['user.invited', 'user.invitation_revoked']),
+			);
+		});
+		it('rejects malformed email addresses', async () => {
+			const { request } = superAdminApi({
+				policy: { superAdmins: [ACTOR], authInvitationsEnabled: true },
+			});
+			expect((await request('POST', '/admin/invitations', { email: 'invalid' })).status).toBe(422);
+		});
+		it.each([
+			'',
+			'  ',
+			'a@@outside.com',
+			'guest name@outside.com',
+			'guest\u0000@outside.com',
+			`${'x'.repeat(309)}@outside.com`,
+		])('rejects invalid invitation input %j without writing', async (email) => {
+			const { request, deps } = superAdminApi({
+				policy: { superAdmins: [ACTOR], authInvitationsEnabled: true },
+			});
+			const invite = vi.spyOn(deps.services.authInvitations, 'invite');
+			await expectError(await request('POST', '/admin/invitations', { email }), 422);
+			expect(invite).not.toHaveBeenCalled();
+		});
+
+		it('rejects unauthenticated invitation reads and mutations', async () => {
+			const deps = makeTestDeps(bucket);
+			deps.policy.authInvitationsEnabled = true;
+			const app = createApi(deps);
+			const invite = vi.spyOn(deps.services.authInvitations, 'invite');
+			const revoke = vi.spyOn(deps.services.authInvitations, 'revoke');
+			for (const method of ['GET', 'POST', 'DELETE']) {
+				const path =
+					method === 'DELETE'
+						? '/api/v1/admin/invitations/guest%40outside.com'
+						: '/api/v1/admin/invitations';
+				await expectError(
+					await app.request(path, {
+						method,
+						headers: { 'content-type': 'application/json' },
+						...(method === 'POST' ? { body: JSON.stringify({ email: 'guest@outside.com' }) } : {}),
+					}),
+					401,
+					'UNAUTHORIZED',
+				);
+			}
+			expect(invite).not.toHaveBeenCalled();
+			expect(revoke).not.toHaveBeenCalled();
+		});
+
+		it('deduplicates mixed-case requests and removes encoded email aliases', async () => {
+			const { request, deps } = superAdminApi({
+				policy: { superAdmins: [ACTOR], authInvitationsEnabled: true },
+			});
+			const first = await expectOk(
+				await request('POST', '/admin/invitations', { email: 'Guest+Team/One%tag@Outside.com' }),
+			);
+			const second = await expectOk(
+				await request('POST', '/admin/invitations', { email: 'guest+team/one%tag@outside.com' }),
+			);
+			expect(first).toEqual(second);
+			expect(await deps.services.authInvitations.list()).toHaveLength(1);
+			await expectOk(
+				await request(
+					'DELETE',
+					`/admin/invitations/${encodeURIComponent('GUEST+TEAM/ONE%tag@outside.com')}`,
+				),
+			);
+			expect(await deps.services.authInvitations.list()).toEqual([]);
+		});
+
+		it('allows cleanup while disabled without allowing new invitations', async () => {
+			const { request, deps } = superAdminApi();
+			await deps.services.authInvitations.invite('guest@outside.com', ACTOR);
+			expect(await expectOk(await request('GET', '/admin/invitations'))).toMatchObject({
+				enabled: false,
+				items: [{ email: 'guest@outside.com' }],
+			});
+			await expectError(
+				await request('POST', '/admin/invitations', { email: 'other@outside.com' }),
+				403,
+			);
+			await expectOk(await request('DELETE', '/admin/invitations/guest%40outside.com'));
+			await expectOk(await request('DELETE', '/admin/invitations/guest%40outside.com'));
+			expect(await deps.services.authInvitations.list()).toEqual([]);
+		});
+
+		it.each(['get', 'put', 'delete'] as const)(
+			'returns a sanitized error when storage %s fails, without a success audit',
+			async (operation) => {
+				const { request, deps } = superAdminApi({
+					policy: { superAdmins: [ACTOR], authInvitationsEnabled: true },
+				});
+				await deps.services.authInvitations.invite('guest@outside.com', ACTOR);
+				const serviceMethod =
+					operation === 'get' ? 'list' : operation === 'put' ? 'invite' : 'revoke';
+				const fault = vi
+					.spyOn(deps.services.authInvitations, serviceMethod)
+					.mockRejectedValueOnce(new Error('secret-storage-detail'));
+				const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+				try {
+					const method = operation === 'get' ? 'GET' : operation === 'put' ? 'POST' : 'DELETE';
+					const path =
+						operation === 'delete'
+							? '/admin/invitations/guest%40outside.com'
+							: '/admin/invitations';
+					const response = await request(
+						method,
+						path,
+						operation === 'put' ? { email: 'new@outside.com' } : undefined,
+					);
+					const error = await expectError(response, 500, 'INTERNAL_ERROR');
+					expect(JSON.stringify(error)).not.toContain('secret-storage-detail');
+					expect(await deps.services.authInvitations.get('guest@outside.com')).not.toBeNull();
+					expect(await deps.services.authInvitations.get('new@outside.com')).toBeNull();
+					const events = await deps.services.events.getEvents(
+						new Date().toISOString().slice(0, 10),
+					);
+					expect(
+						events.some(
+							(event) =>
+								event.event === 'user.invited' || event.event === 'user.invitation_revoked',
+						),
+					).toBe(false);
+				} finally {
+					fault.mockRestore();
+					errorLog.mockRestore();
+				}
+			},
+		);
+
+		it('rejects ordinary users even when the feature is enabled', async () => {
+			const { request } = createTestApi({
+				bucket,
+				userId: ACTOR,
+				deps: { policy: { authInvitationsEnabled: true } },
+			});
+			await expectError(await request('GET', '/admin/invitations'), 403, 'FORBIDDEN');
+			await expectError(
+				await request('POST', '/admin/invitations', { email: 'guest@outside.com' }),
+				403,
+				'FORBIDDEN',
+			);
+			await expectError(
+				await request('DELETE', '/admin/invitations/guest%40outside.com'),
+				403,
+				'FORBIDDEN',
+			);
+		});
 	});
 
 	it('grants access to a super admin configured by email, not just by id', async () => {

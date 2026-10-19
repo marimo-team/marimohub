@@ -28,6 +28,7 @@ import { notebookBridgeRuntime } from '@marimo-hub/notebook-bridge/runtime';
 import {
 	composeAuthenticators,
 	createServices,
+	AuthInvitationService,
 	WarmPoolStore,
 	AppPoolStore,
 	WarmPoolService,
@@ -70,6 +71,8 @@ import { serviceAccountsFromEnv } from './serviceAccount';
 import {
 	authBackend,
 	makeAuth,
+	authInvitationsEnabled,
+	withPatEmailAdmission,
 	oidcLoginPolicySelected,
 	oidcLoginPolicyTimeoutSeconds,
 	projectCreationRestricted,
@@ -617,15 +620,14 @@ export function createFromEnv(
 	const theme = parseTheme(env);
 	const serviceAccounts = serviceAccountsFromEnv(env);
 	const bucket = makeStorage(env, options?.libraries);
+	const authInvitations = new AuthInvitationService(bucket);
 	const exposure = parseSandboxExposure(env);
 	// The same-origin isolation guard only applies to `subdomain` mode (a separate
 	// public kernel domain). `proxy` mode is intentionally same-origin and gated by
 	// its own explicit acknowledgement above.
 	if (exposure.mode === 'subdomain') assertSandboxHostIsolated(env);
-	const { authenticator, authRoutes, externalAuthenticator, externalIssuer } = makeAuth(
-		env,
-		options?.libraries,
-	);
+	const { authenticator, authRoutes, externalAuthenticator, externalIssuer, emailAllowed } =
+		makeAuth(env, options?.libraries, async (email) => (await authInvitations.get(email)) !== null);
 	const mcp = parseMcpConfig(env, externalIssuer);
 	const configuredLoginPolicy =
 		authBackend(env) === 'oidc' && oidcLoginPolicySelected(env)
@@ -769,10 +771,13 @@ export function createFromEnv(
 		// Provider-side limits trail the graceful lifecycle deadlines: Modal idle by
 		// 1.5× and CoreWeave/E2B lifetime by 2×.
 		compute,
-		authenticator: composeAuthenticators(services.tokens, authenticator, {
-			external: externalAuthenticator,
-			serviceAccounts,
-		}),
+		authenticator: withPatEmailAdmission(
+			composeAuthenticators(services.tokens, authenticator, {
+				external: externalAuthenticator,
+				serviceAccounts,
+			}),
+			emailAllowed,
+		),
 		authRoutes,
 		sandbox: {
 			credentialHeaders: env.MARIMOHUB_AUTH_PROXY_HEADER?.split(',').map((header) => header.trim()),
@@ -802,6 +807,7 @@ export function createFromEnv(
 		jobs: parseJobsConfig(env),
 		mcp,
 		policy: {
+			authInvitationsEnabled: authInvitationsEnabled(env),
 			groupsCarried:
 				authBackend(env) === 'oidc' &&
 				(oidcLoginPolicySelected(env) ||

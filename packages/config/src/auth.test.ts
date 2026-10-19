@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { makeAuth, projectCreationRestricted } from './auth';
+import { UserId } from '@marimo-hub/core/ids';
+import type { AuthenticatedPrincipal } from '@marimo-hub/core/ports/auth';
+import { describe, expect, it, vi } from 'vitest';
+import { makeAuth, projectCreationRestricted, withPatEmailAdmission } from './auth';
 import { ConfigError } from './errors';
 
 /**
@@ -1048,5 +1050,90 @@ describe('wildcard membership configuration', () => {
 				MARIMOHUB_AUTH_OIDC_GROUP_SESSION_TTL_SECONDS: '3601',
 			}),
 		).toThrow(/GROUP_SESSION_TTL_SECONDS/);
+	});
+});
+
+describe('external invitation configuration', () => {
+	const req = new Request('https://hub.example.com', {
+		headers: { 'X-Forwarded-Email': 'guest@outside.com', 'X-Forwarded-User': 'guest' },
+	});
+	it('defaults off even with an invitation lookup', async () => {
+		const { authenticator } = makeAuth(proxyHeaderEnv, undefined, async () => true);
+		await expect(authenticator.authenticate(req)).resolves.toBeNull();
+	});
+	it.each([oidcEnv, proxyHeaderEnv])(
+		'fails PAT admission closed during an invitation outage for $MARIMOHUB_AUTH_BACKEND',
+		async (env) => {
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			try {
+				const lookup = vi.fn().mockRejectedValue(new Error('private storage failure'));
+				const { emailAllowed } = makeAuth(
+					{ ...env, MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS: 'on' },
+					undefined,
+					lookup,
+				);
+				const principal: AuthenticatedPrincipal = {
+					id: UserId.parse('guest'),
+					email: 'guest@outside.com',
+					credential: { kind: 'personal-access-token' },
+				};
+				const auth = withPatEmailAdmission({ authenticate: async () => principal }, emailAllowed);
+				await expect(auth.authenticate(req)).resolves.toBeNull();
+				expect(log).toHaveBeenCalledWith(expect.stringContaining('pat_invitation_lookup_failed'));
+				expect(log.mock.calls.flat().join(' ')).not.toContain('private storage failure');
+				principal.email = 'user@example.com';
+				await expect(auth.authenticate(req)).resolves.toBe(principal);
+				expect(lookup).toHaveBeenCalledTimes(1);
+				principal.email = 'guest@outside.com';
+				lookup.mockResolvedValue(true);
+				await expect(auth.authenticate(req)).resolves.toBe(principal);
+			} finally {
+				log.mockRestore();
+			}
+		},
+	);
+	it('requires explicit opt-in and rejects unsupported backends and invalid values', () => {
+		expect(() =>
+			makeAuth({ ...proxyHeaderEnv, MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS: 'on' }),
+		).toThrow('invitation store');
+		expect(() =>
+			makeAuth(
+				{ MARIMOHUB_AUTH_BACKEND: 'dev', MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS: 'on' },
+				undefined,
+				async () => true,
+			),
+		).toThrow('oidc or proxy-header');
+		expect(() =>
+			makeAuth({ ...proxyHeaderEnv, MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS: 'typo' }),
+		).toThrow();
+	});
+	it('wires opted-in proxy authentication and checks PATs against current invitations', async () => {
+		let invited = true;
+		const env = { ...proxyHeaderEnv, MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS: 'on' };
+		const { authenticator, emailAllowed } = makeAuth(
+			env,
+			undefined,
+			async (email) => invited && email === 'guest@outside.com',
+		);
+		await expect(authenticator.authenticate(req)).resolves.toHaveProperty(
+			'email',
+			'guest@outside.com',
+		);
+		const principal = {
+			id: UserId.parse('guest'),
+			email: 'guest@outside.com',
+			credential: { kind: 'personal-access-token' },
+		} as AuthenticatedPrincipal;
+		const patAuth = withPatEmailAdmission({ authenticate: async () => principal }, emailAllowed);
+		await expect(patAuth.authenticate(req)).resolves.toBe(principal);
+		invited = false;
+		await expect(patAuth.authenticate(req)).resolves.toBeNull();
+		const disabled = makeAuth(proxyHeaderEnv, undefined, async () => true);
+		await expect(
+			withPatEmailAdmission(
+				{ authenticate: async () => principal },
+				disabled.emailAllowed,
+			).authenticate(req),
+		).resolves.toBeNull();
 	});
 });

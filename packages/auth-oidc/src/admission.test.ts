@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { admitOidcIdentity, createAdmissionPolicy } from './admission';
+import { describe, expect, it, vi } from 'vitest';
+import {
+	admitOidcIdentity,
+	admitOidcIdentityWithInvitations,
+	createAdmissionPolicy,
+} from './admission';
 import type { OidcAdmissionConfig } from './admission';
 import { MAX_GROUPS } from './claims';
 import { MAX_AUTH_GROUPS } from '@marimo-hub/core/ports/auth';
@@ -549,3 +553,84 @@ describe('wildcard membership selection', () => {
 		);
 	});
 });
+
+describe('external invitations', () => {
+	const guest = { ...identity, email: 'guest@outside.com' };
+	it('admits only the invited email and keeps group restrictions', async () => {
+		const invited = createAdmissionPolicy({
+			allowedEmailDomains: ['example.com'],
+			isEmailInvited: async (email) => email === guest.email,
+		});
+		await expect(admitOidcIdentityWithInvitations(guest, policy)).resolves.toEqual({
+			error: 'domain_not_allowed',
+		});
+		await expect(admitOidcIdentityWithInvitations(guest, invited)).resolves.toHaveProperty(
+			'user.email',
+			guest.email,
+		);
+		await expect(
+			admitOidcIdentityWithInvitations({ ...guest, email: 'other@outside.com' }, invited),
+		).resolves.toEqual({ error: 'domain_not_allowed' });
+		await expect(
+			admitOidcIdentityWithInvitations(guest, { ...invited, groups: groupConfig.groups }),
+		).resolves.toEqual({ error: 'group_not_allowed' });
+	});
+	it('checks the verified UserInfo email and never bypasses verification or subject binding', async () => {
+		const lookup = vi.fn(async () => true);
+		const invited = { ...policy, isEmailInvited: lookup };
+		await expect(
+			admitOidcIdentityWithInvitations(guest, invited, { ...guest, email_verified: false }),
+		).resolves.toEqual({ error: 'email_not_verified' });
+		await expect(
+			admitOidcIdentityWithInvitations(guest, invited, { ...guest, sub: 'other' }),
+		).resolves.toEqual({ error: 'auth_failed' });
+		expect(lookup).not.toHaveBeenCalled();
+		await expect(
+			admitOidcIdentityWithInvitations(identity, invited, guest),
+		).resolves.toHaveProperty('user.email', guest.email);
+		expect(lookup).toHaveBeenCalledWith(guest.email);
+	});
+	it('fails closed on invitation lookup failures without consulting storage for allowed domains', async () => {
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const lookup = vi.fn(async () => {
+			throw new Error('unavailable');
+		});
+		await expect(
+			admitOidcIdentityWithInvitations(identity, { ...policy, isEmailInvited: lookup }),
+		).resolves.toHaveProperty('user');
+		expect(lookup).not.toHaveBeenCalled();
+		await expect(
+			admitOidcIdentityWithInvitations(guest, { ...policy, isEmailInvited: lookup }),
+		).resolves.toEqual({ error: 'auth_failed' });
+		expect(log).toHaveBeenCalled();
+		log.mockRestore();
+	});
+});
+
+it('does not bypass group-count limits for invited identities', async () => {
+	const invited = createAdmissionPolicy({
+		allowedEmailDomains: ['company.com'],
+		isEmailInvited: async () => true,
+		groups: { claim: '/groups', membership: { exact: ['*'] } },
+	});
+	await expect(
+		admitOidcIdentityWithInvitations(
+			{ ...identity, groups: groupsExceedingCount('team-') },
+			invited,
+		),
+	).resolves.toMatchObject({ error: 'too_many_groups' });
+});
+
+it.each([{ allowedEmailDomains: undefined }, { allowedEmailDomains: [] }])(
+	'does not consult invitations for unrestricted domains $allowedEmailDomains',
+	async ({ allowedEmailDomains }) => {
+		const lookup = vi.fn(async () => {
+			throw new Error('unavailable');
+		});
+		const unrestricted = createAdmissionPolicy({ allowedEmailDomains, isEmailInvited: lookup });
+		await expect(admitOidcIdentityWithInvitations(identity, unrestricted)).resolves.toHaveProperty(
+			'user',
+		);
+		expect(lookup).not.toHaveBeenCalled();
+	},
+);

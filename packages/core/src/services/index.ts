@@ -12,6 +12,7 @@ import type { AttrExtractors } from '../tracing';
 import { CatalogService } from './catalog/CatalogService';
 import { EventService } from './catalog/EventService';
 import { IdempotencyService } from './catalog/IdempotencyService';
+import { AuthInvitationService } from './identity/AuthInvitationService';
 import { IdentityService } from './identity/IdentityService';
 import { MaintenanceService } from './catalog/MaintenanceService';
 import { NotebookService } from './content/NotebookService';
@@ -38,6 +39,11 @@ export type { CatalogRecoverySource, CatalogRecoveryReport } from './catalog/rec
 export { EventService, MAX_EVENT_RANGE_DAYS } from './catalog/EventService';
 export { IdempotencyService } from './catalog/IdempotencyService';
 export { SyncedNotebookService } from './content/SyncedNotebookService';
+export {
+	AuthInvitationService,
+	AuthInvitationSchema,
+	AuthInvitationEmailSchema,
+} from './identity/AuthInvitationService';
 export { IdentityService } from './identity/IdentityService';
 export {
 	CliAuthorizationService,
@@ -671,6 +677,7 @@ export function createServices(
 		jobRuns,
 		deepLinks,
 		identities,
+		authInvitations: wrap('AuthInvitationService', new AuthInvitationService(bucket)),
 		tokens,
 		cliAuthorizations,
 		oauthClients,

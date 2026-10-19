@@ -44,6 +44,28 @@ environment. See [Deploying on Cloudflare](./deploying/cloudflare.md).
 
 <!--@include: ./setup/auth/dev.md-->
 
+## Invite people outside the allowed domains
+
+External invitations let super admins admit specific email addresses outside `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS`.
+They require OIDC or trusted proxy authentication and are disabled by default.
+
+1. Set `MARIMOHUB_AUTH_ALLOW_EXTERNAL_INVITATIONS=on` in the server environment.
+2. Restart the server.
+3. As a super admin, add the guest's email under **Admin → Users → Invite user**.
+4. Share the Hub sign-in URL with the guest. The Hub sends no email.
+
+Only super admins can manage invitations. Each invitation matches one email address, regardless of case.
+It does not admit other addresses from that domain or grant project membership.
+Project membership does not create an invitation.
+
+Guests must use the configured identity provider or proxy and meet all other login policies.
+Existing project permissions and deployment defaults determine their access.
+
+Select **Remove** beside an invitation to revoke it.
+For addresses outside the allowed domains, revocation blocks subsequent browser, personal-token, and external-token requests.
+It does not stop requests in progress or running sandbox sessions.
+Setting the flag to `off` disables all invitations but keeps their records available for removal.
+
 ## Verify it
 
 After deployment:

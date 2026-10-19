@@ -20,6 +20,7 @@ import { AppPoolSchema } from '../services/runtime/AppPoolRouter';
 import { ThumbnailRecordSchema } from '../services/content/ThumbnailService';
 import { DeepLinkRecordSchema } from '../deepLinks';
 import { z } from 'zod';
+import { AuthInvitationSchema } from '../services/identity/AuthInvitationService';
 import type {
 	ImportId,
 	IntegrationId,
@@ -462,6 +463,16 @@ const OBJECTS: BucketObject[] = [
 		tag: 'notebook',
 	},
 	{
+		name: 'AuthInvitation',
+		key: template(paths.authInvitation('{email}')),
+		schema: AuthInvitationSchema,
+		summary:
+			'Create-once email exception to the authentication domain allowlist, deleted on revocation.',
+		mutability: 'immutable',
+		owner: 'AuthInvitationService',
+		tag: 'auth',
+	},
+	{
 		name: 'Identity',
 		key: template(paths.identity(UID)),
 		schema: IdentitySchema,
@@ -700,7 +711,7 @@ export function buildBucketSpec(): Record<string, unknown> {
 			{ name: 'integration', description: 'Project- and org-scoped integration records' },
 			{ name: 'session', description: 'Session records and sandbox claims' },
 			{ name: 'job', description: 'Notebook job definitions, runs, and active-run markers' },
-			{ name: 'auth', description: 'Identities and personal access tokens' },
+			{ name: 'auth', description: 'Identities, external invitations, and personal access tokens' },
 			{ name: 'ops', description: 'Operational records' },
 		],
 		paths: specPaths,
