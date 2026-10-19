@@ -1780,6 +1780,7 @@ export async function startNotebookSession(input: {
 							baseUrl: joinUrlPath(appBaseUrl, '/api/ai/v1'),
 							apiKey: token,
 							model: deps.ai.model,
+							allowedModels: deps.ai.allowedModels,
 							enabled: true,
 							maxTokens: deps.ai.maxTokens,
 							rules: deps.ai.rules,

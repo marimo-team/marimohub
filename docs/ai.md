@@ -43,6 +43,11 @@ The full set of variables:
 Managed AI also requires `MARIMOHUB_AUTH_SESSION_SECRET` — the per-session tokens
 are signed with it (the same secret that signs login cookies).
 
+With an allowlist, the notebook picker shows only the default and allowed models
+as `marimohub/<model-id>`, routed through the managed AI proxy. Without an allowlist,
+OpenAI-compatible upstreams keep marimo's model catalog. Bedrock shows only the
+default model. Allowlist changes apply to new sessions.
+
 ## Providers
 
 For API-key-backed providers, any OpenAI-compatible endpoint works. Set

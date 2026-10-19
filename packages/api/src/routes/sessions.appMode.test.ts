@@ -287,42 +287,89 @@ describe('Session routes (app mode)', () => {
 		expect(fake.calls.startProcess[0].cmd).not.toContain('--convert');
 	});
 
-	it('merges managed AI into edit config but injects no config into an app session', async () => {
-		const ai = {
-			upstreamBaseUrl: 'https://ai.example',
-			upstreamApiKey: 'k',
-			model: 'gpt-test',
-			signingSecret: 's'.repeat(32),
-		};
-		const editFake = makeFakeSandbox();
-		const editApi = createTestApi({
+	it.each([
+		{
+			name: 'an allowlist',
+			allowedModels: ['gpt-other', 'gpt-test', 'gpt-other'],
+			modelList: '[ "marimohub/gpt-test", "marimohub/gpt-other" ]',
+		},
+		{ name: 'no allowlist', allowedModels: undefined, modelList: undefined },
+		{ name: 'an empty allowlist', allowedModels: [], modelList: '[ "marimohub/gpt-test" ]' },
+	])(
+		'injects AI config only into edit sessions with $name',
+		async ({ allowedModels, modelList }) => {
+			const ai = {
+				upstreamBaseUrl: 'https://ai.example',
+				upstreamApiKey: 'k',
+				model: 'gpt-test',
+				allowedModels,
+				signingSecret: 's'.repeat(32),
+			};
+			const editFake = makeFakeSandbox();
+			const editApi = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: fakeComputeFrom(editFake.instance),
+				deps: { ai },
+			});
+			await expectOk<any>(await editApi.request('POST', sessionsPath()));
+			const editConfig = editFake.calls.writeFiles
+				.flat()
+				.find((file) => file.path === '/tmp/marimohub-config/marimo/marimo.toml');
+			expect(editConfig?.content).toContain('default_width = "medium"');
+			expect(editConfig?.content).toContain('default_sql_output = "native"');
+			expect(editConfig?.content).toContain('[ai]');
+			expect(editConfig?.content).toContain('[ai.custom_providers.marimohub]');
+			if (modelList === undefined) {
+				expect(editConfig?.content).not.toContain('custom_models');
+				expect(editConfig?.content).not.toContain('displayed_models');
+			} else {
+				expect(editConfig?.content).toContain(`custom_models = ${modelList}`);
+				expect(editConfig?.content).toContain(`displayed_models = ${modelList}`);
+			}
+
+			const runFake = makeFakeSandbox();
+			const runApi = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: fakeComputeFrom(runFake.instance),
+				deps: { ai },
+			});
+			await expectOk<any>(await runApi.request('POST', sessionsPath(), { mode: 'app' }));
+			expect(
+				runFake.calls.writeFiles.flat().some((file) => file.path.endsWith('/marimo/marimo.toml')),
+			).toBe(false);
+			expect(runFake.calls.setEnvVars.flatMap(Object.keys)).not.toContain('XDG_CONFIG_HOME');
+			expect(runFake.calls.setEnvDefaults).toHaveLength(0);
+		},
+	);
+
+	it('starts the editor with notebook defaults when AI token signing fails', async () => {
+		const fake = makeFakeSandbox();
+		const api = createTestApi({
 			bucket,
 			userId: ACTOR,
-			compute: fakeComputeFrom(editFake.instance),
-			deps: { ai },
+			compute: fakeComputeFrom(fake.instance),
+			deps: {
+				ai: {
+					upstreamBaseUrl: 'https://ai.example',
+					upstreamApiKey: 'upstream-secret',
+					model: 'gpt-test',
+					allowedModels: ['gpt-other'],
+					signingSecret: '',
+				},
+			},
 		});
-		await expectOk<any>(await editApi.request('POST', sessionsPath()));
-		const editConfig = editFake.calls.writeFiles
+		const session = await expectOk<{ status: string }>(await api.request('POST', sessionsPath()));
+		expect(session.status).toBe('running');
+		const config = fake.calls.writeFiles
 			.flat()
 			.find((file) => file.path === '/tmp/marimohub-config/marimo/marimo.toml');
-		expect(editConfig?.content).toContain('default_width = "medium"');
-		expect(editConfig?.content).toContain('default_sql_output = "native"');
-		expect(editConfig?.content).toContain('[ai]');
-		expect(editConfig?.content).toContain('[ai.custom_providers.marimohub]');
-
-		const runFake = makeFakeSandbox();
-		const runApi = createTestApi({
-			bucket,
-			userId: ACTOR,
-			compute: fakeComputeFrom(runFake.instance),
-			deps: { ai },
-		});
-		await expectOk<any>(await runApi.request('POST', sessionsPath(), { mode: 'app' }));
-		expect(
-			runFake.calls.writeFiles.flat().some((file) => file.path.endsWith('/marimo/marimo.toml')),
-		).toBe(false);
-		expect(runFake.calls.setEnvVars.flatMap(Object.keys)).not.toContain('XDG_CONFIG_HOME');
-		expect(runFake.calls.setEnvDefaults).toHaveLength(0);
+		expect(config?.content).toContain('default_width = "medium"');
+		expect(config?.content).toContain('default_sql_output = "native"');
+		expect(config?.content).not.toContain('[ai');
+		expect(JSON.stringify(fake.calls.writeFiles)).not.toContain('upstream-secret');
+		expect(JSON.stringify(fake.calls.setEnvVars)).not.toContain('upstream-secret');
 	});
 
 	describe('viewer admission per MARIMOHUB_VIEWER_MODE', () => {

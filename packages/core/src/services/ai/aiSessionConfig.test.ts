@@ -61,12 +61,90 @@ describe('buildMarimoAiToml', () => {
 		const toml = buildMarimoAiToml({ baseUrl: 'u', apiKey: 'k', model: 'm' });
 		expect(toml).not.toContain('max_tokens');
 		expect(toml).not.toContain('rules');
+		expect(toml).not.toContain('custom_models');
+		expect(toml).not.toContain('displayed_models');
+	});
+
+	it.each([
+		{
+			name: 'multiple allowed models',
+			allowedModels: ['gpt-4o', 'anthropic/claude-sonnet'],
+			models: ['marimohub/gpt-4o-mini', 'marimohub/gpt-4o', 'marimohub/anthropic/claude-sonnet'],
+		},
+		{
+			name: 'duplicate models including the default',
+			allowedModels: ['gpt-4o', 'gpt-4o-mini', 'gpt-4o'],
+			models: ['marimohub/gpt-4o-mini', 'marimohub/gpt-4o'],
+		},
+		{
+			name: 'only the default model repeated',
+			allowedModels: ['gpt-4o-mini', 'gpt-4o-mini'],
+			models: ['marimohub/gpt-4o-mini'],
+		},
+		{
+			name: 'an empty allowlist',
+			allowedModels: [],
+			models: ['marimohub/gpt-4o-mini'],
+		},
+	])('limits the picker to proxy models with $name', ({ allowedModels, models }) => {
+		const toml = buildMarimoAiToml({
+			baseUrl: 'https://app.example/api/ai/v1',
+			apiKey: 'mh_token',
+			model: 'gpt-4o-mini',
+			allowedModels,
+		});
+		expect(parse(toml).ai).toMatchObject({
+			models: {
+				chat_model: 'marimohub/gpt-4o-mini',
+				edit_model: 'marimohub/gpt-4o-mini',
+				autocomplete_model: 'marimohub/gpt-4o-mini',
+				custom_models: models,
+				displayed_models: models,
+			},
+		});
+	});
+
+	it('escapes model ids without allowing them to inject TOML configuration', () => {
+		const model = 'model"\\\n[ai]\nenabled = false\r\t';
+		const allowedModel = 'other"\n[ai.custom_providers.evil]\napi_key = "injected';
+		const toml = buildMarimoAiToml({
+			baseUrl: 'https://app.example/api/ai/v1',
+			apiKey: 'mh_token',
+			model,
+			allowedModels: [allowedModel, model, allowedModel],
+		});
+		expect(parse(toml)).toEqual({
+			ai: {
+				enabled: true,
+				models: {
+					chat_model: `marimohub/${model}`,
+					edit_model: `marimohub/${model}`,
+					autocomplete_model: `marimohub/${model}`,
+					custom_models: [`marimohub/${model}`, `marimohub/${allowedModel}`],
+					displayed_models: [`marimohub/${model}`, `marimohub/${allowedModel}`],
+				},
+				custom_providers: {
+					marimohub: { base_url: 'https://app.example/api/ai/v1', api_key: 'mh_token' },
+				},
+			},
+		});
 	});
 
 	it('emits enabled = false when enabled is false (does not silently force-enable)', () => {
-		const toml = buildMarimoAiToml({ baseUrl: 'u', apiKey: 'k', model: 'm', enabled: false });
-		expect(toml).toContain('enabled = false');
-		expect(toml).not.toContain('enabled = true');
+		const toml = buildMarimoAiToml({
+			baseUrl: 'u',
+			apiKey: 'k',
+			model: 'm',
+			allowedModels: ['other'],
+			enabled: false,
+		});
+		expect(parse(toml).ai).toMatchObject({
+			enabled: false,
+			models: {
+				custom_models: ['marimohub/m', 'marimohub/other'],
+				displayed_models: ['marimohub/m', 'marimohub/other'],
+			},
+		});
 	});
 
 	it('escapes newline, carriage-return, and tab in rules (no TOML string break-out)', () => {
@@ -87,6 +165,29 @@ describe('marimoAiContributor', () => {
 		const assembled = assembleMarimoToml([marimoAiContributor(config)]);
 		expect(assembled).toBe(buildMarimoAiToml(config));
 		expect(assembled).toContain(`[ai.custom_providers.${MARIMOHUB_AI_PROVIDER}]`);
+	});
+
+	it('replaces earlier model lists without mutating the allowlist', () => {
+		const allowedModels = ['other', 'm', 'other'];
+		Object.freeze(allowedModels);
+		const assembled = assembleMarimoToml([
+			() => ({
+				ai: {
+					models: {
+						custom_models: ['openai/old-model'],
+						displayed_models: ['openai/old-model'],
+					},
+				},
+			}),
+			marimoAiContributor({ baseUrl: 'u', apiKey: 'k', model: 'm', allowedModels }),
+		]);
+		expect(parse(assembled).ai).toMatchObject({
+			models: {
+				custom_models: ['marimohub/m', 'marimohub/other'],
+				displayed_models: ['marimohub/m', 'marimohub/other'],
+			},
+		});
+		expect(allowedModels).toEqual(['other', 'm', 'other']);
 	});
 });
 

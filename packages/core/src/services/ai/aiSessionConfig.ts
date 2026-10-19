@@ -27,6 +27,7 @@ export interface AiSessionConfig {
 	apiKey: string;
 	/** Bare upstream model id (surfaced to marimo as `marimohub/<model>`). */
 	model: string;
+	allowedModels?: string[];
 	enabled?: boolean;
 	maxTokens?: number;
 	rules?: string;
@@ -59,6 +60,13 @@ function aiConfigTable(config: AiSessionConfig): TomlTable {
 		edit_model: modelRef,
 		autocomplete_model: modelRef,
 	};
+	if (config.allowedModels !== undefined) {
+		const models = [...new Set([config.model, ...config.allowedModels])].map(
+			(model) => `${MARIMOHUB_AI_PROVIDER}/${model}`,
+		);
+		ai.models.custom_models = models;
+		ai.models.displayed_models = models;
+	}
 	ai.custom_providers = {
 		[MARIMOHUB_AI_PROVIDER]: { base_url: config.baseUrl, api_key: config.apiKey },
 	};

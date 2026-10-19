@@ -318,20 +318,48 @@ describe('POST /api/ai/v1/chat/completions', () => {
 		await expectOpenAiError(res, 'Request cancelled by the client', 'cancelled');
 	});
 
-	it('falls back to the default model when off the allowlist', async () => {
-		const fetchMock = vi
-			.spyOn(globalThis, 'fetch')
-			.mockResolvedValue(new Response('ok', { status: 200 }));
-		await post(
-			await token(),
-			{ model: 'evil-model', messages: [] },
-			{
-				ai: { ...AI, allowedModels: ['gpt-4o-mini'] },
-			},
-		);
-		const req = fetchMock.mock.calls[0][0] as Request;
-		expect(((await req.json()) as { model: string }).model).toBe('gpt-4o-mini');
-	});
+	it.each(['gpt-4o', 'anthropic/claude-sonnet', 'eu.anthropic.claude-opus-4-7'])(
+		'forwards the selected allowed model %s without replacing it with the default',
+		async (model) => {
+			const fetchMock = vi
+				.spyOn(globalThis, 'fetch')
+				.mockResolvedValue(new Response('ok', { status: 200 }));
+			const res = await post(
+				await token(),
+				{ model: `marimohub/${model}`, messages: [] },
+				{ ai: { ...AI, allowedModels: [model] } },
+			);
+			expect(res.status).toBe(200);
+			expect(fetchMock).toHaveBeenCalledOnce();
+			const req = fetchMock.mock.calls[0][0] as Request;
+			expect(await req.json()).toMatchObject({ model });
+		},
+	);
+
+	it.each([
+		{ model: 'evil-model', allowedModels: ['gpt-4o-mini'] },
+		{ model: 'marimohub/evil-model', allowedModels: ['gpt-4o-mini'] },
+		{ model: 'marimohub/gpt-4o', allowedModels: [] },
+		{ model: 'marimohub/gpt-4o-mini', allowedModels: ['gpt-4o'] },
+	])(
+		'falls back to the default for $model with $allowedModels',
+		async ({ model, allowedModels }) => {
+			const fetchMock = vi
+				.spyOn(globalThis, 'fetch')
+				.mockResolvedValue(new Response('ok', { status: 200 }));
+			const res = await post(
+				await token(),
+				{ model, messages: [] },
+				{
+					ai: { ...AI, allowedModels },
+				},
+			);
+			expect(res.status).toBe(200);
+			expect(fetchMock).toHaveBeenCalledOnce();
+			const req = fetchMock.mock.calls[0][0] as Request;
+			expect(((await req.json()) as { model: string }).model).toBe('gpt-4o-mini');
+		},
+	);
 });
 
 describe('Bedrock Converse dispatch', () => {
