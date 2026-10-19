@@ -382,7 +382,7 @@ App-native OpenID Connect (the production backend). If the allowlist contains on
 | `MARIMOHUB_AUTH_SESSION_SECRET` 🔒 | Secret that signs the session cookie (HS256; ≥32 bytes). | Yes | — | — |
 | `MARIMOHUB_AUTH_SESSION_TTL_SECONDS` | Signed browser-session lifetime, from 300 to 86400 seconds. | — | `28800` | — |
 | `MARIMOHUB_AUTH_ALLOWED_EMAIL_DOMAINS` | Comma-separated email-domain allowlist. Set `*` to allow all domains. | Yes | — | `example.com,example.org` |
-| `MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM` | RFC 6901 JSON Pointer to a group ID string or array. Required for group policy. | — | — | `/groups` |
+| `MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM` | RFC 6901 JSON Pointer to a group ID string or array. Each string is one exact ID: no splitting, trimming, or case conversion. Required for group policy. | — | — | `/groups` |
 | `MARIMOHUB_AUTH_OIDC_ALLOWED_GROUPS` | Exact comma-separated group IDs. A user must belong to at least one. Missing or malformed group data fails closed. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_SUPER_ADMIN_GROUPS` | Exact comma-separated group IDs mapped to marimohub super-admin. | — | — | — |
 | `MARIMOHUB_AUTH_OIDC_PROJECT_CREATION_GROUPS` | Comma-separated group IDs granted `project-creator`. Any value implies `MARIMOHUB_PROJECT_CREATION=restricted`; an empty value allows only super admins. Unset leaves the project creation policy in effect, including the app-only exception. | — | — | — |

@@ -40,7 +40,7 @@ must use HTTPS and cannot contain embedded credentials.
 ### Groups and roles
 
 Group authorization is optional and uses exact provider group IDs. Set a JSON
-Pointer to the provider array. Then set at least one group policy:
+Pointer to the provider's group string or array. Then set at least one group policy:
 
 ```bash
 MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM=/groups

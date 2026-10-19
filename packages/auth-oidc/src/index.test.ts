@@ -1456,11 +1456,11 @@ describe('OIDC routes', () => {
 	describe.each(['ID token', 'UserInfo'] as const)('%s group claims', (source) => {
 		const identity = { sub: 'user-1', email: 'user@example.com', email_verified: true };
 
-		function setGroups(groups: unknown) {
+		function setGroups(groups: unknown, idTokenGroups = ['hub-users']) {
 			if (source === 'ID token') {
 				oauthMock.getValidatedIdTokenClaims.mockReturnValue({ ...identity, groups });
 			} else {
-				oauthMock.getValidatedIdTokenClaims.mockReturnValue({ ...identity, groups: ['hub-users'] });
+				oauthMock.getValidatedIdTokenClaims.mockReturnValue({ ...identity, groups: idTokenGroups });
 				oauthMock.processDiscoveryResponse.mockReturnValue({
 					issuer: 'https://issuer.example.com',
 					authorization_endpoint: 'https://issuer.example.com/authorize',
@@ -1473,7 +1473,7 @@ describe('OIDC routes', () => {
 		}
 
 		it('accepts a single group at login', async () => {
-			setGroups('hub-users');
+			setGroups('hub-users', ['other']);
 			const { authenticator, routes } = makeOidc({
 				groups: {
 					claim: '/groups',
