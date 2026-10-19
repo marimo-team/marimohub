@@ -238,9 +238,15 @@ it('denies invalid membership tokens despite a valid cookie and does not reuse e
 	expect(await (await me(['team-previous'])).json()).toMatchObject({
 		data: { groups: ['team-previous'] },
 	});
+	expect(await (await me('team-current')).json()).toMatchObject({
+		data: { groups: ['team-current'] },
+	});
 	for (const groups of [
 		null,
-		'team-previous',
+		42,
+		'',
+		'team-\u0000',
+		'x'.repeat(257),
 		groupsExceedingCount('team-'),
 		groupsExceedingBytes('team-'),
 	]) {

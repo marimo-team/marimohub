@@ -155,36 +155,100 @@ describe('shared OIDC identity admission', () => {
 		},
 	);
 
-	it('prefers UserInfo groups and falls back only when the claim is absent', () => {
-		const groups = createAdmissionPolicy(groupConfig);
-		const token = { ...identity, groups: ['staff', 'admin'] };
-		expect(admitOidcIdentity(token, groups, { ...identity, groups: ['staff'] })).toMatchObject({
-			user: { entitlements: ['default-role:editor'] },
-		});
-		expect(admitOidcIdentity(token, groups, { ...identity, groups: [] })).toEqual({
-			error: 'group_not_allowed',
-		});
-		expect(admitOidcIdentity(token, groups, { ...identity, groups: null })).toEqual({
-			error: 'invalid_groups',
-		});
-		expect(admitOidcIdentity(token, groups, identity)).toMatchObject({
-			user: { entitlements: ['super-admin', 'default-role:editor'] },
-		});
-	});
+	it.each([
+		{ groups: ['staff'], expected: { user: { entitlements: ['default-role:editor'] } } },
+		{ groups: 'staff', expected: { user: { entitlements: ['default-role:editor'] } } },
+		{ groups: 'guest', expected: { error: 'group_not_allowed' } },
+		{ groups: [], expected: { error: 'group_not_allowed' } },
+		{ groups: null, expected: { error: 'invalid_groups' } },
+		{
+			groups: undefined,
+			expected: { user: { entitlements: ['super-admin', 'default-role:editor'] } },
+		},
+	])(
+		'prefers UserInfo groups and falls back only for an absent claim: $groups',
+		({ groups, expected }) => {
+			expect(
+				admitOidcIdentity(
+					{ ...identity, groups: ['staff', 'admin'] },
+					createAdmissionPolicy(groupConfig),
+					{ ...identity, groups },
+				),
+			).toMatchObject(expected);
+		},
+	);
 
 	it.each([
 		null,
-		'staff',
+		42,
+		false,
+		true,
+		{},
+		{ value: 'staff' },
+		'',
+		'x'.repeat(257),
+		'bad\n',
+		'bad\u0000',
+		'bad\u007f',
 		['staff', 1],
+		['staff', ['admin']],
 		[''],
 		['x'.repeat(257)],
 		['bad\n'],
 		Array(201).fill('staff'),
 	])('rejects malformed groups: %j', (groups) => {
-		expect(admitOidcIdentity({ ...identity, groups }, createAdmissionPolicy(groupConfig))).toEqual({
+		const admission = createAdmissionPolicy(groupConfig);
+		expect(admitOidcIdentity({ ...identity, groups }, admission)).toEqual({
 			error: 'invalid_groups',
 		});
+		expect(
+			admitOidcIdentity({ ...identity, groups: ['staff', 'admin'] }, admission, {
+				...identity,
+				groups,
+			}),
+		).toEqual({ error: 'invalid_groups' });
 	});
+
+	it.each(['staff', 'x'.repeat(256)])('accepts a single group ID: %j', (group) => {
+		const admission = createAdmissionPolicy({
+			groups: {
+				claim: '/groups',
+				allowed: [group],
+				superAdmin: [group],
+				projectCreation: [group],
+				defaultRoles: { editor: [group] },
+				maxGroups: 1,
+			},
+		});
+		const expected = admitOidcIdentity({ ...identity, groups: [group] }, admission);
+		expect(expected).toMatchObject({
+			user: { entitlements: ['super-admin', 'project-creator', 'default-role:editor'] },
+		});
+		for (const userInfo of [undefined, identity]) {
+			expect(admitOidcIdentity({ ...identity, groups: group }, admission, userInfo)).toEqual(
+				expected,
+			);
+		}
+		expect(
+			admitOidcIdentity({ ...identity, groups: ['other'] }, admission, {
+				...identity,
+				groups: group,
+			}),
+		).toEqual(expected);
+	});
+
+	it.each(['staff,admin', 'staff admin', ' staff', 'staff ', 'STAFF', '["staff"]', '*'])(
+		'does not split, trim, or change the case of a single group ID: %j',
+		(groups) => {
+			expect(
+				admitOidcIdentity({ ...identity, groups }, createAdmissionPolicy(groupConfig)),
+			).toEqual({
+				error: 'group_not_allowed',
+			});
+			const exact = createAdmissionPolicy({ groups: { claim: '/groups', allowed: [groups] } });
+			expect(admitOidcIdentity({ ...identity, groups }, exact)).toHaveProperty('user');
+		},
+	);
 
 	it('enforces a custom group count limit and deduplicates mapped entitlements', () => {
 		const limited = createAdmissionPolicy({ groups: { ...groupConfig.groups, maxGroups: 2 } });
@@ -196,23 +260,25 @@ describe('shared OIDC identity admission', () => {
 		).toEqual({ error: 'invalid_groups' });
 	});
 
-	it('applies group admission to array-nested claims from access tokens or UserInfo', () => {
+	it('applies group admission to array-nested claims from tokens or UserInfo', () => {
 		const nestedPolicy = createAdmissionPolicy({
 			groups: { ...groupConfig.groups, claim: '/identities/0/groups' },
 		});
-		const nestedIdentity = { ...identity, identities: [{ groups: ['staff'] }] };
-		for (const result of [
-			admitOidcIdentity(nestedIdentity, nestedPolicy),
-			admitOidcIdentity(identity, nestedPolicy, nestedIdentity),
-		]) {
-			expect(result).toMatchObject({ user: { entitlements: ['default-role:editor'] } });
+		for (const groups of ['staff', ['staff']]) {
+			const nestedIdentity = { ...identity, identities: [{ groups }] };
+			for (const result of [
+				admitOidcIdentity(nestedIdentity, nestedPolicy),
+				admitOidcIdentity(identity, nestedPolicy, nestedIdentity),
+			]) {
+				expect(result).toMatchObject({ user: { entitlements: ['default-role:editor'] } });
+			}
 		}
 		expect(admitOidcIdentity({ ...identity, identities: [] }, nestedPolicy)).toEqual({
 			error: 'group_not_allowed',
 		});
-		expect(
-			admitOidcIdentity({ ...identity, identities: [{ groups: 'staff' }] }, nestedPolicy),
-		).toEqual({ error: 'invalid_groups' });
+		expect(admitOidcIdentity({ ...identity, identities: [{ groups: 42 }] }, nestedPolicy)).toEqual({
+			error: 'invalid_groups',
+		});
 	});
 
 	it('resolves escaped JSON pointers without accepting inherited memberships', () => {
@@ -350,7 +416,8 @@ describe('membership admission failure boundaries', () => {
 		{ userInfoGroups: [], expected: { user: { groups: [] } } },
 		{ userInfoGroups: ['team-info'], expected: { user: { groups: ['team-info'] } } },
 		{ userInfoGroups: null, expected: { error: 'invalid_groups' } },
-		{ userInfoGroups: 'team-info', expected: { error: 'invalid_groups' } },
+		{ userInfoGroups: 'team-info', expected: { user: { groups: ['team-info'] } } },
+		{ userInfoGroups: 42, expected: { error: 'invalid_groups' } },
 		{ userInfoGroups: undefined, expected: { user: { groups: ['team-token'] } } },
 	])(
 		'does not fall back from a present UserInfo group claim: $userInfoGroups',
@@ -426,7 +493,8 @@ describe('wildcard membership selection', () => {
 		{ groups: undefined, expected: { user: { groups: [] } } },
 		{ groups: [], expected: { user: { groups: [] } } },
 		{ groups: null, expected: { error: 'invalid_groups' } },
-		{ groups: '*', expected: { error: 'invalid_groups' } },
+		{ groups: '*', expected: { user: { groups: ['*'] } } },
+		{ groups: 42, expected: { error: 'invalid_groups' } },
 		{ groups: ['staff', null], expected: { error: 'invalid_groups' } },
 		{ groups: ['staff', 'bad\n'], expected: { error: 'invalid_groups' } },
 	])('preserves claim validation for $groups', ({ groups, expected }) => {

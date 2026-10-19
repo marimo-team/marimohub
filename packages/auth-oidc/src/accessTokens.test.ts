@@ -285,18 +285,29 @@ describe('external OIDC access tokens', () => {
 			maxLifetimeSeconds: 300,
 			groups: { claim: '/org/groups', allowed: ['staff'], defaultRoles: { editor: ['staff'] } },
 		});
-		const payload = claims({ org: { groups: ['staff'] } });
-		expect(await auth.authenticate(request(await sign(payload)))).toMatchObject({
-			entitlements: ['default-role:editor'],
-			entitlementsExpiresAt: new Date(payload.exp! * 1000).toISOString(),
-		});
-		for (const override of [
-			{},
-			{ org: { groups: ['guest'] } },
-			{ org: { groups: 'staff' } },
-			{ org: { groups: ['staff'] }, exp: now() + 301 },
+		for (const groups of ['staff', ['staff']]) {
+			const payload = claims({ org: { groups } });
+			expect(await auth.authenticate(request(await sign(payload)))).toMatchObject({
+				entitlements: ['default-role:editor'],
+				entitlementsExpiresAt: new Date(payload.exp! * 1000).toISOString(),
+			});
+			expect(
+				await auth.authenticate(request(await sign({ ...payload, exp: now() + 301 }))),
+			).toBeNull();
+		}
+		for (const groups of [
+			undefined,
+			['guest'],
+			42,
+			null,
+			'',
+			'g'.repeat(257),
+			'staff\u0000',
+			['staff', ''],
+			'staff,admin',
+			'staff admin',
 		]) {
-			expect(await auth.authenticate(request(await sign(claims(override))))).toBeNull();
+			expect(await auth.authenticate(request(await sign(claims({ org: { groups } }))))).toBeNull();
 		}
 	});
 
@@ -321,7 +332,7 @@ describe('external OIDC access tokens', () => {
 				request(await sign(claims({ identities: [{ groups: ['staff', 'admin'] }] }))),
 			),
 		).toMatchObject({ id: 'user-one', entitlements: ['super-admin'] });
-		for (const identities of [[], [{ groups: ['guest'] }], [{ groups: 'staff' }]]) {
+		for (const identities of [[], [{ groups: ['guest'] }], [{ groups: 42 }]]) {
 			expect(await auth.authenticate(request(await sign(claims({ identities }))))).toBeNull();
 		}
 	});

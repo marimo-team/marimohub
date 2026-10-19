@@ -6,7 +6,7 @@ import type { AuthEntitlement } from '@marimo-hub/core/ports/auth';
 export type EmailVerificationPolicy = 'required' | 'trusted-issuer';
 
 export interface OidcGroupPolicy {
-	/** JSON Pointer locating the provider's group array, e.g. `/groups`. */
+	/** JSON Pointer locating the provider's group string or array, e.g. `/groups`. */
 	claim: string;
 	/** At least one exact group match is required to sign in. */
 	allowed?: string[];
@@ -182,9 +182,10 @@ export function retainMembershipGroups(
 
 export function parseGroups(value: unknown, maxGroups: number): string[] | undefined {
 	if (value === undefined) return undefined;
-	if (!Array.isArray(value) || value.length > maxGroups) throw new Error('invalid groups claim');
+	const values = typeof value === 'string' ? [value] : value;
+	if (!Array.isArray(values) || values.length > maxGroups) throw new Error('invalid groups claim');
 	const groups: string[] = [];
-	for (const group of value) {
+	for (const group of values) {
 		if (!validGroup(group)) {
 			throw new Error('invalid groups claim');
 		}

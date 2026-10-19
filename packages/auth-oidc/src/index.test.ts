@@ -1453,28 +1453,66 @@ describe('OIDC routes', () => {
 		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
 	});
 
-	it.each([
-		{ groups: 'admins' },
-		{ groups: Array.from({ length: 201 }, (_, i) => `group-${i}`) },
-		{ groups: ['ok', 42] },
-		{ groups: [''] },
-		{ groups: ['g'.repeat(257)] },
-		{ groups: ['admin\u007fgroup'] },
-	])('rejects malformed or oversized group claims', async (extraClaims) => {
-		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
-			sub: 'user-1',
-			email: 'user@example.com',
-			email_verified: true,
-			...extraClaims,
-		});
-		const { routes } = makeOidc({ groups: { claim: '/groups', superAdmin: ['admins'] } });
-		const txn = await beginOidcTransaction(routes);
+	describe.each(['ID token', 'UserInfo'] as const)('%s group claims', (source) => {
+		const identity = { sub: 'user-1', email: 'user@example.com', email_verified: true };
 
-		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
-			headers: { cookie: txn },
+		function setGroups(groups: unknown) {
+			if (source === 'ID token') {
+				oauthMock.getValidatedIdTokenClaims.mockReturnValue({ ...identity, groups });
+			} else {
+				oauthMock.getValidatedIdTokenClaims.mockReturnValue({ ...identity, groups: ['hub-users'] });
+				oauthMock.processDiscoveryResponse.mockReturnValue({
+					issuer: 'https://issuer.example.com',
+					authorization_endpoint: 'https://issuer.example.com/authorize',
+					token_endpoint: 'https://issuer.example.com/token',
+					jwks_uri: 'https://issuer.example.com/jwks',
+					userinfo_endpoint: 'https://issuer.example.com/userinfo',
+				});
+				oauthMock.processUserInfoResponse.mockResolvedValue({ ...identity, groups });
+			}
+		}
+
+		it('accepts a single group at login', async () => {
+			setGroups('hub-users');
+			const { authenticator, routes } = makeOidc({
+				groups: {
+					claim: '/groups',
+					allowed: ['hub-users'],
+					defaultRoles: { editor: ['hub-users'] },
+					membership: { exact: ['hub-users'] },
+					maxGroups: 1,
+				},
+			});
+			const res = await completeOidcTransaction(routes);
+			const sessionCookie = cookiePair(res, SESSION_COOKIE);
+			expect(
+				await authenticator.authenticate(requestWithCookie(sessionCookie.split('=')[1])),
+			).toMatchObject({
+				id: 'user-1',
+				groups: ['hub-users'],
+				entitlements: ['default-role:editor'],
+			});
 		});
 
-		expect(res.headers.get('location')).toBe('/?auth_error=auth_failed');
+		it.each([
+			{ groups: 42 },
+			{ groups: '' },
+			{ groups: 'g'.repeat(257) },
+			{ groups: 'admin\u0000group' },
+			{ groups: 'hub-users\n' },
+			{ groups: Array.from({ length: 201 }, (_, i) => `group-${i}`) },
+			{ groups: ['ok', 42] },
+			{ groups: [''] },
+			{ groups: ['g'.repeat(257)] },
+			{ groups: ['admin\u007fgroup'] },
+		])('rejects malformed groups without fallback: $groups', async ({ groups }) => {
+			setGroups(groups);
+			const { routes } = makeOidc({ groups: { claim: '/groups', allowed: ['hub-users'] } });
+			const res = await completeOidcTransaction(routes);
+
+			expect(res.headers.get('location')).toBe('/?auth_error=auth_failed');
+			expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
+		});
 	});
 
 	it('honors a lower configured group-count limit at its exact boundary', async () => {
@@ -1503,37 +1541,6 @@ describe('OIDC routes', () => {
 			{ headers: { cookie: rejectedTxn } },
 		);
 		expect(rejectedResponse.headers.get('location')).toBe('/?auth_error=auth_failed');
-	});
-
-	it('does not fall back to ID-token groups when UserInfo contains malformed groups', async () => {
-		oauthMock.processDiscoveryResponse.mockReturnValue({
-			issuer: 'https://issuer.example.com',
-			authorization_endpoint: 'https://issuer.example.com/authorize',
-			token_endpoint: 'https://issuer.example.com/token',
-			jwks_uri: 'https://issuer.example.com/jwks',
-			userinfo_endpoint: 'https://issuer.example.com/userinfo',
-		});
-		oauthMock.getValidatedIdTokenClaims.mockReturnValue({
-			sub: 'user-1',
-			email: 'user@example.com',
-			email_verified: true,
-			groups: ['hub-users'],
-		});
-		oauthMock.processUserInfoResponse.mockResolvedValue({
-			sub: 'user-1',
-			email: 'user@example.com',
-			email_verified: true,
-			groups: 'hub-users',
-		});
-		const { routes } = makeOidc({ groups: { claim: '/groups', allowed: ['hub-users'] } });
-		const txn = await beginOidcTransaction(routes);
-
-		const res = await routes.request('/api/auth/callback?code=abc&state=state-1', {
-			headers: { cookie: txn },
-		});
-
-		expect(res.headers.get('location')).toBe('/?auth_error=auth_failed');
-		expect(res.headers.get('set-cookie') ?? '').not.toMatch(/mh_session=[^;,]+/);
 	});
 
 	it('drops unsafe profile-picture URLs instead of persisting them', async () => {

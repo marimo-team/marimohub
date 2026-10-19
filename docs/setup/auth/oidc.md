@@ -83,6 +83,10 @@ destroys the kernel and the proxy closes WebSockets. This teardown skips the
 final capture so that the kernel stops promptly. Periodic snapshots limit
 potential data loss.
 
+The groups claim accepts a string or an array of strings in ID tokens, UserInfo,
+and external access tokens. `"hub-users"` is equivalent to `["hub-users"]`.
+Matching is exact: no splitting, trimming, or case conversion.
+
 Missing, malformed, or oversized group data cannot satisfy the login policy.
 marimohub accepts at most 200 group IDs. It does not resolve group-overage
 references from the provider. Configure the IdP to emit only the groups that

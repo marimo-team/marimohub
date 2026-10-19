@@ -1311,7 +1311,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTH_OIDC_GROUPS_CLAIM',
 						name: 'Groups claim pointer',
 						description:
-							'RFC 6901 JSON Pointer to an array of exact provider group IDs. Required for group policy.',
+							'RFC 6901 JSON Pointer to a group ID string or array. Required for group policy.',
 						example: '/groups',
 						optIn: true,
 					},
