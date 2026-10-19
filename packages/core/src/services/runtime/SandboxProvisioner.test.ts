@@ -3502,7 +3502,17 @@ describe('SandboxProvisioner', () => {
 					files: { [`${MOUNT_PATH}/notebook.py`]: 'print(2)' },
 				});
 				if (failure === 'read') {
-					instance.readFileBounded = async () => readFileFailure('BACKEND_ERROR');
+					instance.readFileBounded = async () => ({
+						success: false,
+						content: '',
+						error: {
+							code: 'READ_FAILED',
+							reason: 'timeout',
+							exec_code: 'COMMAND_FAILED',
+							stdout_bytes: 12,
+							stderr: 'private backend details',
+						},
+					});
 				} else {
 					vi.spyOn(env.notebooks, 'commitSession').mockRejectedValue(new Error('bucket down'));
 				}
@@ -3529,9 +3539,18 @@ describe('SandboxProvisioner', () => {
 					expect(JSON.parse(error.mock.calls[0][0])).toMatchObject({
 						event: 'session_capture_failed',
 						...(failure === 'read'
-							? { error: { code: 'BACKEND_ERROR', object: 'notebook.py' } }
+							? {
+									error: {
+										code: 'READ_FAILED',
+										object: 'notebook.py',
+										reason: 'timeout',
+										exec_code: 'COMMAND_FAILED',
+										stdout_bytes: 12,
+									},
+								}
 							: {}),
 					});
+					expect(JSON.stringify(error.mock.calls)).not.toContain('private backend details');
 				} finally {
 					error.mockRestore();
 				}

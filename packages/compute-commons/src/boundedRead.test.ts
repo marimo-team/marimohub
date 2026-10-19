@@ -114,12 +114,13 @@ describe('bounded sandbox reads', () => {
 		const execute = vi.fn();
 		expect(await readBoundedFile('/workspace/file', options, execute)).toMatchObject({
 			success: false,
+			error: { reason: 'invalid_options' },
 		});
 		expect(execute).not.toHaveBeenCalled();
 	});
 
 	it.each([0.1, 100.5, 2 ** 31 - 1])('normalizes supported read timeout %s', async (timeoutMs) => {
-		const execute = vi.fn(async () => ({ success: true, stdout: '' }));
+		const execute = vi.fn(async () => ({ success: true, stdout: '', stderr: '' }));
 		const maxBytes = 3 * Math.floor(Number.MAX_SAFE_INTEGER / 4);
 		expect(
 			await readBoundedFile('/workspace/file', { maxBytes, timeoutMs }, execute),
@@ -131,34 +132,150 @@ describe('bounded sandbox reads', () => {
 	});
 
 	it.each([
-		{ stdout: btoa('12345'), success: true },
-		{ stdout: btoa('1234567'), success: true },
-		{ stdout: '!!!!', success: true },
-		{ stdout: btoa('1234'), success: false },
-	])('refuses invalid or failed command output: %j', async (result) => {
-		const execute = vi.fn(async () => result);
-		expect(
-			await readBoundedFile('/workspace/file', { maxBytes: 4, timeoutMs: 100 }, execute),
-		).toMatchObject({ success: false });
-		expect(execute.mock.calls).toHaveLength(1);
-		expect(execute).toHaveBeenCalledWith(expect.any(String), { maxOutputBytes: 8, timeout: 100 });
-	});
+		{ stdout: btoa('12345'), success: true, stderr: '', maxBytes: 4, reason: 'size_limit' },
+		{ stdout: btoa('1234567'), success: true, stderr: '', maxBytes: 4, reason: 'output_limit' },
+		{ stdout: '!!!!', success: true, stderr: '', maxBytes: 4, reason: 'invalid_base64' },
+		{ stdout: btoa('1234'), success: false, stderr: '', maxBytes: 4, reason: 'exec_failed' },
+		{ stdout: btoa('hi'), success: true, stderr: 'x', maxBytes: 2, reason: 'output_limit' },
+		{ stdout: btoa('x'), success: true, stderr: '', maxBytes: 0, reason: 'output_limit' },
+		{ stdout: '', success: true, stderr: 'warning', maxBytes: 0, reason: 'output_limit' },
+		{ stdout: btoa('abc'), success: true, stderr: 'ééé', maxBytes: 4, reason: 'output_limit' },
+	])(
+		'refuses invalid or failed output within the diagnostic allowance: %j',
+		async ({ maxBytes, reason, ...result }) => {
+			const execute = vi.fn(async () => result);
+			expect(
+				await readBoundedFile('/workspace/file', { maxBytes, timeoutMs: 100 }, execute),
+			).toMatchObject({
+				success: false,
+				error: { code: 'READ_FAILED', reason },
+			});
+			expect(execute).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
+				maxOutputBytes: 2048,
+				timeout: 100,
+			});
+		},
+	);
 
 	it.each(['', '\x00\xff\x80x'])('accepts binary content at the exact limit', async (content) => {
 		const result = await readBoundedFile(
 			'/workspace/file',
 			{ maxBytes: content.length, timeoutMs: 100 },
-			async () => ({ success: true, stdout: btoa(content) }),
+			async () => ({ success: true, stdout: btoa(content), stderr: '' }),
 		);
 		expect(result).toEqual({ success: true, content: btoa(content), encoding: 'base64' });
 	});
 
-	it('returns a refused read when command startup fails', async () => {
-		expect(
-			await readBoundedFile('/workspace/file', { maxBytes: 4, timeoutMs: 100 }, async () => {
-				throw new Error('offline');
+	it.each([
+		['not_found', 'NOT_FOUND'],
+		['size_limit', 'READ_FAILED'],
+		['not_regular', 'READ_FAILED'],
+		['permission_denied', 'READ_FAILED'],
+		['io_error', 'READ_FAILED'],
+		['invalid_path', 'READ_FAILED'],
+		['timeout', 'READ_FAILED'],
+	] as const)('preserves the reader failure %s', async (reason, code) => {
+		const result = await readBoundedFile(
+			'/workspace/file',
+			{ maxBytes: 0, timeoutMs: 100 },
+			async () => ({
+				success: false,
+				stdout: '',
+				stderr: `MARIMOHUB_BOUNDED_READ:${reason}\n`,
+				error: { code: 'COMMAND_FAILED' },
 			}),
-		).toMatchObject({ success: false });
+		);
+		expect(result).toMatchObject({
+			success: false,
+			error: { code, reason, exec_code: 'COMMAND_FAILED', stdout_bytes: 0 },
+		});
+	});
+
+	it.each([
+		['command timed out after 100ms', 'timeout'],
+		['Sandbox output exceeded byte limit', 'output_limit'],
+		['connection reset', 'exec_failed'],
+		['FileNotFoundError: transport socket missing', 'exec_failed'],
+		['MARIMOHUB_BOUNDED_READ:not_found', 'exec_failed'],
+	] as const)(
+		'classifies backend failures without mistaking them for missing files: %s',
+		async (stderr, reason) => {
+			const result = await readBoundedFile(
+				'/workspace/file',
+				{ maxBytes: 4, timeoutMs: 100 },
+				async () => ({
+					success: false,
+					stdout: 'é',
+					stderr,
+					error: { code: 'BACKEND_ERROR' },
+				}),
+			);
+			expect(result).toMatchObject({
+				success: false,
+				error: { code: 'READ_FAILED', reason, exec_code: 'BACKEND_ERROR', stdout_bytes: 2, stderr },
+			});
+		},
+	);
+
+	it.each([
+		'MARIMOHUB_BOUNDED_READ:not_foun',
+		'MARIMOHUB_BOUNDED_READ:unknown',
+		'MARIMOHUB_BOUNDED_READ:not_found extra',
+		'warning\nMARIMOHUB_BOUNDED_READ:not_found',
+		'MARIMOHUB_BOUNDED_READ:not_found\nextra',
+		'FileNotFoundError: missing transport socket',
+	])(
+		'does not classify ambiguous command diagnostics as a missing notebook: %s',
+		async (stderr) => {
+			expect(
+				await readBoundedFile('/workspace/file', { maxBytes: 0, timeoutMs: 100 }, async () => ({
+					success: false,
+					stdout: '',
+					stderr,
+					error: { code: 'COMMAND_FAILED' },
+				})),
+			).toMatchObject({ success: false, error: { code: 'READ_FAILED', reason: 'exec_failed' } });
+		},
+	);
+
+	it('caps stderr diagnostics and never includes file content in failures', async () => {
+		const result = await readBoundedFile(
+			'/workspace/file',
+			{ maxBytes: 4, timeoutMs: 100 },
+			async () => ({
+				success: false,
+				stdout: 'private notebook',
+				stderr: 'x'.repeat(4000),
+				error: { code: 'SPAWN_FAILED' },
+			}),
+		);
+		expect(result).toMatchObject({
+			success: false,
+			content: '',
+			error: { reason: 'exec_failed', exec_code: 'SPAWN_FAILED', stderr: 'x'.repeat(2048) },
+		});
+		expect(JSON.stringify(result)).not.toContain('private notebook');
+	});
+
+	it.each([
+		{ error: new Error('offline'), reason: 'transport_error' },
+		{ error: new Error('Sandbox read timed out'), reason: 'timeout' },
+		{ error: new Error('Sandbox output exceeded byte limit'), reason: 'output_limit' },
+		{ error: null, reason: 'transport_error' },
+		{ error: undefined, reason: 'transport_error' },
+		{ error: 'connection reset', reason: 'transport_error' },
+	])('handles execution rejections: %j', async ({ error, reason }) => {
+		expect(
+			await readBoundedFile(
+				'/workspace/file',
+				{ maxBytes: 4, timeoutMs: 100 },
+				vi.fn().mockRejectedValue(error),
+			),
+		).toEqual({
+			success: false,
+			content: '',
+			error: { code: 'READ_FAILED', reason },
+		});
 	});
 });
 

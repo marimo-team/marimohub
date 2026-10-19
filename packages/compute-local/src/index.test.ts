@@ -1124,8 +1124,15 @@ describe('bounded artifact reads', () => {
 			content: '',
 			encoding: 'base64',
 		});
-		for (const path of ['/workspace', '/workspace/missing'])
-			expectFileResult(await sb.readFileBounded!(path, options), { success: false });
+		expectFileResult(await sb.readFileBounded!('/workspace', options), {
+			success: false,
+			error: expect.objectContaining({ code: 'READ_FAILED', reason: 'not_regular' }),
+		});
+		for (const path of ['/workspace/missing', '/workspace/missing/parent/file'])
+			expectFileResult(await sb.readFileBounded!(path, options), {
+				success: false,
+				error: expect.objectContaining({ code: 'NOT_FOUND', reason: 'not_found' }),
+			});
 	});
 
 	it('preserves binary contents and rejects oversize files, links, and FIFOs', async () => {
@@ -1137,18 +1144,51 @@ describe('bounded artifact reads', () => {
 			content: 'AP8B',
 			encoding: 'base64',
 		});
-		expect(
-			(await sb.readFileBounded!('/workspace/file.bin', { ...options, maxBytes: 2 })).success,
-		).toBe(false);
+		expectFileResult(
+			await sb.readFileBounded!('/workspace/file.bin', { ...options, maxBytes: 2 }),
+			{
+				success: false,
+				error: expect.objectContaining({ code: 'READ_FAILED', reason: 'size_limit' }),
+			},
+		);
 		expectExecResult(
 			await sb.exec(
-				'ln -s file.bin /workspace/link && mkfifo /workspace/pipe && mkdir /workspace/dir && ln -s dir /workspace/dir-link',
+				'ln -s file.bin /workspace/link && ln -s missing /workspace/dangling && mkfifo /workspace/pipe && mkdir /workspace/dir && ln -s dir /workspace/dir-link',
 			),
 			{ success: true },
 		);
 		await sb.writeFiles([{ path: '/workspace/dir/file', content: 'ok' }]);
-		for (const name of ['link', 'pipe', 'dir-link/file'])
-			expect((await sb.readFileBounded!(`/workspace/${name}`, options)).success).toBe(false);
+		for (const name of ['link', 'dangling', 'pipe', 'dir-link/file', 'file.bin/child'])
+			expectFileResult(await sb.readFileBounded!(`/workspace/${name}`, options), {
+				success: false,
+				error: expect.objectContaining({ code: 'READ_FAILED' }),
+			});
+	});
+
+	it('distinguishes permission errors from missing notebooks', async (context) => {
+		if (process.getuid?.() === 0) context.skip('Root bypasses file permissions');
+		const sb = newSandbox();
+		await sb.writeFiles([{ path: '/workspace/private.py', content: 'private notebook' }]);
+		expectExecResult(await sb.exec('chmod 000 /workspace/private.py'), { success: true });
+		try {
+			const result = await sb.readFileBounded!('/workspace/private.py', {
+				maxBytes: 100,
+				timeoutMs: 2000,
+			});
+			expectFileResult(result, {
+				success: false,
+				content: '',
+				error: expect.objectContaining({
+					code: 'READ_FAILED',
+					reason: 'permission_denied',
+					exec_code: 'COMMAND_FAILED',
+					stdout_bytes: 0,
+				}),
+			});
+			expect(JSON.stringify(result)).not.toContain('private notebook');
+		} finally {
+			await sb.exec('chmod 600 /workspace/private.py');
+		}
 	});
 
 	it.each(['../outside', '/workspace/../../outside'])(

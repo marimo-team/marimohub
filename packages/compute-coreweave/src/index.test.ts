@@ -1412,7 +1412,7 @@ describe('bounded file transport', () => {
 			startImpl: async () => ({
 				...fakeProcess({ exitCode: 0 }),
 				stdout: (async function* () {
-					yield '12345';
+					yield 'x'.repeat(2049);
 				})(),
 				cancel,
 			}),

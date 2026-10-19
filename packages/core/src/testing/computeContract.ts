@@ -244,7 +244,7 @@ export function computeContract(
 			]) {
 				expectFileResult(await inst.readFileBounded(CONTRACT_NON_DIRECTORY_PATH, options), {
 					success: false,
-					error: { code: 'READ_FAILED' },
+					error: expect.objectContaining({ code: 'READ_FAILED' }),
 				});
 			}
 			expect(exec).not.toHaveBeenCalled();

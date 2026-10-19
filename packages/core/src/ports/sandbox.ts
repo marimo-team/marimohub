@@ -2,20 +2,22 @@ import type { ProjectId, SandboxId, UserId } from '../ids';
 import type { Millis } from '../duration';
 import type { Timings } from '../timing';
 
+type ExecFailureCode = 'COMMAND_FAILED' | 'SPAWN_FAILED' | 'BACKEND_ERROR';
+
 export type ExecResult =
 	| { success: true; stdout: string; stderr: string }
 	| {
 			success: false;
 			stdout: string;
 			stderr: string;
-			error: { code: 'COMMAND_FAILED' | 'SPAWN_FAILED' | 'BACKEND_ERROR' };
+			error: { code: ExecFailureCode };
 	  };
 
 export function execResult(
 	success: boolean,
 	stdout: string,
 	stderr: string,
-	failureCode: 'COMMAND_FAILED' | 'SPAWN_FAILED' | 'BACKEND_ERROR' = 'COMMAND_FAILED',
+	failureCode: ExecFailureCode = 'COMMAND_FAILED',
 ): ExecResult {
 	return success
 		? { success: true, stdout, stderr }
@@ -109,7 +111,14 @@ export type ReadFileResult =
 	| {
 			success: false;
 			content: '';
-			error: { code: 'NOT_FOUND' | 'READ_FAILED' | 'BACKEND_ERROR' };
+			error: {
+				code: 'NOT_FOUND' | 'READ_FAILED' | 'BACKEND_ERROR';
+				reason?: string;
+				exec_code?: ExecFailureCode;
+				stdout_bytes?: number;
+				/** Internal diagnostics; do not serialize raw sandbox output into operational logs. */
+				stderr?: string;
+			};
 	  };
 
 export function readFileFailure(

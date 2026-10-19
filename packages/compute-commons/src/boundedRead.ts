@@ -5,16 +5,35 @@ export interface BoundedReadOptions {
 	timeoutMs: number;
 }
 
+const DIAGNOSTIC_LIMIT = 2048;
+const FAILURE_PREFIX = 'MARIMOHUB_BOUNDED_READ:';
+const READER_REASONS = new Set([
+	'not_found',
+	'invalid_path',
+	'not_regular',
+	'size_limit',
+	'timeout',
+	'permission_denied',
+	'io_error',
+]);
+
 // Open every path component without following links, and use O_NONBLOCK so a
 // swapped-in FIFO cannot block before fstat rejects it.
 const READ_FILE = `import os, stat, sys, base64, signal
+
+def fail(reason):
+    print('${FAILURE_PREFIX}' + reason, file=sys.stderr, flush=True)
+    sys.exit(1)
+
+signal.signal(signal.SIGALRM, lambda *_: fail('timeout'))
 signal.setitimer(signal.ITIMER_REAL, float(sys.argv[3]) / 1000)
 path, limit = sys.argv[1], int(sys.argv[2])
 parts = path.split('/')
 if not path.startswith('/') or '..' in parts:
-    sys.exit(1)
-fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    fail('invalid_path')
+fd = None
 try:
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
     names = [p for p in parts if p and p != '.']
     for i, name in enumerate(names):
         flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
@@ -24,15 +43,53 @@ try:
         os.close(fd)
         fd = next_fd
     info = os.fstat(fd)
-    if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
-        sys.exit(1)
+    if not stat.S_ISREG(info.st_mode):
+        fail('not_regular')
+    if info.st_size > limit:
+        fail('size_limit')
     with os.fdopen(fd, 'rb', closefd=False) as source:
         data = source.read(limit + 1)
     if len(data) > limit:
-        sys.exit(1)
+        fail('size_limit')
     sys.stdout.write(base64.b64encode(data).decode('ascii'))
+except FileNotFoundError:
+    fail('not_found')
+except PermissionError:
+    fail('permission_denied')
+except OSError:
+    fail('io_error')
 finally:
-    os.close(fd)`;
+    if fd is not None:
+        os.close(fd)`;
+
+interface ReadExecResult {
+	success: boolean;
+	stdout: string;
+	stderr: string;
+	error?: { code: 'COMMAND_FAILED' | 'SPAWN_FAILED' | 'BACKEND_ERROR' };
+}
+
+function executionFailureReason(message: string, fallback: string): string {
+	if (/timed out|timeout|deadline exceeded/i.test(message)) return 'timeout';
+	if (/output.*(?:limit|cap)|(?:limit|cap).*output/i.test(message)) return 'output_limit';
+	return fallback;
+}
+
+function boundedReadFailure(reason: string, result?: ReadExecResult) {
+	return {
+		success: false,
+		content: '',
+		error: {
+			code: reason === 'not_found' ? 'NOT_FOUND' : 'READ_FAILED',
+			reason,
+			...(result && {
+				exec_code: result.error?.code,
+				stdout_bytes: new TextEncoder().encode(result.stdout).byteLength,
+				stderr: result.stderr.slice(0, DIAGNOSTIC_LIMIT),
+			}),
+		},
+	} as const;
+}
 
 export async function readBoundedFile(
 	path: string,
@@ -40,36 +97,50 @@ export async function readBoundedFile(
 	execute: (
 		command: string,
 		options: { timeout: number; maxOutputBytes: number },
-	) => Promise<{ success: boolean; stdout: string }>,
+	) => Promise<ReadExecResult>,
 ): Promise<
-	| { success: true; content: string; encoding: 'base64' }
-	| { success: false; content: ''; error: { code: 'READ_FAILED' } }
+	{ success: true; content: string; encoding: 'base64' } | ReturnType<typeof boundedReadFailure>
 > {
-	const failure = { success: false, content: '', error: { code: 'READ_FAILED' } } as const;
+	const maxOutputBytes = 4 * Math.ceil(options.maxBytes / 3);
 	if (
 		!Number.isSafeInteger(options.maxBytes) ||
 		options.maxBytes < 0 ||
+		!Number.isSafeInteger(maxOutputBytes) ||
 		!Number.isFinite(options.timeoutMs) ||
 		options.timeoutMs <= 0 ||
 		options.timeoutMs > 2 ** 31 - 1
 	)
-		return failure;
+		return boundedReadFailure('invalid_options');
+	let result: ReadExecResult;
 	try {
-		const maxOutputBytes = 4 * Math.ceil(options.maxBytes / 3);
-		validateOutputBudget(maxOutputBytes);
 		const timeout = Math.ceil(options.timeoutMs);
 		const command = `python3 -I -c ${shellQuote(READ_FILE)} ${shellQuote(path)} ${options.maxBytes} ${timeout}`;
-		const result = await execute(command, { timeout, maxOutputBytes });
-		if (
-			!result.success ||
-			result.stdout.length > maxOutputBytes ||
-			atob(result.stdout).length > options.maxBytes
-		)
-			return failure;
-		return { success: true, content: result.stdout, encoding: 'base64' };
-	} catch {
-		return failure;
+		// Failed reads emit diagnostics instead of file bytes, even with a zero-byte file cap.
+		result = await execute(command, {
+			timeout,
+			maxOutputBytes: Math.max(maxOutputBytes, DIAGNOSTIC_LIMIT),
+		});
+	} catch (error) {
+		return boundedReadFailure(
+			executionFailureReason(error instanceof Error ? error.message : '', 'transport_error'),
+		);
 	}
+	if (!result.success) {
+		const marker = result.stderr.trim();
+		const reason = marker.startsWith(FAILURE_PREFIX) ? marker.slice(FAILURE_PREFIX.length) : '';
+		if (result.error?.code === 'COMMAND_FAILED' && READER_REASONS.has(reason))
+			return boundedReadFailure(reason, result);
+		return boundedReadFailure(executionFailureReason(result.stderr, 'exec_failed'), result);
+	}
+	if (result.stdout.length + new TextEncoder().encode(result.stderr).byteLength > maxOutputBytes)
+		return boundedReadFailure('output_limit', result);
+	try {
+		if (atob(result.stdout).length > options.maxBytes)
+			return boundedReadFailure('size_limit', result);
+	} catch {
+		return boundedReadFailure('invalid_base64', result);
+	}
+	return { success: true, content: result.stdout, encoding: 'base64' };
 }
 
 export function validateOutputBudget(maxBytes: number): void {

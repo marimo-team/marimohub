@@ -2,6 +2,8 @@ function safeError(err: unknown): Record<string, unknown> {
 	if (!(err instanceof Error)) return { name: `non-error(${typeof err})` };
 	const value = err as Error & {
 		code?: unknown;
+		exec_code?: unknown;
+		stdout_bytes?: unknown;
 		status?: unknown;
 		operation?: unknown;
 		reason?: unknown;
@@ -10,7 +12,16 @@ function safeError(err: unknown): Record<string, unknown> {
 		cause_name?: unknown;
 	};
 	const out: Record<string, unknown> = { name: value.name };
-	for (const key of ['code', 'status', 'operation', 'reason', 'object', 'cause_name'] as const) {
+	for (const key of [
+		'code',
+		'status',
+		'operation',
+		'reason',
+		'object',
+		'cause_name',
+		'exec_code',
+		'stdout_bytes',
+	] as const) {
 		const field = value[key];
 		if (typeof field === 'number' && Number.isFinite(field)) out[key] = field;
 		if (typeof field === 'string' && field.length <= 256) out[key] = field;

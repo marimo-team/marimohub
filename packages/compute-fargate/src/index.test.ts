@@ -953,7 +953,7 @@ describe('bounded file transport', () => {
 			new Response(
 				new ReadableStream({
 					start(c) {
-						c.enqueue(new Uint8Array(5000));
+						c.enqueue(new Uint8Array(20_000));
 					},
 					cancel,
 				}),

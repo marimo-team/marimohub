@@ -599,6 +599,9 @@ async function readNotebookCode(
 	const code = result?.error.code ?? 'READ_FAILED';
 	const error = Object.assign(new Error(`Could not read ${entryNotebook}: ${code}`), {
 		code,
+		reason: result?.error.reason,
+		exec_code: result?.error.exec_code,
+		stdout_bytes: result?.error.stdout_bytes,
 		operation: 'sandbox.read_session_artifacts',
 		object: entryNotebook,
 	});

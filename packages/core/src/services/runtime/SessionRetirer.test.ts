@@ -708,17 +708,42 @@ describe('SessionRetirer', () => {
 				captured_at: new Date().toISOString(),
 			});
 			if (failure === 'read') {
-				instance.readFileBounded = async () => readFileFailure('BACKEND_ERROR');
+				instance.readFileBounded = async () => ({
+					success: false,
+					content: '',
+					error: {
+						code: 'READ_FAILED',
+						reason: 'timeout',
+						exec_code: 'COMMAND_FAILED',
+						stdout_bytes: 12,
+						stderr: 'private backend details',
+					},
+				});
 			} else {
 				vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockRejectedValue(
 					new Error('bucket unavailable'),
 				);
 			}
-			vi.spyOn(console, 'error').mockImplementation(() => {});
+			const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 			const session = await persistentSession();
 			await sessions.beginTerminating(projectId, session.session_id);
 
 			await retirer(compute).retire(session);
+
+			if (failure === 'read') {
+				expect(error.mock.calls.map(([line]) => JSON.parse(line))).toContainEqual(
+					expect.objectContaining({
+						event: 'session_capture_failed',
+						error: expect.objectContaining({
+							code: 'READ_FAILED',
+							reason: 'timeout',
+							exec_code: 'COMMAND_FAILED',
+							stdout_bytes: 12,
+						}),
+					}),
+				);
+				expect(JSON.stringify(error.mock.calls)).not.toContain('private backend details');
+			}
 
 			expect(captureSnapshot).not.toHaveBeenCalled();
 			expect(deleteSnapshot).not.toHaveBeenCalled();
