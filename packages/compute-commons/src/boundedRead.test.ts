@@ -261,6 +261,8 @@ describe('bounded sandbox reads', () => {
 		{ error: new Error('offline'), reason: 'transport_error' },
 		{ error: new Error('Sandbox read timed out'), reason: 'timeout' },
 		{ error: new Error('Sandbox output exceeded byte limit'), reason: 'output_limit' },
+		{ error: new Error('Sandbox SSE wire limit exceeded'), reason: 'output_limit' },
+		{ error: new Error('Sandbox SSE frame limit exceeded'), reason: 'output_limit' },
 		{ error: null, reason: 'transport_error' },
 		{ error: undefined, reason: 'transport_error' },
 		{ error: 'connection reset', reason: 'transport_error' },

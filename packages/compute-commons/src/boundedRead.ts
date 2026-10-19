@@ -71,7 +71,8 @@ interface ReadExecResult {
 
 function executionFailureReason(message: string, fallback: string): string {
 	if (/timed out|timeout|deadline exceeded/i.test(message)) return 'timeout';
-	if (/output.*(?:limit|cap)|(?:limit|cap).*output/i.test(message)) return 'output_limit';
+	if (/output.*(?:limit|cap)|(?:limit|cap).*output|(?:wire|frame) limit exceeded/i.test(message))
+		return 'output_limit';
 	return fallback;
 }
 

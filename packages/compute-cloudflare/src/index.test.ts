@@ -653,6 +653,32 @@ describe('bounded file transport', () => {
 		expect(cancel).toHaveBeenCalledOnce();
 	});
 
+	it.each([
+		{ kind: 'wire', bytes: 1024 * 1024 },
+		{ kind: 'frame', bytes: 128 * 1024 },
+	])('reports a bounded read $kind overflow as an output limit', async ({ kind, bytes }) => {
+		const cancel = vi.fn();
+		fakeSandbox.execStream.mockResolvedValueOnce(
+			new ReadableStream({
+				start(controller) {
+					controller.enqueue(new Uint8Array(bytes).fill(120));
+				},
+				cancel,
+			}),
+		);
+		expect(
+			await makeProvider().create(SANDBOX_ID).readFileBounded!('/workspace/file', {
+				maxBytes: 2,
+				timeoutMs: 1000,
+			}),
+		).toMatchObject({
+			success: false,
+			content: '',
+			error: { code: 'READ_FAILED', reason: 'output_limit' },
+		});
+		expect(cancel).toHaveBeenCalledExactlyOnceWith(new Error(`Sandbox SSE ${kind} limit exceeded`));
+	});
+
 	it('cancels a stalled wire stream', async () => {
 		const cancel = vi.fn();
 		fakeSandbox.execStream.mockResolvedValueOnce(new ReadableStream({ cancel }));
