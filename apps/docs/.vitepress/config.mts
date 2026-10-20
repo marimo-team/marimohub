@@ -146,7 +146,8 @@ export default defineConfig({
 			},
 			{
 				text: 'Reference',
-				activeMatch: '^/(configuration|api|api-tokens|mcp|search|cli|architecture|agent-guide)',
+				activeMatch:
+					'^/(configuration|api|api-tokens|mcp|host-protocol|search|cli|architecture|agent-guide)',
 				items: [
 					{ text: 'Configuration', link: '/configuration' },
 					{ text: 'API & client', link: '/api' },

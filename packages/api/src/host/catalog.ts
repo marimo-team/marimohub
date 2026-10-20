@@ -41,9 +41,15 @@ export async function loadHostNotebook(
 		principal,
 		'project.read',
 	);
-	const session = parsed.sessionId
-		? await deps.services.sessions.getSession(project.id, parsed.sessionId)
-		: undefined;
+	let session: Session | undefined;
+	if (parsed.sessionId) {
+		try {
+			session = await deps.services.sessions.getSession(project.id, parsed.sessionId);
+		} catch (error) {
+			if (error instanceof NotFoundError) throw new NotFoundError('Notebook not found');
+			throw error;
+		}
+	}
 	if (session) {
 		if (
 			session.notebook_id !== notebook.meta.id ||

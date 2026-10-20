@@ -4,6 +4,7 @@ import {
 	SandboxProvisioner,
 	SessionId,
 	sessionOwner,
+	sessionWorkspaceDir,
 	sleep,
 	UnavailableError,
 	workspaceSourcePolicy,
@@ -177,7 +178,8 @@ export async function callRuntime(
 		!keepAlive && deps.compute.connectExisting
 			? deps.compute.connectExisting(session.sandbox_id, { owner: sessionOwner(session) })
 			: deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) });
-	const path = `${deps.sandbox.workdir}/${workspaceSourcePolicy(notebook.source).entryNotebook}`;
+	const workspaceDir = sessionWorkspaceDir(notebook.source, deps.sandbox.workdir);
+	const path = `${workspaceDir}/${workspaceSourcePolicy(notebook.source).entryNotebook}`;
 	const perform = async (activeSignal?: AbortSignal) => {
 		if (!session.ephemeral) {
 			const claim = await deps.services.sessions.getEditorClaim(project.id, notebook.meta.id);

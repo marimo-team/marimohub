@@ -42,7 +42,7 @@ Clients must treat them as opaque. Projects have `root: null` and notebooks have
 `path: null`. Creation requires `project_id` and `name`. Renaming changes `name`
 and preserves the ID. Neither operation accepts filesystem paths.
 
-Catalog access, creation, and renaming need no compute. Notebook streams and runtime
+Creation and renaming need no compute. Notebook streams and runtime
 operations start or reuse an editor sandbox, with the same permissions
 as editor sessions. Readers can use the catalog but cannot open notebook streams,
 even with `types=cell,document`.
@@ -101,6 +101,10 @@ The bridge reads events in bounded batches through the compute port, resuming th
 upstream cursor. The hub tracks one client attachment for the downstream connection.
 If the compute adapter supports `connectExisting`, catalog discovery uses it.
 Other adapters report runtime records already observed by this API process.
+Catalog snapshots can therefore wait for connections to active runtimes.
+Clients share one refresh per session, with a five-second cache between refreshes.
+Failed connections omit those runtime records; project and notebook records remain available.
+Catalog requests never start a sandbox. Use `types=host,project,notebook` to skip runtime discovery.
 
 ## Retries and limits
 
@@ -119,6 +123,10 @@ Other adapters report runtime records already observed by this API process.
   and a fresh snapshot. The hub retains no downstream replay log.
 - Catalog polling can omit intermediate states. Runtime events keep their upstream
   order within each batch.
+- Request cancellation stops waiting but cannot terminate a dispatched sandbox command
+  or undo an accepted mutation. Use `runtime.interrupt` to stop a run.
+  If the original session remains available, retry a cancelled save with the same key
+  to complete hub storage capture.
 - Request bodies have a 2 MiB limit. Runtime event batches have an 8 MiB limit.
   Oversized or incomplete snapshots return errors rather than partial data.
 

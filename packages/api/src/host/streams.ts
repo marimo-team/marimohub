@@ -85,9 +85,12 @@ export class CatalogStream {
 
 	async change(event: HostEvent, send: SendEvent) {
 		if (event.event.endsWith('.removed') && typeof event.data.id === 'string') {
-			this.previous.delete(`${event.event.replace(/\.removed$/, '')}:${event.data.id}`);
+			if (!this.previous.delete(`${event.event.replace(/\.removed$/, '')}:${event.data.id}`))
+				return;
 		} else {
-			this.previous.set(eventKey(event), event);
+			const key = eventKey(event);
+			if (this.unchanged(key, event)) return;
+			this.previous.set(key, event);
 		}
 		await this.emit(event, send);
 	}
@@ -104,11 +107,7 @@ export class CatalogStream {
 			);
 		}
 		for (const [key, event] of current) {
-			if (
-				JSON.stringify(this.previous.get(key)?.data[event.event]) ===
-				JSON.stringify(event.data[event.event])
-			)
-				continue;
+			if (this.unchanged(key, event)) continue;
 			if (initial) {
 				if (acceptsEvent(this.types, event.event)) await send(event);
 			} else {
@@ -120,6 +119,13 @@ export class CatalogStream {
 		}
 		this.previous = current;
 		if (initial) await this.emit({ event: 'ready', data: {} }, send);
+	}
+
+	private unchanged(key: string, event: HostEvent): boolean {
+		return (
+			JSON.stringify(this.previous.get(key)?.data[event.event]) ===
+			JSON.stringify(event.data[event.event])
+		);
 	}
 
 	private async emit(event: HostEvent, send: SendEvent) {

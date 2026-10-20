@@ -162,6 +162,8 @@ def run(cfg):
                 raise RuntimeError("Host response exceeds limit")
             return {"status": response.status, "notebook": notebook, "body": json.loads(data) if data else None}
     except HTTPError as error:
+        if error.code < 400:
+            raise
         return {"status": error.code, "notebook": notebook, "body": json.loads(error.read(1024 * 1024))}
 
 if __name__ == "__main__":
@@ -207,24 +209,25 @@ export async function requestRuntimeHost(
 ): Promise<HostReply> {
 	const unavailable = () => new UnavailableError('The runtime host API is unavailable');
 	const requestPath = `/tmp/.marimohub-host-${crypto.randomUUID()}.json`;
-	const result = await withDeadline(
-		async (activeSignal) => {
-			await sandbox.writeFiles([{ path: requestPath, content: JSON.stringify(request) }]);
-			activeSignal.throwIfAborted();
-			return sandbox.exec(
-				hostBridgeCommand(sandbox.resolveProcessPath?.(requestPath) ?? requestPath),
-				{
-					timeout: 32_000,
-					maxOutputBytes: 16 * 1024 * 1024,
-				},
-			);
-		},
-		{ timeoutMs: 33_000, timeoutError: unavailable, signal },
-	);
-	if (!result.success) throw unavailable();
 	try {
+		const result = await withDeadline(
+			async (activeSignal) => {
+				await sandbox.writeFiles([{ path: requestPath, content: JSON.stringify(request) }]);
+				activeSignal.throwIfAborted();
+				return sandbox.exec(
+					hostBridgeCommand(sandbox.resolveProcessPath?.(requestPath) ?? requestPath),
+					{
+						timeout: 32_000,
+						maxOutputBytes: 16 * 1024 * 1024,
+					},
+				);
+			},
+			{ timeoutMs: 33_000, timeoutError: unavailable, signal },
+		);
+		if (!result.success) throw unavailable();
 		return ReplySchema.parse(JSON.parse(result.stdout));
-	} catch {
+	} catch (error) {
+		if (signal?.aborted) throw error;
 		throw unavailable();
 	}
 }
