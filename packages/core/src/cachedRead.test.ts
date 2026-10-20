@@ -40,4 +40,31 @@ describe('cachedRead', () => {
 		).toThrow('sync');
 		await expect(cachedRead(cache, 'a', read)).resolves.toBe(1);
 	});
+
+	it('shares a pending rejection without poisoning another key or cache', async () => {
+		const cache = new Map<string, Promise<number>>();
+		const pending = Promise.withResolvers<number>();
+		const failure = new Error('temporarily unavailable');
+		const read = vi.fn(() => pending.promise);
+		const first = cachedRead(cache, 'a', read);
+		const second = cachedRead(cache, 'a', read);
+		const results = Promise.allSettled([first, second]);
+		await expect(cachedRead(cache, 'b', async () => 2)).resolves.toBe(2);
+		await expect(cachedRead(new Map(), 'a', async () => 3)).resolves.toBe(3);
+		pending.reject(failure);
+		expect(await results).toEqual([
+			{ status: 'rejected', reason: failure },
+			{ status: 'rejected', reason: failure },
+		]);
+		expect(cachedRead(cache, 'a', read)).toBe(first);
+		expect(read).toHaveBeenCalledOnce();
+	});
+
+	it.each([undefined, null, false, 0, ''])('memoizes the fulfilled value %s', async (value) => {
+		const cache = new Map<string, Promise<typeof value>>();
+		const read = vi.fn(async () => value);
+		await expect(cachedRead(cache, 'key', read)).resolves.toBe(value);
+		await expect(cachedRead(cache, 'key', read)).resolves.toBe(value);
+		expect(read).toHaveBeenCalledOnce();
+	});
 });

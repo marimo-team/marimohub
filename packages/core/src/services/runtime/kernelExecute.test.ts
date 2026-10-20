@@ -201,6 +201,72 @@ describe('kernel execution', () => {
 		},
 	);
 
+	it.each(['é', '€', '😀'])(
+		'keeps stderr and terminal output within byte budgets when cutting %s',
+		async (character) => {
+			const data = `a${character}tail`;
+			const fetchImpl = vi
+				.fn()
+				.mockResolvedValue(
+					sse(
+						`event: stderr\ndata: ${JSON.stringify({ data })}\n\nevent: done\ndata: ${JSON.stringify({ success: false, output: { mimetype: 'text/plain', data } })}\n\n`,
+					),
+				);
+			const result = await executeInKernel(
+				'https://kernel',
+				{
+					sessionId: 'one',
+					code: 'raise ValueError()',
+					maxStderrBytes: 2,
+					maxOutputBytes: 2,
+				},
+				{ fetchImpl },
+			);
+			expect(result).toMatchObject({
+				completed: true,
+				success: false,
+				stderr: 'a',
+				output: { data: 'a' },
+				truncated: true,
+			});
+			expect(new TextEncoder().encode(result.stderr).byteLength).toBeLessThanOrEqual(2);
+			expect(new TextEncoder().encode(String(result.output?.data)).byteLength).toBeLessThanOrEqual(
+				2,
+			);
+		},
+	);
+
+	it.each([0, 4])('handles a %s-byte cap across all output channels', async (cap) => {
+		const data = '😀';
+		const fetchImpl = vi
+			.fn()
+			.mockResolvedValue(
+				sse(
+					`event: stdout\ndata: ${JSON.stringify({ data })}\n\nevent: stderr\ndata: ${JSON.stringify({ data })}\n\nevent: done\ndata: ${JSON.stringify({ success: true, output: { mimetype: 'text/plain', data } })}\n\n`,
+				),
+			);
+		const result = await executeInKernel(
+			'https://kernel',
+			{
+				sessionId: 'one',
+				code: 'print()',
+				maxStdoutBytes: cap,
+				maxStderrBytes: cap,
+				maxOutputBytes: cap,
+			},
+			{ fetchImpl },
+		);
+		const expected = cap === 0 ? '' : data;
+		expect(result).toMatchObject({
+			completed: true,
+			success: true,
+			stdout: expected,
+			stderr: expected,
+			output: { data: expected },
+			truncated: cap === 0,
+		});
+	});
+
 	it('caps stderr and terminal output independently', async () => {
 		const fetchImpl = vi
 			.fn()

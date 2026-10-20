@@ -41,4 +41,40 @@ describe('table values', () => {
 		expect(JSON.stringify(sparse.map(formatCell))).toBe('[null,"null"]');
 		expect(JSON.stringify(Array.from(sparse, formatCell))).toBe('["","null"]');
 	});
+
+	it.each([
+		{
+			toJSON() {
+				throw new Error('serializer failed');
+			},
+		},
+		{ nested: 123n },
+	])('contains JSON serialization failures within the cell', (value) => {
+		expect(formatCell(value)).toBe('[unserializable]');
+		const cells = [value, 'readable', value].map(formatCell);
+		const keyed = withOccurrenceKeys(cells, (cell) => cell);
+		expect(keyed.map(({ key }) => key)).toEqual([
+			'[unserializable]:0',
+			'readable:0',
+			'[unserializable]:1',
+		]);
+	});
+
+	it.each([Symbol('value'), () => 'value', { toJSON: () => {} }])(
+		'renders values without a JSON representation as empty text',
+		(value) => {
+			expect(formatCell(value)).toBe('');
+		},
+	);
+
+	it('keeps empty and prototype-like headers distinct across duplicates', () => {
+		const headers = ['', '__proto__', 'constructor', '', '__proto__'];
+		expect(withOccurrenceKeys(headers, (name) => name).map(({ key }) => key)).toEqual([
+			':0',
+			'__proto__:0',
+			'constructor:0',
+			':1',
+			'__proto__:1',
+		]);
+	});
 });

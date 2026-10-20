@@ -35,6 +35,27 @@ describe('app pool snapshot reads', () => {
 		},
 	);
 
+	it('retains a read failure only within its request and retries on the next request', async () => {
+		const bucket = new MemoryBucket();
+		const store = new AppPoolStore(bucket);
+		const pid = createProjectId();
+		const nid = createNotebookId();
+		const pending = Promise.withResolvers<null>();
+		const failure = new Error('bucket offline');
+		const get = vi.spyOn(bucket, 'get').mockReturnValueOnce(pending.promise);
+		const read = store.reader();
+		const reads = Promise.allSettled([read(pid, nid), read(pid, nid)]);
+		pending.reject(failure);
+		expect(await reads).toEqual([
+			{ status: 'rejected', reason: failure },
+			{ status: 'rejected', reason: failure },
+		]);
+		await expect(read(pid, nid)).rejects.toBe(failure);
+		expect(get).toHaveBeenCalledOnce();
+		await expect(store.reader()(pid, nid)).resolves.toBeNull();
+		expect(get).toHaveBeenCalledTimes(2);
+	});
+
 	it('shares concurrent reads within a request but observes changes on the next request', async () => {
 		const bucket = new MemoryBucket();
 		const store = new AppPoolStore(bucket);

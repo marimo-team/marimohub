@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { batchByWeight } from './batching';
 
 describe('batchByWeight', () => {
@@ -30,5 +30,42 @@ describe('batchByWeight', () => {
 					(batch.length === 1 || batch.reduce((total, item) => total + item.size, 2) <= 12),
 			),
 		).toBe(true);
+	});
+
+	it.each([
+		{ items: [0, 0, 1, 0], maxWeight: 0, expected: [[0, 0], [1], [0]] },
+		{ items: [0, 0], maxWeight: 1, overhead: 2, expected: [[0], [0]] },
+		{
+			items: [2, 2, 2, 2],
+			maxWeight: 5,
+			maxItems: 2,
+			overhead: 1,
+			expected: [
+				[2, 2],
+				[2, 2],
+			],
+		},
+	])('handles zero weights and boundary overhead: $items', ({ items, expected, ...options }) => {
+		expect(batchByWeight(items, { ...options, weight: (item) => item })).toEqual(expected);
+	});
+
+	it('does not evaluate weights for an empty input', () => {
+		const weight = vi.fn(() => {
+			throw new Error('unexpected evaluation');
+		});
+		expect(batchByWeight([], { weight, maxWeight: 0, overhead: 1 })).toEqual([]);
+		expect(weight).not.toHaveBeenCalled();
+	});
+
+	it('propagates a weight error without changing the input or evaluating later items', () => {
+		const items = Object.freeze([1, 2, 3]);
+		const failure = new Error('cannot size item');
+		const weight = vi.fn((item: number) => {
+			if (item === 2) throw failure;
+			return item;
+		});
+		expect(() => batchByWeight(items, { weight, maxWeight: 1 })).toThrow(failure);
+		expect(weight.mock.calls).toEqual([[1], [2]]);
+		expect(items).toEqual([1, 2, 3]);
 	});
 });

@@ -55,4 +55,40 @@ describe('KeyedSerialQueue', () => {
 		// oxlint-disable-next-line typescript/dot-notation -- inspect private storage without widening the public API
 		expect(queue['tails'].size).toBe(0);
 	});
+
+	it('recovers a failed key while another key remains blocked', async () => {
+		const queue = new KeyedSerialQueue<string>();
+		const blocked = Promise.withResolvers<void>();
+		const other = queue.run('other', () => blocked.promise);
+		const failure = new Error('write failed');
+		try {
+			await expect(
+				queue.run('failed', async () => {
+					throw failure;
+				}),
+			).rejects.toBe(failure);
+			await expect(queue.run('failed', async () => 'retry')).resolves.toBe('retry');
+		} finally {
+			blocked.resolve();
+			await other;
+		}
+	});
+
+	it('keeps work enqueued from a running task behind already queued work', async () => {
+		const queue = new KeyedSerialQueue<string>();
+		const events: string[] = [];
+		let nested: Promise<void> | undefined;
+		const first = queue.run('key', async () => {
+			events.push('first');
+			nested = queue.run('key', async () => {
+				events.push('nested');
+			});
+		});
+		const second = queue.run('key', async () => {
+			events.push('second');
+		});
+		await Promise.all([first, second]);
+		await nested;
+		expect(events).toEqual(['first', 'second', 'nested']);
+	});
 });

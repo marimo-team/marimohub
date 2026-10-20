@@ -162,4 +162,79 @@ describe('guardObjectStream', () => {
 		expect(finalize).toHaveBeenCalledOnce();
 		expect(source.locked).toBe(false);
 	});
+
+	it.each(['eof', 'error', 'close'] as const)(
+		'detaches abort handling after %s',
+		async (terminal) => {
+			const abort = new AbortController();
+			const removeListener = vi.spyOn(abort.signal, 'removeEventListener');
+			const cancel = vi.fn();
+			const source = new ReadableStream<Uint8Array>({
+				start(controller) {
+					if (terminal === 'eof') controller.close();
+					if (terminal === 'error') controller.error(new Error('provider failed'));
+				},
+				cancel,
+			});
+			const finalize = vi.fn();
+			const guarded = guardObjectStream(source, abort.signal, mapError, finalize);
+			const reader = guarded.body.getReader();
+			if (terminal === 'close') guarded.close();
+			if (terminal === 'error') await expect(reader.read()).rejects.toThrow('mapped');
+			else await expect(reader.read()).resolves.toMatchObject({ done: true });
+			const cancellations = cancel.mock.calls.length;
+			abort.abort(new Error('late abort'));
+			guarded.close();
+			expect(cancel).toHaveBeenCalledTimes(cancellations);
+			expect(removeListener).toHaveBeenCalledExactlyOnceWith('abort', expect.any(Function));
+			expect(finalize).toHaveBeenCalledOnce();
+			expect(source.locked).toBe(false);
+		},
+	);
+
+	it('ignores a pull failure that arrives after consumer cancellation', async () => {
+		const pull = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		const source = new ReadableStream<Uint8Array>({
+			pull() {
+				started.resolve();
+				return pull.promise;
+			},
+		});
+		const map = vi.fn(mapError);
+		const finalize = vi.fn();
+		const guarded = guardObjectStream(source, undefined, map, finalize);
+		const reader = guarded.body.getReader();
+		const pending = reader.read();
+		await started.promise;
+		await reader.cancel('no longer needed');
+		pull.reject(new Error('late network failure'));
+		await expect(pending).resolves.toMatchObject({ done: true });
+		await expect(reader.closed).resolves.toBeUndefined();
+		guarded.close();
+		expect(map).not.toHaveBeenCalled();
+		expect(finalize).toHaveBeenCalledOnce();
+		expect(source.locked).toBe(false);
+	});
+
+	it('discards buffered data when aborted before the next consumer read', async () => {
+		const abort = new AbortController();
+		const cancel = vi.fn();
+		const source = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new Uint8Array([1]));
+			},
+			cancel,
+		});
+		const finalize = vi.fn();
+		const guarded = guardObjectStream(source, abort.signal, mapError, finalize);
+		await Promise.resolve();
+		await Promise.resolve();
+		const reason = new Error('disconnected');
+		abort.abort(reason);
+		await expect(guarded.body.getReader().read()).rejects.toMatchObject({ code: 'aborted' });
+		expect(cancel).toHaveBeenCalledExactlyOnceWith(reason);
+		expect(finalize).toHaveBeenCalledOnce();
+		expect(source.locked).toBe(false);
+	});
 });

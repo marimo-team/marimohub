@@ -911,6 +911,43 @@ describe('S3ObjectBrowser previews and streams', () => {
 		expect(test.destroyed()).toBe(1);
 	});
 
+	it.each([undefined, {}])(
+		'releases the client if the provider body cannot be opened: %s',
+		async (Body) => {
+			const test = harness([{ Body, ContentLength: 1 }]);
+			await expect(
+				test.browser.openObject(source, context, {
+					bucket: 'lake',
+					key: 'invalid.bin',
+				}),
+			).rejects.toMatchObject({ code: 'unavailable' });
+			expect(test.destroyed()).toBe(1);
+		},
+	);
+
+	it('releases the client after a pending upstream cancellation rejects', async () => {
+		const cleanup = Promise.withResolvers<void>();
+		const cancel = vi.fn(() => cleanup.promise);
+		const stream = new ReadableStream<Uint8Array>({ cancel });
+		const test = harness([{ Body: stream, ContentLength: 1 }]);
+		const opened = await test.browser.openObject(source, context, {
+			bucket: 'lake',
+			key: 'slow.bin',
+		});
+		const reason = new Error('download canceled');
+		const failure = new Error('cancel failed');
+		const cancellation = opened.body.cancel(reason);
+		const rejected = expect(cancellation).rejects.toBe(failure);
+		expect(cancel).toHaveBeenCalledExactlyOnceWith(reason);
+		expect(test.destroyed()).toBe(0);
+		cleanup.reject(failure);
+		await rejected;
+		opened.close();
+		opened.close();
+		expect(test.destroyed()).toBe(1);
+		expect(stream.locked).toBe(false);
+	});
+
 	it('cancels an unread upstream body when close is called', async () => {
 		const cancel = vi.fn();
 		const stream = new ReadableStream<Uint8Array>({
