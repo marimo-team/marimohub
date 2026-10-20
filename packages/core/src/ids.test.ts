@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
 	AlertDestinationId,
 	createAlertDestinationId,
@@ -10,6 +10,7 @@ import {
 	createSessionId,
 	createVersionId,
 	NotebookId,
+	HostNotebookId,
 	JobId,
 	PreviewId,
 	ProposalId,
@@ -114,6 +115,74 @@ for (const { name, id, prefix } of hyphenIds) {
 		});
 	});
 }
+
+describe('HostNotebookId', () => {
+	const projectId = ProjectId.parse('proj-0123456789abcdef');
+	const notebookId = NotebookId.parse('nb-0123456789abcdef');
+	const value = 'proj-0123456789abcdef:nb-0123456789abcdef';
+
+	it('creates a stable composite ID and parses its branded components', () => {
+		const id = HostNotebookId.create(projectId, notebookId);
+		expectTypeOf(id).toEqualTypeOf<HostNotebookId>();
+		expect(id).toBe(value);
+		const parsed = HostNotebookId.parse(value);
+		expectTypeOf(parsed.projectId).toEqualTypeOf<ProjectId>();
+		expectTypeOf(parsed.notebookId).toEqualTypeOf<NotebookId>();
+		expect(parsed).toEqual({ projectId, notebookId });
+		expect(HostNotebookId.create(parsed.projectId, parsed.notebookId)).toBe(id);
+	});
+
+	it('scopes a temporary notebook to one session', () => {
+		const sessionId = SessionId.create();
+		const id = HostNotebookId.create(projectId, notebookId, sessionId);
+		expect(HostNotebookId.parse(id)).toEqual({ projectId, notebookId, sessionId });
+		expect(id).not.toBe(HostNotebookId.create(projectId, notebookId));
+		expect(id).not.toBe(HostNotebookId.create(projectId, notebookId, SessionId.create()));
+		for (const invalid of [`${id}:extra`, `${id}:`, `${id}\n`, `${value}:${notebookId}`])
+			expect(() => HostNotebookId.parse(invalid)).toThrow('Invalid HostNotebookId');
+	});
+
+	it('scopes each notebook to its project', () => {
+		const id = HostNotebookId.create(projectId, notebookId);
+		expect(HostNotebookId.create(ProjectId.create(), notebookId)).not.toBe(id);
+		expect(HostNotebookId.create(projectId, NotebookId.create())).not.toBe(id);
+	});
+
+	it.each([
+		'',
+		projectId,
+		notebookId,
+		`${projectId}:`,
+		`:${notebookId}`,
+		`${notebookId}:${projectId}`,
+		`${value}:extra`,
+		`${value}:`,
+		`${projectId}::${notebookId}`,
+		`bad-0123456789abcdef:${notebookId}`,
+		`${projectId}:bad-0123456789abcdef`,
+		`${projectId.slice(0, -1)}:${notebookId}`,
+		`${projectId}0:${notebookId}`,
+		`${projectId}:${notebookId.slice(0, -1)}`,
+		`${value}0`,
+		`${projectId.toUpperCase()}:${notebookId}`,
+		`${projectId}:${notebookId.toUpperCase()}`,
+		value.toUpperCase(),
+		` ${value}`,
+		`${value} `,
+		`${projectId}\n:${notebookId}`,
+		`${value}\n`,
+		`${value}\r\n`,
+		`${value}\0`,
+		`${projectId}:\t${notebookId}`,
+		`${projectId}：${notebookId}`,
+		`${projectId}%3A${notebookId}`,
+		`${projectId}:nb-0123456789abcdeé`,
+		`${projectId}:../${notebookId}`,
+		`${projectId}/${notebookId}`,
+	])('rejects malformed composite ID %j', (invalid) => {
+		expect(() => HostNotebookId.parse(invalid)).toThrow('Invalid HostNotebookId');
+	});
+});
 
 describe('VersionId namespace', () => {
 	it('is() accepts a freshly-created uppercase-ULID id', () => {
