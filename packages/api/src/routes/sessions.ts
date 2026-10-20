@@ -1016,10 +1016,12 @@ async function inspectEditorActivity(deps: ApiDeps, session: Session) {
 	};
 }
 
-app.openapi(getEditorSession, async (c) => {
-	const deps = c.get('deps');
-	const user = c.get('user');
-	const { pid, nid } = c.req.valid('param');
+export async function getEditorSessionState(
+	deps: ApiDeps,
+	user: AuthenticatedPrincipal,
+	pid: ProjectId,
+	nid: NotebookId,
+) {
 	const project = await assertProjectRole(
 		deps.services.projects,
 		pid,
@@ -1053,26 +1055,30 @@ app.openapi(getEditorSession, async (c) => {
 						: (cachedEditorActivity(holder) ?? (await inspectEditorActivity(deps, holder))),
 			}
 		: null;
-	return c.json(
-		{
-			success: true,
-			data: {
-				sharing,
-				holder: holderView,
-				can_take_over:
-					sharing === 'exclusive' && !!holder && holder.user_id !== user.id && !claim?.transfer,
-				...(claim?.transfer ? { transfer: { status: claim.transfer.phase } } : {}),
-			},
-		},
-		200,
-	);
+	return {
+		sharing,
+		holder: holderView,
+		can_take_over:
+			sharing === 'exclusive' && !!holder && holder.user_id !== user.id && !claim?.transfer,
+		...(claim?.transfer ? { transfer: { status: claim.transfer.phase } } : {}),
+	};
+}
+
+app.openapi(getEditorSession, async (c) => {
+	const { pid, nid } = c.req.valid('param');
+	const data = await getEditorSessionState(c.get('deps'), c.get('user'), pid, nid);
+	return c.json({ success: true, data }, 200);
 });
 
-app.openapi(takeoverEditorSession, async (c) => {
-	const deps = c.get('deps');
-	const user = c.get('user');
-	const { pid, nid } = c.req.valid('param');
-	const body = c.req.valid('json');
+export async function takeOverNotebookEditor(input: {
+	deps: ApiDeps;
+	user: AuthenticatedPrincipal;
+	pid: ProjectId;
+	nid: NotebookId;
+	body: z.infer<typeof TakeoverBodySchema>;
+	request: { requestId?: string; method: string; path: string };
+}): Promise<void> {
+	const { deps, user, pid, nid, body, request } = input;
 	const startedAt = Date.now();
 	const observer = logObserver({
 		event: 'session_takeover',
@@ -1085,18 +1091,15 @@ app.openapi(takeoverEditorSession, async (c) => {
 	});
 	let failed = false;
 	const audit = (event: string) =>
-		appendAudit(
-			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
-			event,
-			() =>
-				deps.services.events.append({
-					event,
-					actor: user.id,
-					project_id: pid,
-					notebook_id: nid,
-					session_id: body.expected_holder_session_id,
-					takeover_id: body.takeover_id,
-				}),
+		appendAudit({ ...request, userId: user.id }, event, () =>
+			deps.services.events.append({
+				event,
+				actor: user.id,
+				project_id: pid,
+				notebook_id: nid,
+				session_id: body.expected_holder_session_id,
+				takeover_id: body.takeover_id,
+			}),
 		);
 	const assertAccess = async () => {
 		const project = await assertProjectRole(
@@ -1168,7 +1171,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 		};
 		if (claim.transfer?.phase === 'ready') {
 			await audit('session.takeover.success');
-			return c.json({ success: true }, 200);
+			return;
 		}
 		holder ??= await deps.services.sessions.getSession(pid, claim.session_id!);
 		if (holderIdentity === undefined) {
@@ -1184,7 +1187,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 				if (!completed) throw new ConflictError('Another request owns the takeover drain lease');
 				await audit('session.takeover.success');
 				notifyTakeover(holder.user_id);
-				return c.json({ success: true }, 200);
+				return;
 			} catch (err) {
 				if (err instanceof ConflictError) throw err;
 				logEvent({
@@ -1252,7 +1255,7 @@ app.openapi(takeoverEditorSession, async (c) => {
 		}
 		await audit('session.takeover.success');
 		notifyTakeover(holder.user_id);
-		return c.json({ success: true }, 200);
+		return;
 	} catch (err) {
 		failed = true;
 		await deps.services.sessions
@@ -1266,6 +1269,19 @@ app.openapi(takeoverEditorSession, async (c) => {
 		observer.tag('duration_ms', Date.now() - startedAt);
 		observer.flush();
 	}
+}
+
+app.openapi(takeoverEditorSession, async (c) => {
+	const { pid, nid } = c.req.valid('param');
+	await takeOverNotebookEditor({
+		deps: c.get('deps'),
+		user: c.get('user'),
+		pid,
+		nid,
+		body: c.req.valid('json'),
+		request: { requestId: c.get('requestId'), method: c.req.method, path: c.req.path },
+	});
+	return c.json({ success: true }, 200);
 });
 
 export type SessionCreateBody = z.infer<typeof SessionCreateBodySchema>;
