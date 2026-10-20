@@ -11,7 +11,7 @@ import type { S3ClientFactory } from './client';
 import { mapS3Error } from './errors';
 import { detectRasterImage, rasterContentType } from './formats';
 import { readObjectRange, releaseClientOnce, sendS3 } from './s3Request';
-import { toWebStream } from './streams';
+import { guardObjectStream } from '@marimo-hub/object-browser-commons';
 
 interface GetOutput {
 	Body?: unknown;
@@ -74,59 +74,7 @@ export async function openS3Object(
 			context.signal,
 		);
 		if (!output.Body) throw new ObjectBrowseError('unavailable', 'The object body was empty.');
-		const upstream = toWebStream(output.Body).getReader();
-		let upstreamClosed = false;
-		let aborted = context.signal?.aborted ?? false;
-		const abortedError = () => new ObjectBrowseError('aborted', 'The request was canceled.');
-		const cancelUpstream = (reason?: unknown): Promise<void> => {
-			if (upstreamClosed) return Promise.resolve();
-			upstreamClosed = true;
-			context.signal?.removeEventListener('abort', abortStream);
-			return upstream.cancel(reason);
-		};
-		function abortStream() {
-			aborted = true;
-			const cancellation = cancelUpstream(context.signal?.reason);
-			release();
-			void cancellation.catch(() => {});
-		}
-		if (context.signal?.aborted) abortStream();
-		else context.signal?.addEventListener('abort', abortStream, { once: true });
-		const body = new ReadableStream<Uint8Array>({
-			async pull(controller) {
-				if (aborted) {
-					controller.error(abortedError());
-					return;
-				}
-				try {
-					const next = await upstream.read();
-					if (aborted) {
-						controller.error(abortedError());
-						return;
-					}
-					if (next.done) {
-						upstreamClosed = true;
-						context.signal?.removeEventListener('abort', abortStream);
-						controller.close();
-						release();
-					} else {
-						controller.enqueue(next.value);
-					}
-				} catch (error) {
-					upstreamClosed = true;
-					context.signal?.removeEventListener('abort', abortStream);
-					controller.error(aborted ? abortedError() : mapS3Error(error));
-					release();
-				}
-			},
-			async cancel(reason) {
-				try {
-					await cancelUpstream(reason);
-				} finally {
-					release();
-				}
-			},
-		});
+		const { body, close } = guardObjectStream(output.Body, context.signal, mapS3Error, release);
 		const total = totalSize(output.ContentRange, output.ContentLength ?? 0);
 		return {
 			body,
@@ -137,11 +85,7 @@ export async function openS3Object(
 			content_range: output.ContentRange,
 			etag: output.ETag,
 			version_id: output.VersionId ?? request.version_id,
-			close() {
-				const cancellation = cancelUpstream();
-				release();
-				void cancellation.catch(() => {});
-			},
+			close,
 		};
 	} catch (error) {
 		release();

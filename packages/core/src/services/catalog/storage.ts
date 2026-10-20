@@ -1,9 +1,22 @@
 import type { z } from 'zod';
-import type { Bucket, BucketObject } from '../../ports/bucket';
+import type { Bucket, BucketObject, BucketListOptions, BucketListResult } from '../../ports/bucket';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { logOperationalError } from '../../operationalLog';
 import { readStored } from '../../schema';
+
+export async function* iterateBucketPages(
+	bucket: Bucket,
+	options: BucketListOptions = {},
+): AsyncIterable<BucketListResult> {
+	let cursor = options.cursor;
+	do {
+		const page = await bucket.list({ ...options, cursor });
+		yield page;
+		// A missing continuation token is terminal, even on a truncated page.
+		cursor = page.truncated ? page.cursor : undefined;
+	} while (cursor);
+}
 
 /**
  * List every object under a prefix, paginating on the bucket cursor until the
@@ -13,12 +26,9 @@ import { readStored } from '../../schema';
  */
 export async function listAllObjects(bucket: Bucket, prefix: string): Promise<BucketObject[]> {
 	const objects: BucketObject[] = [];
-	let cursor: string | undefined;
-	do {
-		const res = await bucket.list({ prefix, cursor });
+	for await (const res of iterateBucketPages(bucket, { prefix })) {
 		objects.push(...res.objects);
-		cursor = res.truncated ? res.cursor : undefined;
-	} while (cursor);
+	}
 	return objects;
 }
 
@@ -31,14 +41,11 @@ export async function listAllObjects(bucket: Bucket, prefix: string): Promise<Bu
  */
 export async function listAllKeys(bucket: Bucket, prefix: string): Promise<string[]> {
 	const keys: string[] = [];
-	let cursor: string | undefined;
-	do {
-		const res = await bucket.list({ prefix, cursor });
+	for await (const res of iterateBucketPages(bucket, { prefix })) {
 		for (const o of res.objects) {
 			keys.push(o.key);
 		}
-		cursor = res.truncated ? res.cursor : undefined;
-	} while (cursor);
+	}
 	return keys;
 }
 
@@ -49,14 +56,11 @@ export async function listAllPrefixes(
 	delimiter = '/',
 ): Promise<string[]> {
 	const prefixes = new Set<string>();
-	let cursor: string | undefined;
-	do {
-		const result = await bucket.list({ prefix, delimiter, cursor });
+	for await (const result of iterateBucketPages(bucket, { prefix, delimiter })) {
 		for (const delimitedPrefix of result.delimitedPrefixes) {
 			prefixes.add(delimitedPrefix);
 		}
-		cursor = result.truncated ? result.cursor : undefined;
-	} while (cursor);
+	}
 	return [...prefixes].sort();
 }
 

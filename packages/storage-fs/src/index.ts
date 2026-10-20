@@ -21,6 +21,7 @@
  * (`a` vs `a/b`); marimohub's key layout never does this.
  */
 import { createHash, randomUUID } from 'node:crypto';
+import { KeyedSerialQueue } from '@marimo-hub/core/concurrency';
 import { constants, mkdirSync, realpathSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
@@ -57,7 +58,7 @@ const NOT_FOUND_CODES = new Set(['ENOENT', 'ENOTDIR', 'EISDIR', 'ELOOP', 'EMLINK
  * root + key — two FsStorage instances on one root must contend for the same
  * lock or `casScope: 'process'` would silently be instance-scoped.
  */
-const putLocks = new Map<string, Promise<void>>();
+const putLocks = new KeyedSerialQueue<string>();
 
 function errCode(err: unknown): string | undefined {
 	return err instanceof Error && 'code' in err
@@ -175,17 +176,7 @@ export class FsStorage implements Bucket {
 
 	private withKeyLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 		const lockKey = `${this.root}\0${key}`;
-		const prev = putLocks.get(lockKey) ?? Promise.resolve();
-		const run = prev.then(fn, fn);
-		const chain = run.then(
-			() => {},
-			() => {},
-		);
-		putLocks.set(lockKey, chain);
-		void chain.then(() => {
-			if (putLocks.get(lockKey) === chain) putLocks.delete(lockKey);
-		});
-		return run;
+		return putLocks.run(lockKey, fn);
 	}
 
 	private async assertContainedParent(filePath: string): Promise<void> {

@@ -40,6 +40,29 @@ function ResultsHarness() {
 }
 
 describe('QueryExecutionResults', () => {
+	it('renders bigint SQL results using the preview formatter', () => {
+		render(
+			<QueryExecutionResults
+				executions={[
+					{
+						id: 0,
+						sql: 'SELECT value',
+						result: {
+							columns: ['value'],
+							rows: [[123n], [123n]],
+							truncated: false,
+							execution_ms: 1,
+						},
+					},
+				]}
+				activeIndex={0}
+				onSelect={() => {}}
+			/>,
+		);
+		expect(screen.getAllByText('123')).toHaveLength(2);
+		expect(screen.queryByText('[unserializable]')).not.toBeInTheDocument();
+	});
+
 	it('preserves every statement result and switches the displayed table', async () => {
 		const user = userEvent.setup();
 		render(<ResultsHarness />);

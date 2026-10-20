@@ -1,3 +1,5 @@
+import { formatCell, withOccurrenceKeys } from './tableValues';
+
 export function TabularPreviewGrid({
 	columns,
 	rows,
@@ -53,35 +55,13 @@ export function TabularPreviewGrid({
 }
 
 function keyedNames(names: string[]): { key: string; name: string }[] {
-	const counts = new Map<string, number>();
-	return names.map((name) => {
-		const occurrence = counts.get(name) ?? 0;
-		counts.set(name, occurrence + 1);
-		return { key: `${name}:${occurrence}`, name };
-	});
+	return withOccurrenceKeys(names, (name) => name).map(({ key, item: name }) => ({ key, name }));
 }
 
 function keyedRows(rows: unknown[][]): { key: string; cells: string[] }[] {
-	const counts = new Map<string, number>();
-	return rows.map((row) => {
-		const cells = Array.from(row, renderCell);
-		const base = JSON.stringify(cells);
-		const occurrence = counts.get(base) ?? 0;
-		counts.set(base, occurrence + 1);
-		return { key: `${base}:${occurrence}`, cells };
-	});
-}
-
-function renderCell(value: unknown): string {
-	if (value === null) return 'null';
-	if (value === undefined) return '';
-	if (typeof value === 'string') return value;
-	if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
-		return String(value);
-	}
-	try {
-		return JSON.stringify(value) ?? '';
-	} catch {
-		return '[unserializable]';
-	}
+	const cells = rows.map((row) => Array.from(row, formatCell));
+	return withOccurrenceKeys(cells, (row) => JSON.stringify(row)).map(({ key, item: cells }) => ({
+		key,
+		cells,
+	}));
 }

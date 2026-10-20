@@ -178,6 +178,29 @@ describe('kernel execution', () => {
 		).resolves.toMatchObject({ completed: false, stdout: 'abc', truncated: true });
 	});
 
+	it.each(['é', '€', '😀'])(
+		'caps repeated stdout appends at UTF-8 boundaries for %s',
+		async (character) => {
+			const fetchImpl = vi
+				.fn()
+				.mockResolvedValue(
+					sse(
+						`${['a', character, 'z']
+							.map((data) => `event: stdout\ndata: ${JSON.stringify({ data })}\n\n`)
+							.join('')}event: done\ndata: {"success":true}\n\n`,
+					),
+				);
+			const result = await executeInKernel(
+				'https://kernel',
+				{ sessionId: 'one', code: 'print()', maxStdoutBytes: 2 },
+				{ fetchImpl },
+			);
+			expect(result.stdout).toBe('az');
+			expect(result.truncated).toBe(true);
+			expect(new TextEncoder().encode(result.stdout).byteLength).toBeLessThanOrEqual(2);
+		},
+	);
+
 	it('caps stderr and terminal output independently', async () => {
 		const fetchImpl = vi
 			.fn()

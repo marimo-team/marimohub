@@ -66,6 +66,23 @@ describe('preview format boundaries', () => {
 		});
 	});
 
+	it.each(['é', '€', '😀'])(
+		'truncates cells on UTF-8 boundaries for %s with an additional ellipsis',
+		async (character) => {
+			const value = `${'a'.repeat(8191)}${character}tail`;
+			const bytes = new TextEncoder().encode(JSON.stringify([{ value }]));
+			const test = harness([{ ContentLength: bytes.length }, { Body: body(bytes) }]);
+			const preview = await test.preview('values.json');
+			expect(preview.kind).toBe('tabular');
+			if (preview.kind !== 'tabular') throw new Error('Expected tabular preview');
+			expect(preview.rows[0][0]).toBe(`${'a'.repeat(8191)}…`);
+			expect(new TextEncoder().encode(String(preview.rows[0][0])).byteLength).toBeLessThanOrEqual(
+				8192 + 3,
+			);
+			expect(preview.warnings).toContain('Some values were truncated to 8 KiB.');
+		},
+	);
+
 	it('truncates large text to the text-specific limit', async () => {
 		const bytes = new Uint8Array(512 * 1024 + 1).fill(0x61);
 		const test = harness([{ ContentLength: bytes.length }, { Body: body(bytes) }]);

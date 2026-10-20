@@ -1,3 +1,4 @@
+import { batchByWeight } from '@marimo-hub/core/batching';
 import { Buffer } from 'node:buffer';
 import { shellQuote } from '@marimo-hub/compute-commons';
 import type { SandboxFileWrite } from '@marimo-hub/core/ports/sandbox';
@@ -16,24 +17,12 @@ function frameHeader(file: SandboxFileWrite): string {
 }
 
 export function batchFileWrites(files: readonly SandboxFileWrite[]): SandboxFileWrite[][] {
-	const batches: SandboxFileWrite[][] = [];
-	let batch: SandboxFileWrite[] = [];
-	let bytes = END_OF_BATCH.length;
-	for (const file of files) {
-		const size = Buffer.byteLength(frameHeader(file)) + contentBytes(file.content);
-		if (
-			batch.length > 0 &&
-			(batch.length >= MAX_WRITE_BATCH_FILES || bytes + size > MAX_WRITE_BATCH_BYTES)
-		) {
-			batches.push(batch);
-			batch = [];
-			bytes = END_OF_BATCH.length;
-		}
-		batch.push(file);
-		bytes += size;
-	}
-	if (batch.length > 0) batches.push(batch);
-	return batches;
+	return batchByWeight(files, {
+		weight: (file) => Buffer.byteLength(frameHeader(file)) + contentBytes(file.content),
+		maxWeight: MAX_WRITE_BATCH_BYTES,
+		maxItems: MAX_WRITE_BATCH_FILES,
+		overhead: END_OF_BATCH.length,
+	});
 }
 
 export function encodeFileWriteBatch(files: readonly SandboxFileWrite[]): Uint8Array {

@@ -1,3 +1,4 @@
+import { cachedRead } from '../../async';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import type { ProjectAlertDispatcher } from '../../ports/projectAlerts';
@@ -81,20 +82,6 @@ interface JobReadCache {
 	projects: Map<ProjectId, Promise<Project>>;
 	notebooks: Map<NotebookId, Promise<NotebookMeta>>;
 	jobs: Map<JobId, Promise<JobDefinition>>;
-}
-
-function cachedRead<K, V>(
-	cache: Map<K, Promise<V>> | undefined,
-	key: K,
-	read: () => Promise<V>,
-): Promise<V> {
-	if (!cache) return read();
-	let value = cache.get(key);
-	if (!value) {
-		value = read();
-		cache.set(key, value);
-	}
-	return value;
 }
 
 interface LocalExecution {

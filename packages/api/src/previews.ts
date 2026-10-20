@@ -1,3 +1,4 @@
+import { cachedRead } from '@marimo-hub/core/async';
 import { AppPoolStore, logOperationalError, NotFoundError, sessionMode } from '@marimo-hub/core';
 import type { NotebookId, NotebookPreview, ProjectId } from '@marimo-hub/core';
 import type { ApiDeps } from './context';
@@ -63,9 +64,8 @@ async function retirePreviewRuntime(
 export async function sweepPreviews(deps: ApiDeps): Promise<void> {
 	const projectRuntimes = new Map<ProjectId, Promise<Set<NotebookId>>>();
 	const hasRuntime = async (pid: ProjectId, nid: NotebookId): Promise<boolean> => {
-		let runtimes = projectRuntimes.get(pid);
-		if (!runtimes) {
-			runtimes = deps.services.sessions
+		const runtimes = cachedRead(projectRuntimes, pid, () =>
+			deps.services.sessions
 				.listByProject(pid)
 				.then(
 					(sessions) =>
@@ -74,9 +74,8 @@ export async function sweepPreviews(deps: ApiDeps): Promise<void> {
 								.filter((session) => !session.sandbox_reclaimed_at)
 								.map((session) => session.notebook_id),
 						),
-				);
-			projectRuntimes.set(pid, runtimes);
-		}
+				),
+		);
 		return (await runtimes).has(nid);
 	};
 	for (let record of await deps.services.previews.cleanupCandidates()) {

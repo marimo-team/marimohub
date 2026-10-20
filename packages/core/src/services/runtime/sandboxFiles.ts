@@ -1,3 +1,4 @@
+import { batchByWeight } from '../../batching';
 import type { ByteBudget } from './byteBudget';
 import type { Bucket } from '../../ports/bucket';
 import { NotFoundError } from '../../errors';
@@ -86,28 +87,6 @@ async function withRetry<T>(op: () => Promise<T>, attempts = SANDBOX_WRITE_ATTEM
 			});
 		}
 	}
-}
-
-/**
- * Split into batches whose listed sizes sum to at most `maxBytes`. A single item
- * over budget gets a batch of its own (never dropped) — the per-file cap is what
- * bounds that case.
- */
-function batchByBytes<T extends { size: number }>(items: readonly T[], maxBytes: number): T[][] {
-	const batches: T[][] = [];
-	let batch: T[] = [];
-	let bytes = 0;
-	for (const item of items) {
-		if (batch.length > 0 && bytes + item.size > maxBytes) {
-			batches.push(batch);
-			batch = [];
-			bytes = 0;
-		}
-		batch.push(item);
-		bytes += item.size;
-	}
-	if (batch.length > 0) batches.push(batch);
-	return batches;
 }
 
 async function createSandboxDirectories(
@@ -312,7 +291,10 @@ export async function restoreWorkspace(
 	let objectCount = 0;
 	let bytes = 0;
 	let ready = !options.waitUntilReady;
-	const batches = wanted.length > 0 ? batchByBytes(wanted, RESTORE_BATCH_BYTES) : [[]];
+	const batches =
+		wanted.length > 0
+			? batchByWeight(wanted, { weight: (item) => item.size, maxWeight: RESTORE_BATCH_BYTES })
+			: [[]];
 	for (const batch of batches) {
 		using prefetched =
 			ready || !options.prefetchBudget

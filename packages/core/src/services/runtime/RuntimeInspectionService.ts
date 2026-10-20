@@ -1,3 +1,4 @@
+import { cachedRead } from '../../async';
 import { sessionResourceNotebookId, sessionResourcePath } from '../../sessionOrigin';
 import { z } from 'zod';
 import { StaleWhileRevalidateCache } from '../../cache';
@@ -233,20 +234,16 @@ export class RuntimeInspectionService {
 			BUCKET_SCAN_CONCURRENCY,
 			async (session) => {
 				const key = paths.editorClaim(session.project_id, session.notebook_id);
-				let claim = claims.get(key);
-				if (!claim) {
-					claim = (async () => {
-						try {
-							const object = await this.bucket.get(key);
-							const record = object ? await readStored(EditorClaimSchema, object, key) : null;
-							return { holder: record?.session_id ?? null, available: true };
-						} catch (error) {
-							logOperationalError('runtime_editor_claim_unavailable', { object: key }, error);
-							return { holder: null, available: false };
-						}
-					})();
-					claims.set(key, claim);
-				}
+				const claim = cachedRead(claims, key, async () => {
+					try {
+						const object = await this.bucket.get(key);
+						const record = object ? await readStored(EditorClaimSchema, object, key) : null;
+						return { holder: record?.session_id ?? null, available: true };
+					} catch (error) {
+						logOperationalError('runtime_editor_claim_unavailable', { object: key }, error);
+						return { holder: null, available: false };
+					}
+				});
 				const { holder, available } = await claim;
 				// Mirrors the admin route's default `save: true` request.
 				const reclaimBlocked = reclaimBlockedReason(session, now, {

@@ -1,3 +1,4 @@
+import { iterateBucketPages } from './storage';
 import type { Bucket } from '../../ports/bucket';
 import { mapWithConcurrency } from '../../concurrency';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
@@ -140,13 +141,11 @@ export class EventService {
 		const prefix = paths.eventsForDate(date);
 		const idempotencyPrefix = paths.eventIdempotencyForDate(date);
 		const events: Event[] = [];
-		let cursor: string | undefined;
 
 		// Keys are monotonic ULIDs, so prefix-listing returns events in append order.
 		// Pages are sequential (cursor-driven), but the reads within a page run in
 		// bounded-parallel; mapWithConcurrency preserves order, so append order holds.
-		do {
-			const result = await this.bucket.list({ prefix, cursor });
+		for await (const result of iterateBucketPages(this.bucket, { prefix })) {
 			const page = await mapWithConcurrency(
 				result.objects.filter((obj) => !obj.key.startsWith(idempotencyPrefix)),
 				BUCKET_SCAN_CONCURRENCY,
@@ -172,8 +171,7 @@ export class EventService {
 			for (const event of page) {
 				if (event) events.push(event);
 			}
-			cursor = result.truncated ? result.cursor : undefined;
-		} while (cursor);
+		}
 
 		return events;
 	}

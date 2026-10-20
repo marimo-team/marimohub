@@ -156,3 +156,22 @@ export class InFlightWork {
 		}
 	}
 }
+
+export class KeyedSerialQueue<K> {
+	private readonly tails = new Map<K, Promise<void>>();
+
+	run<T>(key: K, work: () => Promise<T>): Promise<T> {
+		const previous = this.tails.get(key) ?? Promise.resolve();
+		const result = previous.then(work);
+		const settled = result.then(
+			() => {},
+			() => {},
+		);
+		this.tails.set(key, settled);
+		void settled.then(() => {
+			// An older completion must not remove the tail of work queued behind it.
+			if (this.tails.get(key) === settled) this.tails.delete(key);
+		});
+		return result;
+	}
+}

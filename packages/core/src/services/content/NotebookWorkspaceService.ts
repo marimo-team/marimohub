@@ -1,3 +1,4 @@
+import { KeyedSerialQueue } from '../../concurrency';
 import { z } from 'zod';
 import {
 	MAX_WORKSPACE_BYTES,
@@ -169,7 +170,7 @@ function serializeWorkspaceMutationClaim(holder: string | null): string {
 }
 
 export class NotebookWorkspaceService {
-	private readonly mutationQueues = new Map<string, Promise<void>>();
+	private readonly mutationQueues = new KeyedSerialQueue<string>();
 
 	constructor(
 		private readonly bucket: Bucket,
@@ -556,20 +557,9 @@ export class NotebookWorkspaceService {
 		mutation: (lease: MutationLease) => Promise<T>,
 	): Promise<T> {
 		const queueKey = `${projectId}/${notebookId}`;
-		const previous = this.mutationQueues.get(queueKey) ?? Promise.resolve();
-		const run = previous
-			.catch(() => {})
-			.then(() => this.withMutationClaim(projectId, notebookId, options, mutation));
-		const settled = run.then(
-			() => {},
-			() => {},
+		return this.mutationQueues.run(queueKey, () =>
+			this.withMutationClaim(projectId, notebookId, options, mutation),
 		);
-		this.mutationQueues.set(queueKey, settled);
-		try {
-			return await run;
-		} finally {
-			if (this.mutationQueues.get(queueKey) === settled) this.mutationQueues.delete(queueKey);
-		}
 	}
 
 	private async withMutationClaim<T>(

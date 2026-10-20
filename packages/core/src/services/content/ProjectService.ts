@@ -1,3 +1,4 @@
+import { cachedRead } from '../../async';
 import { MetadataCache } from './metadataCache';
 import type { ReadConsistency } from './metadataCache';
 import { nextIsoTimestamp } from '../../utcDate';
@@ -258,14 +259,7 @@ export class ProjectService {
 			throw new ForbiddenError('Token grant does not permit project listing');
 		}
 		const loaded = new Map<ProjectId, Promise<Project>>();
-		const loadProject = (id: ProjectId): Promise<Project> => {
-			let project = loaded.get(id);
-			if (!project) {
-				project = this.getProject(id);
-				loaded.set(id, project);
-			}
-			return project;
-		};
+		const loadProject = (id: ProjectId) => cachedRead(loaded, id, () => this.getProject(id));
 		const snapshot = await this.catalog.getCurrentSnapshot();
 		const matching = snapshot.projects.filter(
 			createListFilter<SnapshotProjectEntry>(

@@ -11,6 +11,7 @@ import { SYSTEM_ACTOR } from '../../ids';
 import type { Bucket } from '../../ports/bucket';
 import { logOperationalError } from '../../operationalLog';
 import { EventService } from './EventService';
+import { iterateBucketPages } from './storage';
 
 /** Per-object schema types that use the fan-out migration strategy. */
 export type MigrationTargetType = 'meta' | 'project' | 'source' | 'version';
@@ -69,12 +70,7 @@ export class MigrationService {
 		const { prefix, suffix } = TARGETS[targetType];
 		const result: MigrationResult = { migrated: 0, skipped: 0, scanned: 0 };
 
-		// Paginate the listing on the bucket cursor so the job stays within the
-		// runtime's per-invocation request/time limits and is resumable.
-		let cursor: string | undefined;
-		do {
-			const page = await this.bucket.list({ prefix, cursor });
-
+		for await (const page of iterateBucketPages(this.bucket, { prefix })) {
 			for (const obj of page.objects) {
 				if (!obj.key.endsWith(suffix)) continue;
 				result.scanned++;
@@ -116,9 +112,7 @@ export class MigrationService {
 				await this.bucket.put(obj.key, JSON.stringify(migrated));
 				result.migrated++;
 			}
-
-			cursor = page.truncated ? page.cursor : undefined;
-		} while (cursor);
+		}
 
 		// Completion is verifiable from the immutable event log.
 		await this.events.append({

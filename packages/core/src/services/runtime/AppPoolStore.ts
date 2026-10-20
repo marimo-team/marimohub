@@ -1,3 +1,4 @@
+import { cachedRead } from '../../async';
 import { NotebookId, ProjectId } from '../../ids';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
@@ -75,12 +76,7 @@ export class AppPoolStore {
 		const reads = new Map<string, Promise<AppPool | null>>();
 		return (projectId: ProjectId, notebookId: NotebookId) => {
 			const key = paths.appPool(projectId, notebookId);
-			let read = reads.get(key);
-			if (!read) {
-				read = this.read(projectId, notebookId);
-				reads.set(key, read);
-			}
-			return read;
+			return cachedRead(reads, key, () => this.read(projectId, notebookId));
 		};
 	}
 

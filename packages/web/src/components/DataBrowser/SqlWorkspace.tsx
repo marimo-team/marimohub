@@ -1,3 +1,4 @@
+import { formatCell, withOccurrenceKeys } from './tableValues';
 import {
 	forwardRef,
 	useCallback,
@@ -863,7 +864,7 @@ function QueryResultTable({ result }: { result: QueryResult }) {
 							<tr key={key} className="border-t hover:bg-muted/30">
 								<td className="px-2 py-1.5 text-right text-muted-foreground">{rowIndex + 1}</td>
 								{headers.map(({ key: columnKey }, columnIndex) => {
-									const rendered = renderCell(row[columnIndex]);
+									const rendered = formatCell(row[columnIndex]);
 									return (
 										<td key={columnKey} className="max-w-96 p-0 font-mono">
 											<button
@@ -895,11 +896,11 @@ function compareQueryValues(left: unknown, right: unknown): number {
 	if (a !== undefined && b !== undefined) {
 		if (a < b) return -1;
 		if (a > b) return 1;
-		return renderCell(left).localeCompare(renderCell(right));
+		return formatCell(left).localeCompare(formatCell(right));
 	}
 	if (a !== undefined) return -1;
 	if (b !== undefined) return 1;
-	return renderCell(left).localeCompare(renderCell(right), undefined, { numeric: true });
+	return formatCell(left).localeCompare(formatCell(right), undefined, { numeric: true });
 }
 
 function parseNumericCell(value: unknown): number | bigint | undefined {
@@ -912,35 +913,17 @@ function parseNumericCell(value: unknown): number | bigint | undefined {
 	return Number.isFinite(number) ? number : undefined;
 }
 
-function renderCell(value: unknown): string {
-	if (value === null) return 'null';
-	if (value === undefined) return '';
-	if (typeof value === 'string') return value;
-	if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-	try {
-		return JSON.stringify(value) ?? '';
-	} catch {
-		return '[unserializable]';
-	}
-}
-
 function keyedValues(values: string[]): { key: string; value: string }[] {
-	const counts = new Map<string, number>();
-	return values.map((value) => {
-		const occurrence = counts.get(value) ?? 0;
-		counts.set(value, occurrence + 1);
-		return { key: `${value}:${occurrence}`, value };
-	});
+	return withOccurrenceKeys(values, (value) => value).map(({ key, item: value }) => ({
+		key,
+		value,
+	}));
 }
 
 function keyedRows(rows: unknown[][]): { key: string; row: unknown[]; rowIndex: number }[] {
-	const counts = new Map<string, number>();
-	return rows.map((row, rowIndex) => {
-		const base = JSON.stringify(row.map(renderCell));
-		const occurrence = counts.get(base) ?? 0;
-		counts.set(base, occurrence + 1);
-		return { key: `${base}:${occurrence}`, row, rowIndex };
-	});
+	return withOccurrenceKeys(rows, (row) => JSON.stringify(row.map(formatCell))).map(
+		({ key, item: row }, rowIndex) => ({ key, row, rowIndex }),
+	);
 }
 
 function readStoredWorkspace(key: string): { draft: string; history: string[] } {

@@ -50,35 +50,40 @@ export function guardObjectStream(
 	body: unknown,
 	signal: AbortSignal | undefined,
 	mapError: (error: unknown) => Error,
+	onFinalize?: () => void,
 ): { body: ReadableStream<Uint8Array>; close(): void } {
 	const reader = toWebStream(body).getReader();
 	let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
-	let upstreamClosed = false;
-	let readerReleased = false;
-	let aborted = signal?.aborted ?? false;
-	const abortedError = () => new ObjectBrowseError('aborted', 'The request was canceled.');
-	const releaseReader = () => {
-		if (readerReleased) return;
-		readerReleased = true;
-		reader.releaseLock();
+	let stopped = false;
+	let finalized = false;
+	const finish = () => {
+		if (finalized) return;
+		finalized = true;
+		onFinalize?.();
+	};
+	const stop = () => {
+		stopped = true;
+		signal?.removeEventListener('abort', abortStream);
 	};
 	const cancelUpstream = async (reason?: unknown): Promise<void> => {
-		if (upstreamClosed) return;
-		upstreamClosed = true;
-		signal?.removeEventListener('abort', abortStream);
+		if (stopped) return;
+		stop();
 		try {
 			await reader.cancel(reason);
 		} finally {
-			releaseReader();
+			try {
+				reader.releaseLock();
+			} finally {
+				finish();
+			}
 		}
 	};
 	function abortStream() {
-		aborted = true;
-		try {
-			controller?.error(abortedError());
-		} finally {
-			void cancelUpstream(signal?.reason).catch(() => {});
-		}
+		if (stopped) return;
+		controller?.error(new ObjectBrowseError('aborted', 'The request was canceled.'));
+		void cancelUpstream(signal?.reason).catch(() => {});
+		// Abort and explicit close release provider resources even if cancellation stalls.
+		finish();
 	}
 	return {
 		body: new ReadableStream<Uint8Array>({
@@ -88,24 +93,32 @@ export function guardObjectStream(
 				else signal?.addEventListener('abort', abortStream, { once: true });
 			},
 			async pull(value) {
-				if (aborted) return;
+				if (stopped) return;
+				let next: ReadableStreamReadResult<Uint8Array>;
 				try {
-					const next = await reader.read();
-					if (aborted) return;
-					if (next.done) {
-						upstreamClosed = true;
-						signal?.removeEventListener('abort', abortStream);
-						releaseReader();
-						value.close();
-					} else {
-						value.enqueue(next.value);
-					}
+					next = await reader.read();
 				} catch (error) {
-					if (aborted) return;
-					upstreamClosed = true;
-					signal?.removeEventListener('abort', abortStream);
-					releaseReader();
-					value.error(mapError(error));
+					if (stopped) return;
+					stop();
+					try {
+						reader.releaseLock();
+						value.error(mapError(error));
+					} finally {
+						finish();
+					}
+					return;
+				}
+				if (stopped) return;
+				if (next.done) {
+					stop();
+					try {
+						reader.releaseLock();
+						value.close();
+					} finally {
+						finish();
+					}
+				} else {
+					value.enqueue(next.value);
 				}
 			},
 			async cancel(reason) {
@@ -113,7 +126,11 @@ export function guardObjectStream(
 			},
 		}),
 		close() {
-			void cancelUpstream().catch(() => {});
+			if (!stopped) {
+				controller?.close();
+				void cancelUpstream().catch(() => {});
+			}
+			finish();
 		},
 	};
 }

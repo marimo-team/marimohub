@@ -125,3 +125,18 @@ export async function forEachConcurrentUntilFailure<T>({
 	await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
 	if (failure) throw failure.error;
 }
+
+/** Cache promises, including rejections, for the lifetime of the caller-owned map. */
+export function cachedRead<K, V>(
+	cache: Map<K, Promise<V>> | undefined,
+	key: K,
+	read: () => Promise<V>,
+): Promise<V> {
+	if (!cache) return read();
+	let value = cache.get(key);
+	if (!value) {
+		value = read();
+		cache.set(key, value);
+	}
+	return value;
+}
