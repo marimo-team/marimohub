@@ -23,7 +23,9 @@ class PairConnectionTest(unittest.TestCase):
         self.requests = []
         self.expected_token = "Bearer test-kernel-secret"
         self.base_path = "/proxy/routing-token"
-        self.sessions = {"session-1": {"filename": "notebook.py", "path": "notebook.py"}}
+        self.sessions = {"session-1": {
+            "session_id": "stable-session-1", "filename": "notebook.py", "path": "notebook.py",
+        }}
         self.sessions_status = 200
         self.code = "import marimo._code_mode as cm; help(cm)"
         self.execution = (b'event: stdout\ndata: {"data":"42\\n"}\n\n'
@@ -50,7 +52,7 @@ class PairConnectionTest(unittest.TestCase):
                 owner.requests.append((self.path, self.headers.get("Authorization")))
                 if (self.path != owner.base_path + "/api/kernel/execute"
                         or self.headers.get("Authorization") != owner.expected_token
-                        or self.headers.get("Marimo-Session-Id") != "session-1"):
+                        or self.headers.get("Marimo-Stable-Session-Id") != "stable-session-1"):
                     self.send_error(403)
                     return
                 payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -124,10 +126,12 @@ class PairConnectionTest(unittest.TestCase):
                         self.env["MARIMOHUB_KERNEL_TOKEN_FILE"] = str(self.token_file) if auth else ""
                         listing = json.loads(self.run_pair(listing=True).stdout)
                         self.assertEqual(listing["warnings"], [])
-                        self.assertEqual(listing["notebooks"][0]["sessions"], [{"id": "session-1"}])
+                        self.assertEqual(listing["notebooks"][0]["sessions"],
+                                         [{"id": "session-1", "session_id": "stable-session-1"}])
                         self.assert_requests("/api/sessions")
                         executed = json.loads(self.run_pair().stdout)
                         self.assertTrue(executed["success"])
+                        self.assertEqual(executed["session"], {"id": "stable-session-1"})
                         self.assertEqual(executed["stdout"], "42\n")
                         self.assert_requests("/api/sessions", "/api/kernel/execute")
                         self.assertTrue(all(auth == self.expected_token for _, auth in self.requests))
@@ -152,7 +156,9 @@ class PairConnectionTest(unittest.TestCase):
         self.assert_requests()
 
     def test_missing_or_ambiguous_sessions_do_not_execute(self):
-        for sessions in ({}, {**self.sessions, "session-2": {"filename": "another.py", "path": "another.py"}}):
+        for sessions in ({}, {**self.sessions, "session-2": {
+            "session_id": "stable-session-2", "filename": "another.py", "path": "another.py",
+        }}):
             with self.subTest(sessions=sessions):
                 self.sessions = sessions
                 self.run_pair(success=False)
