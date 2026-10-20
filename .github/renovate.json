@@ -11,8 +11,7 @@
 		"enabled": true,
 		"schedule": ["at any time"],
 		"minimumReleaseAge": null,
-		"labels": ["security"],
-		"prPriority": 10
+		"labels": ["security"]
 	},
 	"osvVulnerabilityAlerts": true,
 	"customManagers": [
@@ -49,13 +48,14 @@
 			"ignoreUnstable": false
 		},
 		{
-			"description": "Check the sandbox image for marimo updates daily",
+			"description": "Update the sandbox image on every marimo release without a cooldown",
 			"matchDatasources": ["pypi"],
 			"matchPackageNames": ["marimo"],
 			"matchFileNames": ["images/marimo-sandbox/Dockerfile", "scripts/test-app-source.py"],
 			"groupName": "marimo sandbox image",
 			"groupSlug": "marimo-sandbox",
-			"schedule": ["* 0-4 * * *"]
+			"schedule": ["at any time"],
+			"minimumReleaseAge": "0 days"
 		},
 		{
 			"description": "E2E runs the npm Playwright client inside the matching Playwright container; a lone bump fails with a missing browser",
