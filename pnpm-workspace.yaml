@@ -109,7 +109,7 @@ catalog:
   typescript: ^6.0.3
   ulidx: ^2.4.1
   vite: npm:@voidzero-dev/vite-plus-core@0.3.0
-  vite-plus: 0.3.0
+  vite-plus: 1.1.0
   vitepress-plugin-llms: ^1.13.2
   vitest: 4.1.11
   yaml: ^2.9.0
@@ -157,6 +157,8 @@ minimumReleaseAgeExclude:
   - csv-parse@7.0.2
   - markdown-it@14.3.1
   - '@modelcontextprotocol/sdk@1.31.0 || 1.32.0'
+  # Renovate security update: vite-plus@1.1.0
+  - vite-plus@1.1.0
 
 onlyBuiltDependencies: []
 
