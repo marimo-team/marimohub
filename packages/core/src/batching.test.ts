@@ -9,6 +9,18 @@ describe('batchByWeight', () => {
 		{ items: [0, 0, 0], maxWeight: 5, maxItems: 2, expected: [[0, 0], [0]] },
 		{ items: [1, 8, 2], maxWeight: 5, expected: [[1], [8], [2]] },
 		{ items: [5, 1], maxWeight: 5, overhead: 1, expected: [[5], [1]] },
+		{ items: [0, 0, 1, 0], maxWeight: 0, expected: [[0, 0], [1], [0]] },
+		{ items: [0, 0], maxWeight: 1, overhead: 2, expected: [[0], [0]] },
+		{
+			items: [2, 2, 2, 2],
+			maxWeight: 5,
+			maxItems: 2,
+			overhead: 1,
+			expected: [
+				[2, 2],
+				[2, 2],
+			],
+		},
 	])('partitions $items with a budget of $maxWeight', ({ items, expected, ...options }) => {
 		expect(batchByWeight(items, { ...options, weight: (item) => item })).toEqual(expected);
 	});
@@ -30,23 +42,6 @@ describe('batchByWeight', () => {
 					(batch.length === 1 || batch.reduce((total, item) => total + item.size, 2) <= 12),
 			),
 		).toBe(true);
-	});
-
-	it.each([
-		{ items: [0, 0, 1, 0], maxWeight: 0, expected: [[0, 0], [1], [0]] },
-		{ items: [0, 0], maxWeight: 1, overhead: 2, expected: [[0], [0]] },
-		{
-			items: [2, 2, 2, 2],
-			maxWeight: 5,
-			maxItems: 2,
-			overhead: 1,
-			expected: [
-				[2, 2],
-				[2, 2],
-			],
-		},
-	])('handles zero weights and boundary overhead: $items', ({ items, expected, ...options }) => {
-		expect(batchByWeight(items, { ...options, weight: (item) => item })).toEqual(expected);
 	});
 
 	it('does not evaluate weights for an empty input', () => {

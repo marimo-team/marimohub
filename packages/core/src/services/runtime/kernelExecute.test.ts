@@ -11,6 +11,18 @@ function sse(body: string): Response {
 	return new Response(body, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
 }
 
+function mockKernelEvents(...events: { event: string; data: unknown }[]) {
+	return vi
+		.fn()
+		.mockResolvedValue(
+			sse(
+				events
+					.map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+					.join(''),
+			),
+		);
+}
+
 function chunkedSse(chunks: string[]): Response {
 	const encoder = new TextEncoder();
 	return new Response(
@@ -168,7 +180,7 @@ describe('kernel execution', () => {
 	});
 
 	it('reports truncation and an incomplete stream', async () => {
-		const fetchImpl = vi.fn().mockResolvedValue(sse('event: stdout\ndata: {"data":"abcdef"}\n\n'));
+		const fetchImpl = mockKernelEvents({ event: 'stdout', data: { data: 'abcdef' } });
 		await expect(
 			executeInKernel(
 				'https://kernel',
@@ -181,15 +193,10 @@ describe('kernel execution', () => {
 	it.each(['é', '€', '😀'])(
 		'caps repeated stdout appends at UTF-8 boundaries for %s',
 		async (character) => {
-			const fetchImpl = vi
-				.fn()
-				.mockResolvedValue(
-					sse(
-						`${['a', character, 'z']
-							.map((data) => `event: stdout\ndata: ${JSON.stringify({ data })}\n\n`)
-							.join('')}event: done\ndata: {"success":true}\n\n`,
-					),
-				);
+			const fetchImpl = mockKernelEvents(
+				...['a', character, 'z'].map((data) => ({ event: 'stdout', data: { data } })),
+				{ event: 'done', data: { success: true } },
+			);
 			const result = await executeInKernel(
 				'https://kernel',
 				{ sessionId: 'one', code: 'print()', maxStdoutBytes: 2 },
@@ -205,13 +212,10 @@ describe('kernel execution', () => {
 		'keeps stderr and terminal output within byte budgets when cutting %s',
 		async (character) => {
 			const data = `a${character}tail`;
-			const fetchImpl = vi
-				.fn()
-				.mockResolvedValue(
-					sse(
-						`event: stderr\ndata: ${JSON.stringify({ data })}\n\nevent: done\ndata: ${JSON.stringify({ success: false, output: { mimetype: 'text/plain', data } })}\n\n`,
-					),
-				);
+			const fetchImpl = mockKernelEvents(
+				{ event: 'stderr', data: { data } },
+				{ event: 'done', data: { success: false, output: { mimetype: 'text/plain', data } } },
+			);
 			const result = await executeInKernel(
 				'https://kernel',
 				{
@@ -238,13 +242,11 @@ describe('kernel execution', () => {
 
 	it.each([0, 4])('handles a %s-byte cap across all output channels', async (cap) => {
 		const data = '😀';
-		const fetchImpl = vi
-			.fn()
-			.mockResolvedValue(
-				sse(
-					`event: stdout\ndata: ${JSON.stringify({ data })}\n\nevent: stderr\ndata: ${JSON.stringify({ data })}\n\nevent: done\ndata: ${JSON.stringify({ success: true, output: { mimetype: 'text/plain', data } })}\n\n`,
-				),
-			);
+		const fetchImpl = mockKernelEvents(
+			{ event: 'stdout', data: { data } },
+			{ event: 'stderr', data: { data } },
+			{ event: 'done', data: { success: true, output: { mimetype: 'text/plain', data } } },
+		);
 		const result = await executeInKernel(
 			'https://kernel',
 			{
@@ -268,14 +270,13 @@ describe('kernel execution', () => {
 	});
 
 	it('caps stderr and terminal output independently', async () => {
-		const fetchImpl = vi
-			.fn()
-			.mockResolvedValue(
-				sse(
-					'event: stderr\ndata: {"data":"abcdef"}\n\n' +
-						'event: done\ndata: {"success":true,"output":{"mimetype":"text/plain","data":"uvwxyz"}}\n\n',
-				),
-			);
+		const fetchImpl = mockKernelEvents(
+			{ event: 'stderr', data: { data: 'abcdef' } },
+			{
+				event: 'done',
+				data: { success: true, output: { mimetype: 'text/plain', data: 'uvwxyz' } },
+			},
+		);
 
 		await expect(
 			executeInKernel(
