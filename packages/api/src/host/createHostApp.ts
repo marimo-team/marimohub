@@ -6,6 +6,7 @@ import {
 	ProjectId,
 	SessionId,
 	sleep,
+	UnavailableError,
 } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import type { HostEvent } from '@marimo-hub/core/host-bridge';
@@ -22,6 +23,7 @@ import {
 	assertProjectActionOn,
 	authMethodFor,
 	initializeForSubject,
+	ifMatchToken,
 	loadVisibleProject,
 } from '../shared';
 import { catalogEvents, loadHostNotebook, notebookRecord } from './catalog';
@@ -36,9 +38,10 @@ import {
 	RUNTIME_ROUTES,
 } from './protocol';
 import { HostRetries } from './retries';
+import { RuntimeCatalogRefreshes } from './runtimeCatalogRefreshes';
 import type { HostMutationReply, HostRetryAttempt } from './retries';
 import { callRuntime, ensureHostSession, runtimeDecisions } from './runtime';
-import { authorizeMcpSession } from '../mcp/sessionActivity';
+import { authorizeMcpSession, sessionAuthorizationDeadline } from '../mcp/sessionActivity';
 import { CatalogStream, eventStream } from './streams';
 
 const UpdateNotebook = z.object({
@@ -76,20 +79,20 @@ function upstreamKey(principal: AuthenticatedPrincipal, key: string): string {
 	return `${principal.id.length}:${principal.id}:${key}`;
 }
 
-function originalRequestId(event: HostEvent): HostEvent {
-	const key = event.data.request_id;
+function originalRequestId(event: HostEvent, principal: AuthenticatedPrincipal): HostEvent {
+	const { request_id: key, ...data } = event.data;
 	if (typeof key !== 'string') return event;
-	const length = /^(\d+):/.exec(key);
-	if (!length) return event;
+	const prefix = upstreamKey(principal, '');
 	return {
 		...event,
-		data: { ...event.data, request_id: key.slice(length[0].length + Number(length[1]) + 1) },
+		data: key.startsWith(prefix) ? { ...data, request_id: key.slice(prefix.length) } : data,
 	};
 }
 
 export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 	const app = new Hono<HonoEnv>();
 	const retries = new HostRetries();
+	const runtimeRefreshes = new RuntimeCatalogRefreshes();
 	const attachments = new Map<string, HostEvent>();
 	const attachmentListeners = new Set<(event: HostEvent, notebookId: string) => void>();
 	function publishAttachment(event: HostEvent, notebookId: string) {
@@ -97,12 +100,12 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 		for (const listener of attachmentListeners) listener(live, notebookId);
 	}
 	const runtimes = new Map<HostNotebookId, { sessionId: string; event: HostEvent }>();
-	const changes = new Map<string, { key: string; expires: number }>();
-	function rememberChange(id: string, key: string) {
+	const changes = new Map<string, { key: string; principalId: string; expires: number }>();
+	function rememberChange(id: string, key: string, principal: AuthenticatedPrincipal) {
 		for (const [notebookId, change] of changes) {
 			if (change.expires <= Date.now()) changes.delete(notebookId);
 		}
-		changes.set(id, { key, expires: Date.now() + 5 * 60_000 });
+		changes.set(id, { key, principalId: principal.id, expires: Date.now() + 5 * 60_000 });
 	}
 
 	async function authenticate(c: Context<HonoEnv>) {
@@ -224,21 +227,37 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 				if (deps.compute.connectExisting) {
 					try {
 						const { project, notebook } = await loadHostNotebook(deps, user, id);
-						const reply = await callRuntime(
-							deps,
-							user,
-							project,
-							notebook,
-							session,
-							{ method: 'GET', path: '/catalog' },
+						const decision = await authorizeMcpSession(deps, user, session);
+						sessionAuthorizationDeadline(session, user, decision.subjectContextExpiresAt);
+						await runtimeRefreshes.refresh(
+							session.session_id,
+							async (refreshSignal) => {
+								try {
+									const reply = await callRuntime(
+										deps,
+										user,
+										project,
+										notebook,
+										session,
+										{ method: 'GET', path: '/catalog' },
+										refreshSignal,
+										false,
+									);
+									runtimes.delete(id);
+									rememberRuntime(reply.events ?? [], id, session.session_id);
+								} catch (error) {
+									if (
+										!(error instanceof UnavailableError) &&
+										!(error instanceof HostProblemError && error.status === 409)
+									)
+										throw error;
+									runtimes.delete(id);
+								}
+							},
 							signal,
-							false,
 						);
-						runtimes.delete(id);
-						rememberRuntime(reply.events ?? [], id, session.session_id);
 					} catch {
 						signal.throwIfAborted();
-						runtimes.delete(id);
 					}
 				}
 			}
@@ -248,8 +267,9 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 				if (session?.status !== 'running') runtimes.delete(id);
 				else if (visible.has(id)) {
 					try {
-						await authorizeMcpSession(deps, user, session);
-						current.push(runtime.event);
+						const decision = await authorizeMcpSession(deps, user, session);
+						sessionAuthorizationDeadline(session, user, decision.subjectContextExpiresAt);
+						current.push(originalRequestId(runtime.event, user));
 					} catch {
 						signal.throwIfAborted();
 					}
@@ -287,7 +307,8 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 						if (event.event !== 'notebook') continue;
 						const id = (event.data.notebook as { id: string }).id;
 						const change = changes.get(id);
-						if (!first && change && change.expires > Date.now()) event.data.request_id = change.key;
+						if (!first && change?.principalId === c.get('user').id && change.expires > Date.now())
+							event.data.request_id = change.key;
 						else if (change && change.expires <= Date.now()) changes.delete(id);
 					}
 					await stream.update(current, send, first);
@@ -326,7 +347,7 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 				c.get('user').id,
 			);
 			const body = await notebookRecord(deps, c.get('user'), project, notebook);
-			rememberChange(body.id, key);
+			rememberChange(body.id, key, c.get('user'));
 			return { status: 201, body };
 		});
 	});
@@ -352,9 +373,10 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 				notebook.meta.id,
 				{ title: input.name },
 				c.get('user').id,
+				ifMatchToken(c),
 			);
 			const body = await notebookRecord(deps, c.get('user'), project, updated);
-			rememberChange(body.id, key);
+			rememberChange(body.id, key, c.get('user'));
 			return { status: 200, body };
 		});
 	});
@@ -433,7 +455,12 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 					);
 					if (kind === 'runtime')
 						rememberRuntime(
-							[{ event: kind, data: { runtime: reply.body, request_id: key } }],
+							[
+								{
+									event: kind,
+									data: { runtime: reply.body, request_id: upstreamKey(c.get('user'), key) },
+								},
+							],
 							notebookId,
 							session.session_id,
 						);
@@ -522,7 +549,9 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 							await emitSnapshot();
 							continue;
 						}
-						await emit(originalRequestId(mapRuntimeEvent(raw, record.id, session.session_id)));
+						await emit(
+							originalRequestId(mapRuntimeEvent(raw, record.id, session.session_id), c.get('user')),
+						);
 						if (raw.event === 'ready') initial = false;
 					}
 					for (const event of pendingAttachments.splice(0)) await emit(event);

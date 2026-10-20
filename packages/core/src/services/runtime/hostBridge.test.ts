@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
+import { UnavailableError } from '../../errors';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { HOST_BRIDGE_CLIENT, hostBridgeCommand, requestRuntimeHost } from './hostBridge';
 import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
@@ -123,11 +124,29 @@ psutil.process_iter = lambda attrs: [
 sys.modules["psutil"] = psutil
 os.environ["XDG_STATE_HOME"] = str(root / "wrong-exec-state")
 seen = []
+redirected = []
+redirect_path = None
+class RedirectTarget(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+    def do_GET(self):
+        redirected.append(self.headers.get("Authorization"))
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"{}")
+target = ThreadingHTTPServer(("127.0.0.1", 0), RedirectTarget)
+threading.Thread(target=target.serve_forever, daemon=True).start()
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
     def do_GET(self):
         seen.append((self.path, self.headers.get("Authorization")))
+        if self.path == redirect_path:
+            self.send_response(302)
+            self.send_header("Location", "http://127.0.0.1:" + str(target.server_port) + "/stolen")
+            self.end_headers()
+            self.wfile.write(b"{}")
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
@@ -170,6 +189,26 @@ assert all(request[1] == "Bearer private-token" for request in seen)
 assert "private-token" not in json.dumps(result)
 assert os.environ["XDG_STATE_HOME"] == str(root)
 saved_record = record.read_text()
+public_record = json.loads(saved_record)
+public_record["url"] = public_record["url"].replace("127.0.0.1", "203.0.113.1")
+record.write_text(json.dumps(public_record))
+request_count = len(seen)
+try:
+    run(cfg)
+    raise AssertionError("public host URL was accepted")
+except RuntimeError as error:
+    assert str(error) == "Host discovery unavailable"
+assert len(seen) == request_count
+record.write_text(saved_record)
+cfg["request"] = {"method": "GET", "path": "/events", "notebookPath": "/workspace/notebook.py"}
+for redirect_path in ("/prefix/api/marimo/v1/events", "/prefix/api/marimo/v1/notebooks/right/events"):
+    try:
+        run(cfg)
+        raise AssertionError("redirect was accepted")
+    except HTTPError as error:
+        assert error.code == 302
+assert redirected == [], redirected
+redirect_path = None
 wrong_process = json.loads(saved_record)
 wrong_process["process"]["pid"] += 1
 record.write_text(json.dumps(wrong_process))
@@ -186,11 +225,75 @@ try:
 except RuntimeError:
     pass
 server.shutdown()
+target.shutdown()
 `;
 		await run('python3', [
 			'-c',
 			`${script}\n${HOST_BRIDGE_CLIENT.replace('if __name__ == "__main__":', 'if False:')}\n${assertions}`,
 		]);
+	});
+
+	it.each(['writeFiles', 'exec'] as const)('sanitizes %s failures', async (operation) => {
+		const sandbox = {
+			writeFiles: vi.fn().mockResolvedValue(undefined),
+			exec: vi.fn(),
+		};
+		sandbox[operation].mockRejectedValue(new Error('private runtime credentials'));
+		const failure = requestRuntimeHost(sandbox as unknown as SandboxInstance, {
+			method: 'GET',
+			path: '/catalog',
+			notebookPath: '/workspace/notebook.py',
+		});
+		await expect(failure).rejects.toBeInstanceOf(UnavailableError);
+		await expect(failure).rejects.toThrow('The runtime host API is unavailable');
+		if (operation === 'writeFiles') expect(sandbox.exec).not.toHaveBeenCalled();
+	});
+
+	it('preserves cancellation errors without starting sandbox work', async () => {
+		const controller = new AbortController();
+		const reason = new Error('request cancelled');
+		controller.abort(reason);
+		const sandbox = { writeFiles: vi.fn(), exec: vi.fn() };
+		await expect(
+			requestRuntimeHost(
+				sandbox as unknown as SandboxInstance,
+				{ method: 'GET', path: '/catalog', notebookPath: '/workspace/notebook.py' },
+				controller.signal,
+			),
+		).rejects.toBe(reason);
+		expect(sandbox.writeFiles).not.toHaveBeenCalled();
+		expect(sandbox.exec).not.toHaveBeenCalled();
+	});
+
+	it('does not dispatch after cancellation during a pending request write', async () => {
+		const controller = new AbortController();
+		const reason = new Error('request cancelled');
+		let finishWrite!: () => void;
+		const writing = new Promise<void>((resolve) => {
+			finishWrite = resolve;
+		});
+		let startedWrite!: () => void;
+		const started = new Promise<void>((resolve) => {
+			startedWrite = resolve;
+		});
+		const sandbox = {
+			writeFiles: vi.fn(() => {
+				startedWrite();
+				return writing;
+			}),
+			exec: vi.fn(),
+		};
+		const pending = requestRuntimeHost(
+			sandbox as unknown as SandboxInstance,
+			{ method: 'POST', path: '/edits', notebookPath: '/workspace/notebook.py' },
+			controller.signal,
+		);
+		await started;
+		controller.abort(reason);
+		await expect(pending).rejects.toBe(reason);
+		finishWrite();
+		await writing;
+		expect(sandbox.exec).not.toHaveBeenCalled();
 	});
 
 	it('keeps large request bodies out of shell arguments and sanitizes failures', async () => {

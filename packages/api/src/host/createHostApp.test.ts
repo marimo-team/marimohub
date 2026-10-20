@@ -402,6 +402,145 @@ describe('hub host protocol', () => {
 		expect((await request('DELETE', `/notebooks/${id}`, undefined, 'delete')).status).toBe(501);
 	});
 
+	it('checks normalized rename preconditions and preserves a newer title after stale writes', async () => {
+		const { request, id, notebook, deps, project } = await setup();
+		const rename = await request('PATCH', `/notebooks/${id}`, { name: 'Newer' }, 'rename-match', {
+			'If-Match': `"${notebook.updated_at}"`,
+		});
+		expect(rename.status).toBe(200);
+		const stale = await request('PATCH', `/notebooks/${id}`, { name: 'Stale' }, 'rename-stale', {
+			'If-Match': `"${notebook.updated_at}"`,
+		});
+		expect(stale.status).toBe(409);
+		expect(await stale.json()).toMatchObject({ type: 'tag:marimo.io,2026:host/conflict' });
+		expect((await deps.services.notebooks.getNotebook(project.id, notebook.id)).meta.title).toBe(
+			'Newer',
+		);
+		expect(
+			(
+				await request('PATCH', `/notebooks/${id}`, { name: 'Any' }, 'rename-any', {
+					'If-Match': '*',
+				})
+			).status,
+		).toBe(200);
+	});
+
+	it('shares catalog runtime refreshes while rechecking permissions for cached records', async () => {
+		const { request, deps, runtime, id, project, setUser } = await setup();
+		await runtime();
+		deps.compute.connectExisting = vi.fn(() => makeFsSandbox().instance);
+		const bridge = vi.mocked(requestRuntimeHost).mockResolvedValue(
+			runtimeReply({
+				status: 200,
+				events: [{ event: 'runtime', data: { runtime: { id: 'kernel', notebook_id: 'local' } } }],
+			}),
+		);
+		const snapshots = await Promise.all(
+			Array.from({ length: 3 }, async () =>
+				readSnapshot(await request('GET', '/events?types=runtime')),
+			),
+		);
+		for (const snapshot of snapshots)
+			expect(snapshot[0]).toMatchObject({
+				event: 'runtime',
+				data: { runtime: { notebook_id: id } },
+			});
+		expect(bridge).toHaveBeenCalledTimes(1);
+		await readSnapshot(await request('GET', '/events?types=runtime'));
+		expect(bridge).toHaveBeenCalledTimes(1);
+		setUser({
+			...user,
+			credential: {
+				...user.credential,
+				grant: { actions: ['project.read'], projects: [project.id] },
+			},
+		});
+		expect(
+			(await readSnapshot(await request('GET', '/events?types=runtime'))).map(
+				(event) => event.event,
+			),
+		).toEqual(['ready']);
+		expect(bridge).toHaveBeenCalledTimes(1);
+		setUser(user);
+		expect((await readSnapshot(await request('GET', '/events?types=runtime')))[0].event).toBe(
+			'runtime',
+		);
+		expect(bridge).toHaveBeenCalledTimes(1);
+	});
+
+	it('only correlates catalog changes with the principal who submitted the mutation', async () => {
+		const { request, deps, id, project, setUser } = await setup();
+		await deps.services.projects.addMember(
+			project.id,
+			{ user_id: otherUser.id },
+			'editor',
+			user.id,
+		);
+		const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
+		const readUntil = async (reader: ReadableStreamDefaultReader<Uint8Array>, needle: string) => {
+			let text = '';
+			while (!text.includes(needle)) {
+				const next = await reader.read();
+				if (next.done) throw new Error('Stream ended before expected event');
+				text += new TextDecoder().decode(next.value);
+			}
+			return text;
+		};
+		try {
+			readers.push((await request('GET', '/events?types=notebook')).body!.getReader());
+			await readUntil(readers[0], 'event: ready');
+			setUser(otherUser);
+			readers.push((await request('GET', '/events?types=notebook')).body!.getReader());
+			await readUntil(readers[1], 'event: ready');
+			setUser(user);
+			expect(
+				(await request('PATCH', `/notebooks/${id}`, { name: 'Renamed' }, 'private-key')).status,
+			).toBe(200);
+			const [own, other] = await Promise.all(readers.map((reader) => readUntil(reader, 'Renamed')));
+			expect(own).toContain('"request_id":"private-key"');
+			expect(other).not.toContain('private-key');
+		} finally {
+			await Promise.all(readers.map((reader) => reader.cancel()));
+		}
+	});
+
+	it('omits other principals request IDs from shared runtime and notebook events', async () => {
+		const { request, deps, id, project, runtime, setUser } = await setup();
+		await runtime();
+		await deps.services.projects.addMember(
+			project.id,
+			{ user_id: otherUser.id },
+			'editor',
+			user.id,
+		);
+		vi.mocked(requestRuntimeHost).mockResolvedValue(
+			runtimeReply({
+				status: 200,
+				events: [
+					{
+						event: 'runtime',
+						data: {
+							runtime: { id: 'kernel', notebook_id: 'local' },
+							request_id: `${user.id.length}:${user.id}:private-runtime-key`,
+						},
+					},
+					{ event: 'ready', data: {} },
+				],
+			}),
+		);
+		const own = await readSnapshot(await request('GET', `/notebooks/${id}/events`));
+		expect(own.find((event) => event.event === 'runtime')?.data.request_id).toBe(
+			'private-runtime-key',
+		);
+		setUser(otherUser);
+		const other = await readSnapshot(await request('GET', `/notebooks/${id}/events`));
+		expect(other.find((event) => event.event === 'runtime')?.data).not.toHaveProperty('request_id');
+		deps.compute.connectExisting = undefined;
+		const catalog = await readSnapshot(await request('GET', '/events?types=runtime'));
+		expect(catalog[0].event).toBe('runtime');
+		expect(catalog[0].data).not.toHaveProperty('request_id');
+	});
+
 	it('rejects idempotency-key reuse with changed edit content or preconditions', async () => {
 		const { request, id, runtime } = await setup();
 		await runtime();
