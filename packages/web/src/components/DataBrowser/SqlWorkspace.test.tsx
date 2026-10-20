@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryExecutionResults } from './SqlWorkspace';
 import type { QueryExecution } from './SqlWorkspace';
 
-function queryExecution(values: readonly (number | string)[]): QueryExecution[] {
+function queryExecution(values: readonly (number | string | bigint)[]): QueryExecution[] {
 	return [
 		{
 			id: 0,
@@ -34,6 +34,31 @@ function permutations<T>(values: readonly T[]): T[][] {
 describe('QueryResultTable column sorting', () => {
 	it.each([
 		{ name: 'numbers', values: [1.5, -3, 1.25, -5], expected: ['-5', '-3', '1.25', '1.5'] },
+		{
+			name: 'bigints across zero',
+			values: [10n, -3n, 0n, -12n, 2n],
+			expected: ['-12', '-3', '0', '2', '10'],
+		},
+		{
+			name: 'negative bigints beyond number precision',
+			values: [-9223372036854775808n, -9223372036854775809n],
+			expected: ['-9223372036854775809', '-9223372036854775808'],
+		},
+		{
+			name: 'bigints with fractional numbers and numeric strings',
+			values: [2.5, 2n, '-3', -2.5, -4n],
+			expected: ['-4', '-3', '-2.5', '2', '2.5'],
+		},
+		{
+			name: 'bigints with numbers and strings beyond number precision',
+			values: [9007199254740993n, '9007199254740994', 9007199254740992],
+			expected: ['9007199254740992', '9007199254740993', '9007199254740994'],
+		},
+		{
+			name: 'bigints with nonnumeric values',
+			values: [Number.NaN, '2kg', Infinity, 2n, -1n],
+			expected: ['-1', '2', '2kg', 'Infinity', 'NaN'],
+		},
 		{
 			name: 'negative integer strings beyond number precision',
 			values: ['-9223372036854775808', '-9223372036854775809'],

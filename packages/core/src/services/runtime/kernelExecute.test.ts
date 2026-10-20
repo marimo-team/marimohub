@@ -190,16 +190,16 @@ describe('kernel execution', () => {
 		).resolves.toMatchObject({ completed: false, stdout: 'abc', truncated: true });
 	});
 
-	it.each(['é', '€', '😀'])(
-		'caps repeated stdout appends at UTF-8 boundaries for %s',
-		async (character) => {
+	it.each(['é', '€', '😀'].flatMap((character) => [2, 2.5].map((cap) => ({ character, cap }))))(
+		'caps repeated stdout appends at UTF-8 boundaries for $character with a $cap-byte budget',
+		async ({ character, cap }) => {
 			const fetchImpl = mockKernelEvents(
 				...['a', character, 'z'].map((data) => ({ event: 'stdout', data: { data } })),
 				{ event: 'done', data: { success: true } },
 			);
 			const result = await executeInKernel(
 				'https://kernel',
-				{ sessionId: 'one', code: 'print()', maxStdoutBytes: 2 },
+				{ sessionId: 'one', code: 'print()', maxStdoutBytes: cap },
 				{ fetchImpl },
 			);
 			expect(result.stdout).toBe('az');

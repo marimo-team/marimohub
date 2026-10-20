@@ -1,4 +1,4 @@
-import { utf8Head } from '../../text';
+import { utf8HeadBytes } from '../../text';
 import { z } from 'zod';
 import { withAbortSignal } from '../../async';
 import type { Session } from '../../schema';
@@ -192,7 +192,7 @@ function appendCapped(current: string, value: string, cap: number): [string, boo
 	const remaining = Math.max(0, cap - currentBytes);
 	const bytes = encoder.encode(value);
 	if (bytes.byteLength <= remaining) return [current + value, false];
-	return [current + utf8Head(value, remaining), true];
+	return [current + utf8HeadBytes(bytes, remaining), true];
 }
 
 export async function executeInKernel(

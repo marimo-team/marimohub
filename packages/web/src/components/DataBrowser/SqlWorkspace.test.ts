@@ -108,12 +108,34 @@ describe('CSV serialization', () => {
 		['=1+1', "'=1+1"],
 		[' +cmd', "' +cmd"],
 		['\t@import', "'\t@import"],
+		['-42', "'-42"],
 		[-42, '-42'],
+		[0n, '0'],
+		[123n, '123'],
+		[-42n, '-42'],
+		[9223372036854775809n, '9223372036854775809'],
+		[-9223372036854775809n, '-9223372036854775809'],
 		['normal', 'normal'],
 		['a,b', '"a,b"'],
 		['say "hi"', '"say ""hi"""'],
-	])('serializes %j safely', (value, expected) => {
+		['=SUM(1,2)\n', '"\'=SUM(1,2)\n"'],
+	])('serializes %s safely', (value, expected) => {
 		expect(csvCell(value)).toBe(expected);
+	});
+
+	it('exports a placeholder when a cell cannot be serialized', () => {
+		const cyclic: unknown[] = [];
+		cyclic.push(cyclic);
+		const throwing = {
+			toJSON() {
+				throw new Error('Cannot serialize');
+			},
+		};
+		expect([cyclic, throwing, { value: 123n }].map(csvCell)).toEqual([
+			'[unserializable]',
+			'[unserializable]',
+			'[unserializable]',
+		]);
 	});
 });
 

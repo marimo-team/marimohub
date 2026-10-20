@@ -1,4 +1,5 @@
 import type { EditorState } from '@codemirror/state';
+import { formatCell } from './tableValues';
 
 export type QueryDialect = 'duckdb' | 'postgresql';
 
@@ -191,20 +192,8 @@ export function allSqlStatements(sql: string): string[] {
 	return sqlStatementRanges(sql).map(({ from, to }) => sql.slice(from, to).trim());
 }
 
-function renderCell(value: unknown): string {
-	if (value === null) return 'null';
-	if (value === undefined) return '';
-	if (typeof value === 'string') return value;
-	if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-	try {
-		return JSON.stringify(value) ?? '';
-	} catch {
-		return '[unserializable]';
-	}
-}
-
 export function csvCell(value: unknown): string {
-	const rendered = renderCell(value);
+	const rendered = formatCell(value);
 	const text =
 		typeof value === 'string' && /^[\t\r ]*[=+\-@]/.test(rendered) ? `'${rendered}` : rendered;
 	return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;

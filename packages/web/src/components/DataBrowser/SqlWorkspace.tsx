@@ -904,6 +904,7 @@ function compareQueryValues(left: unknown, right: unknown): number {
 }
 
 function parseNumericCell(value: unknown): number | bigint | undefined {
+	if (typeof value === 'bigint') return value;
 	if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
 	if (typeof value !== 'string') return undefined;
 	const text = value.trim();
