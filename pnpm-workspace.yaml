@@ -156,7 +156,8 @@ minimumReleaseAgeExclude:
   # Renovate security update: csv-parse@7.0.2
   - csv-parse@7.0.2
   - markdown-it@14.3.1
-  - '@modelcontextprotocol/sdk@1.31.0'
+  # Renovate security update: @modelcontextprotocol/sdk@1.32.0
+  - '@modelcontextprotocol/sdk@1.31.0 || 1.32.0'
 
 onlyBuiltDependencies: []
 
