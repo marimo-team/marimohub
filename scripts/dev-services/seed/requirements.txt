@@ -4,7 +4,7 @@ aiobotocore==3.9.0
     # via s3fs
 aiohappyeyeballs==2.7.1
     # via aiohttp
-aiohttp==3.14.3
+aiohttp==3.14.4
     # via
     #   aiobotocore
     #   s3fs
