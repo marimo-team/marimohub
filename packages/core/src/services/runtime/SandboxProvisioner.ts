@@ -1,6 +1,6 @@
 import { AGENT_CONTEXT_DIR_ENV } from './sandboxEnvironment';
 import { all, allSettled } from 'better-all';
-import { resolveAgentHomeFiles } from './agentContextFiles';
+import { prepareAgentHomeFiles } from './agentContextFiles';
 import type { Attributes, Span as OtelSpan } from '@opentelemetry/api';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { withDeadline } from '../../async';
@@ -1198,19 +1198,22 @@ export class SandboxProvisioner {
 						sandbox.resolveProcessPath?.(options.contextFile.path) ?? options.contextFile.path;
 				}
 				const defaults = sessionEnv?.defaults;
-				const writeFiles = async () =>
-					writeSessionFiles(
+				const writeFiles = async () => {
+					if (
+						!options.restoreFilesystemSnapshotId &&
+						normalizeAbsoluteSandboxPath(workdir) !== '/' &&
+						!files.some((file) => file.relativeTo === 'home')
+					)
+						return writeSessionFiles(sandbox, files, kernelAuthToken);
+					const prepared = await prepareAgentHomeFiles(
 						sandbox,
-						files.some((file) => file.relativeTo === 'home') || options.restoreFilesystemSnapshotId
-							? await resolveAgentHomeFiles(
-									sandbox,
-									files,
-									normalizeAbsoluteSandboxPath(workdir),
-									options.restoreFilesystemSnapshotId !== undefined,
-								)
-							: files,
-						kernelAuthToken,
+						files,
+						normalizeAbsoluteSandboxPath(workdir),
+						options.restoreFilesystemSnapshotId !== undefined,
 					);
+					await writeSessionFiles(sandbox, prepared.files, kernelAuthToken);
+					await prepared.install?.();
+				};
 				await Promise.all([
 					writeFiles(),
 					Object.keys(vars).length > 0 ? sandbox.setEnvVars(vars) : undefined,

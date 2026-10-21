@@ -230,6 +230,12 @@ export function computeContract(
 			).toBe(true);
 		});
 
+		it('home directory capability returns an absolute path', async () => {
+			const inst = provider.create(CONTRACT_ID);
+			if (!inst.getHomeDirectory) return;
+			expect(await inst.getHomeDirectory()).toMatch(/^\//);
+		});
+
 		it('bounded reads reject invalid budgets', async () => {
 			const inst = provider.create(CONTRACT_ID);
 			if (!inst.readFileBounded) return;

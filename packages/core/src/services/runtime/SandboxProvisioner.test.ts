@@ -1,4 +1,3 @@
-import { AGENT_HOME_FILES_MANIFEST } from '../integrations/agentContext';
 import { describe, it, expect, vi } from 'vitest';
 import { ByteBudget } from './byteBudget';
 import { Millis } from '../../duration';
@@ -1179,11 +1178,16 @@ describe('SandboxProvisioner', () => {
 			expect(cmd).not.toContain('marimohub-script-requirements.txt');
 		});
 
-		it('writes agent instructions to the adapter home before starting the session', async () => {
+		it('installs agent instructions in the adapter home before starting the session', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			instance.getHomeDirectory = async () => '/home/custom';
-			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
-			await provisioner.provision({
+			const exec = instance.exec;
+			instance.exec = async (cmd, options) => {
+				if (cmd.includes('# marimohub-agent-context-install'))
+					calls.sequence.push('installAgentContext');
+				return exec(cmd, options);
+			};
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
 				sandboxId,
 				projectId,
 				notebookId,
@@ -1193,15 +1197,16 @@ describe('SandboxProvisioner', () => {
 					files: [{ path: '.claude/CLAUDE.md', content: 'Use polars.', relativeTo: 'home' }],
 				},
 			});
-			expect(calls.writeFile).toContainEqual({
-				path: '/home/custom/.claude/CLAUDE.md',
-				content: 'Use polars.',
+			const payload = calls.writeFiles
+				.flat()
+				.find((file) => file.path.startsWith('/tmp/.marimohub-agent-context-'));
+			expect(payload).toBeDefined();
+			expect(JSON.parse(String(payload!.content))).toMatchObject({
+				home: '/home/custom',
+				files: [{ path: '.claude/CLAUDE.md', content: 'Use polars.' }],
 			});
-			expect(
-				calls.writeFile.some(
-					(file) => file.path.startsWith('/workspace') && file.path.endsWith('CLAUDE.md'),
-				),
-			).toBe(false);
+			expect(calls.startProcess).toHaveLength(1);
+			expect(calls.sequence).toEqual(['writeFiles', 'installAgentContext', 'startProcess']);
 		});
 
 		it('injects environment variables while agent HOME lookup is pending', async () => {
@@ -1249,30 +1254,19 @@ describe('SandboxProvisioner', () => {
 		it.each(['home lookup', 'manifest read', 'cleanup', 'file write'] as const)(
 			'does not start a session when agent context %s fails',
 			async (failure) => {
-				const { instance, calls } = makeFakeSandbox({
-					files: {
-						[AGENT_HOME_FILES_MANIFEST]: JSON.stringify({
-							home: '/home/appuser',
-							paths: ['.claude/skills/obsolete/SKILL.md'],
-						}),
-					},
-				});
+				const { instance, calls } = makeFakeSandbox();
 				instance.getHomeDirectory = async () => {
 					if (failure === 'home lookup') throw new Error('home unavailable');
 					return '/home/appuser';
 				};
-				const read = instance.readFile;
-				instance.readFile = async (path) =>
-					failure === 'manifest read' && path === AGENT_HOME_FILES_MANIFEST
-						? readFileFailure()
-						: read(path);
 				const exec = instance.exec;
 				instance.exec = async (cmd, options) =>
-					failure === 'cleanup' && cmd.startsWith('rm -f --')
+					(failure === 'cleanup' || failure === 'manifest read') &&
+					cmd.includes('# marimohub-agent-context-install')
 						? {
 								success: false,
-								stdout: '',
-								stderr: 'permission denied',
+								stdout: failure === 'manifest read' ? 'invalid_manifest' : 'io_error',
+								stderr: '',
 								error: { code: 'COMMAND_FAILED' },
 							}
 						: exec(cmd, options);
@@ -1280,14 +1274,13 @@ describe('SandboxProvisioner', () => {
 				instance.writeFiles = async (files) => {
 					if (
 						failure === 'file write' &&
-						files.some((file) => file.path.endsWith('/.claude/CLAUDE.md'))
+						files.some((file) => file.path.startsWith('/tmp/.marimohub-agent-context-'))
 					)
 						throw new Error('disk full');
 					await write(files);
 				};
-				const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 				await expect(
-					provisioner.provision({
+					new SandboxProvisioner(fakeComputeFrom(instance)).provision({
 						sandboxId,
 						projectId,
 						notebookId,

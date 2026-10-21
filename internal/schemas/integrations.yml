@@ -1375,9 +1375,11 @@ components:
       type: object
       properties:
         instructions:
-          description: Shared Markdown instructions for coding agents
           type: string
           maxLength: 32768
+          x-max-utf8-bytes: 32768
+          description: Shared Markdown instructions for coding agents. Maximum 32768 UTF-8
+            bytes.
         skills:
           maxItems: 16
           type: array
@@ -1390,28 +1392,35 @@ components:
               content:
                 type: string
                 maxLength: 65536
-                description: Complete SKILL.md, including YAML frontmatter
+                x-max-utf8-bytes: 65536
+                description: Complete SKILL.md, including YAML frontmatter. Maximum 65536 UTF-8
+                  bytes.
             required:
               - name
               - content
             additionalProperties: false
         opencode_json:
+          type: string
+          maxLength: 16384
+          x-max-utf8-bytes: 16384
           description: OpenCode JSON configuration; reference custom environment variables
-            for tokens
-          type: string
-          maxLength: 16384
+            for tokens. Maximum 16384 UTF-8 bytes.
         claude_settings_json:
-          description: Claude Code user settings JSON; do not include secrets
           type: string
           maxLength: 16384
+          x-max-utf8-bytes: 16384
+          description: Claude Code user settings JSON; do not include secrets. Maximum
+            16384 UTF-8 bytes.
       additionalProperties: false
     agent_context_stored:
       type: object
       properties:
         instructions:
-          description: Shared Markdown instructions for coding agents
           type: string
           maxLength: 32768
+          x-max-utf8-bytes: 32768
+          description: Shared Markdown instructions for coding agents. Maximum 32768 UTF-8
+            bytes.
         skills:
           maxItems: 16
           type: array
@@ -1424,20 +1433,25 @@ components:
               content:
                 type: string
                 maxLength: 65536
-                description: Complete SKILL.md, including YAML frontmatter
+                x-max-utf8-bytes: 65536
+                description: Complete SKILL.md, including YAML frontmatter. Maximum 65536 UTF-8
+                  bytes.
             required:
               - name
               - content
             additionalProperties: false
         opencode_json:
+          type: string
+          maxLength: 16384
+          x-max-utf8-bytes: 16384
           description: OpenCode JSON configuration; reference custom environment variables
-            for tokens
-          type: string
-          maxLength: 16384
+            for tokens. Maximum 16384 UTF-8 bytes.
         claude_settings_json:
-          description: Claude Code user settings JSON; do not include secrets
           type: string
           maxLength: 16384
+          x-max-utf8-bytes: 16384
+          description: Claude Code user settings JSON; do not include secrets. Maximum
+            16384 UTF-8 bytes.
       additionalProperties: false
     athena:
       type: object

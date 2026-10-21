@@ -83,6 +83,35 @@ describe('agent context validation', () => {
 			).rejects.toThrow(ValidationError);
 		}
 	});
+	it('publishes UTF-8 byte limits in the client schema', () => {
+		const { json_schema } = defaultRegistry().describe(agentContext.kind);
+		expect(json_schema).toMatchObject({
+			properties: {
+				instructions: {
+					'x-max-utf8-bytes': 32768,
+					description: expect.stringContaining('32768 UTF-8 bytes'),
+				},
+				skills: {
+					items: {
+						properties: {
+							content: {
+								'x-max-utf8-bytes': 65536,
+								description: expect.stringContaining('65536 UTF-8 bytes'),
+							},
+						},
+					},
+				},
+				opencode_json: {
+					'x-max-utf8-bytes': 16384,
+					description: expect.stringContaining('16384 UTF-8 bytes'),
+				},
+				claude_settings_json: {
+					'x-max-utf8-bytes': 16384,
+					description: expect.stringContaining('16384 UTF-8 bytes'),
+				},
+			},
+		});
+	});
 	it('publishes a non-browsable kind with multiline fields', () => {
 		const descriptor = defaultRegistry().describe(agentContext.kind);
 		expect(descriptor.supports_browse).toBe(false);

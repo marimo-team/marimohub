@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { PreconditionFailedError } from '@marimo-hub/core';
+import { PreconditionFailedError, SANDBOX_INSTANCE_OPTIONAL_METHODS } from '@marimo-hub/core';
 import type { ExternalStorageAdapter, SandboxId } from '@marimo-hub/core';
 import { isConfigError } from './errors';
 import { loadAdapterLibraries, resolveAdapterSpecifier } from './library';
@@ -221,7 +221,7 @@ describe('external adapter library loading', () => {
 		},
 	);
 
-	it.each(['ready', 'launchProcess', 'drainTimings', 'drainCounters'] as const)(
+	it.each(SANDBOX_INSTANCE_OPTIONAL_METHODS)(
 		'rejects a non-callable sandbox %s capability',
 		async (capability) => {
 			const loaded = await loadAdapterLibraries({

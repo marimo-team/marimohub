@@ -117,12 +117,12 @@ provider uses its own credential.
 Create an **Agent context** integration (`agent_context`) at org scope for all
 projects, or at project scope for one project. Changes apply to new sessions.
 
-| Field                  | Limit                        | Content                                              |
-| ---------------------- | ---------------------------- | ---------------------------------------------------- |
-| `instructions`         | 32 KiB                       | Markdown for Claude Code and OpenCode                |
-| `skills`               | 16 entries, 64 KiB per entry | Names and complete `SKILL.md` files with frontmatter |
-| `opencode_json`        | 16 KiB                       | OpenCode configuration as a JSON object string       |
-| `claude_settings_json` | 16 KiB                       | Claude Code settings as a JSON object string         |
+| Field                  | Limit                                        | Content                                              |
+| ---------------------- | -------------------------------------------- | ---------------------------------------------------- |
+| `instructions`         | 32 KiB                                       | Markdown for Claude Code and OpenCode                |
+| `skills`               | 16 entries per integration, 64 KiB per entry | Names and complete `SKILL.md` files with frontmatter |
+| `opencode_json`        | 16 KiB                                       | OpenCode configuration as a JSON object string       |
+| `claude_settings_json` | 16 KiB                                       | Claude Code settings as a JSON object string         |
 
 All fields are optional. Limits count UTF-8 bytes. Skill names must match
 `[a-z0-9-]{1,64}`. Duplicate names across active integrations and the reserved
@@ -143,6 +143,7 @@ replaces the whole org integration; disabling it opts out of that org integratio
 | OpenCode settings     | Merged into the session's OpenCode configuration; hub-managed AI values take precedence |
 
 The sandbox home defaults to `/home/appuser`; local compute uses an isolated home.
+Agent context requires a workspace directory other than `/`.
 Files stay outside the workspace and notebook versions. On full filesystem
 restore, the hub removes previously injected home files absent from the current
 integrations. `MARIMOHUB_AGENT_CONTEXT_DIR` identifies the OpenCode source bundle.

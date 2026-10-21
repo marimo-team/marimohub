@@ -6,11 +6,11 @@
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `instructions` | string |  |  | Shared Markdown instructions for coding agents |
+| `instructions` | string |  |  | Shared Markdown instructions for coding agents. Maximum 32768 UTF-8 bytes. |
 | `skills` | object[] |  |  |  |
 | `skills[].name` | string | Yes |  |  |
-| `skills[].content` | string | Yes |  | Complete SKILL.md, including YAML frontmatter |
-| `opencode_json` | string |  |  | OpenCode JSON configuration; reference custom environment variables for tokens |
-| `claude_settings_json` | string |  |  | Claude Code user settings JSON; do not include secrets |
+| `skills[].content` | string | Yes |  | Complete SKILL.md, including YAML frontmatter. Maximum 65536 UTF-8 bytes. |
+| `opencode_json` | string |  |  | OpenCode JSON configuration; reference custom environment variables for tokens. Maximum 16384 UTF-8 bytes. |
+| `claude_settings_json` | string |  |  | Claude Code user settings JSON; do not include secrets. Maximum 16384 UTF-8 bytes. |
 
 :::
