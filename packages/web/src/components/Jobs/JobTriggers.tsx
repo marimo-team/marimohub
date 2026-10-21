@@ -32,7 +32,8 @@ export function ChainPicker({
 	onChange: (chain: Chain) => void;
 }) {
 	const [expanded, setExpanded] = useState(false);
-	const [targetNotebook, setTargetNotebook] = useState(notebookId);
+	const [selectedNotebook, setSelectedNotebook] = useState<string>();
+	const targetNotebook = selectedNotebook ?? notebookId;
 	const notebooks = useChainNotebooksQuery(projectId, expanded);
 	const jobs = useJobsQuery(projectId, targetNotebook, expanded);
 	return (
@@ -51,16 +52,18 @@ export function ChainPicker({
 					<select
 						className={selectClass}
 						value={targetNotebook}
-						onChange={(e) => setTargetNotebook(e.target.value)}
+						onChange={(e) =>
+							setSelectedNotebook(e.target.value === notebookId ? undefined : e.target.value)
+						}
 					>
 						<option value={notebookId}>This notebook</option>
-						{notebooks.data
-							?.filter((nb) => nb.id !== notebookId)
-							.map((nb) => (
+						{notebooks.data?.map((nb) =>
+							nb.id !== notebookId ? (
 								<option key={nb.id} value={nb.id}>
 									{nb.title}
 								</option>
-							))}
+							) : null,
+						)}
 					</select>
 				</label>
 			)}
@@ -88,20 +91,17 @@ export function ChainPicker({
 								}}
 							>
 								<option value="">{jobs.isPending ? 'Loading jobs…' : 'Add a job…'}</option>
-								{jobs.data
-									?.filter(
-										(job) =>
-											(targetNotebook !== notebookId || job.id !== jobId) &&
-											!value[kind]?.some(
-												(ref) => ref.job_id === job.id && ref.notebook_id === targetNotebook,
-											),
-									)
-									.map((job) => (
+								{jobs.data?.map((job) =>
+									(targetNotebook !== notebookId || job.id !== jobId) &&
+									!value[kind]?.some(
+										(ref) => ref.job_id === job.id && ref.notebook_id === targetNotebook,
+									) ? (
 										<option key={job.id} value={job.id}>
 											{job.name}
 											{job.enabled ? '' : ' (disabled)'}
 										</option>
-									))}
+									) : null,
+								)}
 							</select>
 						</label>
 					)}

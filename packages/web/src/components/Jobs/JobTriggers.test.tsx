@@ -97,6 +97,64 @@ describe('Job triggers UI', () => {
 		},
 	);
 
+	it('follows the current notebook by default and keeps an explicit target selection', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = input instanceof Request ? input.url : String(input);
+				if (url.includes('/jobs')) {
+					const notebookId = url.includes('/notebooks/nb-2/') ? 'nb-2' : 'nb-1';
+					return jsonOk({
+						items: [
+							{
+								...job,
+								id: `target-${notebookId}`,
+								name: `Target in ${notebookId}`,
+								notebook_id: notebookId,
+							},
+						],
+						next_cursor: null,
+					});
+				}
+				return jsonOk({
+					items: [
+						{ id: 'nb-1', title: 'First notebook' },
+						{ id: 'nb-2', title: 'Second notebook' },
+					],
+					next_cursor: null,
+				});
+			}),
+		);
+		const onChange = vi.fn();
+		const picker = (notebookId: string) => (
+			<ChainPicker
+				projectId="proj-1"
+				notebookId={notebookId}
+				jobId="job-1"
+				value={{}}
+				onChange={onChange}
+			/>
+		);
+		const { rerender } = renderWithClient(picker('nb-1'));
+		const user = userEvent.setup();
+		await user.click(screen.getByRole('button', { name: 'Choose downstream jobs' }));
+		await screen.findByRole('option', { name: 'Second notebook' });
+		expect(screen.getByLabelText('Target notebook')).toHaveValue('nb-1');
+		rerender(picker('nb-2'));
+		expect(screen.getByLabelText('Target notebook')).toHaveValue('nb-2');
+		await waitFor(() => expect(screen.getByLabelText('After success')).toBeEnabled());
+		await user.selectOptions(screen.getByLabelText('After success'), 'target-nb-2');
+		expect(onChange).toHaveBeenLastCalledWith({
+			on_success: [{ notebook_id: 'nb-2', job_id: 'target-nb-2' }],
+		});
+		await user.selectOptions(screen.getByLabelText('Target notebook'), 'nb-1');
+		rerender(picker('nb-3'));
+		expect(screen.getByLabelText('Target notebook')).toHaveValue('nb-1');
+		await user.selectOptions(screen.getByLabelText('Target notebook'), 'nb-3');
+		rerender(picker('nb-1'));
+		expect(screen.getByLabelText('Target notebook')).toHaveValue('nb-1');
+	});
+
 	it('selects same-project targets, excludes the source, and removes a target', async () => {
 		vi.stubGlobal(
 			'fetch',
