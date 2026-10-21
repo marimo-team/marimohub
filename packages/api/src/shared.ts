@@ -1,5 +1,5 @@
 import { OpenAPIHono, z } from '@hono/zod-openapi';
-import type { Context } from 'hono';
+import type { Context, TypedResponse } from 'hono';
 import { all } from 'better-all';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
@@ -789,9 +789,10 @@ export function jsonContent<T extends z.ZodType>(
 	};
 }
 
-/** The two response envelopes, built in one place so the shape never drifts. */
-export function ok<T>(c: Context, data: T) {
-	return c.json({ success: true as const, data }, 200);
+type SuccessEnvelope<T> = { success: true; data: T };
+
+export function ok<T>(c: Context, data: T): ReturnType<typeof c.json<SuccessEnvelope<T>, 200>> {
+	return c.json<SuccessEnvelope<T>, 200>({ success: true, data }, 200);
 }
 
 /** Backoff hint (seconds) for the retriable statuses, surfaced as `Retry-After`. */
@@ -808,7 +809,7 @@ export function fail(
 	message: string,
 	status: number,
 	options: { details?: ErrorDetail[] } = {},
-) {
+): Response & TypedResponse<z.infer<typeof ErrorResponseSchema>, ContentfulStatusCode, 'json'> {
 	const retryAfter = RETRY_AFTER_SECONDS[status];
 	if (retryAfter !== undefined) c.header('Retry-After', String(retryAfter));
 	const requestId = (c.var as { requestId?: string }).requestId;
