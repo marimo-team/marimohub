@@ -1567,6 +1567,7 @@ class ScopedIntegrationsStore {
 			name: head.name,
 			kind: head.kind,
 			version: version.version,
+			scope: scope.projectId ? 'project' : 'org',
 			requirements: def.resolveRequirements?.(parsed.data) ?? def.requirements,
 			output,
 		};

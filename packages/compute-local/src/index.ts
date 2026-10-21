@@ -315,6 +315,14 @@ class LocalSandboxInstance implements SandboxInstance {
 		return abs;
 	}
 
+	async getHomeDirectory(): Promise<string> {
+		await this.ensureRoot();
+		const home = '/home/appuser';
+		await mkdir(this.mapPath(home), { recursive: true });
+		await this.setEnvVars({ HOME: this.mapPath(home) });
+		return home;
+	}
+
 	resolveProcessPath(p: string): string {
 		return this.mapPath(p);
 	}

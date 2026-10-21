@@ -1,5 +1,5 @@
 import type { AuthUser } from '../../../ports/auth';
-import type { SandboxInstance } from '../../../ports/sandbox';
+import type { SandboxFileWrite, SandboxInstance } from '../../../ports/sandbox';
 
 export const SECONDARY_SURFACE_IDS = ['vscode', 'opencode'] as const;
 export type SecondarySurfaceId = (typeof SECONDARY_SURFACE_IDS)[number];
@@ -17,6 +17,7 @@ export interface SurfaceContext {
 	exposure: 'proxy' | 'subdomain';
 	basePath?: string;
 	userDataDir: string;
+	hasAgentContext?: boolean;
 }
 
 /** Persisted on the session and returned to clients; keep it to these fields. */
@@ -34,6 +35,8 @@ export interface SurfaceSpec {
 	supportsOpenPath?: boolean;
 	proxyPath: 'strip-prefix' | 'preserve-prefix';
 	probe(instance: SandboxInstance): Promise<SurfaceProbe>;
+	/** Read-only preparation overlaps the availability probe; writes wait for the attempt fence. */
+	loadFiles?(instance: SandboxInstance, ctx: SurfaceContext): Promise<SandboxFileWrite[]>;
 	prepare?(instance: SandboxInstance, ctx: SurfaceContext): Promise<void>;
 	command(ctx: SurfaceContext, port: number): { cmd: string[]; env?: Record<string, string> };
 	readiness: { path: string; timeoutMs: number };

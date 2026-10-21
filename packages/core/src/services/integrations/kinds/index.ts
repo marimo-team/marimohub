@@ -1,3 +1,4 @@
+import { agentContext } from './agentContext';
 import { IntegrationRegistry } from '../registry';
 import { athena, redshift } from './awsQueryEngines';
 import { bigquery } from './bigquery';
@@ -36,6 +37,7 @@ export { athena, redshift } from './awsQueryEngines';
 export { bigquery } from './bigquery';
 export { clickhouse } from './clickhouse';
 export { codeArtifact } from './codeArtifact';
+export { agentContext } from './agentContext';
 export { customEnv } from './customEnv';
 export { databricks } from './databricks';
 export { ducklake } from './ducklake';
@@ -94,6 +96,7 @@ export function defaultRegistry(): IntegrationRegistry {
 	registry.register(wandb);
 	registry.register(huggingFace);
 	registry.register(customEnv);
+	registry.register(agentContext);
 	registry.register(codeArtifact);
 	registry.register(pythonPackageIndex);
 	registry.register(artifactory);

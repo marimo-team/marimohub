@@ -3415,7 +3415,14 @@ describe('cross-kind bundle', () => {
 			}));
 		const bundle = bundleIntegrations(rendered, sessionId);
 		expect(bundle.attachments).toHaveLength(defaultRegistry().list().length);
-		expect(bundle.files.every((f) => f.path.startsWith(`${INTEGRATIONS_DIR}/`))).toBe(true);
+		expect(
+			bundle.files
+				.filter((f) => !f.relativeTo)
+				.every((f) => f.path.startsWith(`${INTEGRATIONS_DIR}/`)),
+		).toBe(true);
+		expect(bundle.files.filter((f) => f.relativeTo === 'home')).toEqual([
+			{ path: '.claude/CLAUDE.md', content: 'Use polars for data analysis.', relativeTo: 'home' },
+		]);
 		const pyiceberg = bundle.files.find((file) => file.path.endsWith('/.pyiceberg.yaml'));
 		const config = parse(pyiceberg?.content ?? '') as {
 			catalog: Record<string, { type: string }>;

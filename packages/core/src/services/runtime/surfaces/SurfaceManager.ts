@@ -152,6 +152,7 @@ export class SurfaceManager {
 			exposure: options.exposure,
 			basePath: options.basePath,
 			userDataDir: surfaceStateDir(session.session_id, id),
+			hasAgentContext: session.integrations?.some((pin) => pin.kind === 'agent_context') ?? false,
 		};
 		const pidFile = surfacePidFile(session.session_id, id);
 		const readinessPath = surfaceReadinessPath(spec, context);
@@ -242,6 +243,8 @@ export class SurfaceManager {
 				}
 			}
 			await validateOpenInSandbox(instance, options.workspaceDir, options.open);
+			const files = spec.loadFiles?.(instance, context);
+			files?.catch(() => {});
 			const probe = await spec.probe(instance);
 			if (!probe.available) {
 				await this.sessions.setSurfaceStateForAttempt(
@@ -257,11 +260,13 @@ export class SurfaceManager {
 				);
 				throw new SurfaceUnavailableError(probe.reason ?? `Surface ${id} is unavailable`);
 			}
+			const loadedFiles = await files;
 			const afterProbe = await this.sessions.getSession(session.project_id, session.session_id);
 			const probedAttempt = afterProbe.surfaces?.[id];
 			if (probedAttempt?.status !== 'starting' || probedAttempt.attempt_id !== attemptId) {
 				throw new ConflictError('The surface start was cancelled');
 			}
+			if (loadedFiles) await instance.writeFiles(loadedFiles);
 			await spec.prepare?.(instance, context);
 			const beforeLaunch = await this.sessions.getSession(session.project_id, session.session_id);
 			const currentAttempt = beforeLaunch.surfaces?.[id];

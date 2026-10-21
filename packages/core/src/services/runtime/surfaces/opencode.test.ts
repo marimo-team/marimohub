@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { AGENT_CONTEXT_DIR } from '../../integrations/agentContext';
+import { describe, expect, it, vi } from 'vitest';
 import type { AuthUser } from '../../../ports/auth';
 import { makeFakeSandbox } from '../../../testing/fakes';
 import { opencodeSurface } from './opencode';
-import type { SurfaceContext } from './types';
+import type { SandboxInstance } from '../../../ports/sandbox';
+import type { SurfaceContext, SurfaceSpec } from './types';
 
 const context: SurfaceContext = {
 	sessionId: 'sess_test',
@@ -17,12 +19,18 @@ const context: SurfaceContext = {
 	userDataDir: '/tmp/.marimohub/surfaces/sess_test/opencode',
 };
 
+async function prepare(surface: SurfaceSpec, instance: SandboxInstance, ctx = context) {
+	await instance.writeFiles(await surface.loadFiles!(instance, ctx));
+}
+
+const agentContext = { ...context, hasAgentContext: true };
+
 describe('opencodeSurface', () => {
 	it('uses sandbox-local state and starts the web server', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const surface = opencodeSurface();
 
-		await surface.prepare?.(instance, context);
+		await prepare(surface, instance);
 
 		expect(surface.supportedExposures).toEqual(['subdomain']);
 		expect(surface.readiness.path).toBe('/global/health');
@@ -77,7 +85,7 @@ describe('opencodeSurface', () => {
 			},
 		});
 
-		await surface.prepare?.(instance, context);
+		await prepare(surface, instance);
 
 		expect(JSON.parse(String(calls.writeFile[0].content))).toMatchObject({
 			model: 'marimohub/gpt-test',
@@ -197,7 +205,7 @@ describe('opencodeSurface', () => {
 			},
 		});
 
-		await surface.prepare?.(instance, context);
+		await prepare(surface, instance);
 		const config = JSON.parse(String(calls.writeFile[0].content));
 
 		expect(config).toEqual({
@@ -217,4 +225,89 @@ describe('opencodeSurface', () => {
 			},
 		});
 	});
+});
+
+it('merges agent settings below managed AI and copies global instructions', async () => {
+	const { instance, calls } = makeFakeSandbox({
+		files: {
+			[`${AGENT_CONTEXT_DIR}/opencode.json`]: JSON.stringify({
+				model: 'project/model',
+				plugin: ['org-plugin'],
+				provider: { marimohub: { options: { apiKey: 'override' } }, other: { name: 'Other' } },
+				mcp: { docs: { type: 'remote', url: 'https://docs.example' } },
+			}),
+			[`${AGENT_CONTEXT_DIR}/AGENTS.md`]: 'Use polars.\n\n## Project\n\nAnalytics',
+		},
+	});
+	await prepare(
+		opencodeSurface({
+			managedAi: { baseUrl: 'https://hub.example', apiKey: 'session-token', model: 'managed' },
+		}),
+		instance,
+		agentContext,
+	);
+	const config = JSON.parse(String(calls.writeFile[0].content));
+	expect(config).toMatchObject({
+		model: 'marimohub/managed',
+		plugin: ['org-plugin'],
+		provider: { marimohub: { options: { apiKey: 'session-token' } }, other: { name: 'Other' } },
+		mcp: { docs: { url: 'https://docs.example' } },
+	});
+	expect(calls.writeFile).toContainEqual({
+		path: `${context.userDataDir}/config/opencode/AGENTS.md`,
+		content: 'Use polars.\n\n## Project\n\nAnalytics',
+	});
+});
+
+it('fails preparation if an advertised context bundle is missing', async () => {
+	const { instance } = makeFakeSandbox();
+	await expect(prepare(opencodeSurface(), instance, agentContext)).rejects.toThrow(
+		'Could not read agent context files',
+	);
+});
+
+it.each(['{broken', 'null', '[]', '"text"'])(
+	'rejects malformed or non-object OpenCode settings before writing surface files: %s',
+	async (content) => {
+		const { instance, calls } = makeFakeSandbox({
+			files: {
+				[`${AGENT_CONTEXT_DIR}/opencode.json`]: content,
+				[`${AGENT_CONTEXT_DIR}/AGENTS.md`]: 'instructions',
+			},
+		});
+		await expect(prepare(opencodeSurface(), instance, agentContext)).rejects.toThrow(/JSON object/);
+		expect(calls.writeFiles).toEqual([]);
+	},
+);
+
+it.each(['opencode.json', 'AGENTS.md'])(
+	'rejects a partially written bundle missing %s',
+	async (missing) => {
+		const { instance, calls } = makeFakeSandbox({
+			files: {
+				[`${AGENT_CONTEXT_DIR}/${missing === 'opencode.json' ? 'AGENTS.md' : 'opencode.json'}`]:
+					'{}',
+			},
+		});
+		await expect(prepare(opencodeSurface(), instance, agentContext)).rejects.toThrow(
+			'Could not read agent context files',
+		);
+		expect(calls.writeFiles).toEqual([]);
+	},
+);
+
+it('does not inspect context files or environment without a session integration pin', async () => {
+	const { instance, calls } = makeFakeSandbox({
+		files: { [`${AGENT_CONTEXT_DIR}/opencode.json`]: '{stale invalid settings' },
+	});
+	await prepare(opencodeSurface(), instance);
+	expect(calls.exec).toEqual([]);
+	expect(calls.readFile).toEqual([]);
+	expect(calls.writeFiles).toHaveLength(1);
+});
+
+it('propagates surface configuration write failures', async () => {
+	const { instance } = makeFakeSandbox();
+	instance.writeFiles = vi.fn().mockRejectedValue(new Error('disk full'));
+	await expect(prepare(opencodeSurface(), instance)).rejects.toThrow('disk full');
 });

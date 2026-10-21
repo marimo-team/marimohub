@@ -1,7 +1,12 @@
-import type { SandboxProcess } from '../../../ports/sandbox';
+import type { SandboxFileWrite, SandboxProcess } from '../../../ports/sandbox';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createNotebookId, createProjectId, createSandboxId } from '../../../ids';
+import {
+	createIntegrationId,
+	createNotebookId,
+	createProjectId,
+	createSandboxId,
+} from '../../../ids';
 import { MemoryBucket, ACTOR, fakeComputeFrom, makeFakeSandbox } from '../../../testing';
 import { SessionService } from '../SessionService';
 import { createKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from '../kernelAuth';
@@ -10,10 +15,16 @@ import { opencodeSurface } from './opencode';
 import { SurfaceManager } from './SurfaceManager';
 import { SurfaceRegistry } from './registry';
 import { vscodeSurface } from './vscode';
+import { AGENT_CONTEXT_DIR } from '../../integrations/agentContext';
+import type { SurfaceProbe } from './types';
 
 const user = { id: ACTOR, email: 'owner@example.com' };
 
-async function setup(failWaitForPort?: Error, vscode = vscodeSurface()) {
+async function setup(
+	failWaitForPort?: Error,
+	vscode = vscodeSurface(),
+	opencode = opencodeSurface(),
+) {
 	const sessions = new SessionService(new MemoryBucket());
 	const created = await sessions.createSession({
 		project_id: createProjectId(),
@@ -32,7 +43,7 @@ async function setup(failWaitForPort?: Error, vscode = vscodeSurface()) {
 	const manager = new SurfaceManager(
 		compute,
 		sessions,
-		new SurfaceRegistry([marimoSurface, vscode, opencodeSurface()]),
+		new SurfaceRegistry([marimoSurface, vscode, opencode]),
 	);
 	return { calls, instance, compute, manager, session, sessions };
 }
@@ -48,6 +59,83 @@ function options() {
 }
 
 describe('SurfaceManager', () => {
+	it('loads agent files alongside the OpenCode probe without an environment lookup', async () => {
+		const probe = Promise.withResolvers<SurfaceProbe>();
+		const probing = vi.fn(() => probe.promise);
+		const { instance, calls, manager, session } = await setup(undefined, undefined, {
+			...opencodeSurface(),
+			probe: probing,
+		});
+		instance.readFile = async (path) => {
+			calls.readFile.push(path);
+			return { success: true, content: path.endsWith('.json') ? '{}' : 'instructions' };
+		};
+		const start = manager.ensure(
+			{
+				...session,
+				integrations: [
+					{ id: createIntegrationId(), name: 'team', kind: 'agent_context', version: 1 },
+				],
+			},
+			'opencode',
+			{ ...options(), open: undefined },
+		);
+		try {
+			await vi.waitFor(() => {
+				expect(probing).toHaveBeenCalledOnce();
+				expect(calls.readFile).toEqual([
+					`${AGENT_CONTEXT_DIR}/opencode.json`,
+					`${AGENT_CONTEXT_DIR}/AGENTS.md`,
+				]);
+			});
+			expect(calls.exec).toEqual([]);
+			expect(calls.writeFiles).toEqual([]);
+			expect(calls.startProcess).toEqual([]);
+		} finally {
+			probe.resolve({ available: true });
+			await start;
+		}
+		expect(calls.writeFiles).toHaveLength(1);
+		expect(calls.writeFile).toContainEqual({
+			path: expect.stringContaining('/config/opencode/AGENTS.md'),
+			content: 'instructions',
+		});
+	});
+
+	it('does not write prefetched files after a surface start is cancelled', async () => {
+		const files = Promise.withResolvers<SandboxFileWrite[]>();
+		const loadFiles = vi.fn(() => files.promise);
+		const { calls, manager, session } = await setup(undefined, undefined, {
+			...opencodeSurface(),
+			loadFiles,
+		});
+		const start = manager.ensure(session, 'opencode', { ...options(), open: undefined });
+		await vi.waitFor(() => expect(loadFiles).toHaveBeenCalledOnce());
+		await manager.stop(session, 'opencode');
+		files.resolve([{ path: '/tmp/config', content: 'stale' }]);
+		await expect(start).rejects.toThrow('cancelled');
+		expect(calls.writeFiles).toEqual([]);
+		expect(calls.startProcess).toEqual([]);
+	});
+
+	it('does not write or launch when file prefetch fails before the probe completes', async () => {
+		const probe = Promise.withResolvers<SurfaceProbe>();
+		const loadFiles = vi.fn(async () => {
+			throw new Error('context unavailable');
+		});
+		const { calls, manager, session } = await setup(undefined, undefined, {
+			...opencodeSurface(),
+			loadFiles,
+			probe: () => probe.promise,
+		});
+		const start = manager.ensure(session, 'opencode', { ...options(), open: undefined });
+		await vi.waitFor(() => expect(loadFiles).toHaveBeenCalledOnce());
+		probe.resolve({ available: true });
+		await expect(start).rejects.toThrow('context unavailable');
+		expect(calls.writeFiles).toEqual([]);
+		expect(calls.startProcess).toEqual([]);
+	});
+
 	it.each([
 		['vscode', 'subdomain', false],
 		['vscode', 'subdomain', true],

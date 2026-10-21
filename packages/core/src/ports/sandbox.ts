@@ -192,6 +192,8 @@ export interface SetEnvVarsOptions {
 }
 
 export interface SandboxInstance {
+	/** HOME in sandbox file coordinates; adapters with mapped process paths must provide this. */
+	getHomeDirectory?(): Promise<string>;
 	/** Whether `mountBucket` is a real backend capability rather than a copy fallback signal. */
 	readonly supportsBucketMount?: boolean;
 	resolveProcessPath?(path: string): string;

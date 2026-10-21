@@ -3,6 +3,7 @@
  * Not imported by production code.
  */
 export const SAMPLE_CONFIGS: Record<string, unknown> = {
+	agent_context: { instructions: 'Use polars for data analysis.' },
 	postgres: {
 		host: 'db.internal',
 		database: 'analytics',

@@ -324,7 +324,7 @@ export interface IntegrationVersionPin {
 
 /** Files, variables, and audit pins produced for session provisioning. */
 export interface SessionRender {
-	files: { path: string; content: string }[];
+	files: { path: string; content: string; relativeTo?: 'home' }[];
 	vars: Record<string, string>;
 	/** Version pins persisted on the session record. */
 	attachments: IntegrationVersionPin[];

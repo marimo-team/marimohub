@@ -1119,6 +1119,13 @@ The hub does not fall back to public PyPI. To opt a project out, create a disabl
 
 <!--@include: ./partials/integrations/aws_codeartifact.md-->
 
+## Agent context
+
+Share instructions, skills, and agent configuration across a deployment or project.
+See [Shared instructions and skills](./surfaces.md#shared-instructions-and-skills) for composition rules and file locations.
+
+<!--@include: ./partials/integrations/agent_context.md-->
+
 ## Environment variables
 
 Adds the exact environment variables that you configure. It supports plain

@@ -11,6 +11,37 @@ info:
     API: each path represents the config contract persisted in
     `versions/{n}.json` records and rendered into sandboxes.
 paths:
+  /kinds/agent_context/config:
+    summary: Agent context
+    description: Share coding instructions, skills, and agent settings with every sandbox.
+    x-kind-schema-version: 1
+    x-category: other
+    x-brand-color: '#7C3AED'
+    x-secret-paths: []
+    x-supports-test: false
+    x-requirements: []
+    get:
+      operationId: read_agent_context_config
+      summary: Stored agent_context config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/agent_context_stored'
+    put:
+      operationId: write_agent_context_config
+      summary: Input agent_context config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/agent_context'
+      responses:
+        '204':
+          description: Accepted.
   /kinds/athena/config:
     summary: Amazon Athena
     description: Query S3 data with Athena through PyAthena and SQLAlchemy.
@@ -1339,6 +1370,74 @@ components:
           additionalProperties: false
       required:
         - $secret
+      additionalProperties: false
+    agent_context:
+      type: object
+      properties:
+        instructions:
+          description: Shared Markdown instructions for coding agents
+          type: string
+          maxLength: 32768
+        skills:
+          maxItems: 16
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                pattern: ^[a-z0-9-]{1,64}$
+              content:
+                type: string
+                maxLength: 65536
+                description: Complete SKILL.md, including YAML frontmatter
+            required:
+              - name
+              - content
+            additionalProperties: false
+        opencode_json:
+          description: OpenCode JSON configuration; reference custom environment variables
+            for tokens
+          type: string
+          maxLength: 16384
+        claude_settings_json:
+          description: Claude Code user settings JSON; do not include secrets
+          type: string
+          maxLength: 16384
+      additionalProperties: false
+    agent_context_stored:
+      type: object
+      properties:
+        instructions:
+          description: Shared Markdown instructions for coding agents
+          type: string
+          maxLength: 32768
+        skills:
+          maxItems: 16
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                pattern: ^[a-z0-9-]{1,64}$
+              content:
+                type: string
+                maxLength: 65536
+                description: Complete SKILL.md, including YAML frontmatter
+            required:
+              - name
+              - content
+            additionalProperties: false
+        opencode_json:
+          description: OpenCode JSON configuration; reference custom environment variables
+            for tokens
+          type: string
+          maxLength: 16384
+        claude_settings_json:
+          description: Claude Code user settings JSON; do not include secrets
+          type: string
+          maxLength: 16384
       additionalProperties: false
     athena:
       type: object

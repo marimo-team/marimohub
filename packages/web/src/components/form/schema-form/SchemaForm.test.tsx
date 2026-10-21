@@ -494,3 +494,54 @@ describe('kv-pairs editor', () => {
 		expect(screen.getByText(/missing its name/)).toBeInTheDocument();
 	});
 });
+
+describe('agent skill editor', () => {
+	const agentSchema: JsonSchemaNode = {
+		type: 'object',
+		properties: {
+			instructions: { type: 'string' },
+			skills: {
+				type: 'array',
+				items: {
+					type: 'object',
+					required: ['name', 'content'],
+					properties: { name: { type: 'string' }, content: { type: 'string' } },
+				},
+			},
+		},
+	};
+	function AgentHarness() {
+		const [value, setValue] = useState<Record<string, unknown>>({});
+		return (
+			<>
+				<SchemaForm
+					schema={agentSchema}
+					hints={{
+						instructions: { widget: 'textarea' },
+						'skills.*.content': { widget: 'textarea' },
+					}}
+					value={value}
+					onChange={setValue}
+				/>
+				<output>{JSON.stringify(value)}</output>
+			</>
+		);
+	}
+	it('adds, edits, and removes skills while preserving Markdown newlines', async () => {
+		const user = userEvent.setup();
+		render(<AgentHarness />);
+		await user.type(screen.getByLabelText('Instructions'), '# Team{enter}Use polars.');
+		await user.click(screen.getByRole('button', { name: 'Add' }));
+		await user.type(screen.getByLabelText('Name'), 'analytics');
+		const content = screen.getByLabelText('Content');
+		expect(content.tagName).toBe('TEXTAREA');
+		await user.type(content, '---{enter}name: analytics{enter}---{enter}Analyze data.');
+		expect(JSON.parse(screen.getByRole('status').textContent ?? '')).toEqual({
+			instructions: '# Team\nUse polars.',
+			skills: [{ name: 'analytics', content: '---\nname: analytics\n---\nAnalyze data.' }],
+		});
+		await user.click(screen.getByRole('button', { name: 'Remove' }));
+		expect(screen.queryByLabelText('Content')).not.toBeInTheDocument();
+		expect(JSON.parse(screen.getByRole('status').textContent ?? '')).toMatchObject({ skills: [] });
+	});
+});

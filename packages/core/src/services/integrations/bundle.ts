@@ -6,6 +6,12 @@ import type { IntegrationVersionPin, SessionRender, WorkloadRef } from '../../po
 import type { RenderOutput } from './sdk';
 import { CODE_EXECUTION_ENV, SHELL_BASICS_ENV } from './environmentName';
 import { stringify } from 'yaml';
+import {
+	AGENT_CONTEXT_DIR,
+	AGENT_CONTEXT_DIR_ENV,
+	AGENT_HOME_FILES_MANIFEST,
+	composeAgentContext,
+} from './agentContext';
 
 /** Sandbox directory containing rendered integration files. */
 export const INTEGRATIONS_DIR = '/tmp/marimohub-integrations';
@@ -40,6 +46,7 @@ export function assertValidIntegrationName(name: string): void {
 }
 
 export interface RenderedIntegration extends IntegrationVersionPin {
+	scope?: 'org' | 'project';
 	/** Requirements copied into the integration manifest. */
 	requirements?: string[];
 	output: RenderOutput;
@@ -49,13 +56,18 @@ export function bundleIntegrations(
 	rendered: RenderedIntegration[],
 	workload: WorkloadRef,
 ): SessionRender {
-	const files: SessionRender['files'] = [];
+	const files = composeAgentContext(rendered);
 	const yamlFiles = new Map<string, MergedYaml>();
 	const claimPath = pathClaimer();
+	claimPath(AGENT_HOME_FILES_MANIFEST.slice(INTEGRATIONS_DIR.length + 1), BUNDLER, false);
+	for (const file of files) {
+		if (!file.relativeTo) claimPath(file.path.slice(INTEGRATIONS_DIR.length + 1), BUNDLER, false);
+	}
 	// Claimed up front so a kind emitting the bundler's own key gets the normal
 	// collision error instead of having its value silently overwritten.
 	const vars: Record<string, string> = {
 		[INTEGRATIONS_DIR_ENV]: INTEGRATIONS_DIR,
+		...(files.length > 0 ? { [AGENT_CONTEXT_DIR_ENV]: AGENT_CONTEXT_DIR } : {}),
 		...packageIndexEnv(rendered.flatMap((item) => item.output.packageIndexes ?? [])),
 	};
 	const varOwner = new Map(Object.keys(vars).map((key) => [key, BUNDLER]));

@@ -1,3 +1,4 @@
+import type { AgentContextConfig } from './kinds/agentContext';
 import { z } from 'zod';
 import { DomainError, UnavailableError, ValidationError } from '../../errors';
 import type {
@@ -53,6 +54,7 @@ export interface TestConnectionOptions {
 }
 
 export interface RenderOutput {
+	agentContext?: AgentContextConfig;
 	packageIndexes?: { name: string; url: string; default: boolean }[];
 	/**
 	 * Files to place in the sandbox, paths relative to the integrations dir

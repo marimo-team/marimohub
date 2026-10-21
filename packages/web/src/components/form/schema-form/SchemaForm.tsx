@@ -641,6 +641,9 @@ function ObjectListField(props: SchemaFieldProps & { label: string }) {
 	const { path, node, hints, value, onChange, errors, editing, secretSources, label } = props;
 	const itemSchema = node.items ?? {};
 	const requiredFields = new Set(itemSchema.required);
+	const multiline = Object.keys(itemSchema.properties ?? {}).some(
+		(key) => hintFor(hints, `${path}[0].${key}`)?.widget === 'textarea',
+	);
 	const [rows, setRows] = useState<{ id: number; item: Record<string, unknown> }[]>(() =>
 		((value as Record<string, unknown>[]) ?? []).map((item) => ({ id: rowId(), item })),
 	);
@@ -653,9 +656,18 @@ function ObjectListField(props: SchemaFieldProps & { label: string }) {
 			<span className="text-xs font-medium text-muted-foreground">{label}</span>
 			{node.description && <p className="text-xs text-muted-foreground">{node.description}</p>}
 			{rows.map((row, i) => (
-				<div key={row.id} className="flex items-end gap-1.5">
+				<div
+					key={row.id}
+					className={cn(
+						'flex gap-1.5',
+						multiline ? 'flex-col rounded-md border border-input p-3' : 'items-end',
+					)}
+				>
 					{Object.entries(itemSchema.properties ?? {}).map(([key, child]) => (
-						<div key={key} className={cn('min-w-0', key === 'name' ? 'w-2/5' : 'flex-1')}>
+						<div
+							key={key}
+							className={cn('min-w-0', multiline ? 'w-full' : key === 'name' ? 'w-2/5' : 'flex-1')}
+						>
 							<SchemaField
 								path={`${path}[${i}].${key}`}
 								node={child}

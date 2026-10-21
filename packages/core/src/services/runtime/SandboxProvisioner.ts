@@ -1,10 +1,13 @@
+import { AGENT_CONTEXT_DIR_ENV } from './sandboxEnvironment';
 import { all, allSettled } from 'better-all';
+import { resolveAgentHomeFiles } from './agentContextFiles';
 import type { Attributes, Span as OtelSpan } from '@opentelemetry/api';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { withDeadline } from '../../async';
 import { ByteBudget } from './byteBudget';
 import type { NotebookBridgeRuntime } from '../../ports/notebookBridge';
 import type { Bucket } from '../../ports/bucket';
+import type { SessionRender } from '../../ports/integrations';
 import { MARIMO_PORT } from '../../constants';
 import { Millis } from '../../duration';
 import { PythonEnvironmentSetupError, UnavailableError } from '../../errors';
@@ -188,7 +191,7 @@ export interface SessionEnv {
 	 * credential-bearing — a default the image can shadow is not a control.
 	 */
 	defaults?: Record<string, string>;
-	files?: { path: string; content: string }[];
+	files?: SessionRender['files'];
 }
 
 export interface ProvisionOptions {
@@ -815,7 +818,9 @@ export class SandboxProvisioner {
 				return loaded;
 			});
 		const injectSessionEnv = () =>
-			withSandboxSpan(sw, 'inject', (time) => this.injectSessionEnv(sandbox, options, time));
+			withSandboxSpan(sw, 'inject', (time) =>
+				this.injectSessionEnv(sandbox, options, time, mountPath),
+			);
 		const setupEnvironment = async () =>
 			this.setupEnvironment(sandbox, options, mountPath, sw, await launchStrategy);
 		const uploadBridge = () =>
@@ -1167,10 +1172,17 @@ export class SandboxProvisioner {
 		sandbox: SandboxInstance,
 		options: ProvisionOptions,
 		time: TimeSandboxPhase,
+		workdir: string,
 	): Promise<void> {
 		const sessionEnv = await options.sessionEnv;
 		const kernelAuthToken = options.kernelAuthToken;
-		if (!sessionEnv && kernelAuthToken === undefined && !options.contextFile) return;
+		if (
+			!sessionEnv &&
+			kernelAuthToken === undefined &&
+			!options.contextFile &&
+			!options.restoreFilesystemSnapshotId
+		)
+			return;
 		await time(async () => {
 			try {
 				const files = [...(sessionEnv?.files ?? [])];
@@ -1178,13 +1190,29 @@ export class SandboxProvisioner {
 					files.push({ path: options.contextFile.path, content: options.contextFile.content });
 				}
 				const vars = { ...sessionEnv?.vars };
+				if (options.restoreFilesystemSnapshotId && vars[AGENT_CONTEXT_DIR_ENV] === undefined) {
+					vars[AGENT_CONTEXT_DIR_ENV] = '';
+				}
 				if (options.contextFile) {
 					vars.MARIMOHUB_CONTEXT_FILE =
 						sandbox.resolveProcessPath?.(options.contextFile.path) ?? options.contextFile.path;
 				}
 				const defaults = sessionEnv?.defaults;
+				const writeFiles = async () =>
+					writeSessionFiles(
+						sandbox,
+						files.some((file) => file.relativeTo === 'home') || options.restoreFilesystemSnapshotId
+							? await resolveAgentHomeFiles(
+									sandbox,
+									files,
+									normalizeAbsoluteSandboxPath(workdir),
+									options.restoreFilesystemSnapshotId !== undefined,
+								)
+							: files,
+						kernelAuthToken,
+					);
 				await Promise.all([
-					writeSessionFiles(sandbox, files, kernelAuthToken),
+					writeFiles(),
 					Object.keys(vars).length > 0 ? sandbox.setEnvVars(vars) : undefined,
 					defaults && Object.keys(defaults).length > 0
 						? sandbox.setEnvVars(defaults, { onlyIfUnset: true })

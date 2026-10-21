@@ -1201,3 +1201,14 @@ describe('bounded artifact reads', () => {
 		},
 	);
 });
+
+it('keeps agent home files inside the local sandbox and exposes them through HOME', async () => {
+	const sandbox = newSandbox();
+	const home = await sandbox.getHomeDirectory?.();
+	expect(home).toBe('/home/appuser');
+	await sandbox.writeFiles([{ path: `${home}/.claude/CLAUDE.md`, content: 'Use polars.' }]);
+	expectExecResult(await sandbox.exec('cat "$HOME/.claude/CLAUDE.md"'), { stdout: 'Use polars.' });
+	expectExecResult(await sandbox.exec(`printf '%s' "$HOME"`), {
+		stdout: sandbox.resolveProcessPath?.(home!),
+	});
+});

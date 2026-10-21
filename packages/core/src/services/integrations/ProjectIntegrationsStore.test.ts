@@ -2076,6 +2076,7 @@ describe('ProjectIntegrationsStore', () => {
 		const store = new ProjectIntegrationsStore({ bucket, registry: defaultRegistry(), codec });
 		const kinds = store.listKinds();
 		expect(kinds.map((k) => k.kind).sort()).toEqual([
+			'agent_context',
 			'athena',
 			'aws_codeartifact',
 			'azure_artifacts',

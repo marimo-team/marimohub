@@ -1,12 +1,16 @@
+import type { SessionRender } from '../../ports/integrations';
+
 /**
  * Structural subset of `SessionEnv`: importing the provisioner here would pull
  * the whole runtime into every consumer of the env-name constants.
  */
 interface SessionEnvLike {
-	files?: { path: string; content: string }[];
+	files?: SessionRender['files'];
 	vars: Record<string, string>;
 	defaults: Record<string, string>;
 }
+
+export const AGENT_CONTEXT_DIR_ENV = 'MARIMOHUB_AGENT_CONTEXT_DIR';
 
 export const SANDBOX_CONTEXT_FILE_ENV = 'MARIMOHUB_CONTEXT_FILE';
 export const SANDBOX_INTEGRATIONS_DIR_ENV = 'MARIMOHUB_INTEGRATIONS_DIR';
@@ -20,6 +24,7 @@ export const BRIDGE_STARTUP_DEADLINE_MS_ENV = 'MARIMOHUB_BRIDGE_STARTUP_DEADLINE
 
 /** Every `MARIMOHUB_*` name Hub itself sets in a sandbox process. */
 export const HUB_SANDBOX_ENV = [
+	AGENT_CONTEXT_DIR_ENV,
 	SANDBOX_CONTEXT_FILE_ENV,
 	SANDBOX_INTEGRATIONS_DIR_ENV,
 	SURFACE_KERNEL_URL_ENV,

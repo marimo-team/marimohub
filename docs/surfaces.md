@@ -112,6 +112,60 @@ The managed token expires after `MARIMOHUB_AI_TOKEN_TTL_SECONDS`, even while
 OpenCode is open. Restart OpenCode to get a new token. A bring-your-own-key
 provider uses its own credential.
 
+## Shared instructions and skills
+
+Create an **Agent context** integration (`agent_context`) at org scope for all
+projects, or at project scope for one project. Changes apply to new sessions.
+
+| Field                  | Limit                        | Content                                              |
+| ---------------------- | ---------------------------- | ---------------------------------------------------- |
+| `instructions`         | 32 KiB                       | Markdown for Claude Code and OpenCode                |
+| `skills`               | 16 entries, 64 KiB per entry | Names and complete `SKILL.md` files with frontmatter |
+| `opencode_json`        | 16 KiB                       | OpenCode configuration as a JSON object string       |
+| `claude_settings_json` | 16 KiB                       | Claude Code settings as a JSON object string         |
+
+All fields are optional. Limits count UTF-8 bytes. Skill names must match
+`[a-z0-9-]{1,64}`. Duplicate names across active integrations and the reserved
+`marimo-pair` name are rejected.
+
+Org instructions come first; project instructions follow under `## Project`.
+Org JSON values take precedence, replacing entire MCP server entries and plugin
+lists with the same key. Within each scope, later integration names take
+precedence in alphabetical order. A project integration with the same name
+replaces the whole org integration; disabling it opts out of that org integration.
+
+| Content               | Destination                                                                             |
+| --------------------- | --------------------------------------------------------------------------------------- |
+| Claude instructions   | `$HOME/.claude/CLAUDE.md`                                                               |
+| Skills                | `$HOME/.agents/skills/<name>/SKILL.md` and `$HOME/.claude/skills/<name>/SKILL.md`       |
+| Claude settings       | `$HOME/.claude/settings.json`                                                           |
+| OpenCode instructions | `AGENTS.md` in the session's OpenCode configuration directory                           |
+| OpenCode settings     | Merged into the session's OpenCode configuration; hub-managed AI values take precedence |
+
+The sandbox home defaults to `/home/appuser`; local compute uses an isolated home.
+Files stay outside the workspace and notebook versions. On full filesystem
+restore, the hub removes previously injected home files absent from the current
+integrations. `MARIMOHUB_AGENT_CONTEXT_DIR` identifies the OpenCode source bundle.
+
+Store tokens in an **Environment variables** integration and reference them with
+syntax such as `{env:MCP_TOKEN}` in `opencode_json`. Agent context fields store
+plain configuration. See the [OpenCode configuration reference](https://opencode.ai/docs/config/)
+and [Claude Code settings reference](https://code.claude.com/docs/en/settings).
+
+Example:
+
+```json
+{
+	"instructions": "Use polars for data analysis.",
+	"skills": [
+		{
+			"name": "analytics",
+			"content": "---\nname: analytics\ndescription: Analyze project datasets\n---\nUse the analytics catalog."
+		}
+	]
+}
+```
+
 ## Kernel access
 
 Secondary surfaces and their child agents inherit the sandbox environment,

@@ -335,3 +335,35 @@ describe('package indexes', () => {
 		).toThrow('HTTPS without embedded credentials');
 	});
 });
+
+describe('agent context confinement', () => {
+	it('rejects agent context emitted by another kind', () => {
+		expect(() => bundle([rendered('other', { agentContext: { instructions: 'hello' } })])).toThrow(
+			/Only agent_context/,
+		);
+	});
+	it.each([
+		'/home/appuser/.claude/CLAUDE.md',
+		'../home/appuser/.claude/CLAUDE.md',
+		'x/../../escape',
+	])('keeps ordinary files confined: %s', (path) => {
+		expect(() => bundle([rendered('other', file(path))])).toThrow(/invalid file path/);
+	});
+	it('reserves the context directory files against other integrations', () => {
+		expect(() =>
+			bundle([
+				{
+					...rendered('agents', { agentContext: { instructions: 'hello' } }),
+					kind: 'agent_context',
+				},
+				rendered('other', file('agent-context/opencode.json')),
+			]),
+		).toThrow(/both render/);
+	});
+});
+
+it('reserves the agent home cleanup manifest even without an agent integration', () => {
+	expect(() => bundle([rendered('other', file('agent-context/home-files.json'))])).toThrow(
+		/both render/,
+	);
+});

@@ -1,3 +1,6 @@
+import { AGENT_CONTEXT_DIR, mergeAgentSettings } from '../../integrations/agentContext';
+import { parseAgentJson } from '../../integrations/kinds/agentContext';
+import { ValidationError } from '../../../errors';
 import { utf8ToBase64Url } from '../../../internal/base64url';
 import type { SandboxInstance } from '../../../ports/sandbox';
 import { shellQuote } from '../shell';
@@ -14,34 +17,30 @@ export interface OpenCodeSurfaceOptions {
 	managedAi?: OpenCodeManagedAiOptions;
 }
 
-function openCodeConfig(managedAi: OpenCodeManagedAiOptions | undefined): string {
+function openCodeConfig(managedAi: OpenCodeManagedAiOptions | undefined): Record<string, unknown> {
 	const model = managedAi ? `marimohub/${managedAi.model}` : undefined;
-	return JSON.stringify(
-		{
-			$schema: 'https://opencode.ai/config.json',
-			...(managedAi
-				? {
-						provider: {
-							marimohub: {
-								npm: '@ai-sdk/openai-compatible',
-								name: 'marimohub',
-								options: {
-									baseURL: managedAi.baseUrl,
-									apiKey: managedAi.apiKey,
-								},
-								models: {
-									[managedAi.model]: { name: managedAi.model },
-								},
+	return {
+		$schema: 'https://opencode.ai/config.json',
+		...(managedAi
+			? {
+					provider: {
+						marimohub: {
+							npm: '@ai-sdk/openai-compatible',
+							name: 'marimohub',
+							options: {
+								baseURL: managedAi.baseUrl,
+								apiKey: managedAi.apiKey,
+							},
+							models: {
+								[managedAi.model]: { name: managedAi.model },
 							},
 						},
-						model,
-						small_model: model,
-					}
-				: {}),
-		},
-		null,
-		2,
-	);
+					},
+					model,
+					small_model: model,
+				}
+			: {}),
+	};
 }
 
 function workspaceSessionUrl(base: URL, workspaceDir: string, sessionId?: string): URL {
@@ -97,14 +96,30 @@ export function opencodeSurface(options: OpenCodeSurfaceOptions = {}): SurfaceSp
 			const version = result.stdout.trim().split(/\s+/)[0];
 			return { available: true, ...(version ? { version } : {}) };
 		},
-		async prepare(instance, ctx) {
+		async loadFiles(instance, ctx) {
 			const configPath = `${ctx.userDataDir}/config/opencode/opencode.json`;
-			await instance.writeFiles([
+			let config = openCodeConfig(options.managedAi);
+			const files: { path: string; content: string }[] = [];
+			if (ctx.hasAgentContext) {
+				const [settings, instructions] = await Promise.all([
+					instance.readFile(`${AGENT_CONTEXT_DIR}/opencode.json`),
+					instance.readFile(`${AGENT_CONTEXT_DIR}/AGENTS.md`),
+				]);
+				if (!settings.success || !instructions.success)
+					throw new ValidationError('Could not read agent context files.');
+				config = mergeAgentSettings(parseAgentJson(settings.content), config);
+				files.push({
+					path: `${ctx.userDataDir}/config/opencode/AGENTS.md`,
+					content: instructions.content,
+				});
+			}
+			return [
 				{
 					path: configPath,
-					content: openCodeConfig(options.managedAi),
+					content: JSON.stringify(config, null, 2),
 				},
-			]);
+				...files,
+			];
 		},
 		command(ctx, port) {
 			const configPath = `${ctx.userDataDir}/config/opencode/opencode.json`;
