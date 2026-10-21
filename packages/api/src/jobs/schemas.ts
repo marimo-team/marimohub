@@ -76,13 +76,16 @@ const JobChainShape = z.object({
 	on_failure: JobChainTargets,
 });
 const TriggerSourceSchema = z.union([
-	z.object({ kind: z.literal('webhook'), idempotency_key: z.string().optional() }),
-	z.object({ kind: z.literal('chain'), upstream_run_id: z.string() }),
+	z.object({ kind: z.literal('webhook'), idempotency_key: z.string().min(1).max(200).optional() }),
+	z.object({ kind: z.literal('chain'), upstream_run_id: z.string().regex(RunId.regex) }),
 ]);
 export const WebhookTriggerBody = z.strictObject({
 	parameters: JobParametersSchema.optional(),
 	idempotency_key: z.string().min(1).max(200).optional(),
-	event: z.record(z.string(), z.unknown()).optional(),
+	event: z.record(z.string(), z.unknown()).optional().openapi({
+		description:
+			'Event data, limited to 16 KiB of UTF-8 bytes after JSON serialization. Stored as parameters.event and visible to every project member who can read run history. Do not include secrets.',
+	}),
 });
 
 export const CreateJobBody = z
@@ -164,7 +167,10 @@ export const JobRunResponseSchema = z
 		chain_root_run_id: z.string().optional(),
 		scheduled_for: z.iso.datetime().optional(),
 		source_version_id: z.string().optional(),
-		parameters: JobRunParametersSchema.optional(),
+		parameters: JobRunParametersSchema.clone().optional().openapi({
+			description:
+				'Parameters used for this run, including serialized event data. Visible to every project member who can read run history. Do not store secrets here.',
+		}),
 		attempt: z.number().int().positive().openapi({
 			description:
 				'One-based attempt number. A failed or timed-out attempt can create a new run with attempt + 1 and retry_of set, subject to the job retry policy.',

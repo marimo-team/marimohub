@@ -142,7 +142,7 @@ Each outcome permits up to five unique targets in the same project.
 Saving requires `job.trigger` access on each target notebook.
 Direct self-references are invalid. Deleted or disabled targets do not run.
 
-Failure chains start after the final failed attempt. Cancelled and skipped runs
+Failure chains start after the final failed or timed-out attempt. Cancelled and skipped runs
 do not start chains. Chains stop after eight downstream steps.
 Targets with full queues, invalid parameters, or active runs under the same root produce skipped runs.
 Each chained run records its upstream run, root run, and depth.
@@ -217,20 +217,20 @@ Read it with `json.loads(mo.cli_args()["upstream"])`.
   `job.run.cancel` record who started or stopped a run; `job.run.finish`
   records every outcome (status, attempt, exit code, sanitized error code,
   duration), attributed to the manual or webhook caller, or to `system` for scheduled
-  runs.
+  and chained runs.
 
 ## Run states
 
-| Status         | Meaning                                                                                |
-| -------------- | -------------------------------------------------------------------------------------- |
-| `queued`       | Waiting for the scheduler to dispatch it (or for a retry's backoff to elapse).         |
-| `provisioning` | A sandbox is being created and loaded.                                                 |
-| `running`      | `marimo export html` is executing.                                                     |
-| `succeeded`    | Every cell ran; the rendered output is available.                                      |
-| `failed`       | A cell raised, the export could not run, or the sandbox could not be prepared.         |
-| `timed_out`    | The run exceeded its timeout and was reclaimed.                                        |
-| `cancelled`    | Cancelled by an editor; its sandbox was destroyed.                                     |
-| `skipped`      | A scheduled fire declined because the previous run was still active (`forbid` policy). |
+| Status         | Meaning                                                                                                               |
+| -------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `queued`       | Waiting for the scheduler to dispatch it (or for a retry's backoff to elapse).                                        |
+| `provisioning` | A sandbox is being created and loaded.                                                                                |
+| `running`      | `marimo export html` is executing.                                                                                    |
+| `succeeded`    | Every cell ran; the rendered output is available.                                                                     |
+| `failed`       | A cell raised, the export could not run, or the sandbox could not be prepared.                                        |
+| `timed_out`    | The run exceeded its timeout and was reclaimed.                                                                       |
+| `cancelled`    | Cancelled by an editor; its sandbox was destroyed.                                                                    |
+| `skipped`      | A scheduled fire blocked by `forbid`, or a chain target blocked by an active root, full queue, or invalid parameters. |
 
 When a cell raises, marimo still writes the rendered HTML, so a `failed` run
 usually has output showing where it stopped. The run's `error` carries a

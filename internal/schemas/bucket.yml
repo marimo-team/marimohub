@@ -3986,6 +3986,7 @@ components:
                 required:
                   - notebook_id
                   - job_id
+                additionalProperties: {}
             on_failure:
               maxItems: 5
               type: array
@@ -4001,6 +4002,8 @@ components:
                 required:
                   - notebook_id
                   - job_id
+                additionalProperties: {}
+          additionalProperties: {}
         webhook_admissions:
           maxItems: 60
           type: array
@@ -4091,6 +4094,7 @@ components:
                   maxLength: 200
               required:
                 - kind
+              additionalProperties: {}
             - type: object
               properties:
                 kind:
@@ -4101,6 +4105,7 @@ components:
               required:
                 - kind
                 - upstream_run_id
+              additionalProperties: {}
         chain_depth:
           type: integer
           minimum: 0
@@ -4128,6 +4133,7 @@ components:
             event:
               type: string
               maxLength: 16384
+              description: Serialized event JSON, limited to 16 KiB of UTF-8 bytes.
         attempt:
           default: 1
           type: integer

@@ -4084,6 +4084,8 @@ components:
                     - webhook
                 idempotency_key:
                   type: string
+                  minLength: 1
+                  maxLength: 200
               required:
                 - kind
             - type: object
@@ -4094,6 +4096,7 @@ components:
                     - chain
                 upstream_run_id:
                   type: string
+                  pattern: ^run_[0-9A-HJKMNP-TV-Z]{26}$
               required:
                 - kind
                 - upstream_run_id
@@ -4119,6 +4122,10 @@ components:
             event:
               type: string
               maxLength: 16384
+              description: Serialized event JSON, limited to 16 KiB of UTF-8 bytes.
+          description: Parameters used for this run, including serialized event data.
+            Visible to every project member who can read run history. Do not
+            store secrets here.
         attempt:
           type: integer
           exclusiveMinimum: 0
@@ -17312,6 +17319,10 @@ paths:
                 event:
                   type: object
                   additionalProperties: {}
+                  description: Event data, limited to 16 KiB of UTF-8 bytes after JSON
+                    serialization. Stored as parameters.event and visible to
+                    every project member who can read run history. Do not
+                    include secrets.
               additionalProperties: false
       responses:
         '202':

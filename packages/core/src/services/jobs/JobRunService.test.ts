@@ -56,6 +56,24 @@ describe('JobRunService', () => {
 		expect(second).toEqual(first);
 	});
 
+	it('rejects an oversized UTF-8 event before writing run artifacts and accepts 16 KiB', async () => {
+		const runId = createRunId();
+		const event = JSON.stringify({ value: 'é'.repeat(8186) });
+		expect(new TextEncoder().encode(event).byteLength).toBe(16 * 1024);
+		await expect(
+			enqueue({ runId, trigger: 'webhook', parameters: { event: `${event} ` } }),
+		).rejects.toThrow('event must not exceed 16 KiB of UTF-8 bytes');
+		const jobPaths = paths.project(pid).notebook(nid).job(job.id);
+		expect(await env.bucket.head(paths.jobRunMarker(pid, runId))).toBeNull();
+		expect(await env.bucket.head(jobPaths.runIndex(runId))).toBeNull();
+		expect(await env.bucket.head(jobPaths.run(runId).record)).toBeNull();
+
+		const run = await enqueue({ runId, trigger: 'webhook', parameters: { event } });
+		expect(run.parameters).toEqual({ event });
+		expect(await runs.getRun(pid, nid, job.id, runId)).toEqual(run);
+		expect(await env.bucket.head(paths.jobRunMarker(pid, runId))).not.toBeNull();
+	});
+
 	it('lists runs newest first', async () => {
 		const a = await enqueue();
 		const b = await enqueue();
@@ -299,20 +317,34 @@ describe('JobRunService', () => {
 		expect(await runs.readLogs(run)).toBe('original');
 	});
 
-	it('writes a terminal skipped record with a finalization marker', async () => {
-		const skipped = await runs.writeSkipped({
-			job,
-			timeoutSeconds: 600,
-			scheduledFor: '2026-09-02T06:00:00.000Z',
-			reason: { code: 'CONCURRENCY_FORBIDDEN', message: 'busy' },
-		});
-		expect(skipped).toMatchObject({
-			status: 'skipped',
-			trigger: 'schedule',
-			finished_at: expect.any(String),
-		});
-		expect(await env.bucket.head(paths.jobRunMarker(pid, skipped.run_id))).not.toBeNull();
-	});
+	it.each([undefined, 'chain'] as const)(
+		'writes a skipped record and counts its %s trigger once',
+		async (trigger) => {
+			const metrics = { increment: vi.fn(), gauge: vi.fn() };
+			runs = new JobRunService(env.bucket, metrics);
+			const input = {
+				job,
+				runId: createRunId(),
+				trigger,
+				timeoutSeconds: 600,
+				reason: {
+					code: trigger ? 'CHAIN_ALREADY_ACTIVE' : 'CONCURRENCY_FORBIDDEN',
+					message: 'busy',
+				},
+			};
+			const skipped = await runs.writeSkipped(input);
+			expect(skipped).toMatchObject({
+				status: 'skipped',
+				trigger: trigger ?? 'schedule',
+				finished_at: expect.any(String),
+			});
+			expect(await env.bucket.head(paths.jobRunMarker(pid, skipped.run_id))).not.toBeNull();
+			expect(await runs.writeSkipped(input)).toEqual(skipped);
+			expect(metrics.increment).toHaveBeenCalledExactlyOnceWith('jobs.runs.skipped', 1, {
+				trigger: trigger ?? 'schedule',
+			});
+		},
+	);
 
 	it('cancels every active run of a job and reports their sandboxes', async () => {
 		const queued = await enqueue();

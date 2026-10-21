@@ -48,7 +48,7 @@ describe('JobsService', () => {
 		}
 	});
 
-	it('rejects self-references, duplicate targets, cross-project chains, and more than five targets', async () => {
+	it('rejects self-references, duplicate targets, and cross-project chains', async () => {
 		const job = await env.jobs.createJob(pid, nid, { name: 'chain' }, ACTOR);
 		const ref = { notebook_id: nid, job_id: job.id };
 		await expect(
@@ -75,15 +75,29 @@ describe('JobsService', () => {
 				ACTOR,
 			),
 		).rejects.toThrow('same project');
-		await expect(
-			env.jobs.createJob(
-				pid,
-				nid,
-				{ name: 'too many', chain: { on_success: Array.from({ length: 6 }, () => targetRef) } },
-				ACTOR,
-			),
-		).rejects.toThrow();
 	});
+
+	it.each(['on_success', 'on_failure'] as const)(
+		'limits %s chains to five distinct targets',
+		async (event) => {
+			const refs = [];
+			for (let i = 0; i < 6; i++) {
+				const target = await env.jobs.createJob(pid, nid, { name: `target ${i}` }, ACTOR);
+				refs.push({ notebook_id: nid, job_id: target.id });
+			}
+			await expect(
+				env.jobs.createJob(pid, nid, { name: 'too many', chain: { [event]: refs } }, ACTOR),
+			).rejects.toThrow('Too big: expected array to have <=5 items');
+			await expect(
+				env.jobs.createJob(
+					pid,
+					nid,
+					{ name: 'five targets', chain: { [event]: refs.slice(0, 5) } },
+					ACTOR,
+				),
+			).resolves.toMatchObject({ chain: { [event]: refs.slice(0, 5) } });
+		},
+	);
 
 	it('creates a definition, indexes it in the snapshot, and lists it', async () => {
 		const job = await env.jobs.createJob(

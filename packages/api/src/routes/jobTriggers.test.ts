@@ -86,6 +86,29 @@ describe('Job webhook triggers', () => {
 		}
 		expect(await runs()).toHaveLength(0);
 	});
+	it('audits the webhook caller once across idempotent replays', async () => {
+		const body = { idempotency_key: 'audit' };
+		const result = await expectOk<{ run_id: string }>(await trigger(body), 202);
+		expect(await expectOk(await trigger(body), 202)).toEqual(result);
+		const events = await services.events.getEvents(new Date().toISOString().slice(0, 10));
+		expect(events.filter((event) => event.event === 'job.run.trigger')).toEqual([
+			expect.objectContaining({
+				actor: ACTOR,
+				project_id: pid,
+				notebook_id: nid,
+				job_id: job.id,
+				run_id: result.run_id,
+			}),
+		]);
+	});
+	it('keeps an admitted run successful when the audit append fails', async () => {
+		const append = vi.spyOn(services.events, 'append').mockRejectedValueOnce(new Error('offline'));
+		const body = { idempotency_key: 'audit-failure' };
+		const result = await expectOk(await trigger(body), 202);
+		expect(await expectOk(await trigger(body), 202)).toEqual(result);
+		expect(append).toHaveBeenCalledTimes(1);
+		expect(await runs()).toHaveLength(1);
+	});
 	it('uses the normal CSRF guard for browser requests', async () => {
 		const response = await admin.app.request(inbound(), {
 			method: 'POST',
@@ -333,7 +356,9 @@ describe('Job webhook triggers', () => {
 			if (kind === 'notebook') await services.notebooks.deleteNotebook(pid, nid, ACTOR);
 			if (kind === 'project') await services.projects.deleteProject(pid, ACTOR);
 			if (kind === 'deleting') await services.jobs.beginDelete(pid, nid, job.id, ACTOR);
-			await expectError(await trigger(body), 404, 'NOT_FOUND');
+			const error = await expectError(await trigger(body), 404, 'NOT_FOUND');
+			if (kind === 'job') expect(error.message).toBe('Job is not enabled');
+			if (kind === 'deleting') expect(error.message).toBe(`Job ${job.id} not found`);
 		},
 	);
 	it('returns 404 while jobs are disabled', async () => {

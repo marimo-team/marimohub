@@ -254,7 +254,7 @@ export class JobRunService {
 		return this.getRun(job.project_id, job.notebook_id, job.id, runId);
 	}
 
-	/** A terminal-at-birth record for a scheduled fire the concurrency policy declined. */
+	/** Record a terminal skip when a schedule concurrency policy or chain guard declines a run. */
 	async writeSkipped(
 		input: Omit<EnqueueRunInput, 'trigger' | 'triggeredBy'> & {
 			reason: RunError;
@@ -300,7 +300,7 @@ export class JobRunService {
 		await putIfAbsent(this.bucket, jobPaths.runIndex(runId), '');
 		const created = await putIfAbsent(this.bucket, this.runPaths(run).record, JSON.stringify(run));
 		if (!created) return this.getRun(job.project_id, job.notebook_id, job.id, runId);
-		this.metrics.increment('jobs.runs.skipped');
+		this.metrics.increment('jobs.runs.skipped', 1, { trigger: run.trigger });
 		return run;
 	}
 

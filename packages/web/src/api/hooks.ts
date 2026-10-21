@@ -1864,7 +1864,7 @@ export function useJobsQuery(projectId: string, notebookId: string, enabled = tr
 
 export function useChainNotebooksQuery(projectId: string, enabled: boolean) {
 	return useQuery({
-		queryKey: ['chain-notebooks', projectId],
+		queryKey: [...notebookKeys.list(projectId), 'chain'],
 		enabled,
 		queryFn: () =>
 			listAllCursorPages(

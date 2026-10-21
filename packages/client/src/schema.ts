@@ -4008,7 +4008,9 @@ export interface components {
 			/** Format: date-time */
 			scheduled_for?: string;
 			source_version_id?: string;
+			/** @description Parameters used for this run, including serialized event data. Visible to every project member who can read run history. Do not store secrets here. */
 			parameters?: {
+				/** @description Serialized event JSON, limited to 16 KiB of UTF-8 bytes. */
 				event?: string;
 			} & {
 				[key: string]: string;
@@ -15925,6 +15927,7 @@ export interface operations {
 				'application/json': {
 					parameters?: components['schemas']['JobParameters'];
 					idempotency_key?: string;
+					/** @description Event data, limited to 16 KiB of UTF-8 bytes after JSON serialization. Stored as parameters.event and visible to every project member who can read run history. Do not include secrets. */
 					event?: {
 						[key: string]: unknown;
 					};

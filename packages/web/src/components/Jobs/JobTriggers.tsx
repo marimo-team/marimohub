@@ -1,11 +1,22 @@
 import { useState } from 'react';
 import { useChainNotebooksQuery, useJobsQuery } from '@/api/hooks';
-import { Button } from '@/components/ui';
+import { Button, CopyField } from '@/components/ui';
 import { withBasePath } from '@/lib/basePath';
 import type { Job } from '@/types';
 
 type Chain = NonNullable<Job['chain']>;
 const selectClass = 'rounded-md border border-input bg-background px-2 py-1 text-sm';
+
+function ChainTargetName({
+	projectId,
+	target,
+}: {
+	projectId: string;
+	target: NonNullable<Chain['on_success']>[number];
+}) {
+	const jobs = useJobsQuery(projectId, target.notebook_id);
+	return jobs.data?.find((job) => job.id === target.job_id)?.name ?? target.job_id;
+}
 
 export function ChainPicker({
 	projectId,
@@ -80,7 +91,7 @@ export function ChainPicker({
 								{jobs.data
 									?.filter(
 										(job) =>
-											job.id !== jobId &&
+											(targetNotebook !== notebookId || job.id !== jobId) &&
 											!value[kind]?.some(
 												(ref) => ref.job_id === job.id && ref.notebook_id === targetNotebook,
 											),
@@ -101,7 +112,7 @@ export function ChainPicker({
 						>
 							<span>
 								{kind === 'on_success' ? 'Success' : 'Failure'}:{' '}
-								{jobs.data?.find((job) => job.id === ref.job_id)?.name ?? ref.job_id}
+								<ChainTargetName projectId={projectId} target={ref} />
 							</span>
 							<Button
 								variant="ghost"
@@ -137,10 +148,7 @@ export function WebhookTriggerPanel({
 	return (
 		<fieldset className="flex flex-col gap-2 rounded-md border border-border p-3">
 			<legend className="px-1 text-xs font-medium text-muted-foreground">Webhook trigger</legend>
-			<label className="flex flex-col gap-1 text-xs">
-				Trigger URL
-				<input aria-label="Trigger URL" className={selectClass} readOnly value={url} />
-			</label>
+			<CopyField label="Trigger URL" value={url} />
 			<p className="text-xs text-muted-foreground">
 				Send a POST request with a personal access token as a Bearer credential. In API tokens,
 				choose Trigger jobs and limit access to this project. Disable the job to stop webhook runs.

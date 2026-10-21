@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createServices, paths, SandboxId } from '@marimo-hub/core';
-import type { JobRun, ProjectId, SandboxProvider, UserId } from '@marimo-hub/core';
+import {
+	composeAuthenticators,
+	createServices,
+	expandTokenGrantPreset,
+	paths,
+	SandboxId,
+} from '@marimo-hub/core';
+import type { JobRun, ProjectId, SandboxProvider, TokenGrant, UserId } from '@marimo-hub/core';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import { DEFAULT_JOBS_CONFIG } from '../context';
@@ -221,6 +227,44 @@ describe('Job routes', () => {
 			'FORBIDDEN',
 		);
 		await expectOk(await editor('POST', `${base()}/${job.id}/runs/${run.run_id}/cancel`));
+	});
+
+	it.each([
+		{ name: 'trigger preset', actions: expandTokenGrantPreset('trigger'), allowed: true },
+		{ name: 'trigger only', actions: ['job.trigger'], allowed: true },
+		{ name: 'notebook.write only', actions: ['notebook.write'], allowed: false },
+	])('enforces manual run access for a $name PAT', async ({ actions, allowed }) => {
+		const job = await createJob();
+		const patApi = createTestApi({
+			bucket,
+			compute,
+			deps: {
+				policy: { defaultRole: undefined },
+				authenticator: composeAuthenticators(services.tokens, { authenticate: async () => null }),
+			},
+		});
+		const { token } = await services.tokens.create(
+			{ name: 'manual-run', grant: { actions: actions as TokenGrant['actions'], projects: [pid] } },
+			ACTOR,
+		);
+		const response = await patApi.request(
+			'POST',
+			`${base()}/${job.id}/runs`,
+			{},
+			{
+				authorization: `Bearer ${token}`,
+			},
+		);
+		if (allowed) {
+			expect(await expectOk(response, 201)).toMatchObject({
+				status: 'queued',
+				trigger: 'manual',
+				triggered_by: ACTOR,
+			});
+		} else {
+			await expectError(response, 403, 'FORBIDDEN');
+		}
+		expect(await services.jobRuns.listActive()).toHaveLength(allowed ? 1 : 0);
 	});
 
 	it('triggers a run without provisioning and lists runs newest first', async () => {

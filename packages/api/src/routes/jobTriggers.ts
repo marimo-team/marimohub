@@ -17,6 +17,7 @@ import { commonErrors, createApp, errorResponses, fail, jsonContent } from '../s
 import { authorizeJobNotebook, requireJobs } from '../jobs/operations';
 import { WebhookTriggerBody } from '../jobs/schemas';
 import { canonicalJson, idempotentOperation } from '../idempotency';
+import { appendAudit } from '../log';
 import { JobIdParam } from './jobs';
 
 const app = createApp();
@@ -76,8 +77,9 @@ app.openapi(trigger, async (c) => {
 	const result = await deps.services.jobRuns.withJobMutation(ref, async () => {
 		const target = await authorizeJobNotebook(deps, user, pid, nid, 'job.trigger');
 		const current = await deps.services.jobs.getJob(pid, nid, jobId);
-		if (!current.enabled || (await deps.services.jobs.isDeleting(current)))
-			throw new NotFoundError('Job is not enabled');
+		if (await deps.services.jobs.isDeleting(current))
+			throw new NotFoundError(`Job ${jobId} not found`);
+		if (!current.enabled) throw new NotFoundError('Job is not enabled');
 
 		const parameters = JobRunParametersSchema.safeParse({
 			...(body.parameters ?? current.parameters),
@@ -123,6 +125,19 @@ app.openapi(trigger, async (c) => {
 			sourceVersionId: target.notebook.source.current_version_id ?? undefined,
 			timeoutSeconds: jobTimeoutSeconds(current, config),
 		});
+		await appendAudit(
+			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+			'job.run.trigger',
+			() =>
+				deps.services.events.append({
+					event: 'job.run.trigger',
+					actor: user.id,
+					project_id: pid,
+					notebook_id: nid,
+					job_id: jobId,
+					run_id: run.run_id,
+				}),
+		);
 		return { run_id: run.run_id, queued: true as const };
 	});
 	c.header('Cache-Control', 'no-store');

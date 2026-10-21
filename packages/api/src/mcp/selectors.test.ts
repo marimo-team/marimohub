@@ -237,6 +237,28 @@ function writeOnlyPrincipal(
 }
 
 describe('write-only notebook grants over HTTP', () => {
+	it.each([
+		{ selector: 'ID', code: 'FORBIDDEN' },
+		{ selector: 'name', code: 'NOT_FOUND' },
+	])(
+		'denies run_job without job.trigger when selected by $selector',
+		async ({ selector, code }) => {
+			const job = await createJob('Nightly');
+			expect(
+				await callTool(
+					'run_job',
+					{
+						project: selector === 'ID' ? project.id : project.name.toUpperCase(),
+						notebook: selector === 'ID' ? notebookId : 'REPORT',
+						job: selector === 'ID' ? job.id : job.name.toUpperCase(),
+					},
+					writeOnlyPrincipal([project.id]),
+				),
+			).toMatchObject({ isError: true, structuredContent: { code } });
+			expect(await deps.services.jobRuns.listRuns(project.id, notebookId, job.id)).toHaveLength(0);
+		},
+	);
+
 	it.each(['ID', 'name'])('allows notebook and job writes selected by %s', async (selector) => {
 		const principal = writeOnlyPrincipal([project.id], ['notebook.write', 'job.trigger']);
 		const job = await createJob('Nightly');
