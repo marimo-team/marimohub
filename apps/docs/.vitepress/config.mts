@@ -101,7 +101,7 @@ export default defineConfig({
 			{
 				text: 'Configure',
 				activeMatch:
-					'^/(auth|service-accounts|storage|compute|editor-sessions|surfaces|theming|sandbox-image|apps|thumbnails|jobs|ai|environment-and-access|integration-secrets|integrations|notifications|project-alerts|organizing-projects|importing-notebooks|syncing|notebook-previews|workload-identity-federation)',
+					'^/(auth|service-accounts|storage|compute|editor-sessions|surfaces|theming|sandbox-image|apps|thumbnails|jobs|ai|environment-and-access|integration-secrets|integrations|data-browser|notifications|project-alerts|organizing-projects|importing-notebooks|syncing|notebook-previews|workload-identity-federation)',
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },
@@ -117,6 +117,7 @@ export default defineConfig({
 					{ text: 'Managed AI', link: '/ai' },
 					{ text: 'Environment & cloud access', link: '/environment-and-access' },
 					{ text: 'Integrations', link: '/integrations' },
+					{ text: 'Object uploads', link: '/data-browser' },
 					{ text: 'Notifications', link: '/notifications' },
 					{ text: 'Project alerts', link: '/project-alerts' },
 					{ text: 'Organizing projects', link: '/organizing-projects' },
@@ -183,6 +184,7 @@ export default defineConfig({
 					{ text: 'Managed AI', link: '/ai' },
 					{ text: 'Environment & cloud access', link: '/environment-and-access' },
 					{ text: 'Integrations', link: '/integrations' },
+					{ text: 'Object uploads', link: '/data-browser' },
 					{ text: 'Notifications', link: '/notifications' },
 					{ text: 'Project alerts', link: '/project-alerts' },
 					{ text: 'Organizing projects', link: '/organizing-projects' },

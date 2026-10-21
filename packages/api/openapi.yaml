@@ -158,6 +158,26 @@ components:
     Capabilities:
       type: object
       properties:
+        workspace_limits:
+          type: object
+          properties:
+            single_put_max_bytes:
+              type: integer
+              exclusiveMinimum: 0
+            max_file_bytes:
+              type: integer
+              exclusiveMinimum: 0
+            max_total_bytes:
+              type: integer
+              exclusiveMinimum: 0
+            max_files:
+              type: integer
+              exclusiveMinimum: 0
+          required:
+            - single_put_max_bytes
+            - max_file_bytes
+            - max_total_bytes
+            - max_files
         project_groups:
           type: object
           properties:
@@ -485,6 +505,7 @@ components:
                   - embed
                   - managed_ai
       required:
+        - workspace_limits
         - project_groups
         - federation
         - integrations
@@ -1753,6 +1774,7 @@ components:
                   - preview.manage
                   - integration.read
                   - integration.use
+                  - integration.write
                   - integration.manage
                   - change-request.publish
                   - security-labels.raise
@@ -2214,6 +2236,7 @@ components:
                           - preview.manage
                           - integration.read
                           - integration.use
+                          - integration.write
                           - integration.manage
                           - change-request.publish
                           - security-labels.raise
@@ -2266,6 +2289,7 @@ components:
             - preview.manage
             - integration.read
             - integration.use
+            - integration.write
             - integration.manage
             - change-request.publish
             - security-labels.raise
@@ -4443,6 +4467,8 @@ components:
                   type: boolean
                 download:
                   type: boolean
+                write:
+                  type: boolean
                 search:
                   type: string
                   enum:
@@ -5034,6 +5060,7 @@ components:
                       - preview.manage
                       - integration.read
                       - integration.use
+                      - integration.write
                       - integration.manage
                       - change-request.publish
                       - security-labels.raise
@@ -5303,6 +5330,7 @@ paths:
                               - preview.manage
                               - integration.read
                               - integration.use
+                              - integration.write
                               - integration.manage
                               - change-request.publish
                               - security-labels.raise
@@ -9976,6 +10004,519 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
           description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/workspace/uploads:
+    post:
+      operationId: startWorkspaceUpload
+      tags:
+        - Notebooks
+      summary: Start a resumable workspace upload
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                path:
+                  type: string
+                  minLength: 1
+                size:
+                  type: integer
+                  minimum: 0
+                create_only:
+                  type: boolean
+              required:
+                - path
+                - size
+      responses:
+        '201':
+          description: Upload created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      path:
+                        type: string
+                      size:
+                        type: integer
+                        minimum: 0
+                      part_size:
+                        type: integer
+                        exclusiveMinimum: 0
+                      parts_done:
+                        type: array
+                        items:
+                          type: integer
+                          exclusiveMinimum: 0
+                      expires_at:
+                        type: number
+                      status:
+                        type: string
+                        enum:
+                          - uploading
+                          - publishing
+                          - complete
+                          - cancelled
+                    required:
+                      - id
+                      - path
+                      - size
+                      - part_size
+                      - parts_done
+                      - expires_at
+                      - status
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/workspace/uploads/{uploadId}:
+    get:
+      operationId: getWorkspaceUpload
+      tags:
+        - Notebooks
+      summary: Get workspace upload progress
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: uploadId
+          in: path
+      responses:
+        '200':
+          description: Upload progress
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      path:
+                        type: string
+                      size:
+                        type: integer
+                        minimum: 0
+                      part_size:
+                        type: integer
+                        exclusiveMinimum: 0
+                      parts_done:
+                        type: array
+                        items:
+                          type: integer
+                          exclusiveMinimum: 0
+                      expires_at:
+                        type: number
+                      status:
+                        type: string
+                        enum:
+                          - uploading
+                          - publishing
+                          - complete
+                          - cancelled
+                    required:
+                      - id
+                      - path
+                      - size
+                      - part_size
+                      - parts_done
+                      - expires_at
+                      - status
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: cancelWorkspaceUpload
+      tags:
+        - Notebooks
+      summary: Cancel a workspace upload
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: uploadId
+          in: path
+      responses:
+        '200':
+          description: Upload cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties: {}
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/workspace/uploads/{uploadId}/parts/{part}:
+    put:
+      operationId: putWorkspaceUploadPart
+      tags:
+        - Notebooks
+      summary: Upload one workspace file part
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: uploadId
+          in: path
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+          required: true
+          name: part
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Part stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      path:
+                        type: string
+                      size:
+                        type: integer
+                        minimum: 0
+                      part_size:
+                        type: integer
+                        exclusiveMinimum: 0
+                      parts_done:
+                        type: array
+                        items:
+                          type: integer
+                          exclusiveMinimum: 0
+                      expires_at:
+                        type: number
+                      status:
+                        type: string
+                        enum:
+                          - uploading
+                          - publishing
+                          - complete
+                          - cancelled
+                    required:
+                      - id
+                      - path
+                      - size
+                      - part_size
+                      - parts_done
+                      - expires_at
+                      - status
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/workspace/uploads/{uploadId}/complete:
+    post:
+      operationId: completeWorkspaceUpload
+      tags:
+        - Notebooks
+      summary: Publish a workspace upload
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: uploadId
+          in: path
+      responses:
+        '200':
+          description: File published
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/WorkspaceItem'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
           headers:
             Retry-After:
               schema:
@@ -18083,6 +18624,533 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/{iid}/browse/objects/uploads:
+    post:
+      operationId: startObjectUpload
+      tags:
+        - Integrations
+      summary: Start an object upload
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bucket:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                path:
+                  type: string
+                  minLength: 1
+                  maxLength: 1024
+                size:
+                  type: integer
+                  minimum: 0
+                  maximum: 5368709120
+                content_type:
+                  type: string
+                  maxLength: 256
+                  pattern: ^[^\r\n]*$
+              required:
+                - bucket
+                - path
+                - size
+      responses:
+        '201':
+          description: Upload created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      path:
+                        type: string
+                      size:
+                        type: integer
+                        minimum: 0
+                      part_size:
+                        type: integer
+                        exclusiveMinimum: 0
+                      parts_done:
+                        type: array
+                        items:
+                          type: integer
+                          exclusiveMinimum: 0
+                      expires_at:
+                        type: number
+                      status:
+                        type: string
+                        enum:
+                          - uploading
+                          - publishing
+                          - complete
+                          - cancelled
+                    required:
+                      - id
+                      - path
+                      - size
+                      - part_size
+                      - parts_done
+                      - expires_at
+                      - status
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/{iid}/browse/objects/uploads/{uploadId}:
+    get:
+      operationId: getObjectUpload
+      tags:
+        - Integrations
+      summary: Get object upload progress
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: uploadId
+          in: path
+      responses:
+        '200':
+          description: Upload progress
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      path:
+                        type: string
+                      size:
+                        type: integer
+                        minimum: 0
+                      part_size:
+                        type: integer
+                        exclusiveMinimum: 0
+                      parts_done:
+                        type: array
+                        items:
+                          type: integer
+                          exclusiveMinimum: 0
+                      expires_at:
+                        type: number
+                      status:
+                        type: string
+                        enum:
+                          - uploading
+                          - publishing
+                          - complete
+                          - cancelled
+                    required:
+                      - id
+                      - path
+                      - size
+                      - part_size
+                      - parts_done
+                      - expires_at
+                      - status
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: cancelObjectUpload
+      tags:
+        - Integrations
+      summary: Cancel an object upload
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: uploadId
+          in: path
+      responses:
+        '200':
+          description: Upload cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties: {}
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/{iid}/browse/objects/uploads/{uploadId}/parts/{part}:
+    put:
+      operationId: putObjectUploadPart
+      tags:
+        - Integrations
+      summary: Upload one object part
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: uploadId
+          in: path
+        - schema:
+            type: integer
+            exclusiveMinimum: 0
+          required: true
+          name: part
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Part stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      path:
+                        type: string
+                      size:
+                        type: integer
+                        minimum: 0
+                      part_size:
+                        type: integer
+                        exclusiveMinimum: 0
+                      parts_done:
+                        type: array
+                        items:
+                          type: integer
+                          exclusiveMinimum: 0
+                      expires_at:
+                        type: number
+                      status:
+                        type: string
+                        enum:
+                          - uploading
+                          - publishing
+                          - complete
+                          - cancelled
+                    required:
+                      - id
+                      - path
+                      - size
+                      - part_size
+                      - parts_done
+                      - expires_at
+                      - status
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/integrations/{iid}/browse/objects/uploads/{uploadId}/complete:
+    post:
+      operationId: completeObjectUpload
+      tags:
+        - Integrations
+      summary: Publish an object upload
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^intg-[0-9a-z]{16}$
+            example: intg-7h2k9qm4xz7rp3w8
+          required: true
+          name: iid
+          in: path
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: uploadId
+          in: path
+      responses:
+        '200':
+          description: Object published
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      bucket:
+                        type: string
+                      key:
+                        type: string
+                      size:
+                        type: number
+                    required:
+                      - bucket
+                      - key
+                      - size
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/integrations/{iid}/browse:
     get:
       operationId: integrations.project.browse.get
@@ -18090,8 +19158,8 @@ paths:
         - Integrations
       summary: Whether this integration instance can be browsed (editor or above)
       description: Browse routes resolve the id against the project tier first, then
-        the inherited org tier; a shadowed org instance reads as absent. All
-        browse operations are strictly read-only against the upstream.
+        the inherited org tier; a shadowed org instance reads as absent. Object
+        uploads require explicit write access.
       parameters:
         - schema:
             type: string
@@ -21255,6 +22323,7 @@ paths:
                               - preview.manage
                               - integration.read
                               - integration.use
+                              - integration.write
                               - integration.manage
                               - change-request.publish
                               - security-labels.raise
@@ -21651,6 +22720,7 @@ paths:
                               - preview.manage
                               - integration.read
                               - integration.use
+                              - integration.write
                               - integration.manage
                               - change-request.publish
                               - security-labels.raise
@@ -21707,6 +22777,7 @@ paths:
                               - preview.manage
                               - integration.read
                               - integration.use
+                              - integration.write
                               - integration.manage
                               - change-request.publish
                               - security-labels.raise
@@ -22040,6 +23111,7 @@ paths:
                                         - preview.manage
                                         - integration.read
                                         - integration.use
+                                        - integration.write
                                         - integration.manage
                                         - change-request.publish
                                         - security-labels.raise
@@ -22205,6 +23277,7 @@ paths:
                               - preview.manage
                               - integration.read
                               - integration.use
+                              - integration.write
                               - integration.manage
                               - change-request.publish
                               - security-labels.raise
@@ -22469,6 +23542,7 @@ paths:
                               - preview.manage
                               - integration.read
                               - integration.use
+                              - integration.write
                               - integration.manage
                               - change-request.publish
                               - security-labels.raise

@@ -8,6 +8,7 @@ export type ObjectStoreProvider = 's3' | 'gcs' | 'azure_blob';
 export interface S3ObjectStoreSource {
 	provider: 's3';
 	configured_bucket?: string;
+	allow_write?: boolean;
 	region?: string;
 	endpoint?: string;
 	path_style: boolean;
@@ -25,6 +26,7 @@ export interface S3ObjectStoreSource {
 export interface GcsObjectStoreSource {
 	provider: 'gcs';
 	configured_bucket?: string;
+	allow_write?: boolean;
 	project_id?: string;
 	auth: { method: 'service_account'; credentials_json: string } | { method: 'ambient' };
 }
@@ -32,6 +34,7 @@ export interface GcsObjectStoreSource {
 export interface AzureBlobObjectStoreSource {
 	provider: 'azure_blob';
 	configured_bucket?: string;
+	allow_write?: boolean;
 	account_name: string;
 	endpoint_suffix: string;
 	auth:
@@ -64,6 +67,7 @@ export interface S3FederationContext {
 }
 
 export interface ObjectBrowseContext {
+	expected_integration_state?: string;
 	project_id?: ProjectId;
 	user_id: UserId;
 	user_email: string;
@@ -249,6 +253,7 @@ export class ObjectBrowseError extends Error {
 }
 
 export interface ObjectBrowseCapability {
+	write?: boolean;
 	provider: ObjectStoreProvider;
 	root_kind: 'bucket' | 'container';
 	uri_scheme: 's3' | 'gs' | 'az';
@@ -261,8 +266,31 @@ export interface ObjectBrowseCapability {
 	reason?: string;
 }
 
+export interface ObjectUploadRequest {
+	bucket: string;
+	key: string;
+	body: ReadableStream<Uint8Array> | Uint8Array;
+	size: number;
+	contentType: string;
+}
+
+export function objectWriteAllowed(
+	source: ObjectStoreSource,
+	context: ObjectBrowseContext,
+): boolean {
+	if (!source.allow_write) return false;
+	if (source.auth.method === 'ambient')
+		return source.provider === 's3' && context.federation?.credentials.writeAllowed === true;
+	return source.auth.method !== 'anonymous';
+}
+
 export interface ObjectBrowser<P extends ObjectStoreProvider = ObjectStoreProvider> {
 	readonly provider: P;
+	putObject?(
+		source: ObjectStoreSourceFor<P>,
+		context: ObjectBrowseContext,
+		request: ObjectUploadRequest,
+	): Promise<void>;
 	capability(
 		source: ObjectStoreSourceFor<P>,
 		context: ObjectBrowseContext,

@@ -249,3 +249,15 @@ describe('WorkspaceAdapter', () => {
 		});
 	});
 });
+
+it('rejects a file above the advertised cap before sending it', async () => {
+	const fetch = vi.fn();
+	vi.stubGlobal('fetch', fetch);
+	const adapter = new WorkspaceAdapter('project', 'notebook', access, {
+		max_file_bytes: 2,
+		max_total_bytes: 4,
+		max_files: 10,
+	});
+	await expect(adapter.writeFile('/data', '€')).rejects.toThrow('2-byte workspace upload limit');
+	expect(fetch).not.toHaveBeenCalled();
+});

@@ -2044,6 +2044,7 @@ export async function startNotebookSession(input: {
 						hostname,
 						bucket: sandbox.bucket,
 						bucketHandle,
+						workspaceLimits: notebooks.workspace.limits,
 						workdir: sandbox.workdir,
 						assetUrl: sandbox.assetUrl,
 						notebookBridge: sandbox.notebookBridge,

@@ -170,8 +170,16 @@ const sandboxBrowsyKind = defineIntegration({
 	},
 });
 
+const objectWrites: { bucket: string; key: string; bytes: Uint8Array }[] = [];
 const objectBrowser: ObjectBrowser<'s3'> = {
 	provider: 's3',
+	putObject: async (_source, _context, request) => {
+		const bytes =
+			request.body instanceof Uint8Array
+				? request.body
+				: new Uint8Array(await new Response(request.body).arrayBuffer());
+		objectWrites.push({ bucket: request.bucket, key: request.key, bytes });
+	},
 	capability: (source, context) => {
 		const available =
 			source.auth.method === 'static' ||
@@ -182,6 +190,7 @@ const objectBrowser: ObjectBrowser<'s3'> = {
 			root_kind: 'bucket',
 			uri_scheme: 's3',
 			available,
+			...(source.allow_write ? { write: source.auth.method === 'static' } : {}),
 			preview: available,
 			download: available,
 			search: 'bounded-key-name',
@@ -536,6 +545,72 @@ describe('Data browser routes', () => {
 			201,
 		);
 	}
+
+	it('requires opt-in and manager permission for object uploads and publishes once', async () => {
+		objectWrites.length = 0;
+		const pid = await createProject();
+		const disabled = await createObjectStore(pid);
+		await expectError(
+			await request('POST', `/projects/${pid}/integrations/${disabled.id}/browse/objects/uploads`, {
+				bucket: 'lake',
+				path: 'data.bin',
+				size: 3,
+			}),
+			403,
+			'FORBIDDEN',
+		);
+		const enabled = await expectOk<{ id: string }>(
+			await request('POST', `/projects/${pid}/integrations`, {
+				kind: 's3',
+				name: 'writable',
+				config: {
+					bucket: 'lake',
+					allow_write: true,
+					auth: { method: 'static', access_key_id: 'access', secret_access_key: 'secret' },
+				},
+			}),
+			201,
+		);
+		const base = `/projects/${pid}/integrations/${enabled.id}/browse/objects/uploads`;
+		const upload = await expectOk<{ id: string }>(
+			await request('POST', base, { bucket: 'lake', path: 'data.bin', size: 3 }),
+			201,
+		);
+		const api = createTestApi({ bucket, userId: ACTOR, deps });
+		await expectOk(
+			await api.app.request(`/api/v1${base}/${upload.id}/parts/1`, {
+				method: 'PUT',
+				body: new Uint8Array([1, 2, 3]),
+				headers: { 'content-type': 'application/octet-stream' },
+			}),
+		);
+		await expectOk(await request('POST', `${base}/${upload.id}/complete`));
+		await expectOk(await request('POST', `${base}/${upload.id}/complete`));
+		expect(objectWrites).toEqual([
+			{ bucket: 'lake', key: 'data.bin', bytes: new Uint8Array([1, 2, 3]) },
+		]);
+		const events = await expectOk<
+			{ event: string; bucket?: string; key?: string; bytes?: number }[]
+		>(await request('GET', `/projects/${pid}/events`));
+		expect(events.filter((event) => event.event === 'integration.object.put')).toEqual([
+			expect.objectContaining({ bucket: 'lake', key: 'data.bin', bytes: 3 }),
+		]);
+
+		const editor = uid('upload-editor');
+		await expectOk(
+			await request('POST', `/projects/${pid}/members`, { user_id: editor, role: 'editor' }),
+			201,
+		);
+		const asEditor = createTestApi({ bucket, userId: editor, deps }).request;
+		await expectError(
+			await asEditor('POST', base, { bucket: 'lake', path: 'no.bin', size: 1 }),
+			403,
+			'FORBIDDEN',
+		);
+		expect(
+			await expectOk(await asEditor('GET', `/projects/${pid}/integrations/${enabled.id}/browse`)),
+		).toMatchObject({ surfaces: { objects: { write: false } } });
+	});
 
 	it('404s when the data browser is not wired', async () => {
 		const { dataBrowser: _unused, ...withoutBrowser } = deps;

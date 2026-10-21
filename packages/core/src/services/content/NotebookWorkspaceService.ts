@@ -1,10 +1,16 @@
+import { ResumableUploads, uploadStatus } from './ResumableUploads';
 import { KeyedSerialQueue } from '../../concurrency';
 import { z } from 'zod';
 import {
-	MAX_WORKSPACE_BYTES,
-	MAX_WORKSPACE_FILE_BYTES,
-	MAX_WORKSPACE_FILES,
-} from '../../constants';
+	WORKSPACE_LIMITS,
+	isProtectedWorkspacePath,
+	isWorkspaceDirectoryMarkerPath,
+	workspaceDirectoryFromMarkerPath,
+	workspaceDirectoryMarkerPath,
+	workspaceOperationDenied,
+	workspaceSourcePolicy,
+} from '../../integrations/remoteWorkspace';
+import type { WorkspaceLimits, WorkspaceOperation } from '../../integrations/remoteWorkspace';
 import { sleep } from '../../duration';
 import {
 	BadRequestError,
@@ -16,15 +22,7 @@ import {
 } from '../../errors';
 import { VersionId } from '../../ids';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
-import {
-	isProtectedWorkspacePath,
-	isWorkspaceDirectoryMarkerPath,
-	workspaceDirectoryFromMarkerPath,
-	workspaceDirectoryMarkerPath,
-	workspaceOperationDenied,
-	workspaceSourcePolicy,
-} from '../../integrations/remoteWorkspace';
-import type { WorkspaceOperation } from '../../integrations/remoteWorkspace';
+
 import {
 	normalizeWorkspaceDirectoryInput,
 	normalizeWorkspacePathInput,
@@ -175,6 +173,7 @@ export class NotebookWorkspaceService {
 	constructor(
 		private readonly bucket: Bucket,
 		private readonly owner: WorkspaceServiceOwner,
+		readonly limits: WorkspaceLimits = WORKSPACE_LIMITS,
 	) {}
 
 	async access(projectId: ProjectId, notebookId: NotebookId) {
@@ -236,8 +235,8 @@ export class NotebookWorkspaceService {
 		const key = `${context.prefix}${relative}`;
 		const head = await this.bucket.head(key);
 		if (!head || key.endsWith('/')) throw new NotFoundError(`Workspace file ${relative} not found`);
-		if (head.size > MAX_WORKSPACE_FILE_BYTES) {
-			throw new ResourceExhaustedError(`Workspace file exceeds ${MAX_WORKSPACE_FILE_BYTES} bytes`);
+		if (head.size > this.limits.maxFileBytes) {
+			throw new ResourceExhaustedError(`Workspace file exceeds ${this.limits.maxFileBytes} bytes`);
 		}
 		const body = await this.bucket.get(key);
 		if (!body) throw new NotFoundError(`Workspace file ${relative} not found`);
@@ -313,8 +312,8 @@ export class NotebookWorkspaceService {
 	): Promise<WorkspaceFileItem> {
 		const context = await this.mutableContext(projectId, notebookId, 'write', path);
 		const relative = normalizeWorkspacePathInput(path);
-		if (bytes.byteLength > MAX_WORKSPACE_FILE_BYTES) {
-			throw new ResourceExhaustedError(`Workspace file exceeds ${MAX_WORKSPACE_FILE_BYTES} bytes`);
+		if (bytes.byteLength > this.limits.maxFileBytes) {
+			throw new ResourceExhaustedError(`Workspace file exceeds ${this.limits.maxFileBytes} bytes`);
 		}
 		const key = `${context.prefix}${relative}`;
 		const existing = await this.bucket.head(key);
@@ -354,6 +353,117 @@ export class NotebookWorkspaceService {
 			}
 		}
 		return this.statIn(context.prefix, relative);
+	}
+	private uploads(projectId: ProjectId, notebookId: NotebookId) {
+		return new ResumableUploads(
+			this.bucket,
+			`${paths.project(projectId).notebook(notebookId).base}/uploads/`,
+		);
+	}
+	async startUpload(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		input: { path: string; size: number; create_only?: boolean },
+		actor: UserId,
+	) {
+		const context = await this.mutableContext(projectId, notebookId, 'write', input.path);
+		const path = normalizeWorkspacePathInput(input.path);
+		const policy = workspaceSourcePolicy(context.detail.source);
+		if (path === policy.entryNotebook || path === 'pyproject.toml')
+			throw new BadRequestError('Use the file editor to replace notebook source files');
+		const maxFile =
+			this.bucket.multipart || this.bucket.putStream
+				? this.limits.maxFileBytes
+				: Math.min(this.limits.maxFileBytes, 64 * 1024 * 1024);
+		if (input.size > maxFile)
+			throw new ResourceExhaustedError(`Workspace upload exceeds ${maxFile} bytes`);
+		return this.uploads(projectId, notebookId).start(
+			{
+				path,
+				size: input.size,
+				create_only: input.create_only ?? false,
+				content_type: workspaceMimeType(path) ?? 'application/octet-stream',
+			},
+			actor,
+			this.limits.maxTotalBytes,
+		);
+	}
+	async getUpload(projectId: ProjectId, notebookId: NotebookId, id: string, actor: UserId) {
+		await this.context(projectId, notebookId);
+		return uploadStatus(await this.uploads(projectId, notebookId).get(id, actor));
+	}
+	async putUploadPart(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		id: string,
+		part: number,
+		bytes: Uint8Array,
+		actor: UserId,
+	) {
+		const uploads = this.uploads(projectId, notebookId);
+		const record = await uploads.get(id, actor);
+		await this.mutableContext(projectId, notebookId, 'write', record.path);
+		return uploads.putPart(id, part, bytes, actor);
+	}
+	async cancelUpload(projectId: ProjectId, notebookId: NotebookId, id: string, actor: UserId) {
+		await this.context(projectId, notebookId);
+		await this.uploads(projectId, notebookId).cancel(id, actor);
+	}
+	async completeUpload(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		id: string,
+		actor: UserId,
+		options: WorkspaceMutationOptions = {},
+	) {
+		return this.withMutation(projectId, notebookId, options, async (lease) => {
+			const uploads = this.uploads(projectId, notebookId);
+			const result = await uploads.complete(id, actor, async (record) => {
+				const context = await this.mutableContext(projectId, notebookId, 'write', record.path);
+				if (record.size > this.limits.maxFileBytes)
+					throw new ResourceExhaustedError(
+						`Workspace file exceeds ${this.limits.maxFileBytes} bytes`,
+					);
+				const key = `${context.prefix}${record.path}`;
+				const existing = await this.bucket.head(key);
+				if (
+					(!existing && (await this.exists(context.prefix, record.path))) ||
+					(record.create_only && existing)
+				)
+					throw new ConflictError(`Workspace entry ${record.path} already exists`);
+				await this.assertParentDirectories(context.prefix, record.path);
+				await this.assertCapacity(
+					context.prefix,
+					existing ? 0 : 1,
+					record.size - (existing?.size ?? 0),
+				);
+				await lease.heartbeat();
+				return async () => {
+					const object = await uploads.publishToBucket(
+						record,
+						key,
+						{
+							httpMetadata: { contentType: record.content_type },
+						},
+						lease.heartbeat,
+					);
+					return { ...fileItem(record.path, object) };
+				};
+			});
+			return z
+				.object({
+					path: z.string(),
+					name: z.string(),
+					kind: z.enum(['file', 'directory']),
+					size: z.number().optional(),
+					modifiedAt: z.number().optional(),
+					mimeType: z.string().optional(),
+				})
+				.parse(result);
+		});
+	}
+	async sweepUploads(projectId: ProjectId, notebookId: NotebookId) {
+		await this.uploads(projectId, notebookId).sweep();
 	}
 
 	async createDirectory(
@@ -724,12 +834,12 @@ export class NotebookWorkspaceService {
 		const objects = (await listAllObjects(this.bucket, prefix)).filter(
 			(object) => !isWorkspaceDirectoryMarkerPath(object.key.slice(prefix.length)),
 		);
-		if (objects.length + addedFiles > MAX_WORKSPACE_FILES) {
-			throw new ResourceExhaustedError(`Workspace exceeds ${MAX_WORKSPACE_FILES} files`);
+		if (objects.length + addedFiles > this.limits.maxFiles) {
+			throw new ResourceExhaustedError(`Workspace exceeds ${this.limits.maxFiles} files`);
 		}
 		const currentBytes = objects.reduce((total, object) => total + object.size, 0);
-		if (currentBytes + addedBytes > MAX_WORKSPACE_BYTES) {
-			throw new ResourceExhaustedError(`Workspace exceeds ${MAX_WORKSPACE_BYTES} bytes`);
+		if (currentBytes + addedBytes > this.limits.maxTotalBytes) {
+			throw new ResourceExhaustedError(`Workspace exceeds ${this.limits.maxTotalBytes} bytes`);
 		}
 	}
 }

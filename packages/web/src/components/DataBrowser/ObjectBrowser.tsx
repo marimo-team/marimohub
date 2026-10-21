@@ -1,3 +1,5 @@
+import { useQueryClient } from '@tanstack/react-query';
+import { ObjectUploadButton } from './ObjectUploadButton';
 import { formatBytes } from '@/lib/formatBytes';
 import { useEffect, useMemo, useState } from 'react';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
@@ -20,6 +22,7 @@ import {
 import { withBasePath } from '@/lib/basePath';
 import {
 	objectContentUrl,
+	refreshBrowseQueries,
 	useObjectBucketsQuery,
 	useObjectDetailQuery,
 	useObjectPreview,
@@ -54,6 +57,7 @@ type ObjectRootKind = ObjectCapability['root_kind'];
 type ObjectUriScheme = ObjectCapability['uri_scheme'];
 
 interface ObjectBrowserProps {
+	writeAvailable?: boolean;
 	projectId: string;
 	integration: IntegrationEntry;
 	previewAvailable: boolean;
@@ -73,6 +77,7 @@ const crumbTextClass = 'flex h-7 min-w-0 items-center px-1.5';
 const crumbButtonClass = 'h-7 px-1.5 max-md:min-h-7';
 
 function useObjectBrowserState({
+	writeAvailable,
 	projectId,
 	integration,
 	previewAvailable,
@@ -82,6 +87,10 @@ function useObjectBrowserState({
 	rootKind,
 	uriScheme,
 }: ObjectBrowserProps) {
+	const queryClient = useQueryClient();
+	const refreshAfterUpload = () => {
+		void refreshBrowseQueries(queryClient);
+	};
 	const rootLabel = objectRootLabel(rootKind);
 	const [params, setParams] = useSearchParams();
 	const navigationType = useNavigationType();
@@ -238,6 +247,8 @@ function useObjectBrowserState({
 
 	const crumbs = prefixParts(prefix);
 	return {
+		refreshAfterUpload,
+		writeAvailable,
 		activeSearchQuery,
 		bucket,
 		bucketItems,
@@ -342,6 +353,17 @@ function renderObjectBrowser(state: ReturnType<typeof useObjectBrowserState>) {
 	return (
 		<div className="flex h-full min-h-0 flex-col">
 			<section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
+				{state.writeAvailable && bucket && (
+					<div className="border-b p-3">
+						<ObjectUploadButton
+							projectId={projectId}
+							integrationId={integration.id}
+							bucket={bucket}
+							prefix={prefix}
+							onComplete={state.refreshAfterUpload}
+						/>
+					</div>
+				)}
 				<div className="flex flex-col gap-2 border-b p-3">
 					<div className="flex flex-wrap items-center justify-between gap-2">
 						<nav

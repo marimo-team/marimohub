@@ -2363,6 +2363,7 @@ describe('kind renders (golden)', () => {
 		const configured = s3.objectBrowse!.source(s3.configSchema.parse(FIXTURES.s3));
 		expect(configured).toEqual({
 			provider: 's3',
+			allow_write: false,
 			configured_bucket: 'lake',
 			region: 'us-east-1',
 			endpoint: 'https://minio.internal:9000',
@@ -2377,6 +2378,7 @@ describe('kind renders (golden)', () => {
 		const ambient = s3.objectBrowse!.source(s3.configSchema.parse({ auth: { method: 'ambient' } }));
 		expect(ambient).toEqual({
 			provider: 's3',
+			allow_write: false,
 			configured_bucket: undefined,
 			region: undefined,
 			endpoint: undefined,
@@ -2722,6 +2724,7 @@ describe('kind renders (golden)', () => {
 	it('maps GCS and Azure Blob browsing sources and URI schemes', () => {
 		expect(gcs.objectBrowse?.source(gcs.configSchema.parse(FIXTURES.gcs))).toEqual({
 			provider: 'gcs',
+			allow_write: false,
 			configured_bucket: 'lake',
 			project_id: 'analytics-prod',
 			auth: {
@@ -2733,6 +2736,7 @@ describe('kind renders (golden)', () => {
 			azureBlob.objectBrowse?.source(azureBlob.configSchema.parse(FIXTURES.azure_blob)),
 		).toEqual({
 			provider: 'azure_blob',
+			allow_write: false,
 			configured_bucket: 'raw',
 			account_name: 'lakeaccount',
 			endpoint_suffix: 'core.windows.net',

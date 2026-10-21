@@ -10,6 +10,10 @@
  * `verifyConditionalWrites()` (run at boot by apps/server).
  */
 import {
+	CreateMultipartUploadCommand,
+	UploadPartCommand,
+	CompleteMultipartUploadCommand,
+	AbortMultipartUploadCommand,
 	DeleteObjectCommand,
 	DeleteObjectsCommand,
 	GetObjectCommand,
@@ -23,6 +27,7 @@ import { assertTimerDelay, withDeadline } from '@marimo-hub/core/async';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
 import { assertValidBucketListLimit } from '@marimo-hub/core/ports/bucket';
 import type {
+	BucketMultipart,
 	Bucket,
 	BucketListOptions,
 	BucketListResult,
@@ -110,6 +115,72 @@ export class S3Storage implements Bucket {
 			timeoutError: () => new DOMException('S3 request timed out', 'TimeoutError'),
 		});
 	}
+
+	readonly multipart: BucketMultipart = {
+		create: async (key, options) => {
+			if (options?.onlyIfEtagMatches !== undefined || options?.onlyIfNotExists)
+				throw new Error('Multipart conditional writes are not supported');
+			const result = await this.request((abortSignal) =>
+				this.client.send(
+					new CreateMultipartUploadCommand({
+						Bucket: this.bucket,
+						Key: key,
+						ContentType: options?.httpMetadata?.contentType,
+						Metadata: options?.customMetadata,
+					}),
+					{ abortSignal },
+				),
+			);
+			if (!result.UploadId) throw new Error('S3 did not return an upload ID');
+			return { uploadId: result.UploadId };
+		},
+		putPart: async (key, uploadId, partNumber, bytes) => {
+			const result = await this.request((abortSignal) =>
+				this.client.send(
+					new UploadPartCommand({
+						Bucket: this.bucket,
+						Key: key,
+						UploadId: uploadId,
+						PartNumber: partNumber,
+						Body: bytes,
+					}),
+					{ abortSignal },
+				),
+			);
+			if (!result.ETag) throw new Error('S3 did not return a part ETag');
+			return { partNumber, etag: result.ETag };
+		},
+		complete: async (key, uploadId, parts) => {
+			await this.request((abortSignal) =>
+				this.client.send(
+					new CompleteMultipartUploadCommand({
+						Bucket: this.bucket,
+						Key: key,
+						UploadId: uploadId,
+						MultipartUpload: {
+							Parts: parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag })),
+						},
+					}),
+					{ abortSignal },
+				),
+			);
+			const object = await this.head(key);
+			if (!object) throw new Error('Completed S3 object is missing');
+			return object;
+		},
+		abort: async (key, uploadId) => {
+			try {
+				await this.request((abortSignal) =>
+					this.client.send(
+						new AbortMultipartUploadCommand({ Bucket: this.bucket, Key: key, UploadId: uploadId }),
+						{ abortSignal },
+					),
+				);
+			} catch (error) {
+				if (!isNotFound(error)) throw error;
+			}
+		},
+	};
 
 	async get(key: string): Promise<BucketObjectBody | null> {
 		try {

@@ -1,0 +1,118 @@
+import { z } from 'zod';
+import { apiErrorFromResponse } from '@/api/client';
+
+export interface UploadProgress {
+	path: string;
+	phase: 'preparing' | 'uploading' | 'publishing';
+	loaded: number;
+	total: number;
+}
+const UploadStatusSchema = z.object({
+	id: z.uuid(),
+	size: z.number().int().nonnegative(),
+	part_size: z.number().int().positive(),
+	parts_done: z.array(z.number().int().positive()),
+	status: z.enum(['uploading', 'publishing', 'complete', 'cancelled']),
+});
+type UploadStatus = z.infer<typeof UploadStatusSchema>;
+async function uploadResponse(response: Response): Promise<UploadStatus> {
+	if (!response.ok) throw await apiErrorFromResponse(response, 'Upload failed');
+	const value = await response.json();
+	return z.object({ data: UploadStatusSchema }).parse(value).data;
+}
+function hex(bytes: ArrayBuffer): string {
+	return [...new Uint8Array(bytes)].map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+function readResume(key: string): string | null {
+	try {
+		return sessionStorage.getItem(key);
+	} catch {
+		return null;
+	}
+}
+function saveResume(key: string, id: string | null) {
+	try {
+		if (id) sessionStorage.setItem(key, id);
+		else sessionStorage.removeItem(key);
+	} catch {
+		/* Uploads still work when browser storage is unavailable. */
+	}
+}
+
+export async function resumableUpload(
+	base: string,
+	file: Blob,
+	input: { path: string; create_only?: boolean; bucket?: string; content_type?: string },
+	options: { signal?: AbortSignal; onProgress?: (progress: UploadProgress | null) => void } = {},
+): Promise<Response> {
+	const { signal, onProgress } = options;
+	const progress = (phase: UploadProgress['phase'], loaded: number) =>
+		onProgress?.({ path: input.path, phase, loaded, total: file.size });
+	try {
+		// A content fingerprint prevents a same-name replacement from mixing with old parts after reload.
+		const hashes: string[] = [];
+		progress('preparing', 0);
+		for (let offset = 0; offset < file.size; offset += 8 * 1024 * 1024) {
+			signal?.throwIfAborted();
+			const end = Math.min(file.size, offset + 8 * 1024 * 1024);
+			hashes.push(
+				hex(await crypto.subtle.digest('SHA-256', await file.slice(offset, end).arrayBuffer())),
+			);
+			progress('preparing', end);
+		}
+		const fingerprint = hex(
+			await crypto.subtle.digest('SHA-256', new TextEncoder().encode(hashes.join(''))),
+		);
+		const resumeKey = `marimohub-upload:${base}:${JSON.stringify(input)}:${file.size}:${fingerprint}`;
+		const previous = readResume(resumeKey);
+		let upload: UploadStatus | undefined;
+		if (previous) {
+			const response = await fetch(`${base}/${encodeURIComponent(previous)}`, { signal });
+			if (response.status === 404) saveResume(resumeKey, null);
+			else upload = await uploadResponse(response);
+		}
+		if (!upload) {
+			upload = await uploadResponse(
+				await fetch(base, {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ ...input, size: file.size }),
+					signal,
+				}),
+			);
+			saveResume(resumeKey, upload.id);
+		}
+		if (
+			!Number.isSafeInteger(upload.part_size) ||
+			upload.part_size < 1 ||
+			upload.part_size > 8 * 1024 * 1024 ||
+			upload.size !== file.size
+		)
+			throw new Error('Server returned invalid upload limits');
+		const completed = new Set(upload.parts_done);
+		let loaded = 0;
+		for (let offset = 0, number = 1; offset < file.size; offset += upload.part_size, number++) {
+			signal?.throwIfAborted();
+			const end = Math.min(file.size, offset + upload.part_size);
+			if (!completed.has(number)) {
+				await uploadResponse(
+					await fetch(`${base}/${upload.id}/parts/${number}`, {
+						method: 'PUT',
+						headers: { 'content-type': 'application/octet-stream' },
+						body: file.slice(offset, end),
+						signal,
+					}),
+				);
+			}
+			loaded += end - offset;
+			progress('uploading', loaded);
+		}
+		progress('publishing', file.size);
+		const response = await fetch(`${base}/${upload.id}/complete`, { method: 'POST', signal });
+		if (!response.ok) throw await apiErrorFromResponse(response, 'Upload could not be completed');
+		saveResume(resumeKey, null);
+		return response;
+	} finally {
+		onProgress?.(null);
+	}
+}

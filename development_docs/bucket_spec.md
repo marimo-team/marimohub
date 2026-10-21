@@ -1684,3 +1684,34 @@ The stored session's `notebook_id` remains the internal workspace identity used 
 Session controls accept the public parent notebook ID, then resolve their workspace and pool from the stored session.
 History reads authorize against current parent labels; live operations additionally validate preview ownership and expiry.
 Runtime cleanup does not erase provenance from retained sessions or audit events.
+
+## Resumable upload records
+
+`ResumableUploads` manages the following prefixes:
+
+- Workspace: `projects/{pid}/notebooks/{nid}/uploads/`, called by `NotebookWorkspaceService`.
+- Customer objects: `projects/{pid}/object-uploads/`, called by the object-upload routes.
+
+Each prefix has a CAS `index.json` with at most 16 reservations. Reservations include declared size and expiry.
+The workspace reservation budget is its configured total size; the object-upload budget is 5 GiB per project.
+Each `{id}.json` receipt stores destination, size, owner, expiry, part size, immutable part references and hashes,
+publication state, optional native upload ID, and the completed result.
+Object receipts also bind the integration ID, bucket, and integration revision.
+Only the owner can inspect or modify an upload; project authorization is checked at every API request.
+
+Parts at `{id}/parts/{n}` are written create-if-absent and must match the expected size.
+A duplicate part is accepted only if its hash matches.
+Completion CAS-fences `uploading` to `publishing`, then publishes once and stores `complete` with the result.
+Workspace publication holds the workspace mutation claim and rechecks capacity and editor state.
+An uncertain `publishing` receipt cannot be replayed. This avoids overwriting a later destination change.
+
+All backends stage immutable parts. S3, R2, and Azure assemble them through the optional `Bucket.multipart` port.
+FS and GCS implement `Bucket.putStream` for incremental assembly without a whole-file allocation.
+Other adapters use buffered assembly capped at 64 MiB. Multipart conditional writes are not supported;
+workspace create-only checks are serialized by the workspace mutation claim.
+
+Uploads expire after 24 hours. The notebook/import maintenance pass aborts known native uploads and removes staged parts.
+Receipts remain seven more days so repeated sweeps can remove parts from late requests.
+Configure provider lifecycle cleanup for incomplete multipart uploads to cover a crash between native creation and receipt persistence.
+Azure uncommitted blocks expire through provider retention; abort must not delete an existing committed blob.
+Project or notebook deletion can remove subordinate upload records and parts.

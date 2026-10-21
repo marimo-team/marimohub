@@ -24,6 +24,7 @@ import type {
 	UpdateIntegrationInput,
 } from '../../ports/integrations';
 import type {
+	ObjectUploadRequest,
 	ObjectBody,
 	ObjectBrowseContext,
 	ObjectBucket,
@@ -163,6 +164,12 @@ export interface ProjectIntegrationsService {
 		context: ObjectBrowseContext,
 		request: ObjectPreviewRequest,
 	): Promise<ObjectPreview>;
+	putObject?(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectUploadRequest,
+	): Promise<void>;
 	openObject(
 		projectId: ProjectId,
 		id: IntegrationId,

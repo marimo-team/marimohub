@@ -94,18 +94,11 @@ export function viewerSessionModes(mode: ViewerMode | undefined): readonly Sessi
 /** Port the marimo kernel listens on inside every sandbox (provisioner + probes). */
 export const MARIMO_PORT = 2718;
 
-// Size caps — the single source of truth for the memory ceilings that keep a
-// single oversized file from OOMing the service. Bucket adapters buffer an
-// object's whole body inside `get()`, and the sandbox seam is request/response
-// (buffered) in every compute adapter, so we never stream — instead we refuse to
-// read/accept anything past these caps. Enforced via the size known *before* the
-// read (`BucketObject.size` / `FileInfo.size`) so the bytes are never buffered.
+// Whole-file reads (including sandbox restore/capture) need a size check before
+// buffering. Workspace limits can be configured independently; git and archive
+// ingestion retain these defaults as fixed bounds.
 
-/**
- * Per-file cap for the workspace round-trip (restore from / capture into the
- * bucket). A single file beyond this is skipped (logged) rather than read into
- * memory, where it would also be base64-inflated ~1.33×.
- */
+/** Default per-file workspace limit. Sandbox copies can also require base64 expansion. */
 export const MAX_WORKSPACE_FILE_BYTES = 25 * 1024 * 1024; // 25MB
 /** Total bytes retained in one mutable local workspace mirror. */
 export const MAX_WORKSPACE_BYTES = 100 * 1024 * 1024; // 100MB

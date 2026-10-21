@@ -2064,3 +2064,34 @@ describe('capture transport budgets', () => {
 		expect(legacy).not.toHaveBeenCalled();
 	});
 });
+
+describe('configured workspace round-trip limits', () => {
+	it('uses the injected per-file cap for restore and capture', async () => {
+		const { projectId, notebookId, nb } = nbCtx();
+		const bucket = new RecordingBucket();
+		const sandbox = makeFsSandbox();
+		const limits = { maxFileBytes: 4, maxTotalBytes: 8, maxFiles: 2 };
+		await bucket.put(nb.workspaceFile('data'), '12345');
+		await expect(
+			restoreWorkspace(sandbox.instance, bucket, nb.workspacePrefix, MOUNT, {
+				limits,
+				requireComplete: true,
+			}),
+		).rejects.toThrow('per-file cap (4)');
+		await restoreWorkspace(sandbox.instance, bucket, nb.workspacePrefix, MOUNT, {
+			limits: { ...limits, maxFileBytes: 5 },
+		});
+		await captureWorkspace(
+			sandbox.instance,
+			bucket,
+			projectId,
+			notebookId,
+			MOUNT,
+			'workspace',
+			undefined,
+			undefined,
+			{ ...limits, maxFileBytes: 5 },
+		);
+		expect(await (await bucket.get(nb.workspaceFile('data')))!.text()).toBe('12345');
+	});
+});

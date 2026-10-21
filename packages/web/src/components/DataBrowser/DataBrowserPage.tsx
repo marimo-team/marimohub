@@ -437,6 +437,7 @@ export default function DataBrowserPage() {
 								<ObjectBrowser
 									projectId={pid!}
 									integration={selected}
+									writeAvailable={selectedObjectCapability.write ?? false}
 									previewAvailable={selectedObjectCapability.preview}
 									downloadAvailable={selectedObjectCapability.download}
 									searchAvailable={selectedObjectCapability.search === 'bounded-key-name'}

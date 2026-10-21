@@ -11,6 +11,7 @@ import type { TokenCredential } from '@azure/core-auth';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
 import { assertValidBucketListLimit } from '@marimo-hub/core/ports/bucket';
 import type {
+	BucketMultipart,
 	Bucket,
 	BucketListOptions,
 	BucketListResult,
@@ -141,6 +142,35 @@ export class AzureStorage implements Bucket {
 			raw.container,
 		);
 	}
+
+	readonly multipart: BucketMultipart = {
+		create: async (_key, options) => {
+			if (options?.onlyIfEtagMatches !== undefined || options?.onlyIfNotExists)
+				throw new Error('Multipart conditional writes are not supported');
+			return { uploadId: JSON.stringify({ id: crypto.randomUUID(), options }) };
+		},
+		putPart: async (key, uploadId, partNumber, bytes) => {
+			const { id } = JSON.parse(uploadId) as { id: string };
+			const etag = btoa(`${id}:${String(partNumber).padStart(6, '0')}`);
+			await this.client.getBlockBlobClient(key).stageBlock(etag, bytes, bytes.byteLength);
+			return { partNumber, etag };
+		},
+		complete: async (key, uploadId, parts) => {
+			const { options } = JSON.parse(uploadId) as { options?: BucketPutOptions };
+			await this.client.getBlockBlobClient(key).commitBlockList(
+				parts.map((part) => part.etag),
+				{
+					blobHTTPHeaders: { blobContentType: options?.httpMetadata?.contentType },
+					metadata: options?.customMetadata,
+				},
+			);
+			const object = await this.head(key);
+			if (!object) throw new Error('Completed Azure object is missing');
+			return object;
+		},
+		// Azure expires uncommitted blocks. Deleting the blob here could destroy an existing object.
+		abort: async () => {},
+	};
 
 	async get(key: string): Promise<BucketObjectBody | null> {
 		try {

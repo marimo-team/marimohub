@@ -1,3 +1,5 @@
+import { resumableUpload } from '@/lib/resumableUpload';
+import type { UploadProgress } from '@/lib/resumableUpload';
 import { FinderError, readOnlyAdapter } from '@marimo-team/react-finder';
 import type { WorkspaceItem, WorkspaceOperation } from '@marimo-hub/client';
 import type {
@@ -11,6 +13,13 @@ import { apiClient, apiData, apiErrorFromResponse, ApiRequestError } from '@/api
 import { notebookPath } from '@/api/request';
 import { isWorkspacePathProtected } from './workspacePolicy';
 import type { WorkspaceAccess } from './workspacePolicy';
+
+export interface WorkspaceUploadLimits {
+	single_put_max_bytes?: number;
+	max_file_bytes: number;
+	max_total_bytes: number;
+	max_files: number;
+}
 
 export type { WorkspaceAccess } from './workspacePolicy';
 
@@ -35,9 +44,11 @@ function finderErrorForStatus(
 			? 'not_found'
 			: status === 403
 				? 'permission'
-				: status === 409 || status === 412
-					? 'exists'
-					: 'unknown';
+				: status === 413 || status === 429
+					? 'unsupported'
+					: status === 409 || status === 412
+						? 'exists'
+						: 'unknown';
 	return new FinderError(code, message, path ? { path } : undefined);
 }
 
@@ -118,6 +129,8 @@ export class WorkspaceAdapter implements FileSystemAdapter {
 		projectId: string,
 		notebookId: string,
 		private readonly access: WorkspaceAccess,
+		private readonly limits?: WorkspaceUploadLimits,
+		private readonly onProgress?: (path: string, progress: UploadProgress | null) => void,
 	) {
 		this.base = `${notebookPath(projectId, notebookId)}/workspace`;
 		this.ids = { pid: projectId, nid: notebookId };
@@ -239,6 +252,31 @@ export class WorkspaceAdapter implements FileSystemAdapter {
 		signal: AbortSignal | undefined,
 		create: boolean,
 	): Promise<FileItem> {
+		const size = typeof content === 'string' ? new Blob([content]).size : content.size;
+		if (this.limits && size > this.limits.max_file_bytes) {
+			throw new FinderError(
+				'unknown',
+				`File exceeds the ${this.limits.max_file_bytes}-byte workspace upload limit`,
+				{ path },
+			);
+		}
+		if (
+			this.limits?.single_put_max_bytes !== undefined &&
+			size > this.limits.single_put_max_bytes
+		) {
+			const file = typeof content === 'string' ? new Blob([content]) : content;
+			const response = await finderData(
+				resumableUpload(
+					`${this.base}/uploads`,
+					file,
+					{ path, create_only: create },
+					{ signal, onProgress: (progress) => this.onProgress?.(path, progress) },
+				),
+				path,
+			);
+			return workspaceItemResponse(response, path);
+		}
+
 		const response = await fetch(
 			`${this.base}/files?${query(path, create ? { create: 'true' } : {})}`,
 			{ method: 'PUT', body: content, signal },
@@ -277,7 +315,9 @@ export function workspaceAdapter(
 	projectId: string,
 	notebookId: string,
 	access: WorkspaceAccess,
+	limits?: WorkspaceUploadLimits,
+	onProgress?: (path: string, progress: UploadProgress | null) => void,
 ): FileSystemAdapter {
-	const adapter = new WorkspaceAdapter(projectId, notebookId, access);
+	const adapter = new WorkspaceAdapter(projectId, notebookId, access, limits, onProgress);
 	return access.writable ? adapter : readOnlyAdapter(adapter);
 }

@@ -1081,3 +1081,59 @@ function body(bytes: Uint8Array): ReadableStream<Uint8Array> {
 		},
 	});
 }
+
+describe('S3ObjectBrowser uploads', () => {
+	it('requires opt-in and refuses ambient credentials even when ambient reads are enabled', async () => {
+		const test = harness([]);
+		const request = {
+			contentType: 'application/octet-stream',
+			bucket: 'lake',
+			key: 'data.bin',
+			size: 1,
+			body: new Uint8Array([1]),
+		};
+		await expect(test.browser.putObject(source, context, request)).rejects.toMatchObject({
+			code: 'access_denied',
+		});
+		const ambient: S3ObjectStoreSource = {
+			...source,
+			allow_write: true,
+			auth: { method: 'ambient' },
+		};
+		const ambientContext = { ...context, allow_server_ambient: { s3: true } };
+		expect(test.browser.capability(ambient, ambientContext).write).toBe(false);
+		await expect(test.browser.putObject(ambient, ambientContext, request)).rejects.toMatchObject({
+			code: 'access_denied',
+		});
+		expect(test.sent).toHaveLength(0);
+	});
+
+	it('streams uploads with integration credentials and enforces bucket scope and size', async () => {
+		const chunks: number[] = [];
+		const test = harness(async (call) => {
+			for await (const chunk of call.input.Body as AsyncIterable<Uint8Array>) chunks.push(...chunk);
+			return {};
+		});
+		const writable = { ...source, allow_write: true };
+		const request = {
+			bucket: 'lake',
+			key: 'data.bin',
+			size: 3,
+			contentType: 'application/octet-stream',
+			body: new Uint8Array([1, 2, 3]),
+		};
+		await test.browser.putObject(writable, context, request);
+		expect(chunks).toEqual([1, 2, 3]);
+		expect(test.sent[0]).toMatchObject({
+			name: 'PutObjectCommand',
+			input: { Bucket: 'lake', Key: 'data.bin', ContentLength: 3 },
+		});
+		expect(test.destroyed()).toBe(1);
+		await expect(
+			test.browser.putObject(writable, context, { ...request, bucket: 'outside' }),
+		).rejects.toMatchObject({ code: 'access_denied' });
+		await expect(
+			test.browser.putObject(writable, context, { ...request, size: 4 }),
+		).rejects.toThrow('declared size');
+	});
+});

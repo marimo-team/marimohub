@@ -29,6 +29,12 @@ import {
 import { brokeredS3Secret, duckdbS3StorageAccess, staticS3Credentials } from './duckdbS3';
 
 const s3Config = z.strictObject({
+	allow_write: z
+		.boolean()
+		.default(false)
+		.describe(
+			'Allow managers to upload objects with integration credentials. Server ambient credentials cannot write.',
+		),
 	bucket: z
 		.string()
 		.min(3)
@@ -97,6 +103,7 @@ export const s3 = defineIntegration({
 	],
 	requirements: ['boto3>=1.35', 's3fs>=2024.6'],
 	uiHints: {
+		allow_write: { group: 'Uploads', order: 20, widget: 'toggle' },
 		bucket: { group: 'Bucket', order: 1 },
 		region: { group: 'Bucket', order: 2 },
 		endpoint_url: { group: 'Bucket', order: 3 },
@@ -130,6 +137,7 @@ export const s3 = defineIntegration({
 		source(config) {
 			return {
 				provider: 's3',
+				allow_write: config.allow_write,
 				configured_bucket: config.bucket,
 				region: config.region,
 				endpoint: config.endpoint_url,
@@ -350,6 +358,12 @@ function assertSecureS3Transport(config: S3Config): void {
 }
 
 const gcsConfig = z.strictObject({
+	allow_write: z
+		.boolean()
+		.default(false)
+		.describe(
+			'Allow managers to upload objects with integration credentials. Server ambient credentials cannot write.',
+		),
 	bucket: z
 		.string()
 		.min(3)
@@ -383,6 +397,7 @@ export const gcs = defineIntegration({
 	environmentVariables: ['GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT'],
 	requirements: ['gcsfs>=2024.6', 'google-cloud-storage>=2.18'],
 	uiHints: {
+		allow_write: { group: 'Uploads', order: 20, widget: 'toggle' },
 		bucket: { group: 'Bucket', order: 1 },
 		project_id: { group: 'Bucket', order: 2 },
 		auth: { group: 'Authentication', order: 10 },
@@ -394,6 +409,7 @@ export const gcs = defineIntegration({
 		source(config) {
 			return {
 				provider: 'gcs',
+				allow_write: config.allow_write,
 				configured_bucket: config.bucket,
 				project_id: config.project_id,
 				auth:
@@ -483,6 +499,12 @@ const azureAuthSchema = z.discriminatedUnion('method', [
 ]);
 
 const azureBlobConfig = z.strictObject({
+	allow_write: z
+		.boolean()
+		.default(false)
+		.describe(
+			'Allow managers to upload objects with integration credentials. Server ambient credentials cannot write.',
+		),
 	account_name: z
 		.string()
 		.regex(/^[a-z0-9]{3,24}$/, 'Storage account names are 3–24 lowercase letters and digits'),
@@ -519,6 +541,7 @@ export const azureBlob = defineIntegration({
 	],
 	requirements: ['adlfs>=2024.7', 'azure-storage-blob>=12.22', 'azure-identity>=1.17'],
 	uiHints: {
+		allow_write: { group: 'Uploads', order: 20, widget: 'toggle' },
 		account_name: { group: 'Account', order: 1 },
 		container: { group: 'Account', order: 2 },
 		endpoint_suffix: { group: 'Account', order: 3, advanced: true },
@@ -534,6 +557,7 @@ export const azureBlob = defineIntegration({
 		source(config) {
 			return {
 				provider: 'azure_blob',
+				allow_write: config.allow_write,
 				configured_bucket: config.container,
 				account_name: config.account_name,
 				endpoint_suffix: config.endpoint_suffix,

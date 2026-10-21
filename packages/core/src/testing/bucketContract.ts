@@ -21,6 +21,32 @@ export function bucketContract(name: string, makeBucket: () => Bucket | Promise<
 			bucket = await makeBucket();
 		});
 
+		it('multipart uploads publish ordered parts atomically and abort preserves existing data', async ({
+			skip,
+		}) => {
+			if (!bucket.multipart) return skip();
+			const multipart = bucket.multipart;
+			const key = 'multipart/data.bin';
+			await bucket.put(key, 'old');
+			const first = new Uint8Array(5 * 1024 * 1024).fill(17);
+			const last = new Uint8Array([0, 255, 2]);
+			const { uploadId } = await multipart.create(key);
+			const secondPart = await multipart.putPart(key, uploadId, 2, last);
+			const firstPart = await multipart.putPart(key, uploadId, 1, first);
+			expect(await (await bucket.get(key))!.text()).toBe('old');
+			const complete = await multipart.complete(key, uploadId, [firstPart, secondPart]);
+			const bytes = await (await bucket.get(key))!.bytes();
+			expect(complete.size).toBe(first.length + last.length);
+			expect(
+				await crypto.subtle.digest('SHA-256', new Uint8Array(bytes.slice(0, first.length))),
+			).toEqual(await crypto.subtle.digest('SHA-256', first));
+			expect(new Uint8Array(bytes.slice(first.length))).toEqual(last);
+			const cancelled = await multipart.create(key);
+			await multipart.putPart(key, cancelled.uploadId, 1, new Uint8Array([3]));
+			await multipart.abort(key, cancelled.uploadId);
+			expect((await bucket.head(key))!.etag).toBe(complete.etag);
+		});
+
 		it('put then get returns the stored value and a non-empty etag', async () => {
 			const put = await bucket.put('k/a.json', JSON.stringify({ x: 1 }));
 			expect(put.etag).toBeTruthy();

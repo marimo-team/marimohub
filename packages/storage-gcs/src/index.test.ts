@@ -649,3 +649,64 @@ if (liveBucket) {
 		it('set MARIMOHUB_TEST_GCS_BUCKET to run against real GCS / an emulator', () => {});
 	});
 }
+
+describe('GCS streaming upload', () => {
+	it('sends bounded resumable ranges and commits only after the source ends', async () => {
+		const ranges: string[] = [];
+		let ended = false;
+		const bucket = new GcsStorage({
+			bucket: 'lake',
+			accessToken: 'token',
+			fetchImpl: (async (_url, init) => {
+				if (init?.method === 'POST')
+					return new Response(null, {
+						headers: { location: 'https://storage.googleapis.com/upload/session' },
+					});
+				const headers = new Headers(init?.headers);
+				ranges.push(headers.get('content-range')!);
+				if (ranges.length === 1) {
+					expect((init!.body as Uint8Array).length).toBe(8 * 1024 * 1024);
+					return new Response(null, { status: 308 });
+				}
+				expect(ended).toBe(true);
+				return Response.json({ generation: '42' });
+			}) as typeof fetch,
+		});
+		const size = 8 * 1024 * 1024 + 3;
+		const result = await bucket.putStream(
+			'data',
+			(async function* () {
+				yield new Uint8Array(8 * 1024 * 1024);
+				yield new Uint8Array(3);
+				ended = true;
+			})(),
+			size,
+		);
+		expect(result).toMatchObject({ size, etag: '42' });
+		expect(ranges).toEqual([`bytes 0-8388607/${size}`, `bytes 8388608-8388610/${size}`]);
+	});
+
+	it('cancels a session without publishing a short source', async () => {
+		const methods: string[] = [];
+		const bucket = new GcsStorage({
+			bucket: 'lake',
+			accessToken: 'token',
+			fetchImpl: (async (_url, init) => {
+				methods.push(init!.method!);
+				return new Response(null, {
+					headers: { location: 'https://storage.googleapis.com/upload/session' },
+				});
+			}) as typeof fetch,
+		});
+		await expect(
+			bucket.putStream(
+				'data',
+				(async function* () {
+					yield new Uint8Array(2);
+				})(),
+				3,
+			),
+		).rejects.toThrow('declared size');
+		expect(methods).toEqual(['POST', 'DELETE']);
+	});
+});

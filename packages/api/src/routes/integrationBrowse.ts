@@ -1,5 +1,11 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
+	ResumableUploads,
+	paths,
+	uploadStatus,
+	UploadStatusSchema,
+	ForbiddenError,
+	ConflictError,
 	IntegrationId,
 	LazyMap,
 	MAX_DATA_QUERY_SQL_BYTES,
@@ -19,6 +25,7 @@ import type {
 	SlidingWindowBudget,
 } from '@marimo-hub/core';
 import {
+	authorizationService,
 	assertProjectRole,
 	commonErrors,
 	createApp,
@@ -115,6 +122,7 @@ const BrowseCapabilitySchema = z
 					available: z.boolean(),
 					preview: z.boolean(),
 					download: z.boolean(),
+					write: z.boolean().optional(),
 					search: extensibleResponseEnum(['none', 'bounded-key-name'], 'bounded-key-name'),
 					versions: z.boolean(),
 					preview_formats: z.array(z.string()),
@@ -248,8 +256,7 @@ const browseCapability = createRoute({
 	summary: 'Whether this integration instance can be browsed (editor or above)',
 	description:
 		'Browse routes resolve the id against the project tier first, then the inherited org ' +
-		'tier; a shadowed org instance reads as absent. All browse operations are strictly ' +
-		'read-only against the upstream.',
+		'tier; a shadowed org instance reads as absent. Object uploads require explicit write access.',
 	request: { params: IntegrationIdParam },
 	responses: {
 		200: jsonContent(
@@ -978,6 +985,19 @@ async function resolveObjectAccess(
 	iid: IntegrationId,
 	signal?: AbortSignal,
 ) {
+	const filterWrite = async (
+		capability: Awaited<ReturnType<ProjectIntegrationsService['browseCapability']>>,
+	) => {
+		if (capability.surfaces.objects?.write) {
+			const decision = await authorizationService(deps).authorize(user, 'integration.write', {
+				kind: 'project',
+				project,
+			});
+			capability.surfaces.objects = { ...capability.surfaces.objects, write: decision.allowed };
+		}
+		return capability;
+	};
+
 	const wifEligible = federationFor(project, deps.wif) !== undefined;
 	const base = await makeObjectBrowseContext(deps, project, user, signal, {
 		integrationId: iid,
@@ -988,14 +1008,16 @@ async function resolveObjectAccess(
 	const baseCapability = await runObjectBrowse(() => integrations.browseCapability(pid, iid, base));
 	const objects = baseCapability.surfaces.objects;
 	if (objects?.available || !wifEligible || objects?.provider !== 's3') {
-		return { context: base, capability: baseCapability };
+		return { context: base, capability: await filterWrite(baseCapability) };
 	}
 	const federated = await makeObjectBrowseContext(deps, project, user, signal, {
 		integrationId: iid,
 	});
 	return {
 		context: federated,
-		capability: await runObjectBrowse(() => integrations.browseCapability(pid, iid, federated)),
+		capability: await filterWrite(
+			await runObjectBrowse(() => integrations.browseCapability(pid, iid, federated)),
+		),
 	};
 }
 
@@ -1225,6 +1247,260 @@ const app = createApp();
 // Browse is editor+ (not viewer, not manager): an editor can already read all
 // of this data by starting a session, so browse adds zero new reach; a viewer
 // cannot run code, so metadata would be a genuinely new disclosure.
+const objectUploadsPath = '/projects/{pid}/integrations/{iid}/browse/objects/uploads';
+const ObjectUploadParams = IntegrationIdParam.extend({ uploadId: z.uuid() });
+const ObjectUploadResponse = z.object({ success: z.literal(true), data: UploadStatusSchema });
+const MAX_OBJECT_UPLOAD_BYTES = 5 * 1024 ** 3;
+function objectUploads(deps: ApiDeps, pid: ProjectId) {
+	return new ResumableUploads(deps.bucket, paths.project(pid).objectUploadsPrefix);
+}
+async function objectWriteAccess(
+	deps: ApiDeps,
+	user: AuthUser,
+	pid: ProjectId,
+	iid: IntegrationId,
+	signal?: AbortSignal,
+) {
+	const { integrations } = requireDataBrowser(deps);
+	await assertProjectRole(deps.services.projects, pid, user, 'integration.write', deps);
+	const access = await requireAuthorizedObjectAccess(deps, user, integrations, pid, iid, signal);
+	if (!access.capability.write || !integrations.putObject)
+		throw new ForbiddenError('Object uploads are not enabled for this integration');
+	return { ...access, integrations };
+}
+async function objectUploadRecord(
+	deps: ApiDeps,
+	user: AuthUser,
+	pid: ProjectId,
+	iid: IntegrationId,
+	id: string,
+	stateToken: string,
+) {
+	const record = await objectUploads(deps, pid).get(id, user.id);
+	if (record.context.integration_id !== iid) throw new NotFoundError('Upload not found');
+	if (record.context.state !== stateToken)
+		throw new ConflictError('The integration changed; start a new upload');
+	return record;
+}
+app.openapi(
+	createRoute({
+		method: 'post',
+		path: objectUploadsPath,
+		operationId: 'startObjectUpload',
+		tags: ['Integrations'],
+		summary: 'Start an object upload',
+		request: {
+			params: IntegrationIdParam,
+			body: jsonBody(
+				z.object({
+					bucket: z.string().min(1).max(256),
+					path: z.string().min(1).max(1024),
+					size: z.number().int().nonnegative().max(MAX_OBJECT_UPLOAD_BYTES),
+					content_type: z
+						.string()
+						.max(256)
+						.regex(/^[^\r\n]*$/)
+						.optional(),
+				}),
+			),
+		},
+		responses: {
+			201: jsonContent(ObjectUploadResponse, 'Upload created'),
+			...errorResponses(400, 401, 403, 404, 429),
+		},
+	}),
+	async (c) => {
+		const deps = c.get('deps');
+		const user = c.get('user');
+		const { pid, iid } = c.req.valid('param');
+		const access = await objectWriteAccess(deps, user, pid, iid, c.req.raw.signal);
+		const input = c.req.valid('json');
+		const data = await objectUploads(deps, pid).start(
+			{
+				path: input.path,
+				size: input.size,
+				create_only: false,
+				content_type: input.content_type || 'application/octet-stream',
+			},
+			user.id,
+			MAX_OBJECT_UPLOAD_BYTES,
+			{ integration_id: iid, bucket: input.bucket, state: access.stateToken },
+		);
+		return c.json({ success: true as const, data }, 201);
+	},
+);
+app.openapi(
+	createRoute({
+		method: 'get',
+		path: `${objectUploadsPath}/{uploadId}`,
+		operationId: 'getObjectUpload',
+		tags: ['Integrations'],
+		summary: 'Get object upload progress',
+		request: { params: ObjectUploadParams },
+		responses: {
+			200: jsonContent(ObjectUploadResponse, 'Upload progress'),
+			...errorResponses(401, 403, 404, 409),
+		},
+	}),
+	async (c) => {
+		const deps = c.get('deps');
+		const user = c.get('user');
+		const { pid, iid, uploadId } = c.req.valid('param');
+		const access = await objectWriteAccess(deps, user, pid, iid, c.req.raw.signal);
+		return c.json(
+			{
+				success: true as const,
+				data: uploadStatus(
+					await objectUploadRecord(deps, user, pid, iid, uploadId, access.stateToken),
+				),
+			},
+			200,
+		);
+	},
+);
+app.openapi(
+	createRoute({
+		method: 'put',
+		path: `${objectUploadsPath}/{uploadId}/parts/{part}`,
+		operationId: 'putObjectUploadPart',
+		tags: ['Integrations'],
+		summary: 'Upload one object part',
+		request: {
+			params: ObjectUploadParams.extend({ part: z.coerce.number().int().positive() }),
+			body: {
+				content: {
+					'application/octet-stream': { schema: z.string().openapi({ format: 'binary' }) },
+				},
+				required: true,
+			},
+		},
+		responses: {
+			200: jsonContent(ObjectUploadResponse, 'Part stored'),
+			...errorResponses(400, 401, 403, 404, 409, 413),
+		},
+	}),
+	async (c) => {
+		const deps = c.get('deps');
+		const user = c.get('user');
+		const { pid, iid, uploadId, part } = c.req.valid('param');
+		const access = await objectWriteAccess(deps, user, pid, iid, c.req.raw.signal);
+		await objectUploadRecord(deps, user, pid, iid, uploadId, access.stateToken);
+		const data = await objectUploads(deps, pid).putPart(
+			uploadId,
+			part,
+			new Uint8Array(await c.req.raw.arrayBuffer()),
+			user.id,
+		);
+		return c.json({ success: true as const, data }, 200);
+	},
+);
+app.openapi(
+	createRoute({
+		method: 'post',
+		path: `${objectUploadsPath}/{uploadId}/complete`,
+		operationId: 'completeObjectUpload',
+		tags: ['Integrations'],
+		summary: 'Publish an object upload',
+		request: { params: ObjectUploadParams },
+		responses: {
+			200: jsonContent(
+				z.object({
+					success: z.literal(true),
+					data: z.object({ bucket: z.string(), key: z.string(), size: z.number() }),
+				}),
+				'Object published',
+			),
+			...errorResponses(401, 403, 404, 409, 429),
+		},
+	}),
+	async (c) => {
+		const deps = c.get('deps');
+		const user = c.get('user');
+		const { pid, iid, uploadId } = c.req.valid('param');
+		const signal = AbortSignal.any([c.req.raw.signal, AbortSignal.timeout(60 * 60 * 1000)]);
+		const access = await objectWriteAccess(deps, user, pid, iid, signal);
+		await objectUploadRecord(deps, user, pid, iid, uploadId, access.stateToken);
+		const uploads = objectUploads(deps, pid);
+		const result = await uploads.complete(uploadId, user.id, async (record) => async () => {
+			const iterator = uploads.chunks(record);
+			const body = new ReadableStream<Uint8Array>({
+				async pull(controller) {
+					try {
+						const next = await iterator.next();
+						if (next.done) controller.close();
+						else controller.enqueue(next.value);
+					} catch (error) {
+						controller.error(error);
+					}
+				},
+				async cancel() {
+					await iterator.return(undefined);
+				},
+			});
+			await runObjectBrowse(() =>
+				access.integrations.putObject!(
+					pid,
+					iid,
+					{ ...access.context, expected_integration_state: access.stateToken },
+					{
+						bucket: record.context.bucket,
+						key: record.path,
+						size: record.size,
+						contentType: record.content_type,
+						body,
+					},
+				),
+			);
+			await appendAudit(
+				{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
+				'integration.object.put',
+				() =>
+					deps.services.events.append({
+						event: 'integration.object.put',
+						actor: user.id,
+						project_id: pid,
+						integration_id: iid,
+						bucket: record.context.bucket,
+						key: record.path,
+						bytes: record.size,
+						request_id: c.get('requestId'),
+					}),
+			);
+			return { bucket: record.context.bucket, key: record.path, size: record.size };
+		});
+		const data = z.object({ bucket: z.string(), key: z.string(), size: z.number() }).parse(result);
+		return c.json({ success: true as const, data }, 200);
+	},
+);
+app.openapi(
+	createRoute({
+		method: 'delete',
+		path: `${objectUploadsPath}/{uploadId}`,
+		operationId: 'cancelObjectUpload',
+		tags: ['Integrations'],
+		summary: 'Cancel an object upload',
+		request: { params: ObjectUploadParams },
+		responses: {
+			200: jsonContent(
+				z.object({ success: z.literal(true), data: z.object({}) }),
+				'Upload cancelled',
+			),
+			...errorResponses(401, 403, 404, 409),
+		},
+	}),
+	async (c) => {
+		const deps = c.get('deps');
+		const user = c.get('user');
+		const { pid, iid, uploadId } = c.req.valid('param');
+		await objectWriteAccess(deps, user, pid, iid, c.req.raw.signal);
+		const uploads = objectUploads(deps, pid);
+		const record = await uploads.get(uploadId, user.id);
+		if (record.context.integration_id !== iid) throw new NotFoundError('Upload not found');
+		await uploads.cancel(uploadId, user.id);
+		return c.json({ success: true as const, data: {} }, 200);
+	},
+);
+
 app.openapi(browseCapability, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');

@@ -70,6 +70,77 @@ describe('Notebook routes', () => {
 		expect(await expectPage(await request('GET', nb('')))).toEqual([]);
 	});
 
+	it('stages upload parts during an editor session and retains them on completion conflict', async () => {
+		const created = await expectOk<{ id: NotebookId }>(
+			await request('POST', nb(''), { title: 'Upload', description: '', code: 'print(1)' }),
+			201,
+		);
+		await services.sessions.createSession({
+			project_id: projectId,
+			notebook_id: created.id,
+			user_id: ACTOR,
+			mode: 'edit',
+		});
+		const base = nb(`/${created.id}/workspace/uploads`);
+		const upload = await expectOk<{ id: string }>(
+			await request('POST', base, { path: 'data.bin', size: 3 }),
+			201,
+		);
+		await expectOk(
+			await app.request(`/api/v1${base}/${upload.id}/parts/1`, {
+				method: 'PUT',
+				headers: { 'content-type': 'application/octet-stream' },
+				body: new Uint8Array([1, 2, 3]),
+			}),
+		);
+		await expectError(await request('POST', `${base}/${upload.id}/complete`), 409, 'CONFLICT');
+		expect(await expectOk(await request('GET', `${base}/${upload.id}`))).toMatchObject({
+			parts_done: [1],
+			status: 'uploading',
+		});
+		await expectError(
+			await app.request(`/api/v1${base}/${upload.id}/parts/2`, {
+				method: 'PUT',
+				headers: {
+					'content-type': 'application/octet-stream',
+					'content-length': String(8 * 1024 * 1024 + 1),
+				},
+				body: 'x',
+			}),
+			413,
+			'PAYLOAD_TOO_LARGE',
+		);
+		await expectOk(await request('DELETE', `${base}/${upload.id}`));
+		await expectError(await request('GET', `${base}/${upload.id}`), 404, 'NOT_FOUND');
+	});
+	it('publishes a resumed upload through the workspace API', async () => {
+		const created = await expectOk<{ id: NotebookId }>(
+			await request('POST', nb(''), { title: 'Upload', description: '', code: 'print(1)' }),
+			201,
+		);
+		const base = nb(`/${created.id}/workspace/uploads`);
+		const upload = await expectOk<{ id: string }>(
+			await request('POST', base, { path: 'data.bin', size: 3 }),
+			201,
+		);
+		await expectError(await request('POST', `${base}/${upload.id}/complete`), 409, 'CONFLICT');
+		await expectOk(
+			await app.request(`/api/v1${base}/${upload.id}/parts/1`, {
+				method: 'PUT',
+				headers: { 'content-type': 'application/octet-stream' },
+				body: new Uint8Array([1, 2, 3]),
+			}),
+		);
+		expect(await expectOk(await request('POST', `${base}/${upload.id}/complete`))).toMatchObject({
+			path: '/data.bin',
+			size: 3,
+		});
+		const content = await app.request(
+			`/api/v1${nb(`/${created.id}/workspace/files`)}?path=data.bin`,
+		);
+		expect(new Uint8Array(await content.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+	});
+
 	it('blocks REST source replacement during a persistent editor but allows metadata updates', async () => {
 		const created = await services.notebooks.createNotebook(
 			projectId,

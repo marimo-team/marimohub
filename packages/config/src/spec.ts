@@ -1741,6 +1741,26 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: 'shared',
 					},
 					{
+						id: 'MARIMOHUB_WORKSPACE_MAX_FILE_BYTES',
+						name: 'Workspace per-file limit',
+						description:
+							'Maximum bytes in one workspace file (1 to 5368709120). Restore and capture buffer whole files; raising this increases memory use and session start time. Git fetch and folder archive limits stay fixed.',
+						default: '26214400',
+					},
+					{
+						id: 'MARIMOHUB_WORKSPACE_MAX_BYTES',
+						name: 'Workspace total size limit',
+						description:
+							'Maximum total bytes in the mutable workspace, including existing source files.',
+						default: '104857600',
+					},
+					{
+						id: 'MARIMOHUB_WORKSPACE_MAX_FILES',
+						name: 'Workspace file count limit',
+						description: 'Maximum workspace files. Directory markers do not count.',
+						default: '1000',
+					},
+					{
 						id: 'MARIMOHUB_PERSIST_WORKSPACE',
 						name: 'Persist workspace',
 						description:

@@ -1,11 +1,28 @@
+import { Readable } from 'node:stream';
 import {
+	PutObjectCommand,
 	GetObjectTaggingCommand,
 	HeadObjectCommand,
 	ListBucketsCommand,
 	ListObjectsV2Command,
 	ListObjectVersionsCommand,
 } from '@aws-sdk/client-s3';
+import {
+	objectUploadChunks,
+	decodeCursor,
+	boundedKeySearch,
+	DEFAULT_OBJECT_BROWSER_LIMITS,
+	encodeCursor,
+	ObjectBrowserObserver,
+	objectBrowseCapability,
+	assertBucket,
+	assertObjectIdentity,
+	previewObject,
+	withOperationDeadline,
+} from '@marimo-hub/object-browser-commons';
+import { objectWriteAllowed, ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 import type {
+	ObjectUploadRequest,
 	ObjectBody,
 	ObjectBrowseCapability,
 	ObjectBrowseContext,
@@ -26,20 +43,9 @@ import type {
 	ObjectVersionRequest,
 	S3ObjectStoreSource,
 } from '@marimo-hub/core/ports/object-browser';
+
 import type { Metrics } from '@marimo-hub/core/ports/metrics';
-import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
-import {
-	decodeCursor,
-	boundedKeySearch,
-	DEFAULT_OBJECT_BROWSER_LIMITS,
-	encodeCursor,
-	ObjectBrowserObserver,
-	objectBrowseCapability,
-	assertBucket,
-	assertObjectIdentity,
-	previewObject,
-	withOperationDeadline,
-} from '@marimo-hub/object-browser-commons';
+
 import type { ObjectBrowserLimits, ObjectPreviewReader } from '@marimo-hub/object-browser-commons';
 import { createS3ClientFactory, credentialsFor } from './client';
 import type { GuardedHostResolver, S3ClientFactory } from './client';
@@ -77,6 +83,7 @@ export class S3ObjectBrowser implements ObjectBrowser<'s3'> {
 			const transportTimeoutMs = Math.max(
 				this.limits.metadataTimeoutMs,
 				this.limits.previewTimeoutMs,
+				60 * 60 * 1000,
 			);
 			this.clientFactory = createS3ClientFactory({
 				resolveHost: options.resolveHost,
@@ -91,12 +98,43 @@ export class S3ObjectBrowser implements ObjectBrowser<'s3'> {
 	}
 
 	capability(source: S3ObjectStoreSource, context: ObjectBrowseContext): ObjectBrowseCapability {
-		return objectBrowseCapability(
+		const capability = objectBrowseCapability(
 			this.provider,
 			this.mode,
 			() => void credentialsFor(source, context),
 			mapS3Error,
 		);
+		return { ...capability, write: capability.available && objectWriteAllowed(source, context) };
+	}
+
+	async putObject(
+		source: S3ObjectStoreSource,
+		context: ObjectBrowseContext,
+		request: ObjectUploadRequest,
+	): Promise<void> {
+		if (!this.capability(source, context).write)
+			throw new ObjectBrowseError('access_denied', 'Object uploads are not enabled');
+		assertObjectIdentity(source, request);
+		const body = Readable.from(objectUploadChunks(request.body, request.size), {
+			objectMode: false,
+		});
+		try {
+			await withS3Client(this.clientFactory, source, context, async (client) => {
+				await sendS3(
+					client,
+					new PutObjectCommand({
+						Bucket: request.bucket,
+						Key: request.key,
+						Body: body,
+						ContentLength: request.size,
+						ContentType: request.contentType,
+					}),
+					context.signal,
+				);
+			});
+		} finally {
+			body.destroy();
+		}
 	}
 
 	async listBuckets(

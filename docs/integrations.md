@@ -66,7 +66,7 @@ Each detail view provides notebook code for the selected table or object.
 **Open in notebook** creates and opens a notebook with this code. Before you run
 the notebook, add the packages listed for that integration kind.
 
-Browsing is read-only. Iceberg REST and ClickHouse use HTTP GET requests. Trino
+Catalog browsing is read-only. Object stores can opt into [uploads](./data-browser.md). Iceberg REST and ClickHouse use HTTP GET requests. Trino
 submits hub-generated `SHOW`, `DESCRIBE`, and bounded `SELECT` statements. All
 requests use the egress policy from `MARIMOHUB_INTEGRATIONS_PROBE`.
 
@@ -1289,3 +1289,8 @@ of the two.
 
 For source layout, kind contracts, schema evolution, and tests, see the
 [integration developer guide](https://github.com/marimo-team/marimohub/blob/main/development_docs/integrations.md).
+
+## Object uploads
+
+S3, GCS, and Azure Blob integrations can opt into uploads with `allow_write: true`.
+See [Object uploads in the data browser](./data-browser.md) for credentials, permissions, limits, and resume behavior.

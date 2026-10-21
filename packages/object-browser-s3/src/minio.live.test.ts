@@ -42,6 +42,7 @@ const context = {
 
 if (endpoint)
 	objectBrowseContract('S3-compatible MinIO', () => ({
+		writes: process.env.MARIMOHUB_TEST_OBJECT_WRITES === 'true',
 		browser: new S3ObjectBrowser({
 			mode: 'full',
 			resolveHost: async (hostname) => {

@@ -1,3 +1,5 @@
+import { ResumableUploads } from './ResumableUploads';
+import type { WorkspaceLimits } from '../../integrations/remoteWorkspace';
 import { MetadataCache } from './metadataCache';
 import type { ReadConsistency } from './metadataCache';
 import { NotebookImportService } from './NotebookImportService';
@@ -169,6 +171,7 @@ export class NotebookService {
 		private sessions = new SessionService(bucket, metrics),
 		private deepLinks = new DeepLinkService(bucket, metrics),
 		repositoryHosts?: GitProviderHosts,
+		workspaceLimits?: WorkspaceLimits,
 	) {
 		this.metaCache = new MetadataCache(bucket, NOTEBOOK_META_CACHE_MAX_ENTRIES);
 		this.thumbnails = new ThumbnailService(bucket, this);
@@ -179,11 +182,15 @@ export class NotebookService {
 			pruneVersions: (projectId, notebookId, keep) =>
 				this.pruneVersions(projectId, notebookId, MAX_VERSIONS, keep),
 		});
-		this.workspace = new NotebookWorkspaceService(bucket, {
-			getNotebook: (projectId, notebookId) => this.getNotebook(projectId, notebookId),
-			saveSourceFile: (projectId, notebookId, path, content, actor, assertWritable) =>
-				this.saveWorkspaceSourceFile(projectId, notebookId, path, content, actor, assertWritable),
-		});
+		this.workspace = new NotebookWorkspaceService(
+			bucket,
+			{
+				getNotebook: (projectId, notebookId) => this.getNotebook(projectId, notebookId),
+				saveSourceFile: (projectId, notebookId, path, content, actor, assertWritable) =>
+					this.saveWorkspaceSourceFile(projectId, notebookId, path, content, actor, assertWritable),
+			},
+			workspaceLimits,
+		);
 	}
 
 	/**
@@ -1511,6 +1518,15 @@ export class NotebookService {
 		const stale: { projectId: ProjectId; notebookId: NotebookId }[] = [];
 		for (const project of snapshot.projects) {
 			if (project.status === 'deleted') continue; // owned by sweepDeletedProjects
+			await new ResumableUploads(this.bucket, paths.project(project.id).objectUploadsPrefix)
+				.sweep()
+				.catch((error) =>
+					logOperationalError(
+						'object_uploads.cleanup_failed',
+						{ operation: 'prune', project_id: project.id },
+						error,
+					),
+				);
 			await this.imports.sweep(project.id).catch((error) => {
 				logOperationalError(
 					'notebook_imports.cleanup_failed',
@@ -1519,6 +1535,13 @@ export class NotebookService {
 				);
 			});
 			for (const nb of project.notebooks) {
+				await this.workspace.sweepUploads(project.id, nb.id).catch((error) => {
+					logOperationalError(
+						'workspace_uploads.cleanup_failed',
+						{ operation: 'prune', project_id: project.id, notebook_id: nb.id },
+						error,
+					);
+				});
 				await this.thumbnails.prune(project.id, nb.id).catch((error) => {
 					logOperationalError(
 						'thumbnails.cleanup_failed',

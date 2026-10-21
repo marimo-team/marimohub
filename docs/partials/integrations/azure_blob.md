@@ -10,6 +10,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `allow_write` | boolean |  | `false` | Allow managers to upload objects with integration credentials. Server ambient credentials cannot write. |
 | `account_name` | string | Yes |  |  |
 | `container` | string |  |  | Default container for notebook code |
 | `endpoint_suffix` | string |  | `core.windows.net` | Sovereign clouds use their own, e.g. core.chinacloudapi.cn |

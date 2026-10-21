@@ -58,6 +58,34 @@ function makeR2ObjectBody(key: string, stored: FakeStored): R2ObjectBody {
 }
 
 class FakeR2Bucket {
+	private uploads = new Map<string, Map<number, Uint8Array>>();
+	async createMultipartUpload(key: string) {
+		const id = crypto.randomUUID();
+		this.uploads.set(id, new Map());
+		return this.resumeMultipartUpload(key, id);
+	}
+	resumeMultipartUpload(key: string, uploadId: string) {
+		return {
+			key,
+			uploadId,
+			uploadPart: async (partNumber: number, bytes: Uint8Array) => {
+				this.uploads.get(uploadId)!.set(partNumber, bytes);
+				return { partNumber, etag: `part-${partNumber}` };
+			},
+			complete: async (parts: R2UploadedPart[]) => {
+				const body = Buffer.concat(
+					parts.map((part) => this.uploads.get(uploadId)!.get(part.partNumber)!),
+				);
+				const object = await this.put(key, body);
+				this.uploads.delete(uploadId);
+				return object!;
+			},
+			abort: async () => {
+				this.uploads.delete(uploadId);
+			},
+		};
+	}
+
 	private store = new Map<string, FakeStored>();
 
 	async get(key: string): Promise<R2ObjectBody | null> {

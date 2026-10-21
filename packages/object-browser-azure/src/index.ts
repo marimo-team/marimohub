@@ -1,6 +1,26 @@
-import { Buffer } from 'node:buffer';
-import type { BlobItem, BlobServiceClient, ContainerClient } from '@azure/storage-blob';
+import {
+	objectUploadChunks,
+	assertBucket,
+	assertObjectIdentity,
+	boundedKeySearch,
+	decodeCursor,
+	DEFAULT_OBJECT_BROWSER_LIMITS,
+	detectRasterImage,
+	encodeCursor,
+	guardObjectStream,
+	isAbortError,
+	ObjectBrowserObserver,
+	objectBrowseCapability,
+	objectBrowseHttpError,
+	previewObject,
+	rasterContentType,
+	readBoundedBody,
+	toWebStream,
+	withOperationDeadline,
+} from '@marimo-hub/object-browser-commons';
+import { objectWriteAllowed, ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 import type {
+	ObjectUploadRequest,
 	AzureBlobObjectStoreSource,
 	ObjectBody,
 	ObjectBrowseCapability,
@@ -21,27 +41,11 @@ import type {
 	ObjectVersion,
 	ObjectVersionRequest,
 } from '@marimo-hub/core/ports/object-browser';
+import { Buffer } from 'node:buffer';
+import type { BlobItem, BlobServiceClient, ContainerClient } from '@azure/storage-blob';
+
 import type { Metrics } from '@marimo-hub/core/ports/metrics';
-import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
-import {
-	assertBucket,
-	assertObjectIdentity,
-	boundedKeySearch,
-	decodeCursor,
-	DEFAULT_OBJECT_BROWSER_LIMITS,
-	detectRasterImage,
-	encodeCursor,
-	guardObjectStream,
-	isAbortError,
-	ObjectBrowserObserver,
-	objectBrowseCapability,
-	objectBrowseHttpError,
-	previewObject,
-	rasterContentType,
-	readBoundedBody,
-	toWebStream,
-	withOperationDeadline,
-} from '@marimo-hub/object-browser-commons';
+
 import type {
 	GuardedHostResolver,
 	ObjectBrowserLimits,
@@ -75,12 +79,41 @@ export class AzureBlobObjectBrowser implements ObjectBrowser<'azure_blob'> {
 		source: AzureBlobObjectStoreSource,
 		context: ObjectBrowseContext,
 	): ObjectBrowseCapability {
-		return objectBrowseCapability(
+		const capability = objectBrowseCapability(
 			this.provider,
 			this.mode,
 			() => void this.client(source, context),
 			mapAzureError,
 		);
+		return { ...capability, write: capability.available && objectWriteAllowed(source, context) };
+	}
+
+	async putObject(
+		source: AzureBlobObjectStoreSource,
+		context: ObjectBrowseContext,
+		request: ObjectUploadRequest,
+	): Promise<void> {
+		if (!this.capability(source, context).write)
+			throw new ObjectBrowseError('access_denied', 'Object uploads are not enabled');
+		assertObjectIdentity(source, request);
+		const blob = this.client(source, context)
+			.getContainerClient(request.bucket)
+			.getBlockBlobClient(request.key);
+		const uploadId = crypto.randomUUID();
+		const blocks: string[] = [];
+		try {
+			for await (const bytes of objectUploadChunks(request.body, request.size)) {
+				const id = btoa(`${uploadId}${String(blocks.length).padStart(12, '0')}`);
+				await blob.stageBlock(id, bytes, bytes.byteLength, { abortSignal: context.signal });
+				blocks.push(id);
+			}
+			await blob.commitBlockList(blocks, {
+				abortSignal: context.signal,
+				blobHTTPHeaders: { blobContentType: request.contentType },
+			});
+		} catch (error) {
+			throw mapAzureError(error);
+		}
 	}
 
 	listBuckets(

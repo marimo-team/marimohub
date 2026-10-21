@@ -2,6 +2,7 @@ import { createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import { zipSync } from 'fflate';
 import {
+	UploadStatusSchema,
 	applyGitSourceUpdate,
 	assertSyncedSource,
 	BadRequestError,
@@ -12,7 +13,6 @@ import {
 	ImportId,
 	NotebookId,
 	NotFoundError,
-	MAX_WORKSPACE_FILE_BYTES,
 	ProjectId,
 	sourceDrift,
 	isMonotonicRestrictionIncrease,
@@ -1076,6 +1076,160 @@ app.openapi(copyWorkspaceEntry, async (c) => {
 	return c.json({ success: true, data: toWorkspaceItem(item) }, 200);
 });
 
+const UploadParams = NotebookIdParam.extend({ uploadId: z.uuid() });
+const uploadResponse = z.object({ success: z.literal(true), data: UploadStatusSchema });
+const uploadBase = '/projects/{pid}/notebooks/{nid}/workspace/uploads';
+async function authorizeWorkspaceUpload(c: Context<HonoEnv>, pid: ProjectId, nid: NotebookId) {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const project = await assertProjectRole(
+		deps.services.projects,
+		pid,
+		user,
+		'notebook.write',
+		deps,
+	);
+	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
+	return { workspace: deps.services.notebooks.workspace, user };
+}
+app.openapi(
+	createRoute({
+		method: 'post',
+		path: uploadBase,
+		operationId: 'startWorkspaceUpload',
+		tags: ['Notebooks'],
+		summary: 'Start a resumable workspace upload',
+		request: {
+			params: NotebookIdParam,
+			body: jsonBody(
+				z.object({
+					path: z.string().min(1),
+					size: z.number().int().nonnegative(),
+					create_only: z.boolean().optional(),
+				}),
+			),
+		},
+		responses: {
+			201: jsonContent(uploadResponse, 'Upload created'),
+			...errorResponses(400, 401, 403, 404, 409, 429),
+		},
+	}),
+	async (c) => {
+		const { pid, nid } = c.req.valid('param');
+		const { workspace, user } = await authorizeWorkspaceUpload(c, pid, nid);
+		const data = await workspace.startUpload(pid, nid, c.req.valid('json'), user.id);
+		return c.json({ success: true as const, data }, 201);
+	},
+);
+app.openapi(
+	createRoute({
+		method: 'get',
+		path: `${uploadBase}/{uploadId}`,
+		operationId: 'getWorkspaceUpload',
+		tags: ['Notebooks'],
+		summary: 'Get workspace upload progress',
+		request: { params: UploadParams },
+		responses: {
+			200: jsonContent(uploadResponse, 'Upload progress'),
+			...errorResponses(401, 403, 404),
+		},
+	}),
+	async (c) => {
+		const { pid, nid, uploadId } = c.req.valid('param');
+		const { workspace, user } = await authorizeWorkspaceUpload(c, pid, nid);
+		return c.json(
+			{ success: true as const, data: await workspace.getUpload(pid, nid, uploadId, user.id) },
+			200,
+		);
+	},
+);
+app.openapi(
+	createRoute({
+		method: 'put',
+		path: `${uploadBase}/{uploadId}/parts/{part}`,
+		operationId: 'putWorkspaceUploadPart',
+		tags: ['Notebooks'],
+		summary: 'Upload one workspace file part',
+		request: {
+			params: UploadParams.extend({ part: z.coerce.number().int().positive() }),
+			body: {
+				content: {
+					'application/octet-stream': { schema: z.string().openapi({ format: 'binary' }) },
+				},
+				required: true,
+			},
+		},
+		responses: {
+			200: jsonContent(uploadResponse, 'Part stored'),
+			...errorResponses(400, 401, 403, 404, 409, 413),
+		},
+	}),
+	async (c) => {
+		const { pid, nid, uploadId, part } = c.req.valid('param');
+		const { workspace, user } = await authorizeWorkspaceUpload(c, pid, nid);
+		const bytes = new Uint8Array(await c.req.raw.arrayBuffer());
+		return c.json(
+			{
+				success: true as const,
+				data: await workspace.putUploadPart(pid, nid, uploadId, part, bytes, user.id),
+			},
+			200,
+		);
+	},
+);
+app.openapi(
+	createRoute({
+		method: 'post',
+		path: `${uploadBase}/{uploadId}/complete`,
+		operationId: 'completeWorkspaceUpload',
+		tags: ['Notebooks'],
+		summary: 'Publish a workspace upload',
+		request: { params: UploadParams },
+		responses: {
+			200: jsonContent(
+				z.object({ success: z.literal(true), data: WorkspaceItemSchema }),
+				'File published',
+			),
+			...errorResponses(400, 401, 403, 404, 409, 429),
+		},
+	}),
+	async (c) => {
+		const { pid, nid, uploadId } = c.req.valid('param');
+		const { workspace, user } = await authorizeWorkspaceUpload(c, pid, nid);
+		const item = await workspace.completeUpload(
+			pid,
+			nid,
+			uploadId,
+			user.id,
+			await workspaceMutation(c, pid, nid),
+		);
+		return c.json({ success: true as const, data: toWorkspaceItem(item) }, 200);
+	},
+);
+app.openapi(
+	createRoute({
+		method: 'delete',
+		path: `${uploadBase}/{uploadId}`,
+		operationId: 'cancelWorkspaceUpload',
+		tags: ['Notebooks'],
+		summary: 'Cancel a workspace upload',
+		request: { params: UploadParams },
+		responses: {
+			200: jsonContent(
+				z.object({ success: z.literal(true), data: z.object({}) }),
+				'Upload cancelled',
+			),
+			...errorResponses(401, 403, 404, 409),
+		},
+	}),
+	async (c) => {
+		const { pid, nid, uploadId } = c.req.valid('param');
+		const { workspace, user } = await authorizeWorkspaceUpload(c, pid, nid);
+		await workspace.cancelUpload(pid, nid, uploadId, user.id);
+		return c.json({ success: true as const, data: {} }, 200);
+	},
+);
+
 app.get('/projects/:pid/notebooks/:nid/workspace/files', async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
@@ -1104,12 +1258,13 @@ app.put('/projects/:pid/notebooks/:nid/workspace/files', async (c) => {
 		throw new BadRequestError('create must be true or false');
 	}
 	const options = await workspaceMutation(c, pid, nid);
+	const maxFileBytes = deps.services.notebooks.workspace.limits.maxFileBytes;
 	const declaredSize = Number(c.req.header('content-length'));
-	if (Number.isFinite(declaredSize) && declaredSize > MAX_WORKSPACE_FILE_BYTES) {
+	if (Number.isFinite(declaredSize) && declaredSize > maxFileBytes) {
 		return fail(
 			c,
 			'PAYLOAD_TOO_LARGE',
-			`Workspace file exceeds the ${MAX_WORKSPACE_FILE_BYTES}-byte limit`,
+			`Workspace file exceeds the ${maxFileBytes}-byte limit`,
 			413,
 		);
 	}

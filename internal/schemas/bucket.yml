@@ -1546,6 +1546,172 @@ paths:
       responses:
         '204':
           description: Stored.
+  /projects/{pid}/notebooks/{nid}/uploads/{upload_id}.json:
+    summary: Resumable upload ownership, immutable part references, and publication
+      receipt.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: upload_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: ResumableUploads
+    get:
+      operationId: read_projects_notebooks_uploads_json
+      summary: Read WorkspaceUpload
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceUpload'
+    put:
+      operationId: write_projects_notebooks_uploads_json
+      summary: Write WorkspaceUpload
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceUpload'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/uploads/index.json:
+    summary: Bounded reservations for unfinished uploads.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: ResumableUploads
+    get:
+      operationId: read_projects_notebooks_uploads_index_json
+      summary: Read WorkspaceUploadIndex
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceUploadIndex'
+    put:
+      operationId: write_projects_notebooks_uploads_index_json
+      summary: Write WorkspaceUploadIndex
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceUploadIndex'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/object-uploads/{upload_id}.json:
+    summary: Resumable upload ownership, immutable part references, and publication
+      receipt.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: upload_id
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: ResumableUploads
+    get:
+      operationId: read_projects_object_uploads_json
+      summary: Read ObjectUpload
+      tags:
+        - project
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObjectUpload'
+    put:
+      operationId: write_projects_object_uploads_json
+      summary: Write ObjectUpload
+      tags:
+        - project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ObjectUpload'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/object-uploads/index.json:
+    summary: Bounded reservations for unfinished uploads.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: ResumableUploads
+    get:
+      operationId: read_projects_object_uploads_index_json
+      summary: Read ObjectUploadIndex
+      tags:
+        - project
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObjectUploadIndex'
+    put:
+      operationId: write_projects_object_uploads_index_json
+      summary: Write ObjectUploadIndex
+      tags:
+        - project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ObjectUploadIndex'
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/notebooks/{nid}/workspace_mutation_claim.json:
     summary: Short-lived lease serializing workspace file mutations for one notebook.
     parameters:
@@ -1736,6 +1902,107 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/EventIdempotencyMarker'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/notebooks/{nid}/uploads/{upload_id}/parts/{part}:
+    summary: Immutable upload part, retained until completion, cancellation, or expiry.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: nid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: upload_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: part
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: ResumableUploads
+    get:
+      operationId: read_projects_notebooks_uploads_parts
+      summary: Read WorkspaceUploadPart
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored artifact.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      operationId: write_projects_notebooks_uploads_parts
+      summary: Write WorkspaceUploadPart
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/object-uploads/{upload_id}/parts/{part}:
+    summary: Immutable upload part, retained until completion, cancellation, or expiry.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: upload_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: part
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: immutable
+    x-owner: ResumableUploads
+    get:
+      operationId: read_projects_object_uploads_parts
+      summary: Read ObjectUploadPart
+      tags:
+        - project
+      responses:
+        '200':
+          description: The stored artifact.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      operationId: write_projects_object_uploads_parts
+      summary: Write ObjectUploadPart
+      tags:
+        - project
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
       responses:
         '204':
           description: Stored.
@@ -4900,6 +5167,214 @@ components:
         - attempts
         - state
         - lease_until
+    WorkspaceUpload:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+        path:
+          type: string
+        size:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        part_size:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        created_by:
+          type: string
+        expires_at:
+          type: number
+        create_only:
+          type: boolean
+        content_type:
+          type: string
+        status:
+          type: string
+          enum:
+            - uploading
+            - publishing
+            - complete
+            - cancelled
+        parts:
+          type: array
+          items:
+            type: object
+            properties:
+              number:
+                type: integer
+                exclusiveMinimum: 0
+                maximum: 9007199254740991
+              sha256:
+                type: string
+              key:
+                type: string
+            required:
+              - number
+              - sha256
+              - key
+        result:
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties: {}
+        backend:
+          type: object
+          properties:
+            key:
+              type: string
+            id:
+              type: string
+          required:
+            - key
+            - id
+        context:
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties:
+            type: string
+      required:
+        - id
+        - path
+        - size
+        - part_size
+        - created_by
+        - expires_at
+        - create_only
+        - content_type
+        - status
+        - parts
+        - context
+    WorkspaceUploadIndex:
+      type: object
+      properties:
+        uploads:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+              size:
+                type: number
+              expires_at:
+                type: number
+            required:
+              - id
+              - size
+              - expires_at
+      required:
+        - uploads
+    ObjectUpload:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+        path:
+          type: string
+        size:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        part_size:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        created_by:
+          type: string
+        expires_at:
+          type: number
+        create_only:
+          type: boolean
+        content_type:
+          type: string
+        status:
+          type: string
+          enum:
+            - uploading
+            - publishing
+            - complete
+            - cancelled
+        parts:
+          type: array
+          items:
+            type: object
+            properties:
+              number:
+                type: integer
+                exclusiveMinimum: 0
+                maximum: 9007199254740991
+              sha256:
+                type: string
+              key:
+                type: string
+            required:
+              - number
+              - sha256
+              - key
+        result:
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties: {}
+        backend:
+          type: object
+          properties:
+            key:
+              type: string
+            id:
+              type: string
+          required:
+            - key
+            - id
+        context:
+          type: object
+          propertyNames:
+            type: string
+          additionalProperties:
+            type: string
+      required:
+        - id
+        - path
+        - size
+        - part_size
+        - created_by
+        - expires_at
+        - create_only
+        - content_type
+        - status
+        - parts
+        - context
+    ObjectUploadIndex:
+      type: object
+      properties:
+        uploads:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+              size:
+                type: number
+              expires_at:
+                type: number
+            required:
+              - id
+              - size
+              - expires_at
+      required:
+        - uploads
     WorkspaceMutationClaim:
       anyOf:
         - type: object
@@ -5003,6 +5478,7 @@ components:
                       - preview.manage
                       - integration.read
                       - integration.use
+                      - integration.write
                       - integration.manage
                       - change-request.publish
                       - security-labels.raise

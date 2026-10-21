@@ -1,3 +1,12 @@
+import {
+	WORKSPACE_LIMITS,
+	DEFAULT_LOCAL_ENTRY_NOTEBOOK,
+	isSafeWorkspacePath,
+	isWorkspaceInternalPath,
+	workspaceDirectoryFromMarkerPath,
+	workspaceDirectoryMarkerPath,
+} from '../../integrations/remoteWorkspace';
+import type { WorkspaceLimits } from '../../integrations/remoteWorkspace';
 import { batchByWeight } from '../../batching';
 import type { ByteBudget } from './byteBudget';
 import type { Bucket } from '../../ports/bucket';
@@ -13,20 +22,9 @@ import type {
 	ReadFileResult,
 	SandboxInstance,
 } from '../../ports/sandbox';
-import {
-	MAX_ARTIFACT_BYTES,
-	MAX_WORKSPACE_BYTES,
-	MAX_WORKSPACE_FILE_BYTES,
-	MAX_WORKSPACE_FILES,
-} from '../../constants';
+import { MAX_ARTIFACT_BYTES, MAX_WORKSPACE_BYTES } from '../../constants';
 import { shellQuote } from './shell';
-import {
-	DEFAULT_LOCAL_ENTRY_NOTEBOOK,
-	isSafeWorkspacePath,
-	isWorkspaceInternalPath,
-	workspaceDirectoryFromMarkerPath,
-	workspaceDirectoryMarkerPath,
-} from '../../integrations/remoteWorkspace';
+
 import { isRegenerableArtifactPath } from '../../integrations/workspaceIgnore';
 import { listAllKeys, listAllObjects } from '../catalog/storage';
 import type { CommitSessionInput } from '../content/NotebookService';
@@ -39,10 +37,15 @@ import type { CommitSessionInput } from '../content/NotebookService';
 const RESTORE_FETCH_CONCURRENCY = 32;
 const CAPTURE_FILE_CONCURRENCY = 8;
 // Reserve a full per-file budget for each read/upload slot, regardless of listed size.
-const CAPTURE_READ_CONCURRENCY = Math.min(
-	CAPTURE_FILE_CONCURRENCY,
-	Math.floor(MAX_WORKSPACE_BYTES / MAX_WORKSPACE_FILE_BYTES),
-);
+function captureReadConcurrency(limits: WorkspaceLimits): number {
+	return Math.max(
+		1,
+		Math.min(
+			CAPTURE_FILE_CONCURRENCY,
+			Math.floor(Math.min(MAX_WORKSPACE_BYTES, limits.maxTotalBytes) / limits.maxFileBytes),
+		),
+	);
+}
 const CAPTURE_READ_TIMEOUT_MS = 10_000;
 const warnedUnsupportedSandboxes = new WeakSet<SandboxInstance>();
 
@@ -193,6 +196,7 @@ export async function loadWorkspaceOverlay(
 }
 
 export interface WorkspaceRestoreOptions {
+	limits?: WorkspaceLimits;
 	/** Replaces matching workspace files in the first write batch. */
 	overlay?: WorkspaceOverlay;
 	requireComplete?: boolean;
@@ -218,6 +222,7 @@ export async function restoreWorkspace(
 	// Select from the LISTING (sizes included) so an oversized object is skipped
 	// before `bucket.get()` buffers its body — the size check must never use the
 	// fetched object.
+	const limits = options.limits ?? WORKSPACE_LIMITS;
 	const objects = await listAllObjects(bucket, sourcePrefix);
 	let wanted: { key: string; dest: string; size: number }[] = [];
 	const directories: string[] = [];
@@ -260,14 +265,14 @@ export async function restoreWorkspace(
 			console.warn(`restoreWorkspace: unsafe workspace path; skipping ${rel}`);
 			continue;
 		}
-		if (obj.size > MAX_WORKSPACE_FILE_BYTES) {
+		if (obj.size > limits.maxFileBytes) {
 			if (options.requireComplete) {
 				throw new Error(
-					`restoreWorkspace: per-file cap (${MAX_WORKSPACE_FILE_BYTES}) exceeded: ${rel} (${obj.size} bytes)`,
+					`restoreWorkspace: per-file cap (${limits.maxFileBytes}) exceeded: ${rel} (${obj.size} bytes)`,
 				);
 			}
 			console.warn(
-				`restoreWorkspace: per-file cap (${MAX_WORKSPACE_FILE_BYTES}) exceeded; skipping ${rel} (${obj.size} bytes)`,
+				`restoreWorkspace: per-file cap (${limits.maxFileBytes}) exceeded; skipping ${rel} (${obj.size} bytes)`,
 			);
 			continue;
 		}
@@ -382,6 +387,7 @@ export async function captureWorkspace(
 	mode: 'source' | 'workspace',
 	listing: WorkspaceListing = sharedWorkspaceListing(sandbox, workingDir),
 	entryNotebook = DEFAULT_LOCAL_ENTRY_NOTEBOOK,
+	limits: WorkspaceLimits = WORKSPACE_LIMITS,
 ): Promise<void> {
 	if (!supportsBoundedReads(sandbox)) return;
 	const nb = paths.project(projectId).notebook(notebookId);
@@ -458,7 +464,7 @@ export async function captureWorkspace(
 			const entry = gitGroupFor(group);
 			entry.files.push(rel);
 			entry.bytes += file.size;
-			if (file.size > MAX_WORKSPACE_FILE_BYTES) entry.fitsPerFileCap = false;
+			if (file.size > limits.maxFileBytes) entry.fitsPerFileCap = false;
 			continue;
 		}
 		candidates.push({ rel, size: file.size, tier: captureTier(rel) });
@@ -468,21 +474,21 @@ export async function captureWorkspace(
 
 	let totalBytes = 0;
 	for (const { rel, size } of candidates) {
-		if (selected.length >= MAX_WORKSPACE_FILES) {
+		if (selected.length >= limits.maxFiles) {
 			console.warn(
-				`captureWorkspace: file count cap (${MAX_WORKSPACE_FILES}) reached; skipping ${rel}`,
+				`captureWorkspace: file count cap (${limits.maxFiles}) reached; skipping ${rel}`,
 			);
 			continue;
 		}
-		if (size > MAX_WORKSPACE_FILE_BYTES) {
+		if (size > limits.maxFileBytes) {
 			console.warn(
-				`captureWorkspace: per-file cap (${MAX_WORKSPACE_FILE_BYTES}) exceeded; skipping ${rel} (${size} bytes)`,
+				`captureWorkspace: per-file cap (${limits.maxFileBytes}) exceeded; skipping ${rel} (${size} bytes)`,
 			);
 			continue;
 		}
-		if (totalBytes + size > MAX_WORKSPACE_BYTES) {
+		if (totalBytes + size > limits.maxTotalBytes) {
 			console.warn(
-				`captureWorkspace: total-byte cap (${MAX_WORKSPACE_BYTES}) would be exceeded; skipping ${rel} (${size} bytes)`,
+				`captureWorkspace: total-byte cap (${limits.maxTotalBytes}) would be exceeded; skipping ${rel} (${size} bytes)`,
 			);
 			continue;
 		}
@@ -497,8 +503,8 @@ export async function captureWorkspace(
 	for (const [group, entry] of orderedGitGroups) {
 		if (
 			entry.fitsPerFileCap &&
-			selected.length + entry.files.length <= MAX_WORKSPACE_FILES &&
-			totalBytes + entry.bytes <= MAX_WORKSPACE_BYTES
+			selected.length + entry.files.length <= limits.maxFiles &&
+			totalBytes + entry.bytes <= limits.maxTotalBytes
 		) {
 			selected.push(...entry.files);
 			directoryMarkers.push(...entry.directoryMarkers);
@@ -515,13 +521,13 @@ export async function captureWorkspace(
 
 	// Presence comes from the listing: skipped uploads retain the last good copy.
 	let capturedBytes = 0;
-	await mapWithConcurrency(selected, CAPTURE_READ_CONCURRENCY, async (rel) => {
+	await mapWithConcurrency(selected, captureReadConcurrency(limits), async (rel) => {
 		const result = await readBoundedBytes(
 			sandbox,
 			`${workingDir}/${rel}`,
-			Math.min(MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_BYTES - capturedBytes),
+			Math.min(limits.maxFileBytes, limits.maxTotalBytes - capturedBytes),
 		);
-		if (!result?.success || capturedBytes + result.bytes.byteLength > MAX_WORKSPACE_BYTES) {
+		if (!result?.success || capturedBytes + result.bytes.byteLength > limits.maxTotalBytes) {
 			console.warn(`captureWorkspace: could not read ${rel.slice(0, 256)}; skipping`);
 			return;
 		}

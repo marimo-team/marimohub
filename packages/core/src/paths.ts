@@ -151,6 +151,7 @@ export interface NotebookImportPaths {
 }
 
 export interface ProjectPaths {
+	objectUploadsPrefix: string;
 	meta: string;
 	/** CAS-owned project alert destinations. */
 	alerts: string;
@@ -271,6 +272,7 @@ function integrationPaths(projectBase: string, iid: IntegrationId): IntegrationP
 function projectPaths(pid: ProjectId): ProjectPaths {
 	const base = `projects/${pid}`;
 	return {
+		objectUploadsPrefix: `${base}/object-uploads/`,
 		meta: `${base}/project.json`,
 		alerts: `${base}/alerts.json`,
 		notebook: (nid: NotebookId) => notebookPaths(base, nid),

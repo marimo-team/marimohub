@@ -1,3 +1,4 @@
+import type { WorkspaceLimits } from '../integrations/remoteWorkspace';
 import { NotebookPreviewService } from './content/NotebookPreviewService';
 import { previewKey } from './content/notebookPreviews';
 import type { NotebookPreview } from './content/notebookPreviews';
@@ -496,6 +497,7 @@ const bucketAttrs: AttrExtractors<Bucket> = {
 };
 
 export interface CreateServicesOptions {
+	workspaceLimits?: WorkspaceLimits;
 	repositoryHosts?: GitProviderHosts;
 	/**
 	 * Wrap the bucket and every service in OTEL spans (one per method call).
@@ -583,7 +585,15 @@ export function createServices(
 	);
 	const notebooks = wrap(
 		'NotebookService',
-		new NotebookService(bucket, catalog, metrics, sessions, deepLinks, options?.repositoryHosts),
+		new NotebookService(
+			bucket,
+			catalog,
+			metrics,
+			sessions,
+			deepLinks,
+			options?.repositoryHosts,
+			options?.workspaceLimits,
+		),
 		{
 			listNotebooks: project,
 			createNotebook: project,
@@ -768,3 +778,11 @@ export type { WarmPoolConfig, WarmPoolClaim, WarmPoolProfile } from './runtime/W
 
 export { NotebookPreviewService } from './content/NotebookPreviewService';
 export * from './content/notebookPreviews';
+
+export {
+	ResumableUploads,
+	uploadStatus,
+	UploadStatusSchema,
+	UPLOAD_PART_BYTES,
+} from './content/ResumableUploads';
+export type { UploadRecord } from './content/ResumableUploads';

@@ -47,7 +47,12 @@ export class GcsAuth {
 		private readonly context: ObjectBrowseContext,
 		private readonly fetchImpl: typeof fetch,
 		private readonly useStandardAdc = true,
+		private readonly write = false,
 	) {}
+
+	private scope() {
+		return this.write ? 'https://www.googleapis.com/auth/devstorage.read_write' : STORAGE_SCOPE;
+	}
 
 	async projectId(): Promise<string | undefined> {
 		if (this.source.project_id) return this.source.project_id;
@@ -154,7 +159,7 @@ export class GcsAuth {
 	}
 
 	private googleAuth(): GoogleAuth {
-		this.ambientAuth ??= new GoogleAuth({ scopes: STORAGE_SCOPE });
+		this.ambientAuth ??= new GoogleAuth({ scopes: this.scope() });
 		return this.ambientAuth;
 	}
 
@@ -171,7 +176,7 @@ export class GcsAuth {
 		}
 		try {
 			const key = await importPKCS8(account.private_key.replaceAll('\\n', '\n'), 'RS256');
-			const assertion = await new SignJWT({ scope: STORAGE_SCOPE })
+			const assertion = await new SignJWT({ scope: this.scope() })
 				.setProtectedHeader({ alg: 'RS256', typ: 'JWT' })
 				.setIssuer(account.client_email)
 				.setSubject(account.client_email)

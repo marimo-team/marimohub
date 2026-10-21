@@ -66,3 +66,6 @@ The import uses three routes. All of them require permission to create notebooks
 A notebook that is absent from the `GET` result was not attempted, or its attempt stopped and you can retry it.
 `expired` and a `409 IMPORT_RESTART_REQUIRED` response mean that you must upload the folder again.
 The CLI does not include these routes.
+
+Workspace file uploads use a separate [resumable path](./editor-sessions.md#resumable-uploads) above 25 MiB.
+Its 8 MiB parts avoid buffering the whole upload. Folder ZIP imports still buffer the archive as described above.

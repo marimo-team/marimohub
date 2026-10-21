@@ -1,3 +1,4 @@
+import type { WorkspaceLimits } from '../integrations/remoteWorkspace';
 import { zipSync } from 'fflate';
 import type { NotebookId, ProjectId, UserId } from '../ids';
 import { paths } from '../paths';
@@ -34,15 +35,23 @@ export function fakeNotebookDetail(source: Source = makeLocalSource()): Notebook
 export function makeWorkspaceService(
 	bucket: Bucket,
 	source: Source = makeLocalSource(),
+	limits?: WorkspaceLimits,
 ): { service: NotebookWorkspaceService; owner: FakeWorkspaceOwner } {
 	const owner: FakeWorkspaceOwner = { detail: fakeNotebookDetail(source), saved: [] };
-	const service = new NotebookWorkspaceService(bucket, {
-		getNotebook: async () => owner.detail,
-		saveSourceFile: async (projectId, notebookId, path, content, actor) => {
-			owner.saved.push({ projectId, notebookId, path, content, actor });
-			await bucket.put(paths.project(projectId).notebook(notebookId).workspaceFile(path), content);
+	const service = new NotebookWorkspaceService(
+		bucket,
+		{
+			getNotebook: async () => owner.detail,
+			saveSourceFile: async (projectId, notebookId, path, content, actor) => {
+				owner.saved.push({ projectId, notebookId, path, content, actor });
+				await bucket.put(
+					paths.project(projectId).notebook(notebookId).workspaceFile(path),
+					content,
+				);
+			},
 		},
-	});
+		limits,
+	);
 	return { service, owner };
 }
 

@@ -1,3 +1,4 @@
+import { MAX_WORKSPACE_FILE_BYTES } from '@marimo-hub/core/constants';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	APP_HEARTBEAT_INTERVAL_MS,
@@ -108,6 +109,15 @@ app.openapi(capabilitiesRoute, (c) => {
 	const deps = c.get('deps');
 	const previewReader = deps.sourceControl?.getReader('github');
 	return ok(c, {
+		workspace_limits: {
+			single_put_max_bytes: Math.min(
+				MAX_WORKSPACE_FILE_BYTES,
+				deps.services.notebooks.workspace.limits.maxFileBytes,
+			),
+			max_file_bytes: deps.services.notebooks.workspace.limits.maxFileBytes,
+			max_total_bytes: deps.services.notebooks.workspace.limits.maxTotalBytes,
+			max_files: deps.services.notebooks.workspace.limits.maxFiles,
+		},
 		federation: {
 			available: Boolean(deps.wif),
 			default_enabled: deps.wif?.defaultEnabled ?? false,

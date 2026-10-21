@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { MemoryBucket, uid } from '@marimo-hub/core/testing';
-import { DEFAULT_APP_POOL_POLICY } from '@marimo-hub/core';
+import { createServices, DEFAULT_APP_POOL_POLICY } from '@marimo-hub/core';
 import type { Authenticator } from '@marimo-hub/core';
 import { createApi } from './createApi';
 import { expectError, expectOk, makeTestDeps, makeTestWif, stubSourceControl } from './testing';
@@ -321,4 +321,21 @@ describe('GET /api/v1/capabilities', () => {
 		const res = await createApi(deps).request('/api/v1/capabilities');
 		await expectError(res, 401, 'UNAUTHORIZED');
 	});
+});
+
+it('advertises configured workspace limits from the service', async () => {
+	const bucket = new MemoryBucket();
+	const workspaceLimits = { maxFileBytes: 1024, maxTotalBytes: 4096, maxFiles: 8 };
+	const deps = makeTestDeps(bucket, {
+		authenticator: authed,
+		services: createServices(bucket, undefined, { workspaceLimits }),
+	});
+	expect(await expectOk(await createApi(deps).request('/api/v1/capabilities'))).toMatchObject({
+		workspace_limits: { max_file_bytes: 1024, max_total_bytes: 4096, max_files: 8 },
+	});
+	const response = await createApi(deps).request(
+		'/api/v1/projects/proj-0000000000000000/notebooks/nb-0000000000000000/workspace/files?path=data',
+		{ method: 'PUT', body: new Uint8Array(1025) },
+	);
+	await expectError(response, 413, 'PAYLOAD_TOO_LARGE');
 });

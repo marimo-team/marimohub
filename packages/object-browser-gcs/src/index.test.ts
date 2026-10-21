@@ -1,3 +1,4 @@
+import { GcsAuth } from './auth';
 import { describe, expect, it, vi } from 'vitest';
 import { createProjectId, UserId } from '@marimo-hub/core/ids';
 import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
@@ -215,4 +216,71 @@ describe('GCS object browser', () => {
 			expect(fetchImpl).not.toHaveBeenCalled();
 		},
 	);
+});
+
+describe('GCS object uploads', () => {
+	it('keeps ambient credentials read-only even with allow_write', async () => {
+		const fetcher = vi.fn();
+		const writable = { ...source, allow_write: true };
+		const target = browser(fetcher);
+		expect(target.capability(writable, context).write).toBe(false);
+		await expect(
+			target.putObject(writable, context, {
+				bucket: 'lake',
+				key: 'data',
+				contentType: 'application/octet-stream',
+				size: 0,
+				body: new Uint8Array(),
+			}),
+		).rejects.toMatchObject({ code: 'access_denied' });
+		expect(fetcher).not.toHaveBeenCalled();
+	});
+
+	it('publishes bounded resumable ranges with explicit service-account credentials', async () => {
+		const auth = vi
+			.spyOn(GcsAuth.prototype, 'headers')
+			.mockResolvedValue({ Authorization: 'Bearer token' });
+		try {
+			const requests: RequestInit[] = [];
+			const target = browser((async (_url, init) => {
+				requests.push(init!);
+				if (init!.method === 'POST')
+					return new Response(null, {
+						headers: { location: 'https://storage.googleapis.com/upload/session' },
+					});
+				return new Response(null, { status: requests.length === 2 ? 308 : 200 });
+			}) as typeof fetch);
+			const writable: GcsObjectStoreSource = {
+				...source,
+				allow_write: true,
+				auth: {
+					method: 'service_account',
+					credentials_json: JSON.stringify({
+						client_email: 'test@example.com',
+						private_key: 'test',
+					}),
+				},
+			};
+			await target.putObject(writable, context, {
+				bucket: 'lake',
+				key: 'data',
+				contentType: 'application/octet-stream',
+				size: 8 * 1024 * 1024 + 1,
+				body: new ReadableStream({
+					start(controller) {
+						controller.enqueue(new Uint8Array(8 * 1024 * 1024));
+						controller.enqueue(new Uint8Array([7]));
+						controller.close();
+					},
+				}),
+			});
+			expect(requests.map((request) => request.method)).toEqual(['POST', 'PUT', 'PUT']);
+			expect(new Headers(requests[1].headers).get('content-range')).toBe('bytes 0-8388607/8388609');
+			expect(new Headers(requests[2].headers).get('content-range')).toBe(
+				'bytes 8388608-8388608/8388609',
+			);
+		} finally {
+			auth.mockRestore();
+		}
+	});
 });

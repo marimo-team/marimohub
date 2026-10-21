@@ -798,3 +798,30 @@ describe('NotebookWorkspaceService', () => {
 		expect(results.map((item) => item.path)).toEqual(['data/cars.csv']);
 	});
 });
+
+describe('configured workspace limits', () => {
+	it('enforces file, total and count caps with replacement accounting', async () => {
+		const bucket = new MemoryBucket();
+		const { service } = makeWorkspaceService(bucket, undefined, {
+			maxFileBytes: 5,
+			maxTotalBytes: 7,
+			maxFiles: 2,
+		});
+		const write = (path: string, contents: string) =>
+			service.write(PROJECT_ID, NOTEBOOK_ID, path, encode(contents), ACTOR);
+		await expect(write('too-big', '123456')).rejects.toThrow('exceeds 5 bytes');
+		await write('a', '12345');
+		await expect(write('b', '123')).rejects.toThrow('exceeds 7 bytes');
+		await write('a', '12');
+		await write('b', '12345');
+		await expect(write('c', '')).rejects.toThrow('exceeds 2 files');
+		expect((await service.read(PROJECT_ID, NOTEBOOK_ID, 'b')).bytes).toEqual(encode('12345'));
+		await bucket.put(
+			paths.project(PROJECT_ID).notebook(NOTEBOOK_ID).workspaceFile('oversized'),
+			'123456',
+		);
+		await expect(service.read(PROJECT_ID, NOTEBOOK_ID, 'oversized')).rejects.toThrow(
+			'exceeds 5 bytes',
+		);
+	});
+});

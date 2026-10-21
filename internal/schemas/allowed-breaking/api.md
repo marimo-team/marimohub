@@ -35,3 +35,11 @@ override, so the field no longer accepts `null` there; the update body still doe
 POST /api/v1/projects/{pid}/notebooks the request property `app_compute_profile` became not nullable
 POST /api/v1/projects/{pid}/notebooks/git the request property `app_compute_profile` became not nullable
 ```
+
+The authorization action vocabulary gained `integration.write`. The policy analyzer's
+`anyOf` branches are otherwise unchanged, and all existing policy cases remain valid.
+oasdiff reports the expanded branches as replaced.
+
+```text
+POST /api/v1/admin/policy-analyzer/evaluate removed `subschema #1, subschema #2` from the `cases/items/` request property `anyOf` list
+```

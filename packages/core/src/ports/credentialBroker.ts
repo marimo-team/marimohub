@@ -7,6 +7,8 @@
 
 /** Temporary S3-style credentials returned by a credential exchange. */
 export interface TempS3Creds {
+	/** Set only when the broker verifies that the exchanged credentials permit writes. */
+	writeAllowed?: boolean;
 	accessKeyId: string;
 	secretAccessKey: string;
 	/** Session token, when the provider issues one (may be empty/omitted). */

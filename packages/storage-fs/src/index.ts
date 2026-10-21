@@ -200,19 +200,42 @@ export class FsStorage implements Bucket {
 		value: string | Uint8Array,
 		options?: BucketPutOptions,
 	): Promise<BucketObject> {
+		const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+		return this.putStream(
+			key,
+			(async function* () {
+				yield bytes;
+			})(),
+			bytes.length,
+			options,
+		);
+	}
+
+	async putStream(
+		key: string,
+		chunks: AsyncIterable<Uint8Array>,
+		size: number,
+		options?: BucketPutOptions,
+	): Promise<BucketObject> {
 		const filePath = this.resolvePath(key);
 		if (options?.onlyIfEtagMatches !== undefined && options?.onlyIfNotExists) {
 			throw new Error('onlyIfEtagMatches and onlyIfNotExists are mutually exclusive');
 		}
 		return this.withKeyLock(key, async () => {
 			await this.assertContainedParent(filePath);
-			const body = typeof value === 'string' ? new TextEncoder().encode(value) : value;
-			const etag = sha256hex(body);
+			const hash = createHash('sha256');
+			let written = 0;
 			const tmp = path.join(this.tmpDir, randomUUID());
 			try {
 				const handle = await fsp.open(tmp, 'wx');
 				try {
-					await handle.writeFile(body);
+					for await (const chunk of chunks) {
+						written += chunk.byteLength;
+						if (written > size) throw new Error('Stream exceeds declared size');
+						hash.update(chunk);
+						await handle.writeFile(chunk);
+					}
+					if (written !== size) throw new Error('Stream does not match declared size');
 					// Flush to disk before the rename publishes the file, so a crash
 					// can't leave a renamed-but-empty object behind.
 					await handle.sync();
@@ -240,7 +263,7 @@ export class FsStorage implements Bucket {
 				} else {
 					await fsp.rename(tmp, filePath);
 				}
-				return { key, etag, size: body.length, uploaded };
+				return { key, etag: hash.digest('hex'), size, uploaded };
 			} finally {
 				// ENOENT after a successful rename (the staged file was consumed).
 				await fsp.unlink(tmp).catch(() => {});

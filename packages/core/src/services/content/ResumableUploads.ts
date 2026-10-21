@@ -1,0 +1,323 @@
+import { z } from 'zod';
+import {
+	BadRequestError,
+	ConflictError,
+	ForbiddenError,
+	NotFoundError,
+	PreconditionFailedError,
+	ResourceExhaustedError,
+} from '../../errors';
+import type { UserId } from '../../ids';
+import type { Bucket, BucketObject, BucketPutOptions } from '../../ports/bucket';
+import { readStored } from '../../schema';
+import { withCasRetry } from '../catalog/cas';
+import { deleteByPrefix, listAllObjects } from '../catalog/storage';
+
+export const UPLOAD_PART_BYTES = 8 * 1024 * 1024;
+export const UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
+const RECEIPT_RETENTION_MS = 7 * UPLOAD_RETENTION_MS;
+const MAX_ACTIVE_UPLOADS = 16;
+const UploadPartSchema = z.object({
+	number: z.number().int().positive(),
+	sha256: z.string(),
+	key: z.string(),
+});
+export const UploadRecordSchema = z.object({
+	id: z.uuid(),
+	path: z.string(),
+	size: z.number().int().nonnegative(),
+	part_size: z.number().int().positive(),
+	created_by: z.string(),
+	expires_at: z.number(),
+	create_only: z.boolean(),
+	content_type: z.string(),
+	status: z.enum(['uploading', 'publishing', 'complete', 'cancelled']),
+	parts: z.array(UploadPartSchema),
+	result: z.record(z.string(), z.unknown()).optional(),
+	backend: z.object({ key: z.string(), id: z.string() }).optional(),
+	context: z.record(z.string(), z.string()),
+});
+export type UploadRecord = z.infer<typeof UploadRecordSchema>;
+export const UploadIndexSchema = z.object({
+	uploads: z.array(z.object({ id: z.uuid(), size: z.number(), expires_at: z.number() })),
+});
+
+export const UploadStatusSchema = z.object({
+	id: z.uuid(),
+	path: z.string(),
+	size: z.number().int().nonnegative(),
+	part_size: z.number().int().positive(),
+	parts_done: z.array(z.number().int().positive()),
+	expires_at: z.number(),
+	status: z.enum(['uploading', 'publishing', 'complete', 'cancelled']),
+});
+export function uploadStatus(record: UploadRecord): z.infer<typeof UploadStatusSchema> {
+	return {
+		id: record.id,
+		path: record.path,
+		size: record.size,
+		part_size: record.part_size,
+		parts_done: record.parts.map((part) => part.number),
+		expires_at: record.expires_at,
+		status: record.status,
+	};
+}
+
+/** Each owner supplies a scoped prefix; no key or backend upload ID comes from a client. */
+export class ResumableUploads {
+	constructor(
+		private readonly bucket: Bucket,
+		private readonly prefix: string,
+	) {}
+	private key(id: string) {
+		if (!z.uuid().safeParse(id).success) throw new BadRequestError('Invalid upload ID');
+		return `${this.prefix}${id}.json`;
+	}
+	private partsPrefix(id: string) {
+		return `${this.prefix}${id}/parts/`;
+	}
+	async start(
+		input: Pick<UploadRecord, 'path' | 'size' | 'create_only' | 'content_type'>,
+		actor: UserId,
+		maxBytes: number,
+		context: Record<string, string> = {},
+	) {
+		if (!Number.isSafeInteger(input.size) || input.size < 0 || input.size > maxBytes)
+			throw new ResourceExhaustedError(`Upload exceeds the ${maxBytes}-byte limit`);
+		const record: UploadRecord = {
+			...input,
+			id: crypto.randomUUID(),
+			part_size: UPLOAD_PART_BYTES,
+			created_by: actor,
+			expires_at: Date.now() + UPLOAD_RETENTION_MS,
+			parts: [],
+			status: 'uploading',
+			context,
+		};
+		const indexKey = `${this.prefix}index.json`;
+		await withCasRetry(this.bucket, async (writer) => {
+			const head = await this.bucket.get(indexKey);
+			const index = head ? await readStored(UploadIndexSchema, head, indexKey) : { uploads: [] };
+			const active = index.uploads.filter((upload) => upload.expires_at > Date.now());
+			if (
+				active.length >= MAX_ACTIVE_UPLOADS ||
+				active.reduce((sum, upload) => sum + upload.size, 0) + input.size > maxBytes
+			)
+				throw new ResourceExhaustedError(
+					'Too many unfinished uploads; finish or cancel an upload first',
+				);
+			await writer.put(
+				indexKey,
+				JSON.stringify({
+					uploads: [...active, { id: record.id, size: record.size, expires_at: record.expires_at }],
+				}),
+				head ? { onlyIfEtagMatches: head.etag } : { onlyIfNotExists: true },
+			);
+		});
+		await this.bucket.put(this.key(record.id), JSON.stringify(record), { onlyIfNotExists: true });
+		return uploadStatus(record);
+	}
+	private async load(id: string) {
+		const key = this.key(id);
+		const head = await this.bucket.get(key);
+		if (!head) throw new NotFoundError('Upload not found');
+		return { head, record: await readStored(UploadRecordSchema, head, key) };
+	}
+	private authorize(record: UploadRecord, actor: UserId) {
+		if (record.created_by !== actor) throw new ForbiddenError('Upload belongs to another user');
+		if (record.expires_at <= Date.now() || record.status === 'cancelled')
+			throw new NotFoundError('Upload expired or was cancelled');
+	}
+	async get(id: string, actor: UserId) {
+		const { record } = await this.load(id);
+		this.authorize(record, actor);
+		return record;
+	}
+	async putPart(id: string, number: number, bytes: Uint8Array, actor: UserId) {
+		const record = await this.get(id, actor);
+		const expected = Math.min(record.part_size, record.size - (number - 1) * record.part_size);
+		if (
+			!Number.isSafeInteger(number) ||
+			number < 1 ||
+			expected <= 0 ||
+			expected !== bytes.byteLength
+		)
+			throw new BadRequestError('Upload part number or size does not match the upload');
+		if (record.status !== 'uploading') throw new ConflictError('Upload no longer accepts parts');
+		const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes)))]
+			.map((value) => value.toString(16).padStart(2, '0'))
+			.join('');
+		const key = `${this.partsPrefix(id)}${number}`;
+		try {
+			await this.bucket.put(key, bytes, { onlyIfNotExists: true });
+		} catch (error) {
+			if (!(error instanceof PreconditionFailedError)) throw error;
+			const existing = await this.bucket.get(key);
+			if (!existing || existing.size !== bytes.byteLength)
+				throw new ConflictError('Upload part already contains different bytes');
+			const hash = [
+				...new Uint8Array(
+					await crypto.subtle.digest('SHA-256', new Uint8Array(await existing.bytes())),
+				),
+			]
+				.map((value) => value.toString(16).padStart(2, '0'))
+				.join('');
+			if (hash !== sha256) throw new ConflictError('Upload part already contains different bytes');
+		}
+		return withCasRetry(this.bucket, async (writer) => {
+			const { head, record: current } = await this.load(id);
+			this.authorize(current, actor);
+			if (current.status !== 'uploading') throw new ConflictError('Upload no longer accepts parts');
+			const previous = current.parts.find((part) => part.number === number);
+			if (previous && previous.sha256 !== sha256)
+				throw new ConflictError('Upload part already contains different bytes');
+			if (!previous) current.parts.push({ number, sha256, key });
+			current.parts.sort((a, b) => a.number - b.number);
+			await writer.put(this.key(id), JSON.stringify(current), { onlyIfEtagMatches: head.etag });
+			return uploadStatus(current);
+		});
+	}
+	async *chunks(record: UploadRecord): AsyncGenerator<Uint8Array> {
+		for (const part of record.parts) {
+			const object = await this.bucket.get(part.key);
+			if (!object) throw new ConflictError('Upload part is missing; upload the file again');
+			yield await object.bytes();
+		}
+	}
+	async complete(
+		id: string,
+		actor: UserId,
+		prepare: (record: UploadRecord) => Promise<() => Promise<Record<string, unknown>>>,
+	) {
+		const { head, record } = await this.load(id);
+		this.authorize(record, actor);
+		if (record.status === 'complete' && record.result) return record.result;
+		if (record.status === 'publishing')
+			throw new ConflictError(
+				'Upload publication is in progress or was interrupted; check the destination before starting another upload',
+			);
+		if (record.parts.length !== Math.ceil(record.size / record.part_size))
+			throw new ConflictError('Upload has missing parts');
+		const publish = await prepare(record);
+		record.status = 'publishing';
+		try {
+			await this.bucket.put(this.key(id), JSON.stringify(record), { onlyIfEtagMatches: head.etag });
+		} catch (error) {
+			if (error instanceof PreconditionFailedError)
+				throw new ConflictError('Upload changed; retry completion');
+			throw error;
+		}
+		// Never replay an uncertain publication: another writer may already have changed the destination.
+		const result = await publish();
+		const current = await this.load(id);
+		await this.bucket.put(
+			this.key(id),
+			JSON.stringify({ ...current.record, status: 'complete', backend: undefined, result }),
+			{ onlyIfEtagMatches: current.head.etag },
+		);
+		await this.release(id);
+		await deleteByPrefix(this.bucket, this.partsPrefix(id));
+		return result;
+	}
+	async publishToBucket(
+		record: UploadRecord,
+		key: string,
+		options?: BucketPutOptions,
+		assertMutable: () => Promise<void> = async () => {},
+	): Promise<BucketObject> {
+		if (this.bucket.multipart && record.size > 0) {
+			const multipart = this.bucket.multipart;
+			const { uploadId } = await multipart.create(key, options);
+			try {
+				const current = await this.load(record.id);
+				await this.bucket.put(
+					this.key(record.id),
+					JSON.stringify({ ...current.record, backend: { key, id: uploadId } }),
+					{ onlyIfEtagMatches: current.head.etag },
+				);
+				const parts = [];
+				let partNumber = 0;
+				for await (const bytes of this.chunks(record)) {
+					await assertMutable();
+					parts.push(await multipart.putPart(key, uploadId, ++partNumber, bytes));
+				}
+				await assertMutable();
+				return await multipart.complete(key, uploadId, parts);
+			} catch (error) {
+				await multipart.abort(key, uploadId).catch(() => {});
+				throw error;
+			}
+		}
+		const chunks = this.chunks(record);
+		if (this.bucket.putStream)
+			return this.bucket.putStream(
+				key,
+				(async function* () {
+					for await (const chunk of chunks) {
+						await assertMutable();
+						yield chunk;
+					}
+					await assertMutable();
+				})(),
+				record.size,
+				options,
+			);
+		if (record.size > 64 * 1024 * 1024)
+			throw new ResourceExhaustedError('This storage adapter supports uploads up to 64 MiB');
+		const bytes = new Uint8Array(record.size);
+		let offset = 0;
+		for await (const chunk of this.chunks(record)) {
+			bytes.set(chunk, offset);
+			offset += chunk.length;
+		}
+		await assertMutable();
+		return this.bucket.put(key, bytes, options);
+	}
+	async cancel(id: string, actor: UserId) {
+		const { record } = await this.load(id);
+		if (record.created_by !== actor) throw new ForbiddenError('Upload belongs to another user');
+		if (record.status === 'publishing')
+			throw new ConflictError('Upload publication is in progress');
+		await this.expire(id, actor);
+	}
+	private async release(id: string) {
+		const key = `${this.prefix}index.json`;
+		await withCasRetry(this.bucket, async (writer) => {
+			const head = await this.bucket.get(key);
+			if (!head) return;
+			const index = await readStored(UploadIndexSchema, head, key);
+			await writer.put(
+				key,
+				JSON.stringify({ uploads: index.uploads.filter((upload) => upload.id !== id) }),
+				{ onlyIfEtagMatches: head.etag },
+			);
+		});
+	}
+	private async expire(id: string, actor?: UserId) {
+		const record = await withCasRetry(this.bucket, async (writer) => {
+			const { head, record } = await this.load(id);
+			if (actor) {
+				if (record.created_by !== actor) throw new ForbiddenError('Upload belongs to another user');
+				if (record.status === 'publishing')
+					throw new ConflictError('Upload publication is in progress');
+			}
+			record.status = 'cancelled';
+			await writer.put(this.key(id), JSON.stringify(record), { onlyIfEtagMatches: head.etag });
+			return record;
+		});
+		if (record.backend && this.bucket.multipart)
+			await this.bucket.multipart.abort(record.backend.key, record.backend.id);
+		await deleteByPrefix(this.bucket, this.partsPrefix(id));
+		await this.release(id);
+	}
+	async sweep(now = Date.now()) {
+		for (const object of await listAllObjects(this.bucket, this.prefix)) {
+			const id = object.key.slice(this.prefix.length).replace(/\.json$/, '');
+			if (!z.uuid().safeParse(id).success) continue;
+			const { record } = await this.load(id);
+			if (record.expires_at > now && record.status !== 'cancelled') continue;
+			await this.expire(id);
+			if (record.expires_at + RECEIPT_RETENTION_MS <= now) await this.bucket.delete(this.key(id));
+		}
+	}
+}

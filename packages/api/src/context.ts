@@ -1,3 +1,4 @@
+import type { WorkspaceLimits } from '@marimo-hub/core/remote-workspace';
 import type { ThemeConfig } from '@marimo-hub/core/theme';
 import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-bridge';
 import type { Hono, MiddlewareHandler } from 'hono';
@@ -416,6 +417,7 @@ export interface LoopHealthReport {
  * context (`c.get('deps')`) instead of instantiating adapters from `c.env`.
  */
 export interface ApiDeps {
+	workspaceLimits?: WorkspaceLimits;
 	warmPool?: WarmPoolService;
 	theme?: ThemeConfig;
 	services: Services;

@@ -1857,6 +1857,11 @@ components:
     azure_blob:
       type: object
       properties:
+        allow_write:
+          default: false
+          description: Allow managers to upload objects with integration credentials.
+            Server ambient credentials cannot write.
+          type: boolean
         account_name:
           type: string
           pattern: ^[a-z0-9]{3,24}$
@@ -1958,6 +1963,11 @@ components:
     azure_blob_stored:
       type: object
       properties:
+        allow_write:
+          default: false
+          description: Allow managers to upload objects with integration credentials.
+            Server ambient credentials cannot write.
+          type: boolean
         account_name:
           type: string
           pattern: ^[a-z0-9]{3,24}$
@@ -2053,6 +2063,7 @@ components:
             them.
           type: boolean
       required:
+        - allow_write
         - account_name
         - endpoint_suffix
         - auth
@@ -2958,6 +2969,11 @@ components:
     gcs:
       type: object
       properties:
+        allow_write:
+          default: false
+          description: Allow managers to upload objects with integration credentials.
+            Server ambient credentials cannot write.
+          type: boolean
         bucket:
           description: Default bucket for notebook code; the credentials are not
             restricted to it
@@ -3009,6 +3025,11 @@ components:
     gcs_stored:
       type: object
       properties:
+        allow_write:
+          default: false
+          description: Allow managers to upload objects with integration credentials.
+            Server ambient credentials cannot write.
+          type: boolean
         bucket:
           description: Default bucket for notebook code; the credentials are not
             restricted to it
@@ -3057,6 +3078,7 @@ components:
             them.
           type: boolean
       required:
+        - allow_write
         - auth
         - ambient_env
       additionalProperties: false
@@ -5873,6 +5895,11 @@ components:
     s3:
       type: object
       properties:
+        allow_write:
+          default: false
+          description: Allow managers to upload objects with integration credentials.
+            Server ambient credentials cannot write.
+          type: boolean
         bucket:
           description: Default bucket for notebook code; the credentials are not
             restricted to it
@@ -5976,6 +6003,11 @@ components:
     s3_stored:
       type: object
       properties:
+        allow_write:
+          default: false
+          description: Allow managers to upload objects with integration credentials.
+            Server ambient credentials cannot write.
+          type: boolean
         bucket:
           description: Default bucket for notebook code; the credentials are not
             restricted to it
@@ -6076,6 +6108,7 @@ components:
             them.
           type: boolean
       required:
+        - allow_write
         - allow_insecure_transport
         - auth
         - path_style

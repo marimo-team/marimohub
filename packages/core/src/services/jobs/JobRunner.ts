@@ -523,6 +523,7 @@ export class JobRunner {
 			hostname: '',
 			bucket: sandbox.bucket,
 			bucketHandle: bucket,
+			workspaceLimits: this.deps.notebooks.workspace.limits,
 			workdir: sandbox.workdir ?? DEFAULT_WORKDIR,
 			startupTimeoutMs: sandbox.startupTimeoutMs,
 			image: context.image,

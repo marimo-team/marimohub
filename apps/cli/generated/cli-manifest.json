@@ -329,12 +329,164 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "cancelObjectUpload",
+			"command": ["cancelObjectUpload"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/objects/uploads/{uploadId}",
+			"summary": "Cancel an object upload",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "uploadId",
+					"cli_name": "upload-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "cancelWorkspaceUpload",
+			"command": ["cancelWorkspaceUpload"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/workspace/uploads/{uploadId}",
+			"summary": "Cancel a workspace upload",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "uploadId",
+					"cli_name": "upload-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "capabilities",
 			"command": ["capabilities"],
 			"method": "GET",
 			"path": "/api/v1/capabilities",
 			"summary": "Get deployment capability flags",
 			"parameters": [],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "completeObjectUpload",
+			"command": ["completeObjectUpload"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/objects/uploads/{uploadId}/complete",
+			"summary": "Publish an object upload",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "uploadId",
+					"cli_name": "upload-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "completeWorkspaceUpload",
+			"command": ["completeWorkspaceUpload"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/workspace/uploads/{uploadId}/complete",
+			"summary": "Publish a workspace upload",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "uploadId",
+					"cli_name": "upload-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
 			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
@@ -484,6 +636,82 @@
 				{
 					"name": "slug",
 					"cli_name": "slug",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "getObjectUpload",
+			"command": ["getObjectUpload"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/objects/uploads/{uploadId}",
+			"summary": "Get object upload progress",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "uploadId",
+					"cli_name": "upload-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "getWorkspaceUpload",
+			"command": ["getWorkspaceUpload"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/workspace/uploads/{uploadId}",
+			"summary": "Get workspace upload progress",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "uploadId",
+					"cli_name": "upload-id",
 					"in": "path",
 					"required": true,
 					"value_type": "string",
@@ -851,7 +1079,7 @@
 			"method": "GET",
 			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse",
 			"summary": "Whether this integration instance can be browsed (editor or above)",
-			"description": "Browse routes resolve the id against the project tier first, then the inherited org tier; a shadowed org instance reads as absent. All browse operations are strictly read-only against the upstream.",
+			"description": "Browse routes resolve the id against the project tier first, then the inherited org tier; a shadowed org instance reads as absent. Object uploads require explicit write access.",
 			"parameters": [
 				{
 					"name": "iid",
@@ -5060,6 +5288,98 @@
 			"preflight_operation_id": "projects.get"
 		},
 		{
+			"id": "putObjectUploadPart",
+			"command": ["putObjectUploadPart"],
+			"method": "PUT",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/objects/uploads/{uploadId}/parts/{part}",
+			"summary": "Upload one object part",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "part",
+					"cli_name": "part",
+					"in": "path",
+					"required": true,
+					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "uploadId",
+					"cli_name": "upload-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "putWorkspaceUploadPart",
+			"command": ["putWorkspaceUploadPart"],
+			"method": "PUT",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/workspace/uploads/{uploadId}/parts/{part}",
+			"summary": "Upload one workspace file part",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "part",
+					"cli_name": "part",
+					"in": "path",
+					"required": true,
+					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "uploadId",
+					"cli_name": "upload-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "sessions.create",
 			"command": ["sessions", "create"],
 			"method": "POST",
@@ -5614,6 +5934,125 @@
 				}
 			],
 			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "startObjectUpload",
+			"command": ["startObjectUpload"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/integrations/{iid}/browse/objects/uploads",
+			"summary": "Start an object upload",
+			"parameters": [
+				{
+					"name": "iid",
+					"cli_name": "iid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "bucket",
+						"cli_name": "bucket",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "content_type",
+						"cli_name": "content-type",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "path",
+						"cli_name": "path",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "size",
+						"cli_name": "size",
+						"required": true,
+						"value_type": "integer",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "startWorkspaceUpload",
+			"command": ["startWorkspaceUpload"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/workspace/uploads",
+			"summary": "Start a resumable workspace upload",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "create_only",
+						"cli_name": "create-only",
+						"required": false,
+						"value_type": "boolean",
+						"repeatable": false
+					},
+					{
+						"name": "path",
+						"cli_name": "path",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "size",
+						"cli_name": "size",
+						"required": true,
+						"value_type": "integer",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
 			"accepts_if_match": false,

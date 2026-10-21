@@ -10,6 +10,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `allow_write` | boolean |  | `false` | Allow managers to upload objects with integration credentials. Server ambient credentials cannot write. |
 | `bucket` | string |  |  | Default bucket for notebook code; the credentials are not restricted to it |
 | `project_id` | string |  |  | Project billed for the requests |
 | `auth.method` | `ambient`, `service_account` |  | `ambient` |  |

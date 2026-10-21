@@ -62,6 +62,7 @@ export interface ObjectBrowseContractFixture {
 }
 
 export interface ObjectBrowseContractOptions {
+	writes?: boolean;
 	browser: ObjectBrowser;
 	source: ObjectStoreSource;
 	context: ObjectBrowseContext;
@@ -100,6 +101,26 @@ export function objectBrowseContract(
 			}
 			throw new Error('object pagination did not terminate');
 		}
+
+		it('uploads with explicit credentials and reads the published bytes', async ({ skip }) => {
+			if (!opts.writes || !opts.browser.putObject) return skip();
+			const source = { ...opts.source, allow_write: true };
+			expect((await opts.browser.capability(source, opts.context)).write).toBe(true);
+			const body = new TextEncoder().encode('uploaded contract data');
+			const key = `${fixture.prefix}uploaded.bin`;
+			await opts.browser.putObject(source, opts.context, {
+				bucket: fixture.bucket,
+				key,
+				body,
+				size: body.length,
+				contentType: 'application/octet-stream',
+			});
+			const object = await opts.browser.openObject(source, opts.context, {
+				bucket: fixture.bucket,
+				key,
+			});
+			expect(new Uint8Array(await new Response(object.body).arrayBuffer())).toEqual(body);
+		});
 
 		it('lists the integration bucket', async () => {
 			const buckets = await collect<ObjectBucket>((cursor) =>

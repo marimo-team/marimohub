@@ -10,3 +10,5 @@ export * from './preview';
 export * from './search';
 export * from './streams';
 export * from './validation';
+
+export * from './uploads';

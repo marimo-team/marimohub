@@ -55,6 +55,7 @@ export const PROJECT_ACTIONS = [
 	'integration.read',
 	/** Reach data through an integration: previews, queries, object access. */
 	'integration.use',
+	'integration.write',
 	'integration.manage',
 	/** Publish a change request (PR/MR) from a notebook session. */
 	'change-request.publish',
@@ -144,6 +145,7 @@ export const ACTION_RULES: {
 	'preview.manage': project('manager', 'forbidden'),
 	'integration.read': project('viewer', 'forbidden'),
 	'integration.use': project('editor', 'forbidden'),
+	'integration.write': project('manager', 'forbidden'),
 	'integration.manage': project('manager', 'forbidden'),
 	'change-request.publish': project('manager', 'forbidden'),
 	'security-labels.raise': {

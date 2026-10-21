@@ -1574,6 +1574,12 @@ export const DeploymentInfoResponseSchema = z
  */
 export const CapabilitiesResponseSchema = z
 	.object({
+		workspace_limits: z.object({
+			single_put_max_bytes: z.number().int().positive(),
+			max_file_bytes: z.number().int().positive(),
+			max_total_bytes: z.number().int().positive(),
+			max_files: z.number().int().positive(),
+		}),
 		/** Whether this deployment supports IdP groups as project members. */
 		project_groups: z.object({ available: z.boolean() }),
 		federation: z.object({ available: z.boolean(), default_enabled: z.boolean() }),

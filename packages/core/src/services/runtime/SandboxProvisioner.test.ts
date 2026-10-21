@@ -1,3 +1,4 @@
+import { WORKSPACE_LIMITS } from '../../integrations/remoteWorkspace';
 import { describe, it, expect, vi } from 'vitest';
 import { ByteBudget } from './byteBudget';
 import { Millis } from '../../duration';
@@ -3279,6 +3280,7 @@ describe('SandboxProvisioner', () => {
 
 			// A NotebookService whose commit fails must not block teardown.
 			const failingNotebooks = {
+				workspace: { limits: WORKSPACE_LIMITS },
 				getNotebook: async () => ({ source: makeLocalSource() }),
 				commitSession: async () => {
 					throw new Error('commit boom');
@@ -3668,6 +3670,7 @@ describe('SandboxProvisioner', () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 			const failingNotebooks = {
+				workspace: { limits: WORKSPACE_LIMITS },
 				getNotebook: async () => ({ source: makeLocalSource() }),
 				commitSession: async () => {
 					throw new Error('commit boom');
@@ -3693,6 +3696,7 @@ describe('SandboxProvisioner', () => {
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 			const commitSession = vi.fn();
 			const failingNotebooks = {
+				workspace: { limits: WORKSPACE_LIMITS },
 				getNotebook: async () => {
 					throw new Error('metadata unavailable');
 				},
@@ -3724,6 +3728,7 @@ describe('SandboxProvisioner', () => {
 			} as unknown as SandboxInstance;
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 			const failingNotebooks = {
+				workspace: { limits: WORKSPACE_LIMITS },
 				getNotebook: async () => ({ source: makeLocalSource() }),
 				commitSession: async () => {
 					throw new Error('commit boom');

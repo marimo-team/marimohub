@@ -20,6 +20,7 @@ const versionedObject = `${prefix}${seed.versioned.path}`;
 
 if (connectionString) {
 	objectBrowseContract('Azurite', () => ({
+		writes: process.env.MARIMOHUB_TEST_OBJECT_WRITES === 'true',
 		browser: new AzureBlobObjectBrowser({
 			mode: 'full',
 			resolveHost: async (hostname) => {

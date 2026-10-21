@@ -60,7 +60,33 @@ export interface BucketPutOptions {
 	onlyIfNotExists?: boolean;
 }
 
+export interface BucketUploadPart {
+	partNumber: number;
+	etag: string;
+}
+
+export interface BucketMultipart {
+	create(key: string, options?: BucketPutOptions): Promise<{ uploadId: string }>;
+	putPart(
+		key: string,
+		uploadId: string,
+		partNumber: number,
+		bytes: Uint8Array,
+	): Promise<BucketUploadPart>;
+	complete(key: string, uploadId: string, parts: BucketUploadPart[]): Promise<BucketObject>;
+	abort(key: string, uploadId: string): Promise<void>;
+}
+
 export interface Bucket {
+	multipart?: BucketMultipart;
+	/** Consumes chunks incrementally and publishes only after the entire body succeeds. */
+	putStream?(
+		key: string,
+		chunks: AsyncIterable<Uint8Array>,
+		size: number,
+		options?: BucketPutOptions,
+	): Promise<BucketObject>;
+
 	get(key: string): Promise<BucketObjectBody | null>;
 	head(key: string): Promise<BucketObject | null>;
 	put(key: string, value: string | Uint8Array, options?: BucketPutOptions): Promise<BucketObject>;

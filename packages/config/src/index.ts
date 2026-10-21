@@ -1,3 +1,4 @@
+import { parseWorkspaceLimits } from './workspaceLimits';
 import { parseTheme } from './theme';
 /**
  * Configuration composition root.
@@ -696,7 +697,9 @@ export function createFromEnv(
 		warnedUnsupportedProfileBackends.add(computeBackendValue);
 	}
 	const sourceControlConfig = makeSourceControl(env);
+	const workspaceLimits = parseWorkspaceLimits(env);
 	const services = createServices(bucket, metrics, {
+		workspaceLimits,
 		tracing: options?.tracing,
 		repositoryHosts: sourceControlConfig.sourceControl?.repositoryHosts,
 	});
@@ -749,6 +752,7 @@ export function createFromEnv(
 	);
 	const dataQuery = dataQueryFromEnv(env, duckdbHttpSessionFactory, metrics);
 	const deps: ApiDeps = {
+		workspaceLimits,
 		warmPool: warmPool
 			? new WarmPoolService(
 					new WarmPoolStore(bucket, warmPool.backend),

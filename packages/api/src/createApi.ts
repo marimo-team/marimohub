@@ -1,3 +1,4 @@
+import { WORKSPACE_LIMITS } from '@marimo-hub/core/remote-workspace';
 import { MAX_FOLDER_IMPORT_ARCHIVE_BYTES } from '@marimo-hub/core/workspace-ignore';
 import type { MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -6,6 +7,7 @@ import { HTTPException } from 'hono/http-exception';
 import { requestId } from 'hono/request-id';
 import { routePath } from 'hono/route';
 import {
+	UPLOAD_PART_BYTES,
 	DomainError,
 	IntegrationId,
 	MAX_REQUEST_BYTES,
@@ -148,9 +150,22 @@ export function createApi(rawDeps: ApiDeps) {
 		);
 	});
 
+	const serviceLimits = rawDeps.services?.notebooks.workspace.limits;
+	if (
+		rawDeps.workspaceLimits &&
+		serviceLimits &&
+		Object.entries(serviceLimits).some(
+			([key, value]) => rawDeps.workspaceLimits![key as keyof typeof serviceLimits] !== value,
+		)
+	) {
+		throw new Error('API workspace limits must match the notebook service limits');
+	}
+
 	// Default the exposure mode and kernel probe so library callers need not wire them.
 	const deps: ApiDeps = {
 		...rawDeps,
+		workspaceLimits:
+			rawDeps.workspaceLimits ?? rawDeps.services?.notebooks.workspace.limits ?? WORKSPACE_LIMITS,
 		notifier: rawDeps.notifier ?? noopNotifier,
 		kernelProbe: rawDeps.kernelProbe ?? ((url) => probeKernelLiveness(url, { timeoutMs: 2000 })),
 		sandbox: {
@@ -307,15 +322,24 @@ export function createApi(rawDeps: ApiDeps) {
 		onError: (c) =>
 			fail(c, 'PAYLOAD_TOO_LARGE', `Request body exceeds the ${MAX_REQUEST_BYTES}-byte limit`, 413),
 	});
+	const workspaceFileLimit = Math.min(
+		(deps.workspaceLimits ?? WORKSPACE_LIMITS).maxFileBytes,
+		MAX_WORKSPACE_FILE_BYTES,
+	);
 	const workspaceFileBodyLimit = bodyLimit({
-		maxSize: MAX_WORKSPACE_FILE_BYTES,
+		maxSize: workspaceFileLimit,
 		onError: (c) =>
 			fail(
 				c,
 				'PAYLOAD_TOO_LARGE',
-				`Workspace file exceeds the ${MAX_WORKSPACE_FILE_BYTES}-byte limit`,
+				`Workspace file exceeds the ${workspaceFileLimit}-byte limit`,
 				413,
 			),
+	});
+	const uploadPartBodyLimit = bodyLimit({
+		maxSize: UPLOAD_PART_BYTES,
+		onError: (c) =>
+			fail(c, 'PAYLOAD_TOO_LARGE', `Upload part exceeds the ${UPLOAD_PART_BYTES}-byte limit`, 413),
 	});
 	const importBodyLimit = bodyLimit({
 		maxSize: MAX_FOLDER_IMPORT_ARCHIVE_BYTES,
@@ -328,6 +352,8 @@ export function createApi(rawDeps: ApiDeps) {
 			),
 	});
 	app.use(`${API_PREFIX}/*`, (c, next) => {
+		if (c.req.method === 'PUT' && /\/uploads\/[^/]+\/parts\/[^/]+$/.test(c.req.path))
+			return uploadPartBodyLimit(c, next);
 		if (c.req.method === 'POST' && /\/projects\/[^/]+\/notebook-imports$/.test(c.req.path))
 			return importBodyLimit(c, next);
 		const isWorkspaceFilePut =

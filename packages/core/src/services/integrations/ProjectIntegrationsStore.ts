@@ -1,7 +1,6 @@
-import { all } from 'better-all';
-import { mapWithConcurrency } from '../../concurrency';
-import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import {
+	ForbiddenError,
+	ConflictError,
 	assertVersionMatch,
 	BadRequestError,
 	DomainError,
@@ -10,6 +9,37 @@ import {
 	UnavailableError,
 	ValidationError,
 } from '../../errors';
+import type {
+	ObjectUploadRequest,
+	ObjectBody,
+	ObjectBrowseContext,
+	ObjectBrowser,
+	ObjectBrowserRegistry,
+	ObjectBucket,
+	ObjectDetail,
+	ObjectEntry,
+	ObjectIdentity,
+	ObjectListRequest,
+	ObjectOpenRequest,
+	ObjectPage,
+	ObjectPageRequest,
+	ObjectPreview,
+	ObjectPreviewRequest,
+	ObjectSearchPage,
+	ObjectSearchRequest,
+	ObjectStoreSource,
+	ObjectVersion,
+	ObjectVersionRequest,
+} from '../../ports/objectBrowser';
+import {
+	objectWriteAllowed,
+	OBJECT_BROWSE_PROVIDER_METADATA,
+	ObjectBrowseError,
+} from '../../ports/objectBrowser';
+import { all } from 'better-all';
+import { mapWithConcurrency } from '../../concurrency';
+import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+
 import type { IntegrationId, ProjectId, SessionId, UserId } from '../../ids';
 import { createIntegrationId } from '../../ids';
 import { paths } from '../../paths';
@@ -67,33 +97,13 @@ import type {
 	DatabaseSource,
 } from '../../ports/databaseBrowser';
 import { SecretResolutionError } from '../../ports/secrets';
-import { OBJECT_BROWSE_PROVIDER_METADATA, ObjectBrowseError } from '../../ports/objectBrowser';
+
 import type {
 	PackageRegistryCredentialProvider,
 	PackageRegistryCredentials,
 	PackageRegistrySource,
 } from '../../ports/packageRegistry';
-import type {
-	ObjectBody,
-	ObjectBrowseContext,
-	ObjectBrowser,
-	ObjectBrowserRegistry,
-	ObjectBucket,
-	ObjectDetail,
-	ObjectEntry,
-	ObjectIdentity,
-	ObjectListRequest,
-	ObjectOpenRequest,
-	ObjectPage,
-	ObjectPageRequest,
-	ObjectPreview,
-	ObjectPreviewRequest,
-	ObjectSearchPage,
-	ObjectSearchRequest,
-	ObjectStoreSource,
-	ObjectVersion,
-	ObjectVersionRequest,
-} from '../../ports/objectBrowser';
+
 import { metricsObserver, saga } from '../../saga';
 import {
 	CURRENT_INTEGRATION_CONFIG_VERSION,
@@ -145,6 +155,7 @@ function unavailableObjectCapability(provider: ObjectStoreSource['provider'], re
 	return {
 		...OBJECT_BROWSE_PROVIDER_METADATA[provider],
 		available: false,
+		write: false,
 		preview: false,
 		download: false,
 		search: 'none' as const,
@@ -1344,6 +1355,23 @@ class ScopedIntegrationsStore {
 		);
 	}
 
+	async putObject(
+		scope: IntegrationScope,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectUploadRequest,
+	): Promise<void> {
+		await this.runObjectBrowse(scope, id, context, async (browser, source) => {
+			if (
+				!objectWriteAllowed(source, context) ||
+				!browser.putObject ||
+				!(await browser.capability(source, context)).write
+			)
+				throw new ForbiddenError('Object uploads are not enabled for this integration');
+			await browser.putObject(source, context, request);
+		});
+	}
+
 	async openObject(
 		scope: IntegrationScope,
 		id: IntegrationId,
@@ -1367,6 +1395,11 @@ class ScopedIntegrationsStore {
 		) => Promise<T>,
 	): Promise<T> {
 		const { head, def, config } = await this.openResolvedBrowse(scope, id);
+		if (
+			context.expected_integration_state &&
+			context.expected_integration_state !== `${head.current_version}:${head.updated_at}`
+		)
+			throw new ConflictError('The integration changed; start a new upload');
 		const objectBrowse = def.objectBrowse;
 		if (!objectBrowse) {
 			throw new ValidationError(
@@ -2251,6 +2284,17 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 	): Promise<ObjectPreview> {
 		return this.withBrowseScope(projectId, id, (scope) =>
 			this.store.browseObjectPreview(scope, id, context, request),
+		);
+	}
+
+	putObject(
+		projectId: ProjectId,
+		id: IntegrationId,
+		context: ObjectBrowseContext,
+		request: ObjectUploadRequest,
+	): Promise<void> {
+		return this.withBrowseScope(projectId, id, (scope) =>
+			this.store.putObject(scope, id, context, request),
 		);
 	}
 

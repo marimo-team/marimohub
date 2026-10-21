@@ -1,3 +1,6 @@
+import { UploadProgressList } from './UploadProgressList';
+import type { UploadProgress } from '@/lib/resumableUpload';
+import { useCapabilitiesQuery } from '@/api/hooks';
 import { useQuery } from '@tanstack/react-query';
 import {
 	createFinderStore,
@@ -32,6 +35,7 @@ import { Button as AriaButton, Input, Link, Size, ToggleButton } from 'react-ari
 import { ConfirmDialog, DialogModal, Tooltip } from '@/components/ui';
 import { cn } from '@/lib/utils';
 import { fetchWorkspaceAccess, workspaceAdapter } from './workspaceAdapter';
+import type { WorkspaceUploadLimits } from './workspaceAdapter';
 import { WorkspaceFilePreview } from './WorkspaceFilePreview';
 import {
 	canApplyWorkspaceOperation,
@@ -499,6 +503,7 @@ function AccessBanner({ access }: { access: WorkspaceAccess }) {
 }
 
 function Explorer({
+	limits,
 	projectId,
 	notebookId,
 	access,
@@ -508,10 +513,22 @@ function Explorer({
 	notebookId: string;
 	access: WorkspaceAccess;
 	onDirtyChange: (dirty: boolean) => void;
+	limits?: WorkspaceUploadLimits;
 }) {
+	const [uploads, setUploads] = useState<Record<string, UploadProgress>>({});
+	const onUploadProgress = useCallback(
+		(path: string, progress: UploadProgress | null) =>
+			setUploads((previous) => {
+				const next = { ...previous };
+				if (progress) next[path] = progress;
+				else delete next[path];
+				return next;
+			}),
+		[],
+	);
 	const adapter = useMemo(
-		() => workspaceAdapter(projectId, notebookId, access),
-		[access, notebookId, projectId],
+		() => workspaceAdapter(projectId, notebookId, access, limits, onUploadProgress),
+		[access, notebookId, projectId, limits, onUploadProgress],
 	);
 	const [view, setView] = useState<ViewMode>('list');
 	const [openPath, setOpenPath] = useState<string | null>(null);
@@ -630,6 +647,14 @@ function Explorer({
 			>
 				<Toolbar view={view} setView={setView} access={access} onDelete={requestDelete} />
 				<Breadcrumbs />
+				<UploadProgressList uploads={uploads} />
+				{limits && (
+					<div className="border-b px-3 py-1 text-xs text-muted-foreground">
+						{formatFileSize(limits.max_file_bytes)} per file ·{' '}
+						{formatFileSize(limits.max_total_bytes)} total · {limits.max_files.toLocaleString()}{' '}
+						files
+					</div>
+				)}
 				{error ? (
 					<div className="flex items-center justify-between border-b bg-destructive/10 px-3 py-2 text-xs text-destructive">
 						<span>{error.message}</span>
@@ -691,6 +716,7 @@ export default function WorkspaceBrowserDialog({
 	const setDirty = useCallback((next: boolean) => {
 		dirty.current = next;
 	}, []);
+	const capabilities = useCapabilitiesQuery(isOpen);
 	const access = useQuery({
 		queryKey: ['workspace-access', projectId, notebookId],
 		queryFn: ({ signal }) => fetchWorkspaceAccess(projectId, notebookId, signal),
@@ -711,17 +737,18 @@ export default function WorkspaceBrowserDialog({
 			width="screen"
 			contentClassName="h-full overflow-hidden p-0"
 		>
-			{access.isPending ? (
+			{access.isPending || capabilities.isPending ? (
 				<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
 					Loading workspace…
 				</div>
-			) : access.isError || !access.data ? (
+			) : access.isError || !access.data || capabilities.isError ? (
 				<div className="p-5 text-sm text-destructive">Could not load workspace access.</div>
 			) : (
 				<div className="flex h-full min-h-0 flex-col">
 					<AccessBanner access={access.data} />
 					<Explorer
-						key={`${notebookId}:${String(access.data.writable)}`}
+						key={`${notebookId}:${String(access.data.writable)}:${JSON.stringify(capabilities.data?.workspace_limits)}`}
+						limits={capabilities.data?.workspace_limits}
 						projectId={projectId}
 						notebookId={notebookId}
 						access={access.data}

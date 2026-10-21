@@ -43,6 +43,45 @@ function makeEscapingSymlink() {
 bucketContract('FsStorage', () => new FsStorage({ root: makeRoot() }));
 
 describe('FsStorage', () => {
+	it('streams atomically and preserves the destination on source or size failure', async () => {
+		const bucket = new FsStorage({ root: makeRoot() });
+		await bucket.put('data', 'old');
+		await expect(
+			bucket.putStream(
+				'data',
+				(async function* () {
+					yield new Uint8Array([1, 2]);
+					expect(await (await bucket.get('data'))!.text()).toBe('old');
+					throw new Error('source failed');
+				})(),
+				3,
+			),
+		).rejects.toThrow('source failed');
+		expect(await (await bucket.get('data'))!.text()).toBe('old');
+		await expect(
+			bucket.putStream(
+				'data',
+				(async function* () {
+					yield new Uint8Array([1]);
+				})(),
+				2,
+			),
+		).rejects.toThrow('declared size');
+		expect(await (await bucket.get('data'))!.text()).toBe('old');
+		const result = await bucket.putStream(
+			'data',
+			(async function* () {
+				yield new Uint8Array([1, 2]);
+				yield new Uint8Array([3]);
+			})(),
+			3,
+		);
+		expect(result.size).toBe(3);
+		expect(new Uint8Array(await (await bucket.get('data'))!.bytes())).toEqual(
+			new Uint8Array([1, 2, 3]),
+		);
+	});
+
 	it('stores parent and nested app-link records independently and lists all index depths', async () => {
 		const bucket = new FsStorage({ root: makeRoot() });
 		const registry = '_system/deep-links/';

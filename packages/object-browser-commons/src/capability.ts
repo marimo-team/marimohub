@@ -17,6 +17,7 @@ export function objectBrowseCapability(
 		return {
 			...OBJECT_BROWSE_PROVIDER_METADATA[provider],
 			available: true,
+			write: false,
 			preview: mode === 'full',
 			download: mode === 'full',
 			search: 'bounded-key-name',
@@ -27,6 +28,7 @@ export function objectBrowseCapability(
 		return {
 			...OBJECT_BROWSE_PROVIDER_METADATA[provider],
 			available: false,
+			write: false,
 			preview: false,
 			download: false,
 			search: 'none',

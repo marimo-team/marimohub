@@ -1,3 +1,4 @@
+import { UploadRecordSchema, UploadIndexSchema } from '../services/content/ResumableUploads';
 import {
 	NotebookImportPreparationSchema,
 	NotebookImportItemSchema,
@@ -453,6 +454,42 @@ const OBJECTS: BucketObject[] = [
 		tag: 'notebook',
 	},
 	{
+		name: 'WorkspaceUpload',
+		key: `${notebook.base}/uploads/{upload_id}.json`,
+		schema: UploadRecordSchema,
+		summary: 'Resumable upload ownership, immutable part references, and publication receipt.',
+		mutability: 'cas',
+		owner: 'ResumableUploads',
+		tag: 'notebook',
+	},
+	{
+		name: 'WorkspaceUploadIndex',
+		key: `${notebook.base}/uploads/index.json`,
+		schema: UploadIndexSchema,
+		summary: 'Bounded reservations for unfinished uploads.',
+		mutability: 'cas',
+		owner: 'ResumableUploads',
+		tag: 'notebook',
+	},
+	{
+		name: 'ObjectUpload',
+		key: `${project.objectUploadsPrefix}{upload_id}.json`,
+		schema: UploadRecordSchema,
+		summary: 'Resumable upload ownership, immutable part references, and publication receipt.',
+		mutability: 'cas',
+		owner: 'ResumableUploads',
+		tag: 'project',
+	},
+	{
+		name: 'ObjectUploadIndex',
+		key: `${project.objectUploadsPrefix}index.json`,
+		schema: UploadIndexSchema,
+		summary: 'Bounded reservations for unfinished uploads.',
+		mutability: 'cas',
+		owner: 'ResumableUploads',
+		tag: 'project',
+	},
+	{
 		name: 'WorkspaceMutationClaim',
 		key: paths.project(PID).notebook(NID).workspaceMutationClaim,
 		schema: WorkspaceMutationClaimSchema,
@@ -498,6 +535,22 @@ const OBJECTS: BucketObject[] = [
 ];
 
 const ARTIFACTS: BucketArtifact[] = [
+	{
+		name: 'WorkspaceUploadPart',
+		key: `${notebook.base}/uploads/{upload_id}/parts/{part}`,
+		summary: 'Immutable upload part, retained until completion, cancellation, or expiry.',
+		mutability: 'immutable',
+		owner: 'ResumableUploads',
+		tag: 'notebook',
+	},
+	{
+		name: 'ObjectUploadPart',
+		key: `${project.objectUploadsPrefix}{upload_id}/parts/{part}`,
+		summary: 'Immutable upload part, retained until completion, cancellation, or expiry.',
+		mutability: 'immutable',
+		owner: 'ResumableUploads',
+		tag: 'project',
+	},
 	{
 		name: 'NotebookImportSnapshot',
 		key: notebookImport.snapshot,

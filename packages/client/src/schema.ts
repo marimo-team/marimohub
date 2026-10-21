@@ -655,6 +655,75 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/workspace/uploads': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Start a resumable workspace upload */
+		post: operations['startWorkspaceUpload'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/workspace/uploads/{uploadId}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Get workspace upload progress */
+		get: operations['getWorkspaceUpload'];
+		put?: never;
+		post?: never;
+		/** Cancel a workspace upload */
+		delete: operations['cancelWorkspaceUpload'];
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/workspace/uploads/{uploadId}/parts/{part}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		/** Upload one workspace file part */
+		put: operations['putWorkspaceUploadPart'];
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/workspace/uploads/{uploadId}/complete': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Publish a workspace upload */
+		post: operations['completeWorkspaceUpload'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/notebooks': {
 		parameters: {
 			query?: never;
@@ -1641,6 +1710,75 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/integrations/{iid}/browse/objects/uploads': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Start an object upload */
+		post: operations['startObjectUpload'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/integrations/{iid}/browse/objects/uploads/{uploadId}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Get object upload progress */
+		get: operations['getObjectUpload'];
+		put?: never;
+		post?: never;
+		/** Cancel an object upload */
+		delete: operations['cancelObjectUpload'];
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/integrations/{iid}/browse/objects/uploads/{uploadId}/parts/{part}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		/** Upload one object part */
+		put: operations['putObjectUploadPart'];
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/integrations/{iid}/browse/objects/uploads/{uploadId}/complete': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Publish an object upload */
+		post: operations['completeObjectUpload'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/integrations/{iid}/browse': {
 		parameters: {
 			query?: never;
@@ -1650,7 +1788,7 @@ export interface paths {
 		};
 		/**
 		 * Whether this integration instance can be browsed (editor or above)
-		 * @description Browse routes resolve the id against the project tier first, then the inherited org tier; a shadowed org instance reads as absent. All browse operations are strictly read-only against the upstream.
+		 * @description Browse routes resolve the id against the project tier first, then the inherited org tier; a shadowed org instance reads as absent. Object uploads require explicit write access.
 		 */
 		get: operations['integrations.project.browse.get'];
 		put?: never;
@@ -2305,6 +2443,12 @@ export interface components {
 			version: string;
 		};
 		Capabilities: {
+			workspace_limits: {
+				single_put_max_bytes: number;
+				max_file_bytes: number;
+				max_total_bytes: number;
+				max_files: number;
+			};
 			project_groups: {
 				available: boolean;
 			};
@@ -2952,6 +3096,7 @@ export interface components {
 					| 'preview.manage'
 					| 'integration.read'
 					| 'integration.use'
+					| 'integration.write'
 					| 'integration.manage'
 					| 'change-request.publish'
 					| 'security-labels.raise'
@@ -3144,6 +3289,7 @@ export interface components {
 								| 'preview.manage'
 								| 'integration.read'
 								| 'integration.use'
+								| 'integration.write'
 								| 'integration.manage'
 								| 'change-request.publish'
 								| 'security-labels.raise'
@@ -3177,6 +3323,7 @@ export interface components {
 				| 'preview.manage'
 				| 'integration.read'
 				| 'integration.use'
+				| 'integration.write'
 				| 'integration.manage'
 				| 'change-request.publish'
 				| 'security-labels.raise'
@@ -4136,6 +4283,7 @@ export interface components {
 					available: boolean;
 					preview: boolean;
 					download: boolean;
+					write?: boolean;
 					/**
 					 * @description Known values: none, bounded-key-name. Unrecognized values normalize to unknown.
 					 * @example bounded-key-name
@@ -4374,6 +4522,7 @@ export interface components {
 							| 'preview.manage'
 							| 'integration.read'
 							| 'integration.use'
+							| 'integration.write'
 							| 'integration.manage'
 							| 'change-request.publish'
 							| 'security-labels.raise'
@@ -4561,6 +4710,7 @@ export interface operations {
 									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
+									| 'integration.write'
 									| 'integration.manage'
 									| 'change-request.publish'
 									| 'security-labels.raise'
@@ -9136,6 +9286,417 @@ export interface operations {
 			};
 			/** @description Service unavailable */
 			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	startWorkspaceUpload: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					path: string;
+					size: number;
+					create_only?: boolean;
+				};
+			};
+		};
+		responses: {
+			/** @description Upload created */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							/** Format: uuid */
+							id: string;
+							path: string;
+							size: number;
+							part_size: number;
+							parts_done: number[];
+							expires_at: number;
+							/** @enum {string} */
+							status: 'uploading' | 'publishing' | 'complete' | 'cancelled';
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	getWorkspaceUpload: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				uploadId: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Upload progress */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							/** Format: uuid */
+							id: string;
+							path: string;
+							size: number;
+							part_size: number;
+							parts_done: number[];
+							expires_at: number;
+							/** @enum {string} */
+							status: 'uploading' | 'publishing' | 'complete' | 'cancelled';
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	cancelWorkspaceUpload: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				uploadId: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Upload cancelled */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: Record<string, never>;
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	putWorkspaceUploadPart: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				uploadId: string;
+				part: number;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/octet-stream': string;
+			};
+		};
+		responses: {
+			/** @description Part stored */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							/** Format: uuid */
+							id: string;
+							path: string;
+							size: number;
+							part_size: number;
+							parts_done: number[];
+							expires_at: number;
+							/** @enum {string} */
+							status: 'uploading' | 'publishing' | 'complete' | 'cancelled';
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	completeWorkspaceUpload: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				uploadId: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description File published */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['WorkspaceItem'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
 				headers: {
 					/** @description Seconds to wait before retrying. */
 					'Retry-After': string;
@@ -16835,6 +17396,413 @@ export interface operations {
 			};
 		};
 	};
+	startObjectUpload: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					bucket: string;
+					path: string;
+					size: number;
+					content_type?: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Upload created */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							/** Format: uuid */
+							id: string;
+							path: string;
+							size: number;
+							part_size: number;
+							parts_done: number[];
+							expires_at: number;
+							/** @enum {string} */
+							status: 'uploading' | 'publishing' | 'complete' | 'cancelled';
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	getObjectUpload: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+				uploadId: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Upload progress */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							/** Format: uuid */
+							id: string;
+							path: string;
+							size: number;
+							part_size: number;
+							parts_done: number[];
+							expires_at: number;
+							/** @enum {string} */
+							status: 'uploading' | 'publishing' | 'complete' | 'cancelled';
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	cancelObjectUpload: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+				uploadId: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Upload cancelled */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: Record<string, never>;
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	putObjectUploadPart: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+				uploadId: string;
+				part: number;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/octet-stream': string;
+			};
+		};
+		responses: {
+			/** @description Part stored */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							/** Format: uuid */
+							id: string;
+							path: string;
+							size: number;
+							part_size: number;
+							parts_done: number[];
+							expires_at: number;
+							/** @enum {string} */
+							status: 'uploading' | 'publishing' | 'complete' | 'cancelled';
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	completeObjectUpload: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				iid: string;
+				uploadId: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Object published */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							bucket: string;
+							key: string;
+							size: number;
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
 	'integrations.project.browse.get': {
 		parameters: {
 			query?: never;
@@ -19680,6 +20648,7 @@ export interface operations {
 									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
+									| 'integration.write'
 									| 'integration.manage'
 									| 'change-request.publish'
 									| 'security-labels.raise'
@@ -20044,6 +21013,7 @@ export interface operations {
 									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
+									| 'integration.write'
 									| 'integration.manage'
 									| 'change-request.publish'
 									| 'security-labels.raise'
@@ -20078,6 +21048,7 @@ export interface operations {
 									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
+									| 'integration.write'
 									| 'integration.manage'
 									| 'change-request.publish'
 									| 'security-labels.raise'
@@ -20364,6 +21335,7 @@ export interface operations {
 													| 'preview.manage'
 													| 'integration.read'
 													| 'integration.use'
+													| 'integration.write'
 													| 'integration.manage'
 													| 'change-request.publish'
 													| 'security-labels.raise'
@@ -20506,6 +21478,7 @@ export interface operations {
 									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
+									| 'integration.write'
 									| 'integration.manage'
 									| 'change-request.publish'
 									| 'security-labels.raise'
@@ -20739,6 +21712,7 @@ export interface operations {
 									| 'preview.manage'
 									| 'integration.read'
 									| 'integration.use'
+									| 'integration.write'
 									| 'integration.manage'
 									| 'change-request.publish'
 									| 'security-labels.raise'

@@ -21,7 +21,13 @@ export function localEntryNotebook(source: { entry_notebook?: string }): string 
 	return source.entry_notebook ?? DEFAULT_LOCAL_ENTRY_NOTEBOOK;
 }
 
-export const WORKSPACE_LIMITS = {
+export interface WorkspaceLimits {
+	readonly maxFileBytes: number;
+	readonly maxTotalBytes: number;
+	readonly maxFiles: number;
+}
+
+export const WORKSPACE_LIMITS: WorkspaceLimits = {
 	maxFileBytes: MAX_WORKSPACE_FILE_BYTES,
 	maxTotalBytes: MAX_WORKSPACE_BYTES,
 	maxFiles: MAX_WORKSPACE_FILES,

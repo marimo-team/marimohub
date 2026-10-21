@@ -34,6 +34,7 @@ function installFakeS3(opts: { ignoreIfMatch?: boolean } = {}) {
 	// One store per client instance so each `new S3Storage(CFG)` is isolated, even
 	// though the spy lives on the shared prototype.
 	const stores = new WeakMap<object, { map: Map<string, Stored>; n: number }>();
+	const uploads = new Map<string, Map<number, Uint8Array>>();
 	const calls: { name: string; input: Record<string, unknown> }[] = [];
 	const toBytes = (v: unknown): Uint8Array =>
 		typeof v === 'string' ? new TextEncoder().encode(v) : (v as Uint8Array);
@@ -56,6 +57,28 @@ function installFakeS3(opts: { ignoreIfMatch?: boolean } = {}) {
 			const store = storeFor(this);
 
 			switch (name) {
+				case 'CreateMultipartUploadCommand': {
+					const id = crypto.randomUUID();
+					uploads.set(id, new Map());
+					return { UploadId: id };
+				}
+				case 'UploadPartCommand': {
+					uploads.get(input.UploadId)!.set(input.PartNumber, toBytes(input.Body));
+					return { ETag: `part-${input.PartNumber}` };
+				}
+				case 'CompleteMultipartUploadCommand': {
+					const parts = input.MultipartUpload.Parts as { PartNumber: number }[];
+					const body = Buffer.concat(
+						parts.map((part) => uploads.get(input.UploadId)!.get(part.PartNumber)!),
+					);
+					const etag = `etag-${++store.n}`;
+					store.map.set(input.Key, { body, etag, lastModified: new Date() });
+					uploads.delete(input.UploadId);
+					return { ETag: etag };
+				}
+				case 'AbortMultipartUploadCommand':
+					uploads.delete(input.UploadId);
+					return {};
 				case 'PutObjectCommand': {
 					const existing = store.map.get(input.Key);
 					if (!opts.ignoreIfMatch && input.IfMatch !== undefined) {

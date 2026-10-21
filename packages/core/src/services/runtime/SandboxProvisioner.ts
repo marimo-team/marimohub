@@ -1,6 +1,7 @@
 import { AGENT_CONTEXT_DIR_ENV } from './sandboxEnvironment';
 import type { SessionEnv } from './sandboxEnvironment';
 export type { SessionEnv } from './sandboxEnvironment';
+import type { WorkspaceLimits, WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
 import { all, allSettled } from 'better-all';
 import { prepareAgentHomeFiles } from './agentContextFiles';
 import type { Attributes, Span as OtelSpan } from '@opentelemetry/api';
@@ -18,7 +19,7 @@ import {
 	DEFAULT_LOCAL_ENTRY_NOTEBOOK,
 	workspaceSourcePolicy,
 } from '../../integrations/remoteWorkspace';
-import type { WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
+
 import { logEvent } from '../../logs';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
@@ -184,6 +185,7 @@ export interface BucketConfig {
 }
 
 export interface ProvisionOptions {
+	workspaceLimits?: WorkspaceLimits;
 	existingSandbox?: SandboxInstance;
 	/** Called when failure leaves no handle or sandbox destruction succeeds. */
 	onSandboxDestroyed?: () => void | Promise<void>;
@@ -482,6 +484,7 @@ async function withSandboxSpan<T>(
 }
 
 export interface WorkspaceLoadContext {
+	workspaceLimits?: WorkspaceLimits;
 	overlay?: WorkspaceOverlay;
 	sandbox: SandboxInstance;
 	projectId: ProjectId;
@@ -529,6 +532,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		waitUntilReady,
 		prefetchBudget,
 		overlay,
+		workspaceLimits,
 	}: WorkspaceLoadContext): Promise<WorkspaceLoadResult> {
 		if (!bucketHandle) {
 			throw provisionFailure(
@@ -538,6 +542,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		}
 		try {
 			const stats = await restoreWorkspace(sandbox, bucketHandle, workspacePrefix, mountPath, {
+				limits: workspaceLimits,
 				overlay,
 				excludeRelativeRoots,
 				waitUntilReady,
@@ -1113,6 +1118,7 @@ export class SandboxProvisioner {
 		if (!strategy.supportsPrefetch) await waitUntilReady();
 		const load = strategy.load({
 			overlay: options.workspaceOverlay,
+			workspaceLimits: options.workspaceLimits,
 			sandbox,
 			projectId: options.projectId,
 			notebookId: options.notebookId,
@@ -1479,6 +1485,7 @@ export class SandboxProvisioner {
 					captureMode,
 					listing,
 					policy.entryNotebook,
+					notebooks.workspace.limits,
 				);
 			},
 		});
