@@ -779,10 +779,5 @@ export type { WarmPoolConfig, WarmPoolClaim, WarmPoolProfile } from './runtime/W
 export { NotebookPreviewService } from './content/NotebookPreviewService';
 export * from './content/notebookPreviews';
 
-export {
-	ResumableUploads,
-	uploadStatus,
-	UploadStatusSchema,
-	UPLOAD_PART_BYTES,
-} from './content/ResumableUploads';
+export { ResumableUploads, uploadStatus } from './content/ResumableUploads';
 export type { UploadRecord } from './content/ResumableUploads';

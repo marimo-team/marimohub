@@ -105,7 +105,7 @@ A storage delete can complete after an error, even if the source initially
 appears intact. Keep the destination copy until you have recovered the files;
 do not delete it to retry the move.
 
-Operators can configure the workspace limits. The defaults stay unchanged.
+### Workspace limits
 
 | Environment variable                 | Default                     | Allowed values        |
 | ------------------------------------ | --------------------------- | --------------------- |
@@ -113,46 +113,35 @@ Operators can configure the workspace limits. The defaults stay unchanged.
 | `MARIMOHUB_WORKSPACE_MAX_BYTES`      | 104,857,600 bytes (100 MiB) | Positive safe integer |
 | `MARIMOHUB_WORKSPACE_MAX_FILES`      | 1,000 files                 | Positive safe integer |
 
-The total includes existing source files. Directory markers do not count as files.
-An oversized single request returns `413`. Configured file, workspace, and file-count limits return `429` for chunked uploads.
-The browser reads these limits from `/api/v1/capabilities` under `workspace_limits`.
+The total includes source files. Directory markers do not count.
+Oversized request bodies return `413`. Resumable uploads that exceed file, total-size, or file-count limits return `429`.
+The browser reads these limits from `workspace_limits` in `/api/v1/capabilities`.
 
-Single-request uploads, downloads, sandbox restore, and capture buffer each whole file.
-Restore groups files into 8 MiB batches, but one large file occupies its own batch without being split.
-The 64 MiB prefetch budget delays large reads until the sandbox is ready. It does not bound the size of those reads.
-Higher limits therefore increase hub memory use and session start time.
-Capture reduces concurrent reads when the per-file limit increases, but each read still needs memory for a whole file.
-Git fetch, folder archive parsing, and session source-artifact limits stay fixed.
+Higher limits increase hub memory use and session start time.
+Single-request uploads, downloads, sandbox restore, and capture buffer whole files.
+Restore batches and prefetch budgets do not split a large file or bound its memory use.
+Git fetch, folder archive, and session source-artifact limits remain fixed.
 
 ### Resumable uploads
 
-The workspace browser uploads files above the single-request limit in 8 MiB parts.
-The single-request limit is the smaller of 25 MiB and the configured file limit.
-Each file shows preparation, upload, and publication progress.
-After a reload or network failure, select the same file in the same browser tab.
-The browser checks its contents and sends only missing parts.
-Upload IDs remain in `sessionStorage`; closing the tab removes this local resume information.
+Files larger than the single-request limit use 8 MiB parts, with preparation, upload, and save progress.
+That limit is the smaller of 25 MiB and the configured file limit.
+After a reload or connection failure, select the same file in the same tab.
+The browser checks its contents and sends only missing parts. Closing the tab removes local resume information.
 
-Parts can upload while an editor is active. Publication waits until the editor stops.
-A `409` response preserves the parts, so select the file again after stopping the editor.
-Publication rechecks the current workspace size, file count, path, and overwrite policy.
-Notebook source and `pyproject.toml` still use the file editor and normal save path.
+Parts can upload while an editor is active, but completion returns `409` and keeps the parts.
+Stop the editor, then select the file again.
+Completion rechecks capacity, path, and overwrite restrictions.
+Use the file editor for notebook source and `pyproject.toml`.
 
-Uploads expire after 24 hours. A workspace permits up to 16 unfinished uploads;
-their declared sizes must fit its configured total limit.
-Cancelling an upload removes its staged parts. Maintenance also removes expired parts.
-Completed publication is idempotent. If publication was interrupted before its receipt was saved,
-the API returns `409` instead of risking another overwrite. Check the destination before starting a new upload.
+A workspace permits 16 unfinished uploads whose declared sizes fit its configured total limit.
+Uploads expire after 24 hours. Cancellation and maintenance remove staged parts.
+Retries of completed uploads return the saved result without another write.
+If completion returns `409` for an interrupted publication, check the destination before you start another upload.
+The original write can succeed even if its response is lost.
 
-The hub stages immutable parts in its storage bucket. At publication, S3, R2, and Azure use native multipart assembly.
-FS writes a temporary file incrementally. GCS uses resumable requests.
-Custom adapters without either capability support assembly up to 64 MiB.
-Upload ingestion has bounded buffers; the whole-file sandbox restore and capture costs above still apply.
-Folder ZIP imports retain their existing limits.
-
-API clients use `POST …/workspace/uploads`, then `PUT …/workspace/uploads/{id}/parts/{part}`
-with one-based part numbers. `GET …/workspace/uploads/{id}` reports stored parts.
-Use `POST …/workspace/uploads/{id}/complete` to publish or `DELETE …/workspace/uploads/{id}` to cancel.
+Built-in storage adapters assemble parts incrementally. Custom adapters without multipart or stream support have a 64 MiB upload limit.
+See the [API reference](./api.md) for start, part, progress, complete, and cancel operations under `…/workspace/uploads`.
 
 The API exposes the same operations under
 `/api/v1/projects/{pid}/notebooks/{nid}/workspace/`, including

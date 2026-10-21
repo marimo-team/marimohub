@@ -1,3 +1,4 @@
+import { MAX_UPLOAD_BYTES } from '@marimo-hub/core/uploads';
 import { WORKSPACE_LIMITS } from '@marimo-hub/core/remote-workspace';
 import type { WorkspaceLimits } from '@marimo-hub/core/remote-workspace';
 import { parseIntEnv } from './env';
@@ -16,7 +17,7 @@ export function parseWorkspaceLimits(env: Env): WorkspaceLimits {
 		maxFileBytes: positive(
 			'MARIMOHUB_WORKSPACE_MAX_FILE_BYTES',
 			WORKSPACE_LIMITS.maxFileBytes,
-			5 * 1024 ** 3,
+			MAX_UPLOAD_BYTES,
 		),
 		maxTotalBytes: positive('MARIMOHUB_WORKSPACE_MAX_BYTES', WORKSPACE_LIMITS.maxTotalBytes),
 		maxFiles: positive('MARIMOHUB_WORKSPACE_MAX_FILES', WORKSPACE_LIMITS.maxFiles),

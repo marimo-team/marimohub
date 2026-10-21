@@ -12,6 +12,7 @@ export * from './identityMatch';
 export * from './notifications';
 export * from './utcDate';
 export * from './url';
+export * from './uploads';
 export * from './rateLimit';
 export * from './tokenGrants';
 export * from './concurrency';

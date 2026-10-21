@@ -1108,6 +1108,50 @@ describe('S3ObjectBrowser uploads', () => {
 		expect(test.sent).toHaveLength(0);
 	});
 
+	it.each([undefined, false, true])(
+		'requires broker-attested write scope for WIF credentials: %s',
+		async (writeAllowed) => {
+			const test = harness(async (call) => {
+				const chunks: Uint8Array[] = [];
+				for await (const chunk of call.input.Body as AsyncIterable<Uint8Array>) chunks.push(chunk);
+				expect(chunks).toEqual([]);
+				return {};
+			});
+			const writable: S3ObjectStoreSource = {
+				...source,
+				allow_write: true,
+				auth: { method: 'ambient' },
+			};
+			const scoped: ObjectBrowseContext = {
+				...context,
+				federation: {
+					provider: 's3',
+					storage: { endpoint: source.endpoint },
+					credentials: {
+						accessKeyId: 'temporary',
+						secretAccessKey: 'temporary-secret',
+						writeAllowed,
+					},
+				},
+			};
+			expect(test.browser.capability(writable, scoped).write).toBe(writeAllowed === true);
+			const result = test.browser.putObject(writable, scoped, {
+				bucket: 'lake',
+				key: 'data',
+				size: 0,
+				contentType: 'application/octet-stream',
+				body: new Uint8Array(),
+			});
+			if (writeAllowed) {
+				await expect(result).resolves.toBeUndefined();
+				expect(test.sent).toHaveLength(1);
+			} else {
+				await expect(result).rejects.toMatchObject({ code: 'access_denied' });
+				expect(test.sent).toHaveLength(0);
+			}
+		},
+	);
+
 	it('streams uploads with integration credentials and enforces bucket scope and size', async () => {
 		const chunks: number[] = [];
 		const test = harness(async (call) => {

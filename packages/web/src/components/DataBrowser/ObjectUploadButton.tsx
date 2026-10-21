@@ -1,3 +1,4 @@
+import { MAX_UPLOAD_BYTES } from '@marimo-hub/core/uploads';
 import { withBasePath } from '@/lib/basePath';
 import { useRef, useState } from 'react';
 import { Button } from '@/components/ui';
@@ -27,7 +28,7 @@ export function ObjectUploadButton({
 		setError(null);
 		try {
 			for (const file of files) {
-				if (file.size > 5 * 1024 ** 3) throw new Error('Object uploads must be at most 5 GiB');
+				if (file.size > MAX_UPLOAD_BYTES) throw new Error('Object uploads must be at most 5 GiB');
 				await resumableUpload(
 					withBasePath(
 						`/api/v1/projects/${encodeURIComponent(projectId)}/integrations/${encodeURIComponent(integrationId)}/browse/objects/uploads`,

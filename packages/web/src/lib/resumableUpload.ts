@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { UPLOAD_PART_BYTES, UploadStatusSchema } from '@marimo-hub/core/uploads';
 import { apiErrorFromResponse } from '@/api/client';
 
 export interface UploadProgress {
@@ -7,18 +8,14 @@ export interface UploadProgress {
 	loaded: number;
 	total: number;
 }
-const UploadStatusSchema = z.object({
-	id: z.uuid(),
-	size: z.number().int().nonnegative(),
-	part_size: z.number().int().positive(),
-	parts_done: z.array(z.number().int().positive()),
-	status: z.enum(['uploading', 'publishing', 'complete', 'cancelled']),
+const UploadResponseSchema = z.object({
+	data: UploadStatusSchema.omit({ path: true, expires_at: true }),
 });
-type UploadStatus = z.infer<typeof UploadStatusSchema>;
+type UploadStatus = z.infer<typeof UploadResponseSchema>['data'];
 async function uploadResponse(response: Response): Promise<UploadStatus> {
 	if (!response.ok) throw await apiErrorFromResponse(response, 'Upload failed');
 	const value = await response.json();
-	return z.object({ data: UploadStatusSchema }).parse(value).data;
+	return UploadResponseSchema.parse(value).data;
 }
 function hex(bytes: ArrayBuffer): string {
 	return [...new Uint8Array(bytes)].map((value) => value.toString(16).padStart(2, '0')).join('');
@@ -52,9 +49,9 @@ export async function resumableUpload(
 		// A content fingerprint prevents a same-name replacement from mixing with old parts after reload.
 		const hashes: string[] = [];
 		progress('preparing', 0);
-		for (let offset = 0; offset < file.size; offset += 8 * 1024 * 1024) {
+		for (let offset = 0; offset < file.size; offset += UPLOAD_PART_BYTES) {
 			signal?.throwIfAborted();
-			const end = Math.min(file.size, offset + 8 * 1024 * 1024);
+			const end = Math.min(file.size, offset + UPLOAD_PART_BYTES);
 			hashes.push(
 				hex(await crypto.subtle.digest('SHA-256', await file.slice(offset, end).arrayBuffer())),
 			);
@@ -85,7 +82,7 @@ export async function resumableUpload(
 		if (
 			!Number.isSafeInteger(upload.part_size) ||
 			upload.part_size < 1 ||
-			upload.part_size > 8 * 1024 * 1024 ||
+			upload.part_size > UPLOAD_PART_BYTES ||
 			upload.size !== file.size
 		)
 			throw new Error('Server returned invalid upload limits');

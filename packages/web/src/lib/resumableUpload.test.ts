@@ -97,3 +97,134 @@ describe('resumableUpload', () => {
 		]);
 	});
 });
+
+describe('resumableUpload failures', () => {
+	async function leaveReceipt() {
+		const fetcher = vi
+			.fn()
+			.mockResolvedValueOnce(status())
+			.mockRejectedValueOnce(new Error('offline'));
+		vi.stubGlobal('fetch', fetcher);
+		await expect(resumableUpload('/uploads', file(), { path: 'data.bin' })).rejects.toThrow(
+			'offline',
+		);
+		return fetcher.mockReset();
+	}
+
+	it('starts a fresh upload when its saved receipt has expired', async () => {
+		const fetcher = await leaveReceipt();
+		fetcher
+			.mockResolvedValueOnce(new Response(null, { status: 404 }))
+			.mockResolvedValueOnce(status())
+			.mockResolvedValueOnce(status([1]))
+			.mockResolvedValueOnce(status([1, 2]))
+			.mockResolvedValueOnce(Response.json({ success: true }));
+		await resumableUpload('/uploads', file(), { path: 'data.bin' });
+		expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+			`/uploads/${id}`,
+			'/uploads',
+			`/uploads/${id}/parts/1`,
+			`/uploads/${id}/parts/2`,
+			`/uploads/${id}/complete`,
+		]);
+		expect(sessionStorage.length).toBe(0);
+	});
+
+	it.each([403, 409, 503])(
+		'does not silently start over when resuming returns %i',
+		async (code) => {
+			const fetcher = await leaveReceipt();
+			fetcher.mockResolvedValueOnce(
+				Response.json(
+					{ success: false, error: { code: 'FAILED', message: 'Resume denied' } },
+					{ status: code },
+				),
+			);
+			await expect(resumableUpload('/uploads', file(), { path: 'data.bin' })).rejects.toThrow(
+				'Resume denied',
+			);
+			expect(fetcher).toHaveBeenCalledTimes(1);
+			expect(sessionStorage.length).toBe(1);
+		},
+	);
+
+	it('recovers a lost completion response without resending parts', async () => {
+		const fetcher = vi
+			.fn()
+			.mockResolvedValueOnce(status())
+			.mockResolvedValueOnce(status([1]))
+			.mockResolvedValueOnce(status([1, 2]))
+			.mockRejectedValueOnce(new Error('response lost'));
+		vi.stubGlobal('fetch', fetcher);
+		await expect(resumableUpload('/uploads', file(), { path: 'data.bin' })).rejects.toThrow(
+			'response lost',
+		);
+		fetcher
+			.mockReset()
+			.mockResolvedValueOnce(
+				Response.json({
+					data: { id, size: 6, part_size: 3, parts_done: [1, 2], status: 'complete' },
+				}),
+			)
+			.mockResolvedValueOnce(Response.json({ success: true }));
+		await resumableUpload('/uploads', file(), { path: 'data.bin' });
+		expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+			`/uploads/${id}`,
+			`/uploads/${id}/complete`,
+		]);
+		expect(sessionStorage.length).toBe(0);
+	});
+
+	it('retains a receipt after aborting between parts and clears progress', async () => {
+		const controller = new AbortController();
+		const progress = vi.fn((value) => {
+			if (value?.phase === 'uploading') controller.abort();
+		});
+		const fetcher = vi
+			.fn()
+			.mockResolvedValueOnce(status())
+			.mockResolvedValueOnce(status([1]));
+		vi.stubGlobal('fetch', fetcher);
+		await expect(
+			resumableUpload(
+				'/uploads',
+				file(),
+				{ path: 'data.bin' },
+				{ signal: controller.signal, onProgress: progress },
+			),
+		).rejects.toMatchObject({ name: 'AbortError' });
+		expect(fetcher).toHaveBeenCalledTimes(2);
+		expect(sessionStorage.length).toBe(1);
+		expect(progress).toHaveBeenLastCalledWith(null);
+	});
+
+	it.each([{ part_size: 8 * 1024 * 1024 + 1 }, { size: 7 }])(
+		'rejects unsafe server limits: %j',
+		async (invalid) => {
+			const fetcher = vi.fn().mockResolvedValueOnce(
+				Response.json({
+					data: { id, size: 6, part_size: 3, parts_done: [], status: 'uploading', ...invalid },
+				}),
+			);
+			vi.stubGlobal('fetch', fetcher);
+			await expect(resumableUpload('/uploads', file(), { path: 'data.bin' })).rejects.toThrow(
+				'invalid upload limits',
+			);
+			expect(fetcher).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it('publishes an empty file without a part request', async () => {
+		const fetcher = vi
+			.fn()
+			.mockResolvedValueOnce(
+				Response.json({ data: { id, size: 0, part_size: 3, parts_done: [], status: 'uploading' } }),
+			)
+			.mockResolvedValueOnce(Response.json({ success: true }));
+		vi.stubGlobal('fetch', fetcher);
+		await resumableUpload('/uploads', new Blob([]) as unknown as globalThis.Blob, {
+			path: 'empty',
+		});
+		expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/uploads', `/uploads/${id}/complete`]);
+	});
+});

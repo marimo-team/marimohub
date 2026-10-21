@@ -1687,31 +1687,36 @@ Runtime cleanup does not erase provenance from retained sessions or audit events
 
 ## Resumable upload records
 
-`ResumableUploads` manages the following prefixes:
+`ResumableUploads` owns records under two prefixes:
 
-- Workspace: `projects/{pid}/notebooks/{nid}/uploads/`, called by `NotebookWorkspaceService`.
-- Customer objects: `projects/{pid}/object-uploads/`, called by the object-upload routes.
+| Scope            | Prefix                                    | Caller                     |
+| ---------------- | ----------------------------------------- | -------------------------- |
+| Workspace        | `projects/{pid}/notebooks/{nid}/uploads/` | `NotebookWorkspaceService` |
+| Customer objects | `projects/{pid}/object-uploads/`          | Object-upload routes       |
 
-Each prefix has a CAS `index.json` with at most 16 reservations. Reservations include declared size and expiry.
-The workspace reservation budget is its configured total size; the object-upload budget is 5 GiB per project.
-Each `{id}.json` receipt stores destination, size, owner, expiry, part size, immutable part references and hashes,
-publication state, optional native upload ID, and the completed result.
-Object receipts also bind the integration ID, bucket, and integration revision.
-Only the owner can inspect or modify an upload; project authorization is checked at every API request.
+Each prefix has a CAS `index.json` with at most 16 reservations for declared sizes and expiry times.
+The budget is the configured workspace total or 5 GiB per project for customer objects.
+Each `{id}.json` stores the destination, size, owner, expiry, part size, part references and hashes, and publication state.
+It also stores the native upload ID and completed result when available.
+Object records also bind the integration ID, bucket, and revision. API requests enforce current authorization and upload ownership.
 
-Parts at `{id}/parts/{n}` are written create-if-absent and must match the expected size.
-A duplicate part is accepted only if its hash matches.
-Completion CAS-fences `uploading` to `publishing`, then publishes once and stores `complete` with the result.
-Workspace publication holds the workspace mutation claim and rechecks capacity and editor state.
-An uncertain `publishing` receipt cannot be replayed. This avoids overwriting a later destination change.
+Parts at `{id}/parts/{n}` use create-if-absent writes with exact-size checks.
+Retries must match the saved hash. Assembly checks each part against its saved size and hash.
+Completion uses CAS to transition `uploading` → `publishing` → `complete`.
+An interrupted `publishing` record never replays its write, because a later writer can change the destination.
+Workspace completion holds the mutation claim and rechecks capacity and editor state.
 
-All backends stage immutable parts. S3, R2, and Azure assemble them through the optional `Bucket.multipart` port.
-FS and GCS implement `Bucket.putStream` for incremental assembly without a whole-file allocation.
-Other adapters use buffered assembly capped at 64 MiB. Multipart conditional writes are not supported;
-workspace create-only checks are serialized by the workspace mutation claim.
+| Assembly                 | Adapters       |
+| ------------------------ | -------------- |
+| `Bucket.multipart`       | S3, R2, Azure  |
+| `Bucket.putStream`       | FS, GCS        |
+| Buffered, at most 64 MiB | Other adapters |
 
-Uploads expire after 24 hours. The notebook/import maintenance pass aborts known native uploads and removes staged parts.
-Receipts remain seven more days so repeated sweeps can remove parts from late requests.
-Configure provider lifecycle cleanup for incomplete multipart uploads to cover a crash between native creation and receipt persistence.
-Azure uncommitted blocks expire through provider retention; abort must not delete an existing committed blob.
+Multipart conditional writes are unsupported. The workspace mutation claim serializes create-only checks.
+Successful publication survives cleanup failure. Completion retries and maintenance release reservations and remove parts without another write.
+
+Uploads expire after 24 hours. Notebook/import maintenance aborts known native uploads and removes staged parts.
+Records remain seven more days so later sweeps can remove parts from delayed requests.
+Configure provider lifecycle cleanup for native uploads created before a crash but absent from the record.
+Azure expires uncommitted blocks through provider retention. Abort must preserve an existing committed blob.
 Project or notebook deletion can remove subordinate upload records and parts.

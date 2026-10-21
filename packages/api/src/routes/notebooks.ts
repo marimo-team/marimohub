@@ -1,8 +1,8 @@
+import { UploadPartBody, UploadResponseSchema } from '../uploads';
 import { createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import { zipSync } from 'fflate';
 import {
-	UploadStatusSchema,
 	applyGitSourceUpdate,
 	assertSyncedSource,
 	BadRequestError,
@@ -1077,7 +1077,6 @@ app.openapi(copyWorkspaceEntry, async (c) => {
 });
 
 const UploadParams = NotebookIdParam.extend({ uploadId: z.uuid() });
-const uploadResponse = z.object({ success: z.literal(true), data: UploadStatusSchema });
 const uploadBase = '/projects/{pid}/notebooks/{nid}/workspace/uploads';
 async function authorizeWorkspaceUpload(c: Context<HonoEnv>, pid: ProjectId, nid: NotebookId) {
 	const deps = c.get('deps');
@@ -1110,7 +1109,7 @@ app.openapi(
 			),
 		},
 		responses: {
-			201: jsonContent(uploadResponse, 'Upload created'),
+			201: jsonContent(UploadResponseSchema, 'Upload created'),
 			...errorResponses(400, 401, 403, 404, 409, 429),
 		},
 	}),
@@ -1130,7 +1129,7 @@ app.openapi(
 		summary: 'Get workspace upload progress',
 		request: { params: UploadParams },
 		responses: {
-			200: jsonContent(uploadResponse, 'Upload progress'),
+			200: jsonContent(UploadResponseSchema, 'Upload progress'),
 			...errorResponses(401, 403, 404),
 		},
 	}),
@@ -1152,15 +1151,10 @@ app.openapi(
 		summary: 'Upload one workspace file part',
 		request: {
 			params: UploadParams.extend({ part: z.coerce.number().int().positive() }),
-			body: {
-				content: {
-					'application/octet-stream': { schema: z.string().openapi({ format: 'binary' }) },
-				},
-				required: true,
-			},
+			body: UploadPartBody,
 		},
 		responses: {
-			200: jsonContent(uploadResponse, 'Part stored'),
+			200: jsonContent(UploadResponseSchema, 'Part stored'),
 			...errorResponses(400, 401, 403, 404, 409, 413),
 		},
 	}),

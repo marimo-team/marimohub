@@ -69,6 +69,7 @@
 		"./timing": "./src/timing.ts",
 		"./token-grants": "./src/tokenGrants.ts",
 		"./url": "./src/url.ts",
+		"./uploads": "./src/uploads.ts",
 		"./workspace-archive": "./src/integrations/workspaceArchive.ts",
 		"./ports/notebook-bridge": "./src/ports/notebookBridge.ts",
 		"./sha256": "./src/internal/sha256.ts",

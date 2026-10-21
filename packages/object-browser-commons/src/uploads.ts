@@ -1,15 +1,16 @@
+import { MAX_UPLOAD_BYTES, UPLOAD_PART_BYTES } from '@marimo-hub/core/uploads';
 import { ObjectBrowseError } from '@marimo-hub/core/ports/object-browser';
 
 export async function* objectUploadChunks(
 	body: ReadableStream<Uint8Array> | Uint8Array,
 	size: number,
 ): AsyncGenerator<Uint8Array> {
-	if (!Number.isSafeInteger(size) || size < 0 || size > 5 * 1024 ** 3)
+	if (!Number.isSafeInteger(size) || size < 0 || size > MAX_UPLOAD_BYTES)
 		throw new ObjectBrowseError('unsupported', 'Object uploads must be at most 5 GiB');
 	const reader = body instanceof Uint8Array ? undefined : body.getReader();
 	let used = 0;
 	let seen = 0;
-	let buffer = new Uint8Array(8 * 1024 * 1024);
+	let buffer = new Uint8Array(UPLOAD_PART_BYTES);
 	try {
 		let first = true;
 		while (true) {

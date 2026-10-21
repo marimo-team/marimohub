@@ -8,12 +8,13 @@ import {
 	ResourceExhaustedError,
 } from '../../errors';
 import type { UserId } from '../../ids';
+import { logOperationalError } from '../../operationalLog';
 import type { Bucket, BucketObject, BucketPutOptions } from '../../ports/bucket';
 import { readStored } from '../../schema';
+import { UPLOAD_PART_BYTES, UploadStatusSchema } from '../../uploads';
 import { withCasRetry } from '../catalog/cas';
 import { deleteByPrefix, listAllObjects } from '../catalog/storage';
 
-export const UPLOAD_PART_BYTES = 8 * 1024 * 1024;
 export const UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
 const RECEIPT_RETENTION_MS = 7 * UPLOAD_RETENTION_MS;
 const MAX_ACTIVE_UPLOADS = 16;
@@ -31,7 +32,7 @@ export const UploadRecordSchema = z.object({
 	expires_at: z.number(),
 	create_only: z.boolean(),
 	content_type: z.string(),
-	status: z.enum(['uploading', 'publishing', 'complete', 'cancelled']),
+	status: UploadStatusSchema.shape.status,
 	parts: z.array(UploadPartSchema),
 	result: z.record(z.string(), z.unknown()).optional(),
 	backend: z.object({ key: z.string(), id: z.string() }).optional(),
@@ -42,15 +43,6 @@ export const UploadIndexSchema = z.object({
 	uploads: z.array(z.object({ id: z.uuid(), size: z.number(), expires_at: z.number() })),
 });
 
-export const UploadStatusSchema = z.object({
-	id: z.uuid(),
-	path: z.string(),
-	size: z.number().int().nonnegative(),
-	part_size: z.number().int().positive(),
-	parts_done: z.array(z.number().int().positive()),
-	expires_at: z.number(),
-	status: z.enum(['uploading', 'publishing', 'complete', 'cancelled']),
-});
 export function uploadStatus(record: UploadRecord): z.infer<typeof UploadStatusSchema> {
 	return {
 		id: record.id,
@@ -61,6 +53,12 @@ export function uploadStatus(record: UploadRecord): z.infer<typeof UploadStatusS
 		expires_at: record.expires_at,
 		status: record.status,
 	};
+}
+
+async function partHash(bytes: Uint8Array): Promise<string> {
+	return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes)))]
+		.map((value) => value.toString(16).padStart(2, '0'))
+		.join('');
 }
 
 /** Each owner supplies a scoped prefix; no key or backend upload ID comes from a client. */
@@ -114,7 +112,19 @@ export class ResumableUploads {
 				head ? { onlyIfEtagMatches: head.etag } : { onlyIfNotExists: true },
 			);
 		});
-		await this.bucket.put(this.key(record.id), JSON.stringify(record), { onlyIfNotExists: true });
+		try {
+			await this.bucket.put(this.key(record.id), JSON.stringify(record), { onlyIfNotExists: true });
+		} catch (error) {
+			// A failed start never exposes its ID, even if storage committed the record.
+			await this.release(record.id).catch((cleanupError) => {
+				logOperationalError(
+					'upload_admission_release_failed',
+					{ upload_id: record.id },
+					cleanupError,
+				);
+			});
+			throw error;
+		}
 		return uploadStatus(record);
 	}
 	private async load(id: string) {
@@ -144,9 +154,7 @@ export class ResumableUploads {
 		)
 			throw new BadRequestError('Upload part number or size does not match the upload');
 		if (record.status !== 'uploading') throw new ConflictError('Upload no longer accepts parts');
-		const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes)))]
-			.map((value) => value.toString(16).padStart(2, '0'))
-			.join('');
+		const sha256 = await partHash(bytes);
 		const key = `${this.partsPrefix(id)}${number}`;
 		try {
 			await this.bucket.put(key, bytes, { onlyIfNotExists: true });
@@ -155,13 +163,7 @@ export class ResumableUploads {
 			const existing = await this.bucket.get(key);
 			if (!existing || existing.size !== bytes.byteLength)
 				throw new ConflictError('Upload part already contains different bytes');
-			const hash = [
-				...new Uint8Array(
-					await crypto.subtle.digest('SHA-256', new Uint8Array(await existing.bytes())),
-				),
-			]
-				.map((value) => value.toString(16).padStart(2, '0'))
-				.join('');
+			const hash = await partHash(await existing.bytes());
 			if (hash !== sha256) throw new ConflictError('Upload part already contains different bytes');
 		}
 		return withCasRetry(this.bucket, async (writer) => {
@@ -181,7 +183,14 @@ export class ResumableUploads {
 		for (const part of record.parts) {
 			const object = await this.bucket.get(part.key);
 			if (!object) throw new ConflictError('Upload part is missing; upload the file again');
-			yield await object.bytes();
+			const bytes = await object.bytes();
+			const expected = Math.min(
+				record.part_size,
+				record.size - (part.number - 1) * record.part_size,
+			);
+			if (bytes.byteLength !== expected || (await partHash(bytes)) !== part.sha256)
+				throw new ConflictError('Upload part is corrupt; upload the file again');
+			yield bytes;
 		}
 	}
 	async complete(
@@ -191,7 +200,10 @@ export class ResumableUploads {
 	) {
 		const { head, record } = await this.load(id);
 		this.authorize(record, actor);
-		if (record.status === 'complete' && record.result) return record.result;
+		if (record.status === 'complete' && record.result) {
+			await this.cleanupCompleted(id);
+			return record.result;
+		}
 		if (record.status === 'publishing')
 			throw new ConflictError(
 				'Upload publication is in progress or was interrupted; check the destination before starting another upload',
@@ -199,6 +211,7 @@ export class ResumableUploads {
 		if (record.parts.length !== Math.ceil(record.size / record.part_size))
 			throw new ConflictError('Upload has missing parts');
 		const publish = await prepare(record);
+		this.authorize(record, actor);
 		record.status = 'publishing';
 		try {
 			await this.bucket.put(this.key(id), JSON.stringify(record), { onlyIfEtagMatches: head.etag });
@@ -210,14 +223,25 @@ export class ResumableUploads {
 		// Never replay an uncertain publication: another writer may already have changed the destination.
 		const result = await publish();
 		const current = await this.load(id);
+		this.authorize(current.record, actor);
+		if (current.record.status !== 'publishing')
+			throw new ConflictError('Upload publication was cancelled');
 		await this.bucket.put(
 			this.key(id),
 			JSON.stringify({ ...current.record, status: 'complete', backend: undefined, result }),
 			{ onlyIfEtagMatches: current.head.etag },
 		);
-		await this.release(id);
-		await deleteByPrefix(this.bucket, this.partsPrefix(id));
+		await this.cleanupCompleted(id);
 		return result;
+	}
+	private async cleanupCompleted(id: string) {
+		try {
+			await this.release(id);
+			await deleteByPrefix(this.bucket, this.partsPrefix(id));
+		} catch (error) {
+			// Publication is durable; maintenance retries cleanup without replaying the write.
+			logOperationalError('upload_cleanup_failed', { upload_id: id }, error);
+		}
 	}
 	async publishToBucket(
 		record: UploadRecord,
@@ -230,6 +254,8 @@ export class ResumableUploads {
 			const { uploadId } = await multipart.create(key, options);
 			try {
 				const current = await this.load(record.id);
+				if (current.record.status !== 'publishing' || current.record.expires_at <= Date.now())
+					throw new ConflictError('Upload publication expired or was cancelled');
 				await this.bucket.put(
 					this.key(record.id),
 					JSON.stringify({ ...current.record, backend: { key, id: uploadId } }),
@@ -274,10 +300,6 @@ export class ResumableUploads {
 		return this.bucket.put(key, bytes, options);
 	}
 	async cancel(id: string, actor: UserId) {
-		const { record } = await this.load(id);
-		if (record.created_by !== actor) throw new ForbiddenError('Upload belongs to another user');
-		if (record.status === 'publishing')
-			throw new ConflictError('Upload publication is in progress');
 		await this.expire(id, actor);
 	}
 	private async release(id: string) {
@@ -315,7 +337,10 @@ export class ResumableUploads {
 			const id = object.key.slice(this.prefix.length).replace(/\.json$/, '');
 			if (!z.uuid().safeParse(id).success) continue;
 			const { record } = await this.load(id);
-			if (record.expires_at > now && record.status !== 'cancelled') continue;
+			if (record.expires_at > now && record.status !== 'cancelled') {
+				if (record.status === 'complete') await this.cleanupCompleted(id);
+				continue;
+			}
 			await this.expire(id);
 			if (record.expires_at + RECEIPT_RETENTION_MS <= now) await this.bucket.delete(this.key(id));
 		}
