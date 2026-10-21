@@ -46,9 +46,17 @@ it.skipIf(!endpoint || !process.env.MARIMOHUB_TEST_LARGE_UPLOAD_BYTES)(
 				if (part === 2) {
 					service = makeWorkspaceService(new S3Storage(config), undefined, limits).service;
 					expect((await service.getUpload(pid, nid, upload.id, actor)).parts_done).toEqual([1, 2]);
+					await service.write(pid, nid, 'large.bin', new Uint8Array([7]), actor);
 				}
 			}
-			expect(await bucket.head(`projects/${pid}/notebooks/${nid}/workspace/large.bin`)).toBeNull();
+			expect((await service.read(pid, nid, 'large.bin')).bytes).toEqual(new Uint8Array([7]));
+			expect(
+				(
+					await bucket.list({
+						prefix: `projects/${pid}/notebooks/${nid}/uploads/${upload.id}/parts/`,
+					})
+				).objects,
+			).toEqual([]);
 			const item = await service.completeUpload(pid, nid, upload.id, actor);
 			expect(item.size).toBe(size);
 			const object = await client.send(

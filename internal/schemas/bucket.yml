@@ -1547,8 +1547,8 @@ paths:
         '204':
           description: Stored.
   /projects/{pid}/notebooks/{nid}/uploads/{upload_id}.json:
-    summary: Resumable upload ownership, immutable part references, and publication
-      receipt.
+    summary: Resumable upload ownership, part checksum reservations and receipts,
+      and publication result.
     parameters:
       - name: pid
         in: path
@@ -1635,8 +1635,8 @@ paths:
         '204':
           description: Stored.
   /projects/{pid}/object-uploads/{upload_id}.json:
-    summary: Resumable upload ownership, immutable part references, and publication
-      receipt.
+    summary: Resumable upload ownership, part checksum reservations and receipts,
+      and publication result.
     parameters:
       - name: pid
         in: path
@@ -5212,10 +5212,12 @@ components:
                 type: string
               key:
                 type: string
+              etag:
+                type: string
+                minLength: 1
             required:
               - number
               - sha256
-              - key
         result:
           type: object
           propertyNames:
@@ -5228,6 +5230,9 @@ components:
               type: string
             id:
               type: string
+            direct:
+              type: boolean
+              const: true
           required:
             - key
             - id
@@ -5317,10 +5322,12 @@ components:
                 type: string
               key:
                 type: string
+              etag:
+                type: string
+                minLength: 1
             required:
               - number
               - sha256
-              - key
         result:
           type: object
           propertyNames:
@@ -5333,6 +5340,9 @@ components:
               type: string
             id:
               type: string
+            direct:
+              type: boolean
+              const: true
           required:
             - key
             - id

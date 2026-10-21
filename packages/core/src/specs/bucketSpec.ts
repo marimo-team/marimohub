@@ -457,7 +457,8 @@ const OBJECTS: BucketObject[] = [
 		name: 'WorkspaceUpload',
 		key: `${notebook.base}/uploads/{upload_id}.json`,
 		schema: UploadRecordSchema,
-		summary: 'Resumable upload ownership, immutable part references, and publication receipt.',
+		summary:
+			'Resumable upload ownership, part checksum reservations and receipts, and publication result.',
 		mutability: 'cas',
 		owner: 'ResumableUploads',
 		tag: 'notebook',
@@ -475,7 +476,8 @@ const OBJECTS: BucketObject[] = [
 		name: 'ObjectUpload',
 		key: `${project.objectUploadsPrefix}{upload_id}.json`,
 		schema: UploadRecordSchema,
-		summary: 'Resumable upload ownership, immutable part references, and publication receipt.',
+		summary:
+			'Resumable upload ownership, part checksum reservations and receipts, and publication result.',
 		mutability: 'cas',
 		owner: 'ResumableUploads',
 		tag: 'project',

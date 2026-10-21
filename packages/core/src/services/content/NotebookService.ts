@@ -1493,6 +1493,7 @@ export class NotebookService {
 		await deleteByPrefix(this.bucket, paths.jobDeletionClaimsForNotebook(projectId, notebookId));
 
 		const nb = paths.project(projectId).notebook(notebookId);
+		await new ResumableUploads(this.bucket, `${nb.base}/uploads/`).cancelAll();
 		await deleteByPrefix(this.bucket, `${nb.base}/`);
 	}
 

@@ -32,6 +32,7 @@ export class R2BucketAdapter implements Bucket {
 	constructor(private r2: R2Bucket) {}
 
 	readonly multipart: BucketMultipart = {
+		isolatedSessions: true,
 		create: async (key, options) => {
 			if (options?.onlyIfEtagMatches !== undefined || options?.onlyIfNotExists)
 				throw new Error('Multipart conditional writes are not supported');

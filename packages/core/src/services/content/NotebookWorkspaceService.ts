@@ -379,15 +379,18 @@ export class NotebookWorkspaceService {
 				: Math.min(this.limits.maxFileBytes, 64 * 1024 * 1024);
 		if (input.size > maxFile)
 			throw new ResourceExhaustedError(`Workspace upload exceeds ${maxFile} bytes`);
+		const contentType = workspaceMimeType(path) ?? 'application/octet-stream';
 		return this.uploads(projectId, notebookId).start(
 			{
 				path,
 				size: input.size,
 				create_only: input.create_only ?? false,
-				content_type: workspaceMimeType(path) ?? 'application/octet-stream',
+				content_type: contentType,
 			},
 			actor,
 			this.limits.maxTotalBytes,
+			{},
+			{ key: `${context.prefix}${path}`, options: { httpMetadata: { contentType } } },
 		);
 	}
 	async getUpload(projectId: ProjectId, notebookId: NotebookId, id: string, actor: UserId) {
@@ -427,6 +430,8 @@ export class NotebookWorkspaceService {
 						`Workspace file exceeds ${this.limits.maxFileBytes} bytes`,
 					);
 				const key = `${context.prefix}${record.path}`;
+				if (record.backend?.direct && record.backend.key !== key)
+					throw new ConflictError('Upload destination changed; start a new upload');
 				const existing = await this.bucket.head(key);
 				if (
 					(!existing && (await this.exists(context.prefix, record.path))) ||

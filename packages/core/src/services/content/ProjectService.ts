@@ -1,3 +1,4 @@
+import { ResumableUploads } from './ResumableUploads';
 import { cachedRead } from '../../async';
 import { MetadataCache } from './metadataCache';
 import type { ReadConsistency } from './metadataCache';
@@ -931,6 +932,11 @@ export class ProjectService {
 		await deleteByPrefix(this.bucket, paths.jobOperationClaimsForProject(id));
 		await deleteByPrefix(this.bucket, paths.jobDeletionClaimsForProject(id));
 
+		const notebooks = await listAllPrefixes(this.bucket, `projects/${id}/notebooks/`);
+		await mapWithConcurrency(notebooks, BUCKET_SCAN_CONCURRENCY, (prefix) =>
+			new ResumableUploads(this.bucket, `${prefix}uploads/`).cancelAll(),
+		);
+		await new ResumableUploads(this.bucket, paths.project(id).objectUploadsPrefix).cancelAll();
 		const prefix = paths.project(id).meta.replace(/project\.json$/, '');
 		await deleteByPrefix(this.bucket, prefix);
 	}

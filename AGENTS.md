@@ -182,7 +182,9 @@ These CAS-managed records also have one writer each:
   owns upload receipts and the reservation index at
   `projects/{pid}/notebooks/{nid}/uploads/{id}.json`, `.../uploads/index.json`,
   and `projects/{pid}/object-uploads/{id}.json`, `.../object-uploads/index.json`.
-  Parts under `{id}/parts/{n}` are immutable. Publication is fenced by CAS;
+  Staged parts under `{id}/parts/{n}` are immutable. Direct workspace uploads reserve
+  each part checksum by CAS before sending bytes to an isolated multipart session.
+  Publication is fenced by CAS;
   an uncertain publication is never replayed. Maintenance retains receipts for
   seven days past expiry to clean up late parts and native multipart uploads.
 - `NotebookWorkspaceService` owns each short-lived workspace mutation claim at

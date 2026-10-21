@@ -21,7 +21,8 @@ const MAX_ACTIVE_UPLOADS = 16;
 const UploadPartSchema = z.object({
 	number: z.number().int().positive(),
 	sha256: z.string(),
-	key: z.string(),
+	key: z.string().optional(),
+	etag: z.string().min(1).optional(),
 });
 export const UploadRecordSchema = z.object({
 	id: z.uuid(),
@@ -35,7 +36,9 @@ export const UploadRecordSchema = z.object({
 	status: UploadStatusSchema.shape.status,
 	parts: z.array(UploadPartSchema),
 	result: z.record(z.string(), z.unknown()).optional(),
-	backend: z.object({ key: z.string(), id: z.string() }).optional(),
+	backend: z
+		.object({ key: z.string(), id: z.string(), direct: z.literal(true).optional() })
+		.optional(),
 	context: z.record(z.string(), z.string()),
 });
 export type UploadRecord = z.infer<typeof UploadRecordSchema>;
@@ -51,7 +54,9 @@ export function uploadStatus(record: UploadRecord): z.infer<typeof UploadStatusS
 		path: record.path,
 		size: record.size,
 		part_size: record.part_size,
-		parts_done: record.parts.map((part) => part.number),
+		parts_done: record.parts
+			.filter((part) => !record.backend?.direct || part.etag)
+			.map((part) => part.number),
 		expires_at: record.expires_at,
 		status: record.status,
 	};
@@ -81,6 +86,7 @@ export class ResumableUploads {
 		actor: UserId,
 		maxBytes: number,
 		context: Record<string, string> = {},
+		destination?: { key: string; options?: BucketMultipartOptions },
 	) {
 		if (!Number.isSafeInteger(input.size) || input.size < 0 || input.size > maxBytes)
 			throw new ResourceExhaustedError(`Upload exceeds the ${maxBytes}-byte limit`);
@@ -115,8 +121,22 @@ export class ResumableUploads {
 			);
 		});
 		try {
+			if (destination && input.size > 0 && this.bucket.multipart?.isolatedSessions) {
+				const { uploadId } = await this.bucket.multipart.create(
+					destination.key,
+					destination.options,
+				);
+				record.backend = { key: destination.key, id: uploadId, direct: true };
+			}
 			await this.bucket.put(this.key(record.id), JSON.stringify(record), { onlyIfNotExists: true });
 		} catch (error) {
+			if (record.backend) {
+				await this.bucket
+					.multipart!.abort(record.backend.key, record.backend.id)
+					.catch((cleanupError) => {
+						logOperationalError('upload_abort_failed', { upload_id: record.id }, cleanupError);
+					});
+			}
 			// A failed start never exposes its ID, even if storage committed the record.
 			await this.release(record.id).catch((cleanupError) => {
 				logOperationalError(
@@ -158,6 +178,7 @@ export class ResumableUploads {
 			throw new BadRequestError('Upload part number or size does not match the upload');
 		if (record.status !== 'uploading') throw new ConflictError('Upload no longer accepts parts');
 		const sha256 = await partHash(bytes);
+		if (record.backend?.direct) return this.putNativePart(id, number, bytes, sha256, actor);
 		const key = `${this.partsPrefix(id)}${number}`;
 		try {
 			await this.bucket.put(key, bytes, { onlyIfNotExists: true });
@@ -182,8 +203,50 @@ export class ResumableUploads {
 			return uploadStatus(current);
 		});
 	}
+	private async putNativePart(
+		id: string,
+		number: number,
+		bytes: Uint8Array,
+		sha256: string,
+		actor: UserId,
+	) {
+		const multipart = this.bucket.multipart;
+		if (!multipart) throw new ConflictError('Upload storage changed; start a new upload');
+		// Reserve the checksum before provider I/O: multipart uploads can overwrite a part number.
+		const record = await withCasRetry(this.bucket, async (writer) => {
+			const { head, record } = await this.load(id);
+			this.authorize(record, actor);
+			if (record.status !== 'uploading') throw new ConflictError('Upload no longer accepts parts');
+			const previous = record.parts.find((part) => part.number === number);
+			if (previous) {
+				if (previous.sha256 !== sha256)
+					throw new ConflictError('Upload part already contains different bytes');
+				return record;
+			}
+			record.parts.push({ number, sha256 });
+			record.parts.sort((a, b) => a.number - b.number);
+			await writer.put(this.key(id), JSON.stringify(record), { onlyIfEtagMatches: head.etag });
+			return record;
+		});
+		if (record.parts.find((part) => part.number === number)?.etag) return uploadStatus(record);
+		const backend = record.backend!;
+		const receipt = await multipart.putPart(backend.key, backend.id, number, bytes);
+		if (receipt.partNumber !== number || !receipt.etag)
+			throw new ConflictError('Storage returned an invalid upload part receipt');
+		return withCasRetry(this.bucket, async (writer) => {
+			const { head, record: current } = await this.load(id);
+			this.authorize(current, actor);
+			if (current.status !== 'uploading') throw new ConflictError('Upload no longer accepts parts');
+			const part = current.parts.find((part) => part.number === number);
+			if (!part || part.sha256 !== sha256) throw new ConflictError('Upload part changed');
+			part.etag = receipt.etag;
+			await writer.put(this.key(id), JSON.stringify(current), { onlyIfEtagMatches: head.etag });
+			return uploadStatus(current);
+		});
+	}
 	async *chunks(record: UploadRecord): AsyncGenerator<Uint8Array> {
 		for (const part of record.parts) {
+			if (!part.key) throw new ConflictError('Upload part has no staged bytes');
 			const object = await this.bucket.get(part.key);
 			if (!object) throw new ConflictError('Upload part is missing; upload the file again');
 			const bytes = await object.bytes();
@@ -213,7 +276,9 @@ export class ResumableUploads {
 			);
 		if (
 			record.parts.length !== Math.ceil(record.size / record.part_size) ||
-			record.parts.some((part, index) => part.number !== index + 1)
+			record.parts.some(
+				(part, index) => part.number !== index + 1 || (record.backend?.direct && !part.etag),
+			)
 		)
 			throw new ConflictError('Upload has missing parts or invalid part ordering');
 		const publish = await prepare(record);
@@ -256,6 +321,16 @@ export class ResumableUploads {
 		options?: BucketMultipartOptions,
 		assertMutable: () => Promise<void> = async () => {},
 	): Promise<BucketObject> {
+		if (record.backend?.direct) {
+			if (!this.bucket.multipart || record.backend.key !== key)
+				throw new ConflictError('Upload destination changed; start a new upload');
+			await assertMutable();
+			return this.bucket.multipart.complete(
+				key,
+				record.backend.id,
+				record.parts.map((part) => ({ partNumber: part.number, etag: part.etag! })),
+			);
+		}
 		if (this.bucket.multipart && record.size > 0) {
 			const multipart = this.bucket.multipart;
 			const { uploadId } = await multipart.create(key, options);
@@ -335,15 +410,24 @@ export class ResumableUploads {
 			await writer.put(this.key(id), JSON.stringify(record), { onlyIfEtagMatches: head.etag });
 			return record;
 		});
-		if (record.backend && this.bucket.multipart)
+		if (record.backend) {
+			if (!this.bucket.multipart)
+				throw new ConflictError('Upload storage changed; cannot abort the session');
 			await this.bucket.multipart.abort(record.backend.key, record.backend.id);
+		}
 		await deleteByPrefix(this.bucket, this.partsPrefix(id));
 		await this.release(id);
 	}
+	private async recordIds() {
+		return (await listAllObjects(this.bucket, this.prefix))
+			.map((object) => object.key.slice(this.prefix.length).replace(/\.json$/, ''))
+			.filter((id) => z.uuid().safeParse(id).success);
+	}
+	async cancelAll() {
+		for (const id of await this.recordIds()) await this.expire(id);
+	}
 	async sweep(now = Date.now()) {
-		for (const object of await listAllObjects(this.bucket, this.prefix)) {
-			const id = object.key.slice(this.prefix.length).replace(/\.json$/, '');
-			if (!z.uuid().safeParse(id).success) continue;
+		for (const id of await this.recordIds()) {
 			try {
 				const { record } = await this.load(id);
 				if (record.expires_at > now && record.status !== 'cancelled') {

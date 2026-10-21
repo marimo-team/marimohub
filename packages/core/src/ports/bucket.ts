@@ -71,6 +71,8 @@ export type BucketMultipartOptions = Pick<BucketPutOptions, 'httpMetadata' | 'cu
 };
 
 export interface BucketMultipart {
+	/** Parts survive unrelated writes to the destination and can resume across requests/processes. */
+	isolatedSessions?: true;
 	create(key: string, options?: BucketMultipartOptions): Promise<{ uploadId: string }>;
 	putPart(
 		key: string,

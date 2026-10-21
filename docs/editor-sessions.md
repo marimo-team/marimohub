@@ -135,12 +135,13 @@ Completion rechecks capacity, path, and overwrite restrictions.
 Use the file editor for notebook source and `pyproject.toml`.
 
 A workspace permits 16 unfinished uploads whose declared sizes fit its configured total limit.
-Uploads expire after 24 hours. Cancellation and maintenance remove staged parts.
+Uploads expire after 24 hours. Cancellation and maintenance abort native sessions or remove staged parts.
 Retries of completed uploads return the saved result without another write.
 If completion returns `409` for an interrupted publication, check the destination before you start another upload.
 The original write can succeed even if its response is lost.
 
-Built-in storage adapters assemble parts incrementally. Custom adapters without multipart or stream support have a 64 MiB upload limit.
+S3 and R2 workspace uploads send parts directly into a destination upload session. Saving commits the uploaded parts without another full transfer.
+Other adapters stage parts and assemble them when saving. Custom adapters without multipart or stream support have a 64 MiB upload limit.
 See the [API reference](./api.md) for start, part, progress, complete, and cancel operations under `…/workspace/uploads`.
 
 The API exposes the same operations under
