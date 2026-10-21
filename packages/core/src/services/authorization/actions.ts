@@ -47,6 +47,7 @@ export const PROJECT_ACTIONS = [
 	'project.alerts.manage',
 	/** Modify notebook content, workspaces, and versions. */
 	'notebook.write',
+	'job.trigger',
 	/** Notebook administration (delete, restore, source rewiring). */
 	'notebook.manage',
 	'deep-link.manage',
@@ -138,6 +139,7 @@ export const ACTION_RULES: {
 	'project.members.manage': project('manager', 'forbidden'),
 	'project.events.read': project('manager', 'forbidden'),
 	'project.alerts.manage': project('manager', 'forbidden'),
+	'job.trigger': project('editor', 'forbidden'),
 	'notebook.write': project('editor', 'forbidden'),
 	'notebook.manage': project('manager', 'forbidden'),
 	'deep-link.manage': project('manager', 'forbidden'),

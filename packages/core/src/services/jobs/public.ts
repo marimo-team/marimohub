@@ -7,3 +7,4 @@ export type { JobRunContext, JobRunnerDeps, JobRunnerSandboxConfig } from './Job
 export { appendJobRunFinishEvent, JobScheduler } from './JobScheduler';
 export type { JobSchedulerConfig, JobSchedulerDeps } from './JobScheduler';
 export { isTerminalRunStatus } from './runState';
+export { jobTimeoutSeconds } from './runPolicy';

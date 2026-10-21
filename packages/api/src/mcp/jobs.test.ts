@@ -474,6 +474,26 @@ describe('MCP run execution and authorization', () => {
 		expect((await call('list_jobs')).structuredContent).toMatchObject({ code: 'NOT_FOUND' });
 	});
 
+	it('runs and observes jobs with a trigger-only grant without granting edits or logs', async () => {
+		client = await connectMcpClient(
+			deps,
+			{
+				...USER,
+				credential: {
+					kind: 'external-access-token',
+					grant: externalTokenGrant(['marimohub:trigger'])!,
+				},
+			},
+			requestContext,
+		);
+		const response = await call('run_job');
+		expect(response.isError).not.toBe(true);
+		expect(response.structuredContent?.links).not.toHaveProperty('logs');
+		expect(
+			(await call('schedule_job', { enabled: false, expected_updated_at: job.updated_at })).isError,
+		).toBe(true);
+	});
+
 	it('hides restricted notebooks from every job tool', async () => {
 		deps.resourceSecurity = localResourceSecurity(['UNCLASSIFIED', 'SECRET']);
 		await deps.services.notebooks.setSecurityLabels(

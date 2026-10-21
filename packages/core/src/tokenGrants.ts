@@ -61,7 +61,8 @@ const RUN_TOKEN_ACTIONS = [
 export const TOKEN_GRANT_PRESETS = {
 	read: READ_TOKEN_ACTIONS,
 	run: RUN_TOKEN_ACTIONS,
-	edit: [...RUN_TOKEN_ACTIONS, 'notebook.write', 'change-request.publish'],
+	trigger: ['job.trigger', 'project.read'],
+	edit: [...RUN_TOKEN_ACTIONS, 'job.trigger', 'notebook.write', 'change-request.publish'],
 	full: '*',
 } as const satisfies Record<string, '*' | readonly AuthorizationAction[]>;
 
@@ -103,6 +104,7 @@ export function tokenGrantIsSubset(candidate: TokenGrant, upperBound: TokenGrant
 export const EXTERNAL_TOKEN_SCOPE_PRESETS = {
 	'marimohub:read': 'read',
 	'marimohub:run': 'run',
+	'marimohub:trigger': 'trigger',
 	'marimohub:edit': 'edit',
 	'marimohub:full': 'full',
 } as const satisfies Record<string, TokenGrantPreset>;

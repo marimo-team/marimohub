@@ -31,7 +31,7 @@ function hasJsonContentType(request: Request): boolean {
 	);
 }
 
-function canonicalJson(body: string): string {
+export function canonicalJson(body: string): string {
 	return JSON.stringify(JSON.parse(body), (_key, value: unknown) => {
 		if (value === null || typeof value !== 'object' || Array.isArray(value)) return value;
 		return Object.fromEntries(

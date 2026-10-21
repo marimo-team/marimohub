@@ -35,6 +35,122 @@ so the feature can be turned back on without loss.
   <figcaption>This schedule runs the notebook at 09:00 UTC, Monday through Friday.</figcaption>
 </figure>
 
+## Event triggers
+
+### Authentication
+
+The **Trigger jobs** PAT preset grants `job.trigger` and `project.read`.
+External identity providers can use the equivalent `marimohub:trigger` scope.
+These credentials permit manual runs, webhook triggers, and the MCP `run_job`
+tool without notebook edits. The owner still needs editor access to the project.
+
+PAT grants select projects, not individual jobs. Runs record the caller in
+`triggered_by`. [PAT expiry and revocation](./api-tokens.md#revoke-a-token) apply,
+including the 30-second revocation delay on other replicas.
+
+### Send an event
+
+1. In **API tokens**, create a token with the **Trigger jobs** preset.
+2. Limit the token to the target project.
+3. Set an expiry.
+4. Copy the trigger URL from the saved job.
+
+Send a POST request to
+`/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/trigger`
+with `Authorization: Bearer <PAT>`. This endpoint uses normal API authentication
+and CSRF checks.
+
+The JSON body is optional:
+
+| Field             | Behavior                                                                                             |
+| ----------------- | ---------------------------------------------------------------------------------------------------- |
+| `parameters`      | Replaces the stored parameter map for this run.                                                      |
+| `event`           | JSON object, at most 16 KiB encoded as UTF-8. Replaces `parameters.event` with its serialized value. |
+| `idempotency_key` | Identifies the event for replay. Scoped to the caller and job.                                       |
+
+The notebook reads the event with `json.loads(mo.cli_args()["event"])`.
+The response is HTTP 202 with
+`{"success":true,"data":{"run_id":"run_…","queued":true}}`.
+Runs appear as **Webhook** in the history.
+
+- With `concurrency_policy: "forbid"`, webhook runs wait for earlier runs of the same job.
+- Each job permits 60 webhook admissions per ten minutes across callers and replicas.
+- Each job permits 20 queued runs. Either limit returns HTTP 429.
+- Disabled or deleted jobs reject requests, including replay, with HTTP 404.
+
+For the same caller and job, a repeated key returns the original run without
+another rate-limit admission. Receipts normally last 24 hours.
+A replacement PAT for the same owner can replay the request.
+A different body returns HTTP 422. JSON property order does not affect replay.
+Every request, including replay, requires current authorization.
+
+```sh
+curl --fail-with-body -X POST \
+  -H "Authorization: Bearer $HUB_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"idempotency_key":"upload-123","event":{"key":"incoming/data.csv"}}' \
+  "$HUB_TRIGGER_URL"
+```
+
+For **S3 events**, configure an S3 event consumer, such as Lambda, to make this
+request after an upload. Send the object key, version, and event ID in the body.
+Use a stable event ID as the idempotency key. Direct SNS subscription requests
+require a relay that handles the SNS protocol and adds the bearer credential.
+
+For **GitHub Actions**, store the URL and token as repository secrets:
+
+```yaml
+- name: Trigger notebook job
+  env:
+    HUB_TRIGGER_URL: ${{ secrets.HUB_TRIGGER_URL }}
+    HUB_API_TOKEN: ${{ secrets.HUB_API_TOKEN }}
+  run: |
+    curl --fail-with-body -X POST \
+      -H "Authorization: Bearer $HUB_API_TOKEN" \
+      -H 'Content-Type: application/json' \
+      -d "{\"idempotency_key\":\"github-$GITHUB_RUN_ID\"}" \
+      "$HUB_TRIGGER_URL"
+```
+
+For **GitLab CI**, store the same variables as masked CI variables:
+
+```yaml
+trigger_notebook:
+  script:
+    - >-
+      curl --fail-with-body -X POST
+      -H "Authorization: Bearer $HUB_API_TOKEN"
+      -H 'Content-Type: application/json'
+      -d "{\"idempotency_key\":\"gitlab-$CI_PIPELINE_ID\"}"
+      "$HUB_TRIGGER_URL"
+```
+
+### Job chaining
+
+Use **Choose downstream jobs** in the job form, or set `chain` through the API:
+
+```json
+{
+	"chain": {
+		"on_success": [{ "notebook_id": "nb-…", "job_id": "job-…" }],
+		"on_failure": [{ "notebook_id": "nb-…", "job_id": "job-…" }]
+	}
+}
+```
+
+Each outcome permits up to five unique targets in the same project.
+Saving requires `job.trigger` access on each target notebook.
+Direct self-references are invalid. Deleted or disabled targets do not run.
+
+Failure chains start after the final failed attempt. Cancelled and skipped runs
+do not start chains. Chains stop after eight downstream steps.
+Targets with full queues, invalid parameters, or active runs under the same root produce skipped runs.
+Each chained run records its upstream run, root run, and depth.
+
+The target receives `parameters.upstream` as a JSON string with `job_id`,
+`run_id`, and `status`. It replaces any stored `upstream` value.
+Read it with `json.loads(mo.cli_args()["upstream"])`.
+
 ## How it works
 
 - **A job belongs to a notebook.** Open **Jobs & schedules** from the notebook's
@@ -42,7 +158,7 @@ so the feature can be turned back on without loss.
   notebook title to open that menu. Define jobs there: a
   name, an optional cron schedule with an IANA time zone, parameters, a
   timeout, a retry policy, and what to do when the previous run is still active.
-  A job without a schedule is manual-only.
+  A job without a schedule can run manually, through a webhook, or through a chain.
 - **Runs pin notebook source, not every local workspace file.** Each run uses a
   fresh copy-only sandbox (never a bucket mount) and records the notebook version
   it started from. Git-synced notebooks copy the complete immutable workspace of
@@ -100,7 +216,7 @@ so the feature can be turned back on without loss.
   project [audit log](./operations.md) with the actor; `job.run.trigger` and
   `job.run.cancel` record who started or stopped a run; `job.run.finish`
   records every outcome (status, attempt, exit code, sanitized error code,
-  duration), attributed to the manual triggerer or to `system` for scheduled
+  duration), attributed to the manual or webhook caller, or to `system` for scheduled
   runs.
 
 ## Run states
@@ -140,7 +256,7 @@ environment values and tracebacks.
 > resolved [integration secrets](./integration-secrets.md) and federated
 > credentials injected — exactly what an app session carries — regardless of
 > who triggers it or when the schedule fires. The credentials are attributed to
-> the manual triggerer, or to the job's author for scheduled runs. Treat a job
+> the manual or webhook caller, or to the job's author for scheduled and chained runs. Treat a job
 > definition as you would a shared app.
 
 ## Notifications

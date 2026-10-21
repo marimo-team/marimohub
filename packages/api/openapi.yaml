@@ -1748,6 +1748,7 @@ components:
                   - project.events.read
                   - project.alerts.manage
                   - notebook.write
+                  - job.trigger
                   - notebook.manage
                   - deep-link.manage
                   - preview.manage
@@ -2209,6 +2210,7 @@ components:
                           - project.events.read
                           - project.alerts.manage
                           - notebook.write
+                          - job.trigger
                           - notebook.manage
                           - deep-link.manage
                           - preview.manage
@@ -2261,6 +2263,7 @@ components:
             - project.events.read
             - project.alerts.manage
             - notebook.write
+            - job.trigger
             - notebook.manage
             - deep-link.manage
             - preview.manage
@@ -3710,6 +3713,45 @@ components:
           example: forbid
         notifications:
           $ref: '#/components/schemas/JobNotifications'
+        chain:
+          type: object
+          properties:
+            on_success:
+              type: array
+              items:
+                type: object
+                properties:
+                  project_id:
+                    type: string
+                    pattern: ^proj-[0-9a-z]{16}$
+                  notebook_id:
+                    type: string
+                    pattern: ^nb-[0-9a-z]{16}$
+                  job_id:
+                    type: string
+                    pattern: ^job-[0-9a-z]{16}$
+                required:
+                  - notebook_id
+                  - job_id
+              maxItems: 5
+            on_failure:
+              type: array
+              items:
+                type: object
+                properties:
+                  project_id:
+                    type: string
+                    pattern: ^proj-[0-9a-z]{16}$
+                  notebook_id:
+                    type: string
+                    pattern: ^nb-[0-9a-z]{16}$
+                  job_id:
+                    type: string
+                    pattern: ^job-[0-9a-z]{16}$
+                required:
+                  - notebook_id
+                  - job_id
+              maxItems: 5
         created_by:
           type: string
         created_at:
@@ -3823,6 +3865,45 @@ components:
           default: forbid
         notifications:
           $ref: '#/components/schemas/JobNotifications'
+        chain:
+          type: object
+          properties:
+            on_success:
+              type: array
+              items:
+                type: object
+                properties:
+                  project_id:
+                    type: string
+                    pattern: ^proj-[0-9a-z]{16}$
+                  notebook_id:
+                    type: string
+                    pattern: ^nb-[0-9a-z]{16}$
+                  job_id:
+                    type: string
+                    pattern: ^job-[0-9a-z]{16}$
+                required:
+                  - notebook_id
+                  - job_id
+              maxItems: 5
+            on_failure:
+              type: array
+              items:
+                type: object
+                properties:
+                  project_id:
+                    type: string
+                    pattern: ^proj-[0-9a-z]{16}$
+                  notebook_id:
+                    type: string
+                    pattern: ^nb-[0-9a-z]{16}$
+                  job_id:
+                    type: string
+                    pattern: ^job-[0-9a-z]{16}$
+                required:
+                  - notebook_id
+                  - job_id
+              maxItems: 5
       required:
         - name
       additionalProperties: false
@@ -3910,6 +3991,47 @@ components:
               uniqueItems: true
           required:
             - on
+        chain:
+          type:
+            - object
+            - 'null'
+          properties:
+            on_success:
+              type: array
+              items:
+                type: object
+                properties:
+                  project_id:
+                    type: string
+                    pattern: ^proj-[0-9a-z]{16}$
+                  notebook_id:
+                    type: string
+                    pattern: ^nb-[0-9a-z]{16}$
+                  job_id:
+                    type: string
+                    pattern: ^job-[0-9a-z]{16}$
+                required:
+                  - notebook_id
+                  - job_id
+              maxItems: 5
+            on_failure:
+              type: array
+              items:
+                type: object
+                properties:
+                  project_id:
+                    type: string
+                    pattern: ^proj-[0-9a-z]{16}$
+                  notebook_id:
+                    type: string
+                    pattern: ^nb-[0-9a-z]{16}$
+                  job_id:
+                    type: string
+                    pattern: ^job-[0-9a-z]{16}$
+                required:
+                  - notebook_id
+                  - job_id
+              maxItems: 5
       additionalProperties: false
     JobRun:
       type: object
@@ -3944,11 +4066,42 @@ components:
           enum:
             - schedule
             - manual
+            - webhook
+            - chain
             - unknown
-          description: 'Known values: schedule, manual. Unrecognized values normalize to
-            unknown.'
+          description: 'Known values: schedule, manual, webhook, chain. Unrecognized
+            values normalize to unknown.'
           example: manual
         triggered_by:
+          type: string
+        trigger_source:
+          anyOf:
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                    - webhook
+                idempotency_key:
+                  type: string
+              required:
+                - kind
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                    - chain
+                upstream_run_id:
+                  type: string
+              required:
+                - kind
+                - upstream_run_id
+        chain_depth:
+          type: integer
+          minimum: 0
+          maximum: 8
+        chain_root_run_id:
           type: string
         scheduled_for:
           type: string
@@ -3956,7 +4109,16 @@ components:
         source_version_id:
           type: string
         parameters:
-          $ref: '#/components/schemas/JobParameters'
+          type: object
+          additionalProperties:
+            type: string
+            maxLength: 4096
+          maxProperties: 32
+          propertyNames: *a3
+          properties:
+            event:
+              type: string
+              maxLength: 16384
         attempt:
           type: integer
           exclusiveMinimum: 0
@@ -5029,6 +5191,7 @@ components:
                       - project.events.read
                       - project.alerts.manage
                       - notebook.write
+                      - job.trigger
                       - notebook.manage
                       - deep-link.manage
                       - preview.manage
@@ -5298,6 +5461,7 @@ paths:
                               - project.events.read
                               - project.alerts.manage
                               - notebook.write
+                              - job.trigger
                               - notebook.manage
                               - deep-link.manage
                               - preview.manage
@@ -17102,6 +17266,144 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/trigger:
+    post:
+      operationId: jobs.trigger
+      tags:
+        - Jobs
+      summary: Trigger a job from an event
+      description: Requires job.trigger. Enqueues a webhook run with optional event
+        data and a caller-scoped idempotency key.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^job-[0-9a-z]{16}$
+            example: job-7h2k9qm4xz7rp3w8
+          required: true
+          name: jid
+          in: path
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                parameters:
+                  $ref: '#/components/schemas/JobParameters'
+                idempotency_key:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                event:
+                  type: object
+                  additionalProperties: {}
+              additionalProperties: false
+      responses:
+        '202':
+          description: Run queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      run_id:
+                        type: string
+                      queued:
+                        type: boolean
+                        enum:
+                          - true
+                    required:
+                      - run_id
+                      - queued
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/integrations/kinds:
     get:
       operationId: integrations.kinds.list
@@ -21250,6 +21552,7 @@ paths:
                               - project.events.read
                               - project.alerts.manage
                               - notebook.write
+                              - job.trigger
                               - notebook.manage
                               - deep-link.manage
                               - preview.manage
@@ -21646,6 +21949,7 @@ paths:
                               - project.events.read
                               - project.alerts.manage
                               - notebook.write
+                              - job.trigger
                               - notebook.manage
                               - deep-link.manage
                               - preview.manage
@@ -21702,6 +22006,7 @@ paths:
                               - project.events.read
                               - project.alerts.manage
                               - notebook.write
+                              - job.trigger
                               - notebook.manage
                               - deep-link.manage
                               - preview.manage
@@ -22035,6 +22340,7 @@ paths:
                                         - project.events.read
                                         - project.alerts.manage
                                         - notebook.write
+                                        - job.trigger
                                         - notebook.manage
                                         - deep-link.manage
                                         - preview.manage
@@ -22200,6 +22506,7 @@ paths:
                               - project.events.read
                               - project.alerts.manage
                               - notebook.write
+                              - job.trigger
                               - notebook.manage
                               - deep-link.manage
                               - preview.manage
@@ -22464,6 +22771,7 @@ paths:
                               - project.events.read
                               - project.alerts.manage
                               - notebook.write
+                              - job.trigger
                               - notebook.manage
                               - deep-link.manage
                               - preview.manage

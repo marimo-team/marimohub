@@ -156,7 +156,7 @@ describe('JobFormDialog', () => {
 		renderDialog();
 		const dialog = await screen.findByRole('dialog');
 		await user.type(within(dialog).getByLabelText('Name'), 'Report');
-		await user.click(within(dialog).getByRole('switch', { name: /Manual runs only/ }));
+		await user.click(within(dialog).getByRole('switch', { name: /No cron schedule/ }));
 		const cron = within(dialog).getByLabelText(/Cron/);
 		await user.clear(cron);
 		const timezone = within(dialog).getByLabelText(/Time zone/);
@@ -267,6 +267,7 @@ describe('JobFormDialog', () => {
 		const patch = calls.find((c) => c.method === 'PATCH');
 		expect(patch?.url).toContain('/jobs/job-1');
 		expect(patch?.body).toEqual({
+			chain: null,
 			name: 'Existing',
 			enabled: false,
 			schedule: { cron: '15 7 * * *', timezone: 'Asia/Tokyo' },

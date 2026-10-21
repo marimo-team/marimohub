@@ -26,6 +26,8 @@ describe('TokenGrant', () => {
 		expect(expandTokenGrantPreset('run')).toContain('session.start');
 		expect(expandTokenGrantPreset('edit')).toContain('notebook.write');
 		expect(expandTokenGrantPreset('full')).toBe('*');
+		expect(expandTokenGrantPreset('trigger')).toEqual(['job.trigger', 'project.read']);
+		expect(expandTokenGrantPreset('edit')).toContain('job.trigger');
 	});
 
 	it('rejects duplicate actions and projects', () => {

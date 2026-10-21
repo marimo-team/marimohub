@@ -19,6 +19,7 @@ interface TokenGrantEditorProps {
 }
 
 const PRESETS = [
+	{ id: 'trigger', label: 'Trigger jobs', description: 'Read projects and trigger saved jobs.' },
 	{ id: 'read', label: 'Read', description: 'Read projects and integration settings.' },
 	{ id: 'run', label: 'Run notebooks', description: 'Read projects and use notebook sessions.' },
 	{

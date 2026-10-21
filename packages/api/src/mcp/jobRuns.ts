@@ -151,7 +151,7 @@ export async function observeJobRun({
 	extra: JobToolExtra;
 	signal: AbortSignal;
 	request: StartRequestContext;
-	action: 'project.read' | 'notebook.write';
+	action: 'project.read' | 'notebook.write' | 'job.trigger';
 }) {
 	let authorized = target;
 	const authorize = async (checkSignal: AbortSignal) => {

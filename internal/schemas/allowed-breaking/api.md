@@ -35,3 +35,11 @@ override, so the field no longer accepts `null` there; the update body still doe
 POST /api/v1/projects/{pid}/notebooks the request property `app_compute_profile` became not nullable
 POST /api/v1/projects/{pid}/notebooks/git the request property `app_compute_profile` became not nullable
 ```
+
+The policy analyzer action vocabulary gained `job.trigger`. Both existing
+`PolicyCaseV1` alternatives remain present with the same required fields.
+Their embedded action enums only expand, but oasdiff matches them as replaced.
+
+```text
+POST /api/v1/admin/policy-analyzer/evaluate removed `subschema #1, subschema #2` from the `cases/items/` request property `anyOf` list
+```

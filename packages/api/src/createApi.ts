@@ -25,6 +25,7 @@ import { createAiProxy } from './routes/ai';
 import { createWifCredentials, WIF_CREDENTIALS_PREFIX } from './routes/wifCredentials';
 import eventsApp from './routes/events';
 import gitSyncApp from './routes/gitSync';
+import jobTriggersApp from './routes/jobTriggers';
 import notebooksApp from './routes/notebooks';
 import previewsApp from './routes/previews';
 import thumbnailsApp from './routes/thumbnails';
@@ -295,6 +296,7 @@ export function createApi(rawDeps: ApiDeps) {
 	};
 	app.use(`${API_PREFIX}/*`, observeRejection);
 	app.use('/api/sync/*', observeRejection);
+	app.use('/api/jobs/*', observeRejection);
 	app.use('/api/cli/*', observeRejection);
 
 	// Body-size cap: the API buffers request bodies in full (Hono parses JSON in
@@ -560,6 +562,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, changeRequestsApp);
 	app.route(API_PREFIX, sessionsApp);
 	app.route(API_PREFIX, jobsApp);
+	app.route(API_PREFIX, jobTriggersApp);
 	app.route(API_PREFIX, integrationsApp);
 	app.route(API_PREFIX, usersApp);
 	app.route(API_PREFIX, tokensApp);

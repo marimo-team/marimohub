@@ -3968,6 +3968,46 @@ components:
           required:
             - on
           additionalProperties: {}
+        chain:
+          type: object
+          properties:
+            on_success:
+              maxItems: 5
+              type: array
+              items:
+                type: object
+                properties:
+                  project_id:
+                    type: string
+                  notebook_id:
+                    type: string
+                  job_id:
+                    type: string
+                required:
+                  - notebook_id
+                  - job_id
+            on_failure:
+              maxItems: 5
+              type: array
+              items:
+                type: object
+                properties:
+                  project_id:
+                    type: string
+                  notebook_id:
+                    type: string
+                  job_id:
+                    type: string
+                required:
+                  - notebook_id
+                  - job_id
+        webhook_admissions:
+          maxItems: 60
+          type: array
+          items:
+            type: string
+            format: date-time
+            pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
         created_by:
           type: string
         created_at:
@@ -4036,6 +4076,37 @@ components:
           enum:
             - schedule
             - manual
+            - webhook
+            - chain
+        trigger_source:
+          oneOf:
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  const: webhook
+                idempotency_key:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+              required:
+                - kind
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  const: chain
+                upstream_run_id:
+                  type: string
+              required:
+                - kind
+                - upstream_run_id
+        chain_depth:
+          type: integer
+          minimum: 0
+          maximum: 8
+        chain_root_run_id:
+          type: string
         triggered_by:
           type: string
         scheduled_for:
@@ -4053,6 +4124,10 @@ components:
             type: string
             maxLength: 4096
           maxProperties: 32
+          properties:
+            event:
+              type: string
+              maxLength: 16384
         attempt:
           default: 1
           type: integer
@@ -4998,6 +5073,7 @@ components:
                       - project.events.read
                       - project.alerts.manage
                       - notebook.write
+                      - job.trigger
                       - notebook.manage
                       - deep-link.manage
                       - preview.manage

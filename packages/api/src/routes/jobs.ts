@@ -286,7 +286,7 @@ async function loadAuthorizedJob(
 	pid: JobRun['project_id'],
 	nid: JobRun['notebook_id'],
 	jid: JobDefinition['id'],
-	action: 'project.read' | 'notebook.write' = 'project.read',
+	action: 'project.read' | 'notebook.write' | 'job.trigger' = 'project.read',
 ) {
 	const deps = c.get('deps');
 	const target = await authorizeJobNotebook(deps, c.get('user'), pid, nid, action);
@@ -417,7 +417,7 @@ app.openapi(deleteJob, async (c) => {
 app.openapi(triggerRun, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid, jid } = c.req.valid('param');
-	const target = await loadAuthorizedJob(c, pid, nid, jid, 'notebook.write');
+	const target = await loadAuthorizedJob(c, pid, nid, jid, 'job.trigger');
 	const body = c.req.valid('json');
 	const data = await idempotentCreate(
 		c,

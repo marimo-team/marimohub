@@ -1862,6 +1862,26 @@ export function useJobsQuery(projectId: string, notebookId: string, enabled = tr
 	});
 }
 
+export function useChainNotebooksQuery(projectId: string, enabled: boolean) {
+	return useQuery({
+		queryKey: ['chain-notebooks', projectId],
+		enabled,
+		queryFn: () =>
+			listAllCursorPages(
+				(cursor) =>
+					apiData(
+						apiClient.GET('/api/v1/projects/{pid}/notebooks', {
+							params: {
+								path: { pid: projectId },
+								query: { limit: 100, ...(cursor ? { cursor } : {}) },
+							},
+						}),
+					),
+				'Notebook listing did not advance.',
+			),
+	});
+}
+
 export function useCreateJob(projectId: string, notebookId: string) {
 	return useApiMutation(
 		(body: JobCreateBody) =>
