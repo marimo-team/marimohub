@@ -151,7 +151,8 @@ minimumReleaseAgeExclude:
   - shell-quote@1.9.0 || 1.11.0
   - tar
   - undici
-  - vite@6.4.3
+  # Renovate security update: vite@8.3.5
+  - vite@6.4.3 || 8.3.5
   - smol-toml@1.9.0
   # Renovate security update: csv-parse@7.0.2
   - csv-parse@7.0.2

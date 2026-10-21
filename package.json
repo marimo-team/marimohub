@@ -68,7 +68,7 @@
 			"undici@>=7.0.0 <7.29.1": "7.29.1",
 			"vite": "npm:@voidzero-dev/vite-plus-core@0.3.0",
 			"vitest": "4.1.11",
-			"vitepress>vite": "^6.4.3"
+			"vitepress>vite": "^8.0.0"
 		}
 	}
 }
