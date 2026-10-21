@@ -10,7 +10,7 @@ export async function* objectUploadChunks(
 	const reader = body instanceof Uint8Array ? undefined : body.getReader();
 	let used = 0;
 	let seen = 0;
-	let buffer = new Uint8Array(UPLOAD_PART_BYTES);
+	let buffer = new Uint8Array(Math.min(size, UPLOAD_PART_BYTES));
 	try {
 		let first = true;
 		while (true) {

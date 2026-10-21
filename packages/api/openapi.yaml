@@ -10078,9 +10078,11 @@ paths:
                       size:
                         type: integer
                         minimum: 0
+                        maximum: 5368709120
                       part_size:
                         type: integer
                         exclusiveMinimum: 0
+                        maximum: 8388608
                       parts_done:
                         type: array
                         items:
@@ -10200,9 +10202,11 @@ paths:
                       size:
                         type: integer
                         minimum: 0
+                        maximum: 5368709120
                       part_size:
                         type: integer
                         exclusiveMinimum: 0
+                        maximum: 8388608
                       parts_done:
                         type: array
                         items:
@@ -10377,9 +10381,11 @@ paths:
                       size:
                         type: integer
                         minimum: 0
+                        maximum: 5368709120
                       part_size:
                         type: integer
                         exclusiveMinimum: 0
+                        maximum: 8388608
                       parts_done:
                         type: array
                         items:
@@ -18695,9 +18701,11 @@ paths:
                       size:
                         type: integer
                         minimum: 0
+                        maximum: 5368709120
                       part_size:
                         type: integer
                         exclusiveMinimum: 0
+                        maximum: 8388608
                       parts_done:
                         type: array
                         items:
@@ -18811,9 +18819,11 @@ paths:
                       size:
                         type: integer
                         minimum: 0
+                        maximum: 5368709120
                       part_size:
                         type: integer
                         exclusiveMinimum: 0
+                        maximum: 8388608
                       parts_done:
                         type: array
                         items:
@@ -18994,9 +19004,11 @@ paths:
                       size:
                         type: integer
                         minimum: 0
+                        maximum: 5368709120
                       part_size:
                         type: integer
                         exclusiveMinimum: 0
+                        maximum: 8388608
                       parts_done:
                         type: array
                         items:

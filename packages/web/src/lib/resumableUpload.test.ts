@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MAX_UPLOAD_BYTES, UPLOAD_PART_BYTES } from '@marimo-hub/core/uploads';
 import { resumableUpload } from './resumableUpload';
 
 const { Blob } = await vi.importActual<{ Blob: typeof globalThis.Blob }>('node:buffer');
@@ -198,21 +199,25 @@ describe('resumableUpload failures', () => {
 		expect(progress).toHaveBeenLastCalledWith(null);
 	});
 
-	it.each([{ part_size: 8 * 1024 * 1024 + 1 }, { size: 7 }])(
-		'rejects unsafe server limits: %j',
-		async (invalid) => {
-			const fetcher = vi.fn().mockResolvedValueOnce(
-				Response.json({
-					data: { id, size: 6, part_size: 3, parts_done: [], status: 'uploading', ...invalid },
-				}),
-			);
-			vi.stubGlobal('fetch', fetcher);
-			await expect(resumableUpload('/uploads', file(), { path: 'data.bin' })).rejects.toThrow(
-				'invalid upload limits',
-			);
-			expect(fetcher).toHaveBeenCalledTimes(1);
-		},
-	);
+	it.each([
+		{ part_size: UPLOAD_PART_BYTES + 1 },
+		{ part_size: 0 },
+		{ size: MAX_UPLOAD_BYTES + 1 },
+		{ size: 7 },
+	])('rejects unsafe server limits: %j', async (invalid) => {
+		const fetcher = vi.fn().mockResolvedValueOnce(
+			Response.json({
+				data: { id, size: 6, part_size: 3, parts_done: [], status: 'uploading', ...invalid },
+			}),
+		);
+		vi.stubGlobal('fetch', fetcher);
+		await expect(resumableUpload('/uploads', file(), { path: 'data.bin' })).rejects.toMatchObject(
+			invalid.size === 7
+				? { message: 'Server returned invalid upload limits' }
+				: { name: 'ZodError' },
+		);
+		expect(fetcher).toHaveBeenCalledTimes(1);
+	});
 
 	it('publishes an empty file without a part request', async () => {
 		const fetcher = vi

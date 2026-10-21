@@ -1275,13 +1275,13 @@ async function authorizeObjectUpload(
 	pid: ProjectId,
 	iid: IntegrationId,
 	id: string,
-	options: { signal?: AbortSignal; allowStaleIntegration?: boolean } = {},
+	options: { signal?: AbortSignal } = {},
 ) {
 	const access = await objectWriteAccess(deps, user, pid, iid, options.signal);
 	const uploads = objectUploads(deps, pid);
 	const record = await uploads.get(id, user.id);
 	if (record.context.integration_id !== iid) throw new NotFoundError('Upload not found');
-	if (!options.allowStaleIntegration && record.context.state !== access.stateToken)
+	if (record.context.state !== access.stateToken)
 		throw new ConflictError('The integration changed; start a new upload');
 	return { access, uploads, record };
 }
@@ -1297,7 +1297,13 @@ app.openapi(
 			body: jsonBody(
 				z.object({
 					bucket: z.string().min(1).max(256),
-					path: z.string().min(1).max(1024),
+					path: z
+						.string()
+						.min(1)
+						.max(1024)
+						.refine((value) => utf8ByteLength(value) <= 1024, {
+							message: 'Object key exceeds the 1,024-byte UTF-8 limit',
+						}),
 					size: z.number().int().nonnegative().max(MAX_UPLOAD_BYTES),
 					content_type: z
 						.string()
@@ -1485,10 +1491,10 @@ app.openapi(
 		const deps = c.get('deps');
 		const user = c.get('user');
 		const { pid, iid, uploadId } = c.req.valid('param');
-		const { uploads } = await authorizeObjectUpload(deps, user, pid, iid, uploadId, {
-			signal: c.req.raw.signal,
-			allowStaleIntegration: true,
-		});
+		await assertProjectRole(deps.services.projects, pid, user, 'integration.write', deps);
+		const uploads = objectUploads(deps, pid);
+		const record = await uploads.get(uploadId, user.id);
+		if (record.context.integration_id !== iid) throw new NotFoundError('Upload not found');
 		await uploads.cancel(uploadId, user.id);
 		return c.json({ success: true as const, data: {} }, 200);
 	},

@@ -1355,13 +1355,13 @@ class ScopedIntegrationsStore {
 		);
 	}
 
-	async putObject(
+	putObject(
 		scope: IntegrationScope,
 		id: IntegrationId,
 		context: ObjectBrowseContext,
 		request: ObjectUploadRequest,
 	): Promise<void> {
-		await this.runObjectBrowse(scope, id, context, async (browser, source) => {
+		return this.runObjectBrowse(scope, id, context, async (browser, source) => {
 			if (
 				!objectWriteAllowed(source, context) ||
 				!browser.putObject ||
@@ -2287,15 +2287,20 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		);
 	}
 
-	putObject(
+	async putObject(
 		projectId: ProjectId,
 		id: IntegrationId,
 		context: ObjectBrowseContext,
 		request: ObjectUploadRequest,
 	): Promise<void> {
-		return this.withBrowseScope(projectId, id, (scope) =>
-			this.store.putObject(scope, id, context, request),
-		);
+		try {
+			await this.withBrowseScope(projectId, id, (scope) =>
+				this.store.putObject(scope, id, context, request),
+			);
+		} finally {
+			if (!(request.body instanceof Uint8Array) && !request.body.locked)
+				await request.body.cancel().catch(() => {});
+		}
 	}
 
 	openObject(

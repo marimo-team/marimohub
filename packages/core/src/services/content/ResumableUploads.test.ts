@@ -5,7 +5,7 @@ import { NotebookId, ProjectId } from '../../ids';
 import type { UserId } from '../../ids';
 import { paths } from '../../paths';
 import { UPLOAD_PART_BYTES } from '../../uploads';
-import { ResumableUploads, UPLOAD_RETENTION_MS } from './ResumableUploads';
+import { ResumableUploads, UploadIndexSchema, UPLOAD_RETENTION_MS } from './ResumableUploads';
 
 const actor = 'author' as UserId;
 const other = 'other' as UserId;
@@ -64,7 +64,7 @@ describe('resumable workspace uploads', () => {
 		const { service } = setup();
 		await expect(
 			service.startUpload(pid, nid, { path: '../escape', size: 1 }, actor),
-		).rejects.toThrow();
+		).rejects.toThrow('Invalid workspace file path: ../escape');
 		await expect(
 			service.startUpload(pid, nid, { path: 'notebook.py', size: 1 }, actor),
 		).rejects.toThrow('file editor');
@@ -112,6 +112,14 @@ describe('resumable workspace uploads', () => {
 		vi.setSystemTime(Date.now() + UPLOAD_RETENTION_MS + 1);
 		await service.sweepUploads(pid, nid);
 		await expect(service.getUpload(pid, nid, upload.id, actor)).rejects.toThrow('expired');
+		await expect(
+			service.putUploadPart(pid, nid, upload.id, 1, new Uint8Array(1), actor),
+		).rejects.toThrow('expired');
+		expect(
+			await (await bucket.get(
+				`${paths.project(pid).notebook(nid).base}/uploads/${upload.id}.json`,
+			))!.json(),
+		).toMatchObject({ status: 'cancelled' });
 		expect(
 			(
 				await bucket.list({
@@ -313,7 +321,7 @@ describe('upload failure recovery', () => {
 		expect(await bucket.head(`uploads/${upload.id}/parts/1`)).toBeNull();
 	});
 
-	it('does not revive a publishing receipt expired by maintenance', async () => {
+	it('returns successful publication without reviving a receipt expired by maintenance', async () => {
 		vi.useFakeTimers();
 		const { bucket, uploads, start } = uploadStore();
 		const upload = await start(0);
@@ -323,7 +331,7 @@ describe('upload failure recovery', () => {
 				await uploads.sweep();
 				return {};
 			}),
-		).rejects.toThrow('expired');
+		).resolves.toEqual({});
 		expect(await (await bucket.get(`uploads/${upload.id}.json`))!.json()).toMatchObject({
 			status: 'cancelled',
 		});
@@ -388,4 +396,115 @@ describe('upload failure recovery', () => {
 		expect(multipart.complete).not.toHaveBeenCalled();
 		await expect(uploads.cancel(upload.id, actor)).rejects.toThrow('in progress');
 	});
+});
+
+describe('upload receipt invariants', () => {
+	it('serializes competing create-only completions across service instances', async () => {
+		const { bucket, service } = setup();
+		const { service: otherService } = makeWorkspaceService(bucket);
+		const first = await service.startUpload(
+			pid,
+			nid,
+			{ path: 'data', size: 1, create_only: true },
+			actor,
+		);
+		const second = await otherService.startUpload(
+			pid,
+			nid,
+			{ path: 'data', size: 1, create_only: true },
+			actor,
+		);
+		await service.putUploadPart(pid, nid, first.id, 1, new Uint8Array([1]), actor);
+		await otherService.putUploadPart(pid, nid, second.id, 1, new Uint8Array([2]), actor);
+		const results = await Promise.allSettled([
+			service.completeUpload(pid, nid, first.id, actor),
+			otherService.completeUpload(pid, nid, second.id, actor),
+		]);
+		expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+		expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+			reason: { message: expect.stringContaining('already exists') },
+		});
+		const winner = results.findIndex((result) => result.status === 'fulfilled');
+		expect((await service.read(pid, nid, 'data')).bytes).toEqual(new Uint8Array([winner + 1]));
+	});
+
+	it('retains a successful result across expiry and cancellation', async () => {
+		vi.useFakeTimers();
+		const { uploads, start } = uploadStore();
+		const upload = await start(0);
+		const publish = vi.fn(async () => {
+			vi.setSystemTime(upload.expires_at + 1);
+			return { size: 0 };
+		});
+		await expect(uploads.complete(upload.id, actor, async () => publish)).resolves.toEqual({
+			size: 0,
+		});
+		await uploads.cancel(upload.id, actor);
+		await uploads.sweep();
+		await expect(uploads.complete(upload.id, actor, async () => publish)).resolves.toEqual({
+			size: 0,
+		});
+		expect((await uploads.get(upload.id, actor)).status).toBe('complete');
+		expect(publish).toHaveBeenCalledTimes(1);
+		vi.setSystemTime(upload.expires_at + 7 * UPLOAD_RETENTION_MS);
+		await expect(uploads.get(upload.id, actor)).rejects.toThrow('expired');
+	});
+
+	it('continues sweeping after a corrupt receipt', async () => {
+		vi.useFakeTimers();
+		const { bucket, uploads, start } = uploadStore();
+		const receipts = [await start(), await start()].sort((a, b) => a.id.localeCompare(b.id));
+		const [broken, healthy] = receipts;
+		await uploads.putPart(healthy.id, 1, new Uint8Array([1]), actor);
+		await bucket.put(`uploads/${broken.id}.json`, '{');
+		vi.setSystemTime(healthy.expires_at);
+		await uploads.sweep();
+		expect(await bucket.head(`uploads/${healthy.id}/parts/1`)).toBeNull();
+		expect(await (await bucket.get(`uploads/${healthy.id}.json`))!.json()).toMatchObject({
+			status: 'cancelled',
+		});
+	});
+
+	it.each([
+		[2, 1],
+		[1, 1],
+	])('rejects invalid stored part ordering %s before publication', async (...numbers) => {
+		const { bucket, uploads, start } = uploadStore();
+		const upload = await start(UPLOAD_PART_BYTES + 1, UPLOAD_PART_BYTES + 1);
+		const record = await uploads.get(upload.id, actor);
+		record.parts = numbers.map((number) => ({
+			number,
+			key: `uploads/${upload.id}/parts/${number}`,
+			sha256: 'hash',
+		}));
+		await bucket.put(`uploads/${upload.id}.json`, JSON.stringify(record));
+		const prepare = vi.fn();
+		await expect(uploads.complete(upload.id, actor, prepare)).rejects.toThrow('part ordering');
+		expect(prepare).not.toHaveBeenCalled();
+	});
+
+	it('rejects oversized reservation indexes', () => {
+		const reservation = { id: crypto.randomUUID(), size: 0, expires_at: Date.now() };
+		expect(UploadIndexSchema.safeParse({ uploads: Array(16).fill(reservation) }).success).toBe(
+			true,
+		);
+		expect(UploadIndexSchema.safeParse({ uploads: Array(17).fill(reservation) }).success).toBe(
+			false,
+		);
+	});
+
+	it.each(['data', 'data/child'])(
+		'rejects create-only uploads for existing entries before reserving: %s',
+		async (existing) => {
+			const { bucket, service } = setup();
+			await service.write(pid, nid, existing, new Uint8Array([1]), actor);
+			await expect(
+				service.startUpload(pid, nid, { path: 'data', size: 1, create_only: true }, actor),
+			).rejects.toThrow('already exists');
+			expect(
+				(await bucket.list({ prefix: `${paths.project(pid).notebook(nid).base}/uploads/` }))
+					.objects,
+			).toEqual([]);
+		},
+	);
 });

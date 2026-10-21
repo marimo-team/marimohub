@@ -65,8 +65,13 @@ export interface BucketUploadPart {
 	etag: string;
 }
 
+export type BucketMultipartOptions = Pick<BucketPutOptions, 'httpMetadata' | 'customMetadata'> & {
+	onlyIfEtagMatches?: never;
+	onlyIfNotExists?: never;
+};
+
 export interface BucketMultipart {
-	create(key: string, options?: BucketPutOptions): Promise<{ uploadId: string }>;
+	create(key: string, options?: BucketMultipartOptions): Promise<{ uploadId: string }>;
 	putPart(
 		key: string,
 		uploadId: string,

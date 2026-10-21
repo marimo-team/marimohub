@@ -1144,6 +1144,7 @@ export class SandboxProvisioner {
 					`${layout.gitRoot}/.git`,
 					{
 						requireComplete: true,
+						limits: options.workspaceLimits,
 						excludeRelativeRoots: ['hooks'],
 						waitUntilReady,
 						prefetchBudget: this.prefetchBudget,

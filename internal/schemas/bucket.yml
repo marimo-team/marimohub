@@ -5253,6 +5253,7 @@ components:
       type: object
       properties:
         uploads:
+          maxItems: 16
           type: array
           items:
             type: object
@@ -5357,6 +5358,7 @@ components:
       type: object
       properties:
         uploads:
+          maxItems: 16
           type: array
           items:
             type: object

@@ -7,7 +7,10 @@
 
 /** Temporary S3-style credentials returned by a credential exchange. */
 export interface TempS3Creds {
-	/** Set only when the broker verifies that the exchanged credentials permit writes. */
+	/**
+	 * Set only after verifying write scope. Built-in AWS and CoreWeave brokers do
+	 * not attest this yet, so their federated object-browser access stays read-only.
+	 */
 	writeAllowed?: boolean;
 	accessKeyId: string;
 	secretAccessKey: string;

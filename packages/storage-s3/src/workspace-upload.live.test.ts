@@ -37,6 +37,7 @@ it.skipIf(!endpoint || !process.env.MARIMOHUB_TEST_LARGE_UPLOAD_BYTES)(
 			const nid = createNotebookId();
 			const actor = UserId.parse('upload-test');
 			const upload = await service.startUpload(pid, nid, { path: 'large.bin', size }, actor);
+			expect(size).toBeGreaterThan(upload.part_size);
 			const expected = createHash('sha256');
 			for (let offset = 0, part = 1; offset < size; offset += upload.part_size, part++) {
 				const bytes = new Uint8Array(Math.min(upload.part_size, size - offset)).fill(part % 256);

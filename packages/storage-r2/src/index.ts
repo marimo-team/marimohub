@@ -45,7 +45,14 @@ export class R2BucketAdapter implements Bucket {
 			this.r2.resumeMultipartUpload(key, uploadId).uploadPart(partNumber, bytes),
 		complete: async (key, uploadId, parts) =>
 			toObject(await this.r2.resumeMultipartUpload(key, uploadId).complete(parts)),
-		abort: (key, uploadId) => this.r2.resumeMultipartUpload(key, uploadId).abort(),
+		abort: async (key, uploadId) => {
+			try {
+				await this.r2.resumeMultipartUpload(key, uploadId).abort();
+			} catch (error) {
+				// Workers exposes the R2 NoSuchUpload code in the error message.
+				if (!(error instanceof Error && error.message.endsWith('(10024)'))) throw error;
+			}
+		},
 	};
 
 	async get(key: string): Promise<BucketObjectBody | null> {

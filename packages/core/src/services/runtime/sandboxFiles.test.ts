@@ -2066,6 +2066,142 @@ describe('capture transport budgets', () => {
 });
 
 describe('configured workspace round-trip limits', () => {
+	it.each([
+		{ maxFiles: 2, maxTotalBytes: 100, error: 'file count cap (2)' },
+		{ maxFiles: 10, maxTotalBytes: 6, error: 'total-byte cap (6)' },
+	])(
+		'rejects strict restores beyond $error before reading or writing bodies',
+		async ({ error, ...aggregate }) => {
+			const { nb } = nbCtx();
+			const bucket = new RecordingBucket();
+			const { instance, calls } = makeFakeSandbox();
+			await bucket.put(nb.workspaceFile('a'), '1234');
+			await bucket.put(nb.workspaceFile('b'), '567');
+			await bucket.put(nb.workspaceFile('c'), '89');
+			await expect(
+				restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
+					limits: { maxFileBytes: 10, ...aggregate },
+					requireComplete: true,
+				}),
+			).rejects.toThrow(error);
+			expect(bucket.calls.get).toEqual([]);
+			expect(calls.writeFiles).toEqual([]);
+			expect(calls.exec).toEqual([]);
+		},
+	);
+
+	it.each([
+		{ maxFiles: 2, maxTotalBytes: 100, selected: ['a', 'b'], bytes: 7 },
+		{ maxFiles: 10, maxTotalBytes: 6, selected: ['a', 'c'], bytes: 6 },
+	])(
+		'skips excess files without fetching them (count=$maxFiles, bytes=$maxTotalBytes)',
+		async ({ selected, bytes, ...aggregate }) => {
+			const { nb } = nbCtx();
+			const bucket = new RecordingBucket();
+			const { instance, calls } = makeFakeSandbox();
+			await bucket.put(nb.workspaceFile('a'), '1234');
+			await bucket.put(nb.workspaceFile('b'), '567');
+			await bucket.put(nb.workspaceFile('c'), '89');
+			const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				await expect(
+					restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
+						limits: { maxFileBytes: 10, ...aggregate },
+					}),
+				).resolves.toEqual({ objectCount: 2, bytes });
+				expect(bucket.calls.get).toEqual(selected.map((name) => nb.workspaceFile(name)));
+				expect(calls.writeFiles.flat().map(({ path }) => path)).toEqual(
+					selected.map((name) => `${MOUNT}/${name}`),
+				);
+				expect(warning).toHaveBeenCalledOnce();
+			} finally {
+				warning.mockRestore();
+			}
+		},
+	);
+
+	it.each([
+		{ maxFiles: 2, maxTotalBytes: 100, error: 'file count cap (2)' },
+		{ maxFiles: 10, maxTotalBytes: 6, error: 'total-byte cap (6)' },
+	])('counts overlays once against $error', async ({ error, ...aggregate }) => {
+		const { nb } = nbCtx();
+		const bucket = new RecordingBucket();
+		const { instance, calls } = makeFakeSandbox();
+		await bucket.put(nb.workspaceFile('a'), 'stale');
+		await bucket.put(nb.workspaceFile('b'), '123');
+		await bucket.put(nb.workspaceFile('c'), '45');
+		await bucket.put('version/code.py', 'ab');
+		const options = {
+			limits: { maxFileBytes: 10, ...aggregate },
+			overlay: [{ path: 'a', key: 'version/code.py' }],
+		};
+		await expect(
+			restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
+				...options,
+				requireComplete: true,
+			}),
+		).rejects.toThrow(error);
+		expect(bucket.calls.get).toEqual([]);
+		expect(calls.writeFiles).toEqual([]);
+		const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			await expect(
+				restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, options),
+			).resolves.toEqual({ objectCount: 2, bytes: 5 });
+			expect(bucket.calls.get).toEqual(['version/code.py', nb.workspaceFile('b')]);
+			expect(calls.writeFiles.flat()).toEqual([
+				{ path: `${MOUNT}/a`, content: new TextEncoder().encode('ab') },
+				{ path: `${MOUNT}/b`, content: new TextEncoder().encode('123') },
+			]);
+		} finally {
+			warning.mockRestore();
+		}
+	});
+
+	it('strictly restores an overlay without counting its oversized stale draft', async () => {
+		const { nb } = nbCtx();
+		const bucket = new RecordingBucket();
+		const { instance, calls } = makeFakeSandbox();
+		await bucket.put(nb.workspaceFile('notebook.py'), 'oversized stale draft');
+		await bucket.put(nb.workspaceFile('data'), '123');
+		await bucket.put('version/code.py', 'ab');
+		await expect(
+			restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
+				requireComplete: true,
+				limits: { maxFileBytes: 3, maxTotalBytes: 5, maxFiles: 2 },
+				overlay: [{ path: 'notebook.py', key: 'version/code.py' }],
+			}),
+		).resolves.toEqual({ objectCount: 2, bytes: 5 });
+		expect(bucket.calls.get).toEqual(['version/code.py', nb.workspaceFile('data')]);
+		expect(calls.writeFiles.flat()).toEqual([
+			{ path: `${MOUNT}/notebook.py`, content: new TextEncoder().encode('ab') },
+			{ path: `${MOUNT}/data`, content: new TextEncoder().encode('123') },
+		]);
+	});
+
+	it.each([
+		{ maxFileBytes: 10, maxFiles: 1, maxTotalBytes: 100 },
+		{ maxFileBytes: 10, maxFiles: 10, maxTotalBytes: 5 },
+		{ maxFileBytes: 2, maxFiles: 10, maxTotalBytes: 100 },
+	])('rejects an over-budget overlay before reading any body (%j)', async (limits) => {
+		const bucket = new RecordingBucket();
+		const { instance, calls } = makeFakeSandbox();
+		await bucket.put('version/code.py', 'abc');
+		await bucket.put('version/deps.toml', 'def');
+		await expect(
+			restoreWorkspace(instance, bucket, 'workspace/', MOUNT, {
+				limits,
+				overlay: [
+					{ path: 'a', key: 'version/code.py' },
+					{ path: 'b', key: 'version/deps.toml' },
+				],
+			}),
+		).rejects.toThrow('source overlay exceeds workspace limits');
+		expect(bucket.calls.get).toEqual([]);
+		expect(calls.writeFiles).toEqual([]);
+		expect(calls.exec).toEqual([]);
+	});
+
 	it('uses the injected per-file cap for restore and capture', async () => {
 		const { projectId, notebookId, nb } = nbCtx();
 		const bucket = new RecordingBucket();
@@ -2081,6 +2217,8 @@ describe('configured workspace round-trip limits', () => {
 		await restoreWorkspace(sandbox.instance, bucket, nb.workspacePrefix, MOUNT, {
 			limits: { ...limits, maxFileBytes: 5 },
 		});
+		expect(decode(sandbox.fs.get('data')!)).toBe('12345');
+		await bucket.put(nb.workspaceFile('data'), 'stale');
 		await captureWorkspace(
 			sandbox.instance,
 			bucket,

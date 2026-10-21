@@ -109,8 +109,8 @@ S3, GCS, and Azure Blob browsing supports these read-only operations:
 - Load explicit previews and notebook snippets.
 - Stream downloads through the hub.
 
-The browser cannot upload, delete, restore, rename, or edit upstream objects or
-metadata.
+Uploads are opt-in through `allow_write` and require manager access and write-capable integration credentials.
+See [Object uploads](./data-browser.md). The browser cannot delete, restore, rename, or edit upstream metadata.
 
 The API retains `bucket`, `key`, and `version_id` as provider-neutral compatibility fields. The UI
 calls Azure roots containers. Copied and detail URIs use `s3://`, `gs://`, and `az://` respectively.

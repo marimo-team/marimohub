@@ -64,13 +64,13 @@ afterEach(() => {
 });
 
 describe('GCS ambient authentication', () => {
-	it('delegates credential-file ADC types to the standard Google auth flow', async () => {
+	it.each([false, true])('delegates ADC with write scope enabled: %s', async (write) => {
 		process.env.GOOGLE_APPLICATION_CREDENTIALS = '/operator/adc.json';
-		const auth = new GcsAuth(source, context, fetch);
+		const auth = new GcsAuth(source, context, fetch, true, write);
 		await expect(auth.headers()).resolves.toEqual({ Authorization: 'Bearer adc-token' });
 		await expect(auth.projectId()).resolves.toBe('adc-project');
 		expect(google.constructor).toHaveBeenCalledWith({
-			scopes: 'https://www.googleapis.com/auth/devstorage.read_only',
+			scopes: `https://www.googleapis.com/auth/devstorage.${write ? 'read_write' : 'read_only'}`,
 		});
 	});
 
@@ -104,37 +104,40 @@ describe('GCS ambient authentication', () => {
 });
 
 describe('GCS service-account authentication', () => {
-	it('signs a scoped assertion, exchanges it, and caches the access token', async () => {
-		const fetchImpl = vi.fn<typeof fetch>(async () =>
-			Response.json({ access_token: 'service-token', expires_in: 3600 }),
-		);
-		const auth = new GcsAuth(serviceAccount(), context, fetchImpl);
+	it.each([false, true])(
+		'signs and caches a service-account token with write scope enabled: %s',
+		async (write) => {
+			const fetchImpl = vi.fn<typeof fetch>(async () =>
+				Response.json({ access_token: 'service-token', expires_in: 3600 }),
+			);
+			const auth = new GcsAuth(serviceAccount(), context, fetchImpl, true, write);
 
-		await expect(auth.headers()).resolves.toEqual({ Authorization: 'Bearer service-token' });
-		await expect(auth.headers()).resolves.toEqual({ Authorization: 'Bearer service-token' });
-		await expect(auth.projectId()).resolves.toBe('service-project');
-		expect(fetchImpl).toHaveBeenCalledOnce();
+			await expect(auth.headers()).resolves.toEqual({ Authorization: 'Bearer service-token' });
+			await expect(auth.headers()).resolves.toEqual({ Authorization: 'Bearer service-token' });
+			await expect(auth.projectId()).resolves.toBe('service-project');
+			expect(fetchImpl).toHaveBeenCalledOnce();
 
-		const [url, init] = fetchImpl.mock.calls[0] ?? [];
-		expect(url).toBe('https://oauth2.googleapis.com/token');
-		expect(init).toMatchObject({
-			method: 'POST',
-			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-			signal: context.signal,
-		});
-		const body = init?.body as URLSearchParams;
-		expect(body.get('grant_type')).toBe('urn:ietf:params:oauth:grant-type:jwt-bearer');
-		const assertion = body.get('assertion') ?? '';
-		const payload = JSON.parse(
-			Buffer.from(assertion.split('.')[1] ?? '', 'base64url').toString('utf8'),
-		) as Record<string, unknown>;
-		expect(payload).toMatchObject({
-			iss: 'browser-reader@example.iam.gserviceaccount.com',
-			sub: 'browser-reader@example.iam.gserviceaccount.com',
-			aud: 'https://oauth2.googleapis.com/token',
-			scope: 'https://www.googleapis.com/auth/devstorage.read_only',
-		});
-	});
+			const [url, init] = fetchImpl.mock.calls[0] ?? [];
+			expect(url).toBe('https://oauth2.googleapis.com/token');
+			expect(init).toMatchObject({
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				signal: context.signal,
+			});
+			const body = init?.body as URLSearchParams;
+			expect(body.get('grant_type')).toBe('urn:ietf:params:oauth:grant-type:jwt-bearer');
+			const assertion = body.get('assertion') ?? '';
+			const payload = JSON.parse(
+				Buffer.from(assertion.split('.')[1] ?? '', 'base64url').toString('utf8'),
+			) as Record<string, unknown>;
+			expect(payload).toMatchObject({
+				iss: 'browser-reader@example.iam.gserviceaccount.com',
+				sub: 'browser-reader@example.iam.gserviceaccount.com',
+				aud: 'https://oauth2.googleapis.com/token',
+				scope: `https://www.googleapis.com/auth/devstorage.${write ? 'read_write' : 'read_only'}`,
+			});
+		},
+	);
 
 	it.each([
 		'https://oauth2.googleapis.com.evil.example/token',

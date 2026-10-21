@@ -68,6 +68,16 @@ describe('FsStorage', () => {
 			),
 		).rejects.toThrow('declared size');
 		expect(await (await bucket.get('data'))!.text()).toBe('old');
+		await expect(
+			bucket.putStream(
+				'data',
+				(async function* () {
+					yield new Uint8Array([1, 2, 3]);
+				})(),
+				2,
+			),
+		).rejects.toThrow('Stream exceeds declared size');
+		expect(await (await bucket.get('data'))!.text()).toBe('old');
 		const result = await bucket.putStream(
 			'data',
 			(async function* () {

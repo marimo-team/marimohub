@@ -102,3 +102,10 @@ After deploy:
 
 See [Troubleshooting -> The server refuses to start](./troubleshooting.md#the-server-refuses-to-start)
 and [Operations -> Backups & restore](./operations.md#backups-restore).
+
+### Filesystem staging cleanup
+
+A crash during a filesystem write can leave files under `MARIMOHUB_STORAGE_FS_ROOT/.tmp/`.
+Streamed uploads can leave a temporary file as large as the upload.
+Stop all processes that use the storage root before you remove files from `.tmp/`.
+Do not remove them while writers run: another process can still be writing a temporary file.

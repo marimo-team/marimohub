@@ -696,6 +696,53 @@ describe('Data browser routes', () => {
 		expect(put).not.toHaveBeenCalled();
 	});
 
+	it('validates object upload keys by UTF-8 bytes and accepts the exact limit', async () => {
+		const pid = await createProject();
+		const { base } = await writableUploads(pid);
+		const error = await expectError(
+			await request('POST', base, { bucket: 'lake', path: 'é'.repeat(600), size: 0 }),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect(error.message).toContain('1,024-byte UTF-8 limit');
+		await expectOk(
+			await request('POST', base, { bucket: 'lake', path: 'é'.repeat(512), size: 0 }),
+			201,
+		);
+	});
+
+	it('allows only the upload owner with manager access to cancel after writes are disabled', async () => {
+		const pid = await createProject();
+		const { id, base } = await writableUploads(pid);
+		const owner = uid('upload-owner');
+		await expectOk(
+			await request('POST', `/projects/${pid}/members`, { user_id: owner, role: 'manager' }),
+			201,
+		);
+		const asOwner = createTestApi({ bucket, userId: owner, deps }).request;
+		const upload = await expectOk<{ id: string }>(
+			await asOwner('POST', base, { bucket: 'lake', path: 'data', size: 0 }),
+			201,
+		);
+		await expectOk(
+			await request('PATCH', `/projects/${pid}/integrations/${id}`, {
+				config: {
+					bucket: 'lake',
+					allow_write: false,
+					auth: { method: 'static', access_key_id: 'access', secret_access_key: 'secret' },
+				},
+			}),
+		);
+		await expectError(await asOwner('POST', `${base}/${upload.id}/complete`), 403, 'FORBIDDEN');
+		await expectError(await request('DELETE', `${base}/${upload.id}`), 403, 'FORBIDDEN');
+		await expectOk(await request('PUT', `/projects/${pid}/members/${owner}`, { role: 'editor' }));
+		await expectError(await asOwner('DELETE', `${base}/${upload.id}`), 403, 'FORBIDDEN');
+		await expectOk(await request('PUT', `/projects/${pid}/members/${owner}`, { role: 'manager' }));
+		const capability = vi.spyOn(objectBrowser, 'capability');
+		await expectOk(await asOwner('DELETE', `${base}/${upload.id}`));
+		expect(capability).not.toHaveBeenCalled();
+	});
+
 	it('does not replay a failed provider write or record a success audit', async () => {
 		const pid = await createProject();
 		const { base } = await writableUploads(pid);

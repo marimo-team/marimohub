@@ -741,7 +741,7 @@ export default function WorkspaceBrowserDialog({
 				<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
 					Loading workspace…
 				</div>
-			) : access.isError || !access.data || capabilities.isError ? (
+			) : access.isError || !access.data ? (
 				<div className="p-5 text-sm text-destructive">Could not load workspace access.</div>
 			) : (
 				<div className="flex h-full min-h-0 flex-col">

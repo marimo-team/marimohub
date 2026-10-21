@@ -148,30 +148,53 @@ export class GcsObjectBrowser implements ObjectBrowser<'gcs'> {
 				redirect: 'manual',
 			},
 		);
-		const location = start.headers.get('location');
+		const location = start.headers.get('location') ?? '';
 		await start.body?.cancel();
-		if (!location || new URL(location).origin !== API_ORIGIN)
+		try {
+			if (!location || new URL(location).origin !== API_ORIGIN) throw new Error('location');
+		} catch {
 			throw new ObjectBrowseError('unavailable', 'GCS returned an invalid upload location');
+		}
 		let offset = 0;
 		try {
 			for await (const bytes of objectUploadChunks(request.body, request.size)) {
-				if (this.options.fetchImpl)
-					await this.options.resolveHost(new URL(location).hostname, context.signal);
-				const response = await this.fetchImpl(location, {
-					method: 'PUT',
-					headers: {
-						...headers,
-						'Content-Length': String(bytes.length),
-						'Content-Range': `bytes ${offset}-${offset + bytes.length - 1}/${request.size}`,
-					},
-					body: new Uint8Array(bytes),
-					signal: context.signal,
-					redirect: 'manual',
-				});
-				offset += bytes.length;
-				if (offset === request.size ? !response.ok : response.status !== 308)
-					throw mapGcsResponse(response);
-				await response.body?.cancel();
+				let consumed = 0;
+				let stalled = 0;
+				while (consumed < bytes.length) {
+					if (this.options.fetchImpl)
+						await this.options.resolveHost(new URL(location).hostname, context.signal);
+					const end = offset + bytes.length - consumed;
+					const response = await this.fetchImpl(location, {
+						method: 'PUT',
+						headers: {
+							...headers,
+							'Content-Length': String(bytes.length - consumed),
+							'Content-Range': `bytes ${offset}-${end - 1}/${request.size}`,
+						},
+						body: new Uint8Array(bytes.subarray(consumed)),
+						signal: context.signal,
+						redirect: 'manual',
+					});
+					await response.body?.cancel();
+					if (end === request.size && response.ok) {
+						offset = end;
+						break;
+					}
+					if (response.status !== 308) throw mapGcsResponse(response);
+					const range = response.headers.get('range');
+					const match = range?.match(/^bytes=0-(\d+)$/);
+					const persisted = range === null ? 0 : match ? Number(match[1]) + 1 : Number.NaN;
+					if (!Number.isSafeInteger(persisted) || persisted < offset || persisted > end)
+						throw new ObjectBrowseError('unavailable', 'GCS returned an invalid upload range');
+					const accepted = persisted - offset;
+					if (accepted === 0 && ++stalled >= 3)
+						throw new ObjectBrowseError('unavailable', 'GCS upload made no progress');
+					if (accepted > 0) stalled = 0;
+					consumed += accepted;
+					offset = persisted;
+					if (offset === request.size)
+						throw new ObjectBrowseError('unavailable', 'GCS did not finalize the upload');
+				}
 			}
 			if (request.size === 0) {
 				const response = await this.request(context, location, {

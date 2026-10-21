@@ -27,6 +27,7 @@ function fixture() {
 		download: true,
 		search: 'none' as const,
 		versions: true,
+		write: true,
 		preview_formats: [],
 	};
 	const browser: ObjectBrowser<'s3'> = {
@@ -45,6 +46,7 @@ function fixture() {
 		listVersions: vi.fn(),
 		previewObject: vi.fn(),
 		openObject: vi.fn(),
+		putObject: vi.fn(),
 	};
 	return { browser, guarded: protectControlPlaneBucket(browser, 'hub') };
 }
@@ -56,24 +58,31 @@ describe('control-plane bucket protection', () => {
 		'listVersions',
 		'previewObject',
 		'openObject',
+		'putObject',
 	] as const)('blocks %s before calling the provider', async (method) => {
 		const { browser, guarded } = fixture();
 		await expect(
-			guarded[method](source, context, {
+			guarded[method]!(source, context, {
 				bucket: 'hub',
 				key: 'secret',
 				limit: 1,
 				query: 'secret',
 				content_url: 'https://hub.example.com/content',
+				contentType: 'text/plain',
+				size: 0,
+				body: new Uint8Array(),
 			}),
 		).rejects.toThrow('Control-plane storage');
 		expect(browser[method]).not.toHaveBeenCalled();
-		await guarded[method](source, context, {
+		await guarded[method]!(source, context, {
 			bucket: 'data',
 			key: 'file',
 			limit: 1,
 			query: 'file',
 			content_url: 'https://hub.example.com/content',
+			contentType: 'text/plain',
+			size: 0,
+			body: new Uint8Array(),
 		});
 		expect(browser[method]).toHaveBeenCalledOnce();
 	});
@@ -92,6 +101,7 @@ describe('control-plane bucket protection', () => {
 			available: false,
 			preview: false,
 			download: false,
+			write: false,
 		});
 	});
 	it('preserves explicit credentials and is a no-op without control-plane storage', async () => {

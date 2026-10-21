@@ -1,3 +1,4 @@
+import { UPLOAD_PART_BYTES } from '@marimo-hub/core/uploads';
 import type { NotebookId, ProjectId, UserId } from '@marimo-hub/core';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { strFromU8, unzipSync, zipSync } from 'fflate';
@@ -103,7 +104,7 @@ describe('Notebook routes', () => {
 				method: 'PUT',
 				headers: {
 					'content-type': 'application/octet-stream',
-					'content-length': String(8 * 1024 * 1024 + 1),
+					'content-length': String(UPLOAD_PART_BYTES + 1),
 				},
 				body: 'x',
 			}),

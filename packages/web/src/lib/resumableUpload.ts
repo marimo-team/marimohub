@@ -79,13 +79,7 @@ export async function resumableUpload(
 			);
 			saveResume(resumeKey, upload.id);
 		}
-		if (
-			!Number.isSafeInteger(upload.part_size) ||
-			upload.part_size < 1 ||
-			upload.part_size > UPLOAD_PART_BYTES ||
-			upload.size !== file.size
-		)
-			throw new Error('Server returned invalid upload limits');
+		if (upload.size !== file.size) throw new Error('Server returned invalid upload limits');
 		const completed = new Set(upload.parts_done);
 		let loaded = 0;
 		for (let offset = 0, number = 1; offset < file.size; offset += upload.part_size, number++) {

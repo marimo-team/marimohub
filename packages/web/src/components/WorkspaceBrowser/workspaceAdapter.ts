@@ -15,7 +15,7 @@ import { isWorkspacePathProtected } from './workspacePolicy';
 import type { WorkspaceAccess } from './workspacePolicy';
 
 export interface WorkspaceUploadLimits {
-	single_put_max_bytes?: number;
+	single_put_max_bytes: number;
 	max_file_bytes: number;
 	max_total_bytes: number;
 	max_files: number;
@@ -255,15 +255,12 @@ export class WorkspaceAdapter implements FileSystemAdapter {
 		const size = typeof content === 'string' ? new Blob([content]).size : content.size;
 		if (this.limits && size > this.limits.max_file_bytes) {
 			throw new FinderError(
-				'unknown',
+				'unsupported',
 				`File exceeds the ${this.limits.max_file_bytes}-byte workspace upload limit`,
 				{ path },
 			);
 		}
-		if (
-			this.limits?.single_put_max_bytes !== undefined &&
-			size > this.limits.single_put_max_bytes
-		) {
+		if (this.limits && size > this.limits.single_put_max_bytes) {
 			const file = typeof content === 'string' ? new Blob([content]) : content;
 			const response = await finderData(
 				resumableUpload(

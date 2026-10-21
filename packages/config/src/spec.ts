@@ -1744,7 +1744,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_WORKSPACE_MAX_FILE_BYTES',
 						name: 'Workspace per-file limit',
 						description:
-							'Maximum bytes in one workspace file (1 to 5368709120). Restore and capture buffer whole files; raising this increases memory use and session start time. Git fetch and folder archive limits stay fixed.',
+							'Maximum bytes in one workspace file (1 to 5368709120). Single-request uploads are limited to the smaller of this value and 25 MiB. Uploads, downloads, restore, and capture buffer whole files except on the resumable upload path. Higher limits increase memory use and session start time. Git and archive limits stay fixed.',
 						default: '26214400',
 					},
 					{

@@ -120,7 +120,7 @@ The browser reads these limits from `workspace_limits` in `/api/v1/capabilities`
 Higher limits increase hub memory use and session start time.
 Single-request uploads, downloads, sandbox restore, and capture buffer whole files.
 Restore batches and prefetch budgets do not split a large file or bound its memory use.
-Git fetch, folder archive, and session source-artifact limits remain fixed.
+Git fetch, folder archive, packed sandbox archive restore, and session source-artifact limits remain fixed.
 
 ### Resumable uploads
 

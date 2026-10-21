@@ -16,6 +16,8 @@ jobs:
   minio:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      MARIMOHUB_TEST_OBJECT_WRITES: 'true'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1

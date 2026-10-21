@@ -383,27 +383,45 @@ export class GcsStorage implements Bucket {
 		let buffer = new Uint8Array(8 * 1024 * 1024);
 		let used = 0;
 		const send = async (final: boolean): Promise<Response> => {
-			const body = buffer.subarray(0, used);
-			const response = await this.client.raw(url.toString(), {
-				method: 'PUT',
-				headers: {
-					...(await this.authHeaders()),
-					'Content-Length': String(used),
-					'Content-Range': used
-						? `bytes ${offset}-${offset + used - 1}/${size}`
-						: `bytes */${size}`,
-				},
-				body,
-				retry: 0,
-				redirect: 'manual',
-			});
-			if (response.status === 412)
-				throw new PreconditionFailedError(`ETag (generation) mismatch for key "${key}"`);
-			if (final ? !response.ok : response.status !== 308)
-				return this.failNonOk(response, 'putStream', key);
-			offset += used;
-			used = 0;
-			return response;
+			let stalled = 0;
+			while (true) {
+				const response = await this.client.raw(url.toString(), {
+					method: 'PUT',
+					headers: {
+						...(await this.authHeaders()),
+						'Content-Length': String(used),
+						'Content-Range': used
+							? `bytes ${offset}-${offset + used - 1}/${size}`
+							: `bytes */${size}`,
+					},
+					body: buffer.subarray(0, used),
+					retry: 0,
+					redirect: 'manual',
+				});
+				if (response.status === 412)
+					throw new PreconditionFailedError(`ETag (generation) mismatch for key "${key}"`);
+				if (final && response.ok) {
+					offset += used;
+					used = 0;
+					return response;
+				}
+				if (response.status !== 308) return this.failNonOk(response, 'putStream', key);
+				const range = response.headers.get('range');
+				const match = range?.match(/^bytes=0-(\d+)$/);
+				const persisted = range === null ? 0 : match ? Number(match[1]) + 1 : Number.NaN;
+				if (!Number.isSafeInteger(persisted) || persisted < offset || persisted > offset + used)
+					throw new Error('GCS returned an invalid upload range');
+				const accepted = persisted - offset;
+				if (accepted === 0 && ++stalled >= 3) throw new Error('GCS upload made no progress');
+				if (accepted > 0) stalled = 0;
+				buffer.copyWithin(0, accepted, used);
+				used -= accepted;
+				offset = persisted;
+				if (used === 0) {
+					if (final) throw new Error('GCS did not finalize the upload');
+					return response;
+				}
+			}
 		};
 		try {
 			for await (const chunk of chunks) {

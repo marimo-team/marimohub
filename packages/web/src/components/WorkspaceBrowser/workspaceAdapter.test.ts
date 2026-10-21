@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiRequestError } from '@/api/client';
+import { resumableUpload } from '@/lib/resumableUpload';
 import { FinderError } from '@marimo-team/react-finder';
 import {
 	fetchWorkspaceAccess,
@@ -7,6 +9,8 @@ import {
 	workspaceItemFromApi,
 } from './workspaceAdapter';
 import type { WorkspaceAccess } from './workspaceAdapter';
+
+vi.mock('@/lib/resumableUpload', () => ({ resumableUpload: vi.fn() }));
 
 const access: WorkspaceAccess = {
 	writable: true,
@@ -26,6 +30,7 @@ function jsonOk(data: unknown): Response {
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+	vi.mocked(resumableUpload).mockReset();
 });
 
 describe('WorkspaceAdapter', () => {
@@ -254,10 +259,41 @@ it('rejects a file above the advertised cap before sending it', async () => {
 	const fetch = vi.fn();
 	vi.stubGlobal('fetch', fetch);
 	const adapter = new WorkspaceAdapter('project', 'notebook', access, {
+		single_put_max_bytes: 2,
 		max_file_bytes: 2,
 		max_total_bytes: 4,
 		max_files: 10,
 	});
-	await expect(adapter.writeFile('/data', '€')).rejects.toThrow('2-byte workspace upload limit');
+	await expect(adapter.writeFile('/data', '€')).rejects.toMatchObject({
+		code: 'unsupported',
+		message: 'File exceeds the 2-byte workspace upload limit',
+	});
 	expect(fetch).not.toHaveBeenCalled();
+});
+
+it.each([
+	[403, 'permission'],
+	[409, 'exists'],
+	[413, 'unsupported'],
+	[429, 'unsupported'],
+] as const)('maps resumable upload HTTP %s to %s', async (status, code) => {
+	vi.mocked(resumableUpload).mockRejectedValue(
+		new ApiRequestError('UNKNOWN', 'Upload rejected', { status }),
+	);
+	const adapter = new WorkspaceAdapter('project', 'notebook', access, {
+		single_put_max_bytes: 1,
+		max_file_bytes: 10,
+		max_total_bytes: 20,
+		max_files: 10,
+	});
+	await expect(adapter.createFile('/data', { content: 'ab' })).rejects.toMatchObject({
+		code,
+		message: 'Upload rejected',
+	});
+	expect(resumableUpload).toHaveBeenCalledWith(
+		'/api/v1/projects/project/notebooks/notebook/workspace/uploads',
+		expect.any(Blob),
+		{ path: '/data', create_only: true },
+		expect.any(Object),
+	);
 });

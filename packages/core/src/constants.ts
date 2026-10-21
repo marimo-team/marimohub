@@ -96,7 +96,7 @@ export const MARIMO_PORT = 2718;
 
 // Whole-file reads (including sandbox restore/capture) need a size check before
 // buffering. Workspace limits can be configured independently; git and archive
-// ingestion retain these defaults as fixed bounds.
+// ingestion, including packed sandbox archive restore, retain fixed bounds.
 
 /** Default per-file workspace limit. Sandbox copies can also require base64 expansion. */
 export const MAX_WORKSPACE_FILE_BYTES = 25 * 1024 * 1024; // 25MB

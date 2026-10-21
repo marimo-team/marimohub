@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
 	BadRequestError,
+	ForbiddenError,
 	NotFoundError,
 	PreconditionFailedError,
 	ResourceExhaustedError,
@@ -2723,6 +2724,54 @@ describe('data browsing', () => {
 		await expect(
 			bare.browseObjectBuckets(pid, created.id, objectContext(), { limit: 10 }),
 		).rejects.toThrow(/not enabled/);
+	});
+
+	it.each([false, true])(
+		'cancels an unread upload body when write access is denied (cleanup rejects: %s)',
+		async (cleanupRejects) => {
+			const created = await store.create(
+				pid,
+				{ kind: 'objecty', name: 'objects', config: { token: 'provider-secret' } },
+				ACTOR,
+			);
+			const pull = vi.fn();
+			const cancel = vi.fn(async () => {
+				if (cleanupRejects) throw new Error('source cleanup failed');
+			});
+			const body = new ReadableStream<Uint8Array>({ pull, cancel }, { highWaterMark: 0 });
+
+			await expect(
+				store.putObject(pid, created.id, objectContext(), {
+					bucket: 'lake',
+					key: 'data',
+					size: 1,
+					contentType: 'text/plain',
+					body,
+				}),
+			).rejects.toEqual(new ForbiddenError('Object uploads are not enabled for this integration'));
+			expect(pull).not.toHaveBeenCalled();
+			expect(cancel).toHaveBeenCalledOnce();
+			expect(body.locked).toBe(false);
+		},
+	);
+
+	it('cancels an unread upload body when the integration no longer exists', async () => {
+		const id = createIntegrationId();
+		const pull = vi.fn();
+		const cancel = vi.fn();
+		const body = new ReadableStream<Uint8Array>({ pull, cancel }, { highWaterMark: 0 });
+		await expect(
+			store.putObject(pid, id, objectContext(), {
+				bucket: 'lake',
+				key: 'data',
+				size: 1,
+				contentType: 'text/plain',
+				body,
+			}),
+		).rejects.toEqual(new NotFoundError(`Integration ${id} not found`));
+		expect(pull).not.toHaveBeenCalled();
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(body.locked).toBe(false);
 	});
 
 	it('probes a configured object-store bucket through its guarded browser', async () => {

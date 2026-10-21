@@ -66,24 +66,28 @@ export interface S3ObjectBrowserOptions {
 export const DEFAULT_S3_OBJECT_BROWSER_LIMITS = DEFAULT_OBJECT_BROWSER_LIMITS;
 
 const SEARCH_BATCH_SIZE = 1_000;
+const UPLOAD_REQUEST_TIMEOUT_MS = 60 * 60 * 1000;
 
 export class S3ObjectBrowser implements ObjectBrowser<'s3'> {
 	readonly provider = 's3' as const;
 	private readonly mode: 'metadata' | 'full';
 	private readonly limits: S3ObjectBrowserLimits;
 	private readonly clientFactory: S3ClientFactory;
+	private readonly uploadClientFactory: S3ClientFactory;
 	private readonly observer: ObjectBrowserObserver;
 
 	constructor(options: S3ObjectBrowserOptions) {
 		this.mode = options.mode;
 		this.observer = new ObjectBrowserObserver(this.provider, options.mode, options.metrics);
 		this.limits = { ...DEFAULT_S3_OBJECT_BROWSER_LIMITS, ...options.limits };
-		if (options.clientFactory) this.clientFactory = options.clientFactory;
-		else if (options.resolveHost) {
+		if (options.clientFactory) {
+			this.clientFactory = options.clientFactory;
+			this.uploadClientFactory = options.clientFactory;
+		} else if (options.resolveHost) {
 			const transportTimeoutMs = Math.max(
 				this.limits.metadataTimeoutMs,
 				this.limits.previewTimeoutMs,
-				60 * 60 * 1000,
+				30_000,
 			);
 			this.clientFactory = createS3ClientFactory({
 				resolveHost: options.resolveHost,
@@ -91,6 +95,11 @@ export class S3ObjectBrowser implements ObjectBrowser<'s3'> {
 				requestTimeoutMs: transportTimeoutMs,
 				metadataMaxResponseBytes: this.limits.metadataMaxResponseBytes,
 				listMaxResponseBytes: this.limits.listMaxResponseBytes,
+			});
+			this.uploadClientFactory = createS3ClientFactory({
+				resolveHost: options.resolveHost,
+				connectionTimeoutMs: transportTimeoutMs,
+				requestTimeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
 			});
 		} else {
 			throw new Error('S3ObjectBrowser requires a guarded host resolver.');
@@ -119,7 +128,7 @@ export class S3ObjectBrowser implements ObjectBrowser<'s3'> {
 			objectMode: false,
 		});
 		try {
-			await withS3Client(this.clientFactory, source, context, async (client) => {
+			await withS3Client(this.uploadClientFactory, source, context, async (client) => {
 				await sendS3(
 					client,
 					new PutObjectCommand({

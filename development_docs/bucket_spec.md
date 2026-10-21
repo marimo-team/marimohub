@@ -1715,7 +1715,8 @@ Workspace completion holds the mutation claim and rechecks capacity and editor s
 Multipart conditional writes are unsupported. The workspace mutation claim serializes create-only checks.
 Successful publication survives cleanup failure. Completion retries and maintenance release reservations and remove parts without another write.
 
-Uploads expire after 24 hours. Notebook/import maintenance aborts known native uploads and removes staged parts.
+Uploads expire after 24 hours. Completed results remain available for seven days past expiry; cancellation preserves completed receipts.
+A confirmed publication can finish after expiry. A confirmed publication does not revive a receipt already cancelled by maintenance. Notebook/import maintenance aborts known native uploads and removes staged parts.
 Records remain seven more days so later sweeps can remove parts from delayed requests.
 Configure provider lifecycle cleanup for native uploads created before a crash but absent from the record.
 Azure expires uncommitted blocks through provider retention. Abort must preserve an existing committed blob.

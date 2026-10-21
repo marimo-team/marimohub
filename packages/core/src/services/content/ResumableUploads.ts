@@ -9,7 +9,7 @@ import {
 } from '../../errors';
 import type { UserId } from '../../ids';
 import { logOperationalError } from '../../operationalLog';
-import type { Bucket, BucketObject, BucketPutOptions } from '../../ports/bucket';
+import type { Bucket, BucketObject, BucketMultipartOptions } from '../../ports/bucket';
 import { readStored } from '../../schema';
 import { UPLOAD_PART_BYTES, UploadStatusSchema } from '../../uploads';
 import { withCasRetry } from '../catalog/cas';
@@ -40,7 +40,9 @@ export const UploadRecordSchema = z.object({
 });
 export type UploadRecord = z.infer<typeof UploadRecordSchema>;
 export const UploadIndexSchema = z.object({
-	uploads: z.array(z.object({ id: z.uuid(), size: z.number(), expires_at: z.number() })),
+	uploads: z
+		.array(z.object({ id: z.uuid(), size: z.number(), expires_at: z.number() }))
+		.max(MAX_ACTIVE_UPLOADS),
 });
 
 export function uploadStatus(record: UploadRecord): z.infer<typeof UploadStatusSchema> {
@@ -135,7 +137,8 @@ export class ResumableUploads {
 	}
 	private authorize(record: UploadRecord, actor: UserId) {
 		if (record.created_by !== actor) throw new ForbiddenError('Upload belongs to another user');
-		if (record.expires_at <= Date.now() || record.status === 'cancelled')
+		const expires = record.expires_at + (record.status === 'complete' ? RECEIPT_RETENTION_MS : 0);
+		if (expires <= Date.now() || record.status === 'cancelled')
 			throw new NotFoundError('Upload expired or was cancelled');
 	}
 	async get(id: string, actor: UserId) {
@@ -208,8 +211,11 @@ export class ResumableUploads {
 			throw new ConflictError(
 				'Upload publication is in progress or was interrupted; check the destination before starting another upload',
 			);
-		if (record.parts.length !== Math.ceil(record.size / record.part_size))
-			throw new ConflictError('Upload has missing parts');
+		if (
+			record.parts.length !== Math.ceil(record.size / record.part_size) ||
+			record.parts.some((part, index) => part.number !== index + 1)
+		)
+			throw new ConflictError('Upload has missing parts or invalid part ordering');
 		const publish = await prepare(record);
 		this.authorize(record, actor);
 		record.status = 'publishing';
@@ -223,7 +229,8 @@ export class ResumableUploads {
 		// Never replay an uncertain publication: another writer may already have changed the destination.
 		const result = await publish();
 		const current = await this.load(id);
-		this.authorize(current.record, actor);
+		// Expiry can race a successful write. Do not revive a receipt already fenced by maintenance.
+		if (current.record.status === 'cancelled') return result;
 		if (current.record.status !== 'publishing')
 			throw new ConflictError('Upload publication was cancelled');
 		await this.bucket.put(
@@ -246,7 +253,7 @@ export class ResumableUploads {
 	async publishToBucket(
 		record: UploadRecord,
 		key: string,
-		options?: BucketPutOptions,
+		options?: BucketMultipartOptions,
 		assertMutable: () => Promise<void> = async () => {},
 	): Promise<BucketObject> {
 		if (this.bucket.multipart && record.size > 0) {
@@ -323,6 +330,7 @@ export class ResumableUploads {
 				if (record.status === 'publishing')
 					throw new ConflictError('Upload publication is in progress');
 			}
+			if (record.status === 'complete') return record;
 			record.status = 'cancelled';
 			await writer.put(this.key(id), JSON.stringify(record), { onlyIfEtagMatches: head.etag });
 			return record;
@@ -336,13 +344,17 @@ export class ResumableUploads {
 		for (const object of await listAllObjects(this.bucket, this.prefix)) {
 			const id = object.key.slice(this.prefix.length).replace(/\.json$/, '');
 			if (!z.uuid().safeParse(id).success) continue;
-			const { record } = await this.load(id);
-			if (record.expires_at > now && record.status !== 'cancelled') {
-				if (record.status === 'complete') await this.cleanupCompleted(id);
-				continue;
+			try {
+				const { record } = await this.load(id);
+				if (record.expires_at > now && record.status !== 'cancelled') {
+					if (record.status === 'complete') await this.cleanupCompleted(id);
+					continue;
+				}
+				await this.expire(id);
+				if (record.expires_at + RECEIPT_RETENTION_MS <= now) await this.bucket.delete(this.key(id));
+			} catch (error) {
+				logOperationalError('upload_sweep_failed', { upload_id: id }, error);
 			}
-			await this.expire(id);
-			if (record.expires_at + RECEIPT_RETENTION_MS <= now) await this.bucket.delete(this.key(id));
 		}
 	}
 }

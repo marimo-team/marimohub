@@ -119,7 +119,11 @@ export function objectBrowseContract(
 				bucket: fixture.bucket,
 				key,
 			});
-			expect(new Uint8Array(await new Response(object.body).arrayBuffer())).toEqual(body);
+			try {
+				expect(new Uint8Array(await new Response(object.body).arrayBuffer())).toEqual(body);
+			} finally {
+				object.close();
+			}
 		});
 
 		it('lists the integration bucket', async () => {

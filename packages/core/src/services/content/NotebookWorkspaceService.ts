@@ -371,6 +371,8 @@ export class NotebookWorkspaceService {
 		const policy = workspaceSourcePolicy(context.detail.source);
 		if (path === policy.entryNotebook || path === 'pyproject.toml')
 			throw new BadRequestError('Use the file editor to replace notebook source files');
+		if (input.create_only && (await this.exists(context.prefix, path)))
+			throw new ConflictError(`Workspace entry ${path} already exists`);
 		const maxFile =
 			this.bucket.multipart || this.bucket.putStream
 				? this.limits.maxFileBytes

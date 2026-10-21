@@ -46,6 +46,7 @@ export function protectControlPlaneBucket<P extends ObjectStoreProvider>(
 						available: false,
 						preview: false,
 						download: false,
+						write: false,
 						reason: 'Control-plane storage is not available through ambient credentials.',
 					}
 				: result;
@@ -61,5 +62,6 @@ export function protectControlPlaneBucket<P extends ObjectStoreProvider>(
 		listVersions: guarded(browser.listVersions),
 		previewObject: guarded(browser.previewObject),
 		openObject: guarded(browser.openObject),
+		...(browser.putObject ? { putObject: guarded(browser.putObject) } : {}),
 	};
 }

@@ -2967,6 +2967,32 @@ describe('SandboxProvisioner', () => {
 			);
 		});
 
+		it('restores Git objects above the default cap using configured workspace limits', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const version = paths.project(projectId).notebook(notebookId).version(createVersionId());
+			const size = WORKSPACE_LIMITS.maxFileBytes + 1;
+			await bucketHandle.put(version.gitFile('objects/pack/large.pack'), new Uint8Array(size));
+			const result = await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle,
+				workspaceLoadMode: 'copy-only',
+				workspacePrefix: version.workspacePrefix,
+				gitPrefix: version.gitPrefix,
+				workspaceLimits: { maxFileBytes: size, maxTotalBytes: size, maxFiles: 1 },
+			});
+			const restored = calls.writeFiles
+				.flat()
+				.find(({ path }) => path === `${MOUNT_PATH}/.git/objects/pack/large.pack`);
+			expect(restored?.content).toBeInstanceOf(Uint8Array);
+			expect(restored?.content).toHaveLength(size);
+			expect(result.counters).toMatchObject({ files_objects: 1, files_bytes: size });
+		});
+
 		it('restores Git metadata after a successful workspace mount', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));

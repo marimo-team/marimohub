@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { GcsAuth } from './auth';
 import { describe, expect, it, vi } from 'vitest';
 import { createProjectId, UserId } from '@marimo-hub/core/ids';
@@ -237,47 +238,186 @@ describe('GCS object uploads', () => {
 	});
 
 	it('publishes bounded resumable ranges with explicit service-account credentials', async () => {
+		const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
+			.privateKey.export({ format: 'pem', type: 'pkcs8' })
+			.toString();
+		const requests: RequestInit[] = [];
+		const target = browser((async (url, init) => {
+			if (String(url) === 'https://oauth2.googleapis.com/token')
+				return Response.json({ access_token: 'service-token', expires_in: 3600 });
+			requests.push(init!);
+			if (init!.method === 'POST')
+				return new Response(null, {
+					headers: { location: 'https://storage.googleapis.com/upload/session' },
+				});
+			return new Response(null, {
+				status: requests.length === 2 ? 308 : 200,
+				headers: requests.length === 2 ? { range: 'bytes=0-8388607' } : {},
+			});
+		}) as typeof fetch);
+		const writable: GcsObjectStoreSource = {
+			...source,
+			allow_write: true,
+			auth: {
+				method: 'service_account',
+				credentials_json: JSON.stringify({
+					client_email: 'test@example.com',
+					private_key: privateKey,
+				}),
+			},
+		};
+		await target.putObject(writable, context, {
+			bucket: 'lake',
+			key: 'data',
+			contentType: 'application/octet-stream',
+			size: 8 * 1024 * 1024 + 1,
+			body: new ReadableStream({
+				start(controller) {
+					controller.enqueue(new Uint8Array(8 * 1024 * 1024));
+					controller.enqueue(new Uint8Array([7]));
+					controller.close();
+				},
+			}),
+		});
+		expect(requests.map((request) => request.method)).toEqual(['POST', 'PUT', 'PUT']);
+		for (const request of requests)
+			expect(new Headers(request.headers).get('authorization')).toBe('Bearer service-token');
+		expect(new Headers(requests[1].headers).get('content-range')).toBe('bytes 0-8388607/8388609');
+		expect(new Headers(requests[2].headers).get('content-range')).toBe(
+			'bytes 8388608-8388608/8388609',
+		);
+	});
+
+	it.each(['', 'not-a-url', 'https://evil.example/upload'])(
+		'normalizes invalid upload location %s',
+		async (location) => {
+			const auth = vi
+				.spyOn(GcsAuth.prototype, 'headers')
+				.mockResolvedValue({ Authorization: 'Bearer token' });
+			try {
+				const fetcher = vi.fn<typeof fetch>(
+					async () => new Response(null, { headers: { location } }),
+				);
+				await expect(
+					browser(fetcher).putObject(
+						{
+							...source,
+							allow_write: true,
+							auth: {
+								method: 'service_account',
+								credentials_json: JSON.stringify({
+									client_email: 'test@example.com',
+									private_key: 'test',
+								}),
+							},
+						},
+						context,
+						{
+							bucket: 'lake',
+							key: 'data',
+							contentType: 'text/plain',
+							size: 0,
+							body: new Uint8Array(),
+						},
+					),
+				).rejects.toMatchObject({
+					code: 'unavailable',
+					message: 'GCS returned an invalid upload location',
+				});
+				expect(fetcher).toHaveBeenCalledOnce();
+			} finally {
+				auth.mockRestore();
+			}
+		},
+	);
+	it('retries only the suffix that GCS did not persist, including the final chunk', async () => {
 		const auth = vi
 			.spyOn(GcsAuth.prototype, 'headers')
 			.mockResolvedValue({ Authorization: 'Bearer token' });
 		try {
-			const requests: RequestInit[] = [];
-			const target = browser((async (_url, init) => {
-				requests.push(init!);
-				if (init!.method === 'POST')
+			const fetcher = vi
+				.fn<typeof fetch>()
+				.mockResolvedValueOnce(
+					new Response(null, {
+						headers: { location: 'https://storage.googleapis.com/upload/session' },
+					}),
+				)
+				.mockResolvedValueOnce(new Response(null, { status: 308, headers: { range: 'bytes=0-1' } }))
+				.mockResolvedValueOnce(new Response(null, { status: 200 }));
+			await browser(fetcher).putObject(
+				{
+					...source,
+					allow_write: true,
+					auth: {
+						method: 'service_account',
+						credentials_json: JSON.stringify({
+							client_email: 'test@example.com',
+							private_key: 'test',
+						}),
+					},
+				},
+				context,
+				{
+					bucket: 'lake',
+					key: 'data',
+					contentType: 'text/plain',
+					size: 4,
+					body: new Uint8Array([1, 2, 3, 4]),
+				},
+			);
+			expect(fetcher).toHaveBeenCalledTimes(3);
+			const retry = fetcher.mock.calls[2][1]!;
+			expect(new Headers(retry.headers).get('content-range')).toBe('bytes 2-3/4');
+			expect(retry.body).toEqual(new Uint8Array([3, 4]));
+		} finally {
+			auth.mockRestore();
+		}
+	});
+
+	it.each([
+		[null, 'GCS upload made no progress'],
+		['invalid', 'GCS returned an invalid upload range'],
+		['bytes=0-8', 'GCS returned an invalid upload range'],
+		['bytes=0-3', 'GCS did not finalize the upload'],
+	])('cancels the session after an unusable acknowledgement %s', async (range, message) => {
+		const auth = vi
+			.spyOn(GcsAuth.prototype, 'headers')
+			.mockResolvedValue({ Authorization: 'Bearer token' });
+		try {
+			const fetcher = vi.fn<typeof fetch>(async (_, init) => {
+				if (init?.method === 'POST')
 					return new Response(null, {
 						headers: { location: 'https://storage.googleapis.com/upload/session' },
 					});
-				return new Response(null, { status: requests.length === 2 ? 308 : 200 });
-			}) as typeof fetch);
-			const writable: GcsObjectStoreSource = {
-				...source,
-				allow_write: true,
-				auth: {
-					method: 'service_account',
-					credentials_json: JSON.stringify({
-						client_email: 'test@example.com',
-						private_key: 'test',
-					}),
-				},
-			};
-			await target.putObject(writable, context, {
-				bucket: 'lake',
-				key: 'data',
-				contentType: 'application/octet-stream',
-				size: 8 * 1024 * 1024 + 1,
-				body: new ReadableStream({
-					start(controller) {
-						controller.enqueue(new Uint8Array(8 * 1024 * 1024));
-						controller.enqueue(new Uint8Array([7]));
-						controller.close();
-					},
-				}),
+				if (init?.method === 'DELETE') return new Response(null);
+				return new Response(null, { status: 308, headers: range ? { range } : {} });
 			});
-			expect(requests.map((request) => request.method)).toEqual(['POST', 'PUT', 'PUT']);
-			expect(new Headers(requests[1].headers).get('content-range')).toBe('bytes 0-8388607/8388609');
-			expect(new Headers(requests[2].headers).get('content-range')).toBe(
-				'bytes 8388608-8388608/8388609',
+			await expect(
+				browser(fetcher).putObject(
+					{
+						...source,
+						allow_write: true,
+						auth: {
+							method: 'service_account',
+							credentials_json: JSON.stringify({
+								client_email: 'test@example.com',
+								private_key: 'test',
+							}),
+						},
+					},
+					context,
+					{
+						bucket: 'lake',
+						key: 'data',
+						contentType: 'text/plain',
+						size: 4,
+						body: new Uint8Array([1, 2, 3, 4]),
+					},
+				),
+			).rejects.toMatchObject({ code: 'unavailable', message });
+			expect(fetcher.mock.calls.at(-1)?.[1]?.method).toBe('DELETE');
+			expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(
+				range === null ? 3 : 1,
 			);
 		} finally {
 			auth.mockRestore();

@@ -226,6 +226,7 @@ export async function restoreWorkspace(
 	const objects = await listAllObjects(bucket, sourcePrefix);
 	let wanted: { key: string; dest: string; size: number }[] = [];
 	const directories: string[] = [];
+	const overlayDestinations = new Set(options.overlay?.map(({ path }) => `${workingDir}/${path}`));
 	for (const obj of objects) {
 		const rel = obj.key.slice(sourcePrefix.length);
 		if (!rel) continue;
@@ -265,6 +266,7 @@ export async function restoreWorkspace(
 			console.warn(`restoreWorkspace: unsafe workspace path; skipping ${rel}`);
 			continue;
 		}
+		if (overlayDestinations.has(`${workingDir}/${rel}`)) continue;
 		if (obj.size > limits.maxFileBytes) {
 			if (options.requireComplete) {
 				throw new Error(
@@ -279,8 +281,37 @@ export async function restoreWorkspace(
 		wanted.push({ key: obj.key, dest: `${workingDir}/${rel}`, size: obj.size });
 	}
 
-	const overlayDestinations = new Set(options.overlay?.map(({ path }) => `${workingDir}/${path}`));
-	wanted = wanted.filter(({ dest }) => !overlayDestinations.has(dest));
+	let selectedCount = 0;
+	let selectedBytes = 0;
+	for (const { key } of options.overlay ?? []) {
+		const object = await bucket.head(key);
+		if (!object) throw new NotFoundError(`Workspace source ${key} not found`);
+		selectedCount++;
+		selectedBytes += object.size;
+		if (
+			object.size > limits.maxFileBytes ||
+			selectedCount > limits.maxFiles ||
+			selectedBytes > limits.maxTotalBytes
+		)
+			throw new Error('restoreWorkspace: source overlay exceeds workspace limits');
+	}
+	wanted = wanted.filter((object) => {
+		const exceeded =
+			selectedCount >= limits.maxFiles
+				? `file count cap (${limits.maxFiles})`
+				: selectedBytes + object.size > limits.maxTotalBytes
+					? `total-byte cap (${limits.maxTotalBytes})`
+					: undefined;
+		if (exceeded) {
+			const message = `restoreWorkspace: ${exceeded} exceeded: ${object.key}`;
+			if (options.requireComplete) throw new Error(message);
+			console.warn(message);
+			return false;
+		}
+		selectedCount++;
+		selectedBytes += object.size;
+		return true;
+	});
 	const overlayFiles = await loadWorkspaceOverlay(bucket, workingDir, options.overlay);
 
 	// File writes create parents, but an empty workspace still needs a working directory.

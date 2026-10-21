@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
 import { bucketContract } from '@marimo-hub/core/testing/contract';
 import { R2BucketAdapter } from './index';
@@ -58,7 +58,7 @@ function makeR2ObjectBody(key: string, stored: FakeStored): R2ObjectBody {
 }
 
 class FakeR2Bucket {
-	private uploads = new Map<string, Map<number, Uint8Array>>();
+	private uploads = new Map<string, Map<number, { bytes: Uint8Array; etag: string }>>();
 	async createMultipartUpload(key: string) {
 		const id = crypto.randomUUID();
 		this.uploads.set(id, new Map());
@@ -69,19 +69,30 @@ class FakeR2Bucket {
 			key,
 			uploadId,
 			uploadPart: async (partNumber: number, bytes: Uint8Array) => {
-				this.uploads.get(uploadId)!.set(partNumber, bytes);
-				return { partNumber, etag: `part-${partNumber}` };
+				const upload = this.uploads.get(uploadId);
+				if (!upload) throw new Error('uploadPart: NoSuchUpload (10024)');
+				const etag = crypto.randomUUID();
+				upload.set(partNumber, { bytes, etag });
+				return { partNumber, etag };
 			},
 			complete: async (parts: R2UploadedPart[]) => {
+				const upload = this.uploads.get(uploadId);
+				if (!upload) throw new Error('completeMultipartUpload: NoSuchUpload (10024)');
 				const body = Buffer.concat(
-					parts.map((part) => this.uploads.get(uploadId)!.get(part.partNumber)!),
+					parts.map((part) => {
+						const stored = upload.get(part.partNumber);
+						if (!stored || part.etag !== stored.etag)
+							throw new Error('completeMultipartUpload: InvalidPart');
+						return stored.bytes;
+					}),
 				);
 				const object = await this.put(key, body);
 				this.uploads.delete(uploadId);
 				return object!;
 			},
 			abort: async () => {
-				this.uploads.delete(uploadId);
+				if (!this.uploads.delete(uploadId))
+					throw new Error('abortMultipartUpload: NoSuchUpload (10024)');
 			},
 		};
 	}
@@ -358,5 +369,38 @@ describe('R2BucketAdapter delete chunking', () => {
 		const { r2, batches } = recordingR2();
 		await new R2BucketAdapter(r2).delete('solo');
 		expect(batches).toEqual(['solo']);
+	});
+});
+
+describe('R2 multipart errors', () => {
+	it('rejects missing uploads, unknown parts, and mismatched ETags', async () => {
+		const bucket = new R2BucketAdapter(new FakeR2Bucket() as unknown as R2Bucket);
+		await expect(bucket.multipart.complete('data', 'missing', [])).rejects.toThrow('NoSuchUpload');
+		const { uploadId } = await bucket.multipart.create('data');
+		const part = await bucket.multipart.putPart('data', uploadId, 1, new Uint8Array([1]));
+		await expect(
+			bucket.multipart.complete('data', uploadId, [{ ...part, etag: 'wrong' }]),
+		).rejects.toThrow('InvalidPart');
+		await expect(
+			bucket.multipart.complete('data', uploadId, [{ partNumber: 2, etag: 'part-2' }]),
+		).rejects.toThrow('InvalidPart');
+		await bucket.multipart.putPart('data', uploadId, 1, new Uint8Array([2]));
+		await expect(bucket.multipart.complete('data', uploadId, [part])).rejects.toThrow(
+			'InvalidPart',
+		);
+		expect(await bucket.head('data')).toBeNull();
+	});
+
+	it('ignores already-aborted uploads but propagates provider failures', async () => {
+		const fake = new FakeR2Bucket();
+		const bucket = new R2BucketAdapter(fake as unknown as R2Bucket);
+		const { uploadId } = await bucket.multipart.create('data');
+		await bucket.multipart.abort('data', uploadId);
+		await expect(bucket.multipart.abort('data', uploadId)).resolves.toBeUndefined();
+		const failure = new Error('abortMultipartUpload: InternalError (10001)');
+		vi.spyOn(fake, 'resumeMultipartUpload').mockImplementation(() => {
+			throw failure;
+		});
+		await expect(bucket.multipart.abort('data', uploadId)).rejects.toBe(failure);
 	});
 });
