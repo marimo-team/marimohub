@@ -79,9 +79,9 @@ export default defineConfig({
 		tasks: {
 			dev: {
 				command: 'vp dev',
-				untrackedEnv: ['DEV_HOST', 'PORT', 'WEB_PORT'],
+				cache: { untrackedEnv: ['DEV_HOST', 'PORT', 'WEB_PORT'] },
 			},
-			build: { command: 'vp build', output: ['dist/**'] },
+			build: { command: 'vp build', cache: { output: ['dist/**'] } },
 		},
 	},
 	test: {

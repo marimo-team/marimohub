@@ -11,9 +11,9 @@ export default defineConfig({
 		tasks: {
 			dev: {
 				command: 'tsx watch --env-file-if-exists=.env src/dev.ts',
-				untrackedEnv: ['PORT', 'MARIMOHUB_*', 'OTEL_*'],
+				cache: { untrackedEnv: ['PORT', 'MARIMOHUB_*', 'OTEL_*'] },
 			},
-			build: { command: 'vp pack', output: ['dist/**'] },
+			build: { command: 'vp pack', cache: { output: ['dist/**'] } },
 		},
 	},
 	pack: {
