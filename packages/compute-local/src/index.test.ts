@@ -953,6 +953,122 @@ describe('LocalCompute listActive', () => {
 });
 
 describe('LocalCompute process hygiene', () => {
+	it.each([
+		{ code: 0, success: true },
+		{ code: 7, success: false },
+	])(
+		'destroy removes descendants after an ordinary exec exits with $code',
+		async ({ code, success }) => {
+			const ownUid = process.getuid?.();
+			if (ownUid === undefined || !Number.isSafeInteger(ownUid) || ownUid < 0)
+				throw new Error('POSIX process UID is required for descendant ownership');
+			const sb = newSandbox();
+			const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+			let witness:
+				| Readonly<{ identity: string; pid: number; pgid: number; uid: number }>
+				| undefined;
+			const observe = async (pid: number) => {
+				try {
+					const { stdout } = await promisify(execFile)(
+						'/bin/ps',
+						['-p', String(pid), '-o', 'pid=,pgid=,uid=,lstart=,stat='],
+						{ timeout: 1000 },
+					);
+					const fields = stdout.trim().split(/\s+/);
+					if (fields.length !== 9) throw new Error('owned process identity unreadable');
+					return {
+						identity: fields.slice(0, 8).join(' '),
+						uid: Number(fields[2]),
+						state: fields[8],
+					};
+				} catch (error) {
+					if ((error as { code?: number }).code === 1) return null;
+					throw error;
+				}
+			};
+			const remember = async () => {
+				const file = await sb.readFile('descendant.identity');
+				if (!file.success) throw new Error('owned descendant witness missing');
+				const identity = file.content.trim().split(/\s+/).join(' ');
+				const fields = identity.split(' ');
+				const pid = Number(fields[0]);
+				const pgid = Number(fields[1]);
+				const uid = Number(fields[2]);
+				const birth = fields.slice(3).join(' ');
+				if (
+					fields.length !== 8 ||
+					!/^[1-9]\d*$/.test(fields[0]) ||
+					!/^[1-9]\d*$/.test(fields[1]) ||
+					!/^\d+$/.test(fields[2]) ||
+					!Number.isSafeInteger(pid) ||
+					pid <= 1 ||
+					pid === process.pid ||
+					!Number.isSafeInteger(pgid) ||
+					pgid <= 1 ||
+					pgid === process.pid ||
+					!Number.isSafeInteger(uid) ||
+					uid !== ownUid ||
+					!/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ([1-9]|[12]\d|3[01]) ([01]\d|2[0-3]):[0-5]\d:[0-5]\d \d{4}$/.test(
+						birth,
+					)
+				) {
+					throw new Error('invalid owned descendant witness');
+				}
+				witness = Object.freeze({ identity, pid, pgid, uid });
+			};
+			try {
+				const child =
+					"process.on('SIGTERM', () => {}); const fs = require('node:fs'); const cp = require('node:child_process'); const identity = cp.execFileSync('/bin/ps', ['-p', String(process.pid), '-o', 'pid=,pgid=,uid=,lstart=']); fs.writeFileSync('descendant.identity.tmp', identity); fs.renameSync('descendant.identity.tmp', 'descendant.identity'); setInterval(() => {}, 1000);";
+				const result = await sb.exec(
+					`${quote(process.execPath)} -e ${quote(child)} >/dev/null 2>&1 & count=0; while [ ! -s descendant.identity ]; do count=$((count+1)); test "$count" -lt 200 || exit 91; sleep 0.01; done; printf 'ordinary-output'; printf 'ordinary-error' >&2; exit ${code}`,
+					{ timeout: 5000 },
+				);
+				await remember();
+				const owned = witness!;
+				expectExecResult(result, { success, stdout: 'ordinary-output', stderr: 'ordinary-error' });
+				await sb.destroy();
+				await expect
+					.poll(
+						async () => {
+							const current = await observe(owned.pid);
+							if (current && (current.identity !== owned.identity || current.uid !== ownUid))
+								throw new Error('owned descendant identity changed');
+							return current !== null && !current.state.startsWith('Z');
+						},
+						{ timeout: 1000, interval: 20 },
+					)
+					.toBe(false);
+			} finally {
+				if (!witness) await remember();
+				const owned = witness!;
+				const current = await observe(owned.pid);
+				if (current && !current.state.startsWith('Z')) {
+					if (
+						current.identity !== owned.identity ||
+						current.uid !== owned.uid ||
+						current.uid !== ownUid
+					)
+						throw new Error('owned descendant identity changed before cleanup');
+					process.kill(owned.pid, 'SIGKILL');
+					await expect
+						.poll(
+							async () => {
+								const remaining = await observe(owned.pid);
+								if (
+									remaining &&
+									(remaining.identity !== owned.identity || remaining.uid !== ownUid)
+								)
+									throw new Error('owned descendant identity changed after cleanup');
+								return remaining !== null && !remaining.state.startsWith('Z');
+							},
+							{ timeout: 1000, interval: 20 },
+						)
+						.toBe(false);
+				}
+			}
+		},
+	);
+
 	it('execStream does not deadlock when the command floods stderr', async () => {
 		const sb = newSandbox();
 		const stream = await sb.execStream(
