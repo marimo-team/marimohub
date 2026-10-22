@@ -963,7 +963,7 @@ describe('LocalCompute process hygiene', () => {
 			if (ownUid === undefined || !Number.isSafeInteger(ownUid) || ownUid < 0)
 				throw new Error('POSIX process UID is required for descendant ownership');
 			const sb = newSandbox();
-			const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+			const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 			let witness:
 				| Readonly<{ identity: string; pid: number; pgid: number; uid: number }>
 				| undefined;
@@ -1016,6 +1016,7 @@ describe('LocalCompute process hygiene', () => {
 				}
 				witness = Object.freeze({ identity, pid, pgid, uid });
 			};
+			const errors: unknown[] = [];
 			try {
 				const child =
 					"process.on('SIGTERM', () => {}); const fs = require('node:fs'); const cp = require('node:child_process'); const identity = cp.execFileSync('/bin/ps', ['-p', String(process.pid), '-o', 'pid=,pgid=,uid=,lstart=']); fs.writeFileSync('descendant.identity.tmp', identity); fs.renameSync('descendant.identity.tmp', 'descendant.identity'); setInterval(() => {}, 1000);";
@@ -1038,7 +1039,10 @@ describe('LocalCompute process hygiene', () => {
 						{ timeout: 1000, interval: 20 },
 					)
 					.toBe(false);
-			} finally {
+			} catch (error) {
+				errors.push(error);
+			}
+			try {
 				if (!witness) await remember();
 				const owned = witness!;
 				const current = await observe(owned.pid);
@@ -1065,7 +1069,11 @@ describe('LocalCompute process hygiene', () => {
 						)
 						.toBe(false);
 				}
+			} catch (error) {
+				errors.push(error);
 			}
+			if (errors.length === 1) throw errors[0];
+			if (errors.length > 1) throw new AggregateError(errors, 'Descendant check and cleanup failed');
 		},
 	);
 

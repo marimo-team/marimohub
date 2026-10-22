@@ -386,7 +386,11 @@ class LocalSandboxInstance implements SandboxInstance {
 	private trackChild(child: ChildProcess): ChildProcess {
 		this.children.add(child);
 		const forget = () => this.children.delete(child);
-		child.once('exit', forget);
+		child.once('exit', () => {
+			// The shell's group must not outlive its ownership record.
+			killProcessGroup(child, 'SIGKILL');
+			forget();
+		});
 		child.once('error', forget);
 		return child;
 	}
