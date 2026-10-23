@@ -569,6 +569,10 @@ describe('composeSessionEnv', () => {
 			marimoEnv: { files: [{ path: '/tmp/marimo.toml', content: '[display]' }] },
 			integrationEnv: {
 				runtimePackages: ['marimo-studio==0.4.1'],
+				marimoPresentation: {
+					cssFiles: ['/tmp/marimohub-integrations/presentation/theme.css'],
+					htmlHeadFile: '/tmp/marimohub-integrations/presentation/head.html',
+				},
 				workspaceLoadMode: 'copy-only',
 				files: [],
 				vars: {},
@@ -577,6 +581,12 @@ describe('composeSessionEnv', () => {
 			},
 		});
 		expect(env?.runtimePackages).toEqual(['marimo-studio==0.4.1']);
+		expect(env?.marimoPresentation?.cssFiles).toEqual([
+			'/tmp/marimohub-integrations/presentation/theme.css',
+		]);
+		expect(env?.marimoPresentation?.htmlHeadFile).toBe(
+			'/tmp/marimohub-integrations/presentation/head.html',
+		);
 		expect(env?.workspaceLoadMode).toBe('copy-only');
 		expect(env?.vars).toMatchObject({ AWS_REGION: 'us-east-1' });
 		expect(env?.files).toContainEqual({ path: '/tmp/marimo.toml', content: '[display]' });

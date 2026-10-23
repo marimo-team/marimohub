@@ -113,7 +113,8 @@ For installed tools, use `runtimePackages` in the render output.
 | `packageRegistry`                                     | Optional credential resolution before rendering                      |
 
 Data access and connection tests are optional. All kinds share versioning, inheritance, and authorization.
-Use `boundedText` for UTF-8 limits. A textarea with `file_accept: ['.sh']` imports file contents into its configuration field.
+Use `boundedText` for UTF-8 limits, or `textFileContent` for nonblank text files without NUL characters (64 KiB maximum).
+A textarea with `file_accept: ['.sh']` imports file contents into its configuration field.
 
 `RuntimeContributions` is the common contract for rendering, environment composition, and launch planning.
 `mergeRuntimeContributions` carries its fields through each stage. Kinds that use existing contributions need no launch or adapter changes.
@@ -152,6 +153,23 @@ See `kinds/marimoStudio.ts` for an example. Its experimental label is display te
 For each new contribution, document its destination, precedence, and behavior after update, disable, delete, and snapshot restore.
 Renderers cannot edit workspace files. Persistent source changes require an ownership and cleanup contract.
 See [Changes and removal](../docs/integrations.md#changes-and-removal) for existing cleanup behavior.
+
+## Presentation contributions
+
+Return `presentation: { css, htmlHead }` from `render`; both text fields are optional (`PresentationContent`).
+`composePresentation` builds separate CSS assets and one combined HTML fragment, ordered by integration name.
+Assets live under `/tmp/marimohub-integrations/presentation/` and pass the bundler's path collision checks.
+Their paths form `PresentationFiles`, carried by `RuntimeContributions.marimoPresentation`.
+`mergePresentationFiles` deduplicates CSS paths in order and rejects conflicting HTML head paths.
+
+Before injection, `prepareMarimoPresentation` sets `display.custom_css` in the generated `marimo.toml`, preserving editor and AI settings and resolving local compute paths.
+Apps and jobs also receive `_MARIMO_APP_OVERLOAD_HTML_HEAD_FILE`, which overrides the notebook's head file for that launch.
+Editors omit this override so saves cannot persist generated paths into notebook source.
+
+Snapshot restores rebuild configuration from current contributions, leaving retained assets unreferenced when disabled.
+Without an active HTML head contribution, restores set the override to the literal string `None`.
+Marimo treats this as unset; an empty string does not clear the override correctly.
+See [Custom CSS](../docs/integrations.md#custom-css) and [HTML head](../docs/integrations.md#html-head) for configuration precedence, scope, and user examples.
 
 ## Workspace requirements
 

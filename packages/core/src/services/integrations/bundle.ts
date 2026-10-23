@@ -3,6 +3,8 @@
 import { ValidationError } from '../../errors';
 import { mergeRuntimeContributions } from '../runtime/runtimeContributions';
 import { mergeRuntimePackages } from './runtimePackages';
+import { composePresentation } from './presentation';
+import { sortIntegrationsByName } from './ordering';
 import { hasControlCharacter, isRecord } from '../../internal/validation';
 import type { IntegrationVersionPin, SessionRender, WorkloadRef } from '../../ports/integrations';
 import type { RenderOutput } from './sdk';
@@ -58,7 +60,8 @@ export function bundleIntegrations(
 	rendered: RenderedIntegration[],
 	workload: WorkloadRef,
 ): SessionRender {
-	const runtime = mergeRuntimeContributions(...rendered.map((item) => item.output));
+	const presentation = composePresentation(rendered, INTEGRATIONS_DIR);
+	const runtime = mergeRuntimeContributions(presentation, ...rendered.map((item) => item.output));
 	if (runtime.runtimePackages) {
 		runtime.runtimePackages = mergeRuntimePackages(
 			rendered.flatMap((item) =>
@@ -70,18 +73,22 @@ export function bundleIntegrations(
 		);
 	}
 	if (runtime.startupScripts) runtime.startupScripts = bundleStartupScripts(rendered);
-	const files = composeAgentContext(rendered);
+	const agentFiles = composeAgentContext(rendered);
+	const files = [...agentFiles, ...presentation.files];
 	const yamlFiles = new Map<string, MergedYaml>();
 	const claimPath = pathClaimer();
 	claimPath(AGENT_HOME_FILES_MANIFEST.slice(INTEGRATIONS_DIR.length + 1), BUNDLER, false);
 	for (const file of files) {
-		if (!file.relativeTo) claimPath(file.path.slice(INTEGRATIONS_DIR.length + 1), BUNDLER, false);
+		if (!file.relativeTo) {
+			const path = normalizeRelativePath(file.path.slice(INTEGRATIONS_DIR.length + 1), BUNDLER);
+			claimPath(path, BUNDLER, false);
+		}
 	}
 	// Claimed up front so a kind emitting the bundler's own key gets the normal
 	// collision error instead of having its value silently overwritten.
 	const vars: Record<string, string> = {
 		[INTEGRATIONS_DIR_ENV]: INTEGRATIONS_DIR,
-		...(files.length > 0 ? { [AGENT_CONTEXT_DIR_ENV]: AGENT_CONTEXT_DIR } : {}),
+		...(agentFiles.length > 0 ? { [AGENT_CONTEXT_DIR_ENV]: AGENT_CONTEXT_DIR } : {}),
 		...packageIndexEnv(rendered.flatMap((item) => item.output.packageIndexes ?? [])),
 	};
 	const varOwner = new Map(Object.keys(vars).map((key) => [key, BUNDLER]));
@@ -192,24 +199,22 @@ export function bundleIntegrations(
 }
 
 function bundleStartupScripts(rendered: RenderedIntegration[]): string[] {
-	return [...rendered]
-		.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-		.flatMap((item) => {
-			const seen = new Set<string>();
-			return (item.output.startupScripts ?? []).map((path) => {
-				normalizeRelativePath(path, item.name);
-				if (!item.output.files?.some((file) => file.path === path)) {
-					throw new ValidationError(
-						`Integration "${item.name}" must render its startup script "${path}" as a file.`,
-					);
-				}
-				if (seen.has(path)) {
-					throw new ValidationError(`Integration "${item.name}" repeats startup script "${path}".`);
-				}
-				seen.add(path);
-				return `${INTEGRATIONS_DIR}/${path}`;
-			});
+	return sortIntegrationsByName(rendered).flatMap((item) => {
+		const seen = new Set<string>();
+		return (item.output.startupScripts ?? []).map((path) => {
+			normalizeRelativePath(path, item.name);
+			if (!item.output.files?.some((file) => file.path === path)) {
+				throw new ValidationError(
+					`Integration "${item.name}" must render its startup script "${path}" as a file.`,
+				);
+			}
+			if (seen.has(path)) {
+				throw new ValidationError(`Integration "${item.name}" repeats startup script "${path}".`);
+			}
+			seen.add(path);
+			return `${INTEGRATIONS_DIR}/${path}`;
 		});
+	});
 }
 
 function packageIndexEnv(

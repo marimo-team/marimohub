@@ -266,6 +266,37 @@ paths:
       responses:
         '204':
           description: Accepted.
+  /kinds/custom_css/config:
+    summary: Custom CSS
+    description: Apply CSS to marimo editors and apps through marimo display configuration.
+    x-kind-schema-version: 1
+    x-category: other
+    x-brand-color: '#663399'
+    x-secret-paths: []
+    x-supports-test: false
+    x-requirements: []
+    get:
+      operationId: read_custom_css_config
+      summary: Stored custom_css config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/custom_css_stored'
+    put:
+      operationId: write_custom_css_config
+      summary: Input custom_css config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/custom_css'
+      responses:
+        '204':
+          description: Accepted.
   /kinds/custom_env/config:
     summary: Environment variables
     description: Inject a versioned bundle of plain or secret environment variables.
@@ -476,6 +507,38 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/gitlab_packages'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/html_head/config:
+    summary: HTML head
+    description: Add HTML to app and export heads. Replaces the notebook head file;
+      does not run in the editor.
+    x-kind-schema-version: 1
+    x-category: other
+    x-brand-color: '#E34F26'
+    x-secret-paths: []
+    x-supports-test: false
+    x-requirements: []
+    get:
+      operationId: read_html_head_config
+      summary: Stored html_head config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/html_head_stored'
+    put:
+      operationId: write_html_head_config
+      summary: Input html_head config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/html_head'
       responses:
         '204':
           description: Accepted.
@@ -2288,6 +2351,30 @@ components:
         - database
         - username
       additionalProperties: false
+    custom_css:
+      type: object
+      properties:
+        css:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          x-max-utf8-bytes: 65536
+          description: CSS stylesheet applied to marimo pages. Maximum 65536 UTF-8 bytes.
+      required:
+        - css
+      additionalProperties: false
+    custom_css_stored:
+      type: object
+      properties:
+        css:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          x-max-utf8-bytes: 65536
+          description: CSS stylesheet applied to marimo pages. Maximum 65536 UTF-8 bytes.
+      required:
+        - css
+      additionalProperties: false
     custom_env:
       type: object
       properties:
@@ -3226,6 +3313,32 @@ components:
         - scope_id
         - auth
         - default_index
+      additionalProperties: false
+    html_head:
+      type: object
+      properties:
+        html:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          x-max-utf8-bytes: 65536
+          description: HTML head fragment, including any browser scripts; visible to app
+            viewers. Maximum 65536 UTF-8 bytes.
+      required:
+        - html
+      additionalProperties: false
+    html_head_stored:
+      type: object
+      properties:
+        html:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          x-max-utf8-bytes: 65536
+          description: HTML head fragment, including any browser scripts; visible to app
+            viewers. Maximum 65536 UTF-8 bytes.
+      required:
+        - html
       additionalProperties: false
     huggingface:
       type: object

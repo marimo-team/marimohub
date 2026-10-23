@@ -117,7 +117,7 @@ jobs:
               with playwright.chromium.launch(chromium_sandbox=True) as browser:
                   print(f"Sandboxed Chromium {browser.version} started")
           PY
-          MARIMO_INTEGRATION_PYTHON="$RUNNER_TEMP/thumbnail-python/bin/python" vp test packages/core/src/services/runtime/kernelBootstrap.integration.test.ts --configLoader=runner --pool=threads
+          MARIMO_INTEGRATION_PYTHON="$RUNNER_TEMP/thumbnail-python/bin/python" vp test packages/core/src/services/runtime/kernelBootstrap.integration.test.ts packages/core/src/services/runtime/presentation.integration.test.ts --configLoader=runner --pool=threads
           MARIMOHUB_THUMBNAIL_TEST_PYTHON="$RUNNER_TEMP/thumbnail-python/bin/python" vp test packages/core/src/services/runtime/thumbnailProgram.live.test.ts --configLoader=runner --pool=threads
 
       - name: Test external adapter example

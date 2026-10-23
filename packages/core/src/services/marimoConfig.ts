@@ -1,7 +1,8 @@
-import { stringify } from 'smol-toml';
+import { parse, stringify } from 'smol-toml';
 import type { TomlTable, TomlValue } from 'smol-toml';
 import { isRecord } from '../internal/validation';
-import type { SessionEnv } from './runtime/SandboxProvisioner';
+import type { SessionEnv } from './runtime/sandboxEnvironment';
+import type { MarimoLaunchMode } from './runtime/marimoLaunch';
 
 // Contributors (aiSessionConfig) type their tables against this re-export so
 // the smol-toml dependency stays confined to this module.
@@ -10,6 +11,8 @@ export type { TomlTable };
 export type MarimoConfigContributor = () => TomlTable;
 
 const XDG_CONFIG_HOME = '/tmp/marimohub-config';
+const MARIMO_CONFIG_PATH = `${XDG_CONFIG_HOME}/marimo/marimo.toml`;
+const HTML_HEAD_ENV = '_MARIMO_APP_OVERLOAD_HTML_HEAD_FILE';
 // marimo also writes logs to XDG_CACHE_HOME and recent-files/server state to
 // XDG_STATE_HOME (`~/.cache`, `~/.local/state` by default). Redirect both to
 // /tmp so ephemeral runtime state never lands under $HOME, where a deployment
@@ -67,11 +70,53 @@ export function marimoConfigToSessionEnv(
 	return {
 		files: [
 			{
-				path: `${XDG_CONFIG_HOME}/marimo/marimo.toml`,
+				path: MARIMO_CONFIG_PATH,
 				content: assembleMarimoToml(contributors),
 			},
 		],
 		vars: { XDG_CONFIG_HOME },
 		defaults: { XDG_CACHE_HOME, XDG_STATE_HOME },
+	};
+}
+
+export function prepareMarimoPresentation(
+	env: SessionEnv | undefined,
+	resolvePath: (path: string) => string,
+	options: { restored?: boolean; mode?: MarimoLaunchMode } = {},
+): SessionEnv | undefined {
+	const existing = env?.files?.find((file) => file.path === MARIMO_CONFIG_PATH);
+	const presentation = env?.marimoPresentation;
+	if (
+		!existing &&
+		!presentation?.cssFiles?.length &&
+		!presentation?.htmlHeadFile &&
+		!options.restored
+	)
+		return env;
+	const config = existing ? parse(existing.content) : {};
+	if (presentation?.cssFiles?.length) {
+		const display = isTomlTable(config.display) ? config.display : {};
+		config.display = { ...display, custom_css: presentation.cssFiles.map(resolvePath) };
+	}
+	const generated = marimoConfigToSessionEnv([() => config]);
+	const vars: Record<string, string> = {
+		...env?.vars,
+		XDG_CONFIG_HOME: resolvePath(XDG_CONFIG_HOME),
+	};
+	// Editor saves must not persist the runtime head path into notebook source.
+	if (presentation?.htmlHeadFile && (options.mode === 'app' || options.mode === 'job')) {
+		vars[HTML_HEAD_ENV] = resolvePath(presentation.htmlHeadFile);
+	} else if (options.restored) {
+		// Marimo ignores "None"; an empty string would override the notebook's own head.
+		vars[HTML_HEAD_ENV] = 'None';
+	}
+	return {
+		...env,
+		files: [
+			...(env?.files ?? []).filter((file) => file.path !== MARIMO_CONFIG_PATH),
+			...generated.files!,
+		],
+		vars,
+		defaults: { ...generated.defaults, ...env?.defaults },
 	};
 }

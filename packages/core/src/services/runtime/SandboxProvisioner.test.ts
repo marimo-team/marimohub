@@ -108,6 +108,94 @@ describe('SandboxProvisioner', () => {
 			command.includes('sh -e ') ? result : exec(command, options);
 	}
 
+	it('injects mapped presentation configuration before launching an app', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		instance.resolveProcessPath = (path) => `/local${path}`;
+		const css = '/tmp/marimohub-integrations/presentation/theme.css';
+		const head = '/tmp/marimohub-integrations/presentation/head.html';
+		const start = instance.startProcess.bind(instance);
+		instance.startProcess = async (...args) => {
+			expect(calls.setEnvVars).toContainEqual(
+				expect.objectContaining({
+					XDG_CONFIG_HOME: '/local/tmp/marimohub-config',
+					_MARIMO_APP_OVERLOAD_HTML_HEAD_FILE: `/local${head}`,
+				}),
+			);
+			expect(calls.writeFiles.flat()).toContainEqual({
+				path: '/tmp/marimohub-config/marimo/marimo.toml',
+				content: expect.stringContaining(`/local${css}`),
+			});
+			return start(...args);
+		};
+		await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+			...startupOptions,
+			launchMode: 'app',
+			sessionEnv: {
+				marimoPresentation: { cssFiles: [css], htmlHeadFile: head },
+				files: [
+					{ path: css, content: 'body {}' },
+					{ path: head, content: '<meta name="team">' },
+				],
+			},
+		});
+		expect(calls.startProcess).toHaveLength(1);
+	});
+
+	it.each(
+		[false, true].flatMap((restore) =>
+			['asset write', 'config write', 'environment', 'path resolution', 'malformed config'].map(
+				(failure) => ({ restore, failure }),
+			),
+		),
+	)('fails closed on $failure (snapshot restore: $restore)', async ({ restore, failure }) => {
+		const { instance, calls } = makeFakeSandbox();
+		const css = '/tmp/marimohub-integrations/presentation/theme.css';
+		const head = '/tmp/marimohub-integrations/presentation/head.html';
+		const config = '/tmp/marimohub-config/marimo/marimo.toml';
+		const privateDetail = 'PRIVATE_PRESENTATION_VALUE';
+		const writeFiles = instance.writeFiles.bind(instance);
+		instance.writeFiles = async (files) => {
+			const target =
+				failure === 'asset write' ? css : failure === 'config write' ? config : undefined;
+			if (target && files.some((file) => file.path === target)) {
+				await writeFiles(files.filter((file) => file.path !== target));
+				throw new Error(privateDetail);
+			}
+			return writeFiles(files);
+		};
+		const setEnv = instance.setEnvVars.bind(instance);
+		instance.setEnvVars = async (vars, options) => {
+			if (failure === 'environment' && vars._MARIMO_APP_OVERLOAD_HTML_HEAD_FILE)
+				throw new Error(privateDetail);
+			return setEnv(vars, options);
+		};
+		if (failure === 'path resolution')
+			instance.resolveProcessPath = () => {
+				throw new Error(privateDetail);
+			};
+		const provision = new SandboxProvisioner(
+			restore ? makeSnapshotCompute(instance) : fakeComputeFrom(instance),
+		).provision({
+			...startupOptions,
+			launchMode: 'app',
+			...(restore ? { restoreFilesystemSnapshotId: 'snapshot' } : {}),
+			sessionEnv: {
+				marimoPresentation: { cssFiles: [css], htmlHeadFile: head },
+				files: [
+					{ path: css, content: 'body {}' },
+					{ path: head, content: '<meta name="team">' },
+					...(failure === 'malformed config'
+						? [{ path: config, content: `[ai]\napi_key = "${privateDetail}` }]
+						: []),
+				],
+			},
+		});
+		await expect(provision, failure).rejects.toBeInstanceOf(UnavailableError);
+		await expect(provision, failure).rejects.not.toThrow(privateDetail);
+		expect(calls.startProcess, failure).toEqual([]);
+		expect(calls.destroy, failure).toBe(1);
+	});
+
 	it.each([false, true])(
 		'runs current startup hooks after injection (snapshot restore: %s)',
 		async (restore) => {
@@ -1615,7 +1703,7 @@ describe('SandboxProvisioner', () => {
 			}
 		});
 
-		it('clears the agent context environment inherited from a filesystem snapshot', async () => {
+		it('clears agent context and presentation inherited from a filesystem snapshot', async () => {
 			const { instance, calls } = makeFakeSandbox();
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 			await provisioner.provision({
@@ -1626,7 +1714,15 @@ describe('SandboxProvisioner', () => {
 				bucket: bucketConfig,
 				restoreFilesystemSnapshotId: 'previous',
 			});
-			expect(calls.setEnvVars).toContainEqual({ MARIMOHUB_AGENT_CONTEXT_DIR: '' });
+			expect(calls.setEnvVars).toContainEqual({
+				MARIMOHUB_AGENT_CONTEXT_DIR: '',
+				XDG_CONFIG_HOME: '/tmp/marimohub-config',
+				_MARIMO_APP_OVERLOAD_HTML_HEAD_FILE: 'None',
+			});
+			expect(calls.writeFiles.flat()).toContainEqual({
+				path: '/tmp/marimohub-config/marimo/marimo.toml',
+				content: '',
+			});
 		});
 
 		it.each(['home lookup', 'manifest read', 'cleanup', 'file write'] as const)(
@@ -4183,6 +4279,8 @@ describe('SandboxProvisioner', () => {
 				expect(calls.setEnvVars).toContainEqual({
 					MARIMOHUB_CONTEXT_FILE: contextFile,
 					MARIMOHUB_AGENT_CONTEXT_DIR: '',
+					XDG_CONFIG_HOME: '/tmp/marimohub-config',
+					_MARIMO_APP_OVERLOAD_HTML_HEAD_FILE: 'None',
 				});
 				expect(contextFile).not.toBe(oldPath);
 				expectFileResult(await instance.readFile(contextFile), {

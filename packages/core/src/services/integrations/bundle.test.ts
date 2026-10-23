@@ -457,3 +457,98 @@ describe('startup script ownership', () => {
 		).toThrow(/repeats startup script/);
 	});
 });
+
+describe('presentation contributions', () => {
+	it.each([{}, { presentation: {} }])(
+		'omits presentation assets for empty contributions %j',
+		(output) => {
+			const result = bundle([rendered('empty', output)]);
+			expect(result.marimoPresentation).toBeUndefined();
+			expect(result.files.some((file) => file.path.includes('/presentation/'))).toBe(false);
+		},
+	);
+
+	it('preserves raw content and input order while sorting CSS-only and HTML-only integrations', () => {
+		const css = '/* café */\r\n@import url("https://example.com/theme.css");\r\n';
+		const html = '<script>const text = "é < > &";</script>\r\n';
+		const input = [
+			rendered('z-css', { presentation: { css } }),
+			rendered('a-head', { presentation: { htmlHead: html } }),
+		];
+		const original = structuredClone(input);
+		const result = bundle(input);
+		expect(input).toEqual(original);
+		expect(result.files).toContainEqual({
+			path: `${INTEGRATIONS_DIR}/presentation/z-css.css`,
+			content: css,
+		});
+		expect(result.files).toContainEqual({
+			path: `${INTEGRATIONS_DIR}/presentation/head.html`,
+			content: html,
+		});
+	});
+
+	it.each(['../escape', 'x/../../escape', 'x\\escape'])(
+		'rejects unsafe stylesheet instance paths: %s',
+		(name) => {
+			expect(() => bundle([rendered(name, { presentation: { css: 'body {}' } })])).toThrow(
+				ValidationError,
+			);
+		},
+	);
+
+	it('rejects duplicate stylesheet owners and YAML paths overlapping generated assets', () => {
+		const theme = rendered('theme', {
+			presentation: { css: 'body {}', htmlHead: '<meta name="team">' },
+		});
+		expect(() => bundle([theme, theme])).toThrow(ValidationError);
+		expect(() => bundle([theme, rendered('yaml', yaml('presentation/head.html/child'))])).toThrow(
+			ValidationError,
+		);
+	});
+
+	it('does not activate agent context for presentation files', () => {
+		const result = bundle([
+			rendered('theme', { presentation: { css: 'body {}', htmlHead: '<meta name="team">' } }),
+		]);
+		expect(result.vars).not.toHaveProperty('MARIMOHUB_AGENT_CONTEXT_DIR');
+		expect(result.marimoPresentation).toBeDefined();
+	});
+	it('orders separate stylesheets and joined HTML fragments by integration name', () => {
+		const result = bundle([
+			rendered('z-theme', {
+				presentation: { css: 'body { color: red; }', htmlHead: '<meta name="z">' },
+			}),
+			rendered('a-theme', {
+				presentation: {
+					css: '@import url("https://example.com/font.css");',
+					htmlHead: '<meta name="a">',
+				},
+			}),
+		]);
+		expect(result.marimoPresentation?.cssFiles).toEqual([
+			`${INTEGRATIONS_DIR}/presentation/a-theme.css`,
+			`${INTEGRATIONS_DIR}/presentation/z-theme.css`,
+		]);
+		expect(result.files).toContainEqual({
+			path: `${INTEGRATIONS_DIR}/presentation/a-theme.css`,
+			content: '@import url("https://example.com/font.css");',
+		});
+		expect(result.files).toContainEqual({
+			path: result.marimoPresentation?.htmlHeadFile,
+			content: '<meta name="a">\n<meta name="z">',
+		});
+	});
+
+	it.each(['presentation/theme.css', 'presentation/head.html', 'presentation'])(
+		'rejects file collisions at %s',
+		(path) => {
+			expect(() =>
+				bundle([
+					rendered('theme', { presentation: { css: 'body {}', htmlHead: '<meta name="theme">' } }),
+					rendered('other', file(path)),
+				]),
+			).toThrow(ValidationError);
+		},
+	);
+});

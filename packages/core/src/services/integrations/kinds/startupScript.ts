@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { defineIntegration } from '../sdk';
-import { boundedText } from '../text';
+import { textFileContent } from '../text';
 
 export const startupScript = defineIntegration({
 	kind: 'startup_script',
@@ -11,11 +11,10 @@ export const startupScript = defineIntegration({
 	brand: { color: '#64748B' },
 	schemaVersion: 1,
 	configSchema: z.strictObject({
-		script: boundedText(64 * 1024, 'POSIX shell script run with sh -e from the workspace root')
-			.min(1)
-			.refine((value) => value.trim().length > 0 && !value.includes('\0'), {
-				message: 'Script must contain shell commands and cannot contain NUL characters.',
-			}),
+		script: textFileContent(
+			'POSIX shell script run with sh -e from the workspace root',
+			'Script must contain shell commands and cannot contain NUL characters.',
+		),
 	}),
 	uiHints: {
 		script: {

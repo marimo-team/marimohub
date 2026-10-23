@@ -34,3 +34,4 @@ export { sqlserver } from './sqlserver';
 export { trino } from './trino';
 
 export { startupScript } from './startupScript';
+export { customCss, htmlHead } from './presentation';

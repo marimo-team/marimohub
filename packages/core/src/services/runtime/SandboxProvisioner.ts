@@ -1,6 +1,7 @@
 import { mergeRuntimeContributions } from './runtimeContributions';
 import { AGENT_CONTEXT_DIR_ENV } from './sandboxEnvironment';
 import type { SessionEnv } from './sandboxEnvironment';
+import { prepareMarimoPresentation } from '../marimoConfig';
 export type { SessionEnv } from './sandboxEnvironment';
 import type { WorkspaceLimits, WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
 import { all, allSettled } from 'better-all';
@@ -1204,10 +1205,10 @@ export class SandboxProvisioner {
 		time: TimeSandboxPhase,
 		workdir: string,
 	): Promise<void> {
-		const sessionEnv = await options.sessionEnv;
+		const resolvedEnv = await options.sessionEnv;
 		const kernelAuthToken = options.kernelAuthToken;
 		if (
-			!sessionEnv &&
+			!resolvedEnv &&
 			kernelAuthToken === undefined &&
 			!options.contextFile &&
 			!options.restoreFilesystemSnapshotId
@@ -1215,6 +1216,11 @@ export class SandboxProvisioner {
 			return;
 		await time(async () => {
 			try {
+				const sessionEnv = prepareMarimoPresentation(
+					resolvedEnv,
+					(path) => sandbox.resolveProcessPath?.(path) ?? path,
+					{ restored: options.restoreFilesystemSnapshotId !== undefined, mode: options.launchMode },
+				);
 				const files = [...(sessionEnv?.files ?? [])];
 				if (options.contextFile?.content !== undefined) {
 					files.push({ path: options.contextFile.path, content: options.contextFile.content });

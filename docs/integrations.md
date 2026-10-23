@@ -6,7 +6,7 @@ description: Configure project and organization connections, runtime tools, envi
 
 A **project manager** can configure an integration for one project.
 A [super admin](./auth.md#super-admins-marimohub_super_admins) can configure an integration for the whole organization.
-Integrations supply connections, runtime tools, environment variables, and shared agent configuration.
+Integrations supply connections, runtime tools, environment variables, shared agent configuration, and [CSS](#custom-css) or [HTML head](#html-head) content.
 Supported connections include the common SQL
 databases and warehouses (PostgreSQL, MySQL, SQL Server, MongoDB, ClickHouse,
 Snowflake, BigQuery, Redshift, MotherDuck), query engines (Trino, Spark Connect,
@@ -39,6 +39,7 @@ Disabling or deleting an integration removes its contributions from subsequent l
 | Environment variables and configuration files | Outside the notebook workspace          | New sandboxes omit them. Snapshots can retain old values and files unless the integration provides cleanup. |
 | Runtime packages                              | Separate layer for the notebook process | Launches omit the layer, including after snapshot restores. Caches can remain.                              |
 | Startup scripts                               | Before dependency setup                 | Launches stop running the script. Files and other script side effects can remain.                           |
+| Custom CSS and HTML head                      | Marimo pages and HTML exports           | New launches omit them, including snapshot restores. Existing sessions and exports retain them.             |
 | Agent context                                 | Outside the notebook workspace          | Restored sandboxes remove obsolete hub-managed home files.                                                  |
 | Authored files                                | Notebook source and workspace           | Files remain under normal notebook persistence rules.                                                       |
 
@@ -1187,6 +1188,43 @@ Make scripts safe to repeat: enabled scripts run again after snapshot restore.
 Disabling or deleting an integration stops future runs, but does not undo files, installed packages, or external side effects.
 
 <!--@include: ./partials/integrations/startup_script.md-->
+
+## Custom CSS
+
+Create a **Custom CSS** integration and import a UTF-8 `.css` file or paste CSS (maximum 64 KiB).
+Styles apply to new marimo editors, apps, and HTML exports. They do not affect Hub pages or Studio views.
+
+```css
+:root {
+	--marimo-heading-font: Georgia, serif;
+}
+```
+
+The hub sets `display.custom_css` in its generated `marimo.toml`, with stylesheets ordered by integration name.
+Normal CSS cascade rules apply. Use absolute URLs for fonts and images because marimo inlines the stylesheets.
+
+Marimo's configuration precedence still applies: a workspace `.marimo.toml` can replace the generated user configuration.
+Project and notebook settings can override display settings. See [Changes and removal](#changes-and-removal) for restart and cleanup behavior.
+
+<!--@include: ./partials/integrations/custom_css.md-->
+
+## HTML head
+
+Create an **HTML head** integration and import a UTF-8 `.html` or `.htm` file, or paste an HTML fragment (maximum 64 KiB).
+Fragments apply to new marimo apps and HTML exports. They do not affect editor or Hub pages.
+
+```html
+<meta name="author" content="Analytics team" />
+```
+
+The hub combines fragments in integration-name order and overrides the notebook's `html_head_file` for that launch, without editing notebook source.
+Scripts run in the viewer's browser. All fragment contents are visible to viewers; do not include secrets.
+Use absolute URLs for scripts, fonts, and images.
+
+When no HTML head integration applies, new launches use the notebook's own head setting.
+See [Changes and removal](#changes-and-removal) for restart and cleanup behavior.
+
+<!--@include: ./partials/integrations/html_head.md-->
 
 ## Agent context
 

@@ -9,6 +9,7 @@ import type {
 	IntegrationProbe,
 	IntegrationVersionPin,
 	RuntimeContributions,
+	PresentationContent,
 	QueryReadinessCheck,
 	KindBrand,
 	ProbeRequestInit,
@@ -54,7 +55,8 @@ export interface TestConnectionOptions {
 	packageRegistryCredentials?: PackageRegistryCredentials;
 }
 
-export interface RenderOutput extends RuntimeContributions {
+export interface RenderOutput extends Omit<RuntimeContributions, 'marimoPresentation'> {
+	presentation?: PresentationContent;
 	agentContext?: AgentContextConfig;
 	packageIndexes?: { name: string; url: string; default: boolean }[];
 	/**

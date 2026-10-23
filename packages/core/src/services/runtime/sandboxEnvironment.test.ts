@@ -87,6 +87,21 @@ describe('projectSessionEnv', () => {
 });
 
 describe('mergeSessionEnv', () => {
+	it('retains CSS order and rejects competing bundled heads', () => {
+		const base = {
+			marimoPresentation: { cssFiles: ['/a.css', '/b.css'], htmlHeadFile: '/head.html' },
+		};
+		const same = mergeSessionEnv(base, {
+			marimoPresentation: { cssFiles: ['/b.css', '/c.css'], htmlHeadFile: '/head.html' },
+		});
+		expect(same.marimoPresentation).toEqual({
+			cssFiles: ['/a.css', '/b.css', '/c.css'],
+			htmlHeadFile: '/head.html',
+		});
+		expect(() =>
+			mergeSessionEnv(base, { marimoPresentation: { htmlHeadFile: '/other.html' } }),
+		).toThrow('Cannot combine');
+	});
 	it.each([
 		[{ workspaceLoadMode: 'copy-only' as const }, {}],
 		[{}, { workspaceLoadMode: 'copy-only' as const }],

@@ -324,8 +324,20 @@ export interface IntegrationVersionPin {
 	version: number;
 }
 
+export interface PresentationContent {
+	css?: string;
+	htmlHead?: string;
+}
+
+export interface PresentationFiles {
+	cssFiles?: string[];
+	htmlHeadFile?: string;
+}
+
 /** Contributions consumed by the shared workload launch pipeline. */
 export interface RuntimeContributions {
+	/** Logical sandbox paths, resolved for the notebook process during injection. */
+	marimoPresentation?: PresentationFiles;
 	/** Require local filesystem semantics instead of an object-storage mount. */
 	workspaceLoadMode?: 'copy-only';
 	/** Exact package pins layered onto the workload process. */
