@@ -21,10 +21,8 @@ def install_extensions(connection: duckdb.DuckDBPyConnection) -> None:
 
 
 def main() -> None:
-    # Direct callers can skip the login shell when using the image's own home.
-    for config in ({"extension_directory": BAKED_DIR}, {}):
-        with duckdb.connect(config=config) as connection:
-            install_extensions(connection)
+    with duckdb.connect(config={"extension_directory": BAKED_DIR}) as connection:
+        install_extensions(connection)
 
 
 if __name__ == "__main__":

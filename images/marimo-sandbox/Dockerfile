@@ -92,7 +92,11 @@ COPY duckdb-extensions.sh /etc/profile.d/duckdb-extensions.sh
 COPY --chown=appuser:appuser bake_duckdb.py /tmp/bake_duckdb.py
 
 USER appuser
-RUN python /tmp/bake_duckdb.py && rm /tmp/bake_duckdb.py
+ENV HOME=/home/appuser
+# Direct callers also need the links when they skip the login shell.
+RUN python /tmp/bake_duckdb.py \
+ && . /etc/profile.d/duckdb-extensions.sh \
+ && rm /tmp/bake_duckdb.py
 
 WORKDIR /workspace
 
