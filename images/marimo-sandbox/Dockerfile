@@ -88,7 +88,12 @@ ENV VIRTUAL_ENV=/opt/marimohub/venv \
 # (the data-preview preflight depends on it).
 RUN echo 'export PATH=$VIRTUAL_ENV/bin:$PATH' > /etc/profile.d/venv-path.sh
 
+COPY duckdb-extensions.sh /etc/profile.d/duckdb-extensions.sh
+COPY --chown=appuser:appuser bake_duckdb.py /tmp/bake_duckdb.py
+
 USER appuser
+RUN python /tmp/bake_duckdb.py && rm /tmp/bake_duckdb.py
+
 WORKDIR /workspace
 
 CMD ["sh", "-lc", "umask 077; python3 -c \"import secrets; print('mhub_kernel_' + secrets.token_urlsafe(32))\" > /tmp/.marimohub-kernel-token; exec uv run --no-sync marimo --quiet edit notebook.py --convert --headless --token --token-password-file /tmp/.marimohub-kernel-token --host 0.0.0.0 --port 2718"]

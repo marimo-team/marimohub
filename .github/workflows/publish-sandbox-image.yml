@@ -100,6 +100,17 @@ jobs:
           test -n "$expected"
           test "$actual" = "$expected"
 
+      - name: Verify DuckDB extensions offline with default and mounted homes
+        if: matrix.variant.target == 'release'
+        run: |
+          docker run --rm --network none \
+            --mount "type=bind,src=${PWD}/images/marimo-sandbox,dst=/tmp/duckdb-check,readonly" \
+            marimo-sandbox:ci python /tmp/duckdb-check/test-duckdb.py
+          docker run --rm --network none \
+            --mount "type=bind,src=${PWD}/images/marimo-sandbox,dst=/tmp/duckdb-check,readonly" \
+            --tmpfs /home/appuser:uid=1000,gid=1000,mode=0700 \
+            marimo-sandbox:ci sh -lc 'python /tmp/duckdb-check/test-duckdb.py'
+
       - name: Verify bridge reinstall and uv cache ownership as sandbox user
         if: matrix.variant.target == 'release'
         run: |
