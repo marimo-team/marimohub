@@ -176,3 +176,12 @@ const user = await apiData(api.GET('/api/v1/me'));
 The exported types (`Project`, `NotebookMeta`, `NotebookDetail`, `Session`,
 `Version`, `ResolvedUser`, plus the full `paths` / `components` / `operations`)
 come straight from the schema. The marimohub SPA itself consumes this client.
+
+## Trigger-only job access
+
+Use the `trigger` PAT preset or external `marimohub:trigger` scope to start
+jobs without notebook edits. The manual run endpoint, event-trigger endpoint,
+and MCP `run_job` tool require `job.trigger` and the owner's current editor access.
+
+See [Event triggers](./jobs.md#event-triggers) for token setup, endpoints,
+payloads, replay rules, and limits.

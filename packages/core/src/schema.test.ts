@@ -20,6 +20,8 @@ import {
 	IdentitySchema,
 	JobDefinitionSchema,
 	JobRunSchema,
+	JobRunParametersSchema,
+	MAX_JOB_EVENT_BYTES,
 	NotebookIdSchema,
 	NotebookMetaSchema,
 	PreviewRuntimeMetaSchema,
@@ -320,6 +322,28 @@ describe('SnapshotSchema (looseObject rolling-deploy invariant)', () => {
 	});
 });
 
+describe('job run parameters', () => {
+	it.each(['a', 'é', '🙂'])('enforces the UTF-8 byte limit for %s events', (character) => {
+		const bytes = new TextEncoder().encode(character).byteLength;
+		const event = character.repeat(MAX_JOB_EVENT_BYTES / bytes);
+		expect(JobRunParametersSchema.parse({ event })).toEqual({ event });
+		const result = JobRunParametersSchema.safeParse({ event: `${event}a` });
+		expect(result.success).toBe(false);
+		if (!result.success)
+			expect(result.error.issues).toContainEqual(
+				expect.objectContaining({
+					path: ['event'],
+					message: 'event must not exceed 16 KiB of UTF-8 bytes',
+				}),
+			);
+	});
+
+	it('keeps ordinary parameters limited to 4096 characters', () => {
+		expect(JobRunParametersSchema.safeParse({ value: 'a'.repeat(4096) }).success).toBe(true);
+		expect(JobRunParametersSchema.safeParse({ value: 'a'.repeat(4097) }).success).toBe(false);
+	});
+});
+
 describe('job schema evolution', () => {
 	it('versions definitions and runs independently and rejects unknown versions at the upgrade seam', () => {
 		expect(CURRENT_JOB_DEFINITION_VERSION).toBe(1);
@@ -339,6 +363,11 @@ describe('job schema evolution', () => {
 			schedule: { cron: '0 6 * * *', timezone: 'UTC', future_schedule: true },
 			retry: { max_retries: 1, future_retry: true },
 			notifications: { on: ['failure'], future_notifications: true },
+			chain: {
+				on_success: [{ notebook_id: createNotebookId(), job_id: createJobId(), future_ref: true }],
+				on_failure: [{ notebook_id: createNotebookId(), job_id: createJobId(), future_ref: true }],
+				future_chain: true,
+			},
 			created_by: ACTOR,
 			created_at: NOW,
 			updated_at: NOW,
@@ -347,12 +376,24 @@ describe('job schema evolution', () => {
 		expect(parsed.schedule).toMatchObject({ future_schedule: true });
 		expect(parsed.retry).toMatchObject({ future_retry: true });
 		expect(parsed.notifications).toMatchObject({ future_notifications: true });
+		expect(parsed.chain).toMatchObject({
+			future_chain: true,
+			on_success: [{ future_ref: true }],
+			on_failure: [{ future_ref: true }],
+		});
+		const publicChain = toPublicJobDefinition(parsed).chain;
+		expect(publicChain).not.toHaveProperty('future_chain');
+		expect(publicChain?.on_success?.[0]).not.toHaveProperty('future_ref');
+		expect(publicChain?.on_failure?.[0]).not.toHaveProperty('future_ref');
 		expect(toPublicJobDefinition(parsed).schedule).not.toHaveProperty('future_schedule');
 		expect(toPublicJobDefinition(parsed).retry).not.toHaveProperty('future_retry');
 		expect(toPublicJobDefinition(parsed).notifications).not.toHaveProperty('future_notifications');
 	});
 
-	it('preserves unknown fields in nested run structures', () => {
+	it.each([
+		{ kind: 'webhook', idempotency_key: 'delivery-1', future_source: true },
+		{ kind: 'chain', upstream_run_id: createRunId(), future_source: true },
+	])('preserves unknown nested run fields for $kind', (triggerSource) => {
 		const parsed = JobRunSchema.parse({
 			schema_version: 1,
 			run_id: createRunId(),
@@ -367,8 +408,12 @@ describe('job schema evolution', () => {
 			error: { code: 'FAILED', message: 'failed', future_error: true },
 			output: { html_bytes: 1, future_output: true },
 			compute_resources: { cpu: 1, future_resource: true },
+			trigger_source: triggerSource,
 		});
 
+		expect(parsed.trigger_source).toEqual(triggerSource);
+		const { future_source: _, ...publicSource } = triggerSource;
+		expect(toPublicJobRun(parsed).trigger_source).toEqual(publicSource);
 		expect(parsed.error).toMatchObject({ future_error: true });
 		expect(parsed.output).toMatchObject({ future_output: true });
 		expect(parsed.compute_resources).toMatchObject({ future_resource: true });

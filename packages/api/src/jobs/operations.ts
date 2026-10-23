@@ -1,5 +1,7 @@
+import { jobTimeoutSeconds } from '@marimo-hub/core/jobs';
 import {
 	BadRequestError,
+	ValidationError,
 	JobId,
 	MAX_QUEUED_RUNS_PER_JOB,
 	Millis,
@@ -42,11 +44,11 @@ export async function authorizeJobNotebook(
 	user: AuthenticatedPrincipal,
 	pid: ProjectId,
 	nid: NotebookId,
-	action: 'project.read' | 'notebook.write',
+	action: 'project.read' | 'notebook.write' | 'job.trigger',
 ) {
 	requireJobs(deps);
 	const project =
-		action === 'notebook.write'
+		action !== 'project.read'
 			? await assertProjectRole(deps.services.projects, pid, user, action, deps)
 			: await loadVisibleProject(deps.services.projects, pid, user, deps);
 	const notebook = await loadAuthorizedNotebook(deps, project, nid, user, action);
@@ -77,11 +79,12 @@ export async function listNotebookJobs(
 	};
 }
 
-export function createNotebookJob(
+export async function createNotebookJob(
 	deps: ApiDeps,
 	target: AuthorizedNotebook,
 	body: z.infer<typeof CreateJobBody>,
 ) {
+	await authorizeChain(deps, target, body.chain);
 	return deps.services.jobs.createJob(
 		target.project.id,
 		target.notebook.meta.id,
@@ -103,6 +106,7 @@ export function updateNotebookJob(
 		if (await deps.services.jobs.isDeleting(job))
 			throw new NotFoundError(`Job ${job.id} not found`);
 		signal?.throwIfAborted();
+		await authorizeChain(deps, target, body.chain);
 		return deps.services.jobs.updateJob(
 			target.project.id,
 			target.notebook.meta.id,
@@ -140,10 +144,6 @@ export async function triggerJobRun(
 				);
 			}
 			const config = requireJobs(deps);
-			const requestedMs =
-				current.timeout_seconds !== undefined
-					? current.timeout_seconds * 1000
-					: config.defaultTimeoutMs;
 			signal?.throwIfAborted();
 			const run = await deps.services.jobRuns.enqueue({
 				job: current,
@@ -151,7 +151,7 @@ export async function triggerJobRun(
 				triggeredBy: user.id,
 				parameters: body?.parameters ?? current.parameters,
 				sourceVersionId: notebook.source.current_version_id ?? undefined,
-				timeoutSeconds: Math.floor(Math.min(requestedMs, config.maxTimeoutMs) / 1000),
+				timeoutSeconds: jobTimeoutSeconds(current, config),
 			});
 			await appendAudit({ ...request, userId: user.id }, 'job.run.trigger', () =>
 				deps.services.events.append({
@@ -180,4 +180,23 @@ export async function loadJobRun(deps: ApiDeps, job: JobDefinition, rid: RunId) 
 	const run = await deps.services.jobRuns.getRun(job.project_id, job.notebook_id, job.id, rid);
 	if (run.job_id !== job.id) throw new NotFoundError(`Run ${rid} not found`);
 	return run;
+}
+
+async function authorizeChain(
+	deps: ApiDeps,
+	target: AuthorizedNotebook,
+	chain: JobDefinition['chain'] | null | undefined,
+) {
+	for (const ref of [...(chain?.on_success ?? []), ...(chain?.on_failure ?? [])]) {
+		if (ref.project_id && ref.project_id !== target.project.id)
+			throw new ValidationError('Chains must stay in the same project');
+		await authorizeJobNotebook(
+			deps,
+			target.user,
+			target.project.id,
+			ref.notebook_id,
+			'job.trigger',
+		);
+		await deps.services.jobs.getJob(target.project.id, ref.notebook_id, ref.job_id);
+	}
 }

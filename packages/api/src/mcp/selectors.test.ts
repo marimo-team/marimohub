@@ -221,21 +221,46 @@ describe('ID-shaped job names over HTTP', () => {
 	});
 });
 
-function writeOnlyPrincipal(projects: TokenGrant['projects'] = '*'): AuthenticatedPrincipal {
+function writeOnlyPrincipal(
+	projects: TokenGrant['projects'] = '*',
+	actions: TokenGrant['actions'] = ['notebook.write'],
+): AuthenticatedPrincipal {
 	return {
 		...USER,
 		credential: {
 			...USER.credential,
 			kind: 'personal-access-token',
 			id: 'write-only-token',
-			grant: { actions: ['notebook.write'], projects },
+			grant: { actions, projects },
 		},
 	};
 }
 
 describe('write-only notebook grants over HTTP', () => {
+	it.each([
+		{ selector: 'ID', code: 'FORBIDDEN' },
+		{ selector: 'name', code: 'NOT_FOUND' },
+	])(
+		'denies run_job without job.trigger when selected by $selector',
+		async ({ selector, code }) => {
+			const job = await createJob('Nightly');
+			expect(
+				await callTool(
+					'run_job',
+					{
+						project: selector === 'ID' ? project.id : project.name.toUpperCase(),
+						notebook: selector === 'ID' ? notebookId : 'REPORT',
+						job: selector === 'ID' ? job.id : job.name.toUpperCase(),
+					},
+					writeOnlyPrincipal([project.id]),
+				),
+			).toMatchObject({ isError: true, structuredContent: { code } });
+			expect(await deps.services.jobRuns.listRuns(project.id, notebookId, job.id)).toHaveLength(0);
+		},
+	);
+
 	it.each(['ID', 'name'])('allows notebook and job writes selected by %s', async (selector) => {
-		const principal = writeOnlyPrincipal([project.id]);
+		const principal = writeOnlyPrincipal([project.id], ['notebook.write', 'job.trigger']);
 		const job = await createJob('Nightly');
 		const target = {
 			project: selector === 'ID' ? project.id : project.name.toUpperCase(),
@@ -261,7 +286,7 @@ describe('write-only notebook grants over HTTP', () => {
 		);
 	});
 
-	it.each([1, 3])('allows run_job observation for %i seconds', async (waitSeconds) => {
+	it.each([1, 3])('allows trigger-only run_job observation for %i seconds', async (waitSeconds) => {
 		vi.useFakeTimers();
 		const job = await createJob('Nightly');
 		const read = vi.spyOn(deps.services.jobRuns, 'getRun');
@@ -274,7 +299,7 @@ describe('write-only notebook grants over HTTP', () => {
 				wait: true,
 				wait_seconds: waitSeconds,
 			},
-			writeOnlyPrincipal(),
+			writeOnlyPrincipal('*', ['job.trigger']),
 		);
 		await vi.waitFor(() => expect(read).toHaveBeenCalled());
 		await vi.advanceTimersByTimeAsync(waitSeconds * 1000);

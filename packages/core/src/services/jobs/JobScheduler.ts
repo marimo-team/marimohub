@@ -1,3 +1,7 @@
+import { jobTimeoutSeconds } from './runPolicy';
+import { encodeTime } from 'ulidx';
+import { sha256Hex } from '../../internal/sha256';
+import { MAX_JOB_CHAIN_DEPTH, MAX_QUEUED_RUNS_PER_JOB, JobParametersSchema } from '../../schema';
 import { cachedRead } from '../../async';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
@@ -6,8 +10,8 @@ import type { SandboxProvider } from '../../ports/sandbox';
 import { InFlightWork } from '../../concurrency';
 import { Millis } from '../../duration';
 import { NotFoundError, UnavailableError } from '../../errors';
-import { createRunId, SandboxId, SYSTEM_ACTOR } from '../../ids';
-import type { JobId, NotebookId, ProjectId, RunId, VersionId } from '../../ids';
+import { createRunId, RunId, SandboxId, SYSTEM_ACTOR } from '../../ids';
+import type { JobId, NotebookId, ProjectId, VersionId } from '../../ids';
 import { logEvent } from '../../logs';
 import { logOperationalError } from '../../operationalLog';
 import { notificationRouter } from '../../notifications';
@@ -300,7 +304,20 @@ export class JobScheduler {
 		}
 
 		// Unknown owners can hold sandboxes outside the visible concurrency count.
-		const admitted = ownershipComplete ? admit(queued, running, this.deps.config) : [];
+		const eligible: JobRun[] = [];
+		const occupied = new Set(running.map((run) => run.job_id));
+		for (const run of queued.sort((a, b) => a.run_id.localeCompare(b.run_id))) {
+			const job = await this.loadJob(run.project_id, run.notebook_id, run.job_id, admissionReads);
+			if (
+				(run.trigger === 'webhook' || run.trigger === 'chain') &&
+				job?.concurrency_policy === 'forbid' &&
+				occupied.has(run.job_id)
+			)
+				continue;
+			eligible.push(run);
+			occupied.add(run.job_id);
+		}
+		const admitted = ownershipComplete ? admit(eligible, running, this.deps.config) : [];
 		for (const run of admitted) this.dispatch(run);
 		result.dispatched = admitted.length;
 		this.metrics.gauge?.('jobs.runs.active', running.length + admitted.length);
@@ -437,12 +454,8 @@ export class JobScheduler {
 		}
 	}
 
-	/** The run deadline for a job, in seconds, under the deployment ceiling. */
 	timeoutSeconds(job: Pick<JobDefinition, 'timeout_seconds'>): number {
-		const { defaultTimeoutMs, maxTimeoutMs } = this.deps.config;
-		const requested =
-			job.timeout_seconds !== undefined ? job.timeout_seconds * 1000 : defaultTimeoutMs;
-		return Math.floor(Math.min(requested, maxTimeoutMs) / 1000);
+		return jobTimeoutSeconds(job, this.deps.config);
 	}
 
 	/**
@@ -521,28 +534,122 @@ export class JobScheduler {
 
 	private async finalize(finished: JobRun): Promise<void> {
 		if (!isTerminalRunStatus(finished.status)) return;
-		await this.deps.runs.withJobMutation(
-			{
-				project_id: finished.project_id,
-				notebook_id: finished.notebook_id,
-				id: finished.job_id,
-			},
-			async () => this.finalizeLocked(finished),
+		const ref = {
+			project_id: finished.project_id,
+			notebook_id: finished.notebook_id,
+			id: finished.job_id,
+		};
+		const pending = await this.deps.runs.withJobMutation(ref, async () =>
+			this.finalizeLocked(finished, true),
 		);
+		if (!pending) return;
+		// Never hold an upstream claim while acquiring a downstream claim: two finishing jobs can form a cycle.
+		await this.chain(pending.job, finished, pending.continuationRunId);
+		await this.deps.runs.withJobMutation(ref, async () => {
+			if (!(await this.deps.runs.getMarker(finished))) return;
+			await this.notify(pending.job, finished);
+			await this.deps.runs.deleteMarker(finished);
+		});
 	}
 
-	private async finalizeLocked(finished: JobRun): Promise<void> {
+	private async finalizeLocked(finished: JobRun, deferEffects = false) {
 		const marker = await this.deps.runs.getMarker(finished);
 		if (!marker) return;
-		await this.afterRun(finished, marker.continuation_run_id);
+		const job = await this.afterRun(finished, marker.continuation_run_id);
+		if (deferEffects && job?.chain) return { job, continuationRunId: marker.continuation_run_id };
+		if (job) await this.notify(job, finished);
 		await this.deps.runs.deleteMarker(finished);
 	}
 
-	/** Post-run policy: audit the outcome, schedule a retry, or notify on the final outcome. */
-	private async afterRun(finished: JobRun, continuationRunId: RunId): Promise<void> {
+	private async chain(
+		job: JobDefinition,
+		finished: JobRun,
+		continuationRunId: RunId,
+	): Promise<void> {
+		const depth = finished.chain_depth ?? 0;
+		if (depth >= MAX_JOB_CHAIN_DEPTH || (await this.deps.jobs.isDeleting(job))) return;
+		const refs = finished.status === 'succeeded' ? job.chain?.on_success : job.chain?.on_failure;
+		const root = finished.chain_root_run_id ?? finished.run_id;
+		for (const ref of refs ?? []) {
+			if (ref.project_id && ref.project_id !== job.project_id) continue;
+			if (ref.job_id === job.id && ref.notebook_id === job.notebook_id) continue;
+			const targetRef = {
+				project_id: job.project_id,
+				notebook_id: ref.notebook_id,
+				id: ref.job_id,
+			};
+			await this.deps.runs.withJobMutation(targetRef, async () => {
+				if (await this.deps.jobs.isDeleting(targetRef)) return;
+				const target = await this.loadJob(job.project_id, ref.notebook_id, ref.job_id);
+				if (!target?.enabled) return;
+				// Preserve ULID time ordering while making each finalization/target pair replayable.
+				const suffix = (await sha256Hex(`${continuationRunId}:${ref.notebook_id}:${ref.job_id}`))
+					.slice(0, 16)
+					.toUpperCase();
+				const timestamp = encodeTime(Date.parse(finished.finished_at ?? finished.queued_at), 10);
+				const runId = RunId.parse(`run_${timestamp}${suffix}`);
+				if (await this.deps.runs.runExists(job.project_id, ref.notebook_id, ref.job_id, runId))
+					return;
+				const active = await this.deps.runs.listActiveSnapshot();
+				if (!active.complete) throw new UnavailableError('Cannot determine active chain runs');
+				const targetRuns = active.entries.flatMap(({ run }) =>
+					run?.job_id === ref.job_id && !isTerminalRunStatus(run.status) ? [run] : [],
+				);
+				const duplicate = targetRuns.some((run) => (run.chain_root_run_id ?? run.run_id) === root);
+				const full =
+					targetRuns.filter((run) => run.status === 'queued').length >= MAX_QUEUED_RUNS_PER_JOB;
+				const parameters = JobParametersSchema.safeParse({
+					...target.parameters,
+					upstream: JSON.stringify({
+						job_id: finished.job_id,
+						run_id: finished.run_id,
+						status: finished.status,
+					}),
+				});
+				const input = {
+					job: target,
+					runId,
+					trigger: 'chain' as const,
+					triggerSource: { kind: 'chain' as const, upstream_run_id: finished.run_id },
+					chainDepth: depth + 1,
+					chainRootRunId: root,
+					timeoutSeconds: this.timeoutSeconds(target),
+				};
+				if (duplicate || full || !parameters.success) {
+					await this.deps.runs.writeSkipped({
+						...input,
+						reason: {
+							code: duplicate
+								? 'CHAIN_ALREADY_ACTIVE'
+								: full
+									? 'CHAIN_QUEUE_FULL'
+									: 'CHAIN_PARAMETERS_INVALID',
+							message: duplicate
+								? 'A run of this job is already active in this chain'
+								: full
+									? 'The target job queue is full'
+									: 'The upstream parameter exceeds the job parameter limit',
+						},
+					});
+					return;
+				}
+				const run = await this.deps.runs.enqueue({
+					...input,
+					parameters: parameters.data,
+					sourceVersionId: await this.sourceVersionId(target),
+				});
+				await this.cancelRunIfDeleted(run);
+			});
+		}
+	}
+
+	private async afterRun(
+		finished: JobRun,
+		continuationRunId: RunId,
+	): Promise<JobDefinition | undefined> {
 		if (!isTerminalRunStatus(finished.status)) return;
 		await this.audit(finished);
-		if (finished.status === 'cancelled') return;
+		if (finished.status === 'cancelled' || finished.status === 'skipped') return;
 		const job = await this.loadJob(finished.project_id, finished.notebook_id, finished.job_id);
 		if (!job) return;
 		const failed = finished.status === 'failed' || finished.status === 'timed_out';
@@ -556,6 +663,9 @@ export class JobScheduler {
 				runId: continuationRunId,
 				trigger: finished.trigger,
 				triggeredBy: finished.triggered_by,
+				triggerSource: finished.trigger_source,
+				chainDepth: finished.chain_depth,
+				chainRootRunId: finished.chain_root_run_id ?? finished.run_id,
 				scheduledFor: finished.scheduled_for,
 				parameters: finished.parameters,
 				sourceVersionId: finished.source_version_id,
@@ -568,7 +678,7 @@ export class JobScheduler {
 			this.metrics.increment('jobs.runs.retried');
 			return;
 		}
-		await this.notify(job, finished);
+		return job;
 	}
 
 	/** A failed append leaves the finalization marker in place for a later tick. */

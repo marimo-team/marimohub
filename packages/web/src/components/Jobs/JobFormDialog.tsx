@@ -1,3 +1,4 @@
+import { ChainPicker, WebhookTriggerPanel } from './JobTriggers';
 import { z } from 'zod';
 import { toast } from 'sonner';
 import {
@@ -27,7 +28,19 @@ type JobFormValues = {
 	concurrencyPolicy: Job['concurrency_policy'];
 	notifyFailure: boolean;
 	notifySuccess: boolean;
+	chain: NonNullable<Job['chain']>;
 };
+
+const chainTargetsSchema = z
+	.array(
+		z.object({
+			project_id: z.string().optional(),
+			notebook_id: z.string(),
+			job_id: z.string(),
+		}),
+	)
+	.max(5)
+	.optional();
 
 const baseSchema = z.object({
 	name: requiredText('Name'),
@@ -45,6 +58,10 @@ const baseSchema = z.object({
 	concurrencyPolicy: z.enum(['forbid', 'allow', 'unknown']),
 	notifyFailure: z.boolean(),
 	notifySuccess: z.boolean(),
+	chain: z.object({
+		on_success: chainTargetsSchema,
+		on_failure: chainTargetsSchema,
+	}),
 });
 
 function jobFormSchema(maxTimeout: number | null | undefined) {
@@ -121,6 +138,7 @@ function seedValues(job: Job | null | undefined): JobFormValues {
 		concurrencyPolicy: job?.concurrency_policy ?? 'forbid',
 		notifyFailure: job?.notifications?.on.includes('failure') ?? false,
 		notifySuccess: job?.notifications?.on.includes('success') ?? false,
+		chain: job?.chain ?? {},
 	};
 }
 
@@ -135,6 +153,9 @@ function toCreateBody(values: JobFormValues): JobCreateBody {
 	return {
 		name: values.name.trim(),
 		enabled: values.enabled,
+		...(values.chain.on_success?.length || values.chain.on_failure?.length
+			? { chain: values.chain }
+			: {}),
 		...(values.scheduled
 			? { schedule: { cron: values.cron.trim(), timezone: values.timezone.trim() } }
 			: {}),
@@ -165,6 +186,7 @@ function toUpdateBody(values: JobFormValues): JobUpdateBody {
 		timeout_seconds: body.timeout_seconds ?? null,
 		concurrency_policy: body.concurrency_policy,
 		notifications: body.notifications ?? null,
+		chain: body.chain ?? null,
 	};
 }
 
@@ -247,7 +269,7 @@ export function JobFormDialog({
 					{(field) => (
 						<field.SwitchField>
 							{(on) => (
-								<span className="text-sm">{on ? 'Run on a schedule' : 'Manual runs only'}</span>
+								<span className="text-sm">{on ? 'Run on a schedule' : 'No cron schedule'}</span>
 							)}
 						</field.SwitchField>
 					)}
@@ -347,6 +369,23 @@ export function JobFormDialog({
 					) : null
 				}
 			</form.Subscribe>
+
+			{isOpen && (
+				<form.AppField name="chain">
+					{(field) => (
+						<ChainPicker
+							projectId={projectId}
+							notebookId={notebookId}
+							jobId={job?.id}
+							value={field.state.value}
+							onChange={field.handleChange}
+						/>
+					)}
+				</form.AppField>
+			)}
+			{isOpen && job && (
+				<WebhookTriggerPanel key={job.id} projectId={projectId} notebookId={notebookId} job={job} />
+			)}
 
 			{alertsAvailable && (
 				<fieldset className="flex flex-col gap-2 rounded-md border border-border p-3">

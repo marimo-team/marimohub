@@ -1044,7 +1044,7 @@ export const RUN_STATUSES = [
 ] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
-export const RUN_TRIGGERS = ['schedule', 'manual'] as const;
+export const RUN_TRIGGERS = ['schedule', 'manual', 'webhook', 'chain'] as const;
 export type RunTrigger = (typeof RUN_TRIGGERS)[number];
 
 /** `forbid` skips a scheduled fire while a run of the same job is still active. */
@@ -1057,6 +1057,7 @@ export type JobNotificationEvent = (typeof JOB_NOTIFICATION_EVENTS)[number];
 export const MAX_JOB_NAME_LENGTH = 120;
 export const MAX_JOB_PARAMETERS = 32;
 export const MAX_JOB_PARAMETER_VALUE_LENGTH = 4096;
+export const MAX_JOB_EVENT_BYTES = 16 * 1024;
 export const MAX_JOB_RETRIES = 5;
 export const MAX_JOB_RETRY_BACKOFF_SECONDS = 3600;
 export const MAX_QUEUED_RUNS_PER_JOB = 20;
@@ -1082,6 +1083,38 @@ export const JobParametersSchema = z
 	})
 	.meta(JOB_PARAMETERS_JSON_SCHEMA);
 
+export const JobRunParametersSchema = z
+	.record(z.string().regex(JOB_PARAMETER_KEY_PATTERN), z.string().max(MAX_JOB_EVENT_BYTES))
+	.refine(
+		(parameters) =>
+			parameters.event === undefined ||
+			new TextEncoder().encode(parameters.event).byteLength <= MAX_JOB_EVENT_BYTES,
+		{ message: 'event must not exceed 16 KiB of UTF-8 bytes', path: ['event'] },
+	)
+	.refine((parameters) => Object.keys(parameters).length <= MAX_JOB_PARAMETERS, {
+		message: `At most ${MAX_JOB_PARAMETERS} parameters are allowed`,
+	})
+	.refine(
+		(parameters) =>
+			Object.entries(parameters).every(
+				([key, value]) => key === 'event' || value.length <= MAX_JOB_PARAMETER_VALUE_LENGTH,
+			),
+		{
+			message: `Parameters other than event must not exceed ${MAX_JOB_PARAMETER_VALUE_LENGTH} characters`,
+		},
+	)
+	.meta({
+		...JOB_PARAMETERS_JSON_SCHEMA,
+		additionalProperties: { type: 'string', maxLength: MAX_JOB_PARAMETER_VALUE_LENGTH },
+		properties: {
+			event: {
+				type: 'string',
+				maxLength: MAX_JOB_EVENT_BYTES,
+				description: 'Serialized event JSON, limited to 16 KiB of UTF-8 bytes.',
+			},
+		},
+	});
+
 export type JobParameters = z.infer<typeof JobParametersSchema>;
 
 export const JobRetryPolicySchema = z.looseObject({
@@ -1103,6 +1136,25 @@ export const JobNotificationsSchema = z.looseObject({
 
 export type JobNotifications = z.infer<typeof JobNotificationsSchema>;
 
+export const MAX_JOB_CHAIN_DEPTH = 8;
+export const JobRefSchema = z.looseObject({
+	project_id: ProjectIdSchema.optional(),
+	notebook_id: NotebookIdSchema,
+	job_id: JobIdSchema,
+});
+export const JobChainSchema = z.looseObject({
+	on_success: z.array(JobRefSchema).max(5).optional(),
+	on_failure: z.array(JobRefSchema).max(5).optional(),
+});
+export type JobChain = z.infer<typeof JobChainSchema>;
+export const JobTriggerSourceSchema = z.discriminatedUnion('kind', [
+	z.looseObject({
+		kind: z.literal('webhook'),
+		idempotency_key: z.string().min(1).max(200).optional(),
+	}),
+	z.looseObject({ kind: z.literal('chain'), upstream_run_id: RunIdSchema }),
+]);
+
 export const JobDefinitionSchema = z.looseObject({
 	schema_version: z.literal(CURRENT_JOB_DEFINITION_VERSION),
 	id: JobIdSchema,
@@ -1110,7 +1162,6 @@ export const JobDefinitionSchema = z.looseObject({
 	project_id: ProjectIdSchema,
 	name: z.string().min(1).max(MAX_JOB_NAME_LENGTH),
 	enabled: z.boolean(),
-	/** Absent = manual-trigger only. */
 	schedule: JobScheduleSchema.optional(),
 	/** Passed to the notebook as `mo.cli_args()`. */
 	parameters: JobParametersSchema.optional(),
@@ -1120,6 +1171,8 @@ export const JobDefinitionSchema = z.looseObject({
 	concurrency_policy: z.enum(JOB_CONCURRENCY_POLICIES).default('forbid'),
 	/** Delivered through the project's alert destinations (`job.run.*` kinds). */
 	notifications: JobNotificationsSchema.optional(),
+	chain: JobChainSchema.optional(),
+	webhook_admissions: z.array(z.iso.datetime()).max(60).optional(),
 	created_by: UserIdSchema,
 	created_at: z.iso.datetime(),
 	updated_at: z.iso.datetime(),
@@ -1139,14 +1192,17 @@ export const JobRunSchema = z.looseObject({
 	project_id: ProjectIdSchema,
 	status: z.enum(RUN_STATUSES),
 	trigger: z.enum(RUN_TRIGGERS),
-	/** Manual runs only; scheduled runs attribute to the job. */
+	trigger_source: JobTriggerSourceSchema.optional(),
+	chain_depth: z.number().int().min(0).max(MAX_JOB_CHAIN_DEPTH).optional(),
+	chain_root_run_id: RunIdSchema.optional(),
+	/** Manual and webhook runs record the caller; scheduled and chained runs attribute to the job. */
 	triggered_by: UserIdSchema.optional(),
 	/** The occurrence this scheduled run fired for. */
 	scheduled_for: z.iso.datetime().optional(),
 	/** The notebook head at enqueue time — the same provenance app sessions carry. */
 	source_version_id: VersionIdSchema.optional(),
 	/** As-executed parameters, persisted for audit. */
-	parameters: JobParametersSchema.optional(),
+	parameters: JobRunParametersSchema.optional(),
 	attempt: z.number().int().min(1).default(1),
 	retry_of: RunIdSchema.optional(),
 	/** Stamped when the run goes `provisioning`; the reconciler reads it. */
@@ -1253,10 +1309,19 @@ export type PublicJobDefinition = Pick<
 	| 'timeout_seconds'
 	| 'concurrency_policy'
 	| 'notifications'
+	| 'chain'
 	| 'created_by'
 	| 'created_at'
 	| 'updated_at'
 >;
+
+function toPublicJobRef(ref: z.infer<typeof JobRefSchema>): z.infer<typeof JobRefSchema> {
+	return {
+		...(ref.project_id !== undefined ? { project_id: ref.project_id } : {}),
+		notebook_id: ref.notebook_id,
+		job_id: ref.job_id,
+	};
+}
 
 export function toPublicJobDefinition(job: JobDefinition): PublicJobDefinition {
 	return {
@@ -1279,6 +1344,18 @@ export function toPublicJobDefinition(job: JobDefinition): PublicJobDefinition {
 			: {}),
 		...(job.timeout_seconds !== undefined ? { timeout_seconds: job.timeout_seconds } : {}),
 		concurrency_policy: job.concurrency_policy,
+		...(job.chain
+			? {
+					chain: {
+						...(job.chain.on_success !== undefined
+							? { on_success: job.chain.on_success.map(toPublicJobRef) }
+							: {}),
+						...(job.chain.on_failure !== undefined
+							? { on_failure: job.chain.on_failure.map(toPublicJobRef) }
+							: {}),
+					},
+				}
+			: {}),
 		...(job.notifications !== undefined ? { notifications: { on: job.notifications.on } } : {}),
 		created_by: job.created_by,
 		created_at: job.created_at,
@@ -1295,6 +1372,9 @@ export type PublicJobRun = Pick<
 	| 'status'
 	| 'trigger'
 	| 'triggered_by'
+	| 'trigger_source'
+	| 'chain_depth'
+	| 'chain_root_run_id'
 	| 'scheduled_for'
 	| 'source_version_id'
 	| 'parameters'
@@ -1323,6 +1403,21 @@ export function toPublicJobRun(run: JobRun): PublicJobRun {
 		project_id: run.project_id,
 		status: run.status,
 		trigger: run.trigger,
+		...(run.trigger_source
+			? {
+					trigger_source:
+						run.trigger_source.kind === 'webhook'
+							? {
+									kind: 'webhook',
+									...(run.trigger_source.idempotency_key !== undefined
+										? { idempotency_key: run.trigger_source.idempotency_key }
+										: {}),
+								}
+							: { kind: 'chain', upstream_run_id: run.trigger_source.upstream_run_id },
+				}
+			: {}),
+		...(run.chain_depth !== undefined ? { chain_depth: run.chain_depth } : {}),
+		...(run.chain_root_run_id ? { chain_root_run_id: run.chain_root_run_id } : {}),
 		...(run.triggered_by !== undefined ? { triggered_by: run.triggered_by } : {}),
 		...(run.scheduled_for !== undefined ? { scheduled_for: run.scheduled_for } : {}),
 		...(run.source_version_id !== undefined ? { source_version_id: run.source_version_id } : {}),

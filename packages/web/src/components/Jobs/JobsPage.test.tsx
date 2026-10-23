@@ -439,7 +439,7 @@ describe('JobsPage', () => {
 		await user.click(screen.getByRole('button', { name: /New job/ }));
 		const dialog = await screen.findByRole('dialog');
 		await user.type(within(dialog).getByLabelText('Name'), 'Weekly report');
-		await user.click(within(dialog).getByRole('switch', { name: /Manual runs only/ }));
+		await user.click(within(dialog).getByRole('switch', { name: /No cron schedule/ }));
 		const cron = within(dialog).getByLabelText(/Cron/);
 		await user.clear(cron);
 		await user.type(cron, '0 9 * * mon');
@@ -571,6 +571,13 @@ describe('JobsPage', () => {
 		).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: /Cancel run/ })).not.toBeInTheDocument();
 		expect(world.calls.some((call) => call.url.endsWith('/html'))).toBe(false);
+	});
+
+	it('shows the caller for a webhook run', async () => {
+		makeFetch({ runs: [run({ trigger: 'webhook', triggered_by: 'u-1' })] });
+		renderPage('?job=job-1&run=run_01');
+		expect(await screen.findByText(/Webhook/)).toHaveTextContent('Webhook by');
+		expect(await screen.findByText('Ana')).toBeInTheDocument();
 	});
 
 	it('does not label an unknown trigger as manual', async () => {

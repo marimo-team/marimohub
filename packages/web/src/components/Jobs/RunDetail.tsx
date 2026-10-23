@@ -66,9 +66,9 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 				<span>
 					{run.trigger === 'schedule' ? (
 						<>Scheduled for {formatAbsolute(run.scheduled_for)}</>
-					) : run.trigger === 'manual' ? (
+					) : run.trigger === 'manual' || run.trigger === 'webhook' ? (
 						<>
-							Run manually
+							{run.trigger === 'webhook' ? 'Webhook' : 'Run manually'}
 							{run.triggered_by && (
 								<>
 									{' by '}
@@ -80,10 +80,15 @@ export function RunDetail({ projectId, notebookId, job, run, canEdit, onCancel }
 								</>
 							)}
 						</>
+					) : run.trigger === 'chain' ? (
+						<>Chained run (depth {run.chain_depth ?? 0})</>
 					) : (
 						<>Run trigger not recognized</>
 					)}
 				</span>
+				{run.trigger_source?.kind === 'chain' && (
+					<span>Upstream run: {run.trigger_source.upstream_run_id}</span>
+				)}
 				{run.attempt > 1 && <span>Attempt {run.attempt}</span>}
 				<span>Queued {formatRelative(run.queued_at)}</span>
 				{run.started_at && <span>Started {formatAbsolute(run.started_at)}</span>}

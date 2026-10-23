@@ -44,7 +44,7 @@ const JobSelector = NotebookSelector.extend({
 		),
 });
 const IdempotencyShape = { idempotency_key: IdempotencyKeyHeader.shape['idempotency-key'] };
-type JobAction = 'project.read' | 'notebook.write';
+type JobAction = 'project.read' | 'notebook.write' | 'job.trigger';
 interface ToolContext {
 	target: AuthorizedNotebook;
 	extra: JobToolExtra;
@@ -162,7 +162,7 @@ export function registerJobTools(
 
 	register(
 		'schedule_job',
-		'Change or clear a job’s cron schedule, or pause/resume it with enabled. Omitted fields stay unchanged; schedule=null makes it manual-only. Requires the job’s updated_at from list_jobs, get_notebook, or a previous mutation.',
+		'Change or clear a job’s cron schedule, or pause/resume it with enabled. Omitted fields stay unchanged; schedule=null removes its cron schedule. Requires the job’s updated_at from list_jobs, get_notebook, or a previous mutation.',
 		JobSelector.extend({
 			expected_updated_at: z.iso.datetime(),
 			schedule: JobScheduleShape.nullable().optional(),
@@ -195,7 +195,7 @@ export function registerJobTools(
 		'run_job',
 		'Enqueue a saved job for headless execution by the maintenance scheduler. Optional parameters replace the stored map for this run. Returns status and authenticated output links; poll get_job_run or wait with optional MCP progress. Tracks one attempt, not automatic retries. Reuse idempotency_key when retrying this call.',
 		JobSelector.extend({ ...TriggerRunBody.shape, ...WaitShape, ...IdempotencyShape }),
-		'notebook.write',
+		'job.trigger',
 		async (input, context) => {
 			const { target, signal } = context;
 			const job = await resolveJob(deps, target, input.job);
@@ -220,7 +220,7 @@ export function registerJobTools(
 					runId,
 					input,
 					request,
-					action: 'notebook.write',
+					action: 'job.trigger',
 				}),
 			);
 		},

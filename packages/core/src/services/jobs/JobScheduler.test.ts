@@ -5,7 +5,7 @@ import type { NotebookId, ProjectId } from '../../ids';
 import type { ProjectAlertDispatcher } from '../../ports/projectAlerts';
 import { paths } from '../../paths';
 import type { SandboxInstance } from '../../ports/sandbox';
-import type { JobDefinition, JobRun } from '../../schema';
+import type { JobRun } from '../../schema';
 import { ACTOR, RecordingCompute, setupTestEnv } from '../../testing';
 import type { CreateJobInput } from './JobsService';
 import { admit, JobScheduler } from './JobScheduler';
@@ -110,6 +110,175 @@ describe('JobScheduler', () => {
 	const settle = async (s: JobScheduler) => {
 		await s.drain();
 	};
+
+	it('stops a two-job cycle after eight downstream steps', async () => {
+		const a = await createJob({ schedule: undefined });
+		const b = await createJob({ schedule: undefined });
+		await env.jobs.updateJob(
+			pid,
+			nid,
+			a.id,
+			{ chain: { on_success: [{ notebook_id: nid, job_id: b.id }] } },
+			ACTOR,
+		);
+		await env.jobs.updateJob(
+			pid,
+			nid,
+			b.id,
+			{ chain: { on_success: [{ notebook_id: nid, job_id: a.id }] } },
+			ACTOR,
+		);
+		const root = await env.jobRuns.enqueue({ job: a, trigger: 'manual', timeoutSeconds: 60 });
+		const runner = fakeRunner(env);
+		const s = scheduler(runner);
+		for (let i = 0; i < 12; i++) {
+			await s.tick();
+			await s.drain();
+		}
+		expect(runner.executed).toHaveLength(9);
+		expect(runner.executed.slice(1).map((run) => run.chain_depth)).toEqual([
+			1, 2, 3, 4, 5, 6, 7, 8,
+		]);
+		expect(runner.executed.slice(1).every((run) => run.chain_root_run_id === root.run_id)).toBe(
+			true,
+		);
+		expect(runner.executed[1]).toMatchObject({
+			trigger: 'chain',
+			trigger_source: { kind: 'chain', upstream_run_id: root.run_id },
+		});
+		expect(JSON.parse(runner.executed[1].parameters!.upstream)).toEqual({
+			job_id: a.id,
+			run_id: root.run_id,
+			status: 'succeeded',
+		});
+	});
+
+	it('does not reach the ninth downstream job', async () => {
+		const jobs = [];
+		for (let i = 0; i < 10; i++) jobs.push(await createJob({ schedule: undefined }));
+		for (let i = 0; i < 9; i++)
+			await env.jobs.updateJob(
+				pid,
+				nid,
+				jobs[i].id,
+				{ chain: { on_success: [{ notebook_id: nid, job_id: jobs[i + 1].id }] } },
+				ACTOR,
+			);
+		await env.jobRuns.enqueue({ job: jobs[0], trigger: 'manual', timeoutSeconds: 60 });
+		const runner = fakeRunner(env);
+		const s = scheduler(runner);
+		for (let i = 0; i < 12; i++) {
+			await s.tick();
+			await s.drain();
+		}
+		expect(runner.executed).toHaveLength(9);
+		expect(await env.jobRuns.listRuns(pid, nid, jobs[9].id)).toHaveLength(0);
+	});
+
+	it('chains failures only after retries and preserves the root across retries', async () => {
+		const target = await createJob({ schedule: undefined });
+		const source = await createJob({
+			schedule: undefined,
+			retry: { max_retries: 1, backoff_seconds: 0 },
+			chain: { on_failure: [{ notebook_id: nid, job_id: target.id }] },
+		});
+		const root = await env.jobRuns.enqueue({ job: source, trigger: 'manual', timeoutSeconds: 60 });
+		const s = scheduler(fakeRunner(env, 'fail'), { now: Date.now });
+		await s.tick();
+		await s.drain();
+		expect(await env.jobRuns.listRuns(pid, nid, target.id)).toHaveLength(0);
+		await s.tick();
+		await s.drain();
+		const runs = await env.jobRuns.listRuns(pid, nid, target.id);
+		expect(runs).toHaveLength(1);
+		expect(runs[0]).toMatchObject({
+			trigger: 'chain',
+			chain_depth: 1,
+			chain_root_run_id: root.run_id,
+		});
+	});
+
+	it('starts downstream runs even when alert delivery fails', async () => {
+		const target = await createJob({ schedule: undefined });
+		const source = await createJob({
+			schedule: undefined,
+			notifications: { on: ['success'] },
+			chain: { on_success: [{ notebook_id: nid, job_id: target.id }] },
+		});
+		const root = await env.jobRuns.enqueue({ job: source, trigger: 'manual', timeoutSeconds: 60 });
+		const deliver = vi
+			.fn<ProjectAlertDispatcher['deliver']>()
+			.mockRejectedValueOnce(new Error('webhook unavailable'))
+			.mockResolvedValue('delivered');
+		const s = scheduler(fakeRunner(env), { projectAlerts: { deliver, test: vi.fn() } });
+		await s.tick();
+		await s.drain();
+		expect(await env.jobRuns.listRuns(pid, nid, target.id)).toHaveLength(1);
+		expect(await env.jobRuns.getMarker(root)).not.toBeNull();
+		await s.tick();
+		await s.drain();
+		expect(await env.jobRuns.listRuns(pid, nid, target.id)).toHaveLength(1);
+		expect(await env.jobRuns.getMarker(root)).toBeNull();
+	});
+
+	it('replays finalization without enqueuing the same downstream target twice', async () => {
+		const target = await createJob({ schedule: undefined });
+		const source = await createJob({
+			schedule: undefined,
+			chain: { on_success: [{ notebook_id: nid, job_id: target.id }] },
+		});
+		const root = await env.jobRuns.enqueue({ job: source, trigger: 'manual', timeoutSeconds: 60 });
+		const remove = env.jobRuns.deleteMarker.bind(env.jobRuns);
+		vi.spyOn(env.jobRuns, 'deleteMarker').mockImplementationOnce(async () => {
+			throw new Error('storage unavailable');
+		});
+		const s = scheduler(fakeRunner(env));
+		await s.tick();
+		await s.drain();
+		expect(await env.jobRuns.getMarker(root)).not.toBeNull();
+		vi.mocked(env.jobRuns.deleteMarker).mockImplementation(remove);
+		await s.tick();
+		await s.drain();
+		expect(await env.jobRuns.listRuns(pid, nid, target.id)).toHaveLength(1);
+	});
+
+	it('skips a target already active under the same root and ignores disabled targets', async () => {
+		const target = await createJob({ schedule: undefined });
+		const disabled = await createJob({ schedule: undefined, enabled: false });
+		const source = await createJob({
+			schedule: undefined,
+			chain: {
+				on_success: [target, disabled].map((job) => ({ notebook_id: nid, job_id: job.id })),
+			},
+		});
+		const root = await env.jobRuns.enqueue({ job: source, trigger: 'manual', timeoutSeconds: 60 });
+		await env.jobRuns.enqueue({
+			job: target,
+			trigger: 'chain',
+			chainRootRunId: root.run_id,
+			chainDepth: 1,
+			timeoutSeconds: 60,
+			eligibleAt: '2099-01-01T00:00:00.000Z',
+		});
+		const s = scheduler(fakeRunner(env));
+		await s.tick();
+		await s.drain();
+		const runs = await env.jobRuns.listRuns(pid, nid, target.id);
+		expect(runs).toHaveLength(2);
+		expect(runs.find((run) => run.status === 'skipped')?.error?.code).toBe('CHAIN_ALREADY_ACTIVE');
+		expect(await env.jobRuns.listRuns(pid, nid, disabled.id)).toHaveLength(0);
+	});
+
+	it('keeps webhook runs queued while a forbid job is running', async () => {
+		const job = await createJob({ schedule: undefined });
+		const first = await env.jobRuns.enqueue({ job, trigger: 'webhook', timeoutSeconds: 60 });
+		await env.jobRuns.transition(first, 'provision');
+		await env.jobRuns.transition(first, 'start');
+		await env.jobRuns.enqueue({ job, trigger: 'webhook', timeoutSeconds: 60 });
+		const runner = fakeRunner(env);
+		const s = scheduler(runner);
+		expect((await s.tick()).dispatched).toBe(0);
+	});
 
 	it('reads source metadata once and does not load the readme when firing', async () => {
 		await createJob();
@@ -726,15 +895,6 @@ describe('JobScheduler', () => {
 		const s = scheduler(fakeRunner(env));
 		expect(await s.prune(30 * 24 * 60 * MINUTE)).toEqual({ runsPruned: 1, markersPruned: 0 });
 		expect(await env.jobRuns.listRuns(pid, nid, job.id)).toEqual([]);
-	});
-
-	it('derives the run timeout from the job under the deployment ceiling', () => {
-		const s = scheduler(fakeRunner(env));
-		expect(
-			s.timeoutSeconds({ timeout_seconds: undefined } as Pick<JobDefinition, 'timeout_seconds'>),
-		).toBe(1800);
-		expect(s.timeoutSeconds({ timeout_seconds: 600 })).toBe(600);
-		expect(s.timeoutSeconds({ timeout_seconds: 99_999 })).toBe(14_400);
 	});
 
 	describe('audit events', () => {

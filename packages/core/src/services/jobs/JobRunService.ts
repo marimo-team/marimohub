@@ -43,6 +43,9 @@ export interface EnqueueRunInput {
 	job: JobDefinition;
 	trigger: RunTrigger;
 	triggeredBy?: UserId;
+	triggerSource?: JobRun['trigger_source'];
+	chainDepth?: number;
+	chainRootRunId?: RunId;
 	scheduledFor?: string;
 	parameters?: JobParameters;
 	sourceVersionId?: VersionId;
@@ -212,6 +215,9 @@ export class JobRunService {
 			project_id: job.project_id,
 			status: 'queued',
 			trigger: input.trigger,
+			trigger_source: input.triggerSource,
+			chain_depth: input.chainDepth,
+			chain_root_run_id: input.chainRootRunId,
 			...(input.triggeredBy ? { triggered_by: input.triggeredBy } : {}),
 			...(input.scheduledFor ? { scheduled_for: input.scheduledFor } : {}),
 			...(input.sourceVersionId ? { source_version_id: input.sourceVersionId } : {}),
@@ -248,9 +254,12 @@ export class JobRunService {
 		return this.getRun(job.project_id, job.notebook_id, job.id, runId);
 	}
 
-	/** A terminal-at-birth record for a scheduled fire the concurrency policy declined. */
+	/** Record a terminal skip when a schedule concurrency policy or chain guard declines a run. */
 	async writeSkipped(
-		input: Omit<EnqueueRunInput, 'trigger' | 'triggeredBy'> & { reason: RunError },
+		input: Omit<EnqueueRunInput, 'trigger' | 'triggeredBy'> & {
+			reason: RunError;
+			trigger?: RunTrigger;
+		},
 	): Promise<JobRun> {
 		const runId = input.runId ?? createRunId();
 		const now = new Date().toISOString();
@@ -262,7 +271,10 @@ export class JobRunService {
 			notebook_id: job.notebook_id,
 			project_id: job.project_id,
 			status: 'skipped',
-			trigger: 'schedule',
+			trigger: input.trigger ?? 'schedule',
+			trigger_source: input.triggerSource,
+			chain_depth: input.chainDepth,
+			chain_root_run_id: input.chainRootRunId,
 			...(input.scheduledFor ? { scheduled_for: input.scheduledFor } : {}),
 			...(input.sourceVersionId ? { source_version_id: input.sourceVersionId } : {}),
 			attempt: 1,
@@ -288,7 +300,7 @@ export class JobRunService {
 		await putIfAbsent(this.bucket, jobPaths.runIndex(runId), '');
 		const created = await putIfAbsent(this.bucket, this.runPaths(run).record, JSON.stringify(run));
 		if (!created) return this.getRun(job.project_id, job.notebook_id, job.id, runId);
-		this.metrics.increment('jobs.runs.skipped');
+		this.metrics.increment('jobs.runs.skipped', 1, { trigger: run.trigger });
 		return run;
 	}
 

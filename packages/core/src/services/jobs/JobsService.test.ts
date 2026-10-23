@@ -7,6 +7,7 @@ import {
 } from '../../errors';
 import { JobId } from '../../ids';
 import type { NotebookId, ProjectId } from '../../ids';
+import { toPublicJobDefinition } from '../../schema';
 import { paths } from '../../paths';
 import { ACTOR, setupTestEnv } from '../../testing';
 import { indexedJobs, jobIndexEntry } from './JobsService';
@@ -27,6 +28,76 @@ describe('JobsService', () => {
 		);
 		nid = notebook.id;
 	});
+
+	it('shares the webhook budget across clock rollback and frees it after ten minutes', async () => {
+		const job = await env.jobs.createJob(pid, nid, { name: 'budget' }, ACTOR);
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-21T12:00:00Z'));
+		try {
+			for (let i = 0; i < 59; i++) await env.jobs.consumeWebhookBudget(job);
+			clock.mockReturnValue(Date.parse('2026-10-21T11:59:00Z'));
+			await env.jobs.consumeWebhookBudget(job);
+			await expect(env.jobs.consumeWebhookBudget(job)).rejects.toThrow('60 webhook triggers');
+			const current = await env.jobs.getJob(pid, nid, job.id);
+			expect(current.updated_at).toBe(job.updated_at);
+			expect(toPublicJobDefinition(current)).not.toHaveProperty('webhook_admissions');
+			clock.mockReturnValue(Date.parse('2026-10-21T12:10:00Z'));
+			await env.jobs.consumeWebhookBudget(job);
+			expect((await env.jobs.getJob(pid, nid, job.id)).webhook_admissions).toHaveLength(1);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	it('rejects self-references, duplicate targets, and cross-project chains', async () => {
+		const job = await env.jobs.createJob(pid, nid, { name: 'chain' }, ACTOR);
+		const ref = { notebook_id: nid, job_id: job.id };
+		await expect(
+			env.jobs.updateJob(pid, nid, job.id, { chain: { on_success: [ref] } }, ACTOR),
+		).rejects.toThrow('itself');
+		const target = await env.jobs.createJob(pid, nid, { name: 'target' }, ACTOR);
+		const targetRef = { notebook_id: nid, job_id: target.id };
+		await expect(
+			env.jobs.updateJob(
+				pid,
+				nid,
+				job.id,
+				{ chain: { on_failure: [targetRef, targetRef] } },
+				ACTOR,
+			),
+		).rejects.toThrow('unique');
+		const other = await env.projects.createProject({ name: 'other', description: '' }, ACTOR);
+		await expect(
+			env.jobs.updateJob(
+				pid,
+				nid,
+				job.id,
+				{ chain: { on_success: [{ ...targetRef, project_id: other.id }] } },
+				ACTOR,
+			),
+		).rejects.toThrow('same project');
+	});
+
+	it.each(['on_success', 'on_failure'] as const)(
+		'limits %s chains to five distinct targets',
+		async (event) => {
+			const refs = [];
+			for (let i = 0; i < 6; i++) {
+				const target = await env.jobs.createJob(pid, nid, { name: `target ${i}` }, ACTOR);
+				refs.push({ notebook_id: nid, job_id: target.id });
+			}
+			await expect(
+				env.jobs.createJob(pid, nid, { name: 'too many', chain: { [event]: refs } }, ACTOR),
+			).rejects.toThrow('Too big: expected array to have <=5 items');
+			await expect(
+				env.jobs.createJob(
+					pid,
+					nid,
+					{ name: 'five targets', chain: { [event]: refs.slice(0, 5) } },
+					ACTOR,
+				),
+			).resolves.toMatchObject({ chain: { [event]: refs.slice(0, 5) } });
+		},
+	);
 
 	it('creates a definition, indexes it in the snapshot, and lists it', async () => {
 		const job = await env.jobs.createJob(

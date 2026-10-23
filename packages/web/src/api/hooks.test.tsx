@@ -9,6 +9,7 @@ import {
 	useBrowseTablePreview,
 	useBrowseTablesQuery,
 	useCapabilitiesQuery,
+	useChainNotebooksQuery,
 	useDownloadWorkspace,
 	useEditorSessionQuery,
 	useJobRunQuery,
@@ -39,6 +40,18 @@ import { browseKeys, jobKeys, notebookKeys, projectKeys, sessionKeys } from './q
 
 const PID = 'proj-1';
 const NID = 'nb-1';
+
+describe('chain notebook queries', () => {
+	it('refreshes the picker when notebook list mutations invalidate the project', async () => {
+		let title = 'Original';
+		stubFetch(async () => jsonOk({ items: [{ id: NID, title }], next_cursor: null }));
+		const { result, client } = renderHookWithClient(() => useChainNotebooksQuery(PID, true));
+		await waitFor(() => expect(result.current.data?.[0]?.title).toBe('Original'));
+		title = 'Renamed';
+		await act(() => client.invalidateQueries({ queryKey: notebookKeys.list(PID) }));
+		await waitFor(() => expect(result.current.data?.[0]?.title).toBe('Renamed'));
+	});
+});
 
 type FetchHandler = (url: RequestInfo | URL, init?: RequestInit | Request) => Promise<Response>;
 

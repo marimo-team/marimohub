@@ -2,12 +2,13 @@ import { z } from '@hono/zod-openapi';
 import {
 	JOB_CONCURRENCY_POLICIES,
 	JOB_NOTIFICATION_EVENTS,
-	JOB_PARAMETER_KEY_PATTERN,
-	JOB_PARAMETERS_JSON_SCHEMA,
 	JobId,
+	JobParametersSchema as JobParametersShape,
+	JobRunParametersSchema,
+	NotebookId,
+	ProjectId,
+	MAX_JOB_CHAIN_DEPTH,
 	MAX_JOB_NAME_LENGTH,
-	MAX_JOB_PARAMETER_VALUE_LENGTH,
-	MAX_JOB_PARAMETERS,
 	MAX_JOB_RETRIES,
 	MAX_JOB_RETRY_BACKOFF_SECONDS,
 	MIN_JOB_TIMEOUT_SECONDS,
@@ -35,16 +36,7 @@ const JobRetryPolicyShape = z.object({
 });
 const JobRetryPolicySchema = JobRetryPolicyShape.openapi('JobRetryPolicy');
 
-const JobParametersShape = z
-	.record(
-		z.string().regex(JOB_PARAMETER_KEY_PATTERN),
-		z.string().max(MAX_JOB_PARAMETER_VALUE_LENGTH),
-	)
-	.refine((parameters) => Object.keys(parameters).length <= MAX_JOB_PARAMETERS, {
-		message: `At most ${MAX_JOB_PARAMETERS} parameters are allowed`,
-	})
-	.meta(JOB_PARAMETERS_JSON_SCHEMA);
-const JobParametersSchema = JobParametersShape.openapi('JobParameters', {
+const JobParametersSchema = JobParametersShape.clone().openapi('JobParameters', {
 	description:
 		'String parameters passed to the notebook as `--key value` after `--`, readable via `mo.cli_args()`. Parameters are visible to every project member who can read the job or its run history; do not store secrets here.',
 	example: { region: 'eu-west-1' },
@@ -69,17 +61,44 @@ const TimeoutSchema = z.number().int().min(MIN_JOB_TIMEOUT_SECONDS).openapi({
 	example: 1800,
 });
 
+const JobChainTargets = z
+	.array(
+		z.object({
+			project_id: z.string().regex(ProjectId.regex).transform(ProjectId.parse).optional(),
+			notebook_id: z.string().regex(NotebookId.regex).transform(NotebookId.parse),
+			job_id: z.string().regex(JobId.regex).transform(JobId.parse),
+		}),
+	)
+	.max(5)
+	.optional();
+const JobChainShape = z.object({
+	on_success: JobChainTargets,
+	on_failure: JobChainTargets,
+});
+const TriggerSourceSchema = z.union([
+	z.object({ kind: z.literal('webhook'), idempotency_key: z.string().min(1).max(200).optional() }),
+	z.object({ kind: z.literal('chain'), upstream_run_id: z.string().regex(RunId.regex) }),
+]);
+export const WebhookTriggerBody = z.strictObject({
+	parameters: JobParametersSchema.optional(),
+	idempotency_key: z.string().min(1).max(200).optional(),
+	event: z.record(z.string(), z.unknown()).optional().openapi({
+		description:
+			'Event data, limited to 16 KiB of UTF-8 bytes after JSON serialization. Stored as parameters.event and visible to every project member who can read run history. Do not include secrets.',
+	}),
+});
+
 export const CreateJobBody = z
 	.strictObject({
 		name: z.string().min(1).max(MAX_JOB_NAME_LENGTH).openapi({ example: 'Nightly refresh' }),
 		enabled: z.boolean().default(true),
-		/** Absent = manual-trigger only. */
 		schedule: JobScheduleSchema.optional(),
 		parameters: JobParametersSchema.optional(),
 		retry: JobRetryPolicySchema.optional(),
 		timeout_seconds: TimeoutSchema.optional(),
 		concurrency_policy: z.enum(JOB_CONCURRENCY_POLICIES).default('forbid'),
 		notifications: JobNotificationsSchema.optional(),
+		chain: JobChainShape.optional(),
 	})
 	.openapi('JobCreateBody');
 
@@ -95,6 +114,7 @@ export const UpdateJobBody = z
 		timeout_seconds: TimeoutSchema.nullable().optional(),
 		concurrency_policy: z.enum(JOB_CONCURRENCY_POLICIES).optional(),
 		notifications: JobNotificationsShape.nullable().optional(),
+		chain: JobChainShape.nullable().optional(),
 	})
 	.refine((body) => Object.values(body).some((value) => value !== undefined), {
 		message: 'At least one field is required.',
@@ -121,6 +141,7 @@ export const JobResponseSchema = z
 		timeout_seconds: z.number().int().optional(),
 		concurrency_policy: extensibleResponseEnum(JOB_CONCURRENCY_POLICIES, 'forbid'),
 		notifications: JobNotificationsSchema.optional(),
+		chain: JobChainShape.optional(),
 		created_by: z.string(),
 		created_at: z.iso.datetime(),
 		updated_at: z.iso.datetime(),
@@ -141,9 +162,15 @@ export const JobRunResponseSchema = z
 		}),
 		trigger: extensibleResponseEnum(RUN_TRIGGERS, 'manual'),
 		triggered_by: z.string().optional(),
+		trigger_source: TriggerSourceSchema.optional(),
+		chain_depth: z.number().int().min(0).max(MAX_JOB_CHAIN_DEPTH).optional(),
+		chain_root_run_id: z.string().optional(),
 		scheduled_for: z.iso.datetime().optional(),
 		source_version_id: z.string().optional(),
-		parameters: JobParametersSchema.optional(),
+		parameters: JobRunParametersSchema.clone().optional().openapi({
+			description:
+				'Parameters used for this run, including serialized event data. Visible to every project member who can read run history. Do not store secrets here.',
+		}),
 		attempt: z.number().int().positive().openapi({
 			description:
 				'One-based attempt number. A failed or timed-out attempt can create a new run with attempt + 1 and retry_of set, subject to the job retry policy.',

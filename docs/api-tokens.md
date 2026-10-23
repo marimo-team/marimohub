@@ -24,14 +24,15 @@ In the app, open the user menu (top right) → **API tokens** → **Create a
 token**. Name it after its consumer, such as `ci-deploy`. Select an action
 preset and a project mode. You can also set an expiry in days.
 
-Read, Run notebooks, and Edit notebooks expand to fixed action lists when you
-create the token. Full stores the `"*"` action wildcard instead.
+Presets except **Full** expand to fixed action lists when you create the token.
+**Full** stores the `"*"` action wildcard.
 
 | Preset         | Access                                                                             |
 | -------------- | ---------------------------------------------------------------------------------- |
 | Read           | Read projects and integrations                                                     |
 | Run notebooks  | Read access, use integrations, and start, attach, stop, surface, or proxy sessions |
-| Edit notebooks | Run access, write notebooks, and publish change requests                           |
+| Trigger jobs   | Read projects and trigger saved jobs, without editing notebooks                    |
+| Edit notebooks | Run access, trigger saved jobs, write notebooks, and publish change requests       |
 | Full           | Every PAT-accessible action, including actions added in later releases             |
 
 Use **Advanced** to select individual actions. An explicit list excludes
@@ -110,10 +111,9 @@ as **Full access · all projects · legacy**.
 
 Delete it from the **API tokens** dialog.
 
-Revocation (and expiry) takes effect immediately on the replica that served the
-request and within about 30 seconds everywhere else — verified tokens are
-positively cached per process for that long to keep per-request verification
-off the storage hot path.
+Revocation takes effect immediately on the replica that handles the request.
+Other replicas can accept the token for up to 30 seconds through their authentication cache.
+Expiry applies on every request, including cached authentication.
 
 ## Audit
 

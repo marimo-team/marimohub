@@ -42,6 +42,7 @@ export interface CreateJobInput {
 	timeout_seconds?: number;
 	concurrency_policy?: JobConcurrencyPolicy;
 	notifications?: JobNotifications;
+	chain?: JobDefinition['chain'];
 }
 
 /** `null` clears an optional field; `undefined` leaves it untouched. */
@@ -54,6 +55,7 @@ export interface UpdateJobInput {
 	timeout_seconds?: number | null;
 	concurrency_policy?: JobConcurrencyPolicy;
 	notifications?: JobNotifications | null;
+	chain?: JobDefinition['chain'] | null;
 }
 
 export interface JobLimits {
@@ -228,10 +230,12 @@ export class JobsService {
 			...(input.timeout_seconds !== undefined ? { timeout_seconds: input.timeout_seconds } : {}),
 			concurrency_policy: input.concurrency_policy ?? 'forbid',
 			...(input.notifications ? { notifications: input.notifications } : {}),
+			...(input.chain ? { chain: input.chain } : {}),
 			created_by: actor,
 			created_at: now,
 			updated_at: now,
 		});
+		validateChain(job);
 		const nb = paths.project(projectId).notebook(notebookId);
 		const key = nb.job(job.id).head;
 		const indexKey = nb.jobIndex(job.created_at, job.id);
@@ -276,6 +280,8 @@ export class JobsService {
 				applyOptional(next, 'retry', input.retry);
 				applyOptional(next, 'timeout_seconds', input.timeout_seconds);
 				applyOptional(next, 'notifications', input.notifications);
+				applyOptional(next, 'chain', input.chain);
+				validateChain(next);
 				next.updated_at = nextIsoTimestamp(current.updated_at, new Date().toISOString());
 				return JobDefinitionSchema.parse(next);
 			},
@@ -314,6 +320,32 @@ export class JobsService {
 			throw err;
 		}
 		return updated;
+	}
+
+	async consumeWebhookBudget(job: JobDefinition): Promise<void> {
+		const key = paths.project(job.project_id).notebook(job.notebook_id).job(job.id).head;
+		await mutateObject(
+			this.bucket,
+			key,
+			(raw) => parseStoredJobDefinition(raw, key),
+			(current) => {
+				if (!current.enabled) throw new NotFoundError('Job is not enabled');
+				const timestamps = (current.webhook_admissions ?? []).map(Date.parse);
+				// A replica with an older clock must not reset the shared budget.
+				const admissionTime = Math.max(Date.now(), ...timestamps);
+				const recent = timestamps.filter((time) => admissionTime - time < 10 * 60_000);
+				if (recent.length >= 60)
+					throw new ResourceExhaustedError('At most 60 webhook triggers per job per 10 minutes');
+				// Operational admissions do not change the version of the editable job definition.
+				return {
+					...current,
+					webhook_admissions: [...recent, admissionTime].map((time) =>
+						new Date(time).toISOString(),
+					),
+				};
+			},
+			{ notFound: () => new NotFoundError('Job not found') },
+		);
 	}
 
 	async beginDelete(
@@ -392,9 +424,22 @@ export class JobsService {
 }
 
 function applyOptional<
-	K extends 'schedule' | 'parameters' | 'retry' | 'timeout_seconds' | 'notifications',
+	K extends 'schedule' | 'parameters' | 'retry' | 'timeout_seconds' | 'notifications' | 'chain',
 >(target: JobDefinition, key: K, value: JobDefinition[K] | null | undefined): void {
 	if (value === undefined) return;
 	if (value === null) delete target[key];
 	else target[key] = value;
+}
+
+function validateChain(job: JobDefinition): void {
+	for (const ref of [...(job.chain?.on_success ?? []), ...(job.chain?.on_failure ?? [])]) {
+		if (ref.project_id && ref.project_id !== job.project_id)
+			throw new ValidationError('Chains must stay in the same project');
+		if (ref.notebook_id === job.notebook_id && ref.job_id === job.id)
+			throw new ValidationError('A job cannot chain to itself');
+	}
+	for (const refs of [job.chain?.on_success ?? [], job.chain?.on_failure ?? []]) {
+		if (new Set(refs.map((ref) => `${ref.notebook_id}:${ref.job_id}`)).size !== refs.length)
+			throw new ValidationError('Chain targets must be unique');
+	}
 }

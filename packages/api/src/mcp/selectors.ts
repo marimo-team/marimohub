@@ -24,7 +24,7 @@ export async function resolveProject(
 	deps: ApiDeps,
 	principal: AuthenticatedPrincipal,
 	value: string,
-	action: 'project.read' | 'notebook.write' = 'project.read',
+	action: 'project.read' | 'notebook.write' | 'job.trigger' = 'project.read',
 	appAccess = false,
 ): Promise<Project> {
 	const loadProject = async (id: ProjectId) => {
@@ -109,7 +109,7 @@ export async function resolveAuthorizedNotebook(
 	principal: AuthenticatedPrincipal,
 	projectRef: string,
 	notebookRef: string,
-	action: 'project.read' | 'notebook.write',
+	action: 'project.read' | 'notebook.write' | 'job.trigger',
 ) {
 	const project = await resolveProject(deps, principal, projectRef, action);
 	const notebook = await resolveNotebook(deps, principal, project, notebookRef);

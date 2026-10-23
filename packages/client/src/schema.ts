@@ -1519,6 +1519,26 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/jobs/{jid}/trigger': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Trigger a job from an event
+		 * @description Requires job.trigger. Enqueues a webhook run with optional event data and a caller-scoped idempotency key.
+		 */
+		post: operations['jobs.trigger'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/integrations/kinds': {
 		parameters: {
 			query?: never;
@@ -2947,6 +2967,7 @@ export interface components {
 					| 'project.events.read'
 					| 'project.alerts.manage'
 					| 'notebook.write'
+					| 'job.trigger'
 					| 'notebook.manage'
 					| 'deep-link.manage'
 					| 'preview.manage'
@@ -3139,6 +3160,7 @@ export interface components {
 								| 'project.events.read'
 								| 'project.alerts.manage'
 								| 'notebook.write'
+								| 'job.trigger'
 								| 'notebook.manage'
 								| 'deep-link.manage'
 								| 'preview.manage'
@@ -3172,6 +3194,7 @@ export interface components {
 				| 'project.events.read'
 				| 'project.alerts.manage'
 				| 'notebook.write'
+				| 'job.trigger'
 				| 'notebook.manage'
 				| 'deep-link.manage'
 				| 'preview.manage'
@@ -3816,6 +3839,18 @@ export interface components {
 			 */
 			concurrency_policy: 'forbid' | 'allow' | 'unknown';
 			notifications?: components['schemas']['JobNotifications'];
+			chain?: {
+				on_success?: {
+					project_id?: string;
+					notebook_id: string;
+					job_id: string;
+				}[];
+				on_failure?: {
+					project_id?: string;
+					notebook_id: string;
+					job_id: string;
+				}[];
+			};
 			created_by: string;
 			/** Format: date-time */
 			created_at: string;
@@ -3871,6 +3906,18 @@ export interface components {
 			 */
 			concurrency_policy: 'forbid' | 'allow';
 			notifications?: components['schemas']['JobNotifications'];
+			chain?: {
+				on_success?: {
+					project_id?: string;
+					notebook_id: string;
+					job_id: string;
+				}[];
+				on_failure?: {
+					project_id?: string;
+					notebook_id: string;
+					job_id: string;
+				}[];
+			};
 		};
 		JobUpdateBody: {
 			name?: string;
@@ -3905,6 +3952,18 @@ export interface components {
 			notifications?: {
 				on: ('failure' | 'success')[];
 			} | null;
+			chain?: {
+				on_success?: {
+					project_id?: string;
+					notebook_id: string;
+					job_id: string;
+				}[];
+				on_failure?: {
+					project_id?: string;
+					notebook_id: string;
+					job_id: string;
+				}[];
+			} | null;
 		};
 		JobRun: {
 			run_id: string;
@@ -3927,16 +3986,35 @@ export interface components {
 				| 'skipped'
 				| 'unknown';
 			/**
-			 * @description Known values: schedule, manual. Unrecognized values normalize to unknown.
+			 * @description Known values: schedule, manual, webhook, chain. Unrecognized values normalize to unknown.
 			 * @example manual
 			 * @enum {string}
 			 */
-			trigger: 'schedule' | 'manual' | 'unknown';
+			trigger: 'schedule' | 'manual' | 'webhook' | 'chain' | 'unknown';
 			triggered_by?: string;
+			trigger_source?:
+				| {
+						/** @enum {string} */
+						kind: 'webhook';
+						idempotency_key?: string;
+				  }
+				| {
+						/** @enum {string} */
+						kind: 'chain';
+						upstream_run_id: string;
+				  };
+			chain_depth?: number;
+			chain_root_run_id?: string;
 			/** Format: date-time */
 			scheduled_for?: string;
 			source_version_id?: string;
-			parameters?: components['schemas']['JobParameters'];
+			/** @description Parameters used for this run, including serialized event data. Visible to every project member who can read run history. Do not store secrets here. */
+			parameters?: {
+				/** @description Serialized event JSON, limited to 16 KiB of UTF-8 bytes. */
+				event?: string;
+			} & {
+				[key: string]: string;
+			};
 			/** @description One-based attempt number. A failed or timed-out attempt can create a new run with attempt + 1 and retry_of set, subject to the job retry policy. */
 			attempt: number;
 			retry_of?: string;
@@ -4369,6 +4447,7 @@ export interface components {
 							| 'project.events.read'
 							| 'project.alerts.manage'
 							| 'notebook.write'
+							| 'job.trigger'
 							| 'notebook.manage'
 							| 'deep-link.manage'
 							| 'preview.manage'
@@ -4556,6 +4635,7 @@ export interface operations {
 									| 'project.events.read'
 									| 'project.alerts.manage'
 									| 'notebook.write'
+									| 'job.trigger'
 									| 'notebook.manage'
 									| 'deep-link.manage'
 									| 'preview.manage'
@@ -15831,6 +15911,125 @@ export interface operations {
 			};
 		};
 	};
+	'jobs.trigger': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				jid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: {
+			content: {
+				'application/json': {
+					parameters?: components['schemas']['JobParameters'];
+					idempotency_key?: string;
+					/** @description Event data, limited to 16 KiB of UTF-8 bytes after JSON serialization. Stored as parameters.event and visible to every project member who can read run history. Do not include secrets. */
+					event?: {
+						[key: string]: unknown;
+					};
+				};
+			};
+		};
+		responses: {
+			/** @description Run queued */
+			202: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							run_id: string;
+							/** @enum {boolean} */
+							queued: true;
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
 	'integrations.kinds.list': {
 		parameters: {
 			query?: never;
@@ -19675,6 +19874,7 @@ export interface operations {
 									| 'project.events.read'
 									| 'project.alerts.manage'
 									| 'notebook.write'
+									| 'job.trigger'
 									| 'notebook.manage'
 									| 'deep-link.manage'
 									| 'preview.manage'
@@ -20039,6 +20239,7 @@ export interface operations {
 									| 'project.events.read'
 									| 'project.alerts.manage'
 									| 'notebook.write'
+									| 'job.trigger'
 									| 'notebook.manage'
 									| 'deep-link.manage'
 									| 'preview.manage'
@@ -20073,6 +20274,7 @@ export interface operations {
 									| 'project.events.read'
 									| 'project.alerts.manage'
 									| 'notebook.write'
+									| 'job.trigger'
 									| 'notebook.manage'
 									| 'deep-link.manage'
 									| 'preview.manage'
@@ -20359,6 +20561,7 @@ export interface operations {
 													| 'project.events.read'
 													| 'project.alerts.manage'
 													| 'notebook.write'
+													| 'job.trigger'
 													| 'notebook.manage'
 													| 'deep-link.manage'
 													| 'preview.manage'
@@ -20501,6 +20704,7 @@ export interface operations {
 									| 'project.events.read'
 									| 'project.alerts.manage'
 									| 'notebook.write'
+									| 'job.trigger'
 									| 'notebook.manage'
 									| 'deep-link.manage'
 									| 'preview.manage'
@@ -20734,6 +20938,7 @@ export interface operations {
 									| 'project.events.read'
 									| 'project.alerts.manage'
 									| 'notebook.write'
+									| 'job.trigger'
 									| 'notebook.manage'
 									| 'deep-link.manage'
 									| 'preview.manage'

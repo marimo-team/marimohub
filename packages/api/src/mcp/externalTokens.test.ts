@@ -98,6 +98,7 @@ describe('external access tokens on API and MCP', () => {
 					'mcp:tools',
 					'marimohub:read',
 					'marimohub:run',
+					'marimohub:trigger',
 					'marimohub:edit',
 					'marimohub:full',
 				],
