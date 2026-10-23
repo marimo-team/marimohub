@@ -1,5 +1,7 @@
 export {
 	authorizeSessionStart,
+	getEditorSessionState,
+	takeOverNotebookEditor,
 	resolveSandboxHostname,
 	SessionCreateBodySchema,
 	SessionCreateResponseSchema,
