@@ -1139,6 +1139,13 @@ Create a **marimo Studio (experimental)** integration for reports, apps, and pre
 [Studio](https://marimo-team.github.io/marimo-studio/) opens at the session root unless process configuration selects the native editor.
 The default package is `marimo-studio[deno]==0.4.1`. Deno supports React, Svelte, Reveal.js, and Notebook Kit views. Enable Typst for reports.
 
+<figure class="doc-screenshot">
+  <a href="/screenshots/marimo-studio.png" target="_blank" rel="noreferrer" aria-label="Open full-size screenshot: marimo Studio notebook and interactive HTML view (new tab)">
+    <img src="/screenshots/marimo-studio.png" alt="marimo Studio with notebook code beside an HTML view showing a slider and its squared value" width="1280" height="720" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Studio displays an interactive view beside the notebook that powers it.</figcaption>
+</figure>
+
 The hub supplies a separate runtime layer without editing `pyproject.toml`, `notebook.py`, or `marimo.toml`.
 Studio requires local filesystem semantics. The hub copies its workspace instead of mounting object storage, then uses the normal save flow.
 See [Studio workspace storage](https://marimo-team.github.io/marimo-studio/reference/compatibility#workspace-storage).
