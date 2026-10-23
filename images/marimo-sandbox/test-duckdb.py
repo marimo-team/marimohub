@@ -12,7 +12,9 @@ from bake_duckdb import BAKED_DIR, EXTENSIONS, install_extensions
 assert os.getuid() != 0, "Extension checks must run as the sandbox user"
 
 with duckdb.connect() as connection:
-    install_extensions(connection)
+    # Reusing the installer also checks that the final status result was drained.
+    for _ in range(2):
+        install_extensions(connection)
 
     with TemporaryDirectory() as directory:
         catalog = load_catalog("offline", type="in-memory", warehouse=Path(directory).as_uri())

@@ -10,12 +10,13 @@ def install_extensions(connection: duckdb.DuckDBPyConnection) -> None:
     for extension in EXTENSIONS:
         connection.install_extension(extension)
         connection.load_extension(extension)
+        # DuckDB 2 requires draining the result before the next extension operation.
         state = connection.execute(
             "SELECT installed, loaded FROM duckdb_extensions() "
             "WHERE extension_name = ?",
             [extension],
-        ).fetchone()
-        if state != (True, True):
+        ).fetchall()
+        if state != [(True, True)]:
             raise RuntimeError(f"{extension} not installed and loaded: {state}")
 
 
