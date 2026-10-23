@@ -5,10 +5,12 @@ import { assertValidEnvironmentName } from '../integrations/environmentName';
 import { INTEGRATIONS_DIR_ENV } from '../integrations/bundle';
 import {
 	HUB_SANDBOX_ENV,
+	mergeSessionEnv,
 	projectSessionEnv,
 	SANDBOX_IMAGE_MARIMO_ENV,
 	SANDBOX_INTEGRATIONS_DIR_ENV,
 } from './sandboxEnvironment';
+import type { SessionEnv } from './sandboxEnvironment';
 
 const repoFile = (path: string) =>
 	readFileSync(fileURLToPath(new URL(`../../../../../${path}`, import.meta.url)), 'utf8');
@@ -51,6 +53,18 @@ describe('HUB_SANDBOX_ENV', () => {
 });
 
 describe('projectSessionEnv', () => {
+	it('preserves runtime packages and files while demoting marimo settings', () => {
+		const render = {
+			vars: { MARIMO_OUTPUT_MAX_BYTES: '1000' },
+			files: [{ path: '/tmp/config', content: 'config' }],
+			runtimePackages: ['marimo-studio==0.4.1'],
+		};
+		expect(projectSessionEnv(render)).toEqual({
+			...render,
+			vars: {},
+			defaults: render.vars,
+		});
+	});
 	it('applies project marimo settings as defaults and keeps other variables forced', () => {
 		const files = [{ path: '/tmp/x', content: 'x' }];
 		expect(
@@ -68,5 +82,45 @@ describe('projectSessionEnv', () => {
 			vars: { MARIMOHUB_PG_PROD_URL: 'postgres://db', MARIMOS: 'x', MY_FLAG: 'on' },
 			defaults: { MARIMO_OUTPUT_MAX_BYTES: '1000' },
 		});
+	});
+});
+
+describe('mergeSessionEnv', () => {
+	it.each([
+		[{ workspaceLoadMode: 'copy-only' as const }, {}],
+		[{}, { workspaceLoadMode: 'copy-only' as const }],
+	])('preserves a copy-only requirement from either layer', (base, add) => {
+		expect(mergeSessionEnv(base, add).workspaceLoadMode).toBe('copy-only');
+	});
+	it.each([undefined, {}])('accepts an empty base %j and omits an empty package layer', (base) => {
+		expect(mergeSessionEnv(base, {})).toEqual({ files: [], vars: {}, defaults: {} });
+	});
+
+	it('appends files and packages while later variables and defaults take precedence', () => {
+		const base: SessionEnv = {
+			files: [{ path: '/tmp/base', content: 'base' }],
+			runtimePackages: ['first-tool==1.0.0'],
+			vars: { KEEP: 'base', OVERRIDE: 'base' },
+			defaults: { KEEP_DEFAULT: 'base', OVERRIDE: 'base-default' },
+		};
+		const add: SessionEnv = {
+			files: [{ path: '/tmp/added', content: 'added' }],
+			runtimePackages: ['second-tool==1.0.0'],
+			vars: { OVERRIDE: 'added' },
+			defaults: { OVERRIDE: 'added-default' },
+		};
+		const original = structuredClone({ base, add });
+		const merged = mergeSessionEnv(base, add);
+		expect(merged).toEqual({
+			files: [...base.files!, ...add.files!],
+			runtimePackages: ['first-tool==1.0.0', 'second-tool==1.0.0'],
+			vars: { KEEP: 'base', OVERRIDE: 'added' },
+			defaults: { KEEP_DEFAULT: 'base', OVERRIDE: 'added-default' },
+		});
+		merged.files!.push({ path: '/tmp/new', content: '' });
+		merged.runtimePackages!.push('third-tool==1.0.0');
+		merged.vars!.KEEP = 'changed';
+		merged.defaults!.KEEP_DEFAULT = 'changed';
+		expect({ base, add }).toEqual(original);
 	});
 });

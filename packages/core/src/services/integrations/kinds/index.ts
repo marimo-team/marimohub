@@ -18,6 +18,7 @@ import {
 import { icebergRest } from './icebergRest';
 import { huggingFace, wandb } from './mlPlatforms';
 import { mongodb } from './mongodb';
+import { marimoStudio } from './marimoStudio';
 import { motherduck } from './motherduck';
 import { mysql } from './mysql';
 import { azureBlob, gcs, s3 } from './objectStores';
@@ -52,6 +53,7 @@ export {
 export { icebergRest } from './icebergRest';
 export { huggingFace, wandb } from './mlPlatforms';
 export { mongodb } from './mongodb';
+export { marimoStudio } from './marimoStudio';
 export { motherduck } from './motherduck';
 export { mysql } from './mysql';
 export { azureBlob, gcs, s3 } from './objectStores';
@@ -73,6 +75,7 @@ export function defaultRegistry(): IntegrationRegistry {
 	registry.register(mysql);
 	registry.register(sqlserver);
 	registry.register(mongodb);
+	registry.register(marimoStudio);
 	registry.register(clickhouse);
 	registry.register(snowflake);
 	registry.register(bigquery);

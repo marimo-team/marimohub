@@ -18,7 +18,7 @@ import {
 	CONTRACT_SANDBOX_ID,
 	CONTRACT_VISIBLE_FILE,
 } from '@marimo-hub/core/testing/compute-contract';
-import { buildMarimoLaunch } from '@marimo-hub/core/marimo-launch';
+import { buildMarimoLaunch, MARIMO_VERSION_COMMAND } from '@marimo-hub/core/marimo-launch';
 import { LocalCompute, prepareMarimoCommand, rewriteSandboxPaths, rewriteWorkspace } from './index';
 
 // Some CI runners and containers disable IPv6, so binding ::1 fails for reasons unrelated to the adapter.
@@ -84,6 +84,26 @@ const serverCmdOnQuotedOption = (option: '--port' | '--bind-addr', value: string
 const CONTRACT_LAUNCH_LOCAL_PORT = 43119;
 
 describe('prepareMarimoCommand (pure)', () => {
+	it.each(['127.0.0.1', '0.0.0.0'])(
+		'supplies marimo for both the version lookup and runtime launch on %s',
+		(bindHost) => {
+			const { start } = buildMarimoLaunch({
+				notebookFile: 'notebook.py',
+				port: 2718,
+				host: bindHost,
+				runtimePackages: ['marimo-studio==0.4.1'],
+			});
+			const prepared = prepareMarimoCommand(start, bindHost);
+			expect(prepared).toContain(
+				MARIMO_VERSION_COMMAND.replace('uv run ', 'uv run --with marimo '),
+			);
+			expect(prepared).toContain(
+				'&& uv run --with marimo --no-sync --with "marimo==$marimohub_marimo_version"',
+			);
+			expect(prepared.match(/--host/g)).toHaveLength(1);
+			expect(prepareMarimoCommand(prepared, bindHost)).toBe(prepared);
+		},
+	);
 	it('installs marimo after a workspace Python path prefix', () => {
 		const command =
 			'export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" && uv run --no-sync marimo edit reports/revenue.py';

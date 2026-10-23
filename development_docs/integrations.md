@@ -8,6 +8,9 @@ concurrency protocol are specified in
 
 ## Architecture
 
+Integrations store versioned configuration for connections, runtime tools, and agent context.
+Each kind renders its contributions. Browsing and connection tests are optional.
+
 Integrations follow the repository's ports-and-adapters boundary:
 
 - `packages/core/src/ports/integrations.ts` defines the provider and render
@@ -93,6 +96,39 @@ and identical input must produce byte-identical output.
 
 `requirements` is informational. It is shown in the UI and written to the
 integration manifest, but the hub does not install or preflight those packages.
+For installed tools, use `runtimePackages` in the render output.
+
+## Runtime packages and lifecycle
+
+`runtimePackages` accepts exact index pins such as `marimo-studio[deno]==0.4.1`.
+`mergeRuntimePackages` normalizes names, combines extras, and rejects version conflicts or marimo overrides.
+Paths, URLs, markers, installer flags, and version ranges are unsupported.
+
+`SessionEnv` carries these packages to `runtimePackageCommand`.
+After notebook dependency setup, this helper resolves the layer once with `uv run --with` and starts the process.
+It uses the configured package registries and pins marimo to the installed base version.
+The local backend supplies marimo through `uv --with` for both the version lookup and launch.
+Other layer packages override base packages. Resolution failure stops launch.
+
+The layer covers the notebook process, bridge, and children. Independent terminals use the base environment.
+
+Resolution adds no sandbox request and uses the existing startup deadline or job execution timeout.
+Boot, credential injection, and bridge upload remain concurrent.
+The base environment and dependency files remain unchanged.
+Removal omits the layer on subsequent launches, including snapshot restores. Caches and notebook-declared dependencies can remain.
+
+See `kinds/marimoStudio.ts` for an example. Its experimental label is display text only.
+For each new contribution, document its destination, precedence, and behavior after update, disable, delete, and snapshot restore.
+Renderers cannot edit workspace files. Persistent source changes require an ownership and cleanup contract.
+See [Changes and removal](../docs/integrations.md#changes-and-removal) for existing cleanup behavior.
+
+## Workspace requirements
+
+Render `workspaceLoadMode: 'copy-only'` for tools that require local filesystem semantics, such as Studio.
+The bundler and environment merger preserve this requirement from any integration.
+Mount-capable launches await the existing integration result before choosing the loader. They make no additional resolution request.
+Existing copy-only paths still prefetch during integration resolution and boot.
+The copied workspace uses the existing save flow. Disabling the integration restores the source's normal loading policy on subsequent launches.
 
 ## Supported schema dialect
 

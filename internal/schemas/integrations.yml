@@ -837,6 +837,38 @@ paths:
       responses:
         '204':
           description: Accepted.
+  /kinds/marimo_studio/config:
+    summary: marimo Studio (experimental)
+    description: Add Studio reports, apps, and presentations to notebook sessions.
+      Restart sessions after changes. Saved views remain when disabled.
+    x-kind-schema-version: 1
+    x-category: other
+    x-brand-color: '#14B8A6'
+    x-secret-paths: []
+    x-supports-test: false
+    x-requirements: []
+    get:
+      operationId: read_marimo_studio_config
+      summary: Stored marimo_studio config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/marimo_studio_stored'
+    put:
+      operationId: write_marimo_studio_config
+      summary: Input marimo_studio config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/marimo_studio'
+      responses:
+        '204':
+          description: Accepted.
   /kinds/mongodb/config:
     summary: MongoDB
     description: MongoDB or Atlas cluster reachable from PyMongo.
@@ -4748,6 +4780,48 @@ components:
         - repository
         - auth
         - default_index
+      additionalProperties: false
+    marimo_studio:
+      type: object
+      properties:
+        version:
+          default: 0.4.1
+          description: Exact Studio version. It must support the sandbox image’s marimo
+            version.
+          type: string
+          maxLength: 32
+          pattern: ^\d+\.\d+\.\d+$
+        deno:
+          default: true
+          description: Include Deno for React, Svelte, Reveal.js, and Notebook Kit views.
+          type: boolean
+        typst:
+          default: false
+          description: Include Typst for report views.
+          type: boolean
+      additionalProperties: false
+    marimo_studio_stored:
+      type: object
+      properties:
+        version:
+          default: 0.4.1
+          description: Exact Studio version. It must support the sandbox image’s marimo
+            version.
+          type: string
+          maxLength: 32
+          pattern: ^\d+\.\d+\.\d+$
+        deno:
+          default: true
+          description: Include Deno for React, Svelte, Reveal.js, and Notebook Kit views.
+          type: boolean
+        typst:
+          default: false
+          description: Include Typst for report views.
+          type: boolean
+      required:
+        - version
+        - deno
+        - typst
       additionalProperties: false
     mongodb:
       type: object

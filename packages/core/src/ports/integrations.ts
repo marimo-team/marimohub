@@ -324,6 +324,8 @@ export interface IntegrationVersionPin {
 
 /** Files, variables, and audit pins produced for session provisioning. */
 export interface SessionRender {
+	workspaceLoadMode?: 'copy-only';
+	runtimePackages?: string[];
 	files: { path: string; content: string; relativeTo?: 'home' }[];
 	vars: Record<string, string>;
 	/** Version pins persisted on the session record. */

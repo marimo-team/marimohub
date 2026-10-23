@@ -37,6 +37,7 @@ import {
 import { Utf8TailBuffer } from '@marimo-hub/compute-commons/node';
 import { NotFoundError } from '@marimo-hub/core/errors';
 import { KERNEL_AUTH_TOKEN_FILE } from '@marimo-hub/core/kernel-auth';
+import { MARIMO_VERSION_COMMAND } from '@marimo-hub/core/marimo-launch';
 import { SURFACE_STATE_ROOT } from '@marimo-hub/core/surface-state';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import type {
@@ -224,7 +225,12 @@ function commandSegmentEnd(cmd: string, start: number): number {
  * Commands without a `uv run` launch segment and already-configured ones pass
  * through unchanged.
  */
-export function prepareMarimoCommand(cmd: string, bindHost: string): string {
+export function prepareMarimoCommand(command: string, bindHost: string): string {
+	// Local sandboxes supply marimo through uv, including for the runtime-layer version lookup.
+	const cmd = command.replaceAll(
+		MARIMO_VERSION_COMMAND,
+		MARIMO_VERSION_COMMAND.replace('uv run ', 'uv run --with marimo '),
+	);
 	const uvRunPrefix = /(^|&&\s*)uv run (?=[^&]*\bmarimo\b)/;
 	const match = uvRunPrefix.exec(cmd);
 	if (!match) return cmd;

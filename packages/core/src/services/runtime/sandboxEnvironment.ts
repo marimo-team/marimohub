@@ -1,13 +1,26 @@
 import type { SessionRender } from '../../ports/integrations';
 
-/**
- * Structural subset of `SessionEnv`: importing the provisioner here would pull
- * the whole runtime into every consumer of the env-name constants.
- */
-interface SessionEnvLike {
+/** Configuration injected before the notebook process starts. */
+export interface SessionEnv {
+	workspaceLoadMode?: SessionRender['workspaceLoadMode'];
+	runtimePackages?: SessionRender['runtimePackages'];
 	files?: SessionRender['files'];
-	vars: Record<string, string>;
-	defaults: Record<string, string>;
+	vars?: Record<string, string>;
+	/** Image values win over defaults. Use vars for policy and credentials. */
+	defaults?: Record<string, string>;
+}
+
+export function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): SessionEnv {
+	const runtimePackages = [...(base?.runtimePackages ?? []), ...(add.runtimePackages ?? [])];
+	return {
+		...(base?.workspaceLoadMode || add.workspaceLoadMode
+			? { workspaceLoadMode: 'copy-only' as const }
+			: {}),
+		...(runtimePackages.length > 0 ? { runtimePackages } : {}),
+		files: [...(base?.files ?? []), ...(add.files ?? [])],
+		vars: { ...base?.vars, ...add.vars },
+		defaults: { ...base?.defaults, ...add.defaults },
+	};
 }
 
 export const AGENT_CONTEXT_DIR_ENV = 'MARIMOHUB_AGENT_CONTEXT_DIR';
@@ -61,14 +74,21 @@ export function isMarimoSettingName(name: string): boolean {
  * deployment-wide values (e.g. `MARIMO_RESTRICT_SHARING`) keep precedence; a
  * project can only fill in settings the operator did not pin.
  */
-export function projectSessionEnv(render: {
-	files?: SessionEnvLike['files'];
-	vars: Record<string, string>;
-}): SessionEnvLike {
+export function projectSessionEnv(
+	render: Pick<SessionEnv, 'runtimePackages' | 'files' | 'workspaceLoadMode'> & {
+		vars: Record<string, string>;
+	},
+): SessionEnv & Required<Pick<SessionEnv, 'vars' | 'defaults'>> {
 	const vars: Record<string, string> = {};
 	const defaults: Record<string, string> = {};
 	for (const [name, value] of Object.entries(render.vars)) {
 		(isMarimoSettingName(name) ? defaults : vars)[name] = value;
 	}
-	return { files: render.files, vars, defaults };
+	return {
+		files: render.files,
+		...(render.workspaceLoadMode ? { workspaceLoadMode: render.workspaceLoadMode } : {}),
+		vars,
+		defaults,
+		...(render.runtimePackages?.length ? { runtimePackages: render.runtimePackages } : {}),
+	};
 }

@@ -328,11 +328,11 @@ function ListView({
 				<div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
 					<p className="max-w-3xl text-muted-foreground">
 						{scope === 'org'
-							? 'Connection config every session in every project receives as env vars and ' +
-								'files. A project overrides (or opts out of) an org integration by creating ' +
+							? 'Connections, tools, and shared configuration for new sessions across all projects. ' +
+								'A project overrides (or opts out of) an org integration by creating ' +
 								'one with the same name.'
-							: 'Connection config every session in this project receives as env vars and files. New ' +
-								'sessions pick up config changes; running ones keep what they started with.'}
+							: 'Connections, tools, and shared configuration for this project. Changes apply to new ' +
+								'sessions. Running sessions keep their current configuration.'}
 					</p>
 					{canManage && (
 						<Button variant="primary" onPress={onAdd} className="shrink-0">
@@ -367,7 +367,7 @@ function ListView({
 					<div>
 						<p className="font-medium">No integrations yet.</p>
 						<p className="mt-1 text-xs text-muted-foreground">
-							Add a connection to make it available to new project sessions.
+							Add an integration to make it available to new project sessions.
 						</p>
 					</div>
 				</div>

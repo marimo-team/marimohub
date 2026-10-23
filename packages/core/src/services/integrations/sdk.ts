@@ -54,6 +54,10 @@ export interface TestConnectionOptions {
 }
 
 export interface RenderOutput {
+	/** Require local filesystem semantics instead of an object-storage mount. */
+	workspaceLoadMode?: 'copy-only';
+	/** Pinned packages supplied only to the workload process, without editing notebook dependencies. */
+	runtimePackages?: string[];
 	agentContext?: AgentContextConfig;
 	packageIndexes?: { name: string; url: string; default: boolean }[];
 	/**

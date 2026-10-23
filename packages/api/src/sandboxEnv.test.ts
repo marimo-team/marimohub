@@ -563,6 +563,24 @@ describe('package registry federation', () => {
 });
 
 describe('composeSessionEnv', () => {
+	it('carries runtime packages through credential and editor configuration composition', () => {
+		const env = composeSessionEnv({
+			wifVars: { AWS_REGION: 'us-east-1' },
+			marimoEnv: { files: [{ path: '/tmp/marimo.toml', content: '[display]' }] },
+			integrationEnv: {
+				runtimePackages: ['marimo-studio==0.4.1'],
+				workspaceLoadMode: 'copy-only',
+				files: [],
+				vars: {},
+				attachments: [],
+				warnings: [],
+			},
+		});
+		expect(env?.runtimePackages).toEqual(['marimo-studio==0.4.1']);
+		expect(env?.workspaceLoadMode).toBe('copy-only');
+		expect(env?.vars).toMatchObject({ AWS_REGION: 'us-east-1' });
+		expect(env?.files).toContainEqual({ path: '/tmp/marimo.toml', content: '[display]' });
+	});
 	const integrationEnv: SessionRender = {
 		files: [],
 		vars: {

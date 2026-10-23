@@ -1,4 +1,6 @@
 import { AGENT_CONTEXT_DIR_ENV } from './sandboxEnvironment';
+import type { SessionEnv } from './sandboxEnvironment';
+export type { SessionEnv } from './sandboxEnvironment';
 import { all, allSettled } from 'better-all';
 import { prepareAgentHomeFiles } from './agentContextFiles';
 import type { Attributes, Span as OtelSpan } from '@opentelemetry/api';
@@ -7,7 +9,6 @@ import { withDeadline } from '../../async';
 import { ByteBudget } from './byteBudget';
 import type { NotebookBridgeRuntime } from '../../ports/notebookBridge';
 import type { Bucket } from '../../ports/bucket';
-import type { SessionRender } from '../../ports/integrations';
 import { MARIMO_PORT } from '../../constants';
 import { Millis } from '../../duration';
 import { PythonEnvironmentSetupError, UnavailableError } from '../../errors';
@@ -180,18 +181,6 @@ export interface BucketConfig {
 		accessKeyId: string;
 		secretAccessKey: string;
 	};
-}
-
-/** Env vars + files injected into a sandbox before the kernel starts. */
-export interface SessionEnv {
-	vars?: Record<string, string>;
-	/**
-	 * Fallback vars, applied with `onlyIfUnset`: the sandbox image's own value
-	 * wins when it defines one. Use `vars` for anything policy- or
-	 * credential-bearing — a default the image can shadow is not a control.
-	 */
-	defaults?: Record<string, string>;
-	files?: SessionRender['files'];
 }
 
 export interface ProvisionOptions {
@@ -933,7 +922,7 @@ export class SandboxProvisioner {
 				},
 			);
 			startup.plan.start = startup.plan.start.replace(
-				'marimo --quiet ',
+				/(?:python -m )?marimo --quiet /,
 				`python ${shellQuote(launcher)} --quiet `,
 			);
 		} catch {
@@ -987,9 +976,26 @@ export class SandboxProvisioner {
 		workspacePrefix: string,
 		waitUntilReady: () => Promise<void>,
 	): Promise<WorkspaceLoadResult> {
+		// Only a possible mount needs the integration result. Copy prefetch still overlaps resolution.
+		let workspaceOptions = options;
+		if (
+			options.workspaceLoadMode !== 'copy-only' &&
+			sandbox.supportsBucketMount !== false &&
+			options.bucket.mountable !== false &&
+			options.sessionEnv
+		) {
+			// A failed boot must not wait for pending credential resolution.
+			const sessionEnv = await Promise.race([
+				options.sessionEnv,
+				waitUntilReady().then(() => options.sessionEnv),
+			]);
+			if (sessionEnv?.workspaceLoadMode === 'copy-only') {
+				workspaceOptions = { ...options, workspaceLoadMode: 'copy-only' };
+			}
+		}
 		const loaded = await this.restoreWorkspaceFiles(
 			sandbox,
-			options,
+			workspaceOptions,
 			layout,
 			workspacePrefix,
 			waitUntilReady,
@@ -1283,6 +1289,7 @@ export class SandboxProvisioner {
 					tokenPasswordFile:
 						options.kernelAuthToken !== undefined ? KERNEL_AUTH_TOKEN_FILE : undefined,
 					watch: options.marimoWatch,
+					runtimePackages: (await options.sessionEnv)?.runtimePackages,
 				},
 				launchStrategy,
 			),

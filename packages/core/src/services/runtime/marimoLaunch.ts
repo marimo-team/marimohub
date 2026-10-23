@@ -3,7 +3,9 @@
  * (see launchStrategy.ts); the default is the project-managed env.
  */
 import type { SessionMode } from '../../constants';
+import { runtimePackageCommand } from './runtimePackageCommand';
 import { shellQuote } from './shell';
+export { MARIMO_VERSION_COMMAND } from './runtimePackageCommand';
 
 /**
  * `edit`/`app` serve a browser; `job` runs the notebook to completion with
@@ -12,6 +14,7 @@ import { shellQuote } from './shell';
 export type MarimoLaunchMode = SessionMode | 'job';
 
 export interface MarimoLaunchParams {
+	runtimePackages?: string[];
 	notebookFile: string;
 	port: number;
 	/** Bind 0.0.0.0 so the external ingress can reach the kernel. */
@@ -109,6 +112,18 @@ function marimoCommand(p: MarimoLaunchParams, extraFlags = ''): string {
 	return `marimo ${globalFlags}${subcommand} ${extraFlags}${shellQuote(p.notebookFile)} ${flags(p)}`;
 }
 
+function launchCommand(p: MarimoLaunchParams, sandbox = false): string {
+	if (p.runtimePackages?.length) {
+		return runtimePackageCommand(
+			p.runtimePackages,
+			`python -m ${marimoCommand(p, sandbox ? '--sandbox ' : '')}`,
+		);
+	}
+	return sandbox
+		? `uv run --with marimo ${marimoCommand(p, '--sandbox ')}`
+		: runtimePackageCommand([], marimoCommand(p));
+}
+
 // Sync only when the notebook declares real deps; an empty one just gets a
 // `[project]` table (so `uv add` works) and runs from the pre-installed
 // image environment via `--no-sync`. --no-compile-bytecode skips ~5s of compiling
@@ -155,7 +170,7 @@ export const MARIMO_LAUNCH_STRATEGIES = {
 	// inline deps), this never refetches.
 	'uv-sync-edit': (p) => ({
 		setup: [{ name: 'pyproject_layer', command: PYPROJECT_LAYER_SETUP }],
-		start: `uv run --no-sync ${marimoCommand(p)}`,
+		start: launchCommand(p),
 	}),
 
 	// Notebooks with PEP 723 inline metadata: the pyproject layer runs
@@ -176,7 +191,7 @@ export const MARIMO_LAUNCH_STRATEGIES = {
 				command: SCRIPT_PIN_INSTALL,
 			},
 		],
-		start: `uv run --no-sync ${marimoCommand(p)}`,
+		start: launchCommand(p),
 	}),
 
 	// marimo builds its own venv from PEP 723 metadata. Unselected today; kept
@@ -184,7 +199,7 @@ export const MARIMO_LAUNCH_STRATEGIES = {
 	// frontmatter that uv can't parse (but marimo --sandbox can).
 	'uv-sandbox': (p) => ({
 		setup: [],
-		start: `uv run --with marimo ${marimoCommand(p, '--sandbox ')}`,
+		start: launchCommand(p, true),
 	}),
 } satisfies Record<string, MarimoLaunchStrategy>;
 

@@ -2097,6 +2097,7 @@ describe('ProjectIntegrationsStore', () => {
 			'iceberg_rest',
 			'iceberg_sql',
 			'jfrog_artifactory',
+			'marimo_studio',
 			'mongodb',
 			'motherduck',
 			'mysql',

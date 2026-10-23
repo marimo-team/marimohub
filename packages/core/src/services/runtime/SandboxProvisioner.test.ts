@@ -92,6 +92,112 @@ describe('SandboxProvisioner', () => {
 	const notebookId = createNotebookId();
 	const sandboxId = createSandboxId();
 
+	it('rejects conflicting runtime packages before starting a process and cleans up the sandbox', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		await expect(
+			new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				sessionEnv: {
+					runtimePackages: ['marimo-studio==0.4.1', 'Marimo_Studio==0.4.2'],
+				},
+			}),
+		).rejects.toThrow('different versions');
+		expect(calls.startProcess).toEqual([]);
+		expect(calls.destroy).toBe(1);
+	});
+	it('fails closed when a required workspace copy has no bucket handle', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		await expect(
+			new SandboxProvisioner(fakeComputeFrom({ ...instance, supportsBucketMount: true })).provision(
+				{
+					sandboxId,
+					projectId,
+					notebookId,
+					hostname: 'localhost',
+					bucket: bucketConfig,
+					sessionEnv: { workspaceLoadMode: 'copy-only' },
+				},
+			),
+		).rejects.toThrow('restoring the notebook workspace into the sandbox');
+		expect(calls.mountBucket).toEqual([]);
+		expect(calls.startProcess).toEqual([]);
+		expect(calls.destroy).toBe(1);
+	});
+	it('keeps mounting available when resolved integrations do not require a copy', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const result = await new SandboxProvisioner(
+			fakeComputeFrom({ ...instance, supportsBucketMount: true }),
+		).provision({
+			sandboxId,
+			projectId,
+			notebookId,
+			hostname: 'localhost',
+			bucket: bucketConfig,
+			sessionEnv: Promise.resolve({ vars: {} }),
+		});
+		expect(result.usedFallback).toBe(false);
+		expect(calls.mountBucket).toHaveLength(1);
+	});
+
+	it('surfaces runtime resolution errors without retrying or launching without the integration', async () => {
+		const { instance, calls } = makeFakeSandbox({
+			failWaitForPort: new Error('process exited (code 1) before port 2718 was ready.'),
+			logs: { stdout: '', stderr: 'No solution found: marimo-studio requires marimo==0.25.2' },
+		});
+		await expect(
+			new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				sessionEnv: { runtimePackages: ['marimo-studio==0.4.1'] },
+			}),
+		).rejects.toThrow('No solution found: marimo-studio requires marimo==0.25.2');
+		expect(calls.startProcess).toHaveLength(1);
+		expect(calls.startProcess[0].cmd).toContain("--with 'marimo-studio==0.4.1'");
+		expect(calls.destroy).toBe(1);
+	});
+
+	it('launches integration packages without additional sandbox requests and retains the bridge', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const baseline = makeFakeSandbox();
+		const options = {
+			sandboxId,
+			projectId,
+			notebookId,
+			hostname: 'localhost',
+			bucket: bucketConfig,
+			bridgeParentOrigin: 'https://hub.example.com',
+			notebookBridge: {
+				launcher: 'marimo-bridge.py',
+				files: [{ name: 'marimo-bridge.py', content: 'launcher' }],
+			},
+		};
+		await Promise.all([
+			new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...options,
+				sessionEnv: Promise.resolve({ runtimePackages: ['marimo-studio==0.4.1'] }),
+			}),
+			new SandboxProvisioner(fakeComputeFrom(baseline.instance)).provision(options),
+		]);
+		expect(calls.exec).toEqual(baseline.calls.exec);
+		expect(calls.writeFiles).toEqual(baseline.calls.writeFiles);
+		expect(calls.setEnvVars).toHaveLength(baseline.calls.setEnvVars.length);
+		expect(calls.startProcess).toHaveLength(baseline.calls.startProcess.length);
+		const start = calls.startProcess[0].cmd;
+		expect(start).toContain("--with 'marimo-studio==0.4.1'");
+		expect(start).not.toContain('python -m python');
+		expect(start).not.toContain('python -m marimo');
+		expect(start).toContain(
+			`python '/tmp/marimohub-bridge/${sandboxId}/marimo-bridge.py' --quiet edit`,
+		);
+	});
+
 	it('sets the process-visible context path before launch, overriding session variables', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		instance.resolveProcessPath = (path) => `/sandbox-root${path}`;
@@ -308,6 +414,70 @@ describe('SandboxProvisioner', () => {
 			};
 			return { ...sandbox, started, ready, bucketHandle, options };
 		}
+
+		it.each(['provision', 'prepare'] as const)(
+			'%s copies instead of mounting when an integration requires local filesystem semantics',
+			async (operation) => {
+				const { instance, calls, started, ready, bucketHandle, options } = fixture();
+				const pendingEnv = deferred<{ workspaceLoadMode: 'copy-only' }>();
+				const nb = paths.project(projectId).notebook(notebookId);
+				await bucketHandle.put(nb.workspaceFile('notebook.py'), 'print(1)');
+				const get = vi.spyOn(bucketHandle, 'get');
+				const pending = new SandboxProvisioner(
+					fakeComputeFrom({ ...instance, supportsBucketMount: true }),
+				)[operation]({
+					...options,
+					sessionEnv: pendingEnv.promise,
+				});
+				await started.promise;
+				expect(calls.mountBucket).toEqual([]);
+				pendingEnv.resolve({ workspaceLoadMode: 'copy-only' });
+				await vi.waitFor(() => expect(get).toHaveBeenCalledWith(nb.workspaceFile('notebook.py')));
+				expect(calls.writeFiles).toEqual([]);
+				ready.resolve();
+				const result = await pending;
+				expect(result.usedFallback).toBe(true);
+				expect(calls.mountBucket).toEqual([]);
+				expect(calls.writeFiles.flat()).toContainEqual({
+					path: '/workspace/notebook.py',
+					content: new TextEncoder().encode('print(1)'),
+				});
+			},
+		);
+
+		it.each(['copy-only', 'unsupported mount'] as const)(
+			'prefetches files before integrations resolve for %s',
+			async (reason) => {
+				const { instance, ready, bucketHandle, options } = fixture();
+				const pendingEnv = deferred<undefined>();
+				const list = vi.spyOn(bucketHandle, 'list');
+				const pending = new SandboxProvisioner(
+					fakeComputeFrom({ ...instance, supportsBucketMount: reason !== 'unsupported mount' }),
+				).provision({
+					...options,
+					sessionEnv: pendingEnv.promise,
+					workspaceLoadMode: reason === 'copy-only' ? 'copy-only' : undefined,
+				});
+				await vi.waitFor(() => expect(list).toHaveBeenCalled());
+				pendingEnv.resolve(undefined);
+				ready.resolve();
+				await pending;
+			},
+		);
+
+		it('cleans up a failed boot without waiting for unresolved integrations', async () => {
+			const { instance, calls, started, ready, options } = fixture();
+			const pendingEnv = deferred<undefined>();
+			const pending = new SandboxProvisioner(
+				fakeComputeFrom({ ...instance, supportsBucketMount: true }),
+			).provision({ ...options, sessionEnv: pendingEnv.promise });
+			const rejected = expect(pending).rejects.toThrow('Sandbox compute backend is not available');
+			await started.promise;
+			ready.reject(new Error('boot failed'));
+			await rejected;
+			expect(calls.mountBucket).toEqual([]);
+			expect(calls.destroy).toBe(1);
+		});
 
 		it.each(['provision', 'prepare'] as const)(
 			'%s never attempts mounting or fallback when boot fails',
@@ -557,11 +727,18 @@ describe('SandboxProvisioner', () => {
 			notebookBridge: payload,
 			bridgeParentOrigin: 'https://hub.example',
 		};
-		it.each(['uv-sync-edit', 'uv-script-pins'] as const)(
-			'uploads the bridge while injection is pending and waits before launching %s',
-			async (launchStrategy) => {
+		it.each(
+			(['uv-sync-edit', 'uv-script-pins'] as const).flatMap((launchStrategy) =>
+				[[], ['marimo-studio==0.4.1']].map((runtimePackages) => ({
+					launchStrategy,
+					runtimePackages,
+				})),
+			),
+		)(
+			'uploads the bridge while injection is pending before launching $launchStrategy with $runtimePackages',
+			async ({ launchStrategy, runtimePackages }) => {
 				const { instance, calls } = makeFakeSandbox();
-				const pending = deferred<{ vars: Record<string, string> }>();
+				const pending = deferred<{ vars: Record<string, string>; runtimePackages: string[] }>();
 				const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 				const provision = provisioner.provision({
 					...options,
@@ -578,8 +755,11 @@ describe('SandboxProvisioner', () => {
 				expect(calls.setEnvVars).not.toContainEqual(
 					expect.objectContaining({ MARIMOHUB_BRIDGE_PARENT_ORIGIN: expect.any(String) }),
 				);
-				pending.resolve({ vars: { EXISTING: 'kept' } });
+				pending.resolve({ vars: { EXISTING: 'kept' }, runtimePackages });
 				await provision;
+				if (runtimePackages.length > 0) {
+					expect(calls.startProcess[0].cmd).toContain("--with 'marimo-studio==0.4.1'");
+				}
 				expect(calls.startProcess[0].cmd).toContain('uv run --no-sync python');
 				expect(calls.startProcess[0].cmd).toContain(
 					`/tmp/marimohub-bridge/${sandboxId}/marimo-bridge.py`,
@@ -595,6 +775,18 @@ describe('SandboxProvisioner', () => {
 			vi.spyOn(instance, 'writeFiles').mockRejectedValue(new Error('write unavailable'));
 			await new SandboxProvisioner(fakeComputeFrom(instance)).provision(options);
 			expect(calls.startProcess[0].cmd).toContain('marimo --quiet edit');
+		});
+		it('retains the runtime layer when optional bridge preparation fails', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			vi.spyOn(instance, 'writeFiles').mockRejectedValue(new Error('write unavailable'));
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...options,
+				sessionEnv: { runtimePackages: ['marimo-studio==0.4.1'] },
+			});
+			expect(calls.startProcess).toHaveLength(1);
+			expect(calls.startProcess[0].cmd).toContain("--with 'marimo-studio==0.4.1'");
+			expect(calls.startProcess[0].cmd).toContain('python -m marimo --quiet edit');
+			expect(calls.startProcess[0].cmd).not.toContain('marimo-bridge.py');
 		});
 		it('does not activate an installed extension for jobs', async () => {
 			const { instance, calls } = makeFakeSandbox();

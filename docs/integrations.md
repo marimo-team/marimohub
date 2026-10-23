@@ -1,12 +1,13 @@
 ---
-description: Configure project and organization data sources for notebook sessions, including databases, warehouses, query engines, catalogs, object storage, ML platforms, Python package registries, and environment variables.
+description: Configure project and organization connections, runtime tools, environment variables, and shared agent configuration for notebook sessions.
 ---
 
 # Integrations
 
-A **project manager** can connect a data source once for one project. A
-[super admin](./auth.md#super-admins-marimohub_super_admins) can connect a data
-source for the whole organization. Supported sources include the common SQL
+A **project manager** can configure an integration for one project.
+A [super admin](./auth.md#super-admins-marimohub_super_admins) can configure an integration for the whole organization.
+Integrations supply connections, runtime tools, environment variables, and shared agent configuration.
+Supported connections include the common SQL
 databases and warehouses (PostgreSQL, MySQL, SQL Server, MongoDB, ClickHouse,
 Snowflake, BigQuery, Redshift, MotherDuck), query engines (Trino, Spark Connect,
 Databricks SQL, Athena), PyIceberg catalogs, object storage (S3, GCS, Azure
@@ -15,11 +16,9 @@ Biases, Hugging Face), [Python package registries](#package-registries) for uv
 (any simple index, JFrog Artifactory, Azure Artifacts, GitLab, AWS
 CodeArtifact), and environment variables.
 
-Each new, non-ephemeral session receives the applicable connection
-configuration as environment variables and files. Notebook code never accesses
-the hub API or storage. The hub injects configuration, not Python libraries.
-Each kind lists the required packages below. Add those packages to the notebook
-dependencies.
+Each new, non-ephemeral session receives integration configuration through environment variables and files.
+Notebook code reads it locally. Add each connection's listed Python requirements to the notebook dependencies.
+Runtime tools, such as [marimo Studio](#marimo-studio-experimental), supply their own packages for the notebook process.
 
 Integrations are enabled by default. Set `MARIMOHUB_INTEGRATIONS=off` to make
 the routes return `404` and prevent integration configuration from being
@@ -29,6 +28,21 @@ accepts them.
 
 Integration configuration is versioned. Each save creates an immutable
 revision. Each session records the revisions that it uses.
+
+## Changes and removal
+
+Changes apply to new sessions and job runs. Restart running workloads to apply them.
+Disabling or deleting an integration removes its contributions from subsequent launches, subject to the cleanup rules below.
+
+| Contribution                                  | Where it applies                        | After disabling                                                                                             |
+| --------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Environment variables and configuration files | Outside the notebook workspace          | New sandboxes omit them. Snapshots can retain old values and files unless the integration provides cleanup. |
+| Runtime packages                              | Separate layer for the notebook process | Launches omit the layer, including after snapshot restores. Caches can remain.                              |
+| Agent context                                 | Outside the notebook workspace          | Restored sandboxes remove obsolete hub-managed home files.                                                  |
+| Authored files                                | Notebook source and workspace           | Files remain under normal notebook persistence rules.                                                       |
+
+A disabled project integration also blocks an organization integration with the same name.
+Deleting that project integration restores inheritance from the organization.
 
 ## Browse data
 
@@ -1118,6 +1132,26 @@ fails session and job startup in each project without AWS workload identity.
 The hub does not fall back to public PyPI. To opt a project out, create a disabled project integration with the same name.
 
 <!--@include: ./partials/integrations/aws_codeartifact.md-->
+
+## marimo Studio (experimental)
+
+Create a **marimo Studio (experimental)** integration for reports, apps, and presentations. Then start a new session.
+[Studio](https://marimo-team.github.io/marimo-studio/) opens at the session root unless process configuration selects the native editor.
+The default package is `marimo-studio[deno]==0.4.1`. Deno supports React, Svelte, Reveal.js, and Notebook Kit views. Enable Typst for reports.
+
+The hub supplies a separate runtime layer without editing `pyproject.toml`, `notebook.py`, or `marimo.toml`.
+Studio requires local filesystem semantics. The hub copies its workspace instead of mounting object storage, then uses the normal save flow.
+See [Studio workspace storage](https://marimo-team.github.io/marimo-studio/reference/compatibility#workspace-storage).
+Layer packages override conflicting notebook packages for the kernel and its children. Independent terminals use the base environment.
+Uncached packages increase startup time. Studio 0.4.1 requires marimo 0.25.2. An incompatible image stops startup.
+Before changing the version, review [Studio compatibility](https://marimo-team.github.io/marimo-studio/reference/compatibility).
+
+Studio can write metadata and dependencies into notebooks and view files under `studio/`.
+These authored files remain after removal, as described in [Changes and removal](#changes-and-removal).
+Git-backed sessions do not save these edits to the source repository.
+If the notebook or image supplies Studio independently, it remains available after removal.
+
+<!--@include: ./partials/integrations/marimo_studio.md-->
 
 ## Agent context
 

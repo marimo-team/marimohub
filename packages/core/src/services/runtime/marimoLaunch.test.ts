@@ -12,6 +12,27 @@ const BASE: MarimoLaunchParams = {
 };
 
 describe('buildMarimoLaunch', () => {
+	it.each(['edit', 'app', 'job'] as const)(
+		'resolves runtime packages only at launch without extra setup for %s',
+		(mode) => {
+			const plan = buildMarimoLaunch(
+				{ ...BASE, mode, runtimePackages: ['marimo-studio[deno]==0.4.1'] },
+				'uv-script-pins',
+			);
+			expect(plan.setup).toEqual(buildMarimoLaunch({ ...BASE, mode }, 'uv-script-pins').setup);
+			expect(plan.start.match(/uv run --no-sync --with/g)).toHaveLength(1);
+			expect(plan.start).toContain("--with 'marimo-studio[deno]==0.4.1'");
+			expect(plan.start).toContain('--with "marimo==$marimohub_marimo_version"');
+			expect(plan.start).toContain('python -m marimo');
+			expect(plan.start).toContain('--no-sync');
+		},
+	);
+
+	it('omits the runtime layer when an integration is disabled', () => {
+		const plan = buildMarimoLaunch({ ...BASE, runtimePackages: [] });
+		expect(plan).toEqual(buildMarimoLaunch(BASE));
+		expect(plan.start).not.toContain('--with');
+	});
 	it('defaults to edit mode', () => {
 		const { start } = buildMarimoLaunch(BASE);
 		expect(start).toContain('marimo --quiet edit');

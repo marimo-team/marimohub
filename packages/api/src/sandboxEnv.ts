@@ -3,6 +3,7 @@ import {
 	containerCredentialsEnv,
 	exchangeFederatedStorageCredentials,
 	mintWifCredentialsToken,
+	mergeSessionEnv,
 	projectSessionEnv,
 	s3CredsToEnv,
 	STATIC_AWS_CREDENTIAL_ENV,
@@ -27,13 +28,7 @@ import type { ApiDeps } from './context';
 import { errorMetadata, logEvent } from './log';
 import { wifCredentialCacheFor } from './wifCredentialCache';
 
-export function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): SessionEnv {
-	return {
-		files: [...(base?.files ?? []), ...(add.files ?? [])],
-		vars: { ...base?.vars, ...add.vars },
-		defaults: { ...base?.defaults, ...add.defaults },
-	};
-}
+export { mergeSessionEnv };
 
 const ENDPOINT_DELIVERY_OWNED_ENV = [
 	...STATIC_AWS_CREDENTIAL_ENV,

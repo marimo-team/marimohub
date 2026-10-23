@@ -1,6 +1,7 @@
 // Rendered config stays outside the workspace mount so credentials cannot be
 // captured into a notebook version.
 import { ValidationError } from '../../errors';
+import { mergeRuntimePackages } from './runtimePackages';
 import { hasControlCharacter, isRecord } from '../../internal/validation';
 import type { IntegrationVersionPin, SessionRender, WorkloadRef } from '../../ports/integrations';
 import type { RenderOutput } from './sdk';
@@ -56,6 +57,9 @@ export function bundleIntegrations(
 	rendered: RenderedIntegration[],
 	workload: WorkloadRef,
 ): SessionRender {
+	const runtimePackages = mergeRuntimePackages(
+		rendered.flatMap((item) => item.output.runtimePackages ?? []),
+	);
 	const files = composeAgentContext(rendered);
 	const yamlFiles = new Map<string, MergedYaml>();
 	const claimPath = pathClaimer();
@@ -154,6 +158,9 @@ export function bundleIntegrations(
 			name: item.name,
 			kind: item.kind,
 			version: item.version,
+			...(item.output.runtimePackages?.length
+				? { runtime_packages: item.output.runtimePackages }
+				: {}),
 			...(item.requirements && item.requirements.length > 0
 				? { requirements: item.requirements }
 				: {}),
@@ -167,6 +174,10 @@ export function bundleIntegrations(
 
 	return {
 		files,
+		...(rendered.some((item) => item.output.workspaceLoadMode === 'copy-only')
+			? { workspaceLoadMode: 'copy-only' as const }
+			: {}),
+		...(runtimePackages.length > 0 ? { runtimePackages } : {}),
 		vars,
 		attachments: rendered.map(({ id, name, kind, version }) => ({ id, name, kind, version })),
 		warnings,
