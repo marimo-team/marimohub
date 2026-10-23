@@ -134,8 +134,8 @@ minimumReleaseAgeExclude:
   - qs@6.16.1
   - zod@4.6.6
   - brace-expansion
-  # Renovate security update: fast-uri@3.1.8
-  - fast-uri@3.1.6 || 3.1.8
+  # Renovate security update: fast-uri@3.1.8 || 3.1.9
+  - fast-uri@3.1.6 || 3.1.8 || 3.1.9
   - nanoid
   # Renovate security update: hono@4.13.5 || 4.13.7 || 4.13.11
   - hono@4.12.34 || 4.13.5 || 4.13.7 || 4.13.11
