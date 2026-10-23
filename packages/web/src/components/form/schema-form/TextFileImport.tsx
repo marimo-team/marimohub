@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { FileTrigger } from 'react-aria-components';
 import { Button } from '@/components/ui';
 
@@ -15,6 +15,16 @@ export function TextFileImport({
 }) {
 	const [error, setError] = useState<string>();
 	const selection = useRef(0);
+	const latestOnChange = useRef(onChange);
+	useLayoutEffect(() => {
+		latestOnChange.current = onChange;
+	});
+	useLayoutEffect(
+		() => () => {
+			selection.current++;
+		},
+		[],
+	);
 	const importFile = async (files: FileList | null) => {
 		const current = ++selection.current;
 		const file = files?.[0];
@@ -25,8 +35,9 @@ export function TextFileImport({
 			return;
 		}
 		try {
-			const text = await file.text();
-			if (current === selection.current) onChange(text);
+			const bytes = await file.arrayBuffer();
+			const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+			if (current === selection.current) latestOnChange.current(text);
 		} catch {
 			if (current === selection.current)
 				setError('Could not read this file. Try importing it again.');
@@ -35,7 +46,7 @@ export function TextFileImport({
 	return (
 		<div className="flex flex-col items-start gap-1.5">
 			<FileTrigger acceptedFileTypes={accept} onSelect={(files) => void importFile(files)}>
-				<Button size="sm" aria-label={`Import ${label} from file`}>
+				<Button size="sm" aria-label={`Import file for ${label}`}>
 					Import file
 				</Button>
 			</FileTrigger>

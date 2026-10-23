@@ -209,9 +209,10 @@ function SchemaFieldControl(props: SchemaFieldProps) {
 						/>
 						{hint.file_accept && (
 							<TextFileImport
+								key={typeof value === 'string' ? value : ''}
 								label={label}
 								accept={hint.file_accept}
-								maxBytes={node['x-max-utf8-bytes'] ?? node.maxLength}
+								maxBytes={node['x-max-utf8-bytes']}
 								onChange={onChange}
 							/>
 						)}

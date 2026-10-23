@@ -4,6 +4,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { deferred } from '@/test/deferred';
 import { SchemaForm } from './SchemaForm';
+import { TextFileImport } from './TextFileImport';
 import { buildDefaults, KEEP_SECRET, pruneForSubmit, validateValue } from './model';
 import type { JsonSchemaNode, SecretSources, UiHints } from './model';
 
@@ -548,13 +549,13 @@ describe('agent skill editor', () => {
 });
 
 describe('text file import', () => {
-	function Harness() {
+	function Harness({ node }: { node: JsonSchemaNode }) {
 		const [value, setValue] = useState<Record<string, unknown>>({ script: 'existing' });
 		return (
 			<SchemaForm
 				schema={{
 					type: 'object',
-					properties: { script: { type: 'string', 'x-max-utf8-bytes': 100 } },
+					properties: { script: node, name: { type: 'string' } },
 				}}
 				hints={{ script: { widget: 'textarea', file_accept: ['.sh'] } }}
 				value={value}
@@ -562,24 +563,32 @@ describe('text file import', () => {
 			/>
 		);
 	}
-	function setupImport() {
+	function setupImport(node: JsonSchemaNode = { type: 'string', 'x-max-utf8-bytes': 100 }) {
 		const user = userEvent.setup();
-		const { container } = render(<Harness />);
-		const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
-		return { user, upload: (file: File) => user.upload(input, file) };
+		const { container } = render(<Harness node={node} />);
+		return {
+			user,
+			upload: (file: File) =>
+				user.upload(container.querySelector<HTMLInputElement>('input[type="file"]')!, file),
+		};
 	}
 
-	function textFile(content: string, name: string, read = async () => content): File {
-		const file = new File([content], name, { type: 'text/plain' });
-		// jsdom does not implement File.text().
-		Object.defineProperty(file, 'text', { value: read });
+	function textFile(
+		content: string | Uint8Array<ArrayBuffer>,
+		name: string,
+		read?: () => Promise<ArrayBuffer>,
+	): File {
+		const bytes = typeof content === 'string' ? new TextEncoder().encode(content) : content;
+		const file = new File([bytes], name, { type: 'text/plain' });
+		// jsdom does not implement File.arrayBuffer().
+		Object.defineProperty(file, 'arrayBuffer', { value: read ?? (async () => bytes.buffer) });
 		return file;
 	}
 
 	it('imports a shell file into an editable textarea without losing newlines', async () => {
 		const { user, upload } = setupImport();
 		const file = textFile('#!/bin/sh\necho ready\n', 'startup.sh');
-		expect(screen.getByRole('button', { name: 'Import Script from file' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Import file for Script' })).toBeInTheDocument();
 		await upload(file);
 		await waitFor(() =>
 			expect(screen.getByLabelText('Script')).toHaveValue('#!/bin/sh\necho ready\n'),
@@ -605,18 +614,102 @@ describe('text file import', () => {
 		expect(await screen.findByRole('alert')).toHaveTextContent('Could not read this file.');
 		expect(screen.getByLabelText('Script')).toHaveValue('existing');
 	});
+	it.each([
+		['Latin-1', [0xe9]],
+		['Windows-1252', [0x93, 0x61, 0x94]],
+		['truncated UTF-8', [0xe2, 0x82]],
+	])('rejects %s bytes without replacing the script', async (_, bytes) => {
+		const { upload } = setupImport();
+		await upload(textFile(new Uint8Array(bytes), 'invalid.sh'));
+		expect(await screen.findByRole('alert')).toHaveTextContent('Could not read this file.');
+		expect(screen.getByLabelText('Script')).toHaveValue('existing');
+	});
+	it('preserves valid UTF-8 including a literal replacement character', async () => {
+		const { upload } = setupImport();
+		const content = 'echo "café 日本語 �"\n';
+		await upload(textFile(content, 'unicode.sh'));
+		await waitFor(() => expect(screen.getByLabelText('Script')).toHaveValue(content));
+		expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+	});
+	it.each(['resolve', 'reject'] as const)(
+		'ignores an import that completes with %s after textarea edits',
+		async (outcome) => {
+			const { user, upload } = setupImport();
+			const pending = deferred<ArrayBuffer>();
+			await upload(textFile('old', 'old.sh', () => pending.promise));
+			await user.type(screen.getByLabelText('Script'), ' edited');
+			await act(async () => {
+				if (outcome === 'resolve') pending.resolve(new TextEncoder().encode('stale').buffer);
+				else pending.reject(new Error('stale failure'));
+			});
+			expect(screen.getByLabelText('Script')).toHaveValue('existing edited');
+			expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+			await upload(textFile('echo retry', 'retry.sh'));
+			await waitFor(() => expect(screen.getByLabelText('Script')).toHaveValue('echo retry'));
+		},
+	);
+	it('keeps an import invalidated when the textarea is edited back to its original value', async () => {
+		const { user, upload } = setupImport();
+		const pending = deferred<ArrayBuffer>();
+		await upload(textFile('old', 'old.sh', () => pending.promise));
+		await user.type(screen.getByLabelText('Script'), 'x{Backspace}');
+		await act(async () => pending.resolve(new TextEncoder().encode('stale').buffer));
+		expect(screen.getByLabelText('Script')).toHaveValue('existing');
+	});
+	it('does not update the form when an import finishes after unmounting', async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		const pending = deferred<ArrayBuffer>();
+		const { container, unmount } = render(
+			<TextFileImport label="Script" accept={['.sh']} onChange={onChange} />,
+		);
+		await user.upload(
+			container.querySelector<HTMLInputElement>('input[type="file"]')!,
+			textFile('old', 'old.sh', () => pending.promise),
+		);
+		unmount();
+		await act(async () => pending.resolve(new TextEncoder().encode('stale').buffer));
+		expect(onChange).not.toHaveBeenCalled();
+	});
+	it('preserves edits to another field while importing', async () => {
+		const { user, upload } = setupImport();
+		const pending = deferred<ArrayBuffer>();
+		await upload(textFile('old', 'old.sh', () => pending.promise));
+		await user.type(screen.getByLabelText('Name'), 'new name');
+		await act(async () => pending.resolve(new TextEncoder().encode('echo ready').buffer));
+		expect(screen.getByLabelText('Script')).toHaveValue('echo ready');
+		expect(screen.getByLabelText('Name')).toHaveValue('new name');
+	});
+	it('clears an import error when the textarea is edited', async () => {
+		const { user, upload } = setupImport();
+		await upload(textFile('x'.repeat(101), 'large.sh'));
+		expect(screen.getByRole('alert')).toBeInTheDocument();
+		await user.type(screen.getByLabelText('Script'), ' edited');
+		expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+	});
+	it('uses the default byte cap when the schema only limits characters', async () => {
+		const { upload } = setupImport({ type: 'string', maxLength: 2 });
+		const read = vi.fn();
+		await upload(textFile('x'.repeat(64 * 1024 + 1), 'large.sh', read));
+		expect(screen.getByRole('alert')).toHaveTextContent('File must be at most 65536 bytes.');
+		expect(read).not.toHaveBeenCalled();
+		await upload(textFile('éé', 'unicode.sh'));
+		await waitFor(() => expect(screen.getByLabelText('Script')).toHaveValue('éé'));
+		expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+	});
 	it.each(['resolve', 'reject'] as const)(
 		'ignores an older import that later completes with %s',
 		async (outcome) => {
 			const { upload } = setupImport();
-			const pending = deferred<string>();
+			const pending = deferred<ArrayBuffer>();
 			const older = textFile('old', 'old.sh', () => pending.promise);
 			const newer = textFile('echo new', 'new.sh');
 			await upload(older);
 			await upload(newer);
 			await waitFor(() => expect(screen.getByLabelText('Script')).toHaveValue('echo new'));
 			await act(async () => {
-				if (outcome === 'resolve') pending.resolve('stale contents');
+				if (outcome === 'resolve')
+					pending.resolve(new TextEncoder().encode('stale contents').buffer);
 				else pending.reject(new Error('stale failure'));
 			});
 			expect(screen.getByLabelText('Script')).toHaveValue('echo new');
@@ -639,11 +732,11 @@ describe('text file import', () => {
 
 	it('keeps a later size error when an older pending file read succeeds', async () => {
 		const { upload } = setupImport();
-		const pending = deferred<string>();
+		const pending = deferred<ArrayBuffer>();
 		const older = textFile('old', 'old.sh', () => pending.promise);
 		await upload(older);
 		await upload(new File(['x'.repeat(101)], 'large.sh'));
-		await act(async () => pending.resolve('stale contents'));
+		await act(async () => pending.resolve(new TextEncoder().encode('stale contents').buffer));
 		expect(screen.getByLabelText('Script')).toHaveValue('existing');
 		expect(screen.getByRole('alert')).toHaveTextContent('File must be at most 100 bytes.');
 	});

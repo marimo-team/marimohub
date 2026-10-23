@@ -5,6 +5,7 @@ export * from './definitions';
 
 export function defaultRegistry(): IntegrationRegistry {
 	const registry = new IntegrationRegistry();
-	for (const definition of Object.values(definitions)) registry.register(definition);
+	const sorted = Object.values(definitions).sort((a, b) => a.kind.localeCompare(b.kind));
+	for (const definition of sorted) registry.register(definition);
 	return registry;
 }
