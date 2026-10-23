@@ -84,6 +84,10 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/thumbnail-python"
           "$RUNNER_TEMP/thumbnail-python/bin/pip" install marimo==0.24.2 playwright==1.58.0
+          # The Azure mirror can trickle data indefinitely without hitting apt's timeout.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+          fi
           # A config file, not CLI flags, so the apt-get calls inside install-deps inherit the limits.
           sudo tee /etc/apt/apt.conf.d/80-ci-network >/dev/null <<'EOF'
           Acquire::Retries "3";
