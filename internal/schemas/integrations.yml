@@ -268,7 +268,8 @@ paths:
           description: Accepted.
   /kinds/custom_css/config:
     summary: Custom CSS
-    description: Apply CSS to marimo editors and apps through marimo display configuration.
+    description: Apply CSS to marimo editors, apps, and HTML exports through marimo
+      display configuration.
     x-kind-schema-version: 1
     x-category: other
     x-brand-color: '#663399'

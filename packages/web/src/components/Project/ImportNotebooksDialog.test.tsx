@@ -424,19 +424,23 @@ describe('folder import review', () => {
 		expect(notebookImports.prepare).not.toHaveBeenCalled();
 	});
 
-	it('bounds notebook rows while preserving edits and selecting across pages', async () => {
-		const user = userEvent.setup();
-		renderDialog();
-		await choose([
+	function paginatedNotebookFiles() {
+		return [
 			folderFile('a/revenue.py'),
 			...Array.from({ length: 105 }, (_, index) =>
 				folderFile(`reports/report-${String(index).padStart(3, '0')}.py`),
 			),
-		]);
+		];
+	}
+
+	it('bounds notebook rows while preserving edits across pages', async () => {
+		const user = userEvent.setup();
+		renderDialog();
+		await choose(paginatedNotebookFiles());
 		expect(screen.getAllByRole('textbox', { name: /^Name for / })).toHaveLength(100);
 		const title = screen.getByRole('textbox', { name: 'Name for a/revenue.py' });
 		await user.clear(title);
-		await user.type(title, 'Quarterly revenue');
+		await user.paste('Quarterly revenue');
 		await user.click(screen.getByRole('button', { name: 'Next notebooks' }));
 		expect(screen.getAllByRole('textbox', { name: /^Name for / })).toHaveLength(6);
 		await user.click(screen.getByRole('checkbox', { name: 'Import reports/report-104.py' }));
@@ -444,6 +448,17 @@ describe('folder import review', () => {
 		expect(screen.getByRole('textbox', { name: 'Name for a/revenue.py' })).toHaveValue(
 			'Quarterly revenue',
 		);
+		await user.click(screen.getByRole('button', { name: 'Next notebooks' }));
+		expect(
+			screen.getByRole('checkbox', { name: 'Import reports/report-104.py' }),
+		).not.toBeChecked();
+		expect(screen.getByRole('button', { name: 'Import 105 notebooks' })).toBeEnabled();
+	});
+
+	it('resets notebook pagination when filtering and selects matches across pages', async () => {
+		const user = userEvent.setup();
+		renderDialog();
+		await choose(paginatedNotebookFiles());
 		await user.click(screen.getByRole('button', { name: 'Next notebooks' }));
 		await user.type(screen.getByRole('textbox', { name: 'Search notebook paths' }), 'a/');
 		expect(screen.getAllByRole('textbox', { name: /^Name for / })).toHaveLength(1);
@@ -454,6 +469,13 @@ describe('folder import review', () => {
 		expect(screen.getByRole('button', { name: 'Import 106 notebooks' })).toBeEnabled();
 		await user.click(screen.getByRole('button', { name: 'Next notebooks' }));
 		expect(screen.getByRole('checkbox', { name: 'Import reports/report-104.py' })).toBeChecked();
+	});
+
+	it('imports notebooks from every page and bounds result rows', async () => {
+		const user = userEvent.setup();
+		renderDialog();
+		await choose(paginatedNotebookFiles());
+		await user.click(screen.getByRole('button', { name: 'Next notebooks' }));
 		await user.click(screen.getByRole('button', { name: 'Import 106 notebooks' }));
 		await screen.findByText('106 of 106 imported');
 		expect(screen.getAllByRole('link', { name: /View .+ \(opens in new tab\)/ })).toHaveLength(100);

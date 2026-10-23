@@ -35,25 +35,36 @@ else:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    process = subprocess.Popen([sys.executable, "-m", "marimo", "--quiet", "edit" if mode == "edit" else "run", "notebook.py", "--headless", "--no-token", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    try:
-        deadline = time.monotonic() + 20
-        while True:
-            try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1) as response:
-                    html = response.read().decode()
-                break
-            except OSError:
-                if process.poll() is not None or time.monotonic() > deadline:
-                    raise RuntimeError("marimo did not start")
-                time.sleep(0.1)
-    finally:
-        process.terminate()
+        # The CLI has no socket option; hand the reservation to its Uvicorn server.
+        bootstrap = '''
+import runpy, socket, sys, uvicorn
+sock = socket.socket(fileno=int(sys.argv[1]))
+run = uvicorn.Server.run
+def run_with_socket(self, sockets=None):
+    return run(self, sockets=[sock])
+uvicorn.Server.run = run_with_socket
+sys.argv = ["marimo", *sys.argv[2:]]
+runpy.run_module("marimo", run_name="__main__")
+'''
+        process = subprocess.Popen([sys.executable, "-c", bootstrap, str(sock.fileno()), "--quiet", "edit" if mode == "edit" else "run", "notebook.py", "--headless", "--no-token", "--host", "127.0.0.1", "--port", str(port)], pass_fds=(sock.fileno(),), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         try:
-            process.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.communicate()
+            deadline = time.monotonic() + 20
+            while True:
+                try:
+                    with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1) as response:
+                        html = response.read().decode()
+                    break
+                except OSError:
+                    if process.poll() is not None or time.monotonic() > deadline:
+                        raise RuntimeError("marimo did not start")
+                    time.sleep(0.1)
+        finally:
+            process.terminate()
+            try:
+                process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()
 
 from html.parser import HTMLParser
 class Assets(HTMLParser):

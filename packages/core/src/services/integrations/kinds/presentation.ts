@@ -5,7 +5,8 @@ import { textFileContent } from '../text';
 export const customCss = defineIntegration({
 	kind: 'custom_css',
 	title: 'Custom CSS',
-	description: 'Apply CSS to marimo editors and apps through marimo display configuration.',
+	description:
+		'Apply CSS to marimo editors, apps, and HTML exports through marimo display configuration.',
 	category: 'other',
 	brand: { color: '#663399' },
 	schemaVersion: 1,

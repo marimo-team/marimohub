@@ -1,8 +1,32 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { defaultRegistry } from './kinds';
 import { textFileContent } from './text';
 
 describe('textFileContent', () => {
 	const schema = textFileContent('Text file');
+
+	it('retains byte limits and descriptions after content validation', () => {
+		expect(z.toJSONSchema(schema)).toMatchObject({
+			'x-max-utf8-bytes': 65536,
+			description: 'Text file. Maximum 65536 UTF-8 bytes.',
+		});
+	});
+
+	it.each([
+		['custom_css', 'css'],
+		['html_head', 'html'],
+		['startup_script', 'script'],
+	])('exposes file import byte limits in the %s descriptor', (kind, field) => {
+		expect(defaultRegistry().describe(kind).json_schema).toMatchObject({
+			properties: {
+				[field]: {
+					'x-max-utf8-bytes': 65536,
+					description: expect.stringContaining('Maximum 65536 UTF-8 bytes.'),
+				},
+			},
+		});
+	});
 
 	it.each(['\uFEFF', '\u00a0\u2003\t\r\n', '\0', 'valid\0text'])(
 		'rejects invisible and binary content %#',
