@@ -9,6 +9,7 @@ import {
 	MAX_VERSIONS,
 	Millis,
 	PROJECT_ALERT_KINDS,
+	ProxyExposure,
 	viewerSessionModes,
 } from '@marimo-hub/core';
 import {
@@ -161,6 +162,7 @@ app.openapi(capabilitiesRoute, (c) => {
 		viewer_mode: deps.policy.viewerMode ?? 'static',
 		viewer_session_modes: [...viewerSessionModes(deps.policy.viewerMode)],
 		app_pool: {
+			proxy_renewal: deps.sandbox.exposure instanceof ProxyExposure,
 			heartbeat_interval_seconds:
 				Math.min(
 					APP_HEARTBEAT_INTERVAL_MS,

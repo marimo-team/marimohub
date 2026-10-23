@@ -19,7 +19,7 @@ describe('GET /api/v1/capabilities', () => {
 		const data = await expectOk<{ app_pool: unknown }>(
 			await createApi(deps).request('/api/v1/capabilities'),
 		);
-		expect(data.app_pool).toEqual({ heartbeat_interval_seconds: 30 });
+		expect(data.app_pool).toEqual({ heartbeat_interval_seconds: 30, proxy_renewal: false });
 	});
 
 	it.each([

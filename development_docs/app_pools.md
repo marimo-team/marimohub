@@ -39,7 +39,12 @@ The visit ID remains stored during reconnect grace. Generation tokens reject sta
 
 Expired visits can require earlier cleanup writes. CAS conflicts add retries.
 No acknowledged lease renewal depends on an in-memory buffer surviving a server restart.
-Proxy checks neither renew presence nor cache authorization across requests.
+Ordinary token-proxy checks do not renew presence. The combined app-proxy route
+renews an exact visit using the heartbeat's existing CAS rules. Its fresh path
+reads session, project and notebook metadata concurrently, then the pool. A
+session snapshot is reused only within that request; due session renewal still
+rereads under CAS and cannot revive a terminating session. Neither route caches
+authorization across requests.
 
 First admission discovers legacy sessions through a project-scoped scan.
 Established admission does not list bucket objects. Session listings read each notebook's pool once, regardless of sandbox count.
