@@ -2,6 +2,7 @@
  * How marimo is launched inside a sandbox. Strategies are inferred per-source
  * (see launchStrategy.ts); the default is the project-managed env.
  */
+import type { RuntimeContributions } from '../../ports/integrations';
 import type { SessionMode } from '../../constants';
 import { runtimePackageCommand } from './runtimePackageCommand';
 import { shellQuote } from './shell';
@@ -13,8 +14,7 @@ export { MARIMO_VERSION_COMMAND } from './runtimePackageCommand';
  */
 export type MarimoLaunchMode = SessionMode | 'job';
 
-export interface MarimoLaunchParams {
-	runtimePackages?: string[];
+export interface MarimoLaunchParams extends RuntimeContributions {
 	notebookFile: string;
 	port: number;
 	/** Bind 0.0.0.0 so the external ingress can reach the kernel. */
@@ -212,9 +212,18 @@ export function buildMarimoLaunch(
 	strategy: MarimoLaunchStrategyName = DEFAULT_LAUNCH_STRATEGY,
 ): MarimoLaunchPlan {
 	const plan = MARIMO_LAUNCH_STRATEGIES[strategy](params);
-	if (params.mode !== 'job') return plan;
+
 	return {
 		...plan,
-		setup: [...plan.setup, { name: 'job_output_dir', command: "mkdir -p '__marimo__'" }],
+		setup: [
+			...(params.startupScripts ?? []).map((path, index) => ({
+				name: `startup_script_${index + 1}`,
+				command: `sh -e ${shellQuote(path)}`,
+			})),
+			...plan.setup,
+			...(params.mode === 'job'
+				? [{ name: 'job_output_dir', command: "mkdir -p '__marimo__'" }]
+				: []),
+		],
 	};
 }

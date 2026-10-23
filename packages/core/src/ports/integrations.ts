@@ -31,6 +31,8 @@ export type FieldWidget =
  */
 export interface FieldHint {
 	widget?: FieldWidget;
+	/** File extensions accepted by the textarea's optional import control. */
+	file_accept?: string[];
 	placeholder?: string;
 	/** Section heading used to group related fields. */
 	group?: string;
@@ -322,10 +324,18 @@ export interface IntegrationVersionPin {
 	version: number;
 }
 
-/** Files, variables, and audit pins produced for session provisioning. */
-export interface SessionRender {
+/** Contributions consumed by the shared workload launch pipeline. */
+export interface RuntimeContributions {
+	/** Require local filesystem semantics instead of an object-storage mount. */
 	workspaceLoadMode?: 'copy-only';
+	/** Exact package pins layered onto the workload process. */
 	runtimePackages?: string[];
+	/** Shell file paths, run in order before dependency setup. Relative until bundled. */
+	startupScripts?: string[];
+}
+
+/** Files, variables, and audit pins produced for session provisioning. */
+export interface SessionRender extends RuntimeContributions {
 	files: { path: string; content: string; relativeTo?: 'home' }[];
 	vars: Record<string, string>;
 	/** Version pins persisted on the session record. */

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ChevronRight, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { TextField as AriaTextField, FieldError, Label, TextArea } from 'react-aria-components';
+import { TextFileImport } from './TextFileImport';
 import { Button, IconButton, TextField } from '@/components/ui';
 import { cn } from '@/lib/utils';
 import {
@@ -206,6 +207,14 @@ function SchemaFieldControl(props: SchemaFieldProps) {
 							onChange={onChange}
 							error={error}
 						/>
+						{hint.file_accept && (
+							<TextFileImport
+								label={label}
+								accept={hint.file_accept}
+								maxBytes={node['x-max-utf8-bytes'] ?? node.maxLength}
+								onChange={onChange}
+							/>
+						)}
 					</FieldShell>
 				);
 			}

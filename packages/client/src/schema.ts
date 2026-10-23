@@ -4006,6 +4006,7 @@ export interface components {
 					/** @enum {string} */
 					widget?: 'text' | 'password' | 'textarea' | 'select' | 'toggle' | 'number' | 'kv-pairs';
 					placeholder?: string;
+					file_accept?: string[];
 					group?: string;
 					order?: number;
 					advanced?: boolean;

@@ -4106,6 +4106,10 @@ components:
                   - kv-pairs
               placeholder:
                 type: string
+              file_accept:
+                type: array
+                items:
+                  type: string
               group:
                 type: string
               order:

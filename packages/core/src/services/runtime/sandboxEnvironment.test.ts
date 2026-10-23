@@ -58,6 +58,7 @@ describe('projectSessionEnv', () => {
 			vars: { MARIMO_OUTPUT_MAX_BYTES: '1000' },
 			files: [{ path: '/tmp/config', content: 'config' }],
 			runtimePackages: ['marimo-studio==0.4.1'],
+			startupScripts: ['/tmp/setup.sh'],
 		};
 		expect(projectSessionEnv(render)).toEqual({
 			...render,
@@ -100,12 +101,14 @@ describe('mergeSessionEnv', () => {
 		const base: SessionEnv = {
 			files: [{ path: '/tmp/base', content: 'base' }],
 			runtimePackages: ['first-tool==1.0.0'],
+			startupScripts: ['/tmp/first.sh'],
 			vars: { KEEP: 'base', OVERRIDE: 'base' },
 			defaults: { KEEP_DEFAULT: 'base', OVERRIDE: 'base-default' },
 		};
 		const add: SessionEnv = {
 			files: [{ path: '/tmp/added', content: 'added' }],
 			runtimePackages: ['second-tool==1.0.0'],
+			startupScripts: ['/tmp/second.sh'],
 			vars: { OVERRIDE: 'added' },
 			defaults: { OVERRIDE: 'added-default' },
 		};
@@ -114,11 +117,13 @@ describe('mergeSessionEnv', () => {
 		expect(merged).toEqual({
 			files: [...base.files!, ...add.files!],
 			runtimePackages: ['first-tool==1.0.0', 'second-tool==1.0.0'],
+			startupScripts: ['/tmp/first.sh', '/tmp/second.sh'],
 			vars: { KEEP: 'base', OVERRIDE: 'added' },
 			defaults: { KEEP_DEFAULT: 'base', OVERRIDE: 'added-default' },
 		});
 		merged.files!.push({ path: '/tmp/new', content: '' });
 		merged.runtimePackages!.push('third-tool==1.0.0');
+		merged.startupScripts!.push('/tmp/third.sh');
 		merged.vars!.KEEP = 'changed';
 		merged.defaults!.KEEP_DEFAULT = 'changed';
 		expect({ base, add }).toEqual(original);

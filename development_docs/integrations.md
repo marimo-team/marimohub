@@ -56,9 +56,11 @@ uses `MARIMOHUB_SUPER_ADMINS`.
 
 ## Adding a kind
 
-Add one definition under
-`packages/core/src/services/integrations/kinds/`, export it, and register it in
-`packages/core/src/services/integrations/kinds/index.ts`:
+1. Define the kind under `packages/core/src/services/integrations/kinds/` and export it from `definitions.ts`.
+2. Add a sample to `kinds/sampleConfigs.ts` and tests for the kind's behavior.
+3. Document the kind in `docs/integrations.md` and run `pnpm schemas:generate`.
+
+The registry loads every exported definition. Routes, forms, schemas, and field references come from that registry.
 
 ```ts
 export const postgres = defineIntegration({
@@ -66,6 +68,7 @@ export const postgres = defineIntegration({
 	title: 'PostgreSQL',
 	description: 'Direct Postgres connection for SQL cells and SQLAlchemy.',
 	category: 'database',
+	brand: { color: '#4169E1' },
 	schemaVersion: 1,
 	configSchema: z.object({
 		host: z.string().min(1),
@@ -97,6 +100,34 @@ and identical input must produce byte-identical output.
 `requirements` is informational. It is shown in the UI and written to the
 integration manifest, but the hub does not install or preflight those packages.
 For installed tools, use `runtimePackages` in the render output.
+
+## Extension points
+
+| Extension point                                       | Responsibility                                                       |
+| ----------------------------------------------------- | -------------------------------------------------------------------- |
+| `configSchema`, `uiHints`                             | Validation, secret fields, generated forms, and file import controls |
+| `validate`, `migrate`                                 | Cross-field rules and stored schema upgrades                         |
+| `render`                                              | Pure configuration and runtime contributions for one workload        |
+| `testConnection`                                      | Optional connection check through the guarded probe                  |
+| `browse`, `objectBrowse`, `databaseBrowse`, `preview` | Optional data access capabilities                                    |
+| `packageRegistry`                                     | Optional credential resolution before rendering                      |
+
+Data access and connection tests are optional. All kinds share versioning, inheritance, and authorization.
+Use `boundedText` for UTF-8 limits. A textarea with `file_accept: ['.sh']` imports file contents into its configuration field.
+
+`RuntimeContributions` is the common contract for rendering, environment composition, and launch planning.
+`mergeRuntimeContributions` carries its fields through each stage. Kinds that use existing contributions need no launch or adapter changes.
+
+## Startup scripts
+
+Render script contents through `files` and list their relative paths in `startupScripts`.
+Each path must reference a file from the same integration. The bundler rejects invalid paths, duplicate execution, and file collisions.
+It sorts integrations by name and preserves script order within each integration.
+
+The shared launch planner applies the [startup script execution contract](../docs/integrations.md#startup-script).
+It uses the existing setup deadline and failure reporting. A failure prevents launch and destroys the sandbox.
+Only the current bundle selects scripts, so stale snapshot files cannot activate disabled hooks.
+Use `workspaceLoadMode: 'copy-only'` for scripts that need local filesystem semantics, as the `startup_script` kind does.
 
 ## Runtime packages and lifecycle
 

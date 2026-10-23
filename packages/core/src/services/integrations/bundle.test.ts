@@ -393,3 +393,67 @@ it('reserves the agent home cleanup manifest even without an agent integration',
 		/both render/,
 	);
 });
+
+describe('startup script ownership', () => {
+	it('orders integrations by name while preserving each kind’s script order', () => {
+		const result = bundle([
+			rendered('z-last', { ...file('z.sh'), startupScripts: ['z.sh'] }),
+			rendered('a-first', {
+				files: [
+					{ path: 'b.sh', content: '' },
+					{ path: 'a.sh', content: '' },
+				],
+				startupScripts: ['b.sh', 'a.sh'],
+			}),
+		]);
+		expect(result.startupScripts).toEqual(
+			['b.sh', 'a.sh', 'z.sh'].map((path) => `${INTEGRATIONS_DIR}/${path}`),
+		);
+	});
+	it.each(['/tmp/escape.sh', '../escape.sh', 'manifest.json', 'missing.sh'])(
+		'rejects invalid or unowned script %s',
+		(path) => {
+			expect(() => bundle([rendered('owner', { startupScripts: [path] })])).toThrow(
+				ValidationError,
+			);
+		},
+	);
+	it.each([
+		'startup/../escape.sh',
+		'startup//setup.sh',
+		'startup/./setup.sh',
+		'startup\\setup.sh',
+		'startup/setup\n.sh',
+		'startup/setup\0.sh',
+	])('rejects malformed hook paths even when backed by a rendered file %#', (path) => {
+		expect(() => bundle([rendered('owner', { ...file(path), startupScripts: [path] })])).toThrow(
+			/invalid file path/,
+		);
+	});
+	it('rejects a YAML fragment as a runnable script', () => {
+		expect(() =>
+			bundle([rendered('owner', { ...yaml('setup.sh'), startupScripts: ['setup.sh'] })]),
+		).toThrow(/must render its startup script/);
+	});
+	it('rejects competing ownership of an executable script', () => {
+		expect(() =>
+			bundle([
+				rendered('first', { ...file('setup.sh', 'echo first'), startupScripts: ['setup.sh'] }),
+				rendered('second', { ...file('setup.sh', 'echo second'), startupScripts: ['setup.sh'] }),
+			]),
+		).toThrow(/both render/);
+	});
+	it('rejects references to another integration’s file and repeated execution', () => {
+		expect(() =>
+			bundle([
+				rendered('owner', file('setup.sh')),
+				rendered('other', { startupScripts: ['setup.sh'] }),
+			]),
+		).toThrow(/must render its startup script/);
+		expect(() =>
+			bundle([
+				rendered('owner', { ...file('setup.sh'), startupScripts: ['setup.sh', 'setup.sh'] }),
+			]),
+		).toThrow(/repeats startup script/);
+	});
+});

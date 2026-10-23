@@ -1253,6 +1253,38 @@ paths:
       responses:
         '204':
           description: Accepted.
+  /kinds/startup_script/config:
+    summary: Startup script
+    description: Run a shell script before notebook dependency setup on each new
+      session or job run. A failed script stops startup.
+    x-kind-schema-version: 1
+    x-category: other
+    x-brand-color: '#64748B'
+    x-secret-paths: []
+    x-supports-test: false
+    x-requirements: []
+    get:
+      operationId: read_startup_script_config
+      summary: Stored startup_script config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/startup_script_stored'
+    put:
+      operationId: write_startup_script_config
+      summary: Input startup_script config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/startup_script'
+      responses:
+        '204':
+          description: Accepted.
   /kinds/trino/config:
     summary: Trino
     description: Trino DBAPI and SQLAlchemy connections, with automatic marimo
@@ -6386,6 +6418,32 @@ components:
         - username
         - password
         - driver
+      additionalProperties: false
+    startup_script:
+      type: object
+      properties:
+        script:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          x-max-utf8-bytes: 65536
+          description: POSIX shell script run with sh -e from the workspace root. Maximum
+            65536 UTF-8 bytes.
+      required:
+        - script
+      additionalProperties: false
+    startup_script_stored:
+      type: object
+      properties:
+        script:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          x-max-utf8-bytes: 65536
+          description: POSIX shell script run with sh -e from the workspace root. Maximum
+            65536 UTF-8 bytes.
+      required:
+        - script
       additionalProperties: false
     trino:
       type: object

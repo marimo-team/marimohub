@@ -19,18 +19,13 @@ export interface JsonSchemaNode {
 	minimum?: number;
 	maximum?: number;
 	minLength?: number;
+	maxLength?: number;
+	'x-max-utf8-bytes'?: number;
 	pattern?: string;
 	[SECRET_MARK]?: boolean;
 }
 
-export interface FieldHint {
-	widget?: 'text' | 'password' | 'textarea' | 'select' | 'toggle' | 'number' | 'kv-pairs';
-	placeholder?: string;
-	group?: string;
-	order?: number;
-	advanced?: boolean;
-	docs_url?: string;
-}
+export type FieldHint = IntegrationKind['ui_hints'][string];
 
 export type UiHints = Record<string, FieldHint | undefined>;
 

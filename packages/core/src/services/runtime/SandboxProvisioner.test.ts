@@ -92,6 +92,190 @@ describe('SandboxProvisioner', () => {
 	const notebookId = createNotebookId();
 	const sandboxId = createSandboxId();
 
+	const startupOptions: ProvisionOptions = {
+		sandboxId,
+		projectId,
+		notebookId,
+		hostname: 'localhost',
+		bucket: bucketConfig,
+	};
+
+	function stubStartupExec(instance: SandboxInstance, result: ExecResult | Promise<ExecResult>) {
+		const exec = instance.exec.bind(instance);
+		instance.exec = async (command, options) =>
+			command.includes('sh -e ') ? result : exec(command, options);
+	}
+
+	it.each([false, true])(
+		'runs current startup hooks after injection (snapshot restore: %s)',
+		async (restore) => {
+			const { instance, calls } = makeFakeSandbox();
+			const scriptPath = '/tmp/marimohub-integrations/startup/bootstrap.sh';
+			const originalExec = instance.exec.bind(instance);
+			instance.exec = async (command, options) => {
+				if (command.includes(`sh -e '${scriptPath}'`)) {
+					expect(calls.writeFiles.flat()).toContainEqual({
+						path: scriptPath,
+						content: 'echo current',
+					});
+					expect(calls.setEnvVars).toContainEqual(
+						expect.objectContaining({ BOOTSTRAP_VALUE: 'injected' }),
+					);
+					expect(options?.timeout).toBeGreaterThan(0);
+					expect(options?.timeout).toBeLessThanOrEqual(5000);
+				}
+				return originalExec(command, options);
+			};
+			await new SandboxProvisioner(
+				restore ? makeSnapshotCompute(instance) : fakeComputeFrom(instance),
+			).provision({
+				...startupOptions,
+				...(restore ? { restoreFilesystemSnapshotId: 'snapshot' } : {}),
+				startupTimeoutMs: Millis.seconds(5),
+				sessionEnv: {
+					files: [{ path: scriptPath, content: 'echo current' }],
+					vars: { BOOTSTRAP_VALUE: 'injected' },
+					startupScripts: [scriptPath],
+				},
+			});
+			expect(
+				calls.exec.filter((command) => command.includes(`sh -e '${scriptPath}'`)),
+			).toHaveLength(1);
+			expect(calls.startProcess).toHaveLength(1);
+		},
+	);
+
+	it('does not run stale scripts from a snapshot when no current hook selects them', async () => {
+		const { instance, calls } = makeFakeSandbox({
+			files: {
+				'/tmp/marimohub-integrations/startup/disabled.sh': 'echo stale',
+			},
+		});
+		await new SandboxProvisioner(makeSnapshotCompute(instance)).provision({
+			...startupOptions,
+			restoreFilesystemSnapshotId: 'snapshot',
+		});
+		expect(calls.exec.some((command) => command.includes('sh -e'))).toBe(false);
+	});
+
+	it('destroys the sandbox without launching when a startup script fails', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		stubStartupExec(instance, {
+			success: false,
+			error: { code: 'COMMAND_FAILED' as const },
+			stdout: '',
+			stderr: '__MARIMOHUB_SETUP__ step startup_script_1 1000000000\nsecret output',
+		});
+		await expect(
+			new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...startupOptions,
+				sessionEnv: { startupScripts: ['/tmp/setup.sh'] },
+			}),
+		).rejects.toThrow(/Startup script 1 failed/);
+		expect(calls.startProcess).toEqual([]);
+		expect(calls.destroy).toBe(1);
+	});
+
+	it('times out a hanging startup hook even for a strategy with no dependency setup', async () => {
+		vi.useFakeTimers();
+		const pending = deferred<ExecResult>();
+		try {
+			const { instance, calls } = makeFakeSandbox();
+			stubStartupExec(instance, pending.promise);
+			const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...startupOptions,
+				launchStrategy: 'uv-sandbox',
+				startupTimeoutMs: Millis.seconds(1),
+				sessionEnv: { startupScripts: ['/tmp/hang.sh'] },
+			});
+			const failure = expect(provision).rejects.toMatchObject({
+				code: 'PYTHON_ENV_SETUP_FAILED',
+				message: expect.stringContaining('1s startup timeout'),
+			});
+			await vi.advanceTimersByTimeAsync(1000);
+			await failure;
+			expect(calls.startProcess).toEqual([]);
+			expect(calls.destroy).toBe(1);
+			pending.resolve({ success: true, stdout: '', stderr: '' });
+			await vi.runAllTimersAsync();
+			expect(calls.startProcess).toEqual([]);
+		} finally {
+			pending.resolve({ success: true, stdout: '', stderr: '' });
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(['files', 'credentials'] as const)(
+		'does not run startup scripts when injecting %s fails',
+		async (failure) => {
+			const { instance, calls } = makeFakeSandbox();
+			if (failure === 'files')
+				instance.writeFiles = async () => {
+					throw new Error('file upload failed');
+				};
+			else
+				instance.setEnvVars = async () => {
+					throw new Error('credential injection failed');
+				};
+			await expect(
+				new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					...startupOptions,
+					sessionEnv: {
+						files: [{ path: '/tmp/setup.sh', content: 'echo ready' }],
+						vars: { TOKEN: 'secret' },
+						startupScripts: ['/tmp/setup.sh'],
+					},
+				}),
+			).rejects.toThrow(/injecting session credentials/);
+			expect(calls.exec.some((command) => command.includes('sh -e'))).toBe(false);
+			expect(calls.startProcess).toEqual([]);
+			expect(calls.destroy).toBe(1);
+		},
+	);
+
+	it.each(['stdout', 'stderr'] as const)(
+		'identifies the second failed hook from %s without disclosing script output',
+		async (stream) => {
+			const { instance, calls } = makeFakeSandbox();
+			stubStartupExec(instance, {
+				success: false,
+				error: { code: 'COMMAND_FAILED' as const },
+				stdout: '',
+				stderr: '',
+				[stream]:
+					'__MARIMOHUB_SETUP__ step startup_script_1 1000000000\n__MARIMOHUB_SETUP__ step startup_script_2 1100000000\nPRIVATE_TOKEN=secret-value',
+			});
+			await expect(
+				new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					...startupOptions,
+					sessionEnv: { startupScripts: ['/tmp/first.sh', '/tmp/second.sh'] },
+				}),
+			).rejects.toMatchObject({
+				code: 'PYTHON_ENV_SETUP_FAILED',
+				message: 'Startup script 2 failed. Check the script before restarting the workload.',
+			});
+			expect(calls.startProcess).toEqual([]);
+			expect(calls.destroy).toBe(1);
+		},
+	);
+
+	it('keeps dependency failures distinct from successful startup hooks', async () => {
+		const { instance } = makeFakeSandbox();
+		stubStartupExec(instance, {
+			success: false,
+			error: { code: 'COMMAND_FAILED' as const },
+			stdout: '',
+			stderr:
+				'__MARIMOHUB_SETUP__ step startup_script_1 1000000000\n__MARIMOHUB_SETUP__ step pyproject_layer 1100000000\nNo solution found',
+		});
+		await expect(
+			new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...startupOptions,
+				sessionEnv: { startupScripts: ['/tmp/setup.sh'] },
+			}),
+		).rejects.toThrow('the notebook dependency constraints could not be resolved');
+	});
+
 	it('rejects conflicting runtime packages before starting a process and cleans up the sandbox', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		await expect(

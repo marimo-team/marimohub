@@ -1,9 +1,8 @@
-import type { SessionRender } from '../../ports/integrations';
+import { mergeRuntimeContributions } from './runtimeContributions';
+import type { RuntimeContributions, SessionRender } from '../../ports/integrations';
 
 /** Configuration injected before the notebook process starts. */
-export interface SessionEnv {
-	workspaceLoadMode?: SessionRender['workspaceLoadMode'];
-	runtimePackages?: SessionRender['runtimePackages'];
+export interface SessionEnv extends RuntimeContributions {
 	files?: SessionRender['files'];
 	vars?: Record<string, string>;
 	/** Image values win over defaults. Use vars for policy and credentials. */
@@ -11,12 +10,8 @@ export interface SessionEnv {
 }
 
 export function mergeSessionEnv(base: SessionEnv | undefined, add: SessionEnv): SessionEnv {
-	const runtimePackages = [...(base?.runtimePackages ?? []), ...(add.runtimePackages ?? [])];
 	return {
-		...(base?.workspaceLoadMode || add.workspaceLoadMode
-			? { workspaceLoadMode: 'copy-only' as const }
-			: {}),
-		...(runtimePackages.length > 0 ? { runtimePackages } : {}),
+		...mergeRuntimeContributions(base, add),
 		files: [...(base?.files ?? []), ...(add.files ?? [])],
 		vars: { ...base?.vars, ...add.vars },
 		defaults: { ...base?.defaults, ...add.defaults },
@@ -75,9 +70,10 @@ export function isMarimoSettingName(name: string): boolean {
  * project can only fill in settings the operator did not pin.
  */
 export function projectSessionEnv(
-	render: Pick<SessionEnv, 'runtimePackages' | 'files' | 'workspaceLoadMode'> & {
-		vars: Record<string, string>;
-	},
+	render: RuntimeContributions &
+		Pick<SessionEnv, 'files'> & {
+			vars: Record<string, string>;
+		},
 ): SessionEnv & Required<Pick<SessionEnv, 'vars' | 'defaults'>> {
 	const vars: Record<string, string> = {};
 	const defaults: Record<string, string> = {};
@@ -86,9 +82,8 @@ export function projectSessionEnv(
 	}
 	return {
 		files: render.files,
-		...(render.workspaceLoadMode ? { workspaceLoadMode: render.workspaceLoadMode } : {}),
+		...mergeRuntimeContributions(render),
 		vars,
 		defaults,
-		...(render.runtimePackages?.length ? { runtimePackages: render.runtimePackages } : {}),
 	};
 }

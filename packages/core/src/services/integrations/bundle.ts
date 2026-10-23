@@ -1,6 +1,7 @@
 // Rendered config stays outside the workspace mount so credentials cannot be
 // captured into a notebook version.
 import { ValidationError } from '../../errors';
+import { mergeRuntimeContributions } from '../runtime/runtimeContributions';
 import { mergeRuntimePackages } from './runtimePackages';
 import { hasControlCharacter, isRecord } from '../../internal/validation';
 import type { IntegrationVersionPin, SessionRender, WorkloadRef } from '../../ports/integrations';
@@ -57,11 +58,18 @@ export function bundleIntegrations(
 	rendered: RenderedIntegration[],
 	workload: WorkloadRef,
 ): SessionRender {
-	const runtimePackages = mergeRuntimePackages(
-		rendered.flatMap((item) =>
-			(item.output.runtimePackages ?? []).map((requirement) => ({ requirement, owner: item.name })),
-		),
-	);
+	const runtime = mergeRuntimeContributions(...rendered.map((item) => item.output));
+	if (runtime.runtimePackages) {
+		runtime.runtimePackages = mergeRuntimePackages(
+			rendered.flatMap((item) =>
+				(item.output.runtimePackages ?? []).map((requirement) => ({
+					requirement,
+					owner: item.name,
+				})),
+			),
+		);
+	}
+	if (runtime.startupScripts) runtime.startupScripts = bundleStartupScripts(rendered);
 	const files = composeAgentContext(rendered);
 	const yamlFiles = new Map<string, MergedYaml>();
 	const claimPath = pathClaimer();
@@ -176,14 +184,32 @@ export function bundleIntegrations(
 
 	return {
 		files,
-		...(rendered.some((item) => item.output.workspaceLoadMode === 'copy-only')
-			? { workspaceLoadMode: 'copy-only' as const }
-			: {}),
-		...(runtimePackages.length > 0 ? { runtimePackages } : {}),
+		...runtime,
 		vars,
 		attachments: rendered.map(({ id, name, kind, version }) => ({ id, name, kind, version })),
 		warnings,
 	};
+}
+
+function bundleStartupScripts(rendered: RenderedIntegration[]): string[] {
+	return [...rendered]
+		.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+		.flatMap((item) => {
+			const seen = new Set<string>();
+			return (item.output.startupScripts ?? []).map((path) => {
+				normalizeRelativePath(path, item.name);
+				if (!item.output.files?.some((file) => file.path === path)) {
+					throw new ValidationError(
+						`Integration "${item.name}" must render its startup script "${path}" as a file.`,
+					);
+				}
+				if (seen.has(path)) {
+					throw new ValidationError(`Integration "${item.name}" repeats startup script "${path}".`);
+				}
+				seen.add(path);
+				return `${INTEGRATIONS_DIR}/${path}`;
+			});
+		});
 }
 
 function packageIndexEnv(

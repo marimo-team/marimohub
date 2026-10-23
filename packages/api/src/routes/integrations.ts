@@ -89,6 +89,7 @@ const KindDescriptorSchema = z
 					.enum(['text', 'password', 'textarea', 'select', 'toggle', 'number', 'kv-pairs'])
 					.optional(),
 				placeholder: z.string().optional(),
+				file_accept: z.array(z.string()).optional(),
 				group: z.string().optional(),
 				order: z.number().optional(),
 				advanced: z.boolean().optional(),

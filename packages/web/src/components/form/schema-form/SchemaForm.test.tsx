@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { deferred } from '@/test/deferred';
 import { SchemaForm } from './SchemaForm';
 import { buildDefaults, KEEP_SECRET, pruneForSubmit, validateValue } from './model';
 import type { JsonSchemaNode, SecretSources, UiHints } from './model';
@@ -543,5 +544,107 @@ describe('agent skill editor', () => {
 		await user.click(screen.getByRole('button', { name: 'Remove' }));
 		expect(screen.queryByLabelText('Content')).not.toBeInTheDocument();
 		expect(JSON.parse(screen.getByRole('status').textContent ?? '')).toMatchObject({ skills: [] });
+	});
+});
+
+describe('text file import', () => {
+	function Harness() {
+		const [value, setValue] = useState<Record<string, unknown>>({ script: 'existing' });
+		return (
+			<SchemaForm
+				schema={{
+					type: 'object',
+					properties: { script: { type: 'string', 'x-max-utf8-bytes': 100 } },
+				}}
+				hints={{ script: { widget: 'textarea', file_accept: ['.sh'] } }}
+				value={value}
+				onChange={setValue}
+			/>
+		);
+	}
+	function setupImport() {
+		const user = userEvent.setup();
+		const { container } = render(<Harness />);
+		const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+		return { user, upload: (file: File) => user.upload(input, file) };
+	}
+
+	function textFile(content: string, name: string, read = async () => content): File {
+		const file = new File([content], name, { type: 'text/plain' });
+		// jsdom does not implement File.text().
+		Object.defineProperty(file, 'text', { value: read });
+		return file;
+	}
+
+	it('imports a shell file into an editable textarea without losing newlines', async () => {
+		const { user, upload } = setupImport();
+		const file = textFile('#!/bin/sh\necho ready\n', 'startup.sh');
+		expect(screen.getByRole('button', { name: 'Import Script from file' })).toBeInTheDocument();
+		await upload(file);
+		await waitFor(() =>
+			expect(screen.getByLabelText('Script')).toHaveValue('#!/bin/sh\necho ready\n'),
+		);
+		await user.type(screen.getByLabelText('Script'), 'echo edited');
+		expect(screen.getByLabelText('Script')).toHaveValue('#!/bin/sh\necho ready\necho edited');
+	});
+	it('rejects an oversized file before reading it and preserves the current value', async () => {
+		const { upload } = setupImport();
+		const read = vi.fn();
+		const file = textFile('x'.repeat(101), 'large.sh', read);
+		await upload(file);
+		expect(screen.getByRole('alert')).toHaveTextContent('File must be at most 100 bytes.');
+		expect(read).not.toHaveBeenCalled();
+		expect(screen.getByLabelText('Script')).toHaveValue('existing');
+	});
+	it('reports read failures without discarding the current script', async () => {
+		const { upload } = setupImport();
+		const file = textFile('echo ready', 'unreadable.sh', async () => {
+			throw new Error('read failed');
+		});
+		await upload(file);
+		expect(await screen.findByRole('alert')).toHaveTextContent('Could not read this file.');
+		expect(screen.getByLabelText('Script')).toHaveValue('existing');
+	});
+	it.each(['resolve', 'reject'] as const)(
+		'ignores an older import that later completes with %s',
+		async (outcome) => {
+			const { upload } = setupImport();
+			const pending = deferred<string>();
+			const older = textFile('old', 'old.sh', () => pending.promise);
+			const newer = textFile('echo new', 'new.sh');
+			await upload(older);
+			await upload(newer);
+			await waitFor(() => expect(screen.getByLabelText('Script')).toHaveValue('echo new'));
+			await act(async () => {
+				if (outcome === 'resolve') pending.resolve('stale contents');
+				else pending.reject(new Error('stale failure'));
+			});
+			expect(screen.getByLabelText('Script')).toHaveValue('echo new');
+			expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+		},
+	);
+
+	it('enforces the byte limit for multibyte text and recovers with a file at the limit', async () => {
+		const { upload } = setupImport();
+		const readOversized = vi.fn();
+		const oversized = textFile('é'.repeat(51), 'oversized.sh', readOversized);
+		const atLimit = textFile('é'.repeat(50), 'at-limit.sh');
+		await upload(oversized);
+		expect(screen.getByRole('alert')).toHaveTextContent('File must be at most 100 bytes.');
+		expect(readOversized).not.toHaveBeenCalled();
+		await upload(atLimit);
+		await waitFor(() => expect(screen.getByLabelText('Script')).toHaveValue('é'.repeat(50)));
+		expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+	});
+
+	it('keeps a later size error when an older pending file read succeeds', async () => {
+		const { upload } = setupImport();
+		const pending = deferred<string>();
+		const older = textFile('old', 'old.sh', () => pending.promise);
+		await upload(older);
+		await upload(new File(['x'.repeat(101)], 'large.sh'));
+		await act(async () => pending.resolve('stale contents'));
+		expect(screen.getByLabelText('Script')).toHaveValue('existing');
+		expect(screen.getByRole('alert')).toHaveTextContent('File must be at most 100 bytes.');
 	});
 });

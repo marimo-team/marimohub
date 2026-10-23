@@ -2,19 +2,7 @@ import { z } from 'zod';
 import { ValidationError } from '../../../errors';
 import { isRecord } from '../../../internal/validation';
 import { defineIntegration } from '../sdk';
-
-function boundedText(bytes: number, description: string) {
-	return z
-		.string()
-		.max(bytes)
-		.refine((value) => new TextEncoder().encode(value).length <= bytes, {
-			message: `Must be at most ${bytes} UTF-8 bytes`,
-		})
-		.meta({
-			'x-max-utf8-bytes': bytes,
-			description: `${description}. Maximum ${bytes} UTF-8 bytes.`,
-		});
-}
+import { boundedText } from '../text';
 
 export function parseAgentJson(value: string): Record<string, unknown> {
 	let parsed: unknown;

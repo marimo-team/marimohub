@@ -21,6 +21,7 @@ import { ACTOR, MemoryBucket } from '../../testing';
 import { AesGcmSecretCodec } from '../secrets/AesGcmSecretCodec';
 import { INTEGRATIONS_DIR, INTEGRATIONS_DIR_ENV } from './bundle';
 import { defaultRegistry } from './kinds';
+import * as definitions from './kinds/definitions';
 import {
 	MAX_INTEGRATIONS_PER_SCOPE,
 	OrgIntegrationsStore,
@@ -2075,42 +2076,11 @@ describe('ProjectIntegrationsStore', () => {
 	it('listKinds describes the default registry serializably', () => {
 		const store = new ProjectIntegrationsStore({ bucket, registry: defaultRegistry(), codec });
 		const kinds = store.listKinds();
-		expect(kinds.map((k) => k.kind).sort()).toEqual([
-			'agent_context',
-			'athena',
-			'aws_codeartifact',
-			'azure_artifacts',
-			'azure_blob',
-			'bigquery',
-			'clickhouse',
-			'custom_env',
-			'databricks',
-			'duckdb_http',
-			'ducklake',
-			'gcs',
-			'gitlab_packages',
-			'huggingface',
-			'iceberg_bigquery',
-			'iceberg_dynamodb',
-			'iceberg_glue',
-			'iceberg_hive',
-			'iceberg_rest',
-			'iceberg_sql',
-			'jfrog_artifactory',
-			'marimo_studio',
-			'mongodb',
-			'motherduck',
-			'mysql',
-			'postgres',
-			'pyspark',
-			'python_package_index',
-			'redshift',
-			's3',
-			'snowflake',
-			'sqlserver',
-			'trino',
-			'wandb',
-		]);
+		expect(kinds.map((k) => k.kind).sort()).toEqual(
+			Object.values(definitions)
+				.map((definition) => definition.kind)
+				.sort(),
+		);
 		for (const kind of kinds) {
 			expect(kind.json_schema).toMatchObject({ type: 'object' });
 			expect(() => JSON.stringify(kind)).not.toThrow();

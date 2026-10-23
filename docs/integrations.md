@@ -38,6 +38,7 @@ Disabling or deleting an integration removes its contributions from subsequent l
 | --------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | Environment variables and configuration files | Outside the notebook workspace          | New sandboxes omit them. Snapshots can retain old values and files unless the integration provides cleanup. |
 | Runtime packages                              | Separate layer for the notebook process | Launches omit the layer, including after snapshot restores. Caches can remain.                              |
+| Startup scripts                               | Before dependency setup                 | Launches stop running the script. Files and other script side effects can remain.                           |
 | Agent context                                 | Outside the notebook workspace          | Restored sandboxes remove obsolete hub-managed home files.                                                  |
 | Authored files                                | Notebook source and workspace           | Files remain under normal notebook persistence rules.                                                       |
 
@@ -1160,6 +1161,32 @@ Git-backed sessions do not save these edits to the source repository.
 If the notebook or image supplies Studio independently, it remains available after removal.
 
 <!--@include: ./partials/integrations/marimo_studio.md-->
+
+## Startup script
+
+Create a **Startup script** integration. Import a UTF-8 `.sh` file or paste its contents into **Script** (maximum 64 KiB).
+Start a new session or job to apply it.
+
+Scripts run in integration-name order after workspace and credential injection, before Python dependency setup.
+Each runs as `sh -e` in a separate process, from the workspace root, with the sandbox user's permissions and environment.
+Use POSIX shell syntax, or invoke `bash` explicitly. A failed script stops startup. Scripts and dependency setup share the startup timeout.
+
+```sh
+#!/bin/sh
+mkdir -p assets
+printf '%s\n' 'Workspace prepared' > assets/startup.txt
+```
+
+Exports and directory changes do not carry into the notebook process or other scripts.
+Use an **Environment variables** integration for shared variables and secrets. Script text is stored as ordinary configuration.
+
+The hub copies the workspace, and edits follow the normal save rules.
+Scripts live outside it at `/tmp/marimohub-integrations/startup/<integration-name>.sh`.
+
+Make scripts safe to repeat: enabled scripts run again after snapshot restore.
+Disabling or deleting an integration stops future runs, but does not undo files, installed packages, or external side effects.
+
+<!--@include: ./partials/integrations/startup_script.md-->
 
 ## Agent context
 
