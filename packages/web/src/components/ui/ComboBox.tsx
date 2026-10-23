@@ -108,10 +108,10 @@ export function ComboBox<T extends ComboBoxOption>({
 			/>
 			<AriaPopover
 				offset={4}
-				className="z-50 w-(--trigger-width) rounded-md border bg-popover text-popover-foreground shadow-lg entering:animate-in entering:fade-in-0 exiting:animate-out exiting:fade-out-0"
+				className="z-50 flex w-(--trigger-width) flex-col overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg entering:animate-in entering:fade-in-0 exiting:animate-out exiting:fade-out-0"
 			>
 				<ListBox<T>
-					className="max-h-64 overflow-auto p-1 text-sm outline-none"
+					className="scrollable-overlay min-h-0 max-h-64 p-1 text-sm outline-none"
 					renderEmptyState={() => (
 						<div className="px-2 py-1.5 text-muted-foreground">{emptyState}</div>
 					)}

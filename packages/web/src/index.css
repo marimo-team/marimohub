@@ -5,6 +5,13 @@
 @custom-variant dark (&:is(.dark *));
 @custom-variant branded (&:where([data-custom-theme], [data-custom-theme] *));
 
+@utility scrollable-overlay {
+	overflow-x: hidden;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+}
+
 :root {
 	/* Page background is a whisper of cool grey so white cards read as elevated. */
 	--background: oklch(0.982 0.003 250);

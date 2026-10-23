@@ -70,7 +70,7 @@ export function Header() {
 						</Button>
 						<Popover
 							placement="bottom end"
-							className="z-50 min-w-[180px] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg entering:animate-in entering:fade-in-0 entering:zoom-in-95 exiting:animate-out exiting:fade-out-0 exiting:zoom-out-95"
+							className="scrollable-overlay z-50 min-w-[180px] rounded-md border bg-popover text-popover-foreground shadow-lg entering:animate-in entering:fade-in-0 entering:zoom-in-95 exiting:animate-out exiting:fade-out-0 exiting:zoom-out-95"
 						>
 							<Menu
 								className="outline-none"

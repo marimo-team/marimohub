@@ -82,7 +82,7 @@ export function DropdownMenu({
 			)}
 			<Popover
 				placement="bottom end"
-				className="z-50 min-w-[200px] overflow-x-hidden overflow-y-auto overscroll-contain rounded-md border bg-popover text-popover-foreground shadow-lg [scrollbar-width:thin] entering:animate-in entering:fade-in-0 entering:zoom-in-95 exiting:animate-out exiting:fade-out-0 exiting:zoom-out-95"
+				className="scrollable-overlay z-50 min-w-[200px] rounded-md border bg-popover text-popover-foreground shadow-lg entering:animate-in entering:fade-in-0 entering:zoom-in-95 exiting:animate-out exiting:fade-out-0 exiting:zoom-out-95"
 			>
 				{header && <div className="border-b px-3 py-2 text-xs">{header}</div>}
 				<Menu className="outline-none" onAction={(key) => onAction(String(key))}>

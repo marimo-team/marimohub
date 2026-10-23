@@ -62,7 +62,7 @@ export function Popover({
 			<AriaPopover
 				placement={placement}
 				className={cn(
-					'z-50 max-w-xs rounded-md border bg-popover text-popover-foreground shadow-lg',
+					'scrollable-overlay z-50 max-w-xs rounded-md border bg-popover text-popover-foreground shadow-lg',
 					'entering:animate-in entering:fade-in-0 entering:zoom-in-95 exiting:animate-out exiting:fade-out-0 exiting:zoom-out-95',
 					className,
 				)}
