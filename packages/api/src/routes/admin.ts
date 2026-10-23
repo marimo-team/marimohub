@@ -53,10 +53,6 @@ const UV_BENCHMARK_TIMEOUT_MS =
 	UV_BENCHMARK_SYNC_TIMEOUT_MS;
 const CLEANUP_LEASE_HEADROOM_MS = 60_000;
 const UV_BENCHMARK_DIR = '/tmp/marimohub-uv-sync-benchmark';
-// boto3 (and its botocore dependency) is absent from the sandbox base image, so
-// `uv sync` below does real install work. A "popular" package that ships in the
-// image — e.g. pandas — would already be satisfied and the sync phase would
-// measure nothing.
 const BOTOCORE_WHEEL_URL =
 	'https://files.pythonhosted.org/packages/64/93/7bba357266450f7d3e3075ee4d2f1e1d96c1617e40d8065c558485baed78/botocore-1.43.80-py3-none-any.whl';
 

@@ -56,6 +56,8 @@ RUN cd /tmp \
       connectorx \
       pyiceberg \
       sqlalchemy \
+      boto3 \
+      obstore \
       fsspec \
       s3fs \
       gcsfs \
