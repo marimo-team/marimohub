@@ -58,7 +58,9 @@ export function bundleIntegrations(
 	workload: WorkloadRef,
 ): SessionRender {
 	const runtimePackages = mergeRuntimePackages(
-		rendered.flatMap((item) => item.output.runtimePackages ?? []),
+		rendered.flatMap((item) =>
+			(item.output.runtimePackages ?? []).map((requirement) => ({ requirement, owner: item.name })),
+		),
 	);
 	const files = composeAgentContext(rendered);
 	const yamlFiles = new Map<string, MergedYaml>();

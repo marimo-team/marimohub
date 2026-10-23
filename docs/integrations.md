@@ -1136,7 +1136,7 @@ The hub does not fall back to public PyPI. To opt a project out, create a disabl
 ## marimo Studio (experimental)
 
 Create a **marimo Studio (experimental)** integration for reports, apps, and presentations. Then start a new session.
-[Studio](https://marimo-team.github.io/marimo-studio/) opens at the session root unless process configuration selects the native editor.
+[Studio](https://marimo-team.github.io/marimo-studio/) opens at the session root.
 The default package is `marimo-studio[deno]==0.4.1`. Deno supports React, Svelte, Reveal.js, and Notebook Kit views. Enable Typst for reports.
 
 <figure class="doc-screenshot">
@@ -1146,7 +1146,8 @@ The default package is `marimo-studio[deno]==0.4.1`. Deno supports React, Svelte
   <figcaption>Studio displays an interactive view beside the notebook that powers it.</figcaption>
 </figure>
 
-The hub supplies a separate runtime layer without editing `pyproject.toml`, `notebook.py`, or `marimo.toml`.
+The integration supplies Studio through a separate runtime layer without adding it to notebook-declared dependencies.
+Launch setup can create `pyproject.toml`.
 Studio requires local filesystem semantics. The hub copies its workspace instead of mounting object storage, then uses the normal save flow.
 See [Studio workspace storage](https://marimo-team.github.io/marimo-studio/reference/compatibility#workspace-storage).
 Layer packages override conflicting notebook packages for the kernel and its children. Independent terminals use the base environment.

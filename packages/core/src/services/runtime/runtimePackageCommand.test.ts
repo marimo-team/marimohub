@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ValidationError } from '../../errors';
 import { runtimePackageCommand } from './runtimePackageCommand';
 
 describe('runtimePackageCommand', () => {
@@ -23,7 +24,7 @@ describe('runtimePackageCommand', () => {
 	it.each([['marimo==0.25.2'], ['studio==0.4.1', 'Studio==0.4.2'], ['studio==0.4.1$(id)']])(
 		'rejects invalid requirements at the command boundary: %j',
 		(...packages) => {
-			expect(() => runtimePackageCommand(packages, 'python -m marimo')).toThrow();
+			expect(() => runtimePackageCommand(packages, 'python -m marimo')).toThrow(ValidationError);
 		},
 	);
 });

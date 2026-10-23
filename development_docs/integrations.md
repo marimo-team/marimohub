@@ -107,7 +107,7 @@ Paths, URLs, markers, installer flags, and version ranges are unsupported.
 `SessionEnv` carries these packages to `runtimePackageCommand`.
 After notebook dependency setup, this helper resolves the layer once with `uv run --with` and starts the process.
 It uses the configured package registries and pins marimo to the installed base version.
-The local backend supplies marimo through `uv --with` for both the version lookup and launch.
+The local backend supplies marimo through `uv run --with marimo` for both the version lookup and launch.
 Other layer packages override base packages. Resolution failure stops launch.
 
 The layer covers the notebook process, bridge, and children. Independent terminals use the base environment.

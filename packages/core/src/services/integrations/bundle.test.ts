@@ -22,6 +22,32 @@ const yaml = (path: string, value: Record<string, unknown> = { a: 1 }) => ({
 	yamlFiles: [{ path, value }],
 });
 
+describe('runtime package ownership', () => {
+	it('names all conflicting owners across normalized aliases, excluding unrelated integrations', () => {
+		expect(() =>
+			bundle([
+				rendered('unrelated', { runtimePackages: ['other==1.0.0'] }),
+				rendered('org-studio', { runtimePackages: ['Marimo_Studio[deno]==0.4.1'] }),
+				rendered('project-studio', { runtimePackages: ['marimo.studio[typst]==0.4.1'] }),
+				rendered('new-studio', { runtimePackages: ['marimo-studio==0.4.2'] }),
+			]),
+		).toThrow(
+			new ValidationError(
+				'Integrations "org-studio", "project-studio", "new-studio" require different versions of runtime package "marimo-studio".',
+			),
+		);
+	});
+	it('merges compatible contributions without exposing ownership in runtime requirements', () => {
+		expect(
+			bundle([
+				rendered('first', { runtimePackages: ['Marimo_Studio[deno]==0.4.1'] }),
+				rendered('second', { runtimePackages: ['marimo-studio[typst]==0.4.1'] }),
+				rendered('empty', {}),
+			]).runtimePackages,
+		).toEqual(['marimo-studio[deno,typst]==0.4.1']);
+	});
+});
+
 it('identifies a job run without encoding it as a session in the manifest', () => {
 	const runId = createRunId();
 	const result = bundleIntegrations([], { kind: 'job-run', id: runId });

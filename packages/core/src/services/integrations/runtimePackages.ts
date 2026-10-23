@@ -1,15 +1,27 @@
 import { ValidationError } from '../../errors';
 
 // Only pinned index packages: URLs, local paths, markers, and installer flags are not this contract.
-const REQUIREMENT = /^([a-zA-Z0-9][a-zA-Z0-9._-]*)(?:\[([a-zA-Z0-9,_-]+)\])?==(\d+\.\d+\.\d+)$/;
+const IDENTIFIER = '[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?';
+const REQUIREMENT = new RegExp(
+	`^(${IDENTIFIER})(?:\\[(${IDENTIFIER}(?:,${IDENTIFIER})*)\\])?==(\\d+\\.\\d+\\.\\d+)$`,
+);
+
+interface OwnedRuntimePackage {
+	requirement: string;
+	owner: string;
+}
 
 function normalizePackageName(name: string): string {
 	return name.toLowerCase().replaceAll(/[-_.]+/g, '-');
 }
 
-export function mergeRuntimePackages(requirements: readonly string[]): string[] {
-	const packages = new Map<string, { version: string; extras: Set<string> }>();
-	for (const requirement of requirements) {
+export function mergeRuntimePackages(
+	requirements: readonly (string | OwnedRuntimePackage)[],
+): string[] {
+	const packages = new Map<string, { version: string; extras: Set<string>; owners: Set<string> }>();
+	for (const input of requirements) {
+		const { requirement, owner } =
+			typeof input === 'string' ? { requirement: input, owner: undefined } : input;
 		const match = REQUIREMENT.exec(requirement);
 		if (!match || match[0] !== requirement)
 			throw new ValidationError('Runtime packages must be pinned index requirements.');
@@ -17,13 +29,14 @@ export function mergeRuntimePackages(requirements: readonly string[]): string[] 
 		const name = normalizePackageName(rawName);
 		if (name === 'marimo') throw new ValidationError('The sandbox owns the marimo version.');
 		const existing = packages.get(name);
+		const owners = existing?.owners ?? new Set<string>();
+		if (owner) owners.add(owner);
 		if (existing && existing.version !== version)
 			throw new ValidationError(
-				`Integrations require different versions of runtime package "${name}".`,
+				`Integrations${owners.size > 0 ? ` ${[...owners].map((name) => `"${name}"`).join(', ')}` : ''} require different versions of runtime package "${name}".`,
 			);
-		const entry = existing ?? { version, extras: new Set<string>() };
+		const entry = existing ?? { version, extras: new Set<string>(), owners };
 		for (const extra of extras?.split(',') ?? []) {
-			if (!extra) throw new ValidationError('Runtime package extras must not be empty.');
 			entry.extras.add(normalizePackageName(extra));
 		}
 		packages.set(name, entry);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ValidationError } from '../../errors';
 import { mergeRuntimePackages } from './runtimePackages';
 
 describe('runtime packages', () => {
@@ -26,6 +27,13 @@ describe('runtime packages', () => {
 		'studio[,deno]==0.4.1',
 		'studio[deno,]==0.4.1',
 		'studio[deno,,typst]==0.4.1',
+		...['-studio', '_studio', '.studio', 'studio-', 'studio_', 'studio.'].map(
+			(name) => `${name}==0.4.1`,
+		),
+		...['-x', '_x', '.x', 'x-', 'x_', 'x.', '-', '_', '.'].flatMap((extra) => [
+			`studio[${extra}]==0.4.1`,
+			`studio[deno,${extra}]==0.4.1`,
+		]),
 		'studio==0.4.1; python_version > "3.11"',
 		'studio==0.4.1 && touch /tmp/injected',
 		'studio==0.4.1$(id)',
@@ -33,7 +41,13 @@ describe('runtime packages', () => {
 		'marimo==0.25.2',
 		'MARIMO[recommended]==0.25.2',
 	])('rejects unsupported requirement %s', (requirement) => {
-		expect(() => mergeRuntimePackages([requirement])).toThrow();
+		expect(() => mergeRuntimePackages([requirement])).toThrow(ValidationError);
+	});
+	it('accepts single-character identifiers and normalizes internal punctuation', () => {
+		expect(mergeRuntimePackages(['A[1,b]==1.0.0', 'some._-tool[x.y,x_y]==2.0.0'])).toEqual([
+			'a[1,b]==1.0.0',
+			'some-tool[x-y]==2.0.0',
+		]);
 	});
 	it('deduplicates extras and sorts distributions regardless of integration order', () => {
 		const requirements = [

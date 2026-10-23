@@ -760,9 +760,9 @@ describe('SandboxProvisioner', () => {
 				if (runtimePackages.length > 0) {
 					expect(calls.startProcess[0].cmd).toContain("--with 'marimo-studio==0.4.1'");
 				}
-				expect(calls.startProcess[0].cmd).toContain('uv run --no-sync python');
+				expect(calls.startProcess[0].cmd).toContain('uv run --no-sync');
 				expect(calls.startProcess[0].cmd).toContain(
-					`/tmp/marimohub-bridge/${sandboxId}/marimo-bridge.py`,
+					`python '/tmp/marimohub-bridge/${sandboxId}/marimo-bridge.py'`,
 				);
 				expect(calls.startProcess[0].cmd).toContain('--quiet edit');
 				expect(calls.setEnvVars).toContainEqual(
