@@ -696,6 +696,75 @@ describe('Data browser routes', () => {
 		expect(put).not.toHaveBeenCalled();
 	});
 
+	it.each(['revision', 'write access'])(
+		'replays completed uploads after integration %s changes without another provider write',
+		async (change) => {
+			const pid = await createProject();
+			const { id, base } = await writableUploads(pid);
+			const upload = await expectOk<{ id: string }>(
+				await request('POST', base, { bucket: 'lake', path: 'data', size: 0 }),
+				201,
+			);
+			const result = await expectOk(await request('POST', `${base}/${upload.id}/complete`));
+			await expectOk(
+				await request('PATCH', `/projects/${pid}/integrations/${id}`, {
+					...(change === 'revision'
+						? { name: 'renamed' }
+						: {
+								config: {
+									bucket: 'lake',
+									allow_write: false,
+									auth: { method: 'static', access_key_id: 'access', secret_access_key: 'secret' },
+								},
+							}),
+				}),
+			);
+			const put = vi.spyOn(objectBrowser, 'putObject');
+			expect(await expectOk(await request('GET', `${base}/${upload.id}`))).toMatchObject({
+				status: 'complete',
+			});
+			expect(await expectOk(await request('POST', `${base}/${upload.id}/complete`))).toEqual(
+				result,
+			);
+			expect(put).not.toHaveBeenCalled();
+		},
+	);
+
+	it('requires completed receipt ownership, matching integration, and current project access', async () => {
+		const pid = await createProject();
+		const { base } = await writableUploads(pid);
+		const other = await writableUploads(pid, 'other');
+		const owner = uid('completed-upload-owner');
+		await expectOk(
+			await request('POST', `/projects/${pid}/members`, { user_id: owner, role: 'manager' }),
+			201,
+		);
+		const asOwner = createTestApi({ bucket, userId: owner, deps }).request;
+		const upload = await expectOk<{ id: string }>(
+			await asOwner('POST', base, { bucket: 'lake', path: 'data', size: 0 }),
+			201,
+		);
+		const result = await expectOk(await asOwner('POST', `${base}/${upload.id}/complete`));
+		const put = vi.spyOn(objectBrowser, 'putObject');
+		for (const [method, suffix] of [
+			['GET', ''],
+			['POST', '/complete'],
+		] as const) {
+			await expectError(await request(method, `${base}/${upload.id}${suffix}`), 403, 'FORBIDDEN');
+			await expectError(
+				await asOwner(method, `${other.base}/${upload.id}${suffix}`),
+				404,
+				'NOT_FOUND',
+			);
+		}
+		await expectOk(await request('PUT', `/projects/${pid}/members/${owner}`, { role: 'editor' }));
+		expect(await expectOk(await asOwner('POST', `${base}/${upload.id}/complete`))).toEqual(result);
+		await expectOk(await request('DELETE', `/projects/${pid}/members/${owner}`));
+		await expectError(await asOwner('GET', `${base}/${upload.id}`), 403, 'FORBIDDEN');
+		await expectError(await asOwner('POST', `${base}/${upload.id}/complete`), 403, 'FORBIDDEN');
+		expect(put).not.toHaveBeenCalled();
+	});
+
 	it('validates object upload keys by UTF-8 bytes and accepts the exact limit', async () => {
 		const pid = await createProject();
 		const { base } = await writableUploads(pid);

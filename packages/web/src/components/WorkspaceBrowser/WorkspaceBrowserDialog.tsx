@@ -6,12 +6,13 @@ import {
 	createFinderStore,
 	dirname,
 	Finder,
+	FinderError,
 	formatDate,
 	formatFileSize,
 	useFinder,
 	useFinderStore,
 } from '@marimo-team/react-finder';
-import type { FileItem, FinderError } from '@marimo-team/react-finder';
+import type { FileItem } from '@marimo-team/react-finder';
 import {
 	ArrowLeft,
 	ArrowRight,
@@ -516,19 +517,26 @@ function Explorer({
 	limits?: WorkspaceUploadLimits;
 }) {
 	const [uploads, setUploads] = useState<Record<string, UploadProgress>>({});
-	const onUploadProgress = useCallback(
-		(path: string, progress: UploadProgress | null) =>
-			setUploads((previous) => {
-				const next = { ...previous };
-				if (progress) next[path] = progress;
-				else delete next[path];
-				return next;
-			}),
-		[],
-	);
+	const [uploadConflict, setUploadConflict] = useState<{
+		path: string;
+		restart: () => Promise<FileItem>;
+	} | null>(null);
+	const onUploadConflict = useCallback((path: string, restart: () => Promise<FileItem>) => {
+		setUploadConflict({ path, restart });
+	}, []);
+	const onUploadProgress = useCallback((path: string, progress: UploadProgress | null) => {
+		if (progress) setUploadConflict((current) => (current?.path === path ? null : current));
+		setUploads((previous) => {
+			const next = { ...previous };
+			if (progress) next[path] = progress;
+			else delete next[path];
+			return next;
+		});
+	}, []);
 	const adapter = useMemo(
-		() => workspaceAdapter(projectId, notebookId, access, limits, onUploadProgress),
-		[access, notebookId, projectId, limits, onUploadProgress],
+		() =>
+			workspaceAdapter(projectId, notebookId, access, limits, onUploadProgress, onUploadConflict),
+		[access, notebookId, projectId, limits, onUploadProgress, onUploadConflict],
 	);
 	const [view, setView] = useState<ViewMode>('list');
 	const [openPath, setOpenPath] = useState<string | null>(null);
@@ -648,6 +656,36 @@ function Explorer({
 				<Toolbar view={view} setView={setView} access={access} onDelete={requestDelete} />
 				<Breadcrumbs />
 				<UploadProgressList uploads={uploads} />
+				{uploadConflict && (
+					<AriaButton
+						className="px-3 py-2 text-xs underline"
+						onPress={() => {
+							if (
+								!window.confirm(
+									`Restart ${uploadConflict.path}? Check the destination first: the previous upload may have succeeded. Restarting discards saved progress.`,
+								)
+							)
+								return;
+							setUploadConflict(null);
+							setError(null);
+							void uploadConflict
+								.restart()
+								.then(() => store.getState().refresh())
+								.catch((error: unknown) => {
+									setError(
+										error instanceof FinderError
+											? error
+											: new FinderError(
+													'unknown',
+													error instanceof Error ? error.message : 'Upload failed',
+												),
+									);
+								});
+						}}
+					>
+						Restart upload: {uploadConflict.path}
+					</AriaButton>
+				)}
 				{limits && (
 					<div className="border-b px-3 py-1 text-xs text-muted-foreground">
 						{formatFileSize(limits.max_file_bytes)} per file ·{' '}

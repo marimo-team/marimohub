@@ -86,7 +86,10 @@ export interface BucketMultipart {
 
 export interface Bucket {
 	multipart?: BucketMultipart;
-	/** Consumes chunks incrementally and publishes only after the entire body succeeds. */
+	/**
+	 * Consumes chunks incrementally and publishes only after the entire body succeeds.
+	 * `size` is the exact byte count; reject shorter or longer streams without publishing.
+	 */
 	putStream?(
 		key: string,
 		chunks: AsyncIterable<Uint8Array>,

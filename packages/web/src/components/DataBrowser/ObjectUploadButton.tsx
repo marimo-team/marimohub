@@ -2,6 +2,7 @@ import { MAX_UPLOAD_BYTES } from '@marimo-hub/core/uploads';
 import { withBasePath } from '@/lib/basePath';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui';
+import { ApiRequestError } from '@/api/client';
 import { formatBytes } from '@/lib/formatBytes';
 import { resumableUpload } from '@/lib/resumableUpload';
 import type { UploadProgress } from '@/lib/resumableUpload';
@@ -25,6 +26,7 @@ export function ObjectUploadButton({
 	const [busy, setBusy] = useState(false);
 	const [progress, setProgress] = useState<UploadProgress | null>(null);
 	const [errors, setErrors] = useState<string[]>([]);
+	const [restartFiles, setRestartFiles] = useState<File[]>([]);
 	useEffect(
 		() => () => {
 			active.current?.abort();
@@ -33,7 +35,7 @@ export function ObjectUploadButton({
 		[],
 	);
 
-	async function upload(files: File[]) {
+	async function upload(files: File[], restart = false) {
 		if (active.current || files.length === 0) return;
 		const oversized = files.filter((file) => file.size > MAX_UPLOAD_BYTES);
 		if (oversized.length > 0) {
@@ -48,8 +50,10 @@ export function ObjectUploadButton({
 		active.current = controller;
 		setBusy(true);
 		setErrors([]);
+		setRestartFiles([]);
 		const failures: string[] = [];
-		let completed = 0;
+		const conflicts: File[] = [];
+		let needsRefresh = false;
 		for (const file of files) {
 			if (controller.signal.aborted) break;
 			try {
@@ -64,15 +68,18 @@ export function ObjectUploadButton({
 						content_type: file.type || 'application/octet-stream',
 					},
 					{
+						restart,
 						signal: controller.signal,
 						onProgress: (value) => {
+							if (value?.phase === 'publishing') needsRefresh = true;
 							if (active.current === controller) setProgress(value);
 						},
 					},
 				);
-				completed++;
+				needsRefresh = true;
 			} catch (error) {
 				if (controller.signal.aborted) break;
+				if (error instanceof ApiRequestError && error.status === 409) conflicts.push(file);
 				const message = error instanceof Error ? error.message : 'Upload failed';
 				const hint =
 					error instanceof TypeError
@@ -87,9 +94,10 @@ export function ObjectUploadButton({
 				failures.push('Upload cancelled. Select the same files to resume unfinished uploads.');
 			}
 			setErrors(failures);
+			setRestartFiles(conflicts);
 			setProgress(null);
 			setBusy(false);
-			if (completed > 0) onComplete();
+			if (needsRefresh) onComplete();
 		}
 	}
 	return (
@@ -112,6 +120,21 @@ export function ObjectUploadButton({
 			{busy && <Button onPress={() => active.current?.abort()}>Cancel upload</Button>}
 			<p className="text-xs text-muted-foreground">Files with the same name are replaced.</p>
 			{progress && <UploadProgressList uploads={{ active: progress }} />}
+			{restartFiles.map((file) => (
+				<Button
+					key={file.name}
+					onPress={() => {
+						if (
+							window.confirm(
+								`Restart ${file.name}? Check the destination first: the previous upload may have succeeded. Restarting discards saved progress and can replace the object.`,
+							)
+						)
+							void upload([file], true);
+					}}
+				>
+					Restart {file.name}
+				</Button>
+			))}
 			{errors.length > 0 && (
 				<div role="alert" className="text-xs text-destructive">
 					{[...new Set(errors)].map((error) => (

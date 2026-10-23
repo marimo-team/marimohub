@@ -139,9 +139,12 @@ Uploads expire after 24 hours. Cancellation and maintenance abort native session
 Retries of completed uploads return the saved result without another write.
 If completion returns `409` for an interrupted publication, check the destination before you start another upload.
 The original write can succeed even if its response is lost.
+To discard saved progress, click **Restart upload** and confirm after you check the destination.
 
 S3 and R2 workspace uploads send parts directly into a destination upload session. Saving commits the uploaded parts without another full transfer.
-Other adapters stage parts and assemble them when saving. Custom adapters without multipart or stream support have a 64 MiB upload limit.
+Other adapters stage parts and assemble them when saving.
+Custom adapters without multipart or stream support buffer the whole file during assembly.
+Their upload limit is the smaller of 64 MiB and the configured file limit.
 See the [API reference](./api.md) for start, part, progress, complete, and cancel operations under `…/workspace/uploads`.
 
 The API exposes the same operations under

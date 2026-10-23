@@ -98,6 +98,59 @@ describe('ObjectUploadButton', () => {
 		expect(screen.getByRole('button', { name: 'Upload' })).toBeEnabled();
 	});
 
+	it('refreshes after cancellation during publication and skips the remaining files', async () => {
+		uploader.mockImplementation(
+			(_base, _file, input, options) =>
+				new Promise((_resolve, reject) => {
+					options?.onProgress?.({ path: input.path, phase: 'publishing', loaded: 5, total: 5 });
+					options?.signal?.addEventListener(
+						'abort',
+						() => {
+							options.onProgress?.(null);
+							reject(new DOMException('Cancelled', 'AbortError'));
+						},
+						{ once: true },
+					);
+				}),
+		);
+		const { onComplete } = setup([first, second]);
+		await userEvent.click(screen.getByRole('button', { name: 'Cancel upload' }));
+		expect(await screen.findByRole('alert')).toHaveTextContent('Upload cancelled.');
+		expect(uploader).toHaveBeenCalledTimes(1);
+		expect(onComplete).toHaveBeenCalledTimes(1);
+	});
+
+	it('refreshes when the publication response is lost', async () => {
+		uploader.mockImplementation(async (_base, _file, input, options) => {
+			options?.onProgress?.({ path: input.path, phase: 'publishing', loaded: 5, total: 5 });
+			options?.onProgress?.(null);
+			throw new TypeError('Connection lost');
+		});
+		const { onComplete } = setup([first]);
+		expect(await screen.findByRole('alert')).toHaveTextContent('Connection lost.');
+		expect(onComplete).toHaveBeenCalledTimes(1);
+	});
+
+	it('restarts a conflicted upload only after explicit confirmation', async () => {
+		uploader.mockRejectedValueOnce(
+			new ApiRequestError('CONFLICT', 'Integration changed', { status: 409 }),
+		);
+		setup([first]);
+		const restart = await screen.findByRole('button', { name: 'Restart first.csv' });
+		const confirm = vi
+			.spyOn(window, 'confirm')
+			.mockReturnValueOnce(false)
+			.mockReturnValueOnce(true);
+		await userEvent.click(restart);
+		expect(uploader).toHaveBeenCalledTimes(1);
+		uploader.mockResolvedValueOnce(new Response());
+		await userEvent.click(restart);
+		await waitFor(() => expect(uploader).toHaveBeenCalledTimes(2));
+		expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Check the destination first'));
+		expect(uploader.mock.calls[1]?.[3]).toMatchObject({ restart: true });
+		confirm.mockRestore();
+	});
+
 	it('aborts on unmount without starting another file or refreshing', async () => {
 		uploader.mockImplementation(
 			(_base, _file, _input, options) =>

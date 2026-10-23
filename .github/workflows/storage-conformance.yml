@@ -76,6 +76,8 @@ jobs:
           MARIMOHUB_TEST_S3_REGION: us-east-1
           MARIMOHUB_TEST_S3_KEY: minioadmin
           MARIMOHUB_TEST_S3_SECRET: minioadmin
+          MARIMOHUB_TEST_S3_ACCESS_KEY: minioadmin
+          MARIMOHUB_TEST_S3_SECRET_KEY: minioadmin
           MARIMOHUB_TEST_LARGE_UPLOAD_BYTES: '16777217'
         run: vp run --no-cache --filter @marimo-hub/storage-s3 --fail-if-no-match test
 

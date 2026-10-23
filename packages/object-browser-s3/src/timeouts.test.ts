@@ -9,7 +9,7 @@ import { S3ObjectBrowser } from './index';
 
 afterEach(() => vi.restoreAllMocks());
 
-it('uses the long request timeout only for uploads, retaining bounded connection timeouts', async () => {
+it('uses a single attempt and long request timeout for uploads, retaining bounded connection timeouts', async () => {
 	const read = { send: vi.fn(async () => ({})), destroy: vi.fn() };
 	const upload = { send: vi.fn(async () => ({})), destroy: vi.fn() };
 	const factories = vi
@@ -47,6 +47,7 @@ it('uses the long request timeout only for uploads, retaining bounded connection
 	expect(factories.mock.calls[1][0]).toMatchObject({
 		connectionTimeoutMs: 30_000,
 		requestTimeoutMs: 3_600_000,
+		maxAttempts: 1,
 	});
 	expect(read.send).toHaveBeenCalledExactlyOnceWith(
 		expect.objectContaining({ input: { MaxBuckets: 1 } }),

@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
 import {
+	AbortMultipartUploadCommand,
 	CreateBucketCommand,
 	DeleteBucketCommand,
 	DeleteObjectsCommand,
 	GetObjectCommand,
 	ListObjectsV2Command,
+	ListMultipartUploadsCommand,
 	S3Client,
 } from '@aws-sdk/client-s3';
 import { expect, it } from 'vitest';
@@ -75,6 +77,28 @@ it.skipIf(!endpoint || !process.env.MARIMOHUB_TEST_LARGE_UPLOAD_BYTES)(
 			);
 			await service.cancelUpload(pid, nid, second.id, actor);
 		} finally {
+			let keyMarker: string | undefined;
+			let uploadIdMarker: string | undefined;
+			do {
+				const page = await client.send(
+					new ListMultipartUploadsCommand({
+						Bucket: config.bucket,
+						KeyMarker: keyMarker,
+						UploadIdMarker: uploadIdMarker,
+					}),
+				);
+				for (const upload of page.Uploads ?? []) {
+					await client.send(
+						new AbortMultipartUploadCommand({
+							Bucket: config.bucket,
+							Key: upload.Key,
+							UploadId: upload.UploadId,
+						}),
+					);
+				}
+				keyMarker = page.IsTruncated ? page.NextKeyMarker : undefined;
+				uploadIdMarker = page.NextUploadIdMarker;
+			} while (keyMarker);
 			let token: string | undefined;
 			do {
 				const page = await client.send(

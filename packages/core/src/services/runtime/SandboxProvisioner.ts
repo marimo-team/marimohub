@@ -543,6 +543,8 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		try {
 			const stats = await restoreWorkspace(sandbox, bucketHandle, workspacePrefix, mountPath, {
 				limits: workspaceLimits,
+				// Capture treats absent files as deletions, so a session must restore every file.
+				requireComplete: true,
 				overlay,
 				excludeRelativeRoots,
 				waitUntilReady,

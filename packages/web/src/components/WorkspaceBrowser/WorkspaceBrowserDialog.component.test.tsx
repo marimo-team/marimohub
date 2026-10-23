@@ -30,5 +30,9 @@ it('keeps read-only browsing available when capabilities fail', async () => {
 		{ toaster: false },
 	);
 	expect((await screen.findAllByText('data.csv')).length).toBeGreaterThan(0);
-	expect(screen.queryByText('Could not load workspace access.')).not.toBeInTheDocument();
+	expect(
+		screen.getByText('Your project role allows browsing, but not workspace changes.'),
+	).toBeInTheDocument();
+	expect(screen.getByRole('button', { name: 'New Folder' })).toBeDisabled();
+	expect(screen.getByRole('button', { name: 'New File' })).toBeDisabled();
 });

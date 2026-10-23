@@ -1277,10 +1277,14 @@ async function authorizeObjectUpload(
 	id: string,
 	options: { signal?: AbortSignal } = {},
 ) {
-	const access = await objectWriteAccess(deps, user, pid, iid, options.signal);
 	const uploads = objectUploads(deps, pid);
 	const record = await uploads.get(id, user.id);
 	if (record.context.integration_id !== iid) throw new NotFoundError('Upload not found');
+	if (record.status === 'complete') {
+		await assertProjectRole(deps.services.projects, pid, user, 'integration.use', deps);
+		return { access: null, uploads, record };
+	}
+	const access = await objectWriteAccess(deps, user, pid, iid, options.signal);
 	if (record.context.state !== access.stateToken)
 		throw new ConflictError('The integration changed; start a new upload');
 	return { access, uploads, record };
@@ -1420,52 +1424,60 @@ app.openapi(
 		const { access, uploads } = await authorizeObjectUpload(deps, user, pid, iid, uploadId, {
 			signal,
 		});
-		const result = await uploads.complete(uploadId, user.id, async (record) => async () => {
-			const iterator = uploads.chunks(record);
-			const body = new ReadableStream<Uint8Array>({
-				async pull(controller) {
-					try {
-						const next = await iterator.next();
-						if (next.done) controller.close();
-						else controller.enqueue(next.value);
-					} catch (error) {
-						controller.error(error);
-					}
-				},
-				async cancel() {
-					await iterator.return(undefined);
-				},
-			});
-			await runObjectBrowse(() =>
-				access.integrations.putObject!(
-					pid,
-					iid,
-					{ ...access.context, expected_integration_state: access.stateToken },
-					{
-						bucket: record.context.bucket,
-						key: record.path,
-						size: record.size,
-						contentType: record.content_type,
-						body,
+		const result = await uploads.complete(uploadId, user.id, async (record) => {
+			if (!access) throw new ConflictError('Upload has no completion result');
+			return async () => {
+				const iterator = uploads.chunks(record);
+				const body = new ReadableStream<Uint8Array>({
+					async pull(controller) {
+						try {
+							const next = await iterator.next();
+							if (next.done) controller.close();
+							else controller.enqueue(next.value);
+						} catch (error) {
+							controller.error(error);
+						}
 					},
-				),
-			);
-			await appendAudit(
-				{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
-				'integration.object.put',
-				() =>
-					deps.services.events.append({
-						event: 'integration.object.put',
-						actor: user.id,
-						project_id: pid,
-						integration_id: iid,
-						bucket: record.context.bucket,
-						key: record.path,
-						bytes: record.size,
-						request_id: c.get('requestId'),
-					}),
-			);
-			return { bucket: record.context.bucket, key: record.path, size: record.size };
+					async cancel() {
+						await iterator.return(undefined);
+					},
+				});
+				await runObjectBrowse(() =>
+					access.integrations.putObject!(
+						pid,
+						iid,
+						{ ...access.context, expected_integration_state: access.stateToken },
+						{
+							bucket: record.context.bucket,
+							key: record.path,
+							size: record.size,
+							contentType: record.content_type,
+							body,
+						},
+					),
+				);
+				await appendAudit(
+					{
+						requestId: c.get('requestId'),
+						method: c.req.method,
+						path: c.req.path,
+						userId: user.id,
+					},
+					'integration.object.put',
+					() =>
+						deps.services.events.append({
+							event: 'integration.object.put',
+							actor: user.id,
+							project_id: pid,
+							integration_id: iid,
+							bucket: record.context.bucket,
+							key: record.path,
+							bytes: record.size,
+							request_id: c.get('requestId'),
+						}),
+				);
+				return { bucket: record.context.bucket, key: record.path, size: record.size };
+			};
 		});
 		const data = ObjectUploadResultSchema.parse(result);
 		return c.json({ success: true as const, data }, 200);

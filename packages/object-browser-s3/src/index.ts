@@ -100,6 +100,7 @@ export class S3ObjectBrowser implements ObjectBrowser<'s3'> {
 				resolveHost: options.resolveHost,
 				connectionTimeoutMs: transportTimeoutMs,
 				requestTimeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
+				maxAttempts: 1,
 			});
 		} else {
 			throw new Error('S3ObjectBrowser requires a guarded host resolver.');

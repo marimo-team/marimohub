@@ -220,6 +220,52 @@ describe('GCS object browser', () => {
 });
 
 describe('GCS object uploads', () => {
+	it.each([200, 308])('finalizes an empty object only on success (HTTP %i)', async (status) => {
+		const auth = vi
+			.spyOn(GcsAuth.prototype, 'headers')
+			.mockResolvedValue({ Authorization: 'Bearer token' });
+		try {
+			const fetcher = vi.fn<typeof fetch>(async (_, init) => {
+				if (init?.method === 'POST')
+					return new Response(null, {
+						headers: { location: 'https://storage.googleapis.com/upload/session' },
+					});
+				return new Response(null, { status: init?.method === 'PUT' ? status : 200 });
+			});
+			const upload = browser(fetcher).putObject(
+				{
+					...source,
+					allow_write: true,
+					auth: {
+						method: 'service_account',
+						credentials_json: JSON.stringify({
+							client_email: 'test@example.com',
+							private_key: 'test',
+						}),
+					},
+				},
+				context,
+				{
+					bucket: 'lake',
+					key: 'empty',
+					contentType: 'text/plain',
+					size: 0,
+					body: new Uint8Array(),
+				},
+			);
+			if (status === 200) await expect(upload).resolves.toBeUndefined();
+			else await expect(upload).rejects.toMatchObject({ code: 'unavailable' });
+			const requests = fetcher.mock.calls.map(([, init]) => init!);
+			expect(requests.map(({ method }) => method)).toEqual(
+				status === 200 ? ['POST', 'PUT'] : ['POST', 'PUT', 'DELETE'],
+			);
+			expect(new Headers(requests[1].headers).get('content-range')).toBe('bytes */0');
+			expect(requests[1].body).toEqual(new Uint8Array());
+		} finally {
+			auth.mockRestore();
+		}
+	});
+
 	it('keeps ambient credentials read-only even with allow_write', async () => {
 		const fetcher = vi.fn();
 		const writable = { ...source, allow_write: true };

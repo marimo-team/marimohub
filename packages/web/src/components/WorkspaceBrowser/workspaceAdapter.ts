@@ -22,6 +22,7 @@ export interface WorkspaceUploadLimits {
 }
 
 export type { WorkspaceAccess } from './workspacePolicy';
+export type WorkspaceUploadConflict = (path: string, restart: () => Promise<FileItem>) => void;
 
 export function workspaceItemFromApi(item: WorkspaceItem): FileItem {
 	return {
@@ -131,6 +132,7 @@ export class WorkspaceAdapter implements FileSystemAdapter {
 		private readonly access: WorkspaceAccess,
 		private readonly limits?: WorkspaceUploadLimits,
 		private readonly onProgress?: (path: string, progress: UploadProgress | null) => void,
+		private readonly onUploadConflict?: WorkspaceUploadConflict,
 	) {
 		this.base = `${notebookPath(projectId, notebookId)}/workspace`;
 		this.ids = { pid: projectId, nid: notebookId };
@@ -251,6 +253,7 @@ export class WorkspaceAdapter implements FileSystemAdapter {
 		content: Blob | string,
 		signal: AbortSignal | undefined,
 		create: boolean,
+		restart = false,
 	): Promise<FileItem> {
 		const size = typeof content === 'string' ? new Blob([content]).size : content.size;
 		if (this.limits && size > this.limits.max_file_bytes) {
@@ -267,8 +270,12 @@ export class WorkspaceAdapter implements FileSystemAdapter {
 					`${this.base}/uploads`,
 					file,
 					{ path, create_only: create },
-					{ signal, onProgress: (progress) => this.onProgress?.(path, progress) },
-				),
+					{ signal, restart, onProgress: (progress) => this.onProgress?.(path, progress) },
+				).catch((error) => {
+					if (error instanceof ApiRequestError && error.status === 409)
+						this.onUploadConflict?.(path, () => this.put(path, file, undefined, create, true));
+					throw error;
+				}),
 				path,
 			);
 			return workspaceItemResponse(response, path);
@@ -314,7 +321,15 @@ export function workspaceAdapter(
 	access: WorkspaceAccess,
 	limits?: WorkspaceUploadLimits,
 	onProgress?: (path: string, progress: UploadProgress | null) => void,
+	onUploadConflict?: WorkspaceUploadConflict,
 ): FileSystemAdapter {
-	const adapter = new WorkspaceAdapter(projectId, notebookId, access, limits, onProgress);
+	const adapter = new WorkspaceAdapter(
+		projectId,
+		notebookId,
+		access,
+		limits,
+		onProgress,
+		onUploadConflict,
+	);
 	return access.writable ? adapter : readOnlyAdapter(adapter);
 }

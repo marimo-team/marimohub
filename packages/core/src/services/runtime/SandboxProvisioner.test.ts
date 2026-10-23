@@ -35,6 +35,7 @@ import { SandboxProvisioner } from './SandboxProvisioner';
 import type { BucketConfig, ProvisionOptions, WorkspaceLoadStrategies } from './SandboxProvisioner';
 import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { sandboxContextPath } from './sandboxContext';
+import { captureWorkspace } from './sandboxFiles';
 
 const MOUNT_PATH = '/workspace';
 
@@ -2965,6 +2966,57 @@ describe('SandboxProvisioner', () => {
 			expect(calls.writeFiles.flat().map((file) => file.path)).not.toContain(
 				`${MOUNT_PATH}/.git/config`,
 			);
+		});
+
+		it.each([
+			{ maxFileBytes: 2, maxTotalBytes: 6, maxFiles: 2 },
+			{ maxFileBytes: 3, maxTotalBytes: 5, maxFiles: 2 },
+			{ maxFileBytes: 3, maxTotalBytes: 6, maxFiles: 1 },
+		])('rejects incomplete session restores after lowering limits: %j', async (workspaceLimits) => {
+			const bucketHandle = new MemoryBucket();
+			const nb = paths.project(projectId).notebook(notebookId);
+			await bucketHandle.put(nb.workspaceFile('a.csv'), '123');
+			await bucketHandle.put(nb.workspaceFile('b.csv'), '456');
+			const options: ProvisionOptions = {
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: { ...bucketConfig, mountable: false },
+				bucketHandle,
+				workspaceLimits,
+			};
+			for (const workspaceLoadMode of ['copy-only', 'mount-or-copy'] as const) {
+				const { instance, calls } = makeFsSandbox();
+				const start = vi.spyOn(instance, 'startProcess');
+				const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+				await expect(provisioner.provision({ ...options, workspaceLoadMode })).rejects.toThrow(
+					'restoring the notebook workspace',
+				);
+				expect(start).not.toHaveBeenCalled();
+				expect(calls.destroy).toBe(1);
+				expect(await (await bucketHandle.get(nb.workspaceFile('a.csv')))!.text()).toBe('123');
+				expect(await (await bucketHandle.get(nb.workspaceFile('b.csv')))!.text()).toBe('456');
+			}
+			const { instance } = makeFsSandbox();
+			const limits = { maxFileBytes: 3, maxTotalBytes: 6, maxFiles: 2 };
+			await new SandboxProvisioner(fakeComputeFrom(instance)).prepare({
+				...options,
+				workspaceLimits: limits,
+			});
+			await captureWorkspace(
+				instance,
+				bucketHandle,
+				projectId,
+				notebookId,
+				MOUNT_PATH,
+				'workspace',
+				undefined,
+				undefined,
+				limits,
+			);
+			expect(await (await bucketHandle.get(nb.workspaceFile('a.csv')))!.text()).toBe('123');
+			expect(await (await bucketHandle.get(nb.workspaceFile('b.csv')))!.text()).toBe('456');
 		});
 
 		it('restores Git objects above the default cap using configured workspace limits', async () => {

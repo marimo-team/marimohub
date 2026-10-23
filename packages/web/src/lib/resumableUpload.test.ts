@@ -176,6 +176,72 @@ describe('resumableUpload failures', () => {
 		expect(sessionStorage.length).toBe(0);
 	});
 
+	it('retains its receipt when the completion body fails after successful headers', async () => {
+		const body = new ReadableStream({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode('{"success":'));
+				controller.error(new TypeError('Response body lost'));
+			},
+		});
+		const fetcher = vi
+			.fn()
+			.mockResolvedValueOnce(status())
+			.mockResolvedValueOnce(status([1]))
+			.mockResolvedValueOnce(status([1, 2]))
+			.mockResolvedValueOnce(new Response(body));
+		vi.stubGlobal('fetch', fetcher);
+		await expect(resumableUpload('/uploads', file(), { path: 'data.bin' })).rejects.toThrow(
+			'Response body lost',
+		);
+		expect(sessionStorage.length).toBe(1);
+		fetcher
+			.mockReset()
+			.mockResolvedValueOnce(status([1, 2]))
+			.mockResolvedValueOnce(Response.json({ success: true }));
+		const response = await resumableUpload('/uploads', file(), { path: 'data.bin' });
+		expect(await response.json()).toEqual({ success: true });
+		expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+			`/uploads/${id}`,
+			`/uploads/${id}/complete`,
+		]);
+		expect(sessionStorage.length).toBe(0);
+	});
+
+	it.each([200, 404, 409])(
+		'explicit restart cancels the old upload before discarding its receipt (%i)',
+		async (code) => {
+			const fetcher = await leaveReceipt();
+			fetcher
+				.mockResolvedValueOnce(new Response(null, { status: code }))
+				.mockResolvedValueOnce(status())
+				.mockResolvedValueOnce(status([1]))
+				.mockResolvedValueOnce(status([1, 2]))
+				.mockResolvedValueOnce(Response.json({ success: true }));
+			await resumableUpload('/uploads', file(), { path: 'data.bin' }, { restart: true });
+			expect(fetcher.mock.calls[0]).toMatchObject([`/uploads/${id}`, { method: 'DELETE' }]);
+			expect(fetcher.mock.calls[1]).toMatchObject(['/uploads', { method: 'POST' }]);
+			expect(sessionStorage.length).toBe(0);
+		},
+	);
+
+	it.each([403, 503])(
+		'retains the old receipt if explicit cancellation fails (%i)',
+		async (code) => {
+			const fetcher = await leaveReceipt();
+			fetcher.mockResolvedValueOnce(
+				Response.json(
+					{ success: false, error: { code: 'FAILED', message: 'Cancellation failed' } },
+					{ status: code },
+				),
+			);
+			await expect(
+				resumableUpload('/uploads', file(), { path: 'data.bin' }, { restart: true }),
+			).rejects.toThrow('Cancellation failed');
+			expect(fetcher).toHaveBeenCalledTimes(1);
+			expect(sessionStorage.length).toBe(1);
+		},
+	);
+
 	it('retains a receipt after aborting between parts and clears progress', async () => {
 		const controller = new AbortController();
 		const progress = vi.fn((value) => {

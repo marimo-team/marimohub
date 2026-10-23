@@ -376,11 +376,16 @@ export class GcsStorage implements Bucket {
 		if (!start.ok) return this.failNonOk(start, 'putStream', key);
 		const location = start.headers.get('location');
 		if (!location) throw new Error('GCS did not return a resumable upload location');
-		const url = new URL(location, this.apiEndpoint);
+		let url: URL;
+		try {
+			url = new URL(location, this.apiEndpoint);
+		} catch (cause) {
+			throw new Error('GCS returned an invalid upload location', { cause });
+		}
 		if (url.origin !== new URL(this.apiEndpoint).origin)
 			throw new Error('GCS returned an unexpected upload origin');
 		let offset = 0;
-		let buffer = new Uint8Array(8 * 1024 * 1024);
+		let buffer = new Uint8Array(Math.min(8 * 1024 * 1024, size));
 		let used = 0;
 		const send = async (final: boolean): Promise<Response> => {
 			let stalled = 0;

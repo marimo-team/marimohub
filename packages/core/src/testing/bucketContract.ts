@@ -21,6 +21,26 @@ export function bucketContract(name: string, makeBucket: () => Bucket | Promise<
 			bucket = await makeBucket();
 		});
 
+		for (const size of [1, 3]) {
+			it(`putStream rejects a ${size}-byte source declared as 2 bytes`, async ({ skip }) => {
+				if (!bucket.putStream) return skip();
+				const key = 'stream/data.bin';
+				const original = await bucket.put(key, 'old');
+				await expect(
+					bucket.putStream(
+						key,
+						(async function* () {
+							yield new Uint8Array(size);
+						})(),
+						2,
+					),
+				).rejects.toThrow();
+				const stored = await bucket.get(key);
+				expect(stored?.etag).toBe(original.etag);
+				expect(await stored!.text()).toBe('old');
+			});
+		}
+
 		it('multipart uploads publish ordered parts atomically and abort preserves existing data', async ({
 			skip,
 		}) => {

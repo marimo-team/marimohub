@@ -101,6 +101,8 @@ function makeFakeGcsFetch(): typeof fetch {
 			if (typeof b === 'string') return new TextEncoder().encode(b);
 			return new Uint8Array(0);
 		};
+		if (url.pathname === '/upload/session' && method === 'DELETE')
+			return new Response(null, { status: 204 });
 
 		// Upload (media or multipart): POST /upload/.../o?name=KEY[&ifGenerationMatch=G]
 		if (isUpload && method === 'POST') {
@@ -112,6 +114,10 @@ function makeFakeGcsFetch(): typeof fetch {
 				const have = existing?.generation ?? 0;
 				if (want !== have) return new Response('precondition failed', { status: 412 });
 			}
+			if (q.get('uploadType') === 'resumable')
+				return new Response(null, {
+					headers: { location: `${url.origin}/upload/session` },
+				});
 			// Extract the body (multipart wraps the media between the second blank line
 			// and the closing boundary; media is the raw body) — all at the byte level
 			// so binary payloads survive.
@@ -652,6 +658,42 @@ if (liveBucket) {
 }
 
 describe('GCS streaming upload', () => {
+	it('normalizes a malformed resumable upload location', async () => {
+		const fetchImpl = vi.fn<typeof fetch>(
+			async () => new Response(null, { headers: { location: 'http://[' } }),
+		);
+		const bucket = new GcsStorage({ bucket: 'lake', accessToken: 'token', fetchImpl });
+		await expect(bucket.putStream('data', (async function* () {})(), 0)).rejects.toMatchObject({
+			name: 'Error',
+			message: 'GCS returned an invalid upload location',
+		});
+		expect(fetchImpl).toHaveBeenCalledOnce();
+	});
+
+	it.each([0, 3])('allocates only %i bytes for a small upload', async (size) => {
+		const bucket = new GcsStorage({
+			bucket: 'lake',
+			accessToken: 'token',
+			fetchImpl: (async (_url, init) => {
+				if (init?.method === 'POST')
+					return new Response(null, {
+						headers: { location: 'https://storage.googleapis.com/upload/session' },
+					});
+				expect((init!.body as Uint8Array).buffer.byteLength).toBe(size);
+				return Response.json({ generation: '42' });
+			}) as typeof fetch,
+		});
+		await expect(
+			bucket.putStream(
+				'data',
+				(async function* () {
+					yield new Uint8Array(size);
+				})(),
+				size,
+			),
+		).resolves.toMatchObject({ size });
+	});
+
 	it('sends bounded resumable ranges and commits only after the source ends', async () => {
 		const ranges: string[] = [];
 		let ended = false;

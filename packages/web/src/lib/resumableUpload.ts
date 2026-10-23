@@ -40,7 +40,11 @@ export async function resumableUpload(
 	base: string,
 	file: Blob,
 	input: { path: string; create_only?: boolean; bucket?: string; content_type?: string },
-	options: { signal?: AbortSignal; onProgress?: (progress: UploadProgress | null) => void } = {},
+	options: {
+		signal?: AbortSignal;
+		onProgress?: (progress: UploadProgress | null) => void;
+		restart?: boolean;
+	} = {},
 ): Promise<Response> {
 	const { signal, onProgress } = options;
 	const progress = (phase: UploadProgress['phase'], loaded: number) =>
@@ -61,7 +65,18 @@ export async function resumableUpload(
 			await crypto.subtle.digest('SHA-256', new TextEncoder().encode(hashes.join(''))),
 		);
 		const resumeKey = `marimohub-upload:${base}:${JSON.stringify(input)}:${file.size}:${fingerprint}`;
-		const previous = readResume(resumeKey);
+		let previous = readResume(resumeKey);
+		if (previous && options.restart) {
+			const response = await fetch(`${base}/${encodeURIComponent(previous)}`, {
+				method: 'DELETE',
+				signal,
+			});
+			// Only an explicit restart can discard an uncertain publication's local receipt.
+			if (!response.ok && response.status !== 404 && response.status !== 409)
+				throw await apiErrorFromResponse(response, 'Previous upload could not be cancelled');
+			saveResume(resumeKey, null);
+			previous = null;
+		}
 		let upload: UploadStatus | undefined;
 		if (previous) {
 			const response = await fetch(`${base}/${encodeURIComponent(previous)}`, { signal });
@@ -101,6 +116,7 @@ export async function resumableUpload(
 		progress('publishing', file.size);
 		const response = await fetch(`${base}/${upload.id}/complete`, { method: 'POST', signal });
 		if (!response.ok) throw await apiErrorFromResponse(response, 'Upload could not be completed');
+		await response.clone().json();
 		saveResume(resumeKey, null);
 		return response;
 	} finally {

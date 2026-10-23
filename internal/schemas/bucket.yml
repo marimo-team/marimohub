@@ -5210,6 +5210,7 @@ components:
                 maximum: 9007199254740991
               sha256:
                 type: string
+                pattern: ^[0-9a-f]{64}$
               key:
                 type: string
               etag:
@@ -5320,6 +5321,7 @@ components:
                 maximum: 9007199254740991
               sha256:
                 type: string
+                pattern: ^[0-9a-f]{64}$
               key:
                 type: string
               etag:

@@ -297,3 +297,34 @@ it.each([
 		expect.any(Object),
 	);
 });
+
+it('offers an explicit restart after a resumable conflict without retrying automatically', async () => {
+	const conflict = vi.fn();
+	vi.mocked(resumableUpload).mockRejectedValueOnce(
+		new ApiRequestError('CONFLICT', 'Publication interrupted', { status: 409 }),
+	);
+	const adapter = new WorkspaceAdapter(
+		'project',
+		'notebook',
+		access,
+		{
+			single_put_max_bytes: 1,
+			max_file_bytes: 10,
+			max_total_bytes: 20,
+			max_files: 10,
+		},
+		undefined,
+		conflict,
+	);
+	await expect(adapter.createFile('/data', { content: 'ab' })).rejects.toMatchObject({
+		code: 'exists',
+	});
+	expect(resumableUpload).toHaveBeenCalledTimes(1);
+	expect(conflict).toHaveBeenCalledWith('/data', expect.any(Function));
+	vi.mocked(resumableUpload).mockResolvedValueOnce(
+		jsonOk({ path: '/data', name: 'data', kind: 'file' }),
+	);
+	await expect(conflict.mock.calls[0]?.[1]()).resolves.toMatchObject({ path: '/data' });
+	expect(vi.mocked(resumableUpload).mock.calls[1]?.[3]).toMatchObject({ restart: true });
+	expect(vi.mocked(resumableUpload).mock.calls[1]?.[2]).toMatchObject({ create_only: true });
+});

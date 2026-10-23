@@ -4,6 +4,7 @@ import { makeWorkspaceService } from '../../testing/workspaceFixtures';
 import { NotebookId, ProjectId } from '../../ids';
 import type { UserId } from '../../ids';
 import { paths } from '../../paths';
+import { StoredObjectError } from '../../schema';
 import { UPLOAD_PART_BYTES } from '../../uploads';
 import { ResumableUploads, UploadIndexSchema, UPLOAD_RETENTION_MS } from './ResumableUploads';
 
@@ -475,13 +476,30 @@ describe('upload receipt invariants', () => {
 		record.parts = numbers.map((number) => ({
 			number,
 			key: `uploads/${upload.id}/parts/${number}`,
-			sha256: 'hash',
+			sha256: 'a'.repeat(64),
 		}));
 		await bucket.put(`uploads/${upload.id}.json`, JSON.stringify(record));
 		const prepare = vi.fn();
 		await expect(uploads.complete(upload.id, actor, prepare)).rejects.toThrow('part ordering');
 		expect(prepare).not.toHaveBeenCalled();
 	});
+
+	it.each(['', 'a'.repeat(63), 'a'.repeat(65), 'A'.repeat(64), 'g'.repeat(64)])(
+		'rejects malformed stored checksums before publication: %s',
+		async (sha256) => {
+			const { bucket, uploads, start } = uploadStore();
+			const upload = await start();
+			await uploads.putPart(upload.id, 1, new Uint8Array([1]), actor);
+			const record = await uploads.get(upload.id, actor);
+			record.parts[0].sha256 = sha256;
+			await bucket.put(`uploads/${upload.id}.json`, JSON.stringify(record));
+			const prepare = vi.fn();
+			await expect(uploads.complete(upload.id, actor, prepare)).rejects.toBeInstanceOf(
+				StoredObjectError,
+			);
+			expect(prepare).not.toHaveBeenCalled();
+		},
+	);
 
 	it('rejects oversized reservation indexes', () => {
 		const reservation = { id: crypto.randomUUID(), size: 0, expires_at: Date.now() };

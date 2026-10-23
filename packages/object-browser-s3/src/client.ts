@@ -36,6 +36,7 @@ export function createS3ClientFactory(options: {
 	resolveHost: GuardedHostResolver;
 	connectionTimeoutMs?: number;
 	requestTimeoutMs?: number;
+	maxAttempts?: number;
 	metadataMaxResponseBytes?: number;
 	listMaxResponseBytes?: number;
 }): S3ClientFactory {
@@ -55,7 +56,7 @@ export function createS3ClientFactory(options: {
 			region: source.region ?? context.federation?.storage.region ?? 'us-east-1',
 			endpoint: source.endpoint,
 			forcePathStyle: source.path_style,
-			maxAttempts: 3,
+			maxAttempts: options.maxAttempts ?? 3,
 			requestHandler,
 			...(source.auth.method === 'anonymous'
 				? {

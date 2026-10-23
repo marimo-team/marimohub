@@ -10,7 +10,7 @@ import {
 import type { UserId } from '../../ids';
 import { logOperationalError } from '../../operationalLog';
 import type { Bucket, BucketObject, BucketMultipartOptions } from '../../ports/bucket';
-import { readStored } from '../../schema';
+import { readStored, StoredObjectError } from '../../schema';
 import { UPLOAD_PART_BYTES, UploadStatusSchema } from '../../uploads';
 import { withCasRetry } from '../catalog/cas';
 import { deleteByPrefix, listAllObjects } from '../catalog/storage';
@@ -20,7 +20,7 @@ const RECEIPT_RETENTION_MS = 7 * UPLOAD_RETENTION_MS;
 const MAX_ACTIVE_UPLOADS = 16;
 const UploadPartSchema = z.object({
 	number: z.number().int().positive(),
-	sha256: z.string(),
+	sha256: z.string().regex(/^[0-9a-f]{64}$/),
 	key: z.string().optional(),
 	etag: z.string().min(1).optional(),
 });
@@ -424,7 +424,19 @@ export class ResumableUploads {
 			.filter((id) => z.uuid().safeParse(id).success);
 	}
 	async cancelAll() {
-		for (const id of await this.recordIds()) await this.expire(id);
+		for (const id of await this.recordIds()) {
+			try {
+				await this.load(id);
+			} catch (error) {
+				const corrupt =
+					error instanceof StoredObjectError &&
+					(error.reason === 'schema_mismatch' || error.cause_name === 'SyntaxError');
+				if (!corrupt && !(error instanceof NotFoundError)) throw error;
+				logOperationalError('upload_cancel_failed', { upload_id: id }, error);
+				continue;
+			}
+			await this.expire(id);
+		}
 	}
 	async sweep(now = Date.now()) {
 		for (const id of await this.recordIds()) {

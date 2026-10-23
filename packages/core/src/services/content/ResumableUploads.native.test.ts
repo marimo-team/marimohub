@@ -349,6 +349,45 @@ describe('destination workspace uploads', () => {
 });
 
 describe('native upload deletion', () => {
+	it('preserves receipts when reading a lazy body fails', async () => {
+		const { bucket, uploads, multipart, start } = setup();
+		const upload = await start();
+		const key = `${prefix}${upload.id}.json`;
+		const receipt = await bucket.get(key);
+		const get = bucket.get.bind(bucket);
+		vi.spyOn(bucket, 'get').mockImplementation(async (requested) =>
+			requested === key
+				? {
+						...receipt!,
+						json: async () => {
+							throw new TypeError('connection terminated');
+						},
+					}
+				: get(requested),
+		);
+		await expect(uploads.cancelAll()).rejects.toMatchObject({
+			name: 'StoredObjectError',
+			cause_name: 'TypeError',
+		});
+		expect(await bucket.head(key)).not.toBeNull();
+		expect(multipart.abort).not.toHaveBeenCalled();
+	});
+
+	it.each(['not json', JSON.stringify({ status: 'uploading' })])(
+		'skips corrupt receipts while aborting readable sessions: %s',
+		async (corrupt) => {
+			const { bucket, uploads, multipart, start, sessions } = setup();
+			await bucket.put(`${prefix}00000000-0000-4000-8000-000000000000.json`, corrupt);
+			const upload = await start();
+			await uploads.cancelAll();
+			expect(multipart.abort).toHaveBeenCalledTimes(1);
+			expect(sessions.size).toBe(0);
+			expect(await (await bucket.get(`${prefix}${upload.id}.json`))!.json()).toMatchObject({
+				status: 'cancelled',
+			});
+		},
+	);
+
 	it.each(['notebook', 'project'] as const)(
 		'aborts sessions before deleting a %s and preserves receipts on abort failure',
 		async (scope) => {
@@ -377,6 +416,10 @@ describe('native upload deletion', () => {
 			);
 			const nb = paths.project(project.id).notebook(notebook.id);
 			const receiptKey = `${nb.base}/uploads/${upload.id}.json`;
+			await env.bucket.put(
+				`${nb.base}/uploads/00000000-0000-4000-8000-000000000000.json`,
+				'not json',
+			);
 			if (scope === 'notebook') await env.notebooks.deleteNotebook(project.id, notebook.id, ACTOR);
 			else await env.projects.deleteProject(project.id, ACTOR);
 			const purge = () =>
