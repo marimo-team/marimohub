@@ -20,7 +20,8 @@ Workspace limits do not apply. Uploads use 8 MiB parts and expire after 24 hours
 After a reload or connection failure, select the same file in the same tab to resume.
 The browser checks its contents before it reuses parts.
 If the integration configuration changes, unfinished uploads return `409` and cannot resume.
-Before you retry or restart, check the destination. A write can succeed even if its response is lost or completion returns `409`.
+Before you retry or restart, check the destination.
+A write can succeed even if its response is lost or completion returns `409` for an interrupted publication.
 To discard saved progress, click **Restart** next to the failed file and confirm.
 The browser attempts to cancel the old upload first. An uncertain publication keeps its server receipt for cleanup.
 

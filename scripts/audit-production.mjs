@@ -2,6 +2,10 @@ import { spawnSync } from 'node:child_process';
 
 const allowedAdvisories = new Map([
 	['GHSA-qwww-vcr4-c8h2', 'React Router unstable RSC APIs are not used by the marimohub SPA.'],
+	[
+		'GHSA-xcx6-jx8p-x3h5',
+		'Azure Identity passes only the auth code to MSAL, matching the advisory workaround. marimohub does not use authorization-code credentials.',
+	],
 ]);
 
 const vp = process.platform === 'win32' ? 'vp.exe' : 'vp';

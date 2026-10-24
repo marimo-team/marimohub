@@ -108,8 +108,8 @@ function ObjectUploadForm({
 			setRestartFiles(conflicts);
 			setProgress(null);
 			setBusy(false);
-			if (needsRefresh) onComplete();
 		}
+		if (needsRefresh) onComplete();
 	}
 	return (
 		<div className="space-y-2">

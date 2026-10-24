@@ -12,6 +12,7 @@ import {
 import { expect, it } from 'vitest';
 import { createNotebookId, createProjectId, UserId } from '@marimo-hub/core/ids';
 import { makeWorkspaceService } from '@marimo-hub/core/testing/workspace-fixtures';
+import { WORKSPACE_FILE_BYTES_CEILING } from '@marimo-hub/core/remote-workspace';
 import { S3Storage } from './index';
 
 const endpoint = process.env.MARIMOHUB_TEST_S3_ENDPOINT;
@@ -33,7 +34,11 @@ it.skipIf(!endpoint || !process.env.MARIMOHUB_TEST_LARGE_UPLOAD_BYTES)(
 		await client.send(new CreateBucketCommand({ Bucket: config.bucket }));
 		try {
 			const bucket = new S3Storage(config);
-			const limits = { maxFileBytes: 2 * 1024 ** 3, maxTotalBytes: size, maxFiles: 1000 };
+			const limits = {
+				maxFileBytes: WORKSPACE_FILE_BYTES_CEILING,
+				maxTotalBytes: size,
+				maxFiles: 1000,
+			};
 			let service = makeWorkspaceService(bucket, undefined, limits).service;
 			const pid = createProjectId();
 			const nid = createNotebookId();

@@ -54,8 +54,26 @@ it.skipIf(!python).each([false, true])(
 					credential: 'test',
 				},
 			];
-			const fixture = await readFile(new URL('./fixtures/thumbnail.html', import.meta.url), 'utf8');
+			const notebook = join(dir, 'notebook.py');
 			const input = join(dir, 'snapshot.html');
+			await writeFile(
+				notebook,
+				`import marimo
+app = marimo.App()
+
+@app.cell
+def _():
+    import marimo as mo
+    mo.md('# Thumbnail smoke test\\n\\nSaved outputs, without a kernel.')
+    return
+`,
+			);
+			// Export with the installed runtime so hashed frontend assets match the renderer.
+			await run(python!, ['-m', 'marimo', 'export', 'html', notebook, '-o', input], {
+				timeout: 5000,
+			});
+			const fixture = await readFile(input, 'utf8');
+			expect(fixture).toContain('</body>');
 			await writeFile(
 				input,
 				fixture.replace(
@@ -100,5 +118,5 @@ new WebSocket('ws://127.0.0.1:${address.port}/kernel');
 			await rm(dir, { recursive: true, force: true });
 		}
 	},
-	15_000,
+	20_000,
 );

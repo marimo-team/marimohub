@@ -1,5 +1,5 @@
 export const UTC_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const ISO_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z$/;
+const ISO_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?Z$/;
 
 export function parseUtcDate(value: string): number | null {
 	if (!UTC_DATE_PATTERN.test(value)) return null;
@@ -15,7 +15,7 @@ export function parseIsoTimestamp(value: string): number | null {
 	const parsed = Date.parse(value);
 	if (!Number.isFinite(parsed)) return null;
 	const date = new Date(parsed);
-	const expected = match.slice(1, 7).map(Number);
+	const expected = match.slice(1, 7).map((part) => Number(part ?? 0));
 	const actual = [
 		date.getUTCFullYear(),
 		date.getUTCMonth() + 1,

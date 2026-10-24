@@ -1744,7 +1744,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_WORKSPACE_MAX_FILE_BYTES',
 						name: 'Workspace per-file limit',
 						description:
-							'Maximum bytes per workspace file: 1 to 67108864 (64 MiB). Single-request uploads also have a 25 MiB limit. Higher limits increase memory use and session start time. See [Workspace limits](./editor-sessions.md#workspace-limits) for buffering and fixed limits.',
+							'Maximum bytes per workspace file: 1 to 67108864 (64 MiB). Single-request uploads use the smaller of this value and 25 MiB. Custom adapters without multipart or stream support buffer resumable uploads during assembly, up to the smaller of this value and 64 MiB. Higher limits increase memory use and session start time. See [Workspace limits](./editor-sessions.md#workspace-limits) for buffering and fixed limits.',
 						default: '26214400',
 					},
 					{

@@ -119,6 +119,8 @@ The browser reads these limits from `workspace_limits` in `/api/v1/capabilities`
 
 The 64 MiB per-file ceiling applies to all workspace adapters and library configuration.
 Single-request uploads, downloads, sandbox restore, and capture buffer whole files, so higher limits increase memory use and session start time.
+Custom adapters without multipart or stream support also buffer complete files during resumable upload assembly.
+Their upload limit is the smaller of 64 MiB and `MARIMOHUB_WORKSPACE_MAX_FILE_BYTES`.
 Restore batches and prefetch budgets do not reduce per-file memory use.
 Git fetch, folder archive, packed sandbox archive restore, and session source-artifact limits remain fixed.
 [Object uploads](./data-browser.md) have a separate 5 GiB limit.
@@ -144,7 +146,6 @@ To discard saved progress, click **Restart upload** and confirm after you check 
 
 S3 and R2 workspace uploads send parts directly into a destination upload session. Saving commits the uploaded parts without another full transfer.
 Other adapters stage parts and assemble them when saving.
-Custom adapters without multipart or stream support buffer the whole file during assembly.
 See the [API reference](./api.md) for start, part, progress, complete, and cancel operations under `…/workspace/uploads`.
 
 The API exposes the same operations under

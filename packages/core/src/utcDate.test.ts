@@ -14,7 +14,37 @@ describe('parseUtcDate', () => {
 	);
 });
 
+describe('parseIsoTimestamp', () => {
+	it.each(['2026-10-23T12:30Z', '2000-02-29T23:59Z'])(
+		'accepts minute precision with zero seconds: %s',
+		(value) => {
+			expect(parseIsoTimestamp(value)).toBe(Date.parse(value.replace('Z', ':00.000Z')));
+		},
+	);
+
+	it.each([
+		'2026-02-29T12:30Z',
+		'1900-02-29T12:30Z',
+		'2026-04-31T12:30Z',
+		'2026-10-23T24:00Z',
+		'2026-10-23T12:60Z',
+		'2026-10-23T12:30.1Z',
+		'2026-10-23T12:30+00:00',
+	])('rejects invalid minute timestamps: %s', (value) => {
+		expect(parseIsoTimestamp(value)).toBeNull();
+	});
+});
+
 describe('nextIsoTimestamp', () => {
+	it('compares minute precision without extending it to the end of the minute', () => {
+		expect(nextIsoTimestamp('2026-10-23T12:30Z', '2026-10-23T12:30:00.001Z')).toBe(
+			'2026-10-23T12:30:00.001Z',
+		);
+		expect(nextIsoTimestamp('2026-10-23T12:30:00.001Z', '2026-10-23T12:30Z')).toBe(
+			'2026-10-23T12:30:00.002Z',
+		);
+	});
+
 	it('returns the candidate when it is newer', () => {
 		expect(nextIsoTimestamp('2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.100Z')).toBe(
 			'2025-01-01T00:00:00.100Z',
