@@ -113,7 +113,7 @@ catalog:
   vitepress-plugin-llms: ^1.13.2
   vitest: 5.0.5
   yaml: ^2.9.0
-  zod: ^4.3.6
+  zod: ^4.6.6
 
 catalogMode: prefer
 
@@ -130,6 +130,9 @@ minimumReleaseAgeExclude:
   - '@coreweave/cwsandbox'
   # Security fixes take precedence over the release-age cooldown.
   - '@grpc/grpc-js@1.14.5'
+  - body-parser@2.4.0
+  - qs@6.16.1
+  - zod@4.6.6
   - brace-expansion
   # Renovate security update: fast-uri@3.1.8
   - fast-uri@3.1.6 || 3.1.8

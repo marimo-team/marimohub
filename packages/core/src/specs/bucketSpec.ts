@@ -20,7 +20,8 @@ import { WarmPoolRecordSchema } from '../services/runtime/WarmPoolStore';
 import { AppPoolSchema } from '../services/runtime/AppPoolRouter';
 import { ThumbnailRecordSchema } from '../services/content/ThumbnailService';
 import { DeepLinkRecordSchema } from '../deepLinks';
-import { z } from 'zod';
+import type { z } from 'zod';
+import { jsonSchema } from './jsonSchema';
 import type {
 	ImportId,
 	IntegrationId,
@@ -625,16 +626,6 @@ const ARTIFACTS: BucketArtifact[] = [
 		tag: 'notebook',
 	},
 ];
-
-function jsonSchema(schema: z.ZodType): Record<string, unknown> {
-	// `io: 'input'` — the stored bytes are what parse must accept, so defaulted
-	// fields stay optional and transforms describe their pre-parse shape.
-	const { $schema: _, ...rest } = z.toJSONSchema(schema, { io: 'input' }) as Record<
-		string,
-		unknown
-	>;
-	return rest;
-}
 
 const pathParams = (key: string) =>
 	[...key.matchAll(/\{([a-z_]+)\}/g)].map(([, name]) => ({

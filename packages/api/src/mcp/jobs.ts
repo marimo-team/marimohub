@@ -1,3 +1,4 @@
+import { utcTimestamp } from '@marimo-hub/core/string-formats';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
@@ -164,7 +165,7 @@ export function registerJobTools(
 		'schedule_job',
 		'Change or clear a job’s cron schedule, or pause/resume it with enabled. Omitted fields stay unchanged; schedule=null makes it manual-only. Requires the job’s updated_at from list_jobs, get_notebook, or a previous mutation.',
 		JobSelector.extend({
-			expected_updated_at: z.iso.datetime(),
+			expected_updated_at: utcTimestamp(),
 			schedule: JobScheduleShape.nullable().optional(),
 			enabled: z.boolean().optional(),
 		}).refine((input) => input.schedule !== undefined || input.enabled !== undefined, {

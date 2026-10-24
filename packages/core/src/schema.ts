@@ -1,3 +1,4 @@
+import { utcTimestamp } from './stringFormats';
 import { z } from 'zod';
 import { isAuthGroupId } from './ports/auth';
 import { ResourceSecurityLabelsSchema } from './securityLabels';
@@ -161,7 +162,7 @@ export const UserIdSchema = z.string().refine(UserId.is);
 
 export const CatalogSchema = z.object({
 	version: z.literal(1),
-	updated_at: z.iso.datetime(),
+	updated_at: utcTimestamp(),
 	current_snapshot_id: SnapshotIdSchema,
 	current_snapshot_key: z.string(),
 	previous_snapshot_id: SnapshotIdSchema.nullable(),
@@ -190,7 +191,7 @@ export const SnapshotJobEntrySchema = z.looseObject({
 	id: JobIdSchema,
 	enabled: z.boolean(),
 	schedule: JobScheduleSchema.optional(),
-	updated_at: z.iso.datetime().optional(),
+	updated_at: utcTimestamp().optional(),
 });
 
 export type SnapshotJobEntry = z.infer<typeof SnapshotJobEntrySchema>;
@@ -202,10 +203,10 @@ export const SnapshotNotebookEntrySchema = z.looseObject({
 	status: z.enum(NOTEBOOK_STATUSES),
 	source_type: z.enum(SOURCE_TYPES),
 	author: UserIdSchema,
-	created_at: z.iso.datetime(),
-	updated_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
+	updated_at: utcTimestamp(),
 	tags: z.array(z.string()),
-	last_run_at: z.iso.datetime().nullable(),
+	last_run_at: utcTimestamp().nullable(),
 	compute_profile: z.string().optional(),
 	app_compute_profile: z.string().optional(),
 	/**
@@ -243,8 +244,8 @@ export const SnapshotProjectEntrySchema = z.looseObject({
 	// omit the field) still parse — zod fills 'active' on read. Like notebooks,
 	// 'deleted' is a soft-delete tombstone; the deletion time is `updated_at`.
 	status: z.enum(PROJECT_STATUSES).default('active'),
-	created_at: z.iso.datetime(),
-	updated_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
+	updated_at: utcTimestamp(),
 	notebook_count: z.number().int().nonnegative(),
 	notebooks: z.array(SnapshotNotebookEntrySchema),
 	// Filtering aid added after the v1 snapshot shape shipped. Legacy entries
@@ -360,7 +361,7 @@ export function toPublicProjectEntry(
 export const SnapshotSchema = z.looseObject({
 	snapshot_id: SnapshotIdSchema,
 	schema_version: SchemaVersionSchema,
-	created_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
 	operation: z.string(),
 	actor: UserIdSchema,
 	projects: z.array(SnapshotProjectEntrySchema),
@@ -488,8 +489,8 @@ export const ProjectSchema = z.object({
 	// field existed omits it and reads back as 'active'. See the matching field
 	// on SnapshotProjectEntrySchema.
 	status: z.enum(PROJECT_STATUSES).default('active'),
-	created_at: z.iso.datetime(),
-	updated_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
+	updated_at: utcTimestamp(),
 	tags: z.array(z.string()),
 	/**
 	 * Optional resource security labels — the AUTHORITATIVE copy (the snapshot
@@ -528,9 +529,9 @@ export const NotebookMetaSchema = z.object({
 	description: z.string(),
 	status: z.enum(NOTEBOOK_STATUSES),
 	author: z.string(),
-	created_at: z.iso.datetime(),
-	updated_at: z.iso.datetime(),
-	last_run_at: z.iso.datetime().nullable(),
+	created_at: utcTimestamp(),
+	updated_at: utcTimestamp(),
+	last_run_at: utcTimestamp().nullable(),
 	tags: z.array(z.string()),
 	runtime: RuntimeSchema.optional(),
 	// Absent = the deployment's default image. Only a non-default choice is
@@ -606,7 +607,7 @@ export const GitSourceSchema = z.object({
 	sync_mode: z.enum(['push', 'pull']),
 	current_version_id: VersionIdSchema.nullable(),
 	commit: z.string().nullable(),
-	last_synced_at: z.iso.datetime().nullable(),
+	last_synced_at: utcTimestamp().nullable(),
 });
 
 export const SourceSchema = z.discriminatedUnion('type', [LocalSourceSchema, GitSourceSchema]);
@@ -628,7 +629,7 @@ export function toPublicSource(source: Source): PublicSource {
 // `session.json`). It carries no storage path — clients address notebooks by id
 // (see development_docs/bucket_spec.md §4.7). Absent when the artifact was not captured.
 export const SnapshotDescriptorSchema = z.object({
-	captured_at: z.iso.datetime(),
+	captured_at: utcTimestamp(),
 	size_bytes: z.number().int().nonnegative(),
 });
 
@@ -638,7 +639,7 @@ export const VersionSchema = z.object({
 	schema_version: SchemaVersionSchema,
 	version_id: VersionIdSchema,
 	notebook_id: NotebookIdSchema,
-	saved_at: z.iso.datetime(),
+	saved_at: utcTimestamp(),
 	author: UserIdSchema,
 	message: z.string(),
 	parent_id: VersionIdSchema.nullable(),
@@ -688,7 +689,7 @@ export const NotebookProposalSchema = z.object({
 	notebook_id: NotebookIdSchema,
 	session_id: SessionIdSchema,
 	author: UserIdSchema,
-	created_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
 	base_version_id: VersionIdSchema,
 	capture_strategy: z.enum(['entry-notebook', 'git-working-tree']).default('entry-notebook'),
 	source: GitSourceRevisionSchema.extend({ provider: z.string().min(1) }),
@@ -703,7 +704,7 @@ export const ProposalPayloadMarkerSchema = z.object({
 	proposal_id: ProposalIdSchema,
 	project_id: ProjectIdSchema,
 	notebook_id: NotebookIdSchema,
-	expires_at: z.iso.datetime(),
+	expires_at: utcTimestamp(),
 	change_indexes: z
 		.array(z.number().int().nonnegative())
 		.max(1_000)
@@ -723,11 +724,11 @@ export const ChangeRequestPublicationSchema = z.object({
 export const ProposalPublicationSchema = z.discriminatedUnion('state', [
 	z.looseObject({
 		state: z.literal('pending'),
-		updated_at: z.iso.datetime(),
+		updated_at: utcTimestamp(),
 	}),
 	z.looseObject({
 		state: z.literal('published'),
-		updated_at: z.iso.datetime(),
+		updated_at: utcTimestamp(),
 		change_request: ChangeRequestPublicationSchema,
 	}),
 ]);
@@ -752,7 +753,7 @@ export type ComputeResourceRecord = z.infer<typeof ComputeResourceRecordSchema>;
 
 export const FsSnapshotSchema = z.object({
 	snapshot_id: z.string(),
-	captured_at: z.iso.datetime(),
+	captured_at: utcTimestamp(),
 	size_bytes: z.number().int().nonnegative().optional(),
 	compute_profile: z.string().optional(),
 	compute_resources: ComputeResourceRecordSchema.optional(),
@@ -776,8 +777,8 @@ export const IntegrationRecordSchema = z.looseObject({
 	enabled: z.boolean(),
 	current_version: z.number().int().positive(),
 	created_by: UserIdSchema,
-	created_at: z.iso.datetime(),
-	updated_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
+	updated_at: utcTimestamp(),
 });
 
 export type IntegrationRecord = z.infer<typeof IntegrationRecordSchema>;
@@ -794,7 +795,7 @@ export const IntegrationVersionRecordSchema = z.object({
 	/** Config with secret fields replaced by encrypted envelopes. */
 	config: z.record(z.string(), z.unknown()),
 	created_by: UserIdSchema,
-	created_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
 	change_note: z.string().optional(),
 });
 
@@ -816,13 +817,13 @@ export type SecretEnvelopeRecord = z.infer<typeof SecretEnvelopeSchema>;
 export const SurfaceStateSchema = z.looseObject({
 	status: z.enum(['starting', 'ready', 'stopping', 'stopped', 'failed', 'unavailable']),
 	attempt_id: z.string().optional(),
-	attempt_started_at: z.iso.datetime().optional(),
+	attempt_started_at: utcTimestamp().optional(),
 	cancelled_attempt_id: z.string().optional(),
 	port: z.number().int().positive().optional(),
 	url: z.string().optional(),
 	origin_url: z.string().optional(),
 	proxy_path: z.enum(['strip-prefix', 'preserve-prefix']).optional(),
-	started_at: z.iso.datetime().optional(),
+	started_at: utcTimestamp().optional(),
 	probe: z
 		.looseObject({
 			available: z.boolean(),
@@ -859,39 +860,39 @@ export const SessionSchema = z.looseObject({
 	project_id: ProjectIdSchema,
 	user_id: UserIdSchema,
 	status: z.enum(SESSION_STATUSES),
-	started_at: z.iso.datetime(),
-	last_heartbeat: z.iso.datetime(),
+	started_at: utcTimestamp(),
+	last_heartbeat: utcTimestamp(),
 	/**
 	 * When the lifecycle sweep will gracefully reap this session (save + destroy).
 	 * Stamped at `setRunning` as now + the session TTL, so the clock starts when the
 	 * kernel is actually live; slides forward while editors stay connected
 	 * (connection-aware extension). Absent on records that predate the sweep.
 	 */
-	expires_at: z.iso.datetime().optional(),
+	expires_at: utcTimestamp().optional(),
 	/** Non-extendable expiry of the entitlement credential that authorized this kernel. */
-	authorization_expires_at: z.iso.datetime().optional(),
+	authorization_expires_at: utcTimestamp().optional(),
 	/**
 	 * Last time the periodic snapshotter saved the notebook back to the bucket.
 	 * Cadence bookkeeping only — `commitSession` dedupes unchanged content, so this
 	 * never gates on whether anything changed.
 	 */
-	last_snapshot_at: z.iso.datetime().optional(),
+	last_snapshot_at: utcTimestamp().optional(),
 	/**
 	 * Set after sandbox destruction is confirmed. Claim replacement and
 	 * reconciliation use it to distinguish terminal records still awaiting teardown
 	 * from sandboxes that are already gone.
 	 */
-	sandbox_reclaimed_at: z.iso.datetime().optional(),
+	sandbox_reclaimed_at: utcTimestamp().optional(),
 	/** Provider-guaranteed upper bound, recorded after provisioning completes. */
-	sandbox_deadline_at: z.iso.datetime().optional(),
+	sandbox_deadline_at: utcTimestamp().optional(),
 	/** Set by `beginTerminating`, cleared by `markTerminated`; starts the reclaim teardown grace. */
-	terminating_at: z.iso.datetime().optional(),
+	terminating_at: utcTimestamp().optional(),
 	/**
 	 * Durable takeover checkpoint written after the strict source/workspace capture
 	 * and before sandbox destruction. A draining retry can safely skip a second
 	 * capture when destruction succeeded but a later session-record write failed.
 	 */
-	takeover_capture_completed_at: z.iso.datetime().optional(),
+	takeover_capture_completed_at: utcTimestamp().optional(),
 	/**
 	 * A discard-only session. This includes viewer throwaways and explicit
 	 * temporary editors: nothing is written back at teardown — no version,
@@ -922,7 +923,7 @@ export const SessionSchema = z.looseObject({
 	 * last kernel probe — approximate by design.
 	 */
 	active_connections: z.number().int().nonnegative().optional(),
-	connections_checked_at: z.iso.datetime().optional(),
+	connections_checked_at: utcTimestamp().optional(),
 	runtime: RuntimeSchema.optional(),
 	sandbox_id: SandboxIdSchema.optional(),
 	/** Plaintext, session-scoped credential for marimo. Never expose it as a response field. */
@@ -980,7 +981,7 @@ export type VersionPruneCutoff = z.infer<typeof VersionPruneCutoffSchema>;
 // deleting another holder's claim.
 export const AppClaimSchema = z.object({
 	session_id: SessionIdSchema.nullable(),
-	claimed_at: z.iso.datetime(),
+	claimed_at: utcTimestamp(),
 });
 
 export type AppClaim = z.infer<typeof AppClaimSchema>;
@@ -988,20 +989,20 @@ export type AppClaim = z.infer<typeof AppClaimSchema>;
 export const EditorClaimSchema = z.looseObject({
 	session_id: SessionIdSchema.nullable(),
 	sharing: z.enum(['shared', 'exclusive']),
-	claimed_at: z.iso.datetime(),
+	claimed_at: utcTimestamp(),
 	transfer: z
 		.looseObject({
 			takeover_id: z.string().min(1).max(255),
 			requested_by: UserIdSchema,
 			expected_activity: z.enum(['active', 'idle', 'unknown', 'starting']),
 			phase: z.enum(['requested', 'draining', 'ready']),
-			requested_at: z.iso.datetime(),
+			requested_at: utcTimestamp(),
 			drain_lease_id: z.string().min(1).max(255).optional(),
-			drain_lease_expires_at: z.iso.datetime().optional(),
+			drain_lease_expires_at: utcTimestamp().optional(),
 			drain_lease_stage: z
 				.enum(['capturing', 'snapshotting', 'destroying', 'finalizing'])
 				.optional(),
-			drain_lease_progress_deadline_at: z.iso.datetime().optional(),
+			drain_lease_progress_deadline_at: utcTimestamp().optional(),
 			replacement_session_id: SessionIdSchema.optional(),
 		})
 		.optional(),
@@ -1018,7 +1019,7 @@ export type EditorClaim = z.infer<typeof EditorClaimSchema>;
 // (released or held) instead of accepting a mixed one.
 export const WorkspaceMutationClaimSchema = z.union([
 	z.object({ holder: z.null(), expires_at: z.null() }),
-	z.object({ holder: z.string().min(1), expires_at: z.iso.datetime() }),
+	z.object({ holder: z.string().min(1), expires_at: utcTimestamp() }),
 ]);
 
 export type WorkspaceMutationClaim = z.infer<typeof WorkspaceMutationClaimSchema>;
@@ -1121,8 +1122,8 @@ export const JobDefinitionSchema = z.looseObject({
 	/** Delivered through the project's alert destinations (`job.run.*` kinds). */
 	notifications: JobNotificationsSchema.optional(),
 	created_by: UserIdSchema,
-	created_at: z.iso.datetime(),
-	updated_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
+	updated_at: utcTimestamp(),
 });
 
 export type JobDefinition = z.infer<typeof JobDefinitionSchema>;
@@ -1142,7 +1143,7 @@ export const JobRunSchema = z.looseObject({
 	/** Manual runs only; scheduled runs attribute to the job. */
 	triggered_by: UserIdSchema.optional(),
 	/** The occurrence this scheduled run fired for. */
-	scheduled_for: z.iso.datetime().optional(),
+	scheduled_for: utcTimestamp().optional(),
 	/** The notebook head at enqueue time — the same provenance app sessions carry. */
 	source_version_id: VersionIdSchema.optional(),
 	/** As-executed parameters, persisted for audit. */
@@ -1156,13 +1157,13 @@ export const JobRunSchema = z.looseObject({
 	compute_profile: z.string().optional(),
 	compute_resources: ComputeResourceRecordSchema.optional(),
 	timeout_seconds: z.number().int().min(1),
-	queued_at: z.iso.datetime(),
+	queued_at: utcTimestamp(),
 	/** A retry's backoff: not dispatched before this instant. */
-	eligible_at: z.iso.datetime().optional(),
-	started_at: z.iso.datetime().optional(),
-	finished_at: z.iso.datetime().optional(),
+	eligible_at: utcTimestamp().optional(),
+	started_at: utcTimestamp().optional(),
+	finished_at: utcTimestamp().optional(),
 	/** Watchdog anchor: a run still active past this instant is timed out. */
-	deadline_at: z.iso.datetime().optional(),
+	deadline_at: utcTimestamp().optional(),
 	exit_code: z.number().int().optional(),
 	/** Sanitized like a session's `error`; never carries secret material. */
 	error: RunErrorSchema.optional(),
@@ -1220,7 +1221,7 @@ export async function readStoredJobRun(
 /** Scheduled-fire claim: create-if-absent, immutable (see `paths.job().occurrence`). */
 export const JobOccurrenceSchema = z.object({
 	run_id: RunIdSchema,
-	fired_at: z.iso.datetime(),
+	fired_at: utcTimestamp(),
 	outcome: z.enum(['run', 'skip']).optional(),
 });
 
@@ -1233,7 +1234,7 @@ export const JobRunMarkerSchema = z.object({
 	job_id: JobIdSchema,
 	notebook_id: NotebookIdSchema,
 	project_id: ProjectIdSchema,
-	created_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
 });
 
 export type JobRunMarker = z.infer<typeof JobRunMarkerSchema>;
@@ -1378,8 +1379,8 @@ export const IdentitySchema = z.object({
 	email: z.string(),
 	name: z.string(),
 	picture_url: z.url({ protocol: /^https$/ }).optional(),
-	suspended_at: z.iso.datetime().optional(),
-	updated_at: z.iso.datetime(),
+	suspended_at: utcTimestamp().optional(),
+	updated_at: utcTimestamp(),
 });
 
 export type Identity = z.infer<typeof IdentitySchema>;
@@ -1401,10 +1402,10 @@ const TokenBaseSchema = {
 	name: z.string(),
 	/** Lowercase-hex SHA-256 of the token secret. Never leaves the server. */
 	hash: z.string(),
-	created_at: z.iso.datetime(),
-	expires_at: z.iso.datetime().optional(),
+	created_at: utcTimestamp(),
+	expires_at: utcTimestamp().optional(),
 	/** Daily-coalesced usage marker; concurrent touches are intentionally last-writer-wins. */
-	last_used_at: z.iso.datetime().optional(),
+	last_used_at: utcTimestamp().optional(),
 };
 
 export const TokenSchema = z
@@ -1463,7 +1464,7 @@ export function toPublicToken(token: Token): PublicToken {
 export const EventSchema = z.looseObject({
 	id: z.string().min(1),
 	schema_version: SchemaVersionSchema,
-	ts: z.iso.datetime(),
+	ts: utcTimestamp(),
 	event: z.string(),
 	actor: UserIdSchema,
 });

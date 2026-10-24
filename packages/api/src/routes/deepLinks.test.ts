@@ -454,6 +454,14 @@ describe('App link routes', () => {
 		expect(await expectOk(await api.request('GET', '/deep-links/sales'))).toEqual(link);
 	});
 
+	it('accepts the existing registration-id alphabet for stale removals', async () => {
+		const current = await createLink();
+		await expectOk(
+			await api.request('DELETE', `${base}/sales?registration_id=Z1ARZ3NDEKTSV4RRFFQ69G5FAV`),
+		);
+		expect(await expectOk(await api.request('GET', '/deep-links/sales'))).toEqual(current);
+	});
+
 	it('ignores an old removal after a slug is released and registered again', async () => {
 		const old = await createLink();
 		await expectOk(

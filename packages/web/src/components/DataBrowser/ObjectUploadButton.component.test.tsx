@@ -27,6 +27,21 @@ function setup(files: File[]) {
 	return { ...view, onComplete };
 }
 
+function blockUploadsUntilAbort() {
+	uploader.mockImplementation(
+		(_base, _file, _input, options) =>
+			new Promise((_resolve, reject) => {
+				options?.signal?.addEventListener(
+					'abort',
+					() => reject(new DOMException('Cancelled', 'AbortError')),
+					{
+						once: true,
+					},
+				);
+			}),
+	);
+}
+
 beforeEach(() => {
 	uploader.mockReset();
 });
@@ -76,18 +91,7 @@ describe('ObjectUploadButton', () => {
 	});
 
 	it('cancels the active transfer and skips the remaining files', async () => {
-		uploader.mockImplementation(
-			(_base, _file, _input, options) =>
-				new Promise((_resolve, reject) => {
-					options?.signal?.addEventListener(
-						'abort',
-						() => reject(new DOMException('Cancelled', 'AbortError')),
-						{
-							once: true,
-						},
-					);
-				}),
-		);
+		blockUploadsUntilAbort();
 		const { onComplete } = setup([first, second]);
 		const signal = uploader.mock.calls[0]?.[3]?.signal;
 		await userEvent.click(screen.getByRole('button', { name: 'Cancel upload' }));
@@ -152,22 +156,53 @@ describe('ObjectUploadButton', () => {
 	});
 
 	it('aborts on unmount without starting another file or refreshing', async () => {
-		uploader.mockImplementation(
-			(_base, _file, _input, options) =>
-				new Promise((_resolve, reject) => {
-					options?.signal?.addEventListener(
-						'abort',
-						() => reject(new DOMException('Cancelled', 'AbortError')),
-						{
-							once: true,
-						},
-					);
-				}),
-		);
+		blockUploadsUntilAbort();
 		const { unmount, onComplete } = setup([first, second]);
 		const signal = uploader.mock.calls[0]?.[3]?.signal;
 		unmount();
 		await waitFor(() => expect(signal?.aborted).toBe(true));
+		expect(uploader).toHaveBeenCalledTimes(1);
+		expect(onComplete).not.toHaveBeenCalled();
+	});
+
+	it.each(['projectId', 'integrationId', 'bucket', 'prefix'] as const)(
+		'clears failed uploads when %s changes',
+		async (field) => {
+			uploader.mockRejectedValueOnce(
+				new ApiRequestError('CONFLICT', 'Integration changed', { status: 409 }),
+			);
+			const { rerender, onComplete } = setup([first]);
+			await screen.findByRole('button', { name: 'Restart first.csv' });
+			const destination = {
+				projectId: 'project',
+				integrationId: 'integration',
+				bucket: 'bucket',
+				prefix: 'folder/',
+				[field]: 'other',
+			};
+			rerender(<ObjectUploadButton {...destination} onComplete={onComplete} />);
+			expect(screen.queryByRole('button', { name: 'Restart first.csv' })).not.toBeInTheDocument();
+			expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+			expect(uploader).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it('aborts an active batch when navigating to another folder', async () => {
+		blockUploadsUntilAbort();
+		const { rerender, onComplete } = setup([first, second]);
+		const signal = uploader.mock.calls[0]?.[3]?.signal;
+		rerender(
+			<ObjectUploadButton
+				projectId="project"
+				integrationId="integration"
+				bucket="bucket"
+				prefix="other/"
+				onComplete={onComplete}
+			/>,
+		);
+		await waitFor(() => expect(signal?.aborted).toBe(true));
+		expect(screen.getByRole('button', { name: 'Upload' })).toBeEnabled();
+		expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 		expect(uploader).toHaveBeenCalledTimes(1);
 		expect(onComplete).not.toHaveBeenCalled();
 	});

@@ -1,3 +1,4 @@
+import { utcTimestamp } from '@marimo-hub/core/string-formats';
 import { UploadPartBody, UploadResponseSchema } from '../uploads';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
@@ -175,7 +176,7 @@ const BrowseTableSchemaSchema = z
 		/** Facts from the table's current snapshot, when the catalog reports one. */
 		current_snapshot: z
 			.object({
-				committed_at: z.iso.datetime().optional(),
+				committed_at: utcTimestamp().optional(),
 				total_records: z.number().optional(),
 				total_data_size_bytes: z.number().optional(),
 			})
@@ -460,7 +461,7 @@ const ObjectIdentityQuery = z.object({
 const ObjectBucketSchema = z
 	.object({
 		name: z.string(),
-		created_at: z.iso.datetime().optional(),
+		created_at: utcTimestamp().optional(),
 		configured: z.boolean(),
 	})
 	.openapi('IntegrationObjectBucket');
@@ -470,7 +471,7 @@ const ObjectEntrySchema = z
 		name: z.string(),
 		key: z.string(),
 		size: z.number().nonnegative().optional(),
-		last_modified: z.iso.datetime().optional(),
+		last_modified: utcTimestamp().optional(),
 		etag: z.string().optional(),
 		storage_class: z.string().optional(),
 	})
@@ -481,7 +482,7 @@ const ObjectDetailSchema = z
 		key: z.string(),
 		version_id: z.string().optional(),
 		size: z.number().nonnegative(),
-		last_modified: z.iso.datetime().optional(),
+		last_modified: utcTimestamp().optional(),
 		etag: z.string().optional(),
 		storage_class: z.string().optional(),
 		content_type: z.string().optional(),
@@ -501,7 +502,7 @@ const ObjectVersionSchema = z
 		version_id: z.string().optional(),
 		kind: z.enum(['version', 'delete-marker']),
 		is_latest: z.boolean(),
-		last_modified: z.iso.datetime().optional(),
+		last_modified: utcTimestamp().optional(),
 		size: z.number().nonnegative().optional(),
 		etag: z.string().optional(),
 		storage_class: z.string().optional(),
@@ -607,8 +608,8 @@ const searchObjects = createRoute({
 			prefix: ObjectPrefixValue.optional(),
 			query: z.string().trim().min(2).max(1024),
 			formats: z.string().optional(),
-			modified_after: z.iso.datetime().optional(),
-			modified_before: z.iso.datetime().optional(),
+			modified_after: utcTimestamp().optional(),
+			modified_before: utcTimestamp().optional(),
 			min_size: z.coerce.number().nonnegative().optional(),
 			max_size: z.coerce.number().nonnegative().optional(),
 		}),

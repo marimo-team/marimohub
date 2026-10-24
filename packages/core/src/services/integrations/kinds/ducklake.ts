@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../../../stringFormats';
 import { z } from 'zod';
 import { ValidationError } from '../../../errors';
 import type { DuckDBDataQueryPlan } from '../data-query';
@@ -77,8 +78,7 @@ const snapshotSchema = z
 			.nonnegative()
 			.optional()
 			.describe('Read this DuckLake snapshot version instead of the latest snapshot.'),
-		timestamp: z.iso
-			.datetime()
+		timestamp: utcTimestamp()
 			.optional()
 			.describe('Read the snapshot current at this RFC 3339 timestamp instead of the latest.'),
 	})

@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../stringFormats';
 import { z } from 'zod';
 import type { GitProviderHosts } from './gitRepo';
 import { BadRequestError, ConflictError, ValidationError } from '../errors';
@@ -65,7 +66,7 @@ export type UpdateSyncedNotebookSourceInput = GitSourceConfig & {
 export const SyncTokenRecordSchema = z.object({
 	schema_version: z.literal(1),
 	token_sha256: z.string(),
-	created_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
 });
 
 export type SyncTokenRecord = z.infer<typeof SyncTokenRecordSchema>;

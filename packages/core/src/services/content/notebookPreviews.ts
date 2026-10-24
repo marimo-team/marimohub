@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../../stringFormats';
 import { z } from 'zod';
 import {
 	NotebookIdSchema,
@@ -29,7 +30,7 @@ export const PreviewCreateSchema = z.strictObject({
 	name: z.string().trim().min(1).max(100),
 	source: PreviewSourceSchema,
 	compute_profile: z.string().min(1).optional(),
-	expires_at: z.iso.datetime().optional(),
+	expires_at: utcTimestamp().optional(),
 	pull_request: z.number().int().positive().optional(),
 });
 export const PreviewRecordSchema = z.object({
@@ -43,14 +44,14 @@ export const PreviewRecordSchema = z.object({
 	root_path: z.string(),
 	entry_notebook: z.string(),
 	compute_profile: z.string().optional(),
-	expires_at: z.iso.datetime(),
+	expires_at: utcTimestamp(),
 	pull_request: z.number().int().positive().optional(),
 	created_by: UserIdSchema,
-	created_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
 	request_fingerprint: z.string(),
 	state: z.enum(['active', 'deleting', 'deleted']),
 	preparation: z.enum(PREVIEW_PREPARATIONS),
-	checked_at: z.iso.datetime().optional(),
+	checked_at: utcTimestamp().optional(),
 	next_attempt_at: z.number().optional(),
 	preparation_failures: z.number().int().nonnegative().default(0),
 	error: z.string().optional(),

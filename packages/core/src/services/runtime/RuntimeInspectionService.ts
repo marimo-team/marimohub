@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../../stringFormats';
 import { cachedRead } from '../../async';
 import { sessionResourceNotebookId, sessionResourcePath } from '../../sessionOrigin';
 import { z } from 'zod';
@@ -33,7 +34,7 @@ const RuntimeAssignmentSchema = z.object({
 	user_id: z.string(),
 	visits: z.number().int().nonnegative(),
 	state: z.enum(['active', 'grace']),
-	expires_at: z.iso.datetime(),
+	expires_at: utcTimestamp(),
 });
 
 const RuntimeSessionSchema = z.object({
@@ -42,12 +43,12 @@ const RuntimeSessionSchema = z.object({
 	sandbox_id: z.string().nullable(),
 	user_id: z.string(),
 	status: z.enum(SESSION_STATUSES).nullable(),
-	started_at: z.iso.datetime(),
-	last_heartbeat: z.iso.datetime().nullable(),
+	started_at: utcTimestamp(),
+	last_heartbeat: utcTimestamp().nullable(),
 	source_version_id: z.string().nullable(),
 	compute_profile: z.string().nullable(),
 	active_connections: z.number().int().nonnegative().nullable(),
-	connections_checked_at: z.iso.datetime().nullable(),
+	connections_checked_at: utcTimestamp().nullable(),
 });
 
 const RuntimeLocationSchema = z.object({
@@ -69,7 +70,7 @@ export const RuntimeSandboxSchema = RuntimeSessionSchema.extend({
 		.nonnegative()
 		.nullable()
 		.describe('Occupied browser-session slots, including reconnect grace.'),
-	idle_since: z.iso.datetime().nullable(),
+	idle_since: utcTimestamp().nullable(),
 	assignments: z.array(RuntimeAssignmentSchema),
 	incomplete: z.boolean(),
 });
@@ -82,7 +83,7 @@ export const RuntimeAppSchema = RuntimeLocationSchema.extend({
 });
 
 export const RuntimeEditorSchema = RuntimeLocationSchema.extend(RuntimeSessionSchema.shape).extend({
-	expires_at: z.iso.datetime().nullable(),
+	expires_at: utcTimestamp().nullable(),
 	claim_holder_id: z.string().nullable(),
 	claim_holder_status: z.enum(SESSION_STATUSES).nullable(),
 	claim_available: z.boolean(),
@@ -96,7 +97,7 @@ export const RuntimeEditorSchema = RuntimeLocationSchema.extend(RuntimeSessionSc
 });
 
 export const RuntimeInspectionSchema = z.object({
-	observed_at: z.iso.datetime(),
+	observed_at: utcTimestamp(),
 	apps: z.array(RuntimeAppSchema),
 	editors: z.array(RuntimeEditorSchema),
 	incomplete: z.boolean(),

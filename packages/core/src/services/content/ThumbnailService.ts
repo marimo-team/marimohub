@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../../stringFormats';
 import { all } from 'better-all';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
@@ -12,7 +13,7 @@ import { validateThumbnailPng } from './thumbnailPng';
 import { sha256Hex } from '../../internal/sha256';
 import { Millis } from '../../duration';
 
-const ImageSchema = z.object({ id: z.uuid(), captured_at: z.iso.datetime() });
+const ImageSchema = z.object({ id: z.uuid(), captured_at: utcTimestamp() });
 export const AutomaticThumbnailSchema = ImageSchema.extend({
 	version_id: z.string(),
 	html_hash: z.string(),

@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../../stringFormats';
 import { z } from 'zod';
 import { UserId } from '../../ids';
 import { toHex } from '../../internal/hex';
@@ -20,9 +21,7 @@ const CredentialSchema = z.strictObject({
 	sha256: z
 		.string()
 		.regex(/^[0-9a-f]{64}$/, 'Expected the lowercase SHA-256 hex digest of the complete token'),
-	expires_at: z.iso
-		.datetime({ error: 'Expected a UTC timestamp, for example 2027-01-01T00:00:00Z' })
-		.optional(),
+	expires_at: utcTimestamp('Expected a UTC timestamp, for example 2027-01-01T00:00:00Z').optional(),
 });
 const AccountSchema = z.strictObject({
 	id: AccountIdSchema,

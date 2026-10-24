@@ -73,7 +73,7 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/uv-python"
           "$RUNNER_TEMP/uv-python/bin/pip" install "uv==$UV_INTEGRATION_VERSION"
-          PATH="$RUNNER_TEMP/uv-python/bin:$PATH" MARIMOHUB_UV_INTEGRATION=1 vp test packages/core/src/services/runtime/marimoLaunch.integration.test.ts --configLoader=runner --pool=threads
+          PATH="$RUNNER_TEMP/uv-python/bin:$PATH" MARIMOHUB_UV_INTEGRATION=1 vp test packages/core/src/services/runtime/marimoLaunch.integration.test.ts packages/compute-local/src/runtimePackages.integration.test.ts --configLoader=runner --pool=threads
 
       # An apt mirror stall here once consumed the whole job budget; fail fast instead.
       - name: Install Chromium for thumbnail rendering
@@ -83,7 +83,12 @@ jobs:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/thumbnail-browsers
         run: |
           python3 -m venv "$RUNNER_TEMP/thumbnail-python"
-          "$RUNNER_TEMP/thumbnail-python/bin/pip" install marimo==0.24.2 playwright==1.58.0
+          MARIMO_INTEGRATION_VERSION="$(sed -n 's/^ARG MARIMO_VERSION=//p' images/marimo-sandbox/Dockerfile)"
+          if [[ ! "$MARIMO_INTEGRATION_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Missing or invalid sandbox marimo version"
+            exit 1
+          fi
+          "$RUNNER_TEMP/thumbnail-python/bin/pip" install "marimo==$MARIMO_INTEGRATION_VERSION" playwright==1.58.0
           # The Azure mirror can trickle data indefinitely without hitting apt's timeout.
           if [ -f /etc/apt/apt-mirrors.txt ]; then
             sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt

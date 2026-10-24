@@ -1,5 +1,6 @@
 import {
 	WORKSPACE_LIMITS,
+	validateWorkspaceLimits,
 	DEFAULT_LOCAL_ENTRY_NOTEBOOK,
 	isSafeWorkspacePath,
 	isWorkspaceInternalPath,
@@ -222,7 +223,7 @@ export async function restoreWorkspace(
 	// Select from the LISTING (sizes included) so an oversized object is skipped
 	// before `bucket.get()` buffers its body — the size check must never use the
 	// fetched object.
-	const limits = options.limits ?? WORKSPACE_LIMITS;
+	const limits = validateWorkspaceLimits(options.limits ?? WORKSPACE_LIMITS);
 	const objects = await listAllObjects(bucket, sourcePrefix);
 	let wanted: { key: string; dest: string; size: number }[] = [];
 	const directories: string[] = [];
@@ -418,8 +419,9 @@ export async function captureWorkspace(
 	mode: 'source' | 'workspace',
 	listing: WorkspaceListing = sharedWorkspaceListing(sandbox, workingDir),
 	entryNotebook = DEFAULT_LOCAL_ENTRY_NOTEBOOK,
-	limits: WorkspaceLimits = WORKSPACE_LIMITS,
+	configuredLimits: WorkspaceLimits = WORKSPACE_LIMITS,
 ): Promise<void> {
+	const limits = validateWorkspaceLimits(configuredLimits);
 	if (!supportsBoundedReads(sandbox)) return;
 	const nb = paths.project(projectId).notebook(notebookId);
 	const warnListingFailed = (code: string) =>

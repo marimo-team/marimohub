@@ -1,3 +1,4 @@
+import { utcTimestamp } from '@marimo-hub/core/string-formats';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	PreviewNotReadyError,
@@ -55,10 +56,10 @@ const PublicPreview = z
 		version_id: z.string().optional(),
 		error: z.string().optional(),
 		pull_request: z.number().int().positive().optional(),
-		expires_at: z.iso.datetime(),
-		created_at: z.iso.datetime(),
+		expires_at: utcTimestamp(),
+		created_at: utcTimestamp(),
 		created_by: z.string(),
-		checked_at: z.iso.datetime().optional(),
+		checked_at: utcTimestamp().optional(),
 		compute_profile: z.string().optional(),
 		url: z.string(),
 		can: z.object({ manage: z.boolean(), app: z.boolean(), edit: z.boolean() }),

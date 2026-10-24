@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../../stringFormats';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
 import type { SandboxId, UserId } from '../../ids';
@@ -10,7 +11,7 @@ import { releaseSingletonClaim, withCasRetry } from '../catalog/cas';
 const SandboxDiagnosticLeaseSchema = z
 	.object({
 		sandbox_id: SandboxIdSchema.nullable(),
-		expires_at: z.iso.datetime().nullable(),
+		expires_at: utcTimestamp().nullable(),
 	})
 	.refine(
 		(record) => (record.sandbox_id === null) === (record.expires_at === null),

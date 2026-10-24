@@ -8,19 +8,30 @@ import { resumableUpload } from '@/lib/resumableUpload';
 import type { UploadProgress } from '@/lib/resumableUpload';
 import { UploadProgressList } from '../WorkspaceBrowser/UploadProgressList';
 
-export function ObjectUploadButton({
-	projectId,
-	integrationId,
-	bucket,
-	prefix,
-	onComplete,
-}: {
+interface ObjectUploadButtonProps {
 	projectId: string;
 	integrationId: string;
 	bucket: string;
 	prefix: string;
 	onComplete: () => void;
-}) {
+}
+
+export function ObjectUploadButton(props: ObjectUploadButtonProps) {
+	return (
+		<ObjectUploadForm
+			key={JSON.stringify([props.projectId, props.integrationId, props.bucket, props.prefix])}
+			{...props}
+		/>
+	);
+}
+
+function ObjectUploadForm({
+	projectId,
+	integrationId,
+	bucket,
+	prefix,
+	onComplete,
+}: ObjectUploadButtonProps) {
 	const input = useRef<HTMLInputElement>(null);
 	const active = useRef<AbortController | null>(null);
 	const [busy, setBusy] = useState(false);

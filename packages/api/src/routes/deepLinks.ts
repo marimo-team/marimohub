@@ -1,3 +1,4 @@
+import { ulidString } from '@marimo-hub/core/string-formats';
 import { createRoute, z } from '@hono/zod-openapi';
 import { DeepLinkAccessSchema, DeepLinkSchema, DeepLinkSlugSchema } from '@marimo-hub/core';
 import {
@@ -74,7 +75,7 @@ const release = createRoute({
 		'Releases the slug only when the notebook and registration ID match. The slug is immediately available for reuse. Old shared URLs can then open another notebook. App sessions and notebook permissions stay unchanged.',
 	request: {
 		params: NotebookIdParam.extend(SlugParam.shape),
-		query: z.object({ registration_id: z.ulid() }),
+		query: z.object({ registration_id: ulidString() }),
 	},
 	responses: {
 		200: jsonContent(

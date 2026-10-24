@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../../stringFormats';
 import { z } from 'zod';
 import type { Bucket, BucketObjectBody } from '../../ports/bucket';
 import { BadRequestError } from '../../errors';
@@ -18,7 +19,7 @@ const MAX_TYPE_LENGTH = 100;
 const OAuthClientRecordSchema = z.looseObject({
 	client_id: z.string().refine(OAuthClientId.is),
 	client_id_issued_at: z.number().int().nonnegative(),
-	expires_at: z.iso.datetime(),
+	expires_at: utcTimestamp(),
 	redirect_uris: z.array(z.string()).min(1),
 	token_endpoint_auth_method: z.literal('none'),
 	client_name: z.string().min(1).max(MAX_CLIENT_NAME_LENGTH).optional(),

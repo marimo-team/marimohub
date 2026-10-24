@@ -31,6 +31,14 @@ targets:
 OpenCode is pinned to 1.18.17 with separate SHA-256 checksums for Linux x64 and
 arm64 builds.
 
+The maintained image includes `boto3`, `obstore`, and DuckDB with cached `httpfs` and `iceberg` extensions for offline use.
+The extensions match the image's DuckDB version and platform.
+Custom images need their own packages and matching extensions.
+A notebook that changes DuckDB versions also needs matching extensions.
+
+[Startup scripts](./integrations.md#startup-script) run before notebook dependency setup.
+[marimo Studio](./integrations.md#marimo-studio-experimental) installs separately and requires a compatible marimo version in the image.
+
 > **Build requirement:** All `images/marimo-sandbox` targets require the
 > `notebook_bridge` named build context. Older build commands without this context
 > fail. See [Build the maintained image](#build-the-maintained-image).

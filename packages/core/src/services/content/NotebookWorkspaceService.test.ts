@@ -14,6 +14,8 @@ import { fakeNotebookDetail, makeWorkspaceService, MemoryBucket } from '../../te
 import type { FakeWorkspaceOwner } from '../../testing';
 import {
 	WORKSPACE_DIRECTORY_MARKER,
+	WORKSPACE_FILE_BYTES_CEILING,
+	WORKSPACE_LIMITS,
 	workspaceDirectoryMarkerPath,
 } from '../../integrations/remoteWorkspace';
 import { WORKSPACE_MUTATION_HEARTBEAT_EVERY } from './NotebookWorkspaceService';
@@ -800,6 +802,44 @@ describe('NotebookWorkspaceService', () => {
 });
 
 describe('configured workspace limits', () => {
+	it('rejects unsafe library limits before admitting uploads', () => {
+		expect(() =>
+			makeWorkspaceService(new MemoryBucket(), undefined, {
+				...WORKSPACE_LIMITS,
+				maxFileBytes: WORKSPACE_FILE_BYTES_CEILING + 1,
+			}),
+		).toThrow('Workspace maxFileBytes');
+	});
+
+	it('snapshots library limits and bounds upload admission at 64 MiB', async () => {
+		const limits = { ...WORKSPACE_LIMITS, maxFileBytes: WORKSPACE_FILE_BYTES_CEILING };
+		const { service } = makeWorkspaceService(new MemoryBucket(), undefined, limits);
+		limits.maxFileBytes++;
+		await expect(
+			service.startUpload(
+				PROJECT_ID,
+				NOTEBOOK_ID,
+				{
+					path: 'too-large.bin',
+					size: WORKSPACE_FILE_BYTES_CEILING + 1,
+				},
+				ACTOR,
+			),
+		).rejects.toThrow(`Workspace upload exceeds ${WORKSPACE_FILE_BYTES_CEILING} bytes`);
+		await expect(
+			service.startUpload(
+				PROJECT_ID,
+				NOTEBOOK_ID,
+				{
+					path: 'maximum.bin',
+					size: WORKSPACE_FILE_BYTES_CEILING,
+				},
+				ACTOR,
+			),
+		).resolves.toMatchObject({ size: WORKSPACE_FILE_BYTES_CEILING });
+		expect(service.limits.maxFileBytes).toBe(WORKSPACE_FILE_BYTES_CEILING);
+	});
+
 	it('enforces file, total and count caps with replacement accounting', async () => {
 		const bucket = new MemoryBucket();
 		const { service } = makeWorkspaceService(bucket, undefined, {

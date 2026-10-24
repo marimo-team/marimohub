@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitepress';
 import type { Plugin } from 'vitepress';
 import llmstxt from 'vitepress-plugin-llms';
+import { assertBuiltAssets } from './buildAssets';
 
 const REPO = 'https://github.com/marimo-team/marimohub';
 const SITE = 'https://marimohub.docs.marimo.io';
@@ -29,11 +30,13 @@ export default defineConfig({
 	cleanUrls: true,
 	lastUpdated: true,
 	sitemap: { hostname: SITE },
+	// A successful VitePress render can still reference omitted hydration chunks.
+	buildEnd: ({ outDir, site }) => assertBuiltAssets(outDir, site.base),
 
 	vite: {
 		plugins: [
 			openApiArtifact,
-			// The plugin is compiled against Vite 8; VitePress 1 supplies the compatible Vite 5 API.
+			// VitePress 1's bundled types predate the Vite 8 dependency override.
 			// Emits llms.txt, llms-full.txt, and a raw-markdown twin next to every page.
 			// oxlint-disable-next-line anti-slop/no-chained-type-assertions
 			llmstxt({

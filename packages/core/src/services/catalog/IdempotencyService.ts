@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../../stringFormats';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
 import { Millis } from '../../duration';
@@ -15,7 +16,7 @@ const IdempotencyRecordSchema = z.object({
 	scope: z.string(),
 	data: z.unknown(),
 	fingerprint: z.string().optional(),
-	created_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
 });
 
 type IdempotencyRecord = z.infer<typeof IdempotencyRecordSchema>;

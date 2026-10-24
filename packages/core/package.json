@@ -13,6 +13,7 @@
 		"./async": "./src/async.ts",
 		"./batching": "./src/batching.ts",
 		"./text": "./src/text.ts",
+		"./string-formats": "./src/stringFormats.ts",
 		"./concurrency": "./src/concurrency.ts",
 		"./constants": "./src/constants.ts",
 		"./data-preview-programs": "./src/services/integrations/data-preview/programs.ts",

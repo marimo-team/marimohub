@@ -56,14 +56,13 @@ describe('secretPaths', () => {
 		expect(paths.map((p) => p.join('.')).sort()).toEqual(['auth.password', 'secrets.*.value']);
 	});
 
-	it('finds marks inside intersection (allOf) branches', () => {
-		const intersected = z.intersection(
-			z.object({ host: z.string() }),
-			z.object({ token: zSecret() }),
-		);
-		const json = z.toJSONSchema(intersected, { io: 'input' }) as Record<string, unknown>;
-		// Premise: an intersection really does compile to `allOf`.
-		expect(json.allOf).toBeDefined();
+	it('finds marks inside explicit allOf branches', () => {
+		const json = {
+			allOf: [
+				z.toJSONSchema(z.object({ host: z.string() }), { io: 'input' }),
+				z.toJSONSchema(z.object({ token: zSecret() }), { io: 'input' }),
+			],
+		};
 		expect(secretPaths(json).map((p) => p.join('.'))).toEqual(['token']);
 	});
 

@@ -1,3 +1,4 @@
+import { utcTimestamp } from '@marimo-hub/core/string-formats';
 import { UploadPartBody, UploadResponseSchema } from '../uploads';
 import { createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
@@ -287,7 +288,7 @@ const prepareImport = createRoute({
 				success: z.literal(true),
 				data: z.object({
 					id: z.string().regex(ImportId.regex),
-					expires_at: z.iso.datetime(),
+					expires_at: utcTimestamp(),
 					files: z.array(z.object({ path: z.string(), size: z.number().int().nonnegative() })),
 				}),
 			}),
@@ -332,7 +333,7 @@ const getImport = createRoute({
 				success: z.literal(true),
 				data: z.object({
 					id: z.string().regex(ImportId.regex),
-					expires_at: z.iso.datetime(),
+					expires_at: utcTimestamp(),
 					notebooks: z.array(
 						z.object({
 							entry_notebook: z.string(),
@@ -418,7 +419,7 @@ const SourceDriftResponseSchema = z
 		pending_config: z.boolean().openapi({
 			description: 'Whether a settings edit is waiting for a matching sync.',
 		}),
-		checked_at: z.iso.datetime(),
+		checked_at: utcTimestamp(),
 	})
 	.openapi('SourceDrift');
 

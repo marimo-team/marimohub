@@ -3,6 +3,8 @@ import { createVersionId } from '../ids';
 import { BadRequestError } from '../errors';
 import type { Source } from '../schema';
 import {
+	WORKSPACE_LIMITS,
+	validateWorkspaceLimits,
 	isSafeWorkspacePath,
 	isSafeWorkspaceRootPath,
 	isWorkspaceDirectoryMarkerPath,
@@ -18,6 +20,17 @@ import {
 } from './remoteWorkspace';
 
 describe('remote workspace helpers', () => {
+	it.each(['maxFileBytes', 'maxTotalBytes', 'maxFiles'] as const)(
+		'rejects invalid library limits for %s',
+		(field) => {
+			for (const value of [0, -1, 1.5, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+				expect(() => validateWorkspaceLimits({ ...WORKSPACE_LIMITS, [field]: value })).toThrow(
+					field,
+				);
+			}
+		},
+	);
+
 	it('describes local sources as editable mount-or-copy workspaces', () => {
 		const source: Source = {
 			schema_version: 1,

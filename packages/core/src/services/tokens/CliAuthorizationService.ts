@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../../stringFormats';
 import { z } from 'zod';
 import type { Bucket, BucketObject, BucketObjectBody } from '../../ports/bucket';
 import { BadRequestError, PreconditionFailedError, ResourceExhaustedError } from '../../errors';
@@ -36,8 +37,8 @@ const AuthorizationCommonSchema = {
 	id: z.string().refine(CliAuthorizationId.is),
 	code_hash: z.string().regex(/^[0-9a-f]{64}$/),
 	code_challenge: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-	created_at: z.iso.datetime(),
-	expires_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
+	expires_at: utcTimestamp(),
 };
 
 const ApprovedAuthorizationSchema = {

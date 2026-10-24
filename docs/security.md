@@ -281,16 +281,36 @@ Authenticated callers can always resolve their own profile.
 ## Sandbox artifact reads
 
 Artifact capture accepts regular files only and rejects symlinks in every path component.
-Each read has a 25 MiB limit and a 10-second command deadline.
+Source-artifact reads have a fixed 25 MiB limit.
+Workspace reads use `MARIMOHUB_WORKSPACE_MAX_FILE_BYTES`: 25 MiB by default, up to 64 MiB.
+Each read has a 10-second command deadline.
 The transport stops on overflow or timeout. Earlier file sizes do not replace the transport limit.
 Workspace capture also enforces its total byte limit against the captured bytes.
 A refused workspace read preserves the last stored copy.
+Capture buffers whole files. See [Workspace limits](./editor-sessions.md#workspace-limits).
 
 External compute adapters need `SandboxInstance.readFileBounded` to support artifact and workspace capture.
 The method must enforce byte limits during transport and cancel the transport on overflow or timeout.
 An adapter without this method can still run sessions. Capture logs a warning once per sandbox instance and skips artifact reads, workspace uploads, and workspace cleanup.
 Existing stored content is preserved, but new sandbox changes are not captured until the adapter supports bounded reads.
 Capture never falls back to an unbounded read.
+
+## Integration trust
+
+Project managers control project integrations. Super admins control organization integrations.
+These features require explicit integration configuration:
+
+- [Startup scripts](./integrations.md#startup-script) run with the sandbox user's permissions and injected credentials.
+  Script text is ordinary configuration. Store secrets in an Environment variables integration.
+- [Agent context](./surfaces.md#shared-instructions-and-skills) supplies instructions, skills, and settings that can enable commands, hooks, plugins, and MCP servers in the sandbox.
+- [HTML head](./integrations.md#html-head) fragments can execute scripts in app viewers' browsers.
+  Viewers can read the fragments. Do not include secrets.
+- [Object uploads](./data-browser.md) require `allow_write: true`, write-capable integration credentials, and both `integration.use` and `integration.write` authorization.
+  `allow_write` defaults to `false`. Ambient server credentials cannot write.
+
+Disabling an integration affects future launches or requests. External writes and script side effects remain.
+Existing sessions and HTML exports can retain previous integration content.
+See [Changes and removal](./integrations.md#changes-and-removal) for cleanup behavior.
 
 ## Request safety
 

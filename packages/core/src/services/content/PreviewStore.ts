@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../../stringFormats';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
 import type { NotebookId, PreviewId, ProjectId } from '../../ids';
@@ -45,7 +46,7 @@ export const PreviewReceiptsSchema = z.object({
 			key: z.string(),
 			fingerprint: z.string(),
 			id: PreviewIdSchema,
-			created_at: z.iso.datetime(),
+			created_at: utcTimestamp(),
 			expires_at: Epoch,
 			deleted: z.boolean(),
 		}),

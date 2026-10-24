@@ -1,3 +1,4 @@
+import { utcTimestamp } from '@marimo-hub/core/string-formats';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	INTEGRATION_CATEGORIES,
@@ -124,8 +125,8 @@ const IntegrationEntrySchema = z
 		enabled: z.boolean(),
 		current_version: z.number().int().positive(),
 		created_by: z.string().min(1),
-		created_at: z.iso.datetime(),
-		updated_at: z.iso.datetime(),
+		created_at: utcTimestamp(),
+		updated_at: utcTimestamp(),
 		scope: z.enum(['project', 'org']),
 		/** Org entries in a project listing: a same-name project integration overrides this one. */
 		shadowed: z.boolean().optional(),
@@ -144,7 +145,7 @@ const IntegrationVersionSchema = z
 		version: z.number().int().positive(),
 		kind_schema_version: z.number().int().positive(),
 		created_by: z.string().min(1),
-		created_at: z.iso.datetime(),
+		created_at: utcTimestamp(),
 		change_note: z.string().optional(),
 	})
 	.openapi('IntegrationVersion');

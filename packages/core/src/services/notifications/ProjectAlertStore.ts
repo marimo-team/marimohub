@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../../stringFormats';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
 import type { ManagedSecretCodec, SecretEnvelope } from '../../ports/secrets';
@@ -33,11 +34,11 @@ const StoredDestinationCommonSchema = z.object({
 	name: z.string().min(1).max(100),
 	kinds: z.array(StoredProjectAlertKindSchema).min(1),
 	enabled: z.boolean(),
-	verified_at: z.iso.datetime().nullable(),
+	verified_at: utcTimestamp().nullable(),
 	endpoint_host: z.string().min(1),
 	created_by: UserIdSchema,
-	created_at: z.iso.datetime(),
-	updated_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
+	updated_at: utcTimestamp(),
 });
 
 const StoredSlackDestinationSchema = StoredDestinationCommonSchema.extend({
@@ -61,7 +62,7 @@ export const ProjectAlertConfigSchema = z.object({
 	schema_version: z.literal(1),
 	project_id: ProjectIdSchema,
 	destinations: z.array(StoredProjectAlertDestinationSchema).max(MAX_PROJECT_ALERT_DESTINATIONS),
-	updated_at: z.iso.datetime(),
+	updated_at: utcTimestamp(),
 });
 export type ProjectAlertConfig = z.infer<typeof ProjectAlertConfigSchema>;
 

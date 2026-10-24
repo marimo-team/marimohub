@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../../stringFormats';
 import { z } from 'zod';
 import type { Bucket, BucketObjectBody } from '../../ports/bucket';
 import { BadRequestError, PreconditionFailedError } from '../../errors';
@@ -30,8 +31,8 @@ const AuthorizationCommonSchema = {
 	scopes: z.array(z.string()),
 	state: z.string().optional(),
 	resource: z.string().optional(),
-	created_at: z.iso.datetime(),
-	expires_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
+	expires_at: utcTimestamp(),
 };
 
 const PendingAuthorizationSchema = z.looseObject({

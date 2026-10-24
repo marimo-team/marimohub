@@ -1,3 +1,4 @@
+import { utcTimestamp } from '@marimo-hub/core/string-formats';
 import { sha256Hex } from '@marimo-hub/core/sha256';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
@@ -45,11 +46,11 @@ const DestinationCommonSchema = z.object({
 	name: z.string(),
 	kinds: z.array(extensibleResponseEnum(PROJECT_ALERT_KINDS, PROJECT_ALERT_KINDS[0])),
 	enabled: z.boolean(),
-	verified_at: z.iso.datetime().nullable(),
+	verified_at: utcTimestamp().nullable(),
 	endpoint_host: z.string(),
 	created_by: z.string(),
-	created_at: z.iso.datetime(),
-	updated_at: z.iso.datetime(),
+	created_at: utcTimestamp(),
+	updated_at: utcTimestamp(),
 });
 
 const AlertDestinationResponseSchema = z

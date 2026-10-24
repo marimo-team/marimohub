@@ -1,4 +1,4 @@
-import { BadRequestError } from '../errors';
+import { BadRequestError, ValidationError } from '../errors';
 import type { Source } from '../schema';
 import { MAX_WORKSPACE_BYTES, MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_FILES } from '../constants';
 
@@ -27,11 +27,28 @@ export interface WorkspaceLimits {
 	readonly maxFiles: number;
 }
 
+// Sandbox capture buffers a complete base64 response as well as its decoded bytes.
+export const WORKSPACE_FILE_BYTES_CEILING = 64 * 1024 * 1024;
+
 export const WORKSPACE_LIMITS: WorkspaceLimits = {
 	maxFileBytes: MAX_WORKSPACE_FILE_BYTES,
 	maxTotalBytes: MAX_WORKSPACE_BYTES,
 	maxFiles: MAX_WORKSPACE_FILES,
 } as const;
+
+export function validateWorkspaceLimits(limits: WorkspaceLimits): WorkspaceLimits {
+	for (const [key, maximum] of [
+		['maxFileBytes', WORKSPACE_FILE_BYTES_CEILING],
+		['maxTotalBytes', Number.MAX_SAFE_INTEGER],
+		['maxFiles', Number.MAX_SAFE_INTEGER],
+	] as const) {
+		const value = limits[key];
+		if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+			throw new ValidationError(`Workspace ${key} must be an integer between 1 and ${maximum}`);
+		}
+	}
+	return Object.freeze({ ...limits });
+}
 
 export function folderImportFileLimit(files: readonly { path: string }[]): number {
 	// Local creation adds an empty root pyproject.toml when the upload omits it.

@@ -3,6 +3,7 @@ import { KeyedSerialQueue } from '../../concurrency';
 import { z } from 'zod';
 import {
 	WORKSPACE_LIMITS,
+	validateWorkspaceLimits,
 	isProtectedWorkspacePath,
 	isWorkspaceDirectoryMarkerPath,
 	workspaceDirectoryFromMarkerPath,
@@ -174,7 +175,9 @@ export class NotebookWorkspaceService {
 		private readonly bucket: Bucket,
 		private readonly owner: WorkspaceServiceOwner,
 		readonly limits: WorkspaceLimits = WORKSPACE_LIMITS,
-	) {}
+	) {
+		this.limits = validateWorkspaceLimits(limits);
+	}
 
 	async access(projectId: ProjectId, notebookId: NotebookId) {
 		const { source } = await this.owner.getNotebook(projectId, notebookId);
@@ -373,10 +376,7 @@ export class NotebookWorkspaceService {
 			throw new BadRequestError('Use the file editor to replace notebook source files');
 		if (input.create_only && (await this.exists(context.prefix, path)))
 			throw new ConflictError(`Workspace entry ${path} already exists`);
-		const maxFile =
-			this.bucket.multipart || this.bucket.putStream
-				? this.limits.maxFileBytes
-				: Math.min(this.limits.maxFileBytes, 64 * 1024 * 1024);
+		const maxFile = this.limits.maxFileBytes;
 		if (input.size > maxFile)
 			throw new ResourceExhaustedError(`Workspace upload exceeds ${maxFile} bytes`);
 		const contentType = workspaceMimeType(path) ?? 'application/octet-stream';

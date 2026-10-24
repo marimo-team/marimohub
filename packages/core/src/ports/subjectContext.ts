@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../stringFormats';
 /**
  * Runtime subject security context port.
  *
@@ -49,7 +50,7 @@ export const SubjectSecurityContextSchema = z.strictObject({
 	/** Identifies the policy revision that produced this context. */
 	policyVersion: z.string().regex(SECURITY_LABEL_TOKEN),
 	/** Hard expiry; a stale context must be re-resolved, never trusted. */
-	expiresAt: z.iso.datetime(),
+	expiresAt: utcTimestamp(),
 });
 
 export type SubjectSecurityContext = z.infer<typeof SubjectSecurityContextSchema>;

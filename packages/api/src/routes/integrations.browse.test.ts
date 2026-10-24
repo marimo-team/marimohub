@@ -1017,6 +1017,27 @@ describe('Data browser routes', () => {
 		}
 	});
 
+	it('accepts minute-precision UTC object search filters', async () => {
+		const pid = await createProject();
+		const created = await createObjectStore(pid);
+		const search = vi.spyOn(objectBrowser, 'searchObjects');
+		const base = `/projects/${pid}/integrations/${created.id}/browse/objects/search`;
+		await expectOk(
+			await request(
+				'GET',
+				`${base}?bucket=lake&query=needle&modified_after=2026-08-12T00%3A00Z&modified_before=2026-08-12T01%3A00Z`,
+			),
+		);
+		expect(search).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.anything(),
+			expect.objectContaining({
+				modified_after: '2026-08-12T00:00Z',
+				modified_before: '2026-08-12T01:00Z',
+			}),
+		);
+	});
+
 	it('reports bounded search progress and rejects inconsistent filters', async () => {
 		const pid = await createProject();
 		const created = await createObjectStore(pid);

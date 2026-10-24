@@ -92,6 +92,8 @@ Resource groups:
 
 - **Workspace files** — browse, read, upload, copy, move, and delete notebook files
   under `/projects/{pid}/notebooks/{nid}/workspace`.
+  [Resumable uploads](./editor-sessions.md#resumable-uploads) use `/workspace/uploads`.
+  `GET /api/v1/capabilities` reports deployment limits in `workspace_limits`.
 - **Previews** — create, list, get, and delete [notebook previews](/notebook-previews),
   and start preview sessions under `/projects/{pid}/notebooks/{nid}/previews`.
   `GET /projects/{pid}/notebooks/{nid}/source/refs` suggests GitHub branches and
@@ -101,6 +103,7 @@ Resource groups:
 - **Integrations** — discover integration kinds and manage project or
   organization integration instances. Each kind reports its available secret
   sources. Version-history lists use pagination.
+  Opt-in [object uploads](./data-browser.md) use `/projects/{pid}/integrations/{iid}/browse/objects/uploads`.
 - **Users and tokens** — resolve or search users, and create, list, or revoke
   personal access tokens.
 - **System** — `GET /api/v1/version` and `GET /api/v1/capabilities` report

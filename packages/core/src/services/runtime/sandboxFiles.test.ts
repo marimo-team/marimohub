@@ -17,6 +17,8 @@ import {
 import { execResult, listFilesFailure, readFileFailure } from '../../ports/sandbox';
 import {
 	WORKSPACE_DIRECTORY_MARKER,
+	WORKSPACE_FILE_BYTES_CEILING,
+	WORKSPACE_LIMITS,
 	workspaceDirectoryMarkerPath,
 } from '../../integrations/remoteWorkspace';
 import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
@@ -46,6 +48,33 @@ function captureFixture(options: Parameters<typeof makeFsSandbox>[0] = {}) {
 }
 
 const decode = (b: Uint8Array) => new TextDecoder().decode(b);
+
+it('rejects unsafe library limits before runtime restore or capture performs I/O', async () => {
+	const { instance } = makeFakeSandbox();
+	const bucket = new MemoryBucket();
+	const listObjects = vi.spyOn(bucket, 'list');
+	const listing = vi.fn();
+	const { projectId, notebookId, nb } = nbCtx();
+	const limits = { ...WORKSPACE_LIMITS, maxFileBytes: WORKSPACE_FILE_BYTES_CEILING + 1 };
+	await expect(
+		restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, { limits }),
+	).rejects.toThrow('Workspace maxFileBytes');
+	await expect(
+		captureWorkspace(
+			instance,
+			bucket,
+			projectId,
+			notebookId,
+			MOUNT,
+			'workspace',
+			listing,
+			'notebook.py',
+			limits,
+		),
+	).rejects.toThrow('Workspace maxFileBytes');
+	expect(listObjects).not.toHaveBeenCalled();
+	expect(listing).not.toHaveBeenCalled();
+});
 
 class VanishingObjectBucket extends MemoryBucket {
 	constructor(private readonly missingKey: string) {

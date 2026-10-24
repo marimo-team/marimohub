@@ -1,3 +1,4 @@
+import { utcTimestamp } from '../../stringFormats';
 import { trace } from '@opentelemetry/api';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
@@ -25,7 +26,7 @@ const DEFAULT_TTL_MS = Millis.minutes(10);
 
 const LockRecordSchema = z.object({
 	holder: z.string(),
-	expires_at: z.iso.datetime(),
+	expires_at: utcTimestamp(),
 });
 type LockRecord = z.infer<typeof LockRecordSchema>;
 

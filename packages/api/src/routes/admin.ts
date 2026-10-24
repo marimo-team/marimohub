@@ -1,3 +1,4 @@
+import { utcTimestamp } from '@marimo-hub/core/string-formats';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
 	BadRequestError,
@@ -173,8 +174,8 @@ const SandboxStartupReportSchema = z
 		image: z.string().nullable(),
 		compute_profile: z.string().nullable(),
 		compute_resources: ComputeResourcesResponseSchema,
-		started_at: z.iso.datetime(),
-		finished_at: z.iso.datetime(),
+		started_at: utcTimestamp(),
+		finished_at: utcTimestamp(),
 		total_ms: z.number().nonnegative(),
 		handle: SandboxStartupPhaseSchema,
 		readiness: SandboxStartupCommandSchema,

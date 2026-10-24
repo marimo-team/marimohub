@@ -35,7 +35,8 @@ Every deployment picks storage, compute, and auth.
 - [Integrations](./integrations.md) - databases, warehouses, query engines,
   PyIceberg catalogs, object storage, ML platforms,
   [Python package registries](./integrations.md#package-registries), and
-  environment variables.
+  environment variables, plus runtime tools, presentation, and shared agent configuration.
+- [Object uploads](./data-browser.md) - enable uploads to S3, GCS, and Azure Blob integrations.
 - [Integration secret sources](./integration-secrets.md) - inline encrypted values and external references.
 - [Import notebooks from a folder](./importing-notebooks.md) - import a local folder of
   notebooks with their modules and data.

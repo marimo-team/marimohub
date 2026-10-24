@@ -1,3 +1,4 @@
+import { utcTimestamp } from '@marimo-hub/core/string-formats';
 import { z } from '@hono/zod-openapi';
 import {
 	JOB_CONCURRENCY_POLICIES,
@@ -122,8 +123,8 @@ export const JobResponseSchema = z
 		concurrency_policy: extensibleResponseEnum(JOB_CONCURRENCY_POLICIES, 'forbid'),
 		notifications: JobNotificationsSchema.optional(),
 		created_by: z.string(),
-		created_at: z.iso.datetime(),
-		updated_at: z.iso.datetime(),
+		created_at: utcTimestamp(),
+		updated_at: utcTimestamp(),
 	})
 	.openapi('Job');
 
@@ -141,7 +142,7 @@ export const JobRunResponseSchema = z
 		}),
 		trigger: extensibleResponseEnum(RUN_TRIGGERS, 'manual'),
 		triggered_by: z.string().optional(),
-		scheduled_for: z.iso.datetime().optional(),
+		scheduled_for: utcTimestamp().optional(),
 		source_version_id: z.string().optional(),
 		parameters: JobParametersSchema.optional(),
 		attempt: z.number().int().positive().openapi({
@@ -153,15 +154,15 @@ export const JobRunResponseSchema = z
 		compute_profile: z.string().optional(),
 		compute_resources: ComputeResourcesResponseSchema.optional(),
 		timeout_seconds: z.number().int(),
-		queued_at: z.iso.datetime(),
-		eligible_at: z.iso.datetime().optional(),
-		started_at: z.iso.datetime().optional().openapi({
+		queued_at: utcTimestamp(),
+		eligible_at: utcTimestamp().optional(),
+		started_at: utcTimestamp().optional().openapi({
 			description: 'Present after the run enters running.',
 		}),
-		finished_at: z.iso.datetime().optional().openapi({
+		finished_at: utcTimestamp().optional().openapi({
 			description: 'Present on terminal runs.',
 		}),
-		deadline_at: z.iso.datetime().optional().openapi({
+		deadline_at: utcTimestamp().optional().openapi({
 			description: 'Present after provisioning establishes the watchdog deadline.',
 		}),
 		exit_code: z.number().int().optional().openapi({
