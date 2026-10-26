@@ -76,17 +76,25 @@ describe('Git pack expansion limits', () => {
 			assertGitPackLimits(pack(object(7, Uint8Array.from([0, 0x80]))), 'owner/repo'),
 		).rejects.toThrow('Invalid Git delta');
 	});
-	it('shares the delta operation budget across the pack', async () => {
-		const operations = MAX_GIT_DELTA_OPERATIONS / 2 + 1;
-		const delta = Uint8Array.from([
-			0,
-			...sizeBytes(operations),
-			...Array.from({ length: operations }, () => [1, 97]).flat(),
-		]);
-		await expect(
-			assertGitPackLimits(pack(object(7, delta), object(7, delta)), 'owner/repo'),
-		).rejects.toThrow('operation limit');
-	});
+	it.each([0, 1])(
+		'shares the delta operation budget across the pack (extra: %s)',
+		async (extra) => {
+			const operations = MAX_GIT_DELTA_OPERATIONS / 2 + extra;
+			const delta = Uint8Array.from([
+				0,
+				...sizeBytes(operations),
+				...Array.from({ length: operations }, () => [1, 97]).flat(),
+			]);
+			const result = assertGitPackLimits(pack(object(7, delta), object(7, delta)), 'owner/repo');
+			if (extra) {
+				await expect(result).rejects.toThrow(
+					`Git delta exceeds the operation limit of ${MAX_GIT_DELTA_OPERATIONS} per pack`,
+				);
+			} else {
+				await expect(result).resolves.toBeUndefined();
+			}
+		},
+	);
 	it('rejects unsafe object size integers', async () => {
 		const data = pack(Buffer.from([0xb0, ...Array<number>(8).fill(0xff), 0x01]));
 		await expect(assertGitPackLimits(data, 'owner/repo')).rejects.toThrow(

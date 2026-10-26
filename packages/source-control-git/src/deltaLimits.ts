@@ -1,7 +1,7 @@
 import { MAX_WORKSPACE_FILE_BYTES } from '@marimo-hub/core/constants';
 import { BadRequestError } from '@marimo-hub/core/errors';
 
-export const MAX_GIT_DELTA_OPERATIONS = 100_000;
+export const MAX_GIT_DELTA_OPERATIONS = 1_000_000;
 
 export function validateGitDelta(
 	data: Uint8Array,
@@ -41,7 +41,9 @@ export function validateGitDelta(
 	let output = 0;
 	while (position < data.length) {
 		if (++operations > operationLimit)
-			throw new BadRequestError('Git delta exceeds the operation limit');
+			throw new BadRequestError(
+				`Git delta exceeds the operation limit of ${MAX_GIT_DELTA_OPERATIONS} per pack`,
+			);
 		const opcode = byte();
 		let length: number;
 		if (opcode & 0x80) {
