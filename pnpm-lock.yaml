@@ -69,6 +69,12 @@ catalogs:
     '@duckdb/duckdb-wasm':
       specifier: 1.32.0
       version: 1.32.0
+    '@fontsource/ibm-plex-mono':
+      specifier: ^5.3.0
+      version: 5.3.0
+    '@fontsource/inter':
+      specifier: ^5.3.0
+      version: 5.3.0
     '@hono/mcp':
       specifier: ^0.3.2
       version: 0.3.2
@@ -1934,6 +1940,12 @@ importers:
       '@codemirror/view':
         specifier: 'catalog:'
         version: 6.43.7
+      '@fontsource/ibm-plex-mono':
+        specifier: 'catalog:'
+        version: 5.3.0
+      '@fontsource/inter':
+        specifier: 'catalog:'
+        version: 5.3.0
       '@marimo-hub/client':
         specifier: workspace:*
         version: link:../client
@@ -2928,6 +2940,12 @@ packages:
     peerDependenciesMeta:
       '@noble/hashes':
         optional: true
+
+  '@fontsource/ibm-plex-mono@5.3.0':
+    resolution: {integrity: sha512-eTgnZjZEGk1QtD3ZstF+Vclo2HLAni8YMy34/DxllwZvyz1lR/1RF/xTiAquOBO7MvqBx8D2Ig2WCPMVfdZu7Q==}
+
+  '@fontsource/inter@5.3.0':
+    resolution: {integrity: sha512-RofMylZmjlJEfELXeNHFWBRcSs75rGU/6bV2S2jfnvv/3rPXPGe0LgUJTklcHZ9lM4OZmAVFhcJPnACfb91A3g==}
 
   '@grpc/grpc-js@1.14.5':
     resolution: {integrity: sha512-7VZM+SVdEcUUqSQeNI3zM8Qs/BhQKZndPo2h5VkYkAM8Iz0wJIa8mKV5ekQGqG8UUsnkQ0NMxIxwkIHYvj0qOw==}
@@ -9259,6 +9277,10 @@ snapshots:
       levn: 0.4.1
 
   '@exodus/bytes@1.15.1': {}
+
+  '@fontsource/ibm-plex-mono@5.3.0': {}
+
+  '@fontsource/inter@5.3.0': {}
 
   '@grpc/grpc-js@1.14.5':
     dependencies:

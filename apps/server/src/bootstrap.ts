@@ -150,8 +150,8 @@ export async function bootstrap(
 				baseUri: ["'self'"],
 				objectSrc: ["'none'"],
 				scriptSrc: ["'self'", "'wasm-unsafe-eval'"],
-				styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-				fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+				styleSrc: ["'self'", "'unsafe-inline'"],
+				fontSrc: ["'self'"],
 				imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
 				connectSrc: ["'self'"],
 				// Direct exposure uses provider-issued origins that are unknown at startup.

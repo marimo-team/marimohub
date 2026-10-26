@@ -16,6 +16,8 @@
 		"@codemirror/lint": "catalog:",
 		"@codemirror/state": "catalog:",
 		"@codemirror/view": "catalog:",
+		"@fontsource/ibm-plex-mono": "catalog:",
+		"@fontsource/inter": "catalog:",
 		"@marimo-hub/client": "workspace:*",
 		"@marimo-hub/core": "workspace:*",
 		"@marimo-hub/notebook-bridge": "workspace:*",

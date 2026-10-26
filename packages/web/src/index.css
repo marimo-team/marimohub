@@ -1,5 +1,6 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
+@import './fonts.css';
 @plugin 'tailwindcss-react-aria-components';
 
 @custom-variant dark (&:is(.dark *));
