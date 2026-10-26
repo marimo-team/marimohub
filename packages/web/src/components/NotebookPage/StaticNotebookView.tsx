@@ -1,4 +1,7 @@
-import { Camera } from 'lucide-react';
+import { Camera, Play } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
+import { LinkButton } from '@/components/ui/Button';
+import { notebookAppUrl } from '@/lib/notebookUrls';
 import { cn } from '@/lib/utils';
 import { useNotebookHtmlQuery } from '@/api/hooks';
 import { formatRelative } from '@/lib/time';
@@ -7,6 +10,7 @@ interface StaticNotebookViewProps {
 	projectId: string;
 	notebookId: string;
 	title: string;
+	canRunApp?: boolean;
 	/** Banner copy: the role-gated viewer fallback vs the standalone SnapshotPage. */
 	variant?: 'viewer' | 'standalone';
 	/** Pin to one version's snapshot instead of the newest available. */
@@ -28,55 +32,67 @@ export function StaticNotebookView({
 	projectId,
 	notebookId,
 	title,
+	canRunApp = false,
 	variant = 'viewer',
 	versionId,
 	headVersionId,
 }: StaticNotebookViewProps) {
+	const location = useLocation();
 	const { data, isPending, isError } = useNotebookHtmlQuery(projectId, notebookId, versionId);
-
-	if (isPending) {
-		return (
-			<div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-				<div
-					className={cn(
-						'size-8 rounded-full border-[3px] border-border border-t-primary',
-						'animate-spin',
-					)}
-				/>
-				<p>Loading outputs...</p>
-			</div>
-		);
-	}
-
-	if (isError) {
-		return (
-			<div className="flex flex-1 items-center justify-center p-6 text-center">
-				<p className="max-w-md text-sm text-destructive">Failed to load the notebook outputs.</p>
-			</div>
-		);
-	}
 
 	const capturedFrom = data?.capturedAt ? ` from ${formatRelative(data.capturedAt)}` : '';
 	const stale = !!data?.versionId && !!headVersionId && data.versionId !== headVersionId;
-	const banner = data
-		? variant === 'viewer'
-			? `Static snapshot of outputs${capturedFrom} — sessions are disabled for viewers.`
+	const canOpenApp = variant === 'viewer' && canRunApp;
+	const viewerMessage = canOpenApp
+		? 'run as an app to interact with this notebook.'
+		: 'sessions are disabled for viewers.';
+	const snapshotMessage =
+		variant === 'viewer'
+			? viewerMessage
 			: stale
-				? `Static snapshot of outputs${capturedFrom} — the notebook has changed since these outputs were captured.`
-				: `Static snapshot of outputs${capturedFrom} — captured when the last editing session ended.`
-		: variant === 'viewer'
-			? "You're a viewer on this project — sessions are disabled."
-			: null;
+				? 'the notebook has changed since these outputs were captured.'
+				: 'captured when the last editing session ended.';
+	const banner =
+		data && !isError
+			? `Static snapshot of outputs${capturedFrom} — ${snapshotMessage}`
+			: variant === 'viewer'
+				? `You're a viewer on this project — ${viewerMessage}`
+				: null;
 
 	return (
 		<>
 			{banner && (
-				<div className="flex items-center gap-1.5 border-b bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+				<div className="flex flex-wrap items-center gap-1.5 border-b bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
 					<Camera className="size-3.5 shrink-0" />
 					<span>{banner}</span>
+					{canOpenApp && (
+						<LinkButton
+							to={notebookAppUrl(projectId, notebookId, location.search)}
+							state={{ title }}
+							size="sm"
+							className="ml-auto"
+						>
+							<Play className="size-3.5" />
+							Run as app
+						</LinkButton>
+					)}
 				</div>
 			)}
-			{data ? (
+			{isPending ? (
+				<div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+					<div
+						className={cn(
+							'size-8 rounded-full border-[3px] border-border border-t-primary',
+							'animate-spin',
+						)}
+					/>
+					<p>Loading outputs...</p>
+				</div>
+			) : isError ? (
+				<div className="flex flex-1 items-center justify-center p-6 text-center">
+					<p className="max-w-md text-sm text-destructive">Failed to load the notebook outputs.</p>
+				</div>
+			) : data ? (
 				<div className="flex-1 overflow-hidden">
 					<iframe
 						className="size-full border-0"
@@ -93,7 +109,9 @@ export function StaticNotebookView({
 					<p className="max-w-md text-sm text-muted-foreground">
 						{versionId
 							? 'This version captured no outputs, or they have since been cleaned up.'
-							: 'An editor needs to run this notebook before its outputs can be viewed.'}
+							: canOpenApp
+								? 'Run this notebook as an app to view its live outputs.'
+								: 'An editor needs to run this notebook before its outputs can be viewed.'}
 					</p>
 				</div>
 			)}

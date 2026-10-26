@@ -673,7 +673,14 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 				onClose={thumbnailModal.close}
 			/>
 
-			{staticView && <StaticNotebookView projectId={pid!} notebookId={nid!} title={title} />}
+			{staticView && (
+				<StaticNotebookView
+					projectId={pid!}
+					notebookId={nid!}
+					title={title}
+					canRunApp={canRunApp}
+				/>
+			)}
 
 			{showEditorChoice && editorState?.holder && (
 				<div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">

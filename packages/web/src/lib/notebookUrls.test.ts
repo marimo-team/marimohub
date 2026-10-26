@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	notebookAppUrl,
 	notebookFrameUrl,
 	notebookHomeSearch,
 	notebookQueryParams,
@@ -7,6 +8,32 @@ import {
 } from './notebookUrls';
 
 describe('notebook URLs', () => {
+	it.each(['', '?', '?access_token=bad&%73ession_id=bad&theme=dark'])(
+		'opens the app without a dangling query for empty or reserved parameters (%s)',
+		(search) => {
+			expect(notebookAppUrl('proj-1', 'nb-1', search)).toBe('/projects/proj-1/notebooks/nb-1/app');
+		},
+	);
+
+	it('preserves app inputs and a saved path while removing reserved parameters', () => {
+		const url = new URL(
+			notebookAppUrl(
+				'proj-1',
+				'nb-1',
+				'?tag=one&tag=two&empty=&text=%E2%9C%93+a%2Bb%26c&__mh_path=studio%2Fdata%2F&%61ccess_token=bad&file=other.py',
+			),
+			'https://hub.example',
+		);
+		expect(url.pathname).toBe('/projects/proj-1/notebooks/nb-1/app');
+		expect([...url.searchParams]).toEqual([
+			['tag', 'one'],
+			['tag', 'two'],
+			['empty', ''],
+			['text', '✓ a+b&c'],
+			['__mh_path', 'studio/data/'],
+		]);
+	});
+
 	it('preserves repeated keys, empty values, Unicode, and encoded delimiters', () => {
 		const search = '?id=123&tag=one&tag=two&empty=&bare&text=%E2%9C%93+a%2Bb%26c%3Dd%23e';
 		const url = new URL(notebookFrameUrl('https://kernel.example/', search, 'light', false));

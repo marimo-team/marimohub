@@ -5,8 +5,14 @@ import {
 	notebookFrameUrl as sandboxFrameUrl,
 	notebookQueryParams,
 	sandboxQueryKeys,
+	shareableNotebookQuery,
 } from '@marimo-hub/notebook-bridge/query';
 export { notebookQueryParams, shareableNotebookQuery } from '@marimo-hub/notebook-bridge/query';
+
+export function notebookAppUrl(projectId: string, notebookId: string, search: string): string {
+	const query = shareableNotebookQuery(search).toString();
+	return `/projects/${projectId}/notebooks/${notebookId}/app${query ? `?${query}` : ''}`;
+}
 
 export function trustedSandboxKeys(sandboxUrl: string): string[] {
 	return sandboxQueryKeys(new URL(sandboxUrl, window.location.origin));

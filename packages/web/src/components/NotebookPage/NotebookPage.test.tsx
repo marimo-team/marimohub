@@ -715,6 +715,8 @@ describe('NotebookPage viewer modes', () => {
 		expect(iframe!.getAttribute('srcdoc')).toContain('outputs');
 		// Opaque origin prevents snapshot scripts from reaching the hub document.
 		expect(iframe!.getAttribute('sandbox')).toBe('allow-scripts');
+		expect(screen.getByText(/sessions are disabled for viewers/)).toBeVisible();
+		expect(screen.queryByRole('link', { name: 'Run as app' })).toBeNull();
 		expect(sessionPosts(impl)).toHaveLength(0);
 	});
 
@@ -723,20 +725,49 @@ describe('NotebookPage viewer modes', () => {
 		renderPage();
 
 		await waitFor(() => expect(screen.getByText('No outputs yet')).toBeInTheDocument());
+		expect(screen.getByText(/sessions are disabled/)).toBeVisible();
+		expect(screen.queryByRole('link', { name: 'Run as app' })).toBeNull();
 		expect(sessionPosts(impl)).toHaveLength(0);
 	});
 
-	it('viewer + applications: still the static view on the EDIT page (apps ≠ edit kernels)', async () => {
-		const impl = makeFetch({
-			role: 'viewer',
-			viewerMode: 'applications',
-			html: '<html><body>outputs</body></html>',
-		});
-		renderPage();
+	it.each([
+		['with a snapshot', '<html><body>outputs</body></html>'],
+		['without a snapshot', null],
+	])(
+		'viewer + applications %s: offers an app without starting an edit session',
+		async (_, html) => {
+			const user = userEvent.setup();
+			const impl = makeFetch({
+				role: 'viewer',
+				viewerMode: 'applications',
+				html,
+				session: runningSession({ mode: 'app' }),
+			});
+			renderPage('edit', { search: '?id=123&tag=one&tag=two&access_token=evil&file=other.py' });
 
-		await waitFor(() => expect(screen.getByText(/Static snapshot of outputs/)).toBeInTheDocument());
-		expect(sessionPosts(impl)).toHaveLength(0);
-	});
+			const runApp = await screen.findByRole('link', { name: 'Run as app' });
+			expect(runApp).toHaveAttribute(
+				'href',
+				`/projects/${PID}/notebooks/${NID}/app?id=123&tag=one&tag=two`,
+			);
+			expect(screen.queryByText(/sessions are disabled/)).toBeNull();
+			if (html) {
+				expect(await screen.findByText(/Static snapshot of outputs/)).toBeVisible();
+				expect(screen.getByTitle('Forecast')).toHaveAttribute('sandbox', 'allow-scripts');
+			} else {
+				expect(await screen.findByText('No outputs yet')).toBeVisible();
+				expect(
+					screen.getByText('Run this notebook as an app to view its live outputs.'),
+				).toBeVisible();
+			}
+			expect(sessionPosts(impl)).toHaveLength(0);
+
+			await user.click(runApp);
+
+			await waitFor(() => expect(sessionPosts(impl)).toHaveLength(1));
+			expect(JSON.parse(String(sessionPosts(impl)[0]?.[1]?.body))).toMatchObject({ mode: 'app' });
+		},
+	);
 
 	it('viewer + ephemeral-sandbox: starts a session and shows the not-saved banner', async () => {
 		const impl = makeFetch({
