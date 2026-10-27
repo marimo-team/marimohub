@@ -1544,6 +1544,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						example: 'https://hub.example.com/marimohub',
 					},
 					{
+						id: 'MARIMOHUB_PROJECT_NOTEBOOK_TARGET',
+						name: 'Project notebook target',
+						description:
+							'Notebook links in project lists and galleries open `notebook` or `app`. Users without app permission open the notebook page. In `app` mode, editors also see an Edit link.',
+						default: 'notebook',
+						example: 'app',
+					},
+					{
 						id: 'MARIMOHUB_STATIC_ROOT',
 						name: 'Static root',
 						description: "Directory containing the web UI's static files.",

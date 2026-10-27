@@ -2443,6 +2443,11 @@ export interface components {
 			version: string;
 		};
 		Capabilities: {
+			/**
+			 * @description Destination for project notebook links. Users without app permission open the notebook page.
+			 * @enum {string}
+			 */
+			project_notebook_target: 'notebook' | 'app';
 			workspace_limits: {
 				single_put_max_bytes: number;
 				max_file_bytes: number;

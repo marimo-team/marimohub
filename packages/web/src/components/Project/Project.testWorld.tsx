@@ -195,7 +195,7 @@ export function makeFetch(
 }
 
 export async function renderProject(route = `/projects/${PID}`) {
-	renderWithClient(
+	const result = renderWithClient(
 		<Routes>
 			<Route path="/projects/:pid" element={<Project />} />
 			<Route path="/projects/:pid/notebooks/:nid/snapshot" element={<div>snapshot page</div>} />
@@ -205,6 +205,7 @@ export async function renderProject(route = `/projects/${PID}`) {
 	);
 	await waitFor(() => expect(screen.getByRole('heading', { name: 'Sales' })).toBeInTheDocument());
 	await waitFor(() => expect(screen.getByRole('status')).not.toHaveTextContent('Loading'));
+	return result;
 }
 
 export async function chooseNotebookAction(

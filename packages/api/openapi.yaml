@@ -158,6 +158,13 @@ components:
     Capabilities:
       type: object
       properties:
+        project_notebook_target:
+          type: string
+          enum:
+            - notebook
+            - app
+          description: Destination for project notebook links. Users without app
+            permission open the notebook page.
         workspace_limits:
           type: object
           properties:
@@ -505,6 +512,7 @@ components:
                   - embed
                   - managed_ai
       required:
+        - project_notebook_target
         - workspace_limits
         - project_groups
         - federation

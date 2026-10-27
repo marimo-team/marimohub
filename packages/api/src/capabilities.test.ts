@@ -14,6 +14,21 @@ const authed: Authenticator = {
 };
 
 describe('GET /api/v1/capabilities', () => {
+	it.each([undefined, 'notebook', 'app'] as const)(
+		'reports project notebook target %s',
+		async (projectNotebookTarget) => {
+			const deps = makeTestDeps(new MemoryBucket(), {
+				authenticator: authed,
+				projectNotebookTarget,
+			});
+			expect(await expectOk(await createApi(deps).request('/api/v1/capabilities'))).toMatchObject({
+				project_notebook_target: projectNotebookTarget ?? 'notebook',
+				viewer_mode: 'static',
+				viewer_session_modes: [],
+			});
+		},
+	);
+
 	it('exposes app heartbeat cadence without internal presence or retirement timers', async () => {
 		const deps = makeTestDeps(new MemoryBucket(), { authenticator: authed });
 		const data = await expectOk<{ app_pool: unknown }>(

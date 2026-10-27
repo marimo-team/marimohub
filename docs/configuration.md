@@ -454,6 +454,7 @@ Server-wide settings; no backend selector.
 | `PORT` | Port the HTTP server listens on. | — | `3000` | — |
 | `MARIMOHUB_BIND_HOST` | IP address the HTTP server listens on. Unset listens on all interfaces; an empty value is rejected. Set `127.0.0.1` to accept only connections from the same host, such as a reverse proxy. In a container, leave it unset and publish the port on loopback instead (`-p 127.0.0.1:3000:3000`). | — | — | `127.0.0.1` |
 | `MARIMOHUB_APP_BASE_URL` | Public URL for browser links and the Node SPA base path. When the app uses a path prefix, set this variable. If unset, links use the request origin and the SPA uses `/`. | — | — | `https://hub.example.com/marimohub` |
+| `MARIMOHUB_PROJECT_NOTEBOOK_TARGET` | Notebook links in project lists and galleries open `notebook` or `app`. Users without app permission open the notebook page. In `app` mode, editors also see an Edit link. | — | `notebook` | `app` |
 | `MARIMOHUB_STATIC_ROOT` | Directory containing the web UI's static files. | — | `./public` | — |
 | `MARIMOHUB_RUN_MAINTENANCE` | Run background maintenance (expiring old sessions, cleaning up sandboxes) on this replica only. | — | `false` | `true` |
 | `MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` | Shutdown drain budget in seconds (1–86400). Defaults to 120 on maintenance and 10 on API replicas. Allow another 20 seconds in the container termination grace period. | — | — | `120` |

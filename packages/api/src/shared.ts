@@ -1574,6 +1574,10 @@ export const DeploymentInfoResponseSchema = z
  */
 export const CapabilitiesResponseSchema = z
 	.object({
+		project_notebook_target: z.enum(['notebook', 'app']).openapi({
+			description:
+				'Destination for project notebook links. Users without app permission open the notebook page.',
+		}),
 		workspace_limits: z.object({
 			single_put_max_bytes: z.number().int().positive(),
 			max_file_bytes: z.number().int().positive(),

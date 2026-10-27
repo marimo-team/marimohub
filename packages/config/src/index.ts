@@ -765,6 +765,12 @@ export function createFromEnv(
 				)
 			: undefined,
 		theme,
+		projectNotebookTarget: parseEnumOr(
+			env,
+			'MARIMOHUB_PROJECT_NOTEBOOK_TARGET',
+			['notebook', 'app'] as const,
+			'notebook',
+		),
 		services,
 		metrics,
 		bucket,

@@ -316,12 +316,11 @@ function useProjectContent() {
 	const deleteProject = useDeleteProject();
 	const { data: capabilities, isError: capabilitiesError } = useCapabilitiesQuery();
 	const canManage = canManageProject(project.your_role);
-	const canOperateSource = project.your_role !== null && canEditProject(project.your_role);
+	const canEdit = canEditProject(project.your_role);
 	const sandboxImages = capabilities?.sandbox_images ?? [];
 	const offersImageChoice = sandboxImages.length > 1;
 	const computeProfiles = capabilities?.compute_profiles ?? [];
-	const canChooseComputeProfile =
-		capabilities?.compute_profile_override === 'editors' && canEditProject(project.your_role);
+	const canChooseComputeProfile = capabilities?.compute_profile_override === 'editors' && canEdit;
 	const offersComputeChoice =
 		canChooseComputeProfile &&
 		(computeProfiles.length > 1 || modeComputeProfiles(capabilities, 'app').length > 1);
@@ -333,11 +332,11 @@ function useProjectContent() {
 	// Per-session actions render from the server-evaluated `session.can` grants.
 	// Start has no session to carry grants, so it derives from the evaluated
 	// admission row in capabilities. The server enforces all of it regardless.
-	const canStartApps =
-		canEditProject(project.your_role) || (capabilities?.viewer_session_modes ?? []).includes('app');
+	const canStartApps = canEdit || (capabilities?.viewer_session_modes ?? []).includes('app');
 
-	const dataBrowserAvailable =
-		(capabilities?.data_browser?.available ?? false) && canEditProject(project.your_role);
+	const openNotebooksAsApps = capabilities?.project_notebook_target === 'app' && canStartApps;
+
+	const dataBrowserAvailable = (capabilities?.data_browser?.available ?? false) && canEdit;
 	const projectAlertsAvailable = (capabilities?.project_alerts?.available ?? false) && canManage;
 	const jobsAvailable = capabilities?.jobs?.available ?? false;
 	const { data: integrationKinds } = useIntegrationKindsQuery(dataBrowserAvailable);
@@ -660,7 +659,7 @@ function useProjectContent() {
 		const groups: DropdownMenuOption[][] = [
 			[
 				{ id: 'rename', label: 'Rename', icon: <Pencil className="size-4" /> },
-				...(canOperateSource
+				...(canEdit
 					? [{ id: 'thumbnail', label: 'Edit thumbnail', icon: <FileText className="size-4" /> }]
 					: []),
 				{ id: 'duplicate', label: 'Duplicate', icon: <Copy className="size-4" /> },
@@ -719,13 +718,13 @@ function useProjectContent() {
 								<span className="max-sm:hidden">Browse data</span>
 							</LinkButton>
 						)}
-						{canEditProject(project.your_role) && (
+						{canEdit && (
 							<Button variant="primary" onPress={uploadModal.open}>
 								<Plus className="size-4" />
 								New Notebook
 							</Button>
 						)}
-						{canEditProject(project.your_role) ? (
+						{canEdit ? (
 							<DropdownMenu
 								label="More create options"
 								icon={<ChevronDown className="size-4" />}
@@ -857,12 +856,12 @@ function useProjectContent() {
 						icon={<FileText />}
 						message="No notebooks yet"
 						description={
-							canEditProject(project.your_role)
+							canEdit
 								? 'Create a notebook, upload a .py file, or import a folder with supporting files.'
 								: 'No notebooks are available in this project yet.'
 						}
 						action={
-							canEditProject(project.your_role) && (
+							canEdit && (
 								<div className="flex flex-wrap justify-center gap-2">
 									<Button variant="default" onPress={uploadModal.open}>
 										<Plus className="size-4" />
@@ -897,6 +896,7 @@ function useProjectContent() {
 						);
 					}
 
+					const notebookPath = `/projects/${pid}/notebooks/${nb.id}`;
 					const live = sessionByNotebook.get(nb.id);
 					const stoppableEdit = live?.edit?.can?.stop ? live.edit : undefined;
 					return (
@@ -915,7 +915,7 @@ function useProjectContent() {
 									/>
 								) : undefined
 							}
-							to={`/projects/${pid}/notebooks/${nb.id}`}
+							to={openNotebooksAsApps ? `${notebookPath}/app` : notebookPath}
 							state={{ title: nb.title }}
 							label={nb.title}
 							contentClassName={gallery ? undefined : 'items-center justify-between gap-3 py-3.5'}
@@ -995,7 +995,7 @@ function useProjectContent() {
 									<GitSourcePopover
 										projectId={pid!}
 										notebookId={nb.id}
-										canSync={canEditProject(project.your_role)}
+										canSync={canEdit}
 										triggerClassName="shrink-0 cursor-pointer rounded-lg"
 										trigger={
 											<span className="flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
@@ -1007,6 +1007,18 @@ function useProjectContent() {
 							}
 							actions={
 								<>
+									{openNotebooksAsApps && canEdit && (
+										<LinkButton
+											to={notebookPath}
+											state={{ title: nb.title }}
+											variant="ghost"
+											size="sm"
+											aria-label={`Edit ${nb.title}`}
+										>
+											<Pencil className="size-4" />
+											Edit
+										</LinkButton>
+									)}
 									{/* Inline shutdown is edit-only; app controls live in the menu. */}
 									{stoppableEdit && (
 										<IconButton
@@ -1161,7 +1173,7 @@ function useProjectContent() {
 					onClose={historyModal.close}
 					projectId={pid!}
 					notebook={historyModal.target}
-					canRestore={canEditProject(project.your_role)}
+					canRestore={canEdit}
 				/>
 			)}
 
@@ -1183,7 +1195,7 @@ function useProjectContent() {
 					title={syncSettings.target.title}
 					syncUrl={syncUrl(pid!, syncSettings.target.notebookId)}
 					canManage={canManage}
-					canOperate={canOperateSource}
+					canOperate={canEdit}
 					initialToken={syncSettings.target.token}
 				/>
 			)}

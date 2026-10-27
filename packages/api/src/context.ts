@@ -420,6 +420,7 @@ export interface ApiDeps {
 	workspaceLimits?: WorkspaceLimits;
 	warmPool?: WarmPoolService;
 	theme?: ThemeConfig;
+	projectNotebookTarget?: 'notebook' | 'app';
 	services: Services;
 	/** Operational signals shared by domain services and API-owned resource guards. */
 	metrics?: Metrics;

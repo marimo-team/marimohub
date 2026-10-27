@@ -31,6 +31,36 @@ describe('createFromEnv auth backend selection', () => {
 		MARIMOHUB_COMPUTE_BACKEND: 'none',
 	};
 
+	it.each([
+		[undefined, 'notebook'],
+		['', 'notebook'],
+		[' \t ', 'notebook'],
+		['notebook', 'notebook'],
+		[' Notebook ', 'notebook'],
+		['app', 'app'],
+		[' APP ', 'app'],
+	])('parses project notebook target %j as %s', (value, expected) => {
+		const deps = createFromEnv({
+			...baseEnv,
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_PROJECT_NOTEBOOK_TARGET: value,
+		});
+		expect(deps.projectNotebookTarget).toBe(expected);
+	});
+
+	it.each(['editor', 'apps', 'false', 'app,notebook', '/app'])(
+		'rejects invalid project notebook target %j at startup',
+		(value) => {
+			expect(() =>
+				createFromEnv({
+					...baseEnv,
+					MARIMOHUB_AUTH_BACKEND: 'dev',
+					MARIMOHUB_PROJECT_NOTEBOOK_TARGET: value,
+				}),
+			).toThrow(/Invalid MARIMOHUB_PROJECT_NOTEBOOK_TARGET.*expected notebook, app/);
+		},
+	);
+
 	it('throws when MARIMOHUB_AUTH_BACKEND is unset (fail closed)', () => {
 		expect(() => createFromEnv({ ...baseEnv })).toThrow(/MARIMOHUB_AUTH_BACKEND/);
 	});

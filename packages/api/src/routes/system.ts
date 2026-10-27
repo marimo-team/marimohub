@@ -109,6 +109,7 @@ app.openapi(capabilitiesRoute, (c) => {
 	const deps = c.get('deps');
 	const previewReader = deps.sourceControl?.getReader('github');
 	return ok(c, {
+		project_notebook_target: deps.projectNotebookTarget ?? 'notebook',
 		workspace_limits: {
 			single_put_max_bytes: Math.min(
 				MAX_WORKSPACE_FILE_BYTES,
