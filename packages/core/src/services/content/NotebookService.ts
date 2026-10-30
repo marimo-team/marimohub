@@ -408,7 +408,9 @@ export class NotebookService {
 			if (!codeObj) {
 				throw new NotFoundError(`Notebook code for ${notebookId} not found`);
 			}
-			return new TextDecoder('utf-8', { ignoreBOM: true }).decode(await codeObj.bytes());
+			return new TextDecoder('utf-8', { fatal: false, ignoreBOM: true }).decode(
+				await codeObj.bytes(),
+			);
 		}
 
 		// Synced sources serve the entry notebook from the immutable workspace of the
@@ -422,7 +424,9 @@ export class NotebookService {
 		if (!codeObj) {
 			throw new NotFoundError(`Synced notebook ${notebookId} has not been synced`);
 		}
-		return new TextDecoder('utf-8', { ignoreBOM: true }).decode(await codeObj.bytes());
+		return new TextDecoder('utf-8', { fatal: false, ignoreBOM: true }).decode(
+			await codeObj.bytes(),
+		);
 	}
 
 	/**
@@ -1269,7 +1273,9 @@ export class NotebookService {
 		}
 
 		const version = await readStored(VersionSchema, metaObj, ver.meta);
-		const code = new TextDecoder('utf-8', { ignoreBOM: true }).decode(await codeObj.bytes());
+		const code = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true }).decode(
+			await codeObj.bytes(),
+		);
 
 		return { version, code };
 	}

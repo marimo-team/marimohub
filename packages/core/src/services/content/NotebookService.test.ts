@@ -93,6 +93,27 @@ describe('NotebookService', () => {
 		},
 	);
 
+	it.each(['current', 'version'])(
+		'replaces malformed UTF-8 bytes in a %s source read',
+		async (kind) => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'Malformed source bytes', description: '', code: '' },
+				ACTOR,
+			);
+			const [initial] = await notebooks.listVersions(projectId, created.id);
+			const nb = paths.project(projectId).notebook(created.id);
+			const bytes = new Uint8Array([...enc('\ufeffimport marimo\n# '), 0xc3, 0x28, 0xff]);
+			await bucket.put(nb.workspaceFile('notebook.py'), bytes);
+			await bucket.put(nb.version(initial.version_id).code, bytes);
+			const actual =
+				kind === 'current'
+					? await notebooks.getNotebookContent(projectId, created.id)
+					: (await notebooks.getVersion(projectId, created.id, initial.version_id)).code;
+			expect(actual).toBe('\ufeffimport marimo\n# \ufffd(\ufffd');
+		},
+	);
+
 	describe('cached meta reads', () => {
 		it('revalidates security labels and preserves includeDeleted', async () => {
 			const notebook = await notebooks.createNotebook(
