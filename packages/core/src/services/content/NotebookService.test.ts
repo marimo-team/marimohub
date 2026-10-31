@@ -57,6 +57,63 @@ describe('NotebookService', () => {
 		projectId = project.id;
 	});
 
+	it.each([
+		{ prefix: '\ufeff', kind: 'current' },
+		{ prefix: '\ufeff', kind: 'version' },
+		{ prefix: '', kind: 'current' },
+		{ prefix: '', kind: 'version' },
+	])(
+		'preserves UTF-8 source in local $kind reads with prefix $prefix',
+		async ({ prefix, kind }) => {
+			const code = `${prefix}# /// script\r\n# dependencies = ["marimo"]\r\n# ///\r\nimport marimo\r\n# café α\r\n`;
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'Exact source', description: '', code },
+				ACTOR,
+			);
+			const [initial] = await notebooks.listVersions(projectId, created.id);
+			const nb = paths.project(projectId).notebook(created.id);
+			expect(await (await bucket.get(nb.workspaceFile('notebook.py')))?.bytes()).toEqual(enc(code));
+			expect(await (await bucket.get(nb.version(initial.version_id).code))?.bytes()).toEqual(
+				enc(code),
+			);
+			if (kind === 'version') {
+				await notebooks.updateNotebook(
+					projectId,
+					created.id,
+					{ code: 'import marimo\n# newer' },
+					ACTOR,
+				);
+				expect((await notebooks.getVersion(projectId, created.id, initial.version_id)).code).toBe(
+					code,
+				);
+			} else {
+				expect(await notebooks.getNotebookContent(projectId, created.id)).toBe(code);
+			}
+		},
+	);
+
+	it.each(['current', 'version'])(
+		'replaces malformed UTF-8 bytes in a %s source read',
+		async (kind) => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'Malformed source bytes', description: '', code: '' },
+				ACTOR,
+			);
+			const [initial] = await notebooks.listVersions(projectId, created.id);
+			const nb = paths.project(projectId).notebook(created.id);
+			const bytes = new Uint8Array([...enc('\ufeffimport marimo\n# '), 0xc3, 0x28, 0xff]);
+			await bucket.put(nb.workspaceFile('notebook.py'), bytes);
+			await bucket.put(nb.version(initial.version_id).code, bytes);
+			const actual =
+				kind === 'current'
+					? await notebooks.getNotebookContent(projectId, created.id)
+					: (await notebooks.getVersion(projectId, created.id, initial.version_id)).code;
+			expect(actual).toBe('\ufeffimport marimo\n# \ufffd(\ufffd');
+		},
+	);
+
 	describe('cached meta reads', () => {
 		it('revalidates security labels and preserves includeDeleted', async () => {
 			const notebook = await notebooks.createNotebook(
@@ -464,6 +521,33 @@ describe('NotebookService', () => {
 			const { source } = await notebooks.getNotebook(projectId, notebookId);
 			return source.type === 'git' ? source.current_version_id : null;
 		};
+
+		it.each([
+			{ prefix: '\ufeff', kind: 'current' },
+			{ prefix: '\ufeff', kind: 'version' },
+			{ prefix: '', kind: 'current' },
+			{ prefix: '', kind: 'version' },
+		])(
+			'preserves UTF-8 source in Git $kind reads with prefix $prefix',
+			async ({ prefix, kind }) => {
+				const code = `${prefix}# /// script\r\n# dependencies = ["marimo"]\r\n# ///\r\nimport marimo\r\n# café α\r\n`;
+				const { meta } = await create();
+				await sync(meta.id, 'commit-source', [{ path: 'app.py', bytes: enc(code) }]);
+				const versionId = (await currentVersionId(meta.id))!;
+				const nb = paths.project(projectId).notebook(meta.id);
+				expect(
+					await (await bucket.get(nb.version(versionId).workspaceFile('app.py')))?.bytes(),
+				).toEqual(enc(code));
+				if (kind === 'version') {
+					await sync(meta.id, 'commit-new', [
+						{ path: 'app.py', bytes: enc('import marimo\n# newer') },
+					]);
+					expect((await notebooks.getVersion(projectId, meta.id, versionId)).code).toBe(code);
+				} else {
+					expect(await notebooks.getNotebookContent(projectId, meta.id)).toBe(code);
+				}
+			},
+		);
 
 		it('creates a draft git notebook with a private sync token', async () => {
 			const { meta, sync_token } = await create({ root_path: 'apps', entry_notebook: 'my_app.py' });
