@@ -133,6 +133,7 @@ minimumReleaseAgeExclude:
   # Security fixes take precedence over the release-age cooldown.
   - '@grpc/grpc-js@1.14.5'
   - body-parser@2.4.0
+  # Renovate security update: qs@6.16.1
   - qs@6.16.1
   - zod@4.6.6
   - brace-expansion
