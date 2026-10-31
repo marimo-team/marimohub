@@ -1,3 +1,4 @@
+import { HostRetryCleanupSchema, HostRetryRecordSchema } from '../services/runtime/HostRetryStore';
 import {
 	NotebookImportPreparationSchema,
 	NotebookImportItemSchema,
@@ -484,6 +485,24 @@ const OBJECTS: BucketObject[] = [
 		schema: EventSchema,
 		summary: 'Append-only audit event.',
 		mutability: 'append-only',
+		tag: 'ops',
+	},
+	{
+		name: 'HostRetryCleanup',
+		key: paths.hostRetryCleanup,
+		schema: HostRetryCleanupSchema,
+		summary: 'Shared progress for bounded host receipt compaction.',
+		mutability: 'cas',
+		owner: 'HostRetryStore',
+		tag: 'ops',
+	},
+	{
+		name: 'HostRetryRecord',
+		key: paths.hostRetry('{digest}'),
+		schema: HostRetryRecordSchema,
+		summary: 'Shared host mutation claim, runtime binding, and retry receipt. Retain CAS heads.',
+		mutability: 'cas',
+		owner: 'HostRetryStore',
 		tag: 'ops',
 	},
 	{

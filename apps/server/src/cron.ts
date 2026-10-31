@@ -152,6 +152,7 @@ export function startMaintenance(
 			const snapshotsPruned = await step(() => maintenance.expireSnapshots());
 			const eventsPruned = await step(() => maintenance.pruneEvents());
 			const idempotencyPruned = await step(() => idempotency.prune());
+			const hostRetriesCompacted = await step(() => deps.services.hostRetries.compactExpired());
 			const proposalPayloadsPruned = await step(() => proposals.pruneExpiredPayloads());
 			const inviteRowsClaimed = await step(() => projects.claimPendingInvites());
 			// Projects before notebooks: a swept project wipes its whole subtree, so
@@ -176,6 +177,7 @@ export function startMaintenance(
 				snapshots_pruned: snapshotsPruned,
 				events_pruned: eventsPruned,
 				idempotency_pruned: idempotencyPruned,
+				host_retries_compacted: hostRetriesCompacted,
 				proposal_payloads_pruned: proposalPayloadsPruned,
 				invite_rows_claimed: inviteRowsClaimed,
 				projects_swept: projectsSwept,

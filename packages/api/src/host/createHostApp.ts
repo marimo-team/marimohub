@@ -3,6 +3,7 @@ import {
 	ForbiddenError,
 	HostNotebookId,
 	NotFoundError,
+	PreconditionFailedError,
 	ProjectId,
 	SessionId,
 	sleep,
@@ -91,7 +92,7 @@ function originalRequestId(event: HostEvent, principal: AuthenticatedPrincipal):
 
 export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 	const app = new Hono<HonoEnv>();
-	const retries = new HostRetries();
+	let retries: HostRetries | undefined;
 	const runtimeRefreshes = new RuntimeCatalogRefreshes();
 	const attachments = new Map<string, HostEvent>();
 	const attachmentListeners = new Set<(event: HostEvent, notebookId: string) => void>();
@@ -172,12 +173,13 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 				await c.req.text(),
 			]),
 		);
-		const result = await retries.execute(
+		const result = await (retries ??= new HostRetries(deps.services.hostRetries)).execute(
 			c.get('user').id,
 			key,
 			fingerprint,
 			(attempt) => work(key, attempt),
 			refreshRun,
+			c.req.raw.signal,
 		);
 		if (
 			result.status < 400 &&
@@ -336,7 +338,8 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 			deps,
 		);
 		await assertProjectActionOn(project, c.get('user'), 'notebook.write', deps);
-		return mutation(c, async (key) => {
+		return mutation(c, async (key, attempt) => {
+			await attempt.dispatch();
 			const notebook = await deps.services.notebooks.createNotebook(
 				project.id,
 				{
@@ -367,14 +370,22 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 			deps,
 			notebook.meta.security_labels ?? null,
 		);
-		return mutation(c, async (key) => {
-			const updated = await deps.services.notebooks.updateNotebook(
-				project.id,
-				notebook.meta.id,
-				{ title: input.name },
-				c.get('user').id,
-				ifMatchToken(c),
-			);
+		return mutation(c, async (key, attempt) => {
+			await attempt.dispatch();
+			let updated;
+			try {
+				updated = await deps.services.notebooks.updateNotebook(
+					project.id,
+					notebook.meta.id,
+					{ title: input.name },
+					c.get('user').id,
+					ifMatchToken(c),
+				);
+			} catch (error) {
+				if (!(error instanceof PreconditionFailedError)) throw error;
+				const response = errorResponse(error);
+				return { status: response.status, body: await response.json() };
+			}
 			const body = await notebookRecord(deps, c.get('user'), project, updated);
 			rememberChange(body.id, key, c.get('user'));
 			return { status: 200, body };
@@ -427,7 +438,7 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 					);
 					if (session.status !== 'running')
 						throw HostProblemError.noRuntime('The original runtime is no longer available');
-					if (route.operation === 'runtime.run') attempt.bindSession(session.session_id);
+					await attempt.bindSession(session.session_id);
 					const reply = await callRuntime(
 						deps,
 						c.get('user'),
@@ -517,11 +528,13 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 			};
 			let latestNotebook = record;
 			const emitSnapshot = async () => {
+				const snapshotAttachments = [...attachments.values()].filter(
+					(event) => (event.data.attachment as { notebook_id: string }).notebook_id === record.id,
+				);
+				// The snapshot includes earlier changes; queue only changes after this boundary.
+				pendingAttachments.length = 0;
 				await emit({ event: 'notebook', data: { notebook: latestNotebook } });
-				for (const event of attachments.values()) {
-					if ((event.data.attachment as { notebook_id: string }).notebook_id === record.id)
-						await emit(event);
-				}
+				for (const event of snapshotAttachments) await emit(event);
 			};
 			let cursor: string | undefined;
 			let batch = first;

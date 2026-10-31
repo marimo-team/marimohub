@@ -139,6 +139,10 @@ These CAS-managed records also have one writer each:
   `_system/oauth-clients/{client-id}.json`.
 - `OAuthAuthorizationService` owns each short-lived MCP OAuth grant at
   `_system/oauth-authorizations/{authorization-id}.json`.
+- `HostRetryStore` owns each host mutation claim and receipt at
+  `_system/host-retries/{digest}.json` and the cleanup cursor at
+  `_system/host-retry-cleanup.json`. All updates use CAS. Maintenance compacts
+  expired receipts but retains the heads. Pending claims never expire automatically.
 - `OAuthRateLimitService` owns each shared MCP OAuth request window at
   `_system/oauth-rate-limits/{endpoint}.json`.
 - `ProjectAlertStore` owns each project alert configuration at

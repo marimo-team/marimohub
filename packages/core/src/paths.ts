@@ -347,6 +347,9 @@ export const paths = {
 	eventIdempotencyForDate: (date: string) => `_system/events/${date}/_idempotency/`,
 	eventIdempotency: (date: string, id: string) =>
 		`_system/events/${date}/_idempotency/${encodeURIComponent(id)}.json`,
+	hostRetryCleanup: '_system/host-retry-cleanup.json',
+	hostRetriesPrefix: '_system/host-retries/',
+	hostRetry: (digest: string) => `_system/host-retries/${digest}.json`,
 	idempotencyPrefix: '_system/idempotency/',
 	idempotencyKey: (digest: string) => `_system/idempotency/${digest}.json`,
 	proposalPayloadMarkersPrefix: '_system/proposal-payloads/',

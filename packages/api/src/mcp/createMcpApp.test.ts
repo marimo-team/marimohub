@@ -52,6 +52,48 @@ async function registerClient(
 }
 
 describe('MCP OAuth app', () => {
+	it('limits CORS and preflight handling to MCP and OAuth endpoints', async () => {
+		const deps = makeTestDeps(new MemoryBucket(), {
+			mcp: { publicBaseUrl: 'https://hub.example.com' },
+			authenticator: { authenticate: async () => null },
+		});
+		const app = createApi(deps);
+		for (const path of [
+			'/api/host/v1/events',
+			'/api/host/v1/notebooks/missing/events',
+			'/api/v1/projects',
+		]) {
+			for (const method of ['GET', 'OPTIONS']) {
+				const response = await app.request(path, {
+					method,
+					headers: { Origin: 'https://client.example', 'Access-Control-Request-Method': 'GET' },
+				});
+				expect(response.status).toBe(401);
+				expect(response.headers.has('Access-Control-Allow-Origin')).toBe(false);
+				await response.body?.cancel();
+			}
+		}
+		for (const path of [
+			'/mcp',
+			'/authorize',
+			'/token',
+			'/register',
+			'/revoke',
+			'/.well-known/oauth-authorization-server',
+			'/.well-known/oauth-protected-resource/mcp',
+		]) {
+			const response = await app.request(path, {
+				method: 'OPTIONS',
+				headers: { Origin: 'https://client.example', 'Access-Control-Request-Method': 'POST' },
+			});
+			expect(response.status).toBe(204);
+			expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+		}
+		const metadata = await app.request('/.well-known/oauth-authorization-server');
+		expect(metadata.status).toBe(200);
+		expect(metadata.headers.get('Access-Control-Allow-Origin')).toBe('*');
+	});
+
 	it('discovers OAuth and exchanges browser consent for a PAT', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		const compute = fakeComputeFrom(instance);

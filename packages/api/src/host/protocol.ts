@@ -125,6 +125,7 @@ export function errorResponse(error: unknown): Response {
 		409: HostProblemError.conflict,
 		412: HostProblemError.conflict,
 		422: HostProblemError.invalidRequest,
+		503: HostProblemError.unavailable,
 	};
 	const detail =
 		status >= 500 ? 'The host could not complete the request' : (error as Error).message;

@@ -1698,6 +1698,74 @@ paths:
       responses:
         '204':
           description: Stored.
+  /_system/host-retry-cleanup.json:
+    summary: Shared progress for bounded host receipt compaction.
+    parameters: []
+    x-mutability: cas
+    x-owner: HostRetryStore
+    get:
+      operationId: read_system_host_retry_cleanup_json
+      summary: Read HostRetryCleanup
+      tags:
+        - ops
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HostRetryCleanup'
+    put:
+      operationId: write_system_host_retry_cleanup_json
+      summary: Write HostRetryCleanup
+      tags:
+        - ops
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HostRetryCleanup'
+      responses:
+        '204':
+          description: Stored.
+  /_system/host-retries/{digest}.json:
+    summary: Shared host mutation claim, runtime binding, and retry receipt. Retain
+      CAS heads.
+    parameters:
+      - name: digest
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: HostRetryStore
+    get:
+      operationId: read_system_host_retries_json
+      summary: Read HostRetryRecord
+      tags:
+        - ops
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HostRetryRecord'
+    put:
+      operationId: write_system_host_retries_json
+      summary: Write HostRetryRecord
+      tags:
+        - ops
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HostRetryRecord'
+      responses:
+        '204':
+          description: Stored.
   /_system/events/{date}/_idempotency/{id}.json:
     summary: Create-if-absent mapping from a stable idempotency key to one audit event.
     parameters:
@@ -5087,6 +5155,47 @@ components:
         - event
         - actor
       additionalProperties: {}
+    HostRetryCleanup:
+      type: object
+      properties:
+        after:
+          type: string
+    HostRetryRecord:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        fingerprint:
+          type: string
+          minLength: 1
+        owner:
+          type: string
+          format: uuid
+          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+        session_id:
+          type: string
+          minLength: 1
+        dispatched:
+          type: boolean
+        expires:
+          type: number
+          minimum: 0
+        reply:
+          type: object
+          properties:
+            status:
+              type: integer
+              minimum: 100
+              maximum: 599
+            body: {}
+          required:
+            - status
+            - body
+      required:
+        - schema_version
+        - fingerprint
+        - dispatched
     EventIdempotencyMarker:
       type: object
       properties:

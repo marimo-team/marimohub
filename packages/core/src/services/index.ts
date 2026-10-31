@@ -18,6 +18,7 @@ import { NotebookService } from './content/NotebookService';
 import { DeepLinkService } from './content/DeepLinkService';
 import { NotebookProposalService } from './content/NotebookProposalService';
 import { ProjectService } from './content/ProjectService';
+import { HostRetryStore } from './runtime/HostRetryStore';
 import { SessionService } from './runtime/SessionService';
 import { RuntimeInspectionService } from './runtime/RuntimeInspectionService';
 import { JobsService } from './jobs/JobsService';
@@ -32,6 +33,8 @@ export {
 	RuntimeInspectionService,
 	RuntimeInspectionSchema,
 } from './runtime/RuntimeInspectionService';
+export { HostRetryStore } from './runtime/HostRetryStore';
+export type { HostRetryClaim, HostRetryReply } from './runtime/HostRetryStore';
 export { DeepLinkService } from './content/DeepLinkService';
 export { CatalogService } from './catalog/CatalogService';
 export type { CatalogRecoverySource, CatalogRecoveryReport } from './catalog/recovery';
@@ -676,6 +679,7 @@ export function createServices(
 		oauthClients,
 		oauthAuthorizations,
 		oauthRateLimits,
+		hostRetries: wrap('HostRetryStore', new HostRetryStore(bucket)),
 		maintenance,
 		idempotency,
 	};

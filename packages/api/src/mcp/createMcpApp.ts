@@ -30,6 +30,17 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 			: MCP_SCOPES,
 	};
 
+	for (const path of [
+		'/authorize',
+		'/token',
+		'/register',
+		'/revoke',
+		'/.well-known/oauth-authorization-server',
+		'/.well-known/oauth-protected-resource',
+		'/.well-known/oauth-protected-resource/*',
+	])
+		app.use(path, cors());
+
 	app.use('/register', async (c, next) => {
 		if (c.req.method !== 'OPTIONS' && !(await deps.services.oauthRateLimits.consume('register'))) {
 			return rateLimited(c);
@@ -98,21 +109,22 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 		});
 		return c.json({});
 	});
-	app.route(
-		'/',
-		mcpAuthRouter({
-			provider,
-			issuerUrl: publicBaseUrl,
-			baseUrl,
-			resourceServerUrl: new URL(resource),
-			resourceName: 'marimohub',
-			scopesSupported: MCP_SCOPES,
-			clientRegistrationOptions: { clientIdGeneration: false, rateLimit: false },
-			authorizationOptions: { rateLimit: false },
-			tokenOptions: { rateLimit: false },
-			revocationOptions: { rateLimit: false },
-		}),
-	);
+	const oauth = mcpAuthRouter({
+		provider,
+		issuerUrl: publicBaseUrl,
+		baseUrl,
+		resourceServerUrl: new URL(resource),
+		resourceName: 'marimohub',
+		scopesSupported: MCP_SCOPES,
+		clientRegistrationOptions: { clientIdGeneration: false, rateLimit: false },
+		authorizationOptions: { rateLimit: false },
+		tokenOptions: { rateLimit: false },
+		revocationOptions: { rateLimit: false },
+	});
+	// Keep the SDK's wildcard CORS middleware inside the OAuth endpoints.
+	for (const path of ['/authorize', '/token', '/register']) {
+		app.all(path, (c) => oauth.fetch(c.req.raw));
+	}
 	app.use(
 		'/mcp',
 		cors({
