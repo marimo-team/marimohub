@@ -18,6 +18,8 @@ export default defineConfig({
 	},
 	test: {
 		include: ['src/**/*.test.ts'],
+		// Global clearing can erase mocks owned by another concurrent test.
+		clearMocks: false,
 		// Each concurrent node test owns a WASM worker, so bound peak memory.
 		maxConcurrency: 2,
 	},
