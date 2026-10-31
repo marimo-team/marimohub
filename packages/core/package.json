@@ -26,6 +26,7 @@
 		"./identity-match": "./src/identityMatch.ts",
 		"./jobs": "./src/services/jobs/public.ts",
 		"./kernel-auth": "./src/services/runtime/kernelAuth.ts",
+		"./host-bridge": "./src/services/runtime/hostBridge.ts",
 		"./logs": "./src/logs.ts",
 		"./marimo-launch": "./src/services/runtime/marimoLaunch.ts",
 		"./notifications": "./src/notifications.ts",

@@ -9,6 +9,7 @@ import { monotonicFactory } from 'ulidx';
 export type SandboxId = string & { __brand: 'SandboxId' };
 export type ProjectId = string & { __brand: 'ProjectId' };
 export type NotebookId = string & { __brand: 'NotebookId' };
+export type HostNotebookId = string & { __brand: 'HostNotebookId' };
 export type SnapshotId = string & { __brand: 'SnapshotId' };
 export type VersionId = string & { __brand: 'VersionId' };
 export type ProposalId = string & { __brand: 'ProposalId' };
@@ -135,6 +136,23 @@ export const NotebookId = defineId<NotebookId>(
 	/^nb-[0-9a-z]{16}$/,
 	() => `nb-${randomBody()}`,
 );
+export const HostNotebookId = {
+	create(projectId: ProjectId, notebookId: NotebookId, sessionId?: SessionId): HostNotebookId {
+		return `${projectId}:${notebookId}${sessionId ? `:${sessionId}` : ''}` as HostNotebookId;
+	},
+	parse(value: string): { projectId: ProjectId; notebookId: NotebookId; sessionId?: SessionId } {
+		const [projectId, notebookId, sessionId, extra] = value.split(':');
+		if (
+			extra !== undefined ||
+			!ProjectId.is(projectId) ||
+			!NotebookId.is(notebookId) ||
+			(sessionId !== undefined && !SessionId.is(sessionId))
+		) {
+			throw new Error(`Invalid HostNotebookId: ${value}`);
+		}
+		return { projectId, notebookId, ...(sessionId !== undefined ? { sessionId } : {}) };
+	},
+};
 export const SnapshotId = defineId<SnapshotId>(
 	'SnapshotId',
 	/^snap-[0-9a-z]{16}$/,

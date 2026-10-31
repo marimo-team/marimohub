@@ -92,6 +92,7 @@ adapter task caches. Service-backed integration tests can use the focused
   `GET …/notebooks/{nid}/html`) return the bytes directly on success; their
   errors still use the envelope. `GET /api/wif/v1/credentials` also returns a
   raw body: the AWS container credential protocol requires it.
+  `/api/host/v1` uses the marimo host protocol's JSON, SSE, and RFC 9457 problem responses.
 - **Committed specs.** `packages/api/openapi.yaml` and
   `internal/schemas/{bucket,integrations}.yml` are generated from the zod
   schemas; drift tests fail the build when they are stale. Regenerate with

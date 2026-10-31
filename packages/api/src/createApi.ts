@@ -47,6 +47,7 @@ import oauthAuthorizationsApp from './routes/oauthAuthorizations';
 import usersApp from './routes/users';
 import { createOidcDiscovery } from './oidcDiscovery';
 import { createMcpApp } from './mcp/createMcpApp';
+import { createHostApp } from './host/createHostApp';
 import { refreshIdentity } from './identity';
 import { sandboxProxyMiddleware } from './sandboxProxy';
 import {
@@ -458,6 +459,7 @@ export function createApi(rawDeps: ApiDeps) {
 	// before the authN guard (and 404 when WIF is unconfigured).
 	app.route('/', createOidcDiscovery(deps));
 	app.route('/', createMcpApp(deps));
+	app.route('/api/host/v1', createHostApp(deps));
 
 	// Managed-AI proxy. Notebook kernels call it server-to-server with a minted
 	// session token (no app cookie), so it mounts OUTSIDE the `/api/v1/*` cookie-auth
