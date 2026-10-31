@@ -18,6 +18,12 @@ token grants, and account suspension apply. Browser cookies do not authorize req
 This endpoint extends the upstream loopback-only transport to authenticated remote
 connections. It has no local discovery record and does not claim full v1 conformance.
 
+The [upstream TypeScript client](https://github.com/marimo-team/marimo/tree/main/packages/client)
+accepts the explicit URL and bearer token. Its reducer examples show how to replace
+state on `reset` and finish a snapshot on `ready`. Custom transports must forward
+the cursor and server filters on every connection; local event filtering alone
+does not avoid runtime discovery work. Close streams when their consumer exits.
+
 ## Operations
 
 All paths are relative to `/api/host/v1`.
@@ -111,13 +117,22 @@ Catalog requests never start a sandbox. Use `types=host,project,notebook` to ski
 - Every mutation requires an `Idempotency-Key` of 1–256 characters, scoped to the
   authenticated user across routes. Changed methods, paths, bodies, or `If-Match`
   values with the same key return `409`. Concurrent identical requests share work.
-- Successful responses remain cached for five minutes. Errors release unbound keys.
-  Runs bind their key to a session before dispatch. That binding survives transport
-  failures and error responses for the same five-minute window. Retries query the
-  original runtime; if it is gone, they fail without starting a replacement sandbox.
-- The retry cache and attachment registry exist only in the API process. Use one
-  API replica, or route all host clients to one dedicated replica. Per-client
-  affinity is insufficient. Process replacement loses both registries.
+- Shared storage claims each key before work starts. Successful responses remain
+  available for five minutes across API instances and process restarts. Changed
+  requests conflict while a claim or unexpired receipt exists. Rejected requests release
+  unbound keys. Runtime requests bind to a session before dispatch; retries use
+  that session and never start a replacement after a lost reply.
+- Concurrent requests on another instance wait up to five seconds, plus storage
+  latency, for a receipt, then return `503`. Retry with the same key. An unresolved
+  claim does not expire: a crashed process or a lost Hub write acknowledgement
+  cannot prove that a mutation failed. Inspect the notebook before recovery;
+  using a new key can duplicate the mutation. There is no automatic claim recovery.
+- Maintenance compacts expired receipts in pages of 100 records. It retains CAS
+  heads and unresolved claims. Cleanup progress is shared across maintenance instances.
+- Client attachments and catalog change correlation remain process-local. Route
+  all host streams to one dedicated API instance for complete attachment presence.
+  Per-client affinity is insufficient. Shared mutation receipts alone do not make
+  the catalog's presence information deployment-wide.
 - Both streams accept `types`. Notebook streams also accept `run_id`. Heartbeat
   comments arrive every 15 seconds. Reconnection with `Last-Event-ID` sends `reset`
   and a fresh snapshot. The hub retains no downstream replay log.

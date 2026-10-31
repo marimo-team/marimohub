@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { HostRetryStore } from '@marimo-hub/core';
+import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { HostRetries } from './retries';
 import type { HostMutationReply, HostRetryAttempt } from './retries';
 
@@ -6,11 +8,11 @@ afterEach(() => vi.useRealTimers());
 
 describe('host retry bindings', () => {
 	it('retains a run binding across repeated failures and rejects changed requests', async () => {
-		const retries = new HostRetries();
+		const retries = new HostRetries(new HostRetryStore(new MemoryBucket()));
 		const attempts: (string | undefined)[] = [];
 		const run = async (attempt: HostRetryAttempt) => {
 			attempts.push(attempt.sessionId);
-			attempt.bindSession('original');
+			await attempt.bindSession('original');
 			throw new Error('Reply lost');
 		};
 		for (let index = 0; index < 2; index++) {
@@ -28,7 +30,7 @@ describe('host retry bindings', () => {
 				'key',
 				'run',
 				async (attempt) => {
-					attempt.bindSession('replacement');
+					await attempt.bindSession('replacement');
 					return { status: 202, body: {} };
 				},
 				true,
@@ -37,7 +39,7 @@ describe('host retry bindings', () => {
 	});
 
 	it('shares concurrent attempts, including after an ambiguous failure', async () => {
-		const retries = new HostRetries();
+		const retries = new HostRetries(new HostRetryStore(new MemoryBucket()));
 		const failure = new Error('Reply lost');
 		await expect(
 			retries.execute(
@@ -45,7 +47,7 @@ describe('host retry bindings', () => {
 				'key',
 				'run',
 				async (attempt) => {
-					attempt.bindSession('original');
+					await attempt.bindSession('original');
 					throw failure;
 				},
 				true,
@@ -71,7 +73,7 @@ describe('host retry bindings', () => {
 	});
 
 	it('releases failures before dispatch and scopes bindings to the caller', async () => {
-		const retries = new HostRetries();
+		const retries = new HostRetries(new HostRetryStore(new MemoryBucket()));
 		await expect(
 			retries.execute(
 				'user',
@@ -89,7 +91,7 @@ describe('host retry bindings', () => {
 			'corrected',
 			async (attempt) => {
 				expect(attempt.sessionId).toBeUndefined();
-				attempt.bindSession('first-user');
+				await attempt.bindSession('first-user');
 				return { status: 202, body: {} };
 			},
 			true,
@@ -100,7 +102,7 @@ describe('host retry bindings', () => {
 			'run',
 			async (attempt) => {
 				expect(attempt.sessionId).toBeUndefined();
-				attempt.bindSession('second-user');
+				await attempt.bindSession('second-user');
 				return { status: 202, body: {} };
 			},
 			true,
@@ -109,10 +111,10 @@ describe('host retry bindings', () => {
 
 	it('retains bound error responses only for the documented retry window', async () => {
 		vi.useFakeTimers();
-		const retries = new HostRetries();
+		const retries = new HostRetries(new HostRetryStore(new MemoryBucket()));
 		const work = vi.fn(async (attempt: HostRetryAttempt) => {
 			const prior = attempt.sessionId;
-			attempt.bindSession('original');
+			await attempt.bindSession('original');
 			return { status: 503, body: { prior } };
 		});
 		expect(await retries.execute('user', 'key', 'run', work, true)).toMatchObject({
@@ -126,5 +128,56 @@ describe('host retry bindings', () => {
 		expect(await retries.execute('user', 'key', 'run', work, true)).toMatchObject({
 			body: { prior: undefined },
 		});
+	});
+
+	it('retains the original runtime binding when a retry reaches another API process', async () => {
+		const bucket = new MemoryBucket();
+		const first = new HostRetries(new HostRetryStore(bucket));
+		await expect(
+			first.execute('user', 'save', 'fingerprint', async (attempt) => {
+				await attempt.bindSession('original');
+				throw new Error('Lost runtime reply');
+			}),
+		).rejects.toThrow('Lost runtime reply');
+		const restarted = new HostRetries(new HostRetryStore(bucket));
+		const result = await restarted.execute('user', 'save', 'fingerprint', async (attempt) => {
+			expect(attempt.sessionId).toBe('original');
+			return { status: 200, body: {} };
+		});
+		expect(result.status).toBe(200);
+	});
+
+	it('returns 503 without invoking work when retry storage is unavailable', async () => {
+		const bucket = new MemoryBucket();
+		vi.spyOn(bucket, 'get').mockRejectedValue(new Error('private storage details'));
+		const work = vi.fn(async () => ({ status: 201, body: {} }));
+		const retries = new HostRetries(new HostRetryStore(bucket));
+		await expect(retries.execute('user', 'key', 'create', work)).rejects.toMatchObject({
+			status: 503,
+		});
+		expect(work).not.toHaveBeenCalled();
+	});
+
+	it('bounds waits for unresolved claims without duplicating work', async () => {
+		vi.useFakeTimers();
+		const store = new HostRetryStore(new MemoryBucket());
+		vi.spyOn(store, 'acquire').mockResolvedValue({ kind: 'pending' });
+		const work = vi.fn(async () => ({ status: 201, body: {} }));
+		const pending = new HostRetries(store).execute('user', 'key', 'create', work);
+		const assertion = expect(pending).rejects.toMatchObject({ status: 503 });
+		await vi.runAllTimersAsync();
+		await assertion;
+		expect(work).not.toHaveBeenCalled();
+	});
+
+	it('releases an acquired claim without work when its caller has already disconnected', async () => {
+		const store = new HostRetryStore(new MemoryBucket());
+		const work = vi.fn(async () => ({ status: 201, body: {} }));
+		const retries = new HostRetries(store);
+		await expect(
+			retries.execute('user', 'key', 'create', work, false, AbortSignal.abort()),
+		).rejects.toThrow();
+		expect(work).not.toHaveBeenCalled();
+		expect((await store.acquire('user', 'key', 'create', false)).kind).toBe('claimed');
 	});
 });

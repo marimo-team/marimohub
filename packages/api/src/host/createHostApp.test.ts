@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	createServices,
 	HostNotebookId,
 	NotebookId,
 	NotFoundError,
@@ -253,7 +254,12 @@ describe('hub host protocol', () => {
 		const failed = await request('PUT', `/notebooks/${id}/runtime`, {}, 'retry');
 		expect(failed.status).toBe(503);
 		expect(failed.headers.get('content-type')).toBe('application/problem+json');
-		expect(await failed.text()).not.toContain('private runtime detail');
+		expect(await failed.json()).toEqual({
+			type: 'tag:marimo.io,2026:host/unavailable',
+			title: 'unavailable',
+			status: 503,
+			detail: 'The host could not complete the request',
+		});
 		expect((await request('PUT', `/notebooks/${id}/runtime`, {}, 'retry')).status).toBe(202);
 		expect(bridge).toHaveBeenCalledTimes(2);
 		expect(bridge.mock.calls[0][1].headers).toEqual(bridge.mock.calls[1][1].headers);
@@ -384,6 +390,48 @@ describe('hub host protocol', () => {
 		).toBe(400);
 	});
 
+	it('deduplicates a burst across independent API instances and a subsequent restart', async () => {
+		const { app, deps, project } = await setup();
+		const secondDeps = { ...deps, services: createServices(deps.bucket) };
+		const second = createApi(secondDeps);
+		const creates = [
+			vi.spyOn(deps.services.notebooks, 'createNotebook'),
+			vi.spyOn(secondDeps.services.notebooks, 'createNotebook'),
+		];
+		const send = async (target: typeof app, name = 'Burst') =>
+			target.request(`${HOST_PREFIX}/notebooks`, {
+				method: 'POST',
+				headers: {
+					Authorization: 'Bearer test',
+					'Content-Type': 'application/json',
+					'Idempotency-Key': 'cross-replica',
+				},
+				body: JSON.stringify({ project_id: project.id, name }),
+			});
+		const responses = await Promise.all(
+			Array.from({ length: 32 }, (_, index) => send(index % 2 ? second : app)),
+		);
+		expect(responses.every((response) => response.status === 201)).toBe(true);
+		const notebooks = await Promise.all(
+			responses.map((response) => response.json() as Promise<{ id: string }>),
+		);
+		expect(new Set(notebooks.map((notebook) => notebook.id)).size).toBe(1);
+		expect(creates.reduce((total, spy) => total + spy.mock.calls.length, 0)).toBe(1);
+		const restarted = createApi({ ...deps, services: createServices(deps.bucket) });
+		expect(await (await send(restarted)).json()).toEqual(notebooks[0]);
+		expect((await send(restarted, 'Different')).status).toBe(409);
+	});
+
+	it('serves authenticated catalog SSE without CORS when MCP OAuth is enabled', async () => {
+		const { deps } = await setup();
+		const app = createApi({ ...deps, mcp: { publicBaseUrl: 'https://hub.example.com' } });
+		const response = await app.request(`${HOST_PREFIX}/events?types=host,project,notebook`, {
+			headers: { Authorization: 'Bearer test', Origin: 'https://client.example' },
+		});
+		expect(response.headers.has('Access-Control-Allow-Origin')).toBe(false);
+		expect((await readSnapshot(response)).at(-1)?.event).toBe('ready');
+	});
+
 	it('renames while preserving identity and rejects filesystem paths', async () => {
 		const { request, id, project } = await setup();
 		const response = await request('PATCH', `/notebooks/${id}`, { name: 'Renamed' }, 'rename');
@@ -418,7 +466,7 @@ describe('hub host protocol', () => {
 		);
 		expect(
 			(
-				await request('PATCH', `/notebooks/${id}`, { name: 'Any' }, 'rename-any', {
+				await request('PATCH', `/notebooks/${id}`, { name: 'Any' }, 'rename-stale', {
 					'If-Match': '*',
 				})
 			).status,
@@ -931,6 +979,46 @@ describe('hub host protocol', () => {
 			}
 		} finally {
 			await reader.cancel();
+		}
+	});
+
+	it('emits each attachment once when another client joins during a stalled snapshot', async () => {
+		const { request, id, runtime } = await setup();
+		await runtime();
+		vi.mocked(requestRuntimeHost).mockResolvedValue(
+			runtimeReply({
+				status: 200,
+				events: [
+					{ event: 'document', data: { document: { notebook_id: 'local', order: [] } } },
+					{ event: 'ready', id: 'cursor', data: {} },
+				],
+			}),
+		);
+		const first = await request('GET', `/notebooks/${id}/events`);
+		const second = await request('GET', `/notebooks/${id}/events`);
+		const reader = first.body!.getReader();
+		const decoder = new TextDecoder();
+		let text = '';
+		try {
+			while (text.split('event: document\n').length < 3) {
+				const chunk = await reader.read();
+				if (chunk.done) throw new Error('Stream ended before the next runtime batch');
+				text += decoder.decode(chunk.value);
+			}
+			const joined = text
+				.split('\n\n')
+				.filter((frame) => frame.includes('event: attachment\n'))
+				.map((frame) => {
+					const data = JSON.parse(/^data: (.+)$/m.exec(frame)![1]) as {
+						attachment: { id: string };
+					};
+					return data.attachment.id;
+				});
+			expect(joined).toHaveLength(2);
+			expect(new Set(joined).size).toBe(2);
+		} finally {
+			await reader.cancel();
+			await second.body!.cancel();
 		}
 	});
 

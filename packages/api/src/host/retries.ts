@@ -1,84 +1,96 @@
+import { ConflictError, sleep } from '@marimo-hub/core';
+import type { HostRetryReply, HostRetryStore } from '@marimo-hub/core';
 import { HostProblemError } from './protocol';
 
-const RETRY_WINDOW_MS = 5 * 60_000;
+async function storage<T>(work: () => Promise<T>): Promise<T> {
+	try {
+		return await work();
+	} catch (error) {
+		if (error instanceof ConflictError) throw error;
+		throw HostProblemError.unavailable('Host retry storage is unavailable');
+	}
+}
+
 const MAX_REQUESTS = 10_000;
-export type HostMutationReply = { status: number; body: unknown };
+export type HostMutationReply = HostRetryReply;
 export interface HostRetryAttempt {
 	readonly sessionId?: string;
-	bindSession(sessionId: string): void;
-}
-interface Entry {
-	fingerprint: string;
-	expires: number;
-	result: Promise<HostMutationReply>;
-	sessionId?: string;
-	settled: boolean;
+	bindSession(sessionId: string): Promise<void>;
+	dispatch(): Promise<void>;
 }
 
 export class HostRetries {
-	private entries = new Map<string, Entry>();
+	private readonly pending = new Map<
+		string,
+		{ fingerprint: string; result: Promise<HostMutationReply> }
+	>();
 
-	async execute(
+	constructor(private readonly store: HostRetryStore) {}
+
+	execute(
 		scope: string,
 		key: string,
 		fingerprint: string,
 		work: (attempt: HostRetryAttempt) => Promise<HostMutationReply>,
 		refresh = false,
+		signal?: AbortSignal,
 	): Promise<HostMutationReply> {
-		const now = Date.now();
-		for (const [id, entry] of this.entries) {
-			if (entry.settled && entry.expires <= now) this.entries.delete(id);
-		}
 		const id = JSON.stringify([scope, key]);
-		const existing = this.entries.get(id);
+		const existing = this.pending.get(id);
 		if (existing) {
 			if (existing.fingerprint !== fingerprint)
-				throw HostProblemError.conflict('Idempotency-Key was used for a different request');
-			if (!refresh || !existing.settled) return existing.result;
-			return this.run(id, existing, work);
+				return Promise.reject(
+					HostProblemError.conflict('Idempotency-Key was used for a different request'),
+				);
+			return existing.result;
 		}
-		if (this.entries.size >= MAX_REQUESTS)
-			throw HostProblemError.unavailable('The host retry window is full; retry later');
-		const entry: Entry = {
-			fingerprint,
-			expires: Infinity,
-			result: Promise.resolve().then(() => this.run(id, entry, work)),
-			settled: false,
-		};
-		this.entries.set(id, entry);
-		return entry.result;
+		if (this.pending.size >= MAX_REQUESTS)
+			return Promise.reject(
+				HostProblemError.unavailable('The host retry window is full; retry later'),
+			);
+		const result = this.run(scope, key, fingerprint, work, refresh, signal).finally(() =>
+			this.pending.delete(id),
+		);
+		this.pending.set(id, { fingerprint, result });
+		return result;
 	}
 
-	private run(
-		id: string,
-		entry: Entry,
+	private async run(
+		scope: string,
+		key: string,
+		fingerprint: string,
 		work: (attempt: HostRetryAttempt) => Promise<HostMutationReply>,
+		refresh: boolean,
+		signal?: AbortSignal,
 	): Promise<HostMutationReply> {
-		entry.settled = false;
-		entry.result = Promise.resolve()
-			.then(() =>
-				work({
-					sessionId: entry.sessionId,
-					bindSession(sessionId) {
-						if (entry.sessionId && entry.sessionId !== sessionId)
-							throw HostProblemError.conflict('The request is bound to another runtime');
-						// A lost reply cannot prove that the runtime did not execute the run.
-						entry.sessionId = sessionId;
+		for (let poll = 0; poll < 50; poll++) {
+			const entry = await storage(() => this.store.acquire(scope, key, fingerprint, refresh));
+			if (entry.kind === 'reply') return entry.reply;
+			if (entry.kind === 'pending') {
+				await sleep(100, signal);
+				continue;
+			}
+			const { claim } = entry;
+			let reply: HostMutationReply;
+			try {
+				signal?.throwIfAborted();
+				reply = await work({
+					get sessionId() {
+						return claim.sessionId;
 					},
-				}),
-			)
-			.then((result) => {
-				if (result.status >= 400 && !entry.sessionId) this.entries.delete(id);
-				return result;
-			})
-			.catch((error: unknown) => {
-				if (!entry.sessionId) this.entries.delete(id);
+					bindSession: (sessionId) => storage(() => this.store.dispatch(claim, sessionId)),
+					dispatch: () => storage(() => this.store.dispatch(claim)),
+				});
+			} catch (error) {
+				await storage(() => this.store.finish(claim));
 				throw error;
-			})
-			.finally(() => {
-				entry.settled = true;
-				if (entry.expires === Infinity) entry.expires = Date.now() + RETRY_WINDOW_MS;
-			});
-		return entry.result;
+			}
+			// A failed receipt write must leave the claim pending, not release it for duplicate work.
+			await storage(() => this.store.finish(claim, reply));
+			return reply;
+		}
+		throw HostProblemError.unavailable(
+			'This Idempotency-Key has an unresolved request; retry later',
+		);
 	}
 }

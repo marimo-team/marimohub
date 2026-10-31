@@ -63,7 +63,13 @@ describe('host problem responses', () => {
 		[
 			new UnavailableError('private upstream details'),
 			503,
-			'internal',
+			'unavailable',
+			'The host could not complete the request',
+		],
+		[
+			new HTTPException(503, { message: 'private adapter details' }),
+			503,
+			'unavailable',
 			'The host could not complete the request',
 		],
 		[
