@@ -581,6 +581,18 @@ export class SessionService {
 		});
 	}
 
+	/** Reuse a session read in this request; due renewals still reload under CAS. */
+	async heartbeatFromSnapshot(session: Session): Promise<Session> {
+		if (
+			session.status !== 'running' ||
+			isPastAuthorizationDeadline(session, Date.now()) ||
+			Date.now() - Date.parse(session.last_heartbeat) < HEARTBEAT_PERSIST_INTERVAL_MS
+		) {
+			return session;
+		}
+		return this.heartbeat(session.project_id, session.session_id);
+	}
+
 	/**
 	 * Mark a session `terminating` (stop requested; teardown in flight). Visible to
 	 * pollers as `Stopping…`. No-op on a session that is already

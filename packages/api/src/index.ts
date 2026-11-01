@@ -22,6 +22,7 @@ export {
 	isCredentialHeader,
 	forwardHttp,
 	sandboxProxyMiddleware,
+	APP_PROXY_HEADER,
 	UNSAFE_RESPONSE_HEADERS,
 } from './sandboxProxy';
 export type { ProxyDecision } from './sandboxProxy';

@@ -1371,6 +1371,8 @@ describe('forwardHttp', () => {
 			if (req.url === '/setcookie') {
 				res.writeHead(200, {
 					'set-cookie': 'mh_session=attacker; Path=/',
+					'x-marimohub-app-status': 'starting',
+					'x-marimohub-app-proxy': 'spoof',
 					'content-type': 'text/plain',
 				});
 				res.end('ok');
@@ -1543,6 +1545,8 @@ describe('forwardHttp', () => {
 				'X-Goog-IAP-JWT-Assertion': 'iap-proof',
 				'X-Custom-Assertion': 'custom-proof',
 				'x-custom': 'passes',
+				'x-marimohub-app-visit-id': 'visit-secret',
+				'x-marimohub-app-generation': 'generation-secret',
 			},
 		});
 		const res = await forwardHttp(req, `${origin}/echo`, 'sess-123', TEST_KERNEL_AUTH_TOKEN, [
@@ -1557,6 +1561,8 @@ describe('forwardHttp', () => {
 		expect(seen['x-goog-iap-jwt-assertion']).toBeUndefined();
 		expect(seen['x-custom-assertion']).toBeUndefined();
 		expect(seen['x-custom']).toBe('passes');
+		expect(seen['x-marimohub-app-visit-id']).toBeUndefined();
+		expect(seen['x-marimohub-app-generation']).toBeUndefined();
 	});
 
 	it.each([undefined, [], ['AUTHORIZATION', 'X-Custom-Identity', 'x-custom-identity']])(
@@ -1599,6 +1605,8 @@ describe('forwardHttp', () => {
 		// notebook could overwrite the caller's hub session.
 		const res = await forwardHttp(new Request('https://hub/x'), `${origin}/setcookie`);
 		expect(res.headers.get('set-cookie')).toBeNull();
+		expect(res.headers.get('x-marimohub-app-status')).toBeNull();
+		expect(res.headers.get('x-marimohub-app-proxy')).toBeNull();
 		expect(await res.text()).toBe('ok');
 	});
 });

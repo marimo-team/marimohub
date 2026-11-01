@@ -53,12 +53,39 @@ The response fields `users`, `max_users`, and `max_users_per_session` retain the
 
 In proxy exposure mode, kernel HTTP requests and WebSocket upgrades use `/proxy/<token>/…` and require an account assignment to the sandbox.
 Subdomain deployments use the direct sandbox URL.
-Kernel traffic does not renew leases or replace periodic heartbeats. A heartbeat failure must not trigger replay of a kernel mutation.
+Ordinary token-proxy traffic does not renew leases or replace periodic heartbeats. A heartbeat failure must not trigger replay of a kernel mutation.
 
-Proxy authorization checks the account assignment, not an exact visit and generation.
+Ordinary token-proxy authorization checks the account assignment, not an exact visit and generation.
 A departed tab can retain access while another tab keeps the same sandbox assigned.
 Gateways that require per-request exact-visit validation must retain that check.
 Direct kernel URLs bypass managed-page admission, so occupancy counts managed visits rather than kernel connections.
+
+### Combined visit renewal and proxying
+
+In proxy exposure mode, `GET /api/v1/capabilities` advertises
+`app_pool.proxy_renewal: true`. Clients can forward an admitted visit through
+`/app-proxy/{project_id}/{notebook_id}/{session_id}/...`, supplying their normal
+hub authentication plus `x-marimohub-app-visit-id` and
+`x-marimohub-app-generation` from that visit's `app_assignment`.
+
+Each HTTP request or WebSocket upgrade checks both `session.proxy` and
+`session.attach`, current resource permissions, and the exact active visit.
+It renews due leases before forwarding to the admitted kernel. It does not admit
+a new visit or transfer one to another session. Continue sending ordinary
+lifecycle heartbeats while a page is open, and leave on departure.
+
+Handled HTTP responses and successful WebSocket upgrades carry
+`x-marimohub-app-proxy: 1`. An authorized starting session returns HTTP 503 with
+`x-marimohub-app-status: starting`. Internal visit headers never reach the kernel;
+kernel-supplied protocol markers are discarded. Redirects within the admitted
+kernel route are rewritten to the app route; redirects outside it fail with 502.
+
+Clients must require the protocol marker and strip it before serving a browser.
+A missing or ambiguous marker is a failure: do not replay the request through
+the ordinary proxy, since a mutation may already have executed. Use the ordinary
+heartbeat and proxy path when the capability is absent or false. Clients that
+cache capabilities must upgrade every hub replica before opting in, and return
+to the ordinary path before downgrading the hub.
 
 ## Versions and operations
 
