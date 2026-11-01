@@ -39,7 +39,7 @@ services:
       - ./seed:/seed:ro
 
   iceberg-rest:
-    image: apache/iceberg-rest-fixture:1.10.0
+    image: apache/iceberg-rest-fixture:1.10.0@sha256:df2e9dd421928b7aab01557678ce8e2bb73064d0e253baebd72adad3439ffc2e
     depends_on:
       minio:
         condition: service_healthy
