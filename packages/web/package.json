@@ -50,7 +50,7 @@
 	},
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
-		"@tanstack/react-query-devtools": "^5.91.3",
+		"@tanstack/react-query-devtools": "5.101.0",
 		"@testing-library/dom": "catalog:",
 		"@testing-library/jest-dom": "catalog:",
 		"@testing-library/react": "catalog:",

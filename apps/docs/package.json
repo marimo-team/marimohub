@@ -15,18 +15,18 @@
 	"devDependencies": {
 		"@marimo-hub/config": "workspace:*",
 		"@marimo-hub/tsconfig": "workspace:*",
-		"@types/markdown-it": "^14.1.2",
-		"@types/markdown-it-container": "^2.0.10",
+		"@types/markdown-it": "14.1.2",
+		"@types/markdown-it-container": "2.0.11",
 		"@types/node": "catalog:",
-		"markdown-it": "^14.3.3",
-		"markdown-it-container": "^4.0.0",
+		"markdown-it": "14.3.3",
+		"markdown-it-container": "4.0.0",
 		"simple-icons": "catalog:",
 		"typescript": "catalog:",
 		"vite-plus": "catalog:",
-		"vitepress": "^1.6.3",
+		"vitepress": "1.6.4",
 		"vitepress-plugin-llms": "catalog:",
 		"vitest": "catalog:",
-		"vue": "^3.5.13",
+		"vue": "3.5.38",
 		"yaml": "catalog:"
 	}
 }
