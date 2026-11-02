@@ -104,7 +104,7 @@ export default defineConfig({
 			{
 				text: 'Configure',
 				activeMatch:
-					'^/(auth|service-accounts|storage|compute|editor-sessions|surfaces|theming|sandbox-image|apps|thumbnails|jobs|ai|environment-and-access|integration-secrets|integrations|data-browser|notifications|project-alerts|organizing-projects|importing-notebooks|syncing|notebook-previews|workload-identity-federation)',
+					'^/(auth|service-accounts|storage|compute|editor-sessions|surfaces|theming|sandbox-image|apps|thumbnails|jobs|ai|environment-and-access|integration-secrets|integrations|data-browser|support|notifications|project-alerts|organizing-projects|importing-notebooks|syncing|notebook-previews|workload-identity-federation)',
 				items: [
 					{ text: 'Storage', link: '/storage' },
 					{ text: 'Compute', link: '/compute' },
@@ -122,6 +122,7 @@ export default defineConfig({
 					{ text: 'Integrations', link: '/integrations' },
 					{ text: 'Object uploads', link: '/data-browser' },
 					{ text: 'Notifications', link: '/notifications' },
+					{ text: 'Support', link: '/support' },
 					{ text: 'Project alerts', link: '/project-alerts' },
 					{ text: 'Organizing projects', link: '/organizing-projects' },
 					{ text: 'Integration secret sources', link: '/integration-secrets' },
@@ -190,6 +191,7 @@ export default defineConfig({
 					{ text: 'Integrations', link: '/integrations' },
 					{ text: 'Object uploads', link: '/data-browser' },
 					{ text: 'Notifications', link: '/notifications' },
+					{ text: 'Support', link: '/support' },
 					{ text: 'Project alerts', link: '/project-alerts' },
 					{ text: 'Organizing projects', link: '/organizing-projects' },
 					{ text: 'Integration secret sources', link: '/integration-secrets' },

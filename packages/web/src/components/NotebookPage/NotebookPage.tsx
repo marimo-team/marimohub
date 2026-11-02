@@ -1,3 +1,4 @@
+import { ReportProblemAction } from '@/components/Support/ReportProblemDialog';
 import { HelpMenu } from '@/components/Header/HelpMenu';
 import { AnnouncementBanner } from '@/components/Shell/AnnouncementBanner';
 import { hasNotebookPreviews } from '@/api/previews';
@@ -577,6 +578,10 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		userQuery,
 		users,
 	} = model;
+	const supportSession = session
+		? { id: session.session_id, project_id: session.project_id, notebook_id: nid! }
+		: undefined;
+	const supportAction = <ReportProblemAction error={error?.message} session={supportSession} />;
 	return (
 		<div className="flex h-dvh flex-col">
 			<PageTitle>{title}</PageTitle>
@@ -614,7 +619,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 					)}
 				</div>
 				<div className="ml-auto flex flex-wrap items-center justify-end gap-2 max-md:gap-1">
-					<HelpMenu linkRole={model.linkRole} />
+					<HelpMenu linkRole={model.linkRole} session={supportSession} />
 					<ChangeRequestActions
 						projectId={pid!}
 						notebookId={nid!}
@@ -732,6 +737,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 							Back
 						</Button>
 					</div>
+					{supportAction}
 				</div>
 			)}
 
@@ -753,6 +759,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 							Back
 						</Button>
 					</div>
+					{supportAction}
 				</div>
 			)}
 
@@ -883,6 +890,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 							Back
 						</Button>
 					</div>
+					{supportAction}
 				</div>
 			)}
 
@@ -915,6 +923,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 							Back
 						</Button>
 					</div>
+					{supportAction}
 				</div>
 			)}
 

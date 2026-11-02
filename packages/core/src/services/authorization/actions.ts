@@ -19,6 +19,7 @@
 import type { Role } from '../../constants';
 
 export const DEPLOYMENT_ACTIONS = [
+	'support.request',
 	/** Create a project (restricted deployments: super-admin or `project-creator`). */
 	'project.create',
 	/** Super-admin surfaces: user directory, deployment config, diagnostics. */
@@ -126,6 +127,7 @@ const project = (min: Role, deniedAs: 'not-found' | 'forbidden'): ProjectActionR
 export const ACTION_RULES: {
 	[A in AuthorizationAction]: A extends ProjectAction ? ProjectActionRule : NonProjectActionRule;
 } = {
+	'support.request': { scope: 'deployment' },
 	'project.create': { scope: 'deployment' },
 	'admin.access': { scope: 'deployment' },
 	'org-integration.manage': { scope: 'deployment' },

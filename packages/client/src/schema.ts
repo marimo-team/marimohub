@@ -152,6 +152,40 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/support/diagnostics': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Preview support diagnostics for the signed-in user */
+		post: operations['support.diagnostics'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/support/requests': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Send a support request to the deployment notifier */
+		post: operations['support.request'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects': {
 		parameters: {
 			query?: never;
@@ -2480,6 +2514,10 @@ export interface components {
 			version: string;
 		};
 		Capabilities: {
+			support: {
+				/** @enum {string} */
+				mode: 'notifier' | 'url' | 'off';
+			};
 			/**
 			 * @description Destination for project notebook links. Users without app permission open the notebook page.
 			 * @enum {string}
@@ -3135,6 +3173,7 @@ export interface components {
 			actions: {
 				/** @enum {string} */
 				action:
+					| 'support.request'
 					| 'project.create'
 					| 'admin.access'
 					| 'org-integration.manage'
@@ -3328,6 +3367,7 @@ export interface components {
 					actions:
 						| '*'
 						| (
+								| 'support.request'
 								| 'project.create'
 								| 'admin.access'
 								| 'org-integration.manage'
@@ -3362,6 +3402,7 @@ export interface components {
 			};
 			/** @enum {string} */
 			action:
+				| 'support.request'
 				| 'project.create'
 				| 'admin.access'
 				| 'org-integration.manage'
@@ -4562,6 +4603,7 @@ export interface components {
 				actions:
 					| '*'
 					| (
+							| 'support.request'
 							| 'project.create'
 							| 'admin.access'
 							| 'org-integration.manage'
@@ -4771,6 +4813,7 @@ export interface operations {
 						actions:
 							| '*'
 							| (
+									| 'support.request'
 									| 'project.create'
 									| 'admin.access'
 									| 'org-integration.manage'
@@ -5168,6 +5211,243 @@ export interface operations {
 			/** @description Authentication required */
 			401: {
 				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'support.diagnostics': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** @description Page and optional session identifiers */
+		requestBody?: {
+			content: {
+				'application/json': {
+					page_url: string;
+					client: {
+						user_agent: string;
+						viewport: {
+							width: number;
+							height: number;
+						};
+						error?: string;
+					};
+					session?: {
+						project_id: string;
+						notebook_id: string;
+						id: string;
+					};
+				};
+			};
+		};
+		responses: {
+			/** @description Support diagnostics */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							page_url: string;
+							client: {
+								user_agent: string;
+								viewport: {
+									width: number;
+									height: number;
+								};
+								error?: string;
+							};
+							session?: {
+								project_id: string;
+								notebook_id: string;
+								id: string;
+								source_version_id?: string;
+								sandbox_id?: string;
+								runtime?: {
+									python_version?: string;
+									marimo_version?: string;
+								};
+								compute_profile?: string;
+								error?: {
+									code: string;
+									message: string;
+								};
+							};
+							reporter: {
+								id: string;
+								email: string;
+							};
+							hub_version: string;
+							timestamp: string;
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'support.request': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** @description Report and page context */
+		requestBody?: {
+			content: {
+				'application/json': {
+					page_url: string;
+					client: {
+						user_agent: string;
+						viewport: {
+							width: number;
+							height: number;
+						};
+						error?: string;
+					};
+					session?: {
+						project_id: string;
+						notebook_id: string;
+						id: string;
+					};
+					message: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Support request delivered */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							request_id: string;
+							/** @enum {string} */
+							delivery: 'delivered' | 'partial';
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
 					[name: string]: unknown;
 				};
 				content: {
@@ -20869,6 +21149,7 @@ export interface operations {
 						actions:
 							| '*'
 							| (
+									| 'support.request'
 									| 'project.create'
 									| 'admin.access'
 									| 'org-integration.manage'
@@ -21016,6 +21297,7 @@ export interface operations {
 						actions:
 							| '*'
 							| (
+									| 'support.request'
 									| 'project.create'
 									| 'admin.access'
 									| 'org-integration.manage'
@@ -21381,6 +21663,7 @@ export interface operations {
 						actions:
 							| '*'
 							| (
+									| 'support.request'
 									| 'project.create'
 									| 'admin.access'
 									| 'org-integration.manage'
@@ -21416,6 +21699,7 @@ export interface operations {
 						actions:
 							| '*'
 							| (
+									| 'support.request'
 									| 'project.create'
 									| 'admin.access'
 									| 'org-integration.manage'
@@ -21703,6 +21987,7 @@ export interface operations {
 										actions:
 											| '*'
 											| (
+													| 'support.request'
 													| 'project.create'
 													| 'admin.access'
 													| 'org-integration.manage'
@@ -21846,6 +22131,7 @@ export interface operations {
 						actions:
 							| '*'
 							| (
+									| 'support.request'
 									| 'project.create'
 									| 'admin.access'
 									| 'org-integration.manage'
@@ -22080,6 +22366,7 @@ export interface operations {
 						actions:
 							| '*'
 							| (
+									| 'support.request'
 									| 'project.create'
 									| 'admin.access'
 									| 'org-integration.manage'

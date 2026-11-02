@@ -1,3 +1,4 @@
+import { useBranding } from '@/context/BrandingContext';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { LogIn, AlertCircle } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
@@ -30,6 +31,7 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
  */
 export function SignIn() {
 	const { signIn } = useAuth();
+	const { support_url } = useBranding();
 	const [searchParams] = useSearchParams();
 	const errorCode = searchParams.get('auth_error');
 	const errorMessage = errorCode
@@ -61,6 +63,16 @@ export function SignIn() {
 					<LogIn className="size-4" />
 					{errorMessage ? 'Try a different account' : 'Sign in to continue'}
 				</Button>
+				{support_url && (
+					<a
+						href={support_url}
+						target="_blank"
+						rel="noopener noreferrer"
+						className="text-sm text-primary underline"
+					>
+						Contact your administrator
+					</a>
+				)}
 			</div>
 		</div>
 	);

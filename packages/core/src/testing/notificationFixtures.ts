@@ -26,7 +26,7 @@ export const NOTIFICATION_FIXTURE: Notification = {
 	dedupe_key: 'member.invited:event-fixture:personal',
 };
 
-export const BROADCAST_NOTIFICATION_FIXTURE: Notification = {
+export const BROADCAST_NOTIFICATION_FIXTURE: Extract<Notification, { kind: 'session.takeover' }> = {
 	schema_version: 1,
 	kind: 'session.takeover',
 	severity: 'warning',

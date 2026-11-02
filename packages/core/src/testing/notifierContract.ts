@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { disposeNotifier } from '../ports/notifier';
 import type { NotificationDeliveryOutcome, Notifier } from '../ports/notifier';
-import { NotificationSchema } from '../notifications';
+import { NotificationSchema, notificationRouter } from '../notifications';
+import { UserId } from '../ids';
 import { BROADCAST_NOTIFICATION_FIXTURE, NOTIFICATION_FIXTURE } from './notificationFixtures';
 
 export const CONTRACT_SEED = Object.freeze({
@@ -21,6 +22,23 @@ export function notifierContract(
 			const current = notifier;
 			notifier = undefined;
 			if (current) await disposeNotifier(current);
+		});
+
+		it('delivers support reports through the broadcast destination', async () => {
+			const [notification] = notificationRouter.render({
+				kind: 'support.request',
+				message: 'The app did not start',
+				requestId: 'support-contract',
+				diagnostics: {
+					reporter: { id: UserId.parse('reporter'), email: 'reporter@example.com' },
+					page_url: 'https://hub.example.com/apps',
+					hub_version: '1.2.3',
+					timestamp: '2026-11-02T00:00:00.000Z',
+					client: { user_agent: 'browser', viewport: { width: 1024, height: 768 } },
+				},
+			});
+			notifier = makeNotifier();
+			await expect(notifier.deliver(notification)).resolves.toBe(expected.broadcast);
 		});
 
 		it.each(Object.entries(CONTRACT_SEED))(

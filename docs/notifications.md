@@ -40,6 +40,7 @@ These notification kinds are available:
 | ------------------ | ------------------------------------------------------------ | ----------------------- |
 | `member.invited`   | A manager adds an email address that has no identity record. | `personal`              |
 | `member.added`     | A manager adds a known user.                                 | `personal`              |
+| `support.request`  | A signed-in user submits a support report.                   | `broadcast`             |
 | `session.takeover` | An editor takes over an exclusive editor session.            | `personal`, `broadcast` |
 
 `MARIMOHUB_NOTIFY_KINDS` is the default allowlist for all backends. A blank value enables all listed kinds. Set it to `none` to disable all kinds. This global off switch takes precedence over per-backend values.
@@ -71,6 +72,9 @@ A session takeover creates one personal variant and one broadcast variant. The v
 SMTP does not send personal content to administrator addresses. If a personal recipient cannot be resolved, SMTP skips that variant.
 
 ## Delivery behavior
+
+Support reports wait for delivery and return an error if every destination fails or skips delivery. See [Support](./support.md).
+The following behavior applies to membership and session notifications.
 
 - The API stores the membership or session change before it schedules delivery.
 - A render or delivery failure does not change the API response.

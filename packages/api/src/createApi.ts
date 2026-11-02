@@ -41,6 +41,7 @@ import appsApp from './routes/apps';
 import sessionsApp from './routes/sessions';
 import systemApp from './routes/system';
 import themeApp from './routes/theme';
+import supportApp from './routes/support';
 import webManifestApp from './routes/webManifest';
 import tokensApp from './routes/tokens';
 import cliAuthorizationsApp, { cliTokenApp } from './routes/cliAuthorizations';
@@ -574,6 +575,7 @@ export function createApi(rawDeps: ApiDeps) {
 
 	// Mount resource routers.
 	app.route(API_PREFIX, systemApp);
+	app.route(API_PREFIX, supportApp);
 	app.route(API_PREFIX, projectsApp);
 	app.route(API_PREFIX, projectAlertsApp);
 	app.route(API_PREFIX, eventsApp);

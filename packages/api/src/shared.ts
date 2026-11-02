@@ -1,4 +1,5 @@
 import { SearchKindSchema } from '@marimo-hub/core/search';
+import { SupportModeSchema } from '@marimo-hub/core/support';
 import { OpenAPIHono, z } from '@hono/zod-openapi';
 import type { Context, TypedResponse } from 'hono';
 import { all } from 'better-all';
@@ -1575,6 +1576,7 @@ export const DeploymentInfoResponseSchema = z
  */
 export const CapabilitiesResponseSchema = z
 	.object({
+		support: z.object({ mode: SupportModeSchema }),
 		project_notebook_target: z.enum(['notebook', 'app']).openapi({
 			description:
 				'Destination for project notebook links. Users without app permission open the notebook page.',

@@ -15,6 +15,16 @@ afterEach(() => {
 });
 
 describe('SignIn OIDC errors', () => {
+	it('links to configured support before authentication', () => {
+		renderWithClient(<SignIn />, {
+			route: '/?auth_error=policy_denied',
+			branding: { support_url: 'https://support.example.com' },
+		});
+		expect(screen.getByRole('link', { name: 'Contact your administrator' })).toHaveAttribute(
+			'href',
+			'https://support.example.com',
+		);
+	});
 	it.each([
 		[
 			'domain_not_allowed',

@@ -1,3 +1,5 @@
+import { useProblemReport } from '@/components/Support/ReportProblemDialog';
+import type { SupportContext } from '@/components/Support/diagnostics';
 import { DialogModal } from '@/components/ui/Dialog';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { CircleHelp } from 'lucide-react';
@@ -10,7 +12,14 @@ import { AboutHub } from './AboutHub';
 
 const ITEM_CLASS = 'block cursor-pointer rounded px-3 py-2 text-sm outline-none focus:bg-muted';
 
-export function HelpMenu({ linkRole }: { linkRole?: ThemeLinkRole }) {
+export function HelpMenu({
+	linkRole,
+	session,
+}: {
+	linkRole?: ThemeLinkRole;
+	session?: SupportContext['session'];
+}) {
+	const report = useProblemReport({ session });
 	const { name, docs_url, support_url } = useBranding();
 	const customLinks = useShellLinks('help', linkRole);
 	const links = [
@@ -45,6 +54,9 @@ export function HelpMenu({ linkRole }: { linkRole?: ThemeLinkRole }) {
 								{link.label}
 							</MenuItem>
 						))}
+						<MenuItem id="report" onAction={() => void report.open()} className={ITEM_CLASS}>
+							Report a problem
+						</MenuItem>
 						<Separator className="my-1 h-px bg-border" />
 						<MenuItem id="about" onAction={about.open} className={ITEM_CLASS}>
 							About {name}
@@ -52,6 +64,7 @@ export function HelpMenu({ linkRole }: { linkRole?: ThemeLinkRole }) {
 					</Menu>
 				</Popover>
 			</MenuTrigger>
+			{report.dialog}
 			<DialogModal isOpen={about.isOpen} onClose={about.close} title={`About ${name}`} width="sm">
 				<AboutHub />
 			</DialogModal>

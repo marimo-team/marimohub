@@ -191,6 +191,7 @@ describe('makeNotifier', () => {
 		const env = { MARIMOHUB_NOTIFY_WEBHOOK_KINDS: 'none' };
 		expect(notificationKindsForBackend(env, 'webhook')).toEqual(new Set());
 		expect([...notificationKindsForBackend(env, 'smtp')]).toEqual([
+			'support.request',
 			'member.invited',
 			'member.added',
 			'session.takeover',
