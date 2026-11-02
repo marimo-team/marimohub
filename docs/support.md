@@ -56,6 +56,11 @@ The link adds a `diagnostics` query parameter containing base64-encoded UTF-8 JS
 Existing query parameters remain intact. Larger reports use a plain portal link with instructions to copy diagnostics.
 Portals must accept this parameter to prefill requests. Users can copy reports into other portals.
 
+The parameter includes the reporter's email, message, and diagnostics. Base64 encoding does not encrypt this data.
+Browser history and access logs on portal servers or proxies can retain the full URL.
+Administrators must assess this exposure before they enable `url` mode.
+`notifier` mode sends reports without URL parameters. `off` mode lets users copy reports manually into a trusted destination.
+
 ## Diagnostics and access
 
 | Context                 | Included fields                                                                                               |
@@ -77,7 +82,9 @@ Signed-in users, including app users, can request support within their credentia
 - `POST /api/v1/support/requests` sends a report in notifier mode.
 
 Messages have a 2,000-character limit.
-Each reporter has five delivery attempts per ten minutes, including failed attempts.
+Each reporter can send five support requests per ten minutes. Failed deliveries count toward this limit.
+Delivery to multiple destinations and internal retries consume one request from the budget.
+Requests that fail validation or authorization do not consume the budget.
 The shared notification budget also limits each reporter to 20 changes per minute. Both budgets apply per API instance.
 
 Successful or partial delivery records a `support.request` audit event with the reporter ID, request ID, and outcome.

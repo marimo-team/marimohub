@@ -2392,6 +2392,24 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		],
 	},
 	{
+		name: 'Support',
+		description: 'Configure how users report problems. See the [support guide](./support.md).',
+		backends: [
+			{
+				name: 'Reports',
+				vars: [
+					{
+						id: 'MARIMOHUB_SUPPORT_MODE',
+						name: 'Support reports',
+						description:
+							'Report delivery: `notifier`, `url`, or `off`. Defaults to the first available mode in that order. See [Support](./support.md) for destination requirements.',
+						example: 'notifier',
+					},
+				],
+			},
+		],
+	},
+	{
 		name: 'Notifications',
 		description:
 			'`MARIMOHUB_NOTIFY_BACKENDS` selects one or more outbound notification backends. Membership and session changes succeed independently of delivery. Support reports wait for delivery. See [Notifications](./notifications.md).',
@@ -2415,13 +2433,6 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				name: 'Shared',
 				description: 'These variables control all notification backends.',
 				vars: [
-					{
-						id: 'MARIMOHUB_SUPPORT_MODE',
-						name: 'Support reports',
-						description:
-							'Report delivery: `notifier`, `url`, or `off`. Defaults to the first available mode in that order. See [Support](./support.md) for destination requirements.',
-						example: 'notifier',
-					},
 					{
 						id: 'MARIMOHUB_NOTIFY_BACKENDS',
 						name: 'Notification backends',

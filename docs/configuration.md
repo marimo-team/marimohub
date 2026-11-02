@@ -691,6 +691,16 @@ Resolve `backend: k8s` references from Kubernetes. A locator uses `namespace/sec
 | `MARIMOHUB_SECRETS_KUBERNETES_ALLOWED_SECRETS` | Exact Secret rules with `projects` set to `"*"` or a non-empty project ID array. | — | — | `[{"namespace":"connections","name":"provider-a","projects":"*"}]` |
 | `MARIMOHUB_SECRETS_KUBERNETES_CACHE_TTL_SECONDS` | Cache duration in seconds. Zero reads each Secret once per integration operation. | — | `0` | `0` |
 
+## Support
+
+Configure how users report problems. See the [support guide](./support.md).
+
+### Reports
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_SUPPORT_MODE` | Report delivery: `notifier`, `url`, or `off`. Defaults to the first available mode in that order. See [Support](./support.md) for destination requirements. | — | — | `notifier` |
+
 ## Notifications
 
 `MARIMOHUB_NOTIFY_BACKENDS` selects one or more outbound notification backends. Membership and session changes succeed independently of delivery. Support reports wait for delivery. See [Notifications](./notifications.md).
@@ -709,7 +719,6 @@ These variables control all notification backends.
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_SUPPORT_MODE` | Report delivery: `notifier`, `url`, or `off`. Defaults to the first available mode in that order. See [Support](./support.md) for destination requirements. | — | — | `notifier` |
 | `MARIMOHUB_NOTIFY_BACKENDS` | Comma-separated backends. Accepted values are `smtp`, `slack`, and `webhook`. An empty value disables notifications. | — | — | `smtp,slack,webhook` |
 | `MARIMOHUB_NOTIFY_KINDS` | Default comma-separated allowlist for all notification backends. A blank value enables `member.invited`, `member.added`, `session.takeover`, and `support.request`. Set `none` to disable all kinds, including per-backend overrides. An unknown kind causes a startup error. | — | — | `member.invited,member.added` |
 | `MARIMOHUB_NOTIFY_ALLOW_PRIVATE` | Allow Slack and webhook delivery to private, loopback, link-local, or reserved IP addresses. Enable only for operator-controlled internal destinations. | — | `false` | `true` |

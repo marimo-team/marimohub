@@ -39,4 +39,17 @@ describe('support configuration', () => {
 	it.each(['unknown', 'notifier', 'url'])('rejects unusable mode %s at startup', (mode) => {
 		expect(() => supportMode({ MARIMOHUB_SUPPORT_MODE: mode })).toThrow('MARIMOHUB_SUPPORT_MODE');
 	});
+
+	it('identifies the missing support URL and explains how to configure it', () => {
+		expect(() => supportMode({ MARIMOHUB_SUPPORT_MODE: 'url' })).toThrow(
+			expect.objectContaining({
+				name: 'ConfigError',
+				opts: {
+					variable: 'MARIMOHUB_THEME_SUPPORT_URL',
+					remediation: 'Set MARIMOHUB_THEME_SUPPORT_URL to an HTTPS URL or root-relative path.',
+					docs: 'docs/support.md',
+				},
+			}),
+		);
+	});
 });

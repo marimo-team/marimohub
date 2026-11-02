@@ -1,4 +1,5 @@
 import { useBranding } from '@/context/BrandingContext';
+import { shellLinkTarget } from '@/components/Shell/useShellLinks';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { LogIn, AlertCircle } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
@@ -66,7 +67,7 @@ export function SignIn() {
 				{support_url && (
 					<a
 						href={support_url}
-						target="_blank"
+						target={shellLinkTarget({ href: support_url })}
 						rel="noopener noreferrer"
 						className="text-sm text-primary underline"
 					>

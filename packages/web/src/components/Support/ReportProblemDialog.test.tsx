@@ -162,6 +162,49 @@ describe('Report a problem', () => {
 		expect(post).toHaveBeenCalledTimes(2);
 	});
 
+	it.each(['delivered', 'partial', 'failed'] as const)(
+		'keeps the dialog open until a pending report settles as %s',
+		async (outcome) => {
+			const post = mockApi();
+			const user = userEvent.setup();
+			render(<ReportProblemAction />);
+			await user.click(screen.getByRole('button', { name: 'Report a problem' }));
+			await screen.findByRole('button', { name: 'Send report' });
+			await user.type(screen.getByLabelText('What happened?'), 'The app failed');
+			const pending = deferred<never>();
+			post.mockReturnValueOnce(pending.promise);
+			await user.click(screen.getByRole('button', { name: 'Send report' }));
+			expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+			await user.click(screen.getByRole('button', { name: 'Close' }));
+			await user.keyboard('{Escape}');
+			await user.click(screen.getByRole('dialog').parentElement!.parentElement!);
+			expect(screen.getByRole('dialog')).toBeInTheDocument();
+			expect(screen.getByRole('button', { name: 'Sending…' })).toBeDisabled();
+			expect(post).toHaveBeenCalledTimes(2);
+
+			await act(async () => {
+				if (outcome === 'failed') pending.reject(new Error('Support delivery failed.'));
+				else {
+					pending.resolve({
+						data: { success: true, data: { delivery: outcome, request_id: 'request-1' } },
+						response: new Response(),
+					} as never);
+				}
+			});
+			if (outcome === 'failed') {
+				expect(screen.getByRole('alert')).toHaveTextContent('Support delivery failed.');
+				expect(screen.getByRole('button', { name: 'Send report' })).toBeEnabled();
+			} else {
+				expect(screen.getByText(/^Report sent\./)).toBeInTheDocument();
+				expect(screen.getByRole('button', { name: 'Send report' })).toBeDisabled();
+			}
+			expect(screen.getByRole('button', { name: 'Close' })).toBeEnabled();
+			await user.click(screen.getByRole('button', { name: 'Close' }));
+			expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+			expect(post).toHaveBeenCalledTimes(2);
+		},
+	);
+
 	it('ignores a late diagnostics response after closing and reopening the dialog', async () => {
 		const post = mockApi();
 		const pending = deferred<never>();

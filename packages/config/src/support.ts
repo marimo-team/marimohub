@@ -28,7 +28,8 @@ export function supportMode(env: Env, supportUrl?: string): SupportMode {
 	}
 	if (mode === 'url' && !supportUrl) {
 		throw new ConfigError('MARIMOHUB_SUPPORT_MODE=url requires MARIMOHUB_THEME_SUPPORT_URL', {
-			variable: 'MARIMOHUB_SUPPORT_MODE',
+			variable: 'MARIMOHUB_THEME_SUPPORT_URL',
+			remediation: 'Set MARIMOHUB_THEME_SUPPORT_URL to an HTTPS URL or root-relative path.',
 			docs: 'docs/support.md',
 		});
 	}

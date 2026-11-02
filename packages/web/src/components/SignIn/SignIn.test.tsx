@@ -24,6 +24,16 @@ describe('SignIn OIDC errors', () => {
 			'href',
 			'https://support.example.com',
 		);
+		expect(screen.getByRole('link', { name: 'Contact your administrator' })).toHaveAttribute(
+			'target',
+			'_blank',
+		);
+	});
+	it('keeps root-relative support links in the current tab', () => {
+		renderWithClient(<SignIn />, { route: '/', branding: { support_url: '/help' } });
+		const link = screen.getByRole('link', { name: 'Contact your administrator' });
+		expect(link).toHaveAttribute('href', '/help');
+		expect(link).not.toHaveAttribute('target');
 	});
 	it.each([
 		[

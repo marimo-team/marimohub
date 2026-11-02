@@ -91,7 +91,13 @@ function ReportProblemDialog({ report, onClose }: { report: ReportState; onClose
 		}
 	};
 	return (
-		<DialogModal isOpen onClose={onClose} title="Report a problem" width="lg">
+		<DialogModal
+			isOpen
+			onClose={onClose}
+			isDismissable={delivery !== 'sending'}
+			title="Report a problem"
+			width="lg"
+		>
 			<div className="flex flex-col gap-4">
 				<label className="flex flex-col gap-2 text-sm">
 					What happened?

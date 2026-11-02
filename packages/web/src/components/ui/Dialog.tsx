@@ -7,6 +7,7 @@ import { IconButton } from './IconButton';
 export interface DialogModalProps {
 	isOpen: boolean;
 	onClose: () => void;
+	isDismissable?: boolean;
 	title?: string;
 	children: ReactNode;
 	width?: 'sm' | 'md' | 'lg' | 'form' | 'xl' | 'screen';
@@ -25,6 +26,7 @@ const widthClasses: Record<NonNullable<DialogModalProps['width']>, string> = {
 export function DialogModal({
 	isOpen,
 	onClose,
+	isDismissable = true,
 	title,
 	children,
 	width = 'md',
@@ -34,9 +36,10 @@ export function DialogModal({
 		<ModalOverlay
 			isOpen={isOpen}
 			onOpenChange={(open) => {
-				if (!open) onClose();
+				if (!open && isDismissable) onClose();
 			}}
-			isDismissable
+			isDismissable={isDismissable}
+			isKeyboardDismissDisabled={!isDismissable}
 			className={cn(
 				'fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/50 p-4 backdrop-blur-[2px]',
 				'entering:animate-in entering:fade-in-0 exiting:animate-out exiting:fade-out-0',
@@ -60,7 +63,7 @@ export function DialogModal({
 							<Heading slot="title" className="text-sm font-semibold">
 								{title}
 							</Heading>
-							<IconButton label="Close" onPress={onClose}>
+							<IconButton label="Close" onPress={onClose} isDisabled={!isDismissable}>
 								<X className="size-4" />
 							</IconButton>
 						</div>
