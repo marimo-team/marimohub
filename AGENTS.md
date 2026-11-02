@@ -29,7 +29,7 @@ Use these as the done-criteria for any change.
   It imports **no vendor SDK** — nothing that speaks to a specific provider or
   performs I/O. Its deps are generic, side-effect-free utilities only: `ulidx`, `colorjs.io` (shared hub/notebook palette generation),
   `croner` (cron evaluation for notebook jobs; no timers are ever started),
-  `zod`, `better-all`, `tldts` (public suffix parsing for cookie isolation),
+  `zod`, `parse5` (in-memory HTML text extraction), `better-all`, `tldts` (public suffix parsing for cookie isolation),
   `@opentelemetry/api` and `@opentelemetry/api-logs` (no-op
   tracing/logs facades unless an entrypoint registers a provider), the format
   serializers `smol-toml` and `yaml` (core renders `marimo.toml` and integration
@@ -126,6 +126,7 @@ stopped, replaces it with one ETag CAS.
 
 These CAS-managed records also have one writer each:
 
+- `BucketSearchIndex` owns `_system/search/projects/{pid}/{source}/head.json`, immutable search snapshots, and retained deletion tombstones. `SearchIndexer` owns resumable crawl checkpoints, immutable pages, and `_system/search/cursor.json`.
 - `ThumbnailService` owns each notebook-local `thumbnail.json` CAS record, immutable
   `thumbnails/{id}.png` images, and create-once `thumbnail-attempts/{sandbox-id}.json` markers.
 - `DeepLinkService` owns each slug at `_system/deep-links/{slug}.json` and each

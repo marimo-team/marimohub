@@ -5380,6 +5380,60 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "search.workspace",
+			"command": ["search", "workspace"],
+			"method": "GET",
+			"path": "/api/v1/search",
+			"summary": "Search accessible projects and resources",
+			"parameters": [
+				{
+					"name": "kinds",
+					"cli_name": "kinds",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "limit",
+					"cli_name": "limit",
+					"in": "query",
+					"required": false,
+					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "mode",
+					"cli_name": "mode",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "project_id",
+					"cli_name": "project-id",
+					"in": "query",
+					"required": false,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "q",
+					"cli_name": "q",
+					"in": "query",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "sessions.create",
 			"command": ["sessions", "create"],
 			"method": "POST",

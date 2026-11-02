@@ -154,6 +154,18 @@ describe('Workspace navigation', () => {
 		},
 	);
 
+	it('shows global and project search with separate active states', async () => {
+		setup({
+			route: '/projects/alpha/search',
+			slots: { search: { available: true, allowed: true, to: '/search' } },
+		});
+		expect(await screen.findByRole('link', { name: 'Search project' })).toHaveAttribute(
+			'aria-current',
+			'page',
+		);
+		expect(screen.getByRole('link', { name: 'Search' })).toHaveAttribute('href', '/search');
+		expect(screen.getByRole('link', { name: 'Search' })).not.toHaveAttribute('aria-current');
+	});
 	it.each([
 		['/projects/alpha', 'Notebooks'],
 		['/projects/alpha/data/integration?table=orders', 'Data'],

@@ -18,6 +18,7 @@ import { attachSandboxProxyUpgrade } from './sandboxProxyWs';
 import type * as SandboxProxyWs from './sandboxProxyWs';
 
 vi.mock('./cron', () => ({
+	startSearchIndexing: vi.fn(),
 	startPreviewPreparation: vi.fn(() => vi.fn()),
 	startMaintenance: vi.fn(() => vi.fn()),
 	startWarmPools: vi.fn(),

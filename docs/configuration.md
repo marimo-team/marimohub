@@ -14,6 +14,27 @@ Every marimohub configuration variable, grouped by category and backend. A categ
 
 🔒 marks a sensitive value (a secret).
 
+## Search
+
+Selected by `MARIMOHUB_SEARCH_BACKEND` (default `off`); one of `bucket`, `off`.
+
+### Bucket
+
+`MARIMOHUB_SEARCH_BACKEND=bucket`
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_SEARCH_BUILD_REVISION` | Positive monotonic revision. Increase when changing embedding or catalog discovery configuration; older indexers cannot overwrite newer builds. | — | `1` | — |
+| `MARIMOHUB_SEARCH_EMBEDDING_URL` | Optional embeddings endpoint. Sends notebook content to this endpoint. Requires an embedding model. | — | — | — |
+| `MARIMOHUB_SEARCH_EMBEDDING_MODEL` | Optional model for semantic notebook indexing. Keyword search does not require embeddings. | — | — | — |
+| `MARIMOHUB_SEARCH_EMBEDDING_API_KEY` 🔒 | Bearer credential for the embedding endpoint. | — | — | — |
+
+### Disabled
+
+`MARIMOHUB_SEARCH_BACKEND=off`
+
+_No environment variables to set here._
+
 ## Theme
 
 Deployment branding for the hub UI. All values are public. See the [theming guide](./theming.md) for examples and asset hosting.

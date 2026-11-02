@@ -1172,6 +1172,23 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/search': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Search accessible projects and resources */
+		get: operations['search.workspace'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/notebooks/{nid}/previews': {
 		parameters: {
 			query?: never;
@@ -2548,6 +2565,20 @@ export interface components {
 				available: boolean;
 				manual_tokens: boolean;
 				url: string | null;
+			};
+			search?: {
+				available: boolean;
+				semantic: boolean;
+				kinds: (
+					| 'notebook'
+					| 'code'
+					| 'output'
+					| 'datasource'
+					| 'namespace'
+					| 'table'
+					| 'column'
+					| 'chat'
+				)[];
 			};
 			data_browser: {
 				available: boolean;
@@ -13029,6 +13060,166 @@ export interface operations {
 			};
 			/** @description Conflict */
 			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'search.workspace': {
+		parameters: {
+			query: {
+				q: string;
+				project_id?: string;
+				kinds?: string;
+				limit?: number;
+				mode?: 'keyword' | 'hybrid';
+			};
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Search results and source coverage */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							items: {
+								id: string;
+								/** @enum {string} */
+								kind:
+									| 'notebook'
+									| 'code'
+									| 'output'
+									| 'datasource'
+									| 'namespace'
+									| 'table'
+									| 'column'
+									| 'chat';
+								resource:
+									| {
+											/** @enum {string} */
+											type: 'notebook';
+											notebook_id: string;
+									  }
+									| {
+											/** @enum {string} */
+											type: 'integration';
+											integration_id: string;
+											version: number;
+											namespace?: string[];
+											table?: string;
+											column?: string;
+									  }
+									| {
+											/** @enum {string} */
+											type: 'chat';
+											conversation_id: string;
+											owner_id: string;
+											message_id?: string;
+									  };
+								title: string;
+								project_id: string;
+								project_name: string;
+								/** @description Unstable ranking detail. Preserve response order; do not apply score thresholds. */
+								score: number;
+								href: string;
+								/** Format: date-time */
+								indexed_at: string;
+								snippet: {
+									text: string;
+									highlights: {
+										start: number;
+										end: number;
+									}[];
+								};
+							}[];
+							partial: boolean;
+							coverage: {
+								source: string;
+								project_id?: string;
+								/** @enum {string} */
+								status:
+									| 'complete'
+									| 'partial'
+									| 'unavailable'
+									| 'timeout'
+									| 'not_indexed'
+									| 'stale'
+									| 'disabled';
+							}[];
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
 				headers: {
 					[name: string]: unknown;
 				};

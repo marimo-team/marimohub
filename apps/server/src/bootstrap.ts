@@ -12,6 +12,7 @@ import {
 	startPreviewPreparation,
 	startJobScheduler,
 	startMaintenance,
+	startSearchIndexing,
 	startSessionLifecycle,
 	startWarmPools,
 } from './cron';
@@ -182,6 +183,8 @@ export async function bootstrap(
 		const warmPools = startWarmPools(deps, loops);
 		if (warmPools) stops.push(warmPools.stop);
 		stops.push(startMaintenance(deps, wideEvents, loops));
+		const stopSearch = startSearchIndexing(deps, loops);
+		if (stopSearch) stops.push(stopSearch);
 		const stopPreviews = startPreviewPreparation(deps, loops);
 		if (stopPreviews) stops.push(stopPreviews);
 		const stopLifecycle = startSessionLifecycle(deps, loops);

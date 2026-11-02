@@ -1641,23 +1641,40 @@ class ScopedIntegrationsStore {
 		);
 	}
 
-	async listHeads(scope: IntegrationScope): Promise<IntegrationRecord[]> {
+	async listHeads(
+		scope: IntegrationScope,
+		options?: { maxHeads?: number; signal?: AbortSignal },
+	): Promise<IntegrationRecord[]> {
+		if (
+			options?.maxHeads !== undefined &&
+			(!Number.isSafeInteger(options.maxHeads) ||
+				options.maxHeads < 1 ||
+				options.maxHeads > MAX_INTEGRATIONS_PER_SCOPE)
+		)
+			throw new ValidationError('Invalid integration discovery budget');
 		const prefix = scope.prefix;
 		const dirs: string[] = [];
 		let cursor: string | undefined;
 		do {
+			options?.signal?.throwIfAborted();
 			const page = await this.bucket.list({
 				prefix,
 				delimiter: '/',
 				cursor,
-				limit: MAX_INTEGRATIONS_PER_SCOPE + 2,
+				limit: (options?.maxHeads ?? MAX_INTEGRATIONS_PER_SCOPE) + 2,
 			});
 			dirs.push(...page.delimitedPrefixes);
+			if (
+				options?.maxHeads !== undefined &&
+				dirs.filter((dir) => !dir.endsWith('/_names/')).length > options.maxHeads
+			)
+				throw new ResourceExhaustedError('Integration discovery budget exceeded');
 			cursor = page.truncated ? page.cursor : undefined;
 		} while (cursor);
 
 		const instanceDirs = dirs.filter((dir) => !dir.endsWith('/_names/'));
 		const heads = await mapWithConcurrency(instanceDirs, BUCKET_SCAN_CONCURRENCY, async (dir) => {
+			options?.signal?.throwIfAborted();
 			const body = await this.bucket.get(`${dir}integration.json`);
 			if (!body) return null; // deleted between list and get — skip
 			const raw = await readStoredJson(body, `${dir}integration.json`);
@@ -2058,11 +2075,14 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		return this.store.secretSources();
 	}
 
-	async list(projectId: ProjectId): Promise<IntegrationEntry[]> {
+	async list(
+		projectId: ProjectId,
+		options?: { maxHeads?: number; signal?: AbortSignal },
+	): Promise<IntegrationEntry[]> {
 		const scope = projectScope(projectId);
 		const [project, org] = await Promise.all([
-			this.store.listHeads(scope),
-			this.store.listHeads(ORG_SCOPE),
+			this.store.listHeads(scope, options),
+			this.store.listHeads(ORG_SCOPE, options),
 		]);
 		const projectNames = new Set(project.map((h) => h.name));
 		return [

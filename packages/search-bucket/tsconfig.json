@@ -1,0 +1,1 @@
+{ "extends": "@marimo-hub/tsconfig/library.json", "include": ["src"] }

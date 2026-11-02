@@ -1,3 +1,6 @@
+import { useSearchAccess } from '@/hooks/useSearchAccess';
+import { SEARCH_ROUTE, PROJECT_SEARCH_ROUTE } from '@/lib/workspaceSearch';
+import { useWorkspaceSearchShortcut } from '@/hooks/useWorkspaceSearchShortcut';
 import { PreviewsPage } from '@/components/Previews/PreviewsPage';
 import { PreviewPage } from '@/components/Previews/PreviewPage';
 import { lazy, Suspense } from 'react';
@@ -22,6 +25,7 @@ import { ApiRequestError } from '@/api/client';
 import { AdminLayout } from '@/components/Admin/AdminLayout';
 import { appBasePath, withBasePath } from '@/lib/basePath';
 
+const SearchPage = lazy(() => import('@/components/Search/SearchPage'));
 const AuditLogPage = lazy(() => import('@/components/AuditLog/AuditLogPage'));
 const DataBrowserPage = lazy(() => import('@/components/DataBrowser/DataBrowserPage'));
 const AdminUsersPage = lazy(() => import('@/components/Admin/AdminUsersPage'));
@@ -129,13 +133,23 @@ function PageFallback() {
 }
 
 function StandardLayout() {
-	const { user } = useAuth();
+	const { user, allowed, available } = useSearchAccess();
 	return (
-		<WorkspaceLayout>
+		<WorkspaceLayout
+			slots={{
+				search: {
+					to: SEARCH_ROUTE,
+					available,
+					allowed,
+				},
+			}}
+		>
 			<AppErrorBoundary>
 				<Suspense fallback={<PageFallback />}>
 					<Routes>
 						<Route path="/" element={<WorkspaceHome />} />
+						<Route path={SEARCH_ROUTE} element={<SearchPage />} />
+						<Route path={PROJECT_SEARCH_ROUTE} element={<SearchPage />} />
 						<Route path="/apps" element={<AppsPage />} />
 						<Route
 							path="/projects"
@@ -178,6 +192,8 @@ function StandardLayout() {
 }
 
 function AppContent() {
+	const { available } = useSearchAccess();
+	useWorkspaceSearchShortcut(available);
 	return (
 		<>
 			<AppErrorBoundary>

@@ -54,7 +54,10 @@ export interface IntegrationTestOptions {
 export interface ProjectIntegrationsService {
 	listKinds(): KindDescriptor[];
 	secretSources(): IntegrationSecretSources;
-	list(projectId: ProjectId): Promise<IntegrationEntry[]>;
+	list(
+		projectId: ProjectId,
+		options?: { maxHeads?: number; signal?: AbortSignal },
+	): Promise<IntegrationEntry[]>;
 	get(projectId: ProjectId, id: IntegrationId): Promise<IntegrationDetail>;
 	create(
 		projectId: ProjectId,

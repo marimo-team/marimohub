@@ -26,6 +26,7 @@ const ALLOWED_DEPENDENCIES = new Set([
 	'croner',
 	// Pure in-memory (de)compression for workspace archive parsing — no I/O.
 	'fflate',
+	'parse5',
 	'smol-toml',
 	'tldts',
 	'ulidx',

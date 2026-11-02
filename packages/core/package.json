@@ -77,7 +77,14 @@
 		"./git-repo": "./src/integrations/gitRepo.ts",
 		"./host-isolation": "./src/hostIsolation.ts",
 		"./workspace-ignore": "./src/integrations/workspaceIgnore.ts",
-		"./theme-palette": "./src/themePalette.ts"
+		"./theme-palette": "./src/themePalette.ts",
+		"./search": "./src/search/public.ts",
+		"./search/build": "./src/search/build.ts",
+		"./search/contracts": "./src/search/contracts.ts",
+		"./search/limits": "./src/search/limits.ts",
+		"./search/paths": "./src/search/paths.ts",
+		"./search/embeddings": "./src/search/embeddings.ts",
+		"./testing/search": "./src/testing/search.ts"
 	},
 	"scripts": {
 		"build": "vp pack",
@@ -93,6 +100,7 @@
 		"colorjs.io": "catalog:",
 		"croner": "catalog:",
 		"fflate": "catalog:",
+		"parse5": "catalog:",
 		"smol-toml": "catalog:",
 		"tldts": "catalog:",
 		"ulidx": "catalog:",

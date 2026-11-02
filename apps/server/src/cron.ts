@@ -1,3 +1,4 @@
+import { searchPaths } from '@marimo-hub/core/search/paths';
 import {
 	resolveJobSandboxEnv,
 	scheduleProjectAlert,
@@ -354,5 +355,24 @@ export function startPreviewPreparation(
 		abortOnStop: true,
 		intervalMs: 15_000,
 		run: ({ signal }) => preparePreviews(deps, signal),
+	}).stop;
+}
+
+export function startSearchIndexing(
+	deps: ApiDeps,
+	loops = new BackgroundLoops(),
+): (() => void) | undefined {
+	if (!deps.search) return undefined;
+	return loops.start({
+		name: 'search-indexing',
+		intervalMs: Millis.seconds(5),
+		deadlineMs: Millis.seconds(30),
+		abortOnStop: true,
+		lock: maintenanceLock(deps, searchPaths.lock),
+		overlapEvent: 'search_index_overlap_skipped',
+		notLeaderEvent: 'search_index_not_leader',
+		run: async ({ signal }) => {
+			await deps.search!.indexer.tick(signal);
+		},
 	}).stop;
 }

@@ -12,11 +12,25 @@ export function useSearchHotkey(
 ): void {
 	useEffect(() => {
 		function onKeyDown(event: KeyboardEvent) {
-			if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
+			if (
+				(!ref.current && !onActivate) ||
+				event.defaultPrevented ||
+				event.isComposing ||
+				event.repeat ||
+				event.key !== '/' ||
+				event.metaKey ||
+				event.ctrlKey ||
+				event.altKey
+			)
+				return;
 
 			const active = document.activeElement as HTMLElement | null;
 			const tag = active?.tagName;
-			const isTyping = tag === 'INPUT' || tag === 'TEXTAREA' || active?.isContentEditable === true;
+			const isTyping =
+				tag === 'INPUT' ||
+				tag === 'TEXTAREA' ||
+				tag === 'SELECT' ||
+				active?.isContentEditable === true;
 			if (isTyping) return;
 
 			event.preventDefault();
