@@ -681,11 +681,35 @@ describe('NotebookWorkspaceService', () => {
 		await expect(service.stat(PROJECT_ID, NOTEBOOK_ID, 'target')).rejects.toThrow('not found');
 	});
 
-	it('rejects invalid UTF-8 source edits before calling the source owner', async () => {
-		await expect(
-			service.write(PROJECT_ID, NOTEBOOK_ID, 'notebook.py', Uint8Array.from([0xc3, 0x28]), ACTOR),
-		).rejects.toThrow('valid UTF-8');
-		expect(owner.saved).toEqual([]);
+	describe.each(['notebook.py', 'pyproject.toml'])('UTF-8 writes to %s', (path) => {
+		it.each([
+			{ name: 'BOM, CRLF, and Unicode', content: '\ufeff# café α 🐍\r\n' },
+			{ name: 'plain UTF-8', content: '# café α 🐍\r\n' },
+			{ name: 'BOM only', content: '\ufeff' },
+			{ name: 'empty source', content: '' },
+			{ name: 'repeated and embedded BOMs', content: '\ufeff\ufeff# a\ufeffb\n' },
+		])('preserves $name', async ({ content }) => {
+			await service.write(PROJECT_ID, NOTEBOOK_ID, path, encode(content), ACTOR);
+
+			expect(owner.saved).toEqual([
+				{ projectId: PROJECT_ID, notebookId: NOTEBOOK_ID, path, content, actor: ACTOR },
+			]);
+			expect((await service.read(PROJECT_ID, NOTEBOOK_ID, path)).bytes).toEqual(encode(content));
+		});
+
+		it.each([
+			{ name: 'invalid continuation', bytes: [0xc3, 0x28] },
+			{ name: 'BOM before invalid continuation', bytes: [0xef, 0xbb, 0xbf, 0xc3, 0x28] },
+			{ name: 'truncated BOM', bytes: [0xef, 0xbb] },
+		])('rejects $name without changing the file', async ({ bytes }) => {
+			const key = paths.project(PROJECT_ID).notebook(NOTEBOOK_ID).workspaceFile(path);
+			await bucket.put(key, 'original');
+			await expect(
+				service.write(PROJECT_ID, NOTEBOOK_ID, path, Uint8Array.from(bytes), ACTOR),
+			).rejects.toThrow('valid UTF-8');
+			expect(owner.saved).toEqual([]);
+			expect(await (await bucket.get(key))!.bytes()).toEqual(encode('original'));
+		});
 	});
 
 	it('enforces per-file, total-byte, and file-count limits', async () => {

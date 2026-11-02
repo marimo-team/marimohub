@@ -21,6 +21,8 @@ import { AppPoolStore } from '../runtime/AppPoolStore';
 import { AppPoolService } from '../runtime/AppPoolService';
 import { DEFAULT_APP_POOL_POLICY } from '../runtime/AppPoolRouter';
 import { listAllKeys, listAllPrefixes } from '../catalog/storage';
+import { makeFsSandbox } from '../../testing/fakes';
+import { readSessionArtifacts } from '../runtime/sandboxFiles';
 
 const enc = (s: string) => new TextEncoder().encode(s);
 
@@ -1494,6 +1496,36 @@ describe('NotebookService', () => {
 	});
 
 	describe('restoreVersion', () => {
+		it.each([
+			{ name: 'BOM, CRLF, and Unicode', code: '\ufeffimport marimo\r\n# café α 🐍\r\n' },
+			{ name: 'plain UTF-8', code: 'import marimo\r\n# café α 🐍\r\n' },
+			{ name: 'BOM only', code: '\ufeff' },
+			{ name: 'empty source', code: '' },
+			{ name: 'repeated and embedded BOMs', code: '\ufeff\ufeff# a\ufeffb\n' },
+		])('restores exact source bytes: $name', async ({ code }) => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'Restore source', description: '', code },
+				ACTOR,
+			);
+			const [original] = await notebooks.listVersions(projectId, created.id);
+			await notebooks.updateNotebook(projectId, created.id, { code: '# newer' }, ACTOR);
+
+			await notebooks.restoreVersion(projectId, created.id, original.version_id, ACTOR);
+
+			const { source } = await notebooks.getNotebook(projectId, created.id);
+			const nb = paths.project(projectId).notebook(created.id);
+			expect(source.current_version_id).not.toBe(original.version_id);
+			expect(await notebooks.listVersions(projectId, created.id)).toHaveLength(3);
+			for (const key of [
+				nb.workspaceFile('notebook.py'),
+				nb.version(source.current_version_id!).code,
+				nb.version(original.version_id).code,
+			]) {
+				expect(await (await bucket.get(key))!.bytes()).toEqual(enc(code));
+			}
+		});
+
 		it('rejects a non-local (git) notebook with ConflictError', async () => {
 			const { meta } = await notebooks.synced.create(
 				projectId,
@@ -2019,6 +2051,61 @@ describe('NotebookService', () => {
 	});
 
 	describe('commitSession', () => {
+		it.each([
+			{
+				name: 'unchanged BOM',
+				before: '\ufeff# café α 🐍\r\n',
+				after: '\ufeff# café α 🐍\r\n',
+				changed: false,
+			},
+			{
+				name: 'unchanged plain UTF-8',
+				before: '# café α 🐍\r\n',
+				after: '# café α 🐍\r\n',
+				changed: false,
+			},
+			{ name: 'unchanged empty source', before: '', after: '', changed: false },
+			{ name: 'unchanged BOM only', before: '\ufeff', after: '\ufeff', changed: false },
+			{ name: 'BOM removal', before: '\ufeff# source', after: '# source', changed: true },
+			{ name: 'BOM addition', before: '# source', after: '\ufeff# source', changed: true },
+			{
+				name: 'repeated BOM removal',
+				before: '\ufeff\ufeff# a\ufeffb',
+				after: '\ufeff# a\ufeffb',
+				changed: true,
+			},
+			{ name: 'edited BOM source', before: '\ufeff# old', after: '\ufeff# new', changed: true },
+		])('captures and commits $name', async ({ before, after, changed }) => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'Session source', description: '', code: before },
+				ACTOR,
+			);
+			const [initial] = await notebooks.listVersions(projectId, created.id);
+			const { instance } = makeFsSandbox({ files: { 'notebook.py': after } });
+			const artifacts = await readSessionArtifacts(instance, '/workspace');
+			expect(artifacts.code).toBe(after);
+
+			const result = await notebooks.commitSession(projectId, created.id, artifacts, ACTOR);
+
+			expect(result!.newVersion).toBe(changed);
+			expect(result!.versionId === initial.version_id).toBe(!changed);
+			const nb = paths.project(projectId).notebook(created.id);
+			expect(await (await bucket.get(nb.workspaceFile('notebook.py')))!.bytes()).toEqual(
+				enc(after),
+			);
+			expect(await (await bucket.get(nb.version(result!.versionId).code))!.bytes()).toEqual(
+				enc(after),
+			);
+			await expect(
+				notebooks.commitSession(projectId, created.id, artifacts, ACTOR),
+			).resolves.toMatchObject({
+				newVersion: false,
+				versionId: result!.versionId,
+			});
+			expect(await notebooks.listVersions(projectId, created.id)).toHaveLength(changed ? 2 : 1);
+		});
+
 		it('returns null without writing when the notebook is already deleted', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,

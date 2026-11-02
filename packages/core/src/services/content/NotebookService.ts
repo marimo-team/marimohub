@@ -80,6 +80,7 @@ import { DeepLinkService } from './DeepLinkService';
 import { SessionService } from '../runtime/SessionService';
 import { AppPoolStore } from '../runtime/AppPoolStore';
 import { nextIsoTimestamp } from '../../utcDate';
+import { decodeUtf8PreservingBom } from '../../text';
 
 /**
  * Maximum number of immutable version folders to retain per notebook. Older
@@ -408,9 +409,7 @@ export class NotebookService {
 			if (!codeObj) {
 				throw new NotFoundError(`Notebook code for ${notebookId} not found`);
 			}
-			return new TextDecoder('utf-8', { fatal: false, ignoreBOM: true }).decode(
-				await codeObj.bytes(),
-			);
+			return decodeUtf8PreservingBom(await codeObj.bytes());
 		}
 
 		// Synced sources serve the entry notebook from the immutable workspace of the
@@ -424,9 +423,7 @@ export class NotebookService {
 		if (!codeObj) {
 			throw new NotFoundError(`Synced notebook ${notebookId} has not been synced`);
 		}
-		return new TextDecoder('utf-8', { fatal: false, ignoreBOM: true }).decode(
-			await codeObj.bytes(),
-		);
+		return decodeUtf8PreservingBom(await codeObj.bytes());
 	}
 
 	/**
@@ -957,7 +954,7 @@ export class NotebookService {
 			throw new NotFoundError(`Version ${versionId} not found`);
 		}
 
-		const code = codeObj ? await codeObj.text() : '';
+		const code = codeObj ? decodeUtf8PreservingBom(await codeObj.bytes()) : '';
 		const deps = depsObj ? await depsObj.text() : undefined;
 		return this.updateNotebook(
 			projectId,
@@ -1016,7 +1013,7 @@ export class NotebookService {
 			this.bucket.get(current.code),
 			this.bucket.get(current.deps),
 		]);
-		const curCode = curCodeObj ? await curCodeObj.text() : undefined;
+		const curCode = curCodeObj ? decodeUtf8PreservingBom(await curCodeObj.bytes()) : undefined;
 		const curDeps = curDepsObj ? await curDepsObj.text() : '';
 		const changed = input.code !== curCode || deps !== curDeps;
 
@@ -1273,9 +1270,7 @@ export class NotebookService {
 		}
 
 		const version = await readStored(VersionSchema, metaObj, ver.meta);
-		const code = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true }).decode(
-			await codeObj.bytes(),
-		);
+		const code = decodeUtf8PreservingBom(await codeObj.bytes());
 
 		return { version, code };
 	}

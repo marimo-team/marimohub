@@ -29,6 +29,7 @@ import { shellQuote } from './shell';
 import { isRegenerableArtifactPath } from '../../integrations/workspaceIgnore';
 import { listAllKeys, listAllObjects } from '../catalog/storage';
 import type { CommitSessionInput } from '../content/NotebookService';
+import { decodeUtf8PreservingBom } from '../../text';
 
 /**
  * Restore GETs touch only the object store and byte-bounded API memory, so they
@@ -616,7 +617,7 @@ async function readNotebookCode(
 	entryNotebook: string,
 ): Promise<string | undefined> {
 	const result = await readCappedBytes(sandbox, absolutePath, sizes);
-	if (result?.success) return new TextDecoder().decode(result.bytes);
+	if (result?.success) return decodeUtf8PreservingBom(result.bytes);
 	const code = result?.error.code ?? 'READ_FAILED';
 	const error = Object.assign(new Error(`Could not read ${entryNotebook}: ${code}`), {
 		code,

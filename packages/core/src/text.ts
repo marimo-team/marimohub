@@ -1,3 +1,10 @@
+export function decodeUtf8PreservingBom(
+	bytes: Uint8Array,
+	{ fatal = false }: { fatal?: boolean } = {},
+): string {
+	return new TextDecoder('utf-8', { fatal, ignoreBOM: true }).decode(bytes);
+}
+
 /**
  * The last `maxBytes` of a string, cut on a UTF-8 code-point boundary so the
  * tail is valid text (a kernel log tail, a captured stderr excerpt).

@@ -1567,6 +1567,39 @@ describe('workspace metadata edge cases', () => {
 });
 
 describe('readSessionArtifacts', () => {
+	describe.each(['utf-8', 'base64'] as const)('%s notebook transport', (encoding) => {
+		it.each([
+			{ name: 'BOM, CRLF, and Unicode', code: '\ufeff# café α 🐍\r\n' },
+			{ name: 'plain UTF-8', code: '# café α 🐍\r\n' },
+			{ name: 'BOM only', code: '\ufeff' },
+			{ name: 'empty source', code: '' },
+			{ name: 'repeated and embedded BOMs', code: '\ufeff\ufeff# a\ufeffb\n' },
+		])('preserves $name at a custom entrypoint', async ({ code }) => {
+			const entryNotebook = 'nested/app.py';
+			const { instance } =
+				encoding === 'base64'
+					? makeFsSandbox({ files: { [entryNotebook]: code } })
+					: makeFakeSandbox({ files: { [`${MOUNT}/${entryNotebook}`]: code } });
+
+			const artifacts = await readSessionArtifacts(instance, MOUNT, undefined, entryNotebook);
+
+			expect(artifacts.code).toBe(code);
+		});
+	});
+
+	it.each([
+		{
+			name: 'BOM before malformed UTF-8',
+			bytes: [0xef, 0xbb, 0xbf, 0xc3, 0x28, 0xff],
+			expected: '\ufeff\ufffd(\ufffd',
+		},
+		{ name: 'truncated BOM', bytes: [0xef, 0xbb], expected: '\ufffd' },
+	])('retains replacement decoding for $name', async ({ bytes, expected }) => {
+		const { instance } = makeFsSandbox({ files: { 'notebook.py': Uint8Array.from(bytes) } });
+
+		expect((await readSessionArtifacts(instance, MOUNT)).code).toBe(expected);
+	});
+
 	it.each(['READ_FAILED', 'BACKEND_ERROR'] as const)(
 		'rejects a notebook read failure with its adapter error code (%s)',
 		async (code) => {
