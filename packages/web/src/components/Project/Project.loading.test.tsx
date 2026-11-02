@@ -5,7 +5,7 @@ import { Route, Routes } from 'react-router-dom';
 import { ProjectEntryPage, AppsPage } from '@/components/Apps/AppsPage';
 import { ErrorBoundary } from '@/components/ui';
 import { notebookKeys, projectKeys } from '@/api/queryKeys';
-import { jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
 import { makeFetch, notebook, PID, project } from './Project.testWorld';
 
 function deferredResponse() {
@@ -46,6 +46,25 @@ function setup(respond?: (url: URL) => Response | Promise<Response> | undefined)
 }
 
 describe('project loading', () => {
+	it.each([false, true])(
+		'shows a session placeholder until the first response in compact=%s layout',
+		async (compact) => {
+			installMatchMedia(compact);
+			const sessions = deferredResponse();
+			setup((url) =>
+				url.pathname === `/api/v1/projects/${PID}/sessions` ? sessions.promise : undefined,
+			);
+			await screen.findByRole('heading', { name: 'Sales' });
+			const row = screen.getByTestId('notebook-row');
+			expect(row.querySelectorAll('.animate-pulse.size-2')).toHaveLength(1);
+			if (!compact)
+				expect(screen.getByRole('columnheader', { name: 'Sessions' })).toBeInTheDocument();
+			await act(async () => sessions.resolve(jsonOk({ items: [], next_cursor: null })));
+			await waitFor(() => expect(row.querySelector('.animate-pulse.size-2')).toBeNull());
+			expect(screen.queryByRole('columnheader', { name: 'Sessions' })).not.toBeInTheDocument();
+		},
+	);
+
 	it('shares one fallback until access, project details, and notebooks are ready', async () => {
 		const access = deferredResponse();
 		const details = deferredResponse();

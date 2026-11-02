@@ -785,9 +785,11 @@ function useProjectContent() {
 										refreshedAt={thumbnails.dataUpdatedAt}
 									/>
 								) : undefined,
-							hasSessions:
-								!!live?.apps?.length ||
-								(!!live?.edit && !['terminated', 'expired'].includes(live.edit.status)),
+							showSessions:
+								nb.status !== 'deleted' &&
+								(sessionsLoading ||
+									!!live?.apps?.length ||
+									(!!live?.edit && !['terminated', 'expired'].includes(live.edit.status))),
 							sessions:
 								nb.status === 'deleted' ? null : (
 									<>

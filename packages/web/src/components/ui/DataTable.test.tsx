@@ -57,6 +57,18 @@ describe('DataTable', () => {
 			/>,
 		);
 		expect(screen.getByRole('textbox', { name: 'Notes for Alpha' })).toHaveValue('Keep me');
+		expect(screen.getAllByRole('columnheader').map((header) => header.textContent)).toEqual([
+			'Notes',
+			'Name',
+		]);
+		for (const [index, name] of ['Beta', 'Alpha'].entries()) {
+			const cells = within(screen.getAllByRole('row')[index + 1]).getAllByRole('cell');
+			expect(cells).toHaveLength(2);
+			expect(
+				within(cells[0]).getByRole('textbox', { name: `Notes for ${name}` }),
+			).toBeInTheDocument();
+			expect(within(cells[1]).getByRole('link', { name })).toBeInTheDocument();
+		}
 		expect(screen.queryByRole('columnheader', { name: 'Count' })).not.toBeInTheDocument();
 		expect(
 			within(screen.getAllByRole('row')[1]).getByRole('link', { name: 'Beta' }),

@@ -16,7 +16,7 @@ export interface NotebookCollectionItem {
 	to: string;
 	leading?: ReactNode;
 	preview?: ReactNode;
-	hasSessions: boolean;
+	showSessions: boolean;
 	sessions: ReactNode;
 	actions: ReactNode;
 }
@@ -113,7 +113,7 @@ function notebookColumns(compact: boolean): DataTableColumn<NotebookCollectionIt
 									)}
 								</div>
 							)}
-							{compact && item.hasSessions && (
+							{compact && item.showSessions && (
 								<div className="mt-1 flex flex-wrap items-center gap-2 sm:hidden">
 									{item.sessions}
 								</div>
@@ -132,7 +132,7 @@ function notebookColumns(compact: boolean): DataTableColumn<NotebookCollectionIt
 		{
 			id: 'author',
 			header: 'Author',
-			className: 'hidden w-40 md:table-cell',
+			className: 'hidden w-40 lg:table-cell',
 			cell: (item) => <NotebookAuthor item={item} />,
 		},
 		{
@@ -163,13 +163,13 @@ export function NotebookCollection({
 	const compact = useMediaQuery('(max-width: 639px)');
 	if (!gallery) {
 		const columns = notebookColumns(compact);
-		const hasSessions = items.some((item) => item.hasSessions);
+		const showSessions = items.some((item) => item.showSessions);
 		return (
 			<DataTable
 				label="Notebooks"
 				items={items}
 				columns={
-					hasSessions && !compact ? columns : columns.filter((column) => column.id !== 'sessions')
+					showSessions && !compact ? columns : columns.filter((column) => column.id !== 'sessions')
 				}
 				getRowKey={(item) => item.notebook.id}
 				rowTestId="notebook-row"
@@ -194,7 +194,8 @@ export function NotebookCollection({
 								<NotebookName notebook={notebook} />
 							</div>
 							<NotebookTags tags={tagsFor(notebook)} title={notebook.title} />
-							<div className="hidden max-w-32 sm:block">
+							<div className="hidden min-w-0 max-w-32 items-center gap-1 text-xs text-muted-foreground sm:flex">
+								<span>by</span>
 								<NotebookAuthor item={item} />
 							</div>
 							<NotebookUpdated notebook={notebook} />

@@ -243,6 +243,9 @@ describe('deleted notebook tombstones', () => {
 			if (view === 'gallery') {
 				expect(row).toHaveClass('col-span-full');
 				expect(row.parentElement).toHaveClass('grid');
+				expect(within(row).getByText('by').parentElement).toContainElement(
+					within(row).getByText('me'),
+				);
 			}
 			expect(within(row).getByText('deleted')).toBeInTheDocument();
 			expect(within(row).queryByRole('link', { name: 'Forecast' })).not.toBeInTheDocument();
