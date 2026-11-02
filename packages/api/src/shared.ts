@@ -1,3 +1,4 @@
+import { SearchKindSchema } from '@marimo-hub/core/search';
 import { OpenAPIHono, z } from '@hono/zod-openapi';
 import type { Context, TypedResponse } from 'hono';
 import { all } from 'better-all';
@@ -1630,6 +1631,11 @@ export const CapabilitiesResponseSchema = z
 			available: z.boolean(),
 			manual_tokens: z.boolean(),
 			url: z.string().nullable(),
+		}),
+		search: z.object({
+			available: z.boolean(),
+			semantic: z.boolean(),
+			kinds: z.array(SearchKindSchema),
 		}),
 		/** Read-only data browsing over integrations; `preview` gates row preview. */
 		data_browser: z.object({

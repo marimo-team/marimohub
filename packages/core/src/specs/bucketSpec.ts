@@ -1,3 +1,9 @@
+import {
+	SearchHeadSchema,
+	SearchCheckpointSchema,
+	SearchSnapshotSchema,
+	SearchCursorSchema,
+} from '../search/contracts';
 import { UploadRecordSchema, UploadIndexSchema } from '../services/content/ResumableUploads';
 import {
 	NotebookImportPreparationSchema,
@@ -125,6 +131,49 @@ const orgIntegration = paths.orgIntegration(IID);
 const integrationVersionTemplate = (key: string) => key.replace('000000', '{n}');
 
 const OBJECTS: BucketObject[] = [
+	{
+		name: 'SearchHead',
+		key: '_system/search/projects/{pid}/{source}/head.json',
+		schema: SearchHeadSchema,
+		summary: 'Current search snapshot or retained deletion tombstone.',
+		mutability: 'cas',
+		owner: 'BucketSearchIndex',
+		tag: 'search',
+	},
+	{
+		name: 'SearchSnapshot',
+		key: '_system/search/projects/{pid}/{source}/snapshots/{generation}.json',
+		schema: SearchSnapshotSchema,
+		summary: 'Immutable bounded search corpus for a project and source.',
+		mutability: 'immutable',
+		tag: 'search',
+	},
+	{
+		name: 'SearchCrawlPage',
+		key: '_system/search/projects/{pid}/{source}/pages/{page}.json',
+		schema: SearchSnapshotSchema,
+		summary: 'Immutable page of a resumable search crawl.',
+		mutability: 'immutable',
+		tag: 'search',
+	},
+	{
+		name: 'SearchCheckpoint',
+		key: '_system/search/projects/{pid}/{source}/crawl.json',
+		schema: SearchCheckpointSchema,
+		summary: 'Resumable crawl state and expected publication revision.',
+		mutability: 'cas',
+		owner: 'SearchIndexer',
+		tag: 'search',
+	},
+	{
+		name: 'SearchCursor',
+		key: '_system/search/cursor.json',
+		schema: SearchCursorSchema,
+		summary: 'Round-robin discovery and cleanup cursors.',
+		mutability: 'cas',
+		owner: 'SearchIndexer',
+		tag: 'search',
+	},
 	{
 		name: 'NotebookPreview',
 		key: previewKey(PID, NID, '{preview_id}'),
@@ -742,6 +791,10 @@ export function buildBucketSpec(): Record<string, unknown> {
 			{ name: 'catalog', description: 'Catalog pointer and snapshots (`_system/`)' },
 			{ name: 'project', description: 'Per-project records (`projects/{pid}/`)' },
 			{ name: 'notebook', description: 'Per-notebook records' },
+			{
+				name: 'search',
+				description: 'Derived search indexes, resumable crawls, and deletion fences',
+			},
 			{ name: 'deep-links', description: 'Global app aliases and notebook-local indexes' },
 			{ name: 'integration', description: 'Project- and org-scoped integration records' },
 			{ name: 'session', description: 'Session records and sandbox claims' },

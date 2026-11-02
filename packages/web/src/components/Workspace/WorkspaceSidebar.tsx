@@ -1,3 +1,5 @@
+import { searchPath } from '@/lib/workspaceSearch';
+import { isAppleKeyboard } from '@/lib/keyboard';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from 'react-router-dom';
 import {
@@ -49,6 +51,7 @@ export function WorkspaceSidebar({
 				<SidebarLink
 					{...linkProps}
 					label="Search"
+					shortcut={isAppleKeyboard() ? '⌘ K' : 'Ctrl K'}
 					to={slots.search.to}
 					icon={Search}
 					active={location.pathname === slots.search.to.split('?')[0]}
@@ -74,6 +77,15 @@ export function WorkspaceSidebar({
 			</div>
 			{canRead ? (
 				<nav aria-label="Project" className="space-y-1">
+					{slots.search?.available && slots.search.allowed ? (
+						<SidebarLink
+							{...linkProps}
+							label="Search project"
+							to={searchPath(pid)}
+							icon={Search}
+							active={section === 'search'}
+						/>
+					) : null}
 					{slots.chat?.available && slots.chat.allowed ? (
 						<SidebarLink
 							{...linkProps}

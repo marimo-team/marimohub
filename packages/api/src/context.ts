@@ -1,3 +1,4 @@
+import type { SearchService, SearchIndexer } from '@marimo-hub/core/search';
 import type { WorkspaceLimits } from '@marimo-hub/core/remote-workspace';
 import type { ThemeConfig } from '@marimo-hub/core/theme';
 import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-bridge';
@@ -418,6 +419,7 @@ export interface LoopHealthReport {
  * context (`c.get('deps')`) instead of instantiating adapters from `c.env`.
  */
 export interface ApiDeps {
+	search?: { service: SearchService; indexer: SearchIndexer };
 	workspaceLimits?: WorkspaceLimits;
 	warmPool?: WarmPoolService;
 	theme?: ThemeConfig;

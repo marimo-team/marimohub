@@ -6,6 +6,7 @@ packages:
 blockExoticSubdeps: true
 
 catalog:
+  parse5: ^8.0.1
   '@ai-sdk/amazon-bedrock': ^5.0.72
   '@ai-sdk/openai-compatible': ^3.0.17
   '@ai-sdk/provider': ^4.0.4
@@ -86,6 +87,7 @@ catalog:
   jose: ^6.1.3
   jsdom: ^29.1.1
   lucide-react: ^1.17.0
+  lru-cache: ^11.5.1
   modal: ^0.9.0
   oauth4webapi: ^3.8.6
   ofetch: ^1.5.1

@@ -105,6 +105,49 @@ const AI_TOKEN_TTL_SECONDS: ConfigVar = {
 
 export const CONFIG_SPEC: ConfigGroup[] = [
 	{
+		name: 'Search',
+		selector: 'MARIMOHUB_SEARCH_BACKEND',
+		selectorDefault: 'off',
+		backends: [
+			{
+				name: 'Bucket',
+				selectorValue: 'bucket',
+				vars: [
+					{
+						id: 'MARIMOHUB_SEARCH_BUILD_REVISION',
+						name: 'Search build revision',
+						description:
+							'Positive monotonic revision. Increase when changing embedding or catalog discovery configuration; older indexers cannot overwrite newer builds.',
+						default: '1',
+					},
+					{
+						id: 'MARIMOHUB_SEARCH_EMBEDDING_URL',
+						name: 'Embedding URL',
+						description:
+							'Optional embeddings endpoint. Sends notebook content to this endpoint. Requires an embedding model and HTTPS when an API key is set.',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SEARCH_EMBEDDING_MODEL',
+						name: 'Embedding model',
+						description:
+							'Optional model for semantic notebook indexing. Requires MARIMOHUB_SEARCH_EMBEDDING_URL. Keyword search does not require embeddings.',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SEARCH_EMBEDDING_API_KEY',
+						name: 'Embedding API key',
+						description:
+							'Bearer credential for the HTTPS embedding endpoint. Requires an embedding URL and model.',
+						secret: true,
+						optIn: true,
+					},
+				],
+			},
+			{ name: 'Disabled', selectorValue: 'off', vars: [] },
+		],
+	},
+	{
 		name: 'Theme',
 		description:
 			'Deployment branding for the hub UI. All values are public. See the [theming guide](./theming.md) for examples and asset hosting.',

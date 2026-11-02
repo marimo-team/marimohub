@@ -23,6 +23,17 @@ Organize notebooks into shared projects. Each project has its own notebook list,
   </a>
 </figure>
 
+## Search
+
+When search is enabled, find notebooks, saved code, outputs, and data in accessible projects. Filter by project and resource type in the [search page](./search.md#search-in-the-web-app). Global queries cover at most 16 projects; see [coverage limits](./search.md#access-freshness-and-coverage).
+
+<figure class="doc-screenshot">
+  <a href="/screenshots/search-desktop.png" target="_blank" rel="noreferrer" aria-label="Open full-size screenshot: Global search showing notebook and saved-code results with highlighted matches (new tab)">
+    <img src="/screenshots/search-desktop.png" alt="Global search showing notebook and saved-code results with highlighted matches" width="1200" height="720" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>Results include the project, resource type, and a highlighted snippet.</figcaption>
+</figure>
+
 ## Creating notebooks
 
 Start with a blank notebook or upload a Python file. Choose from the [base images](./sandbox-image.md) and [compute profiles](./compute.md) your deployment offers.

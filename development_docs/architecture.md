@@ -88,6 +88,10 @@ operations. The configured adapters perform provider I/O. Notification events
 also flow from core through a `Notifier` port to the configured delivery
 adapters.
 
+Federated search uses separate source and index ports. Its authorization flow,
+publication protocol, assumptions, and scaling limits are described in
+[`search.md`](./search.md).
+
 ---
 
 ## 3. Components

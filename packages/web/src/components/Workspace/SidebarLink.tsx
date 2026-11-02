@@ -8,12 +8,14 @@ export function SidebarLink({
 	icon: Icon,
 	active,
 	onNavigate,
+	shortcut,
 }: {
 	label: string;
 	to: string;
 	icon: LucideIcon;
 	active: boolean;
 	onNavigate?: () => void;
+	shortcut?: string;
 }) {
 	return (
 		<Link
@@ -29,6 +31,14 @@ export function SidebarLink({
 		>
 			<Icon className="size-4 shrink-0" aria-hidden />
 			{label}
+			{shortcut && (
+				<kbd
+					aria-hidden
+					className="ml-auto rounded border border-sidebar-border px-1 text-[10px] text-muted-foreground max-md:hidden"
+				>
+					{shortcut}
+				</kbd>
+			)}
 		</Link>
 	);
 }

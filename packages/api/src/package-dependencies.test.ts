@@ -5,7 +5,7 @@ import { expect, it } from 'vitest';
 // the other half of the dependency rule — an adapter sneaking into the
 // manifest without any import (see AGENTS.md "The dependency rule").
 const ADAPTER_PATTERN =
-	/^@marimo-hub\/(?:(?:storage|compute|auth|credentials|secrets|notify|object-browser|database-browser|source-control)-|duckdb-wasm-runtime$|postgres-runtime$|notebook-bridge$)/;
+	/^@marimo-hub\/(?:(?:search|embeddings|storage|compute|auth|credentials|secrets|notify|object-browser|database-browser|source-control)-|duckdb-wasm-runtime$|postgres-runtime$|notebook-bridge$)/;
 
 const DEPENDENCY_FIELDS = [
 	'dependencies',
@@ -15,6 +15,8 @@ const DEPENDENCY_FIELDS = [
 ] as const;
 
 it('recognizes adapter implementations', () => {
+	expect(ADAPTER_PATTERN.test('@marimo-hub/search-bucket')).toBe(true);
+	expect(ADAPTER_PATTERN.test('@marimo-hub/embeddings-http')).toBe(true);
 	expect(ADAPTER_PATTERN.test('@marimo-hub/source-control-github')).toBe(true);
 	expect(ADAPTER_PATTERN.test('@marimo-hub/database-browser-bigquery')).toBe(true);
 	expect(ADAPTER_PATTERN.test('@marimo-hub/notebook-bridge')).toBe(true);

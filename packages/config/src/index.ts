@@ -1,3 +1,4 @@
+import { makeSearch } from './search';
 import { parseWorkspaceLimits } from './workspaceLimits';
 import { parseTheme } from './theme';
 /**
@@ -890,6 +891,7 @@ export function createFromEnv(
 	// Deploy-time diagnostics: probe downstream deps (storage/auth/compute/WIF).
 	// Logged once (non-fatal) at boot and served by GET /api/health?deep=true.
 	deps.preflight = () => runPreflight(buildPreflightChecks(env, deps));
+	deps.search = makeSearch(env, deps);
 	return deps;
 }
 

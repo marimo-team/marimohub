@@ -1,3 +1,4 @@
+import searchApp from './routes/search';
 import { WORKSPACE_LIMITS } from '@marimo-hub/core/remote-workspace';
 import { MAX_FOLDER_IMPORT_ARCHIVE_BYTES } from '@marimo-hub/core/workspace-ignore';
 import type { MiddlewareHandler } from 'hono';
@@ -581,6 +582,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, notebooksApp);
 	app.route(API_PREFIX, thumbnailsApp);
 	app.route(API_PREFIX, deepLinksApp);
+	app.route(API_PREFIX, searchApp);
 	app.route(API_PREFIX, previewsApp);
 	app.route(API_PREFIX, appsApp);
 	app.route(API_PREFIX, changeRequestsApp);

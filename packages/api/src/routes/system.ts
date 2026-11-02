@@ -162,6 +162,13 @@ app.openapi(capabilitiesRoute, (c) => {
 			manual_tokens: deps.mcp?.manualTokens ?? false,
 			url: deps.mcp ? `${deps.mcp.publicBaseUrl}/mcp` : null,
 		},
+		search: {
+			available: Boolean(deps.search),
+			semantic: deps.search?.service.supportsSemantic ?? false,
+			kinds: [
+				...new Set(deps.search?.service.sources.flatMap((source) => [...source.kinds]) ?? []),
+			],
+		},
 		data_browser: {
 			available: Boolean(deps.dataBrowser),
 			preview: deps.dataBrowser?.preview ?? false,

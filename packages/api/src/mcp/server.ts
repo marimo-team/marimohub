@@ -1,3 +1,5 @@
+import { SearchRequestSchema } from '@marimo-hub/core/search';
+import { searchWorkspace } from '../search/operations';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { all } from 'better-all';
 import { z } from 'zod';
@@ -68,6 +70,24 @@ export function createMcpServer(
 		toolError(error, { ...request, signal, userId: principal.id, tool });
 	const requestSignal = (signal: AbortSignal) =>
 		request.signal ? AbortSignal.any([request.signal, signal]) : signal;
+
+	server.registerTool(
+		'search_workspace',
+		{
+			description:
+				'Search accessible notebook metadata, saved code, outputs, data sources, and catalog schemas. Reports incomplete source coverage.',
+			annotations: { readOnlyHint: true },
+			inputSchema: SearchRequestSchema,
+		},
+		async (input, extra) => {
+			const signal = requestSignal(extra.signal);
+			try {
+				return result(await searchWorkspace(deps, principal, input, signal));
+			} catch (error) {
+				return errorResult('search_workspace', error, signal);
+			}
+		},
+	);
 
 	server.registerTool(
 		'list_catalog',

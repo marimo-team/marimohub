@@ -1,4 +1,4 @@
-import type { Ref } from 'react';
+import type { Ref, KeyboardEventHandler, CompositionEventHandler } from 'react';
 import { SearchField as AriaSearchField, Input, Button, Label } from 'react-aria-components';
 import { Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -7,7 +7,12 @@ interface SearchFieldBaseProps {
 	value?: string;
 	defaultValue?: string;
 	onChange?: (value: string) => void;
+	onSubmit?: (value: string) => void;
+	inputClassName?: string;
 	name?: string;
+	onCompositionStart?: CompositionEventHandler<HTMLInputElement>;
+	onCompositionEnd?: CompositionEventHandler<HTMLInputElement>;
+	onKeyDown?: KeyboardEventHandler<HTMLInputElement>;
 	placeholder?: string;
 	/** Forwarded to the input so a page-level hotkey can focus it. */
 	inputRef?: Ref<HTMLInputElement>;
@@ -25,10 +30,15 @@ export function SearchField({
 	value,
 	defaultValue,
 	onChange,
+	onSubmit,
+	inputClassName,
 	name,
 	label,
 	placeholder,
 	inputRef,
+	onKeyDown,
+	onCompositionStart,
+	onCompositionEnd,
 	className,
 	...props
 }: SearchFieldProps) {
@@ -38,6 +48,7 @@ export function SearchField({
 			value={value}
 			defaultValue={defaultValue}
 			onChange={onChange}
+			onSubmit={onSubmit}
 			name={name}
 			className={cn('group flex flex-col gap-1.5', className)}
 		>
@@ -49,12 +60,16 @@ export function SearchField({
 				/>
 				<Input
 					ref={inputRef}
+					onKeyDown={onKeyDown}
+					onCompositionStart={onCompositionStart}
+					onCompositionEnd={onCompositionEnd}
 					placeholder={placeholder}
 					autoComplete="off"
 					className={cn(
 						'h-10 w-full rounded-lg border border-input bg-card pl-9 pr-10 text-sm text-foreground shadow-xs transition-[border-color,box-shadow] max-md:h-11',
 						'placeholder:text-muted-foreground hover:border-ring/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
 						'[&::-webkit-search-cancel-button]:appearance-none',
+						inputClassName,
 					)}
 				/>
 				{/* The `/` focus hotkey swaps for the clear button once the input has a value. */}

@@ -1735,3 +1735,25 @@ Records remain seven more days so later sweeps can remove parts from delayed req
 Azure expires uncommitted blocks through provider retention. Abort must preserve an existing committed blob.
 Hard deletion aborts known sessions before removing upload records. Failed aborts leave records for retry.
 Configure provider lifecycle cleanup for sessions whose creation response or receipt was lost.
+
+## Search indexes
+
+Search records live under `_system/search/`, outside project deletion prefixes.
+`BucketSearchIndex` owns each project/source `head.json` through ETag CAS. The head
+references one immutable `snapshots/{generation}.json` object or retains a deletion
+tombstone. Do not delete heads during project cleanup.
+
+`SearchIndexer` owns each project/source `crawl.json`, immutable `pages/{page}.json`
+objects, and the global `cursor.json`. The checkpoint records its original head
+revision, build identity, and completed-page state. The build contains monotonic deployment
+and source revisions plus a configuration identity. Claiming a newer build fences
+older publication while preserving the current snapshot. Incompatible checkpoints restart.
+Publication cannot overwrite a newer head or resurrect a deletion tombstone.
+The maintenance lease uses `_system/search/lock.json`.
+
+Garbage collection fences heads before removing obsolete snapshots. Active crawl
+pages and immutable objects younger than 24 hours remain. Deletion CAS-retires the
+crawl to an empty checkpoint after publishing the tombstone. Retain both records
+to fence delayed writers; reclaim detached pages and snapshots after the grace period.
+See the [search design](./search.md) for consistency assumptions, tradeoffs, and scaling limits.
+The [search guide](../docs/search.md) covers budgets, configuration, and performance evidence.

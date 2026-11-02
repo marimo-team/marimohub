@@ -1,0 +1,26 @@
+{
+	"name": "@marimo-hub/search-bucket",
+	"version": "0.0.0",
+	"private": true,
+	"license": "Apache-2.0",
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"build": "vp pack",
+		"test": "vp test",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@marimo-hub/core": "workspace:*",
+		"lru-cache": "catalog:"
+	},
+	"devDependencies": {
+		"@marimo-hub/tsconfig": "workspace:*",
+		"@types/node": "catalog:",
+		"typescript": "catalog:",
+		"vite-plus": "catalog:",
+		"vitest": "catalog:"
+	}
+}
