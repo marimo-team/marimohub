@@ -7,6 +7,7 @@ import { Skeleton } from './Skeleton';
 
 interface ListResultsProps {
 	gallery?: boolean;
+	contained?: boolean;
 	children: ReactNode;
 	count: number;
 	emptyState: ReactNode;
@@ -24,6 +25,7 @@ const GALLERY_CLASSES = 'grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3';
 export function ListResults({
 	children,
 	gallery = false,
+	contained = true,
 	count,
 	emptyState,
 	isFetching,
@@ -33,13 +35,15 @@ export function ListResults({
 	onReset,
 	resultsId,
 }: ListResultsProps) {
-	let content: ReactNode = gallery ? (
+	let content: ReactNode = !contained ? (
+		children
+	) : gallery ? (
 		<div className={GALLERY_CLASSES}>{children}</div>
 	) : (
 		<ListContainer>{children}</ListContainer>
 	);
 	if (isLoading) {
-		content = <ListSkeleton gallery={gallery} />;
+		content = <ListSkeleton gallery={gallery} contained={contained} />;
 	} else if (count === 0) {
 		content = isFiltered ? (
 			<EmptyState
@@ -64,7 +68,7 @@ export function ListResults({
 	);
 }
 
-function ListSkeleton({ gallery }: { gallery: boolean }) {
+function ListSkeleton({ gallery, contained }: { gallery: boolean; contained: boolean }) {
 	if (gallery) {
 		return (
 			<div className={GALLERY_CLASSES}>
@@ -85,22 +89,19 @@ function ListSkeleton({ gallery }: { gallery: boolean }) {
 			</div>
 		);
 	}
-	return (
-		<ListContainer>
-			{SKELETON_ROWS.map((row) => (
-				<div
-					key={row}
-					data-testid="list-skeleton-row"
-					aria-hidden="true"
-					className="flex items-center gap-3 border-b p-4 last:border-b-0"
-				>
-					<Skeleton className="size-9 rounded-lg" />
-					<div className="flex flex-1 flex-col gap-2">
-						<Skeleton className="h-4 w-36" />
-						<Skeleton className="h-3 w-52 max-w-full" />
-					</div>
-				</div>
-			))}
-		</ListContainer>
-	);
+	const rows = SKELETON_ROWS.map((row) => (
+		<div
+			key={row}
+			data-testid="list-skeleton-row"
+			aria-hidden="true"
+			className="flex items-center gap-3 border-b p-4 last:border-b-0"
+		>
+			<Skeleton className="size-9 rounded-lg" />
+			<div className="flex flex-1 flex-col gap-2">
+				<Skeleton className="h-4 w-36" />
+				<Skeleton className="h-3 w-52 max-w-full" />
+			</div>
+		</div>
+	));
+	return contained ? <ListContainer>{rows}</ListContainer> : rows;
 }

@@ -5,8 +5,10 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryErrorResetBoundary } from '@tanstack/react-query';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
-import { Header } from '@/components/Header/Header';
-import { Footer } from '@/components/Footer/Footer';
+import { WorkspaceLayout } from '@/components/Workspace/WorkspaceLayout';
+import { WorkspaceHome } from '@/components/Workspace/WorkspaceHome';
+import { ProjectJobsPage } from '@/components/Workspace/ProjectJobsPage';
+import { ProjectSettingsPage } from '@/components/Workspace/ProjectSettingsPage';
 import { ProjectList } from '@/components/ProjectList/ProjectList';
 import { AppsPage, ProjectEntryPage } from '@/components/Apps/AppsPage';
 import { AppEntryPage } from '@/components/Apps/AppEntryPage';
@@ -56,7 +58,7 @@ function NotFoundPage() {
 			<p className="text-sm text-muted-foreground">
 				The page may have moved, or you may not have access to it.
 			</p>
-			<Button variant="default" onPress={() => window.location.assign(withBasePath('/'))}>
+			<Button variant="default" onPress={() => window.location.assign(withBasePath('/projects'))}>
 				Back to projects
 			</Button>
 		</div>
@@ -128,49 +130,50 @@ function PageFallback() {
 
 function StandardLayout() {
 	const { user } = useAuth();
-	// h-dvh (not min-h-dvh): pages scroll inside <main>, never the document,
-	// which keeps the header and footer pinned.
 	return (
-		<div className="flex h-dvh flex-col">
-			<Header />
-			<main className="flex min-h-0 flex-1 overflow-hidden">
-				<AppErrorBoundary>
-					<Suspense fallback={<PageFallback />}>
-						<Routes>
-							<Route
-								path="/"
-								element={user?.app_only ? <Navigate to="/apps" replace /> : <ProjectList />}
-							/>
-							<Route path="/apps" element={<AppsPage />} />
-							<Route
-								path="/projects"
-								element={
-									user?.app_only && !user.can_create_projects ? (
-										<Navigate to="/apps" replace />
-									) : (
-										<ProjectList />
-									)
-								}
-							/>
-							<Route path="/projects/:pid" element={<ProjectEntryPage />} />
-							<Route path="/projects/:pid/data" element={<DataBrowserPage />} />
-							<Route path="/projects/:pid/data/:iid" element={<DataBrowserPage />} />
-							<Route path="/admin" element={<AdminLayout />}>
-								<Route index element={<Navigate to="/admin/users" replace />} />
-								<Route path="users" element={<AdminUsersPage />} />
-								<Route path="settings" element={<AdminSettingsPage />} />
-								<Route path="audit-logs" element={<AuditLogPage />} />
-								<Route path="policy-analyzer" element={<AdminPolicyAnalyzerPage />} />
-								<Route path="debug" element={<AdminDebugPage />} />
-								<Route path="runtime" element={<AdminRuntimePage />} />
-							</Route>
-							<Route path="*" element={<NotFoundPage />} />
-						</Routes>
-					</Suspense>
-				</AppErrorBoundary>
-			</main>
-			<Footer />
-		</div>
+		<WorkspaceLayout>
+			<AppErrorBoundary>
+				<Suspense fallback={<PageFallback />}>
+					<Routes>
+						<Route path="/" element={<WorkspaceHome />} />
+						<Route path="/apps" element={<AppsPage />} />
+						<Route
+							path="/projects"
+							element={
+								user?.app_only && !user.can_create_projects ? (
+									<Navigate to="/apps" replace />
+								) : (
+									<ProjectList />
+								)
+							}
+						/>
+						<Route path="/projects/:pid" element={<ProjectEntryPage />} />
+						<Route
+							path="/projects/:pid/members"
+							element={<ProjectSettingsPage section="members" />}
+						/>
+						<Route
+							path="/projects/:pid/integrations"
+							element={<ProjectSettingsPage section="integrations" />}
+						/>
+						<Route path="/projects/:pid/jobs" element={<ProjectJobsPage />} />
+						<Route path="/projects/:pid/notebooks/:nid/jobs" element={<JobsPage />} />
+						<Route path="/projects/:pid/data" element={<DataBrowserPage />} />
+						<Route path="/projects/:pid/data/:iid" element={<DataBrowserPage />} />
+						<Route path="/admin" element={<AdminLayout />}>
+							<Route index element={<Navigate to="/admin/users" replace />} />
+							<Route path="users" element={<AdminUsersPage />} />
+							<Route path="settings" element={<AdminSettingsPage />} />
+							<Route path="audit-logs" element={<AuditLogPage />} />
+							<Route path="policy-analyzer" element={<AdminPolicyAnalyzerPage />} />
+							<Route path="debug" element={<AdminDebugPage />} />
+							<Route path="runtime" element={<AdminRuntimePage />} />
+						</Route>
+						<Route path="*" element={<NotFoundPage />} />
+					</Routes>
+				</Suspense>
+			</AppErrorBoundary>
+		</WorkspaceLayout>
 	);
 }
 
@@ -189,8 +192,6 @@ function AppContent() {
 						<Route path="/projects/:pid/notebooks/:nid/app" element={<AppEntryPage />} />
 						{/* The last HTML snapshot, sandbox-free (no session is ever started). */}
 						<Route path="/projects/:pid/notebooks/:nid/snapshot" element={<SnapshotPage />} />
-						{/* Scheduled + on-demand headless runs and their history (no session). */}
-						<Route path="/projects/:pid/notebooks/:nid/jobs" element={<JobsPage />} />
 						<Route path="/projects/:pid/notebooks/:nid/previews" element={<PreviewsPage />} />
 						<Route
 							path="/projects/:pid/notebooks/:nid/previews/:previewId"

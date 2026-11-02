@@ -5,6 +5,7 @@ import { ListResults } from './ListResults';
 
 interface RenderOptions {
 	gallery?: boolean;
+	contained?: boolean;
 	count?: number;
 	isFiltered?: boolean;
 	isLoading?: boolean;
@@ -12,6 +13,7 @@ interface RenderOptions {
 
 function renderResults({
 	gallery = false,
+	contained = true,
 	count = 1,
 	isFiltered = false,
 	isLoading = false,
@@ -20,6 +22,7 @@ function renderResults({
 	const result = render(
 		<ListResults
 			gallery={gallery}
+			contained={contained}
 			count={count}
 			emptyState={<p>No notebooks yet</p>}
 			isFetching={false}
@@ -36,6 +39,17 @@ function renderResults({
 }
 
 describe('ListResults', () => {
+	it.each([false, true])(
+		'leaves uncontained list content unwrapped while loading=%s',
+		(isLoading) => {
+			renderResults({ contained: false, isLoading });
+			const content = isLoading
+				? screen.getAllByTestId('list-skeleton-row')[0]
+				: screen.getByText('Notebook row');
+			expect(content.parentElement).toHaveAttribute('id', 'notebook-results');
+		},
+	);
+
 	it('renders gallery children in a responsive grid', () => {
 		renderResults({ gallery: true });
 		expect(screen.getByText('Notebook row').parentElement).toHaveClass(

@@ -261,7 +261,7 @@ describe('MCP OAuth app', () => {
 		expect(await mcpJson(catalog)).toMatchObject({
 			result: {
 				structuredContent: {
-					projects: [{ name: 'My Projects', notebooks: [{ title: 'MCP notebook' }] }],
+					projects: [{ name: 'My Project', notebooks: [{ title: 'MCP notebook' }] }],
 				},
 			},
 		});
@@ -276,7 +276,7 @@ describe('MCP OAuth app', () => {
 				params: {
 					name: 'start_session',
 					arguments: {
-						project: 'My Projects',
+						project: 'My Project',
 						notebook: 'MCP notebook',
 						wait_seconds: 0,
 					},
@@ -303,7 +303,7 @@ describe('MCP OAuth app', () => {
 				params: {
 					name: 'execute_code',
 					arguments: {
-						project: 'My Projects',
+						project: 'My Project',
 						session_id: launchResult.result.structuredContent.session_id,
 						code: '1+1',
 					},

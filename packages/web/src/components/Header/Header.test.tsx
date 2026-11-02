@@ -257,7 +257,7 @@ it('keeps app-only accounts out of authoring shortcuts', async () => {
 	const { user } = setup(undefined, { ...USER, app_only: true, can_create_projects: false }, true);
 	await screen.findByRole('button', { name: 'User menu' });
 	expect(screen.getByRole('link', { name: 'marimohub home' })).toHaveAttribute('href', '/apps');
-	expect(screen.queryByRole('link', { name: 'Create a project' })).toBeNull();
+	expect(screen.queryByRole('link', { name: 'Projects' })).toBeNull();
 	await user.click(screen.getByRole('button', { name: 'User menu' }));
 	expect(screen.queryByRole('menuitem', { name: 'API tokens' })).toBeNull();
 	expect(screen.queryByRole('menuitem', { name: /MCP/ })).toBeNull();
@@ -265,7 +265,7 @@ it('keeps app-only accounts out of authoring shortcuts', async () => {
 
 it('offers project creation to an explicitly authorized app-only account', async () => {
 	setup(undefined, { ...USER, app_only: true, can_create_projects: true });
-	expect(await screen.findByRole('link', { name: 'Create a project' })).toHaveAttribute(
+	expect(await screen.findByRole('link', { name: 'Projects' })).toHaveAttribute(
 		'href',
 		'/projects',
 	);

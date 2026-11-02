@@ -110,7 +110,7 @@ describe('service account API', () => {
 		const projects = await expectPage<{ id: string; name: string }>(
 			await human.request('GET', '/projects'),
 		);
-		expect(projects).toMatchObject([{ name: 'My Projects' }]);
+		expect(projects).toMatchObject([{ name: 'My Project' }]);
 		const projectPath = `/projects/${projects[0].id}`;
 		expect(await expectOk(await human.request('GET', projectPath))).toMatchObject({
 			owner: userId,

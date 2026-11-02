@@ -301,7 +301,7 @@ describe('default project bootstrap authorization', () => {
 			await expectOk(await creator.request('GET', '/me'));
 			await expectOk(await creator.request('GET', '/me'));
 			expect((await creator.deps.services.catalog.getCurrentSnapshot()).projects).toEqual([
-				expect.objectContaining({ name: 'My Projects', owner: creatorId }),
+				expect.objectContaining({ name: 'My Project', owner: creatorId }),
 			]);
 		},
 	);
@@ -338,7 +338,7 @@ describe('createApi identity refresh is best-effort', () => {
 		const { request } = createTestApi({ bucket, deps: { services } });
 		const res = await request('GET', '/projects');
 		expect(await expectPage(res)).toEqual([
-			expect.objectContaining({ name: 'My Projects', owner: ACTOR }),
+			expect.objectContaining({ name: 'My Project', owner: ACTOR }),
 		]);
 	});
 });

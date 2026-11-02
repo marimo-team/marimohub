@@ -17,19 +17,19 @@ test('project lifecycle: create, list, edit, delete', async ({ page }) => {
 	await createAndOpenProject(page, name, 'an e2e project');
 	await editProjectName(page, renamed);
 
-	await page.goto('/');
+	await page.goto('/projects');
 	await expect(projectRow(page, renamed)).toBeVisible();
 	await expect(projectRow(page, name)).toHaveCount(0);
 
 	await openProject(page, renamed);
 	await deleteProject(page, renamed);
-	await expect(page).toHaveURL('/');
+	await expect(page).toHaveURL('/projects');
 	await expect(projectRow(page, renamed)).toHaveCount(0);
 });
 
 test('create project: submit is disabled until a name is entered', async ({ page }) => {
-	await page.goto('/');
-	await page.getByRole('button', { name: 'New Project' }).click();
+	await page.goto('/projects');
+	await page.getByRole('main').getByRole('button', { name: 'New Project' }).click();
 
 	const submit = page.getByRole('button', { name: 'Create', exact: true });
 	await expect(submit).toBeDisabled();

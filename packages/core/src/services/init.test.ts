@@ -19,7 +19,7 @@ describe('ensureInitialized', () => {
 		const services = createServices(bucket);
 		const projects = await services.projects.listProjects();
 		expect(projects).toHaveLength(1);
-		expect(projects[0].name).toBe('My Projects');
+		expect(projects[0].name).toBe('My Project');
 		expect(projects[0].description).toBe('Default project');
 	});
 
@@ -213,7 +213,7 @@ describe('ensureInitialized', () => {
 		await ensureInitialized(bucket, ACTOR);
 		const projects = await services.projects.listProjects();
 		expect(projects).toHaveLength(1);
-		expect(projects[0]).toMatchObject({ name: 'My Projects', owner: ACTOR });
+		expect(projects[0]).toMatchObject({ name: 'My Project', owner: ACTOR });
 	});
 
 	it('does not replace a catalog containing only deleted projects', async () => {

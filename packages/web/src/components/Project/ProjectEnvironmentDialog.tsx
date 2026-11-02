@@ -37,7 +37,7 @@ export function ProjectEnvironmentDialog({
 	isPending = false,
 }: ProjectEnvironmentDialogProps) {
 	const [area, setArea] = useState<Area>('overview');
-	const federation = resolveCloudAccess(project, cloudAccessAvailable, cloudAccessDefaultEnabled);
+	const federation = resolveCloudAccess(project);
 	// The capability flag can be stale; the project's own resolution is authoritative.
 	const cloudAccessConfigured = cloudAccessAvailable && federation.source !== 'unavailable';
 	let cloudAccessStatus = 'Loading cloud access…';
@@ -91,16 +91,41 @@ export function ProjectEnvironmentDialog({
 	);
 }
 
+export function ProjectCloudAccessDialog({
+	isOpen,
+	onClose,
+	project,
+	cloudAccessLoading,
+	cloudAccessAvailable,
+	cloudAccessDefaultEnabled,
+	onSaveCloudAccess,
+	isPending = false,
+}: Omit<ProjectEnvironmentDialogProps, 'integrationsAvailable'>) {
+	const federation = resolveCloudAccess(project);
+	return (
+		<DialogModal isOpen={isOpen} onClose={onClose} title="Cloud access" width="lg">
+			{cloudAccessLoading ? (
+				<output>Loading cloud access…</output>
+			) : (
+				<CloudAccessPanel
+					isOpen={isOpen}
+					project={project}
+					federation={federation}
+					available={cloudAccessAvailable && federation.source !== 'unavailable'}
+					defaultEnabled={cloudAccessDefaultEnabled}
+					onSave={onSaveCloudAccess}
+					isPending={isPending}
+				/>
+			)}
+		</DialogModal>
+	);
+}
+
 function resolveCloudAccess(
-	project: Pick<ProjectDetail, 'federation' | 'federation_effective'>,
-	available: boolean,
-	defaultEnabled: boolean,
+	project: Pick<ProjectDetail, 'federation_effective'>,
 ): EffectiveFederation {
-	if (project.federation_effective) return project.federation_effective;
-	// Older API responses omit federation_effective.
-	if (!available) return { enabled: false, source: 'unavailable' };
-	if (project.federation) return { enabled: project.federation.enabled, source: 'project' };
-	return { enabled: defaultEnabled, source: 'deployment' };
+	// Capabilities and saved overrides cannot replace the server's effective resolution.
+	return project.federation_effective ?? { enabled: false, source: 'unavailable' };
 }
 
 function cloudAccessSetting({ enabled, source }: EffectiveFederation): CloudAccessSetting {
@@ -155,7 +180,7 @@ function CloudAccessPanel({
 	federation: EffectiveFederation;
 	available: boolean;
 	defaultEnabled: boolean;
-	onBack: () => void;
+	onBack?: () => void;
 	onSave: (setting: CloudAccessSetting) => Promise<void>;
 	isPending: boolean;
 }) {
@@ -178,14 +203,16 @@ function CloudAccessPanel({
 	return (
 		<div className="flex flex-col gap-4 text-sm">
 			<div className="flex items-center gap-3">
-				<button
-					type="button"
-					className="flex items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-					onClick={onBack}
-				>
-					<ArrowLeft className="size-3.5" aria-hidden />
-					Back
-				</button>
+				{onBack && (
+					<button
+						type="button"
+						className="flex items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+						onClick={onBack}
+					>
+						<ArrowLeft className="size-3.5" aria-hidden />
+						Back
+					</button>
+				)}
 				<h3 className="font-semibold">Federated cloud access</h3>
 			</div>
 
