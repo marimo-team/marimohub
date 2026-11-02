@@ -1,3 +1,5 @@
+import { HelpMenu } from '@/components/Header/HelpMenu';
+import { AnnouncementBanner } from '@/components/Shell/AnnouncementBanner';
 import { hasNotebookPreviews } from '@/api/previews';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
@@ -426,6 +428,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		author,
 		backToProject,
 		canManageLinks: canManageProject(project.your_role),
+		linkRole: project.your_role ?? undefined,
 		canEditThumbnail: project.your_role !== null && !isViewer,
 		canOpenChangeRequest,
 		canRunApp,
@@ -611,6 +614,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 					)}
 				</div>
 				<div className="ml-auto flex flex-wrap items-center justify-end gap-2 max-md:gap-1">
+					<HelpMenu linkRole={model.linkRole} />
 					<ChangeRequestActions
 						projectId={pid!}
 						notebookId={nid!}
@@ -666,6 +670,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 					/>
 				</div>
 			</header>
+			{isApp && <AnnouncementBanner />}
 			<ThumbnailDialog
 				projectId={pid!}
 				notebookId={nid!}

@@ -4,7 +4,7 @@ import { matchPath, useLocation } from 'react-router-dom';
 import { Dialog, Heading, Modal, ModalOverlay } from 'react-aria-components';
 import { Menu, X } from 'lucide-react';
 import { Header } from '@/components/Header/Header';
-import { Footer } from '@/components/Footer/Footer';
+import { AnnouncementBanner } from '@/components/Shell/AnnouncementBanner';
 import { IconButton } from '@/components/ui';
 import { useAuth } from '@/context/AuthContext';
 import { useIsMobile } from '@/hooks/useMediaQuery';
@@ -64,6 +64,7 @@ export function WorkspaceLayout({
 					) : undefined
 				}
 			/>
+			<AnnouncementBanner />
 			<div className="flex min-h-0 min-w-0 flex-1">
 				{showNavigation && !isMobile ? (
 					<aside
@@ -81,7 +82,6 @@ export function WorkspaceLayout({
 					{children}
 				</main>
 			</div>
-			<Footer />
 			{showNavigation && isMobile ? (
 				<ModalOverlay
 					isOpen={open}

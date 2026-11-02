@@ -1,3 +1,5 @@
+import { HelpMenu } from './HelpMenu';
+import { shellLinkTarget, useShellLinks } from '@/components/Shell/useShellLinks';
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { useBranding } from '@/context/BrandingContext';
@@ -17,6 +19,7 @@ import { OrgIntegrationsDialog } from '@/components/Project/ProjectIntegrationsD
 
 export function Header({ navigationTrigger }: { navigationTrigger?: ReactNode }) {
 	const { name } = useBranding();
+	const links = useShellLinks('header');
 	const navigate = useNavigate();
 	const { user, signOut } = useAuth();
 	const { theme, isThemeForced, toggleTheme } = useTheme();
@@ -27,17 +30,20 @@ export function Header({ navigationTrigger }: { navigationTrigger?: ReactNode })
 	const { copy } = useCopyToClipboard();
 
 	return (
-		<header className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between border-b bg-background/85 px-4 backdrop-blur-md max-md:px-3">
+		<header className="sticky top-0 z-40 flex min-h-14 shrink-0 flex-wrap gap-2 py-2 items-center justify-between border-b bg-background/85 px-4 backdrop-blur-md max-md:px-3">
 			{navigationTrigger}
 			<Link
 				to={user?.app_only ? '/apps' : '/'}
 				aria-label={`${name} home`}
-				className="rounded-lg outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+				className="max-md:mr-auto rounded-lg outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 			>
 				<Brand builtInWordmarkClassName="max-md:hidden" />
 			</Link>
 
-			<nav aria-label="Global" className="ml-6 flex h-full items-center gap-1 max-md:ml-2">
+			<nav
+				aria-label="Global"
+				className="ml-6 flex min-w-0 flex-wrap items-center gap-1 max-md:order-last max-md:ml-0 max-md:w-full"
+			>
 				{!user?.app_only || user.can_create_projects ? (
 					<NavLink
 						to="/projects"
@@ -62,8 +68,20 @@ export function Header({ navigationTrigger }: { navigationTrigger?: ReactNode })
 				>
 					Apps
 				</NavLink>
+				{links.map((link) => (
+					<a
+						key={link.id}
+						href={link.href}
+						target={shellLinkTarget(link)}
+						rel="noopener noreferrer"
+						className="px-3 py-2 text-sm max-md:px-2"
+					>
+						{link.label}
+					</a>
+				))}
 			</nav>
 			<div className="ml-auto flex items-center gap-2 max-md:gap-1">
+				<HelpMenu />
 				{!isThemeForced && (
 					<Button
 						onPress={toggleTheme}

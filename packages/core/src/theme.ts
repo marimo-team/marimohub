@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ROLES } from './constants';
 
 export function isThemeAssetUrl(value: string): boolean {
 	if (/[\s\\]/u.test(value)) return false;
@@ -20,7 +21,30 @@ export const DEFAULT_PWA_THEME_COLOR = '#0d9488';
 export const ColorModeSchema = z.enum(['user', 'light', 'dark']);
 export type ColorMode = z.infer<typeof ColorModeSchema>;
 
+export const ThemeNavLinkSchema = z.object({
+	label: z.string().trim().min(1).max(40),
+	href: assetUrl,
+	placement: z.enum(['header', 'help']).optional(),
+	external: z.boolean().optional(),
+	roles: z.array(z.enum(ROLES)).optional(),
+});
+export type ThemeNavLink = z.infer<typeof ThemeNavLinkSchema>;
+export type ThemeLinkRole = NonNullable<ThemeNavLink['roles']>[number];
+
+export const ThemeAnnouncementSchema = z.object({
+	id: z.string().trim().min(1).max(100),
+	text: z.string().trim().min(1).max(280),
+	href: assetUrl.optional(),
+	level: z.enum(['info', 'warning']).optional(),
+	dismissible: z.boolean().optional(),
+});
+
 export const ThemeConfigSchema = z.object({
+	nav_links: z.array(ThemeNavLinkSchema).max(12).optional(),
+	docs_url: assetUrl.optional(),
+	support_url: assetUrl.optional(),
+	announcement: ThemeAnnouncementSchema.optional(),
+	notebook_css: assetUrl.optional(),
 	color_mode: ColorModeSchema.default('user'),
 	name: z.string().trim().min(1),
 	favicon: assetUrl.nullable(),

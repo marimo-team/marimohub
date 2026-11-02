@@ -34,6 +34,7 @@
 	"devDependencies": {
 		"@marimo-hub/tsconfig": "workspace:*",
 		"@types/node": "catalog:",
+		"smol-toml": "catalog:",
 		"typescript": "catalog:",
 		"vite-plus": "catalog:",
 		"vitest": "catalog:",

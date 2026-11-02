@@ -1,3 +1,5 @@
+import { parse } from 'smol-toml';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { AppPoolService, createServices, paths } from '@marimo-hub/core';
 import type { NotebookId, ProjectAlertDispatcher, ProjectId } from '@marimo-hub/core';
@@ -310,7 +312,7 @@ describe('Session routes (app mode)', () => {
 				bucket,
 				userId: ACTOR,
 				compute: fakeComputeFrom(editFake.instance),
-				deps: { ai },
+				deps: { ai, theme: { ...DEFAULT_THEME_CONFIG, primary_color: '#7c3aed' } },
 			});
 			await expectOk<any>(await editApi.request('POST', sessionsPath()));
 			const editConfig = editFake.calls.writeFiles
@@ -333,14 +335,100 @@ describe('Session routes (app mode)', () => {
 				bucket,
 				userId: ACTOR,
 				compute: fakeComputeFrom(runFake.instance),
-				deps: { ai },
+				deps: { ai, theme: { ...DEFAULT_THEME_CONFIG, primary_color: '#7c3aed' } },
 			});
 			await expectOk<any>(await runApi.request('POST', sessionsPath(), { mode: 'app' }));
-			expect(
-				runFake.calls.writeFiles.flat().some((file) => file.path.endsWith('/marimo/marimo.toml')),
-			).toBe(false);
-			expect(runFake.calls.setEnvVars.flatMap(Object.keys)).not.toContain('XDG_CONFIG_HOME');
-			expect(runFake.calls.setEnvDefaults).toHaveLength(0);
+			const runConfig = runFake.calls.writeFiles
+				.flat()
+				.find((file) => file.path.endsWith('/marimo/marimo.toml'));
+			expect(runConfig).toBeDefined();
+			const configText = (content: string | Uint8Array) =>
+				typeof content === 'string' ? content : new TextDecoder().decode(content);
+			expect(parse(configText(runConfig!.content)).display).toEqual(
+				parse(configText(editConfig!.content)).display,
+			);
+			expect(runConfig!.content).not.toContain('[ai');
+			expect(runConfig!.content).not.toContain('file_browser');
+			const brandFile = (fake: ReturnType<typeof makeFakeSandbox>) =>
+				fake.calls.writeFiles.flat().find((file) => file.path.endsWith('/marimo/brand.css'));
+			expect(brandFile(runFake)).toEqual(brandFile(editFake));
+			expect(brandFile(runFake)?.content).toContain('--primary: light-dark(');
+			expect(runFake.calls.setEnvVars.flatMap(Object.keys)).toContain('XDG_CONFIG_HOME');
+		},
+	);
+
+	it.each(['edit', 'app'] as const)(
+		'fetches root-relative notebook CSS for %s sessions',
+		async (mode) => {
+			const fake = makeFakeSandbox();
+			const fetchCss = vi
+				.spyOn(globalThis, 'fetch')
+				.mockResolvedValue(
+					new Response(':root { --operator-brand: purple; }', { headers: { etag: 'v1' } }),
+				);
+			try {
+				const api = createTestApi({
+					bucket,
+					userId: ACTOR,
+					compute: fakeComputeFrom(fake.instance),
+					deps: {
+						theme: {
+							...DEFAULT_THEME_CONFIG,
+							primary_color: '#7c3aed',
+							notebook_css: '/brand.css',
+						},
+						sandbox: {
+							bucket: { name: 'test', endpoint: '' },
+							hostname: 'localhost',
+							workdir: '/workspace',
+							persistWorkspace: 'source',
+							appBaseUrl: 'https://hub.example.com/team',
+						},
+					},
+				});
+				await expectOk(await api.request('POST', sessionsPath(), { mode }));
+				expect(fetchCss).toHaveBeenCalledWith(
+					'https://hub.example.com/brand.css',
+					expect.objectContaining({ redirect: 'error' }),
+				);
+				const brand = fake.calls.writeFiles
+					.flat()
+					.find((file) => file.path.endsWith('/marimo/brand.css'));
+				expect(brand?.content).toContain('--primary: light-dark(');
+				expect(brand?.content).toContain('--operator-brand: purple;');
+			} finally {
+				fetchCss.mockRestore();
+			}
+		},
+	);
+
+	it.each(['edit', 'app'] as const)(
+		'does not boot a %s kernel when deployment CSS cannot load, and allows retry',
+		async (mode) => {
+			const fake = makeFakeSandbox();
+			const fetchCss = vi
+				.spyOn(globalThis, 'fetch')
+				.mockRejectedValueOnce(new Error('private upstream connection details'))
+				.mockResolvedValue(new Response(':root { --operator-brand: purple; }'));
+			try {
+				const api = createTestApi({
+					bucket,
+					userId: ACTOR,
+					compute: fakeComputeFrom(fake.instance),
+					deps: {
+						theme: { ...DEFAULT_THEME_CONFIG, notebook_css: 'https://example.com/brand.css' },
+					},
+				});
+				const response = await api.request('POST', sessionsPath(), { mode });
+				const error = await expectError(response, 503, 'SERVICE_UNAVAILABLE');
+				expect(JSON.stringify(error)).not.toContain('private upstream');
+				expect(fake.calls.startProcess).toHaveLength(0);
+				await expectOk(await api.request('POST', sessionsPath(), { mode }));
+				expect(fake.calls.startProcess).toHaveLength(1);
+				expect(fetchCss).toHaveBeenCalledTimes(2);
+			} finally {
+				fetchCss.mockRestore();
+			}
 		},
 	);
 

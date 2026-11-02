@@ -6,7 +6,9 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createIntegrationId, createSessionId } from '../../ids';
 import { bundleIntegrations } from '../integrations/bundle';
-import { prepareMarimoPresentation } from '../marimoConfig';
+import { marimoBrandDisplay, prepareMarimoPresentation } from '../marimoConfig';
+import { mergeSessionEnv } from './sandboxEnvironment';
+import { DEFAULT_THEME_CONFIG } from '../../theme';
 
 const python = process.env.MARIMO_INTEGRATION_PYTHON;
 const exec = promisify(execFile);
@@ -84,7 +86,7 @@ class Assets(HTMLParser):
         if self.in_style: self.styles.append(data)
 assets = Assets()
 assets.feed(html)
-print(json.dumps({"css": any("--hub-presentation-test" in css for css in assets.styles), "head": "hub-presentation-test" in assets.meta, "notebookHead": "notebook-head-test" in assets.meta, "cssBreakout": "css-breakout" in assets.meta, "headScript": "head-script-test" in assets.scripts}))
+print(json.dumps({"brandCss": any("--primary: light-dark(" in css for css in assets.styles), "css": any("--hub-presentation-test" in css for css in assets.styles), "head": "hub-presentation-test" in assets.meta, "notebookHead": "notebook-head-test" in assets.meta, "cssBreakout": "css-breakout" in assets.meta, "headScript": "head-script-test" in assets.scripts}))
 `;
 
 describe.runIf(Boolean(python))('native marimo presentation', () => {
@@ -112,8 +114,15 @@ describe.runIf(Boolean(python))('native marimo presentation', () => {
 				],
 				{ kind: 'session', id: createSessionId() },
 			);
-			const previous = prepareMarimoPresentation(bundle, resolve, { mode: 'app' })!;
-			const env = prepareMarimoPresentation(mode === 'restored' ? undefined : bundle, resolve, {
+			const branded =
+				mode === 'job'
+					? bundle
+					: mergeSessionEnv(
+							bundle,
+							marimoBrandDisplay({ ...DEFAULT_THEME_CONFIG, primary_color: '#7c3aed' }),
+						);
+			const previous = prepareMarimoPresentation(branded, resolve, { mode: 'app' })!;
+			const env = prepareMarimoPresentation(mode === 'restored' ? undefined : branded, resolve, {
 				mode: mode === 'restored' ? 'app' : mode,
 				restored: mode === 'restored',
 			})!;
@@ -150,8 +159,16 @@ def _():
 			});
 			expect(JSON.parse(stdout)).toEqual(
 				mode === 'restored'
-					? { css: false, head: false, notebookHead: true, cssBreakout: false, headScript: false }
+					? {
+							brandCss: false,
+							css: false,
+							head: false,
+							notebookHead: true,
+							cssBreakout: false,
+							headScript: false,
+						}
 					: {
+							brandCss: mode !== 'job',
 							css: true,
 							head: mode !== 'edit',
 							notebookHead: false,

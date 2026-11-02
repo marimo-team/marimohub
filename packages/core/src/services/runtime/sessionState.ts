@@ -81,6 +81,7 @@ export interface SessionModePolicy {
 	workspaceLoad: 'source-policy' | 'copy-only';
 	/** App sessions skip this because `marimo run` has no editor surface. */
 	injectEditorConfig: boolean;
+	injectDisplayConfig: boolean;
 	/** App sandboxes share visit assignments through the notebook pool. */
 	sharedApp: boolean;
 	/**
@@ -104,6 +105,7 @@ export const MODE_POLICY: Record<SessionMode, SessionModePolicy> = {
 		capScope: 'user',
 		persistsEdits: true,
 		workspaceLoad: 'source-policy',
+		injectDisplayConfig: true,
 		injectEditorConfig: true,
 		sharedApp: false,
 		viewerSession: 'ephemeral',
@@ -115,6 +117,7 @@ export const MODE_POLICY: Record<SessionMode, SessionModePolicy> = {
 		capScope: 'project',
 		persistsEdits: false,
 		workspaceLoad: 'copy-only',
+		injectDisplayConfig: true,
 		injectEditorConfig: false,
 		sharedApp: true,
 		viewerSession: 'shared',

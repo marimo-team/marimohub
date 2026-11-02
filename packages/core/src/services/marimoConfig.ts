@@ -1,3 +1,5 @@
+import type { ThemeConfig } from '../theme';
+import { generateThemePalette } from '../themePalette';
 import { parse, stringify } from 'smol-toml';
 import type { TomlTable, TomlValue } from 'smol-toml';
 import { isRecord } from '../internal/validation';
@@ -63,6 +65,27 @@ export const marimoNotebookDefaults: MarimoConfigContributor = () => ({
 export const marimoSharingDisabled: MarimoConfigContributor = () => ({
 	sharing: { html: false, wasm: false, molab: false },
 });
+
+const BRAND_CSS_PATH = `${XDG_CONFIG_HOME}/marimo/brand.css`;
+
+export function renderMarimoBrandCss(theme: ThemeConfig): string {
+	const palette = generateThemePalette(theme);
+	if (!palette) return '';
+	const tokens = Object.keys(palette.light).map(
+		(key) => `  --${key}: light-dark(${palette.light[key]}, ${palette.dark[key]});`,
+	);
+	// Marimo's colour tokens are not a stable public API; keep this mapping in sync with globals.css.
+	return `:root, .marimo, .dark, .marimo:is(.dark *) {\n${tokens.join('\n')}\n  --link: var(--primary);\n  --link-visited: var(--primary);\n}\n`;
+}
+
+export function marimoBrandDisplay(theme: ThemeConfig, notebookCss = ''): SessionEnv {
+	const css = [renderMarimoBrandCss(theme), notebookCss].filter(Boolean).join('\n');
+	if (!css) return {};
+	return {
+		files: [{ path: BRAND_CSS_PATH, content: css }],
+		marimoPresentation: { cssFiles: [BRAND_CSS_PATH] },
+	};
+}
 
 export function marimoConfigToSessionEnv(
 	contributors: readonly MarimoConfigContributor[],

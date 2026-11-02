@@ -192,3 +192,54 @@ describe('deployment theme configuration', () => {
 		expect(() => createFromEnv({ [variable]: value })).toThrow(variable);
 	});
 });
+
+describe('shell settings', () => {
+	it('parses JSON and optional URL settings', () => {
+		const nav_links = [{ label: 'Platform', href: '/platform', roles: ['app-user'] }];
+		const announcement = { id: '1', text: 'Maintenance', dismissible: true };
+		expect(
+			parseTheme({
+				MARIMOHUB_THEME_NAV_LINKS: JSON.stringify(nav_links),
+				MARIMOHUB_THEME_ANNOUNCEMENT: JSON.stringify(announcement),
+				MARIMOHUB_THEME_DOCS_URL: 'https://docs.example.com',
+				MARIMOHUB_THEME_SUPPORT_URL: '/support',
+				MARIMOHUB_THEME_NOTEBOOK_CSS: '/brand.css',
+				MARIMOHUB_APP_BASE_URL: 'https://hub.example.com',
+			}),
+		).toMatchObject({
+			nav_links,
+			announcement,
+			docs_url: 'https://docs.example.com',
+			support_url: '/support',
+			notebook_css: '/brand.css',
+		});
+	});
+	it.each(['MARIMOHUB_THEME_NAV_LINKS', 'MARIMOHUB_THEME_ANNOUNCEMENT'] as const)(
+		'identifies malformed JSON in %s',
+		(variable) => {
+			expect(() => parseTheme({ [variable]: '{' })).toThrow(variable);
+			expect(() => parseTheme({ [variable]: 'null' })).toThrow(ConfigError);
+		},
+	);
+	it('rejects excessive links and insecure URLs', () => {
+		expect(() =>
+			parseTheme({
+				MARIMOHUB_THEME_NAV_LINKS: JSON.stringify(
+					Array.from({ length: 13 }, () => ({ label: 'Link', href: '/ok' })),
+				),
+			}),
+		).toThrow('MARIMOHUB_THEME_NAV_LINKS');
+		expect(() => parseTheme({ MARIMOHUB_THEME_SUPPORT_URL: 'http://example.com' })).toThrow(
+			'MARIMOHUB_THEME_SUPPORT_URL',
+		);
+	});
+});
+
+it('requires a configured origin for root-relative CSS', () => {
+	expect(() => parseTheme({ MARIMOHUB_THEME_NOTEBOOK_CSS: '/brand.css' })).toThrow(
+		'MARIMOHUB_APP_BASE_URL',
+	);
+	expect(
+		parseTheme({ MARIMOHUB_THEME_NOTEBOOK_CSS: 'https://cdn.example.com/brand.css' }).notebook_css,
+	).toBe('https://cdn.example.com/brand.css');
+});

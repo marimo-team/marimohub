@@ -1,11 +1,11 @@
 ---
-description: Configure the hub name, logos, favicon, and automatic light and dark palettes.
+description: Configure branding, navigation, announcements, and notebook colors.
 ---
 
 # Customize the hub theme
 
 Customize the hub, sign-in screen, navigation, and browser titles without a frontend rebuild.
-Notebook editors and published notebooks keep their own color palettes and receive the selected light or dark mode.
+Notebook editors, served apps, and previews inherit deployment colors and the selected light or dark mode.
 All theme configuration is public before sign-in.
 
 ## Set a primary color
@@ -125,6 +125,65 @@ The backend serves `/manifest.webmanifest` and `/apple-touch-icon.png` before si
 The latter redirects to the selected Apple touch icon or fallback.
 For deployments under a URL prefix, include that prefix on both endpoints.
 Reverse proxies must forward both endpoints to the backend.
+
+## Shell links and announcements
+
+The hub and app headers share a Help menu and announcement banner.
+Configure their contents with these variables:
+
+```dotenv
+MARIMOHUB_THEME_NAV_LINKS='[{"label":"Platform","href":"https://platform.example.com"},{"label":"Data catalog","href":"/catalog","roles":["editor","manager","admin"]},{"label":"Status","href":"https://status.example.com","placement":"help"}]'
+MARIMOHUB_THEME_DOCS_URL="https://docs.example.com"
+MARIMOHUB_THEME_SUPPORT_URL="https://support.example.com"
+MARIMOHUB_THEME_ANNOUNCEMENT='{"id":"maintenance-1","text":"Maintenance Friday, 18:00–19:00 UTC","href":"/status","level":"warning","dismissible":true}'
+```
+
+Navigation accepts up to 12 links. Each link requires a `label` (1–40 characters) and `href`.
+Links use the [asset URL rules](#host-the-assets): HTTPS or root-relative paths, with an explicit deployment prefix.
+
+| Optional field | Behavior                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `placement`    | `header` (default) or `help`.                                                                                       |
+| `external`     | Open a new tab when `true`. Defaults to `true` for HTTPS and `false` for root-relative paths.                       |
+| `roles`        | Show the link only for listed roles: `app-user`, `viewer`, `editor`, `manager`, or `admin`. An empty list hides it. |
+
+Project pages use the project role. Other pages use the deployment default role.
+App-only users use `app-user`; super admins use `admin`.
+Role-specific links stay hidden until the role is known.
+**All links are public configuration.** Role filters control visibility, not access to the destination.
+
+Help includes Documentation, optional Get help and custom links, and About with version and source links.
+`MARIMOHUB_THEME_DOCS_URL` replaces the Help documentation target. Feature-specific documentation links keep their upstream targets.
+Without this override, Help links to the upstream documentation.
+
+Announcements require an `id` (1–100 characters) and `text` (1–280 characters).
+Optional fields are `href`, `level` (`info` by default, or `warning`), and `dismissible` (`false` by default).
+Dismissal persists in browser storage by ID. Change the ID to show a dismissed announcement again.
+Without browser storage, dismissal lasts until the banner reloads.
+
+Restart the server and reload the page to apply changes.
+
+## Colors in notebooks and apps
+
+New editor, app, and preview sessions inherit the hub palette. Existing sessions need a restart to apply changes.
+Without color overrides or notebook CSS, marimo keeps its native palette. Scheduled jobs do not receive deployment CSS.
+
+For additional styles, configure a public stylesheet:
+
+```dotenv
+MARIMOHUB_THEME_NOTEBOOK_CSS="https://hub.example.com/brand/notebook.css"
+```
+
+The API downloads the stylesheet and appends it after the palette CSS.
+Root-relative paths require `MARIMOHUB_APP_BASE_URL` and resolve against its origin.
+The file must contain UTF-8 text of at most 64 KiB. The download has a five-second timeout and rejects redirects.
+If the download fails, the session does not start.
+The API caches CSS for one minute, then revalidates it with its ETag when available.
+Use absolute asset URLs in CSS: marimo serves the copied stylesheet from the notebook origin.
+
+The palette sets marimo's `--primary`, `--secondary`, `--link`, and related surface variables.
+Custom CSS, workspace configuration, and chart libraries can override these colors.
+See the [marimo theming guide](https://docs.marimo.io/guides/configuration/theming/) for version-specific variables.
 
 ## Cloudflare Workers
 

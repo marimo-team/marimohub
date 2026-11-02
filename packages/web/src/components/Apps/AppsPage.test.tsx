@@ -1,3 +1,4 @@
+import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { Suspense } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
@@ -36,6 +37,7 @@ function setup(
 	items = [app],
 	options: Partial<Parameters<typeof makeFetch>[0]> & {
 		colorMode?: Theme;
+		branding?: Partial<ThemeConfig>;
 		appStatus?: number;
 		appReady?: Promise<void>;
 		client?: QueryClient;
@@ -126,13 +128,28 @@ function setup(
 			client,
 			route: entry,
 			toaster: false,
-			branding: { color_mode: options.colorMode ?? 'user' },
+			branding: { color_mode: options.colorMode ?? 'user', ...options.branding },
 		},
 	);
 	return { ...result, fetch, existing };
 }
 
 describe('stakeholder apps', () => {
+	it('shows the announcement and support menu in the consumer shell', async () => {
+		setup(app.url, [app], {
+			branding: {
+				support_url: 'https://help.example.com',
+				announcement: { id: 'release', text: 'New release' },
+			},
+		});
+		expect(await screen.findByText('New release')).toBeInTheDocument();
+		await userEvent.click(screen.getByRole('button', { name: 'Help' }));
+		expect(screen.getByRole('menuitem', { name: 'Get help' })).toHaveAttribute(
+			'href',
+			'https://help.example.com',
+		);
+	});
+
 	it.each([false, true])(
 		'shows the preview link only with the integration: %s',
 		async (enabled) => {

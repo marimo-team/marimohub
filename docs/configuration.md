@@ -22,6 +22,11 @@ Deployment branding for the hub UI. All values are public. See the [theming guid
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
+| `MARIMOHUB_THEME_NAV_LINKS` | JSON array of up to 12 {label, href, placement?, external?, roles?} links. Roles control visibility only; all links are public. | — | — | `[{"label":"Platform","href":"https://example.com","placement":"header"}]` |
+| `MARIMOHUB_THEME_DOCS_URL` | HTTPS URL or root-relative path for the help menu documentation link. | — | — | `https://docs.example.com` |
+| `MARIMOHUB_THEME_SUPPORT_URL` | HTTPS URL or root-relative path for Get help in the hub and app shells. | — | — | `https://support.example.com` |
+| `MARIMOHUB_THEME_ANNOUNCEMENT` | JSON {id, text, href?, level?, dismissible?}. Change id to show a previously dismissed banner again. | — | — | `{"id":"maintenance-1","text":"Maintenance Friday","level":"info","dismissible":true}` |
+| `MARIMOHUB_THEME_NOTEBOOK_CSS` | Public stylesheet for editors, apps, and previews; maximum 64 KiB. Accepts HTTPS URLs or root-relative paths with `MARIMOHUB_APP_BASE_URL`. See the [theming guide](./theming.md#colors-in-notebooks-and-apps). | — | — | `https://hub.example.com/brand/notebook.css` |
 | `MARIMOHUB_THEME_COLOR_MODE` | `user` lets each user choose and uses saved or operating-system preferences. `light` or `dark` forces that mode for all roles and hides the theme toggle. | — | `user` | `light` |
 | `MARIMOHUB_THEME_NAME` | Display name, browser-title suffix, and installed app name. | — | `marimohub` | `Research Hub` |
 | `MARIMOHUB_THEME_FAVICON` | SVG, PNG, or ICO favicon. Use an HTTPS URL or root-relative same-origin path. Falls back to the 192px app icon, then 512px, then the built-in favicon. | — | — | `https://hub.example.com/brand/favicon.svg` |
@@ -483,8 +488,8 @@ Server-wide settings; no backend selector.
 | `MARIMOHUB_WORKSPACE_MAX_BYTES` | Maximum total bytes in the mutable workspace, including existing source files. | — | `104857600` | — |
 | `MARIMOHUB_WORKSPACE_MAX_FILES` | Maximum workspace files. Directory markers do not count. | — | `1000` | — |
 | `MARIMOHUB_PERSIST_WORKSPACE` | Which sandbox working-dir files survive a session (source \| workspace). `source` persists only the source files: the notebook entrypoint (`notebook.py` unless imported with a different entry file) and `pyproject.toml`. In editor sessions that save edits, notebooks imported from a folder always persist their full workspace. `workspace` also captures runtime files (e.g. generated data) into the notebook workspace on teardown and restores them on the next session. This includes hidden files such as `.env` and `.gitignore`, `.git/`, and `__marimo__/`. It excludes regenerable caches such as `.venv/`, `__pycache__/`, `node_modules/`, and `.pytest_cache/`. Workspace capture also skips any directory that contains a regular `CACHEDIR.TAG` file, before size limits apply; in `workspace` mode, previously stored copies of such a directory are removed on the next capture, and a `CACHEDIR.TAG` at the working-dir root removes every previously stored workspace file. `source` mode is unaffected. Any project member with read access can read the captured files, and every later session restores them. | — | `source` | `workspace` |
-| `MARIMOHUB_VERSION` | Build version shown in the UI footer, `GET /api/v1/version`, and boot events. Sets the default `service.version` telemetry attribute. Release artifacts include this value. | — | `dev` | `a1b2c3d` |
-| `MARIMOHUB_IMAGE` | Fully-qualified Docker image reference (`repo:tag`) the deployment runs, shown in the UI footer. Baked into the image at build time. | — | — | `ghcr.io/marimo-team/marimohub:a1b2c3d` |
+| `MARIMOHUB_VERSION` | Build version shown in Help → About, `GET /api/v1/version`, and boot events. Sets the default `service.version` telemetry attribute. Release artifacts include this value. | — | `dev` | `a1b2c3d` |
+| `MARIMOHUB_IMAGE` | Fully-qualified Docker image reference (`repo:tag`) the deployment runs, shown in Admin → Settings. Baked into the image at build time. | — | — | `ghcr.io/marimo-team/marimohub:a1b2c3d` |
 
 ## MCP
 
