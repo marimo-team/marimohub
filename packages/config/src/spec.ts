@@ -2392,9 +2392,27 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 		],
 	},
 	{
+		name: 'Support',
+		description: 'Configure how users report problems. See the [support guide](./support.md).',
+		backends: [
+			{
+				name: 'Reports',
+				vars: [
+					{
+						id: 'MARIMOHUB_SUPPORT_MODE',
+						name: 'Support reports',
+						description:
+							'Report delivery: `notifier`, `url`, or `off`. Defaults to the first available mode in that order. See [Support](./support.md) for destination requirements.',
+						example: 'notifier',
+					},
+				],
+			},
+		],
+	},
+	{
 		name: 'Notifications',
 		description:
-			'Outbound notifications support several backends at the same time. `MARIMOHUB_NOTIFY_BACKENDS` is a comma-separated list. The hub sends notifications after it stores the related change. Delivery failures do not change the API response. See the [notifications guide](./notifications.md) for delivery and security details.',
+			'`MARIMOHUB_NOTIFY_BACKENDS` selects one or more outbound notification backends. Membership and session changes succeed independently of delivery. Support reports wait for delivery. See [Notifications](./notifications.md).',
 		backends: [
 			{
 				name: 'Project alerts',
@@ -2426,7 +2444,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_NOTIFY_KINDS',
 						name: 'Notification kinds',
 						description:
-							'Default comma-separated allowlist for all notification backends. A blank value enables `member.invited`, `member.added`, and `session.takeover`. Set `none` to disable all kinds, including per-backend overrides. An unknown kind causes a startup error.',
+							'Default comma-separated allowlist for all notification backends. A blank value enables `member.invited`, `member.added`, `session.takeover`, and `support.request`. Set `none` to disable all kinds, including per-backend overrides. An unknown kind causes a startup error.',
 						example: 'member.invited,member.added',
 					},
 					{

@@ -258,7 +258,12 @@ describe('NotificationRouter', () => {
 	});
 
 	it('uses the registry as the notification-kind allowlist', () => {
-		expect(NOTIFICATION_KINDS).toEqual(['member.invited', 'member.added', 'session.takeover']);
+		expect(NOTIFICATION_KINDS).toEqual([
+			'support.request',
+			'member.invited',
+			'member.added',
+			'session.takeover',
+		]);
 		expect(PROJECT_ALERT_KINDS).toEqual([
 			'member.invited',
 			'member.added',

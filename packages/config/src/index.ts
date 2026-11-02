@@ -90,6 +90,7 @@ import { integrationProbePolicy, integrationsEnabled, makeIntegrations } from '.
 import { createDuckDBHttpSessionFactory } from './duckdbHttpBroker';
 import { createGuardedHostResolver } from './integrationProbe';
 import { makeNotifier } from './notifications';
+import { supportMode } from './support';
 import { makeProjectAlerts } from './projectAlerts';
 import { makeResourceSecurity, validateResourceSecurityEnv } from './resourceSecurity';
 import { makeSourceControl } from './sourceControl';
@@ -770,6 +771,7 @@ export function createFromEnv(
 				)
 			: undefined,
 		theme,
+		supportMode: supportMode(env, theme.support_url),
 		projectNotebookTarget: parseEnumOr(
 			env,
 			'MARIMOHUB_PROJECT_NOTEBOOK_TARGET',

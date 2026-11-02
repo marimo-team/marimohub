@@ -14,7 +14,7 @@ function notificationDeps(overrides: Partial<ApiDeps>): ApiDeps {
 }
 
 const PERSONAL_TAKEOVER_NOTIFICATION: Extract<Notification, { kind: 'session.takeover' }> = {
-	...(BROADCAST_NOTIFICATION_FIXTURE as Extract<Notification, { kind: 'session.takeover' }>),
+	...BROADCAST_NOTIFICATION_FIXTURE,
 	audience: 'personal',
 	title: 'Your editor session was taken over',
 	body: 'Owner took over Revenue in Forecasts.',

@@ -109,6 +109,7 @@ app.openapi(capabilitiesRoute, (c) => {
 	const deps = c.get('deps');
 	const previewReader = deps.sourceControl?.getReader('github');
 	return ok(c, {
+		support: { mode: deps.supportMode ?? 'off' },
 		project_notebook_target: deps.projectNotebookTarget ?? 'notebook',
 		workspace_limits: {
 			single_put_max_bytes: Math.min(

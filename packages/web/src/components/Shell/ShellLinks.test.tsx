@@ -72,6 +72,7 @@ it.each(['app-user', 'viewer', 'editor', 'manager', 'admin'] as const)(
 			'Documentation',
 			'Get help',
 			'Support portal',
+			'Report a problem',
 			'About marimohub',
 		]);
 		expect(screen.getByRole('menuitem', { name: 'Documentation' })).toHaveAttribute(

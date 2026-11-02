@@ -710,6 +710,8 @@ export class AuthorizationService {
 	): AuthorizationDecision {
 		const allowed = ((): boolean => {
 			switch (action) {
+				case 'support.request':
+					return true;
 				case 'project.create':
 					return canCreateProject(subject, {
 						...this.policy,

@@ -1,3 +1,4 @@
+import { ReportProblemAction } from '@/components/Support/ReportProblemDialog';
 import { Component } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
 import { Button } from './Button';
@@ -48,6 +49,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 						<Button variant="default" className="mt-2" onPress={this.handleRetry}>
 							Try again
 						</Button>
+						<ReportProblemAction error={this.state.error?.message} />
 					</div>
 				</div>
 			);

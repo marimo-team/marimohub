@@ -6052,6 +6052,7 @@ components:
                   items:
                     type: string
                     enum:
+                      - support.request
                       - project.create
                       - admin.access
                       - org-integration.manage

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { SupportDiagnosticsSchema, SupportRequestSchema } from './support';
+import type { SupportDiagnostics } from './support';
 import { ASSIGNABLE_ROLES, ROLES } from './constants';
 import type {
 	AlertDestinationId,
@@ -424,6 +426,24 @@ function appFailureContent(
 }
 
 export const NOTIFICATION_KIND_REGISTRY = {
+	'support.request': {
+		severity: 'info',
+		dataSchema: SupportDiagnosticsSchema.extend({ message: SupportRequestSchema.shape.message }),
+		render: {
+			broadcast: (input: {
+				diagnostics: SupportDiagnostics;
+				message: string;
+				requestId: string;
+			}) => ({
+				title: 'Support request',
+				body: `${input.message}\n\n${JSON.stringify(input.diagnostics, null, 2)}`,
+				recipients: [],
+				context: { reporter_id: input.diagnostics.reporter.id },
+				data: { ...input.diagnostics, message: input.message },
+				dedupeKey: `support.request:${input.requestId}:broadcast`,
+			}),
+		},
+	},
 	'member.invited': {
 		severity: 'info',
 		dataSchema: MemberInvitedDataSchema,
@@ -760,6 +780,7 @@ export const NOTIFICATION_KIND_REGISTRY = {
 
 export type NotificationKind = keyof typeof NOTIFICATION_KIND_REGISTRY;
 export const GLOBAL_NOTIFICATION_KINDS = Object.freeze([
+	'support.request',
 	'member.invited',
 	'member.added',
 	'session.takeover',

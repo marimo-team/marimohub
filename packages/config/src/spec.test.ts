@@ -26,6 +26,7 @@ const WIRING_SOURCES = [
 	fileURLToPath(new URL('./postgresFeatures.ts', import.meta.url)),
 	fileURLToPath(new URL('./experiments.ts', import.meta.url)),
 	fileURLToPath(new URL('./notifications.ts', import.meta.url)),
+	fileURLToPath(new URL('./support.ts', import.meta.url)),
 	fileURLToPath(new URL('./projectAlerts.ts', import.meta.url)),
 	fileURLToPath(new URL('./resourceSecurity.ts', import.meta.url)),
 	fileURLToPath(new URL('./sourceControl.ts', import.meta.url)),

@@ -15,6 +15,26 @@ afterEach(() => {
 });
 
 describe('SignIn OIDC errors', () => {
+	it('links to configured support before authentication', () => {
+		renderWithClient(<SignIn />, {
+			route: '/?auth_error=policy_denied',
+			branding: { support_url: 'https://support.example.com' },
+		});
+		expect(screen.getByRole('link', { name: 'Contact your administrator' })).toHaveAttribute(
+			'href',
+			'https://support.example.com',
+		);
+		expect(screen.getByRole('link', { name: 'Contact your administrator' })).toHaveAttribute(
+			'target',
+			'_blank',
+		);
+	});
+	it('keeps root-relative support links in the current tab', () => {
+		renderWithClient(<SignIn />, { route: '/', branding: { support_url: '/help' } });
+		const link = screen.getByRole('link', { name: 'Contact your administrator' });
+		expect(link).toHaveAttribute('href', '/help');
+		expect(link).not.toHaveAttribute('target');
+	});
 	it.each([
 		[
 			'domain_not_allowed',
