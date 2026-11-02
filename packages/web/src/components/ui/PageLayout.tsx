@@ -1,45 +1,93 @@
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
-/**
- * Centered, scrollable page body shared by the list views. Wraps content in the
- * standard max-width column.
- */
+export type PageWidth = 'normal' | 'wide' | 'full';
+export type PageScroll = 'page' | 'panels';
+export type MobilePageActions = 'stack' | 'inline';
+
+const PAGE_WIDTHS: Record<PageWidth, string> = {
+	normal: 'max-w-3xl',
+	wide: 'max-w-7xl',
+	full: 'max-w-none',
+};
+
 export function PageContainer({
 	children,
+	width = 'normal',
+	scroll = 'page',
 	className,
 	contentClassName,
 }: {
 	children: ReactNode;
+	width?: PageWidth;
+	scroll?: PageScroll;
 	className?: string;
 	contentClassName?: string;
 }) {
 	return (
 		<div
 			className={cn(
-				'flex flex-1 items-start justify-center overflow-y-auto p-8 max-md:p-3',
+				'flex min-h-0 min-w-0 flex-1 items-start justify-center px-8 pb-8 max-md:px-3 max-md:pb-3',
+				scroll === 'page'
+					? 'overflow-y-auto'
+					: 'overflow-hidden pt-8 max-md:overflow-y-auto max-md:pt-3',
 				className,
 			)}
 		>
-			<div className={cn('w-full max-w-3xl pb-8 max-md:pb-5', contentClassName)}>{children}</div>
+			<div
+				className={cn(
+					'w-full min-w-0',
+					PAGE_WIDTHS[width],
+					scroll === 'page'
+						? 'pt-8 pb-8 max-md:pt-3 max-md:pb-5'
+						: 'flex h-full min-h-0 flex-col max-md:h-auto max-md:min-h-full',
+					contentClassName,
+				)}
+			>
+				{children}
+			</div>
 		</div>
 	);
 }
 
-/**
- * The title-row of a page: a left cluster (title + inline controls, passed as
- * children) and an optional right-aligned `actions` slot. Stacks on mobile.
- */
-export function PageHeader({ children, actions }: { children: ReactNode; actions?: ReactNode }) {
+export function PageHeader({
+	children,
+	actions,
+	mobileActions = 'stack',
+}: {
+	children: ReactNode;
+	actions?: ReactNode;
+	mobileActions?: MobilePageActions;
+}) {
 	return (
-		<div className="mb-6 flex items-center justify-between gap-4 max-md:flex-col max-md:items-start max-md:gap-3">
-			<div className="flex min-w-0 items-center gap-2 max-md:w-full">{children}</div>
-			{actions && <div className="shrink-0 max-md:w-full [&>*]:max-md:w-full">{actions}</div>}
+		<div
+			className={cn(
+				'mb-6 flex shrink-0 items-center justify-between gap-4 max-md:gap-3',
+				mobileActions === 'stack' ? 'max-md:flex-col' : 'flex-wrap',
+			)}
+		>
+			<div
+				className={cn(
+					'flex min-w-0 items-center gap-2',
+					mobileActions === 'stack' && 'max-md:w-full',
+				)}
+			>
+				{children}
+			</div>
+			{actions && (
+				<div
+					className={cn(
+						'shrink-0',
+						mobileActions === 'stack' && 'max-md:w-full [&>*]:max-md:w-full',
+					)}
+				>
+					{actions}
+				</div>
+			)}
 		</div>
 	);
 }
 
-/** The bordered card that wraps a vertical list of rows. */
 export function ListContainer({ children }: { children: ReactNode }) {
 	return (
 		<div className="flex flex-col overflow-hidden rounded-xl border bg-card shadow-xs">

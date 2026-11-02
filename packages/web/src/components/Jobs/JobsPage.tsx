@@ -1,4 +1,3 @@
-import { PageTitle } from '@/components/ui/PageTitle';
 import { canEditProject } from '@/lib/roles';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, CalendarClock, Pencil, Play, Plus, Trash2 } from 'lucide-react';
@@ -15,7 +14,7 @@ import {
 	useTriggerJobRun,
 	useUpdateJob,
 } from '@/api/hooks';
-import { Button, Chip, ConfirmDialog, EmptyState, IconLink, Skeleton } from '@/components/ui';
+import { Button, ConfirmDialog, EmptyState, IconLink, Page, Skeleton } from '@/components/ui';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { toastError } from '@/lib/errors';
@@ -134,6 +133,7 @@ function useJobsPageModel() {
 
 	return {
 		jobsAvailable,
+		projectName: project.name,
 		projectId,
 		notebookId,
 		title,
@@ -158,19 +158,19 @@ function useJobsPageModel() {
 	};
 }
 
-/**
- * A notebook's jobs: definitions on the left, the selected job's run history
- * and a selected run's captured output on the right. Full-screen like the
- * editor and snapshot pages; never starts a session.
- */
 export function JobsPage() {
 	const m = useJobsPageModel();
 	const { selectedJob, selectedRun } = m;
 
 	return (
-		<div className="flex h-dvh flex-col">
-			<PageTitle>{`${m.title} · Jobs`}</PageTitle>
-			<header className="flex h-10 min-h-10 items-center gap-2 border-b bg-background px-3 max-md:h-11 max-md:min-h-11">
+		<Page
+			title="Jobs"
+			subtitle={m.title}
+			context={m.projectName}
+			documentTitle={`${m.title} · Jobs`}
+			width="wide"
+			scroll="panels"
+			leading={
 				<IconLink
 					to={`/projects/${m.projectId}`}
 					label="Back to project"
@@ -179,22 +179,17 @@ export function JobsPage() {
 				>
 					<ArrowLeft className="size-4" />
 				</IconLink>
-				<div className="h-5 w-px bg-border" />
-				<span className="truncate text-[13px] font-medium">{m.title}</span>
-				<Chip>
-					<CalendarClock className="size-3" />
-					Jobs
-				</Chip>
-				<div className="ml-auto flex items-center gap-2">
-					{m.canEdit && m.jobsAvailable !== false && (
-						<Button variant="primary" size="sm" onPress={m.createDialog.open}>
-							<Plus className="size-4" />
-							New job
-						</Button>
-					)}
-				</div>
-			</header>
-
+			}
+			actions={
+				m.canEdit &&
+				m.jobsAvailable !== false && (
+					<Button variant="primary" onPress={m.createDialog.open}>
+						<Plus className="size-4" />
+						New job
+					</Button>
+				)
+			}
+		>
 			{m.jobsAvailable === false ? (
 				<EmptyState
 					icon={<CalendarClock className="size-6" />}
@@ -254,12 +249,15 @@ export function JobsPage() {
 						)}
 					</aside>
 
-					<main className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+					<section
+						aria-label="Job details"
+						className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-4"
+					>
 						{selectedJob ? (
 							<>
 								<div className="flex flex-wrap items-start gap-3">
 									<div className="flex min-w-0 flex-1 flex-col gap-1">
-										<h1 className="truncate text-base font-semibold">{selectedJob.name}</h1>
+										<h2 className="truncate text-base font-semibold">{selectedJob.name}</h2>
 										<p className="text-xs text-muted-foreground">
 											{describeSchedule(selectedJob)}
 											{selectedJob.timeout_seconds !== undefined &&
@@ -348,7 +346,7 @@ export function JobsPage() {
 								<p className="text-sm text-muted-foreground">Select a job to see its runs.</p>
 							)
 						)}
-					</main>
+					</section>
 				</div>
 			)}
 
@@ -388,6 +386,6 @@ export function JobsPage() {
 				isPending={m.cancelPending}
 				onConfirm={() => void m.confirmCancel()}
 			/>
-		</div>
+		</Page>
 	);
 }

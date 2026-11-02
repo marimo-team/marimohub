@@ -199,7 +199,7 @@ export async function renderProject(route = `/projects/${PID}`) {
 		<Routes>
 			<Route path="/projects/:pid" element={<Project />} />
 			<Route path="/projects/:pid/notebooks/:nid/snapshot" element={<div>snapshot page</div>} />
-			<Route path="/" element={<div>home</div>} />
+			<Route path="/projects" element={<div>home</div>} />
 		</Routes>,
 		{ route, suspenseFallback: <div>loading</div> },
 	);

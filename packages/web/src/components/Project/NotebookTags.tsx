@@ -4,7 +4,15 @@ import { cn } from '@/lib/utils';
 
 const tagClassName = 'rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground';
 
-export function NotebookTags({ tags, title }: { tags: string[]; title: string }) {
+export function NotebookTags({
+	tags,
+	title,
+	className,
+}: {
+	tags: string[];
+	title: string;
+	className?: string;
+}) {
 	const occurrences = new Map<string, number>();
 	const keyedTags = tags.map((tag) => {
 		const occurrence = occurrences.get(tag) ?? 0;
@@ -13,7 +21,7 @@ export function NotebookTags({ tags, title }: { tags: string[]; title: string })
 	});
 
 	return (
-		<div className="flex shrink-0 items-center gap-1 md:w-44">
+		<div className={cn('flex shrink-0 items-center gap-1 md:w-44', className)}>
 			{keyedTags.slice(0, 2).map(({ tag, key }) => (
 				<span
 					key={key}

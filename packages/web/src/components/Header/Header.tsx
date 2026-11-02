@@ -1,5 +1,7 @@
+import type { ReactNode } from 'react';
+import { cn } from '@/lib/utils';
 import { useBranding } from '@/context/BrandingContext';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { MenuTrigger, Button, Popover, Menu, MenuItem, Separator } from 'react-aria-components';
 import { ChevronDown, Copy, KeyRound, Moon, Plug, Puzzle, Shield, Sun } from 'lucide-react';
 import { toast } from 'sonner';
@@ -13,7 +15,7 @@ import { McpDialog } from '@/components/Account/McpDialog';
 import { ApiTokensDialog } from '@/components/Account/ApiTokensDialog';
 import { OrgIntegrationsDialog } from '@/components/Project/ProjectIntegrationsDialog';
 
-export function Header() {
+export function Header({ navigationTrigger }: { navigationTrigger?: ReactNode }) {
 	const { name } = useBranding();
 	const navigate = useNavigate();
 	const { user, signOut } = useAuth();
@@ -26,6 +28,7 @@ export function Header() {
 
 	return (
 		<header className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between border-b bg-background/85 px-4 backdrop-blur-md max-md:px-3">
+			{navigationTrigger}
 			<Link
 				to={user?.app_only ? '/apps' : '/'}
 				aria-label={`${name} home`}
@@ -34,17 +37,33 @@ export function Header() {
 				<Brand builtInWordmarkClassName="max-md:hidden" />
 			</Link>
 
-			<div className="ml-auto flex items-center gap-2">
-				{!user?.app_only ? (
-					<Link to="/apps" className="text-sm">
-						Apps
-					</Link>
+			<nav aria-label="Global" className="ml-6 flex h-full items-center gap-1 max-md:ml-2">
+				{!user?.app_only || user.can_create_projects ? (
+					<NavLink
+						to="/projects"
+						className={({ isActive }) =>
+							cn(
+								'flex min-h-11 items-center rounded-md px-3 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:px-2',
+								isActive ? 'bg-accent text-foreground' : 'text-muted-foreground',
+							)
+						}
+					>
+						Projects
+					</NavLink>
 				) : null}
-				{user?.app_only && user.can_create_projects ? (
-					<Link to="/projects" className="text-sm">
-						Create a project
-					</Link>
-				) : null}
+				<NavLink
+					to="/apps"
+					className={({ isActive }) =>
+						cn(
+							'flex min-h-11 items-center rounded-md px-3 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:px-2',
+							isActive ? 'bg-accent text-foreground' : 'text-muted-foreground',
+						)
+					}
+				>
+					Apps
+				</NavLink>
+			</nav>
+			<div className="ml-auto flex items-center gap-2 max-md:gap-1">
 				{!isThemeForced && (
 					<Button
 						onPress={toggleTheme}

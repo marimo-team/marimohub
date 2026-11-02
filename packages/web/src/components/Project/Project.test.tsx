@@ -1,12 +1,84 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { jsonError } from '@/test/render';
+import { installMatchMedia, jsonError } from '@/test/render';
 import userEvent from '@testing-library/user-event';
 import { PID, makeFetch, notebook, renderProject, stoppableSession } from './Project.testWorld';
 
 afterEach(() => localStorage.removeItem('notebook-view'));
 
 describe('notebook filters', () => {
+	it.each(['draft', 'archived', 'deleted'] as const)(
+		'keeps %s status and all tags available outside the notebook link',
+		async (status) => {
+			const user = userEvent.setup();
+			const title = 'Long notebook title for customer retention and regional growth';
+			makeFetch({
+				notebooks: [
+					{
+						...notebook(),
+						title,
+						status,
+						tags: [status, 'customer-retention-analysis', 'regional-growth', 'finance'],
+					},
+				],
+			});
+			await renderProject(`/projects/${PID}?status=${status}`);
+			const row = within(screen.getByTestId('notebook-row'));
+			expect(row.getAllByText(status)).toHaveLength(1);
+			expect(row.getByText('customer-retention-analysis')).toBeInTheDocument();
+			const tagButton = row.getByRole('button', { name: `Show all 3 tags for ${title}` });
+			expect(tagButton.closest('a')).toBeNull();
+			if (status === 'deleted')
+				expect(row.queryByRole('link', { name: title })).not.toBeInTheDocument();
+			else expect(row.getByRole('link', { name: title })).toBeInTheDocument();
+			await user.click(tagButton);
+			expect(await screen.findByText('finance')).toBeVisible();
+		},
+	);
+
+	it.each([false, true])(
+		'keeps one accessible session control in compact=%s table layouts',
+		async (compact) => {
+			installMatchMedia(compact);
+			makeFetch({ sessions: [stoppableSession()] });
+			await renderProject();
+			expect(await screen.findAllByRole('button', { name: /^Session .* — details$/ })).toHaveLength(
+				1,
+			);
+			const sessionHeader = screen.queryByRole('columnheader', { name: 'Sessions' });
+			if (compact) expect(sessionHeader).not.toBeInTheDocument();
+			else expect(sessionHeader).toBeInTheDocument();
+			expect(screen.getByRole('button', { name: 'Shut down kernel' })).toBeInTheDocument();
+		},
+	);
+
+	it('shows notebook metadata in a labeled table and preserves the gallery toggle', async () => {
+		const user = userEvent.setup();
+		makeFetch({ notebooks: [{ ...notebook(), tags: ['finance'] }] });
+		await renderProject();
+		const table = within(screen.getByRole('table', { name: 'Notebooks' }));
+		expect(table.getAllByRole('columnheader').map((header) => header.textContent)).toEqual([
+			'Notebook',
+			'Author',
+			'Updated',
+			'Actions',
+		]);
+		const row = within(table.getAllByRole('row')[1]);
+		expect(row.getByRole('link', { name: 'Forecast' })).toHaveAttribute(
+			'href',
+			`/projects/${PID}/notebooks/nb-1`,
+		);
+		expect(row.getByText('finance')).toBeInTheDocument();
+		expect(
+			row.getByRole('button', { name: 'Notebook actions for Forecast' }).closest('a'),
+		).toBeNull();
+		await user.click(screen.getByRole('button', { name: 'Gallery' }));
+		expect(screen.queryByRole('table', { name: 'Notebooks' })).not.toBeInTheDocument();
+		expect(screen.getByRole('link', { name: 'Forecast' })).toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'List' }));
+		expect(screen.getByRole('table', { name: 'Notebooks' })).toBeInTheDocument();
+	});
+
 	it.each(['viewer', 'app-user', 'editor', 'manager'] as const)(
 		'only advertises folder import to editors and managers: %s',
 		async (role) => {
@@ -206,18 +278,6 @@ describe('deleted notebook tombstones', () => {
 			expect(await screen.findByText('snapshot page')).toBeInTheDocument();
 		},
 	);
-});
-
-describe('environment and access', () => {
-	it('is always visible and opens the unified overview', async () => {
-		makeFetch({ capabilities: { federation: { available: false, default_enabled: false } } });
-		await renderProject();
-		const user = userEvent.setup();
-		await user.click(screen.getByRole('button', { name: 'Environment & cloud access' }));
-		expect(screen.getByRole('heading', { name: 'Environment & cloud access' })).toBeInTheDocument();
-		expect(screen.getByRole('button', { name: /Integrations/ })).toBeInTheDocument();
-		expect(screen.getByRole('button', { name: /Cloud access/ })).toBeInTheDocument();
-	});
 });
 
 describe('Project — Delete Project (type-to-confirm)', () => {

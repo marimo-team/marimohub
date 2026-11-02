@@ -736,7 +736,7 @@ export async function ensureInitialized(
 			return;
 		}
 		await services.projects.createProject(
-			{ name: 'My Projects', description: 'Default project' },
+			{ name: 'My Project', description: 'Default project' },
 			actor,
 		);
 	}

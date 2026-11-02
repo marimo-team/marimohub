@@ -288,7 +288,7 @@ async function seedWelcomeNotebook(deps: Pick<ApiDeps, 'bucket' | 'services'>): 
 
 	try {
 		const projects = await deps.services.projects.listProjects();
-		const project = projects.find(({ name }) => name === 'My Projects') ?? projects[0];
+		const project = projects.find(({ name }) => name === 'My Project') ?? projects[0];
 		if (!project) return;
 		const notebooks = await deps.services.notebooks.listNotebooks(project.id);
 		if (!notebooks.some(({ title }) => title === DEV_NOTEBOOK.title)) {

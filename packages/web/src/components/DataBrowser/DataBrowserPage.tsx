@@ -1,4 +1,3 @@
-import { PageTitle } from '@/components/ui/PageTitle';
 import { formatBytes } from '@/lib/formatBytes';
 import { canEditProject } from '@/lib/roles';
 /* oxlint-disable jsx-a11y/prefer-tag-over-role -- output cannot contain this status's paragraphs */
@@ -21,6 +20,7 @@ import {
 	Chip,
 	EmptyState,
 	IconLink,
+	Page,
 	SearchField,
 	Skeleton,
 	TextField,
@@ -288,29 +288,31 @@ export default function DataBrowserPage() {
 	} = useDataBrowserPageState();
 
 	return (
-		<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-6 max-md:overflow-y-auto max-md:p-3">
-			<PageTitle>{`Data · ${project.name}`}</PageTitle>
-			<div className="flex items-center justify-between gap-4">
-				<div className="flex min-w-0 items-center gap-2">
-					<IconLink
-						to={`/projects/${pid}`}
-						label="Back to project"
-						tooltip="Back to project"
-						variant="bordered"
-						size="md"
-					>
-						<ArrowLeft className="size-4" />
-					</IconLink>
-					<h1 className="truncate text-xl font-semibold tracking-tight">Data</h1>
-					<span className="truncate text-sm text-muted-foreground">{project.name}</span>
-				</div>
-				{available && (
+		<Page
+			title="Data"
+			context={project.name}
+			width="full"
+			scroll="panels"
+			leading={
+				<IconLink
+					to={`/projects/${pid}`}
+					label="Back to project"
+					tooltip="Back to project"
+					variant="bordered"
+					size="md"
+				>
+					<ArrowLeft className="size-4" />
+				</IconLink>
+			}
+			actions={
+				available && (
 					<Button variant="default" onPress={() => void refresh()} isDisabled={refreshing}>
 						<RefreshCw className={cn('size-4', refreshing && 'animate-spin')} />
 						Refresh
 					</Button>
-				)}
-			</div>
+				)
+			}
+		>
 			{selectedKind &&
 				[
 					supportsTableBrowse(selectedKind),
@@ -489,7 +491,7 @@ export default function DataBrowserPage() {
 					</div>
 				</div>
 			)}
-		</div>
+		</Page>
 	);
 }
 

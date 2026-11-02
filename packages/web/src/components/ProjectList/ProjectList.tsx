@@ -1,27 +1,10 @@
 import { useState } from 'react';
 import { isPathTag } from '@marimo-hub/core/tag-paths';
 import { ProjectNamespaces } from './ProjectNamespaces';
-import { PageTitle } from '@/components/ui/PageTitle';
-import { toast } from 'sonner';
-import { z } from 'zod';
 import { FolderPlus, Plus } from 'lucide-react';
-import {
-	Button,
-	EmptyState,
-	ListFilters,
-	ListResults,
-	PageContainer,
-	PageHeader,
-} from '@/components/ui';
-import {
-	FormDialog,
-	optionalText,
-	requiredText,
-	schemaValidators,
-	useAppForm,
-	useSeedOnOpen,
-} from '@/components/form';
-import { useProjectsQuery, useCreateProject } from '@/api/hooks';
+import { Button, EmptyState, ListFilters, ListResults, Page } from '@/components/ui';
+import { CreateProjectDialog } from './CreateProjectDialog';
+import { useProjectsQuery } from '@/api/hooks';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { useListFilters } from '@/hooks/useListFilters';
 import { useAuth } from '@/context/AuthContext';
@@ -30,13 +13,6 @@ const PROJECT_STATUS_FILTERS = [
 	{ value: 'active', label: 'Active' },
 	{ value: 'deleted', label: 'Deleted' },
 ] as const;
-
-const projectSchema = z.object({
-	name: requiredText('Project name'),
-	description: optionalText(),
-});
-
-const EMPTY_PROJECT = { name: '', description: '' };
 
 // Predates the namespace rename; kept so saved preferences survive.
 const GROUP_BY_NAMESPACE_KEY = 'project-group-by-tags';
@@ -63,44 +39,20 @@ export function ProjectList() {
 	// deleted projects, so the displayed results count too.
 	const { data: roster = [] } = useProjectsQuery({}, { throwOnError: false });
 	const hasNamespaces = [...roster, ...projects].some((project) => project.tags.some(isPathTag));
-	const createProject = useCreateProject();
-
-	const createForm = useAppForm({
-		defaultValues: EMPTY_PROJECT,
-		validators: schemaValidators(projectSchema),
-		onSubmit: async ({ value }) => {
-			const name = value.name.trim();
-			const description = value.description.trim();
-			try {
-				await createProject.mutateAsync({ name, description: description || name });
-				toast.success(`Created project "${name}"`);
-				createModal.close();
-			} catch {
-				return;
-			}
-		},
-	});
-	useSeedOnOpen(createForm, createModal.isOpen, EMPTY_PROJECT);
 
 	return (
-		<PageContainer>
-			<PageTitle>Projects</PageTitle>
-			<PageHeader
-				actions={
-					canCreateProjects ? (
-						<Button variant="primary" onPress={createModal.open}>
-							<Plus className="size-4" />
-							New Project
-						</Button>
-					) : null
-				}
-			>
-				<div className="flex min-w-0 flex-col gap-0.5">
-					<h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
-					<p className="text-sm text-muted-foreground">Shared workspaces for your notebooks</p>
-				</div>
-			</PageHeader>
-
+		<Page
+			title="Projects"
+			subtitle="Shared workspaces for your notebooks"
+			actions={
+				canCreateProjects ? (
+					<Button variant="primary" onPress={createModal.open}>
+						<Plus className="size-4" />
+						New Project
+					</Button>
+				) : null
+			}
+		>
 			<ListFilters
 				label="Filter projects"
 				itemName="project"
@@ -183,23 +135,8 @@ export function ProjectList() {
 			</ListResults>
 
 			{canCreateProjects ? (
-				<FormDialog
-					form={createForm}
-					isPending={createProject.isPending}
-					isOpen={createModal.isOpen}
-					onClose={createModal.close}
-					title="Create New Project"
-					submitLabel="Create"
-					pendingLabel="Creating..."
-				>
-					<createForm.AppField name="name">
-						{(f) => <f.TextField label="Project Name" placeholder="My Analysis" autoFocus />}
-					</createForm.AppField>
-					<createForm.AppField name="description">
-						{(f) => <f.TextField label="Description" placeholder="Optional description" />}
-					</createForm.AppField>
-				</FormDialog>
+				<CreateProjectDialog isOpen={createModal.isOpen} onClose={createModal.close} />
 			) : null}
-		</PageContainer>
+		</Page>
 	);
 }

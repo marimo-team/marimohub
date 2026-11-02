@@ -11,39 +11,6 @@ import {
 	runningSession,
 } from './Project.testWorld';
 
-describe('Project — cloud access', () => {
-	it.each([
-		['Disabled', { enabled: false, target: 'prod' }, 'Federated cloud access disabled'],
-		[/Use deployment default/, null, 'Federated cloud access uses deployment default (disabled)'],
-	] as const)(
-		'saves %s as the project federation override',
-		async (choice, federation, message) => {
-			const user = userEvent.setup();
-			const toastSuccess = vi.spyOn(toast, 'success');
-			const calls = makeFetch({
-				project: {
-					federation: { enabled: true, target: 'prod' },
-					federation_effective: { enabled: true, source: 'project' },
-				},
-				capabilities: {
-					federation: { available: true, default_enabled: false },
-					jobs: { available: true },
-				},
-			});
-			await renderProject();
-
-			await user.click(screen.getByRole('button', { name: 'Environment & cloud access' }));
-			await user.click(await screen.findByRole('button', { name: /Cloud access/ }));
-			await user.click(screen.getByRole('radio', { name: choice }));
-			await user.click(screen.getByRole('button', { name: 'Save' }));
-
-			await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(message));
-			const patch = calls.find((call) => call.method === 'PATCH' && call.url.endsWith('/proj-x'));
-			expect(patch?.body).toEqual({ federation });
-		},
-	);
-});
-
 describe('Project — Notebook Actions: configuration', () => {
 	it('groups related notebook actions with separators', async () => {
 		const user = userEvent.setup();

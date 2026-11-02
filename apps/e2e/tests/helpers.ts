@@ -16,8 +16,8 @@ export function notebookRow(page: Page, name: string): Locator {
 }
 
 export async function createProject(page: Page, name: string, description?: string): Promise<void> {
-	await page.goto('/');
-	await page.getByRole('button', { name: 'New Project' }).click();
+	await page.goto('/projects');
+	await page.getByRole('main').getByRole('button', { name: 'New Project' }).click();
 	await page.getByLabel('Project Name').fill(name);
 	if (description) await page.getByLabel('Description').fill(description);
 	// `exact` so we hit the dialog submit, not the empty-state "Create your first…".
@@ -26,7 +26,7 @@ export async function createProject(page: Page, name: string, description?: stri
 }
 
 export async function openProject(page: Page, name: string): Promise<void> {
-	await page.goto('/');
+	await page.goto('/projects');
 	await projectRow(page, name).click();
 	await expect(page.getByRole('heading', { name })).toBeVisible();
 }

@@ -7,6 +7,7 @@ import { Skeleton } from './Skeleton';
 
 interface ListResultsProps {
 	gallery?: boolean;
+	contained?: boolean;
 	children: ReactNode;
 	count: number;
 	emptyState: ReactNode;
@@ -24,6 +25,7 @@ const GALLERY_CLASSES = 'grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3';
 export function ListResults({
 	children,
 	gallery = false,
+	contained = true,
 	count,
 	emptyState,
 	isFetching,
@@ -33,7 +35,9 @@ export function ListResults({
 	onReset,
 	resultsId,
 }: ListResultsProps) {
-	let content: ReactNode = gallery ? (
+	let content: ReactNode = !contained ? (
+		children
+	) : gallery ? (
 		<div className={GALLERY_CLASSES}>{children}</div>
 	) : (
 		<ListContainer>{children}</ListContainer>

@@ -91,6 +91,36 @@ export function ProjectEnvironmentDialog({
 	);
 }
 
+export function ProjectCloudAccessDialog({
+	isOpen,
+	onClose,
+	project,
+	cloudAccessLoading,
+	cloudAccessAvailable,
+	cloudAccessDefaultEnabled,
+	onSaveCloudAccess,
+	isPending = false,
+}: Omit<ProjectEnvironmentDialogProps, 'integrationsAvailable'>) {
+	const federation = resolveCloudAccess(project, cloudAccessAvailable, cloudAccessDefaultEnabled);
+	return (
+		<DialogModal isOpen={isOpen} onClose={onClose} title="Cloud access" width="lg">
+			{cloudAccessLoading ? (
+				<output>Loading cloud access…</output>
+			) : (
+				<CloudAccessPanel
+					isOpen={isOpen}
+					project={project}
+					federation={federation}
+					available={cloudAccessAvailable && federation.source !== 'unavailable'}
+					defaultEnabled={cloudAccessDefaultEnabled}
+					onSave={onSaveCloudAccess}
+					isPending={isPending}
+				/>
+			)}
+		</DialogModal>
+	);
+}
+
 function resolveCloudAccess(
 	project: Pick<ProjectDetail, 'federation' | 'federation_effective'>,
 	available: boolean,
@@ -155,7 +185,7 @@ function CloudAccessPanel({
 	federation: EffectiveFederation;
 	available: boolean;
 	defaultEnabled: boolean;
-	onBack: () => void;
+	onBack?: () => void;
 	onSave: (setting: CloudAccessSetting) => Promise<void>;
 	isPending: boolean;
 }) {
@@ -178,14 +208,16 @@ function CloudAccessPanel({
 	return (
 		<div className="flex flex-col gap-4 text-sm">
 			<div className="flex items-center gap-3">
-				<button
-					type="button"
-					className="flex items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-					onClick={onBack}
-				>
-					<ArrowLeft className="size-3.5" aria-hidden />
-					Back
-				</button>
+				{onBack && (
+					<button
+						type="button"
+						className="flex items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+						onClick={onBack}
+					>
+						<ArrowLeft className="size-3.5" aria-hidden />
+						Back
+					</button>
+				)}
 				<h3 className="font-semibold">Federated cloud access</h3>
 			</div>
 

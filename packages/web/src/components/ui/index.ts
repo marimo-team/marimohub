@@ -27,6 +27,9 @@ export { ListFilters } from './ListFilters';
 
 export { ListResults } from './ListResults';
 
+export { DataTable } from './DataTable';
+export type { DataTableProps, DataTableColumn } from './DataTable';
+
 export { ComboBox } from './ComboBox';
 export type { ComboBoxProps, ComboBoxOption } from './ComboBox';
 
@@ -43,6 +46,8 @@ export { EmptyState } from './EmptyState';
 export type { EmptyStateProps } from './EmptyState';
 
 export { PageContainer, PageHeader, ListContainer } from './PageLayout';
+export { Page } from './Page';
+export type { PageProps } from './Page';
 
 export { StatusDot } from './StatusDot';
 export type { StatusDotProps } from './StatusDot';

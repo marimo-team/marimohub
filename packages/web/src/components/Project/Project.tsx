@@ -1,7 +1,6 @@
 import { TagFieldValue } from '@/lib/tagFieldValue';
 import { isPathTag } from '@marimo-hub/core/tag-paths';
 import { hasNotebookPreviews } from '@/api/previews';
-import { PageTitle } from '@/components/ui/PageTitle';
 import { useProjectThumbnails } from '@/api/thumbnails';
 import { Thumbnail } from '@/components/Notebook/Thumbnail';
 import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
@@ -12,8 +11,6 @@ import { toast } from 'sonner';
 import { z } from 'zod';
 import {
 	AppWindow,
-	ArrowLeft,
-	Bell,
 	CalendarClock,
 	Camera,
 	ChevronDown,
@@ -34,29 +31,22 @@ import {
 	Plus,
 	Power,
 	RefreshCw,
-	Settings2,
 	Trash2,
 	Upload,
-	Users,
 	X,
 } from 'lucide-react';
 import {
 	Button,
-	Chip,
 	DropdownMenu,
 	IconButton,
-	IconLink,
 	LinkButton,
-	RowLink,
 	ConfirmDialog,
 	EmptyState,
 	ListFilters,
 	ListResults,
-	PageContainer,
-	PageHeader,
+	Page,
 	SessionStatusDot,
 	TagField,
-	UserLabel,
 } from '@/components/ui';
 import {
 	FormDialog,
@@ -88,11 +78,7 @@ import {
 } from '@/api/hooks';
 import { supportsIntegrationDataPage } from '@/lib/integrationNotebook';
 import { AppSessionIndicator } from './AppSessionIndicator';
-import { NotebookTags } from './NotebookTags';
-import { ProjectMembersDialog } from './ProjectMembersDialog';
-import type { CloudAccessSetting } from './ProjectEnvironmentDialog';
-import { ProjectEnvironmentDialog } from './ProjectEnvironmentDialog';
-import { ProjectAlertsDialog } from './ProjectAlertsDialog';
+import { NotebookCollection } from './NotebookCollection';
 import { RenameNotebookDialog } from '@/components/Notebook/RenameNotebookDialog';
 import { ChangeBaseImageDialog } from '@/components/Notebook/ChangeBaseImageDialog';
 import { baseImageOptions, DEFAULT_BASE_IMAGE } from '@/components/Notebook/baseImage';
@@ -112,13 +98,11 @@ import { VersionHistoryDialog } from '@/components/Notebook/VersionHistoryDialog
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { useListFilters } from '@/hooks/useListFilters';
-import { formatRelative } from '@/lib/time';
-import { cn } from '@/lib/utils';
 import { syncUrl } from '@/lib/links';
 import { sessionConnectionHint, sessionsByNotebook } from '@/lib/sessions';
 import { canEditProject, canManageProject } from '@/lib/roles';
 import type { DropdownMenuOption } from '@/components/ui';
-import type { NotebookEntry, ResolvedUser, Session } from '@/types';
+import type { NotebookEntry, Session } from '@/types';
 
 const ImportNotebooksDialog = lazy(() => import('./ImportNotebooksDialog'));
 const WorkspaceBrowserDialog = lazy(
@@ -170,68 +154,6 @@ function groupedMenuOptions(groups: DropdownMenuOption[][]): DropdownMenuOption[
 		else options.push({ ...group[0], separatorBefore: true }, ...group.slice(1));
 	}
 	return options;
-}
-
-interface DeletedNotebookRowProps {
-	notebook: NotebookEntry;
-	user: ResolvedUser | undefined;
-	usersLoading: boolean;
-	onAction: (key: string) => void;
-}
-
-function DeletedNotebookRow({ notebook, user, usersLoading, onAction }: DeletedNotebookRowProps) {
-	return (
-		<div
-			data-testid="notebook-row"
-			className="col-span-full flex items-center border-b border-l-2 border-l-transparent bg-muted/20 last:border-b-0"
-		>
-			<div className="flex min-w-0 flex-1 items-center justify-between gap-3 px-4 py-3.5">
-				<div className="flex min-w-0 flex-1 items-center gap-3">
-					<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-						{notebook.source_type === 'git' ? (
-							<GitBranch className="size-4" aria-hidden="true" />
-						) : (
-							<FileText className="size-4" aria-hidden="true" />
-						)}
-					</span>
-					<span className="truncate text-sm font-medium" title={notebook.title}>
-						{notebook.title}
-					</span>
-					<Chip>deleted</Chip>
-				</div>
-				<NotebookTags
-					tags={notebook.tags.filter((tag) => tag !== notebook.status)}
-					title={notebook.title}
-				/>
-				<div className="flex shrink-0 items-center gap-3">
-					<span className="hidden w-32 items-center gap-1 text-xs text-muted-foreground sm:flex">
-						<span className="text-muted-foreground/70">by</span>
-						<UserLabel
-							user={user}
-							fallbackId={notebook.author}
-							loading={usersLoading}
-							className="max-w-[8rem]"
-						/>
-					</span>
-					<time
-						dateTime={notebook.updated_at}
-						title={new Date(notebook.updated_at).toLocaleString()}
-						className="w-14 text-right text-xs tabular-nums text-muted-foreground"
-					>
-						{formatRelative(notebook.updated_at)}
-					</time>
-				</div>
-			</div>
-			<div className="relative flex shrink-0 items-center pr-2">
-				<DropdownMenu
-					label={`Historical actions for ${notebook.title}`}
-					icon={<MoreHorizontal className="size-4" />}
-					options={groupedMenuOptions([notebookHistoryActions(false), NOTEBOOK_EXPORT_ACTIONS])}
-					onAction={onAction}
-				/>
-			</div>
-		</div>
-	);
 }
 
 const projectSchema = z.object({
@@ -296,9 +218,6 @@ function useProjectContent() {
 	// Project-level edit/delete (this page's project, not the notebooks).
 	const editProjectModal = useDisclosure();
 	const deleteProjectModal = useDisclosure();
-	const environmentModal = useDisclosure();
-	const membersModal = useDisclosure();
-	const alertsModal = useDisclosure();
 
 	const [{ data: project }, { data: notebooks, isFetching }] = useProjectContentQueries(
 		pid!,
@@ -314,7 +233,7 @@ function useProjectContent() {
 	const downloadWorkspace = useDownloadWorkspace(pid!);
 	const updateProject = useUpdateProject();
 	const deleteProject = useDeleteProject();
-	const { data: capabilities, isError: capabilitiesError } = useCapabilitiesQuery();
+	const { data: capabilities } = useCapabilitiesQuery();
 	const canManage = canManageProject(project.your_role);
 	const canEdit = canEditProject(project.your_role);
 	const sandboxImages = capabilities?.sandbox_images ?? [];
@@ -337,7 +256,6 @@ function useProjectContent() {
 	const openNotebooksAsApps = capabilities?.project_notebook_target === 'app' && canStartApps;
 
 	const dataBrowserAvailable = (capabilities?.data_browser?.available ?? false) && canEdit;
-	const projectAlertsAvailable = (capabilities?.project_alerts?.available ?? false) && canManage;
 	const jobsAvailable = capabilities?.jobs?.available ?? false;
 	const { data: integrationKinds } = useIntegrationKindsQuery(dataBrowserAvailable);
 	const { data: projectIntegrations } = useIntegrationsQuery({ pid: pid! }, dataBrowserAvailable);
@@ -389,7 +307,7 @@ function useProjectContent() {
 			try {
 				await deleteProject.mutateAsync(pid!);
 				toast.success(`Deleted "${project.name}"`);
-				void navigate('/');
+				void navigate('/projects');
 			} catch {
 				return;
 			}
@@ -428,19 +346,6 @@ function useProjectContent() {
 		baseImage: DEFAULT_BASE_IMAGE,
 		computeProfile: DEFAULT_COMPUTE_PROFILE,
 	});
-
-	const handleSaveCloudAccess = async (setting: CloudAccessSetting) => {
-		await updateProject.mutateAsync({
-			projectId: pid!,
-			federation:
-				setting === 'inherit' ? null : { ...project.federation, enabled: setting === 'enabled' },
-		});
-		toast.success(
-			setting === 'inherit'
-				? `Federated cloud access uses deployment default (${capabilities?.federation.default_enabled ? 'enabled' : 'disabled'})`
-				: `Federated cloud access ${setting}`,
-		);
-	};
 
 	// Map each notebook to its "most alive" session so a row shows the strongest state.
 	const sessionByNotebook = useMemo(() => sessionsByNotebook(sessions), [sessions]);
@@ -707,107 +612,68 @@ function useProjectContent() {
 	};
 
 	return (
-		<PageContainer>
-			<PageTitle>{project.name}</PageTitle>
-			<PageHeader
-				actions={
-					<div className="flex items-center gap-1.5">
-						{dataBrowserAvailable && dataIntegrations.length > 0 && (
-							<LinkButton to={`/projects/${pid}/data`} aria-label="Browse data">
-								<Database className="size-4" />
-								<span className="max-sm:hidden">Browse data</span>
-							</LinkButton>
-						)}
-						{canEdit && (
-							<Button variant="primary" onPress={uploadModal.open}>
-								<Plus className="size-4" />
-								New Notebook
-							</Button>
-						)}
-						{canEdit ? (
-							<DropdownMenu
-								label="More create options"
-								icon={<ChevronDown className="size-4" />}
-								triggerClassName="size-9 rounded-md border border-input bg-background hover:border-primary hover:text-primary"
-								options={[
-									{
-										id: 'import',
-										label: 'Import notebooks',
-										icon: <Upload className="size-4" />,
-									},
-									...(canManage
-										? [
-												{
-													id: 'synced',
-													label: 'Sync from git repo',
-													icon: <GitBranch className="size-4" />,
-												},
-											]
-										: []),
-								]}
-								onAction={(key) => {
-									if (key === 'import') importModal.open();
-									if (key === 'synced') syncedCreateModal.open();
-								}}
-							/>
-						) : null}
-					</div>
-				}
-			>
-				<IconLink
-					to="/"
-					label="Back to projects"
-					tooltip="Back to projects"
-					variant="bordered"
-					size="md"
-				>
-					<ArrowLeft className="size-4" />
-				</IconLink>
-				<div className="flex min-w-0 flex-col gap-0.5">
-					<div className="flex min-w-0 items-center gap-1">
-						<h1 className="mr-1 truncate text-xl font-semibold tracking-tight" title={project.name}>
-							{project.name}
-						</h1>
-						{/* Subtle project-level actions — uncommon, so kept low-emphasis. */}
-						<IconButton label="Project access" tooltip="Project access" onPress={membersModal.open}>
-							<Users className="size-4" />
-						</IconButton>
-						<IconButton
-							label="Environment & cloud access"
-							tooltip="Environment & cloud access"
-							onPress={environmentModal.open}
-						>
-							<Settings2 className="size-4" />
-						</IconButton>
-						{projectAlertsAvailable && (
-							<IconButton
-								label="Project alerts"
-								tooltip="Project alerts"
-								onPress={alertsModal.open}
-							>
-								<Bell className="size-4" />
-							</IconButton>
-						)}
-						<IconButton label="Edit project" tooltip="Edit project" onPress={editProjectModal.open}>
-							<Pencil className="size-4" />
-						</IconButton>
-						<IconButton
-							label="Delete project"
-							tooltip="Delete project"
-							tone="danger"
-							onPress={deleteProjectModal.open}
-						>
-							<Trash2 className="size-4" />
-						</IconButton>
-					</div>
-					{project.description && project.description !== project.name && (
-						<p className="truncate text-sm text-muted-foreground" title={project.description}>
-							{project.description}
-						</p>
+		<Page
+			title={project.name}
+			subtitle={project.description !== project.name ? project.description : undefined}
+			titleActions={
+				<>
+					<IconButton label="Edit project" tooltip="Edit project" onPress={editProjectModal.open}>
+						<Pencil className="size-4" />
+					</IconButton>
+					<IconButton
+						label="Delete project"
+						tooltip="Delete project"
+						tone="danger"
+						onPress={deleteProjectModal.open}
+					>
+						<Trash2 className="size-4" />
+					</IconButton>
+				</>
+			}
+			actions={
+				<div className="flex items-center gap-1.5">
+					{dataBrowserAvailable && dataIntegrations.length > 0 && (
+						<LinkButton to={`/projects/${pid}/data`} aria-label="Browse data">
+							<Database className="size-4" />
+							<span className="max-sm:hidden">Browse data</span>
+						</LinkButton>
 					)}
+					{canEdit && (
+						<Button variant="primary" onPress={uploadModal.open}>
+							<Plus className="size-4" />
+							New Notebook
+						</Button>
+					)}
+					{canEdit ? (
+						<DropdownMenu
+							label="More create options"
+							icon={<ChevronDown className="size-4" />}
+							triggerClassName="size-9 rounded-md border border-input bg-background hover:border-primary hover:text-primary"
+							options={[
+								{
+									id: 'import',
+									label: 'Import notebooks',
+									icon: <Upload className="size-4" />,
+								},
+								...(canManage
+									? [
+											{
+												id: 'synced',
+												label: 'Sync from git repo',
+												icon: <GitBranch className="size-4" />,
+											},
+										]
+									: []),
+							]}
+							onAction={(key) => {
+								if (key === 'import') importModal.open();
+								if (key === 'synced') syncedCreateModal.open();
+							}}
+						/>
+					) : null}
 				</div>
-			</PageHeader>
-
+			}
+		>
 			{thumbnailModal.target && (
 				<ThumbnailDialog
 					projectId={pid!}
@@ -849,6 +715,7 @@ function useProjectContent() {
 			/>
 
 			<ListResults
+				contained={false}
 				gallery={gallery}
 				count={notebooks.length}
 				emptyState={
@@ -883,29 +750,33 @@ function useProjectContent() {
 				onReset={() => setFilters({})}
 				resultsId="notebook-results"
 			>
-				{notebooks.map((nb) => {
-					if (nb.status === 'deleted') {
-						return (
-							<DeletedNotebookRow
-								key={nb.id}
-								notebook={nb}
-								user={users?.[nb.author]}
-								usersLoading={usersLoading}
-								onAction={(key) => handleNotebookAction(nb, key)}
-							/>
-						);
-					}
-
-					const notebookPath = `/projects/${pid}/notebooks/${nb.id}`;
-					const live = sessionByNotebook.get(nb.id);
-					const stoppableEdit = live?.edit?.can?.stop ? live.edit : undefined;
-					return (
-						<RowLink
-							key={nb.id}
-							testId="notebook-row"
-							card={gallery}
-							preview={
-								gallery ? (
+				<NotebookCollection
+					gallery={gallery}
+					items={notebooks.map((nb) => {
+						const notebookPath = `/projects/${pid}/notebooks/${nb.id}`;
+						const live = nb.status === 'deleted' ? undefined : sessionByNotebook.get(nb.id);
+						const stoppableEdit = live?.edit?.can?.stop ? live.edit : undefined;
+						return {
+							notebook: nb,
+							user: users?.[nb.author],
+							usersLoading,
+							to: openNotebooksAsApps ? `${notebookPath}/app` : notebookPath,
+							leading:
+								nb.status === 'deleted' ? undefined : nb.source_type === 'git' ? (
+									<GitSourcePopover
+										projectId={pid!}
+										notebookId={nb.id}
+										canSync={canEdit}
+										triggerClassName="shrink-0 cursor-pointer rounded-lg"
+										trigger={
+											<span className="flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
+												<GitBranch className="size-4" />
+											</span>
+										}
+									/>
+								) : undefined,
+							preview:
+								gallery && nb.status !== 'deleted' ? (
 									<Thumbnail
 										projectId={pid!}
 										notebookId={nb.id}
@@ -913,24 +784,13 @@ function useProjectContent() {
 										metadata={thumbnails.data?.[nb.id]}
 										refreshedAt={thumbnails.dataUpdatedAt}
 									/>
-								) : undefined
-							}
-							to={openNotebooksAsApps ? `${notebookPath}/app` : notebookPath}
-							state={{ title: nb.title }}
-							label={nb.title}
-							contentClassName={gallery ? undefined : 'items-center justify-between gap-3 py-3.5'}
-							trailing={
-								<>
-									<NotebookTags
-										tags={nb.tags.filter((tag) => nb.status === 'active' || tag !== nb.status)}
-										title={nb.title}
-									/>
-									<div
-										className={cn(
-											'flex items-center gap-3',
-											gallery ? 'min-w-0 w-full' : 'shrink-0',
-										)}
-									>
+								) : undefined,
+							hasSessions:
+								!!live?.apps?.length ||
+								(!!live?.edit && !['terminated', 'expired'].includes(live.edit.status)),
+							sessions:
+								nb.status === 'deleted' ? null : (
+									<>
 										{live?.apps?.map((appSession) => (
 											<AppSessionIndicator
 												key={appSession.session_id}
@@ -961,103 +821,56 @@ function useProjectContent() {
 												canChooseComputeProfile ? nb.compute_profile : computeProfiles[0]?.name
 											}
 										/>
-										<span
-											className={cn(
-												'items-center gap-1 text-xs text-muted-foreground',
-												gallery ? 'flex min-w-0 flex-1 overflow-hidden' : 'hidden w-32 sm:flex',
-											)}
-										>
-											<span className="shrink-0 text-muted-foreground/70">by</span>
-											<UserLabel
-												user={users?.[nb.author]}
-												fallbackId={nb.author}
-												loading={usersLoading}
-												className={gallery ? 'min-w-0' : 'max-w-[8rem]'}
-											/>
-										</span>
-										<time
-											dateTime={nb.updated_at}
-											title={new Date(nb.updated_at).toLocaleString()}
-											className={cn(
-												'text-right text-xs tabular-nums text-muted-foreground',
-												gallery
-													? 'min-w-0 max-w-1/2 truncate'
-													: 'min-w-14 shrink-0 whitespace-nowrap',
-											)}
-										>
-											{formatRelative(nb.updated_at)}
-										</time>
-									</div>
-								</>
-							}
-							leading={
-								nb.source_type === 'git' ? (
-									<GitSourcePopover
-										projectId={pid!}
-										notebookId={nb.id}
-										canSync={canEdit}
-										triggerClassName="shrink-0 cursor-pointer rounded-lg"
-										trigger={
-											<span className="flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
-												<GitBranch className="size-4" />
-											</span>
-										}
-									/>
-								) : undefined
-							}
-							actions={
-								<>
-									{openNotebooksAsApps && canEdit && (
-										<LinkButton
-											to={notebookPath}
-											state={{ title: nb.title }}
-											variant="ghost"
-											size="sm"
-											aria-label={`Edit ${nb.title}`}
-										>
-											<Pencil className="size-4" />
-											Edit
-										</LinkButton>
-									)}
-									{/* Inline shutdown is edit-only; app controls live in the menu. */}
-									{stoppableEdit && (
-										<IconButton
-											label="Shut down kernel"
-											tooltip="Shut down kernel"
-											tone="danger"
-											onPress={() => stopModal.open({ notebook: nb, session: stoppableEdit })}
-										>
-											<Power className="size-4" />
-										</IconButton>
-									)}
+									</>
+								),
+							actions:
+								nb.status === 'deleted' ? (
 									<DropdownMenu
-										label={`Notebook actions for ${nb.title}`}
+										label={`Historical actions for ${nb.title}`}
 										icon={<MoreHorizontal className="size-4" />}
-										triggerClassName={
-											gallery
-												? ''
-												: 'opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100'
-										}
-										options={notebookActions(nb)}
-										onAction={(key) => handleNotebookAction(nb, key, stoppableEdit)}
+										options={groupedMenuOptions([
+											notebookHistoryActions(false),
+											NOTEBOOK_EXPORT_ACTIONS,
+										])}
+										onAction={(key) => handleNotebookAction(nb, key)}
 									/>
-								</>
-							}
-						>
-							<div className="flex min-w-0 flex-1 items-center gap-3">
-								{!gallery && nb.source_type !== 'git' && (
-									<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
-										<FileText className="size-4" />
-									</span>
-								)}
-								<span className="truncate text-sm font-medium" title={nb.title}>
-									{nb.title}
-								</span>
-								{nb.status !== 'active' && <Chip>{nb.status}</Chip>}
-							</div>
-						</RowLink>
-					);
-				})}
+								) : (
+									<>
+										{openNotebooksAsApps && canEdit && (
+											<LinkButton
+												to={notebookPath}
+												state={{ title: nb.title }}
+												variant="ghost"
+												size="sm"
+												aria-label={`Edit ${nb.title}`}
+												className="px-2"
+											>
+												<Pencil className="size-4" />
+												<span className="max-sm:sr-only">Edit</span>
+											</LinkButton>
+										)}
+										{/* Inline shutdown is edit-only; app controls live in the menu. */}
+										{stoppableEdit && (
+											<IconButton
+												label="Shut down kernel"
+												tooltip="Shut down kernel"
+												tone="danger"
+												onPress={() => stopModal.open({ notebook: nb, session: stoppableEdit })}
+											>
+												<Power className="size-4" />
+											</IconButton>
+										)}
+										<DropdownMenu
+											label={`Notebook actions for ${nb.title}`}
+											icon={<MoreHorizontal className="size-4" />}
+											options={notebookActions(nb)}
+											onAction={(key) => handleNotebookAction(nb, key, stoppableEdit)}
+										/>
+									</>
+								),
+						};
+					})}
+				/>
 			</ListResults>
 
 			{importModal.isOpen && (
@@ -1269,25 +1082,6 @@ function useProjectContent() {
 				</editProjectForm.AppField>
 			</FormDialog>
 
-			{/* Mounted only while open so the member list is fetched on demand, not with the page. */}
-			{membersModal.isOpen && (
-				<ProjectMembersDialog isOpen onClose={membersModal.close} project={project} />
-			)}
-
-			{environmentModal.isOpen && (
-				<ProjectEnvironmentDialog
-					isOpen
-					onClose={environmentModal.close}
-					project={project}
-					integrationsAvailable={capabilities?.integrations?.available ?? false}
-					cloudAccessLoading={!capabilities && !capabilitiesError}
-					cloudAccessAvailable={capabilities?.federation.available ?? false}
-					cloudAccessDefaultEnabled={capabilities?.federation.default_enabled ?? false}
-					isPending={updateProject.isPending}
-					onSaveCloudAccess={handleSaveCloudAccess}
-				/>
-			)}
-
 			{workspaceBrowser.isOpen && workspaceBrowser.target ? (
 				<Suspense fallback={null}>
 					<WorkspaceBrowserDialog
@@ -1299,16 +1093,6 @@ function useProjectContent() {
 					/>
 				</Suspense>
 			) : null}
-
-			{alertsModal.isOpen && capabilities?.project_alerts && (
-				<ProjectAlertsDialog
-					isOpen
-					onClose={alertsModal.close}
-					projectId={pid!}
-					selectableKinds={capabilities.project_alerts.selectable_kinds}
-					maxDestinations={capabilities.project_alerts.max_destinations}
-				/>
-			)}
 
 			<FormConfirmDialog
 				form={deleteProjectForm}
@@ -1330,7 +1114,7 @@ function useProjectContent() {
 					)}
 				</deleteProjectForm.AppField>
 			</FormConfirmDialog>
-		</PageContainer>
+		</Page>
 	);
 }
 

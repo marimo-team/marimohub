@@ -42,6 +42,22 @@ export interface ProjectMembersDialogProps {
 }
 
 export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMembersDialogProps) {
+	return (
+		<DialogModal isOpen={isOpen} onClose={onClose} title="Project Access" width="lg">
+			<div className="-m-1 max-h-[70dvh] overflow-y-auto overscroll-contain p-1">
+				<ProjectMembersPanel project={project} onAccessLost={onClose} />
+			</div>
+		</DialogModal>
+	);
+}
+
+export function ProjectMembersPanel({
+	project,
+	onAccessLost,
+}: {
+	project: ProjectDetail;
+	onAccessLost?: () => void;
+}) {
 	const membersHeadingId = useId();
 	const { user } = useAuth();
 	const queryClient = useQueryClient();
@@ -81,8 +97,8 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 			await queryClient.fetchQuery({ ...projectQueryOptions(project.id), staleTime: 0 });
 		} catch (err) {
 			if (isApiErrorCode(err, 'FORBIDDEN') || isNotFoundError(err)) {
-				onClose();
-				void navigate('/');
+				onAccessLost?.();
+				void navigate('/projects');
 			}
 		}
 	};
@@ -146,81 +162,77 @@ export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMember
 
 	return (
 		<>
-			<DialogModal isOpen={isOpen} onClose={onClose} title="Project Access" width="lg">
-				<div className="-m-1 max-h-[70dvh] overflow-y-auto overscroll-contain p-1">
-					<div className="flex flex-col gap-5 text-sm">
-						<ProjectCurrentAccess
-							project={project}
-							user={user}
+			<div className="flex flex-col gap-5 text-sm">
+				<ProjectCurrentAccess
+					project={project}
+					user={user}
+					members={visibleMembers}
+					users={users}
+					descriptions={descriptions}
+				/>
+
+				<section aria-labelledby={membersHeadingId} className="flex flex-col gap-2">
+					<div className="flex items-baseline justify-between gap-3">
+						<h3 id={membersHeadingId} className="text-xs font-semibold">
+							Members
+						</h3>
+						{!isLoading && (
+							<span className="text-xs text-muted-foreground">{visibleMembers.length}</span>
+						)}
+					</div>
+
+					{isError && (
+						<div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 p-3">
+							<p role="alert" className="text-xs text-destructive">
+								Could not refresh members. The list may be out of date.
+							</p>
+							<Button size="sm" onPress={() => void refetch()} isDisabled={isFetching}>
+								Retry members
+							</Button>
+						</div>
+					)}
+					{isLoading ? (
+						<output className="py-2 text-muted-foreground">Loading members…</output>
+					) : visibleMembers.length === 0 ? (
+						<p className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
+							No explicit project members
+						</p>
+					) : (
+						<ul className="flex flex-col divide-y">
+							{visibleMembers.map((member) => (
+								<MemberRow
+									key={memberKey(member)}
+									member={member}
+									isOwner={member.user_id === project.owner}
+									isYou={isSelf(member, user)}
+									canManage={canManage}
+									disabled={isError || changingMember}
+									users={users}
+									usersLoading={usersLoading}
+									descriptions={descriptions}
+									onRoleChange={(role) => handleRoleChange(member, role)}
+									onRemove={() => confirmRemove.open(member)}
+								/>
+							))}
+						</ul>
+					)}
+
+					{canManage && (
+						<AddMemberForm
+							key={project.id}
 							members={visibleMembers}
+							projectGroupsAvailable={capabilities?.project_groups.available ?? false}
+							groups={user?.groups ?? []}
 							users={users}
 							descriptions={descriptions}
+							onAdd={handleAdd}
+							isPending={isLoading || isError || addMember.isPending || changingMember}
 						/>
+					)}
+				</section>
 
-						<section aria-labelledby={membersHeadingId} className="flex flex-col gap-2">
-							<div className="flex items-baseline justify-between gap-3">
-								<h3 id={membersHeadingId} className="text-xs font-semibold">
-									Members
-								</h3>
-								{!isLoading && (
-									<span className="text-xs text-muted-foreground">{visibleMembers.length}</span>
-								)}
-							</div>
-
-							{isError && (
-								<div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 p-3">
-									<p role="alert" className="text-xs text-destructive">
-										Could not refresh members. The list may be out of date.
-									</p>
-									<Button size="sm" onPress={() => void refetch()} isDisabled={isFetching}>
-										Retry members
-									</Button>
-								</div>
-							)}
-							{isLoading ? (
-								<output className="py-2 text-muted-foreground">Loading members…</output>
-							) : visibleMembers.length === 0 ? (
-								<p className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
-									No explicit project members
-								</p>
-							) : (
-								<ul className="flex flex-col divide-y">
-									{visibleMembers.map((member) => (
-										<MemberRow
-											key={memberKey(member)}
-											member={member}
-											isOwner={member.user_id === project.owner}
-											isYou={isSelf(member, user)}
-											canManage={canManage}
-											disabled={isError || changingMember}
-											users={users}
-											usersLoading={usersLoading}
-											descriptions={descriptions}
-											onRoleChange={(role) => handleRoleChange(member, role)}
-											onRemove={() => confirmRemove.open(member)}
-										/>
-									))}
-								</ul>
-							)}
-
-							{canManage && (
-								<AddMemberForm
-									key={project.id}
-									members={visibleMembers}
-									projectGroupsAvailable={capabilities?.project_groups.available ?? false}
-									groups={user?.groups ?? []}
-									users={users}
-									descriptions={descriptions}
-									onAdd={handleAdd}
-									isPending={isLoading || isError || addMember.isPending || changingMember}
-								/>
-							)}
-						</section>
-
-						<ProjectDefaultAccess project={project} capabilities={capabilities} />
-					</div>
-				</div>
-			</DialogModal>
+				<ProjectDefaultAccess project={project} capabilities={capabilities} />
+			</div>
 
 			<ConfirmDialog
 				isOpen={confirmRemove.isOpen}

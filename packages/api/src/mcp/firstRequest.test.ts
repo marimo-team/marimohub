@@ -93,10 +93,10 @@ describe('MCP as the first Hub interaction', () => {
 				oauth: { ...user.credential.oauth!, scopes: fullScopes },
 			},
 		};
-		await expectCatalog(await listCatalog(), [{ name: 'My Projects', notebooks: [] }]);
-		await expectCatalog(await listCatalog(), [{ name: 'My Projects', notebooks: [] }]);
+		await expectCatalog(await listCatalog(), [{ name: 'My Project', notebooks: [] }]);
+		await expectCatalog(await listCatalog(), [{ name: 'My Project', notebooks: [] }]);
 		expect((await deps.services.catalog.getCurrentSnapshot()).projects).toEqual([
-			expect.objectContaining({ owner: user.id, name: 'My Projects' }),
+			expect.objectContaining({ owner: user.id, name: 'My Project' }),
 		]);
 	});
 

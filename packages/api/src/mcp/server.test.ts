@@ -422,7 +422,7 @@ describe('MCP tool boundaries', () => {
 		const response = await client.callTool({
 			name: 'execute_code',
 			arguments: {
-				project: 'My Projects',
+				project: 'My Project',
 				session_id: 'sess-00000000000000000000000000',
 				code: '😀'.repeat(MAX_EXECUTE_CODE_BYTES / 4 + 1),
 			},

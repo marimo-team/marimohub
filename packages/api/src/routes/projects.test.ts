@@ -24,7 +24,7 @@ describe('Project routes', () => {
 	it('GET /projects seeds the default project in an empty catalog', async () => {
 		const res = await request('GET', '/projects');
 		expect(await expectPage(res)).toEqual([
-			expect.objectContaining({ name: 'My Projects', owner: ACTOR }),
+			expect.objectContaining({ name: 'My Project', owner: ACTOR }),
 		]);
 	});
 
@@ -451,7 +451,7 @@ describe('Project routes', () => {
 		await expectOk(await request('DELETE', `/projects/${created.id}`));
 
 		expect(await expectPage(await request('GET', '/projects'))).toEqual([
-			expect.objectContaining({ name: 'My Projects' }),
+			expect.objectContaining({ name: 'My Project' }),
 		]);
 	});
 
