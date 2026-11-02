@@ -1811,6 +1811,14 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						default: 'off',
 						example: 'on',
 					},
+					{
+						id: 'MARIMOHUB_MCP_MANUAL_TOKENS',
+						name: 'Manual MCP tokens',
+						description:
+							'Enable manual token creation and bearer-header MCP access. Requires `MARIMOHUB_MCP=on`. Disabling blocks existing manual tokens on `/mcp`. Values: `on`, `off`.',
+						default: 'off',
+						example: 'on',
+					},
 				],
 			},
 		],

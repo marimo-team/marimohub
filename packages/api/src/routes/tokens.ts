@@ -1,6 +1,8 @@
+import type { Context } from 'hono';
+import type { HonoEnv } from '../context';
 import { createRoute, z } from '@hono/zod-openapi';
-import { TokenGrantSchema, TokenId } from '@marimo-hub/core';
-import type { CreatedToken, PublicToken } from '@marimo-hub/core';
+import { NotFoundError, TokenGrantSchema, TokenId } from '@marimo-hub/core';
+import type { CreatedToken, PublicToken, TokenGrant } from '@marimo-hub/core';
 import { appendAudit } from '../log';
 import { auditTokenCreation } from '../tokenAudit';
 import {
@@ -26,6 +28,7 @@ const TokenResponseSchema = z
 		/** Coarse (daily) usage marker; absent until the token is first used. */
 		last_used_at: z.string().openapi({ format: 'date-time' }).optional(),
 		grant: TokenGrantSchema.optional(),
+		mcp_resource: z.url().optional(),
 	})
 	.openapi('ApiToken');
 
@@ -101,6 +104,27 @@ const createScopedToken = createRoute({
 	},
 });
 
+const createMcpToken = createRoute({
+	method: 'post',
+	path: '/me/tokens/mcp',
+	operationId: 'auth.tokens.createMcp',
+	tags: ['Auth'],
+	summary: 'Create a manual MCP token',
+	description:
+		'Mint a scoped token bound to this deployment’s MCP URL. Requires session authentication ' +
+		'and MARIMOHUB_MCP_MANUAL_TOKENS=on. The plaintext token is returned only once.',
+	security: SESSION_ONLY_SECURITY,
+	request: { body: jsonBody(CreateScopedTokenBodySchema) },
+	responses: {
+		201: jsonContent(
+			z.object({ success: z.literal(true), data: TokenCreatedResponseSchema }),
+			'The new MCP token',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404, 429),
+	},
+});
+
 const listTokens = createRoute({
 	method: 'get',
 	path: '/me/tokens',
@@ -149,6 +173,7 @@ function toResponse(record: PublicToken) {
 		...(record.expires_at !== undefined ? { expires_at: record.expires_at } : {}),
 		...(record.last_used_at !== undefined ? { last_used_at: record.last_used_at } : {}),
 		...(record.grant !== undefined ? { grant: record.grant } : {}),
+		...(record.mcp_resource !== undefined ? { mcp_resource: record.mcp_resource } : {}),
 	};
 }
 
@@ -158,34 +183,31 @@ function createdTokenData({ token, record }: CreatedToken) {
 
 const app = createApp();
 
-app.openapi(createToken, async (c) => {
+async function issueToken(
+	c: Context<HonoEnv>,
+	{ name, expires_in_days, grant }: z.infer<typeof CreateTokenBodySchema> & { grant?: TokenGrant },
+	kind: 'api' | 'mcp' = 'api',
+) {
 	assertSessionAuthenticated(c, 'manage tokens');
 	const deps = c.get('deps');
 	const user = c.get('user');
-	const { name, expires_in_days } = c.req.valid('json');
-
+	let mcpResource: string | undefined;
+	if (kind === 'mcp') {
+		if (!deps.mcp?.manualTokens) throw new NotFoundError('Manual MCP tokens are not enabled');
+		mcpResource = `${deps.mcp.publicBaseUrl}/mcp`;
+	}
+	if (grant !== undefined) await assertTokenGrantProjectsVisible(deps, user, grant);
 	const credential = await deps.services.tokens.create(
-		{ name, expiresInDays: expires_in_days },
+		{ name, expiresInDays: expires_in_days, grant, mcpResource },
 		user.id,
 	);
 	await auditTokenCreation(c, credential);
 	return c.json({ success: true as const, data: createdTokenData(credential) }, 201);
-});
+}
 
-app.openapi(createScopedToken, async (c) => {
-	assertSessionAuthenticated(c, 'manage tokens');
-	const deps = c.get('deps');
-	const user = c.get('user');
-	const { name, expires_in_days, grant } = c.req.valid('json');
-	await assertTokenGrantProjectsVisible(deps, user, grant);
-
-	const credential = await deps.services.tokens.create(
-		{ name, expiresInDays: expires_in_days, grant },
-		user.id,
-	);
-	await auditTokenCreation(c, credential);
-	return c.json({ success: true as const, data: createdTokenData(credential) }, 201);
-});
+app.openapi(createToken, (c) => issueToken(c, c.req.valid('json')));
+app.openapi(createScopedToken, (c) => issueToken(c, c.req.valid('json')));
+app.openapi(createMcpToken, (c) => issueToken(c, c.req.valid('json'), 'mcp'));
 
 app.openapi(listTokens, async (c) => {
 	assertSessionAuthenticated(c, 'manage tokens');

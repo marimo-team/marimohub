@@ -5463,6 +5463,9 @@ components:
         credential_version:
           type: number
           const: 2
+        mcp_resource:
+          type: string
+          format: uri
         grant:
           type: object
           properties:
@@ -5544,12 +5547,19 @@ components:
         - hash
         - created_at
       additionalProperties: {}
+      not:
+        required:
+          - mcp_resource
+          - oauth
       dependentRequired:
         credential_version:
           - grant
         grant:
           - credential_version
         oauth:
+          - credential_version
+          - grant
+        mcp_resource:
           - credential_version
           - grant
     Event:

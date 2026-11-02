@@ -284,7 +284,7 @@ describe('ApiTokensDialog', () => {
 		await user.click(screen.getByRole('radio', { name: /^All projects/ }));
 		await user.click(screen.getByRole('button', { name: /create token/i }));
 
-		expect(await screen.findByText(/whole number of days/i)).toBeInTheDocument();
+		expect(await screen.findByText(/whole number from 1 to 3650 days/i)).toBeInTheDocument();
 		expect(calls).toEqual([]);
 	});
 

@@ -86,6 +86,7 @@ describe('bucket schema contracts', () => {
 			credential_version: ['grant'],
 			grant: ['credential_version'],
 			oauth: ['credential_version', 'grant'],
+			mcp_resource: ['credential_version', 'grant'],
 		});
 		expect(token.properties.oauth.properties.resource.format).toBe('uri');
 		expect(token.properties.oauth.properties.scopes.minItems).toBe(1);
@@ -96,6 +97,12 @@ describe('bucket schema contracts', () => {
 			);
 			expect(array?.uniqueItems).toBe(true);
 		}
+	});
+
+	it('excludes simultaneous manual MCP and OAuth bindings from stored tokens', () => {
+		expect(doc.components.schemas.Token.not).toEqual({
+			required: ['mcp_resource', 'oauth'],
+		});
 	});
 });
 

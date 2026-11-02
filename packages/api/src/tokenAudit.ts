@@ -23,6 +23,9 @@ export async function auditTokenCreation(
 				token_id: record.id,
 				token_name: record.name,
 				...(record.grant !== undefined ? { grant: record.grant } : {}),
+				...(record.mcp_resource !== undefined
+					? { source: 'mcp-manual', mcp_resource: record.mcp_resource }
+					: {}),
 			}),
 	);
 }

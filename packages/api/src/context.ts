@@ -386,6 +386,7 @@ export interface BackgroundTaskScheduler {
 
 export interface McpConfig {
 	publicBaseUrl: string;
+	manualTokens?: boolean;
 	externalAuthorizationServer?: string;
 }
 

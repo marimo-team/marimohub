@@ -1628,6 +1628,7 @@ export const CapabilitiesResponseSchema = z
 		}),
 		mcp: z.object({
 			available: z.boolean(),
+			manual_tokens: z.boolean(),
 			url: z.string().nullable(),
 		}),
 		/** Read-only data browsing over integrations; `preview` gates row preview. */

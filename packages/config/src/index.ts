@@ -457,6 +457,10 @@ function parseMcpConfig(env: Env, externalIssuer?: string): McpConfig | undefine
 	}
 	return {
 		publicBaseUrl,
+		manualTokens: parseOnOff(env, 'MARIMOHUB_MCP_MANUAL_TOKENS', {
+			fallback: false,
+			docs: 'docs/mcp.md',
+		}),
 		...(externalIssuer ? { externalAuthorizationServer: externalIssuer } : {}),
 	};
 }

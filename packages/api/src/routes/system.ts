@@ -159,6 +159,7 @@ app.openapi(capabilitiesRoute, (c) => {
 				},
 		mcp: {
 			available: Boolean(deps.mcp),
+			manual_tokens: deps.mcp?.manualTokens ?? false,
 			url: deps.mcp ? `${deps.mcp.publicBaseUrl}/mcp` : null,
 		},
 		data_browser: {

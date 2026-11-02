@@ -761,9 +761,14 @@ challenge, state, scopes, and resource. Approval uses ETag compare-and-swap
 (CAS) to bind the user, token grant, PAT lifetime, and one-time code hash.
 The service verifies the bindings, claims the record with CAS, and mints one
 scoped PAT. This PAT stores the client ID, exact MCP resource, and `mcp:tools`
-scope. The MCP endpoint rejects other PATs. A `finally` block deletes the
+scope. A `finally` block deletes the
 authorization. Denial uses CAS to mark the pending record as denied before
 deletion. It then redirects with `error=access_denied`.
+
+Manual MCP tokens store an explicit v2 grant and `mcp_resource`, with no `oauth`
+binding. Requests authenticated with a manual MCP token require
+`MARIMOHUB_MCP_MANUAL_TOKENS=on` and an exact resource match. OAuth-issued MCP
+tokens do not require this flag. Ordinary API PATs cannot access MCP.
 
 OAuth PATs expire within 90 days. The consent page defaults to 7 days. The
 authorization server does not issue refresh tokens.

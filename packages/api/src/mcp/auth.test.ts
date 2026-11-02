@@ -138,4 +138,34 @@ describe('authenticateBearer', () => {
 			),
 		).resolves.toBe(oauthPrincipal);
 	});
+	it.each([
+		{ kind: 'external-access-token' as const },
+		{ kind: 'sso' as const },
+		{ kind: 'service-account' as const },
+		{ grant: undefined },
+		{ oauth: { clientId: 'client', resource: 'https://hub.example/mcp', scopes: ['mcp:tools'] } },
+		{ mcpResource: 'https://hub.example/other/mcp' },
+		{ mcpResource: 'https://hub.example/mcp/' },
+	])('rejects invalid manual credential provenance: %j', async (override) => {
+		const deps = makeTestDeps(new MemoryBucket());
+		const credential: AuthenticatedPrincipal['credential'] = {
+			kind: 'personal-access-token',
+			grant: { actions: ['project.read'], projects: '*' },
+			mcpResource: 'https://hub.example/mcp',
+			...override,
+		};
+		deps.authenticator = { authenticate: async () => ({ ...PRINCIPAL, credential }) };
+		await expect(
+			authenticateBearer(
+				deps,
+				new Request('https://hub.example/mcp', { headers: { Authorization: 'Bearer manual' } }),
+				{
+					resource: 'https://hub.example/mcp',
+					scope: 'mcp:tools',
+					allowManualMcp: true,
+					allowExternal: true,
+				},
+			),
+		).resolves.toBeNull();
+	});
 });

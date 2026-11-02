@@ -1,22 +1,18 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { Plus, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import {
-	Button,
 	ConfirmDialog,
 	CopyField,
 	DialogModal,
 	IconButton,
-	TextField,
 	WriteOnceWarning,
 } from '@/components/ui';
-import { useApiTokensQuery, useCreateScopedApiToken, useRevokeApiToken } from '@/api/hooks';
+import { useApiTokensQuery, useRevokeApiToken } from '@/api/hooks';
 import { useDialogTarget } from '@/hooks/useDialogTarget';
 import { formatDuration, formatRelative } from '@/lib/time';
 import type { ApiToken, ApiTokenCreated } from '@/types';
-import { TokenGrantEditor } from './TokenGrantEditor';
-import { tokenGrantFromDraft } from './tokenGrantDraft';
-import type { TokenGrantDraft } from './tokenGrantDraft';
+import { CreateTokenForm } from './CreateTokenForm';
 import { TOKEN_GRANT_PRESETS } from '@marimo-hub/core/token-grants';
 
 export interface ApiTokensDialogProps {
@@ -57,55 +53,12 @@ function grantLabel(token: ApiToken): string {
 	return `${actions} · ${projects}`;
 }
 
-/**
- * Self-service personal access tokens for the API (CI, scripts, the CLI). The
- * plaintext is server-side hashed, so it is shown exactly once, right after
- * creation — the list only ever carries metadata.
- */
 export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 	const { data: tokens } = useApiTokensQuery(isOpen);
-	const createToken = useCreateScopedApiToken();
 	const revokeToken = useRevokeApiToken();
 
-	const [name, setName] = useState('');
-	const [expiresInDays, setExpiresInDays] = useState('');
 	const [created, setCreated] = useState<ApiTokenCreated | null>(null);
-	const [grantDraft, setGrantDraft] = useState<TokenGrantDraft>({
-		actions: null,
-		projects: null,
-	});
-	const grant = tokenGrantFromDraft(grantDraft);
 	const confirmRevoke = useDialogTarget<ApiToken>();
-
-	const handleCreate = async () => {
-		const trimmed = name.trim();
-		if (!trimmed) {
-			toast.error('Name the token (e.g. "ci-deploy") so you can recognize it later.');
-			return;
-		}
-		const days = expiresInDays.trim();
-		if (days && !/^\d+$/.test(days)) {
-			toast.error('Expiry must be a whole number of days.');
-			return;
-		}
-		if (!grant) {
-			toast.error('Choose an action preset and a project scope.');
-			return;
-		}
-		try {
-			const result = await createToken.mutateAsync({
-				name: trimmed,
-				...(days ? { expires_in_days: Number(days) } : {}),
-				grant,
-			});
-			setCreated(result);
-			setName('');
-			setExpiresInDays('');
-			setGrantDraft({ actions: null, projects: null });
-		} catch {
-			return;
-		}
-	};
 
 	const handleRevoke = () => {
 		const target = confirmRevoke.target;
@@ -154,6 +107,7 @@ export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 									<span className="flex min-w-0 flex-col">
 										<span className="truncate text-xs font-medium">{token.name}</span>
 										<span className="truncate text-xs text-muted-foreground">
+											{token.mcp_resource ? 'MCP · ' : ''}
 											{grantLabel(token)}
 										</span>
 										<span className="truncate text-xs text-muted-foreground">
@@ -177,39 +131,10 @@ export function ApiTokensDialog({ isOpen, onClose }: ApiTokensDialogProps) {
 						</ul>
 					))}
 
-				<form
-					onSubmit={(e) => {
-						e.preventDefault();
-						void handleCreate();
-					}}
-					className="flex flex-col gap-3 border-t pt-4"
-				>
+				<div className="flex flex-col gap-3 border-t pt-4">
 					<span className="text-xs font-semibold">Create a token</span>
-					<div className="flex gap-2">
-						<div className="flex-1">
-							<TextField label="Name" placeholder="ci-deploy" value={name} onChange={setName} />
-						</div>
-						<div className="w-36 shrink-0">
-							<TextField
-								label="Expires in days"
-								placeholder="never"
-								value={expiresInDays}
-								onChange={setExpiresInDays}
-							/>
-						</div>
-					</div>
-					<TokenGrantEditor value={grantDraft} onChange={setGrantDraft} />
-					<div className="flex justify-end">
-						<Button
-							type="submit"
-							variant="primary"
-							isDisabled={createToken.isPending || grant === null}
-						>
-							<Plus className="size-4" />
-							{createToken.isPending ? 'Creating...' : 'Create token'}
-						</Button>
-					</div>
-				</form>
+					<CreateTokenForm kind="api" onCreated={setCreated} />
+				</div>
 
 				<ConfirmDialog
 					isOpen={confirmRevoke.isOpen}
