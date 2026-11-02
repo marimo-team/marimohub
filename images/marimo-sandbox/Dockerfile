@@ -1,11 +1,11 @@
-# syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 
 # All targets require --build-context notebook_bridge=packages/notebook-bridge
 # from the repository root. See README.md for the complete build command.
 
 # Held at 3.13: pyiceberg (in the acceptance image) has no cp314 wheel yet, so
 # 3.14 forces a source build that needs a compiler absent from -slim.
-FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 AS base
+FROM python:3.13-slim@sha256:2d44738ebf4ce5f63b9d9ea871e9c7cfdc0426f7b0c97cac915fd88ded1d86bb AS base
 
 ARG MARIMO_VERSION=0.25.2
 ENV MARIMO_VERSION=${MARIMO_VERSION}
