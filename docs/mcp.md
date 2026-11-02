@@ -64,16 +64,17 @@ Project and notebook selectors accept IDs or exact names, case-insensitively.
 Use IDs when names are duplicated and for subsequent calls.
 Use `project_tag_namespace` to filter [project namespaces](./organizing-projects.md#filter-by-namespace).
 
-| Tool              | Purpose                                                                           |
-| ----------------- | --------------------------------------------------------------------------------- |
-| `list_catalog`    | Discover notebooks by project, namespace, notebook status, tag, or text.          |
-| `get_notebook`    | Read notebook metadata and stored source.                                         |
-| `create_notebook` | Create a local notebook. Optional `launch` starts an edit session.                |
-| `update_notebook` | Replace supplied metadata fields or the complete local source.                    |
-| `delete_notebook` | Soft-delete a notebook, retire live apps, and cancel job runs.                    |
-| `start_session`   | Start or reuse an edit or app session.                                            |
-| `execute_code`    | Run Python in an edit session's live scratchpad.                                  |
-| `stop_session`    | Stop a session and destroy its sandbox, with a save attempt for persistent edits. |
+| Tool                   | Purpose                                                                           |
+| ---------------------- | --------------------------------------------------------------------------------- |
+| `list_catalog`         | Discover notebooks by project, namespace, notebook status, tag, or text.          |
+| `get_notebook`         | Read notebook metadata and stored source.                                         |
+| `create_notebook`      | Create a local notebook. Optional `launch` starts an edit session.                |
+| `update_notebook`      | Replace supplied metadata fields or the complete local source.                    |
+| `sync_notebook_source` | Sync a Git source and report which sessions need restarting.                      |
+| `delete_notebook`      | Soft-delete a notebook, retire live apps, and cancel job runs.                    |
+| `start_session`        | Start or reuse an edit or app session.                                            |
+| `execute_code`         | Run Python in an edit session's live scratchpad.                                  |
+| `stop_session`         | Stop a session and destroy its sandbox, with a save attempt for persistent edits. |
 
 When profile selection is enabled, both tools accept an optional `compute_profile`:
 
@@ -99,6 +100,28 @@ If the precondition fails, read the latest notebook before retrying.
 A persistent edit session blocks stored code replacement until its sandbox is cleaned up.
 Edit in the live session, or stop it and call `get_notebook` to include its saved changes before retrying.
 Metadata updates, app sessions, and temporary sessions do not have this restriction.
+
+### Sync a Git source
+
+`sync_notebook_source` accepts nonblank `project` and `notebook` IDs or names, with no additional arguments:
+
+```json
+{ "project": "Analytics", "notebook": "Report" }
+```
+
+It uses the [**Sync now**](./syncing.md) workflow, including provider support, pending settings,
+`notebook.write` authorization, and manual sync audit events. It never restarts sessions.
+
+Results include `project_id`, `notebook_id`, `commit`, `synced` (whether this call published a version), and:
+
+- `version_id`: the version published by this call, or `null` if already up to date.
+- `current_version_id`: the stored version after sync, even if unchanged. `null` means unknown.
+- `sessions`: each active session's `session_id`, `mode`, `status`, `source_version_id`, and `restart_needed`.
+- `restart_needed`: `true` if any session is stale, otherwise `null` if any status is unknown, otherwise `false`.
+
+Per-session `restart_needed` is `true` for a different source version, `false` for a match,
+and `null` if either version is missing. Active sessions have status `starting`, `running`, or `terminating`.
+To restart one, use `stop_session` then `start_session` with the same notebook and mode, subject to session permissions.
 
 ### Source format
 
