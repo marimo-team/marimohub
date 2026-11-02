@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createNotebookId, createIntegrationId } from '../ids';
 import type { SearchDocument } from './contracts';
-import { rank, resourceHref } from './rank';
+import { terms } from './contracts';
+import { rank, resourceHref, snippet } from './rank';
 
 const notebook = { type: 'notebook' as const, notebook_id: createNotebookId() };
 const integration = {
@@ -102,4 +103,35 @@ describe('search destinations', () => {
 			expect(url.searchParams.get('table')).toBe(ref.table ?? null);
 		},
 	);
+});
+
+describe('search snippets', () => {
+	it('keeps word boundaries and query offsets inside a bounded excerpt', () => {
+		const result = snippet(`${'prefix '.repeat(30)}revenue ${'suffix '.repeat(100)}`, 'revenue');
+		expect(result.text.length).toBeLessThanOrEqual(400);
+		expect(result.text.trim()).toMatch(/^(prefix )*revenue( suffix)*$/);
+		expect(result.highlights.map(({ start, end }) => result.text.slice(start, end))).toEqual([
+			'revenue',
+		]);
+	});
+	it('preserves surrogate pairs at both excerpt boundaries', () => {
+		const result = snippet(
+			`${'x'.repeat(101)}${'😀'.repeat(50)} revenue ${'😀'.repeat(200)}`,
+			'revenue',
+		);
+		expect(result.text.isWellFormed()).toBe(true);
+		expect(result.text.length).toBeLessThanOrEqual(400);
+		expect(result.highlights.map(({ start, end }) => result.text.slice(start, end))).toEqual([
+			'revenue',
+		]);
+	});
+	it('bounds a single long token and highlights combining marks consistently', () => {
+		expect(snippet('x'.repeat(1000), 'missing').text).toHaveLength(400);
+		expect(terms('Café हिंदी')).toEqual(terms('café हिंदी'));
+		const result = snippet('Café हिंदी', 'café हिंदी');
+		expect(result.highlights.map(({ start, end }) => result.text.slice(start, end))).toEqual([
+			'Café',
+			'हिंदी',
+		]);
+	});
 });

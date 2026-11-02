@@ -172,27 +172,42 @@ export class SearchIndexer {
 		const pages: SearchDocument[][] = Array.from({ length: state.pages.length }, () => []);
 		let bytes = 0;
 		let count = 0;
-		await forEachConcurrentUntilFailure({
-			items: state.pages,
-			concurrency: 8,
-			run: async (id, position) => {
-				signal.throwIfAborted();
-				const body = await this.bucket.get(paths.page(id));
-				signal.throwIfAborted();
-				if (!body || body.size > MAX_INDEX_BYTES) throw new Error('Search crawl page unavailable');
-				bytes += body.size;
-				if (bytes > MAX_INDEX_BYTES + state.pages.length * 1024)
-					throw new Error('Search crawl exceeds budget');
-				const documents = SearchSnapshotSchema.parse(await body.json()).documents;
-				count += documents.length;
-				if (count > MAX_INDEX_DOCUMENTS) throw new Error('Search crawl exceeds document budget');
-				pages[position] = documents;
-			},
-		});
+		const missingPage = new Error('Search crawl page unavailable');
+		try {
+			await forEachConcurrentUntilFailure({
+				items: state.pages,
+				concurrency: 8,
+				run: async (id, position) => {
+					signal.throwIfAborted();
+					const body = await this.bucket.get(paths.page(id));
+					signal.throwIfAborted();
+					if (!body) throw missingPage;
+					if (body.size > MAX_INDEX_BYTES) throw new Error('Search crawl page exceeds budget');
+					bytes += body.size;
+					if (bytes > MAX_INDEX_BYTES + state.pages.length * 1024)
+						throw new Error('Search crawl exceeds budget');
+					const documents = SearchSnapshotSchema.parse(await body.json()).documents;
+					count += documents.length;
+					if (count > MAX_INDEX_DOCUMENTS) throw new Error('Search crawl exceeds document budget');
+					pages[position] = documents;
+				},
+			});
+		} catch (error) {
+			signal.throwIfAborted();
+			if (error !== missingPage) throw error;
+			try {
+				await this.bucket.put(key, encodeCheckpoint(initial()), {
+					onlyIfEtagMatches: checkpointEtag!,
+				});
+			} catch (resetError) {
+				if (!(resetError instanceof PreconditionFailedError)) throw resetError;
+			}
+			return false;
+		}
 		const documents = pages.flat();
 		const current = await this.liveProject(projectId);
 		signal.throwIfAborted();
-		await this.index.publish(
+		const committed = await this.index.publish(
 			scope,
 			current
 				? {
@@ -205,6 +220,7 @@ export class SearchIndexer {
 			state.revision,
 			signal,
 		);
+		if (!committed) return false;
 		// A crash after publication leaves a different head revision, which resets the checkpoint on retry.
 		const published = await this.index.head(scope, signal);
 		signal.throwIfAborted();

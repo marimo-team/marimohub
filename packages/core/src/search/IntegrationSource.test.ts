@@ -151,19 +151,71 @@ describe('integration search source', () => {
 		expect(second.cursor).toBeUndefined();
 		expect(second.partial).toBe(true);
 	});
-	it('rejects schema checks beyond the probe budget without making an extra call', async () => {
+	it('keeps validated schema hits when the probe budget is exhausted', async () => {
 		const f = setup();
 		const documents = Array.from({ length: 33 }, (_, i) => tableDocument(f.entry, `table${i}`));
-		await expect(
-			f.source.validate(f.project, documents, principal, 'rank', signal),
-		).rejects.toThrow('catalog budget exceeded');
+		expect(await f.source.validate(f.project, documents, principal, 'rank', signal)).toEqual({
+			documents: documents.slice(0, 32),
+			partial: true,
+		});
 		expect(f.integrations.browseTableSchema).toHaveBeenCalledTimes(32);
+	});
+	it('keeps later cached hits after an uncached table exhausts the probe budget', async () => {
+		const f = setup();
+		const documents = Array.from({ length: 33 }, (_, i) => tableDocument(f.entry, `table${i}`));
+		const cached = { ...documents[0], id: 'cached' };
+		const result = await f.source.validate(
+			f.project,
+			[...documents, cached],
+			principal,
+			'rank',
+			signal,
+		);
+		expect(result).toEqual({ documents: [...documents.slice(0, 32), cached], partial: true });
+		expect(f.integrations.browseTableSchema).toHaveBeenCalledTimes(32);
+	});
+	it('drops unverified namespaces from truncated catalogs without discarding validated hits', async () => {
+		const f = setup();
+		f.integrations.browseNamespaces.mockResolvedValue({ items: [['sales']], next_cursor: 'next' });
+		const namespace = (name: string): SearchDocument => ({
+			...tableDocument(f.entry),
+			id: name,
+			kind: 'namespace',
+			resource: { type: 'integration', integration_id: f.entry.id, version: 1, namespace: [name] },
+		});
+		const found = namespace('sales');
+		expect(
+			await f.source.validate(f.project, [found, namespace('later')], principal, 'rank', signal),
+		).toEqual({ documents: [found], partial: true });
+		expect(f.integrations.browseNamespaces).toHaveBeenCalledTimes(1);
+	});
+	it('bounds namespace probes and preserves previously verified tables', async () => {
+		const f = setup();
+		const tables = Array.from({ length: 32 }, (_, i) => tableDocument(f.entry, `table${i}`));
+		const namespace: SearchDocument = {
+			...tables[0],
+			id: 'namespace',
+			kind: 'namespace',
+			resource: {
+				type: 'integration',
+				integration_id: f.entry.id,
+				version: 1,
+				namespace: ['later'],
+			},
+		};
+		expect(
+			await f.source.validate(f.project, [...tables, namespace], principal, 'rank', signal),
+		).toEqual({ documents: tables, partial: true });
+		expect(f.integrations.browseNamespaces).not.toHaveBeenCalled();
 	});
 	it('shares schema probes within a phase but rechecks the upstream provider before returning', async () => {
 		const f = setup();
 		const table = tableDocument(f.entry);
 		const docs = [table, { ...table, id: 'duplicate' }];
-		expect(await f.source.validate(f.project, docs, principal, 'rank', signal)).toEqual(docs);
+		expect(await f.source.validate(f.project, docs, principal, 'rank', signal)).toEqual({
+			documents: docs,
+			partial: false,
+		});
 		expect(f.integrations.browseTableSchema).toHaveBeenCalledTimes(1);
 		f.integrations.browseTableSchema.mockRejectedValueOnce(new Error('access revoked'));
 		await expect(f.source.validate(f.project, docs, principal, 'return', signal)).rejects.toThrow(
@@ -176,23 +228,32 @@ describe('integration search source', () => {
 		const doc = tableDocument(f.entry);
 		const original = f.entry.updated_at;
 		f.entry.updated_at = '2026-11-03T00:00:00.000Z';
-		expect(await f.source.validate(f.project, [doc], principal, 'rank', signal)).toEqual([]);
+		expect(await f.source.validate(f.project, [doc], principal, 'rank', signal)).toEqual({
+			documents: [],
+			partial: false,
+		});
 		f.entry.updated_at = original;
 		f.integrations.list.mockResolvedValue([{ ...f.entry, shadowed: true }]);
-		expect(await f.source.validate(f.project, [doc], principal, 'return', signal)).toEqual([]);
+		expect(await f.source.validate(f.project, [doc], principal, 'return', signal)).toEqual({
+			documents: [],
+			partial: false,
+		});
 		expect(f.integrations.browseTableSchema).not.toHaveBeenCalled();
 	});
 	it('resumes bounded discovery and indexes only names/types, without credentials or rows', async () => {
 		const f = setup();
 		const docs: SearchDocument[] = [];
 		let cursor: string | undefined;
+		let partial: boolean | undefined;
 		for (let i = 0; i < 10; i++) {
 			const page = await f.source.page(f.project, cursor, signal);
 			docs.push(...page.documents);
 			cursor = page.cursor;
+			partial = page.partial;
 			if (!cursor) break;
 		}
 		expect(cursor).toBeUndefined();
+		expect(partial).toBe(false);
 		expect(new Set(docs.map((d) => d.kind))).toEqual(
 			new Set(['datasource', 'namespace', 'table', 'column']),
 		);
@@ -216,7 +277,10 @@ describe('integration search source', () => {
 			text: 'revenue: DOUBLE',
 			fingerprint: `1:${f.entry.updated_at}`,
 		};
-		expect(await f.source.validate(f.project, [doc], principal, 'rank', signal)).toEqual([doc]);
+		expect(await f.source.validate(f.project, [doc], principal, 'rank', signal)).toEqual({
+			documents: [doc],
+			partial: false,
+		});
 		expect(f.integrations.browseTableSchema).toHaveBeenLastCalledWith(
 			f.project.id,
 			f.entry.id,
@@ -225,7 +289,10 @@ describe('integration search source', () => {
 			{ query_user: principal.email, signal },
 		);
 		f.integrations.browseTableSchema.mockResolvedValueOnce({ columns: [] });
-		expect(await f.source.validate(f.project, [doc], principal, 'return', signal)).toEqual([]);
+		expect(await f.source.validate(f.project, [doc], principal, 'return', signal)).toEqual({
+			documents: [],
+			partial: false,
+		});
 	});
 	it('excludes disabled or replaced integrations without probing catalogs', async () => {
 		const f = setup();
@@ -238,18 +305,27 @@ describe('integration search source', () => {
 			fingerprint: `1:${f.entry.updated_at}`,
 		};
 		f.entry.enabled = false;
-		expect(await f.source.validate(f.project, [doc], principal, 'rank', signal)).toEqual([]);
+		expect(await f.source.validate(f.project, [doc], principal, 'rank', signal)).toEqual({
+			documents: [],
+			partial: false,
+		});
 		f.entry.enabled = true;
 		f.entry.current_version = 2;
-		expect(await f.source.validate(f.project, [doc], principal, 'return', signal)).toEqual([]);
+		expect(await f.source.validate(f.project, [doc], principal, 'return', signal)).toEqual({
+			documents: [],
+			partial: false,
+		});
 		expect(f.integrations.browseTableSchema).not.toHaveBeenCalled();
 	});
 	it('denies schema access to project viewers', async () => {
 		const f = setup();
 		const viewer = { ...principal, id: UserId.parse('viewer') };
 		f.project.members.push({ user_id: viewer.id, role: 'viewer' });
-		expect(await f.source.validate(f.project, [], viewer, 'rank', signal)).toEqual([]);
+		expect(
+			await f.source.validate(f.project, [tableDocument(f.entry)], viewer, 'rank', signal),
+		).toEqual({ documents: [], partial: false });
 		expect(f.integrations.list).not.toHaveBeenCalled();
+		expect(f.integrations.browseTableSchema).not.toHaveBeenCalled();
 	});
 	it('reports failed discovery and advances rather than blocking all later integrations', async () => {
 		const f = setup();

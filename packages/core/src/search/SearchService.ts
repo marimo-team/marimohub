@@ -65,6 +65,16 @@ export class SearchService {
 		signal?.throwIfAborted();
 		const response: SearchResponse = { items: [], partial: false, coverage: [] };
 		const batches: RankedBatch[] = [];
+		const coverage = (entry: SearchResponse['coverage'][number]) => {
+			const existing = response.coverage.find(
+				(value) => value.source === entry.source && value.project_id === entry.project_id,
+			);
+			if (existing) {
+				if (entry.status !== 'partial' || existing.status === 'complete')
+					existing.status = entry.status;
+			} else response.coverage.push(entry);
+			response.partial ||= entry.status !== 'complete';
+		};
 		const phaseTimeout = Math.max(1, Math.floor(this.timeoutMs / 2));
 		const timed = async (work: (deadline: AbortSignal) => Promise<void>) => {
 			await withDeadline(work, {
@@ -74,8 +84,7 @@ export class SearchService {
 			}).catch((error) => {
 				signal?.throwIfAborted();
 				if (!(error instanceof Error) || error.name !== 'TimeoutError') throw error;
-				response.partial = true;
-				response.coverage.push({ source: 'search', status: 'timeout' });
+				coverage({ source: 'search', status: 'timeout' });
 			});
 		};
 		await timed(async (deadline) => {
@@ -101,12 +110,10 @@ export class SearchService {
 						embedding = { space: this.embeddings.space, vector };
 					} catch {
 						deadline.throwIfAborted();
-						response.coverage.push({ source: 'semantic', status: 'unavailable' });
-						response.partial = true;
+						coverage({ source: 'semantic', status: 'unavailable' });
 					}
 				} else {
-					response.coverage.push({ source: 'semantic', status: 'disabled' });
-					response.partial = true;
+					coverage({ source: 'semantic', status: 'disabled' });
 				}
 			}
 			const selected = this.sources.filter(
@@ -114,14 +121,17 @@ export class SearchService {
 			);
 			for (const kind of request.kinds ?? [])
 				if (!this.sources.some((s) => s.kinds.includes(kind))) {
-					response.coverage.push({ source: kind, status: 'disabled' });
-					response.partial = true;
+					coverage({ source: kind, status: 'disabled' });
 				}
 			await mapWithConcurrency(ids.slice(0, 16), 2, async (projectId) => {
 				deadline.throwIfAborted();
 				const project = await this.projects
 					.getProject(projectId, { consistency: 'validated' })
-					.catch(() => null);
+					.catch(() => {
+						deadline.throwIfAborted();
+						coverage({ source: 'search', status: 'unavailable' });
+						return null;
+					});
 				if (
 					!project ||
 					!(await this.authz.authorize(principal, 'project.read', { kind: 'project', project }))
@@ -149,7 +159,7 @@ export class SearchService {
 										resourceHref(projectId, d).length <= 4096,
 								);
 								const rankProject = await this.authorizedProject(projectId, principal);
-								if (!rankProject) return { status: 'complete' as const };
+								if (!rankProject) return { status: 'partial' as const };
 								const authorized = await source.validate(
 									rankProject,
 									privateFiltered,
@@ -158,13 +168,16 @@ export class SearchService {
 									providerSignal,
 								);
 								providerSignal.throwIfAborted();
-								const rows = rank(authorized, request.q, embedding).slice(0, request.limit);
+								const rows = rank(authorized.documents, request.q, embedding).slice(
+									0,
+									request.limit,
+								);
 								return {
 									batch: { projectId, source, indexedAt: found.indexedAt, rows },
 									status:
 										Date.now() - Date.parse(found.indexedAt) > 15 * 60_000
 											? ('stale' as const)
-											: found.partial || oversizedLinks
+											: found.partial || oversizedLinks || authorized.partial
 												? ('partial' as const)
 												: ('complete' as const),
 								};
@@ -177,16 +190,14 @@ export class SearchService {
 						);
 						deadline.throwIfAborted();
 						if (result.batch) batches.push(result.batch);
-						response.coverage.push({
+						coverage({
 							source: source.id,
 							project_id: projectId,
 							status: result.status,
 						});
-						response.partial ||= result.status !== 'complete';
 					} catch (error) {
 						deadline.throwIfAborted();
-						response.partial = true;
-						response.coverage.push({
+						coverage({
 							source: source.id,
 							project_id: projectId,
 							status:
@@ -209,7 +220,10 @@ export class SearchService {
 				try {
 					deadline.throwIfAborted();
 					const project = await this.authorizedProject(batch.projectId, principal);
-					if (!project) return;
+					if (!project) {
+						coverage({ source: batch.source.id, project_id: batch.projectId, status: 'partial' });
+						return;
+					}
 					const live = await batch.source.validate(
 						project,
 						rows.map((r) => r.document),
@@ -218,19 +232,18 @@ export class SearchService {
 						deadline,
 					);
 					const valid = new Set(
-						live
+						live.documents
 							.filter((d) => d.resource.type !== 'chat' || d.resource.owner_id === principal.id)
 							.map((d) => d.id),
 					);
 					const currentProject = await this.authorizedProject(batch.projectId, principal);
-					if (!currentProject) return;
+					if (!currentProject) {
+						coverage({ source: batch.source.id, project_id: batch.projectId, status: 'partial' });
+						return;
+					}
 					deadline.throwIfAborted();
-					if (valid.size < rows.length) {
-						response.partial = true;
-						const coverage = response.coverage.find(
-							(c) => c.source === batch.source.id && c.project_id === batch.projectId,
-						);
-						if (coverage?.status === 'complete') coverage.status = 'partial';
+					if (live.partial || valid.size < rows.length) {
+						coverage({ source: batch.source.id, project_id: batch.projectId, status: 'partial' });
 					}
 					response.items.push(
 						...rows
@@ -250,8 +263,7 @@ export class SearchService {
 					);
 				} catch {
 					deadline.throwIfAborted();
-					response.partial = true;
-					response.coverage.push({
+					coverage({
 						source: batch.source.id,
 						project_id: batch.projectId,
 						status: 'unavailable',

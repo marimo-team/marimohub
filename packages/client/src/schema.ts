@@ -2566,7 +2566,7 @@ export interface components {
 				manual_tokens: boolean;
 				url: string | null;
 			};
-			search?: {
+			search: {
 				available: boolean;
 				semantic: boolean;
 				kinds: (

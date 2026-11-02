@@ -23,6 +23,30 @@ const BLOCK = new Set([
 	'h2',
 	'h3',
 	'pre',
+	'h4',
+	'h5',
+	'h6',
+	'dt',
+	'dd',
+	'article',
+	'header',
+	'footer',
+	'main',
+	'nav',
+	'aside',
+	'blockquote',
+	'hr',
+	'figure',
+	'figcaption',
+	'ul',
+	'ol',
+	'dl',
+	'table',
+	'address',
+	'details',
+	'summary',
+	'fieldset',
+	'legend',
 ]);
 export function cleanText(value: string): string {
 	return (
@@ -48,7 +72,13 @@ export function htmlText(html: string): string {
 			if (
 				OMIT.has(node.tagName) ||
 				node.attrs.some(
-					(a) => a.name === 'hidden' || (a.name === 'aria-hidden' && a.value === 'true'),
+					(a) =>
+						a.name === 'hidden' ||
+						(a.name === 'aria-hidden' && a.value === 'true') ||
+						(a.name === 'style' &&
+							/(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)\s*(?:!\s*important\s*)?(?:;|$)/i.test(
+								a.value.replaceAll(/\/\*[\s\S]*?\*\//g, ''),
+							)),
 				)
 			)
 				continue;
@@ -58,7 +88,8 @@ export function htmlText(html: string): string {
 			}
 		}
 		if ('value' in node) parts.push(node.value);
-		if ('childNodes' in node) stack.push(...[...node.childNodes].reverse());
+		if ('childNodes' in node)
+			for (let i = node.childNodes.length - 1; i >= 0; i--) stack.push(node.childNodes[i]);
 	}
 	return cleanText(parts.join(''));
 }

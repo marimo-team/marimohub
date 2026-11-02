@@ -25,7 +25,7 @@ Organize notebooks into shared projects. Each project has its own notebook list,
 
 ## Search
 
-Find notebooks, saved code, outputs, and data across accessible projects. Filter by project and resource type in the [search page](./search.md#search-in-the-web-app).
+When search is enabled, find notebooks, saved code, outputs, and data in accessible projects. Filter by project and resource type in the [search page](./search.md#search-in-the-web-app). Global queries cover at most 16 projects; see [coverage limits](./search.md#access-freshness-and-coverage).
 
 <figure class="doc-screenshot">
   <a href="/screenshots/search-desktop.png" target="_blank" rel="noreferrer" aria-label="Open full-size screenshot: Global search showing notebook and saved-code results with highlighted matches (new tab)">

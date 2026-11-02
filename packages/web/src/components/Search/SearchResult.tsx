@@ -26,7 +26,7 @@ export function SearchSnippet({ snippet }: { snippet: SearchHit['snippet'] }) {
 		offset = end;
 	}
 	parts.push(snippet.text.slice(offset));
-	return parts;
+	return <span>{parts}</span>;
 }
 
 export function SearchResult({

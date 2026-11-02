@@ -6,6 +6,30 @@ function createEmbeddings(request: typeof fetch) {
 }
 describe('HTTP embeddings', () => {
 	it.each([
+		'not a URL',
+		'/embeddings',
+		'https://',
+		'file:///embeddings',
+		'https://user:password@host',
+		'https://host/#fragment',
+		'https://host/?key=secret',
+	])('rejects invalid endpoint %j with a stable error', (endpoint) => {
+		expect(() => new HttpEmbeddings(endpoint, 'model')).toThrow('Invalid embedding endpoint');
+	});
+	it.each(['http://embedding.example/v1/embeddings', 'http://localhost:8000/embeddings'])(
+		'rejects plaintext credentials at %j before any request',
+		(endpoint) => {
+			const request = vi.fn<typeof fetch>();
+			expect(() => new HttpEmbeddings(endpoint, 'model', 'secret', request)).toThrow(
+				'must use HTTPS',
+			);
+			expect(request).not.toHaveBeenCalled();
+		},
+	);
+	it('allows credential-free HTTP endpoints for local providers', () => {
+		expect(() => new HttpEmbeddings('http://localhost:8000/embeddings', 'model')).not.toThrow();
+	});
+	it.each([
 		'null',
 		'{',
 		JSON.stringify({ data: [null] }),

@@ -205,12 +205,17 @@ export interface SearchSource {
 		principal: AuthenticatedPrincipal,
 		phase: 'rank' | 'return',
 		signal: AbortSignal,
-	): Promise<SearchDocument[]>;
+	): Promise<{ documents: SearchDocument[]; partial: boolean }>;
 }
 export interface EmbeddingProvider {
 	readonly space: string;
 	embed(texts: string[], signal: AbortSignal): Promise<number[][]>;
 }
+export function termMatches(text: string) {
+	return text.matchAll(/[\p{L}\p{M}\p{N}_]+/gu);
+}
 export function terms(text: string): string[] {
-	return [...new Set(text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])];
+	return [
+		...new Set([...termMatches(text.normalize('NFC').toLowerCase())].map((match) => match[0])),
+	];
 }

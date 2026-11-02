@@ -548,6 +548,7 @@ components:
         - project_alerts
         - jobs
         - mcp
+        - search
         - data_browser
         - viewer_mode
         - viewer_session_modes

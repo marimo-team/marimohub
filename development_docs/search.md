@@ -32,7 +32,7 @@ To add a searchable type:
 
 1. Extend hit kinds, resource references, and link construction.
 2. Implement `SearchSource.page` with bounded discovery and a resumable cursor.
-3. Implement `validate` for both `rank` and `return`, using current resource state and caller authorization.
+3. Implement `validate` for both `rank` and `return`, using current resource state and caller authorization. Return validated documents and a partial flag.
 4. Register the source and test revocation, deletion, freshness, cancellation, and budget exhaustion.
 5. Run `pnpm schemas:generate`.
 
@@ -55,11 +55,15 @@ Every project check rereads current state. Authorization decisions are never cac
 Notebook checks include security labels and credential grants.
 Final checks compare metadata, source, code, and output ETags with the indexed fingerprint.
 Changed content is excluded until a later crawl publishes a matching document. Live checks exclude deleted resources.
+HTML extraction excludes hidden attributes and literal inline `display:none` or `visibility:hidden` declarations.
+It does not evaluate stylesheets or browser layout.
 
 Integration checks require `integration.use`, an enabled and unshadowed integration, and matching version/update time.
 Live namespace and schema probes use the caller's upstream identity before ranking and returning results.
 Indexed fields contain names, kinds, and column types. Configuration, credentials, and rows are excluded.
 Chat-owner filtering runs before source checks, but no chat source is registered.
+Budget exhaustion preserves validated results and marks coverage partial. Failed project reads and revoked final access also mark coverage incomplete.
+Coverage contains at most one entry per project/source.
 
 Keyword retrieval unions whole-token postings. Ranking weights title matches above body matches.
 Hybrid queries fuse lexical and cosine ranks using reciprocal rank fusion.
@@ -84,11 +88,13 @@ This prevents mixed configurations from repeatedly replacing each other during a
 
 The indexer stages immutable pages behind a CAS checkpoint containing the build identity and original head revision.
 A ready marker permits publication retries without repeating the final page.
+If an immutable page is missing, a CAS reset restarts discovery and preserves the published snapshot.
 Serialized checkpoints cannot exceed 128 KiB, including UTF-8 cursor bytes, JSON escaping, and page references.
 If the next checkpoint exceeds this limit, the indexer drops the cursor and publishes the collected pages with partial coverage.
 Oversized stored checkpoints restart without parsing their bodies; replacement still requires the stored ETag.
 Cleanup skips these checkpoints until the scheduled crawl replaces them.
 Publication writes the snapshot, then replaces the head only if that revision still matches.
+A losing publication CAS leaves the checkpoint untouched.
 Readers retain the previous snapshot throughout the crawl. A changed head or build identity resets the checkpoint before reading its source cursor.
 Unversioned checkpoints also restart. Superseded workers skip discovery; workers already in flight lose publication CAS.
 A failed replacement leaves the previous snapshot available. Rollbacks must preserve monotonic revisions and compatible source formats.
@@ -128,22 +134,23 @@ Embedding and catalog calls receive cancellation signals where supported.
 
 ## Resource budgets
 
-| Resource                | Bound                                                                                |
-| ----------------------- | ------------------------------------------------------------------------------------ |
-| Project/source snapshot | 16 MiB and 20,000 documents                                                          |
-| Notebook artifacts      | 2 MiB per code or output artifact                                                    |
-| Indexed text            | 8,192 characters per hit type per resource                                           |
-| Cross-project discovery | First 16 non-deleted catalog projects, selected before authorization                 |
-| Query concurrency       | Two projects or final-validation batches; eight notebook checks per batch            |
-| Query deadline          | Three seconds: half for retrieval, half for final validation                         |
-| Candidates              | 200 per project/source, before authorization and ranking                             |
-| Results                 | At most 50, with snippets of at most 400 characters                                  |
-| Catalog validation      | At most 32 probes per source validation phase                                        |
-| Catalog crawl           | 500 queued tasks, 500 visited namespaces, 25 entries per page, 100 columns per table |
-| Crawl assembly          | Eight concurrent page reads; retries restart assembly                                |
-| Crawl checkpoint        | 1,000 pages, 65,536 cursor characters, and 128 KiB of serialized checkpoint state    |
-| Index cache             | 64 MiB of estimated cache weight per process                                         |
-| Stale status            | Index timestamp older than 15 minutes                                                |
+| Resource                  | Bound                                                                                |
+| ------------------------- | ------------------------------------------------------------------------------------ |
+| Project/source snapshot   | 16 MiB and 20,000 documents                                                          |
+| Notebook artifacts        | 2 MiB per metadata, source, code, or output artifact                                 |
+| Indexed text              | 8,192 characters per hit type per resource                                           |
+| Cross-project discovery   | First 16 non-deleted catalog projects, selected before authorization                 |
+| Query concurrency         | Two projects or final-validation batches; eight notebook checks per batch            |
+| Query deadline            | Three seconds: half for retrieval, half for final validation                         |
+| Candidates                | 200 per project/source, before authorization and ranking                             |
+| Results                   | At most 50, with snippets of at most 400 characters                                  |
+| Catalog validation        | At most 32 probes per source validation phase                                        |
+| Catalog crawl             | 500 queued tasks, 500 visited namespaces, 25 entries per page, 100 columns per table |
+| Crawl assembly            | Eight concurrent page reads; retries restart assembly                                |
+| Crawl checkpoint          | 1,000 pages, 65,536 cursor characters, and 128 KiB of serialized checkpoint state    |
+| Concurrent snapshot loads | 64 distinct snapshots per adapter instance; duplicate loads share work               |
+| Index cache               | 64 MiB of estimated cache weight per process                                         |
+| Stale status              | Index timestamp older than 15 minutes                                                |
 
 ## Tradeoffs and scalability
 
@@ -160,15 +167,17 @@ Cold retrieval loads the complete snapshot and builds all postings.
 One notebook can produce three documents. Content or vectors can exhaust the byte budget before the document limit.
 
 **Memory and concurrency.** The 64 MiB cache budget estimates weight as four times serialized size; it is not a heap cap.
-Temporary allocations and concurrent cold loads add memory. Duplicate cold reads are not coalesced.
-Per-request limits do not provide global admission control or establish concurrent-user capacity.
+Temporary allocations and concurrent cold loads add memory. Duplicate cold reads share the download, parse, and postings build.
+Each caller can cancel its wait independently. Bucket reads cannot be canceled, so stalled loads retain their slots until they settle.
+The adapter admits at most 64 distinct loads. Saturation fails the source safely but does not establish concurrent-user capacity.
 
 **Cross-project scope.** Discovery selects the first 16 non-deleted catalog projects before authorization.
 Accessible projects later in catalog order can be omitted. Explicit project selection avoids this cap.
 Two projects run concurrently, with sources sequential within each project.
 Global catalog reads, full crawls, and cache churn remain scaling costs.
 
-**Catalog scope.** Discovery and each live-check phase list merged project and organization integrations, up to 500 heads per scope.
+**Catalog scope.** Discovery and each live-check phase list merged project and organization integrations, up to 500 instance directories per scope.
+The budget includes tombstones and directories without heads. Counting only live heads would leave discovery reads unbounded.
 These reads can dominate before the 32-probe validation budget is reached.
 Schema probes are memoized within a request, never shared across principals.
 Pagination, provider permissions, and crawl limits can leave catalog content unindexed.
@@ -235,20 +244,21 @@ Run the opt-in benchmark:
 SEARCH_BENCH=1 pnpm --filter @marimo-hub/config test src/search.performance.test.ts
 ```
 
-The benchmark seeds filesystem objects and runs the configured indexer and authorized query service. It writes `.context/search-performance.json`. Cold queries use fresh application caches. The OS cache may remain warm. Warm p95 is the largest of ten subsequent samples.
+The benchmark seeds filesystem objects and runs the configured indexer and authorized query service. It writes `.context/search-performance.json`. Cold queries use fresh application caches. The OS cache may remain warm. The warm median averages the two middle samples. Warm p95 is the largest of ten subsequent samples.
 
-Measured on macOS with Node 24.22.1 and local filesystem storage, November 2, 2026:
+Measured on macOS with Node 24.22.1 and local filesystem storage, November 2, 2026.
+Other checks ran on the same host, so these measurements include host contention:
 
-| Notebooks | Query     | Cold    | Warm median | Warm p95 | Cold GET / HEAD | Warm GET / HEAD | Coverage               |
-| --------- | --------- | ------- | ----------- | -------- | --------------- | --------------- | ---------------------- |
-| 1,000     | Selective | 28.3 ms | 5.0 ms      | 8.9 ms   | 33 / 43         | 21 / 54         | Complete indexed scope |
-| 1,000     | Broad     | 27.9 ms | 11.4 ms     | 13.6 ms  | 116 / 43        | 21 / 137        | Candidate cap          |
-| 5,000     | Selective | 90.3 ms | 7.7 ms      | 13.8 ms  | 73 / 43         | 21 / 94         | Complete indexed scope |
-| 5,000     | Broad     | 73.7 ms | 9.7 ms      | 15.3 ms  | 109 / 39        | 19 / 128        | Candidate cap          |
+| Notebooks | Query     | Cold     | Warm median | Warm p95 | Cold GET / HEAD | Warm GET / HEAD | Coverage               |
+| --------- | --------- | -------- | ----------- | -------- | --------------- | --------------- | ---------------------- |
+| 1,000     | Selective | 96.9 ms  | 26.8 ms     | 99.5 ms  | 33 / 43         | 21 / 54         | Complete indexed scope |
+| 1,000     | Broad     | 62.2 ms  | 40.5 ms     | 69.1 ms  | 110 / 39        | 19 / 129        | Candidate cap          |
+| 5,000     | Selective | 131.2 ms | 12.8 ms     | 18.0 ms  | 73 / 43         | 21 / 94         | Complete indexed scope |
+| 5,000     | Broad     | 140.2 ms | 17.2 ms     | 27.4 ms  | 114 / 43        | 21 / 135        | Candidate cap          |
 
 Each notebook contains metadata and approximately 1.2 KiB of Python code. One quarter also has approximately 300 characters of saved output. The corpora contain 2,250 and 11,250 searchable documents. Selective queries match one of 100 cohorts; broad queries match common revenue terms. Each query requests 20 results.
 
-All measured queries made zero bucket LISTs and zero data-catalog probes. Cold GET payloads were approximately 2 MiB and 10 MiB. Warm GET payloads were approximately 4.5 KiB. HEAD calls still validate live authorization and artifact freshness. Index generation took approximately 1.1 and 8.1 seconds, excluding corpus creation and maintenance scheduling delays.
+All measured queries made zero bucket LISTs and zero data-catalog probes. Cold GET payloads were approximately 2 MiB and 10 MiB. Warm GET payloads were approximately 4.5 KiB. HEAD calls still validate live authorization and artifact freshness. Index generation took approximately 4.4 and 9.9 seconds, excluding corpus creation and maintenance scheduling delays.
 
 The corpus meets the local targets: cold latency below 500 ms and warm p95 below 150 ms.
 Broad-query measurements cover truncated results. These measurements exclude remote storage, catalog providers, concurrent load, and semantic quality.

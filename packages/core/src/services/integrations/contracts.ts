@@ -50,14 +50,18 @@ export interface IntegrationTestOptions {
 	signal?: AbortSignal;
 }
 
+export interface IntegrationListOptions {
+	/** Per-scope directory budget (1–500), including deleted and headless instances.
+	 * Exceeding it throws ResourceExhaustedError before reading instance heads. */
+	maxHeads?: number;
+	signal?: AbortSignal;
+}
+
 /** Application service for project integrations and inherited organization integrations. */
 export interface ProjectIntegrationsService {
 	listKinds(): KindDescriptor[];
 	secretSources(): IntegrationSecretSources;
-	list(
-		projectId: ProjectId,
-		options?: { maxHeads?: number; signal?: AbortSignal },
-	): Promise<IntegrationEntry[]>;
+	list(projectId: ProjectId, options?: IntegrationListOptions): Promise<IntegrationEntry[]>;
 	get(projectId: ProjectId, id: IntegrationId): Promise<IntegrationDetail>;
 	create(
 		projectId: ProjectId,

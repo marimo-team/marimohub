@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { expect, it } from 'vitest';
 import { FsStorage } from '@marimo-hub/storage-fs';
@@ -168,14 +169,16 @@ it.skipIf(process.env.SEARCH_BENCH !== '1')(
 						query: name,
 						indexingMs,
 						cold: rows[0],
-						warmMedian: warm[4],
+						warmMedian: { ...warm[4], ms: (warm[4].ms + warm[5].ms) / 2 },
 						warmP95: warm[9],
 						catalogProbes: 0,
 					});
 				}
 			}
-			const target = resolve('../../.context/search-performance.json');
-			await mkdir(resolve('../../.context'), { recursive: true });
+			const target = fileURLToPath(
+				new URL('../../../.context/search-performance.json', import.meta.url),
+			);
+			await mkdir(new URL('../../../.context/', import.meta.url), { recursive: true });
 			await writeFile(
 				target,
 				JSON.stringify(

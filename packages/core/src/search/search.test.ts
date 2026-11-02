@@ -8,7 +8,7 @@ import { AuthorizationService } from '../services/authorization/AuthorizationSer
 import { NotebookSource } from './NotebookSource';
 import { SearchIndexer } from './SearchIndexer';
 import { SearchService } from './SearchService';
-import { SearchRequestSchema } from './contracts';
+import { SearchRequestSchema, SearchCheckpointSchema, terms } from './contracts';
 import { searchPaths } from './paths';
 import { MAX_SEARCH_CHECKPOINT_BYTES, MAX_SEARCH_CURSOR_LENGTH } from './limits';
 import type { SearchSource, SearchDocument } from './contracts';
@@ -62,6 +62,44 @@ async function setup() {
 	};
 }
 describe('authorized search', () => {
+	it.each(['राजस्व', 'รายได้', 'café'])('keeps combining marks in the token %s', (text) => {
+		expect(terms(`${text} ${text}`)).toEqual([text.normalize('NFC')]);
+	});
+	it('reports a failed project read without leaking its identity or dropping other projects', async () => {
+		const f = await setup();
+		const unavailable = await f.services.projects.createProject(
+			{ name: 'Unavailable', description: '' },
+			owner.id,
+		);
+		const getProject = f.services.projects.getProject.bind(f.services.projects);
+		vi.spyOn(f.services.projects, 'getProject').mockImplementation((id, options) => {
+			if (id === unavailable.id) return Promise.reject(new Error('private storage details'));
+			return getProject(id, options);
+		});
+		const result = await f.search.search(owner, { ...f.query, project_id: undefined });
+		expect(result.items).toHaveLength(1);
+		expect(result.partial).toBe(true);
+		expect(result.coverage).toContainEqual({ source: 'search', status: 'unavailable' });
+		expect(JSON.stringify(result)).not.toContain(unavailable.id);
+		expect(JSON.stringify(result)).not.toContain('private storage details');
+	});
+	it.each(['rank', 'return'])(
+		'preserves verified results when %s validation is partial',
+		async (phase) => {
+			const f = await setup();
+			const validate = f.source.validate.bind(f.source);
+			vi.spyOn(f.source, 'validate').mockImplementation(async (...args) => ({
+				...(await validate(...args)),
+				partial: args[3] === phase,
+			}));
+			const result = await f.search.search(owner, f.query);
+			expect(result.items).toHaveLength(1);
+			expect(result.partial).toBe(true);
+			expect(result.coverage).toEqual([
+				{ source: f.source.id, project_id: f.project.id, status: 'partial' },
+			]);
+		},
+	);
 	it('passes the query vector to a retrieval-only backend without snapshot methods', async () => {
 		const f = await setup();
 		const candidates = vi.fn(f.index.candidates.bind(f.index));
@@ -125,7 +163,7 @@ describe('authorized search', () => {
 			id: 'other',
 			kinds: ['datasource'],
 			page: async () => ({ documents: [], partial: false }),
-			validate: async (_p, docs) => docs,
+			validate: async (_p, docs) => ({ documents: docs, partial: false }),
 		};
 		const original = f.index.candidates.bind(f.index);
 		vi.spyOn(f.index, 'candidates').mockImplementation(async (...args) => {
@@ -140,7 +178,14 @@ describe('authorized search', () => {
 			f.services.projects,
 			f.authz,
 		);
-		expect((await search.search(outsider, f.query)).items).toEqual([]);
+		const result = await search.search(outsider, f.query);
+		expect(result.items).toEqual([]);
+		expect(result.partial).toBe(true);
+		expect(result.coverage).toContainEqual({
+			source: f.source.id,
+			project_id: f.project.id,
+			status: 'partial',
+		});
 	});
 	it('rechecks project access before ranking after index retrieval', async () => {
 		const f = await setup();
@@ -181,7 +226,10 @@ describe('authorized search', () => {
 			{ schema_version: 1, indexed_at: new Date().toISOString(), documents, partial: false },
 			null,
 		);
-		const validate = vi.fn<SearchSource['validate']>(async (_p, docs) => docs);
+		const validate = vi.fn<SearchSource['validate']>(async (_p, docs) => ({
+			documents: docs,
+			partial: false,
+		}));
 		const source: SearchSource = {
 			revision: 1,
 			id: 'chats',
@@ -210,7 +258,7 @@ describe('authorized search', () => {
 			id: 'stuck',
 			kinds: ['datasource'],
 			page: async () => ({ documents: [], partial: false }),
-			validate: async () => [],
+			validate: async () => ({ documents: [], partial: false }),
 		};
 		const original = f.index.candidates.bind(f.index);
 		vi.spyOn(f.index, 'candidates').mockImplementation((...args) =>
@@ -311,6 +359,7 @@ describe('authorized search', () => {
 			project_id: f.project.id,
 			status: 'unavailable',
 		});
+		expect(result.coverage).toHaveLength(1);
 		expect(JSON.stringify(result)).not.toContain('private-value');
 	});
 	it('drops results when project access is revoked during final resource checks', async () => {
@@ -323,7 +372,12 @@ describe('authorized search', () => {
 				await f.services.projects.removeMember(f.project.id, outsider.id, owner.id);
 			return docs;
 		});
-		expect((await f.search.search(outsider, f.query)).items).toEqual([]);
+		const result = await f.search.search(outsider, f.query);
+		expect(result.items).toEqual([]);
+		expect(result.partial).toBe(true);
+		expect(result.coverage).toEqual([
+			{ source: f.source.id, project_id: f.project.id, status: 'partial' },
+		]);
 	});
 	it('keeps keyword results when query embeddings fail', async () => {
 		const f = await setup();
@@ -513,28 +567,77 @@ describe('resumable search indexing', () => {
 		]);
 		expect((await f.index.read(scope)).snapshot?.documents).toEqual([{ ...doc, text: 'latest' }]);
 	});
-	it('does not publish an incomplete corpus when a checkpoint page is missing', async () => {
+	it('restarts a crawl with missing pages while retaining the published snapshot', async () => {
 		const f = await setup();
 		const scope = { projectId: f.project.id, source: f.source.id };
 		const old = await f.index.read(scope);
-		vi.spyOn(f.source, 'page')
+		const page = vi
+			.spyOn(f.source, 'page')
 			.mockResolvedValueOnce({ documents: [], partial: false, cursor: f.notebook.id })
 			.mockResolvedValueOnce({ documents: [], partial: false, cursor: undefined });
 		await f.indexer.step(f.project.id, f.source, signal());
-		const pages = await f.bucket.list({
-			prefix: `_system/search/projects/${f.project.id}/${f.source.id}/pages/`,
-		});
+		const pages = await f.bucket.list({ prefix: searchPaths.scope(scope).pages });
 		await f.bucket.delete(pages.objects.map((p) => p.key));
-		await expect(f.indexer.step(f.project.id, f.source, signal())).rejects.toThrow(
-			'crawl page unavailable',
-		);
+		expect(await f.indexer.step(f.project.id, f.source, signal())).toBe(false);
 		expect(await f.index.read(scope)).toEqual(old);
+		const checkpoint = SearchCheckpointSchema.parse(
+			await (await f.bucket.get(searchPaths.scope(scope).checkpoint))!.json(),
+		);
+		expect(checkpoint).toMatchObject({ pages: [], ready: false });
+		expect(checkpoint.cursor).toBeUndefined();
+		expect(await f.indexer.step(f.project.id, f.source, signal())).toBe(true);
+		expect(page.mock.calls.map((call) => call[1])).toEqual([undefined, f.notebook.id, undefined]);
+		expect((await f.index.read(scope)).snapshot?.documents).toEqual(old.snapshot!.documents);
+	});
+	it('does not overwrite a newer checkpoint when resetting a missing page', async () => {
+		const f = await setup();
+		const scope = { projectId: f.project.id, source: f.source.id };
+		const key = searchPaths.scope(scope).checkpoint;
+		vi.spyOn(f.source, 'page').mockResolvedValue({
+			documents: [],
+			partial: false,
+			cursor: undefined,
+		});
+		const get = f.bucket.get.bind(f.bucket);
+		let replacement: unknown;
+		vi.spyOn(f.bucket, 'get').mockImplementation(async (path) => {
+			if (path.startsWith(searchPaths.scope(scope).pages)) {
+				const checkpoint = SearchCheckpointSchema.parse(await (await get(key))!.json());
+				replacement = {
+					...checkpoint,
+					generation: crypto.randomUUID(),
+					cursor: 'newer',
+					ready: false,
+				};
+				await f.bucket.put(key, JSON.stringify(replacement));
+				return null;
+			}
+			return get(path);
+		});
+		expect(await f.indexer.step(f.project.id, f.source, signal())).toBe(false);
+		expect(await (await get(key))!.json()).toEqual(replacement);
+	});
+	it('does not read or reset a checkpoint after losing the publication CAS', async () => {
+		const f = await setup();
+		const scope = { projectId: f.project.id, source: f.source.id };
+		const key = searchPaths.scope(scope).checkpoint;
+		const head = vi.spyOn(f.index, 'head');
+		let checkpointEtag: string | undefined;
+		vi.spyOn(f.index, 'publish').mockImplementation(async () => {
+			checkpointEtag = (await f.bucket.get(key))!.etag;
+			head.mockClear();
+			return false;
+		});
+		expect(await f.indexer.step(f.project.id, f.source, signal())).toBe(false);
+		expect(head).not.toHaveBeenCalled();
+		expect(checkpointEtag).toBeDefined();
+		expect((await f.bucket.get(key))!.etag).toBe(checkpointEtag);
 	});
 	it('does not checkpoint or publish a page after caller cancellation', async () => {
 		const f = await setup();
 		const scope = { projectId: f.project.id, source: f.source.id };
 		const old = await f.index.read(scope);
-		const key = `_system/search/projects/${f.project.id}/${f.source.id}/crawl.json`;
+		const key = searchPaths.scope(scope).checkpoint;
 		const checkpoint = await f.bucket.get(key);
 		const controller = new AbortController();
 		vi.spyOn(f.source, 'page').mockImplementation(async () => {
@@ -544,7 +647,8 @@ describe('resumable search indexing', () => {
 		await expect(f.indexer.step(f.project.id, f.source, controller.signal)).rejects.toMatchObject({
 			name: 'AbortError',
 		});
-		expect((await f.bucket.get(key))?.etag).toBe(checkpoint?.etag);
+		expect(checkpoint).not.toBeNull();
+		expect((await f.bucket.get(key))!.etag).toBe(checkpoint!.etag);
 		expect(await f.index.read(scope)).toEqual(old);
 	});
 	it('abandons an old crawl after another writer advances the index head', async () => {
@@ -583,7 +687,7 @@ describe('resumable search indexing', () => {
 				documents: [{ ...document, id: 'invalid', text: 'x'.repeat(8193) }, document],
 				partial: false,
 			}),
-			validate: async (_p, docs) => docs,
+			validate: async (_p, docs) => ({ documents: docs, partial: false }),
 		};
 		const indexer = new SearchIndexer(
 			f.bucket,
@@ -607,7 +711,7 @@ describe('resumable search indexing', () => {
 			id: 'pages',
 			kinds: ['notebook'],
 			page,
-			validate: async (_p, docs) => docs,
+			validate: async (_p, docs) => ({ documents: docs, partial: false }),
 		};
 		const indexer = new SearchIndexer(
 			f.bucket,

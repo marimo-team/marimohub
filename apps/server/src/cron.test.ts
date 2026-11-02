@@ -4,6 +4,7 @@ import type { ApiDeps } from '@marimo-hub/api';
 import type * as CoreModule from '@marimo-hub/core';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 import {
+	AuthorizationService,
 	createSandboxId,
 	MaintenanceLock,
 	WarmPoolService,
@@ -14,10 +15,14 @@ import {
 	SessionLifecycleService,
 } from '@marimo-hub/core';
 import { JobScheduler } from '@marimo-hub/core/jobs';
+import { SearchIndexer, SearchService } from '@marimo-hub/core/search';
+import { searchPaths } from '@marimo-hub/core/search/paths';
+import { MemorySearchIndex } from '@marimo-hub/core/testing/search';
 import type { SweepResult } from '@marimo-hub/core';
 import { ACTOR, makeNotebookMeta, makeProject, makeSession } from '@marimo-hub/core/testing';
 import {
 	startPreviewPreparation,
+	startSearchIndexing,
 	startJobScheduler,
 	startMaintenance,
 	startSessionLifecycle,
@@ -80,6 +85,17 @@ function makeWarmPool(deps: ApiDeps, enabled = true) {
 		deps.services.sessions,
 		{ enabled, size: 1, profiles: [], creationTimeoutMs: 300_000, minimumRemainingMs: 60_000 },
 	);
+}
+
+function configureSearch(deps: ApiDeps) {
+	const index = new MemorySearchIndex();
+	const { catalog, projects } = deps.services;
+	const indexer = new SearchIndexer(deps.bucket, index, [], catalog, projects);
+	deps.search = {
+		service: new SearchService(index, [], catalog, projects, new AuthorizationService(deps.policy)),
+		indexer,
+	};
+	return indexer;
 }
 
 describe('startMaintenance', () => {
@@ -688,6 +704,44 @@ describe('startWarmPools', () => {
 	});
 });
 
+describe('startSearchIndexing', () => {
+	const h = useLoopHarness();
+
+	it('does not register a loop or timer when search is disabled', async () => {
+		const deps = makeTestDeps(await createInitializedBucket());
+		const loops = new BackgroundLoops();
+		expect(startSearchIndexing(deps, loops)).toBeUndefined();
+		expect(vi.getTimerCount()).toBe(0);
+		expect(loops.health().loops).not.toHaveProperty('search_indexing');
+	});
+
+	it('aborts the active tick on shutdown and does not schedule another', async () => {
+		const deps = makeTestDeps(await createInitializedBucket());
+		const indexer = configureSearch(deps);
+		const done = Promise.withResolvers<void>();
+		const tick = vi.spyOn(indexer, 'tick').mockImplementation(() => done.promise);
+		const loops = new BackgroundLoops();
+		const stop = h.track(startSearchIndexing(deps, loops)!);
+		try {
+			await flushRun();
+			expect(tick).toHaveBeenCalledOnce();
+			expect(loops.health().loops.search_indexing).toMatchObject({
+				interval_ms: 5_000,
+				deadline_ms: 30_000,
+			});
+			const signal = tick.mock.calls[0][0];
+			expect(signal?.aborted).toBe(false);
+			stop();
+			expect(signal?.aborted).toBe(true);
+			done.resolve();
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(tick).toHaveBeenCalledOnce();
+		} finally {
+			done.resolve();
+		}
+	});
+});
+
 describe('startPreviewPreparation', () => {
 	const h = useLoopHarness();
 
@@ -737,6 +791,19 @@ interface LoopCase {
 }
 
 const LOOPS: LoopCase[] = [
+	{
+		name: 'search_indexing',
+		lockKey: searchPaths.lock,
+		intervalMs: 5_000,
+		failureEvent: 'search_indexing_failed',
+		overlapEvent: 'search_index_overlap_skipped',
+		notLeaderEvent: 'search_index_not_leader',
+		start(deps, loops, work) {
+			const indexer = configureSearch(deps);
+			vi.spyOn(indexer, 'tick').mockImplementation((signal) => work(signal));
+			return startSearchIndexing(deps, loops)!;
+		},
+	},
 	{
 		name: 'maintenance',
 		lockKey: paths.maintenanceLock,
@@ -880,6 +947,9 @@ describe('background loop wiring', () => {
 				expect(loops.health().loops[loop.name].status).toBe('stalled');
 				if (loop.name === 'preview_preparation') {
 					expect((work.mock.calls[0][1] as AbortSignal).aborted).toBe(true);
+				}
+				if (loop.name === 'search_indexing') {
+					expect((work.mock.calls[0][0] as AbortSignal).aborted).toBe(true);
 				}
 
 				late.resolve();

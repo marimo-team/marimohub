@@ -7,7 +7,12 @@ import type {
 	SearchBuild,
 } from '../search/contracts';
 import { canClaimSearchBuild, sameSearchBuild } from '../search/build';
-import { terms } from '../search/contracts';
+import {
+	terms,
+	SearchSnapshotSchema,
+	SearchBuildSchema,
+	MAX_INDEX_BYTES,
+} from '../search/contracts';
 import { MAX_SEARCH_CANDIDATES } from '../search/limits';
 
 export class MemorySearchIndex implements SearchRetriever, SearchSnapshotStore {
@@ -23,14 +28,15 @@ export class MemorySearchIndex implements SearchRetriever, SearchSnapshotStore {
 		};
 		return { revision, build, deleted };
 	}
-	async claim(scope: SearchScope, build: SearchBuild) {
+	async claim(scope: SearchScope, input: SearchBuild) {
+		const build = SearchBuildSchema.parse(input);
 		const key = `${scope.projectId}/${scope.source}`;
 		const current = this.records.get(key);
 		if (current?.deleted || !canClaimSearchBuild(current?.build, build)) return null;
 		if (current && sameSearchBuild(current.build, build)) return current;
 		const snapshot = current?.snapshot ?? null;
 		const next = { revision: String(++this.generation), snapshot, build, deleted: false };
-		this.records.set(`${scope.projectId}/${scope.source}`, next);
+		this.records.set(key, next);
 		return { revision: next.revision, build, deleted: false };
 	}
 	async read(scope: SearchScope) {
@@ -38,13 +44,17 @@ export class MemorySearchIndex implements SearchRetriever, SearchSnapshotStore {
 			this.records.get(`${scope.projectId}/${scope.source}`) ?? { revision: null, snapshot: null }
 		);
 	}
-	async publish(scope: SearchScope, snapshot: SearchSnapshot | null, revision: string | null) {
-		const current = await this.head(scope);
-		if (current.revision !== revision || (snapshot && current.deleted)) return false;
-		this.records.set(`${scope.projectId}/${scope.source}`, {
+	async publish(scope: SearchScope, input: SearchSnapshot | null, revision: string | null) {
+		const key = `${scope.projectId}/${scope.source}`;
+		const current = this.records.get(key);
+		if ((current?.revision ?? null) !== revision || (input && current?.deleted)) return false;
+		const snapshot = input ? SearchSnapshotSchema.parse(input) : null;
+		if (snapshot && new TextEncoder().encode(JSON.stringify(snapshot)).length > MAX_INDEX_BYTES)
+			throw new Error('Search snapshot exceeds budget');
+		this.records.set(key, {
 			revision: String(++this.generation),
-			snapshot: structuredClone(snapshot),
-			build: current.build,
+			snapshot,
+			build: current?.build,
 			deleted: snapshot === null,
 		});
 		return true;

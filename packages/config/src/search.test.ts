@@ -8,8 +8,38 @@ describe('search configuration', () => {
 	it('is disabled by default and rejects unknown backends', () => {
 		expect(makeSearch({}, deps())).toBeUndefined();
 		expect(() => makeSearch({ MARIMOHUB_SEARCH_BACKEND: 'unknown' }, deps())).toThrow(
-			'off or bucket',
+			'expected off, bucket',
 		);
+	});
+	it.each(['BUCKET', ' bucket ', 'BuCkEt'])('normalizes backend %j', (backend) => {
+		expect(makeSearch({ MARIMOHUB_SEARCH_BACKEND: backend }, deps())).toBeDefined();
+	});
+	it.each(['OFF', ' off ', '   ', ''])('disables backend %j', (backend) => {
+		expect(makeSearch({ MARIMOHUB_SEARCH_BACKEND: backend }, deps())).toBeUndefined();
+	});
+	it.each([undefined, 'off', 'bucket'])(
+		'rejects orphan embedding keys with backend %j',
+		(backend) => {
+			expect(() =>
+				makeSearch(
+					{ MARIMOHUB_SEARCH_BACKEND: backend, MARIMOHUB_SEARCH_EMBEDDING_API_KEY: 'secret' },
+					deps(),
+				),
+			).toThrow('requires an embedding URL and model');
+		},
+	);
+	it('rejects an HTTP embedding endpoint with a credential', () => {
+		expect(() =>
+			makeSearch(
+				{
+					MARIMOHUB_SEARCH_BACKEND: 'bucket',
+					MARIMOHUB_SEARCH_EMBEDDING_URL: 'http://embedding.example/v1/embeddings',
+					MARIMOHUB_SEARCH_EMBEDDING_MODEL: 'model',
+					MARIMOHUB_SEARCH_EMBEDDING_API_KEY: 'secret',
+				},
+				deps(),
+			),
+		).toThrow('must use HTTPS');
 	});
 	it('enables keyword search without embedding credentials', () => {
 		expect(

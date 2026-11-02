@@ -25,9 +25,9 @@ Selected by `MARIMOHUB_SEARCH_BACKEND` (default `off`); one of `bucket`, `off`.
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_SEARCH_BUILD_REVISION` | Positive monotonic revision. Increase when changing embedding or catalog discovery configuration; older indexers cannot overwrite newer builds. | — | `1` | — |
-| `MARIMOHUB_SEARCH_EMBEDDING_URL` | Optional embeddings endpoint. Sends notebook content to this endpoint. Requires an embedding model. | — | — | — |
-| `MARIMOHUB_SEARCH_EMBEDDING_MODEL` | Optional model for semantic notebook indexing. Keyword search does not require embeddings. | — | — | — |
-| `MARIMOHUB_SEARCH_EMBEDDING_API_KEY` 🔒 | Bearer credential for the embedding endpoint. | — | — | — |
+| `MARIMOHUB_SEARCH_EMBEDDING_URL` | Optional embeddings endpoint. Sends notebook content to this endpoint. Requires an embedding model and HTTPS when an API key is set. | — | — | — |
+| `MARIMOHUB_SEARCH_EMBEDDING_MODEL` | Optional model for semantic notebook indexing. Requires MARIMOHUB_SEARCH_EMBEDDING_URL. Keyword search does not require embeddings. | — | — | — |
+| `MARIMOHUB_SEARCH_EMBEDDING_API_KEY` 🔒 | Bearer credential for the HTTPS embedding endpoint. Requires an embedding URL and model. | — | — | — |
 
 ### Disabled
 

@@ -150,7 +150,7 @@ const OBJECTS: BucketObject[] = [
 	},
 	{
 		name: 'SearchCrawlPage',
-		key: '_system/search/projects/{pid}/{source}/pages/{generation}.json',
+		key: '_system/search/projects/{pid}/{source}/pages/{page}.json',
 		schema: SearchSnapshotSchema,
 		summary: 'Immutable page of a resumable search crawl.',
 		mutability: 'immutable',

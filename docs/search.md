@@ -17,7 +17,8 @@ MARIMOHUB_SEARCH_EMBEDDING_MODEL=your-embedding-model
 MARIMOHUB_SEARCH_EMBEDDING_API_KEY=your-provider-key
 ```
 
-The API key is optional. Enabling embeddings permits sending notebook text to that endpoint.
+The API key is optional and requires an HTTPS endpoint. Local HTTP endpoints work without a key.
+Enabling embeddings permits sending notebook text to that endpoint.
 Integration configuration and credentials are excluded. Provider failures retain keyword search and report incomplete coverage.
 
 When changing embedding or catalog discovery settings, increase `MARIMOHUB_SEARCH_BUILD_REVISION` (default `1`).

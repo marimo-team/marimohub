@@ -30,7 +30,7 @@ describe('Workspace search shortcut', () => {
 		(route) => {
 			setup('MacIntel', true, `${route}?q=revenue`);
 			fireEvent.keyDown(document, { key: 'k', metaKey: true });
-			expect(screen.getByRole('status', { name: 'Location' })).toHaveTextContent(
+			expect(screen.getByRole('status', { name: 'Location' }).textContent).toBe(
 				`${route}?q=revenue`,
 			);
 		},
@@ -45,7 +45,7 @@ describe('Workspace search shortcut', () => {
 		const event = new KeyboardEvent('keydown', { key: 'k', metaKey: true, cancelable: true });
 		event.preventDefault();
 		document.dispatchEvent(event);
-		expect(screen.getByRole('status', { name: 'Location' })).toHaveTextContent('/projects/alpha');
+		expect(screen.getByRole('status', { name: 'Location' }).textContent).toBe('/projects/alpha');
 	});
 	it.each([
 		['MacIntel', { metaKey: true }],
@@ -54,7 +54,7 @@ describe('Workspace search shortcut', () => {
 		setup(platform);
 		screen.getByRole('textbox').focus();
 		fireEvent.keyDown(document, { key: 'k', ...modifiers });
-		expect(screen.getByRole('status', { name: 'Location' })).toHaveTextContent('/search');
+		expect(screen.getByRole('status', { name: 'Location' }).textContent).toBe('/search');
 		expect(screen.getByRole('status', { name: 'Focus' })).toHaveTextContent('true');
 	});
 	it('preserves an existing search scope and requests focus again on repeated shortcuts', () => {
@@ -63,7 +63,7 @@ describe('Workspace search shortcut', () => {
 		const key = screen.getByRole('status', { name: 'Key' }).textContent;
 		fireEvent.keyDown(document, { key: 'k', metaKey: true });
 		expect(screen.getByRole('status', { name: 'Key' }).textContent).not.toBe(key);
-		expect(screen.getByRole('status', { name: 'Location' })).toHaveTextContent(
+		expect(screen.getByRole('status', { name: 'Location' }).textContent).toBe(
 			'/projects/alpha/search?q=revenue&kind=code',
 		);
 	});
@@ -76,12 +76,12 @@ describe('Workspace search shortcut', () => {
 	])('ignores unrelated or composing key events (%j)', (event) => {
 		setup();
 		fireEvent.keyDown(document, event);
-		expect(screen.getByRole('status', { name: 'Location' })).toHaveTextContent('/projects/alpha');
+		expect(screen.getByRole('status', { name: 'Location' }).textContent).toBe('/projects/alpha');
 	});
 	it('does not intercept the browser shortcut when disabled', () => {
 		setup('MacIntel', false);
 		expect(fireEvent.keyDown(document, { key: 'k', metaKey: true })).toBe(true);
-		expect(screen.getByRole('status', { name: 'Location' })).toHaveTextContent('/projects/alpha');
+		expect(screen.getByRole('status', { name: 'Location' }).textContent).toBe('/projects/alpha');
 	});
 	it('removes the listener on unmount', () => {
 		const { unmount } = setup();

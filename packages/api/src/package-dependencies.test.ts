@@ -15,6 +15,8 @@ const DEPENDENCY_FIELDS = [
 ] as const;
 
 it('recognizes adapter implementations', () => {
+	expect(ADAPTER_PATTERN.test('@marimo-hub/search-bucket')).toBe(true);
+	expect(ADAPTER_PATTERN.test('@marimo-hub/embeddings-http')).toBe(true);
 	expect(ADAPTER_PATTERN.test('@marimo-hub/source-control-github')).toBe(true);
 	expect(ADAPTER_PATTERN.test('@marimo-hub/database-browser-bigquery')).toBe(true);
 	expect(ADAPTER_PATTERN.test('@marimo-hub/notebook-bridge')).toBe(true);

@@ -10,7 +10,14 @@ export class HttpEmbeddings implements EmbeddingProvider {
 		private readonly apiKey?: string,
 		private readonly request: typeof fetch = fetch,
 	) {
-		const url = new URL(endpoint);
+		let url: URL;
+		try {
+			url = new URL(endpoint);
+		} catch {
+			throw new Error('Invalid embedding endpoint');
+		}
+		if (apiKey && url.protocol !== 'https:')
+			throw new Error('Embedding endpoint must use HTTPS when an API key is configured');
 		if (
 			!['https:', 'http:'].includes(url.protocol) ||
 			url.username ||

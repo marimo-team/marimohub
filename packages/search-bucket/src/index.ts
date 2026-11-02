@@ -1,4 +1,5 @@
 import { canClaimSearchBuild, sameSearchBuild } from '@marimo-hub/core/search/build';
+import { withAbortSignal } from '@marimo-hub/core/async';
 import { LRUCache } from 'lru-cache';
 import type { Bucket } from '@marimo-hub/core/ports/bucket';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
@@ -22,6 +23,8 @@ import type {
 	SearchCandidatesRequest,
 } from '@marimo-hub/core/search/contracts';
 
+const MAX_PENDING_LOADS = 64;
+
 interface Cached {
 	snapshot: SearchSnapshot;
 	postings: Map<string, number[]>;
@@ -30,6 +33,7 @@ interface Cached {
 
 export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 	private readonly cache: LRUCache<string, Cached>;
+	private readonly loading = new Map<string, Promise<Cached>>();
 	constructor(
 		private readonly bucket: Bucket,
 		maxCacheBytes = 64 * 1024 * 1024,
@@ -97,26 +101,39 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 		const { revision, head } = await this.loadHead(scope, signal);
 		if (!head || head.deleted || !head.key) return { revision, snapshot: null };
 		signal.throwIfAborted();
-		let cached = this.cache.get(head.key);
-		if (!cached) {
-			const body = await this.bucket.get(head.key);
-			if (!body || body.size > MAX_INDEX_BYTES)
-				throw new Error('Search snapshot unavailable or exceeds budget');
-			const snapshot = SearchSnapshotSchema.parse(await body.json());
-			const postings = new Map<string, number[]>();
-			snapshot.documents.forEach((document, index) => {
-				for (const term of terms(`${document.title} ${document.text}`)) {
-					const list = postings.get(term) ?? [];
-					list.push(index);
-					postings.set(term, list);
-				}
-			});
-			cached = { snapshot, postings, bytes: body.size * 4 };
-			this.cache.set(head.key, cached);
-		}
+		const cached =
+			this.cache.get(head.key) ?? (await withAbortSignal(this.loadSnapshot(head.key), signal));
 		signal.throwIfAborted();
 		return { revision, snapshot: cached.snapshot, postings: cached.postings };
 	}
+	private loadSnapshot(key: string): Promise<Cached> {
+		const pending = this.loading.get(key);
+		if (pending) return pending;
+		if (this.loading.size >= MAX_PENDING_LOADS)
+			return Promise.reject(new Error('Search snapshot loading capacity exceeded'));
+		// Each caller cancels its own wait; immutable snapshot work is shared across callers.
+		const loading = this.fetchSnapshot(key).finally(() => this.loading.delete(key));
+		this.loading.set(key, loading);
+		return loading;
+	}
+	private async fetchSnapshot(key: string): Promise<Cached> {
+		const body = await this.bucket.get(key);
+		if (!body || body.size > MAX_INDEX_BYTES)
+			throw new Error('Search snapshot unavailable or exceeds budget');
+		const snapshot = SearchSnapshotSchema.parse(await body.json());
+		const postings = new Map<string, number[]>();
+		snapshot.documents.forEach((document, index) => {
+			for (const term of terms(`${document.title} ${document.text}`)) {
+				const list = postings.get(term) ?? [];
+				list.push(index);
+				postings.set(term, list);
+			}
+		});
+		const cached = { snapshot, postings, bytes: body.size * 4 };
+		this.cache.set(key, cached);
+		return cached;
+	}
+
 	async publish(
 		scope: SearchScope,
 		snapshot: SearchSnapshot | null,

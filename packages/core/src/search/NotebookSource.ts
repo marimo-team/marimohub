@@ -16,7 +16,7 @@ import type { SearchDocument, SearchSource } from './contracts';
 
 const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
 export class NotebookSource implements SearchSource {
-	readonly revision = 1;
+	readonly revision = 2;
 	readonly id = 'notebooks';
 	readonly kinds = ['notebook', 'code', 'output'] as const;
 	constructor(
@@ -36,17 +36,14 @@ export class NotebookSource implements SearchSource {
 			this.bucket.get(nb.meta),
 			this.bucket.get(nb.source),
 		]);
-		if (
-			!metaObject ||
-			!sourceObject ||
-			metaObject.size > MAX_ARTIFACT_BYTES ||
-			sourceObject.size > MAX_ARTIFACT_BYTES
-		)
-			return null;
+		if (!metaObject || metaObject.size > MAX_ARTIFACT_BYTES)
+			throw new Error('Notebook metadata is missing or exceeds the read budget');
 		const meta = NotebookMetaSchema.parse(await metaObject.json());
 		if (meta.id !== notebookId || meta.project_id !== project.id)
 			throw new Error('Notebook identity mismatch');
 		if (meta.status === 'deleted' || meta.preview) return null;
+		if (!sourceObject || sourceObject.size > MAX_ARTIFACT_BYTES)
+			throw new Error('Notebook source is missing or exceeds the read budget');
 		const source = SourceSchema.parse(await sourceObject.json());
 		const remote = remoteWorkspaceEntry(source);
 		const codeKey = remote
@@ -183,12 +180,13 @@ export class NotebookSource implements SearchSource {
 				if (!(error instanceof NotFoundError)) throw error;
 			}
 		});
-		return documents.filter(
+		const validated = documents.filter(
 			(d) =>
 				d.resource.type === 'notebook' &&
 				allowed.has(d.resource.notebook_id) &&
 				(phase === 'rank' || allowed.get(d.resource.notebook_id) === d.fingerprint),
 		);
+		return { documents: validated, partial: validated.length !== documents.length };
 	}
 }
 export function savedOutputText(text: string): string {

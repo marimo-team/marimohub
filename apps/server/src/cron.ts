@@ -364,7 +364,7 @@ export function startSearchIndexing(
 ): (() => void) | undefined {
 	if (!deps.search) return undefined;
 	return loops.start({
-		name: 'search-indexing',
+		name: 'search_indexing',
 		intervalMs: Millis.seconds(5),
 		deadlineMs: Millis.seconds(30),
 		abortOnStop: true,

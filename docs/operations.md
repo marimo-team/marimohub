@@ -128,9 +128,11 @@ several run maintenance.
 | `session_lifecycle`   | `MARIMOHUB_SESSION_SWEEP_INTERVAL_SECONDS` (default 60 s) | `_system/_session_lifecycle.lock` | Session lifetimes are enabled |
 | `warm_pool`           | 5 s (5 min while warm pools are disabled)                 | `_system/_warm_pool.lock`         | A warm pool is configured     |
 | `job_scheduler`       | `MARIMOHUB_JOBS_TICK_SECONDS` (default 60 s)              | `_system/_jobs.lock`              | `MARIMOHUB_JOBS=on`           |
+| `search_indexing`     | 5 s                                                       | `_system/search/lock.json`        | Search is configured          |
 | `preview_preparation` | 15 s                                                      | None                              | Source control is configured  |
 
-Each attempt has a deadline of `max(3 × interval, 10 min)`, covering lease
+Search indexing has a 30-second deadline. Other attempts have a deadline of
+`max(3 × interval, 10 min)`, covering lease
 acquisition, the work, and lease release. When an attempt passes its deadline,
 the runner aborts it, logs `<loop>_stalled` (`level: error`, with `holder`,
 `deadline_ms`, and `duration_ms`), and starts no new attempt for that loop until

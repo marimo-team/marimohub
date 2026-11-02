@@ -1743,7 +1743,7 @@ Search records live under `_system/search/`, outside project deletion prefixes.
 references one immutable `snapshots/{generation}.json` object or retains a deletion
 tombstone. Do not delete heads during project cleanup.
 
-`SearchIndexer` owns each project/source `crawl.json`, immutable `pages/{generation}.json`
+`SearchIndexer` owns each project/source `crawl.json`, immutable `pages/{page}.json`
 objects, and the global `cursor.json`. The checkpoint records its original head
 revision, build identity, and completed-page state. The build contains monotonic deployment
 and source revisions plus a configuration identity. Claiming a newer build fences

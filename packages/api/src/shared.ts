@@ -1632,13 +1632,11 @@ export const CapabilitiesResponseSchema = z
 			manual_tokens: z.boolean(),
 			url: z.string().nullable(),
 		}),
-		search: z
-			.object({
-				available: z.boolean(),
-				semantic: z.boolean(),
-				kinds: z.array(SearchKindSchema),
-			})
-			.optional(),
+		search: z.object({
+			available: z.boolean(),
+			semantic: z.boolean(),
+			kinds: z.array(SearchKindSchema),
+		}),
 		/** Read-only data browsing over integrations; `preview` gates row preview. */
 		data_browser: z.object({
 			available: z.boolean(),

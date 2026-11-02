@@ -202,7 +202,7 @@ export class IntegrationSource implements SearchSource {
 			!(await this.authz.authorize(principal, 'integration.use', { kind: 'project', project }))
 				.allowed
 		)
-			return [];
+			return { documents: [], partial: false };
 		const entries = (await this.integrations.list(project.id, { maxHeads: 500, signal })).filter(
 			(e) => e.enabled && !e.shadowed,
 		);
@@ -214,6 +214,7 @@ export class IntegrationSource implements SearchSource {
 		const namespaces = new Map<string, string[][]>();
 		const truncatedNamespaces = new Set<string>();
 		let probes = 0;
+		let partial = false;
 		for (const doc of documents) {
 			signal.throwIfAborted();
 			const ref = doc.resource;
@@ -235,7 +236,11 @@ export class IntegrationSource implements SearchSource {
 			if (ref.table && ref.namespace) {
 				let schema = tables.get(key);
 				if (!schema) {
-					if (++probes > 32) throw new Error('Search catalog budget exceeded');
+					if (probes === 32) {
+						partial = true;
+						continue;
+					}
+					probes++;
 					schema = await this.integrations.browseTableSchema(
 						project.id,
 						ref.integration_id,
@@ -260,7 +265,11 @@ export class IntegrationSource implements SearchSource {
 				const key = JSON.stringify([ref.integration_id, parent]);
 				let names = namespaces.get(key);
 				if (!names) {
-					if (++probes > 32) throw new Error('Search catalog budget exceeded');
+					if (probes === 32) {
+						partial = true;
+						continue;
+					}
+					probes++;
 					const page = await this.integrations.browseNamespaces(project.id, ref.integration_id, {
 						parent: parent.length > 0 ? parent : undefined,
 						limit: 100,
@@ -272,10 +281,9 @@ export class IntegrationSource implements SearchSource {
 					namespaces.set(key, names);
 				}
 				if (names.some((n) => JSON.stringify(n) === JSON.stringify(ref.namespace))) valid.push(doc);
-				else if (truncatedNamespaces.has(key))
-					throw new Error('Search namespace validation budget exceeded');
+				else if (truncatedNamespaces.has(key)) partial = true;
 			}
 		}
-		return valid;
+		return { documents: valid, partial };
 	}
 }

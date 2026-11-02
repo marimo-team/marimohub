@@ -40,7 +40,7 @@ async function setup() {
 		revision: 1,
 		kinds: ['notebook'],
 		page,
-		validate: async (_project, docs) => docs,
+		validate: async (_project, docs) => ({ documents: docs, partial: false }),
 	};
 	const index = new BucketSearchIndex(bucket);
 	const scope = { projectId: project.id, source: source.id };
@@ -305,8 +305,8 @@ describe('bounded remote page assembly', () => {
 		await expect(f.step()).rejects.toThrow('document budget');
 		expect(await f.index.read(f.scope, signal())).toEqual(old);
 	});
-	it.each(['missing', 'malformed', 'cancelled'] as const)(
-		'stops queued reads after a %s page and retains the ready checkpoint for retry',
+	it.each(['missing', 'unavailable', 'malformed', 'cancelled'] as const)(
+		'stops queued reads after a %s page and preserves the published snapshot',
 		async (failure) => {
 			const f = await setup();
 			const pages = await readyCrawl(f, 40);
@@ -319,19 +319,31 @@ describe('bounded remote page assembly', () => {
 			const get = f.bucket.get.bind(f.bucket);
 			const spy = vi.spyOn(f.bucket, 'get').mockImplementation(async (key) => {
 				if (failure === 'cancelled' && key === body.key) controller.abort();
+				if (failure === 'unavailable' && key === body.key) throw new Error('Storage unavailable');
 				return get(key);
 			});
-			await expect(f.step(f.source, 1, controller.signal)).rejects.toThrow();
+			const attempt = f.step(f.source, 1, controller.signal);
+			if (failure === 'missing') await expect(attempt).resolves.toBe(false);
+			else await expect(attempt).rejects.toThrow();
 			expect(
 				spy.mock.calls.filter(([key]) => key.startsWith(f.paths.pages)).length,
 			).toBeLessThanOrEqual(8);
-			expect((await f.bucket.get(f.paths.checkpoint))!.etag).toBe(checkpoint);
+			const nextCheckpoint = (await f.bucket.get(f.paths.checkpoint))!;
+			if (failure === 'missing') {
+				expect(nextCheckpoint.etag).not.toBe(checkpoint);
+				expect(SearchCheckpointSchema.parse(await nextCheckpoint.json())).toMatchObject({
+					pages: [],
+					ready: false,
+				});
+			} else expect(nextCheckpoint.etag).toBe(checkpoint);
 			expect(await f.index.read(f.scope, signal())).toEqual(old);
 			spy.mockRestore();
 			await f.bucket.put(body.key, await body.text());
 			await f.step();
-			expect((await f.index.read(f.scope, signal())).snapshot?.documents).toHaveLength(40);
-			expect(f.page).not.toHaveBeenCalled();
+			expect((await f.index.read(f.scope, signal())).snapshot?.documents).toHaveLength(
+				failure === 'missing' ? 1 : 40,
+			);
+			expect(f.page).toHaveBeenCalledTimes(failure === 'missing' ? 1 : 0);
 		},
 	);
 });

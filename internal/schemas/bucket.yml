@@ -128,7 +128,7 @@ paths:
       responses:
         '204':
           description: Stored.
-  /_system/search/projects/{pid}/{source}/pages/{generation}.json:
+  /_system/search/projects/{pid}/{source}/pages/{page}.json:
     summary: Immutable page of a resumable search crawl.
     parameters:
       - name: pid
@@ -141,7 +141,7 @@ paths:
         required: true
         schema:
           type: string
-      - name: generation
+      - name: page
         in: path
         required: true
         schema:

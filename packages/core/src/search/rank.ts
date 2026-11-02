@@ -1,13 +1,20 @@
 import type { SearchDocument } from './contracts';
-import { terms } from './contracts';
+import { terms, termMatches } from './contracts';
 
 export function snippet(text: string, query: string) {
 	const wanted = new Set(terms(query));
-	const matches = [...text.matchAll(/[\p{L}\p{N}_]+/gu)].filter((m) =>
-		wanted.has(m[0].toLowerCase()),
-	);
-	const start = Math.max(0, (matches[0]?.index ?? 0) - 100);
-	const value = text.slice(start, start + 400);
+	const tokens = [...termMatches(text)];
+	const matches = tokens.filter((m) => wanted.has(m[0].normalize('NFC').toLowerCase()));
+	let start = Math.max(0, (matches[0]?.index ?? 0) - 100);
+	const leading = tokens.find((m) => m.index < start && m.index + m[0].length > start);
+	if (leading) start = leading.index + leading[0].length;
+	// Offsets remain UTF-16 for browser highlights, without cutting a surrogate pair.
+	if (start > 0 && /[\uDC00-\uDFFF]/u.test(text[start] ?? '')) start++;
+	let end = Math.min(text.length, start + 400);
+	const trailing = tokens.find((m) => m.index < end && m.index + m[0].length > end);
+	if (trailing && trailing.index > start) end = trailing.index;
+	if (/[\uDC00-\uDFFF]/u.test(text[end] ?? '')) end--;
+	const value = text.slice(start, end);
 	return {
 		text: value,
 		highlights: matches

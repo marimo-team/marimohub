@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { createProjectId, createNotebookId } from '@marimo-hub/core/ids';
 import type { SearchSnapshot } from '@marimo-hub/core/search/contracts';
+import { searchPaths } from '@marimo-hub/core/search/paths';
 import { BucketSearchIndex } from './index';
 const signal = () => new AbortController().signal;
 const scope = { projectId: createProjectId(), source: 'notebooks' };
@@ -137,6 +138,98 @@ describe('bucket search index', () => {
 		await index.read(other, signal());
 		expect(get).toHaveBeenCalledTimes(2);
 	});
+	it('coalesces cold downloads and parsing while callers cancel independently', async () => {
+		const bucket = new MemoryBucket();
+		const index = new BucketSearchIndex(bucket);
+		const data = snapshot();
+		await index.publish(scope, data, null, signal());
+		const get = bucket.get.bind(bucket);
+		const gate = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		const json = vi.fn();
+		const spy = vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			const body = await get(key);
+			if (key.startsWith(searchPaths.scope(scope).snapshots)) {
+				started.resolve();
+				await gate.promise;
+				return (
+					body && {
+						...body,
+						json: <T>() => {
+							json();
+							return body.json<T>();
+						},
+					}
+				);
+			}
+			return body;
+		});
+		const cancelled = new AbortController();
+		const first = index.read(scope, cancelled.signal);
+		const rejected = expect(first).rejects.toMatchObject({ name: 'AbortError' });
+		const second = index.read(scope, signal());
+		await started.promise;
+		cancelled.abort();
+		await rejected;
+		gate.resolve();
+		expect((await second).snapshot).toEqual(data);
+		expect(
+			spy.mock.calls.filter(([key]) => key.startsWith(searchPaths.scope(scope).snapshots)),
+		).toHaveLength(1);
+		expect(json).toHaveBeenCalledOnce();
+	});
+	it('bounds stalled distinct loads while allowing callers to join an existing load', async () => {
+		const bucket = new MemoryBucket();
+		const index = new BucketSearchIndex(bucket);
+		const scopes = Array.from({ length: 65 }, (_, i) => ({ ...scope, source: String(i) }));
+		for (const entry of scopes) await index.publish(entry, snapshot(), null, signal());
+		const get = bucket.get.bind(bucket);
+		const gate = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		let loads = 0;
+		vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			if (key.includes('/snapshots/')) {
+				if (++loads === 64) started.resolve();
+				await gate.promise;
+			}
+			return get(key);
+		});
+		const pending = scopes.slice(0, 64).map((entry) => index.read(entry, signal()));
+		await started.promise;
+		await expect(index.read(scopes[64], signal())).rejects.toThrow('loading capacity exceeded');
+		const joined = index.read(scopes[0], signal());
+		gate.resolve();
+		await Promise.all([...pending, joined]);
+		expect(loads).toBe(64);
+		expect((await index.read(scopes[64], signal())).snapshot).not.toBeNull();
+		expect(loads).toBe(65);
+	});
+	it('retries a shared failed download instead of caching its rejection', async () => {
+		const bucket = new MemoryBucket();
+		const index = new BucketSearchIndex(bucket);
+		await index.publish(scope, snapshot(), null, signal());
+		const get = bucket.get.bind(bucket);
+		const gate = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		const spy = vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+			if (key.startsWith(searchPaths.scope(scope).snapshots)) {
+				started.resolve();
+				await gate.promise;
+				throw new Error('storage offline');
+			}
+			return get(key);
+		});
+		const requests = [index.read(scope, signal()), index.read(scope, signal())];
+		const failures = requests.map((request) => expect(request).rejects.toThrow('storage offline'));
+		await started.promise;
+		gate.resolve();
+		await Promise.all(failures);
+		expect(
+			spy.mock.calls.filter(([key]) => key.startsWith(searchPaths.scope(scope).snapshots)),
+		).toHaveLength(1);
+		spy.mockRestore();
+		expect((await index.read(scope, signal())).snapshot).not.toBeNull();
+	});
 	it('serves snapshots larger than the cache without evicting cached entries', async () => {
 		const bucket = new MemoryBucket();
 		const data = snapshot();
@@ -191,6 +284,16 @@ describe('bucket search index', () => {
 		expect(listed.objects).toHaveLength(1);
 		expect((await index.read(scope, signal())).snapshot?.documents).toHaveLength(2);
 		expect(await index.publish(scope, snapshot(), old.revision, signal())).toBe(false);
+		const current = await index.head(scope, signal());
+		await index.publish(scope, null, current.revision, signal());
+		await index.prune(scope, signal());
+		expect(
+			(await bucket.list({ prefix: searchPaths.scope(scope).snapshots })).objects,
+		).toHaveLength(0);
+		const tombstone = await index.head(scope, signal());
+		expect(tombstone.deleted).toBe(true);
+		expect(await bucket.head(searchPaths.scope(scope).head)).not.toBeNull();
+		expect(await index.publish(scope, snapshot(), tombstone.revision, signal())).toBe(false);
 	});
 });
 

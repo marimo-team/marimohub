@@ -14,6 +14,16 @@ afterEach(() => {
 });
 
 describe('Search recovery and input boundaries', () => {
+	it('treats an empty type parameter as all types without duplicate choices', async () => {
+		const { user, searches } = setup({ route: '/search?q=revenue&kind=' });
+		await screen.findByRole('link', { name: /Revenue model/ });
+		expect(searches[0]?.searchParams.has('kinds')).toBe(false);
+		expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: /Type$/ }));
+		expect(screen.getAllByRole('option', { name: 'All types' })).toHaveLength(1);
+		expect(screen.queryByRole('option', { name: 'Unavailable type' })).not.toBeInTheDocument();
+	});
+
 	it('waits for composition to finish before searching or moving focus', async () => {
 		const { searches } = setup();
 		await screen.findByRole('link', { name: /Revenue model/ });

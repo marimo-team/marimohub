@@ -142,6 +142,7 @@ import type {
 	IntegrationTestOptions,
 	OrgIntegrationsService,
 	ProjectIntegrationsService,
+	IntegrationListOptions,
 } from './contracts';
 
 /** Page size when a caller states none; the API passes its own page policy. */
@@ -1643,7 +1644,7 @@ class ScopedIntegrationsStore {
 
 	async listHeads(
 		scope: IntegrationScope,
-		options?: { maxHeads?: number; signal?: AbortSignal },
+		options?: IntegrationListOptions,
 	): Promise<IntegrationRecord[]> {
 		if (
 			options?.maxHeads !== undefined &&
@@ -2075,10 +2076,7 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 		return this.store.secretSources();
 	}
 
-	async list(
-		projectId: ProjectId,
-		options?: { maxHeads?: number; signal?: AbortSignal },
-	): Promise<IntegrationEntry[]> {
+	async list(projectId: ProjectId, options?: IntegrationListOptions): Promise<IntegrationEntry[]> {
 		const scope = projectScope(projectId);
 		const [project, org] = await Promise.all([
 			this.store.listHeads(scope, options),

@@ -30,7 +30,7 @@ export function SearchFilters({
 	];
 	const kindOptions = [
 		{ id: '', label: 'All types' },
-		...(!validKind ? [{ id: kind ?? '', label: 'Unavailable type' }] : []),
+		...(!validKind && kind ? [{ id: kind, label: 'Unavailable type' }] : []),
 		...kinds.map((value) => ({ id: value, label: searchKinds[value].label })),
 	];
 	return (

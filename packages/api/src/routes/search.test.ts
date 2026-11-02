@@ -74,7 +74,7 @@ describe('search REST/MCP parity', () => {
 		{ q: 'test', kinds: [] },
 		{ q: 'test', project_id: '../bad' },
 		{ q: 'test', mode: 'unknown' },
-	])('rejects invalid requests through both transports (%#)', async (query) => {
+	])('rejects invalid requests through both transports (%j)', async (query) => {
 		const { api, client } = await fixture();
 		const params = new URLSearchParams(
 			Object.entries(query).map(([key, value]) => [key, String(value)]),

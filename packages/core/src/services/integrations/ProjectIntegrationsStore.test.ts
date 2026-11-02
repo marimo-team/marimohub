@@ -3432,6 +3432,18 @@ describe('bounded integration discovery', () => {
 		await expect(store.list(projectId, { maxHeads: 2 })).rejects.toThrow('discovery budget');
 		expect(get).not.toHaveBeenCalled();
 	});
+	it('counts headless history directories against the discovery budget', async () => {
+		const bucket = new MemoryBucket();
+		const store = makeStore(bucket);
+		const projectId = createProjectId();
+		for (let i = 0; i < 3; i++) {
+			const head = paths.project(projectId).integration(createIntegrationId()).head;
+			await bucket.put(head.replace('integration.json', 'versions/1.json'), '{}');
+		}
+		const get = vi.spyOn(bucket, 'get');
+		await expect(store.list(projectId, { maxHeads: 2 })).rejects.toThrow('discovery budget');
+		expect(get).not.toHaveBeenCalled();
+	});
 	it('does not list or read after cancellation', async () => {
 		const bucket = new MemoryBucket();
 		const store = makeStore(bucket);

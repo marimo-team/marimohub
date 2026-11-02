@@ -74,7 +74,7 @@ function SearchContent({
 		const timer = setTimeout(() => setPendingInput(false), 500);
 		return () => clearTimeout(timer);
 	}, [query, pendingInput, composing]);
-	const kind = params.get('kind');
+	const kind = params.get('kind') || null;
 	const validKind = kind === null || kinds.includes(kind as SearchKind);
 	const mode = params.get('mode') ?? 'keyword';
 	const validMode = mode === 'keyword' || (mode === 'hybrid' && semantic);
