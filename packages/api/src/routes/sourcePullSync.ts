@@ -18,6 +18,7 @@ import type {
 	UserId,
 } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
+import { appendAudit } from '../log';
 import { loadAuthorizedNotebook } from '../shared';
 
 type PullSyncDeps = Pick<ApiDeps, 'services' | 'sourceControl' | 'policy'>;
@@ -77,6 +78,29 @@ export interface PullSyncOutcome {
 	synced: boolean;
 	commit: string;
 	version_id: string | null;
+}
+
+export async function syncSourceManually(
+	deps: PullSyncDeps,
+	project: Project,
+	notebookId: NotebookId,
+	subject: AuthSubject,
+	request: { requestId?: string; method: string; path: string },
+): Promise<PullSyncOutcome> {
+	const outcome = await pullSourceToHead(deps, project, notebookId, subject.id, subject);
+	if (outcome.synced) {
+		await appendAudit({ ...request, userId: subject.id }, 'notebook.source.sync', () =>
+			deps.services.events.append({
+				event: 'notebook.source.sync',
+				actor: subject.id,
+				project_id: project.id,
+				notebook_id: notebookId,
+				commit: outcome.commit,
+				trigger: 'manual',
+			}),
+		);
+	}
+	return outcome;
 }
 
 /**

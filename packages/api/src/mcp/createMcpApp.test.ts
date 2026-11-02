@@ -233,6 +233,7 @@ describe('MCP OAuth app', () => {
 		expect(toolList.result.tools.map((tool) => tool.name)).toEqual([
 			'list_catalog',
 			'create_notebook',
+			'sync_notebook_source',
 			'get_notebook',
 			'update_notebook',
 			'delete_notebook',

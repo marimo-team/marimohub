@@ -65,7 +65,12 @@ import { checkComputeProfile } from '../computeProfile';
 import { appendAudit } from '../log';
 import { objectContentDisposition } from '../contentDisposition';
 import { safeObjectContentType } from './objectBrowse';
-import { assertPullSourceSupported, pullSourceToHead, resolveSyncTarget } from './sourcePullSync';
+import {
+	assertPullSourceSupported,
+	pullSourceToHead,
+	resolveSyncTarget,
+	syncSourceManually,
+} from './sourcePullSync';
 import type { HonoEnv } from '../context';
 import { NotebookListQuery, pageSchema, paginate, PaginationQuery } from '../pagination';
 import { deleteNotebookAndRetire } from './notebookDelete';
@@ -1507,22 +1512,11 @@ app.openapi(syncSourceNow, async (c) => {
 	const { pid, nid } = c.req.valid('param');
 	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
 	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
-	const outcome = await pullSourceToHead(deps, project, nid, user.id, user);
-	if (outcome.synced) {
-		await appendAudit(
-			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
-			'notebook.source.sync',
-			() =>
-				deps.services.events.append({
-					event: 'notebook.source.sync',
-					actor: user.id,
-					project_id: pid,
-					notebook_id: nid,
-					commit: outcome.commit,
-					trigger: 'manual',
-				}),
-		);
-	}
+	const outcome = await syncSourceManually(deps, project, nid, user, {
+		requestId: c.get('requestId'),
+		method: c.req.method,
+		path: c.req.path,
+	});
 	return c.json({ success: true, data: outcome }, 200);
 });
 

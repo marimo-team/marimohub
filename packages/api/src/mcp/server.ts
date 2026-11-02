@@ -32,6 +32,7 @@ import {
 	NOTEBOOK_REFERENCE_DESCRIPTION,
 } from './selectors';
 import { registerJobTools } from './jobs';
+import { syncNotebookSource, SyncNotebookSourceInputSchema } from './sourceSync';
 import { deleteNotebookAndRetire } from '../routes/notebookDelete';
 import {
 	assertSessionControl,
@@ -215,6 +216,26 @@ export function createMcpServer(
 				return result({ ...notebookData, launched: true, session });
 			} catch (error) {
 				return errorResult('create_notebook', error, signal);
+			}
+		},
+	);
+
+	server.registerTool(
+		'sync_notebook_source',
+		{
+			description:
+				'Sync a Git notebook to its configured branch head, equivalent to Sync now. Returns the synced commit, current source version, and restart_needed for each active session and overall (null means unknown). Does not restart sessions.',
+			inputSchema: SyncNotebookSourceInputSchema,
+		},
+		async ({ project, notebook }, extra) => {
+			const signal = requestSignal(extra.signal);
+			try {
+				signal.throwIfAborted();
+				return result(
+					await syncNotebookSource(deps, principal, { ...request, signal }, project, notebook),
+				);
+			} catch (error) {
+				return errorResult('sync_notebook_source', error, signal);
 			}
 		},
 	);
