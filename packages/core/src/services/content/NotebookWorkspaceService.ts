@@ -132,7 +132,7 @@ function directoryItem(path: string): WorkspaceFileItem {
 
 function assertTextSource(path: string, bytes: Uint8Array): string {
 	try {
-		return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes);
+		return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
 	} catch {
 		throw new BadRequestError(`${path} must contain valid UTF-8 text`);
 	}

@@ -616,7 +616,8 @@ async function readNotebookCode(
 	entryNotebook: string,
 ): Promise<string | undefined> {
 	const result = await readCappedBytes(sandbox, absolutePath, sizes);
-	if (result?.success) return new TextDecoder().decode(result.bytes);
+	if (result?.success)
+		return new TextDecoder('utf-8', { fatal: false, ignoreBOM: true }).decode(result.bytes);
 	const code = result?.error.code ?? 'READ_FAILED';
 	const error = Object.assign(new Error(`Could not read ${entryNotebook}: ${code}`), {
 		code,

@@ -957,7 +957,9 @@ export class NotebookService {
 			throw new NotFoundError(`Version ${versionId} not found`);
 		}
 
-		const code = codeObj ? await codeObj.text() : '';
+		const code = codeObj
+			? new TextDecoder('utf-8', { fatal: false, ignoreBOM: true }).decode(await codeObj.bytes())
+			: '';
 		const deps = depsObj ? await depsObj.text() : undefined;
 		return this.updateNotebook(
 			projectId,
@@ -1016,7 +1018,9 @@ export class NotebookService {
 			this.bucket.get(current.code),
 			this.bucket.get(current.deps),
 		]);
-		const curCode = curCodeObj ? await curCodeObj.text() : undefined;
+		const curCode = curCodeObj
+			? new TextDecoder('utf-8', { fatal: false, ignoreBOM: true }).decode(await curCodeObj.bytes())
+			: undefined;
 		const curDeps = curDepsObj ? await curDepsObj.text() : '';
 		const changed = input.code !== curCode || deps !== curDeps;
 
