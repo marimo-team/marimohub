@@ -227,11 +227,15 @@ export function createMcpServer(
 				'Sync a Git notebook to its configured branch head, equivalent to Sync now. Returns the synced commit, current source version, and restart_needed for each active session and overall (null means unknown). Does not restart sessions.',
 			inputSchema: SyncNotebookSourceInputSchema,
 		},
-		async ({ project, notebook }) => {
+		async ({ project, notebook }, extra) => {
+			const signal = requestSignal(extra.signal);
 			try {
-				return result(await syncNotebookSource(deps, principal, request, project, notebook));
+				signal.throwIfAborted();
+				return result(
+					await syncNotebookSource(deps, principal, { ...request, signal }, project, notebook),
+				);
 			} catch (error) {
-				return errorResult('sync_notebook_source', error);
+				return errorResult('sync_notebook_source', error, signal);
 			}
 		},
 	);

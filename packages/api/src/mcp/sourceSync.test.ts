@@ -67,6 +67,30 @@ async function setup(
 }
 
 describe('sync_notebook_source', () => {
+	it.each([undefined, new Error('Connection closed')])(
+		'does not sync an already cancelled request with reason %s',
+		async (reason) => {
+			const { deps, reader, project, notebook } = await setup();
+			const publish = vi.spyOn(deps.services.notebooks.synced, 'sync');
+			const audit = vi.spyOn(deps.services.events, 'append');
+			const client = await connectMcpClient(deps, mcpPrincipal, {
+				method: 'POST',
+				path: '/mcp',
+				hostname: 'hub.example.com',
+				appBaseUrl: 'https://hub.example.com',
+				signal: AbortSignal.abort(reason),
+			});
+			expect(await callSync(client, { project: project.id, notebook: notebook.id })).toMatchObject({
+				isError: true,
+				structuredContent: { code: 'REQUEST_CANCELLED' },
+			});
+			expect(reader.getBranchHead).not.toHaveBeenCalled();
+			expect(reader.fetchWorkspace).not.toHaveBeenCalled();
+			expect(publish).not.toHaveBeenCalled();
+			expect(audit).not.toHaveBeenCalled();
+		},
+	);
+
 	it.each([
 		{},
 		{ project: 'Analytics' },

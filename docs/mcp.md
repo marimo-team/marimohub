@@ -117,7 +117,7 @@ Results include `project_id`, `notebook_id`, `commit`, `synced` (whether this ca
 - `version_id`: the version published by this call, or `null` if already up to date.
 - `current_version_id`: the stored version after sync, even if unchanged. `null` means unknown.
 - `sessions`: each active session's `session_id`, `mode`, `status`, `source_version_id`, and `restart_needed`.
-- `restart_needed`: `true` if any session is stale, otherwise `null` if any status is unknown, otherwise `false`.
+- `restart_needed`: `true` if any session is stale, otherwise `null` if any per-session `restart_needed` is `null`, otherwise `false`.
 
 Per-session `restart_needed` is `true` for a different source version, `false` for a match,
 and `null` if either version is missing. Active sessions have status `starting`, `running`, or `terminating`.
