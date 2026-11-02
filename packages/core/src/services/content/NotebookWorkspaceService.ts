@@ -38,6 +38,7 @@ import { acquireSingletonClaim, releaseSingletonClaim, withCasRetry } from '../c
 import type { SingletonClaimConfig } from '../catalog/cas';
 import { listAllObjects } from '../catalog/storage';
 import type { NotebookDetail } from './NotebookService';
+import { decodeUtf8PreservingBom } from '../../text';
 
 const DEFAULT_PAGE_SIZE = 200;
 const WORKSPACE_MUTATION_LEASE_MS = 2 * 60_000;
@@ -132,7 +133,7 @@ function directoryItem(path: string): WorkspaceFileItem {
 
 function assertTextSource(path: string, bytes: Uint8Array): string {
 	try {
-		return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+		return decodeUtf8PreservingBom(bytes, { fatal: true });
 	} catch {
 		throw new BadRequestError(`${path} must contain valid UTF-8 text`);
 	}

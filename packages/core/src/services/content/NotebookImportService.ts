@@ -29,6 +29,7 @@ import {
 import { deleteByPrefix, listAllObjects } from '../catalog/storage';
 import { withCasRetry } from '../catalog/cas';
 import type { NotebookService } from './NotebookService';
+import { decodeUtf8PreservingBom } from '../../text';
 
 export const IMPORT_RETENTION_MS = 24 * 60 * 60 * 1000;
 // Receipts outlive the snapshot so lost responses and stalled attempts still
@@ -177,13 +178,13 @@ export class NotebookImportService {
 				const files = this.parse(await archive.bytes());
 				const entry = files.find((file) => file.path === input.entry_notebook);
 				if (!entry) throw new BadRequestError('Selected notebook is not included in the workspace');
-				const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 				let code: string;
 				let deps: string;
 				try {
-					code = decoder.decode(entry.bytes);
-					deps = decoder.decode(
+					code = decodeUtf8PreservingBom(entry.bytes, { fatal: true });
+					deps = decodeUtf8PreservingBom(
 						files.find((file) => file.path === 'pyproject.toml')?.bytes ?? new Uint8Array(),
+						{ fatal: true },
 					);
 				} catch {
 					throw new BadRequestError('Notebook and pyproject.toml must be UTF-8 text');
