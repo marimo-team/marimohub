@@ -2218,6 +2218,26 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/me/tokens/mcp': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Create a manual MCP token
+		 * @description Mint a scoped token bound to this deployment’s MCP URL. Requires session authentication and MARIMOHUB_MCP_MANUAL_TOKENS=on. The plaintext token is returned only once.
+		 */
+		post: operations['auth.tokens.createMcp'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/me/tokens/{tokenId}': {
 		parameters: {
 			query?: never;
@@ -2526,6 +2546,7 @@ export interface components {
 			};
 			mcp: {
 				available: boolean;
+				manual_tokens: boolean;
 				url: string | null;
 			};
 			data_browser: {
@@ -4541,6 +4562,8 @@ export interface components {
 					  )[];
 				projects: '*' | string[];
 			};
+			/** Format: uri */
+			mcp_resource?: string;
 		};
 	};
 	responses: never;
@@ -20672,6 +20695,153 @@ export interface operations {
 		};
 		responses: {
 			/** @description The new token — copy it now; it is never shown again */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['ApiTokenCreated'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'auth.tokens.createMcp': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @example ci-deploy */
+					name: string;
+					/**
+					 * @description Days until expiry; omit for a non-expiring token.
+					 * @example 90
+					 */
+					expires_in_days?: number;
+					grant: {
+						actions:
+							| '*'
+							| (
+									| 'project.create'
+									| 'admin.access'
+									| 'org-integration.manage'
+									| 'audit.global.read'
+									| 'directory.search'
+									| 'app.read'
+									| 'project.read'
+									| 'project.update'
+									| 'project.delete'
+									| 'project.members.manage'
+									| 'project.events.read'
+									| 'project.alerts.manage'
+									| 'notebook.write'
+									| 'notebook.manage'
+									| 'deep-link.manage'
+									| 'preview.manage'
+									| 'integration.read'
+									| 'integration.use'
+									| 'integration.write'
+									| 'integration.manage'
+									| 'change-request.publish'
+									| 'security-labels.raise'
+									| 'security-labels.lower'
+									| 'session.attach'
+									| 'session.stop'
+									| 'session.surface'
+									| 'session.proxy'
+									| 'session.start'
+							  )[];
+						projects: '*' | string[];
+					};
+				};
+			};
+		};
+		responses: {
+			/** @description The new MCP token */
 			201: {
 				headers: {
 					[name: string]: unknown;

@@ -338,12 +338,15 @@ components:
           properties:
             available:
               type: boolean
+            manual_tokens:
+              type: boolean
             url:
               type:
                 - string
                 - 'null'
           required:
             - available
+            - manual_tokens
             - url
         data_browser:
           type: object
@@ -5099,6 +5102,9 @@ components:
             - actions
             - projects
           additionalProperties: false
+        mcp_resource:
+          type: string
+          format: uri
       required:
         - id
         - name
@@ -22381,6 +22387,176 @@ paths:
       responses:
         '201':
           description: The new token — copy it now; it is never shown again
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/ApiTokenCreated'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/me/tokens/mcp:
+    post:
+      operationId: auth.tokens.createMcp
+      tags:
+        - Auth
+      summary: Create a manual MCP token
+      description: Mint a scoped token bound to this deployment’s MCP URL. Requires
+        session authentication and MARIMOHUB_MCP_MANUAL_TOKENS=on. The plaintext
+        token is returned only once.
+      security: *a4
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                  example: ci-deploy
+                expires_in_days:
+                  type: integer
+                  minimum: 1
+                  maximum: 3650
+                  description: Days until expiry; omit for a non-expiring token.
+                  example: 90
+                grant:
+                  type: object
+                  properties:
+                    actions:
+                      anyOf:
+                        - type: string
+                          enum:
+                            - '*'
+                        - type: array
+                          items:
+                            type: string
+                            enum:
+                              - project.create
+                              - admin.access
+                              - org-integration.manage
+                              - audit.global.read
+                              - directory.search
+                              - app.read
+                              - project.read
+                              - project.update
+                              - project.delete
+                              - project.members.manage
+                              - project.events.read
+                              - project.alerts.manage
+                              - notebook.write
+                              - notebook.manage
+                              - deep-link.manage
+                              - preview.manage
+                              - integration.read
+                              - integration.use
+                              - integration.write
+                              - integration.manage
+                              - change-request.publish
+                              - security-labels.raise
+                              - security-labels.lower
+                              - session.attach
+                              - session.stop
+                              - session.surface
+                              - session.proxy
+                              - session.start
+                          uniqueItems: true
+                    projects:
+                      anyOf:
+                        - type: string
+                          enum:
+                            - '*'
+                        - type: array
+                          items:
+                            type: string
+                            pattern: ^proj-[0-9a-z]{16}$
+                          minItems: 1
+                          maxItems: 100
+                          uniqueItems: true
+                  required:
+                    - actions
+                    - projects
+                  additionalProperties: false
+              required:
+                - name
+                - grant
+              additionalProperties: false
+      responses:
+        '201':
+          description: The new MCP token
           content:
             application/json:
               schema:

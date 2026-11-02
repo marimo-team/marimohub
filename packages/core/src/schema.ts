@@ -1412,6 +1412,7 @@ export const TokenSchema = z
 	.looseObject({
 		...TokenBaseSchema,
 		credential_version: z.literal(2).optional(),
+		mcp_resource: z.url().optional(),
 		grant: TokenGrantSchema.optional(),
 		oauth: z
 			.object({
@@ -1429,11 +1430,18 @@ export const TokenSchema = z
 		(token) => token.oauth === undefined || token.credential_version === 2,
 		'An OAuth token must be a version 2 token',
 	)
+	.refine(
+		(token) =>
+			token.mcp_resource === undefined ||
+			(token.credential_version === 2 && token.oauth === undefined),
+		'A manual MCP token requires a version 2 grant and cannot have an OAuth binding',
+	)
 	.meta({
 		dependentRequired: {
 			credential_version: ['grant'],
 			grant: ['credential_version'],
 			oauth: ['credential_version', 'grant'],
+			mcp_resource: ['credential_version', 'grant'],
 		},
 	});
 
@@ -1445,7 +1453,14 @@ export type Token = z.infer<typeof TokenSchema>;
 // `toPublicProjectEntry`). The one field to hide is `hash`.
 export type PublicToken = Pick<
 	Token,
-	'id' | 'user_id' | 'name' | 'created_at' | 'expires_at' | 'last_used_at' | 'grant'
+	| 'id'
+	| 'user_id'
+	| 'name'
+	| 'created_at'
+	| 'expires_at'
+	| 'last_used_at'
+	| 'grant'
+	| 'mcp_resource'
 >;
 export function toPublicToken(token: Token): PublicToken {
 	return {
@@ -1456,6 +1471,7 @@ export function toPublicToken(token: Token): PublicToken {
 		...(token.expires_at !== undefined ? { expires_at: token.expires_at } : {}),
 		...(token.last_used_at !== undefined ? { last_used_at: token.last_used_at } : {}),
 		...(token.grant !== undefined ? { grant: token.grant } : {}),
+		...(token.mcp_resource !== undefined ? { mcp_resource: token.mcp_resource } : {}),
 	};
 }
 

@@ -3,6 +3,7 @@ import { useCapabilitiesQuery } from '@/api/hooks';
 import { Button, CopyField, DialogModal, LinkButton } from '@/components/ui';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { DOCS_MCP_URL } from '@/lib/links';
+import { McpTokenForm } from './McpTokenForm';
 
 const clients = ['Cursor', 'Claude', 'Codex', 'OpenCode', 'Other'] as const;
 const panelClassName =
@@ -31,6 +32,7 @@ function OpenCodeConfig({ url }: { url: string }) {
 export function McpDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
 	const { data: capabilities, isPending, isError } = useCapabilitiesQuery(isOpen);
 	const url = capabilities?.mcp?.available ? capabilities.mcp.url : null;
+	const manualTokens = capabilities?.mcp?.manual_tokens ?? false;
 	// Single quotes keep URL characters from being interpreted by POSIX shells.
 	const shellUrl = url ? `'${url.replaceAll("'", "'\\''")}'` : '';
 	const cursorConfig = url
@@ -52,7 +54,7 @@ export function McpDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
 						<CopyField label="MCP server URL" value={url} />
 						<Tabs defaultSelectedKey="Cursor">
 							<TabList aria-label="MCP client" className="flex overflow-x-auto border-b">
-								{clients.map((client) => (
+								{[...clients, ...(manualTokens ? ['Token'] : [])].map((client) => (
 									<Tab
 										key={client}
 										id={client}
@@ -125,10 +127,21 @@ export function McpDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
 									Connect the server to sign in through your browser.
 								</p>
 								<p className="text-muted-foreground">
-									Your client must support OAuth with dynamic client registration. Manually created
-									API tokens cannot authenticate to this MCP server.
+									{manualTokens
+										? 'For clients that accept headers only, create a token in the Token tab.'
+										: 'Your client must support OAuth with dynamic client registration. Manually created API tokens cannot authenticate to this MCP server.'}
 								</p>
 							</TabPanel>
+							{manualTokens && (
+								<TabPanel
+									id="Token"
+									shouldForceMount
+									className={panelClassName}
+									style={({ isInert }) => ({ display: isInert ? 'none' : undefined })}
+								>
+									{isOpen && <McpTokenForm />}
+								</TabPanel>
+							)}
 						</Tabs>
 						<p className="border-t pt-4 text-xs text-muted-foreground">
 							When you sign in, choose which actions and projects the client can access. You can

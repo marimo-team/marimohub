@@ -113,6 +113,39 @@ describe('TokenService', () => {
 			).rejects.toThrow(/explicit grant/);
 		});
 
+		it('preserves a manual MCP binding through verification and usage updates', async () => {
+			const mcpResource = 'https://hub.example/hub/mcp';
+			const { token, record } = await tokens.create(
+				{ name: 'manual', grant: SCOPED_GRANT, mcpResource },
+				OWNER,
+			);
+			expect(record.mcp_resource).toBe(mcpResource);
+			expect(await tokens.verify(token)).toMatchObject({
+				credential: { kind: 'personal-access-token', grant: SCOPED_GRANT, mcpResource },
+			});
+			const fresh = new TokenService(bucket, identities);
+			expect(await fresh.verify(token)).toMatchObject({ credential: { mcpResource } });
+			expect((await fresh.list(OWNER))[0].mcp_resource).toBe(mcpResource);
+		});
+
+		it('rejects a manual MCP binding without a grant or combined with OAuth', async () => {
+			const mcpResource = 'https://hub.example/mcp';
+			await expect(tokens.create({ name: 'invalid', mcpResource }, OWNER)).rejects.toThrow(
+				/explicit grant/,
+			);
+			await expect(
+				tokens.create(
+					{
+						name: 'invalid',
+						mcpResource,
+						grant: SCOPED_GRANT,
+						oauth: { clientId: 'client', resource: mcpResource, scopes: ['mcp:tools'] },
+					},
+					OWNER,
+				),
+			).rejects.toThrow(/OAuth binding/);
+		});
+
 		it('stamps expires_at from expiresInDays', async () => {
 			const { record } = await tokens.create({ name: 'short', expiresInDays: 7 }, OWNER);
 			const expected = new Date(record.created_at).getTime() + 7 * 24 * 60 * 60 * 1000;
@@ -268,6 +301,14 @@ describe('TokenService', () => {
 			{ credential_version: 2 },
 			{ grant: SCOPED_GRANT },
 			{ credential_version: 3, grant: SCOPED_GRANT },
+			{ mcp_resource: 'https://hub.example/mcp' },
+			{ credential_version: 2, grant: SCOPED_GRANT, mcp_resource: 'not-a-url' },
+			{
+				credential_version: 2,
+				grant: SCOPED_GRANT,
+				mcp_resource: 'https://hub.example/mcp',
+				oauth: { client_id: 'client', resource: 'https://hub.example/mcp', scopes: ['mcp:tools'] },
+			},
 		])('rejects an inconsistent stored record: %j', async (fields) => {
 			const { token, record } = await tokens.create({ name: 'legacy' }, OWNER);
 			const key = paths.token(TokenId.parse(record.id));

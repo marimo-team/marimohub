@@ -107,6 +107,7 @@ export interface AuthCredential {
 	/** Authorization boundary attached to a scoped bearer credential. */
 	readonly grant?: TokenGrant;
 	readonly oauth?: OAuthCredentialBinding;
+	readonly mcpResource?: string;
 	/**
 	 * Opaque reference a `SubjectSecurityContextProvider` can resolve into a
 	 * bounded runtime security context. Never raw claims or attributes.

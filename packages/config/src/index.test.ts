@@ -1913,6 +1913,32 @@ describe('createFromEnv MCP config', () => {
 		expect(createFromEnv({ ...baseEnv, MARIMOHUB_MCP: 'off' }).mcp).toBeUndefined();
 	});
 
+	it.each([
+		[undefined, false],
+		['off', false],
+		['on', true],
+	] as const)('parses manual tokens %s as %s', (value, expected) => {
+		expect(
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_MCP: 'on',
+				MARIMOHUB_APP_BASE_URL: 'https://hub.example.com',
+				MARIMOHUB_MCP_MANUAL_TOKENS: value,
+			}).mcp?.manualTokens,
+		).toBe(expected);
+	});
+
+	it('rejects an invalid manual token flag', () => {
+		expect(() =>
+			createFromEnv({
+				...baseEnv,
+				MARIMOHUB_MCP: 'on',
+				MARIMOHUB_APP_BASE_URL: 'https://hub.example.com',
+				MARIMOHUB_MCP_MANUAL_TOKENS: 'yes',
+			}),
+		).toThrow(/MARIMOHUB_MCP_MANUAL_TOKENS/);
+	});
+
 	it('requires and normalizes the public app URL when enabled', () => {
 		expect(() => createFromEnv({ ...baseEnv, MARIMOHUB_MCP: 'on' })).toThrow(
 			/MARIMOHUB_APP_BASE_URL is required when MARIMOHUB_MCP=on/,
@@ -1923,7 +1949,7 @@ describe('createFromEnv MCP config', () => {
 				MARIMOHUB_MCP: 'on',
 				MARIMOHUB_APP_BASE_URL: 'https://hub.example.com/base/',
 			}).mcp,
-		).toEqual({ publicBaseUrl: 'https://hub.example.com/base' });
+		).toEqual({ publicBaseUrl: 'https://hub.example.com/base', manualTokens: false });
 	});
 
 	it.each([
@@ -1965,7 +1991,7 @@ describe('createFromEnv MCP config', () => {
 				MARIMOHUB_MCP: 'on',
 				MARIMOHUB_APP_BASE_URL: baseUrl,
 			}).mcp,
-		).toEqual({ publicBaseUrl: expected });
+		).toEqual({ publicBaseUrl: expected, manualTokens: false });
 	});
 });
 
@@ -1990,6 +2016,7 @@ describe('external issuer MCP composition', () => {
 		const deps = createFromEnv(env);
 		expect(deps.mcp).toEqual({
 			publicBaseUrl: 'https://hub.example.com/hub',
+			manualTokens: false,
 			externalAuthorizationServer: 'https://issuer.example.com',
 		});
 		expect(

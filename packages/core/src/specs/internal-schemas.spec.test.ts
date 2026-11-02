@@ -86,6 +86,7 @@ describe('bucket schema contracts', () => {
 			credential_version: ['grant'],
 			grant: ['credential_version'],
 			oauth: ['credential_version', 'grant'],
+			mcp_resource: ['credential_version', 'grant'],
 		});
 		expect(token.properties.oauth.properties.resource.format).toBe('uri');
 		expect(token.properties.oauth.properties.scopes.minItems).toBe(1);

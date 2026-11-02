@@ -92,6 +92,7 @@ export interface CreateTokenInput {
 	/** An explicit grant creates a v2 credential. Omission preserves legacy v1 behavior. */
 	grant?: TokenGrant;
 	oauth?: OAuthCredentialBinding;
+	mcpResource?: string;
 }
 
 export interface CreatedToken {
@@ -130,6 +131,14 @@ export class TokenService {
 		if (input.oauth !== undefined && input.grant === undefined) {
 			throw new BadRequestError('OAuth tokens require an explicit grant');
 		}
+		if (
+			input.mcpResource !== undefined &&
+			(input.grant === undefined || input.oauth !== undefined)
+		) {
+			throw new BadRequestError(
+				'Manual MCP tokens require an explicit grant and cannot have an OAuth binding',
+			);
+		}
 		const nowMs = Date.now();
 		// The cap counts only LIVE tokens — an expired record still lists (as
 		// metadata) but must not block minting a replacement. Best-effort: concurrent
@@ -166,6 +175,7 @@ export class TokenService {
 						hash: await hashScopedPatSecret(id, secret),
 						credential_version: 2,
 						grant: input.grant,
+						...(input.mcpResource !== undefined ? { mcp_resource: input.mcpResource } : {}),
 						...(input.oauth
 							? {
 									oauth: {
@@ -262,6 +272,7 @@ export class TokenService {
 				id: tokenId,
 				...(record.expires_at !== undefined ? { expiresAt: record.expires_at } : {}),
 				...(record.grant !== undefined ? { grant: record.grant } : {}),
+				...(record.mcp_resource !== undefined ? { mcpResource: record.mcp_resource } : {}),
 				...(record.oauth !== undefined
 					? {
 							oauth: {

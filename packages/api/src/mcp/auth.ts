@@ -9,6 +9,7 @@ export interface BearerRequirements {
 	resource?: string;
 	scope?: string;
 	allowExternal?: boolean;
+	allowManualMcp?: boolean;
 }
 
 export async function authenticateBearer(
@@ -24,9 +25,23 @@ export async function authenticateBearer(
 			!(requirements.allowExternal && principal.credential.kind === 'external-access-token'))
 	)
 		return null;
-	const oauth = principal.credential.oauth;
-	if (requirements.resource !== undefined && oauth?.resource !== requirements.resource) return null;
-	if (requirements.scope !== undefined && !oauth?.scopes.includes(requirements.scope)) return null;
+	const { oauth, mcpResource } = principal.credential;
+	if (mcpResource !== undefined) {
+		if (
+			!requirements.allowManualMcp ||
+			principal.credential.kind !== 'personal-access-token' ||
+			!principal.credential.grant ||
+			oauth !== undefined ||
+			mcpResource !== requirements.resource ||
+			requirements.scope !== MCP_SCOPE
+		)
+			return null;
+	} else {
+		if (requirements.resource !== undefined && oauth?.resource !== requirements.resource)
+			return null;
+		if (requirements.scope !== undefined && !oauth?.scopes.includes(requirements.scope))
+			return null;
+	}
 	if (await deps.services.identities.isSuspended(principal.id)) return null;
 	return principal;
 }
@@ -40,6 +55,7 @@ export async function authenticateMcpRequest(
 		resource,
 		scope: MCP_SCOPE,
 		allowExternal: Boolean(deps.mcp?.externalAuthorizationServer),
+		allowManualMcp: deps.mcp?.manualTokens ?? false,
 	});
 	if (principal) {
 		await refreshIdentity(c, deps, principal);

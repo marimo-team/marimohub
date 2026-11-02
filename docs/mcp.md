@@ -8,6 +8,7 @@ Marimohub exposes notebooks that a user can access through the Model Context
 Protocol (MCP). By default, the Hub issues a scoped
 [personal access token](./api-tokens.md) after browser consent. Deployments can
 instead enable [external authorization](#external-authorization) through their OIDC issuer.
+For clients that accept headers only, deployments can enable [manual MCP tokens](#header-only-clients).
 
 ## Enable MCP
 
@@ -56,6 +57,26 @@ The Hub-issued token does not carry your IdP groups, so
 [External authorization](#external-authorization) access tokens carry the groups selected by
 `MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUPS` or `MARIMOHUB_AUTH_OIDC_MEMBERSHIP_GROUP_PREFIXES`; without that
 configuration they carry none.
+
+## Header-only clients
+
+With MCP enabled, set `MARIMOHUB_MCP_MANUAL_TOKENS=on` and restart the server. This option defaults to `off`.
+
+1. Open the user menu → **MCP** → **Token**.
+2. Enter a name and choose the permitted actions and projects.
+3. Set an expiry (default: 30 days; blank: no expiry), then select **Create MCP token**.
+4. Copy the server URL and header into your client's Streamable HTTP configuration:
+
+```text
+Authorization: Bearer mhub_pat_…
+```
+
+Creation requires a browser session. The token appears once and is bound to the deployment's exact MCP URL.
+It can also call the REST API within the same grants. Ordinary API tokens cannot access MCP.
+Manage and revoke tokens in **API tokens**.
+
+Setting `MARIMOHUB_MCP_MANUAL_TOKENS=off` blocks creation and MCP access without revoking tokens or changing OAuth.
+REST API access remains until expiry or revocation. If you re-enable the option, valid manual tokens work again at the same URL.
 
 ## Work with notebooks
 
@@ -339,7 +360,7 @@ application scheme. Marimohub supports `cursor:` and reverse-domain,
 single-slash application schemes. Authorization codes expire after ten minutes
 and can be used once. Authorization requests, token exchanges, and issued tokens
 must target the configured MCP URL. Each token also stores the registered client
-ID. Other marimohub PATs cannot access `/mcp`.
+ID. [Manual MCP tokens](#header-only-clients) use a separate resource binding. Other PATs cannot access `/mcp`.
 
 The `mcp:tools` OAuth scope permits MCP access. The consent grant restricts Hub
 actions and projects for each tool call.

@@ -129,6 +129,8 @@ describe('buildConfigSummary', () => {
 			'MARIMOHUB_AUTH_OIDC_ACCESS_TOKENS',
 			'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_AUDIENCE',
 			'MARIMOHUB_AUTH_OIDC_ACCESS_TOKEN_JWKS_URL',
+			// Feature toggle, not a bearer credential.
+			'MARIMOHUB_MCP_MANUAL_TOKENS',
 			// LLM token limits/TTLs, not credentials.
 			'MARIMOHUB_AI_MAX_TOKENS',
 			'MARIMOHUB_AI_TOKEN_TTL_SECONDS',

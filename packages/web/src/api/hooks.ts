@@ -118,10 +118,11 @@ export function useCreateApiToken() {
 	);
 }
 
-export function useCreateScopedApiToken() {
+export function useCreateScopedToken(kind: 'api' | 'mcp' = 'api') {
+	const path = kind === 'mcp' ? '/api/v1/me/tokens/mcp' : '/api/v1/me/tokens/scoped';
 	return useApiMutation(
 		(body: { name: string; expires_in_days?: number; grant: TokenGrant }) =>
-			apiData(apiClient.POST('/api/v1/me/tokens/scoped', { body })),
+			apiData(apiClient.POST(path, { body })),
 		() => [userKeys.tokens()],
 	);
 }
