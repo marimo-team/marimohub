@@ -175,7 +175,7 @@ MARIMOHUB_THEME_NOTEBOOK_CSS="https://hub.example.com/brand/notebook.css"
 ```
 
 The API downloads the stylesheet and appends it after the palette CSS.
-Root-relative paths require `MARIMOHUB_APP_BASE_URL` and resolve against its origin.
+Root-relative paths resolve against `MARIMOHUB_APP_BASE_URL`, which must be an absolute HTTP(S) URL without credentials.
 The file must contain UTF-8 text of at most 64 KiB. The download has a five-second timeout and rejects redirects.
 If the download fails, the session does not start.
 The API caches CSS for one minute, then revalidates it with its ETag when available.

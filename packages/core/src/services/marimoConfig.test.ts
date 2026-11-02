@@ -249,4 +249,16 @@ describe('deployment brand CSS', () => {
 	it('leaves native palettes alone without deployment colours or CSS', () => {
 		expect(marimoBrandDisplay(DEFAULT_THEME_CONFIG)).toEqual({});
 	});
+	it('sets the colour scheme for both document and nested marimo dark modes', () => {
+		const css = marimoBrandDisplay({ ...DEFAULT_THEME_CONFIG, primary_color: '#7c3aed' }).files![0]
+			.content;
+		expect(css).toContain(':root {\n  color-scheme: light;\n}');
+		expect(css).toContain(
+			':root:has(body.dark), .dark, .marimo:is(.dark *) {\n  color-scheme: dark;\n}',
+		);
+	});
+	it('does not impose a colour scheme when only operator CSS is configured', () => {
+		const css = ':root { --operator-color: purple; }';
+		expect(marimoBrandDisplay(DEFAULT_THEME_CONFIG, css).files![0].content).toBe(css);
+	});
 });

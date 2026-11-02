@@ -74,7 +74,7 @@ export function Header({ navigationTrigger }: { navigationTrigger?: ReactNode })
 						href={link.href}
 						target={shellLinkTarget(link)}
 						rel="noopener noreferrer"
-						className="px-3 py-2 text-sm max-md:px-2"
+						className="flex min-h-11 items-center px-3 py-2 text-sm max-md:px-2"
 					>
 						{link.label}
 					</a>

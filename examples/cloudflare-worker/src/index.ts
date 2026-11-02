@@ -51,6 +51,17 @@ export { Sandbox, ContainerProxy };
 const R2_BINDING = 'NOTEBOOKS_BUCKET';
 const notebookBridge = notebookBridgeRuntime();
 let warnedAboutComputeProfiles = false;
+// The API's notebook CSS cache follows theme identity, not individual requests.
+const themes = new WeakMap<Env, ReturnType<typeof parseTheme>>();
+
+function deploymentTheme(env: Env): ReturnType<typeof parseTheme> {
+	let theme = themes.get(env);
+	if (!theme) {
+		theme = parseTheme(env);
+		themes.set(env, theme);
+	}
+	return theme;
+}
 
 /**
  * Deps are built per request here, so a rejected KEK would otherwise surface as
@@ -153,7 +164,7 @@ export function buildDeps(
 
 	const services = createServices(bucket);
 	return {
-		theme: parseTheme(env),
+		theme: deploymentTheme(env),
 		services,
 		bucket,
 		compute: new CloudflareSandboxProvider(env.SANDBOX, { useTunnel }),
@@ -176,6 +187,7 @@ export function buildDeps(
 			codec: secretCodec(env.SECRETS_KEK),
 		}),
 		sandbox: {
+			appBaseUrl: env.MARIMOHUB_APP_BASE_URL?.trim() || undefined,
 			// Default: credential-less R2 binding mount (no endpoint/secrets) — the
 			// sandbox mounts the bucket by Worker binding name. Set R2_S3_ENDPOINT to
 			// mount an external S3-compatible bucket with credentials instead.

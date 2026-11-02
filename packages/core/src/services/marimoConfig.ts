@@ -75,7 +75,7 @@ export function renderMarimoBrandCss(theme: ThemeConfig): string {
 		(key) => `  --${key}: light-dark(${palette.light[key]}, ${palette.dark[key]});`,
 	);
 	// Marimo's colour tokens are not a stable public API; keep this mapping in sync with globals.css.
-	return `:root, .marimo, .dark, .marimo:is(.dark *) {\n${tokens.join('\n')}\n  --link: var(--primary);\n  --link-visited: var(--primary);\n}\n`;
+	return `:root {\n  color-scheme: light;\n}\n:root:has(body.dark), .dark, .marimo:is(.dark *) {\n  color-scheme: dark;\n}\n:root, .marimo, .dark, .marimo:is(.dark *) {\n${tokens.join('\n')}\n  --link: var(--primary);\n  --link-visited: var(--primary);\n}\n`;
 }
 
 export function marimoBrandDisplay(theme: ThemeConfig, notebookCss = ''): SessionEnv {

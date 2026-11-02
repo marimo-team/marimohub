@@ -243,3 +243,63 @@ it('requires a configured origin for root-relative CSS', () => {
 		parseTheme({ MARIMOHUB_THEME_NOTEBOOK_CSS: 'https://cdn.example.com/brand.css' }).notebook_css,
 	).toBe('https://cdn.example.com/brand.css');
 });
+
+it.each([
+	'not-a-url',
+	'/hub',
+	'//hub.example.com',
+	'https://',
+	'https:/hub.example.com',
+	'https:hub.example.com',
+	'https://hub.example.com:99999',
+	'https://hub.example.com/pa\nth',
+	'https://hub.example.com\\path',
+	'file:///hub',
+	'ftp://hub.example.com',
+	'https://private:secret@hub.example.com',
+	'https://private@hub.example.com',
+	'https://:secret@hub.example.com',
+])('rejects invalid CSS base URL %j at startup without exposing its value', (appBaseUrl) => {
+	let error: unknown;
+	try {
+		createFromEnv({
+			MARIMOHUB_THEME_NOTEBOOK_CSS: '/brand.css',
+			MARIMOHUB_APP_BASE_URL: appBaseUrl,
+		});
+	} catch (caught) {
+		error = caught;
+	}
+	expect(error).toBeInstanceOf(ConfigError);
+	expect(error).toMatchObject({
+		opts: {
+			variable: 'MARIMOHUB_APP_BASE_URL',
+			remediation: 'Use an absolute HTTP(S) URL without credentials.',
+			docs: 'docs/theming.md',
+		},
+	});
+	expect(String(error)).not.toContain(appBaseUrl);
+});
+
+it.each(['https://hub.example.com/team', ' http://localhost:4831/ ', 'HTTPS://hub.example.com'])(
+	'accepts a credential-free HTTP(S) base URL %j for CSS',
+	(appBaseUrl) => {
+		expect(
+			parseTheme({
+				MARIMOHUB_THEME_NOTEBOOK_CSS: '/brand.css',
+				MARIMOHUB_APP_BASE_URL: appBaseUrl,
+			}).notebook_css,
+		).toBe('/brand.css');
+	},
+);
+
+it.each([undefined, '', ' ', 'not-a-url'])(
+	'does not require a base URL for absolute CSS (base %j)',
+	(appBaseUrl) => {
+		expect(
+			parseTheme({
+				MARIMOHUB_THEME_NOTEBOOK_CSS: 'https://cdn.example.com/brand.css',
+				MARIMOHUB_APP_BASE_URL: appBaseUrl,
+			}).notebook_css,
+		).toBe('https://cdn.example.com/brand.css');
+	},
+);

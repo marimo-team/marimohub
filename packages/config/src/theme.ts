@@ -1,5 +1,6 @@
 import { DEFAULT_THEME_CONFIG, ThemeConfigSchema } from '@marimo-hub/core/theme';
 import type { ThemeConfig } from '@marimo-hub/core/theme';
+import { parseHttpUrl } from '@marimo-hub/core/url';
 import { ConfigError } from './errors';
 
 const THEME_VARIABLES = {
@@ -54,12 +55,29 @@ export function parseTheme(env: ThemeEnv): ThemeConfig {
 			docs: 'docs/theming.md',
 		});
 	}
-	if (result.data.notebook_css?.startsWith('/') && !env.MARIMOHUB_APP_BASE_URL?.trim()) {
+	const appBaseUrl = env.MARIMOHUB_APP_BASE_URL?.trim();
+	if (result.data.notebook_css?.startsWith('/') && !appBaseUrl) {
 		throw new ConfigError(
 			'Root-relative MARIMOHUB_THEME_NOTEBOOK_CSS requires MARIMOHUB_APP_BASE_URL.',
 			{
 				variable: 'MARIMOHUB_THEME_NOTEBOOK_CSS',
 				remediation: 'Set MARIMOHUB_APP_BASE_URL or use an absolute HTTPS CSS URL.',
+				docs: 'docs/theming.md',
+			},
+		);
+	}
+	if (
+		result.data.notebook_css?.startsWith('/') &&
+		appBaseUrl &&
+		(!/^https?:\/\//i.test(appBaseUrl) ||
+			/[\s\\]/u.test(appBaseUrl) ||
+			!parseHttpUrl(appBaseUrl).ok)
+	) {
+		throw new ConfigError(
+			'Invalid MARIMOHUB_APP_BASE_URL for root-relative MARIMOHUB_THEME_NOTEBOOK_CSS.',
+			{
+				variable: 'MARIMOHUB_APP_BASE_URL',
+				remediation: 'Use an absolute HTTP(S) URL without credentials.',
 				docs: 'docs/theming.md',
 			},
 		);

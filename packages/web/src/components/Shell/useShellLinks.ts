@@ -22,13 +22,16 @@ export function useShellLinks(placement: 'header' | 'help', projectRole?: ThemeL
 				: match?.params.pid
 					? project?.your_role
 					: capabilities?.default_role));
-	return (nav_links ?? [])
-		.map((link, index) => ({ ...link, id: `custom-${index}-${link.href}` }))
-		.filter(
-			(link) =>
-				(link.placement ?? 'header') === placement &&
-				(!link.roles || (!!user && !!role && link.roles.includes(role))),
-		);
+	const links: (ThemeNavLink & { id: string })[] = [];
+	for (const [index, link] of (nav_links ?? []).entries()) {
+		if (
+			(link.placement ?? 'header') === placement &&
+			(!link.roles || (!!user && !!role && link.roles.includes(role)))
+		) {
+			links.push({ ...link, id: `custom-${index}-${link.href}` });
+		}
+	}
+	return links;
 }
 
 export function shellLinkTarget(link: Pick<ThemeNavLink, 'href' | 'external'>) {

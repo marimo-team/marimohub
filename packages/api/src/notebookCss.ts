@@ -87,7 +87,14 @@ export function notebookCssUrl(href: string, appBaseUrl?: string): string {
 			'Root-relative MARIMOHUB_THEME_NOTEBOOK_CSS requires MARIMOHUB_APP_BASE_URL.',
 		);
 	}
-	return new URL(href, appBaseUrl).href;
+	try {
+		return new URL(href, href.startsWith('/') ? appBaseUrl : undefined).href;
+	} catch (cause) {
+		throw new UnavailableError(
+			'Unable to resolve deployment notebook CSS. Check MARIMOHUB_THEME_NOTEBOOK_CSS and MARIMOHUB_APP_BASE_URL.',
+			{ cause },
+		);
+	}
 }
 
 const caches = new WeakMap<ThemeConfig, NotebookCssCache>();

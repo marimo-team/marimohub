@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { NotebookCssCache, notebookCssCacheFor, notebookCssUrl } from './notebookCss';
 import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
+import { UnavailableError } from '@marimo-hub/core/errors';
 
 afterEach(() => vi.unstubAllGlobals());
 it('coalesces requests, reuses fresh CSS, and revalidates with its ETag', async () => {
@@ -49,10 +50,18 @@ it('accepts exactly 64 KiB', async () => {
 	);
 	expect((await new NotebookCssCache().get('https://example.com/css')).length).toBe(65536);
 });
-it('isolates deployment caches', () => {
+it('reuses deployment CSS without sharing cached content across deployments', async () => {
 	const theme = { ...DEFAULT_THEME_CONFIG };
-	expect(notebookCssCacheFor(theme)).toBe(notebookCssCacheFor(theme));
-	expect(notebookCssCacheFor({ ...theme })).not.toBe(notebookCssCacheFor(theme));
+	const fetch = vi
+		.fn()
+		.mockResolvedValueOnce(new Response('first deployment'))
+		.mockResolvedValueOnce(new Response('second deployment'));
+	vi.stubGlobal('fetch', fetch);
+	const url = 'https://example.com/brand.css';
+	expect(await notebookCssCacheFor(theme).get(url)).toBe('first deployment');
+	expect(await notebookCssCacheFor(theme).get(url)).toBe('first deployment');
+	expect(await notebookCssCacheFor({ ...theme }).get(url)).toBe('second deployment');
+	expect(fetch).toHaveBeenCalledTimes(2);
 });
 
 it('resolves root-relative CSS only against a configured origin', () => {
@@ -64,6 +73,35 @@ it('resolves root-relative CSS only against a configured origin', () => {
 		'https://cdn.example.com/brand.css',
 	);
 });
+
+it.each([undefined, '', ' ', 'not-a-url'])(
+	'resolves absolute CSS without using the base URL %j',
+	(appBaseUrl) => {
+		expect(notebookCssUrl('https://cdn.example.com/brand.css', appBaseUrl)).toBe(
+			'https://cdn.example.com/brand.css',
+		);
+	},
+);
+
+it.each(['not-a-url', '//hub.example.com', 'https://hub.example.com:99999'])(
+	'normalizes malformed base URL %j without losing the parsing cause',
+	(appBaseUrl) => {
+		let error: unknown;
+		try {
+			notebookCssUrl('/brand.css', appBaseUrl);
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toBeInstanceOf(UnavailableError);
+		expect(error).toMatchObject({
+			code: 'SERVICE_UNAVAILABLE',
+			status: 503,
+			cause: expect.any(TypeError),
+		});
+		expect(String(error)).toContain('MARIMOHUB_APP_BASE_URL');
+		expect(String(error)).not.toContain(appBaseUrl);
+	},
+);
 
 it('releases the reader after a response stream fails', async () => {
 	const body = new ReadableStream<Uint8Array>({

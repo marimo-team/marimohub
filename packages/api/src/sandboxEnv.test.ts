@@ -563,6 +563,36 @@ describe('package registry federation', () => {
 });
 
 describe('composeSessionEnv', () => {
+	it('loads project CSS after deployment branding without changing policy or credential precedence', () => {
+		const layers = {
+			wifVars: { AWS_ACCESS_KEY_ID: 'wif' },
+			marimoEnv: {
+				vars: { MARIMO_RESTRICT_SHARING: 'true' },
+				marimoPresentation: { cssFiles: ['/brand.css', '/shared.css'] },
+			},
+			integrationEnv: {
+				vars: { AWS_ACCESS_KEY_ID: 'integration', MARIMO_RESTRICT_SHARING: 'false' },
+				files: [],
+				attachments: [],
+				warnings: [],
+				marimoPresentation: {
+					cssFiles: ['/shared.css', '/project.css'],
+					htmlHeadFile: '/project-head.html',
+				},
+			},
+		};
+		const original = structuredClone(layers);
+		const env = composeSessionEnv(layers);
+		expect(env?.marimoPresentation).toEqual({
+			cssFiles: ['/brand.css', '/shared.css', '/project.css'],
+			htmlHeadFile: '/project-head.html',
+		});
+		expect(env?.vars).toEqual({
+			AWS_ACCESS_KEY_ID: 'wif',
+			MARIMO_RESTRICT_SHARING: 'true',
+		});
+		expect(layers).toEqual(original);
+	});
 	it('carries runtime packages through credential and editor configuration composition', () => {
 		const env = composeSessionEnv({
 			wifVars: { AWS_REGION: 'us-east-1' },

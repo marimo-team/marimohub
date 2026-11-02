@@ -47,6 +47,15 @@ export function composeSessionEnv(layers: {
 	if (layers.marimoEnv) env = mergeSessionEnv(env, layers.marimoEnv);
 	if (layers.integrationEnv) {
 		env = mergeSessionEnv(projectSessionEnv(layers.integrationEnv), env ?? {});
+		const brandCss = layers.marimoEnv?.marimoPresentation?.cssFiles;
+		const projectCss = layers.integrationEnv.marimoPresentation?.cssFiles;
+		// Project styles override deployment branding; credential and policy precedence stays above.
+		if (brandCss?.length && projectCss?.length) {
+			env.marimoPresentation = {
+				...env.marimoPresentation,
+				cssFiles: [...new Set([...brandCss, ...projectCss])],
+			};
+		}
 	}
 	// Static keys, web-identity inputs, and other container-provider inputs must not bypass
 	// or redirect endpoint delivery, even if token minting failed.
