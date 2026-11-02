@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -31,6 +32,7 @@ function setup({
 	projectError = false,
 	listError = false,
 	slots,
+	branding,
 }: {
 	route?: string | string[];
 	role?: string | null;
@@ -42,6 +44,7 @@ function setup({
 	projectError?: boolean;
 	listError?: boolean;
 	slots?: WorkspaceNavigationSlots;
+	branding?: Partial<ThemeConfig>;
 } = {}) {
 	installMatchMedia(mobile);
 	const requests: string[] = [];
@@ -103,7 +106,7 @@ function setup({
 				</WorkspaceLayout>
 			</AuthProvider>
 		</ThemeProvider>,
-		{ route, toaster: false },
+		{ route, toaster: false, branding },
 	);
 	return { user, requests, ...rendered };
 }
@@ -115,6 +118,42 @@ afterEach(() => {
 });
 
 describe('Workspace navigation', () => {
+	it.each([false, true])(
+		'preserves shell customization with workspace navigation (mobile=%s)',
+		async (mobile) => {
+			const { user } = setup({
+				mobile,
+				branding: {
+					nav_links: [{ label: 'Platform', href: '/platform', roles: ['editor'] }],
+					support_url: 'https://support.example.com',
+					announcement: { id: 'maintenance', text: 'Planned maintenance' },
+				},
+			});
+			const navigation = within(screen.getByRole('navigation', { name: 'Global' }));
+			expect(await navigation.findByRole('link', { name: 'Platform' })).toHaveAttribute(
+				'href',
+				'/platform',
+			);
+			expect(navigation.getByRole('link', { name: 'Projects' })).toHaveAttribute(
+				'href',
+				'/projects',
+			);
+			expect(navigation.getByRole('link', { name: 'Apps' })).toHaveAttribute('href', '/apps');
+			expect(screen.getAllByRole('complementary', { name: 'Announcement' })).toHaveLength(1);
+			expect(screen.queryByRole('contentinfo')).not.toBeInTheDocument();
+			if (mobile) {
+				await user.click(screen.getByRole('button', { name: 'Open navigation' }));
+				expect(screen.getByRole('dialog', { name: 'Workspace' })).toBeVisible();
+				await user.click(screen.getByRole('button', { name: 'Close navigation' }));
+			}
+			await user.click(screen.getByRole('button', { name: 'Help' }));
+			expect(screen.getByRole('menuitem', { name: 'Get help' })).toHaveAttribute(
+				'href',
+				'https://support.example.com',
+			);
+		},
+	);
+
 	it.each([
 		['/projects/alpha', 'Notebooks'],
 		['/projects/alpha/data/integration?table=orders', 'Data'],

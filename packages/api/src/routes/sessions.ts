@@ -1,3 +1,5 @@
+import { notebookCssCacheFor, notebookCssUrl } from '../notebookCss';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
 import { createRoute, z } from '@hono/zod-openapi';
 import { all } from 'better-all';
 import type {
@@ -39,6 +41,8 @@ import {
 	DomainError,
 	marimoAiContributor,
 	marimoConfigToSessionEnv,
+	marimoBrandDisplay,
+	mergeSessionEnv,
 	marimoNotebookDefaults,
 	marimoSharingDisabled,
 	mintAiSessionToken,
@@ -1753,17 +1757,17 @@ export async function startNotebookSession(input: {
 			});
 
 		const resolveMarimoConfigEnv = async () => {
-			if (!MODE_POLICY[mode].injectEditorConfig) return;
+			if (!MODE_POLICY[mode].injectDisplayConfig) return;
 			const contributors: MarimoConfigContributor[] = [
 				marimoNotebookDefaults,
 				marimoSharingDisabled,
 			];
-			if (userHome) {
+			if (MODE_POLICY[mode].injectEditorConfig && userHome) {
 				contributors.push(() => ({
 					file_browser: { folders: [{ path: userHome.path, name: 'Personal files' }] },
 				}));
 			}
-			if (deps.ai) {
+			if (MODE_POLICY[mode].injectEditorConfig && deps.ai) {
 				try {
 					const token = await mintAiSessionToken(
 						deps.ai.signingSecret,
@@ -1794,7 +1798,16 @@ export async function startNotebookSession(input: {
 					);
 				}
 			}
-			return marimoConfigToSessionEnv(contributors);
+			const theme = deps.theme ?? DEFAULT_THEME_CONFIG;
+			const css = theme.notebook_css
+				? await notebookCssCacheFor(theme).get(
+						notebookCssUrl(theme.notebook_css, deps.sandbox.appBaseUrl),
+					)
+				: '';
+			return mergeSessionEnv(
+				marimoConfigToSessionEnv(contributors),
+				marimoBrandDisplay(theme, css),
+			);
 		};
 
 		const resolveIntegrationEnv = () =>

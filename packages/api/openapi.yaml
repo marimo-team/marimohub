@@ -5133,6 +5133,67 @@ paths:
                   data:
                     type: object
                     properties:
+                      nav_links:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            label:
+                              type: string
+                              minLength: 1
+                              maxLength: 40
+                            href:
+                              type: string
+                            placement:
+                              type: string
+                              enum:
+                                - header
+                                - help
+                            external:
+                              type: boolean
+                            roles:
+                              type: array
+                              items:
+                                type: string
+                                enum:
+                                  - admin
+                                  - manager
+                                  - editor
+                                  - viewer
+                                  - app-user
+                          required:
+                            - label
+                            - href
+                        maxItems: 12
+                      docs_url:
+                        type: string
+                      support_url:
+                        type: string
+                      announcement:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                            minLength: 1
+                            maxLength: 100
+                          text:
+                            type: string
+                            minLength: 1
+                            maxLength: 280
+                          href:
+                            type: string
+                          level:
+                            type: string
+                            enum:
+                              - info
+                              - warning
+                          dismissible:
+                            type: boolean
+                        required:
+                          - id
+                          - text
+                      notebook_css:
+                        type: string
                       color_mode:
                         type: string
                         enum:

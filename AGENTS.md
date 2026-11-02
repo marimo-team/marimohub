@@ -27,7 +27,7 @@ Use these as the done-criteria for any change.
   interface, never on a vendor SDK.
 - **`packages/core`** holds the domain model, services, and the port interfaces.
   It imports **no vendor SDK** — nothing that speaks to a specific provider or
-  performs I/O. Its deps are generic, side-effect-free utilities only: `ulidx`,
+  performs I/O. Its deps are generic, side-effect-free utilities only: `ulidx`, `colorjs.io` (shared hub/notebook palette generation),
   `croner` (cron evaluation for notebook jobs; no timers are ever started),
   `zod`, `better-all`, `tldts` (public suffix parsing for cookie isolation),
   `@opentelemetry/api` and `@opentelemetry/api-logs` (no-op

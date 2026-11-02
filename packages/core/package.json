@@ -76,7 +76,8 @@
 		"./sha256": "./src/internal/sha256.ts",
 		"./git-repo": "./src/integrations/gitRepo.ts",
 		"./host-isolation": "./src/hostIsolation.ts",
-		"./workspace-ignore": "./src/integrations/workspaceIgnore.ts"
+		"./workspace-ignore": "./src/integrations/workspaceIgnore.ts",
+		"./theme-palette": "./src/themePalette.ts"
 	},
 	"scripts": {
 		"build": "vp pack",
@@ -89,6 +90,7 @@
 		"@opentelemetry/api": "catalog:",
 		"@opentelemetry/api-logs": "catalog:",
 		"better-all": "catalog:",
+		"colorjs.io": "catalog:",
 		"croner": "catalog:",
 		"fflate": "catalog:",
 		"smol-toml": "catalog:",

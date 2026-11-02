@@ -1,7 +1,10 @@
+import { DEFAULT_THEME_CONFIG } from '../theme';
+import { generateThemePalette } from '../themePalette';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'smol-toml';
 import {
 	assembleMarimoToml,
+	marimoBrandDisplay,
 	marimoConfigToSessionEnv,
 	marimoNotebookDefaults,
 	marimoSharingDisabled,
@@ -221,5 +224,41 @@ describe('prepareMarimoPresentation', () => {
 		const original = structuredClone(env);
 		expect(() => prepareMarimoPresentation(env, resolve)).toThrow();
 		expect(env).toEqual(original);
+	});
+});
+
+describe('deployment brand CSS', () => {
+	it('uses the shared light and dark palette and appends operator CSS', () => {
+		const theme = { ...DEFAULT_THEME_CONFIG, primary_color: '#7c3aed', secondary_color: '#2563eb' };
+		const palette = generateThemePalette(theme)!;
+		const env = marimoBrandDisplay(theme, ':root { --primary: red; }');
+		const css = env.files![0].content;
+		expect(css).toContain(
+			`--primary: light-dark(${palette.light.primary}, ${palette.dark.primary});`,
+		);
+		expect(css).toContain(
+			`--secondary: light-dark(${palette.light.secondary}, ${palette.dark.secondary});`,
+		);
+		expect(css).toContain('--link: var(--primary)');
+		expect(css.endsWith(':root { --primary: red; }')).toBe(true);
+		const resolved = prepareMarimoPresentation(env, (path) => `/sandbox${path}`, { mode: 'app' })!;
+		expect(
+			parse(resolved.files!.find((file) => file.path.endsWith('/marimo.toml'))!.content).display,
+		).toEqual({ custom_css: ['/sandbox/tmp/marimohub-config/marimo/brand.css'] });
+	});
+	it('leaves native palettes alone without deployment colours or CSS', () => {
+		expect(marimoBrandDisplay(DEFAULT_THEME_CONFIG)).toEqual({});
+	});
+	it('sets the colour scheme for both document and nested marimo dark modes', () => {
+		const css = marimoBrandDisplay({ ...DEFAULT_THEME_CONFIG, primary_color: '#7c3aed' }).files![0]
+			.content;
+		expect(css).toContain(':root {\n  color-scheme: light;\n}');
+		expect(css).toContain(
+			':root:has(body.dark), .dark, .marimo:is(.dark *) {\n  color-scheme: dark;\n}',
+		);
+	});
+	it('does not impose a colour scheme when only operator CSS is configured', () => {
+		const css = ':root { --operator-color: purple; }';
+		expect(marimoBrandDisplay(DEFAULT_THEME_CONFIG, css).files![0].content).toBe(css);
 	});
 });

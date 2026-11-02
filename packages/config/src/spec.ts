@@ -113,6 +113,45 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				name: 'Branding',
 				vars: [
 					{
+						id: 'MARIMOHUB_THEME_NAV_LINKS',
+						name: 'Navigation links',
+						description:
+							'JSON array of up to 12 {label, href, placement?, external?, roles?} links. Roles control visibility only; all links are public.',
+						example: '[{"label":"Platform","href":"https://example.com","placement":"header"}]',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_THEME_DOCS_URL',
+						name: 'Documentation URL',
+						description: 'HTTPS URL or root-relative path for the help menu documentation link.',
+						example: 'https://docs.example.com',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_THEME_SUPPORT_URL',
+						name: 'Support URL',
+						description: 'HTTPS URL or root-relative path for Get help in the hub and app shells.',
+						example: 'https://support.example.com',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_THEME_ANNOUNCEMENT',
+						name: 'Announcement',
+						description:
+							'JSON {id, text, href?, level?, dismissible?}. Change id to show a previously dismissed banner again.',
+						example:
+							'{"id":"maintenance-1","text":"Maintenance Friday","level":"info","dismissible":true}',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_THEME_NOTEBOOK_CSS',
+						name: 'Notebook CSS',
+						description:
+							'Public stylesheet for editors, apps, and previews; maximum 64 KiB. Accepts HTTPS URLs or root-relative paths with `MARIMOHUB_APP_BASE_URL`. See the [theming guide](./theming.md#colors-in-notebooks-and-apps).',
+						example: 'https://hub.example.com/brand/notebook.css',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_THEME_COLOR_MODE',
 						name: 'Color mode',
 						description:
@@ -1780,7 +1819,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_VERSION',
 						name: 'Deployment version',
 						description:
-							'Build version shown in the UI footer, `GET /api/v1/version`, and boot events. Sets the default `service.version` telemetry attribute. Release artifacts include this value.',
+							'Build version shown in Help → About, `GET /api/v1/version`, and boot events. Sets the default `service.version` telemetry attribute. Release artifacts include this value.',
 						example: 'a1b2c3d',
 						default: 'dev',
 					},
@@ -1788,7 +1827,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_IMAGE',
 						name: 'Deployment image',
 						description:
-							'Fully-qualified Docker image reference (`repo:tag`) the deployment runs, shown in the UI footer. Baked into the image at build time.',
+							'Fully-qualified Docker image reference (`repo:tag`) the deployment runs, shown in Admin → Settings. Baked into the image at build time.',
 						example: 'ghcr.io/marimo-team/marimohub:a1b2c3d',
 					},
 				],

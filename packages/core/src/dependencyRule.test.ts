@@ -19,6 +19,8 @@ const ALLOWED_DEPENDENCIES = new Set([
 	'@opentelemetry/api',
 	'@opentelemetry/api-logs',
 	'better-all',
+	// In-memory color conversion and contrast calculations shared by hub and notebook CSS.
+	'colorjs.io',
 	// Cron evaluation for notebook jobs: pure date math over `Intl`, zero deps,
 	// and never scheduled (a `Cron` built without a callback starts no timer).
 	'croner',

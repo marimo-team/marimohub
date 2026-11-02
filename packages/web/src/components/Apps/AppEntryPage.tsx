@@ -1,3 +1,5 @@
+import { HelpMenu } from '@/components/Header/HelpMenu';
+import { AnnouncementBanner } from '@/components/Shell/AnnouncementBanner';
 import { hasNotebookPreviews } from '@/api/previews';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -151,8 +153,10 @@ function StakeholderApp({
 						Previews
 					</Link>
 				)}
+				<HelpMenu linkRole="app-user" />
 				<ShareUrlMenu label="Share app" successMessage="App URL copied" />
 			</header>
+			<AnnouncementBanner />
 			{!canRun ? (
 				<p className="p-6">You cannot run this app.</p>
 			) : error || ended ? (

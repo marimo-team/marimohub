@@ -17,9 +17,6 @@ describe('Popover', () => {
 		expect(await screen.findByText('Plain body')).toBeInTheDocument();
 	});
 
-	// Pins the render-prop contract: react-aria's Dialog invokes function
-	// children with a working `close` — the Footer's settings shortcut relies
-	// on it to dismiss the popover on in-app navigation.
 	it('invokes function children with a working close handler', async () => {
 		const user = userEvent.setup();
 		render(

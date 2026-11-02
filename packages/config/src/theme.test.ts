@@ -192,3 +192,114 @@ describe('deployment theme configuration', () => {
 		expect(() => createFromEnv({ [variable]: value })).toThrow(variable);
 	});
 });
+
+describe('shell settings', () => {
+	it('parses JSON and optional URL settings', () => {
+		const nav_links = [{ label: 'Platform', href: '/platform', roles: ['app-user'] }];
+		const announcement = { id: '1', text: 'Maintenance', dismissible: true };
+		expect(
+			parseTheme({
+				MARIMOHUB_THEME_NAV_LINKS: JSON.stringify(nav_links),
+				MARIMOHUB_THEME_ANNOUNCEMENT: JSON.stringify(announcement),
+				MARIMOHUB_THEME_DOCS_URL: 'https://docs.example.com',
+				MARIMOHUB_THEME_SUPPORT_URL: '/support',
+				MARIMOHUB_THEME_NOTEBOOK_CSS: '/brand.css',
+				MARIMOHUB_APP_BASE_URL: 'https://hub.example.com',
+			}),
+		).toMatchObject({
+			nav_links,
+			announcement,
+			docs_url: 'https://docs.example.com',
+			support_url: '/support',
+			notebook_css: '/brand.css',
+		});
+	});
+	it.each(['MARIMOHUB_THEME_NAV_LINKS', 'MARIMOHUB_THEME_ANNOUNCEMENT'] as const)(
+		'identifies malformed JSON in %s',
+		(variable) => {
+			expect(() => parseTheme({ [variable]: '{' })).toThrow(variable);
+			expect(() => parseTheme({ [variable]: 'null' })).toThrow(ConfigError);
+		},
+	);
+	it('rejects excessive links and insecure URLs', () => {
+		expect(() =>
+			parseTheme({
+				MARIMOHUB_THEME_NAV_LINKS: JSON.stringify(
+					Array.from({ length: 13 }, () => ({ label: 'Link', href: '/ok' })),
+				),
+			}),
+		).toThrow('MARIMOHUB_THEME_NAV_LINKS');
+		expect(() => parseTheme({ MARIMOHUB_THEME_SUPPORT_URL: 'http://example.com' })).toThrow(
+			'MARIMOHUB_THEME_SUPPORT_URL',
+		);
+	});
+});
+
+it('requires a configured origin for root-relative CSS', () => {
+	expect(() => parseTheme({ MARIMOHUB_THEME_NOTEBOOK_CSS: '/brand.css' })).toThrow(
+		'MARIMOHUB_APP_BASE_URL',
+	);
+	expect(
+		parseTheme({ MARIMOHUB_THEME_NOTEBOOK_CSS: 'https://cdn.example.com/brand.css' }).notebook_css,
+	).toBe('https://cdn.example.com/brand.css');
+});
+
+it.each([
+	'not-a-url',
+	'/hub',
+	'//hub.example.com',
+	'https://',
+	'https:/hub.example.com',
+	'https:hub.example.com',
+	'https://hub.example.com:99999',
+	'https://hub.example.com/pa\nth',
+	'https://hub.example.com\\path',
+	'file:///hub',
+	'ftp://hub.example.com',
+	'https://private:secret@hub.example.com',
+	'https://private@hub.example.com',
+	'https://:secret@hub.example.com',
+])('rejects invalid CSS base URL %j at startup without exposing its value', (appBaseUrl) => {
+	let error: unknown;
+	try {
+		createFromEnv({
+			MARIMOHUB_THEME_NOTEBOOK_CSS: '/brand.css',
+			MARIMOHUB_APP_BASE_URL: appBaseUrl,
+		});
+	} catch (caught) {
+		error = caught;
+	}
+	expect(error).toBeInstanceOf(ConfigError);
+	expect(error).toMatchObject({
+		opts: {
+			variable: 'MARIMOHUB_APP_BASE_URL',
+			remediation: 'Use an absolute HTTP(S) URL without credentials.',
+			docs: 'docs/theming.md',
+		},
+	});
+	expect(String(error)).not.toContain(appBaseUrl);
+});
+
+it.each(['https://hub.example.com/team', ' http://localhost:4831/ ', 'HTTPS://hub.example.com'])(
+	'accepts a credential-free HTTP(S) base URL %j for CSS',
+	(appBaseUrl) => {
+		expect(
+			parseTheme({
+				MARIMOHUB_THEME_NOTEBOOK_CSS: '/brand.css',
+				MARIMOHUB_APP_BASE_URL: appBaseUrl,
+			}).notebook_css,
+		).toBe('/brand.css');
+	},
+);
+
+it.each([undefined, '', ' ', 'not-a-url'])(
+	'does not require a base URL for absolute CSS (base %j)',
+	(appBaseUrl) => {
+		expect(
+			parseTheme({
+				MARIMOHUB_THEME_NOTEBOOK_CSS: 'https://cdn.example.com/brand.css',
+				MARIMOHUB_APP_BASE_URL: appBaseUrl,
+			}).notebook_css,
+		).toBe('https://cdn.example.com/brand.css');
+	},
+);

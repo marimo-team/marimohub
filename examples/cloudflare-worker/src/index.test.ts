@@ -127,6 +127,29 @@ describe('Cloudflare Worker configuration', () => {
 		expect(icon.headers.get('location')).toBe('/brand/apple.png');
 	});
 
+	it('preserves the notebook CSS cache scope across requests in one deployment', () => {
+		const env = {
+			...baseEnv,
+			MARIMOHUB_THEME_NOTEBOOK_CSS: 'https://cdn.example.com/brand.css',
+		} as Env;
+		const first = buildDeps(new Request('https://hub.example.com'), env);
+		const next = buildDeps(new Request('https://hub.example.com/projects'), env);
+		const other = buildDeps(new Request('https://other.example.com'), { ...env });
+		expect(next.theme).toBe(first.theme);
+		expect(other.theme).toEqual(first.theme);
+		expect(other.theme).not.toBe(first.theme);
+	});
+
+	it('forwards the configured base URL for root-relative notebook CSS', () => {
+		const deps = buildDeps(new Request('https://untrusted.example.com'), {
+			...baseEnv,
+			MARIMOHUB_THEME_NOTEBOOK_CSS: '/brand.css',
+			MARIMOHUB_APP_BASE_URL: ' https://hub.example.com/team/ ',
+		} as Env);
+		expect(deps.theme?.notebook_css).toBe('/brand.css');
+		expect(deps.sandbox.appBaseUrl).toBe('https://hub.example.com/team/');
+	});
+
 	it.each([
 		{ MARIMOHUB_THEME_PRIMARY_COLOR: 'rgb(1,2,3)' },
 		{ MARIMOHUB_THEME_LOGO_DARK: 'javascript:alert(1)' },

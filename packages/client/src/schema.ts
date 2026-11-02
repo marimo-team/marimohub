@@ -4593,6 +4593,25 @@ export interface operations {
 						/** @enum {boolean} */
 						success: true;
 						data: {
+							nav_links?: {
+								label: string;
+								href: string;
+								/** @enum {string} */
+								placement?: 'header' | 'help';
+								external?: boolean;
+								roles?: ('admin' | 'manager' | 'editor' | 'viewer' | 'app-user')[];
+							}[];
+							docs_url?: string;
+							support_url?: string;
+							announcement?: {
+								id: string;
+								text: string;
+								href?: string;
+								/** @enum {string} */
+								level?: 'info' | 'warning';
+								dismissible?: boolean;
+							};
+							notebook_css?: string;
 							/**
 							 * @default user
 							 * @enum {string}

@@ -86,3 +86,18 @@ describe('GET /api/v1/theme', () => {
 		expect(JSON.stringify(body)).not.toContain('private:secret');
 	});
 });
+
+it('serves public shell configuration without authentication', async () => {
+	const theme = {
+		...DEFAULT_THEME_CONFIG,
+		nav_links: [{ label: 'Admin portal', href: '/admin', roles: ['admin' as const] }],
+		docs_url: '/docs',
+		support_url: 'https://help.example.com',
+		announcement: { id: '1', text: 'News' },
+		notebook_css: '/brand.css',
+	};
+	const { request } = createTestApi({
+		deps: { theme, authenticator: { authenticate: async () => null } },
+	});
+	expect(await expectOk(await request('GET', '/theme'))).toEqual(theme);
+});

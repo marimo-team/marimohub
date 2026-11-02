@@ -425,6 +425,7 @@ export { isAnthropicBedrockModel } from './ai/bedrockModels';
 export {
 	assembleMarimoToml,
 	marimoConfigToSessionEnv,
+	marimoBrandDisplay,
 	marimoNotebookDefaults,
 	marimoSharingDisabled,
 } from './marimoConfig';

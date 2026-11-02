@@ -179,6 +179,10 @@ describe('App routes', () => {
 
 		expect(await screen.findByRole('heading', { name: 'Users' })).toBeInTheDocument();
 		expect(screen.getByRole('navigation', { name: 'Admin' })).toBeInTheDocument();
+		expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute(
+			'href',
+			'/admin/settings',
+		);
 		expect(screen.getByRole('link', { name: 'Debug' })).toHaveAttribute('href', '/admin/debug');
 		expect(screen.getByRole('link', { name: 'Policy' })).toHaveAttribute(
 			'href',

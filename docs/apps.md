@@ -373,3 +373,8 @@ See [Configuration](./configuration.md) for the full reference and
 
 Use **Edit thumbnail** to upload and crop a screenshot of your app. See
 [Notebook thumbnails](./thumbnails.md) for screenshot shortcuts and automatic previews.
+
+## Deployment appearance
+
+App headers include Help and deployment announcements. New app and preview sessions inherit deployment colors and notebook CSS.
+See [the theming guide](./theming.md) for configuration, CSS limits, and restart requirements.
