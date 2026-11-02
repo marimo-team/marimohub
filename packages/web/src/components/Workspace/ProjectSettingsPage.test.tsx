@@ -16,13 +16,21 @@ function setup(
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (input: RequestInfo | URL) => {
-			const { pathname } = new URL(String(input), 'http://localhost');
+			const { pathname, searchParams } = new URL(String(input), 'http://localhost');
 			requests.push(pathname);
 			if (pathname === '/api/v1/me')
 				return jsonOk({ id: 'user', email: 'user@example.com', groups: [] });
-			if (pathname === '/api/v1/projects/alpha')
+			if (pathname === '/api/v1/apps' && searchParams.get('project_id') === 'alpha')
 				return denied
-					? jsonError('FORBIDDEN', 'Forbidden', 403)
+					? jsonError('NOT_FOUND', 'Not found', 404)
+					: jsonOk({
+							items: [],
+							next_cursor: null,
+							project: { id: 'alpha', name: 'Alpha', your_role: role },
+						});
+			if (pathname === '/api/v1/projects/alpha')
+				return denied || role === 'app-user'
+					? jsonError('NOT_FOUND', 'Not found', 404)
 					: jsonOk({
 							id: 'alpha',
 							name: 'Alpha',
@@ -89,6 +97,8 @@ describe('Project settings pages', () => {
 		async (section) => {
 			const requests = setup(section, 'app-user');
 			await screen.findByText('Apps destination');
+			expect(requests).toContain('/api/v1/apps');
+			expect(requests).not.toContain('/api/v1/projects/alpha');
 			expect(
 				requests.some((path) => path.endsWith('/members') || path.endsWith('/integrations')),
 			).toBe(false);

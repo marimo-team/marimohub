@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
 import { Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider } from '@/context/AuthContext';
-import { jsonOk, renderWithClient } from '@/test/render';
+import { userKeys } from '@/api/queryKeys';
+import { createTestQueryClient, jsonOk, renderWithClient } from '@/test/render';
 import { WorkspaceHome } from './WorkspaceHome';
 import { lastProjectKey } from './lastProject';
 
@@ -17,12 +18,16 @@ function Destination() {
 }
 
 function setup({ userId = 'u', appOnly = false, route = '/' } = {}) {
+	const requests: string[] = [];
+	const user = { id: userId, email: 'user@example.com', app_only: appOnly };
+	const client = createTestQueryClient();
+	client.setQueryData(userKeys.me(), user);
 	vi.stubGlobal(
 		'fetch',
 		vi.fn(async (input: RequestInfo | URL) => {
 			const url = new URL(String(input), 'http://localhost');
-			if (url.pathname === '/api/v1/me')
-				return jsonOk({ id: userId, email: 'user@example.com', app_only: appOnly });
+			requests.push(url.pathname);
+			if (url.pathname === '/api/v1/me') return jsonOk(user);
 			if (url.pathname === '/api/v1/projects')
 				return jsonOk({
 					items: [
@@ -41,8 +46,9 @@ function setup({ userId = 'u', appOnly = false, route = '/' } = {}) {
 				<Route path="*" element={<Destination />} />
 			</Routes>
 		</AuthProvider>,
-		{ route, toaster: false },
+		{ route, toaster: false, client },
 	);
+	return requests;
 }
 
 afterEach(() => {
@@ -88,9 +94,10 @@ describe('Workspace home', () => {
 		expect(await screen.findByRole('status', { name: 'Destination' })).toHaveTextContent('/apps');
 	});
 	it('preserves project-index filter links', async () => {
-		setup({ route: '/?q=analysis' });
+		const requests = setup({ route: '/?q=analysis' });
 		expect(await screen.findByRole('status', { name: 'Destination' })).toHaveTextContent(
 			'/projects?q=analysis',
 		);
+		expect(requests).not.toContain('/api/v1/projects');
 	});
 });

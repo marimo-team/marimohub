@@ -18,9 +18,17 @@ function setup({
 		vi.fn(async (input: RequestInfo | URL) => {
 			const url = new URL(String(input), 'http://localhost');
 			requests.push(url.pathname + url.search);
-			if (url.pathname === '/api/v1/projects/p')
+			if (url.pathname === '/api/v1/apps' && url.searchParams.get('project_id') === 'p')
 				return denied
-					? jsonError('FORBIDDEN', 'Forbidden', 403)
+					? jsonError('NOT_FOUND', 'Not found', 404)
+					: jsonOk({
+							items: [],
+							next_cursor: null,
+							project: { id: 'p', name: 'Analysis', your_role: role },
+						});
+			if (url.pathname === '/api/v1/projects/p')
+				return denied || role === 'app-user'
+					? jsonError('NOT_FOUND', 'Not found', 404)
 					: jsonOk({ id: 'p', name: 'Analysis', your_role: role });
 			if (url.pathname === '/api/v1/capabilities') return jsonOk({ jobs: { available } });
 			if (url.pathname === '/api/v1/projects/p/notebooks') {
@@ -85,6 +93,8 @@ describe('Project jobs navigation', () => {
 	it('redirects app users without fetching notebooks', async () => {
 		const { requests } = setup({ role: 'app-user' });
 		await screen.findByRole('heading', { name: 'Apps' });
+		expect(requests).toContain('/api/v1/apps?project_id=p');
+		expect(requests).not.toContain('/api/v1/projects/p');
 		expect(requests.some((url) => url.includes('/notebooks'))).toBe(false);
 	});
 

@@ -9,7 +9,7 @@ export function WorkspaceHome() {
 	const location = useLocation();
 	const projects = useProjectsQuery(
 		{ status: 'active' },
-		{ enabled: Boolean(user && !user.app_only), throwOnError: false },
+		{ enabled: Boolean(user && !user.app_only && !location.search), throwOnError: false },
 	);
 	if (user?.app_only) return <Navigate to="/apps" replace />;
 	if (location.search) return <Navigate to={`/projects${location.search}`} replace />;

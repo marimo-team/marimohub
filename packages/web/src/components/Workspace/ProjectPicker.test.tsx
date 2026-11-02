@@ -13,7 +13,10 @@ function setup(canCreate = true) {
 	const requests: unknown[] = [];
 	vi.stubGlobal(
 		'fetch',
-		vi.fn(async (_input: RequestInfo | URL, init: RequestInit) => {
+		vi.fn(async (input: RequestInfo | URL, init: RequestInit) => {
+			const url = new URL(String(input), 'http://localhost');
+			if (url.pathname !== '/api/v1/projects' || init.method !== 'POST')
+				throw new Error(`Unexpected request: ${init.method} ${url}`);
 			requests.push(JSON.parse(String(init.body)));
 			return jsonOk({ id: 'new-project' });
 		}),
