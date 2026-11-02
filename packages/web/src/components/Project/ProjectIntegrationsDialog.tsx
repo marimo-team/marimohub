@@ -211,52 +211,64 @@ function IntegrationsContent({
 							? 'Org integrations'
 							: 'Integrations';
 
-	if (kindsQuery.isError || entriesQuery.isError)
-		return (
-			<div role="alert" className="space-y-3 text-sm">
-				<p className="text-destructive">Could not load integrations.</p>
-				<Button
-					onPress={() => {
-						void kindsQuery.refetch();
-						void entriesQuery.refetch();
+	const header = (view.mode !== 'list' || onBack) &&
+		(!modalEditor || view.mode === 'create' || view.mode === 'copy') && (
+			<div className="flex items-center gap-3">
+				<button
+					type="button"
+					className="flex w-fit items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					onClick={() => {
+						if (view.mode === 'list') onBack?.();
+						else
+							setView(
+								view.mode === 'create' || view.mode === 'copy'
+									? { mode: 'catalog' }
+									: { mode: 'list' },
+							);
 					}}
 				>
-					Retry integrations
-				</Button>
+					<ArrowLeft className="size-3.5" aria-hidden />
+					Back
+				</button>
+				{!modalEditor && <h3 className="font-semibold">{title}</h3>}
 			</div>
 		);
-	if (kinds === undefined || entries === undefined) return <Skeleton className="h-24" />;
-	if (kinds === null || entries === null)
+
+	if (
+		kindsQuery.isError ||
+		entriesQuery.isError ||
+		kinds === undefined ||
+		entries === undefined ||
+		kinds === null ||
+		entries === null
+	) {
 		return (
-			<p className="text-sm text-muted-foreground">
-				Integrations are not enabled on this deployment.
-			</p>
+			<div className="flex flex-col gap-4 text-sm">
+				{header}
+				{kindsQuery.isError || entriesQuery.isError ? (
+					<div role="alert" className="space-y-3">
+						<p className="text-destructive">Could not load integrations.</p>
+						<Button
+							onPress={() => {
+								void kindsQuery.refetch();
+								void entriesQuery.refetch();
+							}}
+						>
+							Retry integrations
+						</Button>
+					</div>
+				) : kinds === undefined || entries === undefined ? (
+					<Skeleton className="h-24" />
+				) : (
+					<p className="text-muted-foreground">Integrations are not enabled on this deployment.</p>
+				)}
+			</div>
 		);
+	}
 
 	const editor = (
 		<div className="flex flex-col gap-4 text-sm">
-			{(view.mode !== 'list' || onBack) &&
-				(!modalEditor || view.mode === 'create' || view.mode === 'copy') && (
-					<div className="flex items-center gap-3">
-						<button
-							type="button"
-							className="flex w-fit items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-							onClick={() => {
-								if (view.mode === 'list') onBack?.();
-								else
-									setView(
-										view.mode === 'create' || view.mode === 'copy'
-											? { mode: 'catalog' }
-											: { mode: 'list' },
-									);
-							}}
-						>
-							<ArrowLeft className="size-3.5" aria-hidden />
-							Back
-						</button>
-						{!modalEditor && <h3 className="font-semibold">{title}</h3>}
-					</div>
-				)}
+			{header}
 			{view.mode === 'catalog' ? (
 				<CatalogView
 					kinds={kinds}

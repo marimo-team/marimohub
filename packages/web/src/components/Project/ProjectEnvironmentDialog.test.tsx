@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { ProjectEnvironmentDialog } from './ProjectEnvironmentDialog';
+import { ProjectCloudAccessDialog, ProjectEnvironmentDialog } from './ProjectEnvironmentDialog';
 import type { ProjectDetail } from '@/types';
 
 const project = (role: ProjectDetail['your_role'] = 'manager') =>
@@ -29,46 +29,13 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe('ProjectEnvironmentDialog', () => {
-	it.each([
-		{
-			available: false,
-			defaultEnabled: true,
-			override: true,
-			label: 'Not configured for this deployment',
-			selected: undefined,
-		},
-		{
-			available: true,
-			defaultEnabled: true,
-			override: undefined,
-			label: 'Enabled by deployment default',
-			selected: /Use deployment default/,
-		},
-		{
-			available: true,
-			defaultEnabled: false,
-			override: undefined,
-			label: 'Disabled by deployment default',
-			selected: /Use deployment default/,
-		},
-		{
-			available: true,
-			defaultEnabled: true,
-			override: false,
-			label: 'Disabled for this project',
-			selected: 'Disabled',
-		},
-		{
-			available: true,
-			defaultEnabled: false,
-			override: true,
-			label: 'Enabled for this project',
-			selected: 'Enabled',
-		},
-	])(
-		'opens cloud access without federation_effective: $label',
-		async ({ available, defaultEnabled, override, label, selected }) => {
+describe.each([
+	['environment', ProjectEnvironmentDialog],
+	['direct cloud access', ProjectCloudAccessDialog],
+] as const)('%s dialog', (_name, Dialog) => {
+	it.each([undefined, false, true])(
+		'keeps cloud access read-only without server resolution (override: %s)',
+		async (override) => {
 			const user = userEvent.setup();
 			const legacyProject = {
 				...project(),
@@ -76,30 +43,29 @@ describe('ProjectEnvironmentDialog', () => {
 			};
 			Reflect.deleteProperty(legacyProject, 'federation_effective');
 			render(
-				<ProjectEnvironmentDialog
+				<Dialog
 					isOpen
 					onClose={() => {}}
 					project={legacyProject}
 					integrationsAvailable
 					cloudAccessLoading={false}
-					cloudAccessAvailable={available}
-					cloudAccessDefaultEnabled={defaultEnabled}
+					cloudAccessAvailable
+					cloudAccessDefaultEnabled
 					onSaveCloudAccess={() => Promise.resolve()}
 				/>,
 			);
-			expect(screen.getByText(label)).toBeInTheDocument();
-			await user.click(screen.getByRole('button', { name: /Cloud access/ }));
-			if (selected) {
-				expect(screen.getByRole('radio', { name: selected })).toBeChecked();
-				expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
-			} else {
-				expect(screen.getByRole('link', { name: /How to enable it/ })).toBeInTheDocument();
-				expect(screen.queryByRole('radio')).not.toBeInTheDocument();
-				expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+			if (Dialog === ProjectEnvironmentDialog) {
+				expect(screen.getByText('Not configured for this deployment')).toBeInTheDocument();
+				await user.click(screen.getByRole('button', { name: /Cloud access/ }));
 			}
+			expect(screen.getByRole('link', { name: /How to enable it/ })).toBeInTheDocument();
+			expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+			expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
 		},
 	);
+});
 
+describe('ProjectEnvironmentDialog', () => {
 	it('shows the integrations and cloud access overview', () => {
 		render(
 			<ProjectEnvironmentDialog

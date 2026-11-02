@@ -37,7 +37,7 @@ export function ProjectEnvironmentDialog({
 	isPending = false,
 }: ProjectEnvironmentDialogProps) {
 	const [area, setArea] = useState<Area>('overview');
-	const federation = resolveCloudAccess(project, cloudAccessAvailable, cloudAccessDefaultEnabled);
+	const federation = resolveCloudAccess(project);
 	// The capability flag can be stale; the project's own resolution is authoritative.
 	const cloudAccessConfigured = cloudAccessAvailable && federation.source !== 'unavailable';
 	let cloudAccessStatus = 'Loading cloud access…';
@@ -101,7 +101,7 @@ export function ProjectCloudAccessDialog({
 	onSaveCloudAccess,
 	isPending = false,
 }: Omit<ProjectEnvironmentDialogProps, 'integrationsAvailable'>) {
-	const federation = resolveCloudAccess(project, cloudAccessAvailable, cloudAccessDefaultEnabled);
+	const federation = resolveCloudAccess(project);
 	return (
 		<DialogModal isOpen={isOpen} onClose={onClose} title="Cloud access" width="lg">
 			{cloudAccessLoading ? (
@@ -122,15 +122,10 @@ export function ProjectCloudAccessDialog({
 }
 
 function resolveCloudAccess(
-	project: Pick<ProjectDetail, 'federation' | 'federation_effective'>,
-	available: boolean,
-	defaultEnabled: boolean,
+	project: Pick<ProjectDetail, 'federation_effective'>,
 ): EffectiveFederation {
-	if (project.federation_effective) return project.federation_effective;
-	// Older API responses omit federation_effective.
-	if (!available) return { enabled: false, source: 'unavailable' };
-	if (project.federation) return { enabled: project.federation.enabled, source: 'project' };
-	return { enabled: defaultEnabled, source: 'deployment' };
+	// Capabilities and saved overrides cannot replace the server's effective resolution.
+	return project.federation_effective ?? { enabled: false, source: 'unavailable' };
 }
 
 function cloudAccessSetting({ enabled, source }: EffectiveFederation): CloudAccessSetting {
