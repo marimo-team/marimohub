@@ -4,7 +4,7 @@ import { ACTION_RULES, AUTHORIZATION_ACTIONS } from './services/authorization/ac
 import type { AuthorizationAction, DeploymentAction } from './services/authorization/actions';
 
 export type { AuthorizationAction } from './services/authorization/actions';
-export { AUTHORIZATION_ACTIONS } from './services/authorization/actions';
+export { AUTHORIZATION_ACTIONS, DEPLOYMENT_ACTIONS } from './services/authorization/actions';
 
 export const MAX_TOKEN_GRANT_PROJECTS = 100;
 

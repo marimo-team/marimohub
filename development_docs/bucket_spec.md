@@ -766,8 +766,9 @@ authorization. Denial uses CAS to mark the pending record as denied before
 deletion. It then redirects with `error=access_denied`.
 
 Manual MCP tokens store an explicit v2 grant and `mcp_resource`, with no `oauth`
-binding. Each MCP request requires `MARIMOHUB_MCP_MANUAL_TOKENS=on` and an exact
-resource match. Other PATs cannot access MCP.
+binding. Requests authenticated with a manual MCP token require
+`MARIMOHUB_MCP_MANUAL_TOKENS=on` and an exact resource match. OAuth-issued MCP
+tokens do not require this flag. Ordinary API PATs cannot access MCP.
 
 OAuth PATs expire within 90 days. The consent page defaults to 7 days. The
 authorization server does not issue refresh tokens.

@@ -11,6 +11,7 @@ import { errorMessage } from '@/lib/errors';
 import { cn } from '@/lib/utils';
 import type { TokenGrant } from '@/types';
 import type { TokenGrantDraft } from './tokenGrantDraft';
+import { actionFitsProjects, actionsForProjects } from './tokenGrantDraft';
 
 interface TokenGrantEditorProps {
 	value: TokenGrantDraft;
@@ -126,7 +127,11 @@ export function TokenGrantEditor({ value, onChange, upperBound }: TokenGrantEdit
 								/>
 								<span className="flex flex-col">
 									<span className="text-xs font-medium">{preset.label}</span>
-									<span className="text-xs text-muted-foreground">{preset.description}</span>
+									<span className="text-xs text-muted-foreground">
+										{preset.id === 'full' && Array.isArray(value.projects)
+											? 'Use all current and future actions within selected projects.'
+											: preset.description}
+									</span>
 								</span>
 							</label>
 						);
@@ -140,7 +145,10 @@ export function TokenGrantEditor({ value, onChange, upperBound }: TokenGrantEdit
 						if (value.actions === null || value.actions === '*') {
 							onChange({
 								...value,
-								actions: value.actions === '*' ? [...AUTHORIZATION_ACTIONS] : [],
+								actions: actionsForProjects(
+									value.actions === '*' ? [...AUTHORIZATION_ACTIONS] : [],
+									value.projects ?? '*',
+								),
 							});
 						}
 					}}
@@ -150,7 +158,9 @@ export function TokenGrantEditor({ value, onChange, upperBound }: TokenGrantEdit
 				{showAdvanced ? (
 					<div className="grid max-h-40 gap-1 overflow-y-auto rounded-md border p-2 sm:grid-cols-2">
 						{AUTHORIZATION_ACTIONS.map((action) => {
-							const disabled = upperBoundActions !== null && !upperBoundActions.has(action);
+							const disabled =
+								(upperBoundActions !== null && !upperBoundActions.has(action)) ||
+								!actionFitsProjects(action, value.projects ?? '*');
 							return (
 								<label key={action} className="flex items-center gap-2 text-xs">
 									<input
@@ -187,7 +197,9 @@ export function TokenGrantEditor({ value, onChange, upperBound }: TokenGrantEdit
 						type="radio"
 						name="token-project-scope"
 						checked={Array.isArray(value.projects)}
-						onChange={() => onChange({ ...value, projects: [] })}
+						onChange={() =>
+							onChange({ actions: actionsForProjects(value.actions, []), projects: [] })
+						}
 					/>
 					Selected projects
 				</label>

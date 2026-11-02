@@ -98,6 +98,12 @@ describe('bucket schema contracts', () => {
 			expect(array?.uniqueItems).toBe(true);
 		}
 	});
+
+	it('excludes simultaneous manual MCP and OAuth bindings from stored tokens', () => {
+		expect(doc.components.schemas.Token.not).toEqual({
+			required: ['mcp_resource', 'oauth'],
+		});
+	});
 });
 
 describe('bucket job contracts', () => {

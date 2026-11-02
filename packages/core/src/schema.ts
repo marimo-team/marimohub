@@ -1437,6 +1437,7 @@ export const TokenSchema = z
 		'A manual MCP token requires a version 2 grant and cannot have an OAuth binding',
 	)
 	.meta({
+		not: { required: ['mcp_resource', 'oauth'] },
 		dependentRequired: {
 			credential_version: ['grant'],
 			grant: ['credential_version'],

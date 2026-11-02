@@ -5547,6 +5547,10 @@ components:
         - hash
         - created_at
       additionalProperties: {}
+      not:
+        required:
+          - mcp_resource
+          - oauth
       dependentRequired:
         credential_version:
           - grant
