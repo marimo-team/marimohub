@@ -228,8 +228,44 @@ describe('prepareMarimoPresentation', () => {
 });
 
 describe('deployment brand CSS', () => {
+	const brandedTheme = {
+		...DEFAULT_THEME_CONFIG,
+		primary_color: '#7c3aed',
+		secondary_color: '#2563eb',
+	};
+
+	it('preserves native notebook colors by default even when the hub is branded', () => {
+		expect(marimoBrandDisplay(brandedTheme)).toEqual({});
+	});
+
+	it('applies operator CSS independently of the notebook palette', () => {
+		const css = ':root { --operator-color: purple; }';
+		expect(marimoBrandDisplay(brandedTheme, css).files![0].content).toBe(css);
+	});
+
+	it('limits accents to actions, links, and focus rings', () => {
+		const css = marimoBrandDisplay({ ...brandedTheme, notebook_palette: 'accents' }).files![0]
+			.content;
+		expect([...css.matchAll(/--([\w-]+):/g)].map((match) => match[1]).sort()).toEqual([
+			'link',
+			'link-visited',
+			'primary',
+			'primary-foreground',
+			'primary-hover',
+			'primary-hover-foreground',
+			'ring',
+			'sidebar-primary',
+			'sidebar-primary-foreground',
+			'sidebar-ring',
+		]);
+		const palette = generateThemePalette(brandedTheme)!;
+		expect(css).toContain(
+			`--primary: light-dark(${palette.light.primary}, ${palette.dark.primary});`,
+		);
+	});
+
 	it('uses the shared light and dark palette and appends operator CSS', () => {
-		const theme = { ...DEFAULT_THEME_CONFIG, primary_color: '#7c3aed', secondary_color: '#2563eb' };
+		const theme = { ...brandedTheme, notebook_palette: 'full' as const };
 		const palette = generateThemePalette(theme)!;
 		const env = marimoBrandDisplay(theme, ':root { --primary: red; }');
 		const css = env.files![0].content;
@@ -240,18 +276,25 @@ describe('deployment brand CSS', () => {
 			`--secondary: light-dark(${palette.light.secondary}, ${palette.dark.secondary});`,
 		);
 		expect(css).toContain('--link: var(--primary)');
+		for (const key of Object.keys(palette.light)) {
+			expect(css).toContain(`--${key}: light-dark(${palette.light[key]}, ${palette.dark[key]});`);
+		}
 		expect(css.endsWith(':root { --primary: red; }')).toBe(true);
 		const resolved = prepareMarimoPresentation(env, (path) => `/sandbox${path}`, { mode: 'app' })!;
 		expect(
 			parse(resolved.files!.find((file) => file.path.endsWith('/marimo.toml'))!.content).display,
 		).toEqual({ custom_css: ['/sandbox/tmp/marimohub-config/marimo/brand.css'] });
 	});
-	it('leaves native palettes alone without deployment colours or CSS', () => {
-		expect(marimoBrandDisplay(DEFAULT_THEME_CONFIG)).toEqual({});
-	});
-	it('sets the colour scheme for both document and nested marimo dark modes', () => {
-		const css = marimoBrandDisplay({ ...DEFAULT_THEME_CONFIG, primary_color: '#7c3aed' }).files![0]
-			.content;
+	it.each(['off', 'accents', 'full'] as const)(
+		'omits the %s palette without hub colors',
+		(mode) => {
+			expect(marimoBrandDisplay({ ...DEFAULT_THEME_CONFIG, notebook_palette: mode })).toEqual({});
+		},
+	);
+	it.each(['accents', 'full'] as const)('sets the color scheme for the %s palette', (mode) => {
+		const css = marimoBrandDisplay({ ...brandedTheme, notebook_palette: mode }).files![0].content;
+		expect(css).toContain('--link: var(--primary);');
+		expect(css).toContain('--link-visited: var(--primary);');
 		expect(css).toContain(':root {\n  color-scheme: light;\n}');
 		expect(css).toContain(
 			':root:has(body.dark), .dark, .marimo:is(.dark *) {\n  color-scheme: dark;\n}',

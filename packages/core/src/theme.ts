@@ -45,6 +45,7 @@ export const ThemeConfigSchema = z.object({
 	support_url: assetUrl.optional(),
 	announcement: ThemeAnnouncementSchema.optional(),
 	notebook_css: assetUrl.optional(),
+	notebook_palette: z.enum(['off', 'accents', 'full']).default('off'),
 	color_mode: ColorModeSchema.default('user'),
 	name: z.string().trim().min(1),
 	favicon: assetUrl.nullable(),
@@ -65,6 +66,7 @@ export const ThemeResponseSchema = z.object({
 });
 
 export const DEFAULT_THEME_CONFIG: ThemeConfig = {
+	notebook_palette: 'off',
 	color_mode: 'user',
 	name: 'marimohub',
 	favicon: null,

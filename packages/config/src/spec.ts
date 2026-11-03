@@ -145,6 +145,15 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
+						id: 'MARIMOHUB_THEME_NOTEBOOK_PALETTE',
+						name: 'Notebook palette',
+						description:
+							'Notebook colors: `off` (native), `accents` (actions, links, focus), or `full` (all hub colors). Enabled modes require a primary or secondary brand color. See the [theming guide](./theming.md#colors-in-notebooks-and-apps) for CSS precedence and restarts.',
+						default: 'off',
+						example: 'accents',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_THEME_NOTEBOOK_CSS',
 						name: 'Notebook CSS',
 						description:

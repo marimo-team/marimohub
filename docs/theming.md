@@ -5,7 +5,7 @@ description: Configure branding, navigation, announcements, and notebook colors.
 # Customize the hub theme
 
 Customize the hub, sign-in screen, navigation, and browser titles without a frontend rebuild.
-Notebook editors, served apps, and previews inherit deployment colors and the selected light or dark mode.
+Notebooks, apps, and previews share the selected light or dark mode. Brand colors require [palette opt-in](#colors-in-notebooks-and-apps).
 All theme configuration is public before sign-in.
 
 ## Set a primary color
@@ -168,9 +168,25 @@ Restart the server and reload the page to apply changes.
 
 ## Colors in notebooks and apps
 
-New editor, app, and preview sessions inherit the hub palette. Existing sessions need a restart to apply changes.
-Without color overrides or notebook CSS, marimo keeps its native palette. Scheduled jobs do not receive deployment CSS.
+`MARIMOHUB_THEME_NOTEBOOK_PALETTE` controls generated colors in editors, apps, and previews:
 
+| Value           | Behavior                                                                                                                |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `off` (default) | Keeps native marimo colors.                                                                                             |
+| `accents`       | Applies primary action, link, and focus colors, including sidebar equivalents. Keeps native surfaces, text, and charts. |
+| `full`          | Applies all hub colors, including surfaces, text, borders, and charts.                                                  |
+
+Both enabled modes require a primary or secondary brand color. The hub UI is unaffected.
+To retain the notebook colors from earlier releases, set `MARIMOHUB_THEME_NOTEBOOK_PALETTE=full`.
+Restart the server and notebook sessions to apply changes.
+
+**Admin → Colors** shows configured colors, the palette mode, and all generated tokens with light and dark swatches.
+Tokens that the current mode does not apply remain visible as previews.
+Without brand colors, the page shows a reference palette from the default teal, not native marimo defaults.
+
+### Custom notebook CSS
+
+Custom CSS applies independently of the palette mode. Scheduled jobs receive neither palette CSS nor custom CSS.
 For additional styles, configure a public stylesheet:
 
 ```dotenv
@@ -179,15 +195,14 @@ MARIMOHUB_THEME_NOTEBOOK_CSS="https://hub.example.com/brand/notebook.css"
 
 The API downloads the stylesheet and appends it after the palette CSS.
 Root-relative paths resolve against `MARIMOHUB_APP_BASE_URL`, which must be an absolute HTTP(S) URL without credentials.
-Host the stylesheet on infrastructure you control; it runs inside the notebook page and can load remote assets.
+Host the stylesheet on infrastructure you control. It runs inside the notebook page and can load remote assets.
 The file must contain UTF-8 text of at most 64 KiB.
-A response without a `Content-Type` header is accepted. If the header is present, its media type must be exactly `text/css`; parameters such as `charset` are allowed.
+The `Content-Type` header is optional. If present, it must be `text/css`, with optional parameters such as `charset`.
 The download has a five-second timeout and rejects redirects.
 The API caches CSS for one minute, then revalidates it with its ETag when available.
-If the stylesheet cannot be revalidated, the hub serves the last fetched copy. Session starts fail only when it was never fetched.
+If revalidation fails, the hub serves the last fetched copy. Without a cached copy, the download failure blocks session startup.
 Use absolute asset URLs in CSS: marimo serves the copied stylesheet from the notebook origin.
 
-The palette sets marimo's `--primary`, `--secondary`, `--link`, and related surface variables.
 Custom CSS, workspace configuration, and chart libraries can override these colors.
 See the [marimo theming guide](https://docs.marimo.io/guides/configuration/theming/) for version-specific variables.
 

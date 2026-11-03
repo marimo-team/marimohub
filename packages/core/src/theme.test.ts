@@ -5,6 +5,10 @@ describe('shell theme config', () => {
 	it('keeps default deployments backward compatible', () => {
 		expect(ThemeConfigSchema.parse(DEFAULT_THEME_CONFIG)).toEqual(DEFAULT_THEME_CONFIG);
 	});
+	it('defaults older theme configurations to no notebook palette', () => {
+		const { notebook_palette: _, ...legacy } = DEFAULT_THEME_CONFIG;
+		expect(ThemeConfigSchema.parse(legacy).notebook_palette).toBe('off');
+	});
 	it.each([
 		'javascript:alert(1)',
 		'//evil.example',

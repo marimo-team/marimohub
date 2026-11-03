@@ -40,7 +40,7 @@ describe('theme bootstrap', () => {
 		);
 	});
 
-	it('accepts older theme responses without forced mode or installation icon fields', async () => {
+	it('preserves older branding while defaulting missing notebook palette, color mode, and icon fields', async () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn().mockResolvedValue(
@@ -49,12 +49,16 @@ describe('theme bootstrap', () => {
 					favicon: null,
 					logo: null,
 					logo_dark: null,
-					primary_color: null,
+					primary_color: '#2741E7',
 					secondary_color: null,
 				}),
 			),
 		);
-		expect(await loadThemeConfig()).toEqual({ ...DEFAULT_THEME_CONFIG, name: 'Existing hub' });
+		expect(await loadThemeConfig()).toEqual({
+			...DEFAULT_THEME_CONFIG,
+			name: 'Existing hub',
+			primary_color: '#2741E7',
+		});
 	});
 
 	it('loads public branding once under the deployment base path', async () => {
@@ -80,6 +84,9 @@ describe('theme bootstrap', () => {
 		jsonOk({ ...DEFAULT_THEME_CONFIG, name: 42 }),
 		...['system', '', 'Light', null, false, 0, ['light'], { mode: 'light' }].map((color_mode) =>
 			jsonOk({ ...DEFAULT_THEME_CONFIG, color_mode }),
+		),
+		...['on', 'Full', '', null, false, 0, ['full'], { mode: 'full' }].map((notebook_palette) =>
+			jsonOk({ ...DEFAULT_THEME_CONFIG, primary_color: '#2741E7', notebook_palette }),
 		),
 		jsonOk({ ...DEFAULT_THEME_CONFIG, favicon: '//example.com/icon.svg' }),
 		jsonOk({ ...DEFAULT_THEME_CONFIG, logo_dark: 'data:image/svg+xml,<svg/>' }),

@@ -1,5 +1,9 @@
 import type { ThemeConfig } from '../theme';
-import { generateThemePalette } from '../themePalette';
+import {
+	generateThemePalette,
+	getNotebookPaletteTokens,
+	NOTEBOOK_TOKEN_ALIASES,
+} from '../themePalette';
 import { parse, stringify } from 'smol-toml';
 import type { TomlTable, TomlValue } from 'smol-toml';
 import { isRecord } from '../internal/validation';
@@ -69,13 +73,18 @@ export const marimoSharingDisabled: MarimoConfigContributor = () => ({
 const BRAND_CSS_PATH = `${XDG_CONFIG_HOME}/marimo/brand.css`;
 
 export function renderMarimoBrandCss(theme: ThemeConfig): string {
+	if (!theme.notebook_palette || theme.notebook_palette === 'off') return '';
 	const palette = generateThemePalette(theme);
 	if (!palette) return '';
-	const tokens = Object.keys(palette.light).map(
-		(key) => `  --${key}: light-dark(${palette.light[key]}, ${palette.dark[key]});`,
-	);
+	const tokens = getNotebookPaletteTokens(palette, theme.notebook_palette).map((key) => {
+		const alias = NOTEBOOK_TOKEN_ALIASES[key];
+		const value = alias
+			? `var(--${alias})`
+			: `light-dark(${palette.light[key]}, ${palette.dark[key]})`;
+		return `  --${key}: ${value};`;
+	});
 	// Marimo's colour tokens are not a stable public API; keep this mapping in sync with globals.css.
-	return `:root {\n  color-scheme: light;\n}\n:root:has(body.dark), .dark, .marimo:is(.dark *) {\n  color-scheme: dark;\n}\n:root, .marimo, .dark, .marimo:is(.dark *) {\n${tokens.join('\n')}\n  --link: var(--primary);\n  --link-visited: var(--primary);\n}\n`;
+	return `:root {\n  color-scheme: light;\n}\n:root:has(body.dark), .dark, .marimo:is(.dark *) {\n  color-scheme: dark;\n}\n:root, .marimo, .dark, .marimo:is(.dark *) {\n${tokens.join('\n')}\n}\n`;
 }
 
 export function marimoBrandDisplay(theme: ThemeConfig, notebookCss = ''): SessionEnv {
