@@ -36,6 +36,22 @@ describe('deployment theme configuration', () => {
 		expect(() => parseTheme({ [variable]: 'javascript:alert(1)' })).toThrow(variable);
 	});
 
+	it.each(['off', 'accents', 'full'] as const)('accepts notebook palette %s', (mode) => {
+		expect(parseTheme({ MARIMOHUB_THEME_NOTEBOOK_PALETTE: ` ${mode} ` }).notebook_palette).toBe(
+			mode,
+		);
+	});
+
+	it.each([undefined, '', '  '])('defaults notebook palette to off for %j', (value) => {
+		expect(parseTheme({ MARIMOHUB_THEME_NOTEBOOK_PALETTE: value }).notebook_palette).toBe('off');
+	});
+
+	it.each(['on', 'true', 'Full'])('rejects invalid notebook palette %s', (value) => {
+		expect(() => parseTheme({ MARIMOHUB_THEME_NOTEBOOK_PALETTE: value })).toThrow(
+			'MARIMOHUB_THEME_NOTEBOOK_PALETTE',
+		);
+	});
+
 	it('defaults empty and whitespace-only values', () => {
 		expect(parseTheme({})).toEqual(DEFAULT_THEME_CONFIG);
 		expect(parseTheme({ MARIMOHUB_THEME_NAME: '  ', MARIMOHUB_THEME_LOGO: '\t' })).toEqual(

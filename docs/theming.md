@@ -168,8 +168,24 @@ Restart the server and reload the page to apply changes.
 
 ## Colors in notebooks and apps
 
-New editor, app, and preview sessions inherit the hub palette. Existing sessions need a restart to apply changes.
-Without color overrides or notebook CSS, marimo keeps its native palette. Scheduled jobs do not receive deployment CSS.
+Hub colors do not change notebook colors by default.
+`MARIMOHUB_THEME_NOTEBOOK_PALETTE` controls palette inheritance for editor, app, and preview sessions:
+
+| Value           | Behavior                                                                                                  |
+| --------------- | --------------------------------------------------------------------------------------------------------- |
+| `off` (default) | Preserves native marimo colors.                                                                           |
+| `accents`       | Applies hub colors to actions, links, and focus rings. Preserves native surfaces, text, and chart colors. |
+| `full`          | Applies the full hub palette, including surfaces, text, and chart colors.                                 |
+
+The hub palette requires at least one configured primary or secondary color.
+This setting does not change the hub UI or disable custom notebook CSS.
+Existing sessions need a restart to apply changes. Scheduled jobs do not receive deployment CSS.
+
+To retain notebook colors from releases that automatically applied hub branding, set `MARIMOHUB_THEME_NOTEBOOK_PALETTE=full`.
+
+Super admins can inspect the configured colors and notebook palette mode in **Admin → Colors**.
+The page shows all generated tokens on light and dark backgrounds, including tokens that the current mode does not apply.
+Without configured colors, it shows an unapplied reference palette based on the default teal.
 
 For additional styles, configure a public stylesheet:
 
@@ -187,7 +203,8 @@ The API caches CSS for one minute, then revalidates it with its ETag when availa
 If the stylesheet cannot be revalidated, the hub serves the last fetched copy. Session starts fail only when it was never fetched.
 Use absolute asset URLs in CSS: marimo serves the copied stylesheet from the notebook origin.
 
-The palette sets marimo's `--primary`, `--secondary`, `--link`, and related surface variables.
+The `accents` palette sets primary action, link, and focus variables, including their sidebar equivalents.
+The `full` palette also sets `--secondary`, background, foreground, border, and chart variables.
 Custom CSS, workspace configuration, and chart libraries can override these colors.
 See the [marimo theming guide](https://docs.marimo.io/guides/configuration/theming/) for version-specific variables.
 

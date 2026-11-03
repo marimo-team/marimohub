@@ -32,6 +32,7 @@ const AuditLogPage = lazy(() => import('@/components/AuditLog/AuditLogPage'));
 const DataBrowserPage = lazy(() => import('@/components/DataBrowser/DataBrowserPage'));
 const AdminUsersPage = lazy(() => import('@/components/Admin/AdminUsersPage'));
 const AdminSettingsPage = lazy(() => import('@/components/Admin/AdminSettingsPage'));
+const AdminColorsPage = lazy(() => import('@/components/Admin/AdminColorsPage'));
 const AdminRuntimePage = lazy(() => import('@/components/Admin/AdminRuntimePage'));
 const AdminDebugPage = lazy(() => import('@/components/Admin/AdminDebugPage'));
 const AdminPolicyAnalyzerPage = lazy(() => import('@/components/Admin/AdminPolicyAnalyzerPage'));
@@ -168,6 +169,7 @@ function StandardLayout() {
 							<Route index element={<Navigate to="/admin/users" replace />} />
 							<Route path="users" element={<AdminUsersPage />} />
 							<Route path="settings" element={<AdminSettingsPage />} />
+							<Route path="colors" element={<AdminColorsPage />} />
 							<Route path="audit-logs" element={<AuditLogPage />} />
 							<Route path="policy-analyzer" element={<AdminPolicyAnalyzerPage />} />
 							<Route path="debug" element={<AdminDebugPage />} />

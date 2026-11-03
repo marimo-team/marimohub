@@ -145,6 +145,15 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						optIn: true,
 					},
 					{
+						id: 'MARIMOHUB_THEME_NOTEBOOK_PALETTE',
+						name: 'Notebook palette',
+						description:
+							'Apply hub colors to editors, apps, and previews: `off`, `accents`, or `full`. `off` preserves native marimo colors. `accents` changes actions, links, and focus rings. `full` also changes surfaces, text, and chart colors. Custom notebook CSS applies independently. Existing sessions need a restart.',
+						default: 'off',
+						example: 'accents',
+						optIn: true,
+					},
+					{
 						id: 'MARIMOHUB_THEME_NOTEBOOK_CSS',
 						name: 'Notebook CSS',
 						description:

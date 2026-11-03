@@ -5386,6 +5386,13 @@ paths:
                           - text
                       notebook_css:
                         type: string
+                      notebook_palette:
+                        type: string
+                        enum:
+                          - off
+                          - accents
+                          - full
+                        default: off
                       color_mode:
                         type: string
                         enum:

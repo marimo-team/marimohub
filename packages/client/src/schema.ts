@@ -4753,6 +4753,11 @@ export interface operations {
 							};
 							notebook_css?: string;
 							/**
+							 * @default off
+							 * @enum {string}
+							 */
+							notebook_palette: 'off' | 'accents' | 'full';
+							/**
 							 * @default user
 							 * @enum {string}
 							 */

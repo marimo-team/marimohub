@@ -1,5 +1,5 @@
 import type { ThemeConfig } from '../theme';
-import { generateThemePalette } from '../themePalette';
+import { generateThemePalette, NOTEBOOK_ACCENT_TOKENS } from '../themePalette';
 import { parse, stringify } from 'smol-toml';
 import type { TomlTable, TomlValue } from 'smol-toml';
 import { isRecord } from '../internal/validation';
@@ -69,9 +69,12 @@ export const marimoSharingDisabled: MarimoConfigContributor = () => ({
 const BRAND_CSS_PATH = `${XDG_CONFIG_HOME}/marimo/brand.css`;
 
 export function renderMarimoBrandCss(theme: ThemeConfig): string {
+	if (!theme.notebook_palette || theme.notebook_palette === 'off') return '';
 	const palette = generateThemePalette(theme);
 	if (!palette) return '';
-	const tokens = Object.keys(palette.light).map(
+	const keys =
+		theme.notebook_palette === 'accents' ? NOTEBOOK_ACCENT_TOKENS : Object.keys(palette.light);
+	const tokens = keys.map(
 		(key) => `  --${key}: light-dark(${palette.light[key]}, ${palette.dark[key]});`,
 	);
 	// Marimo's colour tokens are not a stable public API; keep this mapping in sync with globals.css.

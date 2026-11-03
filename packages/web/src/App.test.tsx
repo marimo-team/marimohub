@@ -48,6 +48,7 @@ describe('App routes', () => {
 		'/admin/audit-logs',
 		'/admin/users',
 		'/admin/settings',
+		'/admin/colors',
 		'/admin/policy-analyzer',
 		'/admin/debug',
 	])('redirects a non-super-admin away from %s', async (path) => {
@@ -184,6 +185,7 @@ describe('App routes', () => {
 			'/admin/settings',
 		);
 		expect(screen.getByRole('link', { name: 'Debug' })).toHaveAttribute('href', '/admin/debug');
+		expect(screen.getByRole('link', { name: 'Colors' })).toHaveAttribute('href', '/admin/colors');
 		expect(screen.getByRole('link', { name: 'Policy' })).toHaveAttribute(
 			'href',
 			'/admin/policy-analyzer',

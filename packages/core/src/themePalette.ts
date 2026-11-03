@@ -4,6 +4,18 @@ import type { ThemeConfig } from './theme';
 ColorSpace.register(sRGB);
 ColorSpace.register(OKLCH);
 
+export const DEFAULT_PALETTE_PRIMARY = 'oklch(0.511 0.096 186.391)';
+export const NOTEBOOK_ACCENT_TOKENS = [
+	'primary',
+	'primary-foreground',
+	'primary-hover',
+	'primary-hover-foreground',
+	'ring',
+	'sidebar-primary',
+	'sidebar-primary-foreground',
+	'sidebar-ring',
+];
+
 type Seed = { chroma: number; hue: number };
 export type ThemeTokens = Record<string, string>;
 export interface ThemePalette {
@@ -108,7 +120,7 @@ export function generateThemePalette(
 	config: Pick<ThemeConfig, 'primary_color' | 'secondary_color'>,
 ): ThemePalette | null {
 	if (!config.primary_color && !config.secondary_color) return null;
-	const primary = seed(config.primary_color ?? 'oklch(0.511 0.096 186.391)');
+	const primary = seed(config.primary_color ?? DEFAULT_PALETTE_PRIMARY);
 	const secondary = config.secondary_color ? seed(config.secondary_color) : primary;
 	return {
 		light: modePalette(primary, secondary, false),

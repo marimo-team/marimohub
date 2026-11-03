@@ -312,7 +312,10 @@ describe('Session routes (app mode)', () => {
 				bucket,
 				userId: ACTOR,
 				compute: fakeComputeFrom(editFake.instance),
-				deps: { ai, theme: { ...DEFAULT_THEME_CONFIG, primary_color: '#7c3aed' } },
+				deps: {
+					ai,
+					theme: { ...DEFAULT_THEME_CONFIG, primary_color: '#7c3aed', notebook_palette: 'full' },
+				},
 			});
 			await expectOk<any>(await editApi.request('POST', sessionsPath()));
 			const editConfig = editFake.calls.writeFiles
@@ -335,7 +338,10 @@ describe('Session routes (app mode)', () => {
 				bucket,
 				userId: ACTOR,
 				compute: fakeComputeFrom(runFake.instance),
-				deps: { ai, theme: { ...DEFAULT_THEME_CONFIG, primary_color: '#7c3aed' } },
+				deps: {
+					ai,
+					theme: { ...DEFAULT_THEME_CONFIG, primary_color: '#7c3aed', notebook_palette: 'full' },
+				},
 			});
 			await expectOk<any>(await runApi.request('POST', sessionsPath(), { mode: 'app' }));
 			const runConfig = runFake.calls.writeFiles
@@ -357,8 +363,40 @@ describe('Session routes (app mode)', () => {
 		},
 	);
 
+	it.each([
+		{ mode: 'edit', notebook_palette: 'off' },
+		{ mode: 'app', notebook_palette: 'off' },
+		{ mode: 'edit', notebook_palette: 'accents' },
+		{ mode: 'app', notebook_palette: 'accents' },
+	] as const)(
+		'starts $mode sessions with the $notebook_palette palette',
+		async ({ mode, notebook_palette }) => {
+			const fake = makeFakeSandbox();
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: fakeComputeFrom(fake.instance),
+				deps: { theme: { ...DEFAULT_THEME_CONFIG, primary_color: '#7c3aed', notebook_palette } },
+			});
+			await expectOk(await api.request('POST', sessionsPath(), { mode }));
+			const files = fake.calls.writeFiles.flat();
+			const brand = files.find((file) => file.path.endsWith('/marimo/brand.css'));
+			const config = files.find((file) => file.path.endsWith('/marimo/marimo.toml'));
+			expect(config).toBeDefined();
+			if (notebook_palette === 'off') {
+				expect(brand).toBeUndefined();
+				expect(config?.content).not.toContain('custom_css');
+			} else {
+				expect(brand?.content).toContain('--primary: light-dark(');
+				expect(brand?.content).not.toContain('--background:');
+				expect(brand?.content).not.toContain('--chart-');
+				expect(config?.content).toContain('brand.css');
+			}
+		},
+	);
+
 	it.each(['edit', 'app'] as const)(
-		'fetches root-relative notebook CSS for %s sessions',
+		'fetches root-relative notebook CSS with the palette off for %s sessions',
 		async (mode) => {
 			const fake = makeFakeSandbox();
 			const fetchCss = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -394,7 +432,7 @@ describe('Session routes (app mode)', () => {
 				const brand = fake.calls.writeFiles
 					.flat()
 					.find((file) => file.path.endsWith('/marimo/brand.css'));
-				expect(brand?.content).toContain('--primary: light-dark(');
+				expect(brand?.content).not.toContain('--primary:');
 				expect(brand?.content).toContain('--operator-brand: purple;');
 			} finally {
 				fetchCss.mockRestore();

@@ -9,6 +9,7 @@ const THEME_VARIABLES = {
 	support_url: 'MARIMOHUB_THEME_SUPPORT_URL',
 	announcement: 'MARIMOHUB_THEME_ANNOUNCEMENT',
 	notebook_css: 'MARIMOHUB_THEME_NOTEBOOK_CSS',
+	notebook_palette: 'MARIMOHUB_THEME_NOTEBOOK_PALETTE',
 	color_mode: 'MARIMOHUB_THEME_COLOR_MODE',
 	name: 'MARIMOHUB_THEME_NAME',
 	favicon: 'MARIMOHUB_THEME_FAVICON',
@@ -51,7 +52,9 @@ export function parseTheme(env: ThemeEnv): ThemeConfig {
 			remediation:
 				variable === 'MARIMOHUB_THEME_COLOR_MODE'
 					? 'Use user, light, or dark. Unset or blank means user.'
-					: 'Use the URL, color, or JSON format described in the theming guide.',
+					: variable === 'MARIMOHUB_THEME_NOTEBOOK_PALETTE'
+						? 'Use off, accents, or full. Unset or blank means off.'
+						: 'Use the URL, color, or JSON format described in the theming guide.',
 			docs: 'docs/theming.md',
 		});
 	}

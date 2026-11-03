@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 const TABS = [
 	{ to: '/admin/users', label: 'Users' },
 	{ to: '/admin/settings', label: 'Settings' },
+	{ to: '/admin/colors', label: 'Colors' },
 	{ to: '/admin/audit-logs', label: 'Audit logs' },
 	{ to: '/admin/policy-analyzer', label: 'Policy' },
 	{ to: '/admin/runtime', label: 'Runtime' },

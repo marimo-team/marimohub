@@ -119,7 +119,11 @@ describe.runIf(Boolean(python))('native marimo presentation', () => {
 					? bundle
 					: mergeSessionEnv(
 							bundle,
-							marimoBrandDisplay({ ...DEFAULT_THEME_CONFIG, primary_color: '#7c3aed' }),
+							marimoBrandDisplay({
+								...DEFAULT_THEME_CONFIG,
+								primary_color: '#7c3aed',
+								notebook_palette: 'full',
+							}),
 						);
 			const previous = prepareMarimoPresentation(branded, resolve, { mode: 'app' })!;
 			const env = prepareMarimoPresentation(mode === 'restored' ? undefined : branded, resolve, {
