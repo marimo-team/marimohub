@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
 import App from './App';
 
@@ -81,6 +82,54 @@ describe('App routes', () => {
 		expect(window.location.pathname).toBe('/');
 		expect(requests.some((url) => url.startsWith('/api/v1/events?'))).toBe(false);
 		expect(requests.some((url) => url.startsWith('/api/v1/admin/'))).toBe(false);
+	});
+
+	it('requires sign-in before rendering the Colors tab', async () => {
+		installMatchMedia(false);
+		const fetch = vi.fn(async () => jsonError('UNAUTHORIZED', 'Sign in required', 401));
+		vi.stubGlobal('fetch', fetch);
+		window.history.replaceState({}, '', '/admin/colors');
+		renderWithClient(<App />, { toaster: false });
+		expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeVisible();
+		expect(screen.queryByRole('heading', { name: 'Colors' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('table')).not.toBeInTheDocument();
+		expect(screen.queryByRole('navigation', { name: 'Admin' })).not.toBeInTheDocument();
+		expect(fetch.mock.calls).toHaveLength(1);
+	});
+
+	it('withholds Colors on account lookup failure and opens it after a successful retry', async () => {
+		installMatchMedia(false);
+		const user = userEvent.setup();
+		let unavailable = true;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = String(input);
+				if (url === '/api/v1/me') {
+					return unavailable
+						? jsonError('SERVICE_UNAVAILABLE', 'Account lookup unavailable', 503)
+						: jsonOk({
+								id: 'admin',
+								email: 'admin@example.com',
+								is_super_admin: true,
+								logout_url: null,
+								groups: [],
+							});
+				}
+				if (url === '/api/v1/version') return jsonOk({ version: 'test' });
+				throw new Error(`unexpected fetch: ${url}`);
+			}),
+		);
+		window.history.replaceState({}, '', '/admin/colors');
+		renderWithClient(<App />, { toaster: false });
+		expect(await screen.findByRole('heading', { name: 'Something went wrong' })).toBeVisible();
+		expect(screen.queryByRole('heading', { name: 'Colors' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('table')).not.toBeInTheDocument();
+		unavailable = false;
+		await user.click(screen.getByRole('button', { name: 'Retry' }));
+		expect(await screen.findByRole('heading', { name: 'Colors' })).toBeVisible();
+		expect(screen.getByRole('table')).toBeVisible();
+		expect(window.location.pathname).toBe('/admin/colors');
 	});
 
 	it('redirects /admin to /admin/users for a super admin', async () => {

@@ -118,6 +118,7 @@ describe('deployment theme configuration', () => {
 			MARIMOHUB_AUTH_BACKEND: 'dev',
 			MARIMOHUB_THEME_NAME: 'Research Hub',
 			MARIMOHUB_THEME_COLOR_MODE: 'light',
+			MARIMOHUB_THEME_NOTEBOOK_PALETTE: 'accents',
 			MARIMOHUB_THEME_LOGO_DARK: '/logo-dark.svg',
 			MARIMOHUB_THEME_PWA_ICON_192: '/brand/192.png',
 			MARIMOHUB_THEME_PWA_ICON_512: '/brand/512.png',
@@ -127,6 +128,7 @@ describe('deployment theme configuration', () => {
 			...DEFAULT_THEME_CONFIG,
 			name: 'Research Hub',
 			color_mode: 'light',
+			notebook_palette: 'accents',
 			logo_dark: '/logo-dark.svg',
 			pwa_icon_192: '/brand/192.png',
 			pwa_icon_512: '/brand/512.png',
@@ -154,6 +156,7 @@ describe('deployment theme configuration', () => {
 		['MARIMOHUB_THEME_PRIMARY_COLOR', '#abcd'],
 		['MARIMOHUB_THEME_SECONDARY_COLOR', 'transparent'],
 		['MARIMOHUB_THEME_COLOR_MODE', 'invalid-mode'],
+		['MARIMOHUB_THEME_NOTEBOOK_PALETTE', 'private-invalid-palette'],
 	])('reports actionable errors for %s without echoing its value', (variable, value) => {
 		let error: unknown;
 		try {
@@ -204,6 +207,7 @@ describe('deployment theme configuration', () => {
 	it.each([
 		['MARIMOHUB_THEME_PRIMARY_COLOR', 'red'],
 		['MARIMOHUB_THEME_COLOR_MODE', 'system'],
+		['MARIMOHUB_THEME_NOTEBOOK_PALETTE', 'on'],
 	])('rejects invalid %s before initializing adapters', (variable, value) => {
 		expect(() => createFromEnv({ [variable]: value })).toThrow(variable);
 	});

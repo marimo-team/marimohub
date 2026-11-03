@@ -440,9 +440,16 @@ describe('Session routes (app mode)', () => {
 		},
 	);
 
-	it.each(['edit', 'app'] as const)(
-		'does not boot a %s kernel when deployment CSS cannot load, and allows retry',
-		async (mode) => {
+	it.each([
+		{ mode: 'edit', notebook_palette: 'off' },
+		{ mode: 'app', notebook_palette: 'off' },
+		{ mode: 'edit', notebook_palette: 'accents' },
+		{ mode: 'app', notebook_palette: 'accents' },
+		{ mode: 'edit', notebook_palette: 'full' },
+		{ mode: 'app', notebook_palette: 'full' },
+	] as const)(
+		'blocks $mode startup on CSS failure with palette $notebook_palette and permits retry',
+		async ({ mode, notebook_palette }) => {
 			const fake = makeFakeSandbox();
 			const fetchCss = vi
 				.spyOn(globalThis, 'fetch')
@@ -458,7 +465,12 @@ describe('Session routes (app mode)', () => {
 					userId: ACTOR,
 					compute: fakeComputeFrom(fake.instance),
 					deps: {
-						theme: { ...DEFAULT_THEME_CONFIG, notebook_css: 'https://example.com/brand.css' },
+						theme: {
+							...DEFAULT_THEME_CONFIG,
+							primary_color: '#2741E7',
+							notebook_palette,
+							notebook_css: 'https://example.com/brand.css',
+						},
 					},
 				});
 				const response = await api.request('POST', sessionsPath(), { mode });
