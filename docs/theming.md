@@ -5,7 +5,7 @@ description: Configure branding, navigation, announcements, and notebook colors.
 # Customize the hub theme
 
 Customize the hub, sign-in screen, navigation, and browser titles without a frontend rebuild.
-Notebook editors, served apps, and previews inherit deployment colors and the selected light or dark mode.
+Notebooks, apps, and previews share the selected light or dark mode. Brand colors require [palette opt-in](#colors-in-notebooks-and-apps).
 All theme configuration is public before sign-in.
 
 ## Set a primary color
@@ -168,25 +168,25 @@ Restart the server and reload the page to apply changes.
 
 ## Colors in notebooks and apps
 
-Hub colors do not change notebook colors by default.
-`MARIMOHUB_THEME_NOTEBOOK_PALETTE` controls palette inheritance for editor, app, and preview sessions:
+`MARIMOHUB_THEME_NOTEBOOK_PALETTE` controls generated colors in editors, apps, and previews:
 
-| Value           | Behavior                                                                                                  |
-| --------------- | --------------------------------------------------------------------------------------------------------- |
-| `off` (default) | Preserves native marimo colors.                                                                           |
-| `accents`       | Applies hub colors to actions, links, and focus rings. Preserves native surfaces, text, and chart colors. |
-| `full`          | Applies the full hub palette, including surfaces, text, and chart colors.                                 |
+| Value           | Behavior                                                                                                                |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `off` (default) | Keeps native marimo colors.                                                                                             |
+| `accents`       | Applies primary action, link, and focus colors, including sidebar equivalents. Keeps native surfaces, text, and charts. |
+| `full`          | Applies all hub colors, including surfaces, text, borders, and charts.                                                  |
 
-The hub palette requires at least one configured primary or secondary color.
-This setting does not change the hub UI or disable custom notebook CSS.
-Existing sessions need a restart to apply changes. Scheduled jobs do not receive deployment CSS.
+Both enabled modes require a primary or secondary brand color. The hub UI is unaffected.
+To retain the notebook colors from earlier releases, set `MARIMOHUB_THEME_NOTEBOOK_PALETTE=full`.
+Restart the server and notebook sessions to apply changes.
 
-To retain notebook colors from releases that automatically applied hub branding, set `MARIMOHUB_THEME_NOTEBOOK_PALETTE=full`.
+**Admin → Colors** shows configured colors, the palette mode, and all generated tokens with light and dark swatches.
+Tokens that the current mode does not apply remain visible as previews.
+Without brand colors, the page shows a reference palette from the default teal, not native marimo defaults.
 
-Super admins can inspect the configured colors and notebook palette mode in **Admin → Colors**.
-The page shows all generated tokens on light and dark backgrounds, including tokens that the current mode does not apply.
-Without configured colors, it shows an unapplied reference palette based on the default teal.
+### Custom notebook CSS
 
+Custom CSS applies independently of the palette mode. Scheduled jobs receive neither palette CSS nor custom CSS.
 For additional styles, configure a public stylesheet:
 
 ```dotenv
@@ -195,16 +195,14 @@ MARIMOHUB_THEME_NOTEBOOK_CSS="https://hub.example.com/brand/notebook.css"
 
 The API downloads the stylesheet and appends it after the palette CSS.
 Root-relative paths resolve against `MARIMOHUB_APP_BASE_URL`, which must be an absolute HTTP(S) URL without credentials.
-Host the stylesheet on infrastructure you control; it runs inside the notebook page and can load remote assets.
+Host the stylesheet on infrastructure you control. It runs inside the notebook page and can load remote assets.
 The file must contain UTF-8 text of at most 64 KiB.
-A response without a `Content-Type` header is accepted. If the header is present, its media type must be exactly `text/css`; parameters such as `charset` are allowed.
+The `Content-Type` header is optional. If present, it must be `text/css`, with optional parameters such as `charset`.
 The download has a five-second timeout and rejects redirects.
 The API caches CSS for one minute, then revalidates it with its ETag when available.
-If the stylesheet cannot be revalidated, the hub serves the last fetched copy. Session starts fail only when it was never fetched.
+If revalidation fails, the hub serves the last fetched copy. Without a cached copy, the download failure blocks session startup.
 Use absolute asset URLs in CSS: marimo serves the copied stylesheet from the notebook origin.
 
-The `accents` palette sets primary action, link, and focus variables, including their sidebar equivalents.
-The `full` palette also sets `--secondary`, background, foreground, border, and chart variables.
 Custom CSS, workspace configuration, and chart libraries can override these colors.
 See the [marimo theming guide](https://docs.marimo.io/guides/configuration/theming/) for version-specific variables.
 

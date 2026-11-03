@@ -23,16 +23,19 @@ describe('AdminColorsPage', () => {
 			screen.getByText('Native marimo colors. No generated tokens are applied.'),
 		).toBeVisible();
 		const palette = generateThemePalette(BRAND)!;
-		for (const [token, light] of Object.entries(palette.light)) {
+		for (const token of [...Object.keys(palette.light), 'link', 'link-visited']) {
+			const source = token === 'link' || token === 'link-visited' ? 'primary' : token;
+			const light = palette.light[source];
+			const dark = palette.dark[source];
 			const cells = within(tokenRow(token)).getAllByRole('cell');
 			expect(cells[0]).toHaveTextContent('Preview only');
 			expect(cells[1]).toHaveTextContent(light);
-			expect(cells[2]).toHaveTextContent(palette.dark[token]);
+			expect(cells[2]).toHaveTextContent(dark);
 			expect(cells[1]).toHaveStyle({ backgroundColor: palette.light.background });
 			expect(cells[2]).toHaveStyle({ backgroundColor: palette.dark.background });
 			expect(cells[1].querySelector('[aria-hidden]')).toHaveStyle({ backgroundColor: light });
 			expect(cells[2].querySelector('[aria-hidden]')).toHaveStyle({
-				backgroundColor: palette.dark[token],
+				backgroundColor: dark,
 			});
 		}
 	});

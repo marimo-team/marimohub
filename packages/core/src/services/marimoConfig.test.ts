@@ -293,6 +293,8 @@ describe('deployment brand CSS', () => {
 	);
 	it.each(['accents', 'full'] as const)('sets the color scheme for the %s palette', (mode) => {
 		const css = marimoBrandDisplay({ ...brandedTheme, notebook_palette: mode }).files![0].content;
+		expect(css).toContain('--link: var(--primary);');
+		expect(css).toContain('--link-visited: var(--primary);');
 		expect(css).toContain(':root {\n  color-scheme: light;\n}');
 		expect(css).toContain(
 			':root:has(body.dark), .dark, .marimo:is(.dark *) {\n  color-scheme: dark;\n}',

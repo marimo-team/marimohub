@@ -1,10 +1,10 @@
 import { Moon, Sun } from 'lucide-react';
 import type { ThemeConfig } from '@marimo-hub/core/theme';
-import type { ThemePalette } from '@marimo-hub/core/theme-palette';
 import {
 	DEFAULT_PALETTE_PRIMARY,
 	generateThemePalette,
-	NOTEBOOK_ACCENT_TOKENS,
+	getNotebookPaletteTokens,
+	NOTEBOOK_TOKEN_ALIASES,
 } from '@marimo-hub/core/theme-palette';
 import { PageContainer, PageHeader } from '@/components/ui';
 import { PageTitle } from '@/components/ui/PageTitle';
@@ -60,21 +60,18 @@ export default function AdminColorsPage() {
 			secondary_color: null,
 		})!;
 	const mode = theme.notebook_palette;
-	const tokens = [
-		...NOTEBOOK_ACCENT_TOKENS,
-		'link',
-		'link-visited',
-		...Object.keys(palette.light).filter((key) => !NOTEBOOK_ACCENT_TOKENS.includes(key)),
-	];
-	const colors: ThemePalette = {
-		light: { ...palette.light, link: palette.light.primary, 'link-visited': palette.light.primary },
-		dark: { ...palette.dark, link: palette.dark.primary, 'link-visited': palette.dark.primary },
-	};
-	const applied = (token: string) =>
-		Boolean(configuredPalette) &&
-		(mode === 'full' ||
-			(mode === 'accents' &&
-				(NOTEBOOK_ACCENT_TOKENS.includes(token) || token === 'link' || token === 'link-visited')));
+	const tokens = getNotebookPaletteTokens(palette, 'full');
+	const appliedTokens = new Set(getNotebookPaletteTokens(configuredPalette, mode));
+	const columns = (['light', 'dark'] as const).map((appearance) => ({
+		appearance,
+		label: appearance === 'light' ? 'Light' : 'Dark',
+		Icon: appearance === 'light' ? Sun : Moon,
+		colors: palette[appearance],
+		style: {
+			backgroundColor: palette[appearance].background,
+			color: palette[appearance].foreground,
+		},
+	}));
 
 	return (
 		<PageContainer width="wide">
@@ -143,25 +140,14 @@ export default function AdminColorsPage() {
 								<th scope="col" className="px-4 py-4 font-medium">
 									Notebook
 								</th>
-								{(['light', 'dark'] as const).map((appearance) => {
-									const Icon = appearance === 'light' ? Sun : Moon;
-									return (
-										<th
-											key={appearance}
-											scope="col"
-											className="px-5 py-4 font-medium"
-											style={{
-												backgroundColor: colors[appearance].background,
-												color: colors[appearance].foreground,
-											}}
-										>
-											<span className="flex items-center gap-2">
-												<Icon className="size-4" />
-												{appearance === 'light' ? 'Light' : 'Dark'}
-											</span>
-										</th>
-									);
-								})}
+								{columns.map(({ appearance, label, Icon, style }) => (
+									<th key={appearance} scope="col" className="px-5 py-4 font-medium" style={style}>
+										<span className="flex items-center gap-2">
+											<Icon className="size-4" />
+											{label}
+										</span>
+									</th>
+								))}
 							</tr>
 						</thead>
 						<tbody>
@@ -171,20 +157,13 @@ export default function AdminColorsPage() {
 										--{token}
 									</th>
 									<td className="px-4 py-2 text-muted-foreground">
-										{applied(token) ? 'Applied' : 'Preview only'}
+										{appliedTokens.has(token) ? 'Applied' : 'Preview only'}
 									</td>
-									{(['light', 'dark'] as const).map((appearance) => (
-										<td
-											key={appearance}
-											className="px-5 py-2"
-											style={{
-												backgroundColor: colors[appearance].background,
-												color: colors[appearance].foreground,
-											}}
-										>
+									{columns.map(({ appearance, colors, style }) => (
+										<td key={appearance} className="px-5 py-2" style={style}>
 											<div className="flex items-center gap-3">
-												<Swatch color={colors[appearance][token]} />
-												<code>{colors[appearance][token]}</code>
+												<Swatch color={colors[NOTEBOOK_TOKEN_ALIASES[token] ?? token]} />
+												<code>{colors[NOTEBOOK_TOKEN_ALIASES[token] ?? token]}</code>
 											</div>
 										</td>
 									))}
