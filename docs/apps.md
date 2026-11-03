@@ -272,6 +272,8 @@ Viewer access depends on that setting; editors and higher roles have full app ac
 | Stop or restart an app                       |            |                              |                                                 |          x          |
 
 Static viewers can see app activity indicators but cannot use apps.
+Viewers who can use apps see a **Run as app** button in the viewer fallback banner on the notebook page.
+The standalone snapshot page does not show this button.
 Viewer mode grants no project membership or default role.
 The server enforces these permissions on every API request.
 
@@ -360,6 +362,7 @@ CI runs this check with the Chromium end-to-end job.
 | `MARIMOHUB_APP_MAX_SESSIONS_PER_VERSION` | Unexpired starting reservations and ready sandboxes per notebook's current version; unset means unlimited.             |
 | `MARIMOHUB_MAX_APPS_PER_PROJECT`         | Physical app sandboxes per project, including draining versions (default `5`, `0` = unlimited).                        |
 | `MARIMOHUB_MAX_SESSIONS_PER_USER`        | Also bounds the apps a single user may have _started_, across all projects.                                            |
+| `MARIMOHUB_PROJECT_NOTEBOOK_TARGET`      | `app` opens notebook links in project lists and galleries as apps for users who can use apps. Default `notebook`.      |
 
 > **Legacy upgrade note.** Releases introducing app mode also grant app access to existing `ephemeral-sandbox` viewers.
 > There is no mode that grants ephemeral editors without shared apps.
@@ -376,5 +379,5 @@ Use **Edit thumbnail** to upload and crop a screenshot of your app. See
 
 ## Deployment appearance
 
-App headers include Help and deployment announcements. New app and preview sessions inherit deployment colors and notebook CSS.
+App headers include Help and deployment announcements. New app and preview sessions inherit deployment colors and notebook CSS, and receive the hub's `marimo.toml` display defaults like editor sessions.
 See [the theming guide](./theming.md) for configuration, CSS limits, and restart requirements.

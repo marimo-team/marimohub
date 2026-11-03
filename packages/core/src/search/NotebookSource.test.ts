@@ -1,36 +1,10 @@
 import { expect, it } from 'vitest';
-import { createServices } from '../services';
-import { MemoryBucket } from '../testing/MemoryBucket';
-import { ACTOR } from '../testing/fixtures';
+import { createSearchFixture } from '../testing/search';
 import { paths } from '../paths';
-import { AuthorizationService } from '../services/authorization/AuthorizationService';
-import { NotebookSource } from './NotebookSource';
 
 async function setup() {
-	const bucket = new MemoryBucket();
-	const services = createServices(bucket);
-	await services.catalog.initialize(ACTOR);
-	const project = await services.projects.createProject(
-		{ name: 'Research', description: '' },
-		ACTOR,
-	);
-	const notebook = await services.notebooks.createNotebook(
-		project.id,
-		{ title: 'Revenue', description: '', code: 'revenue = 42' },
-		ACTOR,
-	);
-	return {
-		bucket,
-		project,
-		notebook,
-		source: new NotebookSource(
-			bucket,
-			services.catalog,
-			services.notebooks,
-			new AuthorizationService({}),
-		),
-		keys: paths.project(project.id).notebook(notebook.id),
-	};
+	const f = await createSearchFixture();
+	return { ...f, keys: paths.project(f.project.id).notebook(f.notebook.id) };
 }
 
 it.each(['meta', 'source'] as const)(

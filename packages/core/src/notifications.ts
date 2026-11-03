@@ -425,6 +425,13 @@ function appFailureContent(
 	};
 }
 
+/** A Markdown fence longer than any backtick run in `text`, so the text cannot close it. */
+function fence(text: string): string {
+	let longest = 0;
+	for (const [run] of text.matchAll(/`+/g)) longest = Math.max(longest, run.length);
+	return '`'.repeat(Math.max(3, longest + 1));
+}
+
 export const NOTIFICATION_KIND_REGISTRY = {
 	'support.request': {
 		severity: 'info',
@@ -434,14 +441,20 @@ export const NOTIFICATION_KIND_REGISTRY = {
 				diagnostics: SupportDiagnostics;
 				message: string;
 				requestId: string;
-			}) => ({
-				title: 'Support request',
-				body: `${input.message}\n\n${JSON.stringify(input.diagnostics, null, 2)}`,
-				recipients: [],
-				context: { reporter_id: input.diagnostics.reporter.id },
-				data: { ...input.diagnostics, message: input.message },
-				dedupeKey: `support.request:${input.requestId}:broadcast`,
-			}),
+			}) => {
+				const diagnostics = JSON.stringify(input.diagnostics, null, 2);
+				const messageFence = fence(input.message);
+				const diagnosticsFence = fence(diagnostics);
+				return {
+					title: `Support request from ${input.diagnostics.reporter.email}`,
+					// Labeled sections and fenced blocks keep user text from passing as diagnostics.
+					body: `Message:\n${messageFence}\n${input.message}\n${messageFence}\n\nDiagnostics:\n${diagnosticsFence}json\n${diagnostics}\n${diagnosticsFence}`,
+					recipients: [],
+					context: { reporter_id: input.diagnostics.reporter.id },
+					data: { ...input.diagnostics, message: input.message },
+					dedupeKey: `support.request:${input.requestId}:broadcast`,
+				};
+			},
 		},
 	},
 	'member.invited': {

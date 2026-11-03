@@ -1,5 +1,6 @@
 import type { SearchDocument } from './contracts';
 import { terms, termMatches } from './contracts';
+import { cosineSimilarity } from './embeddings';
 
 export function snippet(text: string, query: string) {
 	const wanted = new Set(terms(query));
@@ -42,12 +43,8 @@ export function rank(
 			embedding &&
 			vector?.space === embedding.space &&
 			vector.vector.length === embedding.vector.length
-		) {
-			const norm = Math.hypot(...vector.vector) * Math.hypot(...embedding.vector);
-			semantic = norm
-				? vector.vector.reduce((n, x, i) => n + x * embedding.vector[i], 0) / norm
-				: 0;
-		}
+		)
+			semantic = cosineSimilarity(vector.vector, embedding.vector);
 		return { document, lexical, semantic, score: 0 };
 	});
 	for (const field of ['lexical', 'semantic'] as const)
@@ -65,7 +62,6 @@ export function resourceHref(projectId: string, document: SearchDocument): strin
 	const base = `/projects/${encodeURIComponent(projectId)}`;
 	const ref = document.resource;
 	if (ref.type === 'notebook') return `${base}/notebooks/${encodeURIComponent(ref.notebook_id)}`;
-	if (ref.type === 'chat') return `${base}/chat/${encodeURIComponent(ref.conversation_id)}`;
 	if (document.kind === 'datasource') return `${base}/integrations`;
 	const params = new URLSearchParams();
 	if (ref.namespace) params.set('ns', ref.namespace.join('\u001f'));

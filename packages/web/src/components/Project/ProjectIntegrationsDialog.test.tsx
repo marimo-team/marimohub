@@ -7,7 +7,6 @@ import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { OrgIntegrationsDialog, ProjectIntegrationsPanel } from './ProjectIntegrationsDialog';
-import { ProjectEnvironmentDialog } from './ProjectEnvironmentDialog';
 import type { IntegrationDetail, IntegrationEntry, IntegrationKind, ProjectDetail } from '@/types';
 import { createTestQueryClient } from '@/test/render';
 
@@ -355,7 +354,6 @@ function setup(
 	fetchOpts: FetchOpts = { kinds: [postgresKind, customEnvKind], entries: [] },
 ) {
 	const calls = makeFetch(fetchOpts);
-	const onBack = vi.fn();
 	const client = createTestQueryClient();
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<QueryClientProvider client={client}>
@@ -363,10 +361,8 @@ function setup(
 			<Toaster />
 		</QueryClientProvider>
 	);
-	render(<ProjectIntegrationsPanel project={project()} onBack={onBack} {...overrides} />, {
-		wrapper,
-	});
-	return { onBack, calls };
+	render(<ProjectIntegrationsPanel project={project()} {...overrides} />, { wrapper });
+	return { calls };
 }
 
 beforeEach(() => {
@@ -388,10 +384,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe('Project integrations page editor', () => {
 	it('creates in a modal and returns focus to the page action', async () => {
 		const user = userEvent.setup();
-		const { calls } = setup(
-			{ modalEditor: true, onBack: undefined },
-			{ kinds: [postgresKind], entries: [] },
-		);
+		const { calls } = setup({ modalEditor: true }, { kinds: [postgresKind], entries: [] });
 		const trigger = await screen.findByRole('button', { name: 'Add integration' });
 		await user.click(trigger);
 		const catalog = await screen.findByRole('dialog', { name: 'Add integration' });
@@ -408,56 +401,6 @@ describe('Project integrations page editor', () => {
 		});
 		await waitFor(() => expect(trigger).toHaveFocus());
 		expect(screen.getByText('No integrations yet.')).toBeVisible();
-	});
-});
-
-describe('Environment integrations navigation', () => {
-	it.each([
-		{ state: 'failed kinds query', kinds: 'error', entries: [] },
-		{ state: 'failed list query', kinds: [postgresKind], entries: 'error' },
-		{ state: 'disabled deployment', kinds: null, entries: null },
-	] satisfies (FetchOpts & { state: string })[])(
-		'returns to the overview after a $state',
-		async ({ kinds, entries }) => {
-			const user = userEvent.setup();
-			makeFetch({ kinds, entries });
-			render(
-				<QueryClientProvider client={createTestQueryClient()}>
-					<ProjectEnvironmentDialog
-						isOpen
-						onClose={() => {}}
-						project={project()}
-						integrationsAvailable
-						cloudAccessLoading={false}
-						cloudAccessAvailable={false}
-						cloudAccessDefaultEnabled={false}
-						onSaveCloudAccess={async () => {}}
-					/>
-				</QueryClientProvider>,
-			);
-			await user.click(screen.getByRole('button', { name: /Integrations/ }));
-			await screen.findByText(
-				kinds === null
-					? 'Integrations are not enabled on this deployment.'
-					: 'Could not load integrations.',
-			);
-			await user.click(screen.getByRole('button', { name: 'Back' }));
-			expect(screen.getByRole('button', { name: /Integrations/ })).toBeVisible();
-			expect(screen.getByRole('button', { name: /Cloud access/ })).toBeVisible();
-		},
-	);
-
-	it('keeps Back available while integrations load', async () => {
-		const user = userEvent.setup();
-		vi.stubGlobal('fetch', () => new Promise<Response>(() => {}));
-		const onBack = vi.fn();
-		render(
-			<QueryClientProvider client={createTestQueryClient()}>
-				<ProjectIntegrationsPanel project={project()} onBack={onBack} />
-			</QueryClientProvider>,
-		);
-		await user.click(screen.getByRole('button', { name: 'Back' }));
-		expect(onBack).toHaveBeenCalledOnce();
 	});
 });
 

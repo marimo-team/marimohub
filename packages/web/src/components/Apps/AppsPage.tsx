@@ -1,8 +1,7 @@
 import { PageTitle } from '@/components/ui/PageTitle';
 import { ArrowRight, Folder, LayoutGrid, Search } from 'lucide-react';
-import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
-import { useAppsQuery, useProjectAppsQuery } from '@/api/apps';
-import { Project } from '@/components/Project/Project';
+import { Link, useSearchParams } from 'react-router-dom';
+import { useAppsQuery } from '@/api/apps';
 import { Button, EmptyState, SearchField, Skeleton } from '@/components/ui';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useSearchField } from '@/hooks/useSearchField';
@@ -28,16 +27,6 @@ export function AppAccessError({
 				<Link to="/apps">Back to apps</Link>
 			)}
 		</div>
-	);
-}
-
-export function ProjectEntryPage() {
-	const { pid = '' } = useParams();
-	const query = useProjectAppsQuery(pid);
-	return query.data.pages[0].project?.your_role === 'app-user' ? (
-		<Navigate to={`/apps?project_id=${encodeURIComponent(pid)}`} replace />
-	) : (
-		<Project />
 	);
 }
 

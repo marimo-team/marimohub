@@ -1,10 +1,9 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import {
-	ForbiddenError,
 	NotFoundError,
+	ResourceExhaustedError,
 	UnavailableError,
 	notificationRouter,
-	sessionResourceNotebookId,
 } from '@marimo-hub/core';
 import {
 	SupportContextSchema,
@@ -17,17 +16,15 @@ import type { Context } from 'hono';
 import type { HonoEnv } from '../context';
 import {
 	assertDeploymentAction,
-	assertSessionAccess,
-	assertSessionNotebookVisible,
-	authorizationService,
 	createApp,
 	errorResponses,
 	jsonContent,
-	loadSessionProject,
 	ok,
+	sessionGrantsFor,
 } from '../shared';
 import { assertNotificationMutationAllowed } from '../notifications';
 import { appendAudit } from '../log';
+import { loadAuthorizedSession, presentSession } from './sessions';
 
 const app = createApp();
 
@@ -41,24 +38,23 @@ async function diagnostics(
 	let session: SupportDiagnostics['session'];
 	if (input.session) {
 		const { project_id: pid, notebook_id: nid, id: sid } = input.session;
-		const project = await loadSessionProject(deps.services.projects, pid, user, deps);
-		const stored = await deps.services.sessions.getSession(pid, sid);
-		if (sessionResourceNotebookId(stored) !== nid) throw new NotFoundError('Session not found');
-		const labels = await assertSessionNotebookVisible(deps, project, stored, user, {
-			requireActivePreview: false,
-		});
-		if (authorizationService(deps).role(user, project) === 'app-user') {
-			await assertSessionAccess(project, stored, user, deps, labels);
-		}
+		const {
+			project,
+			session: stored,
+			labels,
+		} = await loadAuthorizedSession(deps, user, { pid, nid, sid });
+		const grants = await sessionGrantsFor(project, user, stored, deps, labels);
+		const visible = await presentSession(deps, user, stored, grants);
 		session = {
 			id: stored.session_id,
 			project_id: pid,
 			notebook_id: nid,
-			source_version_id: stored.source_version_id,
-			sandbox_id: stored.sandbox_id,
+			source_version_id: visible.source_version_id,
+			sandbox_id: visible.sandbox_url && !grants.appReadOnly ? stored.sandbox_id : undefined,
 			runtime: stored.runtime,
-			compute_profile: stored.compute_profile,
-			error: stored.error,
+			compute_profile: visible.compute_profile,
+			// Pool and preview denials clear `can.attach` but keep `error`, which can name the host.
+			error: visible.can.attach ? visible.error : undefined,
 		};
 	}
 	return SupportDiagnosticsSchema.parse({
@@ -75,7 +71,8 @@ app.openapi(
 	createRoute({
 		method: 'post',
 		path: '/support/diagnostics',
-		operationId: 'support.diagnostics',
+		operationId: 'support.diagnostics.preview',
+		'x-cli-hidden': true,
 		tags: ['System'],
 		summary: 'Preview support diagnostics for the signed-in user',
 		request: { body: jsonContent(SupportContextSchema, 'Page and optional session identifiers') },
@@ -97,7 +94,8 @@ app.openapi(
 	createRoute({
 		method: 'post',
 		path: '/support/requests',
-		operationId: 'support.request',
+		operationId: 'support.requests.create',
+		'x-cli-hidden': true,
 		tags: ['System'],
 		summary: 'Send a support request to the deployment notifier',
 		request: { body: jsonContent(SupportRequestSchema, 'Report and page context') },
@@ -117,15 +115,23 @@ app.openapi(
 	}),
 	async (c) => {
 		const deps = c.get('deps');
-		if (deps.supportMode !== 'notifier' || !deps.notifier) {
-			throw new ForbiddenError('Support notification delivery is disabled');
+		if (!deps.supportReports || !deps.notifier) {
+			throw new NotFoundError('Support reports are not enabled on this deployment');
 		}
 		const input = c.req.valid('json');
 		const report = await diagnostics(c, input);
-		assertNotificationMutationAllowed(deps, c.get('user').id, {
-			delivery: 'notifier',
-			recipient: 'support',
-		});
+		try {
+			assertNotificationMutationAllowed(deps, c.get('user').id, {
+				delivery: 'notifier',
+				recipient: 'support',
+				consumeActor: false,
+			});
+		} catch (err) {
+			if (err instanceof ResourceExhaustedError) {
+				throw new ResourceExhaustedError('Too many support reports. Try again in a few minutes.');
+			}
+			throw err;
+		}
 		const requestId = crypto.randomUUID();
 		const [notification] = notificationRouter.render({
 			kind: 'support.request',

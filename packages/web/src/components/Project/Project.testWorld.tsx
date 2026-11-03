@@ -3,6 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import type userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
 import { Project } from './Project';
+import { makeCapabilities } from '@/test/apiStub';
 import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
 import type { NotebookEntry, ProjectDetail, Session } from '@/types';
 import type { WorkspaceItem } from '@marimo-hub/client';
@@ -68,10 +69,7 @@ export function makeFetch(
 ) {
 	const notebooks = options.notebooks ?? [notebook()];
 	const sessions = options.sessions ?? [];
-	const capabilities = options.capabilities ?? {
-		federation: { available: false, default_enabled: false },
-		jobs: { available: true },
-	};
+	const capabilities = options.capabilities ?? makeCapabilities({ jobs: { available: true } });
 	const proj = {
 		...project(),
 		...options.project,

@@ -17,6 +17,12 @@ import { McpDialog } from '@/components/Account/McpDialog';
 import { ApiTokensDialog } from '@/components/Account/ApiTokensDialog';
 import { OrgIntegrationsDialog } from '@/components/Project/ProjectIntegrationsDialog';
 
+const navLinkClass = ({ isActive }: { isActive: boolean }) =>
+	cn(
+		'flex min-h-11 items-center rounded-md px-3 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:px-2',
+		isActive ? 'bg-accent text-foreground' : 'text-muted-foreground',
+	);
+
 export function Header({ navigationTrigger }: { navigationTrigger?: ReactNode }) {
 	const { name } = useBranding();
 	const links = useShellLinks('header');
@@ -45,27 +51,11 @@ export function Header({ navigationTrigger }: { navigationTrigger?: ReactNode })
 				className="ml-6 flex min-w-0 flex-wrap items-center gap-1 max-md:order-last max-md:ml-0 max-md:w-full"
 			>
 				{!user?.app_only || user.can_create_projects ? (
-					<NavLink
-						to="/projects"
-						className={({ isActive }) =>
-							cn(
-								'flex min-h-11 items-center rounded-md px-3 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:px-2',
-								isActive ? 'bg-accent text-foreground' : 'text-muted-foreground',
-							)
-						}
-					>
+					<NavLink to="/projects" className={navLinkClass}>
 						Projects
 					</NavLink>
 				) : null}
-				<NavLink
-					to="/apps"
-					className={({ isActive }) =>
-						cn(
-							'flex min-h-11 items-center rounded-md px-3 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:px-2',
-							isActive ? 'bg-accent text-foreground' : 'text-muted-foreground',
-						)
-					}
-				>
+				<NavLink to="/apps" className={navLinkClass}>
 					Apps
 				</NavLink>
 				{links.map((link) => (

@@ -16,10 +16,16 @@ import type {
 	SearchDocument,
 } from './contracts';
 import { rank, snippet, resourceHref } from './rank';
+import { MAX_SEARCH_PROJECT_SCAN } from './limits';
 import type { ProjectId } from '../ids';
+import type { Project } from '../schema';
+
+const MAX_SEARCH_PROJECTS = 16;
+const PROJECT_SCAN_BATCH = 8;
+const STALE_AFTER_MS = 15 * 60_000;
 
 interface RankedBatch {
-	projectId: ProjectId;
+	project: Project;
 	source: SearchSource;
 	indexedAt: string;
 	rows: { document: SearchDocument; score: number }[];
@@ -55,6 +61,38 @@ export class SearchService {
 		});
 		return decision.allowed ? project : null;
 	}
+	/**
+	 * Catalog-order projects the caller can read. Scanning stops once more than
+	 * `MAX_SEARCH_PROJECTS` are found (the surplus signals truncation) or after
+	 * `MAX_SEARCH_PROJECT_SCAN` ids, which `scanTruncated` reports when ids remain.
+	 */
+	private async accessibleProjects(
+		ids: readonly ProjectId[],
+		principal: AuthenticatedPrincipal,
+		signal: AbortSignal,
+		unavailable: () => void,
+	) {
+		const accessible: Project[] = [];
+		const limit = Math.min(ids.length, MAX_SEARCH_PROJECT_SCAN);
+		let offset = 0;
+		while (offset < limit && accessible.length <= MAX_SEARCH_PROJECTS) {
+			const batch = ids.slice(offset, Math.min(offset + PROJECT_SCAN_BATCH, limit));
+			offset += batch.length;
+			const loaded = await mapWithConcurrency(batch, PROJECT_SCAN_BATCH, async (id) => {
+				signal.throwIfAborted();
+				return this.authorizedProject(id, principal).catch(() => {
+					signal.throwIfAborted();
+					unavailable();
+					return null;
+				});
+			});
+			accessible.push(...loaded.filter((project) => project !== null));
+		}
+		return {
+			accessible,
+			scanTruncated: accessible.length <= MAX_SEARCH_PROJECTS && offset < ids.length,
+		};
+	}
 
 	async search(
 		principal: AuthenticatedPrincipal,
@@ -70,10 +108,11 @@ export class SearchService {
 				(value) => value.source === entry.source && value.project_id === entry.project_id,
 			);
 			if (existing) {
-				if (entry.status !== 'partial' || existing.status === 'complete')
+				if (entry.status !== 'partial' || ['complete', 'stale'].includes(existing.status))
 					existing.status = entry.status;
 			} else response.coverage.push(entry);
-			response.partial ||= entry.status !== 'complete';
+			// Stale snapshots are still complete; the visit period grows with project/source pairs.
+			response.partial ||= entry.status !== 'complete' && entry.status !== 'stale';
 		};
 		const phaseTimeout = Math.max(1, Math.floor(this.timeoutMs / 2));
 		const timed = async (work: (deadline: AbortSignal) => Promise<void>) => {
@@ -93,7 +132,6 @@ export class SearchService {
 				: (await this.catalog.getCurrentSnapshot()).projects
 						.filter((p) => p.status !== 'deleted')
 						.map((p) => p.id);
-			response.partial ||= ids.length > 16;
 			let embedding: { space: string; vector: number[] } | undefined;
 			if (request.mode === 'hybrid') {
 				if (this.embeddings) {
@@ -123,21 +161,16 @@ export class SearchService {
 				if (!this.sources.some((s) => s.kinds.includes(kind))) {
 					coverage({ source: kind, status: 'disabled' });
 				}
-			await mapWithConcurrency(ids.slice(0, 16), 2, async (projectId) => {
-				deadline.throwIfAborted();
-				const project = await this.projects
-					.getProject(projectId, { consistency: 'validated' })
-					.catch(() => {
-						deadline.throwIfAborted();
-						coverage({ source: 'search', status: 'unavailable' });
-						return null;
-					});
-				if (
-					!project ||
-					!(await this.authz.authorize(principal, 'project.read', { kind: 'project', project }))
-						.allowed
-				)
-					return;
+			const { accessible: projects, scanTruncated } = await this.accessibleProjects(
+				ids,
+				principal,
+				deadline,
+				() => coverage({ source: 'search', status: 'unavailable' }),
+			);
+			if (scanTruncated || projects.length > MAX_SEARCH_PROJECTS)
+				coverage({ source: 'projects', status: 'truncated' });
+			await mapWithConcurrency(projects.slice(0, MAX_SEARCH_PROJECTS), 2, async (project) => {
+				const projectId = project.id;
 				for (const source of selected) {
 					deadline.throwIfAborted();
 					try {
@@ -153,16 +186,9 @@ export class SearchService {
 								const oversizedLinks = found.documents.some(
 									(d) => resourceHref(projectId, d).length > 4096,
 								);
-								const privateFiltered = found.documents.filter(
-									(d) =>
-										(d.resource.type !== 'chat' || d.resource.owner_id === principal.id) &&
-										resourceHref(projectId, d).length <= 4096,
-								);
-								const rankProject = await this.authorizedProject(projectId, principal);
-								if (!rankProject) return { status: 'partial' as const };
 								const authorized = await source.validate(
-									rankProject,
-									privateFiltered,
+									project,
+									found.documents.filter((d) => resourceHref(projectId, d).length <= 4096),
 									principal,
 									'rank',
 									providerSignal,
@@ -172,13 +198,14 @@ export class SearchService {
 									0,
 									request.limit,
 								);
+								const indexedAt = found.verifiedAt ?? found.indexedAt;
 								return {
-									batch: { projectId, source, indexedAt: found.indexedAt, rows },
+									batch: { project, source, indexedAt, rows },
 									status:
-										Date.now() - Date.parse(found.indexedAt) > 15 * 60_000
-											? ('stale' as const)
-											: found.partial || oversizedLinks || authorized.partial
-												? ('partial' as const)
+										found.partial || oversizedLinks || authorized.partial
+											? ('partial' as const)
+											: Date.now() - Date.parse(indexedAt) > STALE_AFTER_MS
+												? ('stale' as const)
 												: ('complete' as const),
 								};
 							},
@@ -214,64 +241,53 @@ export class SearchService {
 				(a, b) => b.row.score - a.row.score || a.row.document.id.localeCompare(b.row.document.id),
 			)
 			.slice(0, request.limit);
+		const verified = new Set<(typeof best)[number]>();
+		const names = new Map<ProjectId, string>();
 		await timed(async (deadline) => {
 			await mapWithConcurrency([...new Set(best.map((b) => b.batch))], 2, async (batch) => {
-				const rows = best.filter((b) => b.batch === batch).map((b) => b.row);
+				const entries = best.filter((b) => b.batch === batch);
+				const projectId = batch.project.id;
 				try {
 					deadline.throwIfAborted();
-					const project = await this.authorizedProject(batch.projectId, principal);
-					if (!project) {
-						coverage({ source: batch.source.id, project_id: batch.projectId, status: 'partial' });
+					const currentProject = await this.authorizedProject(projectId, principal);
+					if (!currentProject) {
+						coverage({ source: batch.source.id, project_id: projectId, status: 'partial' });
 						return;
 					}
+					deadline.throwIfAborted();
 					const live = await batch.source.validate(
-						project,
-						rows.map((r) => r.document),
+						currentProject,
+						entries.map((e) => e.row.document),
 						principal,
 						'return',
 						deadline,
 					);
-					const valid = new Set(
-						live.documents
-							.filter((d) => d.resource.type !== 'chat' || d.resource.owner_id === principal.id)
-							.map((d) => d.id),
-					);
-					const currentProject = await this.authorizedProject(batch.projectId, principal);
-					if (!currentProject) {
-						coverage({ source: batch.source.id, project_id: batch.projectId, status: 'partial' });
-						return;
-					}
 					deadline.throwIfAborted();
-					if (live.partial || valid.size < rows.length) {
-						coverage({ source: batch.source.id, project_id: batch.projectId, status: 'partial' });
+					const valid = new Set(live.documents.map((d) => d.id));
+					if (live.partial || valid.size < entries.length) {
+						coverage({ source: batch.source.id, project_id: projectId, status: 'partial' });
 					}
-					response.items.push(
-						...rows
-							.filter((r) => valid.has(r.document.id))
-							.map(({ document, score }) => ({
-								id: document.id,
-								kind: document.kind,
-								resource: document.resource,
-								title: document.title,
-								project_id: batch.projectId,
-								project_name: currentProject.name.slice(0, 256),
-								score,
-								href: resourceHref(batch.projectId, document),
-								indexed_at: batch.indexedAt,
-								snippet: snippet(document.text, request.q),
-							})),
-					);
+					names.set(projectId, currentProject.name.slice(0, 256));
+					for (const entry of entries) if (valid.has(entry.row.document.id)) verified.add(entry);
 				} catch {
 					deadline.throwIfAborted();
-					coverage({
-						source: batch.source.id,
-						project_id: batch.projectId,
-						status: 'unavailable',
-					});
+					coverage({ source: batch.source.id, project_id: projectId, status: 'unavailable' });
 				}
 			});
 		});
-		response.items.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+		response.items = best
+			.filter((entry) => verified.has(entry))
+			.map(({ batch, row: { document } }) => ({
+				id: document.id,
+				kind: document.kind,
+				resource: document.resource,
+				title: document.title,
+				project_id: batch.project.id,
+				project_name: names.get(batch.project.id)!,
+				href: resourceHref(batch.project.id, document),
+				indexed_at: batch.indexedAt,
+				snippet: snippet(document.text, request.q),
+			}));
 		response.coverage = response.coverage.slice(0, 100);
 		return SearchResponseSchema.parse(response);
 	}

@@ -18,6 +18,7 @@ const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
 export class NotebookSource implements SearchSource {
 	readonly revision = 2;
 	readonly id = 'notebooks';
+	readonly embeddable = true;
 	readonly kinds = ['notebook', 'code', 'output'] as const;
 	constructor(
 		private readonly bucket: Bucket,

@@ -55,6 +55,19 @@ export interface StartRequestContext {
 
 export const MAX_EXECUTE_CODE_BYTES = 1024 * 1024;
 
+const search = SearchRequestSchema.shape;
+const SearchWorkspaceInputSchema = z.object({
+	q: search.q.describe('Search text, 1-256 characters.'),
+	project_id: search.project_id.describe(
+		'Project ID from list_catalog. Omit to search across accessible projects (at most 16).',
+	),
+	kinds: search.kinds.describe('Result kinds to include. Omit for all available kinds.'),
+	limit: search.limit.describe('Maximum results, 1-50.'),
+	mode: search.mode.describe(
+		'keyword matches text; hybrid adds semantic notebook matches when embeddings are configured.',
+	),
+});
+
 const NOTEBOOK_CODE_DESCRIPTION =
 	'Complete marimo Python notebook source (marimo.App and @app.cell definitions), stored verbatim. Declare dependencies in a PEP 723 script header. They install at session or job startup after workspace pyproject.toml dependencies. Dependency changes require a new session. The sandbox image provides marimo.';
 const EXPECTED_UPDATED_AT_DESCRIPTION =
@@ -70,24 +83,6 @@ export function createMcpServer(
 		toolError(error, { ...request, signal, userId: principal.id, tool });
 	const requestSignal = (signal: AbortSignal) =>
 		request.signal ? AbortSignal.any([request.signal, signal]) : signal;
-
-	server.registerTool(
-		'search_workspace',
-		{
-			description:
-				'Search accessible notebook metadata, saved code, outputs, data sources, and catalog schemas. Reports incomplete source coverage.',
-			annotations: { readOnlyHint: true },
-			inputSchema: SearchRequestSchema,
-		},
-		async (input, extra) => {
-			const signal = requestSignal(extra.signal);
-			try {
-				return result(await searchWorkspace(deps, principal, input, signal));
-			} catch (error) {
-				return errorResult('search_workspace', error, signal);
-			}
-		},
-	);
 
 	server.registerTool(
 		'list_catalog',
@@ -245,6 +240,7 @@ export function createMcpServer(
 		{
 			description:
 				'Sync a Git notebook to its configured branch head, equivalent to Sync now. Returns the synced commit, current source version, and restart_needed for each active session and overall (null means unknown). Does not restart sessions.',
+			annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: true },
 			inputSchema: SyncNotebookSourceInputSchema,
 		},
 		async ({ project, notebook }, extra) => {
@@ -551,6 +547,32 @@ export function createMcpServer(
 		},
 	);
 
+	if (deps.search) {
+		server.registerTool(
+			'search_workspace',
+			{
+				description:
+					'Search accessible notebook metadata, saved code, outputs, data sources, and catalog schemas. Returns absolute links and reports incomplete source coverage.',
+				annotations: { readOnlyHint: true },
+				inputSchema: SearchWorkspaceInputSchema,
+			},
+			async (input, extra) => {
+				const signal = requestSignal(extra.signal);
+				try {
+					const response = await searchWorkspace(deps, principal, input, signal);
+					return result({
+						...response,
+						items: response.items.map((item) => ({
+							...item,
+							href: `${request.appBaseUrl}${item.href}`,
+						})),
+					});
+				} catch (error) {
+					return errorResult('search_workspace', error, signal);
+				}
+			},
+		);
+	}
 	if (deps.jobs) registerJobTools(server, deps, principal, request);
 	return server;
 }

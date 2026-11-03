@@ -10,6 +10,7 @@ import {
 	usePreviewsQuery,
 } from '@/api/previews';
 import type { NotebookPreview } from '@/api/previews';
+import { notebookAppUrl } from '@/lib/notebookUrls';
 import { Button, DialogModal } from '@/components/ui';
 import { copyPreviewLink } from './copyPreviewLink';
 import { SourceRefInput } from './SourceRefInput';
@@ -37,7 +38,7 @@ export function PreviewsPage() {
 	const remove = useDeletePreview(pid, nid);
 	return (
 		<main className="mx-auto max-w-4xl space-y-6 p-6">
-			<Link to={`/projects/${pid}/notebooks/${nid}/app`} className="text-sm text-muted-foreground">
+			<Link to={notebookAppUrl(pid, nid)} className="text-sm text-muted-foreground">
 				Back to notebook
 			</Link>
 			<div className="flex items-center justify-between">

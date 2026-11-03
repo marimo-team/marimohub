@@ -10,18 +10,12 @@ import { useAuth } from '@/context/AuthContext';
 import { useIsMobile } from '@/hooks/useMediaQuery';
 import { useQuery } from '@tanstack/react-query';
 import { projectQueryOptions } from '@/api/hooks';
+import { canReadProjectSource } from '@/lib/roles';
 import { workspaceRoute } from './navigation';
 import { rememberProject } from './lastProject';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
-import type { WorkspaceNavigationSlots } from './navigation';
 
-export function WorkspaceLayout({
-	children,
-	slots,
-}: {
-	children: ReactNode;
-	slots?: WorkspaceNavigationSlots;
-}) {
+export function WorkspaceLayout({ children }: { children: ReactNode }) {
 	const { user } = useAuth();
 	const location = useLocation();
 	const isMobile = useIsMobile();
@@ -33,7 +27,7 @@ export function WorkspaceLayout({
 	});
 	const role = selectedProject.isError ? null : selectedProject.data?.your_role;
 	useEffect(() => {
-		if (pid && user && !user.app_only && role && role !== 'app-user') rememberProject(user.id, pid);
+		if (pid && user && !user.app_only && canReadProjectSource(role)) rememberProject(user.id, pid);
 	}, [pid, user, role]);
 	const [openedAt, setOpenedAt] = useState<string | null>(null);
 	const open = openedAt === location.key;
@@ -55,7 +49,7 @@ export function WorkspaceLayout({
 						<IconButton
 							label="Open navigation"
 							aria-expanded={open}
-							aria-controls="workspace-navigation"
+							aria-controls={open ? 'workspace-navigation' : undefined}
 							onPress={() => setOpenedAt(location.key)}
 							className="mr-2"
 						>
@@ -71,7 +65,7 @@ export function WorkspaceLayout({
 						aria-label="Workspace"
 						className="flex w-60 shrink-0 border-r border-sidebar-border bg-sidebar max-lg:w-52"
 					>
-						<WorkspaceSidebar slots={slots} />
+						<WorkspaceSidebar />
 					</aside>
 				) : null}
 				<main
@@ -99,7 +93,7 @@ export function WorkspaceLayout({
 									<X className="size-5" aria-hidden />
 								</IconButton>
 							</div>
-							<WorkspaceSidebar onNavigate={close} slots={slots} />
+							<WorkspaceSidebar onNavigate={close} />
 						</Dialog>
 					</Modal>
 				</ModalOverlay>

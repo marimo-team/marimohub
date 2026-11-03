@@ -17,7 +17,12 @@ import type { AuthenticatedPrincipal, ProjectId, SessionId } from '@marimo-hub/c
 import type { ApiDeps, HonoEnv } from './context';
 import { errorMetadataChain, logEvent } from './log';
 import { SANDBOX_PROXY_PREFIXES } from './proxyRoutes';
-import { assertSessionPreviewActive, authorizationService, fail } from './shared';
+import {
+	assertSessionPreviewActive,
+	authorizationService,
+	fail,
+	rejectsMcpOnlyCredential,
+} from './shared';
 
 /** Outcome of routing a `/proxy/<token>/…` request. */
 export type ProxyDecision =
@@ -142,6 +147,9 @@ export async function authorizeProxyRequest(
 	const user = await deps.authenticator.authenticate(request);
 	if (!user) {
 		return rejectProxy(401, 'UNAUTHORIZED', 'Authentication required');
+	}
+	if (rejectsMcpOnlyCredential(user)) {
+		return rejectProxy(401, 'UNAUTHORIZED', 'MCP tokens cannot access the REST API');
 	}
 
 	const surfaceId = surfaceMatch?.[2];

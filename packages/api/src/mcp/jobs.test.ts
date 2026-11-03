@@ -12,12 +12,17 @@ import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { externalTokenGrant } from '@marimo-hub/core/token-grants';
 import {
 	CallToolResultSchema,
-	JSONRPCMessageSchema,
 	ListToolsResultSchema,
 	ProgressNotificationSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { makeTestDeps } from '../testing';
-import { connectMcpClient } from '../testing/mcp';
+import {
+	connectMcpClient,
+	findMcpResult,
+	postMcp,
+	readMcpMessages,
+	readMcpResult,
+} from '../testing/mcp';
 import { createApi } from '../createApi';
 import { DEFAULT_JOBS_CONFIG } from '../context';
 
@@ -83,29 +88,9 @@ async function finish(run: JobRun) {
 	return (await deps.services.jobRuns.transition(run, 'succeed', () => ({ output }))).run;
 }
 function rpc(method: string, params: Record<string, unknown>, signal?: AbortSignal) {
-	return createApi(deps).request('/mcp', {
-		method: 'POST',
-		signal,
-		headers: {
-			Authorization: 'Bearer test',
-			'Content-Type': 'application/json',
-			Accept: 'application/json, text/event-stream',
-		},
-		body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-	});
+	return postMcp(createApi(deps), { method, params }, { Authorization: 'Bearer test' }, signal);
 }
-function parseMessages(text: string) {
-	return text
-		.split('\n')
-		.filter((line) => line.startsWith('data: '))
-		.map((line) => JSONRPCMessageSchema.parse(JSON.parse(line.slice(6))));
-}
-function responseResult(messages: ReturnType<typeof parseMessages>) {
-	const response = messages.find((message) => 'result' in message);
-	if (!response || !('result' in response)) throw new Error('Missing MCP response');
-	return response.result;
-}
-function progressMessages(messages: ReturnType<typeof parseMessages>) {
+function progressMessages(messages: unknown[]) {
 	return messages.flatMap((message) => {
 		const parsed = ProgressNotificationSchema.safeParse(message);
 		return parsed.success ? [parsed.data] : [];
@@ -150,7 +135,7 @@ describe('MCP job registration', () => {
 	it.each([true, false])('registers jobs over HTTP only when enabled=%s', async (enabled) => {
 		deps.jobs = enabled ? { ...DEFAULT_JOBS_CONFIG } : undefined;
 		const response = await rpc('tools/list', {});
-		const tools = ListToolsResultSchema.parse(responseResult(parseMessages(await response.text())));
+		const tools = ListToolsResultSchema.parse(await readMcpResult(response));
 		const names = new Set(tools.tools.map((tool) => tool.name));
 		for (const name of TOOL_NAMES) expect(names.has(name)).toBe(enabled);
 		if (!enabled) {
@@ -158,9 +143,7 @@ describe('MCP job registration', () => {
 			const enqueueRun = vi.spyOn(deps.services.jobRuns, 'enqueue');
 			for (const name of TOOL_NAMES) {
 				const reply = CallToolResultSchema.parse(
-					responseResult(
-						parseMessages(await (await rpc('tools/call', { name, arguments: selectors() })).text()),
-					),
+					await readMcpResult(await rpc('tools/call', { name, arguments: selectors() })),
 				);
 				expect(reply.isError).toBe(true);
 				expect(reply.content[0]).toMatchObject({
@@ -901,7 +884,7 @@ describe('MCP waiting', () => {
 			arguments: { ...selectors(), run_id: run.run_id, wait: true },
 			_meta: { progressToken: 'changes' },
 		});
-		const text = response.text();
+		const pending = readMcpMessages(response);
 		await vi.advanceTimersByTimeAsync(2001);
 		await deps.services.jobRuns.transition(run, 'provision');
 		await vi.advanceTimersByTimeAsync(2000);
@@ -909,7 +892,7 @@ describe('MCP waiting', () => {
 		await vi.advanceTimersByTimeAsync(2000);
 		await finish(run);
 		await vi.advanceTimersByTimeAsync(2000);
-		const messages = parseMessages(await text);
+		const messages = await pending;
 		expect(progressMessages(messages).map((message) => message.params.progress)).toEqual([
 			1, 2, 3, 4,
 		]);
@@ -918,7 +901,7 @@ describe('MCP waiting', () => {
 				(status) => `Run ${run.run_id}: ${status}`,
 			),
 		);
-		expect(CallToolResultSchema.parse(responseResult(messages)).structuredContent).toMatchObject({
+		expect(CallToolResultSchema.parse(findMcpResult(messages)).structuredContent).toMatchObject({
 			completed: true,
 		});
 	});
@@ -929,17 +912,17 @@ describe('MCP waiting', () => {
 			arguments: { ...selectors(), wait: true },
 			_meta: { progressToken: 'new-run' },
 		});
-		const text = response.text();
+		const pending = readMcpMessages(response);
 		await vi.advanceTimersByTimeAsync(1);
 		const [active] = await deps.services.jobRuns.listActive();
 		await finish(active.run!);
 		await vi.advanceTimersByTimeAsync(2000);
-		const messages = parseMessages(await text);
+		const messages = await pending;
 		expect(progressMessages(messages)[0].params).toMatchObject({
 			progressToken: 'new-run',
 			progress: 1,
 		});
-		expect(CallToolResultSchema.parse(responseResult(messages)).structuredContent).toMatchObject({
+		expect(CallToolResultSchema.parse(findMcpResult(messages)).structuredContent).toMatchObject({
 			completed: true,
 			run: { status: 'succeeded' },
 		});
@@ -960,11 +943,11 @@ describe('MCP waiting', () => {
 			...(withToken ? { _meta: { progressToken: 0 } } : {}),
 		});
 		expect(response.headers.get('content-type')).toContain('text/event-stream');
-		const text = response.text();
+		const pending = readMcpMessages(response);
 		await vi.advanceTimersByTimeAsync(1);
 		await finish(run);
 		await vi.advanceTimersByTimeAsync(2000);
-		const messages = parseMessages(await text);
+		const messages = await pending;
 		const progress = progressMessages(messages);
 		expect(progress).toHaveLength(withToken ? 2 : 0);
 		if (withToken) {
@@ -975,7 +958,7 @@ describe('MCP waiting', () => {
 			});
 			expect(progress[1].params.message).toContain('succeeded');
 		}
-		expect(CallToolResultSchema.parse(responseResult(messages)).structuredContent).toMatchObject({
+		expect(CallToolResultSchema.parse(findMcpResult(messages)).structuredContent).toMatchObject({
 			completed: true,
 		});
 	});

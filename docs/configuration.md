@@ -14,27 +14,6 @@ Every marimohub configuration variable, grouped by category and backend. A categ
 
 🔒 marks a sensitive value (a secret).
 
-## Search
-
-Selected by `MARIMOHUB_SEARCH_BACKEND` (default `off`); one of `bucket`, `off`.
-
-### Bucket
-
-`MARIMOHUB_SEARCH_BACKEND=bucket`
-
-| Variable | Description | Required | Default | Example |
-| --- | --- | --- | --- | --- |
-| `MARIMOHUB_SEARCH_BUILD_REVISION` | Positive monotonic revision. Increase when changing embedding or catalog discovery configuration; older indexers cannot overwrite newer builds. | — | `1` | — |
-| `MARIMOHUB_SEARCH_EMBEDDING_URL` | Optional embeddings endpoint. Sends notebook content to this endpoint. Requires an embedding model and HTTPS when an API key is set. | — | — | — |
-| `MARIMOHUB_SEARCH_EMBEDDING_MODEL` | Optional model for semantic notebook indexing. Requires MARIMOHUB_SEARCH_EMBEDDING_URL. Keyword search does not require embeddings. | — | — | — |
-| `MARIMOHUB_SEARCH_EMBEDDING_API_KEY` 🔒 | Bearer credential for the HTTPS embedding endpoint. Requires an embedding URL and model. | — | — | — |
-
-### Disabled
-
-`MARIMOHUB_SEARCH_BACKEND=off`
-
-_No environment variables to set here._
-
 ## Theme
 
 Deployment branding for the hub UI. All values are public. See the [theming guide](./theming.md) for examples and asset hosting.
@@ -45,9 +24,9 @@ Deployment branding for the hub UI. All values are public. See the [theming guid
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_THEME_NAV_LINKS` | JSON array of up to 12 {label, href, placement?, external?, roles?} links. Roles control visibility only; all links are public. | — | — | `[{"label":"Platform","href":"https://example.com","placement":"header"}]` |
 | `MARIMOHUB_THEME_DOCS_URL` | HTTPS URL or root-relative path for the help menu documentation link. | — | — | `https://docs.example.com` |
-| `MARIMOHUB_THEME_SUPPORT_URL` | HTTPS URL or root-relative path for Get help in the hub and app shells. | — | — | `https://support.example.com` |
+| `MARIMOHUB_THEME_SUPPORT_URL` | HTTPS URL or root-relative path for the Help menu Get help link, the sign-in "Contact your administrator" link, and the problem-report portal link. | — | — | `https://support.example.com` |
 | `MARIMOHUB_THEME_ANNOUNCEMENT` | JSON {id, text, href?, level?, dismissible?}. Change id to show a previously dismissed banner again. | — | — | `{"id":"maintenance-1","text":"Maintenance Friday","level":"info","dismissible":true}` |
-| `MARIMOHUB_THEME_NOTEBOOK_CSS` | Public stylesheet for editors, apps, and previews; maximum 64 KiB. Accepts HTTPS URLs or root-relative paths with `MARIMOHUB_APP_BASE_URL`. See the [theming guide](./theming.md#colors-in-notebooks-and-apps). | — | — | `https://hub.example.com/brand/notebook.css` |
+| `MARIMOHUB_THEME_NOTEBOOK_CSS` | Public stylesheet for editors, apps, and previews; maximum 64 KiB, fetched without redirects. Accepts HTTPS URLs or root-relative paths with `MARIMOHUB_APP_BASE_URL`. If revalidation fails, the last fetched copy is served. Runs inside notebook pages, so host it on infrastructure you control. See the [theming guide](./theming.md#colors-in-notebooks-and-apps). | — | — | `https://hub.example.com/brand/notebook.css` |
 | `MARIMOHUB_THEME_COLOR_MODE` | `user` lets each user choose and uses saved or operating-system preferences. `light` or `dark` forces that mode for all roles and hides the theme toggle. | — | `user` | `light` |
 | `MARIMOHUB_THEME_NAME` | Display name, browser-title suffix, and installed app name. | — | `marimohub` | `Research Hub` |
 | `MARIMOHUB_THEME_FAVICON` | SVG, PNG, or ICO favicon. Use an HTTPS URL or root-relative same-origin path. Falls back to the 192px app icon, then 512px, then the built-in favicon. | — | — | `https://hub.example.com/brand/favicon.svg` |
@@ -521,7 +500,7 @@ The built-in OAuth 2.1 server exposes notebooks to MCP clients. MCP is off by de
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_MCP` | Enables the MCP endpoint and OAuth server. Requires an HTTPS `MARIMOHUB_APP_BASE_URL` (plain http is accepted only for localhost and 127.0.0.1). Values: `on`, `off`. | — | `off` | `on` |
-| `MARIMOHUB_MCP_MANUAL_TOKENS` | Enable manual token creation and bearer-header MCP access. Requires `MARIMOHUB_MCP=on`. Disabling blocks existing manual tokens on `/mcp`. Values: `on`, `off`. | — | `off` | `on` |
+| `MARIMOHUB_MCP_MANUAL_TOKENS` | Enable manual MCP token creation and bearer-header MCP access. Manual tokens cannot call the REST API. Requires `MARIMOHUB_MCP=on`; `on` without it fails startup. Disabling blocks existing manual tokens without revoking them. Values: `on`, `off`. | — | `off` | `on` |
 
 ## Jobs
 
@@ -699,11 +678,11 @@ Configure how users report problems. See the [support guide](./support.md).
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
-| `MARIMOHUB_SUPPORT_MODE` | Report delivery: `notifier`, `url`, or `off`. Defaults to the first available mode in that order. See [Support](./support.md) for destination requirements. | — | — | `notifier` |
+| `MARIMOHUB_SUPPORT_REPORTS` | Send problem reports to deployment notification destinations: `on` or `off`. `on` requires a notification destination that accepts `support.request`. When `off`, users can still copy diagnostics and use the support link. See [Support](./support.md). | — | `off` | `on` |
 
 ## Notifications
 
-`MARIMOHUB_NOTIFY_BACKENDS` selects one or more outbound notification backends. Membership and session changes succeed independently of delivery. Support reports wait for delivery. See [Notifications](./notifications.md).
+`MARIMOHUB_NOTIFY_BACKENDS` selects one or more outbound notification backends. Membership and session changes succeed independently of delivery. Support reports (`MARIMOHUB_SUPPORT_REPORTS=on`) wait for delivery. See [Notifications](./notifications.md).
 
 ### Project alerts
 
@@ -752,6 +731,28 @@ Posts the complete notification as signed JSON.
 | `MARIMOHUB_NOTIFY_WEBHOOK_URL` 🔒 | Required HTTPS endpoint when `webhook` is enabled. It receives the complete notification object. | — | — | `https://events.example.com/marimohub` |
 | `MARIMOHUB_NOTIFY_WEBHOOK_SECRET` 🔒 | Required HMAC-SHA256 key when `webhook` is enabled. It signs the `X-Marimohub-Signature` header. | — | — | — |
 | `MARIMOHUB_NOTIFY_WEBHOOK_KINDS` | Exact comma-separated allowlist for webhooks. If unset or blank, it inherits `MARIMOHUB_NOTIFY_KINDS`. Set `none` to disable webhook delivery. | — | — | `session.takeover` |
+
+## Search
+
+Selected by `MARIMOHUB_SEARCH_BACKEND` (default `off`); one of `bucket`, `off`.
+
+Permission-aware search across notebooks and data sources. Node deployments build the index on the maintenance replica (`MARIMOHUB_RUN_MAINTENANCE=true`); Cloudflare Workers do not support search. See [Search](./search.md).
+
+### Bucket
+
+`MARIMOHUB_SEARCH_BACKEND=bucket`
+
+| Variable | Description | Required | Default | Example |
+| --- | --- | --- | --- | --- |
+| `MARIMOHUB_SEARCH_EMBEDDING_URL` | Optional embeddings endpoint. Indexing sends notebook content to this provider, and `hybrid` queries also send the query text. Requires an embedding model, and HTTPS when an API key is set. | — | — | — |
+| `MARIMOHUB_SEARCH_EMBEDDING_MODEL` | Optional model for semantic notebook indexing. Requires `MARIMOHUB_SEARCH_EMBEDDING_URL`. Notebook content and `hybrid` query text are sent to the configured provider. Keyword search does not require embeddings. | — | — | — |
+| `MARIMOHUB_SEARCH_EMBEDDING_API_KEY` 🔒 | Bearer credential for the HTTPS embedding endpoint. Requires an embedding URL and model. | — | — | — |
+
+### Disabled
+
+`MARIMOHUB_SEARCH_BACKEND=off`
+
+_No environment variables to set here._
 
 ## Integrations
 

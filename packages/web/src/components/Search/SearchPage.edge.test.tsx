@@ -24,6 +24,25 @@ describe('Search recovery and input boundaries', () => {
 		expect(screen.queryByRole('option', { name: 'Unavailable type' })).not.toBeInTheDocument();
 	});
 
+	it('renders kinds and resource types from a newer server', async () => {
+		const future = {
+			...hit,
+			kind: 'comment',
+			resource: { type: 'comment', comment_id: 'c' },
+		} as unknown as typeof hit;
+		const { user } = setup({
+			capabilities: () =>
+				Promise.resolve(
+					jsonOk({ search: { available: true, semantic: false, kinds: ['notebook', 'comment'] } }),
+				),
+			search: () => Promise.resolve(response([future])),
+		});
+		const link = await screen.findByRole('link', { name: /Revenue model/ });
+		expect(link).toHaveTextContent('comment');
+		await user.click(screen.getByRole('button', { name: /Type$/ }));
+		expect(screen.getByRole('option', { name: 'comment' })).toBeVisible();
+	});
+
 	it('waits for composition to finish before searching or moving focus', async () => {
 		const { searches } = setup();
 		await screen.findByRole('link', { name: /Revenue model/ });

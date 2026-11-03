@@ -446,6 +446,25 @@ describe('authorizeProxyRequest', () => {
 		},
 	);
 
+	it('rejects manual MCP tokens even when their grant covers the project', async () => {
+		const { d } = recordedDeps();
+		d.authenticator = {
+			authenticate: async () => ({
+				id: ACTOR,
+				email: `${ACTOR}@example.com`,
+				credential: {
+					kind: 'personal-access-token',
+					grant: { actions: '*', projects: '*' },
+					mcpResource: 'https://hub.example.com/mcp',
+				},
+			}),
+		};
+		expect(await authorizeProxyRequest(proxyRequest(), d)).toMatchObject({
+			kind: 'reject',
+			status: 401,
+		});
+	});
+
 	it.each(['email', 'credential', 'groups', 'entitlements', 'entitlementsExpiresAt'] as const)(
 		'partitions admissions when the principal %s changes',
 		async (field) => {

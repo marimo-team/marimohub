@@ -1,5 +1,6 @@
 import { NotebookId, ProjectId, UserId } from '../ids';
 import type { Notification } from '../notifications';
+import type { SupportDiagnostics } from '../support';
 
 const projectId = ProjectId.parse('proj-0000000000000001');
 const notebookId = NotebookId.parse('nb-0000000000000001');
@@ -46,4 +47,12 @@ export const BROADCAST_NOTIFICATION_FIXTURE: Extract<Notification, { kind: 'sess
 		displaced_user_id: displacedUserId,
 	},
 	dedupe_key: 'session.takeover:takeover-fixture:broadcast',
+};
+
+export const SUPPORT_DIAGNOSTICS_FIXTURE: SupportDiagnostics = {
+	reporter: { id: UserId.parse('reporter'), email: 'reporter@example.com' },
+	page_url: 'https://hub.example.com/apps',
+	hub_version: '1.2.3',
+	timestamp: '2026-11-02T00:00:00.000Z',
+	client: { user_agent: 'browser', viewport: { width: 1024, height: 768 } },
 };

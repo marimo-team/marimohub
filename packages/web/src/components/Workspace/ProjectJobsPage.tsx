@@ -1,41 +1,14 @@
 import { CalendarClock } from 'lucide-react';
-import { Navigate, useParams } from 'react-router-dom';
-import { useProjectAppsQuery } from '@/api/apps';
-import { useCapabilitiesQuery, useProjectQuery } from '@/api/hooks';
-import { useInfiniteQuery } from '@tanstack/react-query';
-import { apiClient, apiData } from '@/api/client';
-import { notebookKeys } from '@/api/queryKeys';
+import { useParams } from 'react-router-dom';
+import { useCapabilitiesQuery, useJobNotebooksQuery, useProjectQuery } from '@/api/hooks';
 import { Button, EmptyState, ListContainer, Page, RowLink } from '@/components/ui';
 
 export function ProjectJobsPage() {
 	const { pid = '' } = useParams();
-	const access = useProjectAppsQuery(pid);
-	if (access.data.pages[0].project?.your_role === 'app-user')
-		return <Navigate to={`/apps?project_id=${encodeURIComponent(pid)}`} replace />;
-	return <ProjectJobsContent pid={pid} />;
-}
-
-function ProjectJobsContent({ pid }: { pid: string }) {
 	const project = useProjectQuery(pid);
 	const capabilities = useCapabilitiesQuery();
-	const notebooks = useInfiniteQuery({
-		queryKey: [...notebookKeys.list(pid), 'job-navigation'],
-		initialPageParam: undefined as string | undefined,
-		queryFn: ({ pageParam, signal }) =>
-			apiData(
-				apiClient.GET('/api/v1/projects/{pid}/notebooks', {
-					params: { path: { pid }, query: { limit: 50, cursor: pageParam } },
-					signal,
-				}),
-			),
-		getNextPageParam: (page) => page.next_cursor ?? undefined,
-		enabled:
-			capabilities.data?.jobs?.available === true &&
-			Boolean(project.data.your_role && project.data.your_role !== 'app-user'),
-	});
+	const notebooks = useJobNotebooksQuery(pid, capabilities.data?.jobs?.available === true);
 	const items = notebooks.data?.pages.flatMap((page) => page.items) ?? [];
-	if (project.data.your_role === 'app-user')
-		return <Navigate to={`/apps?project_id=${encodeURIComponent(pid)}`} replace />;
 	if (capabilities.isPending)
 		return (
 			<output className="m-auto p-8 text-sm text-muted-foreground">

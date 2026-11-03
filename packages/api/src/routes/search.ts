@@ -1,14 +1,51 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { SearchRequestSchema, SearchResponseSchema } from '@marimo-hub/core/search';
-import { commonErrors, createApp, errorResponses, jsonContent } from '../shared';
+import {
+	SEARCH_COVERAGE_STATUSES,
+	SEARCH_KINDS,
+	SearchHitSchema,
+	SearchRequestSchema,
+	SearchResponseSchema,
+} from '@marimo-hub/core/search';
+import {
+	commonErrors,
+	createApp,
+	errorResponses,
+	extensibleResponseEnum,
+	jsonContent,
+} from '../shared';
 import { searchWorkspace } from '../search/operations';
+
+// Core schemas are built before zod is extended, so they lack `.openapi()`; re-wrap the shape.
+// The array bounds mirror `SearchResponseSchema` in core.
+// Kinds and coverage statuses grow over time, so clients must tolerate unknown values.
+const SearchResponse = z
+	.object({
+		...SearchResponseSchema.shape,
+		items: z
+			.array(
+				z.object({
+					...SearchHitSchema.shape,
+					kind: extensibleResponseEnum(SEARCH_KINDS, 'notebook'),
+				}),
+			)
+			.max(50),
+		coverage: z
+			.array(
+				z.object({
+					...SearchResponseSchema.shape.coverage.element.shape,
+					status: extensibleResponseEnum(SEARCH_COVERAGE_STATUSES, 'complete'),
+				}),
+			)
+			.max(100),
+	})
+	.openapi('SearchResponse');
 
 const app = createApp();
 app.openapi(
 	createRoute({
 		method: 'get',
 		path: '/search',
-		operationId: 'search.workspace',
+		operationId: 'search.query',
 		tags: ['Search'],
 		summary: 'Search accessible projects and resources',
 		request: {
@@ -16,6 +53,10 @@ app.openapi(
 				limit: z.coerce.number().int().min(1).max(50).default(20),
 				kinds: z
 					.string()
+					.openapi({
+						description: `Comma-separated result kinds to include. Values: ${SEARCH_KINDS.join(', ')}.`,
+						example: 'notebook,code',
+					})
 					.transform((s, ctx) => {
 						const result = SearchRequestSchema.shape.kinds.safeParse(s.split(','));
 						if (!result.success) {
@@ -29,11 +70,11 @@ app.openapi(
 		},
 		responses: {
 			200: jsonContent(
-				z.object({ success: z.literal(true), data: SearchResponseSchema }),
+				z.object({ success: z.literal(true), data: SearchResponse }),
 				'Search results and source coverage',
 			),
 			...commonErrors(),
-			...errorResponses(404, 422),
+			...errorResponses(404, 422, 429),
 		},
 	}),
 	async (c) => {

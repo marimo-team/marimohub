@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { ArrowUpRight } from 'lucide-react';
 import type { SearchHit } from '@/api/search';
 import { cn } from '@/lib/utils';
-import { searchKinds } from './presentation';
+import { searchKind } from './presentation';
 
 export function SearchSnippet({ snippet }: { snippet: SearchHit['snippet'] }) {
 	const parts: ReactNode[] = [];
@@ -36,7 +36,7 @@ export function SearchResult({
 	item: SearchHit;
 	onKeyDown?: KeyboardEventHandler<HTMLAnchorElement>;
 }) {
-	const { icon: Icon, singular } = searchKinds[item.kind];
+	const { icon: Icon, singular } = searchKind(item.kind);
 	return (
 		<li>
 			<Link

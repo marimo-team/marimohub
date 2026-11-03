@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultAccessSummary, roleDescriptions } from './roles';
+import { canReadProjectSource, canUseApps, defaultAccessSummary, roleDescriptions } from './roles';
 import type { Capabilities } from '@/types';
 
 const caps = (over: Partial<Capabilities>): Capabilities =>
@@ -46,5 +46,35 @@ describe('defaultAccessSummary', () => {
 		expect(defaultAccessSummary('viewer', 'manager')).toMatch(/can view/);
 		expect(defaultAccessSummary('editor', 'manager')).toMatch(/can edit/);
 		expect(defaultAccessSummary('manager', null)).toMatch(/can manage/);
+	});
+});
+
+describe('canReadProjectSource', () => {
+	it.each([
+		['app-user', false],
+		['viewer', true],
+		['editor', true],
+		['manager', true],
+		['admin', true],
+		[null, false],
+		[undefined, false],
+	] as const)('%s → %s', (role, expected) => {
+		expect(canReadProjectSource(role)).toBe(expected);
+	});
+});
+
+describe('canUseApps', () => {
+	const granted = caps({ viewer_session_modes: ['app'] });
+	it.each(['app-user', 'editor', 'manager', 'admin'] as const)(
+		'lets %s use apps without the viewer grant',
+		(role) => {
+			expect(canUseApps(role, caps({}))).toBe(true);
+		},
+	);
+
+	it.each(['viewer', null, undefined] as const)('requires the viewer app grant for %s', (role) => {
+		expect(canUseApps(role, caps({}))).toBe(false);
+		expect(canUseApps(role, undefined)).toBe(false);
+		expect(canUseApps(role, granted)).toBe(true);
 	});
 });

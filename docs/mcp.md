@@ -64,7 +64,7 @@ With MCP enabled, set `MARIMOHUB_MCP_MANUAL_TOKENS=on` and restart the server. T
 
 1. Open the user menu → **MCP** → **Token**.
 2. Enter a name and choose the permitted actions and projects.
-3. Set an expiry (default: 30 days; blank: no expiry), then select **Create MCP token**.
+3. Set an expiry from 1 to 90 days (default: 30), then select **Create MCP token**.
 4. Copy the server URL and header into your client's Streamable HTTP configuration:
 
 ```text
@@ -72,11 +72,12 @@ Authorization: Bearer mhub_pat_…
 ```
 
 Creation requires a browser session. The token appears once and is bound to the deployment's exact MCP URL.
-It can also call the REST API within the same grants. Ordinary API tokens cannot access MCP.
+It works only on MCP: the REST API rejects it with `401`. Ordinary API tokens cannot access MCP.
 Manage and revoke tokens in **API tokens**.
 
 Setting `MARIMOHUB_MCP_MANUAL_TOKENS=off` blocks creation and MCP access without revoking tokens or changing OAuth.
-REST API access remains until expiry or revocation. If you re-enable the option, valid manual tokens work again at the same URL.
+If you re-enable the option, valid manual tokens work again at the same URL.
+Setting the option to `on` while `MARIMOHUB_MCP` is off stops server startup.
 
 ## Work with notebooks
 
@@ -92,6 +93,7 @@ Use `project_tag_namespace` to filter [project namespaces](./organizing-projects
 | `create_notebook`      | Create a local notebook. Optional `launch` starts an edit session.                |
 | `update_notebook`      | Replace supplied metadata fields or the complete local source.                    |
 | `sync_notebook_source` | Sync a Git source and report which sessions need restarting.                      |
+| `search_workspace`     | [Search](./search.md) notebooks, code, outputs, and data catalogs, when enabled.  |
 | `delete_notebook`      | Soft-delete a notebook, retire live apps, and cancel job runs.                    |
 | `start_session`        | Start or reuse an edit or app session.                                            |
 | `execute_code`         | Run Python in an edit session's live scratchpad.                                  |
@@ -138,6 +140,7 @@ Results include `project_id`, `notebook_id`, `commit`, `synced` (whether this ca
 - `version_id`: the version published by this call, or `null` if already up to date.
 - `current_version_id`: the stored version after sync, even if unchanged. `null` means unknown.
 - `sessions`: each active session's `session_id`, `mode`, `status`, `source_version_id`, and `restart_needed`.
+  `null` means the session lookup failed after sync; `restart_needed` is then `null`.
 - `restart_needed`: `true` if any session is stale, otherwise `null` if any per-session `restart_needed` is `null`, otherwise `false`.
 
 Per-session `restart_needed` is `true` for a different source version, `false` for a match,

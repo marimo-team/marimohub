@@ -1,5 +1,5 @@
 import { forEachConcurrentUntilFailure } from '../async';
-import { sameSearchBuild } from './build';
+import { sameSearchBuild, searchSnapshotDigest } from './build';
 import type { Bucket } from '../ports/bucket';
 import type { CatalogService } from '../services/catalog/CatalogService';
 import type { ProjectService } from '../services/content/ProjectService';
@@ -13,6 +13,7 @@ import {
 	MAX_SOURCE_PAGE_DOCUMENTS,
 	MAX_SEARCH_CURSOR_LENGTH,
 	MAX_SEARCH_CHECKPOINT_BYTES,
+	MIN_RECRAWL_INTERVAL_MS,
 } from './limits';
 import {
 	SearchDocumentSchema,
@@ -39,7 +40,7 @@ export class SearchIndexer {
 		private readonly catalog: CatalogService,
 		private readonly projects: ProjectService,
 		private readonly embeddings?: EmbeddingProvider,
-		private readonly buildRevision = 1,
+		private readonly minRecrawlIntervalMs = MIN_RECRAWL_INTERVAL_MS,
 	) {}
 	async step(projectId: ProjectId, source: SearchSource, signal: AbortSignal): Promise<boolean> {
 		signal.throwIfAborted();
@@ -48,11 +49,11 @@ export class SearchIndexer {
 		const key = paths.checkpoint;
 		const stored = await this.bucket.get(key);
 		const build = SearchBuildSchema.parse({
-			revision: this.buildRevision,
+			revision: 1,
 			source_revision: source.revision,
 			configuration: JSON.stringify({
 				source: source.configuration ?? '',
-				embedding: source.id === 'notebooks' ? (this.embeddings?.space ?? null) : null,
+				embedding: source.embeddable ? (this.embeddings?.space ?? null) : null,
 			}),
 		});
 		const project = await this.liveProject(projectId);
@@ -78,6 +79,9 @@ export class SearchIndexer {
 		}
 		const loaded = await this.index.claim(scope, build, signal);
 		if (!loaded) return true;
+		// Every recrawl writes pages that cleanup retains for a day, even when nothing changed.
+		if (loaded.verifiedAt && Date.now() - Date.parse(loaded.verifiedAt) < this.minRecrawlIntervalMs)
+			return true;
 		const initial = () => emptyCheckpoint(loaded.revision, build);
 		// Oversized legacy checkpoints restart without parsing their unbounded bodies.
 		let state =
@@ -103,7 +107,7 @@ export class SearchIndexer {
 				page.cursor = undefined;
 			}
 			page.documents = valid;
-			if (this.embeddings && source.id === 'notebooks')
+			if (this.embeddings && source.embeddable)
 				page.partial =
 					(await this.embed(
 						page.documents,
@@ -204,22 +208,31 @@ export class SearchIndexer {
 			}
 			return false;
 		}
-		const documents = pages.flat();
+		const documents = [...new Map(pages.flat().map((d) => [d.id, d])).values()];
 		const current = await this.liveProject(projectId);
+		const revision = state.revision;
+		const unchanged =
+			current !== null &&
+			revision !== null &&
+			loaded.digest !== undefined &&
+			loaded.digest === (await searchSnapshotDigest({ partial: state.partial, documents }));
 		signal.throwIfAborted();
-		const committed = await this.index.publish(
-			scope,
-			current
-				? {
-						schema_version: 1,
-						indexed_at: new Date().toISOString(),
-						partial: state.partial,
-						documents: [...new Map(documents.map((d) => [d.id, d])).values()],
-					}
-				: null,
-			state.revision,
-			signal,
-		);
+		// Republishing an unchanged corpus would write a full snapshot on every round-robin visit.
+		const committed = unchanged
+			? await this.index.touch(scope, revision, signal)
+			: await this.index.publish(
+					scope,
+					current
+						? {
+								schema_version: 1,
+								indexed_at: new Date().toISOString(),
+								partial: state.partial,
+								documents,
+							}
+						: null,
+					revision,
+					signal,
+				);
 		if (!committed) return false;
 		// A crash after publication leaves a different head revision, which resets the checkpoint on retry.
 		const published = await this.index.head(scope, signal);
@@ -273,6 +286,7 @@ export class SearchIndexer {
 		return partial;
 	}
 	async tick(signal: AbortSignal) {
+		signal.throwIfAborted();
 		const key = searchPaths.cursor;
 		const object = await this.bucket.get(key);
 		if (object && object.size > 4096) throw new Error('Search cursor exceeds budget');
@@ -291,6 +305,7 @@ export class SearchIndexer {
 			cursor: cursor.cleanup,
 			limit: 1,
 		});
+		signal.throwIfAborted();
 		try {
 			await this.bucket.put(
 				key,

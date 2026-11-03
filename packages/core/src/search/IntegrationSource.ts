@@ -1,6 +1,7 @@
 import { MAX_SEARCH_TEXT_LENGTH, MAX_SEARCH_CURSOR_LENGTH } from './limits';
 import { sha256Hex } from '../internal/sha256';
 import { withDeadline } from '../async';
+import { NotFoundError } from '../errors';
 import { z } from 'zod';
 import type { ProjectIntegrationsService } from '../services/integrations/contracts';
 import type { AuthorizationService } from '../services/authorization/AuthorizationService';
@@ -195,7 +196,7 @@ export class IntegrationSource implements SearchSource {
 		project: Project,
 		documents: SearchDocument[],
 		principal: AuthenticatedPrincipal,
-		_phase: 'rank' | 'return',
+		phase: 'rank' | 'return',
 		signal: AbortSignal,
 	) {
 		if (
@@ -209,12 +210,22 @@ export class IntegrationSource implements SearchSource {
 		const valid: SearchDocument[] = [];
 		const tables = new Map<
 			string,
-			Awaited<ReturnType<ProjectIntegrationsService['browseTableSchema']>>
+			Awaited<ReturnType<ProjectIntegrationsService['browseTableSchema']>> | null
 		>();
-		const namespaces = new Map<string, string[][]>();
+		const namespaces = new Map<string, string[][] | null>();
 		const truncatedNamespaces = new Set<string>();
 		let probes = 0;
 		let partial = false;
+		// A failed probe drops only the documents that depend on it.
+		const probe = async <T>(work: () => Promise<T>): Promise<T | null> => {
+			try {
+				return await work();
+			} catch (error) {
+				signal.throwIfAborted();
+				if (!(error instanceof NotFoundError)) partial = true;
+				return null;
+			}
+		};
 		for (const doc of documents) {
 			signal.throwIfAborted();
 			const ref = doc.resource;
@@ -232,31 +243,39 @@ export class IntegrationSource implements SearchSource {
 				continue;
 			}
 			if (!this.schemas) continue;
+			// Upstream probes are expensive, so `rank` admits docs without them. A stale doc can then
+			// take a top-k slot that `return` drops; SearchService cuts to `limit` before that check,
+			// so the response shrinks rather than refilling. This keeps one round of probes per query.
+			if (phase === 'rank') {
+				valid.push(doc);
+				continue;
+			}
 			const key = JSON.stringify([ref.integration_id, ref.namespace, ref.table]);
 			if (ref.table && ref.namespace) {
 				let schema = tables.get(key);
-				if (!schema) {
+				if (schema === undefined) {
 					if (probes === 32) {
 						partial = true;
 						continue;
 					}
 					probes++;
-					schema = await this.integrations.browseTableSchema(
-						project.id,
-						ref.integration_id,
-						ref.namespace,
-						ref.table,
-						{ query_user: principal.email, signal },
+					const { namespace, table } = ref;
+					schema = await probe(() =>
+						this.integrations.browseTableSchema(project.id, ref.integration_id, namespace, table, {
+							query_user: principal.email,
+							signal,
+						}),
 					);
 					tables.set(key, schema);
 				}
 				if (
-					ref.column &&
-					!schema.columns.some(
-						(c) =>
-							c.name === ref.column &&
-							`${c.name}: ${c.type}`.slice(0, MAX_SEARCH_TEXT_LENGTH) === doc.text,
-					)
+					!schema ||
+					(ref.column &&
+						!schema.columns.some(
+							(c) =>
+								c.name === ref.column &&
+								`${c.name}: ${c.type}`.slice(0, MAX_SEARCH_TEXT_LENGTH) === doc.text,
+						))
 				)
 					continue;
 				valid.push(doc);
@@ -264,22 +283,25 @@ export class IntegrationSource implements SearchSource {
 				const parent = ref.namespace.slice(0, -1);
 				const key = JSON.stringify([ref.integration_id, parent]);
 				let names = namespaces.get(key);
-				if (!names) {
+				if (names === undefined) {
 					if (probes === 32) {
 						partial = true;
 						continue;
 					}
 					probes++;
-					const page = await this.integrations.browseNamespaces(project.id, ref.integration_id, {
-						parent: parent.length > 0 ? parent : undefined,
-						limit: 100,
-						query_user: principal.email,
-						signal,
-					});
-					names = page.items;
-					if (page.next_cursor) truncatedNamespaces.add(key);
+					const page = await probe(() =>
+						this.integrations.browseNamespaces(project.id, ref.integration_id, {
+							parent: parent.length > 0 ? parent : undefined,
+							limit: 100,
+							query_user: principal.email,
+							signal,
+						}),
+					);
+					names = page?.items ?? null;
+					if (page?.next_cursor) truncatedNamespaces.add(key);
 					namespaces.set(key, names);
 				}
+				if (!names) continue;
 				if (names.some((n) => JSON.stringify(n) === JSON.stringify(ref.namespace))) valid.push(doc);
 				else if (truncatedNamespaces.has(key)) partial = true;
 			}

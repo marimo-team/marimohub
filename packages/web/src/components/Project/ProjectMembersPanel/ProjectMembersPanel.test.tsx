@@ -3,7 +3,7 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from 'react-router-dom';
-import { ProjectMembersDialog } from '.';
+import { ProjectMembersPanel } from '.';
 import { AuthProvider } from '@/context/AuthContext';
 import { projectQueryOptions } from '@/api/hooks';
 import { appKeys, projectKeys, userKeys } from '@/api/queryKeys';
@@ -145,50 +145,43 @@ function makeFetch({
 	return calls;
 }
 
-/** Feeds the dialog from the detail cache, as the project page does. */
-function CachedProjectDialog({
-	project,
-	onClose,
-}: {
-	project: ProjectDetail;
-	onClose: () => void;
-}) {
+/** Feeds the panel from the detail cache, as the members page does. */
+function CachedProjectPanel({ project }: { project: ProjectDetail }) {
 	const { data } = useQuery({
 		...projectQueryOptions(project.id),
 		initialData: project,
 		staleTime: Infinity,
 	});
-	return <ProjectMembersDialog isOpen onClose={onClose} project={data} />;
+	return <ProjectMembersPanel project={data} />;
 }
 
 function Location() {
 	return <span data-testid="location">{useLocation().pathname}</span>;
 }
 
-function dialogTree(project: ProjectDetail, onClose: () => void = vi.fn()) {
+function panelTree(project: ProjectDetail) {
 	return (
 		<AuthProvider>
-			<CachedProjectDialog project={project} onClose={onClose} />
+			<CachedProjectPanel project={project} />
 			<Location />
 		</AuthProvider>
 	);
 }
 
-async function renderDialog(
+async function renderPanel(
 	yourRole: ProjectDetail['your_role'],
 	overrides: Partial<ProjectDetail> = {},
 ) {
 	const client = createTestQueryClient();
 	client.setQueryData(userKeys.me(), currentTestUser);
-	const onClose = vi.fn();
 	serverProject = { ...project(yourRole), ...overrides };
-	const { rerender } = renderWithClient(dialogTree(serverProject, onClose), {
+	const { rerender } = renderWithClient(panelTree(serverProject), {
 		client,
 		route: `/projects/${PID}`,
 	});
 	// Wait for the member list and the user directory to resolve.
 	await waitFor(() => expect(screen.getAllByText('Eddie Editor').length).toBeGreaterThan(0));
-	return { onClose, client, rerender };
+	return { client, rerender };
 }
 
 /** Type into the picker and click the option it surfaces (debounced search). */
@@ -205,14 +198,14 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-describe('ProjectMembersDialog — admin', () => {
+describe('ProjectMembersPanel — admin', () => {
 	it('keeps the fallback roster read-only after a failed refresh and supports retry', async () => {
 		const membersResponse = vi
 			.fn()
 			.mockRejectedValueOnce(new TypeError('Network unavailable'))
 			.mockResolvedValueOnce(jsonOk(MEMBERS));
 		makeFetch({ membersResponse });
-		await renderDialog('admin');
+		await renderPanel('admin');
 		expect(await screen.findByRole('alert')).toHaveTextContent('The list may be out of date');
 		expect(screen.getByRole('combobox', { name: `Role for ${EDITOR}` })).toBeDisabled();
 		expect(screen.getByRole('button', { name: `Remove ${EDITOR}` })).toBeDisabled();
@@ -231,7 +224,7 @@ describe('ProjectMembersDialog — admin', () => {
 			.mockRejectedValueOnce(new TypeError('Search unavailable'))
 			.mockResolvedValueOnce(jsonOk([NINA]));
 		const calls = makeFetch({ searchResponse });
-		await renderDialog('admin');
+		await renderPanel('admin');
 		const user = userEvent.setup();
 		const input = screen.getByRole('combobox', { name: 'Search users' });
 		await user.type(input, 'nina');
@@ -267,7 +260,7 @@ describe('ProjectMembersDialog — admin', () => {
 					}),
 			);
 		const calls = makeFetch({ searchResponse });
-		await renderDialog('admin');
+		await renderPanel('admin');
 		const user = userEvent.setup();
 		const input = screen.getByRole('combobox', { name: 'Search users' });
 		await user.type(input, 'nina');
@@ -289,7 +282,7 @@ describe('ProjectMembersDialog — admin', () => {
 
 	it('renders resolved member names with role and remove controls', async () => {
 		makeFetch();
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		expect(screen.getAllByText('Olive Owner')).toHaveLength(2);
 		expect(screen.getByText('Project owner')).toBeInTheDocument();
@@ -308,7 +301,7 @@ describe('ProjectMembersDialog — admin', () => {
 
 	it('renders a pending email invite with its badge and controls', async () => {
 		makeFetch();
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		expect(screen.getByText(INVITED)).toBeInTheDocument();
 		expect(screen.getByText('Invited')).toBeInTheDocument();
@@ -318,7 +311,7 @@ describe('ProjectMembersDialog — admin', () => {
 	it('POSTs the picked search result by user id with the chosen role', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch();
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		await user.selectOptions(screen.getByRole('combobox', { name: 'New member role' }), 'viewer');
 		await pickOption(user, 'nina', /Nina New/);
@@ -335,7 +328,7 @@ describe('ProjectMembersDialog — admin', () => {
 		async (input) => {
 			const user = userEvent.setup();
 			makeFetch();
-			await renderDialog('admin');
+			await renderPanel('admin');
 
 			const search = screen.getByRole('combobox', { name: 'Search users' });
 			await user.type(search, 'nina');
@@ -364,7 +357,7 @@ describe('ProjectMembersDialog — admin', () => {
 	it('closes suggestions when the search is cleared', async () => {
 		const user = userEvent.setup();
 		makeFetch();
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		const search = screen.getByRole('combobox', { name: 'Search users' });
 		await user.type(search, 'nina');
@@ -378,7 +371,7 @@ describe('ProjectMembersDialog — admin', () => {
 	it('POSTs an email invite when the query is an unknown email', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch({ searchResults: [] });
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		await pickOption(user, 'Newbie@x.io', /Invite "newbie@x\.io" by email/);
 
@@ -391,7 +384,7 @@ describe('ProjectMembersDialog — admin', () => {
 	it('POSTs a raw user id via the fallback option when search misses', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch({ searchResults: [] });
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		await pickOption(user, 'u-raw', /Add "u-raw" by user id/);
 
@@ -404,7 +397,7 @@ describe('ProjectMembersDialog — admin', () => {
 	it('offers the raw-id fallback below results, so substring hits do not block an exact id', async () => {
 		const user = userEvent.setup();
 		makeFetch(); // search returns Nina for any query
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		await user.type(screen.getByRole('combobox', { name: 'Search users' }), 'u-raw');
 		expect(
@@ -416,7 +409,7 @@ describe('ProjectMembersDialog — admin', () => {
 	it('never offers the raw-id fallback for an id the directory already knows', async () => {
 		const user = userEvent.setup();
 		makeFetch(); // NINA.id === 'u-nina'
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		await user.type(screen.getByRole('combobox', { name: 'Search users' }), NINA.id);
 		await screen.findByRole('option', { name: /Nina New/ });
@@ -426,7 +419,7 @@ describe('ProjectMembersDialog — admin', () => {
 	it('offers no fallback while the query is too short to search', async () => {
 		const user = userEvent.setup();
 		makeFetch({ searchResults: [] });
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		await user.type(screen.getByRole('combobox', { name: 'Search users' }), 'u');
 		expect(await screen.findByText('Type at least 2 characters to search')).toBeInTheDocument();
@@ -436,7 +429,7 @@ describe('ProjectMembersDialog — admin', () => {
 	it("does not offer inviting an existing member's resolved email", async () => {
 		const user = userEvent.setup();
 		makeFetch({ searchResults: [] });
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		// eddie@x.io belongs to the member u-edit via the directory resolution.
 		await user.type(screen.getByRole('combobox', { name: 'Search users' }), 'eddie@x.io');
@@ -447,7 +440,7 @@ describe('ProjectMembersDialog — admin', () => {
 	it('does not offer inviting a syntactically invalid email as an email', async () => {
 		const user = userEvent.setup();
 		makeFetch({ searchResults: [] });
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		// Rejected by the same validator the server uses (would 422 there); the
 		// free-text id fallback still applies.
@@ -459,7 +452,7 @@ describe('ProjectMembersDialog — admin', () => {
 	it('PUTs a role change from the row select', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch();
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		await user.selectOptions(
 			screen.getByRole('combobox', { name: `Role for ${EDITOR}` }),
@@ -483,7 +476,7 @@ describe('ProjectMembersDialog — admin', () => {
 				[legacy]: { id: legacy, email: 'legacy@x.io', name: 'Legacy Admin' },
 			},
 		});
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		const select = screen.getByRole('combobox', { name: `Role for ${legacy}` });
 		expect(select).toHaveValue('admin');
@@ -510,7 +503,7 @@ describe('ProjectMembersDialog — admin', () => {
 				member.user_id === EDITOR ? { ...member, role: 'manager' } : member,
 			),
 		});
-		await renderDialog('manager');
+		await renderPanel('manager');
 
 		expect(screen.getByRole('combobox', { name: `Role for ${INVITED}` })).toBeInTheDocument();
 		const newRole = screen.getByRole('combobox', {
@@ -528,7 +521,7 @@ describe('ProjectMembersDialog — admin', () => {
 	it('removes a member only after the confirm dialog', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch();
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		await user.click(screen.getByRole('button', { name: `Remove ${EDITOR}` }));
 		expect(screen.getByText(/Remove “Eddie Editor” from “Sales”/)).toBeInTheDocument();
@@ -549,7 +542,7 @@ describe('ProjectMembersDialog — admin', () => {
 	it('removes a pending invite by its URL-encoded email', async () => {
 		const user = userEvent.setup();
 		const calls = makeFetch();
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		await user.click(screen.getByRole('button', { name: `Remove ${INVITED}` }));
 		await user.click(screen.getByRole('button', { name: 'Remove' }));
@@ -560,35 +553,34 @@ describe('ProjectMembersDialog — admin', () => {
 		});
 	});
 
-	it('surfaces a 409 from add and keeps the dialog open', async () => {
+	it('surfaces a 409 from add and keeps the draft', async () => {
 		const user = userEvent.setup();
 		makeFetch({
 			searchResults: [],
 			addResponse: conflict('u-dup is already a member of project proj-1'),
 		});
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		await pickOption(user, 'u-dup', /Add "u-dup" by user id/);
 
 		expect(await screen.findByText(/already a member/)).toBeInTheDocument();
 		expect(screen.getByRole('combobox', { name: 'Search users' })).toHaveValue('u-dup');
-		expect(screen.getByRole('dialog', { name: 'Project Access' })).toBeInTheDocument();
 	});
 
 	it('describes a members-only deployment (default_role null)', async () => {
 		makeFetch();
-		await renderDialog('admin');
+		await renderPanel('admin');
 		expect(await screen.findByText(/Your default access: Members only/)).toBeInTheDocument();
 	});
 
 	it('describes an open deployment (default_role editor)', async () => {
 		makeFetch({ capabilities: { ...CAPABILITIES, default_role: 'editor' } as Capabilities });
-		await renderDialog('admin');
+		await renderPanel('admin');
 		expect(await screen.findByText(/Your default access: Editor/)).toBeInTheDocument();
 	});
 });
 
-describe('ProjectMembersDialog — non-admin', () => {
+describe('ProjectMembersPanel — non-admin', () => {
 	it('renders a read-only list: no role selects, no remove, no add picker', async () => {
 		makeFetch({
 			currentUser: {
@@ -604,7 +596,7 @@ describe('ProjectMembersDialog — non-admin', () => {
 				'u-invitee': { id: 'u-invitee', email: INVITED, name: 'Pending Person' },
 			},
 		});
-		await renderDialog('viewer');
+		await renderPanel('viewer');
 
 		expect(screen.getByText('Olive Owner')).toBeInTheDocument();
 		expect(screen.getByLabelText(`Role for ${EDITOR}: Editor`)).toBeInTheDocument();
@@ -629,13 +621,13 @@ describe('ProjectMembersDialog — non-admin', () => {
 				[legacy]: { id: legacy, email: 'legacy@x.io', name: 'Legacy Admin' },
 			},
 		});
-		await renderDialog('editor');
+		await renderPanel('editor');
 
 		expect(screen.getByLabelText(`Role for ${legacy}: Admin (legacy)`)).toBeInTheDocument();
 	});
 });
 
-describe('ProjectMembersDialog — current access', () => {
+describe('ProjectMembersPanel — current access', () => {
 	it('reports super-admin access even when the caller has a lower member role', async () => {
 		makeFetch({
 			currentUser: {
@@ -645,7 +637,7 @@ describe('ProjectMembersDialog — current access', () => {
 				is_super_admin: true,
 			},
 		});
-		await renderDialog('admin');
+		await renderPanel('admin');
 		expect(screen.getByText('Deployment super admin')).toBeInTheDocument();
 		expect(screen.queryByText('Project member')).not.toBeInTheDocument();
 		expect(screen.getByLabelText('Your role: Admin')).toBeInTheDocument();
@@ -667,7 +659,7 @@ describe('ProjectMembersDialog — current access', () => {
 				'u-invitee': { id: 'u-invitee', email: INVITED, name: 'Pending Person' },
 			},
 		});
-		await renderDialog('viewer');
+		await renderPanel('viewer');
 
 		expect(screen.getByText('Project member')).toBeInTheDocument();
 		expect(screen.getByText('You')).toBeInTheDocument();
@@ -687,7 +679,7 @@ describe('ProjectMembersDialog — current access', () => {
 			capabilities: { ...CAPABILITIES, default_role: 'editor' } as Capabilities,
 			directory: { ...DIRECTORY, [NINA.id]: NINA },
 		});
-		await renderDialog('editor');
+		await renderPanel('editor');
 
 		expect(screen.getByText('Default access')).toBeInTheDocument();
 		expect(screen.getByLabelText('Your role: Editor')).toBeInTheDocument();
@@ -708,7 +700,7 @@ describe('ProjectMembersDialog — current access', () => {
 			directory: { ...DIRECTORY, [NINA.id]: NINA },
 		});
 		// A super admin sees `your_role: admin` even without a member row.
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		expect(screen.getByText('Deployment super admin')).toBeInTheDocument();
 		expect(screen.queryByText('Default access')).not.toBeInTheDocument();
@@ -718,7 +710,7 @@ describe('ProjectMembersDialog — current access', () => {
 	it('shows owner access when a legacy roster omits the owner row', async () => {
 		const members = MEMBERS.filter((member) => member.user_id !== OWNER);
 		makeFetch({ members });
-		await renderDialog('admin');
+		await renderPanel('admin');
 
 		expect(screen.getByText('Project owner')).toBeInTheDocument();
 		expect(screen.getByLabelText('Your role: Owner')).toBeInTheDocument();
@@ -746,10 +738,9 @@ describe('ProjectMembersDialog — current access', () => {
 				'u-invitee': { id: 'u-invitee', email: INVITED, name: 'Pending Person' },
 			},
 		});
-		await renderDialog('viewer');
+		await renderPanel('viewer');
 
 		const role = screen.getByLabelText('Your role: Viewer');
-		await user.tab();
 		await user.tab();
 		expect(role).toHaveFocus();
 		expect(await screen.findByText(/temporary sandbox/)).toBeInTheDocument();
@@ -766,7 +757,7 @@ describe('project default access', () => {
 					: Promise.reject(new TypeError('Capabilities unavailable')),
 			);
 			const calls = makeFetch({ capabilitiesResponse });
-			await renderDialog('manager');
+			await renderPanel('manager');
 			expect(capabilitiesResponse).toHaveBeenCalled();
 			const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
 			expect(select).toHaveValue('inherit');
@@ -786,7 +777,7 @@ describe('project default access', () => {
 	it('keeps confirmed access when the project refetch fails', async () => {
 		const detailResponse = vi.fn(() => Promise.reject(new TypeError('Project unavailable')));
 		makeFetch({ detailResponse });
-		await renderDialog('manager', { default_role: 'none' });
+		await renderPanel('manager', { default_role: 'none' });
 		const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
 		await userEvent.setup().selectOptions(select, 'viewer');
 		expect(await screen.findByText('Default access updated')).toBeInTheDocument();
@@ -800,7 +791,7 @@ describe('project default access', () => {
 
 	it('follows the project when its default changes or another project opens', async () => {
 		makeFetch();
-		const { client, rerender } = await renderDialog('manager', { default_role: 'none' });
+		const { client, rerender } = await renderPanel('manager', { default_role: 'none' });
 		const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
 		await userEvent.setup().selectOptions(select, 'viewer');
 		await screen.findByText('Default access updated');
@@ -809,7 +800,7 @@ describe('project default access', () => {
 
 		client.setQueryData(projectKeys.detail(PID), { ...project('manager'), default_role: 'editor' });
 		await waitFor(() => expect(select).toHaveValue('editor'));
-		rerender(dialogTree({ ...project('manager'), id: 'another-project', default_role: 'none' }));
+		rerender(panelTree({ ...project('manager'), id: 'another-project', default_role: 'none' }));
 		expect(select).toHaveValue('none');
 	});
 
@@ -819,11 +810,11 @@ describe('project default access', () => {
 			resolveResponse = resolve;
 		});
 		makeFetch({ updateResponse: () => response });
-		const { rerender } = await renderDialog('manager', { default_role: 'none' });
+		const { rerender } = await renderPanel('manager', { default_role: 'none' });
 		const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
 		await userEvent.setup().selectOptions(select, 'viewer');
 		await waitFor(() => expect(select).toBeDisabled());
-		rerender(dialogTree({ ...project('manager'), id: 'another-project', default_role: 'none' }));
+		rerender(panelTree({ ...project('manager'), id: 'another-project', default_role: 'none' }));
 		expect(select).toHaveValue('none');
 		await act(async () => {
 			resolveResponse(jsonOk({ ...project('manager'), default_role: 'viewer' }));
@@ -844,7 +835,7 @@ describe('project default access', () => {
 				.mockResolvedValueOnce(jsonError(code, message, status))
 				.mockResolvedValueOnce(jsonOk({ ...project('manager'), default_role: 'viewer' }));
 			const calls = makeFetch({ updateResponse });
-			const { onClose } = await renderDialog('manager', { default_role: 'none' });
+			await renderPanel('manager', { default_role: 'none' });
 			const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
 			const user = userEvent.setup();
 			await user.selectOptions(select, 'viewer');
@@ -854,7 +845,6 @@ describe('project default access', () => {
 			expect(select).toBeEnabled();
 			expect(screen.getByText(/This project is members-only/)).toBeInTheDocument();
 			expect(screen.queryByText('Default access updated')).not.toBeInTheDocument();
-			expect(onClose).not.toHaveBeenCalled();
 
 			await user.selectOptions(select, 'viewer');
 			expect(await screen.findByText('Default access updated')).toBeInTheDocument();
@@ -872,7 +862,7 @@ describe('project default access', () => {
 			resolveResponse = resolve;
 		});
 		const calls = makeFetch({ updateResponse: () => response });
-		await renderDialog('manager', { default_role: 'none' });
+		await renderPanel('manager', { default_role: 'none' });
 		const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
 		const user = userEvent.setup();
 		await user.selectOptions(select, 'viewer');
@@ -895,7 +885,7 @@ describe('project default access', () => {
 				throw new TypeError('Network unavailable');
 			},
 		});
-		await renderDialog('manager', { default_role: 'none' });
+		await renderPanel('manager', { default_role: 'none' });
 		const select = screen.getByRole('combobox', { name: 'Default access for signed-in users' });
 		await userEvent.setup().selectOptions(select, 'manager');
 		expect(await screen.findByText('Network unavailable')).toBeInTheDocument();
@@ -908,7 +898,7 @@ describe('project default access', () => {
 		'saves %s from the manager control',
 		async (default_role) => {
 			const calls = makeFetch();
-			await renderDialog('manager', {
+			await renderPanel('manager', {
 				default_role: default_role === 'inherit' ? 'none' : 'inherit',
 			});
 			await userEvent
@@ -930,7 +920,7 @@ describe('project default access', () => {
 
 	it('shows project access instead of deployment access and hides editing from viewers', async () => {
 		makeFetch({ capabilities: { ...CAPABILITIES, default_role: 'editor' } as Capabilities });
-		await renderDialog('viewer', { default_role: 'none' });
+		await renderPanel('viewer', { default_role: 'none' });
 		expect(screen.getByText(/This project is members-only/)).toBeInTheDocument();
 		expect(
 			screen.queryByRole('combobox', { name: 'Default access for signed-in users' }),
@@ -942,7 +932,7 @@ describe('IdP group members', () => {
 	const groupCapabilities = { ...CAPABILITIES, project_groups: { available: true } };
 	async function groupPicker() {
 		const user = userEvent.setup();
-		await renderDialog('admin');
+		await renderPanel('admin');
 		await user.selectOptions(await screen.findByRole('combobox', { name: 'Member type' }), 'group');
 		return user;
 	}
@@ -1030,7 +1020,7 @@ describe('IdP group members', () => {
 	});
 	it('preserves each draft when switching between people and groups', async () => {
 		const calls = makeFetch({ capabilities: groupCapabilities });
-		await renderDialog('admin');
+		await renderPanel('admin');
 		const user = userEvent.setup();
 		const type = screen.getByRole('combobox', { name: 'Member type' });
 		await user.type(screen.getByRole('combobox', { name: 'Search users' }), 'nina');
@@ -1122,7 +1112,7 @@ describe('IdP group members', () => {
 				return jsonOk({ ...project('admin'), members });
 			});
 		const calls = makeFetch({ groupResponse, membersResponse: async () => jsonOk(members) });
-		const { client } = await renderDialog('admin');
+		const { client } = await renderPanel('admin');
 		const invalidate = vi.spyOn(client, 'invalidateQueries');
 		const user = userEvent.setup();
 		const role = screen.getByRole('combobox', { name: 'Role for group team' });
@@ -1146,7 +1136,7 @@ describe('IdP group members', () => {
 				return jsonOk(null);
 			});
 		const calls = makeFetch({ groupResponse, membersResponse: async () => jsonOk(members) });
-		await renderDialog('admin');
+		await renderPanel('admin');
 		const user = userEvent.setup();
 		await user.click(screen.getByRole('button', { name: 'Remove group team' }));
 		await user.click(screen.getByRole('button', { name: 'Remove' }));
@@ -1197,7 +1187,7 @@ describe('IdP group members', () => {
 			members: [...MEMBERS, { group: 'team', role: 'viewer' }],
 			groupResponse: () => response,
 		});
-		await renderDialog('admin');
+		await renderPanel('admin');
 		const user = userEvent.setup();
 		await user.click(screen.getByRole('button', { name: 'Remove group team' }));
 		await user.click(screen.getByRole('button', { name: 'Remove' }));
@@ -1218,7 +1208,7 @@ describe('IdP group members', () => {
 			capabilities: groupCapabilities,
 			members: [...MEMBERS, { group: 'team', role: 'viewer' }],
 		});
-		await renderDialog('admin');
+		await renderPanel('admin');
 		const user = userEvent.setup();
 		await user.selectOptions(screen.getByRole('combobox', { name: 'New member role' }), 'manager');
 		const type = screen.getByRole('combobox', { name: 'Member type' });
@@ -1239,7 +1229,7 @@ describe('IdP group members', () => {
 		const group = '/Teams/Data + Research';
 		const calls = makeFetch({ members: [...MEMBERS, { group, role: 'viewer' }] });
 		const user = userEvent.setup();
-		const { client } = await renderDialog('admin');
+		const { client } = await renderPanel('admin');
 		client.setQueryData(appKeys.list(), []);
 		client.setQueryData(projectKeys.list(), []);
 		expect(screen.getByRole('button', { name: `IdP group ${group}` })).toBeInTheDocument();
@@ -1271,14 +1261,14 @@ describe('IdP group members', () => {
 			members: [...MEMBERS, { group: 'team', role: 'viewer' }],
 			currentUser: { ...OWNER_USER, id: 'other', email: 'other@x.io', groups: ['team'] },
 		});
-		await renderDialog('viewer');
+		await renderPanel('viewer');
 		expect(screen.getByText('Group membership')).toBeInTheDocument();
 		expect(screen.queryByText('You')).not.toBeInTheDocument();
 		expect(screen.queryByRole('combobox', { name: 'Member type' })).not.toBeInTheDocument();
 	});
 	it('does not offer group additions on unsupported deployments', async () => {
 		makeFetch();
-		await renderDialog('admin');
+		await renderPanel('admin');
 		expect(screen.queryByRole('combobox', { name: 'Member type' })).not.toBeInTheDocument();
 		expect(screen.queryByRole('combobox', { name: 'IdP group ID' })).not.toBeInTheDocument();
 	});
@@ -1296,13 +1286,12 @@ describe('changing your own access', () => {
 			members: SELF_MANAGED,
 			detailResponse: async () => jsonError('FORBIDDEN', 'Requires project access', 403),
 		});
-		const { onClose } = await renderDialog('manager');
+		await renderPanel('manager');
 		const user = userEvent.setup();
 		await user.click(screen.getByRole('button', { name: `Remove ${EDITOR}` }));
 		const dialog = screen.getByRole('dialog', { name: 'Remove Yourself' });
 		expect(dialog).toHaveTextContent('You may lose access to this project.');
 		await user.click(within(dialog).getByRole('button', { name: 'Remove' }));
-		await waitFor(() => expect(onClose).toHaveBeenCalled());
 		await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/projects$/));
 		expect(calls).toContainEqual({
 			url: `/api/v1/projects/${PID}/members/${EDITOR}`,
@@ -1317,7 +1306,7 @@ describe('changing your own access', () => {
 			members: SELF_MANAGED,
 			detailResponse: async () => jsonError('NOT_FOUND', 'Project not found', 404),
 		});
-		const { onClose } = await renderDialog('manager');
+		await renderPanel('manager');
 		const user = userEvent.setup();
 		const role = screen.getByRole('combobox', { name: `Role for ${EDITOR}` });
 		await user.selectOptions(role, 'viewer');
@@ -1326,7 +1315,6 @@ describe('changing your own access', () => {
 		expect(calls.filter((call) => call.method === 'PUT')).toEqual([]);
 		expect(role).toHaveValue('manager');
 		await user.click(within(dialog).getByRole('button', { name: 'Change role' }));
-		await waitFor(() => expect(onClose).toHaveBeenCalled());
 		await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/projects$/));
 		expect(calls).toContainEqual({
 			url: `/api/v1/projects/${PID}/members/${EDITOR}`,
@@ -1335,9 +1323,9 @@ describe('changing your own access', () => {
 		});
 	});
 
-	it('keeps the dialog open when you still have access after demoting yourself', async () => {
+	it('stays on the project when you still have access after demoting yourself', async () => {
 		makeFetch({ currentUser: SELF, members: SELF_MANAGED });
-		const { onClose } = await renderDialog('manager');
+		await renderPanel('manager');
 		const user = userEvent.setup();
 		await user.selectOptions(
 			screen.getByRole('combobox', { name: `Role for ${EDITOR}` }),
@@ -1345,13 +1333,12 @@ describe('changing your own access', () => {
 		);
 		await user.click(screen.getByRole('button', { name: 'Change role' }));
 		await screen.findByText('Role updated');
-		expect(onClose).not.toHaveBeenCalled();
 		expect(screen.getByTestId('location')).toHaveTextContent(`/projects/${PID}`);
 	});
 
 	it('cancels a self-demotion without sending it', async () => {
 		const calls = makeFetch({ currentUser: SELF, members: SELF_MANAGED });
-		await renderDialog('manager');
+		await renderPanel('manager');
 		const user = userEvent.setup();
 		await user.selectOptions(
 			screen.getByRole('combobox', { name: `Role for ${EDITOR}` }),

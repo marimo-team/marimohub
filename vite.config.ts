@@ -403,6 +403,10 @@ export default defineConfig({
 									name: '@marimo-hub/core/testing',
 									message: 'Import the specific testing helper or contract subpath.',
 								},
+								{
+									name: '@marimo-hub/core/search',
+									message: 'Import the specific search subpath, such as contracts or paths.',
+								},
 							],
 							patterns: ['@marimo-hub/postgres-runtime', '@marimo-hub/postgres-runtime/*'],
 						},

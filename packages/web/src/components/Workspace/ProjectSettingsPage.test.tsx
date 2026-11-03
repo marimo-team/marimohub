@@ -1,67 +1,50 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
 import { Route, Routes } from 'react-router-dom';
-import { AuthProvider } from '@/context/AuthContext';
-import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { renderWorkspace, stubApi } from '@/test/apiStub';
+import { jsonError } from '@/test/render';
 import type { ProjectRole } from '@/types';
 import { ProjectSettingsPage } from './ProjectSettingsPage';
+import { ProjectSourceGate } from './ProjectSourceGate';
 
 function setup(
 	section: 'members' | 'integrations',
 	role: ProjectRole | null = 'manager',
 	denied = false,
 ) {
-	installMatchMedia();
-	const requests: string[] = [];
-	vi.stubGlobal(
-		'fetch',
-		vi.fn(async (input: RequestInfo | URL) => {
-			const { pathname, searchParams } = new URL(String(input), 'http://localhost');
-			requests.push(pathname);
-			if (pathname === '/api/v1/me')
-				return jsonOk({ id: 'user', email: 'user@example.com', groups: [] });
-			if (pathname === '/api/v1/apps' && searchParams.get('project_id') === 'alpha')
-				return denied
-					? jsonError('NOT_FOUND', 'Not found', 404)
-					: jsonOk({
-							items: [],
-							next_cursor: null,
-							project: { id: 'alpha', name: 'Alpha', your_role: role },
-						});
-			if (pathname === '/api/v1/projects/alpha')
-				return denied || role === 'app-user'
-					? jsonError('NOT_FOUND', 'Not found', 404)
-					: jsonOk({
-							id: 'alpha',
-							name: 'Alpha',
-							owner: 'owner',
-							members: [],
-							default_role: 'inherit',
-							your_role: role,
-						});
-			if (pathname === '/api/v1/capabilities')
-				return jsonOk({
-					project_groups: { available: false },
-					federation: { available: false, default_enabled: false },
-				});
-			if (pathname === '/api/v1/users') return jsonOk({});
-			if (pathname.endsWith('/members')) return jsonOk([]);
-			if (pathname === '/api/v1/integrations/kinds') return jsonOk([]);
-			if (pathname.endsWith('/integrations')) return jsonOk({ items: [] });
-			throw new Error(`Unexpected request: ${pathname}`);
-		}),
-	);
-	renderWithClient(
-		<AuthProvider>
-			<Routes>
-				<Route path="/projects/:pid/members" element={<ProjectSettingsPage section="members" />} />
-				<Route
-					path="/projects/:pid/integrations"
-					element={<ProjectSettingsPage section="integrations" />}
-				/>
-				<Route path="/apps" element={<p>Apps destination</p>} />
-			</Routes>
-		</AuthProvider>,
+	const { requests } = stubApi({
+		'/api/v1/apps': ({ url }) =>
+			url.searchParams.get('project_id') !== 'alpha' || denied
+				? jsonError('NOT_FOUND', 'Not found', 404)
+				: {
+						items: [],
+						next_cursor: null,
+						project: { id: 'alpha', name: 'Alpha', your_role: role },
+					},
+		'/api/v1/projects/alpha': () =>
+			denied || role === 'app-user'
+				? jsonError('NOT_FOUND', 'Not found', 404)
+				: {
+						id: 'alpha',
+						name: 'Alpha',
+						owner: 'owner',
+						members: [],
+						default_role: 'inherit',
+						your_role: role,
+					},
+		'/api/v1/users': {},
+		'/api/v1/projects/alpha/members': [],
+		'/api/v1/integrations/kinds': [],
+		'/api/v1/projects/alpha/integrations': { items: [] },
+	});
+	renderWorkspace(
+		<Routes>
+			<Route path="/projects/:pid" element={<ProjectSourceGate />}>
+				<Route path="members" element={<ProjectSettingsPage section="members" />} />
+				<Route path="integrations" element={<ProjectSettingsPage section="integrations" />} />
+			</Route>
+			<Route path="/apps" element={<p>Apps destination</p>} />
+		</Routes>,
 		{ route: `/projects/alpha/${section}`, errorBoundary: true },
 	);
 	return requests;
@@ -97,11 +80,9 @@ describe('Project settings pages', () => {
 		async (section) => {
 			const requests = setup(section, 'app-user');
 			await screen.findByText('Apps destination');
-			expect(requests).toContain('/api/v1/apps');
+			expect(requests).toContain('/api/v1/apps?project_id=alpha');
 			expect(requests).not.toContain('/api/v1/projects/alpha');
-			expect(
-				requests.some((path) => path.endsWith('/members') || path.endsWith('/integrations')),
-			).toBe(false);
+			expect(requests.some((path) => /\/(members|integrations)(\?|$)/.test(path))).toBe(false);
 		},
 	);
 	it.each(['members', 'integrations'] as const)(
@@ -110,9 +91,7 @@ describe('Project settings pages', () => {
 			vi.spyOn(console, 'error').mockImplementation(() => {});
 			const requests = setup(section, null, true);
 			await screen.findByText('Request failed');
-			expect(
-				requests.some((path) => path.endsWith('/members') || path.endsWith('/integrations')),
-			).toBe(false);
+			expect(requests.some((path) => /\/(members|integrations)(\?|$)/.test(path))).toBe(false);
 		},
 	);
 });

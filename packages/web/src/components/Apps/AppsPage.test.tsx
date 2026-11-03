@@ -12,7 +12,9 @@ import { projectKeys, userKeys } from '@/api/queryKeys';
 import { projectQueryOptions } from '@/api/hooks';
 import { deferred } from '@/test/deferred';
 import { createTestQueryClient, renderWithClient } from '@/test/render';
-import { AppsPage, ProjectEntryPage } from './AppsPage';
+import { AppsPage } from './AppsPage';
+import { Project } from '@/components/Project/Project';
+import { ProjectSourceGate } from '@/components/Workspace/ProjectSourceGate';
 import { AppEntryPage } from './AppEntryPage';
 import {
 	makeFetch,
@@ -118,7 +120,9 @@ function setup(
 			<Suspense fallback={<p>Loading…</p>}>
 				<Routes>
 					<Route path="/apps" element={<AppsPage />} />
-					<Route path="/projects/:pid" element={<ProjectEntryPage />} />
+					<Route path="/projects/:pid" element={<ProjectSourceGate />}>
+						<Route index element={<Project />} />
+					</Route>
 					<Route path="/projects/:pid/notebooks/:nid" element={<AppEntryPage variant="edit" />} />
 					<Route path="/projects/:pid/notebooks/:nid/app" element={<AppEntryPage />} />
 				</Routes>

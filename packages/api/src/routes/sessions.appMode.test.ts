@@ -361,11 +361,11 @@ describe('Session routes (app mode)', () => {
 		'fetches root-relative notebook CSS for %s sessions',
 		async (mode) => {
 			const fake = makeFakeSandbox();
-			const fetchCss = vi
-				.spyOn(globalThis, 'fetch')
-				.mockResolvedValue(
-					new Response(':root { --operator-brand: purple; }', { headers: { etag: 'v1' } }),
-				);
+			const fetchCss = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+				new Response(':root { --operator-brand: purple; }', {
+					headers: { etag: 'v1', 'content-type': 'text/css' },
+				}),
+			);
 			try {
 				const api = createTestApi({
 					bucket,
@@ -409,7 +409,11 @@ describe('Session routes (app mode)', () => {
 			const fetchCss = vi
 				.spyOn(globalThis, 'fetch')
 				.mockRejectedValueOnce(new Error('private upstream connection details'))
-				.mockResolvedValue(new Response(':root { --operator-brand: purple; }'));
+				.mockResolvedValue(
+					new Response(':root { --operator-brand: purple; }', {
+						headers: { 'content-type': 'text/css' },
+					}),
+				);
 			try {
 				const api = createTestApi({
 					bucket,

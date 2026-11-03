@@ -696,11 +696,29 @@ A scoped token has this version 2 shape:
 }
 ```
 
+A manual MCP token replaces `oauth` with the exact MCP URL:
+
+```json
+{
+	"id": "01HXY0S6GWMBASVAG3PZ7Y2K5W",
+	"user_id": "user_abc123",
+	"name": "header-client",
+	"hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+	"credential_version": 2,
+	"grant": { "actions": ["project.read"], "projects": "*" },
+	"mcp_resource": "https://hub.example.com/mcp",
+	"created_at": "2026-07-24T14:30:00Z",
+	"expires_at": "2026-08-23T14:30:00Z"
+}
+```
+
 `actions` is `"*"` or a unique canonical action list. `projects` is `"*"` or
 1 to 100 unique project IDs. Parsing fails for a missing, inconsistent, or
 unknown credential version. The optional `oauth` object binds an OAuth token to
-its client, MCP resource, and scopes. Other fields remain loose so the daily
-`last_used_at` rewrite preserves fields from later releases.
+its client, MCP resource, and scopes. The optional `mcp_resource` marks a
+manual MCP token; it requires a `grant` and cannot coexist with `oauth`.
+Other fields remain loose so the daily `last_used_at` rewrite preserves fields
+from later releases.
 
 **Why keyed by token id.** The presented bearer is
 `mhub_pat_<tokenId>_<secret>`. The embedded ULID enables one-GET verification
@@ -766,7 +784,8 @@ authorization. Denial uses CAS to mark the pending record as denied before
 deletion. It then redirects with `error=access_denied`.
 
 Manual MCP tokens store an explicit v2 grant and `mcp_resource`, with no `oauth`
-binding. Requests authenticated with a manual MCP token require
+binding, and expire within 90 days. They authenticate only on `/mcp`; the REST
+API rejects them with `401`. MCP requests with a manual token require
 `MARIMOHUB_MCP_MANUAL_TOKENS=on` and an exact resource match. OAuth-issued MCP
 tokens do not require this flag. Ordinary API PATs cannot access MCP.
 
@@ -1741,13 +1760,15 @@ Configure provider lifecycle cleanup for sessions whose creation response or rec
 Search records live under `_system/search/`, outside project deletion prefixes.
 `BucketSearchIndex` owns each project/source `head.json` through ETag CAS. The head
 references one immutable `snapshots/{generation}.json` object or retains a deletion
-tombstone. Do not delete heads during project cleanup.
+tombstone. It also records the snapshot's content digest and `verified_at`, which an
+unchanged recrawl advances without writing a new snapshot. Do not delete heads during project cleanup.
 
 `SearchIndexer` owns each project/source `crawl.json`, immutable `pages/{page}.json`
 objects, and the global `cursor.json`. The checkpoint records its original head
-revision, build identity, and completed-page state. The build contains monotonic deployment
-and source revisions plus a configuration identity. Claiming a newer build fences
-older publication while preserving the current snapshot. Incompatible checkpoints restart.
+revision, build identity, and completed-page state. The build contains monotonic format
+and source revisions plus a configuration identity. Claiming a newer build, or a different
+configuration at equal revisions, fences older publication while preserving the current
+snapshot. Incompatible checkpoints restart.
 Publication cannot overwrite a newer head or resurrect a deletion tombstone.
 The maintenance lease uses `_system/search/lock.json`.
 
@@ -1755,5 +1776,5 @@ Garbage collection fences heads before removing obsolete snapshots. Active crawl
 pages and immutable objects younger than 24 hours remain. Deletion CAS-retires the
 crawl to an empty checkpoint after publishing the tombstone. Retain both records
 to fence delayed writers; reclaim detached pages and snapshots after the grace period.
-See the [search design](./search.md) for consistency assumptions, tradeoffs, and scaling limits.
-The [search guide](../docs/search.md) covers budgets, configuration, and performance evidence.
+See the [search design](./search.md) for consistency assumptions, budgets, tradeoffs, scaling limits,
+and performance evidence. The [search guide](../docs/search.md) covers configuration.

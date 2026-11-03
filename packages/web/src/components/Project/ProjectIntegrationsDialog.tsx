@@ -143,18 +143,15 @@ type View =
 
 export function ProjectIntegrationsPanel({
 	project,
-	onBack,
 	modalEditor = false,
 }: {
 	project: ProjectDetail;
-	onBack?: () => void;
 	modalEditor?: boolean;
 }) {
 	return (
 		<IntegrationsContent
 			scope={{ pid: project.id }}
 			canManage={canManageProject(project.your_role)}
-			onBack={onBack}
 			modalEditor={modalEditor}
 		/>
 	);
@@ -182,13 +179,11 @@ function IntegrationsDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () 
 function IntegrationsContent({
 	scope,
 	canManage,
-	onBack,
 	enabled = true,
 	modalEditor = false,
 }: {
 	scope: IntegrationsScope;
 	canManage: boolean;
-	onBack?: () => void;
 	enabled?: boolean;
 	modalEditor?: boolean;
 }) {
@@ -211,21 +206,19 @@ function IntegrationsContent({
 							? 'Org integrations'
 							: 'Integrations';
 
-	const header = (view.mode !== 'list' || onBack) &&
+	const header = view.mode !== 'list' &&
 		(!modalEditor || view.mode === 'create' || view.mode === 'copy') && (
 			<div className="flex items-center gap-3">
 				<button
 					type="button"
 					className="flex w-fit items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-					onClick={() => {
-						if (view.mode === 'list') onBack?.();
-						else
-							setView(
-								view.mode === 'create' || view.mode === 'copy'
-									? { mode: 'catalog' }
-									: { mode: 'list' },
-							);
-					}}
+					onClick={() =>
+						setView(
+							view.mode === 'create' || view.mode === 'copy'
+								? { mode: 'catalog' }
+								: { mode: 'list' },
+						)
+					}
 				>
 					<ArrowLeft className="size-3.5" aria-hidden />
 					Back

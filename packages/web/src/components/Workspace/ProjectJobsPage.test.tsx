@@ -2,51 +2,51 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
-import { jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { stubApi } from '@/test/apiStub';
+import { jsonError, renderWithClient } from '@/test/render';
+import type { ProjectRole } from '@/types';
 import { ProjectJobsPage } from './ProjectJobsPage';
+import { ProjectSourceGate } from './ProjectSourceGate';
 
 function setup({
 	available = true,
 	role = 'editor',
 	denied = false,
 	failNext = false,
-}: { available?: boolean; role?: string; denied?: boolean; failNext?: boolean } = {}) {
-	const requests: string[] = [];
+}: { available?: boolean; role?: ProjectRole; denied?: boolean; failNext?: boolean } = {}) {
 	let failed = false;
-	vi.stubGlobal(
-		'fetch',
-		vi.fn(async (input: RequestInfo | URL) => {
-			const url = new URL(String(input), 'http://localhost');
-			requests.push(url.pathname + url.search);
-			if (url.pathname === '/api/v1/apps' && url.searchParams.get('project_id') === 'p')
-				return denied
+	const { requests } = stubApi(
+		{
+			'/api/v1/apps': ({ url }) =>
+				url.searchParams.get('project_id') !== 'p' || denied
 					? jsonError('NOT_FOUND', 'Not found', 404)
-					: jsonOk({
+					: {
 							items: [],
 							next_cursor: null,
 							project: { id: 'p', name: 'Analysis', your_role: role },
-						});
-			if (url.pathname === '/api/v1/projects/p')
-				return denied || role === 'app-user'
+						},
+			'/api/v1/projects/p': () =>
+				denied || role === 'app-user'
 					? jsonError('NOT_FOUND', 'Not found', 404)
-					: jsonOk({ id: 'p', name: 'Analysis', your_role: role });
-			if (url.pathname === '/api/v1/capabilities') return jsonOk({ jobs: { available } });
-			if (url.pathname === '/api/v1/projects/p/notebooks') {
+					: { id: 'p', name: 'Analysis', your_role: role },
+			'/api/v1/projects/p/notebooks': ({ url }) => {
 				if (!url.searchParams.has('cursor'))
-					return jsonOk({ items: [{ id: 'first', title: 'First notebook' }], next_cursor: 'next' });
+					return { items: [{ id: 'first', title: 'First notebook' }], next_cursor: 'next' };
 				if (failNext && !failed) {
 					failed = true;
 					return jsonError('UNAVAILABLE', 'Unavailable', 503);
 				}
-				return jsonOk({ items: [{ id: 'second', title: 'Second notebook' }], next_cursor: null });
-			}
-			throw new Error(`Unexpected request ${url}`);
-		}),
+				return { items: [{ id: 'second', title: 'Second notebook' }], next_cursor: null };
+			},
+		},
+		{ capabilities: { jobs: { available } } },
 	);
 	const user = userEvent.setup();
 	renderWithClient(
 		<Routes>
-			<Route path="/projects/:pid/jobs" element={<ProjectJobsPage />} />
+			<Route path="/projects/:pid" element={<ProjectSourceGate />}>
+				<Route path="jobs" element={<ProjectJobsPage />} />
+			</Route>
 			<Route path="/apps" element={<h1>Apps</h1>} />
 		</Routes>,
 		{ route: '/projects/p/jobs', errorBoundary: true },

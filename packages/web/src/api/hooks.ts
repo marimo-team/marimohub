@@ -1863,6 +1863,22 @@ export function useJobsQuery(projectId: string, notebookId: string, enabled = tr
 	});
 }
 
+export function useJobNotebooksQuery(projectId: string, enabled = true) {
+	return useInfiniteQuery({
+		queryKey: notebookKeys.jobNavigation(projectId),
+		initialPageParam: null as string | null,
+		queryFn: ({ pageParam, signal }) =>
+			apiData(
+				apiClient.GET('/api/v1/projects/{pid}/notebooks', {
+					params: { path: { pid: projectId }, query: { limit: 50, ...cursorQuery(pageParam) } },
+					signal,
+				}),
+			),
+		getNextPageParam: nextCursor,
+		enabled,
+	});
+}
+
 export function useCreateJob(projectId: string, notebookId: string) {
 	return useApiMutation(
 		(body: JobCreateBody) =>

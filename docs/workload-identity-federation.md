@@ -65,8 +65,8 @@ example below; the full reference is
 
 WIF is a deployment capability. By default, a manager must enable it for each
 project. Deployments can instead enable the inherited default described below.
-Select **Environment & cloud access**, **Cloud access**, and **Federated cloud access**
-to set a project override.
+Open the project's **Integrations** page from the sidebar. Select **Cloud access**.
+Use **Federated cloud access** to set a project override.
 
 For an API update, get the project and save its `ETag` response header. Then
 send a guarded update:
@@ -98,7 +98,7 @@ continues to take precedence over hub-minted WIF.
 Both new and existing projects without a `federation` setting inherit this
 value. Explicit `enabled: true` or `enabled: false` overrides it. No project
 records are rewritten. Managers can select **Use deployment default**,
-**Enabled**, or **Disabled** in **Environment & cloud access → Cloud access**.
+**Enabled**, or **Disabled** in **Integrations → Cloud access**.
 To clear an override through the API, send a guarded project update with
 `{ "federation": null }`. Omitting the field leaves the override unchanged.
 

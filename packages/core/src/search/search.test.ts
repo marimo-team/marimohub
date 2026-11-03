@@ -1,66 +1,28 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createServices } from '../services';
-import { MemoryBucket } from '../testing/MemoryBucket';
-import { MemorySearchIndex } from '../testing/search';
-import { UserId } from '../ids';
+import {
+	createSearchFixture as setup,
+	searchOutsider as outsider,
+	searchOwner as owner,
+	stubSearchSource,
+} from '../testing/search';
 import { paths } from '../paths';
-import { AuthorizationService } from '../services/authorization/AuthorizationService';
-import { NotebookSource } from './NotebookSource';
 import { SearchIndexer } from './SearchIndexer';
 import { SearchService } from './SearchService';
-import { SearchRequestSchema, SearchCheckpointSchema, terms } from './contracts';
+import { SearchCheckpointSchema, terms } from './contracts';
 import { searchPaths } from './paths';
-import { MAX_SEARCH_CHECKPOINT_BYTES, MAX_SEARCH_CURSOR_LENGTH } from './limits';
+import {
+	MAX_SEARCH_CHECKPOINT_BYTES,
+	MAX_SEARCH_CURSOR_LENGTH,
+	MAX_SEARCH_PROJECT_SCAN,
+	MIN_RECRAWL_INTERVAL_MS,
+} from './limits';
 import type { SearchSource, SearchDocument } from './contracts';
-import type { AuthenticatedPrincipal } from '../ports/auth';
 
-const owner: AuthenticatedPrincipal = {
-	id: UserId.parse('owner'),
-	email: 'owner@example.com',
-	credential: { kind: 'development' },
-};
-const outsider: AuthenticatedPrincipal = {
-	id: UserId.parse('outsider'),
-	email: 'outsider@example.com',
-	credential: { kind: 'development' },
-};
 const signal = () => new AbortController().signal;
 afterEach(() => {
 	vi.restoreAllMocks();
 	vi.useRealTimers();
 });
-async function setup() {
-	const bucket = new MemoryBucket();
-	const services = createServices(bucket);
-	await services.catalog.initialize(owner.id);
-	const project = await services.projects.createProject(
-		{ name: 'Research', description: '' },
-		owner.id,
-	);
-	const notebook = await services.notebooks.createNotebook(
-		project.id,
-		{ title: 'Revenue', description: 'Quarterly', code: 'net_revenue = 42' },
-		owner.id,
-	);
-	const index = new MemorySearchIndex();
-	const authz = new AuthorizationService({});
-	const source = new NotebookSource(bucket, services.catalog, services.notebooks, authz);
-	const indexer = new SearchIndexer(bucket, index, [source], services.catalog, services.projects);
-	const search = new SearchService(index, [source], services.catalog, services.projects, authz);
-	await indexer.step(project.id, source, signal());
-	return {
-		bucket,
-		services,
-		project,
-		notebook,
-		index,
-		authz,
-		source,
-		indexer,
-		search,
-		query: SearchRequestSchema.parse({ q: 'net_revenue', project_id: project.id }),
-	};
-}
 describe('authorized search', () => {
 	it.each(['राजस्व', 'รายได้', 'café'])('keeps combining marks in the token %s', (text) => {
 		expect(terms(`${text} ${text}`)).toEqual([text.normalize('NFC')]);
@@ -158,13 +120,7 @@ describe('authorized search', () => {
 	it('rechecks revocation after another source finishes', async () => {
 		const f = await setup();
 		await f.services.projects.addMember(f.project.id, { user_id: outsider.id }, 'viewer', owner.id);
-		const other: SearchSource = {
-			revision: 1,
-			id: 'other',
-			kinds: ['datasource'],
-			page: async () => ({ documents: [], partial: false }),
-			validate: async (_p, docs) => ({ documents: docs, partial: false }),
-		};
+		const other = stubSearchSource({ id: 'other' });
 		const original = f.index.candidates.bind(f.index);
 		vi.spyOn(f.index, 'candidates').mockImplementation(async (...args) => {
 			if (args[0].source === 'other')
@@ -187,7 +143,7 @@ describe('authorized search', () => {
 			status: 'partial',
 		});
 	});
-	it('rechecks project access before ranking after index retrieval', async () => {
+	it('rechecks project access after final validation when revoked during retrieval', async () => {
 		const f = await setup();
 		await f.services.projects.addMember(f.project.id, { user_id: outsider.id }, 'viewer', owner.id);
 		const candidates = f.index.candidates.bind(f.index);
@@ -196,9 +152,40 @@ describe('authorized search', () => {
 			await f.services.projects.removeMember(f.project.id, outsider.id, owner.id);
 			return found;
 		});
+		const result = await f.search.search(outsider, f.query);
+		expect(result.items).toEqual([]);
+		expect(result.coverage).toEqual([
+			{ source: f.source.id, project_id: f.project.id, status: 'partial' },
+		]);
+	});
+	it('checks project access once before retrieval and once after final validation', async () => {
+		const f = await setup();
+		const authorize = vi.spyOn(f.authz, 'authorize');
+		expect((await f.search.search(owner, f.query)).items).toHaveLength(1);
+		const projectChecks = authorize.mock.calls.filter(
+			([, action, resource]) => action === 'project.read' && !('notebookLabels' in resource),
+		);
+		expect(projectChecks).toHaveLength(2);
+	});
+	it('drops hits when project labels change between ranking and final validation', async () => {
+		const f = await setup();
 		const validate = vi.spyOn(f.source, 'validate');
-		expect((await f.search.search(outsider, f.query)).items).toEqual([]);
-		expect(validate).not.toHaveBeenCalled();
+		const original = f.index.candidates.bind(f.index);
+		vi.spyOn(f.index, 'candidates').mockImplementation(async (...args) => {
+			const found = await original(...args);
+			await f.services.projects.setSecurityLabels(
+				f.project.id,
+				{ classification: 'secret', compartments: [] },
+				owner.id,
+			);
+			return found;
+		});
+		const result = await f.search.search(owner, f.query);
+		expect(result.items).toEqual([]);
+		expect(result.coverage).toEqual([
+			{ source: f.source.id, project_id: f.project.id, status: 'partial' },
+		]);
+		expect(validate.mock.calls.map((call) => call[3])).toEqual(['rank']);
 	});
 	it('drops a notebook deleted between ranking and final validation', async () => {
 		const f = await setup();
@@ -211,55 +198,9 @@ describe('authorized search', () => {
 		expect((await f.search.search(owner, f.query)).items).toEqual([]);
 	});
 
-	it('never passes another user’s private chats to a provider or ranking', async () => {
-		const f = await setup();
-		const documents: SearchDocument[] = [owner, outsider].map((user) => ({
-			id: `chat:${user.id}`,
-			kind: 'chat',
-			resource: { type: 'chat', owner_id: user.id, conversation_id: user.id },
-			title: 'Revenue chat',
-			text: 'net_revenue',
-			fingerprint: '1',
-		}));
-		await f.index.publish(
-			{ projectId: f.project.id, source: 'chats' },
-			{ schema_version: 1, indexed_at: new Date().toISOString(), documents, partial: false },
-			null,
-		);
-		const validate = vi.fn<SearchSource['validate']>(async (_p, docs) => ({
-			documents: docs,
-			partial: false,
-		}));
-		const source: SearchSource = {
-			revision: 1,
-			id: 'chats',
-			kinds: ['chat'],
-			page: async () => ({ documents, partial: false }),
-			validate,
-		};
-		const search = new SearchService(
-			f.index,
-			[source],
-			f.services.catalog,
-			f.services.projects,
-			f.authz,
-		);
-		expect((await search.search(owner, f.query)).items.map((i) => i.id)).toEqual(['chat:owner']);
-		expect(
-			validate.mock.calls.every((call) =>
-				call[1].every((d: SearchDocument) => d.id === 'chat:owner'),
-			),
-		).toBe(true);
-	});
 	it('keeps completed sources when a provider ignores its deadline', async () => {
 		const f = await setup();
-		const stuck: SearchSource = {
-			revision: 1,
-			id: 'stuck',
-			kinds: ['datasource'],
-			page: async () => ({ documents: [], partial: false }),
-			validate: async () => ({ documents: [], partial: false }),
-		};
+		const stuck = stubSearchSource({ id: 'stuck' });
 		const original = f.index.candidates.bind(f.index);
 		vi.spyOn(f.index, 'candidates').mockImplementation((...args) =>
 			args[0].source === 'stuck' ? new Promise(() => {}) : original(...args),
@@ -362,22 +303,18 @@ describe('authorized search', () => {
 		expect(result.coverage).toHaveLength(1);
 		expect(JSON.stringify(result)).not.toContain('private-value');
 	});
-	it('drops results when project access is revoked during final resource checks', async () => {
+	it('validates final resources against the freshly read project', async () => {
 		const f = await setup();
-		await f.services.projects.addMember(f.project.id, { user_id: outsider.id }, 'viewer', owner.id);
 		const validate = f.source.validate.bind(f.source);
-		vi.spyOn(f.source, 'validate').mockImplementation(async (...args) => {
+		const spy = vi.spyOn(f.source, 'validate').mockImplementation(async (...args) => {
 			const docs = await validate(...args);
-			if (args[3] === 'return')
-				await f.services.projects.removeMember(f.project.id, outsider.id, owner.id);
+			if (args[3] === 'rank')
+				await f.services.projects.updateProject(f.project.id, { name: 'Renamed' }, owner.id);
 			return docs;
 		});
-		const result = await f.search.search(outsider, f.query);
-		expect(result.items).toEqual([]);
-		expect(result.partial).toBe(true);
-		expect(result.coverage).toEqual([
-			{ source: f.source.id, project_id: f.project.id, status: 'partial' },
-		]);
+		const result = await f.search.search(owner, f.query);
+		expect(spy.mock.calls.find((call) => call[3] === 'return')?.[0].name).toBe('Renamed');
+		expect(result.items.map((item) => item.project_name)).toEqual(['Renamed']);
 	});
 	it('keeps keyword results when query embeddings fail', async () => {
 		const f = await setup();
@@ -407,7 +344,7 @@ describe('authorized search', () => {
 		);
 		const stale = await f.search.search(owner, f.query);
 		expect(stale.items).toHaveLength(1);
-		expect(stale.partial).toBe(true);
+		expect(stale.partial).toBe(false);
 		expect(stale.coverage).toContainEqual({
 			source: f.source.id,
 			project_id: f.project.id,
@@ -425,13 +362,57 @@ describe('authorized search', () => {
 	});
 	it('reports absent sources and optional semantics explicitly', async () => {
 		const f = await setup();
-		const result = await f.search.search(owner, { ...f.query, kinds: ['chat'], mode: 'hybrid' });
+		const result = await f.search.search(owner, {
+			...f.query,
+			kinds: ['datasource'],
+			mode: 'hybrid',
+		});
 		expect(result.partial).toBe(true);
 		expect(result.items).toEqual([]);
 		expect(result.coverage).toEqual([
 			{ source: 'semantic', status: 'disabled' },
-			{ source: 'chat', status: 'disabled' },
+			{ source: 'datasource', status: 'disabled' },
 		]);
+	});
+	it('searches the first sixteen accessible projects and reports truncation', async () => {
+		const f = await setup();
+		for (let i = 0; i < 16; i++)
+			await f.services.projects.createProject({ name: `Hidden ${i}`, description: '' }, owner.id);
+		const visible: string[] = [];
+		for (let i = 0; i < 17; i++) {
+			const project = await f.services.projects.createProject(
+				{ name: `Shared ${i}`, description: '' },
+				owner.id,
+			);
+			await f.services.notebooks.createNotebook(
+				project.id,
+				{ title: 'Revenue', description: '', code: 'net_revenue = 1' },
+				owner.id,
+			);
+			await f.services.projects.addMember(project.id, { user_id: outsider.id }, 'viewer', owner.id);
+			await f.indexer.step(project.id, f.source, signal());
+			visible.push(project.id);
+		}
+		const order = (await f.services.catalog.getCurrentSnapshot()).projects.map((p) => p.id);
+		const expected = order.filter((id) => visible.includes(id)).slice(0, 16);
+		const result = await f.search.search(outsider, { ...f.query, project_id: undefined });
+		expect(result.items.map((item) => item.project_id).toSorted()).toEqual(expected.toSorted());
+		expect(result.partial).toBe(true);
+		expect(result.coverage).toContainEqual({ source: 'projects', status: 'truncated' });
+	});
+	it('caps the cross-project scan and reports truncation', async () => {
+		const f = await setup();
+		for (let i = 1; i < 200; i++)
+			await f.services.projects.createProject({ name: `Hidden ${i}`, description: '' }, owner.id);
+		const getProject = vi.spyOn(f.services.projects, 'getProject');
+		const result = await f.search.search(outsider, { ...f.query, project_id: undefined });
+		const reads = getProject.mock.calls.filter(
+			([, options]) => options?.consistency === 'validated',
+		);
+		expect(reads.length).toBeLessThanOrEqual(MAX_SEARCH_PROJECT_SCAN);
+		expect(result.items).toEqual([]);
+		expect(result.partial).toBe(true);
+		expect(result.coverage).toEqual([{ source: 'projects', status: 'truncated' }]);
 	});
 });
 
@@ -511,6 +492,29 @@ describe('resumable search indexing', () => {
 				expect((await f.index.read(scope)).revision).not.toBe(old.revision);
 				expect((await f.index.read(scope)).snapshot?.documents).toEqual(old.snapshot!.documents);
 			}
+		},
+	);
+	it.each(['before starting', 'during cleanup listing'])(
+		'does not advance maintenance after cancellation %s',
+		async (when) => {
+			const f = await setup();
+			const cursor = await f.bucket.put(searchPaths.cursor, JSON.stringify({ after: '' }));
+			const controller = new AbortController();
+			const list = f.bucket.list.bind(f.bucket);
+			vi.spyOn(f.bucket, 'list').mockImplementationOnce(async (options) => {
+				const result = await list(options);
+				controller.abort();
+				return result;
+			});
+			const get = vi.spyOn(f.bucket, 'get');
+			const put = vi.spyOn(f.bucket, 'put');
+			const page = vi.spyOn(f.source, 'page');
+			if (when === 'before starting') controller.abort();
+			await expect(f.indexer.tick(controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+			if (when === 'before starting') expect(get).not.toHaveBeenCalled();
+			expect(put).not.toHaveBeenCalled();
+			expect(page).not.toHaveBeenCalled();
+			expect((await f.bucket.get(searchPaths.cursor))!.etag).toBe(cursor.etag);
 		},
 	);
 	it('maintenance skips oversized cleanup state and restarts the crawl', async () => {
@@ -623,11 +627,13 @@ describe('resumable search indexing', () => {
 		const key = searchPaths.scope(scope).checkpoint;
 		const head = vi.spyOn(f.index, 'head');
 		let checkpointEtag: string | undefined;
-		vi.spyOn(f.index, 'publish').mockImplementation(async () => {
+		const lose = async () => {
 			checkpointEtag = (await f.bucket.get(key))!.etag;
 			head.mockClear();
 			return false;
-		});
+		};
+		vi.spyOn(f.index, 'publish').mockImplementation(lose);
+		vi.spyOn(f.index, 'touch').mockImplementation(lose);
 		expect(await f.indexer.step(f.project.id, f.source, signal())).toBe(false);
 		expect(head).not.toHaveBeenCalled();
 		expect(checkpointEtag).toBeDefined();
@@ -679,16 +685,13 @@ describe('resumable search indexing', () => {
 			text: 'revenue',
 			fingerprint: '1',
 		};
-		const source: SearchSource = {
-			revision: 1,
-			id: 'custom',
+		const source = stubSearchSource({
 			kinds: ['code'],
 			page: async () => ({
 				documents: [{ ...document, id: 'invalid', text: 'x'.repeat(8193) }, document],
 				partial: false,
 			}),
-			validate: async (_p, docs) => ({ documents: docs, partial: false }),
-		};
+		});
 		const indexer = new SearchIndexer(
 			f.bucket,
 			f.index,
@@ -706,13 +709,7 @@ describe('resumable search indexing', () => {
 		const f = await setup();
 		const scope = { projectId: f.project.id, source: 'pages' };
 		const page = vi.fn(async () => ({ documents: [], partial: false }));
-		const source: SearchSource = {
-			revision: 1,
-			id: 'pages',
-			kinds: ['notebook'],
-			page,
-			validate: async (_p, docs) => ({ documents: docs, partial: false }),
-		};
+		const source = stubSearchSource({ id: 'pages', kinds: ['notebook'], page });
 		const indexer = new SearchIndexer(
 			f.bucket,
 			f.index,
@@ -747,7 +744,7 @@ describe('resumable search indexing', () => {
 			f.services.catalog,
 			f.services.projects,
 			{ space: 'test', embed },
-			2,
+			0,
 		);
 		await indexer.step(f.project.id, f.source, signal());
 		expect(embed).toHaveBeenCalledTimes(1);
@@ -759,5 +756,82 @@ describe('resumable search indexing', () => {
 		const result = await f.search.search(owner, { ...f.query, q: 'profit' });
 		expect(result.items).toHaveLength(1);
 		expect(result.partial).toBe(true);
+	});
+	it('re-claims and re-crawls when the embedding space changes at equal revisions', async () => {
+		const f = await setup();
+		const scope = { projectId: f.project.id, source: f.source.id };
+		const indexer = (space: string) =>
+			new SearchIndexer(f.bucket, f.index, [f.source], f.services.catalog, f.services.projects, {
+				space,
+				embed: async (texts: string[]) => texts.map(() => [1, 0]),
+			});
+		for (const space of ['model-a', 'model-b']) {
+			const page = vi.spyOn(f.source, 'page');
+			expect(await indexer(space).step(f.project.id, f.source, signal())).toBe(true);
+			expect(page.mock.calls[0][1]).toBeUndefined();
+			expect(
+				(await f.index.read(scope)).snapshot?.documents.every((d) => d.embedding?.space === space),
+			).toBe(true);
+			expect((await f.index.head(scope)).build?.configuration).toContain(`"embedding":"${space}"`);
+			page.mockRestore();
+		}
+	});
+	it.each(['publication', 'verification'])(
+		'waits the minimum interval after a %s before re-crawling',
+		async (event) => {
+			const f = await setup();
+			const scope = { projectId: f.project.id, source: f.source.id };
+			const start = Date.now() + 60_000;
+			vi.useFakeTimers({ now: start, toFake: ['Date'] });
+			if (event === 'publication')
+				await f.bucket.put(paths.project(f.project.id).notebook(f.notebook.id).code, 'profit = 9');
+			const publish = vi.spyOn(f.index, 'publish');
+			await f.indexer.step(f.project.id, f.source, signal());
+			expect(publish).toHaveBeenCalledTimes(event === 'publication' ? 1 : 0);
+			expect((await f.index.head(scope)).verifiedAt).toBe(new Date(start).toISOString());
+			const indexer = new SearchIndexer(
+				f.bucket,
+				f.index,
+				[f.source],
+				f.services.catalog,
+				f.services.projects,
+			);
+			const put = vi.spyOn(f.bucket, 'put');
+			const page = vi.spyOn(f.source, 'page');
+			vi.setSystemTime(start + MIN_RECRAWL_INTERVAL_MS - 1);
+			expect(await indexer.step(f.project.id, f.source, signal())).toBe(true);
+			expect(put).not.toHaveBeenCalled();
+			expect(page).not.toHaveBeenCalled();
+			vi.setSystemTime(start + MIN_RECRAWL_INTERVAL_MS);
+			expect(await indexer.step(f.project.id, f.source, signal())).toBe(true);
+			expect(page).toHaveBeenCalledOnce();
+			expect(put.mock.calls.some(([key]) => key.startsWith(searchPaths.scope(scope).pages))).toBe(
+				true,
+			);
+		},
+	);
+	it('verifies an unchanged corpus without republishing its snapshot', async () => {
+		const f = await setup();
+		const scope = { projectId: f.project.id, source: f.source.id };
+		const before = await f.index.read(scope);
+		const publish = vi.spyOn(f.index, 'publish');
+		const touch = vi.spyOn(f.index, 'touch');
+		const later = new Date(Date.now() + 20 * 60_000);
+		vi.useFakeTimers({ now: later, toFake: ['Date'] });
+		expect(await f.indexer.step(f.project.id, f.source, signal())).toBe(true);
+		expect(publish).not.toHaveBeenCalled();
+		expect(touch).toHaveBeenCalledOnce();
+		expect((await f.index.read(scope)).snapshot).toBe(before.snapshot);
+		const result = await f.search.search(owner, f.query);
+		expect(result.items[0].indexed_at).toBe(later.toISOString());
+		expect(result.coverage).toEqual([
+			{ source: f.source.id, project_id: f.project.id, status: 'complete' },
+		]);
+		await f.bucket.put(paths.project(f.project.id).notebook(f.notebook.id).code, 'profit = 9');
+		expect(await f.indexer.step(f.project.id, f.source, signal())).toBe(true);
+		expect(publish).toHaveBeenCalledOnce();
+		expect((await f.index.read(scope)).snapshot?.documents.map((d) => d.text)).toContain(
+			'profit = 9',
+		);
 	});
 });

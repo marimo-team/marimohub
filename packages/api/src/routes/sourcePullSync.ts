@@ -68,9 +68,10 @@ export async function resolveSyncTarget(
 	deps: PullSyncDeps,
 	source: Source,
 	projectId: ProjectId,
+	signal?: AbortSignal,
 ): Promise<SyncTarget> {
 	const { git, reader, config } = requireSyncReader(deps, source, projectId);
-	const head = await reader.getBranchHead(config.repo, config.branch);
+	const head = await reader.getBranchHead(config.repo, config.branch, { signal });
 	return { git, reader, config, head };
 }
 
@@ -86,8 +87,9 @@ export async function syncSourceManually(
 	notebookId: NotebookId,
 	subject: AuthSubject,
 	request: { requestId?: string; method: string; path: string },
+	signal?: AbortSignal,
 ): Promise<PullSyncOutcome> {
-	const outcome = await pullSourceToHead(deps, project, notebookId, subject.id, subject);
+	const outcome = await pullSourceToHead(deps, project, notebookId, subject.id, subject, signal);
 	if (outcome.synced) {
 		await appendAudit({ ...request, userId: subject.id }, 'notebook.source.sync', () =>
 			deps.services.events.append({
@@ -114,6 +116,7 @@ export async function pullSourceToHead(
 	notebookId: NotebookId,
 	actor: UserId,
 	subject: AuthSubject,
+	signal?: AbortSignal,
 ): Promise<PullSyncOutcome> {
 	const { notebooks } = deps.services;
 	const { source } = await loadAuthorizedNotebook(
@@ -123,16 +126,17 @@ export async function pullSourceToHead(
 		subject,
 		'notebook.write',
 	);
-	const { git, reader, config, head } = await resolveSyncTarget(deps, source, project.id);
+	const { git, reader, config, head } = await resolveSyncTarget(deps, source, project.id, signal);
 	if (isAtBranchHead(git, head.commit)) {
 		return { synced: false, commit: head.commit, version_id: null };
 	}
 	const [files, gitFiles] = await Promise.all([
-		reader.fetchWorkspace(config.repo, head.commit, config.root_path),
+		reader.fetchWorkspace(config.repo, head.commit, config.root_path, { signal }),
 		git.sync_mode === 'pull'
-			? reader.fetchGitDirectory!(config.repo, head.commit, config.branch)
+			? reader.fetchGitDirectory!(config.repo, head.commit, config.branch, { signal })
 			: undefined,
 	]);
+	signal?.throwIfAborted();
 	const { versionId } = await notebooks.synced.sync(
 		project.id,
 		notebookId,

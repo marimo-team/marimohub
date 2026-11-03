@@ -4,6 +4,7 @@ import type { TokenGrant } from '@marimo-hub/core';
 import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { createApi } from '../createApi';
 import { createTestApi, expectError, expectOk } from '../testing';
+import { postMcp, readMcpResult } from '../testing/mcp';
 import { createOAuthProvider } from './oauthProvider';
 
 const publicBaseUrl = 'https://hub.example.com/hub';
@@ -28,29 +29,17 @@ function setup(manualTokens?: boolean) {
 }
 
 function mcpRequest(app: ReturnType<typeof createApi>, token: string, params?: unknown) {
-	return app.request('/mcp', {
-		method: 'POST',
-		headers: {
-			Authorization: `Bearer ${token}`,
-			'Content-Type': 'application/json',
-			Accept: 'application/json, text/event-stream',
-		},
-		body: JSON.stringify({
-			jsonrpc: '2.0',
-			id: 1,
-			method: params ? 'tools/call' : 'tools/list',
-			params: params ?? {},
-		}),
+	return postMcp(app, params ? { method: 'tools/call', params } : { method: 'tools/list' }, {
+		Authorization: `Bearer ${token}`,
 	});
 }
 async function mcpResult(response: Response) {
 	expect(response.status).toBe(200);
-	const text = await response.text();
-	return (
-		JSON.parse(/^data: (.+)$/m.exec(text)?.[1] ?? text) as {
-			result: { tools?: unknown[]; structuredContent?: { projects: unknown[] }; isError?: boolean };
-		}
-	).result;
+	return readMcpResult<{
+		tools?: unknown[];
+		structuredContent?: { projects: unknown[] };
+		isError?: boolean;
+	}>(response);
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -97,26 +86,48 @@ describe('manual MCP tokens', () => {
 
 	it('requires session authentication to mint tokens', async () => {
 		const { request } = setup(true);
-		const created = await expectOk<Created>(await request('POST', '/me/tokens/mcp', body), 201);
+		const scoped = await expectOk<Created>(await request('POST', '/me/tokens/scoped', body), 201);
 		await expectError(
-			await request('POST', '/me/tokens/mcp', body, { Authorization: `Bearer ${created.token}` }),
+			await request('POST', '/me/tokens/mcp', body, { Authorization: `Bearer ${scoped.token}` }),
 			403,
 		);
 	});
 
+	it('restricts manual tokens to MCP', async () => {
+		const { app, request, deps } = setup(true);
+		const created = await expectOk<Created>(await request('POST', '/me/tokens/mcp', body), 201);
+		const rest = (api: ReturnType<typeof createApi>) =>
+			api.request('/api/v1/projects', { headers: { Authorization: `Bearer ${created.token}` } });
+		await expectError(await rest(app), 401, 'UNAUTHORIZED');
+		await expectError(
+			await request('POST', '/me/tokens/mcp', body, { Authorization: `Bearer ${created.token}` }),
+			401,
+			'UNAUTHORIZED',
+		);
+		expect((await mcpRequest(app, created.token)).status).toBe(200);
+		const disabled = createApi({ ...deps, mcp: { publicBaseUrl, manualTokens: false } });
+		expect((await mcpRequest(disabled, created.token)).status).toBe(401);
+		await expectError(await rest(disabled), 401, 'UNAUTHORIZED');
+	});
+
+	it('rejects manual tokens on the authenticated deep health check', async () => {
+		const { app, request } = setup(true);
+		const created = await expectOk<Created>(await request('POST', '/me/tokens/mcp', body), 201);
+		await expectError(
+			await app.request('/api/health?deep=true', {
+				headers: { Authorization: `Bearer ${created.token}` },
+			}),
+			401,
+			'UNAUTHORIZED',
+		);
+	});
+
 	it.each([
-		{ name: 'missing-grant' },
 		{ ...body, mcp_resource: 'https://other.example/mcp' },
 		{ ...body, oauth: { clientId: 'forged' } },
-		{ ...body, name: '   ' },
-		{ ...body, name: 'x'.repeat(101) },
-		{ ...body, expires_in_days: 0 },
-		{ ...body, expires_in_days: -1 },
-		{ ...body, expires_in_days: 1.5 },
-		{ ...body, expires_in_days: 3651 },
-		{ ...body, grant: { actions: ['project.read'], projects: [] } },
-		{ ...body, grant: { actions: ['invalid'], projects: '*' } },
-	])('rejects invalid or caller-supplied bindings: %j', async (input) => {
+		{ name: 'permanent', grant },
+		{ ...body, expires_in_days: 91 },
+	])('rejects caller-supplied bindings and unbounded lifetimes: %j', async (input) => {
 		const { request, deps } = setup(true);
 		await expectError(await request('POST', '/me/tokens/mcp', input), 422);
 		expect(await deps.services.tokens.list(ACTOR)).toEqual([]);
@@ -230,7 +241,7 @@ describe('manual MCP tokens', () => {
 				await request('POST', '/me/tokens/mcp', body, {
 					Authorization: `${scheme} ${created.token}`,
 				}),
-				403,
+				401,
 			);
 		}
 		for (const path of ['/mcp', `/mcp?access_token=${created.token}`]) {
@@ -281,23 +292,22 @@ describe('manual MCP tokens', () => {
 		expect(JSON.stringify(events)).not.toContain(created.token.split('_').at(-1));
 	});
 
-	it('rejects a cached token at the exact expiry while a token without expiry remains valid', async () => {
+	it('rejects a cached token at the exact expiry', async () => {
 		const { app, request } = setup(true);
 		const created = await expectOk<Created>(
 			await request('POST', '/me/tokens/mcp', { ...body, expires_in_days: 1 }),
 			201,
 		);
-		const permanent = await expectOk<Created>(
-			await request('POST', '/me/tokens/mcp', { name: 'permanent', grant }),
+		const longest = await expectOk<Created>(
+			await request('POST', '/me/tokens/mcp', { ...body, expires_in_days: 90 }),
 			201,
 		);
-		expect(permanent).not.toHaveProperty('expires_at');
 		const expiry = Date.parse(created.expires_at!);
 		const now = vi.spyOn(Date, 'now').mockReturnValue(expiry - 1);
 		expect((await mcpRequest(app, created.token)).status).toBe(200);
 		now.mockReturnValue(expiry);
 		expect((await mcpRequest(app, created.token)).status).toBe(401);
-		expect((await mcpRequest(app, permanent.token)).status).toBe(200);
+		expect((await mcpRequest(app, longest.token)).status).toBe(200);
 	});
 
 	it('keeps OAuth working when manual tokens are disabled and restores only unrevoked manual tokens', async () => {

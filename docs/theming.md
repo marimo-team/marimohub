@@ -128,7 +128,7 @@ Reverse proxies must forward both endpoints to the backend.
 
 ## Shell links and announcements
 
-The hub and app headers share a Help menu and announcement banner.
+The hub and app headers share a Help menu. The announcement banner appears in the hub, the editor, and apps.
 Configure their contents with these variables:
 
 ```dotenv
@@ -149,10 +149,13 @@ Links use the [asset URL rules](#host-the-assets): HTTPS or root-relative paths,
 
 Project pages use the project role. Other pages use the deployment default role.
 App-only users use `app-user`; super admins use `admin`.
+Role filters match the listed roles exactly: a link for `["editor"]` is hidden from managers and admins.
 Role-specific links stay hidden until the role is known.
+If a project or deployment role lookup fails, its role-specific links stay hidden until the next successful lookup.
 **All links are public configuration.** Role filters control visibility, not access to the destination.
 
-Help includes Documentation, optional Get help and custom links, and About with version and source links.
+Help includes Documentation, optional Get help and custom links, **Report a problem** (always present; see [Support](./support.md)), and About with version and source links.
+`MARIMOHUB_THEME_SUPPORT_URL` sets the Get help target. It also sets the sign-in "Contact your administrator" link and the problem-report portal link.
 `MARIMOHUB_THEME_DOCS_URL` replaces the Help documentation target. Feature-specific documentation links keep their upstream targets.
 Without this override, Help links to the upstream documentation.
 
@@ -176,9 +179,12 @@ MARIMOHUB_THEME_NOTEBOOK_CSS="https://hub.example.com/brand/notebook.css"
 
 The API downloads the stylesheet and appends it after the palette CSS.
 Root-relative paths resolve against `MARIMOHUB_APP_BASE_URL`, which must be an absolute HTTP(S) URL without credentials.
-The file must contain UTF-8 text of at most 64 KiB. The download has a five-second timeout and rejects redirects.
-If the download fails, the session does not start.
+Host the stylesheet on infrastructure you control; it runs inside the notebook page and can load remote assets.
+The file must contain UTF-8 text of at most 64 KiB.
+A response without a `Content-Type` header is accepted. If the header is present, its media type must be exactly `text/css`; parameters such as `charset` are allowed.
+The download has a five-second timeout and rejects redirects.
 The API caches CSS for one minute, then revalidates it with its ETag when available.
+If the stylesheet cannot be revalidated, the hub serves the last fetched copy. Session starts fail only when it was never fetched.
 Use absolute asset URLs in CSS: marimo serves the copied stylesheet from the notebook origin.
 
 The palette sets marimo's `--primary`, `--secondary`, `--link`, and related surface variables.

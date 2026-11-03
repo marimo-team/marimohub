@@ -260,37 +260,118 @@ describe('sync_notebook_source', () => {
 			mcpPrincipal.id,
 		);
 		expect(await sync()).toMatchObject({ structuredContent: { synced: true, commit: HEAD } });
-		expect(reader.getBranchHead).toHaveBeenLastCalledWith('org/repo', 'release');
-		expect(reader.fetchWorkspace).toHaveBeenLastCalledWith('org/repo', HEAD, 'apps');
+		const signal = { signal: expect.any(AbortSignal) };
+		expect(reader.getBranchHead).toHaveBeenLastCalledWith('org/repo', 'release', signal);
+		expect(reader.fetchWorkspace).toHaveBeenLastCalledWith('org/repo', HEAD, 'apps', signal);
 		const { source } = await deps.services.notebooks.getNotebook(project.id, notebook.id);
 		expect(source).toMatchObject({ branch: 'release', root_path: 'apps' });
 		expect(source).not.toHaveProperty('pending_config');
 		expect(source.current_version_id).not.toBe(before.source.current_version_id);
 	});
 
-	it('sanitizes unexpected errors and permits retry after a post-sync session lookup failure', async () => {
+	it('reports unknown restart status when the post-sync session lookup fails', async () => {
 		const { deps, project, notebook, sync } = await setup();
 		const audit = vi.spyOn(deps.services.events, 'append');
 		vi.spyOn(deps.services.sessions, 'listActiveByProject').mockRejectedValueOnce(
 			new Error('Private storage endpoint and credentials'),
 		);
 		const response = await sync();
-		expect(response).toMatchObject({
-			isError: true,
-			structuredContent: { code: 'INTERNAL_ERROR', message: 'Internal error' },
+		const { source } = await deps.services.notebooks.getNotebook(project.id, notebook.id);
+		expect(response.isError).not.toBe(true);
+		expect(response.structuredContent).toMatchObject({
+			synced: true,
+			version_id: source.current_version_id,
+			current_version_id: source.current_version_id,
+			sessions: null,
+			restart_needed: null,
 		});
 		expect(JSON.stringify(response)).not.toContain('Private storage');
 		expect(audit).toHaveBeenCalledWith(expect.objectContaining({ event: 'notebook.source.sync' }));
-		audit.mockClear();
-		const { source } = await deps.services.notebooks.getNotebook(project.id, notebook.id);
 		expect(await sync()).toMatchObject({
-			structuredContent: {
-				synced: false,
-				current_version_id: source.current_version_id,
-				restart_needed: false,
-			},
+			structuredContent: { synced: false, sessions: [], restart_needed: false },
 		});
+	});
+
+	it('reports restart status against the source pointer after a concurrent sync', async () => {
+		const { deps, project, notebook, sync, createSession } = await setup();
+		const synced = deps.services.notebooks.synced;
+		const publish = synced.sync.bind(synced);
+		vi.spyOn(synced, 'sync').mockImplementationOnce(async (pid, nid, input, actor) => {
+			const result = await publish(pid, nid, input, actor);
+			await createSession('edit', result.versionId ?? undefined);
+			const newer = { ...input, commit: 'b'.repeat(40), expected_source_version: undefined };
+			await publish(pid, nid, newer, actor);
+			return result;
+		});
+		const response = await sync();
+		const { source } = await deps.services.notebooks.getNotebook(project.id, notebook.id);
+		expect(await deps.services.notebooks.listVersions(project.id, notebook.id)).toHaveLength(2);
+		expect(response.structuredContent).toMatchObject({
+			synced: true,
+			version_id: expect.not.stringMatching(source.current_version_id!),
+			current_version_id: source.current_version_id,
+			sessions: [{ restart_needed: true }],
+			restart_needed: true,
+		});
+	});
+
+	it('does not publish when the request is cancelled during the fetch', async () => {
+		const { deps, reader, project, notebook } = await setup();
+		const controller = new AbortController();
+		const client = await connectMcpClient(deps, mcpPrincipal, {
+			method: 'POST',
+			path: '/mcp',
+			hostname: 'hub.example.com',
+			appBaseUrl: 'https://hub.example.com',
+			signal: controller.signal,
+		});
+		const publish = vi.spyOn(deps.services.notebooks.synced, 'sync');
+		const audit = vi.spyOn(deps.services.events, 'append');
+		vi.mocked(reader.fetchWorkspace).mockImplementation(async () => {
+			controller.abort();
+			return [{ path: 'app.py', bytes: encode('print("synced")') }];
+		});
+		expect(await callSync(client, { project: project.id, notebook: notebook.id })).toMatchObject({
+			isError: true,
+			structuredContent: { code: 'REQUEST_CANCELLED' },
+		});
+		expect(reader.fetchWorkspace).toHaveBeenCalledWith('org/repo', HEAD, '', {
+			signal: expect.any(AbortSignal),
+		});
+		expect(publish).not.toHaveBeenCalled();
 		expect(audit).not.toHaveBeenCalled();
+		expect(await deps.services.notebooks.listVersions(project.id, notebook.id)).toEqual([]);
+	});
+
+	it('stops the Git directory fetch and publishes nothing when a pull sync is cancelled', async () => {
+		const { deps, reader, project, notebook } = await setup('github', 'pull');
+		const controller = new AbortController();
+		const client = await connectMcpClient(deps, mcpPrincipal, {
+			method: 'POST',
+			path: '/mcp',
+			hostname: 'hub.example.com',
+			appBaseUrl: 'https://hub.example.com',
+			signal: controller.signal,
+		});
+		const publish = vi.spyOn(deps.services.notebooks.synced, 'sync');
+		const audit = vi.spyOn(deps.services.events, 'append');
+		vi.mocked(reader.fetchGitDirectory!).mockImplementation(
+			async (_repo, _commit, _branch, options) => {
+				controller.abort();
+				options?.signal?.throwIfAborted();
+				return new Promise<never>(() => {});
+			},
+		);
+		expect(await callSync(client, { project: project.id, notebook: notebook.id })).toMatchObject({
+			isError: true,
+			structuredContent: { code: 'REQUEST_CANCELLED' },
+		});
+		expect(reader.fetchGitDirectory).toHaveBeenCalledWith('org/repo', HEAD, 'main', {
+			signal: expect.any(AbortSignal),
+		});
+		expect(publish).not.toHaveBeenCalled();
+		expect(audit).not.toHaveBeenCalled();
+		expect(await deps.services.notebooks.listVersions(project.id, notebook.id)).toEqual([]);
 	});
 
 	it.each(['github', 'gitlab', 'azure-devops'] as const)(

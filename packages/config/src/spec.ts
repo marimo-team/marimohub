@@ -105,49 +105,6 @@ const AI_TOKEN_TTL_SECONDS: ConfigVar = {
 
 export const CONFIG_SPEC: ConfigGroup[] = [
 	{
-		name: 'Search',
-		selector: 'MARIMOHUB_SEARCH_BACKEND',
-		selectorDefault: 'off',
-		backends: [
-			{
-				name: 'Bucket',
-				selectorValue: 'bucket',
-				vars: [
-					{
-						id: 'MARIMOHUB_SEARCH_BUILD_REVISION',
-						name: 'Search build revision',
-						description:
-							'Positive monotonic revision. Increase when changing embedding or catalog discovery configuration; older indexers cannot overwrite newer builds.',
-						default: '1',
-					},
-					{
-						id: 'MARIMOHUB_SEARCH_EMBEDDING_URL',
-						name: 'Embedding URL',
-						description:
-							'Optional embeddings endpoint. Sends notebook content to this endpoint. Requires an embedding model and HTTPS when an API key is set.',
-						optIn: true,
-					},
-					{
-						id: 'MARIMOHUB_SEARCH_EMBEDDING_MODEL',
-						name: 'Embedding model',
-						description:
-							'Optional model for semantic notebook indexing. Requires MARIMOHUB_SEARCH_EMBEDDING_URL. Keyword search does not require embeddings.',
-						optIn: true,
-					},
-					{
-						id: 'MARIMOHUB_SEARCH_EMBEDDING_API_KEY',
-						name: 'Embedding API key',
-						description:
-							'Bearer credential for the HTTPS embedding endpoint. Requires an embedding URL and model.',
-						secret: true,
-						optIn: true,
-					},
-				],
-			},
-			{ name: 'Disabled', selectorValue: 'off', vars: [] },
-		],
-	},
-	{
 		name: 'Theme',
 		description:
 			'Deployment branding for the hub UI. All values are public. See the [theming guide](./theming.md) for examples and asset hosting.',
@@ -173,7 +130,8 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					{
 						id: 'MARIMOHUB_THEME_SUPPORT_URL',
 						name: 'Support URL',
-						description: 'HTTPS URL or root-relative path for Get help in the hub and app shells.',
+						description:
+							'HTTPS URL or root-relative path for the Help menu Get help link, the sign-in "Contact your administrator" link, and the problem-report portal link.',
 						example: 'https://support.example.com',
 						optIn: true,
 					},
@@ -190,7 +148,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_THEME_NOTEBOOK_CSS',
 						name: 'Notebook CSS',
 						description:
-							'Public stylesheet for editors, apps, and previews; maximum 64 KiB. Accepts HTTPS URLs or root-relative paths with `MARIMOHUB_APP_BASE_URL`. See the [theming guide](./theming.md#colors-in-notebooks-and-apps).',
+							'Public stylesheet for editors, apps, and previews; maximum 64 KiB, fetched without redirects. Accepts HTTPS URLs or root-relative paths with `MARIMOHUB_APP_BASE_URL`. If revalidation fails, the last fetched copy is served. Runs inside notebook pages, so host it on infrastructure you control. See the [theming guide](./theming.md#colors-in-notebooks-and-apps).',
 						example: 'https://hub.example.com/brand/notebook.css',
 						optIn: true,
 					},
@@ -1897,7 +1855,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_MCP_MANUAL_TOKENS',
 						name: 'Manual MCP tokens',
 						description:
-							'Enable manual token creation and bearer-header MCP access. Requires `MARIMOHUB_MCP=on`. Disabling blocks existing manual tokens on `/mcp`. Values: `on`, `off`.',
+							'Enable manual MCP token creation and bearer-header MCP access. Manual tokens cannot call the REST API. Requires `MARIMOHUB_MCP=on`; `on` without it fails startup. Disabling blocks existing manual tokens without revoking them. Values: `on`, `off`.',
 						default: 'off',
 						example: 'on',
 					},
@@ -2399,11 +2357,12 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				name: 'Reports',
 				vars: [
 					{
-						id: 'MARIMOHUB_SUPPORT_MODE',
+						id: 'MARIMOHUB_SUPPORT_REPORTS',
 						name: 'Support reports',
 						description:
-							'Report delivery: `notifier`, `url`, or `off`. Defaults to the first available mode in that order. See [Support](./support.md) for destination requirements.',
-						example: 'notifier',
+							'Send problem reports to deployment notification destinations: `on` or `off`. `on` requires a notification destination that accepts `support.request`. When `off`, users can still copy diagnostics and use the support link. See [Support](./support.md).',
+						default: 'off',
+						example: 'on',
 					},
 				],
 			},
@@ -2412,7 +2371,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Notifications',
 		description:
-			'`MARIMOHUB_NOTIFY_BACKENDS` selects one or more outbound notification backends. Membership and session changes succeed independently of delivery. Support reports wait for delivery. See [Notifications](./notifications.md).',
+			'`MARIMOHUB_NOTIFY_BACKENDS` selects one or more outbound notification backends. Membership and session changes succeed independently of delivery. Support reports (`MARIMOHUB_SUPPORT_REPORTS=on`) wait for delivery. See [Notifications](./notifications.md).',
 		backends: [
 			{
 				name: 'Project alerts',
@@ -2542,6 +2501,44 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					},
 				],
 			},
+		],
+	},
+	{
+		name: 'Search',
+		selector: 'MARIMOHUB_SEARCH_BACKEND',
+		selectorDefault: 'off',
+		description:
+			'Permission-aware search across notebooks and data sources. Node deployments build the index on the maintenance replica (`MARIMOHUB_RUN_MAINTENANCE=true`); Cloudflare Workers do not support search. See [Search](./search.md).',
+		backends: [
+			{
+				name: 'Bucket',
+				selectorValue: 'bucket',
+				vars: [
+					{
+						id: 'MARIMOHUB_SEARCH_EMBEDDING_URL',
+						name: 'Embedding URL',
+						description:
+							'Optional embeddings endpoint. Indexing sends notebook content to this provider, and `hybrid` queries also send the query text. Requires an embedding model, and HTTPS when an API key is set.',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SEARCH_EMBEDDING_MODEL',
+						name: 'Embedding model',
+						description:
+							'Optional model for semantic notebook indexing. Requires `MARIMOHUB_SEARCH_EMBEDDING_URL`. Notebook content and `hybrid` query text are sent to the configured provider. Keyword search does not require embeddings.',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_SEARCH_EMBEDDING_API_KEY',
+						name: 'Embedding API key',
+						description:
+							'Bearer credential for the HTTPS embedding endpoint. Requires an embedding URL and model.',
+						secret: true,
+						optIn: true,
+					},
+				],
+			},
+			{ name: 'Disabled', selectorValue: 'off', vars: [] },
 		],
 	},
 	{

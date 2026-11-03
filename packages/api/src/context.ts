@@ -1,5 +1,4 @@
 import type { SearchService, SearchIndexer } from '@marimo-hub/core/search';
-import type { SupportMode } from '@marimo-hub/core/support';
 import type { WorkspaceLimits } from '@marimo-hub/core/remote-workspace';
 import type { ThemeConfig } from '@marimo-hub/core/theme';
 import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-bridge';
@@ -424,7 +423,7 @@ export interface ApiDeps {
 	workspaceLimits?: WorkspaceLimits;
 	warmPool?: WarmPoolService;
 	theme?: ThemeConfig;
-	supportMode?: SupportMode;
+	supportReports?: boolean;
 	projectNotebookTarget?: 'notebook' | 'app';
 	services: Services;
 	/** Operational signals shared by domain services and API-owned resource guards. */

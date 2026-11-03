@@ -11,6 +11,19 @@ Select any screenshot to open it at full size.
 
 Organize notebooks into shared projects. Each project has its own notebook list, tags, members, and environment configuration.
 
+The sidebar project picker switches between projects. **All projects** opens the complete list.
+The home page opens your last accessible project, or the first available project.
+App-only users open the app gallery.
+
+Within a project, the sidebar links to **Notebooks**, **Members**, and **Integrations**.
+Managers also see **Alerts** when [project alerts](./project-alerts.md) are enabled.
+**Data**, **Jobs**, and **Search** appear when available for your deployment and role.
+The **Integrations** page also contains the [Cloud access](./environment-and-access.md) button.
+On small screens, the navigation button opens the sidebar.
+
+The header's **Help** menu contains documentation, [problem reports](./support.md), and version information under **About**.
+Operators can configure [navigation links, announcements, and branding](./theming.md) across the workspace and app headers.
+
 <figure class="doc-screenshot">
   <a href="/screenshots/gallery-projects.png" target="_blank" rel="noreferrer" aria-label="Open full-size screenshot: Projects page with Analytics, Machine learning, and Team knowledge projects (new tab)">
     <img src="/screenshots/gallery-projects.png" alt="Projects page with Analytics, Machine learning, and Team knowledge projects" width="798" height="351" loading="lazy" decoding="async" />

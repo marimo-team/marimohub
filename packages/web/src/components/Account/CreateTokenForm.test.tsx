@@ -99,3 +99,38 @@ describe.each(['api', 'mcp'] as const)('%s token project scope', (kind) => {
 		}
 	});
 });
+
+describe('token expiry', () => {
+	it.each([
+		['api', '3650', 3650],
+		['mcp', '90', 90],
+	] as const)('accepts the %s maximum of %s days', async (kind, days, expected) => {
+		const { user, requests } = setup(kind);
+		await user.type(screen.getByLabelText('Name'), 'client');
+		await user.click(screen.getByRole('radio', { name: 'Full' }));
+		await user.click(screen.getByRole('radio', { name: /^All projects/ }));
+		await user.clear(screen.getByLabelText('Expires in days'));
+		await user.type(screen.getByLabelText('Expires in days'), days);
+		await user.click(screen.getByRole('button', { name: /create.*token/i }));
+		await waitFor(() => expect(requests).toHaveLength(1));
+		expect(requests[0].body).toMatchObject({ expires_in_days: expected });
+	});
+
+	it.each([
+		['mcp', '', 90],
+		['mcp', '91', 90],
+		['api', '3651', 3650],
+	] as const)('rejects a %s expiry of %j', async (kind, days, max) => {
+		const { user, requests } = setup(kind);
+		await user.type(screen.getByLabelText('Name'), 'client');
+		await user.click(screen.getByRole('radio', { name: 'Full' }));
+		await user.click(screen.getByRole('radio', { name: /^All projects/ }));
+		await user.clear(screen.getByLabelText('Expires in days'));
+		if (days) await user.type(screen.getByLabelText('Expires in days'), days);
+		await user.click(screen.getByRole('button', { name: /create.*token/i }));
+		expect(
+			await screen.findByText(`Expiry must be a whole number from 1 to ${max} days.`),
+		).toBeVisible();
+		expect(requests).toEqual([]);
+	});
+});

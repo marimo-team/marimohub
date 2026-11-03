@@ -1,7 +1,7 @@
 # Federated search
 
 Search combines notebook content and integration metadata through one authorized REST/MCP operation.
-The bucket backend partitions indexes by project and source. The web app shares one search page across global and project routes. The private chat source remains separate work.
+The bucket backend partitions indexes by project and source. The web app shares one search page across global and project routes.
 See the [search guide](../docs/search.md) for configuration, requests, screenshots, and user-visible limits.
 
 ## Architecture
@@ -32,25 +32,26 @@ To add a searchable type:
 
 1. Extend hit kinds, resource references, and link construction.
 2. Implement `SearchSource.page` with bounded discovery and a resumable cursor.
-3. Implement `validate` for both `rank` and `return`, using current resource state and caller authorization. Return validated documents and a partial flag.
+3. Implement `validate` for both `rank` and `return`, using current resource state and caller authorization. Return validated documents and a partial flag. `rank` may skip expensive upstream probes; `return` must not.
 4. Register the source and test revocation, deletion, freshness, cancellation, and budget exhaustion.
 5. Run `pnpm schemas:generate`.
 
 Source IDs must be stable and unique. At most four sources are registered, each supporting multiple hit kinds.
+Only sources that set `embeddable` send their documents to the embedding provider.
 Increase the source revision when cursor formats or extraction rules change.
 Include relevant source options in its configuration identity; never include credentials.
 
 A query backend implements `SearchRetriever`; requests include text, kind filters, and an optional query vector with its model identity.
 The bucket adapter also implements `SearchSnapshotStore` for the existing crawler.
-Its `head` and `claim` operations do not load documents. Only embedding reuse needs the previous snapshot during discovery.
+Its `head`, `claim`, and `touch` operations do not load documents. Only embedding reuse needs the previous snapshot during discovery.
 An incremental engine can supply its own ingestion path without implementing whole-corpus replacement.
 Design that ingestion port with a concrete backend; preserve revision checks, deletion fences, and bounded retrieval.
 
 ## Authorization and ranking
 
-Each query checks project access before index retrieval, then checks project and resource access before ranking.
-After selecting the highest-ranked results, it checks resources, content freshness, and project access again.
-Every project check rereads current state. Authorization decisions are never cached.
+Each query checks project access before index retrieval. Sources then check resources before ranking.
+After selecting the highest-ranked results, project access is checked again. Sources then recheck resources and content freshness against that freshly read project.
+Both project checks reread current state. Authorization decisions are never cached.
 
 Notebook checks include security labels and credential grants.
 Final checks compare metadata, source, code, and output ETags with the indexed fingerprint.
@@ -59,19 +60,23 @@ HTML extraction excludes hidden attributes and literal inline `display:none` or 
 It does not evaluate stylesheets or browser layout.
 
 Integration checks require `integration.use`, an enabled and unshadowed integration, and matching version/update time.
-Live namespace and schema probes use the caller's upstream identity before ranking and returning results.
+Live namespace and schema probes run only before returning results, using the caller's upstream identity.
+Ranking therefore admits table, namespace, and column documents without probes. `SearchService` cuts to `limit` before the final check, so a stale document can take a slot and shrink the response. This keeps upstream probes to one round per query.
+A failed probe drops only the documents that depend on it. Errors other than not-found also mark coverage partial.
 Indexed fields contain names, kinds, and column types. Configuration, credentials, and rows are excluded.
-Chat-owner filtering runs before source checks, but no chat source is registered.
 Budget exhaustion preserves validated results and marks coverage partial. Failed project reads and revoked final access also mark coverage incomplete.
 Coverage contains at most one entry per project/source.
 
 Keyword retrieval unions whole-token postings. Ranking weights title matches above body matches.
 Hybrid queries fuse lexical and cosine ranks using reciprocal rank fusion.
 Scores reflect local ranks, not calibrated relevance across projects or sources.
-A weak local first-place match can tie a strong match elsewhere. Scores are unstable API details: preserve response order and avoid numeric thresholds.
+A weak local first-place match can tie a strong match elsewhere. Responses omit scores; their order is the ranking.
 `rank.test.ts` fixes expected ordering for a small mixed-kind, multilingual corpus, exact tokens, ties, and vector compatibility.
 Expand this relevance set before changing weights or introducing global reranking.
 
+Hybrid retrieval adds the compatible embedded documents most similar to the query vector.
+Keyword and semantic candidates each keep at least half of the candidate budget; either side can use the other's unused share.
+Only dropped keyword candidates mark coverage partial.
 Candidate limits apply before resource authorization and scoring, so unauthorized candidates can reduce recall.
 Final checks can also reduce the result count; results are not refilled from lower-ranked candidates.
 Checks are not transactional across project, resource, and upstream state. A later revocation cannot retract a delivered response.
@@ -82,9 +87,10 @@ Each project/source head points to an immutable snapshot or retained deletion to
 These records sit outside project cleanup prefixes. The [bucket specification](./bucket_spec.md#search-indexes) defines their owners.
 
 Before crawling, the indexer claims a build identity on the head through CAS, preserving the previous snapshot.
-The identity contains a deployment revision, source revision, and configuration string (source options and notebook embedding identity).
-Neither numeric revision may decrease. Different configurations at equal revisions fail with a request to increase `MARIMOHUB_SEARCH_BUILD_REVISION`.
-This prevents mixed configurations from repeatedly replacing each other during a rollout.
+The identity contains a fixed format revision, the source revision, and a configuration string (source options and embedding identity).
+Neither numeric revision may decrease. At equal revisions, a different configuration replaces the claimed build and restarts the crawl.
+The maintenance lease admits one indexer at a time, so the newest configuration wins.
+During a rolling deployment, old and new processes can alternate claims until the rollout completes.
 
 The indexer stages immutable pages behind a CAS checkpoint containing the build identity and original head revision.
 A ready marker permits publication retries without repeating the final page.
@@ -94,6 +100,11 @@ If the next checkpoint exceeds this limit, the indexer drops the cursor and publ
 Oversized stored checkpoints restart without parsing their bodies; replacement still requires the stored ETag.
 Cleanup skips these checkpoints until the scheduled crawl replaces them.
 Publication writes the snapshot, then replaces the head only if that revision still matches.
+The head records a digest of the published documents and partial flag.
+If a completed crawl has the same digest, the indexer writes no snapshot. It CAS-updates the head's `verified_at` instead.
+Publication also sets `verified_at`; claiming a new build clears it.
+A visit within five minutes (`MIN_RECRAWL_INTERVAL_MS`) of `verified_at` returns without reading the source or writing pages or the checkpoint.
+The interval is below the 15-minute stale threshold, so skipped visits alone cannot make a scope stale.
 A losing publication CAS leaves the checkpoint untouched.
 Readers retain the previous snapshot throughout the crawl. A changed head or build identity resets the checkpoint before reading its source cursor.
 Unversioned checkpoints also restart. Superseded workers skip discovery; workers already in flight lose publication CAS.
@@ -124,7 +135,7 @@ Persistent deadline exhaustion can prevent publication. [Resumable assembly is d
 | ETags change with content; validated reads observe current state | Freshness and permission checks                                                       |
 | Stable resource IDs without reuse                                | Persisted references and deletion fences                                              |
 | Discovery identity can enumerate the intended catalog            | Caller checks can restrict results but cannot recover content absent from the index   |
-| Monotonic build/source revisions                                 | Rolling deployments cannot reclaim incompatible newer builds                          |
+| Monotonic source revisions                                       | Rolling deployments cannot reclaim incompatible newer builds                          |
 | Stable embedding endpoint/model identity                         | Changing model behavior requires a new identity to avoid reusing incompatible vectors |
 | Index storage receives the original content's access controls    | Snapshots copy potentially sensitive code and output text                             |
 
@@ -139,8 +150,9 @@ Embedding and catalog calls receive cancellation signals where supported.
 | Project/source snapshot   | 16 MiB and 20,000 documents                                                          |
 | Notebook artifacts        | 2 MiB per metadata, source, code, or output artifact                                 |
 | Indexed text              | 8,192 characters per hit type per resource                                           |
-| Cross-project discovery   | First 16 non-deleted catalog projects, selected before authorization                 |
-| Query concurrency         | Two projects or final-validation batches; eight notebook checks per batch            |
+| Cross-project discovery   | First 16 accessible projects within 128 scanned; more reports `projects` `truncated` |
+| Query concurrency         | Eight project checks during selection; two projects or final-validation batches      |
+| Notebook checks           | Eight per batch                                                                      |
 | Query deadline            | Three seconds: half for retrieval, half for final validation                         |
 | Candidates                | 200 per project/source, before authorization and ranking                             |
 | Results                   | At most 50, with snippets of at most 400 characters                                  |
@@ -150,17 +162,18 @@ Embedding and catalog calls receive cancellation signals where supported.
 | Crawl checkpoint          | 1,000 pages, 65,536 cursor characters, and 128 KiB of serialized checkpoint state    |
 | Concurrent snapshot loads | 64 distinct snapshots per adapter instance; duplicate loads share work               |
 | Index cache               | 64 MiB of estimated cache weight per process                                         |
-| Stale status              | Index timestamp older than 15 minutes                                                |
+| Re-crawl interval         | Five minutes after the last publication or verification                              |
+| Stale status              | Last publication or verification older than 15 minutes; does not set `partial`       |
 
 ## Tradeoffs and scalability
 
-| Design                                   | Benefit                                                                                   | Limit                                                                                 |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Immutable project/source snapshots       | Simple atomic publication and recovery                                                    | Cold reads load the whole snapshot; completed crawls rewrite it                       |
-| In-memory token postings                 | Warm queries avoid body scans                                                             | Each process rebuilds postings on cache misses                                        |
-| Live authorization and freshness checks  | Revocation and deletion do not depend on crawl lag                                        | Storage HEAD calls and catalog probes remain on the query path                        |
-| Bounded candidates and partial responses | Predictable request work; source failures remain isolated                                 | Broad queries can miss better or authorized matches                                   |
-| Optional embeddings with reuse           | Keyword search survives provider failures; unchanged text avoids repeated embedding calls | Crawling and snapshot writes remain; semantic retrieval has no nearest-neighbor index |
+| Design                                   | Benefit                                                                                   | Limit                                                                        |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Immutable project/source snapshots       | Simple atomic publication and recovery                                                    | Cold reads load the whole snapshot; changed crawls rewrite it                |
+| In-memory token postings                 | Warm queries avoid body scans                                                             | Each process rebuilds postings on cache misses                               |
+| Live authorization and freshness checks  | Revocation and deletion do not depend on crawl lag                                        | Storage HEAD calls and catalog probes remain on the query path               |
+| Bounded candidates and partial responses | Predictable request work; source failures remain isolated                                 | Broad queries can miss better or authorized matches                          |
+| Optional embeddings with reuse           | Keyword search survives provider failures; unchanged text avoids repeated embedding calls | Crawling remains; semantic retrieval scans every compatible vector per query |
 
 **Project scope.** Explicit project queries bypass global discovery, but still read the current index head.
 Cold retrieval loads the complete snapshot and builds all postings.
@@ -171,8 +184,11 @@ Temporary allocations and concurrent cold loads add memory. Duplicate cold reads
 Each caller can cancel its wait independently. Bucket reads cannot be canceled, so stalled loads retain their slots until they settle.
 The adapter admits at most 64 distinct loads. Saturation fails the source safely but does not establish concurrent-user capacity.
 
-**Cross-project scope.** Discovery selects the first 16 non-deleted catalog projects before authorization.
-Accessible projects later in catalog order can be omitted. Explicit project selection avoids this cap.
+**Cross-project scope.** Discovery checks non-deleted catalog projects in order, in batches of eight checked concurrently.
+It stops after the batch that finds a 17th readable project, or after 128 projects (`MAX_SEARCH_PROJECT_SCAN`).
+It searches the first 16 and reports `{ source: 'projects', status: 'truncated' }` when a 17th exists or unscanned projects remain.
+Callers with access to few projects in a large catalog can miss projects beyond the scan cap.
+Explicit project selection avoids this scan.
 Two projects run concurrently, with sources sequential within each project.
 Global catalog reads, full crawls, and cache churn remain scaling costs.
 
@@ -208,7 +224,8 @@ Even when each read succeeds, every 30-second attempt can fail on that corpus.
 Discovery, parsing, and publication consume additional time.
 
 Retries repeat completed page reads. The previous snapshot remains available subject to live authorization and freshness checks.
-Without a previous snapshot, search continues to report `not_indexed`. An existing snapshot reports `stale` after 15 minutes.
+Without a previous snapshot, search continues to report `not_indexed`. An existing snapshot reports `stale` after 15 minutes without publication or verification.
+Each pair is visited once per round-robin cycle of five-second attempts, so deployments with more than 180 project/source pairs can report `stale` between visits.
 Retrying alone does not resolve persistent deadline exhaustion.
 
 The follow-up is resumable compaction or an atomic manifest over immutable segments.
@@ -226,7 +243,7 @@ Higher concurrency or longer deadlines alone do not satisfy these criteria.
 
 ## Validation and performance
 
-Regression tests cover authorization races, private-owner filtering, freshness, cancellation, crawl recovery, CAS conflicts, tombstones, and corrupt storage.
+Regression tests cover authorization races, freshness, cancellation, crawl recovery, CAS conflicts, tombstones, and corrupt storage.
 Provider tests cover malformed vectors, oversized streams, repeated cursors, catalog limits, and upstream revocation.
 REST/MCP tests cover matching results, request rejection, and partial failures without provider error details.
 

@@ -45,18 +45,9 @@ async function setup() {
 	const index = new BucketSearchIndex(bucket);
 	const scope = { projectId: project.id, source: source.id };
 	const paths = searchPaths.scope(scope);
-	const indexer = (src = source, revision = 1) =>
-		new SearchIndexer(
-			bucket,
-			index,
-			[src],
-			services.catalog,
-			services.projects,
-			undefined,
-			revision,
-		);
-	const step = (src = source, revision = 1, abort = signal()) =>
-		indexer(src, revision).step(project.id, src, abort);
+	const indexer = (src = source) =>
+		new SearchIndexer(bucket, index, [src], services.catalog, services.projects, undefined, 0);
+	const step = (src = source, abort = signal()) => indexer(src).step(project.id, src, abort);
 	await step();
 	page.mockClear();
 	return { bucket, services, project, document, source, page, index, scope, paths, indexer, step };
@@ -204,15 +195,14 @@ describe('search lifecycle across deployments', () => {
 		expect((await f.index.read(f.scope, signal())).snapshot?.documents[0].id).toBe('new-build');
 		expect((await f.index.head(f.scope, signal())).build?.source_revision).toBe(2);
 	});
-	it('requires a monotonic deployment revision for configuration changes and rejects rollback', async () => {
+	it('rebuilds when the source configuration changes', async () => {
 		const f = await setup();
 		const source = { ...f.source, configuration: 'schema-discovery-enabled' };
-		await expect(f.step(source)).rejects.toThrow('MARIMOHUB_SEARCH_BUILD_REVISION');
-		await f.step(source, 2);
-		const published = await f.index.head(f.scope, signal());
-		await f.step();
-		expect(await f.index.head(f.scope, signal())).toEqual(published);
+		await f.step(source);
 		expect(f.page).toHaveBeenCalledTimes(1);
+		expect((await f.index.head(f.scope, signal())).build?.configuration).toContain(
+			'schema-discovery-enabled',
+		);
 	});
 	it('restarts unversioned checkpoints without interpreting their cursor', async () => {
 		const f = await setup();
@@ -258,8 +248,9 @@ describe('bounded remote page assembly', () => {
 			const start = Date.now();
 			const controller = new AbortController();
 			const timeout = setTimeout(() => controller.abort(), 30_000);
-			const pending = f.step(f.source, 1, controller.signal).finally(() => clearTimeout(timeout));
-			await vi.runAllTimersAsync();
+			const pending = f.step(f.source, controller.signal).finally(() => clearTimeout(timeout));
+			// Not runAllTimersAsync: the snapshot digest awaits real WebCrypto, so that would fire the abort.
+			await vi.advanceTimersByTimeAsync((count / 8) * 100);
 			expect(await pending).toBe(true);
 			expect(Date.now() - start).toBe((count / 8) * 100);
 			expect(peak).toBe(8);
@@ -289,7 +280,7 @@ describe('bounded remote page assembly', () => {
 		});
 		const controller = new AbortController();
 		setTimeout(() => controller.abort(), 30_000);
-		const pending = expect(f.step(f.source, 1, controller.signal)).rejects.toMatchObject({
+		const pending = expect(f.step(f.source, controller.signal)).rejects.toMatchObject({
 			name: 'AbortError',
 		});
 		await vi.runAllTimersAsync();
@@ -322,7 +313,7 @@ describe('bounded remote page assembly', () => {
 				if (failure === 'unavailable' && key === body.key) throw new Error('Storage unavailable');
 				return get(key);
 			});
-			const attempt = f.step(f.source, 1, controller.signal);
+			const attempt = f.step(f.source, controller.signal);
 			if (failure === 'missing') await expect(attempt).resolves.toBe(false);
 			else await expect(attempt).rejects.toThrow();
 			expect(

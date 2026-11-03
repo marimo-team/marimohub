@@ -15,24 +15,8 @@ import { ConfigError } from './errors';
 
 export function makeSearch(env: Env, deps: ApiDeps): ApiDeps['search'] {
 	const backend = parseEnumOr(env, 'MARIMOHUB_SEARCH_BACKEND', ['off', 'bucket'], 'off');
-	const apiKey = env.MARIMOHUB_SEARCH_EMBEDDING_API_KEY;
-	if (apiKey && !env.MARIMOHUB_SEARCH_EMBEDDING_URL && !env.MARIMOHUB_SEARCH_EMBEDDING_MODEL)
-		throw new ConfigError('Embedding API key requires an embedding URL and model', {
-			variable: 'MARIMOHUB_SEARCH_EMBEDDING_API_KEY',
-		});
 	if (backend === 'off') return undefined;
-	const revision = Number(env.MARIMOHUB_SEARCH_BUILD_REVISION ?? '1');
-	if (!Number.isSafeInteger(revision) || revision < 1)
-		throw new ConfigError('Search build revision must be a positive safe integer', {
-			variable: 'MARIMOHUB_SEARCH_BUILD_REVISION',
-		});
-	const endpoint = env.MARIMOHUB_SEARCH_EMBEDDING_URL;
-	const model = env.MARIMOHUB_SEARCH_EMBEDDING_MODEL;
-	if (Boolean(endpoint) !== Boolean(model))
-		throw new ConfigError('Embedding URL and model must be configured together', {
-			variable: 'MARIMOHUB_SEARCH_EMBEDDING_URL',
-		});
-	const embeddings = endpoint && model ? new HttpEmbeddings(endpoint, model, apiKey) : undefined;
+	const embeddings = makeEmbeddings(env);
 	const authz = new AuthorizationService(deps.policy, deps.resourceSecurity);
 	const { catalog, projects, notebooks } = deps.services;
 	const sources: SearchSource[] = [new NotebookSource(deps.bucket, catalog, notebooks, authz)];
@@ -41,14 +25,31 @@ export function makeSearch(env: Env, deps: ApiDeps): ApiDeps['search'] {
 	const index = new BucketSearchIndex(deps.bucket);
 	return {
 		service: new SearchService(index, sources, catalog, projects, authz, embeddings),
-		indexer: new SearchIndexer(
-			deps.bucket,
-			index,
-			sources,
-			catalog,
-			projects,
-			embeddings,
-			revision,
-		),
+		indexer: new SearchIndexer(deps.bucket, index, sources, catalog, projects, embeddings),
 	};
+}
+
+function makeEmbeddings(env: Env): HttpEmbeddings | undefined {
+	const endpoint = env.MARIMOHUB_SEARCH_EMBEDDING_URL;
+	const model = env.MARIMOHUB_SEARCH_EMBEDDING_MODEL;
+	const apiKey = env.MARIMOHUB_SEARCH_EMBEDDING_API_KEY;
+	if (apiKey && !endpoint && !model)
+		throw new ConfigError('Embedding API key requires an embedding URL and model', {
+			variable: 'MARIMOHUB_SEARCH_EMBEDDING_API_KEY',
+		});
+	if (Boolean(endpoint) !== Boolean(model))
+		throw new ConfigError('Embedding URL and model must be configured together', {
+			variable: 'MARIMOHUB_SEARCH_EMBEDDING_URL',
+		});
+	if (!endpoint || !model) return undefined;
+	try {
+		return new HttpEmbeddings(endpoint, model, apiKey);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : 'Invalid embedding endpoint';
+		if (message === 'Embedding identity exceeds budget')
+			throw new ConfigError(
+				'MARIMOHUB_SEARCH_EMBEDDING_URL and MARIMOHUB_SEARCH_EMBEDDING_MODEL together exceed the 512-character embedding identity budget',
+			);
+		throw new ConfigError(message, { variable: 'MARIMOHUB_SEARCH_EMBEDDING_URL' });
+	}
 }

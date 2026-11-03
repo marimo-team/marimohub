@@ -5380,8 +5380,8 @@
 			"accepts_idempotency_key": false
 		},
 		{
-			"id": "search.workspace",
-			"command": ["search", "workspace"],
+			"id": "search.query",
+			"command": ["search", "query"],
 			"method": "GET",
 			"path": "/api/v1/search",
 			"summary": "Search accessible projects and resources",
@@ -5391,6 +5391,7 @@
 					"cli_name": "kinds",
 					"in": "query",
 					"required": false,
+					"description": "Comma-separated result kinds to include. Values: notebook, code, output, datasource, namespace, table, column.",
 					"value_type": "string",
 					"repeatable": false
 				},
@@ -6102,91 +6103,6 @@
 						"cli_name": "size",
 						"required": true,
 						"value_type": "integer",
-						"repeatable": false
-					}
-				]
-			},
-			"destructive": false,
-			"paginated": false,
-			"response_kind": "json",
-			"accepts_if_match": false,
-			"accepts_idempotency_key": false
-		},
-		{
-			"id": "support.diagnostics",
-			"command": ["support", "diagnostics"],
-			"method": "POST",
-			"path": "/api/v1/support/diagnostics",
-			"summary": "Preview support diagnostics for the signed-in user",
-			"parameters": [],
-			"body": {
-				"required": false,
-				"properties": [
-					{
-						"name": "client",
-						"cli_name": "client",
-						"required": true,
-						"value_type": "object",
-						"repeatable": false
-					},
-					{
-						"name": "page_url",
-						"cli_name": "page-url",
-						"required": true,
-						"value_type": "string",
-						"repeatable": false
-					},
-					{
-						"name": "session",
-						"cli_name": "session",
-						"required": false,
-						"value_type": "object",
-						"repeatable": false
-					}
-				]
-			},
-			"destructive": false,
-			"paginated": false,
-			"response_kind": "json",
-			"accepts_if_match": false,
-			"accepts_idempotency_key": false
-		},
-		{
-			"id": "support.request",
-			"command": ["support", "request"],
-			"method": "POST",
-			"path": "/api/v1/support/requests",
-			"summary": "Send a support request to the deployment notifier",
-			"parameters": [],
-			"body": {
-				"required": false,
-				"properties": [
-					{
-						"name": "client",
-						"cli_name": "client",
-						"required": true,
-						"value_type": "object",
-						"repeatable": false
-					},
-					{
-						"name": "message",
-						"cli_name": "message",
-						"required": true,
-						"value_type": "string",
-						"repeatable": false
-					},
-					{
-						"name": "page_url",
-						"cli_name": "page-url",
-						"required": true,
-						"value_type": "string",
-						"repeatable": false
-					},
-					{
-						"name": "session",
-						"cli_name": "session",
-						"required": false,
-						"value_type": "object",
 						"repeatable": false
 					}
 				]

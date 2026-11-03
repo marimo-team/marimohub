@@ -9,9 +9,9 @@ import {
 } from '@marimo-hub/notebook-bridge/query';
 export { notebookQueryParams, shareableNotebookQuery } from '@marimo-hub/notebook-bridge/query';
 
-export function notebookAppUrl(projectId: string, notebookId: string, search: string): string {
+export function notebookAppUrl(projectId: string, notebookId: string, search = ''): string {
 	const query = shareableNotebookQuery(search).toString();
-	return `/projects/${projectId}/notebooks/${notebookId}/app${query ? `?${query}` : ''}`;
+	return `/projects/${encodeURIComponent(projectId)}/notebooks/${encodeURIComponent(notebookId)}/app${query ? `?${query}` : ''}`;
 }
 
 export function trustedSandboxKeys(sandboxUrl: string): string[] {

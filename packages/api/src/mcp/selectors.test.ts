@@ -12,8 +12,9 @@ import {
 import type { AuthenticatedPrincipal, JobDefinition, Project, TokenGrant } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { localResourceSecurity } from '@marimo-hub/core/testing';
-import { CallToolResultSchema, JSONRPCMessageSchema } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { makeTestDeps } from '../testing';
+import { postMcp, readMcpResult } from '../testing/mcp';
 import { createApi } from '../createApi';
 import { resolveNotebook, resolveProject } from './selectors';
 
@@ -77,27 +78,12 @@ async function readRun(job: JobDefinition, reference: string) {
 
 async function callTool(name: string, args: Record<string, unknown>, principal = USER) {
 	deps.authenticator = { authenticate: async () => principal };
-	const response = await createApi(deps).request('/mcp', {
-		method: 'POST',
-		headers: {
-			Authorization: 'Bearer test',
-			'Content-Type': 'application/json',
-			Accept: 'application/json, text/event-stream',
-		},
-		body: JSON.stringify({
-			jsonrpc: '2.0',
-			id: 1,
-			method: 'tools/call',
-			params: { name, arguments: args },
-		}),
-	});
-	const messages = (await response.text())
-		.split('\n')
-		.filter((line) => line.startsWith('data: '))
-		.map((line) => JSONRPCMessageSchema.parse(JSON.parse(line.slice(6))));
-	const message = messages.find((item) => 'result' in item);
-	if (!message || !('result' in message)) throw new Error('Missing MCP response');
-	return CallToolResultSchema.parse(message.result);
+	const response = await postMcp(
+		createApi(deps),
+		{ method: 'tools/call', params: { name, arguments: args } },
+		{ Authorization: 'Bearer test' },
+	);
+	return CallToolResultSchema.parse(await readMcpResult(response));
 }
 
 describe('ID-shaped project names', () => {

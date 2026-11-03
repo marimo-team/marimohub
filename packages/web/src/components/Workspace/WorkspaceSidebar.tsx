@@ -1,36 +1,20 @@
-import { searchPath } from '@/lib/workspaceSearch';
+import { SEARCH_ROUTE, searchPath } from '@/lib/workspaceSearch';
 import { isAppleKeyboard } from '@/lib/keyboard';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from 'react-router-dom';
-import {
-	CalendarClock,
-	ArrowLeft,
-	Database,
-	MessageSquare,
-	Notebook,
-	Search,
-	Shield,
-} from 'lucide-react';
-import { projectQueryOptions, useCapabilitiesQuery, useProjectsQuery } from '@/api/hooks';
-import { useAuth } from '@/context/AuthContext';
+import { CalendarClock, ArrowLeft, Database, Notebook, Search, Shield } from 'lucide-react';
+import { projectQueryOptions, useProjectsQuery } from '@/api/hooks';
+import { useSearchAccess } from '@/hooks/useSearchAccess';
 import { ProjectPicker } from './ProjectPicker';
 import { ProjectSettingsNavigation } from './ProjectSettingsNavigation';
 import { SidebarLink } from './SidebarLink';
 import { Button } from '@/components/ui';
-import { canEditProject } from '@/lib/roles';
+import { canEditProject, canReadProjectSource } from '@/lib/roles';
 import { workspaceRoute } from './navigation';
-import type { WorkspaceNavigationSlots } from './navigation';
 
-export function WorkspaceSidebar({
-	onNavigate,
-	slots = {},
-}: {
-	onNavigate?: () => void;
-	slots?: WorkspaceNavigationSlots;
-}) {
-	const { user } = useAuth();
+export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void }) {
+	const { user, allowed: enabled, available: searchAvailable, capabilities } = useSearchAccess();
 	const location = useLocation();
-	const enabled = Boolean(user && !user.app_only);
 	const { pid, section } = workspaceRoute(location.pathname);
 	const projects = useProjectsQuery({ status: 'active' }, { enabled, throwOnError: false });
 	const selectedProject = useQuery({
@@ -38,23 +22,22 @@ export function WorkspaceSidebar({
 		enabled: enabled && Boolean(pid),
 		throwOnError: false,
 	});
-	const { data: capabilities } = useCapabilitiesQuery(enabled);
 	if (!enabled) return null;
 	const project = selectedProject.isError ? undefined : selectedProject.data;
-	const canRead = Boolean(project?.your_role && project.your_role !== 'app-user');
+	const canRead = canReadProjectSource(project?.your_role);
 	const projectPath = pid ? `/projects/${encodeURIComponent(pid)}` : '';
 	const linkProps = { onNavigate };
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto overscroll-contain p-3 text-sidebar-foreground">
-			{slots.search?.available && slots.search.allowed ? (
+			{searchAvailable ? (
 				<SidebarLink
 					{...linkProps}
 					label="Search"
 					shortcut={isAppleKeyboard() ? '⌘ K' : 'Ctrl K'}
-					to={slots.search.to}
+					to={SEARCH_ROUTE}
 					icon={Search}
-					active={location.pathname === slots.search.to.split('?')[0]}
+					active={location.pathname === SEARCH_ROUTE}
 				/>
 			) : null}
 			<div className="space-y-2">
@@ -77,22 +60,13 @@ export function WorkspaceSidebar({
 			</div>
 			{canRead ? (
 				<nav aria-label="Project" className="space-y-1">
-					{slots.search?.available && slots.search.allowed ? (
+					{searchAvailable ? (
 						<SidebarLink
 							{...linkProps}
 							label="Search project"
 							to={searchPath(pid)}
 							icon={Search}
 							active={section === 'search'}
-						/>
-					) : null}
-					{slots.chat?.available && slots.chat.allowed ? (
-						<SidebarLink
-							{...linkProps}
-							label="Chat"
-							to={slots.chat.to}
-							icon={MessageSquare}
-							active={section === 'chat'}
 						/>
 					) : null}
 					<SidebarLink
@@ -102,7 +76,8 @@ export function WorkspaceSidebar({
 						icon={Notebook}
 						active={section === 'notebooks'}
 					/>
-					{capabilities?.data_browser?.available && canEditProject(project?.your_role ?? null) ? (
+					{capabilities.data?.data_browser?.available &&
+					canEditProject(project?.your_role ?? null) ? (
 						<SidebarLink
 							{...linkProps}
 							label="Data"
@@ -111,7 +86,7 @@ export function WorkspaceSidebar({
 							active={section === 'data'}
 						/>
 					) : null}
-					{capabilities?.jobs?.available ? (
+					{capabilities.data?.jobs?.available ? (
 						<SidebarLink
 							{...linkProps}
 							label="Jobs"

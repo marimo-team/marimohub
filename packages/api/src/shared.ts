@@ -1,5 +1,4 @@
-import { SearchKindSchema } from '@marimo-hub/core/search';
-import { SupportModeSchema } from '@marimo-hub/core/support';
+import { SEARCH_KINDS } from '@marimo-hub/core/search';
 import { OpenAPIHono, z } from '@hono/zod-openapi';
 import type { Context, TypedResponse } from 'hono';
 import { all } from 'better-all';
@@ -62,6 +61,7 @@ import type {
 	TokenGrant,
 	JobRun,
 	UserId,
+	AuthenticatedPrincipal,
 } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { describeError, logEvent } from './log';
@@ -80,6 +80,11 @@ export function resolvePublicBaseUrl(c: Context<HonoEnv>, configured?: string): 
 			: requestUrl.protocol.slice(0, -1);
 	const host = c.req.header('host') ?? requestUrl.host;
 	return new URL(`${protocol}://${host}`).origin;
+}
+
+/** Manual MCP tokens are bound to the MCP resource; every other bearer-authenticated surface rejects them. */
+export function rejectsMcpOnlyCredential(principal: AuthenticatedPrincipal): boolean {
+	return principal.credential.mcpResource !== undefined;
 }
 
 export function extensibleResponseEnum<const Values extends readonly [string, ...string[]]>(
@@ -1576,7 +1581,11 @@ export const DeploymentInfoResponseSchema = z
  */
 export const CapabilitiesResponseSchema = z
 	.object({
-		support: z.object({ mode: SupportModeSchema }),
+		support: z.object({
+			reports: z.boolean().openapi({
+				description: 'Users can send problem reports to the deployment notifier.',
+			}),
+		}),
 		project_notebook_target: z.enum(['notebook', 'app']).openapi({
 			description:
 				'Destination for project notebook links. Users without app permission open the notebook page.',
@@ -1637,7 +1646,7 @@ export const CapabilitiesResponseSchema = z
 		search: z.object({
 			available: z.boolean(),
 			semantic: z.boolean(),
-			kinds: z.array(SearchKindSchema),
+			kinds: z.array(extensibleResponseEnum(SEARCH_KINDS, 'notebook')),
 		}),
 		/** Read-only data browsing over integrations; `preview` gates row preview. */
 		data_browser: z.object({

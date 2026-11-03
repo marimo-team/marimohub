@@ -100,7 +100,8 @@ import { useDisclosure } from '@/hooks/useDisclosure';
 import { useListFilters } from '@/hooks/useListFilters';
 import { syncUrl } from '@/lib/links';
 import { sessionConnectionHint, sessionsByNotebook } from '@/lib/sessions';
-import { canEditProject, canManageProject } from '@/lib/roles';
+import { canEditProject, canManageProject, canUseApps } from '@/lib/roles';
+import { notebookAppUrl } from '@/lib/notebookUrls';
 import type { DropdownMenuOption } from '@/components/ui';
 import type { NotebookEntry, Session } from '@/types';
 
@@ -251,7 +252,7 @@ function useProjectContent() {
 	// Per-session actions render from the server-evaluated `session.can` grants.
 	// Start has no session to carry grants, so it derives from the evaluated
 	// admission row in capabilities. The server enforces all of it regardless.
-	const canStartApps = canEdit || (capabilities?.viewer_session_modes ?? []).includes('app');
+	const canStartApps = canUseApps(project.your_role, capabilities);
 
 	const openNotebooksAsApps = capabilities?.project_notebook_target === 'app' && canStartApps;
 
@@ -498,9 +499,7 @@ function useProjectContent() {
 		else if (key === 'stop-kernel' && stoppableEdit)
 			stopModal.open({ notebook: nb, session: stoppableEdit });
 		else if (key === 'run-app' || key === 'open-app')
-			void navigate(`/projects/${pid}/notebooks/${nb.id}/app`, {
-				state: { title: nb.title },
-			});
+			void navigate(notebookAppUrl(pid!, nb.id), { state: { title: nb.title } });
 		else if (key === 'stop-app') {
 			const apps = sessionByNotebook.get(nb.id)?.apps;
 			const app = apps?.length === 1 ? apps[0] : undefined;
@@ -715,7 +714,7 @@ function useProjectContent() {
 			/>
 
 			<ListResults
-				contained={false}
+				contained={gallery}
 				gallery={gallery}
 				count={notebooks.length}
 				emptyState={
@@ -760,7 +759,7 @@ function useProjectContent() {
 							notebook: nb,
 							user: users?.[nb.author],
 							usersLoading,
-							to: openNotebooksAsApps ? `${notebookPath}/app` : notebookPath,
+							to: openNotebooksAsApps ? notebookAppUrl(pid!, nb.id) : notebookPath,
 							leading:
 								nb.status === 'deleted' ? undefined : nb.source_type === 'git' ? (
 									<GitSourcePopover

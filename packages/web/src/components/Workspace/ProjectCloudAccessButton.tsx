@@ -1,8 +1,8 @@
 import { Cloud } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCapabilitiesQuery, useUpdateProject } from '@/api/hooks';
-import { ProjectCloudAccessDialog } from '@/components/Project/ProjectEnvironmentDialog';
-import type { CloudAccessSetting } from '@/components/Project/ProjectEnvironmentDialog';
+import { ProjectCloudAccessDialog } from '@/components/Project/ProjectCloudAccessDialog';
+import type { CloudAccessSetting } from '@/components/Project/ProjectCloudAccessDialog';
 import { Button } from '@/components/ui';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import type { ProjectDetail } from '@/types';

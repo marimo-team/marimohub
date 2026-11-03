@@ -131,7 +131,8 @@ several run maintenance.
 | `search_indexing`     | 5 s                                                       | `_system/search/lock.json`        | Search is configured          |
 | `preview_preparation` | 15 s                                                      | None                              | Source control is configured  |
 
-Search indexing has a 30-second deadline. Other attempts have a deadline of
+Search indexing has a 30-second deadline; [Search](./search.md) covers its
+configuration and index freshness. Other attempts have a deadline of
 `max(3 × interval, 10 min)`, covering lease
 acquisition, the work, and lease release. When an attempt passes its deadline,
 the runner aborts it, logs `<loop>_stalled` (`level: error`, with `holder`,

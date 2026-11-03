@@ -7,6 +7,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { installMatchMedia } from '@/test/render';
 import { NotebookPage } from './NotebookPage';
 import { ThemeProvider } from '@/context/ThemeContext';
+import { BrandingContext } from '@/context/BrandingContext';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
+import type { ThemeConfig } from '@marimo-hub/core/theme';
 import type { ProjectDetail, Session } from '@/types';
 
 export const PID = 'proj-x';
@@ -402,7 +405,11 @@ export function makeFetch(opts: FetchOptions) {
 
 export function renderPage(
 	variant: 'edit' | 'app' = 'edit',
-	{ search = '', controls }: { search?: string; controls?: ReactNode } = {},
+	{
+		search = '',
+		controls,
+		branding,
+	}: { search?: string; controls?: ReactNode; branding?: Partial<ThemeConfig> } = {},
 ) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const path =
@@ -411,12 +418,14 @@ export function renderPage(
 			: `/projects/${PID}/notebooks/${NID}`;
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<MemoryRouter initialEntries={[`${path}${search}`]}>
-			<QueryClientProvider client={client}>
-				<ThemeProvider>
-					{controls}
-					<Suspense fallback={<div>loading</div>}>{children}</Suspense>
-				</ThemeProvider>
-			</QueryClientProvider>
+			<BrandingContext value={{ ...DEFAULT_THEME_CONFIG, ...branding }}>
+				<QueryClientProvider client={client}>
+					<ThemeProvider>
+						{controls}
+						<Suspense fallback={<div>loading</div>}>{children}</Suspense>
+					</ThemeProvider>
+				</QueryClientProvider>
+			</BrandingContext>
 		</MemoryRouter>
 	);
 	const view = render(

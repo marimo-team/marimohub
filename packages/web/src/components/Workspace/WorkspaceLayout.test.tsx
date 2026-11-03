@@ -3,12 +3,11 @@ import type { ThemeConfig } from '@marimo-hub/core/theme';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { AuthProvider } from '@/context/AuthContext';
-import { ThemeProvider } from '@/context/ThemeContext';
-import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { renderWorkspace, stubApi } from '@/test/apiStub';
+import { jsonError } from '@/test/render';
+import type { ProjectRole } from '@/types';
 import { lastProjectKey } from './lastProject';
 import { WorkspaceLayout } from './WorkspaceLayout';
-import type { WorkspaceNavigationSlots } from './navigation';
 
 function Page() {
 	const location = useLocation();
@@ -29,84 +28,64 @@ function setup({
 	jobs = true,
 	data = true,
 	alerts = true,
+	search = false,
 	projectError = false,
 	listError = false,
-	slots,
 	branding,
 }: {
 	route?: string | string[];
-	role?: string | null;
+	role?: ProjectRole | null;
 	appOnly?: boolean;
 	mobile?: boolean;
 	jobs?: boolean;
 	data?: boolean;
 	alerts?: boolean;
+	search?: boolean;
 	projectError?: boolean;
 	listError?: boolean;
-	slots?: WorkspaceNavigationSlots;
 	branding?: Partial<ThemeConfig>;
 } = {}) {
-	installMatchMedia(mobile);
-	const requests: string[] = [];
-	vi.stubGlobal(
-		'fetch',
-		vi.fn(async (input: RequestInfo | URL) => {
-			const url = new URL(String(input), 'http://localhost');
-			requests.push(url.pathname + url.search);
-			if (url.pathname === '/api/v1/me')
-				return jsonOk({
-					id: 'u',
-					email: 'user@example.com',
-					app_only: appOnly,
-					can_create_projects: false,
-					is_super_admin: false,
-					groups: [],
-				});
-			if (url.pathname === '/api/v1/capabilities')
-				return jsonOk({
-					jobs: { available: jobs },
-					data_browser: { available: data },
-					federation: { available: false, default_enabled: false },
-					project_groups: { available: false },
-					project_alerts: { available: alerts, selectable_kinds: [], max_destinations: 5 },
-				});
-			if (url.pathname === '/api/v1/version') return jsonOk({ version: 'test' });
-			if (url.pathname.endsWith('/members')) return jsonOk([]);
-			if (url.pathname.endsWith('/alert-destinations')) return jsonOk({ items: [] });
-			if (url.pathname === '/api/v1/users') return jsonOk({});
-			if (url.pathname === '/api/v1/projects') {
-				if (listError) return jsonError('UNAVAILABLE', 'Unavailable', 503);
-				return jsonOk(
-					url.searchParams.has('cursor')
+	const { requests } = stubApi(
+		{
+			'/api/v1/version': { version: 'test' },
+			'/api/v1/users': {},
+			'/api/v1/projects': ({ url }) =>
+				listError
+					? jsonError('UNAVAILABLE', 'Unavailable', 503)
+					: url.searchParams.has('cursor')
 						? { items: [{ id: 'beta', name: 'Beta' }], next_cursor: null }
 						: { items: [{ id: 'alpha', name: 'Alpha' }], next_cursor: 'next' },
-				);
-			}
-			if (url.pathname.startsWith('/api/v1/projects/')) {
+			'/api/v1/projects/': ({ url }) => {
+				if (url.pathname.endsWith('/members')) return [];
+				if (url.pathname.endsWith('/alert-destinations')) return { items: [] };
 				if (projectError) return jsonError('FORBIDDEN', 'Forbidden', 403);
 				const id = url.pathname.split('/').at(-1);
-				return jsonOk({
+				return {
 					id,
 					name: id === 'alpha' ? 'Alpha' : id === 'beta' ? 'Beta' : 'Archived project',
 					owner: 'u',
 					members: [],
 					default_role: 'inherit',
 					your_role: role,
-				});
-			}
-			throw new Error(`Unexpected request: ${url}`);
-		}),
+				};
+			},
+		},
+		{
+			me: { app_only: appOnly },
+			capabilities: {
+				jobs: { available: jobs },
+				data_browser: { available: data },
+				search: { available: search },
+				project_alerts: { available: alerts },
+			},
+		},
 	);
 	const user = userEvent.setup();
-	const rendered = renderWithClient(
-		<ThemeProvider>
-			<AuthProvider>
-				<WorkspaceLayout slots={slots}>
-					<Page />
-				</WorkspaceLayout>
-			</AuthProvider>
-		</ThemeProvider>,
-		{ route, toaster: false, branding },
+	const rendered = renderWorkspace(
+		<WorkspaceLayout>
+			<Page />
+		</WorkspaceLayout>,
+		{ route, mobile, branding },
 	);
 	return { user, requests, ...rendered };
 }
@@ -155,10 +134,7 @@ describe('Workspace navigation', () => {
 	);
 
 	it('shows global and project search with separate active states', async () => {
-		setup({
-			route: '/projects/alpha/search',
-			slots: { search: { available: true, allowed: true, to: '/search' } },
-		});
+		setup({ route: '/projects/alpha/search', search: true });
 		expect(await screen.findByRole('link', { name: 'Search project' })).toHaveAttribute(
 			'aria-current',
 			'page',
@@ -215,19 +191,23 @@ describe('Workspace navigation', () => {
 		expect(await screen.findByRole('button', { name: /Archived project/ })).toBeVisible();
 	});
 
-	it.each(['viewer', 'app-user', null])('gates project navigation for role %s', async (role) => {
-		const { requests } = setup({ role });
-		await waitFor(() => expect(requests).toContain('/api/v1/projects/alpha'));
-		await screen.findByRole('button', { name: /Alpha/ });
-		expect(screen.queryByRole('link', { name: 'Data' })).not.toBeInTheDocument();
-		if (role === 'viewer') expect(await screen.findByRole('link', { name: 'Jobs' })).toBeVisible();
-		else {
-			expect(screen.queryByRole('navigation', { name: 'Project' })).not.toBeInTheDocument();
-			expect(
-				screen.queryByRole('navigation', { name: 'Project settings' }),
-			).not.toBeInTheDocument();
-		}
-	});
+	it.each(['viewer', 'app-user', null] as const)(
+		'gates project navigation for role %s',
+		async (role) => {
+			const { requests } = setup({ role });
+			await waitFor(() => expect(requests).toContain('/api/v1/projects/alpha'));
+			await screen.findByRole('button', { name: /Alpha/ });
+			expect(screen.queryByRole('link', { name: 'Data' })).not.toBeInTheDocument();
+			if (role === 'viewer')
+				expect(await screen.findByRole('link', { name: 'Jobs' })).toBeVisible();
+			else {
+				expect(screen.queryByRole('navigation', { name: 'Project' })).not.toBeInTheDocument();
+				expect(
+					screen.queryByRole('navigation', { name: 'Project settings' }),
+				).not.toBeInTheDocument();
+			}
+		},
+	);
 
 	it('remembers validated direct links without opening the mobile drawer', async () => {
 		setup({ route: '/projects/beta/data', mobile: true });
@@ -280,10 +260,10 @@ describe('Workspace navigation', () => {
 		},
 	);
 
-	it('hides unavailable capabilities and unregistered slots', async () => {
+	it('hides unavailable capabilities', async () => {
 		setup({ jobs: false, data: false });
 		await screen.findByRole('link', { name: 'Notebooks' });
-		for (const name of ['Data', 'Jobs', 'Chat', 'Search'])
+		for (const name of ['Data', 'Jobs', 'Search', 'Search project'])
 			expect(screen.queryByRole('link', { name })).not.toBeInTheDocument();
 	});
 
@@ -357,26 +337,23 @@ describe('Workspace navigation', () => {
 		else expect(within(settings).queryByRole('button', { name: 'Alerts' })).not.toBeInTheDocument();
 	});
 
-	it.each([
-		[false, true],
-		[true, false],
-		[true, true],
-	])(
-		'requires availability=%s and permission=%s for optional destinations',
-		async (available, allowed) => {
-			setup({
-				slots: {
-					search: { to: '/search', available, allowed },
-					chat: { to: '/projects/alpha/chat', available, allowed },
-				},
-			});
-			await screen.findByRole('link', { name: 'Notebooks' });
-			for (const name of ['Search', 'Chat']) {
-				if (available && allowed) expect(screen.getByRole('link', { name })).toBeVisible();
-				else expect(screen.queryByRole('link', { name })).not.toBeInTheDocument();
-			}
-		},
-	);
+	it.each([false, true])('shows search only when the deployment offers it (%s)', async (search) => {
+		setup({ search });
+		await screen.findByRole('link', { name: 'Notebooks' });
+		for (const name of ['Search', 'Search project']) {
+			if (search) expect(screen.getByRole('link', { name })).toBeVisible();
+			else expect(screen.queryByRole('link', { name })).not.toBeInTheDocument();
+		}
+	});
+
+	it('points the drawer trigger at the drawer only while it is open', async () => {
+		const { user } = setup({ mobile: true });
+		const trigger = await screen.findByRole('button', { name: 'Open navigation' });
+		expect(trigger).not.toHaveAttribute('aria-controls');
+		await user.click(trigger);
+		expect(trigger).toHaveAttribute('aria-controls', 'workspace-navigation');
+		expect(document.getElementById('workspace-navigation')).toBeInTheDocument();
+	});
 
 	it('leaves global links available when project requests fail', async () => {
 		setup({ projectError: true, listError: true });

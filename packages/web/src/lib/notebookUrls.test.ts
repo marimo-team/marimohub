@@ -15,6 +15,11 @@ describe('notebook URLs', () => {
 		},
 	);
 
+	it('encodes project and notebook ids as single path segments', () => {
+		expect(notebookAppUrl('a/b', 'nb?#1')).toBe('/projects/a%2Fb/notebooks/nb%3F%231/app');
+		expect(notebookAppUrl('proj-1', 'nb-1')).toBe('/projects/proj-1/notebooks/nb-1/app');
+	});
+
 	it('preserves app inputs and a saved path while removing reserved parameters', () => {
 		const url = new URL(
 			notebookAppUrl(

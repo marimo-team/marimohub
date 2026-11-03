@@ -120,7 +120,7 @@ describe('Search page', () => {
 			expect(screen.queryByRole('searchbox')).not.toBeInTheDocument();
 		},
 	);
-	it.each(['kind=invalid', 'kind=chat', 'mode=unknown', `q=${'x'.repeat(257)}`])(
+	it.each(['kind=invalid', 'mode=unknown', `q=${'x'.repeat(257)}`])(
 		'rejects invalid URL filters instead of silently broadening search (%s)',
 		async (filter) => {
 			const { searches } = setup({

@@ -51,6 +51,21 @@ const CreateScopedTokenBodySchema = CreateTokenBodySchema.extend({
 	grant: TokenGrantSchema,
 });
 
+const MCP_TOKEN_LIFETIME_DAYS_MAX = 90;
+
+// Same cap as OAuth MCP tokens (`OAUTH_TOKEN_LIFETIME_DAYS_MAX`).
+const CreateMcpTokenBodySchema = CreateScopedTokenBodySchema.extend({
+	expires_in_days: z
+		.number()
+		.int()
+		.min(1)
+		.max(MCP_TOKEN_LIFETIME_DAYS_MAX)
+		.openapi({
+			description: `Days until expiry, at most ${MCP_TOKEN_LIFETIME_DAYS_MAX}.`,
+			example: 30,
+		}),
+});
+
 const TokenIdParam = z.object({
 	tokenId: z
 		.string()
@@ -111,10 +126,11 @@ const createMcpToken = createRoute({
 	tags: ['Auth'],
 	summary: 'Create a manual MCP token',
 	description:
-		'Mint a scoped token bound to this deployment’s MCP URL. Requires session authentication ' +
-		'and MARIMOHUB_MCP_MANUAL_TOKENS=on. The plaintext token is returned only once.',
+		'Mint a scoped token bound to this deployment’s MCP URL. It authenticates only to MCP, not ' +
+		'the REST API, and expires in at most 90 days. Requires session authentication and ' +
+		'MARIMOHUB_MCP_MANUAL_TOKENS=on. The plaintext token is returned only once.',
 	security: SESSION_ONLY_SECURITY,
-	request: { body: jsonBody(CreateScopedTokenBodySchema) },
+	request: { body: jsonBody(CreateMcpTokenBodySchema) },
 	responses: {
 		201: jsonContent(
 			z.object({ success: z.literal(true), data: TokenCreatedResponseSchema }),

@@ -5,6 +5,7 @@ import { externalTokenGrant } from '@marimo-hub/core/token-grants';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { createApi } from '../createApi';
 import { makeTestDeps } from '../testing';
+import { postMcp, readMcpResult } from '../testing/mcp';
 
 const publicBaseUrl = 'https://hub.example.com/hub';
 const scopes = ['mcp:tools', 'marimohub:read'];
@@ -25,30 +26,18 @@ let deps: ReturnType<typeof makeTestDeps>;
 let app: ReturnType<typeof createApi>;
 
 function listCatalog() {
-	return app.request('/mcp', {
-		method: 'POST',
-		headers: {
-			Authorization: 'Bearer external',
-			'Content-Type': 'application/json',
-			Accept: 'application/json, text/event-stream',
-		},
-		body: JSON.stringify({
-			jsonrpc: '2.0',
-			id: 1,
-			method: 'tools/call',
-			params: { name: 'list_catalog', arguments: {} },
-		}),
-	});
+	return postMcp(
+		app,
+		{ method: 'tools/call', params: { name: 'list_catalog', arguments: {} } },
+		{ Authorization: 'Bearer external' },
+	);
 }
 async function expectCatalog(
 	response: Response,
 	projects: { name: string; notebooks: never[] }[] = [],
 ) {
 	expect(response.status).toBe(200);
-	const text = await response.text();
-	expect(JSON.parse(/^data: (.+)$/m.exec(text)?.[1] ?? text)).toMatchObject({
-		result: { structuredContent: { projects } },
-	});
+	expect(await readMcpResult(response)).toMatchObject({ structuredContent: { projects } });
 }
 
 beforeEach(() => {

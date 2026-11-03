@@ -1512,11 +1512,14 @@ app.openapi(syncSourceNow, async (c) => {
 	const { pid, nid } = c.req.valid('param');
 	const project = await assertProjectRole(projects, pid, user, 'notebook.write', deps);
 	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
-	const outcome = await syncSourceManually(deps, project, nid, user, {
-		requestId: c.get('requestId'),
-		method: c.req.method,
-		path: c.req.path,
-	});
+	const outcome = await syncSourceManually(
+		deps,
+		project,
+		nid,
+		user,
+		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path },
+		c.req.raw.signal,
+	);
 	return c.json({ success: true, data: outcome }, 200);
 });
 

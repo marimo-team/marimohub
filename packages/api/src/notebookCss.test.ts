@@ -4,13 +4,18 @@ import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
 import { UnavailableError } from '@marimo-hub/core/errors';
 
 afterEach(() => vi.unstubAllGlobals());
+function css(body: BodyInit | null, init: ResponseInit = {}): Response {
+	const headers = new Headers(init.headers);
+	headers.set('content-type', 'text/css; charset=utf-8');
+	return new Response(body, { ...init, headers });
+}
 it('coalesces requests, reuses fresh CSS, and revalidates with its ETag', async () => {
 	let now = 0;
 	const fetch = vi
 		.fn()
-		.mockResolvedValueOnce(new Response('body {}', { headers: { ETag: 'v1' } }))
+		.mockResolvedValueOnce(css('body {}', { headers: { ETag: 'v1' } }))
 		.mockResolvedValueOnce(new Response(null, { status: 304 }))
-		.mockResolvedValueOnce(new Response('body {color:red}', { headers: { ETag: 'v2' } }));
+		.mockResolvedValueOnce(css('body {color:red}', { headers: { ETag: 'v2' } }));
 	vi.stubGlobal('fetch', fetch);
 	const cache = new NotebookCssCache(() => now);
 	expect(
@@ -28,15 +33,14 @@ it('coalesces requests, reuses fresh CSS, and revalidates with its ETag', async 
 	expect(await cache.get('https://example.com/a.css')).toBe('body {color:red}');
 });
 it.each([
-	new Response('x'.repeat(65537)),
-	new Response('é'.repeat(32769)),
-	new Response('no', { status: 500 }),
+	css('x'.repeat(65537)),
+	css('é'.repeat(32769)),
+	css('no', { status: 500 }),
 	new Response(null, { status: 304 }),
+	new Response('<html></html>', { headers: { 'content-type': 'text/html' } }),
+	new Response('body {}', { headers: { 'content-type': 'text/cssx' } }),
 ])('rejects invalid CSS responses and permits retries', async (response) => {
-	vi.stubGlobal(
-		'fetch',
-		vi.fn().mockResolvedValueOnce(response).mockResolvedValueOnce(new Response('ok')),
-	);
+	vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(response).mockResolvedValueOnce(css('ok')));
 	const cache = new NotebookCssCache();
 	await expect(cache.get('https://example.com/css')).rejects.toThrow(
 		'MARIMOHUB_THEME_NOTEBOOK_CSS',
@@ -46,7 +50,7 @@ it.each([
 it('accepts exactly 64 KiB', async () => {
 	vi.stubGlobal(
 		'fetch',
-		vi.fn(async () => new Response('x'.repeat(65536))),
+		vi.fn(async () => css('x'.repeat(65536))),
 	);
 	expect((await new NotebookCssCache().get('https://example.com/css')).length).toBe(65536);
 });
@@ -54,8 +58,8 @@ it('reuses deployment CSS without sharing cached content across deployments', as
 	const theme = { ...DEFAULT_THEME_CONFIG };
 	const fetch = vi
 		.fn()
-		.mockResolvedValueOnce(new Response('first deployment'))
-		.mockResolvedValueOnce(new Response('second deployment'));
+		.mockResolvedValueOnce(css('first deployment'))
+		.mockResolvedValueOnce(css('second deployment'));
 	vi.stubGlobal('fetch', fetch);
 	const url = 'https://example.com/brand.css';
 	expect(await notebookCssCacheFor(theme).get(url)).toBe('first deployment');
@@ -146,7 +150,7 @@ it('rejects malformed UTF-8 and retries without caching the invalid response', a
 	const fetch = vi
 		.fn()
 		.mockResolvedValueOnce(new Response(new Uint8Array([0xc3, 0x28])))
-		.mockResolvedValueOnce(new Response('valid'));
+		.mockResolvedValueOnce(css('valid'));
 	vi.stubGlobal('fetch', fetch);
 	const cache = new NotebookCssCache();
 	await expect(cache.get('https://example.com/css')).rejects.toThrow('UTF-8');
@@ -166,7 +170,7 @@ it('propagates a timeout to concurrent callers and permits a later retry', async
 					signal!.addEventListener('abort', () => reject(timeoutError), { once: true });
 				}),
 		)
-		.mockResolvedValueOnce(new Response('recovered'));
+		.mockResolvedValueOnce(css('recovered'));
 	vi.stubGlobal('fetch', fetch);
 	try {
 		const cache = new NotebookCssCache();
@@ -189,25 +193,42 @@ it('propagates a timeout to concurrent callers and permits a later retry', async
 	}
 });
 
-it('does not serve stale CSS after failed revalidation and retains its ETag for recovery', async () => {
+it('serves stale CSS after failed revalidation and retries on the next request', async () => {
 	let now = 0;
 	const fetch = vi
 		.fn()
-		.mockResolvedValueOnce(new Response('original', { headers: { etag: 'v1' } }))
+		.mockResolvedValueOnce(css('original', { headers: { etag: 'v1' } }))
 		.mockRejectedValueOnce(new Error('DNS failure'))
-		.mockResolvedValueOnce(new Response(null, { status: 304 }));
+		.mockResolvedValueOnce(css(null, { status: 304 }));
 	vi.stubGlobal('fetch', fetch);
 	const cache = new NotebookCssCache(() => now);
 	expect(await cache.get('https://example.com/css')).toBe('original');
 	now = 60_000;
-	await expect(cache.get('https://example.com/css')).rejects.toThrow('Unable to load');
 	expect(await cache.get('https://example.com/css')).toBe('original');
+	expect(await cache.get('https://example.com/css')).toBe('original');
+	expect(fetch).toHaveBeenCalledTimes(3);
 	expect(fetch.mock.calls[2][1].headers).toEqual({ 'If-None-Match': 'v1' });
+});
+
+it('serves the last fetched CSS when revalidation fails after a recovery', async () => {
+	let now = 0;
+	const fetch = vi
+		.fn()
+		.mockRejectedValueOnce(new Error('DNS failure'))
+		.mockResolvedValueOnce(css('recovered'))
+		.mockResolvedValueOnce(new Response('upstream error', { status: 502 }));
+	vi.stubGlobal('fetch', fetch);
+	const cache = new NotebookCssCache(() => now);
+	await expect(cache.get('https://example.com/css')).rejects.toThrow('Unable to load');
+	expect(await cache.get('https://example.com/css')).toBe('recovered');
+	now = 60_000;
+	expect(await cache.get('https://example.com/css')).toBe('recovered');
+	expect(fetch).toHaveBeenCalledTimes(3);
 });
 
 it('re-fetches expired CSS without an ETag and keeps URLs isolated', async () => {
 	let now = 0;
-	const fetch = vi.fn().mockImplementation(async (url) => new Response(String(url)));
+	const fetch = vi.fn().mockImplementation(async (url) => css(String(url)));
 	vi.stubGlobal('fetch', fetch);
 	const cache = new NotebookCssCache(() => now);
 	expect(await cache.get('https://example.com/a.css')).toBe('https://example.com/a.css');
