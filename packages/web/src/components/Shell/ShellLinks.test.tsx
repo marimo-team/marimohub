@@ -3,12 +3,12 @@ import { capabilitiesQueryOptions } from '@/api/hooks';
 import { projectKeys, userKeys } from '@/api/queryKeys';
 import { DOCS_BASE } from '@/lib/links';
 import { afterEach, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ThemeLinkRole } from '@marimo-hub/core/theme';
 import { HelpMenu } from '@/components/Header/HelpMenu';
 import { AuthProvider } from '@/context/AuthContext';
-import { createTestQueryClient, jsonOk, renderWithClient } from '@/test/render';
+import { createTestQueryClient, jsonError, jsonOk, renderWithClient } from '@/test/render';
 import { useShellLinks } from './useShellLinks';
 
 function HeaderLinks() {
@@ -180,3 +180,40 @@ it('keeps public links and default documentation available when identity lookup 
 	);
 	expect(screen.queryByRole('menuitem', { name: 'Get help' })).not.toBeInTheDocument();
 });
+
+it.each([
+	{ route: '/projects/p', key: projectKeys.detail('p'), status: 403 },
+	{ route: '/projects/p', key: projectKeys.detail('p'), status: 503 },
+	{ route: '/', key: capabilitiesQueryOptions().queryKey, status: 503 },
+])(
+	'hides cached role links after revalidation fails at $route ($status)',
+	async ({ route, key, status }) => {
+		let failed = false;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input) => {
+				if (String(input).endsWith('/me')) return jsonOk({ id: 'u' });
+				if (failed) return jsonError('UNAVAILABLE', 'Cannot verify access', status);
+				if (String(input).includes('/projects/')) return jsonOk({ id: 'p', your_role: 'editor' });
+				return jsonOk({ default_role: 'editor' });
+			}),
+		);
+		const { client } = renderWithClient(<HeaderLinks />, {
+			route,
+			branding: {
+				nav_links: [
+					{ label: 'Public', href: '/public' },
+					{ label: 'Editors', href: '/editors', roles: ['editor'] },
+				],
+			},
+		});
+		expect(await screen.findByRole('link', { name: 'Editors' })).toBeInTheDocument();
+		failed = true;
+		await act(() => client.invalidateQueries({ queryKey: key }));
+		await waitFor(() => expect(screen.queryByText('Editors')).not.toBeInTheDocument());
+		expect(screen.getByRole('link', { name: 'Public' })).toBeInTheDocument();
+		failed = false;
+		await act(() => client.invalidateQueries({ queryKey: key }));
+		expect(await screen.findByRole('link', { name: 'Editors' })).toBeInTheDocument();
+	},
+);

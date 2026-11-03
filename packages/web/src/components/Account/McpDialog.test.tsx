@@ -149,10 +149,11 @@ describe('McpDialog manual tokens', () => {
 		await user.type(screen.getByLabelText('Expires in days'), '0');
 		await user.click(screen.getByRole('button', { name: 'Create MCP token' }));
 		expect(
-			await screen.findByText('Expiry must be a whole number from 1 to 3650 days.'),
+			await screen.findByText('Expiry must be a whole number from 1 to 90 days.'),
 		).toBeVisible();
 		expect(calls).toHaveLength(0);
 		await user.clear(screen.getByLabelText('Expires in days'));
+		await user.type(screen.getByLabelText('Expires in days'), '90');
 		await user.click(screen.getByRole('button', { name: 'Create MCP token' }));
 		await waitFor(() => expect(calls).toHaveLength(1));
 		expect(await screen.findByText('Manual MCP tokens are not enabled')).toBeVisible();
@@ -172,18 +173,21 @@ describe('McpDialog manual tokens', () => {
 		expect(screen.queryByRole('tab', { name: 'Token' })).not.toBeInTheDocument();
 	});
 
-	it.each(['-1', '1.5', '3651', 'soon'])('does not submit an invalid expiry: %s', async (days) => {
-		const user = userEvent.setup();
-		const { calls } = setup(true);
-		await fillTokenForm(user);
-		await user.clear(screen.getByLabelText('Expires in days'));
-		await user.type(screen.getByLabelText('Expires in days'), days);
-		await user.click(screen.getByRole('button', { name: 'Create MCP token' }));
-		expect(
-			await screen.findByText('Expiry must be a whole number from 1 to 3650 days.'),
-		).toBeVisible();
-		expect(calls).toHaveLength(0);
-	});
+	it.each(['', '-1', '1.5', '91', 'soon'])(
+		'does not submit an invalid expiry: %j',
+		async (days) => {
+			const user = userEvent.setup();
+			const { calls } = setup(true);
+			await fillTokenForm(user);
+			await user.clear(screen.getByLabelText('Expires in days'));
+			if (days) await user.type(screen.getByLabelText('Expires in days'), days);
+			await user.click(screen.getByRole('button', { name: 'Create MCP token' }));
+			expect(
+				await screen.findByText('Expiry must be a whole number from 1 to 90 days.'),
+			).toBeVisible();
+			expect(calls).toHaveLength(0);
+		},
+	);
 
 	it('requires a nonblank name before submission', async () => {
 		const user = userEvent.setup();
@@ -205,7 +209,6 @@ describe('McpDialog manual tokens', () => {
 			.mockResolvedValueOnce(jsonOk({ token }));
 		const { calls } = setup(true, false, { createResponse });
 		await fillTokenForm(user, ' my-client ');
-		await user.clear(screen.getByLabelText('Expires in days'));
 		await user.click(screen.getByRole('button', { name: 'Create MCP token' }));
 		expect(await screen.findByText('Network unavailable')).toBeVisible();
 		expect(screen.queryByLabelText('Header value')).not.toBeInTheDocument();
@@ -217,10 +220,12 @@ describe('McpDialog manual tokens', () => {
 		expect(calls).toEqual([
 			{
 				name: 'my-client',
+				expires_in_days: 30,
 				grant: { actions: ['app.read', 'project.read', 'integration.read'], projects: '*' },
 			},
 			{
 				name: 'my-client',
+				expires_in_days: 30,
 				grant: { actions: ['app.read', 'project.read', 'integration.read'], projects: '*' },
 			},
 		]);

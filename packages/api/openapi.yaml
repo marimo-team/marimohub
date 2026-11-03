@@ -161,14 +161,11 @@ components:
         support:
           type: object
           properties:
-            mode:
-              type: string
-              enum:
-                - notifier
-                - url
-                - off
+            reports:
+              type: boolean
+              description: Users can send problem reports to the deployment notifier.
           required:
-            - mode
+            - reports
         project_notebook_target:
           type: string
           enum:
@@ -378,7 +375,10 @@ components:
                   - namespace
                   - table
                   - column
-                  - chat
+                  - unknown
+                description: 'Known values: notebook, code, output, datasource, namespace,
+                  table, column. Unrecognized values normalize to unknown.'
+                example: notebook
           required:
             - available
             - semantic
@@ -3106,6 +3106,157 @@ components:
         - created_by
         - created_at
       additionalProperties: false
+    SearchResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                minLength: 1
+                maxLength: 1024
+              kind:
+                type: string
+                enum:
+                  - notebook
+                  - code
+                  - output
+                  - datasource
+                  - namespace
+                  - table
+                  - column
+                  - unknown
+                description: 'Known values: notebook, code, output, datasource, namespace,
+                  table, column. Unrecognized values normalize to unknown.'
+                example: notebook
+              resource:
+                oneOf:
+                  - type: object
+                    properties:
+                      type:
+                        type: string
+                        enum:
+                          - notebook
+                      notebook_id:
+                        type: string
+                    required:
+                      - type
+                      - notebook_id
+                  - type: object
+                    properties:
+                      type:
+                        type: string
+                        enum:
+                          - integration
+                      integration_id:
+                        type: string
+                      version:
+                        type: integer
+                        exclusiveMinimum: 0
+                      namespace:
+                        type: array
+                        items:
+                          type: string
+                          maxLength: 256
+                        maxItems: 16
+                      table:
+                        type: string
+                        maxLength: 256
+                      column:
+                        type: string
+                        maxLength: 256
+                    required:
+                      - type
+                      - integration_id
+                      - version
+              title:
+                type: string
+                maxLength: 256
+              project_id:
+                type: string
+              project_name:
+                type: string
+                maxLength: 256
+              href:
+                type: string
+                maxLength: 4096
+              indexed_at:
+                type: string
+                format: date-time
+              snippet:
+                type: object
+                properties:
+                  text:
+                    type: string
+                    maxLength: 400
+                  highlights:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        start:
+                          type: integer
+                          minimum: 0
+                        end:
+                          type: integer
+                          minimum: 0
+                      required:
+                        - start
+                        - end
+                    maxItems: 200
+                required:
+                  - text
+                  - highlights
+            required:
+              - id
+              - kind
+              - resource
+              - title
+              - project_id
+              - project_name
+              - href
+              - indexed_at
+              - snippet
+          maxItems: 50
+        partial:
+          type: boolean
+        coverage:
+          type: array
+          items:
+            type: object
+            properties:
+              source:
+                type: string
+                maxLength: 64
+              project_id:
+                type: string
+              status:
+                type: string
+                enum:
+                  - complete
+                  - partial
+                  - truncated
+                  - unavailable
+                  - timeout
+                  - not_indexed
+                  - stale
+                  - disabled
+                  - unknown
+                description: 'Known values: complete, partial, truncated, unavailable, timeout,
+                  not_indexed, stale, disabled. Unrecognized values normalize to
+                  unknown.'
+                example: complete
+            required:
+              - source
+              - status
+          maxItems: 100
+      required:
+        - items
+        - partial
+        - coverage
     NotebookPreview:
       type: object
       properties:
@@ -5886,7 +6037,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/support/diagnostics:
     post:
-      operationId: support.diagnostics
+      operationId: support.diagnostics.preview
+      x-cli-hidden: true
       tags:
         - System
       summary: Preview support diagnostics for the signed-in user
@@ -6077,7 +6229,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/support/requests:
     post:
-      operationId: support.request
+      operationId: support.requests.create
+      x-cli-hidden: true
       tags:
         - System
       summary: Send a support request to the deployment notifier
@@ -14523,7 +14676,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/search:
     get:
-      operationId: search.workspace
+      operationId: search.query
       tags:
         - Search
       summary: Search accessible projects and resources
@@ -14542,7 +14695,12 @@ paths:
           in: query
         - schema:
             type: string
+            description: 'Comma-separated result kinds to include. Values: notebook, code,
+              output, datasource, namespace, table, column.'
+            example: notebook,code
           required: false
+          description: 'Comma-separated result kinds to include. Values: notebook, code,
+            output, datasource, namespace, table, column.'
           name: kinds
           in: query
         - schema:
@@ -14575,172 +14733,7 @@ paths:
                     enum:
                       - true
                   data:
-                    type: object
-                    properties:
-                      items:
-                        type: array
-                        items:
-                          type: object
-                          properties:
-                            id:
-                              type: string
-                              minLength: 1
-                              maxLength: 1024
-                            kind:
-                              type: string
-                              enum:
-                                - notebook
-                                - code
-                                - output
-                                - datasource
-                                - namespace
-                                - table
-                                - column
-                                - chat
-                            resource:
-                              oneOf:
-                                - type: object
-                                  properties:
-                                    type:
-                                      type: string
-                                      enum:
-                                        - notebook
-                                    notebook_id:
-                                      type: string
-                                  required:
-                                    - type
-                                    - notebook_id
-                                - type: object
-                                  properties:
-                                    type:
-                                      type: string
-                                      enum:
-                                        - integration
-                                    integration_id:
-                                      type: string
-                                    version:
-                                      type: integer
-                                      exclusiveMinimum: 0
-                                    namespace:
-                                      type: array
-                                      items:
-                                        type: string
-                                        maxLength: 256
-                                      maxItems: 16
-                                    table:
-                                      type: string
-                                      maxLength: 256
-                                    column:
-                                      type: string
-                                      maxLength: 256
-                                  required:
-                                    - type
-                                    - integration_id
-                                    - version
-                                - type: object
-                                  properties:
-                                    type:
-                                      type: string
-                                      enum:
-                                        - chat
-                                    conversation_id:
-                                      type: string
-                                      maxLength: 256
-                                    owner_id:
-                                      type: string
-                                      maxLength: 256
-                                    message_id:
-                                      type: string
-                                      maxLength: 256
-                                  required:
-                                    - type
-                                    - conversation_id
-                                    - owner_id
-                            title:
-                              type: string
-                              maxLength: 256
-                            project_id:
-                              type: string
-                            project_name:
-                              type: string
-                              maxLength: 256
-                            score:
-                              type: number
-                              description:
-                                Unstable ranking detail. Preserve response order; do not apply
-                                score thresholds.
-                            href:
-                              type: string
-                              maxLength: 4096
-                            indexed_at:
-                              type: string
-                              format: date-time
-                            snippet:
-                              type: object
-                              properties:
-                                text:
-                                  type: string
-                                  maxLength: 400
-                                highlights:
-                                  type: array
-                                  items:
-                                    type: object
-                                    properties:
-                                      start:
-                                        type: integer
-                                        minimum: 0
-                                      end:
-                                        type: integer
-                                        minimum: 0
-                                    required:
-                                      - start
-                                      - end
-                                  maxItems: 200
-                              required:
-                                - text
-                                - highlights
-                          required:
-                            - id
-                            - kind
-                            - resource
-                            - title
-                            - project_id
-                            - project_name
-                            - score
-                            - href
-                            - indexed_at
-                            - snippet
-                        maxItems: 50
-                      partial:
-                        type: boolean
-                      coverage:
-                        type: array
-                        items:
-                          type: object
-                          properties:
-                            source:
-                              type: string
-                              maxLength: 64
-                            project_id:
-                              type: string
-                            status:
-                              type: string
-                              enum:
-                                - complete
-                                - partial
-                                - unavailable
-                                - timeout
-                                - not_indexed
-                                - stale
-                                - disabled
-                          required:
-                            - source
-                            - status
-                        maxItems: 100
-                    required:
-                      - items
-                      - partial
-                      - coverage
+                    $ref: '#/components/schemas/SearchResponse'
                 required:
                   - success
                   - data
@@ -14770,6 +14763,20 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
           description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
           content:
             application/json:
               schema:
@@ -23188,9 +23195,11 @@ paths:
       tags:
         - Auth
       summary: Create a manual MCP token
-      description: Mint a scoped token bound to this deployment’s MCP URL. Requires
-        session authentication and MARIMOHUB_MCP_MANUAL_TOKENS=on. The plaintext
-        token is returned only once.
+      description: Mint a scoped token bound to this deployment’s MCP URL. It
+        authenticates only to MCP, not the REST API, and expires in at most 90
+        days. Requires session authentication and
+        MARIMOHUB_MCP_MANUAL_TOKENS=on. The plaintext token is returned only
+        once.
       security: *a4
       requestBody:
         required: true
@@ -23207,9 +23216,9 @@ paths:
                 expires_in_days:
                   type: integer
                   minimum: 1
-                  maximum: 3650
-                  description: Days until expiry; omit for a non-expiring token.
-                  example: 90
+                  maximum: 90
+                  description: Days until expiry, at most 90.
+                  example: 30
                 grant:
                   type: object
                   properties:
@@ -23270,6 +23279,7 @@ paths:
                   additionalProperties: false
               required:
                 - name
+                - expires_in_days
                 - grant
               additionalProperties: false
       responses:

@@ -2,7 +2,7 @@ import { useId } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Button, ConfirmDialog, DialogModal, displayName } from '@/components/ui';
+import { Button, ConfirmDialog, displayName } from '@/components/ui';
 import {
 	projectQueryOptions,
 	useAddMember,
@@ -35,29 +35,7 @@ const SELF_ACCESS_WARNING = 'You may lose access to this project.';
 const isDemotion = (from: ProjectMember['role'], to: AssignableProjectRole) =>
 	PROJECT_ROLES.indexOf(to) < PROJECT_ROLES.indexOf(from);
 
-export interface ProjectMembersDialogProps {
-	isOpen: boolean;
-	onClose: () => void;
-	project: ProjectDetail;
-}
-
-export function ProjectMembersDialog({ isOpen, onClose, project }: ProjectMembersDialogProps) {
-	return (
-		<DialogModal isOpen={isOpen} onClose={onClose} title="Project Access" width="lg">
-			<div className="-m-1 max-h-[70dvh] overflow-y-auto overscroll-contain p-1">
-				<ProjectMembersPanel project={project} onAccessLost={onClose} />
-			</div>
-		</DialogModal>
-	);
-}
-
-export function ProjectMembersPanel({
-	project,
-	onAccessLost,
-}: {
-	project: ProjectDetail;
-	onAccessLost?: () => void;
-}) {
+export function ProjectMembersPanel({ project }: { project: ProjectDetail }) {
 	const membersHeadingId = useId();
 	const { user } = useAuth();
 	const queryClient = useQueryClient();
@@ -97,7 +75,6 @@ export function ProjectMembersPanel({
 			await queryClient.fetchQuery({ ...projectQueryOptions(project.id), staleTime: 0 });
 		} catch (err) {
 			if (isApiErrorCode(err, 'FORBIDDEN') || isNotFoundError(err)) {
-				onAccessLost?.();
 				void navigate('/projects');
 			}
 		}

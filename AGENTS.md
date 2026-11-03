@@ -40,7 +40,8 @@ Use these as the done-criteria for any change.
   Anything that _reaches_ something — a store, a cluster, an IdP — is a port.
 - **Adapters** (`packages/storage-*`, `packages/compute-*`, `packages/auth-*`,
   `packages/object-browser-*`, `packages/notify-*`, `packages/source-control-*`,
-  and the credential, secret, and DuckDB runtime packages) implement the ports.
+  `packages/search-bucket`, `packages/embeddings-http`, and the credential,
+  secret, and DuckDB runtime packages) implement the ports.
   `packages/api` wires the services to Hono/OpenAPI routes via
   `@hono/zod-openapi`.
 - **`packages/config`** is the ONLY package that imports concrete adapters: it
@@ -59,14 +60,15 @@ the only places concrete adapters are imported. **Reject PRs that violate this**
 is enforced mechanically: a
 `no-restricted-imports` override in `vite.config.ts` (files `packages/core/**`,
 `packages/api/**`) bans `@marimo-hub/{storage,compute,auth,credentials,secrets}-*`
-imports, `@marimo-hub/{notify,object-browser,source-control}-*` imports, and
-`@marimo-hub/duckdb-wasm-runtime`. A colocated `package-dependencies.test.ts` in
+imports, `@marimo-hub/{notify,object-browser,database-browser,source-control,search,embeddings}-*`
+imports, `@marimo-hub/{duckdb-wasm-runtime,postgres-runtime}`, and
+`@marimo-hub/notebook-bridge` (including its subpaths). A colocated `package-dependencies.test.ts` in
 each of `core` and `api` fails if one of these packages appears in its
 `package.json`.
 
 Adapters use focused core exports such as `@marimo-hub/core/errors`,
 `@marimo-hub/core/ports/bucket`, and `@marimo-hub/core/testing/contract`.
-The root, ports, and testing barrels are prohibited in adapters, including type
+The root, ports, testing, and search barrels are prohibited in adapters, including type
 imports: traversing their re-exports makes unrelated core changes invalidate
 adapter task caches. Service-backed integration tests can use the focused
 `@marimo-hub/core/testing/workspace-fixtures` export.

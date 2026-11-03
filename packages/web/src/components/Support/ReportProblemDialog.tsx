@@ -1,13 +1,14 @@
 import { useRef, useState } from 'react';
 import { SUPPORT_LIMITS } from '@marimo-hub/core/support';
-import type { SupportMode } from '@marimo-hub/core/support';
 import type { SupportContext, SupportDiagnostics } from './diagnostics';
 import { apiClient, apiData } from '@/api/client';
+import { capabilitiesQueryOptions } from '@/api/hooks';
+import { queryClient } from '@/api/queryClient';
 import { useBranding } from '@/context/BrandingContext';
 import { Button } from '@/components/ui/Button';
 import { DialogModal } from '@/components/ui/Dialog';
 import { copyText } from '@/lib/clipboard';
-import { clientSupportContext, supportPortalUrl } from './diagnostics';
+import { clientSupportContext } from './diagnostics';
 
 interface ReportContext {
 	session?: SupportContext['session'];
@@ -17,7 +18,7 @@ interface ReportContext {
 interface ReportState {
 	context: SupportContext;
 	diagnostics: SupportDiagnostics | SupportContext;
-	mode: SupportMode;
+	reports: boolean;
 	loading: boolean;
 	error?: string;
 }
@@ -32,19 +33,20 @@ export function useProblemReport(context: ReportContext = {}) {
 	const open = async () => {
 		const current = ++generation.current;
 		const input = clientSupportContext(context.session, context.error);
-		setReport({ context: input, diagnostics: input, mode: 'off', loading: true });
+		setReport({ context: input, diagnostics: input, reports: false, loading: true });
+		// The module client, not useQueryClient: error boundaries render this outside providers.
 		const [diagnostics, capabilities] = await Promise.allSettled([
 			apiData(apiClient.POST('/api/v1/support/diagnostics', { body: input })),
-			apiData(apiClient.GET('/api/v1/capabilities')),
+			queryClient.fetchQuery(capabilitiesQueryOptions()),
 		]);
 		if (current !== generation.current) return;
 		setReport({
 			context: input,
 			diagnostics: diagnostics.status === 'fulfilled' ? diagnostics.value : input,
-			mode:
-				diagnostics.status === 'fulfilled' && capabilities.status === 'fulfilled'
-					? (capabilities.value.support?.mode ?? 'off')
-					: 'off',
+			reports:
+				diagnostics.status === 'fulfilled' &&
+				capabilities.status === 'fulfilled' &&
+				capabilities.value.support.reports,
 			loading: false,
 			...(diagnostics.status === 'rejected' || capabilities.status === 'rejected'
 				? {
@@ -68,8 +70,6 @@ function ReportProblemDialog({ report, onClose }: { report: ReportState; onClose
 	const [error, setError] = useState('');
 	const trimmedMessage = message.trim();
 	const payload = JSON.stringify({ ...report.diagnostics, message: trimmedMessage }, null, 2);
-	const portal =
-		report.mode === 'url' && support_url ? supportPortalUrl(support_url, payload) : null;
 	const send = async () => {
 		setDelivery('sending');
 		setError('');
@@ -132,15 +132,9 @@ function ReportProblemDialog({ report, onClose }: { report: ReportState; onClose
 					</p>
 				)}
 				{status && <output className="text-sm">{status}</output>}
-				{!report.loading && report.mode === 'off' && !report.error && (
+				{!report.loading && !report.reports && !report.error && (
 					<p className="text-sm text-muted-foreground">
 						Copy diagnostics and share them with your administrator.
-					</p>
-				)}
-				{report.mode === 'url' && !portal && (
-					<p className="text-sm text-muted-foreground">
-						This report is too large for a portal link. Copy the diagnostics and paste them into
-						your support request.
 					</p>
 				)}
 				<div className="flex flex-wrap items-center gap-2">
@@ -153,7 +147,7 @@ function ReportProblemDialog({ report, onClose }: { report: ReportState; onClose
 					>
 						Copy diagnostics
 					</Button>
-					{report.mode === 'notifier' && (
+					{report.reports && (
 						<Button
 							variant="primary"
 							onPress={() => void send()}
@@ -162,9 +156,9 @@ function ReportProblemDialog({ report, onClose }: { report: ReportState; onClose
 							{delivery === 'sending' ? 'Sending…' : 'Send report'}
 						</Button>
 					)}
-					{report.mode === 'url' && support_url && (
+					{!report.loading && !report.reports && support_url && (
 						<a
-							href={portal ?? support_url}
+							href={support_url}
 							target="_blank"
 							rel="noopener noreferrer"
 							className="text-sm text-primary underline"

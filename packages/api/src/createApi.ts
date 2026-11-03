@@ -58,6 +58,7 @@ import {
 	fail,
 	resolvePublicBaseUrl,
 	initializeForSubject,
+	rejectsMcpOnlyCredential,
 } from './shared';
 import type { ErrorCode } from './shared';
 
@@ -405,6 +406,9 @@ export function createApi(rawDeps: ApiDeps) {
 		if (c.req.query('deep') !== 'true') return c.json({ status: 'ok' });
 		const user = await deps.authenticator.authenticate(c.req.raw);
 		if (!user) return fail(c, 'UNAUTHORIZED', 'Authentication required', 401);
+		if (rejectsMcpOnlyCredential(user)) {
+			return fail(c, 'UNAUTHORIZED', 'MCP tokens cannot access the REST API', 401);
+		}
 		let suspensionUnavailable = false;
 		try {
 			if (await deps.services.identities.isSuspended(user.id)) {
@@ -528,6 +532,9 @@ export function createApi(rawDeps: ApiDeps) {
 		const user = await deps.authenticator.authenticate(c.req.raw);
 		if (!user) {
 			return fail(c, 'UNAUTHORIZED', 'Authentication required', 401);
+		}
+		if (rejectsMcpOnlyCredential(user)) {
+			return fail(c, 'UNAUTHORIZED', 'MCP tokens cannot access the REST API', 401);
 		}
 		if (await deps.services.identities.isSuspended(user.id)) {
 			return fail(c, 'USER_SUSPENDED', 'User account is suspended', 403);

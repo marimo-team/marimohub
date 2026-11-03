@@ -4,10 +4,10 @@ description: Choose how notebook sessions receive data-source configuration, sec
 
 # Environment & cloud access
 
-Open a project and select **Environment & cloud access**. The dialog has two areas:
+Open a project and select **Integrations** in the sidebar.
 
-- **Integrations** stores versioned configuration for data sources and environment variables.
-- **Cloud access** supplies short-lived credentials through Workload Identity Federation (WIF).
+The page stores versioned configuration for data sources and environment variables.
+The **Cloud access** button opens the Workload Identity Federation (WIF) configuration for short-lived credentials.
 
 Project managers can make changes. Other project members can view the cloud-access status.
 Cloud access supplies credentials to notebook sessions. It does not control project roles or permissions.
@@ -66,8 +66,8 @@ The hub sets these variables in a sandbox. Notebook code can read them; projects
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`                                               | Temporary credentials from [WIF](./workload-identity-federation.md#what-the-notebook-receives), without refresh.                       | With WIF enabled: editor, app, preview, surfaces in `env` delivery; jobs in either delivery mode          |
 | `AWS_CONTAINER_CREDENTIALS_FULL_URI`, `AWS_CONTAINER_AUTHORIZATION_TOKEN`                                       | URL and bearer token for the [refreshable credential provider](./workload-identity-federation.md#refreshable-credentials).             | With WIF enabled: editor, app, preview, surfaces in `endpoint` delivery                                   |
 | `AWS_ENDPOINT_URL_S3`, `AWS_REGION`                                                                             | Optional WIF storage endpoint and region.                                                                                              | With WIF enabled and these values configured: editor, app, preview, job, surfaces in either delivery mode |
-| `XDG_CONFIG_HOME`                                                                                               | Location of the hub-written `marimo.toml`. The hub always sets it.                                                                     | Editor                                                                                                    |
-| `XDG_CACHE_HOME`, `XDG_STATE_HOME`                                                                              | marimo logs and state under `/tmp`, outside the workspace. The sandbox image can set its own values.                                   | Editor                                                                                                    |
+| `XDG_CONFIG_HOME`                                                                                               | Location of the hub-written `marimo.toml`.                                                                                             | Editor, app, preview; jobs with presentation configuration                                                |
+| `XDG_CACHE_HOME`, `XDG_STATE_HOME`                                                                              | marimo logs and state under `/tmp`, outside the workspace. The sandbox image can set its own values.                                   | Editor, app, preview; jobs with presentation configuration                                                |
 | `MARIMO_VERSION`, `MARIMO_SKIP_UPDATE_CHECK`, `_MARIMO_APP_OVERLOAD_AUTO_DOWNLOAD`                              | Pinned by the reference [sandbox image](./sandbox-image.md), not by the hub process.                                                   | All                                                                                                       |
 
 Endpoint delivery removes static AWS credential keys from integration variables and defaults, so SDKs use the container provider.

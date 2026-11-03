@@ -109,6 +109,8 @@ export const notebookKeys = {
 	list: (projectId: string) => [...notebookKeys.all, 'list', { projectId }] as const,
 	filteredList: (projectId: string, filters: ListQueryFilters) =>
 		[...notebookKeys.list(projectId), filters] as const,
+	jobNavigation: (projectId: string) =>
+		[...notebookKeys.list(projectId), 'job-navigation'] as const,
 	detail: (projectId: string, notebookId: string) =>
 		[...notebookKeys.all, 'detail', { projectId, notebookId }] as const,
 	sourceDrift: (projectId: string, notebookId: string) =>

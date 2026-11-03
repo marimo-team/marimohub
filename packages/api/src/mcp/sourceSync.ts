@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { sessionMode } from '@marimo-hub/core';
-import type { AuthenticatedPrincipal } from '@marimo-hub/core';
+import type { AuthenticatedPrincipal, Session, VersionId } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
+import { bestEffort } from '../log';
 import { syncSourceManually } from '../routes/sourcePullSync';
-import { loadAuthorizedNotebook } from '../shared';
 import {
 	resolveAuthorizedNotebook,
 	PROJECT_REFERENCE_DESCRIPTION,
@@ -31,18 +31,33 @@ export async function syncNotebookSource(
 		notebookRef,
 		'notebook.write',
 	);
-	const outcome = await syncSourceManually(deps, project, notebook.id, principal, request);
-	const { source } = await loadAuthorizedNotebook(
+	const outcome = await syncSourceManually(
 		deps,
 		project,
 		notebook.id,
 		principal,
-		'notebook.write',
+		request,
+		request.signal,
 	);
-	const currentVersionId = source.current_version_id ?? null;
-	const active = await deps.services.sessions.listActiveByProject(project.id);
-	const sessions = active
-		.filter((session) => session.notebook_id === notebook.id)
+	// A concurrent sync can move the source pointer past `outcome.version_id`, so
+	// restart status compares against the reloaded pointer. The sync has already
+	// committed; a failed lookup reports unknown restart status.
+	const logFields = {
+		request_id: request.requestId ?? null,
+		project_id: project.id,
+		notebook_id: notebook.id,
+	};
+	const lookup: { currentVersionId?: VersionId | null; active?: Session[] } = {};
+	await bestEffort('mcp_sync_source_lookup', logFields, async () => {
+		const { source } = await deps.services.notebooks.getNotebook(project.id, notebook.id);
+		lookup.currentVersionId = source.current_version_id ?? null;
+	});
+	const currentVersionId = lookup.currentVersionId ?? null;
+	await bestEffort('mcp_sync_session_lookup', logFields, async () => {
+		lookup.active = await deps.services.sessions.listActiveByProject(project.id);
+	});
+	const sessions = lookup.active
+		?.filter((session) => session.notebook_id === notebook.id)
 		.map((session) => ({
 			session_id: session.session_id,
 			mode: sessionMode(session),
@@ -58,11 +73,13 @@ export async function syncNotebookSource(
 		notebook_id: notebook.id,
 		...outcome,
 		current_version_id: currentVersionId,
-		sessions,
-		restart_needed: sessions.some((session) => session.restart_needed === true)
-			? true
-			: sessions.some((session) => session.restart_needed === null)
-				? null
-				: false,
+		sessions: sessions ?? null,
+		restart_needed: !sessions
+			? null
+			: sessions.some((session) => session.restart_needed === true)
+				? true
+				: sessions.some((session) => session.restart_needed === null)
+					? null
+					: false,
 	};
 }

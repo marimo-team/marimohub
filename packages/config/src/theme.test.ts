@@ -233,6 +233,20 @@ describe('shell settings', () => {
 			'MARIMOHUB_THEME_SUPPORT_URL',
 		);
 	});
+	it.each([
+		['MARIMOHUB_THEME_NAV_LINKS', [{ label: 'Admin', href: '/admin', roles: ['superuser'] }]],
+		['MARIMOHUB_THEME_NAV_LINKS', [{ label: 'Run', href: 'javascript:alert(1)' }]],
+		['MARIMOHUB_THEME_NAV_LINKS', [{ label: 'x'.repeat(41), href: '/ok' }]],
+		[
+			'MARIMOHUB_THEME_NAV_LINKS',
+			Array.from({ length: 13 }, (_, i) => ({ label: `Link ${i}`, href: '/ok' })),
+		],
+		['MARIMOHUB_THEME_ANNOUNCEMENT', { id: '1', text: 'Maintenance', href: 'javascript:alert(1)' }],
+	] as const)('rejects invalid %s JSON with a ConfigError', (variable, value) => {
+		const env = { [variable]: JSON.stringify(value) };
+		expect(() => parseTheme(env)).toThrow(ConfigError);
+		expect(() => parseTheme(env)).toThrow(variable);
+	});
 });
 
 it('requires a configured origin for root-relative CSS', () => {

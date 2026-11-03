@@ -1,6 +1,6 @@
 import type { SearchKind } from '@/api/search';
 import { Select } from '@/components/ui/Select';
-import { searchKinds } from './presentation';
+import { searchKind } from './presentation';
 
 export function SearchFilters({
 	projectId,
@@ -31,7 +31,7 @@ export function SearchFilters({
 	const kindOptions = [
 		{ id: '', label: 'All types' },
 		...(!validKind && kind ? [{ id: kind, label: 'Unavailable type' }] : []),
-		...kinds.map((value) => ({ id: value, label: searchKinds[value].label })),
+		...kinds.map((value) => ({ id: value, label: searchKind(value).label })),
 	];
 	return (
 		<div className="flex min-w-0 flex-wrap gap-3">

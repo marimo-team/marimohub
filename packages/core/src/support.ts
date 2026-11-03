@@ -7,9 +7,6 @@ import {
 	UserIdSchema,
 } from './schema';
 
-export const SupportModeSchema = z.enum(['notifier', 'url', 'off']);
-export type SupportMode = z.infer<typeof SupportModeSchema>;
-
 export const SUPPORT_LIMITS = {
 	message: 2000,
 	userAgent: 512,

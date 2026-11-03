@@ -1242,7 +1242,7 @@ variables, secret variables, and secret JSON bundles with optional prefixes.
 
 ## Managing integrations
 
-Open a project and select **Environment & cloud access**. Then select **Integrations**.
+Open a project and select **Integrations** in the sidebar.
 Members can view the list and protected configuration. Project managers and
 [super admins](./auth.md#super-admins-marimohub_super_admins) can make changes.
 

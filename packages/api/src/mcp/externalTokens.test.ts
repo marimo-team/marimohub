@@ -5,6 +5,7 @@ import { externalTokenGrant } from '@marimo-hub/core/token-grants';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { createApi } from '../createApi';
 import { makeTestDeps } from '../testing';
+import { postMcp, readMcpResult } from '../testing/mcp';
 import { createOAuthProvider } from './oauthProvider';
 
 const publicBaseUrl = 'https://hub.example.com/hub';
@@ -37,23 +38,11 @@ function api(path: string, method = 'GET', body?: unknown) {
 	});
 }
 function mcp(method = 'tools/list', params: unknown = {}, token = 'external') {
-	return app.request('/mcp', {
-		method: 'POST',
-		headers: {
-			...headers,
-			Authorization: `Bearer ${token}`,
-			Accept: 'application/json, text/event-stream',
-		},
-		body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-	});
+	return postMcp(app, { method, params }, { Authorization: `Bearer ${token}` });
 }
 async function toolResult(response: Response) {
 	expect(response.status).toBe(200);
-	const text = await response.text();
-	const body = JSON.parse(/^data: (.+)$/m.exec(text)?.[1] ?? text) as {
-		result: { isError?: boolean; structuredContent: Record<string, unknown> };
-	};
-	return body.result;
+	return readMcpResult<{ isError?: boolean; structuredContent: Record<string, unknown> }>(response);
 }
 
 beforeEach(async () => {

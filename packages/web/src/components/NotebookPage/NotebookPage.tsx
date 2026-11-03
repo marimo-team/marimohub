@@ -38,7 +38,7 @@ import { ChangeRequestActions } from '@/components/NotebookPage/ChangeRequestAct
 import { sessionConnectionHint, isSessionStale, sessionsByNotebook } from '@/lib/sessions';
 import { useTheme } from '@/context/ThemeContext';
 import { useNotebookFrameLocation } from '@/hooks/useNotebookFrameLocation';
-import { canManageProject } from '@/lib/roles';
+import { canManageProject, canUseApps } from '@/lib/roles';
 import { OpenMenu } from './OpenMenu';
 import { NotebookMenu } from './NotebookMenu';
 import { SessionControl } from './SessionControl';
@@ -422,7 +422,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		!!sourceProvider &&
 		(capabilities?.source_control?.change_request_providers.includes(sourceProvider) ?? false) &&
 		canManageProject(project.your_role);
-	const canRunApp = !isViewer || (capabilities?.viewer_session_modes ?? []).includes('app');
+	const canRunApp = canUseApps(project.your_role, capabilities);
 	return {
 		appStale,
 		applicationTabs,
@@ -675,7 +675,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 					/>
 				</div>
 			</header>
-			{isApp && <AnnouncementBanner />}
+			<AnnouncementBanner />
 			<ThumbnailDialog
 				projectId={pid!}
 				notebookId={nid!}

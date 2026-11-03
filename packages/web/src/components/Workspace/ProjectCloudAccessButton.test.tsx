@@ -3,14 +3,30 @@ import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { useProjectQuery } from '@/api/hooks';
+import { makeCapabilities, stubApi } from '@/test/apiStub';
+import type { CapabilityOverrides } from '@/test/apiStub';
 import { jsonError, renderWithClient } from '@/test/render';
-import { makeFetch, PID } from '@/components/Project/Project.testWorld';
+import { PID, project } from '@/components/Project/Project.testWorld';
+import type { ProjectDetail } from '@/types';
 import { ProjectCloudAccessButton } from './ProjectCloudAccessButton';
 
 function Settings() {
-	const { data: project } = useProjectQuery(PID);
-	return <ProjectCloudAccessButton project={project} />;
+	const { data } = useProjectQuery(PID);
+	return <ProjectCloudAccessButton project={data} />;
 }
+
+function stubProject(
+	overrides: Partial<ProjectDetail> = {},
+	capabilities: CapabilityOverrides | Promise<Response> = {},
+) {
+	return stubApi({
+		[`/api/v1/projects/${PID}`]: { ...project(), ...overrides },
+		[`PATCH /api/v1/projects/${PID}`]: project(),
+		'/api/v1/capabilities':
+			capabilities instanceof Promise ? () => capabilities : makeCapabilities(capabilities),
+	});
+}
+
 async function renderSettings() {
 	const result = renderWithClient(<Settings />, { route: `/projects/${PID}` });
 	await screen.findByRole('button', { name: 'Cloud access' });
@@ -26,16 +42,13 @@ describe('Project — cloud access', () => {
 		async (choice, federation, message) => {
 			const user = userEvent.setup();
 			const toastSuccess = vi.spyOn(toast, 'success');
-			const calls = makeFetch({
-				project: {
+			const { calls } = stubProject(
+				{
 					federation: { enabled: true, target: 'prod' },
 					federation_effective: { enabled: true, source: 'project' },
 				},
-				capabilities: {
-					federation: { available: true, default_enabled: false },
-					jobs: { available: true },
-				},
-			});
+				{ federation: { available: true, default_enabled: false }, jobs: { available: true } },
+			);
 			await renderSettings();
 
 			await user.click(await screen.findByRole('button', { name: /Cloud access/ }));
@@ -43,7 +56,8 @@ describe('Project — cloud access', () => {
 			await user.click(screen.getByRole('button', { name: 'Save' }));
 
 			await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(message));
-			const patch = calls.find((call) => call.method === 'PATCH' && call.url.endsWith('/proj-x'));
+			const patch = calls.find((call) => call.method === 'PATCH');
+			expect(patch?.url.pathname).toBe(`/api/v1/projects/${PID}`);
 			expect(patch?.body).toEqual({ federation });
 		},
 	);
@@ -51,7 +65,7 @@ describe('Project — cloud access', () => {
 
 describe('environment and access', () => {
 	it('opens cloud access directly', async () => {
-		makeFetch({ capabilities: { federation: { available: false, default_enabled: false } } });
+		stubProject();
 		await renderSettings();
 		const user = userEvent.setup();
 		await user.click(screen.getByRole('button', { name: 'Cloud access' }));
@@ -63,18 +77,10 @@ describe('environment and access', () => {
 describe('Project settings loading', () => {
 	it('shows cloud access guidance after a pending capabilities request fails', async () => {
 		let resolve!: (response: Response) => void;
-		const promise = new Promise<Response>((done) => {
+		const capabilities = new Promise<Response>((done) => {
 			resolve = done;
 		});
-		makeFetch();
-		const originalFetch = globalThis.fetch;
-		vi.stubGlobal(
-			'fetch',
-			vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-				if (String(input).includes('/capabilities')) return promise;
-				return originalFetch(input, init);
-			}),
-		);
+		stubProject({}, capabilities);
 		await renderSettings();
 		fireEvent.click(screen.getByRole('button', { name: /Cloud access/ }));
 		expect(screen.getByText('Loading cloud access…')).toBeVisible();

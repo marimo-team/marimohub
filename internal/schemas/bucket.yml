@@ -2704,6 +2704,13 @@ components:
             - type: string
               maxLength: 1024
             - type: 'null'
+        digest:
+          type: string
+          maxLength: 128
+        verified_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z))$
       required:
         - schema_version
         - generation
@@ -2741,7 +2748,6 @@ components:
                   - namespace
                   - table
                   - column
-                  - chat
               resource:
                 oneOf:
                   - type: object
@@ -2781,24 +2787,6 @@ components:
                       - type
                       - integration_id
                       - version
-                  - type: object
-                    properties:
-                      type:
-                        type: string
-                        const: chat
-                      conversation_id:
-                        type: string
-                        maxLength: 256
-                      owner_id:
-                        type: string
-                        maxLength: 256
-                      message_id:
-                        type: string
-                        maxLength: 256
-                    required:
-                      - type
-                      - conversation_id
-                      - owner_id
               title:
                 type: string
                 maxLength: 256
@@ -2867,7 +2855,6 @@ components:
                   - namespace
                   - table
                   - column
-                  - chat
               resource:
                 oneOf:
                   - type: object
@@ -2907,24 +2894,6 @@ components:
                       - type
                       - integration_id
                       - version
-                  - type: object
-                    properties:
-                      type:
-                        type: string
-                        const: chat
-                      conversation_id:
-                        type: string
-                        maxLength: 256
-                      owner_id:
-                        type: string
-                        maxLength: 256
-                      message_id:
-                        type: string
-                        maxLength: 256
-                    required:
-                      - type
-                      - conversation_id
-                      - owner_id
               title:
                 type: string
                 maxLength: 256

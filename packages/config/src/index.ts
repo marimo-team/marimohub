@@ -90,7 +90,7 @@ import { integrationProbePolicy, integrationsEnabled, makeIntegrations } from '.
 import { createDuckDBHttpSessionFactory } from './duckdbHttpBroker';
 import { createGuardedHostResolver } from './integrationProbe';
 import { makeNotifier } from './notifications';
-import { supportMode } from './support';
+import { supportReports } from './support';
 import { makeProjectAlerts } from './projectAlerts';
 import { makeResourceSecurity, validateResourceSecurityEnv } from './resourceSecurity';
 import { makeSourceControl } from './sourceControl';
@@ -417,7 +417,18 @@ function parseJobsConfig(env: Env): JobsConfig | undefined {
 }
 
 function parseMcpConfig(env: Env, externalIssuer?: string): McpConfig | undefined {
+	const manualTokens = parseOnOff(env, 'MARIMOHUB_MCP_MANUAL_TOKENS', {
+		fallback: false,
+		docs: 'docs/mcp.md',
+	});
 	if (!parseOnOff(env, 'MARIMOHUB_MCP', { fallback: false, docs: 'docs/mcp.md' })) {
+		if (manualTokens) {
+			throw new ConfigError('MARIMOHUB_MCP_MANUAL_TOKENS=on requires MARIMOHUB_MCP=on', {
+				variable: 'MARIMOHUB_MCP_MANUAL_TOKENS',
+				remediation: 'Set MARIMOHUB_MCP=on or unset MARIMOHUB_MCP_MANUAL_TOKENS',
+				docs: 'docs/mcp.md',
+			});
+		}
 		return undefined;
 	}
 	const baseUrl = env.MARIMOHUB_APP_BASE_URL;
@@ -459,10 +470,7 @@ function parseMcpConfig(env: Env, externalIssuer?: string): McpConfig | undefine
 	}
 	return {
 		publicBaseUrl,
-		manualTokens: parseOnOff(env, 'MARIMOHUB_MCP_MANUAL_TOKENS', {
-			fallback: false,
-			docs: 'docs/mcp.md',
-		}),
+		manualTokens,
 		...(externalIssuer ? { externalAuthorizationServer: externalIssuer } : {}),
 	};
 }
@@ -771,7 +779,7 @@ export function createFromEnv(
 				)
 			: undefined,
 		theme,
-		supportMode: supportMode(env, theme.support_url),
+		supportReports: supportReports(env),
 		projectNotebookTarget: parseEnumOr(
 			env,
 			'MARIMOHUB_PROJECT_NOTEBOOK_TARGET',

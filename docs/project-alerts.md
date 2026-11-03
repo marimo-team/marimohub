@@ -26,7 +26,7 @@ not use the repository's DNS-pinned Node egress transport.
 
 ## Destination workflow
 
-A manager opens **Project alerts** from the project header and adds a Slack incoming webhook or
+A manager selects **Alerts** in the project sidebar and adds a Slack incoming webhook or
 a generic webhook. A project can store at most 10 destinations. New destinations select every
 available event by default, but the manager can choose an exact set.
 

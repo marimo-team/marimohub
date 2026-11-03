@@ -3,7 +3,9 @@ import { screen } from '@testing-library/react';
 import { Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider } from '@/context/AuthContext';
 import { userKeys } from '@/api/queryKeys';
-import { createTestQueryClient, jsonOk, renderWithClient } from '@/test/render';
+import { makeUser, stubApi } from '@/test/apiStub';
+import type { RouteHandler } from '@/test/apiStub';
+import { createTestQueryClient, jsonError, renderWithClient } from '@/test/render';
 import { WorkspaceHome } from './WorkspaceHome';
 import { lastProjectKey } from './lastProject';
 
@@ -17,28 +19,24 @@ function Destination() {
 	);
 }
 
-function setup({ userId = 'u', appOnly = false, route = '/' } = {}) {
-	const requests: string[] = [];
-	const user = { id: userId, email: 'user@example.com', app_only: appOnly };
+const PROJECTS = {
+	items: [
+		{ id: 'alpha', name: 'Alpha', tags: [] },
+		{ id: 'beta', name: 'Beta', tags: [] },
+	],
+	next_cursor: null,
+};
+
+function setup({
+	userId = 'u',
+	appOnly = false,
+	route = '/',
+	projects = PROJECTS as RouteHandler,
+} = {}) {
+	const user = makeUser({ id: userId, app_only: appOnly });
 	const client = createTestQueryClient();
 	client.setQueryData(userKeys.me(), user);
-	vi.stubGlobal(
-		'fetch',
-		vi.fn(async (input: RequestInfo | URL) => {
-			const url = new URL(String(input), 'http://localhost');
-			requests.push(url.pathname);
-			if (url.pathname === '/api/v1/me') return jsonOk(user);
-			if (url.pathname === '/api/v1/projects')
-				return jsonOk({
-					items: [
-						{ id: 'alpha', name: 'Alpha' },
-						{ id: 'beta', name: 'Beta' },
-					],
-					next_cursor: null,
-				});
-			throw new Error(`Unexpected request: ${url}`);
-		}),
-	);
+	const { requests } = stubApi({ '/api/v1/projects': projects }, { me: user });
 	renderWithClient(
 		<AuthProvider>
 			<Routes>
@@ -46,7 +44,7 @@ function setup({ userId = 'u', appOnly = false, route = '/' } = {}) {
 				<Route path="*" element={<Destination />} />
 			</Routes>
 		</AuthProvider>,
-		{ route, toaster: false, client },
+		{ route, toaster: false, client, errorBoundary: true },
 	);
 	return requests;
 }
@@ -98,6 +96,19 @@ describe('Workspace home', () => {
 		expect(await screen.findByRole('status', { name: 'Destination' })).toHaveTextContent(
 			'/projects?q=analysis',
 		);
-		expect(requests).not.toContain('/api/v1/projects');
+		expect(requests.some((url) => url.startsWith('/api/v1/projects'))).toBe(false);
+	});
+	it('shows the project index when there are no projects', async () => {
+		localStorage.setItem(lastProjectKey('u'), 'beta');
+		setup({ projects: { items: [], next_cursor: null } });
+		expect(await screen.findByText('No projects yet')).toBeVisible();
+		expect(screen.queryByRole('status', { name: 'Destination' })).not.toBeInTheDocument();
+	});
+	it('does not redirect when the project list fails', async () => {
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		localStorage.setItem(lastProjectKey('u'), 'beta');
+		setup({ projects: jsonError('UNAVAILABLE', 'Unavailable', 503) });
+		expect(await screen.findByText('Request failed')).toBeVisible();
+		expect(screen.queryByRole('status', { name: 'Destination' })).not.toBeInTheDocument();
 	});
 });

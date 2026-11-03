@@ -17,6 +17,8 @@ export function CreateTokenForm({
 }) {
 	const createToken = useCreateScopedToken(kind);
 	const defaultExpiry = kind === 'mcp' ? '30' : '';
+	// Manual MCP tokens share the OAuth MCP token cap and cannot be permanent.
+	const maxExpiryDays = kind === 'mcp' ? 90 : 3650;
 	const [name, setName] = useState('');
 	const [expiresInDays, setExpiresInDays] = useState(defaultExpiry);
 	const [draft, setDraft] = useState<TokenGrantDraft>({ actions: null, projects: null });
@@ -28,8 +30,11 @@ export function CreateTokenForm({
 			return;
 		}
 		const days = expiresInDays.trim();
-		if (days && (!/^\d+$/.test(days) || Number(days) < 1 || Number(days) > 3650)) {
-			toast.error('Expiry must be a whole number from 1 to 3650 days.');
+		if (
+			(days || kind === 'mcp') &&
+			(!/^\d+$/.test(days) || Number(days) < 1 || Number(days) > maxExpiryDays)
+		) {
+			toast.error(`Expiry must be a whole number from 1 to ${maxExpiryDays} days.`);
 			return;
 		}
 		if (!grant) return;
@@ -68,7 +73,8 @@ export function CreateTokenForm({
 				<div className="w-36 shrink-0">
 					<TextField
 						label="Expires in days"
-						placeholder="never"
+						placeholder={kind === 'api' ? 'never' : undefined}
+						isRequired={kind === 'mcp'}
 						value={expiresInDays}
 						onChange={setExpiresInDays}
 					/>

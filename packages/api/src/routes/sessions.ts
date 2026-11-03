@@ -860,7 +860,7 @@ function withoutConnectionUrls(response: ReturnType<typeof toSessionResponse>) {
 	};
 }
 
-async function presentSession(
+export async function presentSession(
 	deps: ApiDeps,
 	user: AuthUser,
 	session: Session,
@@ -946,14 +946,19 @@ app.openapi(listSessions, async (c) => {
 	return c.json({ success: true, data }, 200);
 });
 
-app.openapi(getSession, async (c) => {
-	const deps = c.get('deps');
-	const { sessions, projects } = deps.services;
-	const user = c.get('user');
-	const { pid, nid, sid } = c.req.valid('param');
+export async function loadAuthorizedSession(
+	deps: ApiDeps,
+	user: AuthenticatedPrincipal,
+	{ pid, nid, sid }: { pid: ProjectId; nid: NotebookId; sid: SessionId },
+): Promise<{
+	project: Project;
+	session: Session;
+	labels: ResourceSecurityLabels | null;
+	appUser: boolean;
+}> {
 	// The project-scoped key masks cross-project IDs; also reject other notebooks.
-	const project = await loadSessionProject(projects, pid, user, deps);
-	const session = await sessions.getSession(pid, sid);
+	const project = await loadSessionProject(deps.services.projects, pid, user, deps);
+	const session = await deps.services.sessions.getSession(pid, sid);
 	if (sessionResourceNotebookId(session) !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
@@ -962,6 +967,17 @@ app.openapi(getSession, async (c) => {
 		requireActivePreview: false,
 	});
 	if (appUser) await assertSessionAccess(project, session, user, deps, labels);
+	return { project, session, labels, appUser };
+}
+
+app.openapi(getSession, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { project, session, labels } = await loadAuthorizedSession(
+		deps,
+		user,
+		c.req.valid('param'),
+	);
 	return c.json(
 		{
 			success: true,
@@ -1757,7 +1773,6 @@ export async function startNotebookSession(input: {
 			});
 
 		const resolveMarimoConfigEnv = async () => {
-			if (!MODE_POLICY[mode].injectDisplayConfig) return;
 			const contributors: MarimoConfigContributor[] = [
 				marimoNotebookDefaults,
 				marimoSharingDisabled,

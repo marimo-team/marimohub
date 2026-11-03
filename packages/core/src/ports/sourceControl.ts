@@ -255,6 +255,7 @@ export interface SourceControlReader {
 		repository: string,
 		commit: string,
 		branch: string,
+		options?: SourceReadOptions,
 	): Promise<SourceWorkspaceFile[]>;
 }
 

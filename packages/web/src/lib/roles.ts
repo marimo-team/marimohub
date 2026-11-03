@@ -68,3 +68,16 @@ export function defaultAccessSummary(
 export function canEditProject(role: ProjectRole | null): boolean {
 	return role === 'editor' || canManageProject(role);
 }
+
+export function canReadProjectSource(role: ProjectRole | null | undefined): boolean {
+	return Boolean(role && role !== 'app-user');
+}
+
+// Viewers and unresolved roles need the deployment's viewer app grant.
+export function canUseApps(
+	role: ProjectRole | null | undefined,
+	capabilities: Pick<Capabilities, 'viewer_session_modes'> | undefined,
+): boolean {
+	if (role && role !== 'viewer') return true;
+	return (capabilities?.viewer_session_modes ?? []).includes('app');
+}

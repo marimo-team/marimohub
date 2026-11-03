@@ -330,7 +330,8 @@ See [Changes and removal](./integrations.md#changes-and-removal) for cleanup beh
   Connections are limited to the app origin. Proxy-mode frames also use only the app origin.
   Direct sandbox exposure permits HTTP(S) frames because providers assign their origins at runtime.
   This frame allowance is intentional and does not protect against iframe exfiltration.
-  The policy also permits local scripts, Google Fonts, image sources, and workers.
+  The policy also permits local scripts (with `'wasm-unsafe-eval'` for WebAssembly), inline styles, HTTPS and data/blob images, and local and blob workers.
+  Fonts are bundled with the app, so `font-src` allows only the app origin.
   Browsers report violations in the developer console. The policy does not block resources yet.
   Before enforcement, review violations from the deployment's integrations and narrow the permitted origins.
   Kernel proxy and HTML snapshot policies remain separate.

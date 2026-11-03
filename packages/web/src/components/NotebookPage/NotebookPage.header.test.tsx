@@ -53,6 +53,18 @@ describe('Notebook header', () => {
 		).not.toBeInTheDocument();
 	});
 
+	it.each(['edit', 'app'] as const)(
+		'shows deployment announcements in %s mode',
+		async (variant) => {
+			makeFetch({ role: 'editor', session: runningSession({ mode: variant }) });
+			renderPage(variant, { branding: { announcement: { id: 'm1', text: 'Maintenance Friday' } } });
+			await screen.findByRole('button', { name: /Session Running/ });
+			expect(screen.getByRole('complementary', { name: 'Announcement' })).toHaveTextContent(
+				'Maintenance Friday',
+			);
+		},
+	);
+
 	it('preserves the notebook title when following the Jobs link', async () => {
 		const user = userEvent.setup();
 		render(

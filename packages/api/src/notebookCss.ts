@@ -1,28 +1,31 @@
-import { BoundedLruMap, UnavailableError } from '@marimo-hub/core';
+import { UnavailableError } from '@marimo-hub/core';
 import type { ThemeConfig } from '@marimo-hub/core/theme';
 
 const MAX_BYTES = 64 * 1024;
 const REVALIDATE_MS = 60_000;
 
 interface Entry {
+	url: string;
 	css: string;
 	etag?: string;
 	checkedAt: number;
 }
 
+// Each deployment theme configures one stylesheet URL, so a single entry suffices.
 export class NotebookCssCache {
-	private readonly entries = new BoundedLruMap<string, Entry>(8);
-	private readonly pending = new Map<string, Promise<string>>();
+	private entry: Entry | undefined;
+	private pending: { url: string; request: Promise<string> } | undefined;
 
 	constructor(private readonly now: () => number = Date.now) {}
 
 	get(url: string): Promise<string> {
-		const cached = this.entries.get(url);
+		const cached = this.entry?.url === url ? this.entry : undefined;
 		if (cached && this.now() - cached.checkedAt < REVALIDATE_MS) return Promise.resolve(cached.css);
-		const pending = this.pending.get(url);
-		if (pending) return pending;
-		const request = this.load(url, cached).finally(() => this.pending.delete(url));
-		this.pending.set(url, request);
+		if (this.pending?.url === url) return this.pending.request;
+		const request = this.load(url, cached).finally(() => {
+			if (this.pending?.request === request) this.pending = undefined;
+		});
+		this.pending = { url, request };
 		return request;
 	}
 
@@ -34,10 +37,15 @@ export class NotebookCssCache {
 				redirect: 'error',
 			});
 			if (response.status === 304 && cached) {
-				this.entries.set(url, { ...cached, checkedAt: this.now() });
+				this.entry = { ...cached, checkedAt: this.now() };
 				return cached.css;
 			}
-			if (!response.ok || !response.body) {
+			const contentType = response.headers.get('content-type');
+			if (
+				!response.ok ||
+				!response.body ||
+				(contentType !== null && contentType.split(';')[0].trim().toLowerCase() !== 'text/css')
+			) {
 				await response.body?.cancel();
 				throw new Error('CSS response unavailable');
 			}
@@ -66,15 +74,18 @@ export class NotebookCssCache {
 				offset += chunk.byteLength;
 			}
 			const css = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-			this.entries.set(url, {
+			this.entry = {
+				url,
 				css,
 				etag: response.headers.get('etag') ?? undefined,
 				checkedAt: this.now(),
-			});
+			};
 			return css;
 		} catch {
+			// Stale-if-error: keep checkedAt unchanged so the next request retries the upstream.
+			if (cached) return cached.css;
 			throw new UnavailableError(
-				'Unable to load deployment notebook CSS. Check MARIMOHUB_THEME_NOTEBOOK_CSS (UTF-8, at most 64 KiB, no redirects).',
+				'Unable to load deployment notebook CSS. Check MARIMOHUB_THEME_NOTEBOOK_CSS (Content-Type text/css when set, UTF-8, at most 64 KiB, no redirects).',
 			);
 		}
 	}

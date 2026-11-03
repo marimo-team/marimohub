@@ -1,11 +1,12 @@
 # Search
 
 Find notebook metadata, saved code and outputs, data sources, namespaces, tables, and columns through the web app, REST API, or MCP.
-Private chat search is not yet available.
 
 ## Enable search
 
 Search defaults to `off`. Set `MARIMOHUB_SEARCH_BACKEND=bucket` and run one server replica with `MARIMOHUB_RUN_MAINTENANCE=true` to maintain the index.
+The [maintenance replica](./operations.md#background-loops) runs the `search_indexing` loop.
+Search runs only on the Node server (`apps/server`). The Cloudflare Worker does not support search.
 Keyword search needs no AI provider.
 
 For semantic notebook search, configure an embeddings endpoint and model:
@@ -18,11 +19,10 @@ MARIMOHUB_SEARCH_EMBEDDING_API_KEY=your-provider-key
 ```
 
 The API key is optional and requires an HTTPS endpoint. Local HTTP endpoints work without a key.
-Enabling embeddings permits sending notebook text to that endpoint.
-Integration configuration and credentials are excluded. Provider failures retain keyword search and report incomplete coverage.
-
-When changing embedding or catalog discovery settings, increase `MARIMOHUB_SEARCH_BUILD_REVISION` (default `1`).
-Use the same revision and settings on all indexing replicas. Do not decrease the revision during rollback.
+Enabling embeddings permits sending notebook text to that endpoint. In `hybrid` mode, the query text is also sent to the provider.
+Integration configuration and credentials are excluded.
+Each indexing batch has a 2-second deadline, and each query embedding has a 500 ms deadline.
+Provider failures and timeouts retain keyword search and report incomplete coverage.
 See [configuration](./configuration.md#search) for available settings.
 
 ### Local embeddings with Ollama
@@ -87,7 +87,7 @@ Data source results open project Integrations. Namespace, table, and column resu
 GET /api/v1/search?q=revenue&project_id=proj-0123456789abcdef&kinds=notebook,code,table&limit=20
 ```
 
-The MCP tool `search_workspace` accepts the same fields, with `kinds` as an array:
+The [MCP](./mcp.md) tool `search_workspace` accepts the same fields, with `kinds` as an array:
 
 ```json
 {
@@ -99,27 +99,27 @@ The MCP tool `search_workspace` accepts the same fields, with `kinds` as an arra
 }
 ```
 
-Omit `project_id` to search across projects. Set `mode` to `hybrid` to include semantic matches when enabled.
+Omit `project_id` to search across projects. Set `mode` to `hybrid` to include semantic matches when enabled; the most similar embedded documents are ranked alongside keyword matches.
 Queries contain 1–256 characters. `limit` ranges from 1 to 50.
+Each user can run 30 queries per minute across REST and MCP on each server replica. The limit is not shared between replicas. Further queries return `429` with `RESOURCE_EXHAUSTED` until the window resets.
 
-Results include a typed resource reference, relative link, index timestamp, score, and plain-text snippet.
-Highlights use UTF-16 offsets. Render snippets as text, never HTML.
-Preserve response order. Scores are not comparable across queries, projects, or sources and must not serve as numeric thresholds.
+Results include a typed resource reference, link, index timestamp, and plain-text snippet.
+Highlights use UTF-16 offsets. Render snippets as text, never HTML. Preserve response order.
+New result kinds, resource types, and coverage statuses can appear in later releases. Clients must ignore unknown `kind` and `coverage.status` values.
 
 ## Access, freshness, and coverage
 
-Search returns only content the caller can currently access. Data search also requires permission to use the integration.
+Search returns only content the caller can currently access. Data source, namespace, table, and column results require the editor role (`integration.use`) in the project; viewers do not see them.
 Search excludes integration credentials and table rows. Saved outputs include plain text and visible HTML text, excluding hidden or external content.
 
 Indexes update asynchronously. New or changed content can remain absent until indexing completes.
-`not_indexed` means no index is available. `stale` means the index is older than 15 minutes.
+`not_indexed` means no index is available. `stale` means the index was last verified more than 15 minutes ago; stale results are still returned and do not mark the search incomplete.
 Persistent storage failures or slow reads can prevent updates indefinitely. Existing results remain subject to current access and content checks.
 
 A coverage notice, or `partial: true` in the API, means the search was incomplete.
 Per-source status identifies failures, timeouts, missing or stale indexes, disabled sources, and exhausted limits.
 An empty result with incomplete coverage does not mean the content is absent.
-The `chat` filter reports `disabled` until private chat search is available.
 
-Global search examines at most 16 projects and can omit projects you can access. Select a project or set `project_id` for project-scoped search.
+Global search covers the first 16 projects you can access, in catalog order, among the first 128 projects in the catalog. It reports `truncated` coverage for the `projects` source when more exist. Select a project or set `project_id` for project-scoped search.
 Large projects and catalogs can also have incomplete coverage.
 Keyword search matches whole tokens, including underscores, without case sensitivity. It does not match prefixes, substrings, or word variants.

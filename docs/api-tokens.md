@@ -12,6 +12,7 @@ created it. It cannot add authority that the user does not have.
 
 MCP clients use OAuth or opt-in [manual MCP tokens](./mcp.md#header-only-clients).
 Create manual MCP tokens in the MCP dialog. Revoke them in **API tokens**.
+Manual MCP tokens work only on MCP. The REST API rejects them with `401`.
 
 For an interactive CLI, run `mohub login`. For a remote CLI, run
 `mohub login --device-code`. Both commands create a 30-day token by default. You
@@ -121,8 +122,9 @@ Token lifecycle is recorded in the audit event stream as `token.create` and
 `token.revoke`, stamped with the acting user. These are account-level events.
 They do not appear in any single project's audit log.
 
-The `token.create` event includes the immutable grant for a scoped token. It
-never includes the token secret.
+The `token.create` event includes the immutable grant for a scoped token. For
+a manual MCP token, it also includes `source: "mcp-manual"` and the bound
+`mcp_resource` URL. It never includes the token secret.
 
 ## Rolling upgrades
 

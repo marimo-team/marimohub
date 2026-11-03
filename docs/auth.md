@@ -134,7 +134,7 @@ IdP group members differ from the deployment-wide [OIDC group mappings](#groups-
 A mapping such as `MARIMOHUB_AUTH_OIDC_DEFAULT_EDITOR_GROUPS` grants a default role on every project.
 An IdP group member grants its role on one project only.
 
-To add a group in **Project Access**:
+To add a group on the project **Members** page:
 
 1. Select **IdP group**.
 2. Enter the exact group id.
@@ -205,7 +205,7 @@ and the next visit starts fresh from the notebook's saved version.
 ### Default access for non-members
 
 `MARIMOHUB_DEFAULT_ROLE` sets access for signed-in non-members (`editor` by default).
-Managers and admins can override it in **Project Access → Default access for signed-in users**.
+Managers and admins can override it on the project **Members** page under **Default access for signed-in users**.
 
 | Setting                                 | API value                                 | Access for non-members                                       |
 | --------------------------------------- | ----------------------------------------- | ------------------------------------------------------------ |

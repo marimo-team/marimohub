@@ -12,8 +12,10 @@ import { WorkspaceLayout } from '@/components/Workspace/WorkspaceLayout';
 import { WorkspaceHome } from '@/components/Workspace/WorkspaceHome';
 import { ProjectJobsPage } from '@/components/Workspace/ProjectJobsPage';
 import { ProjectSettingsPage } from '@/components/Workspace/ProjectSettingsPage';
+import { ProjectSourceGate } from '@/components/Workspace/ProjectSourceGate';
 import { ProjectList } from '@/components/ProjectList/ProjectList';
-import { AppsPage, ProjectEntryPage } from '@/components/Apps/AppsPage';
+import { AppsPage } from '@/components/Apps/AppsPage';
+import { Project } from '@/components/Project/Project';
 import { AppEntryPage } from '@/components/Apps/AppEntryPage';
 import { AppLinkPage } from '@/components/NotebookPage/AppLinkPage';
 import { SnapshotPage } from '@/components/NotebookPage/SnapshotPage';
@@ -133,17 +135,9 @@ function PageFallback() {
 }
 
 function StandardLayout() {
-	const { user, allowed, available } = useSearchAccess();
+	const { user } = useAuth();
 	return (
-		<WorkspaceLayout
-			slots={{
-				search: {
-					to: SEARCH_ROUTE,
-					available,
-					allowed,
-				},
-			}}
-		>
+		<WorkspaceLayout>
 			<AppErrorBoundary>
 				<Suspense fallback={<PageFallback />}>
 					<Routes>
@@ -161,19 +155,15 @@ function StandardLayout() {
 								)
 							}
 						/>
-						<Route path="/projects/:pid" element={<ProjectEntryPage />} />
-						<Route
-							path="/projects/:pid/members"
-							element={<ProjectSettingsPage section="members" />}
-						/>
-						<Route
-							path="/projects/:pid/integrations"
-							element={<ProjectSettingsPage section="integrations" />}
-						/>
-						<Route path="/projects/:pid/jobs" element={<ProjectJobsPage />} />
-						<Route path="/projects/:pid/notebooks/:nid/jobs" element={<JobsPage />} />
-						<Route path="/projects/:pid/data" element={<DataBrowserPage />} />
-						<Route path="/projects/:pid/data/:iid" element={<DataBrowserPage />} />
+						<Route path="/projects/:pid" element={<ProjectSourceGate />}>
+							<Route index element={<Project />} />
+							<Route path="members" element={<ProjectSettingsPage section="members" />} />
+							<Route path="integrations" element={<ProjectSettingsPage section="integrations" />} />
+							<Route path="jobs" element={<ProjectJobsPage />} />
+							<Route path="notebooks/:nid/jobs" element={<JobsPage />} />
+							<Route path="data" element={<DataBrowserPage />} />
+							<Route path="data/:iid" element={<DataBrowserPage />} />
+						</Route>
 						<Route path="/admin" element={<AdminLayout />}>
 							<Route index element={<Navigate to="/admin/users" replace />} />
 							<Route path="users" element={<AdminUsersPage />} />

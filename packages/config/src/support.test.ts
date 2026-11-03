@@ -1,55 +1,47 @@
 import { describe, expect, it } from 'vitest';
-import { supportMode } from './support';
+import { supportReports } from './support';
 
 describe('support configuration', () => {
-	it('defaults to off, then URL, then a usable notifier', () => {
-		expect(supportMode({})).toBe('off');
-		expect(supportMode({}, '/help')).toBe('url');
-		expect(supportMode({ MARIMOHUB_NOTIFY_BACKENDS: 'slack' }, '/help')).toBe('notifier');
+	it('defaults to off, even with a usable notifier', () => {
+		expect(supportReports({})).toBe(false);
+		expect(supportReports({ MARIMOHUB_NOTIFY_BACKENDS: 'slack' })).toBe(false);
+		expect(
+			supportReports({ MARIMOHUB_SUPPORT_REPORTS: 'off', MARIMOHUB_NOTIFY_BACKENDS: 'slack' }),
+		).toBe(false);
 	});
 
-	it('does not advertise filtered or untargeted notification delivery', () => {
-		expect(supportMode({ MARIMOHUB_NOTIFY_BACKENDS: 'smtp' })).toBe('off');
+	it('enables reports with a destination accepting support.request', () => {
 		expect(
-			supportMode({
+			supportReports({ MARIMOHUB_SUPPORT_REPORTS: 'on', MARIMOHUB_NOTIFY_BACKENDS: 'slack' }),
+		).toBe(true);
+		expect(
+			supportReports({
+				MARIMOHUB_SUPPORT_REPORTS: 'on',
 				MARIMOHUB_NOTIFY_BACKENDS: 'smtp',
 				MARIMOHUB_NOTIFY_SMTP_ADMIN_TO: 'admin@example.com',
 			}),
-		).toBe('notifier');
-		expect(
-			supportMode({ MARIMOHUB_NOTIFY_BACKENDS: 'slack', MARIMOHUB_NOTIFY_KINDS: 'none' }, '/help'),
-		).toBe('url');
-		expect(
-			supportMode({
-				MARIMOHUB_NOTIFY_BACKENDS: 'slack',
-				MARIMOHUB_NOTIFY_SLACK_KINDS: 'session.takeover',
-			}),
-		).toBe('off');
+		).toBe(true);
 	});
 
-	it('allows explicit off and URL modes with a notifier configured', () => {
-		expect(
-			supportMode({ MARIMOHUB_SUPPORT_MODE: 'off', MARIMOHUB_NOTIFY_BACKENDS: 'slack' }, '/help'),
-		).toBe('off');
-		expect(
-			supportMode({ MARIMOHUB_SUPPORT_MODE: 'url', MARIMOHUB_NOTIFY_BACKENDS: 'slack' }, '/help'),
-		).toBe('url');
-	});
-
-	it.each(['unknown', 'notifier', 'url'])('rejects unusable mode %s at startup', (mode) => {
-		expect(() => supportMode({ MARIMOHUB_SUPPORT_MODE: mode })).toThrow('MARIMOHUB_SUPPORT_MODE');
-	});
-
-	it('identifies the missing support URL and explains how to configure it', () => {
-		expect(() => supportMode({ MARIMOHUB_SUPPORT_MODE: 'url' })).toThrow(
+	it.each([
+		{},
+		{ MARIMOHUB_NOTIFY_BACKENDS: 'smtp' },
+		{ MARIMOHUB_NOTIFY_BACKENDS: 'slack', MARIMOHUB_NOTIFY_KINDS: 'none' },
+		{ MARIMOHUB_NOTIFY_BACKENDS: 'slack', MARIMOHUB_NOTIFY_SLACK_KINDS: 'session.takeover' },
+	])('rejects on without a destination accepting support.request (%o)', (env) => {
+		expect(() => supportReports({ ...env, MARIMOHUB_SUPPORT_REPORTS: 'on' })).toThrow(
 			expect.objectContaining({
 				name: 'ConfigError',
-				opts: {
-					variable: 'MARIMOHUB_THEME_SUPPORT_URL',
-					remediation: 'Set MARIMOHUB_THEME_SUPPORT_URL to an HTTPS URL or root-relative path.',
-					docs: 'docs/support.md',
-				},
+				message:
+					'MARIMOHUB_SUPPORT_REPORTS=on requires a notification destination accepting support.request',
+				opts: { variable: 'MARIMOHUB_SUPPORT_REPORTS', docs: 'docs/support.md' },
 			}),
+		);
+	});
+
+	it.each(['unknown', 'notifier', 'url'])('rejects unknown value %s at startup', (value) => {
+		expect(() => supportReports({ MARIMOHUB_SUPPORT_REPORTS: value })).toThrow(
+			'MARIMOHUB_SUPPORT_REPORTS',
 		);
 	});
 });

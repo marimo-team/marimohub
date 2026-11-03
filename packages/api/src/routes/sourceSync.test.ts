@@ -177,7 +177,7 @@ describe('Source drift and sync-now routes', () => {
 				repo: repository,
 				commit: 'b'.repeat(40),
 			});
-			expect(reader.getBranchHead).toHaveBeenCalledWith(repository, 'main');
+			expect(reader.getBranchHead).toHaveBeenCalledWith(repository, 'main', expect.anything());
 		},
 	);
 
@@ -199,7 +199,7 @@ describe('Source drift and sync-now routes', () => {
 			provider: 'github',
 			commit: head,
 		});
-		expect(reader.getBranchHead).toHaveBeenCalledWith(repository, 'main');
+		expect(reader.getBranchHead).toHaveBeenCalledWith(repository, 'main', expect.anything());
 	});
 
 	it.each([
@@ -362,7 +362,7 @@ describe('Source drift and sync-now routes', () => {
 			201,
 		);
 		expect(created.notebook.status).toBe('active');
-		expect(fetchWorkspace).toHaveBeenCalledWith('org/repo', HEAD, 'python/apps');
+		expect(fetchWorkspace).toHaveBeenCalledWith('org/repo', HEAD, 'python/apps', expect.anything());
 		const detail = await expectOk<{ source: { sync_mode: string; root_path: string } }>(
 			await request('GET', `/projects/${projectId}/notebooks/${created.notebook.id}`),
 		);
@@ -416,7 +416,7 @@ describe('Source drift and sync-now routes', () => {
 			}),
 			201,
 		);
-		expect(fetchWorkspace).toHaveBeenCalledWith('org/repo', HEAD, 'python');
+		expect(fetchWorkspace).toHaveBeenCalledWith('org/repo', HEAD, 'python', expect.anything());
 		expect(created.notebook.status).toBe('draft');
 		expect(created.sync_error).toMatchObject({
 			code: 'VALIDATION_ERROR',
@@ -543,7 +543,7 @@ describe('Source drift and sync-now routes', () => {
 
 		fetchWorkspace.mockClear();
 		await expectOk(await request('POST', `${path}/sync`));
-		expect(fetchWorkspace).toHaveBeenCalledWith('org/repo', HEAD, 'apps');
+		expect(fetchWorkspace).toHaveBeenCalledWith('org/repo', HEAD, 'apps', expect.anything());
 		const promoted = await expectOk<{ source: { root_path: string; pending_config?: unknown } }>(
 			await request('GET', `/projects/${projectId}/notebooks/${notebookId}`),
 		);

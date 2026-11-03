@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { QueryErrorResetBoundary } from '@tanstack/react-query';
 import { Route, Routes } from 'react-router-dom';
-import { ProjectEntryPage, AppsPage } from '@/components/Apps/AppsPage';
+import { AppsPage } from '@/components/Apps/AppsPage';
+import { ProjectSourceGate } from '@/components/Workspace/ProjectSourceGate';
+import { Project } from './Project';
 import { ErrorBoundary } from '@/components/ui';
 import { notebookKeys, projectKeys } from '@/api/queryKeys';
 import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
@@ -34,7 +36,9 @@ function setup(respond?: (url: URL) => Response | Promise<Response> | undefined)
 			{({ reset }) => (
 				<ErrorBoundary onRetry={reset}>
 					<Routes>
-						<Route path="/projects/:pid" element={<ProjectEntryPage />} />
+						<Route path="/projects/:pid" element={<ProjectSourceGate />}>
+							<Route index element={<Project />} />
+						</Route>
 						<Route path="/apps" element={<AppsPage />} />
 					</Routes>
 				</ErrorBoundary>

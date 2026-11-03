@@ -17,7 +17,6 @@ export const hit: SearchHit = {
 	title: 'Revenue model',
 	project_id: 'alpha',
 	project_name: 'Alpha',
-	score: 1,
 	href: '/projects/alpha/notebooks/n',
 	indexed_at: '2026-11-02T00:00:00Z',
 	snippet: { text: 'annual revenue = 42', highlights: [{ start: 7, end: 14 }] },

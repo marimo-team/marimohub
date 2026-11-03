@@ -2,10 +2,10 @@ import { SUPPORT_LIMITS, supportPageUrl } from '@marimo-hub/core/support';
 import type { operations } from '@marimo-hub/client';
 
 export type SupportContext = NonNullable<
-	operations['support.diagnostics']['requestBody']
+	operations['support.diagnostics.preview']['requestBody']
 >['content']['application/json'];
 export type SupportDiagnostics =
-	operations['support.diagnostics']['responses'][200]['content']['application/json']['data'];
+	operations['support.diagnostics.preview']['responses'][200]['content']['application/json']['data'];
 
 export function clientSupportContext(
 	session?: SupportContext['session'],
@@ -20,15 +20,4 @@ export function clientSupportContext(
 		},
 		...(session ? { session } : {}),
 	};
-}
-
-export function supportPortalUrl(supportUrl: string, diagnostics: string): string | null {
-	const bytes = new TextEncoder().encode(diagnostics);
-	if (bytes.length > 4096) return null;
-	const encoded = btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''));
-	if (encoded.length > 4096) return null;
-	const url = new URL(supportUrl, window.location.origin);
-	if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
-	url.searchParams.set('diagnostics', encoded);
-	return url.href;
 }

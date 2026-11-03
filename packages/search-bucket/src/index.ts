@@ -1,10 +1,14 @@
-import { canClaimSearchBuild, sameSearchBuild } from '@marimo-hub/core/search/build';
+import {
+	canClaimSearchBuild,
+	sameSearchBuild,
+	searchSnapshotDigest,
+} from '@marimo-hub/core/search/build';
+import { selectSearchCandidates } from '@marimo-hub/core/search/embeddings';
 import { withAbortSignal } from '@marimo-hub/core/async';
 import { LRUCache } from 'lru-cache';
 import type { Bucket } from '@marimo-hub/core/ports/bucket';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
 import { searchPaths } from '@marimo-hub/core/search/paths';
-import { MAX_SEARCH_CANDIDATES } from '@marimo-hub/core/search/limits';
 import {
 	MAX_INDEX_BYTES,
 	SearchSnapshotSchema,
@@ -19,7 +23,6 @@ import type {
 	SearchHead,
 	SearchScope,
 	SearchSnapshot,
-	SearchDocument,
 	SearchCandidatesRequest,
 } from '@marimo-hub/core/search/contracts';
 
@@ -69,13 +72,26 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 	}
 	async head(scope: SearchScope, signal: AbortSignal) {
 		const { revision, head } = await this.loadHead(scope, signal);
-		return { revision, build: head?.build, deleted: head?.deleted ?? false };
+		return {
+			revision,
+			build: head?.build,
+			deleted: head?.deleted ?? false,
+			digest: head?.digest,
+			verifiedAt: head?.verified_at,
+		};
 	}
 	async claim(scope: SearchScope, build: SearchBuild, signal: AbortSignal) {
 		SearchBuildSchema.parse(build);
 		const { revision, head } = await this.loadHead(scope, signal);
 		if (head?.deleted || !canClaimSearchBuild(head?.build, build)) return null;
-		if (sameSearchBuild(head?.build, build)) return { revision, build, deleted: false };
+		if (sameSearchBuild(head?.build, build))
+			return {
+				revision,
+				build,
+				deleted: false,
+				digest: head?.digest,
+				verifiedAt: head?.verified_at,
+			};
 		signal.throwIfAborted();
 		try {
 			const result = await this.writeHead(
@@ -87,11 +103,12 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 					key: null,
 					...head,
 					build,
+					verified_at: undefined,
 				},
 				revision,
 				signal,
 			);
-			return { revision: result.etag, build, deleted: false };
+			return { revision: result.etag, build, deleted: false, digest: head?.digest };
 		} catch (error) {
 			if (error instanceof PreconditionFailedError) return null;
 			throw error;
@@ -104,7 +121,12 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 		const cached =
 			this.cache.get(head.key) ?? (await withAbortSignal(this.loadSnapshot(head.key), signal));
 		signal.throwIfAborted();
-		return { revision, snapshot: cached.snapshot, postings: cached.postings };
+		return {
+			revision,
+			snapshot: cached.snapshot,
+			postings: cached.postings,
+			verifiedAt: head.verified_at,
+		};
 	}
 	private loadSnapshot(key: string): Promise<Cached> {
 		const pending = this.loading.get(key);
@@ -146,10 +168,14 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 		const generation = crypto.randomUUID();
 		const paths = searchPaths.scope(scope);
 		const key = snapshot ? paths.snapshot(generation) : null;
+		let digest: string | undefined;
 		if (snapshot && key) {
-			const serialized = JSON.stringify(SearchSnapshotSchema.parse(snapshot));
+			const parsed = SearchSnapshotSchema.parse(snapshot);
+			const serialized = JSON.stringify(parsed);
 			if (new TextEncoder().encode(serialized).length > MAX_INDEX_BYTES)
 				throw new Error('Search snapshot exceeds budget');
+			digest = await searchSnapshotDigest(parsed);
+			signal.throwIfAborted();
 			await this.bucket.put(key, serialized, { onlyIfNotExists: true });
 		}
 		signal.throwIfAborted();
@@ -162,7 +188,25 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 					deleted: snapshot === null,
 					key,
 					build: current.head?.build,
+					digest,
+					verified_at: snapshot?.indexed_at,
 				},
+				revision,
+				signal,
+			);
+			return true;
+		} catch (error) {
+			if (error instanceof PreconditionFailedError) return false;
+			throw error;
+		}
+	}
+	async touch(scope: SearchScope, revision: string, signal: AbortSignal) {
+		const current = await this.loadHead(scope, signal);
+		if (current.revision !== revision || !current.head?.key || current.head.deleted) return false;
+		try {
+			await this.writeHead(
+				scope,
+				{ ...current.head, verified_at: new Date().toISOString() },
 				revision,
 				signal,
 			);
@@ -198,28 +242,22 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 	) {
 		const loaded = await this.read(scope, signal);
 		if (!loaded.snapshot) return { documents: [], partial: true };
-		const indexes = new Set<number>();
+		const matches = new Map<number, number>();
 		for (const term of terms(query))
-			for (const i of loaded.postings?.get(term) ?? []) indexes.add(i);
-		if (embedding)
-			loaded.snapshot.documents.forEach((doc, i) => {
-				if (
-					doc.embedding?.space === embedding.space &&
-					doc.embedding.vector.length === embedding.vector.length
-				)
-					indexes.add(i);
-			});
-		const documents: SearchDocument[] = [];
-		let partial = loaded.snapshot.partial;
-		for (const i of indexes) {
-			const doc = loaded.snapshot.documents[i];
-			if (kinds && !kinds.includes(doc.kind)) continue;
-			if (documents.length === MAX_SEARCH_CANDIDATES) {
-				partial = true;
-				break;
-			}
-			documents.push(doc);
-		}
-		return { documents, indexedAt: loaded.snapshot.indexed_at, partial };
+			for (const i of loaded.postings?.get(term) ?? []) matches.set(i, (matches.get(i) ?? 0) + 1);
+		const { documents } = loaded.snapshot;
+		const selected = selectSearchCandidates(
+			[...matches]
+				.sort(([a, countA], [b, countB]) => countB - countA || a - b)
+				.map(([i]) => documents[i]),
+			documents,
+			{ kinds, embedding },
+		);
+		return {
+			documents: selected.documents,
+			indexedAt: loaded.snapshot.indexed_at,
+			verifiedAt: loaded.verifiedAt,
+			partial: loaded.snapshot.partial || selected.partial,
+		};
 	}
 }

@@ -162,7 +162,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Preview support diagnostics for the signed-in user */
-		post: operations['support.diagnostics'];
+		post: operations['support.diagnostics.preview'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -179,7 +179,7 @@ export interface paths {
 		get?: never;
 		put?: never;
 		/** Send a support request to the deployment notifier */
-		post: operations['support.request'];
+		post: operations['support.requests.create'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -1214,7 +1214,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** Search accessible projects and resources */
-		get: operations['search.workspace'];
+		get: operations['search.query'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -2280,7 +2280,7 @@ export interface paths {
 		put?: never;
 		/**
 		 * Create a manual MCP token
-		 * @description Mint a scoped token bound to this deployment’s MCP URL. Requires session authentication and MARIMOHUB_MCP_MANUAL_TOKENS=on. The plaintext token is returned only once.
+		 * @description Mint a scoped token bound to this deployment’s MCP URL. It authenticates only to MCP, not the REST API, and expires in at most 90 days. Requires session authentication and MARIMOHUB_MCP_MANUAL_TOKENS=on. The plaintext token is returned only once.
 		 */
 		post: operations['auth.tokens.createMcp'];
 		delete?: never;
@@ -2515,8 +2515,8 @@ export interface components {
 		};
 		Capabilities: {
 			support: {
-				/** @enum {string} */
-				mode: 'notifier' | 'url' | 'off';
+				/** @description Users can send problem reports to the deployment notifier. */
+				reports: boolean;
 			};
 			/**
 			 * @description Destination for project notebook links. Users without app permission open the notebook page.
@@ -2615,7 +2615,7 @@ export interface components {
 					| 'namespace'
 					| 'table'
 					| 'column'
-					| 'chat'
+					| 'unknown'
 				)[];
 			};
 			data_browser: {
@@ -3776,6 +3776,73 @@ export interface components {
 			created_by: string;
 			/** Format: date-time */
 			created_at: string;
+		};
+		SearchResponse: {
+			items: {
+				id: string;
+				/**
+				 * @description Known values: notebook, code, output, datasource, namespace, table, column. Unrecognized values normalize to unknown.
+				 * @example notebook
+				 * @enum {string}
+				 */
+				kind:
+					| 'notebook'
+					| 'code'
+					| 'output'
+					| 'datasource'
+					| 'namespace'
+					| 'table'
+					| 'column'
+					| 'unknown';
+				resource:
+					| {
+							/** @enum {string} */
+							type: 'notebook';
+							notebook_id: string;
+					  }
+					| {
+							/** @enum {string} */
+							type: 'integration';
+							integration_id: string;
+							version: number;
+							namespace?: string[];
+							table?: string;
+							column?: string;
+					  };
+				title: string;
+				project_id: string;
+				project_name: string;
+				href: string;
+				/** Format: date-time */
+				indexed_at: string;
+				snippet: {
+					text: string;
+					highlights: {
+						start: number;
+						end: number;
+					}[];
+				};
+			}[];
+			partial: boolean;
+			coverage: {
+				source: string;
+				project_id?: string;
+				/**
+				 * @description Known values: complete, partial, truncated, unavailable, timeout, not_indexed, stale, disabled. Unrecognized values normalize to unknown.
+				 * @example complete
+				 * @enum {string}
+				 */
+				status:
+					| 'complete'
+					| 'partial'
+					| 'truncated'
+					| 'unavailable'
+					| 'timeout'
+					| 'not_indexed'
+					| 'stale'
+					| 'disabled'
+					| 'unknown';
+			}[];
 		};
 		NotebookPreview: {
 			id: string;
@@ -5219,7 +5286,7 @@ export interface operations {
 			};
 		};
 	};
-	'support.diagnostics': {
+	'support.diagnostics.preview': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -5340,7 +5407,7 @@ export interface operations {
 			};
 		};
 	};
-	'support.request': {
+	'support.requests.create': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -13387,11 +13454,12 @@ export interface operations {
 			};
 		};
 	};
-	'search.workspace': {
+	'search.query': {
 		parameters: {
 			query: {
 				q: string;
 				project_id?: string;
+				/** @description Comma-separated result kinds to include. Values: notebook, code, output, datasource, namespace, table, column. */
 				kinds?: string;
 				limit?: number;
 				mode?: 'keyword' | 'hybrid';
@@ -13411,72 +13479,7 @@ export interface operations {
 					'application/json': {
 						/** @enum {boolean} */
 						success: true;
-						data: {
-							items: {
-								id: string;
-								/** @enum {string} */
-								kind:
-									| 'notebook'
-									| 'code'
-									| 'output'
-									| 'datasource'
-									| 'namespace'
-									| 'table'
-									| 'column'
-									| 'chat';
-								resource:
-									| {
-											/** @enum {string} */
-											type: 'notebook';
-											notebook_id: string;
-									  }
-									| {
-											/** @enum {string} */
-											type: 'integration';
-											integration_id: string;
-											version: number;
-											namespace?: string[];
-											table?: string;
-											column?: string;
-									  }
-									| {
-											/** @enum {string} */
-											type: 'chat';
-											conversation_id: string;
-											owner_id: string;
-											message_id?: string;
-									  };
-								title: string;
-								project_id: string;
-								project_name: string;
-								/** @description Unstable ranking detail. Preserve response order; do not apply score thresholds. */
-								score: number;
-								href: string;
-								/** Format: date-time */
-								indexed_at: string;
-								snippet: {
-									text: string;
-									highlights: {
-										start: number;
-										end: number;
-									}[];
-								};
-							}[];
-							partial: boolean;
-							coverage: {
-								source: string;
-								project_id?: string;
-								/** @enum {string} */
-								status:
-									| 'complete'
-									| 'partial'
-									| 'unavailable'
-									| 'timeout'
-									| 'not_indexed'
-									| 'stale'
-									| 'disabled';
-							}[];
-						};
+						data: components['schemas']['SearchResponse'];
 					};
 				};
 			};
@@ -13519,6 +13522,17 @@ export interface operations {
 			/** @description Validation error */
 			422: {
 				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
 					[name: string]: unknown;
 				};
 				content: {
@@ -21289,10 +21303,10 @@ export interface operations {
 					/** @example ci-deploy */
 					name: string;
 					/**
-					 * @description Days until expiry; omit for a non-expiring token.
-					 * @example 90
+					 * @description Days until expiry, at most 90.
+					 * @example 30
 					 */
-					expires_in_days?: number;
+					expires_in_days: number;
 					grant: {
 						actions:
 							| '*'

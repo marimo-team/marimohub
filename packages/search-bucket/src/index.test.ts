@@ -3,6 +3,7 @@ import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { createProjectId, createNotebookId } from '@marimo-hub/core/ids';
 import type { SearchSnapshot } from '@marimo-hub/core/search/contracts';
 import { searchPaths } from '@marimo-hub/core/search/paths';
+import { searchIndexContract } from '@marimo-hub/core/testing/search';
 import { BucketSearchIndex } from './index';
 const signal = () => new AbortController().signal;
 const scope = { projectId: createProjectId(), source: 'notebooks' };
@@ -22,6 +23,7 @@ function snapshot(count = 1): SearchSnapshot {
 	};
 }
 afterEach(() => vi.restoreAllMocks());
+searchIndexContract('BucketSearchIndex', () => new BucketSearchIndex(new MemoryBucket()));
 describe('bucket search index', () => {
 	it('rejects a head pointing outside its own project/source snapshot prefix', async () => {
 		const bucket = new MemoryBucket();
@@ -64,18 +66,6 @@ describe('bucket search index', () => {
 		await expect(index.candidates(scope, { query: 'net_revenue' }, signal())).rejects.toThrow(
 			'storage offline',
 		);
-	});
-	it('admits only one simultaneous first publication', async () => {
-		const bucket = new MemoryBucket();
-		const index = new BucketSearchIndex(bucket);
-		const a = snapshot();
-		const b = snapshot(2);
-		const published = await Promise.all([
-			index.publish(scope, a, null, signal()),
-			index.publish(scope, b, null, signal()),
-		]);
-		expect(published.filter(Boolean)).toHaveLength(1);
-		expect((await index.read(scope, signal())).snapshot).toEqual(published[0] ? a : b);
 	});
 	it('uses an inverted index and reads only the head on warm queries', async () => {
 		const bucket = new MemoryBucket();
@@ -299,33 +289,27 @@ describe('bucket search index', () => {
 
 describe('search build fencing', () => {
 	const build = { revision: 1, source_revision: 1, configuration: 'keyword' };
-	it('claims a new build with a head-only read and preserves the last snapshot', async () => {
+	it('claims and verifies with head-only reads', async () => {
 		const bucket = new MemoryBucket();
 		const index = new BucketSearchIndex(bucket);
-		const data = snapshot();
-		await index.publish(scope, data, null, signal());
-		const previous = await index.head(scope, signal());
+		await index.publish(scope, snapshot(), null, signal());
 		const get = vi.spyOn(bucket, 'get');
 		const claimed = await index.claim(scope, build, signal());
-		expect(get.mock.calls).toEqual([
-			[`_system/search/projects/${scope.projectId}/${scope.source}/head.json`],
-		]);
-		expect(claimed?.revision).not.toBe(previous.revision);
-		expect(await index.publish(scope, snapshot(2), previous.revision, signal())).toBe(false);
-		expect((await index.read(scope, signal())).snapshot).toEqual(data);
-		expect(await index.claim(scope, build, signal())).toEqual(claimed);
+		expect(await index.touch(scope, claimed!.revision!, signal())).toBe(true);
+		expect(new Set(get.mock.calls.map(([key]) => key))).toEqual(
+			new Set([searchPaths.scope(scope).head]),
+		);
+		expect(
+			(await bucket.list({ prefix: searchPaths.scope(scope).snapshots })).objects,
+		).toHaveLength(1);
 	});
-	it('admits one competing claim and rejects any later downgrade', async () => {
+	it('admits one competing first claim', async () => {
 		const index = new BucketSearchIndex(new MemoryBucket());
 		const claims = await Promise.all([
 			index.claim(scope, build, signal()),
 			index.claim(scope, { ...build, source_revision: 2 }, signal()),
 		]);
 		expect(claims.filter(Boolean)).toHaveLength(1);
-		const newest = { ...build, revision: 2, source_revision: 2 };
-		expect(await index.claim(scope, newest, signal())).not.toBeNull();
-		for (const older of [build, { ...newest, revision: 1 }, { ...newest, source_revision: 1 }])
-			expect(await index.claim(scope, older, signal())).toBeNull();
 	});
 	it('rejects oversized UTF-8 build metadata without poisoning the current head', async () => {
 		const index = new BucketSearchIndex(new MemoryBucket());
@@ -334,14 +318,6 @@ describe('search build fencing', () => {
 			index.claim(scope, { ...build, revision: 2, configuration: '界'.repeat(2048) }, signal()),
 		).rejects.toThrow('head exceeds budget');
 		expect(await index.head(scope, signal())).toEqual(previous);
-	});
-	it('does not resurrect a tombstone even with its current revision or a newer build', async () => {
-		const index = new BucketSearchIndex(new MemoryBucket());
-		await index.publish(scope, null, null, signal());
-		const tombstone = await index.head(scope, signal());
-		expect(await index.claim(scope, { ...build, revision: 2 }, signal())).toBeNull();
-		expect(await index.publish(scope, snapshot(), tombstone.revision, signal())).toBe(false);
-		expect(await index.head(scope, signal())).toEqual(tombstone);
 	});
 	it('filters incompatible semantic spaces before the candidate budget', async () => {
 		const index = new BucketSearchIndex(new MemoryBucket());
@@ -367,5 +343,22 @@ describe('search build fencing', () => {
 				)
 			).documents,
 		).toEqual([]);
+	});
+	it('keeps the most similar embedded documents regardless of snapshot order', async () => {
+		const index = new BucketSearchIndex(new MemoryBucket());
+		const data = snapshot(250);
+		data.documents = data.documents.map((doc, i) => ({
+			...doc,
+			embedding: { space: 'current', vector: i === 249 ? [1, 0] : [0.1, 1] },
+		}));
+		await index.publish(scope, data, null, signal());
+		const result = await index.candidates(
+			scope,
+			{ query: 'unmatched', embedding: { space: 'current', vector: [1, 0] } },
+			signal(),
+		);
+		expect(result.documents).toHaveLength(200);
+		expect(result.documents[0].id).toBe('doc-249');
+		expect(result.partial).toBe(false);
 	});
 });

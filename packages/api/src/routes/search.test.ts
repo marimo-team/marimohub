@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AuthorizationService } from '@marimo-hub/core';
-import { ACTOR } from '@marimo-hub/core/testing';
+import { ACTOR, uid } from '@marimo-hub/core/testing';
 import { MemorySearchIndex } from '@marimo-hub/core/testing/search';
 import { NotebookSource, SearchService, SearchIndexer } from '@marimo-hub/core/search';
 import { createInitializedBucket, createTestApi, expectOk, expectError } from '../testing';
 import { connectMcpClient } from '../testing/mcp';
+import { SEARCH_QUERIES_PER_MINUTE } from '../search/operations';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+	vi.restoreAllMocks();
+	vi.useRealTimers();
+});
 async function fixture() {
 	const bucket = await createInitializedBucket();
 	const api = createTestApi({ bucket });
@@ -60,7 +64,15 @@ describe('search REST/MCP parity', () => {
 		expect(response.headers.get('cache-control')).toBe('no-store');
 		const data = await expectOk(response);
 		const mcp = await client.callTool({ name: 'search_workspace', arguments: query });
-		expect(mcp.structuredContent).toEqual(data);
+		expect(mcp.structuredContent).toEqual({
+			...data,
+			items: data.items.map((item: { href: string }) => ({
+				...item,
+				href: expect.stringMatching(
+					new RegExp(`^https?://[^/]+${item.href.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`),
+				),
+			})),
+		});
 		expect(data.items).toHaveLength(1);
 	});
 	it.each([
@@ -105,6 +117,40 @@ describe('search REST/MCP parity', () => {
 		});
 		expect(JSON.stringify(mcp)).not.toContain('private-value');
 	});
+	it('limits each user to 30 queries per minute across both transports', async () => {
+		const { api, client, project } = await fixture();
+		vi.useFakeTimers({ toFake: ['Date'] });
+		const query = { q: 'revenue', project_id: project.id };
+		const path = `/search?${new URLSearchParams(query)}`;
+		for (let i = 1; i < SEARCH_QUERIES_PER_MINUTE; i++)
+			await expectOk(await api.request('GET', path));
+		expect(await client.callTool({ name: 'search_workspace', arguments: query })).not.toMatchObject(
+			{ isError: true },
+		);
+		const limited = await api.request('GET', path);
+		expect(limited.headers.get('retry-after')).toBeTruthy();
+		await expectError(limited, 429, 'RESOURCE_EXHAUSTED');
+		expect(await client.callTool({ name: 'search_workspace', arguments: query })).toMatchObject({
+			isError: true,
+			structuredContent: { code: 'RESOURCE_EXHAUSTED' },
+		});
+		const other = await connectMcpClient(api.deps, {
+			id: uid('other-user'),
+			email: 'other-user@example.com',
+			credential: { kind: 'development' },
+		});
+		expect(await other.callTool({ name: 'search_workspace', arguments: query })).not.toMatchObject({
+			structuredContent: { code: 'RESOURCE_EXHAUSTED' },
+		});
+		vi.setSystemTime(Date.now() + 60_000);
+		await expectOk(await api.request('GET', path));
+	});
+	it('does not spend the query budget on invalid requests', async () => {
+		const { api } = await fixture();
+		for (let i = 0; i <= SEARCH_QUERIES_PER_MINUTE; i++)
+			await expectError(await api.request('GET', '/search?q='), 422);
+		await expectOk(await api.request('GET', '/search?q=revenue'));
+	});
 	it('reports disabled search through both transports', async () => {
 		const api = createTestApi({ bucket: await createInitializedBucket() });
 		const client = await connectMcpClient(api.deps, {
@@ -113,8 +159,7 @@ describe('search REST/MCP parity', () => {
 			credential: { kind: 'development' },
 		});
 		await expectError(await api.request('GET', '/search?q=revenue'), 404);
-		expect(
-			await client.callTool({ name: 'search_workspace', arguments: { q: 'revenue' } }),
-		).toMatchObject({ isError: true, structuredContent: { code: 'NOT_FOUND' } });
+		const { tools } = await client.listTools();
+		expect(tools.map((tool) => tool.name)).not.toContain('search_workspace');
 	});
 });

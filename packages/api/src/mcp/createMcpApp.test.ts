@@ -3,6 +3,7 @@ import { fakeComputeFrom, makeFakeSandbox, MemoryBucket } from '@marimo-hub/core
 import {
 	bearerToken,
 	expandTokenGrantPreset,
+	NotebookId,
 	OAuthAuthorizationId,
 	paths,
 	ProjectId,
@@ -10,8 +11,10 @@ import {
 	UserId,
 } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, TokenGrant } from '@marimo-hub/core';
+import type { SearchIndexer, SearchService } from '@marimo-hub/core/search';
 import { createApi } from '../createApi';
 import { makeTestDeps } from '../testing';
+import { connectMcpClient, postMcp, readMcpResult } from '../testing/mcp';
 import { createOAuthProvider } from './oauthProvider';
 
 const USER: AuthenticatedPrincipal = {
@@ -27,12 +30,6 @@ async function challenge(verifier: string): Promise<string> {
 		.replaceAll('+', '-')
 		.replaceAll('/', '_')
 		.replace(/=+$/, '');
-}
-
-async function mcpJson(response: Response): Promise<unknown> {
-	const text = await response.text();
-	const data = /^data: (.+)$/m.exec(text)?.[1] ?? text;
-	return JSON.parse(data);
 }
 
 async function registerClient(
@@ -202,36 +199,25 @@ describe('MCP OAuth app', () => {
 			expect.objectContaining({ name: `MCP · ${'T'.repeat(94)}` }),
 		);
 
-		const mcpHeaders = {
-			Authorization: `Bearer ${tokens.access_token}`,
-			'Content-Type': 'application/json',
-			Accept: 'application/json, text/event-stream',
-		};
-		const initialized = await app.request('/mcp', {
-			method: 'POST',
-			headers: mcpHeaders,
-			body: JSON.stringify({
-				jsonrpc: '2.0',
-				id: 1,
+		const auth = { Authorization: `Bearer ${tokens.access_token}` };
+		const initialized = await postMcp(
+			app,
+			{
 				method: 'initialize',
 				params: {
 					protocolVersion: '2025-06-18',
 					capabilities: {},
 					clientInfo: { name: 'test', version: '1' },
 				},
-			}),
-		});
+			},
+			auth,
+		);
 		expect(initialized.status).toBe(200);
 
-		const tools = await app.request('/mcp', {
-			method: 'POST',
-			headers: mcpHeaders,
-			body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
-		});
+		const tools = await postMcp(app, { id: 2, method: 'tools/list' }, auth);
 		expect(tools.status).toBe(200);
-		const toolList = (await mcpJson(tools)) as { result: { tools: { name: string }[] } };
-		expect(toolList.result.tools.map((tool) => tool.name)).toEqual([
-			'search_workspace',
+		const toolList = await readMcpResult<{ tools: { name: string }[] }>(tools);
+		expect(toolList.tools.map((tool) => tool.name)).toEqual([
 			'list_catalog',
 			'create_notebook',
 			'sync_notebook_source',
@@ -248,30 +234,21 @@ describe('MCP OAuth app', () => {
 			'get_job_run',
 		]);
 
-		const catalog = await app.request('/mcp', {
-			method: 'POST',
-			headers: mcpHeaders,
-			body: JSON.stringify({
-				jsonrpc: '2.0',
-				id: 3,
-				method: 'tools/call',
-				params: { name: 'list_catalog', arguments: {} },
-			}),
-		});
+		const catalog = await postMcp(
+			app,
+			{ id: 3, method: 'tools/call', params: { name: 'list_catalog', arguments: {} } },
+			auth,
+		);
 		expect(catalog.status).toBe(200);
-		expect(await mcpJson(catalog)).toMatchObject({
-			result: {
-				structuredContent: {
-					projects: [{ name: 'My Project', notebooks: [{ title: 'MCP notebook' }] }],
-				},
+		expect(await readMcpResult(catalog)).toMatchObject({
+			structuredContent: {
+				projects: [{ name: 'My Project', notebooks: [{ title: 'MCP notebook' }] }],
 			},
 		});
 
-		const launched = await app.request('/mcp', {
-			method: 'POST',
-			headers: mcpHeaders,
-			body: JSON.stringify({
-				jsonrpc: '2.0',
+		const launched = await postMcp(
+			app,
+			{
 				id: 4,
 				method: 'tools/call',
 				params: {
@@ -282,50 +259,48 @@ describe('MCP OAuth app', () => {
 						wait_seconds: 0,
 					},
 				},
-			}),
-		});
+			},
+			auth,
+		);
 		expect(launched.status).toBe(200);
-		const launchResult = (await mcpJson(launched)) as {
-			result: { structuredContent: { session_id: string; status: string } };
-		};
-		expect(launchResult.result.structuredContent.status).toBe('running');
+		const launchResult = await readMcpResult<{
+			structuredContent: { session_id: string; status: string };
+		}>(launched);
+		expect(launchResult.structuredContent.status).toBe('running');
 		expect(calls.exposePort).toContainEqual({
 			port: 2718,
 			options: expect.objectContaining({ hostname: 'sandboxes.example.com' }),
 		});
 
-		const executed = await app.request('/mcp', {
-			method: 'POST',
-			headers: mcpHeaders,
-			body: JSON.stringify({
-				jsonrpc: '2.0',
+		const executed = await postMcp(
+			app,
+			{
 				id: 5,
 				method: 'tools/call',
 				params: {
 					name: 'execute_code',
 					arguments: {
 						project: 'My Project',
-						session_id: launchResult.result.structuredContent.session_id,
+						session_id: launchResult.structuredContent.session_id,
 						code: '1+1',
 					},
 				},
-			}),
-		});
+			},
+			auth,
+		);
 		expect(executed.status).toBe(200);
-		expect(await mcpJson(executed)).toMatchObject({
-			result: {
-				structuredContent: {
-					kernel_session_id: 'kernel-one',
-					completed: true,
-					success: true,
-					stdout: '2\n',
-					output: { mimetype: 'text/plain', data: '2' },
-				},
+		expect(await readMcpResult(executed)).toMatchObject({
+			structuredContent: {
+				kernel_session_id: 'kernel-one',
+				completed: true,
+				success: true,
+				stdout: '2\n',
+				output: { mimetype: 'text/plain', data: '2' },
 			},
 		});
 		const storedSession = await deps.services.sessions.getSession(
 			ProjectId.parse(projectId),
-			SessionId.parse(launchResult.result.structuredContent.session_id),
+			SessionId.parse(launchResult.structuredContent.session_id),
 		);
 		expect(kernelAuthorizations).toEqual([
 			`Bearer ${storedSession.kernel_auth_token}`,
@@ -344,15 +319,7 @@ describe('MCP OAuth app', () => {
 			}),
 		});
 		expect(unrelatedRevocation.status).toBe(200);
-		expect(
-			(
-				await app.request('/mcp', {
-					method: 'POST',
-					headers: mcpHeaders,
-					body: JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/list', params: {} }),
-				})
-			).status,
-		).toBe(200);
+		expect((await postMcp(app, { id: 5, method: 'tools/list' }, auth)).status).toBe(200);
 
 		const revoked = await app.request('/revoke', {
 			method: 'POST',
@@ -364,14 +331,7 @@ describe('MCP OAuth app', () => {
 			}),
 		});
 		expect(revoked.status).toBe(200);
-		expect(
-			(
-				await app.request('/mcp', {
-					method: 'POST',
-					headers: mcpHeaders,
-				})
-			).status,
-		).toBe(401);
+		expect((await postMcp(app, { method: 'tools/list' }, auth)).status).toBe(401);
 	});
 
 	it('keeps discovery URLs under a configured public path prefix', async () => {
@@ -652,15 +612,7 @@ describe('MCP OAuth app', () => {
 			USER.id,
 		);
 		const request = (token: string) =>
-			app.request('/mcp', {
-				method: 'POST',
-				headers: {
-					Authorization: `Bearer ${token}`,
-					'Content-Type': 'application/json',
-					Accept: 'application/json, text/event-stream',
-				},
-				body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
-			});
+			postMcp(app, { method: 'tools/list' }, { Authorization: `Bearer ${token}` });
 
 		for (const token of [plain.token, wrongResource.token, wrongScope.token]) {
 			expect((await request(token)).status).toBe(401);
@@ -889,5 +841,50 @@ describe('MCP OAuth app', () => {
 		const app = createApi(makeTestDeps(new MemoryBucket(), { mcp: undefined }));
 		expect((await app.request('/mcp', { method: 'POST' })).status).toBe(404);
 		expect((await app.request('/.well-known/oauth-protected-resource/mcp')).status).toBe(404);
+	});
+
+	it('registers search_workspace only when search is configured and returns absolute links', async () => {
+		const disabled = await connectMcpClient(makeTestDeps(new MemoryBucket()), USER);
+		expect((await disabled.listTools()).tools.map((tool) => tool.name)).not.toContain(
+			'search_workspace',
+		);
+		const search = vi.fn<SearchService['search']>(async () => ({
+			items: [
+				{
+					id: 'doc',
+					kind: 'notebook',
+					resource: { type: 'notebook', notebook_id: NotebookId.create() },
+					title: 'Revenue',
+					project_id: ProjectId.create(),
+					project_name: 'Project',
+					href: '/projects/p/notebooks/n',
+					indexed_at: new Date(0).toISOString(),
+					snippet: { text: 'Revenue', highlights: [] },
+				},
+			],
+			partial: false,
+			coverage: [],
+		}));
+		const client = await connectMcpClient(
+			makeTestDeps(new MemoryBucket(), {
+				search: { service: { search } as unknown as SearchService, indexer: {} as SearchIndexer },
+			}),
+			USER,
+		);
+		const tool = (await client.listTools()).tools.find(({ name }) => name === 'search_workspace');
+		expect(tool?.inputSchema.properties).toMatchObject({
+			q: { description: expect.any(String) },
+			project_id: { description: expect.any(String) },
+			kinds: { description: expect.any(String) },
+			limit: { description: expect.any(String) },
+			mode: { description: expect.any(String) },
+		});
+		expect(
+			await client.callTool({ name: 'search_workspace', arguments: { q: 'revenue' } }),
+		).toMatchObject({
+			structuredContent: {
+				items: [{ href: 'https://hub.example.com/projects/p/notebooks/n' }],
+			},
+		});
 	});
 });

@@ -1,17 +1,5 @@
 import { PROJECT_SEARCH_ROUTE } from '@/lib/workspaceSearch';
-import { matchPath } from 'react-router-dom';
-
-export interface WorkspaceNavigationSlot {
-	to: string;
-	available: boolean;
-	allowed: boolean;
-}
-
-// Register destinations only when their routes and permission checks are available.
-export interface WorkspaceNavigationSlots {
-	search?: WorkspaceNavigationSlot;
-	chat?: WorkspaceNavigationSlot;
-}
+import { matchPath, useLocation } from 'react-router-dom';
 
 export function workspaceRoute(pathname: string) {
 	const pid = matchPath('/projects/:pid/*', pathname)?.params.pid;
@@ -24,14 +12,16 @@ export function workspaceRoute(pathname: string) {
 			? 'search'
 			: matchPath('/projects/:pid/data/*', pathname)
 				? 'data'
-				: matchPath('/projects/:pid/chat/*', pathname)
-					? 'chat'
-					: matchPath('/projects/:pid/members', pathname)
-						? 'members'
-						: matchPath('/projects/:pid/integrations', pathname)
-							? 'integrations'
-							: matchPath('/projects/:pid', pathname)
-								? 'notebooks'
-								: null;
+				: matchPath('/projects/:pid/members', pathname)
+					? 'members'
+					: matchPath('/projects/:pid/integrations', pathname)
+						? 'integrations'
+						: matchPath('/projects/:pid', pathname)
+							? 'notebooks'
+							: null;
 	return { pid, section };
+}
+
+export function useWorkspaceRoute() {
+	return workspaceRoute(useLocation().pathname);
 }

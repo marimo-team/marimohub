@@ -19,7 +19,6 @@ export const SEARCH_KINDS = [
 	'namespace',
 	'table',
 	'column',
-	'chat',
 ] as const;
 export const SearchKindSchema = z.enum(SEARCH_KINDS);
 export const SearchRequestSchema = z.object({
@@ -40,12 +39,6 @@ export const SearchResourceSchema = z.discriminatedUnion('type', [
 		table: z.string().max(256).optional(),
 		column: z.string().max(256).optional(),
 	}),
-	z.object({
-		type: z.literal('chat'),
-		conversation_id: z.string().max(256),
-		owner_id: z.string().max(256),
-		message_id: z.string().max(256).optional(),
-	}),
 ]);
 export const SearchDocumentSchema = z.object({
 	id: z.string().min(1).max(1024),
@@ -54,7 +47,7 @@ export const SearchDocumentSchema = z.object({
 	title: z.string().max(256),
 	text: z.string().max(MAX_SEARCH_TEXT_LENGTH),
 	fingerprint: z.string().max(256),
-	// Only notebook sources can opt into sending content to an embedding provider.
+	// Only `embeddable` sources send content to an embedding provider.
 	embedding: z
 		.object({
 			space: z.string().max(512),
@@ -83,6 +76,10 @@ export const SearchHeadSchema = z.object({
 	fence: z.uuid().optional(),
 	build: SearchBuildSchema.optional(),
 	key: z.string().max(1024).nullable(),
+	/** Content digest of the published snapshot; an equal recrawl only advances `verified_at`. */
+	digest: z.string().max(128).optional(),
+	/** When this build last published or confirmed the snapshot; a new build clears it. */
+	verified_at: z.iso.datetime().optional(),
 });
 export type SearchHead = z.infer<typeof SearchHeadSchema>;
 export const SearchCursorSchema = z.object({
@@ -109,9 +106,6 @@ export const SearchHitSchema = SearchDocumentSchema.pick({
 }).extend({
 	project_id: ProjectIdSchema,
 	project_name: z.string().max(256),
-	score: z
-		.number()
-		.describe('Unstable ranking detail. Preserve response order; do not apply score thresholds.'),
 	href: z.string().max(4096),
 	indexed_at: z.iso.datetime(),
 	snippet: z.object({
@@ -123,6 +117,16 @@ export const SearchHitSchema = SearchDocumentSchema.pick({
 			.max(200),
 	}),
 });
+export const SEARCH_COVERAGE_STATUSES = [
+	'complete',
+	'partial',
+	'truncated',
+	'unavailable',
+	'timeout',
+	'not_indexed',
+	'stale',
+	'disabled',
+] as const;
 export const SearchResponseSchema = z.object({
 	items: z.array(SearchHitSchema).max(50),
 	partial: z.boolean(),
@@ -131,15 +135,7 @@ export const SearchResponseSchema = z.object({
 			z.object({
 				source: z.string().max(64),
 				project_id: ProjectIdSchema.optional(),
-				status: z.enum([
-					'complete',
-					'partial',
-					'unavailable',
-					'timeout',
-					'not_indexed',
-					'stale',
-					'disabled',
-				]),
+				status: z.enum(SEARCH_COVERAGE_STATUSES),
 			}),
 		)
 		.max(100),
@@ -159,12 +155,19 @@ export interface SearchRetriever {
 		scope: SearchScope,
 		request: SearchCandidatesRequest,
 		signal: AbortSignal,
-	): Promise<{ documents: SearchDocument[]; indexedAt?: string; partial: boolean }>;
+	): Promise<{
+		documents: SearchDocument[];
+		indexedAt?: string;
+		verifiedAt?: string;
+		partial: boolean;
+	}>;
 }
 export interface SearchRevision {
 	revision: string | null;
 	build?: SearchBuild;
 	deleted: boolean;
+	digest?: string;
+	verifiedAt?: string;
 }
 /** Snapshot ingestion is separate from query retrieval; other engines can use different writers. */
 export interface SearchSnapshotStore {
@@ -186,12 +189,16 @@ export interface SearchSnapshotStore {
 		revision: string | null,
 		signal: AbortSignal,
 	): Promise<boolean>;
+	/** Record that a recrawl at `revision` matched the published snapshot. False means the head changed or has no snapshot. */
+	touch(scope: SearchScope, revision: string, signal: AbortSignal): Promise<boolean>;
 }
 export interface SearchSource {
 	readonly id: string;
 	/** Increase when extraction or cursor interpretation changes. */
 	readonly revision: number;
 	readonly configuration?: string;
+	/** Documents may be sent to the configured embedding provider. */
+	readonly embeddable?: boolean;
 	readonly kinds: readonly SearchDocument['kind'][];
 	page(
 		project: Project,

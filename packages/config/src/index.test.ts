@@ -61,6 +61,20 @@ describe('createFromEnv auth backend selection', () => {
 		},
 	);
 
+	it.each([undefined, 'off'] as const)(
+		'preserves help links with support reports %s',
+		(reports) => {
+			const deps = createFromEnv({
+				...baseEnv,
+				MARIMOHUB_AUTH_BACKEND: 'dev',
+				MARIMOHUB_THEME_SUPPORT_URL: 'https://support.example/new?category=hub',
+				MARIMOHUB_SUPPORT_REPORTS: reports,
+			});
+			expect(deps.theme?.support_url).toBe('https://support.example/new?category=hub');
+			expect(deps.supportReports).toBe(false);
+		},
+	);
+
 	it('throws when MARIMOHUB_AUTH_BACKEND is unset (fail closed)', () => {
 		expect(() => createFromEnv({ ...baseEnv })).toThrow(/MARIMOHUB_AUTH_BACKEND/);
 	});
@@ -1937,6 +1951,22 @@ describe('createFromEnv MCP config', () => {
 				MARIMOHUB_MCP_MANUAL_TOKENS: 'yes',
 			}),
 		).toThrow(/MARIMOHUB_MCP_MANUAL_TOKENS/);
+	});
+
+	it.each([undefined, 'off'])('validates the manual token flag when MCP is %s', (mcp) => {
+		const env = { ...baseEnv, MARIMOHUB_MCP: mcp };
+		expect(() => createFromEnv({ ...env, MARIMOHUB_MCP_MANUAL_TOKENS: 'yes' })).toThrow(
+			/MARIMOHUB_MCP_MANUAL_TOKENS/,
+		);
+		expect(() => createFromEnv({ ...env, MARIMOHUB_MCP_MANUAL_TOKENS: 'on' })).toThrow(
+			expect.objectContaining({
+				opts: expect.objectContaining({
+					variable: 'MARIMOHUB_MCP_MANUAL_TOKENS',
+					remediation: 'Set MARIMOHUB_MCP=on or unset MARIMOHUB_MCP_MANUAL_TOKENS',
+				}),
+			}),
+		);
+		expect(createFromEnv({ ...env, MARIMOHUB_MCP_MANUAL_TOKENS: 'off' }).mcp).toBeUndefined();
 	});
 
 	it('requires and normalizes the public app URL when enabled', () => {
