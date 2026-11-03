@@ -5,7 +5,17 @@ import { cn } from '@/lib/utils';
 import { useBranding } from '@/context/BrandingContext';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { MenuTrigger, Button, Popover, Menu, MenuItem, Separator } from 'react-aria-components';
-import { ChevronDown, Copy, KeyRound, Moon, Plug, Puzzle, Shield, Sun } from 'lucide-react';
+import {
+	ArrowUpRight,
+	ChevronDown,
+	Copy,
+	KeyRound,
+	Moon,
+	Plug,
+	Puzzle,
+	Shield,
+	Sun,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
@@ -64,9 +74,12 @@ export function Header({ navigationTrigger }: { navigationTrigger?: ReactNode })
 						href={link.href}
 						target={shellLinkTarget(link)}
 						rel="noopener noreferrer"
-						className="flex min-h-11 items-center px-3 py-2 text-sm max-md:px-2"
+						className="flex min-h-11 items-center gap-1 px-3 py-2 text-sm max-md:px-2"
 					>
 						{link.label}
+						{shellLinkTarget(link) === '_blank' && (
+							<ArrowUpRight aria-hidden="true" className="size-3.5 shrink-0" />
+						)}
 					</a>
 				))}
 			</nav>
