@@ -7,8 +7,17 @@ import { createTestQueryClient } from '@/test/render';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { OpenMenu } from './OpenMenu';
 import { useSurfaceActions } from '@/api/surfaces';
+import type { Session } from '@/types';
 
-function TestMenu({ canRunApp, isApp }: { canRunApp: boolean; isApp: boolean }) {
+function TestMenu({
+	canRunApp,
+	isApp,
+	session,
+}: {
+	canRunApp: boolean;
+	isApp: boolean;
+	session?: Session;
+}) {
 	const actions = useSurfaceActions('proj-1', 'nb-1');
 	return (
 		<OpenMenu
@@ -18,6 +27,7 @@ function TestMenu({ canRunApp, isApp }: { canRunApp: boolean; isApp: boolean }) 
 			canRunApp={canRunApp}
 			actions={actions}
 			isApp={isApp}
+			session={session}
 			onOpenFrame={() => {}}
 			onCloseFrame={() => {}}
 		/>
@@ -41,7 +51,8 @@ function renderMenu({
 	canRunApp = true,
 	isApp = false,
 	path = '/projects/proj-1/notebooks/nb-1',
-}: { canRunApp?: boolean; isApp?: boolean; path?: string } = {}) {
+	session,
+}: { canRunApp?: boolean; isApp?: boolean; path?: string; session?: Session } = {}) {
 	const client = createTestQueryClient();
 	const wrapper = ({ children }: { children: ReactNode }) => (
 		<MemoryRouter initialEntries={[path]}>
@@ -54,7 +65,7 @@ function renderMenu({
 				path="*"
 				element={
 					<>
-						<TestMenu canRunApp={canRunApp} isApp={isApp} />
+						<TestMenu canRunApp={canRunApp} isApp={isApp} session={session} />
 						<LocationProbe />
 					</>
 				}
@@ -114,5 +125,58 @@ describe('OpenMenu', () => {
 		expect(screen.getByTestId('location').textContent).toBe(
 			`/projects/proj-1/notebooks/nb-1${suffix}`,
 		);
+	});
+});
+
+const linkedSession: Session = {
+	session_id: 'sess-1',
+	project_id: 'proj-1',
+	notebook_id: 'nb-1',
+	mode: 'edit',
+	status: 'running',
+	started_at: '2026-06-24T12:00:00Z',
+	last_heartbeat: '2026-06-24T12:00:00Z',
+	can: { attach: true, stop: true },
+	links: [
+		{ id: 'lookout', label: 'Lookout', href: 'https://lookout.example/?jobSet=sb-123' },
+		{ id: 'logs', label: 'Logs', href: 'https://logs.example/sess-1' },
+	],
+};
+
+describe('session links', () => {
+	it.each(['starting', 'running', 'failed'] as const)(
+		'shows external links in their own group while %s',
+		async (status) => {
+			const user = userEvent.setup();
+			renderMenu({ session: { ...linkedSession, status } });
+			await user.click(screen.getByRole('button', { name: 'Open' }));
+			const link = screen.getByRole('menuitem', { name: 'Open in Lookout' });
+			expect(link.tagName).toBe('A');
+			expect(link).toHaveAttribute('href', linkedSession.links![0].href);
+			expect(link).toHaveAttribute('target', '_blank');
+			expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+			expect(screen.getAllByRole('separator')).toHaveLength(1);
+			expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+				'Run as app',
+				'View static outputs',
+				'Open in Lookout',
+				'Open in Logs',
+			]);
+		},
+	);
+
+	it.each([
+		{ session: undefined },
+		{ session: { ...linkedSession, links: undefined } },
+		{ session: { ...linkedSession, links: [] } },
+		{ session: { ...linkedSession, can: { attach: false, stop: true } } },
+		{ session: { ...linkedSession, mode: 'app' as const } },
+		{ session: linkedSession, isApp: true },
+	])('omits links and their separator when unavailable (%j)', async (options) => {
+		const user = userEvent.setup();
+		renderMenu(options);
+		await user.click(screen.getByRole('button', { name: 'Open' }));
+		expect(screen.queryByRole('menuitem', { name: 'Open in Lookout' })).toBeNull();
+		expect(screen.queryByRole('separator')).toBeNull();
 	});
 });

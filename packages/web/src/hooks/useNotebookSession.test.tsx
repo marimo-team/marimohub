@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import type { Session } from '@/types';
 import { deferred } from '@/test/deferred';
@@ -1522,5 +1522,181 @@ describe('useNotebookSession (app mode)', () => {
 		act(() => result.current.restart());
 		await waitFor(() => expect(result.current.session?.session_id).toBe('sess-2'));
 		expect(result.current.error).toBeNull();
+	});
+});
+
+describe('session diagnostic links', () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+
+	function linkedSession(overrides: Partial<Session> = {}): Session {
+		return makeSession({
+			mode: 'edit',
+			status: 'starting',
+			sandbox_url: undefined,
+			can: { attach: true, stop: true },
+			links: [{ id: 'logs', label: 'Logs', href: 'https://logs.example/old' }],
+			...overrides,
+		});
+	}
+
+	it.each(['starting', 'running'] as const)(
+		'keeps the final links after a %s session fails and clears them on retry',
+		async (status) => {
+			const failed = linkedSession({
+				status: 'failed',
+				links: [{ id: 'lookout', label: 'Lookout', href: 'https://lookout.example/final-job' }],
+			});
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
+					jsonOk(
+						init?.method === 'POST'
+							? makeSession({
+									mode: 'edit',
+									status,
+									sandbox_url: status === 'running' ? 'https://kernel.example' : undefined,
+								})
+							: failed,
+					),
+				),
+			);
+			const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), {
+				toaster: false,
+			});
+			await settleHook();
+			await act(() => vi.advanceTimersByTimeAsync(30_000));
+			expect(result.current.session).toBeNull();
+			expect(result.current.isRunning).toBe(false);
+			expect(result.current.diagnosticSession).toEqual(failed);
+
+			act(() => result.current.start());
+			expect(result.current.diagnosticSession).toBeNull();
+			await settleHook();
+		},
+	);
+
+	it('replaces links during startup and removes them when access is revoked', async () => {
+		const next = linkedSession({
+			links: [{ id: 'lookout', label: 'Lookout', href: 'https://lookout.example/warm-sandbox' }],
+		});
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
+				jsonOk(init?.method === 'POST' ? { ...next, links: [] } : next),
+			),
+		);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		await settleHook();
+		await act(() => vi.advanceTimersByTimeAsync(SESSION_START_POLL_INTERVAL_MS));
+		expect(result.current.session?.links).toEqual(next.links);
+
+		next.status = 'running';
+		next.can.attach = false;
+		next.links = undefined;
+		await act(() => vi.advanceTimersByTimeAsync(SESSION_START_POLL_INTERVAL_MS));
+		expect(result.current.session).toBeNull();
+		expect(result.current.diagnosticSession).toBeNull();
+		expect(result.current.error?.code).toBe('FORBIDDEN');
+	});
+
+	it.each(['terminated', 'expired', 'missing'] as const)(
+		'discards diagnostic links when the session becomes %s',
+		async (outcome) => {
+			const starting = linkedSession();
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+					if (init?.method === 'POST') return jsonOk(starting);
+					return outcome === 'missing'
+						? jsonError('NOT_FOUND', 'Session not found', 404)
+						: jsonOk({ ...starting, status: outcome });
+				}),
+			);
+			const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), {
+				toaster: false,
+			});
+			await settleHook();
+			expect(result.current.session?.links).toEqual(starting.links);
+			await act(() => vi.advanceTimersByTimeAsync(SESSION_START_POLL_INTERVAL_MS));
+			expect(result.current.session).toBeNull();
+			expect(result.current.diagnosticSession).toBeNull();
+		},
+	);
+
+	it('retains the last known links after the local startup timeout', async () => {
+		const starting = linkedSession({
+			links: [{ id: 'logs', label: 'Logs', href: 'https://logs.example/queued' }],
+		});
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => jsonOk(starting)),
+		);
+		const { result } = renderHookWithClient(
+			() => useNotebookSession(PID, NID, { startupTimeoutSeconds: 1 }),
+			{ toaster: false },
+		);
+		await settleHook();
+		await act(() => vi.advanceTimersByTimeAsync(33_000));
+		expect(result.current.error?.code).toBe('STARTUP_TIMEOUT');
+		expect(result.current.session).toBeNull();
+		expect(result.current.isProvisioning).toBe(false);
+		expect(result.current.sandboxUrl).toBeUndefined();
+		expect(result.current.diagnosticSession?.links).toEqual(starting.links);
+	});
+
+	it.each(['stop', 'start'] as const)(
+		'does not restore old links when a failure response arrives after %s',
+		async (action) => {
+			const pending = deferred<Response>();
+			let starts = 0;
+			const starting = linkedSession();
+			const fresh = { ...starting, session_id: 'sess-2', links: [] };
+			const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'DELETE') return jsonOk({});
+				if (init?.method === 'POST') return jsonOk(++starts === 1 ? starting : fresh);
+				return pending.promise;
+			});
+			vi.stubGlobal('fetch', fetchMock);
+			const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), {
+				toaster: false,
+			});
+			await settleHook();
+			await act(() => vi.advanceTimersByTimeAsync(SESSION_START_POLL_INTERVAL_MS));
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			act(() => result.current[action]());
+			await settleHook();
+			pending.resolve(jsonOk({ ...starting, status: 'failed' }));
+			await settleHook();
+			expect(result.current.diagnosticSession).toBeNull();
+			expect(result.current.error).toBeNull();
+			expect(result.current.session).toEqual(action === 'start' ? fresh : null);
+		},
+	);
+
+	it('does not restore the previous failure links when the retry request fails', async () => {
+		let starts = 0;
+		const starting = linkedSession();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'POST') {
+					return ++starts === 1
+						? jsonOk(starting)
+						: jsonError('SERVICE_UNAVAILABLE', 'Compute unavailable', 503);
+				}
+				return jsonOk({ ...starting, status: 'failed' });
+			}),
+		);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		await settleHook();
+		await act(() => vi.advanceTimersByTimeAsync(SESSION_START_POLL_INTERVAL_MS));
+		expect(result.current.diagnosticSession?.links).toEqual(starting.links);
+		act(() => result.current.start());
+		await settleHook();
+		expect(result.current.error?.message).toBe('Compute unavailable');
+		expect(result.current.session).toBeNull();
+		expect(result.current.diagnosticSession).toBeNull();
 	});
 });

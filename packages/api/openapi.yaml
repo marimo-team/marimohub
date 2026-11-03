@@ -3531,6 +3531,21 @@ components:
             - expired
         sandbox_url:
           type: string
+        links:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              label:
+                type: string
+              href:
+                type: string
+            required:
+              - id
+              - label
+              - href
         started_at:
           type: string
           format: date-time

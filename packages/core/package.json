@@ -68,6 +68,7 @@
 		"./testing/workspace-fixtures": "./src/testing/workspaceFixtures.ts",
 		"./support": "./src/support.ts",
 		"./theme": "./src/theme.ts",
+		"./session-links": "./src/sessionLinks.ts",
 		"./timing": "./src/timing.ts",
 		"./token-grants": "./src/tokenGrants.ts",
 		"./url": "./src/url.ts",

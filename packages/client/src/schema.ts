@@ -3953,6 +3953,11 @@ export interface components {
 			/** @enum {string} */
 			status: 'starting' | 'running' | 'terminating' | 'terminated' | 'failed' | 'expired';
 			sandbox_url?: string;
+			links?: {
+				id: string;
+				label: string;
+				href: string;
+			}[];
 			/**
 			 * Format: date-time
 			 * @example 2025-03-05T14:00:00Z

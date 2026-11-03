@@ -170,6 +170,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 
 	const {
 		session,
+		diagnosticSession,
 		error,
 		isProvisioning,
 		isRunning,
@@ -471,6 +472,7 @@ function useNotebookPageModel({ variant = 'edit', target }: NotebookPageProps) {
 		selectedApplicationKey,
 		selectedComputeProfile,
 		session,
+		diagnosticSession,
 		setEditIntent,
 		setSelectedApplicationKey,
 		setSplitApplicationKey,
@@ -555,6 +557,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 		selectedApplicationKey,
 		selectedComputeProfile,
 		session,
+		diagnosticSession,
 		setEditIntent,
 		setSelectedApplicationKey,
 		setSplitApplicationKey,
@@ -660,7 +663,7 @@ function renderNotebookPage(model: ReturnType<typeof useNotebookPageModel>) {
 						title={title}
 						canRunApp={!isApp && canRunApp}
 						actions={surfaceActions}
-						session={session}
+						session={session ?? diagnosticSession}
 						capabilities={capabilities}
 						notebook={notebook}
 						isApp={isApp}

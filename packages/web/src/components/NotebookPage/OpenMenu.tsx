@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import { notebookAppUrl } from '@/lib/notebookUrls';
-import { Bot, Camera, Code2, PanelsTopLeft, Play, Square } from 'lucide-react';
+import { Bot, Camera, Code2, ExternalLink, PanelsTopLeft, Play, Square } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { useSurfaceActions } from '@/api/surfaces';
 import { DropdownMenu } from '@/components/ui';
@@ -130,6 +130,19 @@ export function OpenMenu({
 		icon: <Camera className="size-3.5" />,
 		separatorBefore: controls.length > 0 && !canOpenApp,
 	});
+
+	if (!isApp && session?.mode === 'edit' && session.can.attach) {
+		options.push(
+			...(session.links ?? []).map((link, index) => ({
+				id: `session-link:${link.id}`,
+				label: `Open in ${link.label}`,
+				href: link.href,
+				target: '_blank' as const,
+				icon: <ExternalLink className="size-3.5" />,
+				separatorBefore: index === 0,
+			})),
+		);
+	}
 
 	const start = (control: (typeof controls)[number]) => {
 		if (!session) return;

@@ -5,6 +5,39 @@ import { parseTheme } from './theme';
 import { createFromEnv } from './index';
 
 describe('deployment theme configuration', () => {
+	it('wires server-only session link templates through the composition root', () => {
+		const links = [
+			{
+				id: 'lookout',
+				label: 'Lookout',
+				href_template: 'https://lookout.example/?jobSet={sandbox_id}',
+			},
+		];
+		const deps = createFromEnv({
+			MARIMOHUB_STORAGE_BACKEND: 'memory',
+			MARIMOHUB_ALLOW_EPHEMERAL_STORAGE: 'true',
+			MARIMOHUB_COMPUTE_BACKEND: 'none',
+			MARIMOHUB_AUTH_BACKEND: 'dev',
+			MARIMOHUB_THEME_SESSION_LINKS: JSON.stringify(links),
+		});
+		expect(deps.theme?.session_links).toEqual(links);
+		expect(parseTheme({ MARIMOHUB_THEME_SESSION_LINKS: '  ' }).session_links).toBeUndefined();
+		expect(parseTheme({ MARIMOHUB_THEME_SESSION_LINKS: '[]' }).session_links).toEqual([]);
+	});
+
+	it.each([
+		'{',
+		'null',
+		'{}',
+		'[{"id":"logs","label":"Logs","href_template":"javascript:alert(1)"}]',
+		'[{"id":"logs","label":"Logs","href_template":"https://logs.example/{job_id}"}]',
+	])('reports the configuration variable for invalid session links %s', (value) => {
+		expect(() => parseTheme({ MARIMOHUB_THEME_SESSION_LINKS: value })).toThrow(ConfigError);
+		expect(() => parseTheme({ MARIMOHUB_THEME_SESSION_LINKS: value })).toThrow(
+			'MARIMOHUB_THEME_SESSION_LINKS',
+		);
+	});
+
 	it.each(['user', 'light', 'dark'] as const)('accepts color mode %s', (mode) => {
 		expect(parseTheme({ MARIMOHUB_THEME_COLOR_MODE: ` ${mode} ` }).color_mode).toBe(mode);
 	});

@@ -1,9 +1,10 @@
-import { DEFAULT_THEME_CONFIG, ThemeConfigSchema } from '@marimo-hub/core/theme';
-import type { ThemeConfig } from '@marimo-hub/core/theme';
+import { DEFAULT_THEME_CONFIG, DeploymentThemeConfigSchema } from '@marimo-hub/core/theme';
+import type { DeploymentThemeConfig } from '@marimo-hub/core/theme';
 import { parseHttpUrl } from '@marimo-hub/core/url';
 import { ConfigError } from './errors';
 
 const THEME_VARIABLES = {
+	session_links: 'MARIMOHUB_THEME_SESSION_LINKS',
 	nav_links: 'MARIMOHUB_THEME_NAV_LINKS',
 	docs_url: 'MARIMOHUB_THEME_DOCS_URL',
 	support_url: 'MARIMOHUB_THEME_SUPPORT_URL',
@@ -26,12 +27,12 @@ export type ThemeEnv = Partial<
 	Record<(typeof THEME_VARIABLES)[keyof typeof THEME_VARIABLES], string>
 > & { MARIMOHUB_APP_BASE_URL?: string };
 
-export function parseTheme(env: ThemeEnv): ThemeConfig {
-	const values: Partial<Record<keyof ThemeConfig, unknown>> = { ...DEFAULT_THEME_CONFIG };
-	for (const key of Object.keys(THEME_VARIABLES) as (keyof ThemeConfig)[]) {
+export function parseTheme(env: ThemeEnv): DeploymentThemeConfig {
+	const values: Partial<Record<keyof DeploymentThemeConfig, unknown>> = { ...DEFAULT_THEME_CONFIG };
+	for (const key of Object.keys(THEME_VARIABLES) as (keyof DeploymentThemeConfig)[]) {
 		const value = env[THEME_VARIABLES[key]]?.trim();
 		if (!value) continue;
-		if (key === 'nav_links' || key === 'announcement') {
+		if (key === 'nav_links' || key === 'announcement' || key === 'session_links') {
 			try {
 				values[key] = JSON.parse(value);
 			} catch {
@@ -43,10 +44,10 @@ export function parseTheme(env: ThemeEnv): ThemeConfig {
 			}
 		} else values[key] = value;
 	}
-	const result = ThemeConfigSchema.safeParse(values);
+	const result = DeploymentThemeConfigSchema.safeParse(values);
 	if (!result.success) {
 		const issue = result.error.issues[0];
-		const variable = THEME_VARIABLES[issue.path[0] as keyof ThemeConfig];
+		const variable = THEME_VARIABLES[issue.path[0] as keyof DeploymentThemeConfig];
 		throw new ConfigError(`Invalid ${variable}: ${issue.message}`, {
 			variable,
 			remediation:

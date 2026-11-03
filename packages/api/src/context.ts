@@ -1,6 +1,6 @@
 import type { SearchService, SearchIndexer } from '@marimo-hub/core/search';
 import type { WorkspaceLimits } from '@marimo-hub/core/remote-workspace';
-import type { ThemeConfig } from '@marimo-hub/core/theme';
+import type { DeploymentThemeConfig } from '@marimo-hub/core/theme';
 import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-bridge';
 import type { Hono, MiddlewareHandler } from 'hono';
 import type {
@@ -422,7 +422,7 @@ export interface ApiDeps {
 	search?: { service: SearchService; indexer: SearchIndexer };
 	workspaceLimits?: WorkspaceLimits;
 	warmPool?: WarmPoolService;
-	theme?: ThemeConfig;
+	theme?: DeploymentThemeConfig;
 	supportReports?: boolean;
 	projectNotebookTarget?: 'notebook' | 'app';
 	services: Services;

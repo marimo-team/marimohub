@@ -6,7 +6,7 @@ description: Configure branding, navigation, announcements, and notebook colors.
 
 Customize the hub, sign-in screen, navigation, and browser titles without a frontend rebuild.
 Notebooks, apps, and previews share the selected light or dark mode. Brand colors require [palette opt-in](#colors-in-notebooks-and-apps).
-All theme configuration is public before sign-in.
+Branding configuration is public before sign-in. Session link templates stay on the server.
 
 ## Set a primary color
 
@@ -166,6 +166,33 @@ Without browser storage, dismissal lasts until the banner reloads.
 
 Restart the server and reload the page to apply changes.
 
+## Session links
+
+Add a compute console or dashboard to the notebook **Open** menu:
+
+```dotenv
+MARIMOHUB_THEME_SESSION_LINKS='[{"id":"lookout","label":"Lookout","href_template":"https://lookout.example/?jobSet={sandbox_id}"}]'
+```
+
+Restart the server. The menu shows **Open in Lookout**, which opens in a new tab.
+Links apply to editor sessions, including temporary sessions, for callers with attach permission. App sessions do not receive links.
+Templates stay out of the public theme response. The destination controls its own authentication.
+
+The array accepts up to 12 entries. Each entry requires:
+
+- `id`: unique, up to 64 letters, digits, underscores, or hyphens.
+- `label`: up to 40 characters.
+- `href_template`: an absolute HTTP(S) URL, up to 2,048 characters, with a fixed host and no credentials.
+
+Templates support `{sandbox_id}`, `{session_id}`, `{project_id}`, and `{notebook_id}` in the path, query, or fragment.
+`{sandbox_id}` is the hub ID, not a provider-specific job or pod ID.
+The server URL-encodes replacements and omits links with missing values. Invalid templates stop configuration loading.
+Keep access tokens out of templates. Existing sessions use updated templates on their next response.
+
+Links remain available during startup and after failure when the browser already knows the session.
+If the initial start request fails before returning a session, no links appear for that attempt.
+Retrying or reloading clears failed-session links.
+
 ## Colors in notebooks and apps
 
 `MARIMOHUB_THEME_NOTEBOOK_PALETTE` controls generated colors in editors, apps, and previews:
@@ -232,7 +259,7 @@ The reference Worker and Node server use the same configuration parser.
 2. Switch between light and dark mode, or check that the forced mode hides the theme toggle.
 3. Check logos, favicon, titles, buttons, and keyboard focus rings on desktop and mobile.
 
-The public `GET /api/v1/theme` endpoint returns normalized configuration in the standard API envelope.
+The public `GET /api/v1/theme` endpoint returns normalized public configuration in the standard API envelope.
 The browser requests it once per page load, before displaying the UI.
 If the response fails, is invalid, or takes over two seconds, the browser uses defaults until the next page load.
 This fallback uses the saved or operating-system mode, without a theme override.
