@@ -612,6 +612,7 @@ function useProjectContent() {
 
 	return (
 		<Page
+			width="wide"
 			title={project.name}
 			subtitle={project.description !== project.name ? project.description : undefined}
 			titleActions={

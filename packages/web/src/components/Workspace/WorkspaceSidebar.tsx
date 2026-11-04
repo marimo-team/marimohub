@@ -29,7 +29,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void }) {
 	const linkProps = { onNavigate };
 
 	return (
-		<div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto overscroll-contain p-3 text-sidebar-foreground">
+		<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain p-3 text-sidebar-foreground">
 			{searchAvailable ? (
 				<SidebarLink
 					{...linkProps}
@@ -59,7 +59,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void }) {
 				) : null}
 			</div>
 			{canRead ? (
-				<nav aria-label="Project" className="space-y-1">
+				<nav aria-label="Project" className="space-y-0.5">
 					{searchAvailable ? (
 						<SidebarLink
 							{...linkProps}
@@ -105,7 +105,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void }) {
 					onNavigate={onNavigate}
 				/>
 			) : null}
-			<nav aria-label="Browse" className="space-y-1 border-t border-sidebar-border pt-3">
+			<nav aria-label="Browse" className="space-y-0.5 border-t border-sidebar-border pt-2">
 				<SidebarLink
 					{...linkProps}
 					label="All projects"
@@ -115,7 +115,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void }) {
 				/>
 			</nav>
 			{user?.is_super_admin ? (
-				<nav aria-label="Administration" className="mt-auto border-t border-sidebar-border pt-3">
+				<nav aria-label="Administration" className="mt-auto border-t border-sidebar-border pt-2">
 					<SidebarLink
 						{...linkProps}
 						label="Admin"

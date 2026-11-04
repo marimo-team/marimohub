@@ -33,7 +33,7 @@ export function DataTable<T>({
 }: DataTableProps<T>) {
 	return (
 		// Clip the outer corners without creating a scroll container for the sticky header.
-		<div className="overflow-clip rounded-xl border bg-card shadow-xs">
+		<div className="overflow-clip rounded-lg border bg-card">
 			<table
 				aria-label={label}
 				className="w-full table-fixed border-separate border-spacing-0 text-sm"
@@ -45,7 +45,7 @@ export function DataTable<T>({
 								key={column.id}
 								scope="col"
 								className={cn(
-									'border-b bg-muted px-4 py-3 text-xs font-medium text-muted-foreground max-sm:px-3',
+									'border-b bg-muted px-3 py-2 text-xs font-medium text-muted-foreground max-sm:px-3',
 									stickyHeader && 'sticky top-0 z-10',
 									ALIGNMENT[column.align ?? 'left'],
 									column.className,
@@ -70,7 +70,7 @@ export function DataTable<T>({
 								<td
 									key={column.id}
 									className={cn(
-										'border-b px-4 py-3 align-middle group-last:border-b-0 max-sm:px-3',
+										'border-b px-3 py-2 align-middle group-last:border-b-0 max-sm:px-3',
 										ALIGNMENT[column.align ?? 'left'],
 										column.className,
 									)}

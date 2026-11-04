@@ -44,7 +44,7 @@ export function Page({
 						</p>
 					)}
 					<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-						<h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight">{title}</h1>
+						<h1 className="min-w-0 break-words text-xl font-semibold tracking-tight">{title}</h1>
 						{titleActions && <div className="flex shrink-0 items-center gap-1">{titleActions}</div>}
 					</div>
 					{subtitle && <div className="mt-1 text-sm text-muted-foreground">{subtitle}</div>}

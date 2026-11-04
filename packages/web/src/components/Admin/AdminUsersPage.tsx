@@ -63,7 +63,7 @@ export default function AdminUsersPage() {
 			<PageTitle>Users</PageTitle>
 			<PageHeader>
 				<div className="flex min-w-0 flex-col gap-0.5">
-					<h1 className="text-2xl font-semibold tracking-tight">Users</h1>
+					<h1 className="text-xl font-semibold tracking-tight">Users</h1>
 					<p className="text-sm text-muted-foreground">
 						{users.length} user{users.length !== 1 ? 's' : ''} · everyone who has signed in at least
 						once
@@ -96,9 +96,9 @@ export default function AdminUsersPage() {
 					/>
 				)
 			) : (
-				<div className="overflow-hidden rounded-xl border bg-card shadow-xs">
+				<div className="overflow-hidden rounded-lg border bg-card">
 					<div
-						className={`grid ${ROW_GRID} gap-3 border-b bg-muted/60 px-4 py-2 text-xs font-medium text-muted-foreground`}
+						className={`grid ${ROW_GRID} gap-3 border-b bg-muted/60 px-3 py-2 text-xs font-medium text-muted-foreground`}
 					>
 						<span>User</span>
 						<span>User id</span>
@@ -114,7 +114,7 @@ export default function AdminUsersPage() {
 						<div
 							key={user.id}
 							data-testid="admin-user-row"
-							className={`grid ${ROW_GRID} items-center gap-3 border-b px-4 py-3 last:border-b-0`}
+							className={`grid ${ROW_GRID} items-center gap-3 border-b px-3 py-2.5 last:border-b-0`}
 						>
 							<span className="flex min-w-0 flex-col gap-0.5">
 								<span className="flex min-w-0 items-center gap-2">

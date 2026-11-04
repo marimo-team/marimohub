@@ -29,7 +29,7 @@ import { OrgIntegrationsDialog } from '@/components/Project/ProjectIntegrationsD
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
 	cn(
-		'flex min-h-11 items-center rounded-md px-3 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:px-2',
+		'flex min-h-8 max-md:min-h-11 items-center rounded-md px-3 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring max-md:px-2',
 		isActive ? 'bg-accent text-foreground' : 'text-muted-foreground',
 	);
 
@@ -46,7 +46,7 @@ export function Header({ navigationTrigger }: { navigationTrigger?: ReactNode })
 	const { copy } = useCopyToClipboard();
 
 	return (
-		<header className="sticky top-0 z-40 flex min-h-14 shrink-0 flex-wrap gap-2 py-2 items-center justify-between border-b bg-background/85 px-4 backdrop-blur-md max-md:px-3">
+		<header className="sticky top-0 z-40 flex min-h-13 shrink-0 flex-wrap gap-2 py-1.5 items-center justify-between border-b bg-card px-4 max-md:px-3">
 			{navigationTrigger}
 			<Link
 				to={user?.app_only ? '/apps' : '/'}
@@ -74,7 +74,7 @@ export function Header({ navigationTrigger }: { navigationTrigger?: ReactNode })
 						href={link.href}
 						target={shellLinkTarget(link)}
 						rel="noopener noreferrer"
-						className="flex min-h-11 items-center gap-1 px-3 py-2 text-sm max-md:px-2"
+						className="flex min-h-8 max-md:min-h-11 items-center gap-1 px-3 py-1.5 text-sm max-md:px-2"
 					>
 						{link.label}
 						{shellLinkTarget(link) === '_blank' && (

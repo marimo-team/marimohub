@@ -78,7 +78,7 @@ export default function AdminColorsPage() {
 			<PageTitle>Colors</PageTitle>
 			<PageHeader>
 				<div className="flex flex-col gap-1">
-					<h1 className="text-2xl font-semibold tracking-tight">Colors</h1>
+					<h1 className="text-xl font-semibold tracking-tight">Colors</h1>
 					<p className="text-sm text-muted-foreground">
 						Deployment branding and the generated notebook palette. Read-only configuration from
 						server startup.
