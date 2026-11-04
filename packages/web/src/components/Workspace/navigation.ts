@@ -16,9 +16,11 @@ export function workspaceRoute(pathname: string) {
 					? 'members'
 					: matchPath('/projects/:pid/integrations', pathname)
 						? 'integrations'
-						: matchPath('/projects/:pid', pathname)
-							? 'notebooks'
-							: null;
+						: matchPath('/projects/:pid/alerts', pathname)
+							? 'alerts'
+							: matchPath('/projects/:pid', pathname)
+								? 'notebooks'
+								: null;
 	return { pid, section };
 }
 

@@ -58,8 +58,6 @@ const GROUPS: { label: string; kinds: ProjectAlertKind[] }[] = [
 ];
 
 interface Props {
-	isOpen: boolean;
-	onClose: () => void;
 	projectId: string;
 	selectableKinds: string[];
 	maxDestinations: number;
@@ -78,12 +76,11 @@ function fresh(kinds: readonly string[]): EditorState {
 	return { type: 'slack', name: '', kinds: knownKinds(kinds), endpoint: '', secret: '' };
 }
 
-function useProjectAlertsDialogState({
-	isOpen,
+function useProjectAlertsPanelState({
 	projectId,
 	selectableKinds,
-}: Pick<Props, 'isOpen' | 'projectId' | 'selectableKinds'>) {
-	const { data: destinations = [], isLoading } = useProjectAlertsQuery(projectId, isOpen);
+}: Pick<Props, 'projectId' | 'selectableKinds'>) {
+	const { data: destinations = [], isLoading, isError, refetch } = useProjectAlertsQuery(projectId);
 	const create = useCreateProjectAlert(projectId);
 	const update = useUpdateProjectAlert(projectId);
 	const remove = useDeleteProjectAlert(projectId);
@@ -119,7 +116,7 @@ function useProjectAlertsDialogState({
 	const visibleGroups = GROUPS.map((group) => ({
 		...group,
 		kinds: group.kinds.filter((kind) => selectableKindSet.has(kind)),
-	}));
+	})).filter((group) => group.kinds.length > 0);
 
 	const save = async () => {
 		if (!editor?.name.trim() || (!hasSelectedKinds && !kindsPristine)) return;
@@ -186,9 +183,11 @@ function useProjectAlertsDialogState({
 		edit,
 		editor,
 		hasSelectedKinds,
+		isError,
 		isLoading,
 		kindsPristine,
 		pending,
+		refetch,
 		remove,
 		save,
 		selectedKindSet,
@@ -200,8 +199,8 @@ function useProjectAlertsDialogState({
 	};
 }
 
-export function ProjectAlertsDialog(props: Props) {
-	const { isOpen, onClose, selectableKinds, maxDestinations } = props;
+export function ProjectAlertsPanel(props: Props) {
+	const { selectableKinds, maxDestinations } = props;
 	const {
 		confirmDelete,
 		deleteDestination,
@@ -209,9 +208,11 @@ export function ProjectAlertsDialog(props: Props) {
 		edit,
 		editor,
 		hasSelectedKinds,
+		isError,
 		isLoading,
 		kindsPristine,
 		pending,
+		refetch,
 		remove,
 		save,
 		selectedKindSet,
@@ -220,12 +221,12 @@ export function ProjectAlertsDialog(props: Props) {
 		testKeys,
 		update,
 		visibleGroups,
-	} = useProjectAlertsDialogState(props);
+	} = useProjectAlertsPanelState(props);
 
 	return (
-		<DialogModal isOpen={isOpen} onClose={onClose} title="Project alerts" width="lg">
+		<>
 			<div className="space-y-5">
-				<div className="flex items-start justify-between gap-4">
+				<div className="flex items-start justify-between gap-4 max-sm:flex-col">
 					<p className="max-w-xl text-sm text-muted-foreground">
 						Send selected project events to Slack or a signed HTTPS webhook. Destinations stay
 						disabled until a test succeeds.
@@ -233,19 +234,24 @@ export function ProjectAlertsDialog(props: Props) {
 					<Button
 						size="sm"
 						onPress={() => setEditor(fresh(selectableKinds))}
-						isDisabled={destinations.length >= maxDestinations}
+						isDisabled={isLoading || isError || destinations.length >= maxDestinations}
 					>
 						<Plus className="size-3.5" /> Add destination
 					</Button>
 				</div>
 
 				{editor && (
-					<div className="space-y-4 rounded-lg border bg-muted/20 p-4">
-						<div className="flex items-center justify-between">
-							<h3 className="text-sm font-semibold">
-								{editor.destination ? 'Edit destination' : 'New destination'}
-							</h3>
-							{!editor.destination && (
+					<DialogModal
+						isOpen
+						onClose={() => setEditor(null)}
+						isDismissable={!pending}
+						title={editor.destination ? 'Edit destination' : 'New destination'}
+						width="form"
+						contentClassName="space-y-4"
+					>
+						{!editor.destination && (
+							<label className="flex flex-col gap-1.5 text-sm font-medium">
+								Destination type
 								<select
 									aria-label="Destination type"
 									value={editor.type}
@@ -257,8 +263,8 @@ export function ProjectAlertsDialog(props: Props) {
 									<option value="slack">Slack</option>
 									<option value="webhook">Signed webhook</option>
 								</select>
-							)}
-						</div>
+							</label>
+						)}
 						<TextField
 							label="Name"
 							value={editor.name}
@@ -312,7 +318,12 @@ export function ProjectAlertsDialog(props: Props) {
 							))}
 						</div>
 						<div className="flex justify-end gap-2">
-							<Button size="sm" variant="ghost" onPress={() => setEditor(null)}>
+							<Button
+								size="sm"
+								variant="ghost"
+								onPress={() => setEditor(null)}
+								isDisabled={pending}
+							>
 								Cancel
 							</Button>
 							<Button
@@ -330,11 +341,16 @@ export function ProjectAlertsDialog(props: Props) {
 								{pending ? 'Saving…' : 'Save'}
 							</Button>
 						</div>
-					</div>
+					</DialogModal>
 				)}
 
 				{isLoading ? (
 					<p className="text-sm text-muted-foreground">Loading destinations…</p>
+				) : isError ? (
+					<div role="alert" className="space-y-3 text-sm">
+						<p>Could not load alert destinations.</p>
+						<Button onPress={() => void refetch()}>Retry</Button>
+					</div>
 				) : destinations.length === 0 ? (
 					<EmptyState
 						icon={<Bell className="size-5" />}
@@ -344,8 +360,8 @@ export function ProjectAlertsDialog(props: Props) {
 				) : (
 					<div className="divide-y rounded-lg border">
 						{destinations.map((destination) => (
-							<div key={destination.id} className="flex items-center gap-3 p-3">
-								<div className="min-w-0 flex-1">
+							<div key={destination.id} className="flex flex-wrap items-center gap-3 p-3">
+								<div className="min-w-0 flex-1 max-sm:basis-full">
 									<div className="flex items-center gap-2">
 										<span className="truncate text-sm font-medium">{destination.name}</span>
 										<span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase">
@@ -443,6 +459,6 @@ export function ProjectAlertsDialog(props: Props) {
 				isPending={remove.isPending}
 				onConfirm={() => void deleteDestination()}
 			/>
-		</DialogModal>
+		</>
 	);
 }

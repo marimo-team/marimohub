@@ -10,6 +10,7 @@ import { ThemeProvider } from '@/context/ThemeContext';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { WorkspaceLayout } from '@/components/Workspace/WorkspaceLayout';
 import { WorkspaceHome } from '@/components/Workspace/WorkspaceHome';
+import { ProjectAlertsPage } from '@/components/Workspace/ProjectAlertsPage';
 import { ProjectJobsPage } from '@/components/Workspace/ProjectJobsPage';
 import { ProjectSettingsPage } from '@/components/Workspace/ProjectSettingsPage';
 import { ProjectSourceGate } from '@/components/Workspace/ProjectSourceGate';
@@ -160,6 +161,7 @@ function StandardLayout() {
 							<Route index element={<Project />} />
 							<Route path="members" element={<ProjectSettingsPage section="members" />} />
 							<Route path="integrations" element={<ProjectSettingsPage section="integrations" />} />
+							<Route path="alerts" element={<ProjectAlertsPage />} />
 							<Route path="jobs" element={<ProjectJobsPage />} />
 							<Route path="notebooks/:nid/jobs" element={<JobsPage />} />
 							<Route path="data" element={<DataBrowserPage />} />

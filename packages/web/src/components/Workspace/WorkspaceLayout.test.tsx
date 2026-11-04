@@ -267,33 +267,14 @@ describe('Workspace navigation', () => {
 			expect(screen.queryByRole('link', { name })).not.toBeInTheDocument();
 	});
 
-	it.each([false, true])('opens project settings from the sidebar (mobile=%s)', async (mobile) => {
-		const { user, requests } = setup({ mobile, role: 'manager' });
-		if (mobile) await user.click(await screen.findByRole('button', { name: 'Open navigation' }));
-		const settings = await screen.findByRole('navigation', { name: 'Project settings' });
-		expect(
-			requests.some((url) => url.endsWith('/members') || url.endsWith('/alert-destinations')),
-		).toBe(false);
-		for (const [label, title] of [['Alerts', 'Project alerts']]) {
-			const trigger = await within(settings).findByRole('button', { name: label });
-			trigger.focus();
-			await user.keyboard('{Enter}');
-			expect(await screen.findByRole('dialog', { name: title })).toBeVisible();
-			await user.keyboard('{Escape}');
-			await waitFor(() =>
-				expect(screen.queryByRole('dialog', { name: title })).not.toBeInTheDocument(),
-			);
-			await waitFor(() => expect(trigger).toHaveFocus());
-		}
-	});
-
 	it.each([false, true])(
 		'navigates to settings pages and follows history (mobile=%s)',
 		async (mobile) => {
-			const { user } = setup({ mobile });
+			const { user, requests } = setup({ mobile, role: 'manager' });
 			for (const [label, path] of [
 				['Members', 'members'],
 				['Integrations', 'integrations'],
+				['Alerts', 'alerts'],
 			]) {
 				if (mobile)
 					await user.click(await screen.findByRole('button', { name: 'Open navigation' }));
@@ -316,8 +297,9 @@ describe('Workspace navigation', () => {
 			}
 			await user.click(screen.getByRole('button', { name: 'Back' }));
 			expect(screen.getByRole('status', { name: 'Location' })).toHaveTextContent(
-				'/projects/alpha/members',
+				'/projects/alpha/integrations',
 			);
+			expect(requests.some((url) => url.endsWith('/alert-destinations'))).toBe(false);
 		},
 	);
 
@@ -333,8 +315,8 @@ describe('Workspace navigation', () => {
 		expect(within(settings).getByRole('link', { name: 'Members' })).toBeVisible();
 		expect(within(settings).getByRole('link', { name: 'Integrations' })).toBeVisible();
 		if (visible)
-			expect(await within(settings).findByRole('button', { name: 'Alerts' })).toBeVisible();
-		else expect(within(settings).queryByRole('button', { name: 'Alerts' })).not.toBeInTheDocument();
+			expect(await within(settings).findByRole('link', { name: 'Alerts' })).toBeVisible();
+		else expect(within(settings).queryByRole('link', { name: 'Alerts' })).not.toBeInTheDocument();
 	});
 
 	it.each([false, true])('shows search only when the deployment offers it (%s)', async (search) => {
