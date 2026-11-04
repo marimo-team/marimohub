@@ -1,31 +1,26 @@
-import { Check, Copy, ExternalLink, Notebook, X } from 'lucide-react';
-import { Button, IconButton } from '@/components/ui';
+import { Check, Copy, ExternalLink, Notebook } from 'lucide-react';
+import { Button } from '@/components/ui';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { withBasePath } from '@/lib/basePath';
 import { formatAbsolute } from '@/lib/time';
 import { cn } from '@/lib/utils';
-import { toolLabel } from './ToolActivity';
-import { toolReferences } from './toolActivityModel';
-import type { InspectedTool, ToolReference } from './toolActivityModel';
+import { SidePane } from './SidePane';
+import {
+	permissionOutcome,
+	TOOL_STATUS_LABELS,
+	toolLabel,
+	toolReferences,
+} from './toolActivityModel';
+import type { InspectedTool, ToolReference, ToolStatus } from './toolActivityModel';
 
-const STATUS = {
-	running: { label: 'Running', className: 'bg-primary/10 text-primary' },
-	succeeded: {
-		label: 'Completed',
-		className: 'bg-emerald-500/10 text-emerald-800 dark:text-emerald-300',
-	},
-	failed: { label: 'Failed', className: 'bg-destructive/10 text-destructive' },
-} as const;
+const STATUS_CLASS: Record<ToolStatus, string> = {
+	running: 'bg-primary/10 text-primary',
+	succeeded: 'bg-emerald-500/10 text-emerald-800 dark:text-emerald-300',
+	failed: 'bg-destructive/10 text-destructive',
+};
 
-const OUTCOME = {
-	open: 'Waiting for your answer',
-	allowed: 'Allowed once',
-	remembered: 'Always allowed',
-	denied: 'Not allowed',
-	expired: 'No answer in time',
-	cancelled: 'Stopped before a decision',
-	unavailable: 'Could not ask',
-} as const;
+const newTabLink =
+	'inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary';
 
 function Block({ title, value }: { title: string; value?: string }) {
 	const { copied, copy } = useCopyToClipboard();
@@ -102,7 +97,7 @@ function ReferenceRow({
 						target="_blank"
 						rel="noopener noreferrer"
 						aria-label={`Open ${title ?? reference.id} in a new tab`}
-						className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
+						className={newTabLink}
 					>
 						<ExternalLink className="size-3.5" aria-hidden />
 						New tab
@@ -123,7 +118,7 @@ export function ContextInspector({
 	entry,
 	notebooks,
 	permalink,
-	width = 50,
+	width,
 	onShowNotebook,
 	onClose,
 }: {
@@ -132,53 +127,49 @@ export function ContextInspector({
 	notebooks: readonly { id: string; title: string }[];
 	/** Same-app URL that reopens this inspector, for a new tab. */
 	permalink: string;
-	width?: number;
+	width: number;
 	onShowNotebook?: (notebookId: string) => void;
 	onClose: () => void;
 }) {
-	const status = STATUS[entry.status];
 	const references = toolReferences(entry);
 	return (
-		<aside
-			aria-label="Tool call details"
-			className="flex min-h-[50vh] min-w-0 shrink-0 flex-col border-t lg:min-h-0 lg:basis-[var(--pane-width)] lg:border-t-0"
-			style={{ '--pane-width': `${width}%` } as React.CSSProperties}
-		>
-			<header className="flex shrink-0 items-start justify-between gap-2 border-b px-4 py-3">
-				<div className="min-w-0">
+		<SidePane
+			label="Tool call details"
+			width={width}
+			closeLabel="Close details"
+			onClose={onClose}
+			title={
+				<>
 					<h2 className="truncate text-sm font-semibold capitalize">{toolLabel(entry.name)}</h2>
 					<p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-						<span className={cn('rounded-md px-1.5 py-0.5 font-medium', status.className)}>
-							{status.label}
+						<span
+							className={cn('rounded-md px-1.5 py-0.5 font-medium', STATUS_CLASS[entry.status])}
+						>
+							{TOOL_STATUS_LABELS[entry.status]}
 						</span>
 						{entry.createdAt ? <span>{formatAbsolute(entry.createdAt)}</span> : null}
 						<span className="font-mono">{entry.name}</span>
 					</p>
-				</div>
-				<div className="flex shrink-0 items-center gap-1">
-					<a
-						href={withBasePath(permalink)}
-						target="_blank"
-						rel="noopener noreferrer"
-						aria-label="Open details in a new tab"
-						className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
-					>
-						<ExternalLink className="size-4" aria-hidden />
-					</a>
-					<IconButton label="Close details" onPress={onClose}>
-						<X className="size-4" aria-hidden />
-					</IconButton>
-				</div>
-			</header>
+				</>
+			}
+			actions={
+				<a
+					href={withBasePath(permalink)}
+					target="_blank"
+					rel="noopener noreferrer"
+					aria-label="Open details in a new tab"
+					className={cn(newTabLink, 'size-8 justify-center px-0')}
+				>
+					<ExternalLink className="size-4" aria-hidden />
+				</a>
+			}
+		>
 			<div className="min-h-0 flex-1 space-y-6 overflow-auto px-4 py-4">
 				{entry.permission ? (
 					<section aria-label="Permission" className="rounded-md border p-3 text-sm">
 						<p className="font-medium">{entry.permission.action}</p>
 						<p className="mt-1 text-xs text-muted-foreground">
-							{OUTCOME[entry.permission.status]}
-							{entry.permission.status === 'remembered'
-								? ` for ${entry.permission.scope.label}`
-								: ''}
+							{permissionOutcome(entry.permission)}
 						</p>
 					</section>
 				) : null}
@@ -215,24 +206,20 @@ export function ContextInspector({
 					record.
 				</p>
 			</div>
-		</aside>
+		</SidePane>
 	);
 }
 
 /** The URL named a call this conversation does not contain (deleted, mistyped, or another chat). */
-export function MissingInspector({ width = 50, onClose }: { width?: number; onClose: () => void }) {
+export function MissingInspector({ width, onClose }: { width: number; onClose: () => void }) {
 	return (
-		<aside
-			aria-label="Tool call details"
-			className="flex min-h-[50vh] min-w-0 shrink-0 flex-col border-t lg:min-h-0 lg:basis-[var(--pane-width)] lg:border-t-0"
-			style={{ '--pane-width': `${width}%` } as React.CSSProperties}
+		<SidePane
+			label="Tool call details"
+			width={width}
+			closeLabel="Close details"
+			onClose={onClose}
+			title={<h2 className="text-sm font-semibold">Tool call details</h2>}
 		>
-			<header className="flex shrink-0 items-center justify-between gap-2 border-b px-4 py-3">
-				<h2 className="text-sm font-semibold">Tool call details</h2>
-				<IconButton label="Close details" onPress={onClose}>
-					<X className="size-4" aria-hidden />
-				</IconButton>
-			</header>
 			<div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
 				<p className="text-sm font-medium">This tool call is not in this conversation.</p>
 				<p className="text-xs text-muted-foreground">
@@ -242,6 +229,6 @@ export function MissingInspector({ width = 50, onClose }: { width?: number; onCl
 					Close
 				</Button>
 			</div>
-		</aside>
+		</SidePane>
 	);
 }

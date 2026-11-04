@@ -111,6 +111,12 @@ export async function refreshProject(client: QueryClient, pid: string, cid: stri
 	]);
 }
 
+function refreshConversation(client: QueryClient, pid: string, cid?: string) {
+	if (cid)
+		void client.invalidateQueries({ queryKey: conversationKeys.detail(pid, cid), exact: true });
+	void client.invalidateQueries({ queryKey: conversationKeys.list(pid), exact: true });
+}
+
 export function useCreateConversation(pid: string) {
 	const client = useQueryClient();
 	return useMutation({
@@ -125,9 +131,7 @@ export function useCreateConversation(pid: string) {
 			client.setQueryData(conversationKeys.detail(pid, result.conversation.id), result);
 			return result;
 		},
-		onSuccess: () => {
-			void client.invalidateQueries({ queryKey: conversationKeys.list(pid), exact: true });
-		},
+		onSuccess: () => refreshConversation(client, pid),
 	});
 }
 
@@ -158,10 +162,7 @@ export function useStopConversation(pid: string) {
 					params: { path: { pid, cid } },
 				}),
 			),
-		onSuccess: (_result, cid) => {
-			void client.invalidateQueries({ queryKey: conversationKeys.detail(pid, cid), exact: true });
-			void client.invalidateQueries({ queryKey: conversationKeys.list(pid), exact: true });
-		},
+		onSuccess: (_result, cid) => refreshConversation(client, pid, cid),
 	});
 }
 
@@ -194,7 +195,7 @@ export function useDismissContinuation(pid: string) {
 			),
 		onSuccess: (result, cid) => {
 			client.setQueryData(conversationKeys.detail(pid, cid), result);
-			void client.invalidateQueries({ queryKey: conversationKeys.list(pid), exact: true });
+			refreshConversation(client, pid);
 		},
 	});
 }
@@ -210,10 +211,7 @@ export function useDecidePermission(pid: string) {
 				}),
 			),
 		onSuccess: (_result, input) => {
-			void client.invalidateQueries({
-				queryKey: conversationKeys.detail(pid, input.cid),
-				exact: true,
-			});
+			refreshConversation(client, pid, input.cid);
 			if (input.decision === 'always')
 				void client.invalidateQueries({ queryKey: conversationKeys.permissions(pid), exact: true });
 		},

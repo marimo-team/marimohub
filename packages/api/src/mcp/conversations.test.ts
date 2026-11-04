@@ -48,9 +48,19 @@ function textModel(text: string) {
 	});
 }
 
-async function connectWithChat(deps: ReturnType<typeof makeTestDeps>) {
-	const server = createMcpServer(deps, principal, request);
-	registerConversationTools(server, deps, principal, request);
+function chatAi(text: string) {
+	return {
+		upstreamBaseUrl: 'https://provider.example/v1',
+		model: 'm',
+		signingSecret: 's',
+		languageModel: textModel(text),
+		chat: DEFAULT_CHAT_CONFIG,
+	};
+}
+
+async function connectWithChat(deps: ReturnType<typeof makeTestDeps>, who = principal) {
+	const server = createMcpServer(deps, who, request);
+	registerConversationTools(server, deps, who, request);
 	const client = new Client({ name: 'test', version: '1' });
 	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 	await server.connect(serverTransport);
@@ -60,15 +70,7 @@ async function connectWithChat(deps: ReturnType<typeof makeTestDeps>) {
 
 describe('project_conversations MCP tool', () => {
 	it('is not offered to the chat model itself', async () => {
-		const deps = makeTestDeps(new MemoryBucket(), {
-			ai: {
-				upstreamBaseUrl: 'https://provider.example/v1',
-				model: 'm',
-				signingSecret: 's',
-				languageModel: textModel('hi'),
-				chat: DEFAULT_CHAT_CONFIG,
-			},
-		});
+		const deps = makeTestDeps(new MemoryBucket(), { ai: chatAi('hi') });
 		const client = await connectMcpClient(deps, principal, request);
 		const { tools } = await client.listTools();
 		expect(tools.map((tool) => tool.name)).not.toContain('project_conversations');
@@ -78,15 +80,7 @@ describe('project_conversations MCP tool', () => {
 		const bucket = new MemoryBucket();
 		const api = createTestApi({
 			bucket,
-			deps: {
-				ai: {
-					upstreamBaseUrl: 'https://provider.example/v1',
-					model: 'm',
-					signingSecret: 's',
-					languageModel: textModel('Three notebooks.'),
-					chat: DEFAULT_CHAT_CONFIG,
-				},
-			},
+			deps: { ai: chatAi('Three notebooks.') },
 		});
 		const project = await expectOk<{ id: string }>(
 			await api.request('POST', '/projects', { name: 'Sales', description: 'd' }),
@@ -126,30 +120,9 @@ describe('project_conversations MCP tool', () => {
 	});
 
 	it('refuses machine identities', async () => {
-		const deps = makeTestDeps(new MemoryBucket(), {
-			ai: {
-				upstreamBaseUrl: 'https://provider.example/v1',
-				model: 'm',
-				signingSecret: 's',
-				languageModel: textModel('hi'),
-				chat: DEFAULT_CHAT_CONFIG,
-			},
-		});
-		const server = createMcpServer(
-			deps,
-			{ ...principal, credential: { kind: 'service-account' } },
-			request,
-		);
-		registerConversationTools(
-			server,
-			deps,
-			{ ...principal, credential: { kind: 'service-account' } },
-			request,
-		);
-		const client = new Client({ name: 'test', version: '1' });
-		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-		await server.connect(serverTransport);
-		await client.connect(clientTransport);
+		const deps = makeTestDeps(new MemoryBucket(), { ai: chatAi('hi') });
+		const machine = { ...principal, credential: { kind: 'service-account' as const } };
+		const client = await connectWithChat(deps, machine);
 		const reply = await client.callTool({
 			name: 'project_conversations',
 			arguments: { project: 'any', request: { action: 'list' } },

@@ -144,10 +144,9 @@ These CAS-managed records also have one writer each:
 - `OAuthRateLimitService` owns each shared MCP OAuth request window at
   `_system/oauth-rate-limits/{endpoint}.json`.
 - `ConversationService` owns each private chat conversation at
-  `projects/{pid}/conversations/{uid}/{cid}.json` and the per-user index at
-  `projects/{pid}/conversations/{uid}/_index.json`. The turn claim (`pending`),
-  stop flag, and consent decisions live on the conversation record.
-- `ChatPermissionStore` owns each user's remembered chat tool consents at
+  `projects/{pid}/conversations/{uid}/{cid}.json` (turn claim, stop flag, and
+  consent decisions included) and the per-user index `…/{uid}/_index.json`.
+- `ChatPermissionStore` owns remembered chat consents at
   `projects/{pid}/chat-permissions/{uid}.json`.
 - `ProjectAlertStore` owns each project alert configuration at
   `projects/{pid}/alerts.json`.

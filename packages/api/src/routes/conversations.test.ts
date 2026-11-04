@@ -136,6 +136,25 @@ async function readChunks(response: Response): Promise<Record<string, unknown>[]
 		.map((line) => JSON.parse(line.slice('data: '.length)) as Record<string, unknown>);
 }
 
+/** Poll the saved record until `predicate` holds (the turn runs in the background). */
+async function waitForRecord(
+	request: ReturnType<typeof createTestApi>['request'],
+	path: string,
+	predicate: (conversation: Conversation) => boolean,
+): Promise<Conversation> {
+	for (let attempt = 0; attempt < 100; attempt++) {
+		const { conversation } = await expectOk<ConversationResult>(await request('GET', path));
+		if (predicate(conversation)) return conversation;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+	throw new Error('The conversation never reached the expected state');
+}
+
+function openCard(conversation: Conversation): ConversationPermission | undefined {
+	const part = conversation.messages.at(-1)?.parts.find((part) => part.type === 'data-permission');
+	return part?.type === 'data-permission' ? part.data : undefined;
+}
+
 function permissionChunks(chunks: Record<string, unknown>[]): ConversationPermission[] {
 	return chunks
 		.filter((chunk) => chunk.type === 'data-permission')
@@ -192,13 +211,7 @@ describe('project conversations', () => {
 		const pid = await createProject(request);
 		const path = await startConversation(request, pid);
 		const streaming = request('POST', `${path}/stream`, { content: 'long task' });
-		let pendingSeen = false;
-		for (let attempt = 0; attempt < 100 && !pendingSeen; attempt++) {
-			await new Promise((resolve) => setTimeout(resolve, 20));
-			pendingSeen = Boolean(
-				(await expectOk<ConversationResult>(await request('GET', path))).conversation.pending,
-			);
-		}
+		await waitForRecord(request, path, (c) => Boolean(c.pending));
 		const other = createTestApi({
 			bucket,
 			userId: UserId.parse('other'),
@@ -329,15 +342,7 @@ describe('project conversations', () => {
 		const streaming = request('POST', `${path}/stream`, { content: 'make a notebook' });
 		const cid = path.split('/').at(-1)!;
 		// Wait for the card to be persisted, then answer from a "different" client.
-		let card: ConversationPermission | undefined;
-		for (let attempt = 0; attempt < 100 && !card; attempt++) {
-			await new Promise((resolve) => setTimeout(resolve, 20));
-			const current = await expectOk<ConversationResult>(await request('GET', path));
-			const part = current.conversation.messages
-				.at(-1)
-				?.parts.find((part) => part.type === 'data-permission');
-			if (part?.type === 'data-permission') card = part.data;
-		}
+		const card = openCard(await waitForRecord(request, path, (c) => Boolean(openCard(c))));
 		expect(card).toMatchObject({
 			status: 'open',
 			action: 'Create a notebook',
@@ -385,15 +390,7 @@ describe('project conversations', () => {
 		const pid = await createProject(request);
 		const path = await startConversation(request, pid);
 		const first = request('POST', `${path}/stream`, { content: 'one' });
-		let rid: string | undefined;
-		for (let attempt = 0; attempt < 100 && !rid; attempt++) {
-			await new Promise((resolve) => setTimeout(resolve, 20));
-			const current = await expectOk<ConversationResult>(await request('GET', path));
-			const part = current.conversation.messages
-				.at(-1)
-				?.parts.find((part) => part.type === 'data-permission');
-			if (part?.type === 'data-permission') rid = part.id;
-		}
+		const rid = openCard(await waitForRecord(request, path, (c) => Boolean(openCard(c))))!.id;
 		await expectOk(await request('POST', `${path}/permissions/${rid}`, { decision: 'always' }));
 		expect(permissionChunks(await readChunks(await first)).at(-1)?.status).toBe('remembered');
 		const grants = await expectOk<{ grants: { id: string; scope_key: string }[] }>(
@@ -445,15 +442,7 @@ describe('project conversations', () => {
 		const pid = await createProject(request);
 		const path = await startConversation(request, pid);
 		const streaming = request('POST', `${path}/stream`, { content: 'make it' });
-		let rid: string | undefined;
-		for (let attempt = 0; attempt < 100 && !rid; attempt++) {
-			await new Promise((resolve) => setTimeout(resolve, 20));
-			const current = await expectOk<ConversationResult>(await request('GET', path));
-			const part = current.conversation.messages
-				.at(-1)
-				?.parts.find((part) => part.type === 'data-permission');
-			if (part?.type === 'data-permission') rid = part.id;
-		}
+		const rid = openCard(await waitForRecord(request, path, (c) => Boolean(openCard(c))))!.id;
 		await expectOk(await request('POST', `${path}/permissions/${rid}`, { decision: 'deny' }));
 		const chunks = await readChunks(await streaming);
 		expect(permissionChunks(chunks).at(-1)?.status).toBe('denied');
@@ -470,15 +459,11 @@ describe('project conversations', () => {
 		const pid = await createProject(request);
 		const path = await startConversation(request, pid);
 		const streaming = request('POST', `${path}/stream`, { content: 'long task' });
-		let pendingSeen = false;
-		for (let attempt = 0; attempt < 100 && !pendingSeen; attempt++) {
-			await new Promise((resolve) => setTimeout(resolve, 20));
-			const current = await expectOk<ConversationResult>(await request('GET', path));
-			pendingSeen =
-				Boolean(current.conversation.pending) &&
-				messageText(current.conversation.messages.at(-1)!) === 'Working';
-		}
-		expect(pendingSeen).toBe(true);
+		await waitForRecord(
+			request,
+			path,
+			(c) => Boolean(c.pending) && messageText(c.messages.at(-1)!) === 'Working',
+		);
 		expect(await expectOk(await request('POST', `${path}/stop`))).toEqual({ stopped: true });
 		const chunks = await readChunks(await streaming);
 		expect(chunks.at(-1)).toEqual({ type: 'error', errorText: 'The response was stopped.' });
@@ -506,12 +491,7 @@ describe('project conversations', () => {
 		const path = await startConversation(request, pid);
 		expect((await request('GET', `${path}/stream`)).status).toBe(204);
 		const streaming = request('POST', `${path}/stream`, { content: 'long task' });
-		let pendingSeen = false;
-		for (let attempt = 0; attempt < 100 && !pendingSeen; attempt++) {
-			await new Promise((resolve) => setTimeout(resolve, 20));
-			const current = await expectOk<ConversationResult>(await request('GET', path));
-			pendingSeen = Boolean(current.conversation.pending);
-		}
+		await waitForRecord(request, path, (c) => Boolean(c.pending));
 		const reconnect = request('GET', `${path}/stream`);
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		await expectOk(await request('POST', `${path}/stop`));
@@ -567,12 +547,7 @@ describe('project conversations', () => {
 			body: JSON.stringify({ content: 'hello' }),
 			signal: controller.signal,
 		});
-		let pendingSeen = false;
-		for (let attempt = 0; attempt < 100 && !pendingSeen; attempt++) {
-			await new Promise((resolve) => setTimeout(resolve, 20));
-			const current = await expectOk<ConversationResult>(await request('GET', path));
-			pendingSeen = Boolean(current.conversation.pending);
-		}
+		await waitForRecord(request, path, (c) => Boolean(c.pending));
 		controller.abort();
 		await expectError(await pending, 503);
 		const saved = await expectOk<ConversationResult>(await request('GET', path));
@@ -608,13 +583,7 @@ describe('project conversations', () => {
 		);
 		expect(cleared.conversation.working_notebook).toBeUndefined();
 		const streaming = request('POST', `${path}/stream`, { content: 'task' });
-		let pendingSeen = false;
-		for (let attempt = 0; attempt < 100 && !pendingSeen; attempt++) {
-			await new Promise((resolve) => setTimeout(resolve, 20));
-			pendingSeen = Boolean(
-				(await expectOk<ConversationResult>(await request('GET', path))).conversation.pending,
-			);
-		}
+		await waitForRecord(request, path, (c) => Boolean(c.pending));
 		await expectError(await request('POST', `${path}/continuation/dismiss`), 409);
 		await expectOk(await request('POST', `${path}/stop`));
 		await readChunks(await streaming);

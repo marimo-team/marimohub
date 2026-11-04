@@ -5,6 +5,36 @@ export type ToolPart = Extract<ChatPart, { type: 'dynamic-tool' }>;
 export type PermissionPart = Extract<ChatPart, { type: 'data-permission' }>;
 export type ToolStatus = 'running' | 'succeeded' | 'failed';
 
+export const TOOL_STATUS_LABELS: Record<ToolStatus, string> = {
+	running: 'Running',
+	succeeded: 'Completed',
+	failed: 'Failed',
+};
+
+export function toolLabel(name: string): string {
+	return name.replaceAll('_', ' ');
+}
+
+/** One line describing where a consent request ended up. */
+export function permissionOutcome(permission: ConversationPermission): string {
+	switch (permission.status) {
+		case 'open':
+			return 'Waiting for your answer';
+		case 'allowed':
+			return 'Allowed once';
+		case 'remembered':
+			return `Always allowed for ${permission.scope.label}`;
+		case 'denied':
+			return 'Not allowed';
+		case 'expired':
+			return 'No answer in time. Chat continued without it.';
+		case 'cancelled':
+			return 'Stopped';
+		case 'unavailable':
+			return 'This client cannot ask for permission.';
+	}
+}
+
 export interface ToolActivityEntry {
 	id: string;
 	name: string;

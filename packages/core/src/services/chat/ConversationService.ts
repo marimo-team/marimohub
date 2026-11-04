@@ -28,6 +28,7 @@ import type {
 	ConversationContinuation,
 	ConversationMessage,
 	ConversationMessagePart,
+	ConversationPermission,
 	ConversationSummary,
 	PermissionDecision,
 	StoredConversation,
@@ -341,6 +342,29 @@ export class ConversationService {
 		return stopped;
 	}
 
+	/** The consent card for `requestId` on the running turn, or why it cannot be answered. */
+	private openPermission(
+		head: StoredConversation,
+		requestId: string,
+	): { permission: ConversationPermission; turnId: string } | 'cancelled' | 'expired' {
+		if (!this.live(head.pending)) return 'cancelled';
+		const message = head.messages.at(-1);
+		if (message?.role !== 'assistant') return 'cancelled';
+		const part = message.parts.find(
+			(part) => part.type === 'data-permission' && part.id === requestId,
+		);
+		if (part?.type !== 'data-permission') return 'cancelled';
+		if (Date.parse(part.data.expires_at) <= this.now()) return 'expired';
+		if (['expired', 'cancelled', 'unavailable'].includes(part.data.status)) return 'cancelled';
+		return { permission: part.data, turnId: head.pending!.id };
+	}
+
+	private recordedDecision(head: StoredConversation, turnId: string, requestId: string) {
+		return head.permission_decisions?.find(
+			(entry) => entry.turn_id === turnId && entry.request_id === requestId,
+		)?.decision;
+	}
+
 	/** Record a consent decision for an open permission card of the running turn. */
 	async decidePermission(
 		pid: ProjectId,
@@ -352,32 +376,17 @@ export class ConversationService {
 		let accepted = false;
 		await this.mutate(pid, owner, id, (head) => {
 			accepted = false;
-			if (!this.live(head.pending)) return;
-			const message = head.messages.at(-1);
-			if (message?.role !== 'assistant') return;
-			const part = message.parts.find(
-				(part) => part.type === 'data-permission' && part.id === requestId,
-			);
-			if (part?.type !== 'data-permission') return;
-			const permission = part.data;
-			if (
-				Date.parse(permission.expires_at) <= this.now() ||
-				permission.status === 'expired' ||
-				permission.status === 'cancelled' ||
-				permission.status === 'unavailable'
-			)
-				return;
-			const existing = head.permission_decisions?.find(
-				(entry) => entry.turn_id === head.pending!.id && entry.request_id === requestId,
-			);
+			const open = this.openPermission(head, requestId);
+			if (typeof open === 'string') return;
+			const existing = this.recordedDecision(head, open.turnId, requestId);
 			if (existing) {
-				accepted = existing.decision === decision;
+				accepted = existing === decision;
 				return;
 			}
-			if (permission.status !== 'open') return;
+			if (open.permission.status !== 'open') return;
 			head.permission_decisions = [
 				...(head.permission_decisions ?? []),
-				{ turn_id: head.pending!.id, request_id: requestId, decision },
+				{ turn_id: open.turnId, request_id: requestId, decision },
 			];
 			accepted = true;
 		});
@@ -398,17 +407,9 @@ export class ConversationService {
 			if (error instanceof NotFoundError) return 'cancelled';
 			throw error;
 		}
-		if (!this.live(head.pending)) return 'cancelled';
-		const message = head.messages.at(-1);
-		if (message?.role !== 'assistant') return 'cancelled';
-		const part = message.parts.find(
-			(part) => part.type === 'data-permission' && part.id === requestId,
-		);
-		if (part?.type !== 'data-permission') return 'cancelled';
-		if (Date.parse(part.data.expires_at) <= this.now()) return 'expired';
-		return head.permission_decisions?.find(
-			(entry) => entry.turn_id === head.pending!.id && entry.request_id === requestId,
-		)?.decision;
+		const open = this.openPermission(head, requestId);
+		if (typeof open === 'string') return open;
+		return this.recordedDecision(head, open.turnId, requestId);
 	}
 
 	async resume(

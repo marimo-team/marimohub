@@ -255,8 +255,8 @@ Use `stop_session` to stop a session explicitly.
 
 ## Project chat
 
-With [managed AI](./ai.md#project-chat) enabled, `project_conversations` manages the
-caller's private chat conversations. It is registered for human credentials only.
+With [managed AI](./ai.md#project-chat) on, `project_conversations` manages the caller's
+private chat conversations. Human credentials only.
 
 | Action              | Purpose                                                               |
 | ------------------- | --------------------------------------------------------------------- |
@@ -268,8 +268,8 @@ caller's private chat conversations. It is registered for human credentials only
 | `revoke_permission` | Forget a remembered consent.                                          |
 | `decide_permission` | Answer an open consent card of a running turn.                        |
 
-Consent-gated tools cannot prompt during an MCP `send`; they are skipped and the
-assistant is told so. Use the hub UI to approve changes interactively.
+Consent-gated tools cannot prompt during an MCP `send`: they are skipped and the
+assistant is told. Approve changes in the hub UI.
 
 ## Run and schedule jobs
 

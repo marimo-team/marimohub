@@ -3,30 +3,12 @@ import { Clock3, ShieldCheck, ShieldX } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ConversationPermission, PermissionDecision } from '@/api/conversations';
 import { Button } from '@/components/ui';
+import { permissionOutcome } from './toolActivityModel';
 
 export type DecidePermission = (
 	rid: string,
 	decision: PermissionDecision,
 ) => Promise<{ accepted: boolean }>;
-
-function outcome(permission: ConversationPermission) {
-	switch (permission.status) {
-		case 'allowed':
-			return 'Allowed once';
-		case 'remembered':
-			return `Always allowed for ${permission.scope.label}`;
-		case 'denied':
-			return 'Not allowed';
-		case 'expired':
-			return 'No answer in time. Chat continued without it.';
-		case 'cancelled':
-			return 'Stopped';
-		case 'unavailable':
-			return 'This client cannot ask for permission.';
-		case 'open':
-			return '';
-	}
-}
 
 export function PermissionCard({
 	permission,
@@ -75,7 +57,7 @@ export function PermissionCard({
 			<span className="min-w-0 break-words">
 				{closed && permission.status === 'open'
 					? 'This permission request is closed.'
-					: outcome(permission)}
+					: permissionOutcome(permission)}
 			</span>
 		</output>
 	);

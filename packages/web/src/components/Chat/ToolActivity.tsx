@@ -1,14 +1,9 @@
 import { CheckCircle2, ChevronRight, CircleAlert, LoaderCircle } from 'lucide-react';
+import { TOOL_STATUS_LABELS, toolLabel } from './toolActivityModel';
 import type { ToolActivityEntry, ToolStatus } from './toolActivityModel';
 import { PermissionCard } from './PermissionCard';
 import type { DecidePermission } from './PermissionCard';
 import { cn } from '@/lib/utils';
-
-const labels = { running: 'Running', succeeded: 'Completed', failed: 'Failed' } as const;
-
-export function toolLabel(name: string): string {
-	return name.replaceAll('_', ' ');
-}
 
 function ToolStatusIcon({ status }: { status: ToolStatus }) {
 	switch (status) {
@@ -63,7 +58,7 @@ export function ToolActivity({
 									call.status === 'failed' ? 'text-destructive' : 'text-muted-foreground',
 								)}
 							>
-								{labels[call.status]}
+								{TOOL_STATUS_LABELS[call.status]}
 							</span>
 						</>
 					);

@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { ExternalLink, Notebook, X } from 'lucide-react';
-import { Button, IconButton } from '@/components/ui';
+import { ExternalLink, Notebook } from 'lucide-react';
+import { Button } from '@/components/ui';
+import { SidePane } from './SidePane';
 import { withBasePath } from '@/lib/basePath';
 
 /**
@@ -90,44 +91,43 @@ export function NotebookPane({
 		</form>
 	);
 	return (
-		<aside
-			aria-label="Notebook pane"
-			className="flex min-h-[60vh] min-w-0 shrink-0 flex-col border-t lg:min-h-0 lg:basis-[var(--pane-width)] lg:border-t-0"
-			style={{ '--pane-width': `${width}%` } as React.CSSProperties}
-		>
-			<header className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2 text-xs">
-				<div className="flex min-w-0 items-center gap-2">
+		<SidePane
+			label="Notebook pane"
+			width={width}
+			className="min-h-[60vh]"
+			closeLabel="Close notebook pane"
+			onClose={onClose}
+			title={
+				<div className="flex min-w-0 items-center gap-2 py-1.5 text-xs">
 					<Notebook className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
 					<span className="truncate font-medium">
 						{current?.title ?? (workingNotebook ? 'Notebook' : 'No notebook open')}
 					</span>
 				</div>
-				<div className="flex shrink-0 items-center gap-1">
-					{workingNotebook && !choosing ? (
-						<>
-							<Button
-								size="sm"
-								variant="ghost"
-								isDisabled={busy || saving}
-								onPress={() => setChoosing(true)}
-							>
-								Change
-							</Button>
-							<a
-								href={withBasePath(notebookPath!)}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
-							>
-								Open full page <ExternalLink className="size-3" aria-hidden />
-							</a>
-						</>
-					) : null}
-					<IconButton label="Close notebook pane" onPress={onClose}>
-						<X className="size-4" aria-hidden />
-					</IconButton>
-				</div>
-			</header>
+			}
+			actions={
+				workingNotebook && !choosing ? (
+					<>
+						<Button
+							size="sm"
+							variant="ghost"
+							isDisabled={busy || saving}
+							onPress={() => setChoosing(true)}
+						>
+							Change
+						</Button>
+						<a
+							href={withBasePath(notebookPath!)}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
+						>
+							Open full page <ExternalLink className="size-3" aria-hidden />
+						</a>
+					</>
+				) : null
+			}
+		>
 			{notebookPath && !choosing ? (
 				<iframe
 					key={workingNotebook}
@@ -138,6 +138,6 @@ export function NotebookPane({
 			) : (
 				picker
 			)}
-		</aside>
+		</SidePane>
 	);
 }
