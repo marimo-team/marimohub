@@ -59,10 +59,46 @@ export function PermissionCard({
 	const allowed = permission.status === 'allowed' || permission.status === 'remembered';
 	const denied = permission.status === 'denied';
 	const OutcomeIcon = allowed ? ShieldCheck : denied ? ShieldX : Clock3;
+	const open = permission.status === 'open' && !closed;
+	const outcomeBadge = (
+		<output
+			className={cn(
+				'inline-flex max-w-full items-start gap-1.5 rounded-md border px-2 py-1 text-xs font-medium',
+				allowed
+					? 'border-emerald-600/20 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300'
+					: denied
+						? 'border-destructive/20 bg-destructive/10 text-destructive'
+						: 'border-border bg-muted text-muted-foreground',
+			)}
+		>
+			<OutcomeIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+			<span className="min-w-0 break-words">
+				{closed && permission.status === 'open'
+					? 'This permission request is closed.'
+					: outcome(permission)}
+			</span>
+		</output>
+	);
+	// A settled request is history: one quiet line. An open one needs attention.
+	if (!open)
+		return (
+			<section
+				aria-label="Tool permission"
+				className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"
+			>
+				<span className="font-medium text-foreground">{permission.action}</span>
+				{permission.details.map((detail) => (
+					<span key={`${detail.label}:${detail.value}`} className="truncate">
+						{detail.label}: {detail.value}
+					</span>
+				))}
+				{outcomeBadge}
+			</section>
+		);
 	return (
 		<section
 			aria-label="Tool permission"
-			className="mt-3 space-y-3 rounded-lg border border-primary/20 bg-background p-4 text-sm"
+			className="mt-3 space-y-3 rounded-lg border border-primary/30 bg-primary/[0.03] p-4 text-sm"
 		>
 			<p className="font-medium">{permission.action}</p>
 			{permission.details.length > 0 ? (
@@ -75,46 +111,24 @@ export function PermissionCard({
 					))}
 				</dl>
 			) : null}
-			{permission.status === 'open' && !closed ? (
-				<>
-					<div className="flex flex-wrap gap-2">
-						<Button
-							variant="primary"
-							isDisabled={pending || !onDecide}
-							onPress={() => void decide('allow')}
-						>
-							Allow once
-						</Button>
-						{permission.can_remember ? (
-							<Button isDisabled={pending || !onDecide} onPress={() => void decide('always')}>
-								Always allow {permission.scope.label}
-							</Button>
-						) : null}
-						<Button isDisabled={pending || !onDecide} onPress={() => void decide('deny')}>
-							Do not allow
-						</Button>
-					</div>
-					{pending && <output>Sending…</output>}
-				</>
-			) : (
-				<output
-					className={cn(
-						'inline-flex max-w-full items-start gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium',
-						allowed
-							? 'border-emerald-600/20 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300'
-							: denied
-								? 'border-destructive/20 bg-destructive/10 text-destructive'
-								: 'border-border bg-muted text-muted-foreground',
-					)}
+			<div className="flex flex-wrap gap-2">
+				<Button
+					variant="primary"
+					isDisabled={pending || !onDecide}
+					onPress={() => void decide('allow')}
 				>
-					<OutcomeIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-					<span className="min-w-0 break-words">
-						{closed && permission.status === 'open'
-							? 'This permission request is closed.'
-							: outcome(permission)}
-					</span>
-				</output>
-			)}
+					Allow once
+				</Button>
+				{permission.can_remember ? (
+					<Button isDisabled={pending || !onDecide} onPress={() => void decide('always')}>
+						Always allow {permission.scope.label}
+					</Button>
+				) : null}
+				<Button isDisabled={pending || !onDecide} onPress={() => void decide('deny')}>
+					Do not allow
+				</Button>
+			</div>
+			{pending && <output>Sending…</output>}
 			{error && (
 				<p role="alert" className="text-destructive">
 					{error}

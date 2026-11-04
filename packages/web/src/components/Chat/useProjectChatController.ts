@@ -110,6 +110,9 @@ export function useProjectChatController(pid: string) {
 	}, [cid, messages, busy, alignTranscript]);
 	const latestAssistant = messages.findLast((message) => message.role === 'assistant');
 	const latestTools = latestAssistant ? messageToolEntries(latestAssistant) : [];
+	const latestWriting = Boolean(
+		latestAssistant?.parts.some((part) => part.type === 'text' && part.text.trim()),
+	);
 	const conversations = list.data?.conversations ?? [];
 	const home = !cid;
 	const canSubmit = canSend || canQueue;
@@ -228,6 +231,7 @@ export function useProjectChatController(pid: string) {
 		home,
 		live: chat.live,
 		latestTools,
+		latestWriting,
 		draft,
 		setDraft,
 		error,

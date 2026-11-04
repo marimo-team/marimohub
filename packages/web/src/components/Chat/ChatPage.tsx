@@ -35,7 +35,7 @@ function ProjectChat({ pid }: { pid: string }) {
 				<PermissionsDialog pid={pid} onClose={() => c.setPermissionsOpen(false)} />
 			)}
 			<div className="flex min-h-0 flex-1 flex-col overflow-auto lg:flex-row lg:overflow-hidden">
-				<div className="flex min-h-0 min-w-0 flex-1 flex-col">
+				<div className="@container flex min-h-0 min-w-0 flex-1 flex-col">
 					<header className="flex shrink-0 items-center justify-between gap-4 px-4 py-4 sm:px-9 sm:py-5">
 						<div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
 							<span className="truncate">{c.project.name}</span>
@@ -53,19 +53,19 @@ function ProjectChat({ pid }: { pid: string }) {
 								aria-pressed={c.paneOpen}
 							>
 								<Notebook className="size-4" aria-hidden />
-								<span className="max-sm:sr-only">Notebook</span>
+								<span className="@max-3xl:sr-only">Notebook</span>
 							</Button>
 							<Button variant="ghost" size="sm" onPress={() => c.setPermissionsOpen(true)}>
 								<ShieldCheck className="size-4" aria-hidden />
-								<span className="max-sm:sr-only">Permissions</span>
+								<span className="@max-3xl:sr-only">Permissions</span>
 							</Button>
 							<Button variant="ghost" size="sm" onPress={() => c.setHistoryOpen(true)}>
 								<History className="size-4" aria-hidden />
-								<span className="max-sm:sr-only">History</span>
+								<span className="@max-3xl:sr-only">History</span>
 							</Button>
 							<Button variant="ghost" size="sm" onPress={() => c.select(null)} isDisabled={c.busy}>
 								<Plus className="size-4" aria-hidden />
-								<span className="max-sm:sr-only">New chat</span>
+								<span className="@max-3xl:sr-only">New chat</span>
 							</Button>
 						</div>
 					</header>
@@ -131,7 +131,9 @@ function ProjectChat({ pid }: { pid: string }) {
 										onDismiss={c.dismissTask}
 									/>
 								) : null}
-								{c.busy ? <ChatProgress calls={c.latestTools} /> : null}
+								{c.busy ? (
+									<ChatProgress calls={c.latestTools} writing={c.live && c.latestWriting} />
+								) : null}
 								{c.queue.length > 0 ? (
 									<section
 										aria-label="Queued messages"

@@ -109,10 +109,17 @@ function ToolPreview({ label, value }: { label: string; value?: string }) {
 	);
 }
 
-export function ChatProgress({ calls }: { calls: readonly ToolActivityEntry[] }) {
+export function ChatProgress({
+	calls,
+	writing = false,
+}: {
+	calls: readonly ToolActivityEntry[];
+	/** Text is arriving right now, so the model is past planning. */
+	writing?: boolean;
+}) {
 	const running = calls.filter((call) => call.status === 'running').at(-1);
 	const waitingForConsent = running?.permission?.status === 'open';
-	let message = calls.length > 0 ? 'Preparing a response…' : 'Planning the next step…';
+	let message = writing || calls.length > 0 ? 'Writing…' : 'Planning the next step…';
 	if (running) message = `Running ${toolLabel(running.name)}…`;
 	if (waitingForConsent) message = 'Waiting for your permission…';
 	return (
