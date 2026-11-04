@@ -37,8 +37,10 @@ class MarimoClient:
         self.remaining = remaining
         self.base = "http://127.0.0.1:" + str(cfg["port"]) + cfg["base_url"]
         self.opener = build_opener(ProxyHandler({}))
-        token = Path(cfg["token_file"]).read_text().strip()
-        self.auth = {"Authorization": "Bearer " + token}
+        self.auth = {}
+        if cfg["authenticated"]:
+            token = Path(cfg["token_file"]).read_text().strip()
+            self.auth["Authorization"] = "Bearer " + token
         self.headers = dict(self.auth)
 
     def request(self, path, body=None, session_id=None):
@@ -113,6 +115,7 @@ class MarimoClient:
 @contextmanager
 def bootstrap_lock(token_file, inspect, remaining):
     # Use the sandbox-scoped token path to keep coordination outside workspace capture.
+    Path(token_file).parent.mkdir(parents=True, exist_ok=True)
     with open(token_file + ".bootstrap.lock", "a+") as lock:
         while True:
             try:

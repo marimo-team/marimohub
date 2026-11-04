@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { withDeadline } from '../../async';
+import { MARIMO_PORT } from '../../constants';
 import { sleep } from '../../duration';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { kernelBootstrapCommand } from './kernelBootstrap/command';
@@ -25,12 +26,20 @@ async function bootstrapOnce(
 	options: { timeoutMs: number; inspectOnly?: boolean; signal?: AbortSignal },
 ): Promise<KernelBootstrapResult> {
 	try {
+		const kernelUrl = `http://127.0.0.1:${MARIMO_PORT}`;
+		const processUrl = new URL(sandbox.resolveProcessUrl?.(kernelUrl) ?? kernelUrl);
+		const mappedPort = Number(processUrl.port || (processUrl.protocol === 'https:' ? 443 : 80));
+		const port =
+			Number.isInteger(mappedPort) && mappedPort > 0 && mappedPort <= 65535
+				? mappedPort
+				: MARIMO_PORT;
 		const executed = await withDeadline(
 			() =>
 				sandbox.exec(
 					kernelBootstrapCommand(
 						Math.max(1, options.timeoutMs - Math.min(250, options.timeoutMs / 10)),
 						options.inspectOnly,
+						port,
 					),
 					{
 						// The request deadline must win over adapter process termination.
