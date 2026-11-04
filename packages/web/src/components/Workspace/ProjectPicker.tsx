@@ -45,7 +45,7 @@ export function ProjectPicker({
 				setOpen(false);
 				createDialog.open();
 			}}
-			className="flex min-h-11 w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+			className="flex min-h-9 max-md:min-h-11 w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
 		>
 			<Plus className="size-4" aria-hidden />
 			New project
@@ -65,7 +65,7 @@ export function ProjectPicker({
 				className="space-y-2"
 			>
 				<Label className="block px-2 text-xs font-medium text-muted-foreground">Project</Label>
-				<Button className="flex min-h-11 w-full items-center gap-2 rounded-lg border border-sidebar-border bg-background px-3 py-2 text-left text-sm font-semibold outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring">
+				<Button className="flex min-h-9 max-md:min-h-11 w-full items-center gap-2 rounded-md border border-sidebar-border bg-card px-2.5 py-1.5 text-left text-[13px] font-semibold outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring">
 					<Folder className="size-4 shrink-0 text-muted-foreground" aria-hidden />
 					<SelectValue className="min-w-0 flex-1 truncate" />
 					<ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" aria-hidden />

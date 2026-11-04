@@ -12,7 +12,7 @@ const UNGROUPED_SECTION = Symbol('ungrouped');
 function ProjectRow({ project }: { project: ProjectSummary }) {
 	const content = (
 		<>
-			<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors group-hover:bg-primary/15">
+			<span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors group-hover:bg-primary/15">
 				<Folder className="size-4" aria-hidden="true" />
 			</span>
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -40,7 +40,7 @@ function ProjectRow({ project }: { project: ProjectSummary }) {
 		return (
 			<div
 				data-testid="project-row"
-				className="flex items-center gap-3 border-b border-l-2 border-l-transparent bg-muted/20 px-4 py-3.5 last:border-b-0"
+				className="flex items-center gap-3 border-b border-l-2 border-l-transparent bg-muted/20 px-4 py-2.5 last:border-b-0"
 			>
 				{content}
 				{metadata}
@@ -53,7 +53,7 @@ function ProjectRow({ project }: { project: ProjectSummary }) {
 			to={`/projects/${project.id}`}
 			testId="project-row"
 			trailing={metadata}
-			contentClassName="items-center gap-3 py-3.5"
+			contentClassName="items-center gap-3 py-2.5"
 		>
 			{content}
 			<ChevronRight

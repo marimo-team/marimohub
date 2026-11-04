@@ -17,9 +17,9 @@ export interface EmptyStateProps {
  */
 export function EmptyState({ message, description, icon, action }: EmptyStateProps) {
 	return (
-		<div className="flex flex-col items-center gap-4 rounded-xl border border-dashed bg-card/50 px-8 py-14 text-center">
+		<div className="flex flex-col items-center gap-3 rounded-lg border border-dashed bg-card/50 px-6 py-8 text-center">
 			{icon && (
-				<div className="flex size-12 items-center justify-center rounded-xl bg-muted text-muted-foreground [&_svg]:size-5">
+				<div className="flex size-10 items-center justify-center rounded-lg bg-muted text-muted-foreground [&_svg]:size-5">
 					{icon}
 				</div>
 			)}

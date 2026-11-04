@@ -22,7 +22,10 @@ export function ProjectSettingsNavigation({
 		capabilities?.project_alerts?.available && canManageProject(project.your_role);
 	return (
 		<>
-			<nav aria-label="Project settings" className="space-y-1 border-t border-sidebar-border pt-3">
+			<nav
+				aria-label="Project settings"
+				className="space-y-0.5 border-t border-sidebar-border pt-2"
+			>
 				<SidebarLink
 					label="Members"
 					icon={Users}
@@ -42,7 +45,7 @@ export function ProjectSettingsNavigation({
 						variant="unstyled"
 						onPress={alertsDialog.open}
 						aria-haspopup="dialog"
-						className="flex min-h-10 w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11"
+						className="flex min-h-8 w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11"
 					>
 						<Bell className="size-4 shrink-0" aria-hidden />
 						Alerts

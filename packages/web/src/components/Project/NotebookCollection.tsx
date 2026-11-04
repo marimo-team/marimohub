@@ -63,7 +63,7 @@ function NotebookUpdated({ notebook }: { notebook: NotebookEntry }) {
 
 function NotebookIcon({ notebook }: { notebook: NotebookEntry }) {
 	return (
-		<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+		<span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
 			{notebook.source_type === 'git' ? (
 				<GitBranch className="size-4" aria-hidden="true" />
 			) : (
@@ -96,7 +96,7 @@ function notebookColumns(compact: boolean): DataTableColumn<NotebookCollectionIt
 									to={item.to}
 									state={{ title: notebook.title }}
 									aria-label={notebook.title}
-									className="block rounded py-1 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+									className="block rounded py-0.5 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
 								>
 									<NotebookName notebook={notebook} showStatus={false} />
 								</Link>

@@ -1559,7 +1559,7 @@ export default function AdminPolicyAnalyzerPage() {
 		<PageContainer contentClassName="max-w-6xl">
 			<PageHeader>
 				<div>
-					<h1 className="text-2xl font-semibold tracking-tight text-balance">Policy Analyzer</h1>
+					<h1 className="text-xl font-semibold tracking-tight text-balance">Policy Analyzer</h1>
 					<p className="mt-1 max-w-3xl text-sm text-muted-foreground text-pretty">
 						Build a scenario to see whether the current policy allows or denies an action. The
 						analyzer does not change access.

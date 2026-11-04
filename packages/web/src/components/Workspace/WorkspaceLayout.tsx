@@ -63,7 +63,7 @@ export function WorkspaceLayout({ children }: { children: ReactNode }) {
 				{showNavigation && !isMobile ? (
 					<aside
 						aria-label="Workspace"
-						className="flex w-60 shrink-0 border-r border-sidebar-border bg-sidebar max-lg:w-52"
+						className="flex w-56 shrink-0 border-r border-sidebar-border bg-sidebar max-lg:w-52"
 					>
 						<WorkspaceSidebar />
 					</aside>

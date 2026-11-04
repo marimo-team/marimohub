@@ -27,10 +27,10 @@ export function PageContainer({
 	return (
 		<div
 			className={cn(
-				'flex min-h-0 min-w-0 flex-1 items-start justify-center px-8 pb-8 max-md:px-3 max-md:pb-3',
+				'flex min-h-0 min-w-0 flex-1 items-start justify-start px-6 pb-6 max-md:px-3 max-md:pb-3',
 				scroll === 'page'
 					? 'overflow-y-auto'
-					: 'overflow-hidden pt-8 max-md:overflow-y-auto max-md:pt-3',
+					: 'overflow-hidden pt-6 max-md:overflow-y-auto max-md:pt-3',
 				className,
 			)}
 		>
@@ -39,7 +39,7 @@ export function PageContainer({
 					'w-full min-w-0',
 					PAGE_WIDTHS[width],
 					scroll === 'page'
-						? 'pt-8 pb-8 max-md:pt-3 max-md:pb-5'
+						? 'pt-6 max-md:pt-3'
 						: 'flex h-full min-h-0 flex-col max-md:h-auto max-md:min-h-full',
 					contentClassName,
 				)}
@@ -62,7 +62,7 @@ export function PageHeader({
 	return (
 		<div
 			className={cn(
-				'mb-6 flex shrink-0 items-center justify-between gap-4 max-md:gap-3',
+				'mb-4 flex shrink-0 items-center justify-between gap-4 max-md:gap-3',
 				mobileActions === 'stack' ? 'max-md:flex-col' : 'flex-wrap',
 			)}
 		>
@@ -89,9 +89,5 @@ export function PageHeader({
 }
 
 export function ListContainer({ children }: { children: ReactNode }) {
-	return (
-		<div className="flex flex-col overflow-hidden rounded-xl border bg-card shadow-xs">
-			{children}
-		</div>
-	);
+	return <div className="flex flex-col overflow-hidden rounded-lg border bg-card">{children}</div>;
 }

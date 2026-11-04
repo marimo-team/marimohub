@@ -42,6 +42,7 @@ export function ProjectList() {
 
 	return (
 		<Page
+			width="wide"
 			title="Projects"
 			subtitle="Shared workspaces for your notebooks"
 			actions={

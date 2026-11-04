@@ -23,7 +23,7 @@ export function SidebarLink({
 			onClick={onNavigate}
 			aria-current={active ? 'page' : undefined}
 			className={cn(
-				'flex min-h-10 items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none max-md:min-h-11',
+				'flex min-h-8 items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none max-md:min-h-11',
 				active
 					? 'bg-primary/10 text-primary'
 					: 'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground',

@@ -303,7 +303,7 @@ export default function AdminDebugPage() {
 					}
 				>
 					<div className="flex min-w-0 flex-col gap-0.5">
-						<h1 className="text-2xl font-semibold tracking-tight">Sandbox startup time</h1>
+						<h1 className="text-xl font-semibold tracking-tight">Sandbox startup time</h1>
 						<p className="text-sm text-muted-foreground">
 							Create a fresh sandbox, use the first echo as its readiness probe, then measure one
 							steady-state exec. The sandbox is destroyed after every run.

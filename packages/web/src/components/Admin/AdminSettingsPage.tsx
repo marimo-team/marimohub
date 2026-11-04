@@ -113,7 +113,7 @@ export default function AdminSettingsPage() {
 			<PageTitle>Settings</PageTitle>
 			<PageHeader>
 				<div className="flex min-w-0 flex-col gap-0.5">
-					<h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+					<h1 className="text-xl font-semibold tracking-tight">Settings</h1>
 					<p className="text-sm text-muted-foreground">
 						Read-only deployment configuration — set via MARIMOHUB_* environment variables, read at
 						boot. Secrets show only whether they are set.
