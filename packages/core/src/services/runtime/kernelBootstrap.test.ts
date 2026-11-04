@@ -6,6 +6,113 @@ import { kernelBootstrapCommand } from './kernelBootstrap/command';
 afterEach(() => vi.useRealTimers());
 
 describe('bootstrapKernel', () => {
+	it('maps the exact bridge launcher into the sandbox process namespace', async () => {
+		const { instance } = makeFakeSandbox();
+		instance.resolveProcessPath = (path) => `/local sandbox${path}`;
+		const exec = vi
+			.spyOn(instance, 'exec')
+			.mockResolvedValue({ success: true, stdout: '{"status":"ready"}', stderr: '' });
+		await bootstrapKernel(instance, { timeoutMs: 1_000, sandboxId: 'sb-test' });
+		expect(exec).toHaveBeenCalledWith(
+			kernelBootstrapCommand(
+				900,
+				false,
+				2718,
+				'/local sandbox/tmp/marimohub-bridge/sb-test/marimo-bridge.py',
+			),
+			{ timeout: 2_000 },
+		);
+	});
+	it('retains allowlisted diagnostics and discards arbitrary sandbox output', async () => {
+		const { instance } = makeFakeSandbox();
+		const diagnostics = {
+			stage: 'configure',
+			reason: 'incompatible_runtime',
+			runtime_kind: 'bridge',
+			authenticated: false,
+			http_status: 404,
+			processes_scanned: 6,
+			port_matches: 1,
+		};
+		vi.spyOn(instance, 'exec').mockResolvedValue({
+			success: true,
+			stdout: JSON.stringify({
+				status: 'awaiting_client',
+				diagnostics: { ...diagnostics, token: 'private', stderr: 'private' },
+			}),
+			stderr: 'private',
+		});
+		expect(await bootstrapKernel(instance, { timeoutMs: 1_000 })).toEqual({
+			status: 'awaiting_client',
+			diagnostics,
+		});
+	});
+	it('ignores malformed diagnostics without changing readiness', async () => {
+		const { instance } = makeFakeSandbox();
+		for (const diagnostics of [
+			'private',
+			null,
+			{
+				stage: 'private',
+				reason: 'private',
+				runtime_kind: 'private',
+				authenticated: 'private',
+				http_status: 999,
+				processes_scanned: -1,
+				port_matches: 'private',
+			},
+		]) {
+			vi.spyOn(instance, 'exec').mockResolvedValue({
+				success: true,
+				stdout: JSON.stringify({ status: 'ready', diagnostics }),
+				stderr: 'private',
+			});
+			const result = await bootstrapKernel(instance, { timeoutMs: 1_000 });
+			expect(result.status).toBe('ready');
+			expect(JSON.stringify(result)).not.toContain('private');
+			expect(
+				Object.values(result.diagnostics ?? {}).filter((value) => value !== undefined),
+			).toEqual([]);
+		}
+	});
+	it.each([null, true, -1, 1.5, 1_000_001, 'private'])(
+		'drops invalid counters (%s) while retaining useful diagnostics',
+		async (count) => {
+			const { instance } = makeFakeSandbox();
+			vi.spyOn(instance, 'exec').mockResolvedValue({
+				success: true,
+				stdout: JSON.stringify({
+					status: 'awaiting_client',
+					diagnostics: {
+						stage: 'discovery',
+						reason: 'runtime_not_found',
+						processes_scanned: count,
+						port_matches: count,
+						http_status: 'private',
+					},
+				}),
+				stderr: '',
+			});
+			const result = await bootstrapKernel(instance, { timeoutMs: 1_000 });
+			expect(JSON.parse(JSON.stringify(result))).toEqual({
+				status: 'awaiting_client',
+				diagnostics: { stage: 'discovery', reason: 'runtime_not_found' },
+			});
+		},
+	);
+	it('rejects a failed exec even if its stdout claims a ready kernel', async () => {
+		const { instance } = makeFakeSandbox();
+		vi.spyOn(instance, 'exec').mockResolvedValue({
+			success: false,
+			stdout: '{"status":"ready","diagnostics":{"stage":"kernel_status"}}',
+			stderr: 'private',
+			error: { code: 'COMMAND_FAILED' },
+		});
+		expect(await bootstrapKernel(instance, { timeoutMs: 1_000 })).toEqual({
+			status: 'unavailable',
+			diagnostics: { stage: 'exec', reason: 'exec_failed' },
+		});
+	});
 	it.each([
 		['http://127.0.0.1:43210', 43210],
 		['http://127.0.0.1:80', 80],
@@ -80,7 +187,7 @@ describe('bootstrapKernel', () => {
 		const exec = vi.spyOn(instance, 'exec').mockImplementation(() => new Promise(() => {}));
 		const pending = bootstrapKernel(instance, { timeoutMs: 3_000 });
 		await vi.advanceTimersByTimeAsync(3_000);
-		expect(await pending).toEqual({ status: 'initializing' });
+		expect(await pending).toMatchObject({ status: 'initializing' });
 		expect(exec).toHaveBeenCalledTimes(2);
 		expect(exec).toHaveBeenNthCalledWith(2, kernelBootstrapCommand(450), { timeout: 1_500 });
 		expect(vi.getTimerCount()).toBe(0);
@@ -95,7 +202,7 @@ describe('bootstrapKernel', () => {
 		});
 		const pending = bootstrapKernel(instance, { timeoutMs: 1_000 });
 		await vi.advanceTimersByTimeAsync(1_000);
-		expect(await pending).toEqual({ status: 'initializing' });
+		expect(await pending).toMatchObject({ status: 'initializing' });
 		expect(vi.getTimerCount()).toBe(0);
 	});
 	it('does not poll in inspect mode', async () => {
@@ -133,7 +240,7 @@ describe('bootstrapKernel', () => {
 		vi.spyOn(instance, 'exec').mockImplementation(() => new Promise(() => {}));
 		const pending = bootstrapKernel(instance, { timeoutMs: 100 });
 		await vi.advanceTimersByTimeAsync(100);
-		expect(await pending).toEqual({ status: 'initializing' });
+		expect(await pending).toMatchObject({ status: 'initializing' });
 		expect(vi.getTimerCount()).toBe(0);
 	});
 	it.each([100, 1_000])(
@@ -153,7 +260,7 @@ describe('bootstrapKernel', () => {
 			});
 			const pending = bootstrapKernel(instance, { timeoutMs });
 			await vi.advanceTimersByTimeAsync(timeoutMs);
-			expect(await pending).toEqual({ status: 'initializing' });
+			expect(await pending).toMatchObject({ status: 'initializing' });
 			await vi.runAllTimersAsync();
 			expect(vi.getTimerCount()).toBe(0);
 		},
@@ -165,13 +272,17 @@ describe('bootstrapKernel', () => {
 			vi.spyOn(instance, 'exec').mockResolvedValue({ success: true, stdout, stderr: 'secret' });
 			expect(await bootstrapKernel(instance, { timeoutMs: 100 })).toEqual({
 				status: 'unavailable',
+				diagnostics: { stage: 'exec', reason: 'invalid_output' },
 			});
 		},
 	);
 	it('sanitizes execution errors', async () => {
 		const { instance } = makeFakeSandbox();
 		vi.spyOn(instance, 'exec').mockRejectedValue(new Error('secret'));
-		expect(await bootstrapKernel(instance, { timeoutMs: 100 })).toEqual({ status: 'unavailable' });
+		expect(await bootstrapKernel(instance, { timeoutMs: 100 })).toEqual({
+			status: 'unavailable',
+			diagnostics: { stage: 'exec', reason: 'exec_failed' },
+		});
 	});
 	it('stops waiting on cancellation and clears its deadline', async () => {
 		vi.useFakeTimers();

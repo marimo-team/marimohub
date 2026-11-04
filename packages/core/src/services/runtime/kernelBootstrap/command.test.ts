@@ -9,6 +9,69 @@ async function python(assertions: string) {
 }
 
 describe('sandbox bootstrap launcher', () => {
+	it('discovers a bridge from Linux argv while skipping unreadable and exited processes', async () => {
+		await python(String.raw`
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+bridge = "/mapped path/équipe/marimohub-bridge/sb-test/marimo-bridge.py"
+args = ["/env/bin/python3", bridge, "--quiet", "edit", "notebook.py", "--no-token", "--port=2718", "--base-url=/prefix/"]
+entries = [SimpleNamespace(read_bytes=Mock(side_effect=FileNotFoundError())),
+           SimpleNamespace(read_bytes=Mock(side_effect=PermissionError())),
+           SimpleNamespace(read_bytes=Mock(return_value=b"\xff")),
+           SimpleNamespace(read_bytes=Mock(return_value=b"")),
+           SimpleNamespace(read_bytes=Mock(return_value=("\0".join(args) + "\0").encode()))]
+diagnostics = {}
+with patch.object(Path, "is_dir", return_value=True), patch.object(Path, "glob", return_value=entries):
+    with patch.object(subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout='{"status":"ready"}')) as run:
+        assert run_launcher("/tmp/token", 2, True, "client", 2718, bridge, diagnostics) == "ready"
+        assert run.call_args.args[0] == [args[0], "-c", "client"]
+        cfg = json.loads(run.call_args.kwargs["input"])
+        assert cfg["base_url"] == "/prefix"
+        assert cfg["authenticated"] is False
+        assert cfg["inspect"] is True
+assert diagnostics == {"stage": "client", "processes_scanned": 2, "port_matches": 1, "runtime_kind": "bridge", "authenticated": False}
+`);
+	});
+	it('discovers only the expected tokenless bridge launcher on the sandbox port', async () => {
+		await python(String.raw`
+bridge = "/tmp/marimohub-bridge/sb-test/marimo-bridge.py"
+args = ["/env/bin/python3", bridge, "--quiet", "edit", "notebook.py", "--no-token", "--port=43210"]
+assert server_runtime(args, "/tmp/token", 43210, bridge) == ("/env/bin/python3", 43210, "", False)
+assert server_runtime(args, "/tmp/token", 2718, bridge) is None
+assert server_runtime(args, "/tmp/token", 43210) is None
+for other in ("/workspace/marimo-bridge.py", "/tmp/marimohub-bridge/sb-other/marimo-bridge.py", "marimo-bridge.py"):
+    assert server_runtime([args[0], other, *args[2:]], "/tmp/token", 43210, bridge) is None
+assert server_runtime(args + ["--token-password-file=/tmp/other"], "/tmp/token", 43210, bridge) is None
+assert server_runtime(["sh", *args[1:]], "/tmp/token", 43210, bridge) is None
+authenticated = [arg for arg in args if arg != "--no-token"] + ["--token-password-file=/tmp/token"]
+assert server_runtime(authenticated, "/tmp/token", 43210, bridge) == ("/env/bin/python3", 43210, "", True)
+assert server_runtime(authenticated, "/tmp/other", 43210, bridge) is None
+for port in ("", "bad", "0", "-1", "65536"):
+    assert server_runtime([arg for arg in args if not arg.startswith("--port=")] + ["--port=" + port], "/tmp/token", 43210, bridge) is None
+`);
+	});
+	it('distinguishes discovery failure from a client compatibility failure without exposing output', async () => {
+		await python(String.raw`
+from types import SimpleNamespace
+from unittest.mock import patch
+bridge = "/tmp/marimohub-bridge/sb-test/marimo-bridge.py"
+args = ["python3", bridge, "--no-token", "--port=2718"]
+diagnostics = {}
+with patch.dict(globals(), {"commands": lambda _: iter([args])}):
+    assert run_launcher("/tmp/token", 1, False, "client", 2718, diagnostics=diagnostics) == "awaiting_client"
+    assert diagnostics == {"stage": "discovery", "reason": "runtime_not_found", "processes_scanned": 1, "port_matches": 1}
+    result = SimpleNamespace(returncode=0, stdout=json.dumps({"status": "awaiting_client", "diagnostics": {"stage": "configure", "reason": "incompatible_runtime"}}), stderr="private token")
+    diagnostics = {}
+    with patch.object(subprocess, "run", return_value=result):
+        assert run_launcher("/tmp/token", 1, False, "client", 2718, bridge, diagnostics) == "awaiting_client"
+    assert diagnostics == {"stage": "configure", "reason": "incompatible_runtime", "processes_scanned": 1, "port_matches": 1, "runtime_kind": "bridge", "authenticated": False}
+for result, reason in ((SimpleNamespace(returncode=1, stdout="private", stderr="private"), "client_exit"),
+                       (SimpleNamespace(returncode=0, stdout="private", stderr="private"), "invalid_output")):
+    diagnostics = {}
+    assert client_outcome(result, diagnostics) == "unavailable"
+    assert diagnostics == {"reason": reason}
+`);
+	});
 	it('discovers tokenless marimo only on the sandbox port', async () => {
 		await python(String.raw`
 from tempfile import TemporaryDirectory

@@ -22,6 +22,7 @@ async function runtime(
 	prefix = '',
 	fault?: 'fail' | 'delay',
 	authenticated = true,
+	bridge = false,
 ) {
 	const root = await mkdtemp(join(tmpdir(), 'mhub-bootstrap-'));
 	cleanup.push(() => rm(root, { recursive: true, force: true }));
@@ -67,21 +68,24 @@ if __name__ == "__main__":
         from marimo._session.session import SessionImpl as Session
         original = Session.instantiate
         def faulty(self, *args, **kwargs):
-            Session.instantiate = original
-            if ${fault === 'fail' ? 'True' : 'False'}:
+            from pathlib import Path
+            if ${fault === 'fail' ? 'True' : 'False'} and not Path("recover").exists():
                 raise RuntimeError("private initialization error")
+            Session.instantiate = original
             original(self, *args, **kwargs)
             import time
             time.sleep(2)
         Session.instantiate = faulty
+    sys.argv[0] = "marimo"
     from marimo._cli.cli import main
     main(prog_name="marimo")
 `;
-	await writeFile(join(root, 'marimo'), serverMain);
+	const launcher = join(root, bridge ? 'marimo-bridge.py' : 'marimo');
+	await writeFile(launcher, serverMain);
 	const child = spawn(
 		python!,
 		[
-			join(root, 'marimo'),
+			launcher,
 			'--quiet',
 			'edit',
 			'notebook.py',
@@ -142,6 +146,8 @@ if __name__ == "__main__":
 		)
 		.toBe(200);
 	const sandbox = {
+		resolveProcessPath: (path: string) =>
+			path === '/tmp/marimohub-bridge/sb-test/marimo-bridge.py' ? launcher : path,
 		resolveProcessUrl: (url: string) => url.replace(`:${MARIMO_PORT}`, `:${port}`),
 		async exec(command, options) {
 			try {
@@ -224,6 +230,43 @@ with connect(cfg["base"].replace("http:", "ws:") + "/ws?session_id=browser-sessi
 
 describe.skipIf(!python)('real marimo headless bootstrap', () => {
 	it.each([
+		{ authenticated: false, autoRun: true },
+		{ authenticated: false, autoRun: false },
+		{ authenticated: true, autoRun: true },
+	])(
+		'bootstraps a bridge with auth=$authenticated and auto execution=$autoRun without a browser',
+		async ({ authenticated, autoRun }) => {
+			const rt = await runtime(autoRun, '/bridge/prefix', undefined, authenticated, true);
+			if (!authenticated) {
+				expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000 })).toMatchObject({
+					status: 'awaiting_client',
+					diagnostics: { stage: 'discovery', reason: 'runtime_not_found' },
+				});
+			}
+			const options = { timeoutMs: 15_000, sandboxId: 'sb-test' };
+			expect(await bootstrapKernel(rt.sandbox, { ...options, inspectOnly: true })).toMatchObject({
+				status: 'initializing',
+			});
+			expect(await listKernelSessions(rt.base, rt.request)).toEqual([]);
+			for (let attempt = 0; attempt < 2; attempt++) {
+				expect(await bootstrapKernel(rt.sandbox, options)).toMatchObject({
+					status: 'ready',
+					diagnostics: { runtime_kind: 'bridge', authenticated },
+				});
+			}
+			expect(await rt.execute('print(globals().get("initial_value", "disabled"))')).toMatchObject({
+				success: true,
+				stdout: autoRun ? '41\n' : 'disabled\n',
+			});
+			expect(
+				await rt.execute(
+					'from pathlib import Path; print(Path("runs.txt").read_text() if Path("runs.txt").exists() else "disabled")',
+				),
+			).toMatchObject({ success: true, stdout: autoRun ? 'x\n' : 'disabled\n' });
+		},
+		30_000,
+	);
+	it.each([
 		{ autoRun: true, authenticated: true },
 		{ autoRun: false, authenticated: true },
 		{ autoRun: true, authenticated: false },
@@ -232,14 +275,16 @@ describe.skipIf(!python)('real marimo headless bootstrap', () => {
 		'initializes with auto execution $autoRun and authentication $authenticated, serializes starts, and preserves state',
 		async ({ autoRun, authenticated }) => {
 			const rt = await runtime(autoRun, '/nested/prefix', undefined, authenticated);
-			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000, inspectOnly: true })).toEqual({
+			expect(
+				await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000, inspectOnly: true }),
+			).toMatchObject({
 				status: 'initializing',
 			});
 			expect(await listKernelSessions(rt.base, rt.request)).toEqual([]);
 			const starts = await Promise.all(
 				[1, 2, 3].map(() => bootstrapKernel(rt.sandbox, { timeoutMs: 15_000 })),
 			);
-			expect(starts).toEqual(Array(3).fill({ status: 'ready' }));
+			expect(starts).toMatchObject(Array(3).fill({ status: 'ready' }));
 			const initial = await rt.execute('print(globals().get("initial_value", "disabled"))');
 			expect(initial).toMatchObject({
 				completed: true,
@@ -254,14 +299,18 @@ async with cm.get_context() as ctx:
 `),
 			).toMatchObject({ success: true });
 			expect(await rt.execute('live_values.append(99)')).toMatchObject({ success: true });
-			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 15_000 })).toEqual({ status: 'ready' });
+			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 15_000 })).toMatchObject({
+				status: 'ready',
+			});
 			expect(await rt.execute('print(live_values[0])')).toMatchObject({ stdout: '99\n' });
 			expect(
 				await rt.execute(
 					'from pathlib import Path; print(Path("runs.txt").read_text() if Path("runs.txt").exists() else "disabled")',
 				),
 			).toMatchObject({ stdout: autoRun ? 'x\n' : 'disabled\n' });
-			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000, inspectOnly: true })).toEqual({
+			expect(
+				await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000, inspectOnly: true }),
+			).toMatchObject({
 				status: 'ready',
 			});
 		},
@@ -271,7 +320,7 @@ async with cm.get_context() as ctx:
 	it('rejects invalid authentication without exposing credentials', async () => {
 		const rt = await runtime(true);
 		await writeFile(rt.tokenFile, createKernelAuthToken());
-		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000 })).toEqual({
+		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000 })).toMatchObject({
 			status: 'unavailable',
 		});
 		expect(await listKernelSessions(rt.base, rt.request)).toEqual([]);
@@ -283,8 +332,11 @@ async with cm.get_context() as ctx:
 			const rt = await runtime(true, '', fault);
 			expect(
 				await bootstrapKernel(rt.sandbox, { timeoutMs: fault === 'delay' ? 1_000 : 5_000 }),
-			).toEqual({ status: fault === 'delay' ? 'initializing' : 'unavailable' });
-			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 10_000 })).toEqual({ status: 'ready' });
+			).toMatchObject({ status: fault === 'delay' ? 'initializing' : 'unavailable' });
+			if (fault === 'fail') await writeFile(join(rt.root, 'recover'), '');
+			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 10_000 })).toMatchObject({
+				status: 'ready',
+			});
 			expect(
 				await rt.execute('from pathlib import Path; print(Path("runs.txt").read_text())'),
 			).toMatchObject({ success: true, stdout: 'x\n' });
@@ -295,7 +347,9 @@ async with cm.get_context() as ctx:
 	it('retries initialization within one wait window without rerunning cells', async () => {
 		const rt = await runtime(true, '', 'delay');
 		const probe = vi.spyOn(rt.sandbox, 'exec');
-		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 10_000 })).toEqual({ status: 'ready' });
+		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 10_000 })).toMatchObject({
+			status: 'ready',
+		});
 		expect(probe.mock.calls.length).toBeGreaterThan(1);
 		expect(
 			await rt.execute('from pathlib import Path; print(Path("runs.txt").read_text())'),
@@ -307,7 +361,9 @@ async with cm.get_context() as ctx:
 		async (autoRun) => {
 			const rt = await runtime(autoRun, '/browser/prefix');
 			const { browserProcess } = await attachBrowser(rt, autoRun);
-			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000, inspectOnly: true })).toEqual({
+			expect(
+				await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000, inspectOnly: true }),
+			).toMatchObject({
 				status: 'ready',
 			});
 			expect((await listKernelSessions(rt.base, rt.request))[0].id).toBe('browser-session');
@@ -327,7 +383,9 @@ async with cm.get_context() as ctx:
 
 	it('a browser resumes variables and editable cells under a new session ID', async () => {
 		const rt = await runtime(true);
-		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 15_000 })).toEqual({ status: 'ready' });
+		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 15_000 })).toMatchObject({
+			status: 'ready',
+		});
 		expect(
 			await rt.execute(`import marimo._code_mode as cm
 async with cm.get_context() as ctx:
@@ -343,14 +401,18 @@ async with cm.get_context() as ctx:
 		const newId = (await listKernelSessions(rt.base, rt.request))[0].id;
 		expect(newId).toBe('browser-session');
 		expect(newId).not.toBe(oldId);
-		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000, inspectOnly: true })).toEqual({
+		expect(
+			await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000, inspectOnly: true }),
+		).toMatchObject({
 			status: 'ready',
 		});
 		expect(await rt.execute('print(live_values[0], initial_value)')).toMatchObject({
 			success: true,
 			stdout: '73 41\n',
 		});
-		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 15_000 })).toEqual({ status: 'ready' });
+		expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 15_000 })).toMatchObject({
+			status: 'ready',
+		});
 		expect((await listKernelSessions(rt.base, rt.request))[0].id).toBe(newId);
 		expect(browserProcess.exitCode).toBeNull();
 		const cellId = ready.cell_ids[ready.codes.indexOf('edited_value = 17; live_values = []')];
