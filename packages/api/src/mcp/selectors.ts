@@ -24,7 +24,11 @@ export async function resolveProject(
 	deps: ApiDeps,
 	principal: AuthenticatedPrincipal,
 	value: string,
-	action: 'project.read' | 'notebook.write' = 'project.read',
+	action:
+		| 'project.read'
+		| 'notebook.write'
+		| 'integration.read'
+		| 'integration.use' = 'project.read',
 	appAccess = false,
 ): Promise<Project> {
 	const loadProject = async (id: ProjectId) => {
@@ -58,7 +62,7 @@ export async function resolveProject(
 	);
 	let matches = projects.filter((project) => foldCase(project.name) === foldCase(value));
 	if (action !== 'project.read') {
-		// Project listings require a read grant; write selectors authorize exact candidates instead.
+		// Scoped action grants need not include project.read; authorize exact candidates instead.
 		const candidates = await Promise.all(
 			matches.map((project) => deps.services.projects.getProject(project.id)),
 		);

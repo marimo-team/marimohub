@@ -1,3 +1,24 @@
+import {
+	requireDataBrowser,
+	resolveObjectAccess,
+	requireObjectCapability,
+	resolveAuthorizedObjectAccess,
+	requireAuthorizedObjectAccess,
+	assertIntegrationBudget,
+	consumeIntegrationBudget,
+	clearBrowseStateForTests,
+	listIntegrationNamespaces,
+	listIntegrationTables,
+	getIntegrationTableSchema,
+	previewIntegrationTable,
+	listIntegrationObjectBuckets,
+	listIntegrationObjects,
+	getIntegrationObjectMetadata,
+	previewIntegrationObject,
+} from '../integrations/browse';
+import type { IntegrationBrowseContext } from '../integrations/browse';
+import type { Context } from 'hono';
+import type { HonoEnv } from '../context';
 import { utcTimestamp } from '@marimo-hub/core/string-formats';
 import { UploadPartBody, UploadResponseSchema } from '../uploads';
 import { createRoute, z } from '@hono/zod-openapi';
@@ -9,25 +30,14 @@ import {
 	ForbiddenError,
 	ConflictError,
 	IntegrationId,
-	LazyMap,
 	MAX_DATA_QUERY_SQL_BYTES,
 	NotFoundError,
-	ResourceExhaustedError,
 	ValidationError,
 	assertValidDataQuerySql,
 	createSessionId,
-	createSlidingWindowBudget,
-	exchangeFederatedStorageEnv,
 } from '@marimo-hub/core';
-import type {
-	AuthUser,
-	Project,
-	ProjectId,
-	ProjectIntegrationsService,
-	SlidingWindowBudget,
-} from '@marimo-hub/core';
+import type { AuthUser, ProjectId, ProjectIntegrationsService } from '@marimo-hub/core';
 import {
-	authorizationService,
 	assertProjectRole,
 	commonErrors,
 	createApp,
@@ -38,12 +48,10 @@ import {
 	ProjectIdParam,
 } from '../shared';
 import type { ApiDeps } from '../shared';
-import { federationFor } from '../federation';
 import { appendAudit, logEvent } from '../log';
 import { objectContentDisposition } from '../contentDisposition';
 import {
 	acquireDownload,
-	makeObjectBrowseContext,
 	runObjectBrowse,
 	safeObjectContentType,
 	streamObjectBody,
@@ -742,23 +750,16 @@ const browseObjectContent = createRoute({
 	},
 });
 
-function requireIntegrations(deps: ApiDeps): ProjectIntegrationsService {
-	if (!deps.integrations) {
-		throw new NotFoundError('Integrations are not enabled on this deployment');
-	}
-	return deps.integrations;
-}
-
-function requireDataBrowser(deps: ApiDeps): {
-	integrations: ProjectIntegrationsService;
-	preview: boolean;
-} {
-	if (!deps.dataBrowser) {
-		throw new NotFoundError('The data browser is not enabled on this deployment');
-	}
+function browseContext(
+	c: Context<HonoEnv>,
+	params: { pid: ProjectId; iid: IntegrationId },
+): IntegrationBrowseContext {
 	return {
-		integrations: requireIntegrations(deps),
-		preview: deps.dataBrowser.preview,
+		deps: c.get('deps'),
+		user: c.get('user'),
+		...params,
+		signal: c.req.raw.signal,
+		request: { requestId: c.get('requestId'), method: c.req.method, path: c.req.path },
 	};
 }
 
@@ -953,260 +954,6 @@ function quoteSqlIdentifier(value: string): string {
 	return `"${value.replaceAll('"', '""')}"`;
 }
 
-const BROWSE_LIST_TTL_MS = 60_000;
-const BROWSE_SCHEMA_TTL_MS = 300_000;
-const BROWSE_CACHE_MAX_ENTRIES = 1024;
-
-/**
- * A cache entry must not outlive the integration state it was computed from,
- * so every metadata request re-runs resolution (project-then-org, shadowing),
- * the enablement check, and the instance verdict BEFORE the cache is
- * consulted: a shadowed org head 404s and a disabled instance 422s even while
- * a hit is warm. The returned token keys the entry on the config version AND
- * `updated_at` — a rename bumps only the head, yet changes the snippet a
- * schema response embeds. Only the upstream catalog traffic is cached.
- */
-async function assertBrowsable(
-	integrations: ProjectIntegrationsService,
-	pid: ProjectId,
-	iid: IntegrationId,
-): Promise<string> {
-	const capability = await integrations.browseCapability(pid, iid);
-	if (!capability.metadata) {
-		throw new ValidationError(capability.reason ?? 'This integration cannot be browsed.');
-	}
-	return `${capability.current_version}:${capability.updated_at}`;
-}
-
-async function resolveObjectAccess(
-	deps: ApiDeps,
-	project: Project,
-	user: AuthUser,
-	integrations: ProjectIntegrationsService,
-	pid: ProjectId,
-	iid: IntegrationId,
-	signal?: AbortSignal,
-) {
-	const filterWrite = async (
-		capability: Awaited<ReturnType<ProjectIntegrationsService['browseCapability']>>,
-	) => {
-		if (capability.surfaces.objects?.write) {
-			const decision = await authorizationService(deps).authorize(user, 'integration.write', {
-				kind: 'project',
-				project,
-			});
-			capability.surfaces.objects = { ...capability.surfaces.objects, write: decision.allowed };
-		}
-		return capability;
-	};
-
-	const wifEligible = federationFor(project, deps.wif) !== undefined;
-	const base = await makeObjectBrowseContext(deps, project, user, signal, {
-		integrationId: iid,
-		includeFederated: false,
-		allowServerAmbient: deps.dataBrowser?.objectBrowser?.allowServerAmbientCredentials,
-		disableS3Ambient: wifEligible,
-	});
-	const baseCapability = await runObjectBrowse(() => integrations.browseCapability(pid, iid, base));
-	const objects = baseCapability.surfaces.objects;
-	if (objects?.available || !wifEligible || objects?.provider !== 's3') {
-		return { context: base, capability: await filterWrite(baseCapability) };
-	}
-	const federated = await makeObjectBrowseContext(deps, project, user, signal, {
-		integrationId: iid,
-	});
-	return {
-		context: federated,
-		capability: await filterWrite(
-			await runObjectBrowse(() => integrations.browseCapability(pid, iid, federated)),
-		),
-	};
-}
-
-function requireObjectCapability(
-	capability: Awaited<ReturnType<ProjectIntegrationsService['browseCapability']>>,
-) {
-	const objects = capability.surfaces.objects;
-	if (!objects?.available) {
-		throw new ValidationError(objects?.reason ?? 'This integration cannot browse objects.');
-	}
-	return {
-		stateToken: `${capability.current_version}:${capability.updated_at}`,
-		capability: objects,
-	};
-}
-
-async function resolveAuthorizedObjectAccess(
-	deps: ApiDeps,
-	user: AuthUser,
-	integrations: ProjectIntegrationsService,
-	pid: ProjectId,
-	iid: IntegrationId,
-	signal?: AbortSignal,
-) {
-	const project = await assertProjectRole(
-		deps.services.projects,
-		pid,
-		user,
-		'integration.use',
-		deps,
-	);
-	return resolveObjectAccess(deps, project, user, integrations, pid, iid, signal);
-}
-
-async function requireAuthorizedObjectAccess(
-	deps: ApiDeps,
-	user: AuthUser,
-	integrations: ProjectIntegrationsService,
-	pid: ProjectId,
-	iid: IntegrationId,
-	signal?: AbortSignal,
-) {
-	const access = await resolveAuthorizedObjectAccess(deps, user, integrations, pid, iid, signal);
-	return { context: access.context, ...requireObjectCapability(access.capability) };
-}
-
-/**
- * Per-replica TTL cache over successful browse results, so tree navigation
- * does not re-spend probe budget on every expansion. The LRU bound and
- * superseded-pending semantics live in core's LazyMap.
- */
-type BrowseCache = LazyMap<string, { expiresAt: number; value: unknown }>;
-
-function createBrowseCache(): BrowseCache {
-	return new LazyMap(
-		async () => {
-			throw new Error('A browse cache load function is required.');
-		},
-		{ maxSize: BROWSE_CACHE_MAX_ENTRIES },
-	);
-}
-
-async function cachedBrowse<T>(
-	cache: BrowseCache,
-	key: string,
-	ttlMs: number,
-	fresh: boolean,
-	charge: () => void,
-	load: () => Promise<T>,
-	observation?: { metrics: ApiDeps['metrics']; operation: string },
-): Promise<T> {
-	const record = (outcome: 'hit' | 'miss' | 'coalesced' | 'refresh') =>
-		observation?.metrics?.increment('object_browser.cache.requests', 1, {
-			operation: observation.operation,
-			outcome,
-		});
-	const now = Date.now();
-	const hit = fresh ? undefined : cache.getIfPresent(key);
-	if (hit && hit.expiresAt > now) {
-		record('hit');
-		return hit.value as T;
-	}
-	if (hit) cache.delete(key);
-	// Every consumer of a miss pays its own budget BEFORE creating or joining
-	// the shared load: an exhausted user 429s alone (never poisoning the shared
-	// promise for others), and piggybacking on someone else's load is not free.
-	charge();
-	const coalesced = !fresh && cache.hasPending(key);
-	record(coalesced ? 'coalesced' : fresh ? 'refresh' : 'miss');
-	const loaded = await cache.getOrLoad(
-		key,
-		async () => ({ expiresAt: Date.now() + ttlMs, value: await load() }),
-		{ force: fresh },
-	);
-	return loaded.value as T;
-}
-
-function browseEndpoint<T>(options: {
-	deps: ApiDeps;
-	pid: ProjectId;
-	iid: IntegrationId;
-	user: AuthUser;
-	stateToken: string;
-	operation: string;
-	key: unknown[];
-	ttlMs: number;
-	fresh: boolean;
-	load: () => Promise<T>;
-	observation?: { metrics: ApiDeps['metrics']; operation: string };
-}): Promise<T> {
-	const state = integrationBrowseState(options.deps);
-	return cachedBrowse(
-		state.cache,
-		JSON.stringify([
-			options.pid,
-			options.iid,
-			options.user.id,
-			options.user.email,
-			options.stateToken,
-			options.operation,
-			...options.key,
-		]),
-		options.ttlMs,
-		options.fresh,
-		() => assertIntegrationBudget(options.deps, 'browse', options.user.id),
-		options.load,
-		options.observation,
-	);
-}
-
-const BUDGET_WINDOW_MS = 60_000;
-const integrationBudgetDefinitions = {
-	browse: { limit: 20, message: 'Too many browse requests — try again in a minute.' },
-	objectSearch: { limit: 5, message: 'Too many object searches — try again in a minute.' },
-	objectPreview: { limit: 10, message: 'Too many object previews — try again in a minute.' },
-	dataQuery: { limit: 5, message: 'Too many data queries — try again in a minute.' },
-	aiQuery: { limit: 5, message: 'Too many AI query requests — try again in a minute.' },
-	querySchemaWork: { limit: 512, message: 'Too much query-schema work — try again in a minute.' },
-} as const;
-type IntegrationBudgetName = keyof typeof integrationBudgetDefinitions;
-
-function createIntegrationBudgets(): Record<IntegrationBudgetName, SlidingWindowBudget<string>> {
-	return Object.fromEntries(
-		Object.entries(integrationBudgetDefinitions).map(([name, definition]) => [
-			name,
-			createSlidingWindowBudget<string>({
-				limit: definition.limit,
-				windowMs: BUDGET_WINDOW_MS,
-			}),
-		]),
-	) as Record<IntegrationBudgetName, SlidingWindowBudget<string>>;
-}
-
-interface IntegrationBrowseState {
-	cache: BrowseCache;
-	budgets: Record<IntegrationBudgetName, SlidingWindowBudget<string>>;
-}
-
-function createIntegrationBrowseState(): IntegrationBrowseState {
-	return { cache: createBrowseCache(), budgets: createIntegrationBudgets() };
-}
-
-let integrationBrowseStates = new WeakMap<ApiDeps, IntegrationBrowseState>();
-
-function integrationBrowseState(deps: ApiDeps): IntegrationBrowseState {
-	let state = integrationBrowseStates.get(deps);
-	if (!state) {
-		state = createIntegrationBrowseState();
-		integrationBrowseStates.set(deps, state);
-	}
-	return state;
-}
-
-function assertIntegrationBudget(deps: ApiDeps, name: IntegrationBudgetName, userId: string): void {
-	if (!consumeIntegrationBudget(deps, name, userId)) {
-		throw new ResourceExhaustedError(integrationBudgetDefinitions[name].message);
-	}
-}
-
-function consumeIntegrationBudget(
-	deps: ApiDeps,
-	name: IntegrationBudgetName,
-	userId: string,
-): boolean {
-	return integrationBrowseState(deps).budgets[name].consume(userId);
-}
-
 const querySchemaCache = new Map<string, { expiresAt: number; value: unknown }>();
 const inflightQuerySchema = new Map<string, Promise<unknown>>();
 const QUERY_SCHEMA_CACHE_TTL_MS = 300_000;
@@ -1239,7 +986,7 @@ async function cachedQuerySchema<T>(key: string, load: () => Promise<T>): Promis
 }
 
 export function clearIntegrationBrowseStateForTests(): void {
-	integrationBrowseStates = new WeakMap();
+	clearBrowseStateForTests();
 	querySchemaCache.clear();
 	inflightQuerySchema.clear();
 }
@@ -1564,140 +1311,39 @@ app.openapi(browseCapability, async (c) => {
 });
 
 app.openapi(browseNamespaces, async (c) => {
-	const deps = c.get('deps');
-	const user = c.get('user');
-	const { pid, iid } = c.req.valid('param');
-	const { limit, cursor, parent, fresh } = c.req.valid('query');
-	const { integrations } = requireDataBrowser(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'integration.use', deps);
-	const stateToken = await assertBrowsable(integrations, pid, iid);
-	const request = {
-		limit,
-		query_user: user.email,
-		...(cursor !== undefined ? { cursor } : {}),
-		...(parent !== undefined ? { parent: splitNamespace(parent) } : {}),
-	};
-	const data = await browseEndpoint({
-		deps,
-		pid,
-		iid,
-		user,
-		stateToken,
-		operation: 'namespaces',
-		key: [limit, cursor, parent],
-		ttlMs: BROWSE_LIST_TTL_MS,
-		fresh: fresh === 'true',
-		load: () => integrations.browseNamespaces(pid, iid, request),
+	const input = c.req.valid('query');
+	const data = await listIntegrationNamespaces(browseContext(c, c.req.valid('param')), {
+		...input,
+		fresh: input.fresh === 'true',
+		parent: input.parent === undefined ? undefined : splitNamespace(input.parent),
 	});
 	return c.json({ success: true, data }, 200);
 });
 
 app.openapi(browseTables, async (c) => {
-	const deps = c.get('deps');
-	const user = c.get('user');
-	const { pid, iid } = c.req.valid('param');
-	const { limit, cursor, namespace, fresh } = c.req.valid('query');
-	const { integrations } = requireDataBrowser(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'integration.use', deps);
-	const stateToken = await assertBrowsable(integrations, pid, iid);
-	const request = {
-		limit,
-		query_user: user.email,
-		...(cursor !== undefined ? { cursor } : {}),
-	};
-	const data = await browseEndpoint({
-		deps,
-		pid,
-		iid,
-		user,
-		stateToken,
-		operation: 'tables',
-		key: [namespace, limit, cursor],
-		ttlMs: BROWSE_LIST_TTL_MS,
-		fresh: fresh === 'true',
-		load: () => integrations.browseTables(pid, iid, splitNamespace(namespace), request),
+	const input = c.req.valid('query');
+	const data = await listIntegrationTables(browseContext(c, c.req.valid('param')), {
+		...input,
+		fresh: input.fresh === 'true',
+		namespace: splitNamespace(input.namespace),
 	});
 	return c.json({ success: true, data }, 200);
 });
 
 app.openapi(browseTableSchema, async (c) => {
-	const deps = c.get('deps');
-	const user = c.get('user');
-	const { pid, iid } = c.req.valid('param');
-	const { namespace, table, fresh } = c.req.valid('query');
-	const { integrations } = requireDataBrowser(deps);
-	await assertProjectRole(deps.services.projects, pid, user, 'integration.use', deps);
-	const stateToken = await assertBrowsable(integrations, pid, iid);
-	const data = await browseEndpoint({
-		deps,
-		pid,
-		iid,
-		user,
-		stateToken,
-		operation: 'schema',
-		key: [namespace, table],
-		ttlMs: BROWSE_SCHEMA_TTL_MS,
-		fresh: fresh === 'true',
-		load: () =>
-			integrations.browseTableSchema(pid, iid, splitNamespace(namespace), table, {
-				query_user: user.email,
-			}),
+	const input = c.req.valid('query');
+	const data = await getIntegrationTableSchema(browseContext(c, c.req.valid('param')), {
+		...input,
+		fresh: input.fresh === 'true',
+		namespace: splitNamespace(input.namespace),
 	});
 	return c.json({ success: true, data }, 200);
 });
 
 app.openapi(browseTablePreview, async (c) => {
 	c.header('Cache-Control', 'no-store');
-	const deps = c.get('deps');
-	const user = c.get('user');
-	const { pid, iid } = c.req.valid('param');
-	const { namespace, table, limit } = c.req.valid('json');
-	const { integrations, preview } = requireDataBrowser(deps);
-	const project = await assertProjectRole(
-		deps.services.projects,
-		pid,
-		user,
-		'integration.use',
-		deps,
-	);
-	const wif = federationFor(project, deps.wif);
-	if (!preview) throw new NotFoundError('Row preview is not enabled on this deployment');
-	assertIntegrationBudget(deps, 'browse', user.id);
-	const capability = await integrations.browseCapability(pid, iid);
-	if (!capability.metadata) {
-		throw new ValidationError(capability.reason ?? 'This integration cannot be browsed.');
-	}
-	const sessionId = createSessionId();
-	const data = await integrations.browseTablePreview(
-		pid,
-		iid,
-		{ userId: user.id, email: user.email },
-		sessionId,
-		namespace,
-		table,
-		{ limit, query_user: user.email, signal: c.req.raw.signal },
-		wif
-			? () =>
-					exchangeFederatedStorageEnv(wif.issuer, wif.issuerUrl, wif.target, pid, {
-						kind: 'session',
-						id: sessionId,
-					})
-			: undefined,
-	);
-	await appendAudit(
-		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
-		'integration.preview',
-		() =>
-			deps.services.events.append({
-				event: 'integration.preview',
-				actor: user.id,
-				project_id: pid,
-				integration_id: iid,
-				namespace,
-				table,
-				row_limit: limit,
-			}),
-	);
+	const input = c.req.valid('json');
+	const data = await previewIntegrationTable(browseContext(c, c.req.valid('param')), input);
 	return c.json({ success: true, data }, 200);
 });
 
@@ -1851,71 +1497,20 @@ app.openapi(generateDataQuerySql, async (c) => {
 	return c.json({ success: true, data: { sql } }, 200);
 });
 
-const OBJECT_METADATA_TTL_MS = 15_000;
-
 app.openapi(browseObjectBuckets, async (c) => {
-	const deps = c.get('deps');
-	const user = c.get('user');
-	const { pid, iid } = c.req.valid('param');
-	const { limit, cursor, fresh } = c.req.valid('query');
-	const { integrations } = requireDataBrowser(deps);
-	const { context, stateToken } = await requireAuthorizedObjectAccess(
-		deps,
-		user,
-		integrations,
-		pid,
-		iid,
-		c.req.raw.signal,
-	);
-	const request = { limit, ...(cursor ? { cursor } : {}) };
-	const data = await browseEndpoint({
-		deps,
-		pid,
-		iid,
-		user,
-		stateToken,
-		operation: 'object-buckets',
-		key: [request],
-		ttlMs: OBJECT_METADATA_TTL_MS,
-		fresh: fresh === 'true',
-		load: () => runObjectBrowse(() => integrations.browseObjectBuckets(pid, iid, context, request)),
-		observation: { metrics: deps.metrics, operation: 'list_buckets' },
+	const input = c.req.valid('query');
+	const data = await listIntegrationObjectBuckets(browseContext(c, c.req.valid('param')), {
+		...input,
+		fresh: input.fresh === 'true',
 	});
 	return c.json({ success: true, data }, 200);
 });
 
 app.openapi(browseObjects, async (c) => {
-	const deps = c.get('deps');
-	const user = c.get('user');
-	const { pid, iid } = c.req.valid('param');
-	const { bucket, prefix, limit, cursor, fresh } = c.req.valid('query');
-	const { integrations } = requireDataBrowser(deps);
-	const { context, stateToken } = await requireAuthorizedObjectAccess(
-		deps,
-		user,
-		integrations,
-		pid,
-		iid,
-		c.req.raw.signal,
-	);
-	const request = {
-		bucket,
-		limit,
-		...(prefix !== undefined ? { prefix } : {}),
-		...(cursor ? { cursor } : {}),
-	};
-	const data = await browseEndpoint({
-		deps,
-		pid,
-		iid,
-		user,
-		stateToken,
-		operation: 'objects',
-		key: [request],
-		ttlMs: OBJECT_METADATA_TTL_MS,
-		fresh: fresh === 'true',
-		load: () => runObjectBrowse(() => integrations.browseObjects(pid, iid, context, request)),
-		observation: { metrics: deps.metrics, operation: 'list_objects' },
+	const input = c.req.valid('query');
+	const data = await listIntegrationObjects(browseContext(c, c.req.valid('param')), {
+		...input,
+		fresh: input.fresh === 'true',
 	});
 	return c.json({ success: true, data }, 200);
 });
@@ -1974,24 +1569,8 @@ app.openapi(searchObjects, async (c) => {
 });
 
 app.openapi(browseObjectHead, async (c) => {
-	const deps = c.get('deps');
-	const user = c.get('user');
-	const { pid, iid } = c.req.valid('param');
-	const { bucket, key, version_id } = c.req.valid('query');
-	const { integrations } = requireDataBrowser(deps);
-	const { context } = await requireAuthorizedObjectAccess(
-		deps,
-		user,
-		integrations,
-		pid,
-		iid,
-		c.req.raw.signal,
-	);
-	const request = { bucket, key, ...(version_id ? { version_id } : {}) };
-	assertIntegrationBudget(deps, 'browse', user.id);
-	const data = await runObjectBrowse(() =>
-		integrations.browseObjectDetail(pid, iid, context, request),
-	);
+	const input = c.req.valid('query');
+	const data = await getIntegrationObjectMetadata(browseContext(c, c.req.valid('param')), input);
 	return c.json({ success: true, data }, 200);
 });
 
@@ -2025,48 +1604,8 @@ app.openapi(browseObjectVersions, async (c) => {
 
 app.openapi(browseObjectPreview, async (c) => {
 	c.header('Cache-Control', 'no-store');
-	const deps = c.get('deps');
-	const user = c.get('user');
-	const { pid, iid } = c.req.valid('param');
-	const body = c.req.valid('json');
-	const { integrations } = requireDataBrowser(deps);
-	const { capability, context } = await requireAuthorizedObjectAccess(
-		deps,
-		user,
-		integrations,
-		pid,
-		iid,
-		c.req.raw.signal,
-	);
-	if (!capability.preview) throw new NotFoundError('Object preview is not enabled.');
-	assertIntegrationBudget(deps, 'objectPreview', user.id);
-	const contentParams = new URLSearchParams({ bucket: body.bucket, key: body.key, inline: 'true' });
-	if (body.version_id) contentParams.set('version_id', body.version_id);
-	const data = await runObjectBrowse(() =>
-		integrations.browseObjectPreview(pid, iid, context, {
-			...body,
-			content_url: `/api/v1/projects/${pid}/integrations/${iid}/browse/objects/content?${contentParams}`,
-		}),
-	);
-	if (data.kind !== 'image') {
-		await appendAudit(
-			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
-			'integration.object.preview',
-			() =>
-				deps.services.events.append({
-					event: 'integration.object.preview',
-					actor: user.id,
-					project_id: pid,
-					integration_id: iid,
-					bucket: body.bucket,
-					key: body.key,
-					...(body.version_id ? { version_id: body.version_id } : {}),
-					format: data.kind === 'unsupported' ? data.detected_type : data.format,
-					bytes: 'bytes_read' in data ? data.bytes_read : undefined,
-					request_id: c.get('requestId'),
-				}),
-		);
-	}
+	const input = c.req.valid('json');
+	const data = await previewIntegrationObject(browseContext(c, c.req.valid('param')), input);
 	return c.json({ success: true, data }, 200);
 });
 
