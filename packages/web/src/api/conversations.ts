@@ -318,12 +318,7 @@ function createSession(
 	};
 }
 
-/**
- * One AI SDK chat session per conversation. The session starts from the saved
- * record; when a turn is still running on the server, the in-progress reply is
- * dropped from the seed and the session re-attaches to the live stream instead,
- * which replays everything streamed so far.
- */
+/** One AI SDK chat session per conversation, seeded from the saved record. */
 export function useConversationChat(
 	pid: string,
 	/** The loaded record for the selected conversation; undefined until it has loaded. */
@@ -337,12 +332,10 @@ export function useConversationChat(
 	const failed = useRef(false);
 	const cid = conversation?.id ?? null;
 	const [session, setSession] = useState<ChatSession | null>(null);
-	// The session is created once its record first arrives and dropped with the
-	// selection; later refetches of the same record are applied via setMessages.
-	// A pending record seeds without its partial reply and re-attaches to the
-	// live stream. Until that attempt settles (replayed, 204, or failed) the
-	// caller must not overwrite the store from the record, or the partial comes
-	// back and the replay lands beside it.
+	// A session is created when its record first arrives and dropped with the
+	// selection. A pending record re-attaches to the live stream; until that
+	// settles (replayed, 204, or failed) the caller must not sync the store from
+	// the record, or the saved partial comes back beside the replay.
 	const [resuming, setResuming] = useState(false);
 	useEffect(() => {
 		if (session && session.cid !== cid) {

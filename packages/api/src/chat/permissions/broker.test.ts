@@ -46,8 +46,9 @@ describe('PermissionBroker', () => {
 			pollMs: 50,
 			readDecision: () => Promise.reject(new Error('bucket down')),
 		});
+		const rejected = expect(pending).rejects.toThrow('bucket down');
 		await vi.advanceTimersByTimeAsync(60);
-		await expect(pending).rejects.toThrow('bucket down');
+		await rejected;
 		expect(broker.decide('k', 'allow')).toBe(false);
 	});
 });

@@ -1,96 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import { simulateReadableStream } from 'ai';
-import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart, LanguageModelV3StreamResult } from '@ai-sdk/provider';
 import { UserId } from '@marimo-hub/core';
 import { messageText } from '@marimo-hub/core/chat';
 import type { Conversation, ConversationPermission } from '@marimo-hub/core/chat';
-import { DEFAULT_CHAT_CONFIG } from '../context';
 import type { ApiDeps } from '../context';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
+import { chatAi, chatModel, hangingStream, textStream, toolCallStream } from '../testing/chat';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
 
 interface ConversationResult {
 	conversation: Conversation;
 }
 
-const USAGE = {
-	inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
-	outputTokens: { total: 1, text: 1, reasoning: 0 },
-};
-
-function finish(unified: 'stop' | 'tool-calls' | 'length'): LanguageModelV3StreamPart {
-	return { type: 'finish', finishReason: { unified, raw: unified }, usage: USAGE };
-}
-
-function textStream(text: string): LanguageModelV3StreamResult {
-	return {
-		stream: simulateReadableStream<LanguageModelV3StreamPart>({
-			chunks: [
-				{ type: 'text-start', id: 't' },
-				{ type: 'text-delta', id: 't', delta: text },
-				{ type: 'text-end', id: 't' },
-				finish('stop'),
-			],
-		}),
-	};
-}
-
-function toolCallStream(
-	toolName: string,
-	input: Record<string, unknown>,
-): LanguageModelV3StreamResult {
-	return {
-		stream: simulateReadableStream<LanguageModelV3StreamPart>({
-			chunks: [
-				{
-					type: 'tool-call',
-					toolCallId: `call-${toolName}`,
-					toolName,
-					input: JSON.stringify(input),
-				},
-				finish('tool-calls'),
-			],
-		}),
-	};
-}
-
-/** A stream that never ends until the SDK cancels it (aborted turns). */
-function hangingStream(onCancel?: () => void): LanguageModelV3StreamResult {
-	return {
-		stream: new ReadableStream<LanguageModelV3StreamPart>({
-			start(controller) {
-				controller.enqueue({ type: 'text-start', id: 't' });
-				controller.enqueue({ type: 'text-delta', id: 't', delta: 'Working' });
-			},
-			cancel: onCancel,
-		}),
-	};
-}
-
-function aiDeps(
-	model: MockLanguageModelV3,
-	overrides: Partial<NonNullable<ApiDeps['ai']>> = {},
-): Pick<ApiDeps, 'ai'> {
-	return {
-		ai: {
-			upstreamBaseUrl: 'https://provider.example/v1',
-			upstreamApiKey: 'provider-secret',
-			model: 'configured-model',
-			signingSecret: 'signing-secret',
-			languageModel: model,
-			chat: DEFAULT_CHAT_CONFIG,
-			...overrides,
-		},
-	};
-}
-
 async function fixture(
-	doStream: ConstructorParameters<typeof MockLanguageModelV3>[0] extends infer T
-		? T extends { doStream?: infer D }
-			? D
-			: never
-		: never,
+	responses: LanguageModelV3StreamResult | LanguageModelV3StreamResult[],
 	options: {
 		bucket?: MemoryBucket;
 		userId?: UserId;
@@ -98,12 +22,8 @@ async function fixture(
 	} = {},
 ) {
 	const bucket = options.bucket ?? (await createInitializedBucket());
-	const model = new MockLanguageModelV3({ modelId: 'configured-model', doStream });
-	const api = createTestApi({
-		bucket,
-		userId: options.userId,
-		deps: aiDeps(model, options.ai),
-	});
+	const model = chatModel(...[responses].flat());
+	const api = createTestApi({ bucket, userId: options.userId, deps: chatAi(model, options.ai) });
 	return { ...api, model };
 }
 
@@ -180,13 +100,13 @@ describe('project conversations', () => {
 		const outsider = createTestApi({
 			bucket,
 			userId: UserId.parse('other'),
-			deps: aiDeps(new MockLanguageModelV3({})),
+			deps: chatAi(chatModel()),
 		});
 		await expectError(await outsider.request('GET', `/projects/${pid}/conversations`), 404);
 		const viewer = createTestApi({
 			bucket,
 			userId: UserId.parse('other'),
-			deps: { ...aiDeps(new MockLanguageModelV3({})), policy: { defaultRole: 'viewer' } },
+			deps: { ...chatAi(chatModel()), policy: { defaultRole: 'viewer' } },
 		});
 		await expectError(await viewer.request('GET', path), 404);
 		await expectError(await viewer.request('DELETE', path), 404);
@@ -201,7 +121,7 @@ describe('project conversations', () => {
 		const machine = createTestApi({
 			bucket,
 			subject: { credential: { kind: 'service-account' } },
-			deps: aiDeps(new MockLanguageModelV3({})),
+			deps: chatAi(chatModel()),
 		});
 		await expectError(await machine.request('GET', `/projects/${pid}/conversations`), 403);
 	});
@@ -215,7 +135,7 @@ describe('project conversations', () => {
 		const other = createTestApi({
 			bucket,
 			userId: UserId.parse('other'),
-			deps: { ...aiDeps(new MockLanguageModelV3({})), policy: { defaultRole: 'editor' } },
+			deps: { ...chatAi(chatModel()), policy: { defaultRole: 'editor' } },
 		});
 		// An editor sees the project, but never another person's conversation.
 		await expectError(await other.request('GET', path), 404);

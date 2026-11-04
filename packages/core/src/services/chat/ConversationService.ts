@@ -4,6 +4,7 @@ import type { Bucket } from '../../ports/bucket';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import { paths } from '../../paths';
 import { readStored } from '../../schema';
+import { withCasRetry } from '../catalog/cas';
 import {
 	ConflictError,
 	NotFoundError,
@@ -141,24 +142,39 @@ export class ConversationService {
 		return { key, body, conversation };
 	}
 
-	private async mutate(
+	private mutate(
 		pid: ProjectId,
 		owner: UserId,
 		id: string,
 		change: (head: StoredConversation) => void,
 	): Promise<StoredConversation> {
-		for (let attempt = 0; attempt < 8; attempt++) {
+		return withCasRetry(this.bucket, async (cas) => {
 			const { key, body, conversation } = await this.read(pid, owner, id);
 			change(conversation);
 			const next = StoredConversationSchema.parse(conversation);
-			try {
-				await this.bucket.put(key, JSON.stringify(next), { onlyIfEtagMatches: body.etag });
-				return next;
-			} catch (error) {
-				if (!(error instanceof PreconditionFailedError)) throw error;
-			}
-		}
-		throw new ConflictError('Conversation changed. Retry the request');
+			await cas.put(key, JSON.stringify(next), { onlyIfEtagMatches: body.etag });
+			return next;
+		});
+	}
+
+	/** Rewrite the per-user index; `change` returns null to leave it as is. */
+	private mutateIndex(
+		pid: ProjectId,
+		owner: UserId,
+		change: (ids: readonly string[]) => Promise<string[] | null> | string[] | null,
+	): Promise<void> {
+		const key = this.indexKey(pid, owner);
+		return withCasRetry(this.bucket, async (cas) => {
+			const head = await this.bucket.get(key);
+			const ids = head ? (await readStored(ConversationIndexSchema, head, key)).ids : [];
+			const next = await change(ids);
+			if (next === null) return;
+			await cas.put(
+				key,
+				JSON.stringify({ schema_version: 1, ids: next }),
+				head ? { onlyIfEtagMatches: head.etag } : { onlyIfNotExists: true },
+			);
+		});
 	}
 
 	private async liveIds(pid: ProjectId, owner: UserId, ids: readonly string[]) {
@@ -218,28 +234,15 @@ export class ConversationService {
 		await this.bucket.put(key, JSON.stringify(conversation), { onlyIfNotExists: true });
 		const indexKey = this.indexKey(pid, owner);
 		try {
-			for (let attempt = 0; attempt < 8; attempt++) {
-				const head = await this.bucket.get(indexKey);
-				const index = head
-					? await readStored(ConversationIndexSchema, head, indexKey)
-					: { schema_version: 1 as const, ids: [] };
-				const ids = await this.liveIds(pid, owner, index.ids);
+			await this.mutateIndex(pid, owner, async (stale) => {
+				const ids = await this.liveIds(pid, owner, stale);
 				if (ids.length >= CHAT_LIMITS.conversationsPerProject)
 					throw new ResourceExhaustedError(
 						`Project conversation limit reached (${CHAT_LIMITS.conversationsPerProject} per person)`,
 					);
-				try {
-					await this.bucket.put(
-						indexKey,
-						JSON.stringify({ schema_version: 1, ids: [...ids, conversation.id] }),
-						head ? { onlyIfEtagMatches: head.etag } : { onlyIfNotExists: true },
-					);
-					return conversation;
-				} catch (error) {
-					if (!(error instanceof PreconditionFailedError)) throw error;
-				}
-			}
-			throw new ConflictError('Conversations changed; please retry');
+				return [...ids, conversation.id];
+			});
+			return conversation;
 		} catch (error) {
 			// A lost PUT response may still have published the ID; check before cleanup.
 			let published: boolean;
@@ -279,24 +282,9 @@ export class ConversationService {
 				throw error;
 			}
 		}
-		const indexKey = this.indexKey(pid, owner);
-		for (let attempt = 0; attempt < 8; attempt++) {
-			const head = await this.bucket.get(indexKey);
-			if (!head) break;
-			const index = await readStored(ConversationIndexSchema, head, indexKey);
-			if (!index.ids.includes(id)) break;
-			try {
-				await this.bucket.put(
-					indexKey,
-					JSON.stringify({ ...index, ids: index.ids.filter((entry) => entry !== id) }),
-					{ onlyIfEtagMatches: head.etag },
-				);
-				break;
-			} catch (error) {
-				if (!(error instanceof PreconditionFailedError)) throw error;
-				if (attempt === 7) throw new ConflictError('Conversations changed; please retry deletion');
-			}
-		}
+		await this.mutateIndex(pid, owner, (ids) =>
+			ids.includes(id) ? ids.filter((entry) => entry !== id) : null,
+		);
 		await this.bucket.delete(key);
 	}
 
@@ -536,10 +524,10 @@ export class ConversationService {
 			);
 			return next;
 		};
-		const saveTurn = async (
+		const saveTurn = (
 			change: (latest: StoredConversation) => StoredConversation,
-		): Promise<StoredConversation> => {
-			for (let attempt = 0; attempt < 8; attempt++) {
+		): Promise<StoredConversation> =>
+			withCasRetry(this.bucket, async (cas) => {
 				const current = await this.bucket.get(key);
 				if (!current) throw new PreconditionFailedError('Conversation was deleted');
 				const latest = await readStored(StoredConversationSchema, current, key);
@@ -549,15 +537,9 @@ export class ConversationService {
 				}
 				if (latest.pending.stop_requested) stop.abort(new ChatTurnStoppedError());
 				const next = StoredConversationSchema.parse(change(latest));
-				try {
-					await this.bucket.put(key, JSON.stringify(next), { onlyIfEtagMatches: current.etag });
-					return next;
-				} catch (error) {
-					if (!(error instanceof PreconditionFailedError)) throw error;
-				}
-			}
-			throw new ConflictError('Conversation changed during the turn');
-		};
+				await cas.put(key, JSON.stringify(next), { onlyIfEtagMatches: current.etag });
+				return next;
+			});
 		const replaceAssistant = (
 			latest: StoredConversation,
 			update: (message: ConversationMessage) => ConversationMessage,

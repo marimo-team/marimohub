@@ -103,17 +103,17 @@ Consent cards show the code or source the call would submit. Irreversible action
 managed under **Permissions** on the chat page or with the `project_conversations`
 MCP tool.
 
-Replies stream over the AI SDK UI message protocol and keep running if the browser
-disconnects: a reload re-attaches to the live stream on the same instance and otherwise
-shows the saved progress. Stop requests and consent decisions are written to the
-conversation record, so they reach the instance running the turn without session
-affinity. A stopped or interrupted reply leaves a saved task to continue or dismiss.
+Replies keep running if the browser disconnects: a reload re-attaches to the live
+stream on the same instance and otherwise shows the saved progress. Stop requests and
+consent decisions are written to the conversation record, so they reach the instance
+running the turn without session affinity. A stopped or interrupted reply leaves a
+saved task to continue or dismiss.
 
-Earlier turns reach the model as text only; tool results from a previous turn are not
-replayed, so the assistant re-reads what it needs. Tool inputs and results are stored as
-redacted previews: credential-like fields and
-large payloads (code, query results, stdout) are omitted, URLs and bearer tokens masked.
-Each call can be opened in an inspector that links the notebooks and jobs it touched.
+Earlier turns reach the model as text only; it re-reads what it needs rather than
+replaying old tool results. Stored tool inputs and results are redacted previews:
+credential-like fields and large payloads (code, query results, stdout) are omitted,
+URLs and bearer tokens masked. Any call opens in an inspector that links the
+notebooks and jobs it touched.
 
 | Variable                                       | Default | Description                                                         |
 | ---------------------------------------------- | ------- | ------------------------------------------------------------------- |

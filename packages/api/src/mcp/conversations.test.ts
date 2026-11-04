@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { simulateReadableStream } from 'ai';
-import { MockLanguageModelV3 } from 'ai/test';
-import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { ACTOR, MemoryBucket } from '@marimo-hub/core/testing';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
-import { DEFAULT_CHAT_CONFIG } from '../context';
 import { createTestApi, expectOk, makeTestDeps } from '../testing';
+import { chatAi, chatModel, textStream } from '../testing/chat';
 import { connectMcpClient } from '../testing/mcp';
 import { registerConversationTools } from './conversations';
 import { createMcpServer } from './server';
@@ -26,38 +23,6 @@ const request: StartRequestContext = {
 	appBaseUrl: 'https://hub.example.com',
 };
 
-function textModel(text: string) {
-	return new MockLanguageModelV3({
-		doStream: {
-			stream: simulateReadableStream<LanguageModelV3StreamPart>({
-				chunks: [
-					{ type: 'text-start', id: 't' },
-					{ type: 'text-delta', id: 't', delta: text },
-					{ type: 'text-end', id: 't' },
-					{
-						type: 'finish',
-						finishReason: { unified: 'stop', raw: 'stop' },
-						usage: {
-							inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
-							outputTokens: { total: 1, text: 1, reasoning: 0 },
-						},
-					},
-				],
-			}),
-		},
-	});
-}
-
-function chatAi(text: string) {
-	return {
-		upstreamBaseUrl: 'https://provider.example/v1',
-		model: 'm',
-		signingSecret: 's',
-		languageModel: textModel(text),
-		chat: DEFAULT_CHAT_CONFIG,
-	};
-}
-
 async function connectWithChat(deps: ReturnType<typeof makeTestDeps>, who = principal) {
 	const server = createMcpServer(deps, who, request);
 	registerConversationTools(server, deps, who, request);
@@ -70,7 +35,7 @@ async function connectWithChat(deps: ReturnType<typeof makeTestDeps>, who = prin
 
 describe('project_conversations MCP tool', () => {
 	it('is not offered to the chat model itself', async () => {
-		const deps = makeTestDeps(new MemoryBucket(), { ai: chatAi('hi') });
+		const deps = makeTestDeps(new MemoryBucket(), chatAi(chatModel(textStream('hi'))));
 		const client = await connectMcpClient(deps, principal, request);
 		const { tools } = await client.listTools();
 		expect(tools.map((tool) => tool.name)).not.toContain('project_conversations');
@@ -80,7 +45,7 @@ describe('project_conversations MCP tool', () => {
 		const bucket = new MemoryBucket();
 		const api = createTestApi({
 			bucket,
-			deps: { ai: chatAi('Three notebooks.') },
+			deps: chatAi(chatModel(textStream('Three notebooks.'))),
 		});
 		const project = await expectOk<{ id: string }>(
 			await api.request('POST', '/projects', { name: 'Sales', description: 'd' }),
@@ -120,7 +85,7 @@ describe('project_conversations MCP tool', () => {
 	});
 
 	it('refuses machine identities', async () => {
-		const deps = makeTestDeps(new MemoryBucket(), { ai: chatAi('hi') });
+		const deps = makeTestDeps(new MemoryBucket(), chatAi(chatModel(textStream('hi'))));
 		const machine = { ...principal, credential: { kind: 'service-account' as const } };
 		const client = await connectWithChat(deps, machine);
 		const reply = await client.callTool({
