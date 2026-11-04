@@ -96,7 +96,7 @@ function notebookColumns(compact: boolean): DataTableColumn<NotebookCollectionIt
 									to={item.to}
 									state={{ title: notebook.title }}
 									aria-label={notebook.title}
-									className="block rounded py-0.5 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+									className="block rounded py-0.5 max-md:py-3 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
 								>
 									<NotebookName notebook={notebook} showStatus={false} />
 								</Link>

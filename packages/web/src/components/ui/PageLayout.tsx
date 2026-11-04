@@ -27,7 +27,7 @@ export function PageContainer({
 	return (
 		<div
 			className={cn(
-				'flex min-h-0 min-w-0 flex-1 items-start justify-start px-6 pb-6 max-md:px-3 max-md:pb-3',
+				'flex min-h-0 min-w-0 flex-1 items-start justify-center px-6 pb-6 max-md:px-3 max-md:pb-3',
 				scroll === 'page'
 					? 'overflow-y-auto'
 					: 'overflow-hidden pt-6 max-md:overflow-y-auto max-md:pt-3',
