@@ -160,6 +160,7 @@ function setup(
 					});
 				}
 			}
+			if (path === '/api/v1/me') return jsonOk({ id: 'user-1', name: 'Ada Lovelace' });
 			if (path.endsWith('/capabilities'))
 				return jsonOk(makeCapabilities({ chat: { available: true }, jobs: { available: true } }));
 			if (path.endsWith('/chat-permissions')) return jsonOk({ grants: [] });
@@ -239,7 +240,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe('ChatPage', () => {
 	it('keeps the empty state focused and fills the composer from a prompt chip', async () => {
 		const { user, writes } = setup();
-		await screen.findByRole('heading', { name: 'How can I help?' });
+		await screen.findByRole('heading', { name: 'What should we build, Ada?' });
 		expect(screen.queryByText('Recent conversations')).not.toBeInTheDocument();
 		expect(screen.queryByRole('link', { name: 'Sales report' })).not.toBeInTheDocument();
 		await user.click(screen.getByRole('button', { name: 'Explore this project' }));
@@ -295,7 +296,7 @@ describe('ChatPage', () => {
 		const { user, writes, client } = setup();
 		client.setQueryData(notebookKeys.detail('sales', 'existing'), { title: 'Cached notebook' });
 		client.setQueryData(notebookKeys.detail('finance', 'existing'), { title: 'Other notebook' });
-		await screen.findByRole('heading', { name: 'How can I help?' });
+		await screen.findByRole('heading', { name: 'What should we build, Ada?' });
 		await user.type(textbox(), 'What notebooks are here?');
 		await user.click(screen.getByRole('button', { name: 'Send message' }));
 		expect(await screen.findByText('Live project answer')).toBeInTheDocument();
@@ -512,7 +513,7 @@ describe('ChatPage', () => {
 		const { user } = setup({ listFails: true });
 		await screen.findByText('History unavailable');
 		await user.click(screen.getByRole('button', { name: 'Retry' }));
-		await screen.findByRole('heading', { name: 'How can I help?' });
+		await screen.findByRole('heading', { name: 'What should we build, Ada?' });
 		expect(screen.queryByText('Select a conversation first')).not.toBeInTheDocument();
 		await user.type(textbox(), 'Ready');
 		expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();
@@ -917,11 +918,11 @@ describe('ChatPage', () => {
 				route: saved,
 				detailResponse: jsonOk({ conversation: { ...record, messages: [] } }),
 			});
-			await screen.findByRole('heading', { name: 'How can I help?' });
+			await screen.findByRole('heading', { name: 'What should we build, Ada?' });
 			await user.click(screen.getByRole('button', { name: 'Add context' }));
 			await user.click(screen.getByRole('menuitem', { name: 'Open notebook beside chat' }));
 			await screen.findByRole('combobox', { name: 'Notebook to open' });
-			expect(screen.getByRole('heading', { name: 'How can I help?' })).toBeVisible();
+			expect(screen.getByRole('heading', { name: 'What should we build, Ada?' })).toBeVisible();
 			await user.type(textbox(), 'Explain this notebook');
 			await user.click(screen.getByRole('button', { name: 'Send message' }));
 			await waitFor(() => expect(writes.map((write) => write.path)).toEqual([streamPath]));
@@ -929,7 +930,7 @@ describe('ChatPage', () => {
 
 		it('opens the notebook picker from the empty composer without sending or clearing its draft', async () => {
 			const { user, writes } = setup();
-			await screen.findByRole('heading', { name: 'How can I help?' });
+			await screen.findByRole('heading', { name: 'What should we build, Ada?' });
 			await user.type(textbox(), 'Explain this notebook');
 			await user.click(screen.getByRole('button', { name: 'Add context' }));
 			expect(writes).toEqual([]);
@@ -946,7 +947,7 @@ describe('ChatPage', () => {
 			const { user } = setup({
 				createResponse: Promise.resolve(jsonError('UNAVAILABLE', 'Chat unavailable')),
 			});
-			await screen.findByRole('heading', { name: 'How can I help?' });
+			await screen.findByRole('heading', { name: 'What should we build, Ada?' });
 			await user.type(textbox(), 'Keep this question');
 			await user.click(screen.getByRole('button', { name: 'Add context' }));
 			await user.click(screen.getByRole('menuitem', { name: 'Open notebook beside chat' }));

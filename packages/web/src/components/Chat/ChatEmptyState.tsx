@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { BookOpen, Clock, NotebookPen, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui';
+import { useUserQuery } from '@/api/hooks';
 import type { Capabilities, ProjectDetail } from '@/types';
 import { canEditProject } from '@/lib/roles';
 
@@ -15,6 +16,8 @@ export function ChatEmptyState({
 	composer: ReactNode;
 	onPickPrompt: (prompt: string) => void;
 }) {
+	const { data: user } = useUserQuery();
+	const firstName = user?.name?.trim().split(/\s+/)[0];
 	const canEdit = canEditProject(project.your_role);
 	const prompts = [
 		{
@@ -49,8 +52,8 @@ export function ChatEmptyState({
 	];
 	return (
 		<div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center py-12 sm:pb-24">
-			<h1 className="mb-8 text-center text-3xl font-medium tracking-tight sm:text-4xl">
-				How can I help?
+			<h1 className="mb-8 text-balance text-center text-3xl font-medium tracking-tight sm:text-4xl">
+				What should we build{firstName ? `, ${firstName}` : ''}?
 			</h1>
 			{composer}
 			<div className="mt-5 flex flex-wrap justify-center gap-2">
