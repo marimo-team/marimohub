@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
 	chatErrorMessage,
 	conversationKeys,
+	toUIMessages,
 	useConversations,
 	useCreateConversation,
 	useDeleteConversation,
@@ -87,7 +88,14 @@ export function useProjectChatController(pid: string) {
 	const { detail, messages, queue, busy, canSend, canQueue } = chat;
 	const conversation = detail.data?.conversation;
 	const inspect = params.get('inspect');
-	const inspected = inspect ? findToolEntry(messages, inspect) : undefined;
+	// Until the live session has seeded its store, the saved record is the transcript.
+	const transcript = messages.length > 0 || !conversation ? messages : toUIMessages(conversation);
+	const inspected = inspect ? findToolEntry(transcript, inspect) : undefined;
+	// Only call it missing once the session is ready; a stale link must not flash
+	// "not found" while the conversation is still loading.
+	const inspectMissing = Boolean(
+		inspect && cid && conversation?.id === cid && chat.ready && !inspected,
+	);
 	const setInspect = (toolCallId: string | null) =>
 		setParam('inspect', toolCallId === inspect ? null : toolCallId);
 	const paneOpen =
@@ -186,7 +194,13 @@ export function useProjectChatController(pid: string) {
 	};
 	const showNotebook = async (notebookId: string) => {
 		if (!cid) return;
-		await update.mutateAsync({ cid, working_notebook: notebookId });
+		try {
+			await update.mutateAsync({ cid, working_notebook: notebookId });
+		} catch (cause) {
+			report(cause, 'Could not open the notebook.');
+			return;
+		}
+		if (!mounted.current || activeCid.current !== cid) return;
 		const next = new URLSearchParams(params);
 		next.set('notebook', '1');
 		next.delete('inspect');
@@ -259,6 +273,7 @@ export function useProjectChatController(pid: string) {
 		removing: remove.isPending,
 		inspect,
 		inspected,
+		inspectMissing,
 		setInspect,
 		showNotebook,
 		inspectPermalink: cid

@@ -218,3 +218,30 @@ export function ContextInspector({
 		</aside>
 	);
 }
+
+/** The URL named a call this conversation does not contain (deleted, mistyped, or another chat). */
+export function MissingInspector({ width = 50, onClose }: { width?: number; onClose: () => void }) {
+	return (
+		<aside
+			aria-label="Tool call details"
+			className="flex min-h-[50vh] min-w-0 shrink-0 flex-col border-t lg:min-h-0 lg:basis-[var(--pane-width)] lg:border-t-0"
+			style={{ '--pane-width': `${width}%` } as React.CSSProperties}
+		>
+			<header className="flex shrink-0 items-center justify-between gap-2 border-b px-4 py-3">
+				<h2 className="text-sm font-semibold">Tool call details</h2>
+				<IconButton label="Close details" onPress={onClose}>
+					<X className="size-4" aria-hidden />
+				</IconButton>
+			</header>
+			<div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+				<p className="text-sm font-medium">This tool call is not in this conversation.</p>
+				<p className="text-xs text-muted-foreground">
+					The link may point at another conversation, or the call was never saved.
+				</p>
+				<Button size="sm" className="mt-2" onPress={onClose}>
+					Close
+				</Button>
+			</div>
+		</aside>
+	);
+}

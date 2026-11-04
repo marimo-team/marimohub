@@ -187,6 +187,60 @@ describe('project conversations', () => {
 		await expectError(await machine.request('GET', `/projects/${pid}/conversations`), 403);
 	});
 
+	it('lets no other user mutate, stop, answer, or re-attach to a private conversation', async () => {
+		const { request, bucket } = await fixture([hangingStream(), textStream('x')]);
+		const pid = await createProject(request);
+		const path = await startConversation(request, pid);
+		const streaming = request('POST', `${path}/stream`, { content: 'long task' });
+		let pendingSeen = false;
+		for (let attempt = 0; attempt < 100 && !pendingSeen; attempt++) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			pendingSeen = Boolean(
+				(await expectOk<ConversationResult>(await request('GET', path))).conversation.pending,
+			);
+		}
+		const other = createTestApi({
+			bucket,
+			userId: UserId.parse('other'),
+			deps: { ...aiDeps(new MockLanguageModelV3({})), policy: { defaultRole: 'editor' } },
+		});
+		// An editor sees the project, but never another person's conversation.
+		await expectError(await other.request('GET', path), 404);
+		await expectError(await other.request('POST', `${path}/stop`), 404);
+		await expectError(await other.request('GET', `${path}/stream`), 404);
+		await expectError(await other.request('PATCH', path, { working_notebook: null }), 404);
+		await expectError(await other.request('POST', `${path}/continuation/dismiss`), 404);
+		await expectError(
+			await other.request('POST', `${path}/permissions/${crypto.randomUUID()}`, {
+				decision: 'allow',
+			}),
+			404,
+		);
+		await expectError(await other.request('DELETE', path), 404);
+		// The owner's turn is untouched by all of that.
+		expect(
+			(await expectOk<ConversationResult>(await request('GET', path))).conversation.pending,
+		).toBeDefined();
+		await expectOk(await request('POST', `${path}/stop`));
+		await readChunks(await streaming);
+	});
+
+	it('closes stale consent answers and ignores unknown request ids', async () => {
+		const { request } = await fixture([textStream('plain')]);
+		const pid = await createProject(request);
+		const path = await startConversation(request, pid);
+		await expectOk(await request('POST', `${path}/messages`, { content: 'hello' }));
+		expect(
+			await expectOk(
+				await request('POST', `${path}/permissions/${crypto.randomUUID()}`, { decision: 'allow' }),
+			),
+		).toEqual({ accepted: false, reason: 'closed' });
+		await expectError(
+			await request('POST', `${path}/permissions/${crypto.randomUUID()}`, { decision: 'maybe' }),
+			422,
+		);
+	});
+
 	it('streams the reply, persists it, and never exposes provider credentials', async () => {
 		const { request, model } = await fixture(textStream('Project overview'));
 		const pid = await createProject(request);

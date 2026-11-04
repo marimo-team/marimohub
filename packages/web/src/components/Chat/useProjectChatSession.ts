@@ -90,6 +90,7 @@ export function useProjectChatSession(
 	}, [canSend, queue, cid, send]);
 	return {
 		detail,
+		ready: chat.ready,
 		messages: chat.messages,
 		live: chat.live,
 		busy,

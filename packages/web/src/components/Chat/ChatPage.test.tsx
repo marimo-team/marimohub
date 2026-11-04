@@ -102,6 +102,7 @@ function setup(
 		createResponse?: Promise<Response>;
 		streamResponse?: Promise<Response> | (() => Response | Promise<Response>);
 		reconnectResponse?: () => Response;
+		patchResponse?: () => Response;
 		workingNotebook?: string;
 	} = {},
 ) {
@@ -130,6 +131,7 @@ function setup(
 					return jsonOk({ deleted: true });
 				}
 				if (request.method === 'PATCH') {
+					if (options.patchResponse) return options.patchResponse();
 					const body = writes.at(-1)!.body as { working_notebook: string | null };
 					current = { ...current, working_notebook: body.working_notebook ?? undefined };
 					return jsonOk({ conversation: current });
@@ -974,6 +976,267 @@ describe('ChatPage', () => {
 				screen.queryByRole('complementary', { name: 'Tool call details' }),
 			).not.toBeInTheDocument();
 			expect(screen.getByTestId('location')).not.toHaveTextContent('inspect=');
+		});
+	});
+
+	describe('tool call inspector edge cases', () => {
+		const failedTool = {
+			...record,
+			messages: [
+				...record.messages,
+				{
+					id: 'reply-3',
+					role: 'assistant',
+					metadata: { created_at: '2026-10-14T01:03:00Z' },
+					parts: [
+						{
+							type: 'dynamic-tool',
+							toolName: 'delete_notebook',
+							toolCallId: 'call-denied',
+							state: 'output-available',
+							input: '{"notebook":"Old"}',
+							output: '{"permission":"denied"}',
+						},
+						{
+							type: 'data-permission',
+							id: 'perm-denied',
+							data: {
+								id: 'perm-denied',
+								tool_call_id: 'call-denied',
+								kind: 'tool',
+								action: 'Delete a notebook',
+								details: [],
+								scope: { key: 'tool:delete_notebook', label: 'deleting notebooks' },
+								can_remember: false,
+								status: 'denied',
+								expires_at: '2099-01-01T00:00:00Z',
+							},
+						},
+						{
+							type: 'dynamic-tool',
+							toolName: 'run_job',
+							toolCallId: 'call-failed',
+							state: 'output-error',
+							input: '{"job":"job-0123456789abcdef"}',
+							errorText: 'NOT_FOUND: Job not found',
+						},
+						{ type: 'text', text: 'I could not do either.' },
+					],
+				},
+			],
+		};
+
+		it('explains a link to a call this conversation does not contain', async () => {
+			const { user } = setup({ route: `${saved}&inspect=call-from-elsewhere` });
+			await screen.findByText('Persisted project findings');
+			const details = await screen.findByRole('complementary', { name: 'Tool call details' });
+			expect(details).toHaveTextContent('This tool call is not in this conversation.');
+			await user.click(within(details).getByRole('button', { name: 'Close' }));
+			expect(
+				screen.queryByRole('complementary', { name: 'Tool call details' }),
+			).not.toBeInTheDocument();
+			expect(screen.getByTestId('location')).not.toHaveTextContent('inspect=');
+		});
+
+		it('does not call a slow-loading conversation missing before it arrives', async () => {
+			const pending = deferred<Response>();
+			setup({ route: `${saved}&inspect=call-9`, detailResponse: pending.promise });
+			await screen.findByText('Loading conversation…');
+			expect(
+				screen.queryByRole('complementary', { name: 'Tool call details' }),
+			).not.toBeInTheDocument();
+			await act(async () => pending.resolve(jsonOk({ conversation: record })));
+			expect(
+				await screen.findByText('This tool call is not in this conversation.'),
+			).toBeInTheDocument();
+		});
+
+		it('shows a denied consent and a failed call with its error', async () => {
+			const { user } = setup({
+				route: saved,
+				detailResponse: () => jsonOk({ conversation: failedTool }),
+			});
+			await screen.findByText('I could not do either.');
+			await user.click(screen.getByRole('button', { name: 'Inspect delete notebook' }));
+			let details = await screen.findByRole('complementary', { name: 'Tool call details' });
+			expect(within(details).getByRole('region', { name: 'Permission' })).toHaveTextContent(
+				'Not allowed',
+			);
+			expect(
+				within(details).queryByRole('button', { name: 'Show beside chat' }),
+			).not.toBeInTheDocument();
+			await user.click(screen.getByRole('button', { name: 'Inspect run job' }));
+			details = await screen.findByRole('complementary', { name: 'Tool call details' });
+			expect(within(details).getByText('Failed')).toBeInTheDocument();
+			expect(within(details).getByRole('note')).toHaveTextContent('NOT_FOUND: Job not found');
+			expect(within(details).getByRole('region', { name: 'Error' })).toHaveTextContent(
+				'Nothing saved for this call.',
+			);
+			expect(
+				within(details).getByRole('link', { name: 'Open job-0123456789abcdef in a new tab' }),
+			).toHaveAttribute('href', '/projects/sales/jobs');
+			expect(screen.getByRole('button', { name: 'Inspect run job' })).toHaveAttribute(
+				'aria-pressed',
+				'true',
+			);
+			expect(screen.getByRole('button', { name: 'Inspect delete notebook' })).toHaveAttribute(
+				'aria-pressed',
+				'false',
+			);
+		});
+
+		it('follows a running call live and keeps the inspector when the result arrives', async () => {
+			const hold = deferred<void>();
+			let finished = false;
+			const final = {
+				...record,
+				messages: [
+					...record.messages,
+					textMessage('user-2', 'user', 'Read the sales report'),
+					{
+						id: 'reply-live',
+						role: 'assistant',
+						metadata: { created_at: '2026-10-14T01:04:00Z' },
+						parts: [
+							{
+								type: 'dynamic-tool',
+								toolName: 'get_notebook',
+								toolCallId: 'live-1',
+								state: 'output-error',
+								input: '{"notebook":"Sales report"}',
+								errorText: 'FORBIDDEN: No access',
+							},
+							{ type: 'text', text: 'I cannot read it.' },
+						],
+					},
+				],
+			};
+			const { user } = setup({
+				route: saved,
+				detailResponse: () => jsonOk({ conversation: finished ? final : record }),
+				streamResponse: () =>
+					uiStream(
+						[
+							{ type: 'start', messageId: 'reply-live' },
+							{
+								type: 'tool-input-start',
+								toolCallId: 'live-1',
+								toolName: 'get_notebook',
+								dynamic: true,
+							},
+							{
+								type: 'tool-input-available',
+								toolCallId: 'live-1',
+								toolName: 'get_notebook',
+								input: '{"notebook":"Sales report"}',
+								dynamic: true,
+							},
+						],
+						{
+							hold: hold.promise,
+							rest: [
+								{
+									type: 'tool-output-error',
+									toolCallId: 'live-1',
+									errorText: 'FORBIDDEN: No access',
+									dynamic: true,
+								},
+								{ type: 'text-start', id: 't1' },
+								{ type: 'text-delta', id: 't1', delta: 'I cannot read it.' },
+								{ type: 'text-end', id: 't1' },
+								{ type: 'finish' },
+							],
+							onDone: () => {
+								finished = true;
+							},
+						},
+					),
+			});
+			await screen.findByText('Persisted project findings');
+			await user.type(textbox(), 'Read the sales report{Enter}');
+			await user.click(await screen.findByRole('button', { name: 'Inspect get notebook' }));
+			const details = await screen.findByRole('complementary', { name: 'Tool call details' });
+			expect(within(details).getByText('Running')).toBeInTheDocument();
+			expect(within(details).getByRole('region', { name: 'Result' })).toHaveTextContent(
+				'Nothing saved for this call.',
+			);
+			await act(async () => hold.resolve());
+			await screen.findByText('I cannot read it.');
+			expect(within(details).getByText('Failed')).toBeInTheDocument();
+			expect(within(details).getByRole('note')).toHaveTextContent('FORBIDDEN: No access');
+		});
+
+		it('keeps the inspector open and reports when a notebook cannot be shown beside the chat', async () => {
+			const withResource = {
+				...record,
+				messages: [
+					...record.messages,
+					{
+						id: 'reply-2',
+						role: 'assistant',
+						metadata: { created_at: '2026-10-14T01:02:00Z' },
+						parts: [
+							{
+								type: 'dynamic-tool',
+								toolName: 'create_notebook',
+								toolCallId: 'call-9',
+								state: 'output-available',
+								input: '{}',
+								output: '{"notebook_id":"nb-0123456789abcdef"}',
+							},
+						],
+					},
+				],
+			};
+			const { user, writes } = setup({
+				route: `${saved}&inspect=call-9`,
+				detailResponse: () => jsonOk({ conversation: withResource }),
+				patchResponse: () => jsonError('NOT_FOUND', 'Notebook was deleted', 404),
+			});
+			const details = await screen.findByRole('complementary', { name: 'Tool call details' });
+			await user.click(within(details).getByRole('button', { name: 'Show beside chat' }));
+			expect(await screen.findByRole('alert')).toHaveTextContent('Notebook was deleted');
+			expect(writes.filter((write) => write.method === 'PATCH')).toHaveLength(1);
+			expect(screen.getByRole('complementary', { name: 'Tool call details' })).toBeInTheDocument();
+			expect(screen.getByTestId('location')).toHaveTextContent('inspect=call-9');
+			expect(screen.getByTestId('location')).not.toHaveTextContent('notebook=1');
+		});
+
+		it('takes precedence over the notebook pane and gives it back on close', async () => {
+			const withTool = {
+				...record,
+				working_notebook: 'notebook-1',
+				messages: [
+					...record.messages,
+					{
+						id: 'reply-2',
+						role: 'assistant',
+						metadata: { created_at: '2026-10-14T01:02:00Z' },
+						parts: [
+							{
+								type: 'dynamic-tool',
+								toolName: 'get_notebook',
+								toolCallId: 'call-9',
+								state: 'output-available',
+								input: '{}',
+								output: '{}',
+							},
+						],
+					},
+				],
+			};
+			const { user } = setup({
+				route: saved,
+				detailResponse: () => jsonOk({ conversation: withTool }),
+			});
+			await screen.findByTitle('Notebook Sales report');
+			await user.click(screen.getByRole('button', { name: 'Inspect get notebook' }));
+			await screen.findByRole('complementary', { name: 'Tool call details' });
+			expect(
+				screen.queryByRole('complementary', { name: 'Notebook pane' }),
+			).not.toBeInTheDocument();
+			await user.click(screen.getByRole('button', { name: 'Close details' }));
+			expect(await screen.findByTitle('Notebook Sales report')).toBeInTheDocument();
 		});
 	});
 

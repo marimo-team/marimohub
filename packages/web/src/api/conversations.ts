@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { Chat, useChat } from '@ai-sdk/react';
@@ -274,6 +275,46 @@ export interface ConversationChatCallbacks {
 	onWorkingNotebook?: (notebookId: string) => void;
 }
 
+interface ChatSession {
+	cid: string;
+	resume: boolean;
+	chat: Chat<ChatUIMessage>;
+}
+
+function createSession(
+	pid: string,
+	conversation: Conversation,
+	callbacks: RefObject<ConversationChatCallbacks>,
+	failed: RefObject<boolean>,
+): ChatSession {
+	const cid = conversation.id;
+	const api = streamUrl(pid, cid);
+	return {
+		cid,
+		// The SDK replays the live stream from its first chunk, replacing the
+		// partially saved reply; a 204 leaves the saved reply in place.
+		resume: isTurnPending(conversation),
+		chat: new Chat<ChatUIMessage>({
+			id: cid,
+			messages: toUIMessages(conversation),
+			transport: new DefaultChatTransport<ChatUIMessage>({
+				api,
+				prepareSendMessagesRequest: ({ body }) => ({ api, body: body as TurnBody }),
+				prepareReconnectToStreamRequest: () => ({ api }),
+			}),
+			onFinish: () => callbacks.current.onFinish?.(cid),
+			onError: (error) => {
+				failed.current = true;
+				callbacks.current.onError?.(error);
+			},
+			onData: (part) => {
+				if (part.type === 'data-working-notebook')
+					callbacks.current.onWorkingNotebook?.(part.data.notebook_id);
+			},
+		}),
+	};
+}
+
 /**
  * One AI SDK chat session per conversation. The session starts from the saved
  * record; when a turn is still running on the server, the in-progress reply is
@@ -292,36 +333,15 @@ export function useConversationChat(
 	});
 	const failed = useRef(false);
 	const cid = conversation?.id ?? null;
-	const loaded = useRef(conversation);
-	loaded.current = conversation;
-	const session = useMemo(() => {
-		const current = loaded.current;
-		if (!cid || !current) return null;
-		const api = streamUrl(pid, cid);
-		return {
-			// The SDK replays the live stream from its first chunk, replacing the
-			// partially saved reply; a 204 leaves the saved reply in place.
-			resume: isTurnPending(current),
-			chat: new Chat<ChatUIMessage>({
-				id: cid,
-				messages: toUIMessages(current),
-				transport: new DefaultChatTransport<ChatUIMessage>({
-					api,
-					prepareSendMessagesRequest: ({ body }) => ({ api, body: body as TurnBody }),
-					prepareReconnectToStreamRequest: () => ({ api }),
-				}),
-				onFinish: () => latest.current.onFinish?.(cid),
-				onError: (error) => {
-					failed.current = true;
-					latest.current.onError?.(error);
-				},
-				onData: (part) => {
-					if (part.type === 'data-working-notebook')
-						latest.current.onWorkingNotebook?.(part.data.notebook_id);
-				},
-			}),
-		};
-	}, [pid, cid]);
+	const [session, setSession] = useState<ChatSession | null>(null);
+	// The session is created once its record first arrives and dropped with the
+	// selection; later refetches of the same record are applied via setMessages.
+	useEffect(() => {
+		if (cid && conversation && session?.cid !== cid)
+			setSession(createSession(pid, conversation, latest, failed));
+		else if (!cid && session) setSession(null);
+	}, [pid, cid, conversation, session]);
+	const active = session?.cid === cid ? session : null;
 	const fallback = useMemo(
 		() =>
 			new Chat<ChatUIMessage>({
@@ -331,7 +351,7 @@ export function useConversationChat(
 			}),
 		[pid],
 	);
-	const helpers = useChat({ chat: session?.chat ?? fallback, resume: session?.resume ?? false });
+	const helpers = useChat({ chat: active?.chat ?? fallback, resume: active?.resume ?? false });
 	const live = helpers.status === 'submitted' || helpers.status === 'streaming';
 	const { sendMessage } = helpers;
 	const send = useCallback(
@@ -353,5 +373,5 @@ export function useConversationChat(
 		},
 		[sendMessage],
 	);
-	return { ...helpers, ready: session !== null, live, send, resume };
+	return { ...helpers, ready: active !== null, live, send, resume };
 }

@@ -10,7 +10,7 @@ import { ConversationList } from './ConversationList';
 import { ChatProgress } from './ToolActivity';
 import { PermissionsDialog } from './PermissionsDialog';
 import { NotebookPane } from './NotebookPane';
-import { ContextInspector } from './ContextInspector';
+import { ContextInspector, MissingInspector } from './ContextInspector';
 import { PaneDivider } from './PaneDivider';
 import { useProjectChatController } from './useProjectChatController';
 
@@ -177,10 +177,12 @@ function ProjectChat({ pid }: { pid: string }) {
 						</div>
 					) : null}
 				</div>
-				{(c.inspected || c.paneOpen) && c.cid ? (
+				{(c.inspected || c.inspectMissing || c.paneOpen) && c.cid ? (
 					<PaneDivider width={c.paneWidth} onWidth={c.setPaneWidth} />
 				) : null}
-				{c.inspected && c.cid ? (
+				{c.inspectMissing && c.cid ? (
+					<MissingInspector width={c.paneWidth} onClose={() => c.setInspect(null)} />
+				) : c.inspected && c.cid ? (
 					<ContextInspector
 						key={c.inspected.id}
 						pid={pid}
