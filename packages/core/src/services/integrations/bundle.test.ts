@@ -236,6 +236,30 @@ describe('bundler-owned env', () => {
 	});
 });
 
+describe('environment conflict guidance', () => {
+	it.each([
+		['custom_env', 'custom_env', 'AWS_DEFAULT_REGION', false],
+		['s3', 'custom_env', 'AWS_DEFAULT_REGION', true],
+		['custom_env', 's3', 'AWS_DEFAULT_REGION', true],
+		['s3', 's3', 'AWS_DEFAULT_REGION', true],
+		['custom_env', 'custom_env', 'APP_REGION', false],
+	])('selects guidance for %s / %s conflicting on %s', (firstKind, secondKind, key, s3Help) => {
+		const items = [
+			{ ...rendered('unrelated-s3', {}), kind: 's3' },
+			{ ...rendered('first', { env: { [key]: 'one' } }), kind: firstKind },
+			{ ...rendered('second', { env: { [key]: 'two' } }), kind: secondKind },
+		];
+		const help = s3Help
+			? 'For S3 connections: Disable "Ambient env" in advanced settings on all but one connection. Namespaced settings remain available.'
+			: "Align the values or disable one integration's export of this variable.";
+		expect(() => bundle(items)).toThrow(
+			new ValidationError(
+				`Integrations "first" and "second" set the same environment variable "${key}" to different values. ${help}`,
+			),
+		);
+	});
+});
+
 describe('AWS config conflicts', () => {
 	const configFile = (name: string, content?: string, env: Record<string, string> = {}) =>
 		rendered(name, {

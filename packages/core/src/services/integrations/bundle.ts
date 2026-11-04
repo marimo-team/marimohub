@@ -136,9 +136,11 @@ export function bundleIntegrations(
 					// S3 instances render separate paths for the same addressing-style config.
 					if (previous && next && previous.content === next.content) continue;
 				}
-				const help = key.startsWith('AWS_')
-					? `For S3 connections: ${AMBIENT_ENV_CONFLICT_HELP}`
-					: "Align the values or disable one integration's export of this variable.";
+				const help =
+					key.startsWith('AWS_') &&
+					(item.kind === 's3' || rendered.some(({ name, kind }) => name === owner && kind === 's3'))
+						? `For S3 connections: ${AMBIENT_ENV_CONFLICT_HELP}`
+						: "Align the values or disable one integration's export of this variable.";
 				throw new ValidationError(
 					`Integrations "${owner}" and "${item.name}" set the same environment variable "${key}" to different values. ${help}`,
 				);
