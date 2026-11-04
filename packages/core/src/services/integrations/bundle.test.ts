@@ -236,6 +236,63 @@ describe('bundler-owned env', () => {
 	});
 });
 
+describe('AWS config conflicts', () => {
+	const configFile = (name: string, content?: string, env: Record<string, string> = {}) =>
+		rendered(name, {
+			...(content === undefined ? {} : file(`${name}.conf`, content)),
+			env: { AWS_CONFIG_FILE: `${INTEGRATIONS_DIR}/${name}.conf`, ...env },
+		});
+
+	it.each(['[default]\nregion = eu-west-1\n', undefined])(
+		'rejects different or unavailable config contents: %j',
+		(content) => {
+			const items = [
+				configFile('first', '[default]\nregion = us-east-1\n'),
+				configFile('second', content),
+			];
+			expect(() => bundle(items)).toThrow(
+				/environment variable "AWS_CONFIG_FILE" to different values/,
+			);
+			expect(() => bundle(items.toReversed())).toThrow(
+				/environment variable "AWS_CONFIG_FILE" to different values/,
+			);
+		},
+	);
+
+	it('still rejects a third config after coalescing two identical configs', () => {
+		const items = ['first', 'second', 'third'].map((name) =>
+			configFile(name, name === 'third' ? 'different' : 'same'),
+		);
+		expect(() => bundle(items)).toThrow(/"first" and "third".*"AWS_CONFIG_FILE"/);
+	});
+
+	it('checks later environment variables even when AWS config files are equivalent', () => {
+		const items = ['first', 'second'].map((name) =>
+			configFile(name, 'same', { AWS_REGION: name === 'first' ? 'us-east-1' : 'eu-west-1' }),
+		);
+		expect(() => bundle(items)).toThrow(/"first" and "second".*"AWS_REGION"/);
+	});
+
+	it('does not apply AWS config equivalence to other path-valued variables', () => {
+		const items = ['first', 'second'].map((name) =>
+			rendered(name, {
+				...file(`${name}.json`, '{}'),
+				env: { GOOGLE_APPLICATION_CREDENTIALS: `${INTEGRATIONS_DIR}/${name}.json` },
+			}),
+		);
+		expect(() => bundle(items)).toThrow(/"GOOGLE_APPLICATION_CREDENTIALS" to different values/);
+	});
+
+	it('rejects two external config paths whose contents are unknown', () => {
+		expect(() =>
+			bundle([
+				rendered('first', { env: { AWS_CONFIG_FILE: '/etc/first.conf' } }),
+				rendered('second', { env: { AWS_CONFIG_FILE: '/etc/second.conf' } }),
+			]),
+		).toThrow(/environment variable "AWS_CONFIG_FILE" to different values/);
+	});
+});
+
 describe('data-source discovery env', () => {
 	it('selects one complete discovery contract and warns about later claimants', () => {
 		const result = bundle([

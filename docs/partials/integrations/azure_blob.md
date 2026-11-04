@@ -15,7 +15,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `container` | string |  |  | Default container for notebook code |
 | `endpoint_suffix` | string |  | `core.windows.net` | Sovereign clouds use their own, e.g. core.chinacloudapi.cn |
 | `auth.method` | `ambient`, `account_key`, `sas_token`, `connection_string`, `service_principal` | Yes |  |  |
-| `ambient_env` | boolean |  | `true` | Also export the vendor-standard variables so libraries pick this up with no configuration. Only one integration per session can claim them. |
+| `ambient_env` | boolean |  | `true` | Export shared vendor variables for automatic connections. Conflicting values prevent notebook startup. |
 
 **`auth.method: account_key`**
 

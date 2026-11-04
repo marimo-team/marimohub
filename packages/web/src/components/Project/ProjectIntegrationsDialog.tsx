@@ -1,4 +1,9 @@
 import { useMemo, useState } from 'react';
+import {
+	AMBIENT_ENV_CONFLICT_HELP,
+	INTEGRATION_TEST_HELP,
+	validateIntegrations,
+} from '@marimo-hub/core/integration-validation';
 import { toast } from 'sonner';
 import {
 	ArrowLeft,
@@ -330,6 +335,7 @@ function ListView({
 	// through the org dialog. A same-name project integration overrides them.
 	const isInherited = (entry: IntegrationEntry) => scope !== 'org' && entry.scope === 'org';
 	const kindsByName = new Map(kinds.map((kind) => [kind.kind, kind]));
+	const validationResults = validateIntegrations(entries, kinds);
 	const visibleEntries = filterBySearch(entries, query, (entry) => {
 		const kind = kindsByName.get(entry.kind);
 		return `${entry.name} ${entry.kind} ${kind?.title ?? ''} ${kind?.category ?? ''}`;
@@ -392,6 +398,17 @@ function ListView({
 					</div>
 				)}
 			</div>
+
+			{validationResults.map((result) => (
+				<div
+					key={`${result.ruleId}:${result.integrationIds.join(',')}`}
+					role={result.severity === 'error' ? 'alert' : 'note'}
+					className={`rounded-lg border p-3 ${result.severity === 'error' ? 'border-destructive/30 bg-destructive/5' : 'border-amber-500/30 bg-amber-500/5'}`}
+				>
+					<p className="font-medium">{result.title}</p>
+					<p className="mt-1 text-muted-foreground">{result.message}</p>
+				</div>
+			))}
 
 			{entries.length === 0 ? (
 				<div className="flex flex-col items-center gap-3 rounded-xl border border-dashed bg-muted/20 px-6 py-12 text-center">
@@ -977,6 +994,11 @@ function EditorForm({
 				editing={editing}
 				secretSources={kind.secret_sources}
 			/>
+			{kind.kind === 's3' && config.ambient_env !== false && (
+				<p className="text-sm text-muted-foreground">
+					For multiple S3 connections: {AMBIENT_ENV_CONFLICT_HELP} {INTEGRATION_TEST_HELP}
+				</p>
+			)}
 			<div className="flex justify-end gap-2 border-t pt-4">
 				{kind.supports_test && (
 					<Button

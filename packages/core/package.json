@@ -25,6 +25,7 @@
 		"./errors": "./src/errors.ts",
 		"./ids": "./src/ids.ts",
 		"./identity-match": "./src/identityMatch.ts",
+		"./integration-validation": "./src/services/integrations/validation.ts",
 		"./jobs": "./src/services/jobs/public.ts",
 		"./kernel-auth": "./src/services/runtime/kernelAuth.ts",
 		"./logs": "./src/logs.ts",

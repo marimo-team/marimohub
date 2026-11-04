@@ -2973,6 +2973,57 @@ describe('connection kinds (golden)', () => {
 		expect(out.files?.some(({ path }) => path.endsWith('-aws.conf'))).toBe(false);
 	});
 
+	it.each([true, false])('s3: multiple buckets work with ambient_env=%s', (ambientEnv) => {
+		const rendered = ['notebooks', 'metrics'].map((name) => ({
+			id: createIntegrationId(),
+			name,
+			kind: 's3',
+			version: 1,
+			output: renderFixture(s3, { bucket: name, ambient_env: ambientEnv }, name),
+		}));
+		const bundle = bundleIntegrations(rendered, createSessionId());
+		expect(bundle.vars.MARIMOHUB_S3_NOTEBOOKS_BUCKET).toBe('notebooks');
+		expect(bundle.vars.MARIMOHUB_S3_METRICS_BUCKET).toBe('metrics');
+		if (ambientEnv) {
+			expect(bundle.files.find((file) => file.path === bundle.vars.AWS_CONFIG_FILE)?.content).toBe(
+				'[default]\ns3 =\n    addressing_style = path\n',
+			);
+		} else {
+			expect(bundle.vars.AWS_CONFIG_FILE).toBeUndefined();
+		}
+	});
+
+	it('s3: reports conflicting credentials without exposing values and explains the workaround', () => {
+		const instances = (ambientEnv: boolean) =>
+			['notebooks', 'metrics'].map((name) => ({
+				id: createIntegrationId(),
+				name,
+				kind: 's3',
+				version: 1,
+				output: renderFixture(
+					s3,
+					{
+						ambient_env: name === 'notebooks' || ambientEnv,
+						auth: {
+							method: 'static',
+							access_key_id: 'shared-key',
+							secret_access_key: `${name}-secret`,
+						},
+					},
+					name,
+				),
+			}));
+		expect(() => bundleIntegrations(instances(true), createSessionId())).toThrow(
+			new ValidationError(
+				'Integrations "notebooks" and "metrics" set the same environment variable "AWS_SECRET_ACCESS_KEY" to different values. ' +
+					'For S3 connections: Disable "Ambient env" in advanced settings on all but one connection. Namespaced settings remain available.',
+			),
+		);
+		const bundle = bundleIntegrations(instances(false), createSessionId());
+		expect(bundle.vars.AWS_SECRET_ACCESS_KEY).toBe('notebooks-secret');
+		expect(bundle.vars.MARIMOHUB_S3_METRICS_SECRET_ACCESS_KEY).toBe('metrics-secret');
+	});
+
 	it('snowflake: a password rides in the URL, a key pair rides in a file', () => {
 		expect(renderFixture(snowflake).env?.MARIMOHUB_SNOWFLAKE_PROD_URL).toBe(
 			'snowflake://svc:sf-pw@myorg-account1/analytics/public?warehouse=compute_wh',

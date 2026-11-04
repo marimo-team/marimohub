@@ -335,14 +335,7 @@ export const awsAuthSchema = z
 	])
 	.default({ method: 'ambient' });
 
-/**
- * Shared wording for the `ambient_env` switch on kinds whose clients read
- * credentials from the vendor's standard variables and take no explicit
- * connection argument.
- */
-export const AMBIENT_ENV_DESCRIPTION =
-	'Also export the vendor-standard variables so libraries pick this up with no ' +
-	'configuration. Only one integration per session can claim them.';
+export { AMBIENT_ENV_DESCRIPTION } from '../environmentHelp';
 
 /**
  * The same switch for a kind whose client takes an explicit URL: the standard

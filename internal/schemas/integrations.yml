@@ -2048,9 +2048,8 @@ components:
             propertyName: method
         ambient_env:
           default: true
-          description: Also export the vendor-standard variables so libraries pick this up
-            with no configuration. Only one integration per session can claim
-            them.
+          description: Export shared vendor variables for automatic connections.
+            Conflicting values prevent notebook startup.
           type: boolean
       required:
         - account_name
@@ -2154,9 +2153,8 @@ components:
             propertyName: method
         ambient_env:
           default: true
-          description: Also export the vendor-standard variables so libraries pick this up
-            with no configuration. Only one integration per session can claim
-            them.
+          description: Export shared vendor variables for automatic connections.
+            Conflicting values prevent notebook startup.
           type: boolean
       required:
         - allow_write
@@ -2210,9 +2208,8 @@ components:
             propertyName: method
         ambient_env:
           default: false
-          description: Also export the vendor-standard variables so libraries pick this up
-            with no configuration. Only one integration per session can claim
-            them.
+          description: Export shared vendor variables for automatic connections.
+            Conflicting values prevent notebook startup.
           type: boolean
       required:
         - project_id
@@ -2262,9 +2259,8 @@ components:
             propertyName: method
         ambient_env:
           default: false
-          description: Also export the vendor-standard variables so libraries pick this up
-            with no configuration. Only one integration per session can claim
-            them.
+          description: Export shared vendor variables for automatic connections.
+            Conflicting values prevent notebook startup.
           type: boolean
       required:
         - project_id
@@ -3137,9 +3133,8 @@ components:
             propertyName: method
         ambient_env:
           default: true
-          description: Also export the vendor-standard variables so libraries pick this up
-            with no configuration. Only one integration per session can claim
-            them.
+          description: Export shared vendor variables for automatic connections.
+            Conflicting values prevent notebook startup.
           type: boolean
       additionalProperties: false
     gcs_stored:
@@ -3193,9 +3188,8 @@ components:
             propertyName: method
         ambient_env:
           default: true
-          description: Also export the vendor-standard variables so libraries pick this up
-            with no configuration. Only one integration per session can claim
-            them.
+          description: Export shared vendor variables for automatic connections.
+            Conflicting values prevent notebook startup.
           type: boolean
       required:
         - allow_write
@@ -6141,9 +6135,8 @@ components:
             additionalProperties: false
         ambient_env:
           default: true
-          description: Also export the vendor-standard variables so libraries pick this up
-            with no configuration. Only one integration per session can claim
-            them.
+          description: Export shared vendor variables for automatic connections.
+            Conflicting values prevent notebook startup.
           type: boolean
       additionalProperties: false
     s3_stored:
@@ -6249,9 +6242,8 @@ components:
             additionalProperties: false
         ambient_env:
           default: true
-          description: Also export the vendor-standard variables so libraries pick this up
-            with no configuration. Only one integration per session can claim
-            them.
+          description: Export shared vendor variables for automatic connections.
+            Conflicting values prevent notebook startup.
           type: boolean
       required:
         - allow_write

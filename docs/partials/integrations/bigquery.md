@@ -14,7 +14,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `dataset` | string |  |  | Default dataset for unqualified table names |
 | `location` | string |  |  | Dataset location, e.g. US or europe-west4 |
 | `auth.method` | `ambient`, `service_account` |  | `ambient` |  |
-| `ambient_env` | boolean |  | `false` | Also export the vendor-standard variables so libraries pick this up with no configuration. Only one integration per session can claim them. |
+| `ambient_env` | boolean |  | `false` | Export shared vendor variables for automatic connections. Conflicting values prevent notebook startup. |
 
 **`auth.method: service_account`**
 

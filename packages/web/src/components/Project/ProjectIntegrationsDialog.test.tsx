@@ -58,6 +58,8 @@ const customEnvKind: IntegrationKind = {
 	secret_sources: { inline: false, references: [] },
 };
 
+const s3Kind: IntegrationKind = { ...postgresKind, kind: 's3', title: 'S3' };
+
 const secretKind: IntegrationKind = {
 	...postgresKind,
 	secret_sources: {
@@ -137,6 +139,9 @@ const entry = (over: Partial<IntegrationEntry> = {}): IntegrationEntry => ({
 	scope: over.scope ?? 'project',
 });
 
+const s3Entry = (name: string, overrides: Partial<IntegrationEntry> = {}) =>
+	entry({ id: name, kind: 's3', name, ...overrides });
+
 function ok(data: unknown, status = 200, headers: Record<string, string> = {}) {
 	return new Response(JSON.stringify({ success: true, data }), {
 		status,
@@ -186,6 +191,7 @@ function makeFetch({
 	loopingProjects = false,
 	slowRole = false,
 }: FetchOpts) {
+	let currentEntries = entries;
 	const calls: {
 		url: string;
 		method: string;
@@ -318,13 +324,24 @@ function makeFetch({
 			if (method === 'GET') {
 				return detail ? ok(detail, 200, { ETag: '"detail-version"' }) : notFound();
 			}
-			if (method === 'PATCH') return patchError ? serverError() : ok({ ...detail, ...body });
+			if (method === 'PATCH') {
+				if (patchError) return serverError();
+				const enabled = body?.enabled;
+				if (typeof enabled === 'boolean' && Array.isArray(currentEntries)) {
+					currentEntries = currentEntries.map((entry) =>
+						entry.id === iid ? { ...entry, enabled } : entry,
+					);
+				}
+				return ok({ ...detail, ...body });
+			}
 			if (method === 'DELETE') return ok(null);
 		}
 		if (url.includes(`/projects/${PID}/integrations`)) {
 			if (method === 'GET') {
-				if (entries === 'error') return serverError();
-				return entries === null ? notFound() : ok({ items: entries, next_cursor: null });
+				if (currentEntries === 'error') return serverError();
+				return currentEntries === null
+					? notFound()
+					: ok({ items: currentEntries, next_cursor: null });
 			}
 			if (method === 'POST') {
 				return ok(
@@ -381,6 +398,102 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
+describe('integration validation findings', () => {
+	it.each([false, true])(
+		'keeps the advisory accurate after disabling a connection (failure=%s)',
+		async (patchError) => {
+			const user = userEvent.setup();
+			const { calls } = setup(
+				{},
+				{
+					kinds: [s3Kind],
+					entries: [s3Entry('notebooks'), s3Entry('metrics')],
+					patchError,
+				},
+			);
+			await screen.findByRole('note');
+			const row = screen.getByText('metrics').closest('li')!;
+			await user.click(within(row).getByRole('button', { name: 'Disable' }));
+			await waitFor(() =>
+				expect(calls).toContainEqual(
+					expect.objectContaining({
+						method: 'PATCH',
+						body: { enabled: false },
+					}),
+				),
+			);
+			if (patchError) {
+				await screen.findByText('boom');
+				expect(screen.getByRole('note')).toHaveTextContent('notebooks, metrics');
+				expect(within(row).getByRole('button', { name: 'Disable' })).toBeEnabled();
+			} else {
+				await waitFor(() => expect(screen.queryByRole('note')).not.toBeInTheDocument());
+				expect(within(row).getByRole('button', { name: 'Enable' })).toBeEnabled();
+			}
+		},
+	);
+
+	it('clears an unavailable-kind error after the integration is disabled', async () => {
+		const user = userEvent.setup();
+		setup({}, { kinds: [], entries: [entry({ kind: 'removed', name: 'legacy' })] });
+		expect(await screen.findByRole('alert')).toHaveTextContent('legacy (removed)');
+		await user.click(screen.getByRole('button', { name: 'Disable' }));
+		await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+		expect(screen.getByRole('button', { name: 'Enable' })).toBeEnabled();
+	});
+
+	it('renders warnings and errors from different rules without blocking management', async () => {
+		setup(
+			{},
+			{
+				kinds: [{ ...postgresKind, kind: 'gcs' }],
+				entries: [
+					entry({ id: 'gcs_1', kind: 'gcs', name: 'lake' }),
+					entry({ id: 'gcs_2', kind: 'gcs', name: 'archive' }),
+					entry({ id: 'custom_1', kind: 'custom', name: 'legacy' }),
+				],
+			},
+		);
+		expect(await screen.findByRole('note')).toHaveTextContent('Multiple Google Cloud connections');
+		expect(screen.getByRole('alert')).toHaveTextContent('legacy (custom)');
+		expect(screen.getByRole('button', { name: 'Add integration' })).toBeEnabled();
+		const row = screen.getByText('legacy').closest('li')!;
+		expect(within(row).getByRole('button', { name: 'Disable' })).toBeEnabled();
+	});
+
+	it('includes inherited connections and stays visible when the list is filtered', async () => {
+		const user = userEvent.setup();
+		setup(
+			{},
+			{
+				kinds: [s3Kind],
+				entries: [s3Entry('notebooks'), s3Entry('metrics', { scope: 'org' })],
+			},
+		);
+		const note = await screen.findByRole('note');
+		expect(note).toHaveTextContent('notebooks, metrics');
+		expect(note).toHaveTextContent('Connection tests do not check conflicts between integrations.');
+		await user.type(screen.getByRole('searchbox'), 'notebooks');
+		expect(screen.getAllByTestId('integration-row')).toHaveLength(1);
+		expect(note).toBeVisible();
+	});
+
+	it.each([{ enabled: false }, { scope: 'org' as const, shadowed: true }])(
+		'does not count inactive connections: %j',
+		async (overrides) => {
+			setup(
+				{},
+				{
+					kinds: [s3Kind],
+					entries: [s3Entry('notebooks'), s3Entry('metrics', overrides)],
+				},
+			);
+			await screen.findByText('notebooks');
+			expect(screen.queryByRole('note')).not.toBeInTheDocument();
+		},
+	);
+});
+
 describe('Project integrations page editor', () => {
 	it('creates in a modal and returns focus to the page action', async () => {
 		const user = userEvent.setup();
@@ -415,8 +528,11 @@ describe('ProjectIntegrationsPanel — disabled deployment', () => {
 
 describe('ProjectIntegrationsPanel — query failures', () => {
 	it('a failed kinds query shows an error instead of a permanent skeleton', async () => {
-		setup({}, { kinds: 'error', entries: [] });
+		setup({}, { kinds: 'error', entries: [entry({ kind: 'custom' })] });
 		expect(await screen.findByText(/Could not load integrations/)).toBeInTheDocument();
+		expect(screen.queryByText('Integration kinds unavailable')).not.toBeInTheDocument();
+		expect(screen.queryByRole('note')).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Retry integrations' })).toBeEnabled();
 	});
 
 	it('a failed list query shows an error instead of a permanent skeleton', async () => {
