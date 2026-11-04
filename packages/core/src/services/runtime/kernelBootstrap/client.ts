@@ -9,6 +9,9 @@ from urllib.request import Request, build_opener, ProxyHandler
 class Incompatible(Exception):
     pass
 
+class InitializationFailed(Exception):
+    pass
+
 class EditorData(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -94,9 +97,9 @@ class MarimoClient:
             "objectIds": [], "values": [], "autoRun": self.auto_run,
         }, session_id))
         if not isinstance(response, dict) or response.get("success") is not True:
-            raise RuntimeError()
+            raise InitializationFailed()
         if not self.is_live(session_id):
-            raise RuntimeError()
+            raise InitializationFailed()
 
     @contextmanager
     def session(self, sessions):
@@ -184,6 +187,9 @@ def run_client(cfg, diagnostics=None):
     except HTTPError as error:
         diagnostics.update(reason="http_error", http_status=error.code)
         return "awaiting_client" if error.code in (404, 405) else "unavailable"
+    except InitializationFailed:
+        diagnostics["reason"] = "initialization_failed"
+        return "unavailable"
     except Exception:
         diagnostics["reason"] = "client_error"
         return "unavailable"

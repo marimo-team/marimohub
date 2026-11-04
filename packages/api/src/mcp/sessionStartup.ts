@@ -177,7 +177,12 @@ export async function startMcpSession(input: {
 										timeoutMs,
 										inspectOnly: waitSeconds === 0,
 										signal,
-										sandboxId: session.sandbox_id,
+										bridge: deps.sandbox.notebookBridge
+											? {
+													sandboxId: session.sandbox_id,
+													launcher: deps.sandbox.notebookBridge.launcher,
+												}
+											: undefined,
 									},
 								)
 							: { status: 'unavailable' as const };

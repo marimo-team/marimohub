@@ -35,6 +35,7 @@ const BootstrapDiagnostics = z.object({
 			'invalid_output',
 			'launcher_error',
 			'client_error',
+			'initialization_failed',
 			'exec_failed',
 		])
 		.optional()
@@ -57,7 +58,7 @@ interface BootstrapOptions {
 	timeoutMs: number;
 	inspectOnly?: boolean;
 	signal?: AbortSignal;
-	sandboxId?: string;
+	bridge?: { sandboxId: string; launcher: string };
 }
 
 // Leave time for another probe when a startup attempt stalls.
@@ -98,8 +99,8 @@ async function bootstrapOnce(
 			Number.isInteger(mappedPort) && mappedPort > 0 && mappedPort <= 65535
 				? mappedPort
 				: MARIMO_PORT;
-		const bridgePath = options.sandboxId
-			? notebookBridgePaths(options.sandboxId).launcher
+		const bridgePath = options.bridge
+			? notebookBridgePaths(options.bridge.sandboxId, options.bridge.launcher).launcher
 			: undefined;
 		const bridgeLauncher = bridgePath
 			? (sandbox.resolveProcessPath?.(bridgePath) ?? bridgePath)
@@ -146,7 +147,7 @@ export async function bootstrapKernel(
 			timeoutMs: options.inspectOnly ? budget : Math.min(PROBE_TIMEOUT_MS, budget),
 			inspectOnly: options.inspectOnly,
 			signal: options.signal,
-			sandboxId: options.sandboxId,
+			bridge: options.bridge,
 		});
 		if (options.inspectOnly || result.status !== 'initializing') return result;
 		const pause = Math.min(RETRY_PAUSE_MS, deadline - Date.now());

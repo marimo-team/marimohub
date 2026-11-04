@@ -739,6 +739,10 @@ describe('MCP session execution readiness', () => {
 		const { instance } = makeFakeSandbox();
 		const proxy = vi.fn(async () => Response.json([]));
 		const { deps, project } = await setup({ compute: { ...fakeComputeFrom(instance), proxy } });
+		deps.sandbox.notebookBridge = {
+			launcher: 'custom bridge.py',
+			files: [{ name: 'custom bridge.py', content: 'bridge' }],
+		};
 		const notebook = await deps.services.notebooks.createNotebook(
 			project.id,
 			{ title: 'Notebook', description: '', code: NOTEBOOK_CODE },
@@ -782,7 +786,9 @@ describe('MCP session execution readiness', () => {
 		]);
 		expect(bootstrapKernel).toHaveBeenCalledWith(
 			instance,
-			expect.objectContaining({ sandboxId: bootstrapLogs[0].sandbox_id }),
+			expect.objectContaining({
+				bridge: { sandboxId: bootstrapLogs[0].sandbox_id, launcher: 'custom bridge.py' },
+			}),
 		);
 		expect(data.execution).not.toHaveProperty('diagnostics');
 		if (!ready) {

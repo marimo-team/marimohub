@@ -12,13 +12,16 @@ describe('bootstrapKernel', () => {
 		const exec = vi
 			.spyOn(instance, 'exec')
 			.mockResolvedValue({ success: true, stdout: '{"status":"ready"}', stderr: '' });
-		await bootstrapKernel(instance, { timeoutMs: 1_000, sandboxId: 'sb-test' });
+		await bootstrapKernel(instance, {
+			timeoutMs: 1_000,
+			bridge: { sandboxId: 'sb-test', launcher: 'custom bridge.py' },
+		});
 		expect(exec).toHaveBeenCalledWith(
 			kernelBootstrapCommand(
 				900,
 				false,
 				2718,
-				'/local sandbox/tmp/marimohub-bridge/sb-test/marimo-bridge.py',
+				'/local sandbox/tmp/marimohub-bridge/sb-test/custom bridge.py',
 			),
 			{ timeout: 2_000 },
 		);
@@ -320,4 +323,23 @@ describe('bootstrapKernel', () => {
 		expect(command).not.toContain('uv run');
 		expect(command).not.toContain('pip install');
 	});
+	it.each(['instantiate', 'kernel_status'] as const)(
+		'preserves initialization failure diagnostics from %s',
+		async (stage) => {
+			const { instance } = makeFakeSandbox();
+			const diagnostics = { stage, reason: 'initialization_failed' };
+			vi.spyOn(instance, 'exec').mockResolvedValue({
+				success: true,
+				stdout: JSON.stringify({
+					status: 'unavailable',
+					diagnostics: { ...diagnostics, error: 'private' },
+				}),
+				stderr: 'private',
+			});
+			expect(await bootstrapKernel(instance, { timeoutMs: 1_000 })).toEqual({
+				status: 'unavailable',
+				diagnostics,
+			});
+		},
+	);
 });

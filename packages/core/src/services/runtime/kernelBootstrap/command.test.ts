@@ -9,6 +9,45 @@ async function python(assertions: string) {
 }
 
 describe('sandbox bootstrap launcher', () => {
+	it('reconstructs only the expected bridge argument in flattened ps output', async () => {
+		await python(String.raw`
+from types import SimpleNamespace
+from unittest.mock import patch
+for bridge in ("/mapped path/custom bridge.py", "/mapped  path/équipe/custom bridge.py", "/mapped O'Brien/custom 'bridge'.py"):
+    args = ["/env/bin/python3", bridge, "--quiet", "edit", "notebook.py", "--no-token", "--port=2718"]
+    for line in (" ".join(args), shlex.join(args)):
+        diagnostics = {}
+        with patch.object(Path, "is_dir", return_value=False), patch.object(subprocess, "check_output", return_value=line):
+            with patch.object(subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout='{"status":"ready"}')) as run:
+                assert run_launcher("/tmp/token", 2, True, "client", 2718, bridge, diagnostics) == "ready"
+                run.assert_called_once()
+                assert run.call_args.args[0] == [args[0], "-c", "client"]
+        assert diagnostics["runtime_kind"] == "bridge"
+        assert diagnostics["port_matches"] == 1
+bridge = "/mapped path/custom bridge.py"
+flags = " --no-token --port=2718"
+for command in ("python3 " + bridge + ".bak", "python3 other.py " + bridge,
+                "python3 /other/path/custom bridge.py"):
+    assert server_runtime(ps_arguments(command + flags, bridge), "/tmp/token", 2718, bridge) is None
+# Unlike ps output, /proc already preserves argv boundaries; never join separate arguments there.
+assert server_runtime(["python3", *bridge.split(), "--no-token", "--port=2718"], "/tmp/token", 2718, bridge) is None
+`);
+	});
+	it('counts numerically equivalent ports using the same validation as discovery', async () => {
+		await python(String.raw`
+from types import SimpleNamespace
+from unittest.mock import patch
+for value, matches in (("2718", 1), ("02718", 1), ("+2718", 1), ("2719", 0), ("invalid", 0), ("0", 0), ("65536", 0), ("", 0)):
+    for flags in (["--port=" + value], ["--port", value]):
+        args = ["python3", "-m", "marimo", "--no-token", *flags]
+        diagnostics = {}
+        with patch.dict(globals(), {"commands": lambda *_: iter([args])}):
+            with patch.object(subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout='{"status":"ready"}')) as run:
+                assert run_launcher("/tmp/token", 2, True, "client", 2718, diagnostics=diagnostics) == ("ready" if matches else "awaiting_client")
+                assert run.call_count == matches
+        assert diagnostics["port_matches"] == matches
+`);
+	});
 	it('discovers a bridge from Linux argv while skipping unreadable and exited processes', async () => {
 		await python(String.raw`
 from types import SimpleNamespace
@@ -57,7 +96,7 @@ from unittest.mock import patch
 bridge = "/tmp/marimohub-bridge/sb-test/marimo-bridge.py"
 args = ["python3", bridge, "--no-token", "--port=2718"]
 diagnostics = {}
-with patch.dict(globals(), {"commands": lambda _: iter([args])}):
+with patch.dict(globals(), {"commands": lambda *_: iter([args])}):
     assert run_launcher("/tmp/token", 1, False, "client", 2718, diagnostics=diagnostics) == "awaiting_client"
     assert diagnostics == {"stage": "discovery", "reason": "runtime_not_found", "processes_scanned": 1, "port_matches": 1}
     result = SimpleNamespace(returncode=0, stdout=json.dumps({"status": "awaiting_client", "diagnostics": {"stage": "configure", "reason": "incompatible_runtime"}}), stderr="private token")
@@ -96,7 +135,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 processes = [["python3", "-m", "marimo", "edit", "--no-token", "--port=" + port, "--base-url=/prefix/"]
              for port in ("2718", "43210")]
-with patch.dict(globals(), {"commands": lambda _: iter(processes)}):
+with patch.dict(globals(), {"commands": lambda *_: iter(processes)}):
     with patch.object(subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout='{"status":"ready"}')) as run:
         assert run_launcher("/tmp/token", 1, False, "client", 43210) == "ready"
         run.assert_called_once()
@@ -133,14 +172,14 @@ for status in ("ready", "initializing", "awaiting_client", "unavailable"):
 	it('classifies missing runtimes, discovery failures, and client timeouts', async () => {
 		await python(String.raw`
 from unittest.mock import patch
-with patch.dict(globals(), {"commands": lambda _: iter([])}):
+with patch.dict(globals(), {"commands": lambda *_: iter([])}):
     assert run_launcher("/tmp/token", 1, False, "", 2718) == "awaiting_client"
 for error, expected in ((OSError("secret"), "unavailable"), (subprocess.TimeoutExpired("secret", 1), "initializing")):
-    def broken(_):
+    def broken(*_):
         raise error
     with patch.dict(globals(), {"commands": broken}):
         assert run_launcher("/tmp/token", 1, False, "", 2718) == expected
-with patch.dict(globals(), {"commands": lambda _: iter([["python3", "--token-password-file=/tmp/token", "--port=2718"]])}):
+with patch.dict(globals(), {"commands": lambda *_: iter([["python3", "--token-password-file=/tmp/token", "--port=2718"]])}):
     with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired("secret", 1)):
         assert run_launcher("/tmp/token", 1, False, "", 2718) == "initializing"
 `);

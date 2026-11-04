@@ -80,7 +80,7 @@ if __name__ == "__main__":
     from marimo._cli.cli import main
     main(prog_name="marimo")
 `;
-	const launcher = join(root, bridge ? 'marimo-bridge.py' : 'marimo');
+	const launcher = join(root, bridge ? 'custom bridge.py' : 'marimo');
 	await writeFile(launcher, serverMain);
 	const child = spawn(
 		python!,
@@ -147,7 +147,7 @@ if __name__ == "__main__":
 		.toBe(200);
 	const sandbox = {
 		resolveProcessPath: (path: string) =>
-			path === '/tmp/marimohub-bridge/sb-test/marimo-bridge.py' ? launcher : path,
+			path === '/tmp/marimohub-bridge/sb-test/custom bridge.py' ? launcher : path,
 		resolveProcessUrl: (url: string) => url.replace(`:${MARIMO_PORT}`, `:${port}`),
 		async exec(command, options) {
 			try {
@@ -243,7 +243,10 @@ describe.skipIf(!python)('real marimo headless bootstrap', () => {
 					diagnostics: { stage: 'discovery', reason: 'runtime_not_found' },
 				});
 			}
-			const options = { timeoutMs: 15_000, sandboxId: 'sb-test' };
+			const options = {
+				timeoutMs: 15_000,
+				bridge: { sandboxId: 'sb-test', launcher: 'custom bridge.py' },
+			};
 			expect(await bootstrapKernel(rt.sandbox, { ...options, inspectOnly: true })).toMatchObject({
 				status: 'initializing',
 			});

@@ -185,6 +185,29 @@ assert probe.call_count == 1
 assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
 `);
 	});
+	it('reports initialization failures at the failing stage without leaking response data', async () => {
+		await python(String.raw`
+from tempfile import TemporaryDirectory
+from unittest.mock import MagicMock, patch
+editor = b'<marimo-server-token data-token="private-token"></marimo-server-token><marimo-user-config data-config=\'{"runtime":{"auto_instantiate":false}}\'></marimo-user-config>'
+cases = [([b'{"success":false,"error":"private-error"}'], "instantiate"),
+         ([b'null'], "instantiate"),
+         ([b'{"success":true}', b'{"state":"stopped","error":"private-error"}'], "kernel_status"),
+         ([b'{"success":true}', b'{}'], "kernel_status")]
+with TemporaryDirectory() as directory:
+    cfg = {"token_file": directory + "/token", "inspect": False, "authenticated": False,
+           "port": 2718, "base_url": "", "seconds": 1}
+    for responses, stage in cases:
+        opener = MagicMock()
+        opener.open.return_value.__enter__.return_value.read.side_effect = [b'{"existing":{}}', editor, *responses]
+        diagnostics = {}
+        with patch.dict(globals(), {"build_opener": lambda *_: opener}):
+            assert run_client(cfg, diagnostics) == "unavailable"
+        assert diagnostics == {"stage": stage, "reason": "initialization_failed"}
+        assert opener.open.call_count == 2 + len(responses)
+        assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+`);
+	});
 	it('rejects failed initialization responses and stopped kernels', async () => {
 		await python(String.raw`
 from unittest.mock import Mock
@@ -195,13 +218,13 @@ for response in ('null', '[]', '{}', '{"success":false}', '{"success":1}'):
     try:
         client.initialize("live")
         raise AssertionError("accepted failed initialization")
-    except RuntimeError:
+    except InitializationFailed:
         pass
 client.request = Mock(side_effect=['{"success":true}', '{"state":"stopped"}'])
 try:
     client.initialize("live")
     raise AssertionError("accepted a stopped kernel")
-except RuntimeError:
+except InitializationFailed:
     pass
 for auto_run in (True, False):
     client.auto_run = auto_run
