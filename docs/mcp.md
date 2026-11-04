@@ -253,6 +253,43 @@ It does not stop an existing session or undo work already sent to the runtime.
 A sandbox already provisioning can finish startup and remains subject to normal idle cleanup.
 Use `stop_session` to stop a session explicitly.
 
+## Discover data
+
+These read-only tools work through MCP and project chat. Chat runs them without consent cards.
+They share the [data browser's](./integrations.md#browse-data) access checks, caches, and request budgets.
+
+| Tool                  | Purpose                                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| `list_integrations`   | List project and inherited organization integrations, excluding credentials and configuration. |
+| `list_namespaces`     | List namespaces, optionally beneath a parent.                                                  |
+| `list_tables`         | List tables in a namespace.                                                                    |
+| `get_table_schema`    | Read columns, types, partitioning, and an available loading snippet.                           |
+| `preview_table`       | Sample table rows. This can start temporary preview compute.                                   |
+| `list_object_buckets` | List accessible buckets or containers.                                                         |
+| `list_objects`        | List objects and prefixes at one directory level.                                              |
+| `get_object_metadata` | Read metadata, tags, and an available loading snippet.                                         |
+| `preview_object`      | Preview text or rows, or return an authenticated image URL.                                    |
+
+`list_integrations` requires integrations to be enabled and `integration.read`.
+Other tools require the data browser and `integration.use` (editor or above).
+`preview_table` requires table previews. Object tools require the object browser.
+Disabled tools are absent from `tools/list`. Each integration must support the requested operation.
+Token grants must permit the required action in the selected project.
+
+All tools accept `project` as an ID or exact name.
+Browse tools require an `integration_id` from a `list_integrations` entry with `enabled: true` and `shadowed: false`.
+Namespaces use arrays from `list_namespaces`, such as `["sales", "eu.central"]`, with dots preserved within each part.
+Schema and table preview calls also require a table name from `list_tables`.
+
+Lists return `items` and `next_cursor`, with a default `limit` of 50 and a maximum of 100.
+For another page, pass `next_cursor` as `cursor` with the same filters.
+`list_namespaces`, `list_tables`, `get_table_schema`, `list_object_buckets`, and `list_objects`
+accept `fresh: true` to bypass cached results and consume browse budget.
+
+Table and tabular object previews default to a `limit` of 20 rows, with a maximum of 100.
+Text, image, and Parquet previews also enforce [configured byte limits](./configuration.md#integrations).
+Image previews return an absolute `content_url` that requires authentication. Unsupported object formats return a reason.
+
 ## Project chat
 
 With [managed AI](./ai.md#project-chat) on, `project_conversations` manages the caller's

@@ -24,13 +24,18 @@ export async function resolveProject(
 	deps: ApiDeps,
 	principal: AuthenticatedPrincipal,
 	value: string,
-	action: 'project.read' | 'notebook.write' = 'project.read',
+	action:
+		| 'project.read'
+		| 'notebook.write'
+		| 'integration.read'
+		| 'integration.use' = 'project.read',
 	appAccess = false,
 ): Promise<Project> {
+	const integrationAction = action === 'integration.read' || action === 'integration.use';
 	const loadProject = async (id: ProjectId) => {
 		if (appAccess) return loadSessionProject(deps.services.projects, id, principal, deps);
 		const project = await deps.services.projects.getProject(id);
-		if (effectiveRole(project, principal, deps.policy) === null) {
+		if (!integrationAction && effectiveRole(project, principal, deps.policy) === null) {
 			throw new NotFoundError(`Project ${id} not found`);
 		}
 		await assertProjectActionOn(project, principal, action, deps);
@@ -58,7 +63,7 @@ export async function resolveProject(
 	);
 	let matches = projects.filter((project) => foldCase(project.name) === foldCase(value));
 	if (action !== 'project.read') {
-		// Project listings require a read grant; write selectors authorize exact candidates instead.
+		// Scoped action grants need not include project.read; authorize exact candidates instead.
 		const candidates = await Promise.all(
 			matches.map((project) => deps.services.projects.getProject(project.id)),
 		);
@@ -68,6 +73,16 @@ export async function resolveProject(
 			candidates.map((project) => ({ kind: 'project', project })),
 		);
 		matches = matches.filter((_, index) => decisions[index].allowed);
+		if (integrationAction && matches.length === 0) {
+			// Prefer allowed matches, but preserve each action's denial contract when none qualify.
+			for (const candidate of candidates) {
+				try {
+					return await loadProject(candidate.id);
+				} catch (error) {
+					if (!(error instanceof NotFoundError)) throw error;
+				}
+			}
+		}
 	}
 	if (matches.length === 0) throw new NotFoundError(`Project '${value}' not found`);
 	if (matches.length > 1) {

@@ -128,6 +128,108 @@ describe('ID-shaped project names', () => {
 	);
 });
 
+describe.each(['integration.read', 'integration.use'] as const)(
+	'%s project selectors',
+	(action) => {
+		const principalWithGrant = (grant: TokenGrant): AuthenticatedPrincipal => ({
+			...USER,
+			credential: { ...USER.credential, kind: 'personal-access-token', id: 'restricted', grant },
+		});
+
+		it('returns forbidden for insufficient roles by ID and name', async () => {
+			const principal = { ...USER, id: UserId.parse('limited-member') };
+			await deps.services.projects.addMember(
+				project.id,
+				{ user_id: principal.id },
+				action === 'integration.read' ? 'app-user' : 'viewer',
+				USER.id,
+			);
+			for (const reference of [project.id, project.name.toUpperCase()]) {
+				await expect(resolveProject(deps, principal, reference, action)).rejects.toBeInstanceOf(
+					ForbiddenError,
+				);
+			}
+		});
+
+		it('preserves existence-revealing role denials for nonmembers by ID and name', async () => {
+			const principal = { ...USER, id: UserId.parse('stranger') };
+			for (const reference of [project.id, project.name]) {
+				await expect(resolveProject(deps, principal, reference, action)).rejects.toBeInstanceOf(
+					ForbiddenError,
+				);
+			}
+		});
+
+		it('returns forbidden for missing token actions by ID and name', async () => {
+			const principal = principalWithGrant({ actions: ['project.read'], projects: [project.id] });
+			for (const reference of [project.id, project.name]) {
+				await expect(resolveProject(deps, principal, reference, action)).rejects.toThrow(
+					`Token grant does not permit '${action}'`,
+				);
+			}
+		});
+
+		it('hides projects outside token scope by ID and name', async () => {
+			const principal = principalWithGrant({ actions: [action], projects: [ProjectId.create()] });
+			for (const reference of [project.id, project.name]) {
+				await expect(resolveProject(deps, principal, reference, action)).rejects.toBeInstanceOf(
+					NotFoundError,
+				);
+			}
+		});
+
+		it('hides projects with unmet security labels by ID and name', async () => {
+			deps.resourceSecurity = localResourceSecurity(['UNCLASSIFIED']);
+			await deps.services.projects.setSecurityLabels(
+				project.id,
+				{ classification: 'UNCLASSIFIED', compartments: [] },
+				USER.id,
+			);
+			for (const reference of [project.id, project.name]) {
+				await expect(resolveProject(deps, USER, reference, action)).rejects.toBeInstanceOf(
+					NotFoundError,
+				);
+			}
+		});
+
+		it('hides deleted projects by ID and name', async () => {
+			await deps.services.projects.deleteProject(project.id, USER.id);
+			for (const reference of [project.id, project.name]) {
+				await expect(resolveProject(deps, USER, reference, action)).rejects.toBeInstanceOf(
+					NotFoundError,
+				);
+			}
+		});
+
+		it('prefers an allowed name match over denied matches', async () => {
+			await createProject(project.name, UserId.parse('other-owner'));
+			const principal = principalWithGrant({ actions: [action], projects: '*' });
+			await expect(resolveProject(deps, principal, project.name, action)).resolves.toMatchObject({
+				id: project.id,
+			});
+		});
+
+		it('excludes denied matches from ambiguity errors', async () => {
+			const hidden = await createProject(project.name, UserId.parse('other-owner'));
+			const duplicate = await createProject(project.name.toUpperCase());
+			await expect(resolveProject(deps, USER, project.name, action)).rejects.toThrow(
+				new RegExp(
+					`ambiguous; use one of: (?:${project.id}, ${duplicate.id}|${duplicate.id}, ${project.id})$`,
+				),
+			);
+			await expect(resolveProject(deps, USER, project.name, action)).rejects.not.toThrow(hidden.id);
+		});
+
+		it('does not let a hidden name match mask a forbidden match', async () => {
+			const duplicate = await createProject(project.name);
+			const principal = principalWithGrant({ actions: ['project.read'], projects: [duplicate.id] });
+			await expect(resolveProject(deps, principal, project.name, action)).rejects.toThrow(
+				`Token grant does not permit '${action}' on project ${duplicate.id}`,
+			);
+		});
+	},
+);
+
 describe('ID-shaped notebook titles', () => {
 	it('falls back to an exact case-insensitive title when the ID is missing', async () => {
 		const reference = NotebookId.create();
