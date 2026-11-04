@@ -9,6 +9,7 @@ import { hasControlCharacter, isRecord } from '../../internal/validation';
 import type { IntegrationVersionPin, SessionRender, WorkloadRef } from '../../ports/integrations';
 import type { RenderOutput } from './sdk';
 import { CODE_EXECUTION_ENV, SHELL_BASICS_ENV } from './environmentName';
+import { AMBIENT_ENV_CONFLICT_HELP } from './environmentHelp';
 import { stringify } from 'yaml';
 import {
 	AGENT_CONTEXT_DIR,
@@ -129,8 +130,19 @@ export function bundleIntegrations(
 			// An identical value from two instances is tolerated (e.g. a shared
 			// tool var like PYICEBERG_HOME); a differing one is ambiguous.
 			if (owner && vars[key] !== value) {
+				if (key === 'AWS_CONFIG_FILE') {
+					const previous = files.find((file) => file.path === vars[key]);
+					const next = files.find((file) => file.path === value);
+					// S3 instances render separate paths for the same addressing-style config.
+					if (previous && next && previous.content === next.content) continue;
+				}
+				const help =
+					key.startsWith('AWS_') &&
+					(item.kind === 's3' || rendered.some(({ name, kind }) => name === owner && kind === 's3'))
+						? `For S3 connections: ${AMBIENT_ENV_CONFLICT_HELP}`
+						: "Align the values or disable one integration's export of this variable.";
 				throw new ValidationError(
-					`Integrations "${owner}" and "${item.name}" set the same environment variable to different values.`,
+					`Integrations "${owner}" and "${item.name}" set the same environment variable "${key}" to different values. ${help}`,
 				);
 			}
 			varOwner.set(key, item.name);

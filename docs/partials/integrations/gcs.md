@@ -14,7 +14,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `bucket` | string |  |  | Default bucket for notebook code; the credentials are not restricted to it |
 | `project_id` | string |  |  | Project billed for the requests |
 | `auth.method` | `ambient`, `service_account` |  | `ambient` |  |
-| `ambient_env` | boolean |  | `true` | Also export the vendor-standard variables so libraries pick this up with no configuration. Only one integration per session can claim them. |
+| `ambient_env` | boolean |  | `true` | Export shared vendor variables for automatic connections. Conflicting values prevent notebook startup. |
 
 **`auth.method: service_account`**
 

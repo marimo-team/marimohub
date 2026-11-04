@@ -527,15 +527,24 @@ the `ambient_env` switch. There are two reasons to do that:
 | S3               | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` — plus region and endpoint. On by default            |
 | Iceberg catalogs | the rendered `.pyiceberg.yaml`, found through `PYICEBERG_HOME`. Always set                        |
 
-Because these names are process-wide, only one integration per session can claim
-a discovery contract. When multiple integrations request the same names, the
-first by integration name is discovered. The others remain available through
-their namespaced variables and notebook snippets. The session manifest and
-provisioning log contain a warning naming the selected and skipped integrations.
-When
-[workload identity federation](./workload-identity-federation.md) is enabled it
-injects `AWS_*` for the session's own bucket, and hub-injected variables win over
-integrations.
+For database discovery variables, the first integration by name claims each set
+of shared names. Other connections remain available through namespaced variables
+and notebook snippets. The session manifest and provisioning log name the selected
+and skipped integrations.
+
+For object stores, conflicting shared variables prevent notebook startup.
+For multiple connections, disable `ambient_env` on all but one connection.
+Namespaced settings remain available for every connection.
+
+The integrations page warns about possible shared-variable conflicts between S3,
+Google Cloud, or Azure connections. These warnings do not compare credentials.
+Connection tests check connectivity, not conflicts between integrations.
+Unavailable integration kinds appear as errors. Restore those kinds or disable
+the affected integrations before starting notebooks. Disabled and overridden
+integrations do not contribute findings.
+
+[Workload identity federation](./workload-identity-federation.md) injects `AWS_*`
+for the session's own bucket. Hub-injected variables take precedence over integrations.
 
 Two combinations fall back to the namespaced connection instead of advertising a
 connection that is weaker than the one you configured:
@@ -960,11 +969,11 @@ plus static credentials when configured, and a descriptor at
 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`,
 `AWS_DEFAULT_REGION`, and `AWS_ENDPOINT_URL_S3`.
 
-The endpoint is S3-scoped on purpose: the unscoped `AWS_ENDPOINT_URL` would
-point STS and every other AWS service at the same store. Path-style addressing
-has no variable of its own — boto3 reads it from a config file — so choosing it
-also renders one and sets `AWS_CONFIG_FILE`, which replaces any other profile
-file the image ships.
+`AWS_ENDPOINT_URL_S3` applies only to S3. Other AWS services keep their own endpoints.
+With `ambient_env` and `path_style` enabled, boto3 reads the addressing style from
+a generated file through `AWS_CONFIG_FILE`. This variable overrides the default
+AWS config file. Identical generated AWS config files do not conflict, even when
+their paths differ.
 
 Works with MinIO, Cloudflare R2, Ceph, and other S3-compatible stores: set the
 endpoint and, for most of them, path-style addressing.
