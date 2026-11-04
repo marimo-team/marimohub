@@ -3,6 +3,7 @@ import type { WorkspaceLimits } from '@marimo-hub/core/remote-workspace';
 import type { DeploymentThemeConfig } from '@marimo-hub/core/theme';
 import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-bridge';
 import type { Hono, MiddlewareHandler } from 'hono';
+import type { LanguageModel, ToolLoopAgentSettings } from 'ai';
 import type {
 	AppPoolPolicy,
 	WarmPoolService,
@@ -246,6 +247,15 @@ export interface AiProxyConfig {
 	rules?: string;
 	/** Session-token lifetime in seconds. */
 	tokenTtlSeconds?: Seconds;
+	/**
+	 * AI SDK model for project chat. The chat runner streams through it with the
+	 * hub's MCP tools; absent (for example the Workers example) disables chat.
+	 */
+	languageModel?: LanguageModel;
+	/** Provider options sent with every chat call (reasoning settings and the like). */
+	chatProviderOptions?: NonNullable<ToolLoopAgentSettings['providerOptions']>;
+	/** Project chat budgets; absent disables chat even when a language model exists. */
+	chat?: ChatConfig;
 	generateSql?: (input: {
 		mode: 'generate' | 'revise';
 		instruction: string;
@@ -269,6 +279,19 @@ export interface AiProxyConfig {
 		onStreamError?: (error: unknown) => void;
 	}) => Response | Promise<Response>;
 }
+
+/** Project chat budgets (config: `MARIMOHUB_AI_CHAT*`). */
+export interface ChatConfig {
+	/** Wall-clock budget for one assistant turn, in seconds (30–900). */
+	taskTimeoutSeconds: number;
+	/** How long a consent card waits for an answer before the tool call is skipped, in seconds (30–900). */
+	permissionTimeoutSeconds: number;
+}
+
+export const DEFAULT_CHAT_CONFIG: ChatConfig = {
+	taskTimeoutSeconds: 300,
+	permissionTimeoutSeconds: 300,
+};
 
 /** Deployment-wide authorization / abuse-guard knobs. */
 export interface PolicyConfig {

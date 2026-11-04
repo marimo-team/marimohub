@@ -5,14 +5,15 @@
  * from `MARIMOHUB_AUTH_SESSION_SECRET` (like the proxy-exposure routing tokens), so
  * there is no separate AI key to manage.
  */
-import type { ApiDeps } from '@marimo-hub/api';
+import type { ApiDeps, ChatConfig } from '@marimo-hub/api';
+import { DEFAULT_CHAT_CONFIG } from '@marimo-hub/api';
 import { Seconds, isAnthropicBedrockModel } from '@marimo-hub/core';
 import { awsDefaultCredentialProvider, createAwsSigV4Fetch } from '@marimo-hub/credentials-aws';
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { generateText } from 'ai';
 import { converseChatCompletion } from './openaiToConverse';
-import { parseIntEnv, parseList, requiredVar } from './env';
+import { parseIntEnv, parseList, parseOnOff, requiredVar } from './env';
 import type { Env } from './env';
 import { ConfigError } from './errors';
 
@@ -95,6 +96,32 @@ function rejectBedrockOrphans(env: Env): void {
 	);
 }
 
+const CHAT_TIMEOUT_VARS = {
+	taskTimeoutSeconds: 'MARIMOHUB_AI_CHAT_TASK_TIMEOUT_SECONDS',
+	permissionTimeoutSeconds: 'MARIMOHUB_AI_CHAT_PERMISSION_TIMEOUT_SECONDS',
+} as const;
+
+/** Project chat budgets; undefined when `MARIMOHUB_AI_CHAT=off`. */
+function chatConfig(env: Env): ChatConfig | undefined {
+	if (!parseOnOff(env, 'MARIMOHUB_AI_CHAT', { fallback: true, docs: DOCS })) return undefined;
+	const config: ChatConfig = { ...DEFAULT_CHAT_CONFIG };
+	for (const [field, variable] of Object.entries(CHAT_TIMEOUT_VARS) as [
+		keyof ChatConfig,
+		string,
+	][]) {
+		const value = parseIntEnv(env, variable);
+		if (value === undefined) continue;
+		if (value < 30 || value > 900)
+			throw new ConfigError(`Invalid ${variable}: ${value} (expected 30–900 seconds)`, {
+				variable,
+				remediation: 'Set a value between 30 and 900 seconds, or unset it for the 300 s default.',
+				docs: DOCS,
+			});
+		config[field] = value;
+	}
+	return config;
+}
+
 export function makeAi(env: Env): Pick<ApiDeps, 'ai'> {
 	const backend = env.MARIMOHUB_AI_BACKEND?.trim().toLowerCase();
 	if (backend === undefined || backend === '' || backend === 'none') return {};
@@ -173,6 +200,12 @@ export function makeAi(env: Env): Pick<ApiDeps, 'ai'> {
 					credentialProvider: awsCredentials,
 				})
 			: undefined;
+	// Claude on Bedrock only speaks Converse; everything else goes through the
+	// OpenAI-compatible endpoint, the same split the SQL helper makes.
+	const languageModel =
+		bedrockProvider !== undefined && isAnthropicBedrockModel(model)
+			? bedrockProvider(model)
+			: provider.chatModel(model);
 	const maxTokens = parseIntEnv(env, 'MARIMOHUB_AI_MAX_TOKENS');
 	if (maxTokens !== undefined && (!Number.isSafeInteger(maxTokens) || maxTokens < 1)) {
 		throw new ConfigError(
@@ -193,6 +226,8 @@ export function makeAi(env: Env): Pick<ApiDeps, 'ai'> {
 			maxTokens,
 			rules: env.MARIMOHUB_AI_RULES,
 			tokenTtlSeconds: tokenTtl === undefined ? undefined : Seconds.of(tokenTtl),
+			languageModel,
+			chat: chatConfig(env),
 			converse:
 				bedrockProvider === undefined
 					? undefined
@@ -206,12 +241,8 @@ export function makeAi(env: Env): Pick<ApiDeps, 'ai'> {
 								onStreamError: input.onStreamError,
 							}),
 			async generateSql(input) {
-				const sqlModel =
-					bedrockProvider !== undefined && isAnthropicBedrockModel(model)
-						? bedrockProvider(model)
-						: provider.chatModel(model);
 				const result = await generateText({
-					model: sqlModel,
+					model: languageModel,
 					instructions: sqlGenerationInstructions(input.dialect, env.MARIMOHUB_AI_RULES),
 					prompt: [
 						`Mode: ${input.mode}`,

@@ -26,6 +26,7 @@ import {
 } from '../shared';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../pagination';
 import { surfaceCapabilities } from './sessionSurfaces';
+import { chatAvailable } from '../chat/access';
 
 /**
  * System routes: current user (`/api/v1/me`), deployment metadata (`/api/v1/version`),
@@ -170,6 +171,7 @@ app.openapi(capabilitiesRoute, (c) => {
 				...new Set(deps.search?.service.sources.flatMap((source) => [...source.kinds]) ?? []),
 			],
 		},
+		chat: { available: chatAvailable(deps) },
 		data_browser: {
 			available: Boolean(deps.dataBrowser),
 			preview: deps.dataBrowser?.preview ?? false,

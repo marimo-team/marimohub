@@ -1,4 +1,5 @@
 import searchApp from './routes/search';
+import conversationsApp from './routes/conversations';
 import { WORKSPACE_LIMITS } from '@marimo-hub/core/remote-workspace';
 import { MAX_FOLDER_IMPORT_ARCHIVE_BYTES } from '@marimo-hub/core/workspace-ignore';
 import type { MiddlewareHandler } from 'hono';
@@ -66,6 +67,11 @@ function internalErrorMessage(requestId: string | undefined): string {
 	return requestId ? `Internal error — ref ${requestId}` : 'Internal error';
 }
 
+const CHAT_STREAM_PATH = /^\/api\/v1\/projects\/[^/]+\/conversations\/[^/]+\/stream$/;
+function isChatStreamPath(path: string): boolean {
+	return CHAT_STREAM_PATH.test(path);
+}
+
 const OPENAPI_DOC = {
 	openapi: '3.1.0' as const,
 	info: {
@@ -77,6 +83,7 @@ const OPENAPI_DOC = {
 		{ name: 'Auth', description: 'Authentication' },
 		{ name: 'Projects', description: 'Project management' },
 		{ name: 'Alerts', description: 'Project alert destinations' },
+		{ name: 'Conversations', description: 'Private project chat with tool consent' },
 		{ name: 'Notebooks', description: 'Notebook CRUD and versioning' },
 		{ name: 'Sessions', description: 'Notebook session lifecycle' },
 		{ name: 'Jobs', description: 'Scheduled and on-demand headless notebook runs' },
@@ -567,7 +574,10 @@ export function createApi(rawDeps: ApiDeps) {
 	// before `etag` builds the 304 (which retains cache-control).
 	const conditionalGet = etag({ weak: true });
 	app.use(`${API_PREFIX}/*`, (c, next) =>
-		c.req.path.endsWith('/browse/objects/content') || isDeepLinkPath(c.req.path)
+		c.req.path.endsWith('/browse/objects/content') ||
+		isDeepLinkPath(c.req.path) ||
+		// The chat reconnect stream is served as SSE; hashing it would buffer the body.
+		isChatStreamPath(c.req.path)
 			? next()
 			: conditionalGet(c, next),
 	);
@@ -592,6 +602,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, thumbnailsApp);
 	app.route(API_PREFIX, deepLinksApp);
 	app.route(API_PREFIX, searchApp);
+	app.route(API_PREFIX, conversationsApp);
 	app.route(API_PREFIX, previewsApp);
 	app.route(API_PREFIX, appsApp);
 	app.route(API_PREFIX, changeRequestsApp);

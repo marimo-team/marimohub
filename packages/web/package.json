@@ -10,6 +10,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@ai-sdk/react": "catalog:",
 		"@codemirror/autocomplete": "catalog:",
 		"@codemirror/commands": "catalog:",
 		"@codemirror/lang-sql": "catalog:",
@@ -28,6 +29,7 @@
 		"@tanstack/react-form": "catalog:",
 		"@tanstack/react-query": "^5.90.21",
 		"@tanstack/react-store": "catalog:",
+		"ai": "catalog:",
 		"class-variance-authority": "catalog:",
 		"clsx": "catalog:",
 		"codemirror": "catalog:",
@@ -38,7 +40,9 @@
 		"react-aria-components": "catalog:",
 		"react-dom": "^19.1.1",
 		"react-image-crop": "catalog:",
+		"react-markdown": "catalog:",
 		"react-router-dom": "^7.18.2",
+		"remark-gfm": "catalog:",
 		"simple-icons": "catalog:",
 		"sonner": "catalog:",
 		"sql-formatter": "catalog:",

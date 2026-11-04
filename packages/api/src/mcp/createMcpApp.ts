@@ -7,6 +7,8 @@ import type { ApiDeps, HonoEnv } from '../context';
 import { authenticateMcpRequest } from './auth';
 import { createOAuthProvider } from './oauthProvider';
 import { createMcpServer } from './server';
+import { registerConversationTools } from './conversations';
+import { chatAvailable } from '../chat/access';
 import { MCP_SCOPES } from './constants';
 
 function rateLimited(c: { json(body: unknown, status: 429): Response }): Response {
@@ -126,14 +128,18 @@ export function createMcpApp(deps: ApiDeps): Hono<HonoEnv> {
 		if (authenticated instanceof Response) return authenticated;
 		await initializeForSubject(deps, authenticated);
 		const disconnected = new AbortController();
-		const server = createMcpServer(deps, authenticated, {
+		const request = {
 			requestId: c.get('requestId'),
 			method: c.req.method,
 			path: c.req.path,
 			hostname: new URL(c.req.url).hostname,
 			appBaseUrl: publicBaseUrl,
 			signal: AbortSignal.any([c.req.raw.signal, disconnected.signal]),
-		});
+		};
+		const server = createMcpServer(deps, authenticated, request);
+		// Registered here, not in createMcpServer: chat itself drives that server
+		// in-process, and its tool must not be offered back to the model.
+		if (chatAvailable(deps)) registerConversationTools(server, deps, authenticated, request);
 		const transport = new StreamableHTTPTransport({ sessionIdGenerator: undefined });
 		await server.connect(transport);
 		const response = await transport.handleRequest(c);

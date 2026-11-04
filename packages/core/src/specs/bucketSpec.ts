@@ -45,6 +45,8 @@ import type {
 import { SyncTokenRecordSchema } from '../integrations/syncedSource';
 import { paths } from '../paths';
 import { ProjectAlertConfigSchema } from '../services/notifications/ProjectAlertStore';
+import { StoredConversationSchema, ConversationIndexSchema } from '../services/chat/schema';
+import { ChatPermissionRecordSchema } from '../services/chat/ChatPermissionStore';
 import {
 	AppClaimSchema,
 	CatalogSchema,
@@ -283,6 +285,34 @@ const OBJECTS: BucketObject[] = [
 			'destinations.*.url',
 			'destinations.*.signing_secret',
 		],
+		tag: 'project',
+	},
+	{
+		name: 'ProjectConversation',
+		key: template(paths.conversation(PID, UID, '{cid}')),
+		schema: StoredConversationSchema,
+		summary:
+			'Private per-user project chat conversation: messages as UI message parts, the turn claim, and the saved task.',
+		mutability: 'cas',
+		owner: 'ConversationService',
+		tag: 'project',
+	},
+	{
+		name: 'ProjectConversationIndex',
+		key: template(paths.conversationIndex(PID, UID)),
+		schema: ConversationIndexSchema,
+		summary: 'Per-user list of conversation ids in a project.',
+		mutability: 'cas',
+		owner: 'ConversationService',
+		tag: 'project',
+	},
+	{
+		name: 'ChatPermissionRecord',
+		key: template(paths.chatPermissions(PID, UID)),
+		schema: ChatPermissionRecordSchema,
+		summary: 'Remembered "always allow" chat tool consents, private to the user and project.',
+		mutability: 'cas',
+		owner: 'ChatPermissionStore',
 		tag: 'project',
 	},
 	{

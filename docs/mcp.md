@@ -253,6 +253,24 @@ It does not stop an existing session or undo work already sent to the runtime.
 A sandbox already provisioning can finish startup and remains subject to normal idle cleanup.
 Use `stop_session` to stop a session explicitly.
 
+## Project chat
+
+With [managed AI](./ai.md#project-chat) enabled, `project_conversations` manages the
+caller's private chat conversations. It is registered for human credentials only.
+
+| Action              | Purpose                                                               |
+| ------------------- | --------------------------------------------------------------------- |
+| `list`, `get`       | Browse your conversations in a project and read recent messages.      |
+| `create`, `send`    | Start a conversation or send a message and wait for the saved reply.  |
+| `resume`            | Continue an interrupted task; set `acknowledge_uncertain` when asked. |
+| `delete`            | Remove a conversation.                                                |
+| `permissions`       | List remembered "always allow" tool consents.                         |
+| `revoke_permission` | Forget a remembered consent.                                          |
+| `decide_permission` | Answer an open consent card of a running turn.                        |
+
+Consent-gated tools cannot prompt during an MCP `send`; they are skipped and the
+assistant is told so. Use the hub UI to approve changes interactively.
+
 ## Run and schedule jobs
 
 Set `MARIMOHUB_JOBS=on` and restart the deployment to register these tools.

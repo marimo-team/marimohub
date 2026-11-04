@@ -1223,6 +1223,192 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/conversations': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List your conversations in a project */
+		get: operations['conversations.list'];
+		put?: never;
+		/** Start a private conversation */
+		post: operations['conversations.create'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/conversations/{cid}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Read a conversation */
+		get: operations['conversations.get'];
+		put?: never;
+		post?: never;
+		/** Delete a conversation */
+		delete: operations['conversations.delete'];
+		options?: never;
+		head?: never;
+		/** Choose the notebook shown beside a conversation */
+		patch: operations['conversations.update'];
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/conversations/{cid}/messages': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Send a message and wait for the reply
+		 * @description Runs one assistant turn and returns the saved conversation. Mutating tools that need consent are skipped on this endpoint; use the web UI to approve them.
+		 */
+		post: operations['conversations.send'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/conversations/{cid}/resume': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Continue an interrupted task and wait for the reply */
+		post: operations['conversations.resume'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/conversations/{cid}/stream': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/**
+		 * Re-attach to the running reply
+		 * @description Replays the chunks streamed so far for the turn running on this instance and follows it live. Responds 204 when no turn runs here; the saved conversation then carries the progress.
+		 */
+		get: operations['conversations.reconnect'];
+		put?: never;
+		/**
+		 * Send a message and stream the reply
+		 * @description Runs one turn and streams the assistant reply as an AI SDK UI message stream (server-sent events). The turn keeps running if the client disconnects; reconnect with GET …/stream or reload the conversation.
+		 */
+		post: operations['conversations.stream'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/conversations/{cid}/stop': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Stop the running reply
+		 * @description Stops the turn running for this conversation on any instance. Completed tool results stay saved and the task can be continued. Returns stopped=false when no turn is running.
+		 */
+		post: operations['conversations.stop'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/conversations/{cid}/continuation/dismiss': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Discard the saved task without continuing it */
+		post: operations['conversations.dismiss'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/conversations/{cid}/permissions/{rid}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Answer a tool consent request */
+		post: operations['conversations.permissions.decide'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/chat-permissions': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List remembered tool permissions */
+		get: operations['chatPermissions.list'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/chat-permissions/{grant_id}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		post?: never;
+		/** Forget a remembered tool permission */
+		delete: operations['chatPermissions.revoke'];
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/notebooks/{nid}/previews': {
 		parameters: {
 			query?: never;
@@ -2617,6 +2803,9 @@ export interface components {
 					| 'column'
 					| 'unknown'
 				)[];
+			};
+			chat: {
+				available: boolean;
 			};
 			data_browser: {
 				available: boolean;
@@ -13563,6 +13752,1758 @@ export interface operations {
 				headers: {
 					/** @description Seconds to wait before retrying. */
 					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'conversations.list': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Private project conversations, newest first */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							conversations: {
+								/** @enum {number} */
+								schema_version: 1;
+								id: string;
+								title: string;
+								/** Format: date-time */
+								created_at: string;
+								/** Format: date-time */
+								updated_at: string;
+								pending?: {
+									id: string;
+									/** Format: date-time */
+									expires_at: string;
+									stop_requested?: boolean;
+								};
+								last_error?: string;
+								working_notebook?: string;
+								message_count: number;
+								continuation?: {
+									/** @enum {string} */
+									status: 'running' | 'paused' | 'needs_review';
+									/** @enum {string} */
+									reason?: 'tool_limit' | 'context_limit' | 'interrupted' | 'stopped' | 'failed';
+								};
+							}[];
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'conversations.create': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					title?: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Private project conversation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							conversation: {
+								/** @enum {number} */
+								schema_version: 1;
+								id: string;
+								title: string;
+								/** Format: date-time */
+								created_at: string;
+								/** Format: date-time */
+								updated_at: string;
+								messages: {
+									id: string;
+									/** @enum {string} */
+									role: 'user' | 'assistant';
+									metadata: {
+										/** Format: date-time */
+										created_at: string;
+									};
+									parts: (
+										| {
+												/** @enum {string} */
+												type: 'text';
+												text: string;
+												/** @enum {string} */
+												state?: 'streaming' | 'done';
+										  }
+										| {
+												/** @enum {string} */
+												type: 'dynamic-tool';
+												toolName: string;
+												toolCallId: string;
+												/** @enum {string} */
+												state:
+													| 'input-streaming'
+													| 'input-available'
+													| 'output-available'
+													| 'output-error';
+												input?: string;
+												output?: string;
+												errorText?: string;
+										  }
+										| {
+												/** @enum {string} */
+												type: 'data-permission';
+												/** Format: uuid */
+												id: string;
+												data: {
+													/** Format: uuid */
+													id: string;
+													tool_call_id: string;
+													kind: string;
+													action: string;
+													details: {
+														label: string;
+														value: string;
+													}[];
+													scope: {
+														key: string;
+														label: string;
+													};
+													can_remember: boolean;
+													/** @enum {string} */
+													status:
+														| 'open'
+														| 'allowed'
+														| 'remembered'
+														| 'denied'
+														| 'expired'
+														| 'cancelled'
+														| 'unavailable';
+													/** Format: date-time */
+													expires_at: string;
+												};
+										  }
+									)[];
+								}[];
+								pending?: {
+									id: string;
+									/** Format: date-time */
+									expires_at: string;
+									stop_requested?: boolean;
+								};
+								last_error?: string;
+								continuation?: {
+									/** @enum {string} */
+									status: 'running' | 'paused' | 'needs_review';
+									/** @enum {string} */
+									reason?: 'tool_limit' | 'context_limit' | 'interrupted' | 'stopped' | 'failed';
+									task: string;
+									omitted_observations?: number;
+									observations: {
+										id: string;
+										name: string;
+										result: string;
+									}[];
+									unresolved_calls: {
+										id: string;
+										name: string;
+									}[];
+								};
+								working_notebook?: string;
+							};
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'conversations.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				cid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Private project conversation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							conversation: {
+								/** @enum {number} */
+								schema_version: 1;
+								id: string;
+								title: string;
+								/** Format: date-time */
+								created_at: string;
+								/** Format: date-time */
+								updated_at: string;
+								messages: {
+									id: string;
+									/** @enum {string} */
+									role: 'user' | 'assistant';
+									metadata: {
+										/** Format: date-time */
+										created_at: string;
+									};
+									parts: (
+										| {
+												/** @enum {string} */
+												type: 'text';
+												text: string;
+												/** @enum {string} */
+												state?: 'streaming' | 'done';
+										  }
+										| {
+												/** @enum {string} */
+												type: 'dynamic-tool';
+												toolName: string;
+												toolCallId: string;
+												/** @enum {string} */
+												state:
+													| 'input-streaming'
+													| 'input-available'
+													| 'output-available'
+													| 'output-error';
+												input?: string;
+												output?: string;
+												errorText?: string;
+										  }
+										| {
+												/** @enum {string} */
+												type: 'data-permission';
+												/** Format: uuid */
+												id: string;
+												data: {
+													/** Format: uuid */
+													id: string;
+													tool_call_id: string;
+													kind: string;
+													action: string;
+													details: {
+														label: string;
+														value: string;
+													}[];
+													scope: {
+														key: string;
+														label: string;
+													};
+													can_remember: boolean;
+													/** @enum {string} */
+													status:
+														| 'open'
+														| 'allowed'
+														| 'remembered'
+														| 'denied'
+														| 'expired'
+														| 'cancelled'
+														| 'unavailable';
+													/** Format: date-time */
+													expires_at: string;
+												};
+										  }
+									)[];
+								}[];
+								pending?: {
+									id: string;
+									/** Format: date-time */
+									expires_at: string;
+									stop_requested?: boolean;
+								};
+								last_error?: string;
+								continuation?: {
+									/** @enum {string} */
+									status: 'running' | 'paused' | 'needs_review';
+									/** @enum {string} */
+									reason?: 'tool_limit' | 'context_limit' | 'interrupted' | 'stopped' | 'failed';
+									task: string;
+									omitted_observations?: number;
+									observations: {
+										id: string;
+										name: string;
+										result: string;
+									}[];
+									unresolved_calls: {
+										id: string;
+										name: string;
+									}[];
+								};
+								working_notebook?: string;
+							};
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'conversations.delete': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				cid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Conversation deleted */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							/** @enum {boolean} */
+							deleted: true;
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'conversations.update': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				cid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @description Notebook shown beside the conversation; null closes the pane. */
+					working_notebook: string | null;
+				};
+			};
+		};
+		responses: {
+			/** @description Private project conversation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							conversation: {
+								/** @enum {number} */
+								schema_version: 1;
+								id: string;
+								title: string;
+								/** Format: date-time */
+								created_at: string;
+								/** Format: date-time */
+								updated_at: string;
+								messages: {
+									id: string;
+									/** @enum {string} */
+									role: 'user' | 'assistant';
+									metadata: {
+										/** Format: date-time */
+										created_at: string;
+									};
+									parts: (
+										| {
+												/** @enum {string} */
+												type: 'text';
+												text: string;
+												/** @enum {string} */
+												state?: 'streaming' | 'done';
+										  }
+										| {
+												/** @enum {string} */
+												type: 'dynamic-tool';
+												toolName: string;
+												toolCallId: string;
+												/** @enum {string} */
+												state:
+													| 'input-streaming'
+													| 'input-available'
+													| 'output-available'
+													| 'output-error';
+												input?: string;
+												output?: string;
+												errorText?: string;
+										  }
+										| {
+												/** @enum {string} */
+												type: 'data-permission';
+												/** Format: uuid */
+												id: string;
+												data: {
+													/** Format: uuid */
+													id: string;
+													tool_call_id: string;
+													kind: string;
+													action: string;
+													details: {
+														label: string;
+														value: string;
+													}[];
+													scope: {
+														key: string;
+														label: string;
+													};
+													can_remember: boolean;
+													/** @enum {string} */
+													status:
+														| 'open'
+														| 'allowed'
+														| 'remembered'
+														| 'denied'
+														| 'expired'
+														| 'cancelled'
+														| 'unavailable';
+													/** Format: date-time */
+													expires_at: string;
+												};
+										  }
+									)[];
+								}[];
+								pending?: {
+									id: string;
+									/** Format: date-time */
+									expires_at: string;
+									stop_requested?: boolean;
+								};
+								last_error?: string;
+								continuation?: {
+									/** @enum {string} */
+									status: 'running' | 'paused' | 'needs_review';
+									/** @enum {string} */
+									reason?: 'tool_limit' | 'context_limit' | 'interrupted' | 'stopped' | 'failed';
+									task: string;
+									omitted_observations?: number;
+									observations: {
+										id: string;
+										name: string;
+										result: string;
+									}[];
+									unresolved_calls: {
+										id: string;
+										name: string;
+									}[];
+								};
+								working_notebook?: string;
+							};
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'conversations.send': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				cid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					content: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Private project conversation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							conversation: {
+								/** @enum {number} */
+								schema_version: 1;
+								id: string;
+								title: string;
+								/** Format: date-time */
+								created_at: string;
+								/** Format: date-time */
+								updated_at: string;
+								messages: {
+									id: string;
+									/** @enum {string} */
+									role: 'user' | 'assistant';
+									metadata: {
+										/** Format: date-time */
+										created_at: string;
+									};
+									parts: (
+										| {
+												/** @enum {string} */
+												type: 'text';
+												text: string;
+												/** @enum {string} */
+												state?: 'streaming' | 'done';
+										  }
+										| {
+												/** @enum {string} */
+												type: 'dynamic-tool';
+												toolName: string;
+												toolCallId: string;
+												/** @enum {string} */
+												state:
+													| 'input-streaming'
+													| 'input-available'
+													| 'output-available'
+													| 'output-error';
+												input?: string;
+												output?: string;
+												errorText?: string;
+										  }
+										| {
+												/** @enum {string} */
+												type: 'data-permission';
+												/** Format: uuid */
+												id: string;
+												data: {
+													/** Format: uuid */
+													id: string;
+													tool_call_id: string;
+													kind: string;
+													action: string;
+													details: {
+														label: string;
+														value: string;
+													}[];
+													scope: {
+														key: string;
+														label: string;
+													};
+													can_remember: boolean;
+													/** @enum {string} */
+													status:
+														| 'open'
+														| 'allowed'
+														| 'remembered'
+														| 'denied'
+														| 'expired'
+														| 'cancelled'
+														| 'unavailable';
+													/** Format: date-time */
+													expires_at: string;
+												};
+										  }
+									)[];
+								}[];
+								pending?: {
+									id: string;
+									/** Format: date-time */
+									expires_at: string;
+									stop_requested?: boolean;
+								};
+								last_error?: string;
+								continuation?: {
+									/** @enum {string} */
+									status: 'running' | 'paused' | 'needs_review';
+									/** @enum {string} */
+									reason?: 'tool_limit' | 'context_limit' | 'interrupted' | 'stopped' | 'failed';
+									task: string;
+									omitted_observations?: number;
+									observations: {
+										id: string;
+										name: string;
+										result: string;
+									}[];
+									unresolved_calls: {
+										id: string;
+										name: string;
+									}[];
+								};
+								working_notebook?: string;
+							};
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'conversations.resume': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				cid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					acknowledge_uncertain?: boolean;
+				};
+			};
+		};
+		responses: {
+			/** @description Private project conversation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							conversation: {
+								/** @enum {number} */
+								schema_version: 1;
+								id: string;
+								title: string;
+								/** Format: date-time */
+								created_at: string;
+								/** Format: date-time */
+								updated_at: string;
+								messages: {
+									id: string;
+									/** @enum {string} */
+									role: 'user' | 'assistant';
+									metadata: {
+										/** Format: date-time */
+										created_at: string;
+									};
+									parts: (
+										| {
+												/** @enum {string} */
+												type: 'text';
+												text: string;
+												/** @enum {string} */
+												state?: 'streaming' | 'done';
+										  }
+										| {
+												/** @enum {string} */
+												type: 'dynamic-tool';
+												toolName: string;
+												toolCallId: string;
+												/** @enum {string} */
+												state:
+													| 'input-streaming'
+													| 'input-available'
+													| 'output-available'
+													| 'output-error';
+												input?: string;
+												output?: string;
+												errorText?: string;
+										  }
+										| {
+												/** @enum {string} */
+												type: 'data-permission';
+												/** Format: uuid */
+												id: string;
+												data: {
+													/** Format: uuid */
+													id: string;
+													tool_call_id: string;
+													kind: string;
+													action: string;
+													details: {
+														label: string;
+														value: string;
+													}[];
+													scope: {
+														key: string;
+														label: string;
+													};
+													can_remember: boolean;
+													/** @enum {string} */
+													status:
+														| 'open'
+														| 'allowed'
+														| 'remembered'
+														| 'denied'
+														| 'expired'
+														| 'cancelled'
+														| 'unavailable';
+													/** Format: date-time */
+													expires_at: string;
+												};
+										  }
+									)[];
+								}[];
+								pending?: {
+									id: string;
+									/** Format: date-time */
+									expires_at: string;
+									stop_requested?: boolean;
+								};
+								last_error?: string;
+								continuation?: {
+									/** @enum {string} */
+									status: 'running' | 'paused' | 'needs_review';
+									/** @enum {string} */
+									reason?: 'tool_limit' | 'context_limit' | 'interrupted' | 'stopped' | 'failed';
+									task: string;
+									omitted_observations?: number;
+									observations: {
+										id: string;
+										name: string;
+										result: string;
+									}[];
+									unresolved_calls: {
+										id: string;
+										name: string;
+									}[];
+								};
+								working_notebook?: string;
+							};
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'conversations.reconnect': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				cid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description UI message stream for the running reply */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'text/event-stream': string;
+				};
+			};
+			/** @description No reply is streaming on this instance */
+			204: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content?: never;
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'conversations.stream': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				cid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json':
+					| {
+							content: string;
+							/** @enum {boolean} */
+							resume?: false;
+					  }
+					| {
+							/** @enum {boolean} */
+							resume: true;
+							acknowledge_uncertain?: boolean;
+					  };
+			};
+		};
+		responses: {
+			/** @description UI message stream for the assistant reply */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'text/event-stream': string;
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'conversations.stop': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				cid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Stop request outcome */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							stopped: boolean;
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'conversations.dismiss': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				cid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Private project conversation */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							conversation: {
+								/** @enum {number} */
+								schema_version: 1;
+								id: string;
+								title: string;
+								/** Format: date-time */
+								created_at: string;
+								/** Format: date-time */
+								updated_at: string;
+								messages: {
+									id: string;
+									/** @enum {string} */
+									role: 'user' | 'assistant';
+									metadata: {
+										/** Format: date-time */
+										created_at: string;
+									};
+									parts: (
+										| {
+												/** @enum {string} */
+												type: 'text';
+												text: string;
+												/** @enum {string} */
+												state?: 'streaming' | 'done';
+										  }
+										| {
+												/** @enum {string} */
+												type: 'dynamic-tool';
+												toolName: string;
+												toolCallId: string;
+												/** @enum {string} */
+												state:
+													| 'input-streaming'
+													| 'input-available'
+													| 'output-available'
+													| 'output-error';
+												input?: string;
+												output?: string;
+												errorText?: string;
+										  }
+										| {
+												/** @enum {string} */
+												type: 'data-permission';
+												/** Format: uuid */
+												id: string;
+												data: {
+													/** Format: uuid */
+													id: string;
+													tool_call_id: string;
+													kind: string;
+													action: string;
+													details: {
+														label: string;
+														value: string;
+													}[];
+													scope: {
+														key: string;
+														label: string;
+													};
+													can_remember: boolean;
+													/** @enum {string} */
+													status:
+														| 'open'
+														| 'allowed'
+														| 'remembered'
+														| 'denied'
+														| 'expired'
+														| 'cancelled'
+														| 'unavailable';
+													/** Format: date-time */
+													expires_at: string;
+												};
+										  }
+									)[];
+								}[];
+								pending?: {
+									id: string;
+									/** Format: date-time */
+									expires_at: string;
+									stop_requested?: boolean;
+								};
+								last_error?: string;
+								continuation?: {
+									/** @enum {string} */
+									status: 'running' | 'paused' | 'needs_review';
+									/** @enum {string} */
+									reason?: 'tool_limit' | 'context_limit' | 'interrupted' | 'stopped' | 'failed';
+									task: string;
+									omitted_observations?: number;
+									observations: {
+										id: string;
+										name: string;
+										result: string;
+									}[];
+									unresolved_calls: {
+										id: string;
+										name: string;
+									}[];
+								};
+								working_notebook?: string;
+							};
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'conversations.permissions.decide': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				cid: string;
+				rid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					/** @enum {string} */
+					decision: 'allow' | 'always' | 'deny';
+				};
+			};
+		};
+		responses: {
+			/** @description Permission decision outcome */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							accepted: boolean;
+							/** @enum {string} */
+							reason?: 'closed';
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'chatPermissions.list': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Remembered permissions */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							grants: {
+								/** Format: uuid */
+								id: string;
+								kind: string;
+								scope_key: string;
+								scope_label: string;
+								action: string;
+								/** Format: date-time */
+								created_at: string;
+							}[];
+						};
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'chatPermissions.revoke': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				grant_id: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Permission removal outcome */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							removed: boolean;
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
 					[name: string]: unknown;
 				};
 				content: {

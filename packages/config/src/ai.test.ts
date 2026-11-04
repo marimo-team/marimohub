@@ -70,6 +70,30 @@ describe('makeAi', () => {
 		);
 	});
 
+	it('exposes a chat model with default budgets and honours MARIMOHUB_AI_CHAT=off', () => {
+		const on = makeAi(aiEnv).ai!;
+		expect(on.languageModel).toBeDefined();
+		expect(on.chat).toEqual({ taskTimeoutSeconds: 300, permissionTimeoutSeconds: 300 });
+		const tuned = makeAi({
+			...aiEnv,
+			MARIMOHUB_AI_CHAT_TASK_TIMEOUT_SECONDS: '600',
+			MARIMOHUB_AI_CHAT_PERMISSION_TIMEOUT_SECONDS: '45',
+		}).ai!;
+		expect(tuned.chat).toEqual({ taskTimeoutSeconds: 600, permissionTimeoutSeconds: 45 });
+		const off = makeAi({ ...aiEnv, MARIMOHUB_AI_CHAT: 'off' }).ai!;
+		expect(off.chat).toBeUndefined();
+		expect(off.languageModel).toBeDefined();
+	});
+
+	it.each([
+		['MARIMOHUB_AI_CHAT_TASK_TIMEOUT_SECONDS', '10'],
+		['MARIMOHUB_AI_CHAT_PERMISSION_TIMEOUT_SECONDS', '901'],
+		['MARIMOHUB_AI_CHAT', 'maybe'],
+	])('rejects an invalid %s', (variable, value) => {
+		const error = getConfigError(() => makeAi({ ...aiEnv, [variable]: value }));
+		expect(error.opts.variable).toBe(variable);
+	});
+
 	it('is disabled when the backend is unset or none', () => {
 		expect(makeAi({})).toEqual({});
 		expect(makeAi({ MARIMOHUB_AI_BACKEND: 'none' })).toEqual({});

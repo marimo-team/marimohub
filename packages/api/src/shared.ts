@@ -1650,6 +1650,8 @@ export const CapabilitiesResponseSchema = z
 			semantic: z.boolean(),
 			kinds: z.array(extensibleResponseEnum(SEARCH_KINDS, 'notebook')),
 		}),
+		/** Project chat: a managed model plus consented hub tools. */
+		chat: z.object({ available: z.boolean() }),
 		/** Read-only data browsing over integrations; `preview` gates row preview. */
 		data_browser: z.object({
 			available: z.boolean(),

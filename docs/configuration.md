@@ -618,6 +618,9 @@ Uses Bedrock Converse for Claude chat and SQL generation, and the OpenAI-compati
 | `MARIMOHUB_AI_MAX_TOKENS` | Optional `[ai] max_tokens` written into the injected notebook config. | — | — | `4096` |
 | `MARIMOHUB_AI_RULES` | Optional `[ai] rules` (custom assistant instructions). | — | — | `Prefer polars over pandas.` |
 | `MARIMOHUB_AI_TOKEN_TTL_SECONDS` | Per-session token lifetime in seconds. | — | `3600` | — |
+| `MARIMOHUB_AI_CHAT` | Project chat in the hub UI, MCP, and API: a private per-user assistant that uses the hub tools with per-call consent for changes. `off` keeps the notebook assistant proxy only. | — | `on` | — |
+| `MARIMOHUB_AI_CHAT_TASK_TIMEOUT_SECONDS` | Wall-clock budget for one chat reply, including tool calls (30–900). | — | `300` | — |
+| `MARIMOHUB_AI_CHAT_PERMISSION_TIMEOUT_SECONDS` | How long a chat consent card waits for an answer before the tool call is skipped (30–900). | — | `300` | — |
 
 ### OpenAI-compatible upstream
 
@@ -635,6 +638,9 @@ Fronts any OpenAI-compatible upstream (OpenAI, OpenRouter, LiteLLM, or Anthropic
 | `MARIMOHUB_AI_MAX_TOKENS` | Optional `[ai] max_tokens` written into the injected notebook config. | — | — | `4096` |
 | `MARIMOHUB_AI_RULES` | Optional `[ai] rules` (custom assistant instructions). | — | — | `Prefer polars over pandas.` |
 | `MARIMOHUB_AI_TOKEN_TTL_SECONDS` | Per-session token lifetime in seconds. | — | `3600` | — |
+| `MARIMOHUB_AI_CHAT` | Project chat in the hub UI, MCP, and API: a private per-user assistant that uses the hub tools with per-call consent for changes. `off` keeps the notebook assistant proxy only. | — | `on` | — |
+| `MARIMOHUB_AI_CHAT_TASK_TIMEOUT_SECONDS` | Wall-clock budget for one chat reply, including tool calls (30–900). | — | `300` | — |
+| `MARIMOHUB_AI_CHAT_PERMISSION_TIMEOUT_SECONDS` | How long a chat consent card waits for an answer before the tool call is skipped (30–900). | — | `300` | — |
 
 ## Integration secret sources
 

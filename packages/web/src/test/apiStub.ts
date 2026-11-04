@@ -46,6 +46,7 @@ const BASE_CAPABILITIES: Capabilities = {
 	},
 	mcp: { available: false, manual_tokens: false, url: null },
 	search: { available: false, semantic: false, kinds: [] },
+	chat: { available: false },
 	data_browser: { available: false, preview: false, query: false, ai_query: false },
 	viewer_mode: 'static',
 	viewer_session_modes: [],
