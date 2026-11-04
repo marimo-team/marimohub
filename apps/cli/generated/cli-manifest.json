@@ -418,6 +418,58 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "chat-permissions.list",
+			"command": ["chat-permissions", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/chat-permissions",
+			"summary": "List remembered tool permissions",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "chat-permissions.revoke",
+			"command": ["chat-permissions", "revoke"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/chat-permissions/{grant_id}",
+			"summary": "Forget a remembered tool permission",
+			"parameters": [
+				{
+					"name": "grant_id",
+					"cli_name": "grant-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "completeObjectUpload",
 			"command": ["completeObjectUpload"],
 			"method": "POST",
@@ -481,6 +533,268 @@
 				{
 					"name": "uploadId",
 					"cli_name": "upload-id",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "conversations.create",
+			"command": ["conversations", "create"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/conversations",
+			"summary": "Start a private conversation",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "title",
+						"cli_name": "title",
+						"required": false,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "conversations.delete",
+			"command": ["conversations", "delete"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/conversations/{cid}",
+			"summary": "Delete a conversation",
+			"parameters": [
+				{
+					"name": "cid",
+					"cli_name": "cid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "conversations.dismiss",
+			"command": ["conversations", "dismiss"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/conversations/{cid}/continuation/dismiss",
+			"summary": "Discard the saved task without continuing it",
+			"parameters": [
+				{
+					"name": "cid",
+					"cli_name": "cid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "conversations.get",
+			"command": ["conversations", "get"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/conversations/{cid}",
+			"summary": "Read a conversation",
+			"parameters": [
+				{
+					"name": "cid",
+					"cli_name": "cid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "conversations.list",
+			"command": ["conversations", "list"],
+			"method": "GET",
+			"path": "/api/v1/projects/{pid}/conversations",
+			"summary": "List your conversations in a project",
+			"parameters": [
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "conversations.resume",
+			"command": ["conversations", "resume"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/conversations/{cid}/resume",
+			"summary": "Continue an interrupted task and wait for the reply",
+			"parameters": [
+				{
+					"name": "cid",
+					"cli_name": "cid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "acknowledge_uncertain",
+						"cli_name": "acknowledge-uncertain",
+						"required": false,
+						"value_type": "boolean",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "conversations.send",
+			"command": ["conversations", "send"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/conversations/{cid}/messages",
+			"summary": "Send a message and wait for the reply",
+			"description": "Runs one assistant turn and returns the saved conversation. Mutating tools that need consent are skipped on this endpoint; use the web UI to approve them.",
+			"parameters": [
+				{
+					"name": "cid",
+					"cli_name": "cid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "content",
+						"cli_name": "content",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "conversations.stop",
+			"command": ["conversations", "stop"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/conversations/{cid}/stop",
+			"summary": "Stop the running reply",
+			"description": "Stops the turn running for this conversation on any instance. Completed tool results stay saved and the task can be continued. Returns stopped=false when no turn is running.",
+			"parameters": [
+				{
+					"name": "cid",
+					"cli_name": "cid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
 					"in": "path",
 					"required": true,
 					"value_type": "string",

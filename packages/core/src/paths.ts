@@ -411,5 +411,18 @@ export const paths = {
 	orgIntegrationsPrefix: '_system/integrations/',
 	orgIntegrationNameClaim: (name: string) =>
 		`_system/integrations/_names/${encodeURIComponent(name)}.json`,
+	/**
+	 * Private per-user project chat. Every key embeds the encoded owner id, so a
+	 * conversation can only be addressed through its owner; the whole tree is
+	 * deleted with the project prefix.
+	 */
+	conversationsForOwner: (projectId: ProjectId, owner: UserId) =>
+		`projects/${projectId}/conversations/${encodeURIComponent(owner)}/`,
+	conversationIndex: (projectId: ProjectId, owner: UserId) =>
+		`projects/${projectId}/conversations/${encodeURIComponent(owner)}/_index.json`,
+	conversation: (projectId: ProjectId, owner: UserId, conversationId: string) =>
+		`projects/${projectId}/conversations/${encodeURIComponent(owner)}/${conversationId}.json`,
+	chatPermissions: (projectId: ProjectId, owner: UserId) =>
+		`projects/${projectId}/chat-permissions/${encodeURIComponent(owner)}.json`,
 	project: projectPaths,
 } as const;

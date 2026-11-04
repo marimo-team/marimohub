@@ -686,6 +686,136 @@ paths:
       responses:
         '204':
           description: Stored.
+  /projects/{pid}/conversations/{uid}/{cid}.json:
+    summary: 'Private per-user project chat conversation: messages as UI message
+      parts, the turn claim, and the saved task.'
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: uid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: cid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: ConversationService
+    get:
+      operationId: read_projects_conversations_json
+      summary: Read ProjectConversation
+      tags:
+        - project
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectConversation'
+    put:
+      operationId: write_projects_conversations_json
+      summary: Write ProjectConversation
+      tags:
+        - project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectConversation'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/conversations/{uid}/_index.json:
+    summary: Per-user list of conversation ids in a project.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: uid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: ConversationService
+    get:
+      operationId: read_projects_conversations_index_json
+      summary: Read ProjectConversationIndex
+      tags:
+        - project
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectConversationIndex'
+    put:
+      operationId: write_projects_conversations_index_json
+      summary: Write ProjectConversationIndex
+      tags:
+        - project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectConversationIndex'
+      responses:
+        '204':
+          description: Stored.
+  /projects/{pid}/chat-permissions/{uid}.json:
+    summary: Remembered "always allow" chat tool consents, private to the user and
+      project.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: uid
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: ChatPermissionStore
+    get:
+      operationId: read_projects_chat_permissions_json
+      summary: Read ChatPermissionRecord
+      tags:
+        - project
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatPermissionRecord'
+    put:
+      operationId: write_projects_chat_permissions_json
+      summary: Write ChatPermissionRecord
+      tags:
+        - project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatPermissionRecord'
+      responses:
+        '204':
+          description: Stored.
   /projects/{pid}/notebooks/{nid}/meta.json:
     summary: Notebook metadata record.
     parameters:
@@ -4102,6 +4232,369 @@ components:
         - project_id
         - destinations
         - updated_at
+    ProjectConversation:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        id:
+          type: string
+          pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+        title:
+          type: string
+          maxLength: 120
+        created_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z))$
+        updated_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z))$
+        messages:
+          maxItems: 80
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                minLength: 1
+                maxLength: 80
+              role:
+                type: string
+                enum:
+                  - user
+                  - assistant
+              metadata:
+                type: object
+                properties:
+                  created_at:
+                    type: string
+                    format: date-time
+                    pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z))$
+                required:
+                  - created_at
+              parts:
+                maxItems: 80
+                type: array
+                items:
+                  oneOf:
+                    - type: object
+                      properties:
+                        type:
+                          type: string
+                          const: text
+                        text:
+                          type: string
+                          maxLength: 24000
+                        state:
+                          type: string
+                          enum:
+                            - streaming
+                            - done
+                      required:
+                        - type
+                        - text
+                    - type: object
+                      properties:
+                        type:
+                          type: string
+                          const: dynamic-tool
+                        toolName:
+                          type: string
+                          maxLength: 80
+                        toolCallId:
+                          type: string
+                          maxLength: 128
+                        state:
+                          type: string
+                          enum:
+                            - input-streaming
+                            - input-available
+                            - output-available
+                            - output-error
+                        input:
+                          type: string
+                          maxLength: 2000
+                        output:
+                          type: string
+                          maxLength: 2000
+                        errorText:
+                          type: string
+                          maxLength: 2000
+                      required:
+                        - type
+                        - toolName
+                        - toolCallId
+                        - state
+                    - type: object
+                      properties:
+                        type:
+                          type: string
+                          const: data-permission
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        data:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            tool_call_id:
+                              type: string
+                              maxLength: 128
+                            kind:
+                              type: string
+                              maxLength: 40
+                            action:
+                              type: string
+                              maxLength: 120
+                            details:
+                              maxItems: 8
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  label:
+                                    type: string
+                                    maxLength: 40
+                                  value:
+                                    type: string
+                                    maxLength: 20000
+                                required:
+                                  - label
+                                  - value
+                            scope:
+                              type: object
+                              properties:
+                                key:
+                                  type: string
+                                  maxLength: 200
+                                label:
+                                  type: string
+                                  maxLength: 120
+                              required:
+                                - key
+                                - label
+                            can_remember:
+                              type: boolean
+                            status:
+                              type: string
+                              enum:
+                                - open
+                                - allowed
+                                - remembered
+                                - denied
+                                - expired
+                                - cancelled
+                                - unavailable
+                            expires_at:
+                              type: string
+                              format: date-time
+                              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z))$
+                          required:
+                            - id
+                            - tool_call_id
+                            - kind
+                            - action
+                            - details
+                            - scope
+                            - can_remember
+                            - status
+                            - expires_at
+                      required:
+                        - type
+                        - id
+                        - data
+            required:
+              - id
+              - role
+              - metadata
+              - parts
+        pending:
+          type: object
+          properties:
+            id:
+              type: string
+              pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+            expires_at:
+              type: string
+              format: date-time
+              pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z))$
+            stop_requested:
+              type: boolean
+          required:
+            - id
+            - expires_at
+        last_error:
+          type: string
+          maxLength: 400
+        continuation:
+          type: object
+          properties:
+            status:
+              type: string
+              enum:
+                - running
+                - paused
+                - needs_review
+            reason:
+              type: string
+              enum:
+                - tool_limit
+                - context_limit
+                - interrupted
+                - stopped
+                - failed
+            task:
+              type: string
+              maxLength: 8000
+            omitted_observations:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+            observations:
+              maxItems: 16
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    minLength: 1
+                    maxLength: 155
+                  name:
+                    type: string
+                    minLength: 1
+                    maxLength: 128
+                  result:
+                    type: string
+                    maxLength: 4000
+                required:
+                  - id
+                  - name
+                  - result
+            unresolved_calls:
+              maxItems: 48
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    maxLength: 155
+                  name:
+                    type: string
+                    maxLength: 128
+                required:
+                  - id
+                  - name
+          required:
+            - status
+            - task
+            - observations
+            - unresolved_calls
+        working_notebook:
+          type: string
+          pattern: ^nb-[0-9a-z]{16}$
+        permission_decisions:
+          maxItems: 24
+          type: array
+          items:
+            type: object
+            properties:
+              turn_id:
+                type: string
+                pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+              request_id:
+                type: string
+                format: uuid
+                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+              decision:
+                type: string
+                enum:
+                  - allow
+                  - always
+                  - deny
+            required:
+              - turn_id
+              - request_id
+              - decision
+        deleted_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z))$
+      required:
+        - schema_version
+        - id
+        - title
+        - created_at
+        - updated_at
+        - messages
+    ProjectConversationIndex:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        ids:
+          maxItems: 50
+          type: array
+          items:
+            type: string
+            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+      required:
+        - schema_version
+        - ids
+    ChatPermissionRecord:
+      type: object
+      properties:
+        schema_version:
+          type: number
+          const: 1
+        grants:
+          maxItems: 200
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+              kind:
+                type: string
+                minLength: 1
+                maxLength: 40
+              scope_key:
+                type: string
+                minLength: 1
+                maxLength: 200
+              scope_label:
+                type: string
+                maxLength: 120
+              action:
+                type: string
+                maxLength: 120
+              created_at:
+                type: string
+                format: date-time
+                pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z))$
+            required:
+              - id
+              - kind
+              - scope_key
+              - scope_label
+              - action
+              - created_at
+      required:
+        - schema_version
+        - grants
     NotebookMeta:
       type: object
       properties:

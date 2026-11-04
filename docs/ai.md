@@ -87,6 +87,47 @@ value to reduce the revocation window. AI access ends when the token expires, ev
 if the notebook session remains active.
 :::
 
+## Project chat
+
+With managed AI configured, every project gets a **Chat** page: a private, per-user
+assistant that works through the hub's own tools. Conversations belong to the person
+who started them; nobody else can read or change them, and service accounts cannot
+use chat.
+
+The assistant has the same tools as the [MCP server](./mcp.md), under the caller's
+project permissions. Read-only tools run freely. Tools that change something show a
+consent card: allow once, always allow that kind of action in this project, or refuse.
+Consent cards show the code or source the call would submit. Irreversible actions
+(`update_notebook`, `sync_notebook_source`, `delete_notebook`, `stop_session`) and
+`execute_code` always ask; the other actions can be remembered. Remembered grants are
+managed under **Permissions** on the chat page or with the `project_conversations`
+MCP tool.
+
+Replies keep running if the browser disconnects: a reload re-attaches to the live
+stream on the same instance and otherwise shows the saved progress. Stop requests and
+consent decisions are written to the conversation record, so they reach the instance
+running the turn without session affinity. A stopped or interrupted reply leaves a
+saved task to continue or dismiss.
+
+Earlier turns reach the model as text only; it re-reads what it needs rather than
+replaying old tool results. Stored tool inputs and results are redacted previews:
+credential-like fields and large payloads (code, query results, stdout) are omitted,
+URLs and bearer tokens masked. The observations a saved task keeps for resuming hold
+the payloads but mask credential-like fields and inline secrets. Code or source
+longer than a consent card can show (20,000 characters) is refused rather than
+approved unseen. Any call opens in an inspector that links the notebooks and jobs it
+touched.
+
+| Variable                                       | Default | Description                                                         |
+| ---------------------------------------------- | ------- | ------------------------------------------------------------------- |
+| `MARIMOHUB_AI_CHAT`                            | `on`    | `off` disables project chat; the notebook assistant proxy stays on. |
+| `MARIMOHUB_AI_CHAT_TASK_TIMEOUT_SECONDS`       | `300`   | Wall-clock budget for one reply, including tool calls (30–900).     |
+| `MARIMOHUB_AI_CHAT_PERMISSION_TIMEOUT_SECONDS` | `300`   | How long a consent card waits before the call is skipped (30–900).  |
+
+Chat needs a provider with tool calling. On Bedrock, Claude uses Converse; everything
+else uses native tool calling. The Workers example wires no chat model, so it hides the
+Chat page.
+
 ## Proxy contract
 
 The proxy exposes the OpenAI endpoints marimo needs. Each requires a bearer

@@ -155,6 +155,20 @@ describe('paths', () => {
 		expect(key.slice(paths.sandboxDiagnosticLeasesPrefix.length)).not.toContain('/');
 	});
 
+	it('conversation paths encode the owner id so it cannot escape its prefix', () => {
+		const owner = '../../evil@example.com' as UserId;
+		const prefix = paths.conversationsForOwner(pid, owner);
+		expect(prefix.startsWith(`projects/${pid}/conversations/`)).toBe(true);
+		expect(prefix.slice(`projects/${pid}/conversations/`.length).slice(0, -1)).not.toContain('/');
+		expect(paths.conversation(pid, owner, '01HXYZ9ABCDEFGHJKMNPQRSTVW')).toBe(
+			`${prefix}01HXYZ9ABCDEFGHJKMNPQRSTVW.json`,
+		);
+		expect(paths.conversationIndex(pid, owner)).toBe(`${prefix}_index.json`);
+		const grants = paths.chatPermissions(pid, owner);
+		expect(grants.startsWith(`projects/${pid}/chat-permissions/`)).toBe(true);
+		expect(grants.slice(`projects/${pid}/chat-permissions/`.length)).not.toContain('/');
+	});
+
 	it('composability — intermediate objects are reusable', () => {
 		const proj = paths.project(pid);
 		const nb1 = proj.notebook('nb_01AAAA00000000000000000000' as NotebookId);

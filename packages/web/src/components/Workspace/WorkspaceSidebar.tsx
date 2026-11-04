@@ -2,7 +2,15 @@ import { SEARCH_ROUTE, searchPath } from '@/lib/workspaceSearch';
 import { isAppleKeyboard } from '@/lib/keyboard';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from 'react-router-dom';
-import { CalendarClock, ArrowLeft, Database, Notebook, Search, Shield } from 'lucide-react';
+import {
+	CalendarClock,
+	ArrowLeft,
+	Database,
+	MessageSquare,
+	Notebook,
+	Search,
+	Shield,
+} from 'lucide-react';
 import { projectQueryOptions, useProjectsQuery } from '@/api/hooks';
 import { useSearchAccess } from '@/hooks/useSearchAccess';
 import { ProjectPicker } from './ProjectPicker';
@@ -76,6 +84,15 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void }) {
 						icon={Notebook}
 						active={section === 'notebooks'}
 					/>
+					{capabilities.data?.chat?.available ? (
+						<SidebarLink
+							{...linkProps}
+							label="Chat"
+							to={`${projectPath}/chat`}
+							icon={MessageSquare}
+							active={section === 'chat'}
+						/>
+					) : null}
 					{capabilities.data?.data_browser?.available &&
 					canEditProject(project?.your_role ?? null) ? (
 						<SidebarLink

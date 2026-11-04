@@ -29,6 +29,7 @@ import { AdminLayout } from '@/components/Admin/AdminLayout';
 import { appBasePath, withBasePath } from '@/lib/basePath';
 
 const SearchPage = lazy(() => import('@/components/Search/SearchPage'));
+const ChatPage = lazy(() => import('@/components/Chat/ChatPage'));
 const AuditLogPage = lazy(() => import('@/components/AuditLog/AuditLogPage'));
 const DataBrowserPage = lazy(() => import('@/components/DataBrowser/DataBrowserPage'));
 const AdminUsersPage = lazy(() => import('@/components/Admin/AdminUsersPage'));
@@ -162,6 +163,7 @@ function StandardLayout() {
 							<Route path="members" element={<ProjectSettingsPage section="members" />} />
 							<Route path="integrations" element={<ProjectSettingsPage section="integrations" />} />
 							<Route path="alerts" element={<ProjectAlertsPage />} />
+							<Route path="chat" element={<ChatPage />} />
 							<Route path="jobs" element={<ProjectJobsPage />} />
 							<Route path="notebooks/:nid/jobs" element={<JobsPage />} />
 							<Route path="data" element={<DataBrowserPage />} />

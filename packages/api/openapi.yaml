@@ -10,6 +10,8 @@ tags:
     description: Project management
   - name: Alerts
     description: Project alert destinations
+  - name: Conversations
+    description: Private project chat with tool consent
   - name: Notebooks
     description: Notebook CRUD and versioning
   - name: Sessions
@@ -383,6 +385,13 @@ components:
             - available
             - semantic
             - kinds
+        chat:
+          type: object
+          properties:
+            available:
+              type: boolean
+          required:
+            - available
         data_browser:
           type: object
           properties:
@@ -561,6 +570,7 @@ components:
         - jobs
         - mcp
         - search
+        - chat
         - data_browser
         - viewer_mode
         - viewer_session_modes
@@ -14819,6 +14829,2876 @@ paths:
                 example: '5'
               required: true
               description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/conversations:
+    get:
+      operationId: conversations.list
+      tags: &a5
+        - Conversations
+      summary: List your conversations in a project
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+      responses:
+        '200':
+          description: Private project conversations, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      conversations:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            schema_version:
+                              type: number
+                              enum:
+                                - 1
+                            id:
+                              type: string
+                              pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+                            title:
+                              type: string
+                              maxLength: 120
+                            created_at:
+                              type: string
+                              format: date-time
+                            updated_at:
+                              type: string
+                              format: date-time
+                            pending:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                  pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+                                expires_at:
+                                  type: string
+                                  format: date-time
+                                stop_requested:
+                                  type: boolean
+                              required:
+                                - id
+                                - expires_at
+                            last_error:
+                              type: string
+                              maxLength: 400
+                            working_notebook:
+                              type: string
+                              pattern: ^nb-[0-9a-z]{16}$
+                            message_count:
+                              type: integer
+                              minimum: 0
+                            continuation:
+                              type: object
+                              properties:
+                                status:
+                                  type: string
+                                  enum:
+                                    - running
+                                    - paused
+                                    - needs_review
+                                reason:
+                                  type: string
+                                  enum:
+                                    - tool_limit
+                                    - context_limit
+                                    - interrupted
+                                    - stopped
+                                    - failed
+                              required:
+                                - status
+                          required:
+                            - schema_version
+                            - id
+                            - title
+                            - created_at
+                            - updated_at
+                            - message_count
+                    required:
+                      - conversations
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      operationId: conversations.create
+      tags: *a5
+      summary: Start a private conversation
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+      responses:
+        '200':
+          description: Private project conversation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      conversation:
+                        type: object
+                        properties:
+                          schema_version:
+                            type: number
+                            enum:
+                              - 1
+                          id:
+                            type: string
+                            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+                          title:
+                            type: string
+                            maxLength: 120
+                          created_at:
+                            type: string
+                            format: date-time
+                          updated_at:
+                            type: string
+                            format: date-time
+                          messages:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 80
+                                role:
+                                  type: string
+                                  enum:
+                                    - user
+                                    - assistant
+                                metadata:
+                                  type: object
+                                  properties:
+                                    created_at:
+                                      type: string
+                                      format: date-time
+                                  required:
+                                    - created_at
+                                parts:
+                                  type: array
+                                  items:
+                                    oneOf:
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - text
+                                          text:
+                                            type: string
+                                            maxLength: 24000
+                                          state:
+                                            type: string
+                                            enum:
+                                              - streaming
+                                              - done
+                                        required:
+                                          - type
+                                          - text
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - dynamic-tool
+                                          toolName:
+                                            type: string
+                                            maxLength: 80
+                                          toolCallId:
+                                            type: string
+                                            maxLength: 128
+                                          state:
+                                            type: string
+                                            enum:
+                                              - input-streaming
+                                              - input-available
+                                              - output-available
+                                              - output-error
+                                          input:
+                                            type: string
+                                            maxLength: 2000
+                                          output:
+                                            type: string
+                                            maxLength: 2000
+                                          errorText:
+                                            type: string
+                                            maxLength: 2000
+                                        required:
+                                          - type
+                                          - toolName
+                                          - toolCallId
+                                          - state
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - data-permission
+                                          id:
+                                            type: string
+                                            format: uuid
+                                          data:
+                                            type: object
+                                            properties:
+                                              id:
+                                                type: string
+                                                format: uuid
+                                              tool_call_id:
+                                                type: string
+                                                maxLength: 128
+                                              kind:
+                                                type: string
+                                                maxLength: 40
+                                              action:
+                                                type: string
+                                                maxLength: 120
+                                              details:
+                                                type: array
+                                                items:
+                                                  type: object
+                                                  properties:
+                                                    label:
+                                                      type: string
+                                                      maxLength: 40
+                                                    value:
+                                                      type: string
+                                                      maxLength: 20000
+                                                  required:
+                                                    - label
+                                                    - value
+                                                maxItems: 8
+                                              scope:
+                                                type: object
+                                                properties:
+                                                  key:
+                                                    type: string
+                                                    maxLength: 200
+                                                  label:
+                                                    type: string
+                                                    maxLength: 120
+                                                required:
+                                                  - key
+                                                  - label
+                                              can_remember:
+                                                type: boolean
+                                              status:
+                                                type: string
+                                                enum:
+                                                  - open
+                                                  - allowed
+                                                  - remembered
+                                                  - denied
+                                                  - expired
+                                                  - cancelled
+                                                  - unavailable
+                                              expires_at:
+                                                type: string
+                                                format: date-time
+                                            required:
+                                              - id
+                                              - tool_call_id
+                                              - kind
+                                              - action
+                                              - details
+                                              - scope
+                                              - can_remember
+                                              - status
+                                              - expires_at
+                                        required:
+                                          - type
+                                          - id
+                                          - data
+                                  maxItems: 80
+                              required:
+                                - id
+                                - role
+                                - metadata
+                                - parts
+                            maxItems: 80
+                          pending:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                                pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+                              expires_at:
+                                type: string
+                                format: date-time
+                              stop_requested:
+                                type: boolean
+                            required:
+                              - id
+                              - expires_at
+                          last_error:
+                            type: string
+                            maxLength: 400
+                          continuation:
+                            type: object
+                            properties:
+                              status:
+                                type: string
+                                enum:
+                                  - running
+                                  - paused
+                                  - needs_review
+                              reason:
+                                type: string
+                                enum:
+                                  - tool_limit
+                                  - context_limit
+                                  - interrupted
+                                  - stopped
+                                  - failed
+                              task:
+                                type: string
+                                maxLength: 8000
+                              omitted_observations:
+                                type: integer
+                                minimum: 0
+                              observations:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 155
+                                    name:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 128
+                                    result:
+                                      type: string
+                                      maxLength: 4000
+                                  required:
+                                    - id
+                                    - name
+                                    - result
+                                maxItems: 16
+                              unresolved_calls:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                      maxLength: 155
+                                    name:
+                                      type: string
+                                      maxLength: 128
+                                  required:
+                                    - id
+                                    - name
+                                maxItems: 48
+                            required:
+                              - status
+                              - task
+                              - observations
+                              - unresolved_calls
+                          working_notebook:
+                            type: string
+                            pattern: ^nb-[0-9a-z]{16}$
+                        required:
+                          - schema_version
+                          - id
+                          - title
+                          - created_at
+                          - updated_at
+                          - messages
+                    required:
+                      - conversation
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/conversations/{cid}:
+    get:
+      operationId: conversations.get
+      tags: *a5
+      summary: Read a conversation
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          required: true
+          name: cid
+          in: path
+      responses:
+        '200':
+          description: Private project conversation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      conversation:
+                        type: object
+                        properties:
+                          schema_version:
+                            type: number
+                            enum:
+                              - 1
+                          id:
+                            type: string
+                            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+                          title:
+                            type: string
+                            maxLength: 120
+                          created_at:
+                            type: string
+                            format: date-time
+                          updated_at:
+                            type: string
+                            format: date-time
+                          messages:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 80
+                                role:
+                                  type: string
+                                  enum:
+                                    - user
+                                    - assistant
+                                metadata:
+                                  type: object
+                                  properties:
+                                    created_at:
+                                      type: string
+                                      format: date-time
+                                  required:
+                                    - created_at
+                                parts:
+                                  type: array
+                                  items:
+                                    oneOf:
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - text
+                                          text:
+                                            type: string
+                                            maxLength: 24000
+                                          state:
+                                            type: string
+                                            enum:
+                                              - streaming
+                                              - done
+                                        required:
+                                          - type
+                                          - text
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - dynamic-tool
+                                          toolName:
+                                            type: string
+                                            maxLength: 80
+                                          toolCallId:
+                                            type: string
+                                            maxLength: 128
+                                          state:
+                                            type: string
+                                            enum:
+                                              - input-streaming
+                                              - input-available
+                                              - output-available
+                                              - output-error
+                                          input:
+                                            type: string
+                                            maxLength: 2000
+                                          output:
+                                            type: string
+                                            maxLength: 2000
+                                          errorText:
+                                            type: string
+                                            maxLength: 2000
+                                        required:
+                                          - type
+                                          - toolName
+                                          - toolCallId
+                                          - state
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - data-permission
+                                          id:
+                                            type: string
+                                            format: uuid
+                                          data:
+                                            type: object
+                                            properties:
+                                              id:
+                                                type: string
+                                                format: uuid
+                                              tool_call_id:
+                                                type: string
+                                                maxLength: 128
+                                              kind:
+                                                type: string
+                                                maxLength: 40
+                                              action:
+                                                type: string
+                                                maxLength: 120
+                                              details:
+                                                type: array
+                                                items:
+                                                  type: object
+                                                  properties:
+                                                    label:
+                                                      type: string
+                                                      maxLength: 40
+                                                    value:
+                                                      type: string
+                                                      maxLength: 20000
+                                                  required:
+                                                    - label
+                                                    - value
+                                                maxItems: 8
+                                              scope:
+                                                type: object
+                                                properties:
+                                                  key:
+                                                    type: string
+                                                    maxLength: 200
+                                                  label:
+                                                    type: string
+                                                    maxLength: 120
+                                                required:
+                                                  - key
+                                                  - label
+                                              can_remember:
+                                                type: boolean
+                                              status:
+                                                type: string
+                                                enum:
+                                                  - open
+                                                  - allowed
+                                                  - remembered
+                                                  - denied
+                                                  - expired
+                                                  - cancelled
+                                                  - unavailable
+                                              expires_at:
+                                                type: string
+                                                format: date-time
+                                            required:
+                                              - id
+                                              - tool_call_id
+                                              - kind
+                                              - action
+                                              - details
+                                              - scope
+                                              - can_remember
+                                              - status
+                                              - expires_at
+                                        required:
+                                          - type
+                                          - id
+                                          - data
+                                  maxItems: 80
+                              required:
+                                - id
+                                - role
+                                - metadata
+                                - parts
+                            maxItems: 80
+                          pending:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                                pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+                              expires_at:
+                                type: string
+                                format: date-time
+                              stop_requested:
+                                type: boolean
+                            required:
+                              - id
+                              - expires_at
+                          last_error:
+                            type: string
+                            maxLength: 400
+                          continuation:
+                            type: object
+                            properties:
+                              status:
+                                type: string
+                                enum:
+                                  - running
+                                  - paused
+                                  - needs_review
+                              reason:
+                                type: string
+                                enum:
+                                  - tool_limit
+                                  - context_limit
+                                  - interrupted
+                                  - stopped
+                                  - failed
+                              task:
+                                type: string
+                                maxLength: 8000
+                              omitted_observations:
+                                type: integer
+                                minimum: 0
+                              observations:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 155
+                                    name:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 128
+                                    result:
+                                      type: string
+                                      maxLength: 4000
+                                  required:
+                                    - id
+                                    - name
+                                    - result
+                                maxItems: 16
+                              unresolved_calls:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                      maxLength: 155
+                                    name:
+                                      type: string
+                                      maxLength: 128
+                                  required:
+                                    - id
+                                    - name
+                                maxItems: 48
+                            required:
+                              - status
+                              - task
+                              - observations
+                              - unresolved_calls
+                          working_notebook:
+                            type: string
+                            pattern: ^nb-[0-9a-z]{16}$
+                        required:
+                          - schema_version
+                          - id
+                          - title
+                          - created_at
+                          - updated_at
+                          - messages
+                    required:
+                      - conversation
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      operationId: conversations.update
+      x-cli-hidden: true
+      tags: *a5
+      summary: Choose the notebook shown beside a conversation
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          required: true
+          name: cid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                working_notebook:
+                  type:
+                    - string
+                    - 'null'
+                  pattern: ^nb-[0-9a-z]{16}$
+                  description: Notebook shown beside the conversation; null closes the pane.
+              required:
+                - working_notebook
+              additionalProperties: false
+      responses:
+        '200':
+          description: Private project conversation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      conversation:
+                        type: object
+                        properties:
+                          schema_version:
+                            type: number
+                            enum:
+                              - 1
+                          id:
+                            type: string
+                            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+                          title:
+                            type: string
+                            maxLength: 120
+                          created_at:
+                            type: string
+                            format: date-time
+                          updated_at:
+                            type: string
+                            format: date-time
+                          messages:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 80
+                                role:
+                                  type: string
+                                  enum:
+                                    - user
+                                    - assistant
+                                metadata:
+                                  type: object
+                                  properties:
+                                    created_at:
+                                      type: string
+                                      format: date-time
+                                  required:
+                                    - created_at
+                                parts:
+                                  type: array
+                                  items:
+                                    oneOf:
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - text
+                                          text:
+                                            type: string
+                                            maxLength: 24000
+                                          state:
+                                            type: string
+                                            enum:
+                                              - streaming
+                                              - done
+                                        required:
+                                          - type
+                                          - text
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - dynamic-tool
+                                          toolName:
+                                            type: string
+                                            maxLength: 80
+                                          toolCallId:
+                                            type: string
+                                            maxLength: 128
+                                          state:
+                                            type: string
+                                            enum:
+                                              - input-streaming
+                                              - input-available
+                                              - output-available
+                                              - output-error
+                                          input:
+                                            type: string
+                                            maxLength: 2000
+                                          output:
+                                            type: string
+                                            maxLength: 2000
+                                          errorText:
+                                            type: string
+                                            maxLength: 2000
+                                        required:
+                                          - type
+                                          - toolName
+                                          - toolCallId
+                                          - state
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - data-permission
+                                          id:
+                                            type: string
+                                            format: uuid
+                                          data:
+                                            type: object
+                                            properties:
+                                              id:
+                                                type: string
+                                                format: uuid
+                                              tool_call_id:
+                                                type: string
+                                                maxLength: 128
+                                              kind:
+                                                type: string
+                                                maxLength: 40
+                                              action:
+                                                type: string
+                                                maxLength: 120
+                                              details:
+                                                type: array
+                                                items:
+                                                  type: object
+                                                  properties:
+                                                    label:
+                                                      type: string
+                                                      maxLength: 40
+                                                    value:
+                                                      type: string
+                                                      maxLength: 20000
+                                                  required:
+                                                    - label
+                                                    - value
+                                                maxItems: 8
+                                              scope:
+                                                type: object
+                                                properties:
+                                                  key:
+                                                    type: string
+                                                    maxLength: 200
+                                                  label:
+                                                    type: string
+                                                    maxLength: 120
+                                                required:
+                                                  - key
+                                                  - label
+                                              can_remember:
+                                                type: boolean
+                                              status:
+                                                type: string
+                                                enum:
+                                                  - open
+                                                  - allowed
+                                                  - remembered
+                                                  - denied
+                                                  - expired
+                                                  - cancelled
+                                                  - unavailable
+                                              expires_at:
+                                                type: string
+                                                format: date-time
+                                            required:
+                                              - id
+                                              - tool_call_id
+                                              - kind
+                                              - action
+                                              - details
+                                              - scope
+                                              - can_remember
+                                              - status
+                                              - expires_at
+                                        required:
+                                          - type
+                                          - id
+                                          - data
+                                  maxItems: 80
+                              required:
+                                - id
+                                - role
+                                - metadata
+                                - parts
+                            maxItems: 80
+                          pending:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                                pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+                              expires_at:
+                                type: string
+                                format: date-time
+                              stop_requested:
+                                type: boolean
+                            required:
+                              - id
+                              - expires_at
+                          last_error:
+                            type: string
+                            maxLength: 400
+                          continuation:
+                            type: object
+                            properties:
+                              status:
+                                type: string
+                                enum:
+                                  - running
+                                  - paused
+                                  - needs_review
+                              reason:
+                                type: string
+                                enum:
+                                  - tool_limit
+                                  - context_limit
+                                  - interrupted
+                                  - stopped
+                                  - failed
+                              task:
+                                type: string
+                                maxLength: 8000
+                              omitted_observations:
+                                type: integer
+                                minimum: 0
+                              observations:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 155
+                                    name:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 128
+                                    result:
+                                      type: string
+                                      maxLength: 4000
+                                  required:
+                                    - id
+                                    - name
+                                    - result
+                                maxItems: 16
+                              unresolved_calls:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                      maxLength: 155
+                                    name:
+                                      type: string
+                                      maxLength: 128
+                                  required:
+                                    - id
+                                    - name
+                                maxItems: 48
+                            required:
+                              - status
+                              - task
+                              - observations
+                              - unresolved_calls
+                          working_notebook:
+                            type: string
+                            pattern: ^nb-[0-9a-z]{16}$
+                        required:
+                          - schema_version
+                          - id
+                          - title
+                          - created_at
+                          - updated_at
+                          - messages
+                    required:
+                      - conversation
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: conversations.delete
+      x-cli-destructive: true
+      tags: *a5
+      summary: Delete a conversation
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          required: true
+          name: cid
+          in: path
+      responses:
+        '200':
+          description: Conversation deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      deleted:
+                        type: boolean
+                        enum:
+                          - true
+                    required:
+                      - deleted
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/conversations/{cid}/messages:
+    post:
+      operationId: conversations.send
+      tags: *a5
+      summary: Send a message and wait for the reply
+      description: Runs one assistant turn and returns the saved conversation.
+        Mutating tools that need consent are skipped on this endpoint; use the
+        web UI to approve them.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          required: true
+          name: cid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: string
+                  minLength: 1
+                  maxLength: 8000
+              required:
+                - content
+              additionalProperties: false
+      responses:
+        '200':
+          description: Private project conversation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      conversation:
+                        type: object
+                        properties:
+                          schema_version:
+                            type: number
+                            enum:
+                              - 1
+                          id:
+                            type: string
+                            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+                          title:
+                            type: string
+                            maxLength: 120
+                          created_at:
+                            type: string
+                            format: date-time
+                          updated_at:
+                            type: string
+                            format: date-time
+                          messages:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 80
+                                role:
+                                  type: string
+                                  enum:
+                                    - user
+                                    - assistant
+                                metadata:
+                                  type: object
+                                  properties:
+                                    created_at:
+                                      type: string
+                                      format: date-time
+                                  required:
+                                    - created_at
+                                parts:
+                                  type: array
+                                  items:
+                                    oneOf:
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - text
+                                          text:
+                                            type: string
+                                            maxLength: 24000
+                                          state:
+                                            type: string
+                                            enum:
+                                              - streaming
+                                              - done
+                                        required:
+                                          - type
+                                          - text
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - dynamic-tool
+                                          toolName:
+                                            type: string
+                                            maxLength: 80
+                                          toolCallId:
+                                            type: string
+                                            maxLength: 128
+                                          state:
+                                            type: string
+                                            enum:
+                                              - input-streaming
+                                              - input-available
+                                              - output-available
+                                              - output-error
+                                          input:
+                                            type: string
+                                            maxLength: 2000
+                                          output:
+                                            type: string
+                                            maxLength: 2000
+                                          errorText:
+                                            type: string
+                                            maxLength: 2000
+                                        required:
+                                          - type
+                                          - toolName
+                                          - toolCallId
+                                          - state
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - data-permission
+                                          id:
+                                            type: string
+                                            format: uuid
+                                          data:
+                                            type: object
+                                            properties:
+                                              id:
+                                                type: string
+                                                format: uuid
+                                              tool_call_id:
+                                                type: string
+                                                maxLength: 128
+                                              kind:
+                                                type: string
+                                                maxLength: 40
+                                              action:
+                                                type: string
+                                                maxLength: 120
+                                              details:
+                                                type: array
+                                                items:
+                                                  type: object
+                                                  properties:
+                                                    label:
+                                                      type: string
+                                                      maxLength: 40
+                                                    value:
+                                                      type: string
+                                                      maxLength: 20000
+                                                  required:
+                                                    - label
+                                                    - value
+                                                maxItems: 8
+                                              scope:
+                                                type: object
+                                                properties:
+                                                  key:
+                                                    type: string
+                                                    maxLength: 200
+                                                  label:
+                                                    type: string
+                                                    maxLength: 120
+                                                required:
+                                                  - key
+                                                  - label
+                                              can_remember:
+                                                type: boolean
+                                              status:
+                                                type: string
+                                                enum:
+                                                  - open
+                                                  - allowed
+                                                  - remembered
+                                                  - denied
+                                                  - expired
+                                                  - cancelled
+                                                  - unavailable
+                                              expires_at:
+                                                type: string
+                                                format: date-time
+                                            required:
+                                              - id
+                                              - tool_call_id
+                                              - kind
+                                              - action
+                                              - details
+                                              - scope
+                                              - can_remember
+                                              - status
+                                              - expires_at
+                                        required:
+                                          - type
+                                          - id
+                                          - data
+                                  maxItems: 80
+                              required:
+                                - id
+                                - role
+                                - metadata
+                                - parts
+                            maxItems: 80
+                          pending:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                                pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+                              expires_at:
+                                type: string
+                                format: date-time
+                              stop_requested:
+                                type: boolean
+                            required:
+                              - id
+                              - expires_at
+                          last_error:
+                            type: string
+                            maxLength: 400
+                          continuation:
+                            type: object
+                            properties:
+                              status:
+                                type: string
+                                enum:
+                                  - running
+                                  - paused
+                                  - needs_review
+                              reason:
+                                type: string
+                                enum:
+                                  - tool_limit
+                                  - context_limit
+                                  - interrupted
+                                  - stopped
+                                  - failed
+                              task:
+                                type: string
+                                maxLength: 8000
+                              omitted_observations:
+                                type: integer
+                                minimum: 0
+                              observations:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 155
+                                    name:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 128
+                                    result:
+                                      type: string
+                                      maxLength: 4000
+                                  required:
+                                    - id
+                                    - name
+                                    - result
+                                maxItems: 16
+                              unresolved_calls:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                      maxLength: 155
+                                    name:
+                                      type: string
+                                      maxLength: 128
+                                  required:
+                                    - id
+                                    - name
+                                maxItems: 48
+                            required:
+                              - status
+                              - task
+                              - observations
+                              - unresolved_calls
+                          working_notebook:
+                            type: string
+                            pattern: ^nb-[0-9a-z]{16}$
+                        required:
+                          - schema_version
+                          - id
+                          - title
+                          - created_at
+                          - updated_at
+                          - messages
+                    required:
+                      - conversation
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/conversations/{cid}/resume:
+    post:
+      operationId: conversations.resume
+      tags: *a5
+      summary: Continue an interrupted task and wait for the reply
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          required: true
+          name: cid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                acknowledge_uncertain:
+                  type: boolean
+              additionalProperties: false
+      responses:
+        '200':
+          description: Private project conversation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      conversation:
+                        type: object
+                        properties:
+                          schema_version:
+                            type: number
+                            enum:
+                              - 1
+                          id:
+                            type: string
+                            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+                          title:
+                            type: string
+                            maxLength: 120
+                          created_at:
+                            type: string
+                            format: date-time
+                          updated_at:
+                            type: string
+                            format: date-time
+                          messages:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 80
+                                role:
+                                  type: string
+                                  enum:
+                                    - user
+                                    - assistant
+                                metadata:
+                                  type: object
+                                  properties:
+                                    created_at:
+                                      type: string
+                                      format: date-time
+                                  required:
+                                    - created_at
+                                parts:
+                                  type: array
+                                  items:
+                                    oneOf:
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - text
+                                          text:
+                                            type: string
+                                            maxLength: 24000
+                                          state:
+                                            type: string
+                                            enum:
+                                              - streaming
+                                              - done
+                                        required:
+                                          - type
+                                          - text
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - dynamic-tool
+                                          toolName:
+                                            type: string
+                                            maxLength: 80
+                                          toolCallId:
+                                            type: string
+                                            maxLength: 128
+                                          state:
+                                            type: string
+                                            enum:
+                                              - input-streaming
+                                              - input-available
+                                              - output-available
+                                              - output-error
+                                          input:
+                                            type: string
+                                            maxLength: 2000
+                                          output:
+                                            type: string
+                                            maxLength: 2000
+                                          errorText:
+                                            type: string
+                                            maxLength: 2000
+                                        required:
+                                          - type
+                                          - toolName
+                                          - toolCallId
+                                          - state
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - data-permission
+                                          id:
+                                            type: string
+                                            format: uuid
+                                          data:
+                                            type: object
+                                            properties:
+                                              id:
+                                                type: string
+                                                format: uuid
+                                              tool_call_id:
+                                                type: string
+                                                maxLength: 128
+                                              kind:
+                                                type: string
+                                                maxLength: 40
+                                              action:
+                                                type: string
+                                                maxLength: 120
+                                              details:
+                                                type: array
+                                                items:
+                                                  type: object
+                                                  properties:
+                                                    label:
+                                                      type: string
+                                                      maxLength: 40
+                                                    value:
+                                                      type: string
+                                                      maxLength: 20000
+                                                  required:
+                                                    - label
+                                                    - value
+                                                maxItems: 8
+                                              scope:
+                                                type: object
+                                                properties:
+                                                  key:
+                                                    type: string
+                                                    maxLength: 200
+                                                  label:
+                                                    type: string
+                                                    maxLength: 120
+                                                required:
+                                                  - key
+                                                  - label
+                                              can_remember:
+                                                type: boolean
+                                              status:
+                                                type: string
+                                                enum:
+                                                  - open
+                                                  - allowed
+                                                  - remembered
+                                                  - denied
+                                                  - expired
+                                                  - cancelled
+                                                  - unavailable
+                                              expires_at:
+                                                type: string
+                                                format: date-time
+                                            required:
+                                              - id
+                                              - tool_call_id
+                                              - kind
+                                              - action
+                                              - details
+                                              - scope
+                                              - can_remember
+                                              - status
+                                              - expires_at
+                                        required:
+                                          - type
+                                          - id
+                                          - data
+                                  maxItems: 80
+                              required:
+                                - id
+                                - role
+                                - metadata
+                                - parts
+                            maxItems: 80
+                          pending:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                                pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+                              expires_at:
+                                type: string
+                                format: date-time
+                              stop_requested:
+                                type: boolean
+                            required:
+                              - id
+                              - expires_at
+                          last_error:
+                            type: string
+                            maxLength: 400
+                          continuation:
+                            type: object
+                            properties:
+                              status:
+                                type: string
+                                enum:
+                                  - running
+                                  - paused
+                                  - needs_review
+                              reason:
+                                type: string
+                                enum:
+                                  - tool_limit
+                                  - context_limit
+                                  - interrupted
+                                  - stopped
+                                  - failed
+                              task:
+                                type: string
+                                maxLength: 8000
+                              omitted_observations:
+                                type: integer
+                                minimum: 0
+                              observations:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 155
+                                    name:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 128
+                                    result:
+                                      type: string
+                                      maxLength: 4000
+                                  required:
+                                    - id
+                                    - name
+                                    - result
+                                maxItems: 16
+                              unresolved_calls:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                      maxLength: 155
+                                    name:
+                                      type: string
+                                      maxLength: 128
+                                  required:
+                                    - id
+                                    - name
+                                maxItems: 48
+                            required:
+                              - status
+                              - task
+                              - observations
+                              - unresolved_calls
+                          working_notebook:
+                            type: string
+                            pattern: ^nb-[0-9a-z]{16}$
+                        required:
+                          - schema_version
+                          - id
+                          - title
+                          - created_at
+                          - updated_at
+                          - messages
+                    required:
+                      - conversation
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/conversations/{cid}/stream:
+    post:
+      operationId: conversations.stream
+      x-cli-hidden: true
+      tags: *a5
+      summary: Send a message and stream the reply
+      description: Runs one turn and streams the assistant reply as an AI SDK UI
+        message stream (server-sent events). The turn keeps running if the
+        client disconnects; reconnect with GET …/stream or reload the
+        conversation.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          required: true
+          name: cid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              anyOf:
+                - type: object
+                  properties:
+                    content:
+                      type: string
+                      minLength: 1
+                      maxLength: 8000
+                    resume:
+                      type: boolean
+                      enum:
+                        - false
+                  required:
+                    - content
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    resume:
+                      type: boolean
+                      enum:
+                        - true
+                    acknowledge_uncertain:
+                      type: boolean
+                  required:
+                    - resume
+                  additionalProperties: false
+      responses:
+        '200':
+          description: UI message stream for the assistant reply
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      operationId: conversations.reconnect
+      x-cli-hidden: true
+      tags: *a5
+      summary: Re-attach to the running reply
+      description: Replays the chunks streamed so far for the turn running on this
+        instance and follows it live. Responds 204 when no turn runs here; the
+        saved conversation then carries the progress.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          required: true
+          name: cid
+          in: path
+      responses:
+        '200':
+          description: UI message stream for the running reply
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '204':
+          description: No reply is streaming on this instance
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/conversations/{cid}/stop:
+    post:
+      operationId: conversations.stop
+      tags: *a5
+      summary: Stop the running reply
+      description: Stops the turn running for this conversation on any instance.
+        Completed tool results stay saved and the task can be continued. Returns
+        stopped=false when no turn is running.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          required: true
+          name: cid
+          in: path
+      responses:
+        '200':
+          description: Stop request outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      stopped:
+                        type: boolean
+                    required:
+                      - stopped
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/conversations/{cid}/continuation/dismiss:
+    post:
+      operationId: conversations.dismiss
+      tags: *a5
+      summary: Discard the saved task without continuing it
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          required: true
+          name: cid
+          in: path
+      responses:
+        '200':
+          description: Private project conversation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      conversation:
+                        type: object
+                        properties:
+                          schema_version:
+                            type: number
+                            enum:
+                              - 1
+                          id:
+                            type: string
+                            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+                          title:
+                            type: string
+                            maxLength: 120
+                          created_at:
+                            type: string
+                            format: date-time
+                          updated_at:
+                            type: string
+                            format: date-time
+                          messages:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                  minLength: 1
+                                  maxLength: 80
+                                role:
+                                  type: string
+                                  enum:
+                                    - user
+                                    - assistant
+                                metadata:
+                                  type: object
+                                  properties:
+                                    created_at:
+                                      type: string
+                                      format: date-time
+                                  required:
+                                    - created_at
+                                parts:
+                                  type: array
+                                  items:
+                                    oneOf:
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - text
+                                          text:
+                                            type: string
+                                            maxLength: 24000
+                                          state:
+                                            type: string
+                                            enum:
+                                              - streaming
+                                              - done
+                                        required:
+                                          - type
+                                          - text
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - dynamic-tool
+                                          toolName:
+                                            type: string
+                                            maxLength: 80
+                                          toolCallId:
+                                            type: string
+                                            maxLength: 128
+                                          state:
+                                            type: string
+                                            enum:
+                                              - input-streaming
+                                              - input-available
+                                              - output-available
+                                              - output-error
+                                          input:
+                                            type: string
+                                            maxLength: 2000
+                                          output:
+                                            type: string
+                                            maxLength: 2000
+                                          errorText:
+                                            type: string
+                                            maxLength: 2000
+                                        required:
+                                          - type
+                                          - toolName
+                                          - toolCallId
+                                          - state
+                                      - type: object
+                                        properties:
+                                          type:
+                                            type: string
+                                            enum:
+                                              - data-permission
+                                          id:
+                                            type: string
+                                            format: uuid
+                                          data:
+                                            type: object
+                                            properties:
+                                              id:
+                                                type: string
+                                                format: uuid
+                                              tool_call_id:
+                                                type: string
+                                                maxLength: 128
+                                              kind:
+                                                type: string
+                                                maxLength: 40
+                                              action:
+                                                type: string
+                                                maxLength: 120
+                                              details:
+                                                type: array
+                                                items:
+                                                  type: object
+                                                  properties:
+                                                    label:
+                                                      type: string
+                                                      maxLength: 40
+                                                    value:
+                                                      type: string
+                                                      maxLength: 20000
+                                                  required:
+                                                    - label
+                                                    - value
+                                                maxItems: 8
+                                              scope:
+                                                type: object
+                                                properties:
+                                                  key:
+                                                    type: string
+                                                    maxLength: 200
+                                                  label:
+                                                    type: string
+                                                    maxLength: 120
+                                                required:
+                                                  - key
+                                                  - label
+                                              can_remember:
+                                                type: boolean
+                                              status:
+                                                type: string
+                                                enum:
+                                                  - open
+                                                  - allowed
+                                                  - remembered
+                                                  - denied
+                                                  - expired
+                                                  - cancelled
+                                                  - unavailable
+                                              expires_at:
+                                                type: string
+                                                format: date-time
+                                            required:
+                                              - id
+                                              - tool_call_id
+                                              - kind
+                                              - action
+                                              - details
+                                              - scope
+                                              - can_remember
+                                              - status
+                                              - expires_at
+                                        required:
+                                          - type
+                                          - id
+                                          - data
+                                  maxItems: 80
+                              required:
+                                - id
+                                - role
+                                - metadata
+                                - parts
+                            maxItems: 80
+                          pending:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                                pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+                              expires_at:
+                                type: string
+                                format: date-time
+                              stop_requested:
+                                type: boolean
+                            required:
+                              - id
+                              - expires_at
+                          last_error:
+                            type: string
+                            maxLength: 400
+                          continuation:
+                            type: object
+                            properties:
+                              status:
+                                type: string
+                                enum:
+                                  - running
+                                  - paused
+                                  - needs_review
+                              reason:
+                                type: string
+                                enum:
+                                  - tool_limit
+                                  - context_limit
+                                  - interrupted
+                                  - stopped
+                                  - failed
+                              task:
+                                type: string
+                                maxLength: 8000
+                              omitted_observations:
+                                type: integer
+                                minimum: 0
+                              observations:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 155
+                                    name:
+                                      type: string
+                                      minLength: 1
+                                      maxLength: 128
+                                    result:
+                                      type: string
+                                      maxLength: 4000
+                                  required:
+                                    - id
+                                    - name
+                                    - result
+                                maxItems: 16
+                              unresolved_calls:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                      maxLength: 155
+                                    name:
+                                      type: string
+                                      maxLength: 128
+                                  required:
+                                    - id
+                                    - name
+                                maxItems: 48
+                            required:
+                              - status
+                              - task
+                              - observations
+                              - unresolved_calls
+                          working_notebook:
+                            type: string
+                            pattern: ^nb-[0-9a-z]{16}$
+                        required:
+                          - schema_version
+                          - id
+                          - title
+                          - created_at
+                          - updated_at
+                          - messages
+                    required:
+                      - conversation
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/conversations/{cid}/permissions/{rid}:
+    post:
+      operationId: conversations.permissions.decide
+      x-cli-hidden: true
+      tags: *a5
+      summary: Answer a tool consent request
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          required: true
+          name: cid
+          in: path
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: rid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                decision:
+                  type: string
+                  enum:
+                    - allow
+                    - always
+                    - deny
+              required:
+                - decision
+      responses:
+        '200':
+          description: Permission decision outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      accepted:
+                        type: boolean
+                      reason:
+                        type: string
+                        enum:
+                          - closed
+                    required:
+                      - accepted
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/chat-permissions:
+    get:
+      operationId: chat-permissions.list
+      tags: *a5
+      summary: List remembered tool permissions
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+      responses:
+        '200':
+          description: Remembered permissions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      grants:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                            kind:
+                              type: string
+                              minLength: 1
+                              maxLength: 40
+                            scope_key:
+                              type: string
+                              minLength: 1
+                              maxLength: 200
+                            scope_label:
+                              type: string
+                              maxLength: 120
+                            action:
+                              type: string
+                              maxLength: 120
+                            created_at:
+                              type: string
+                              format: date-time
+                          required:
+                            - id
+                            - kind
+                            - scope_key
+                            - scope_label
+                            - action
+                            - created_at
+                        maxItems: 200
+                    required:
+                      - grants
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/chat-permissions/{grant_id}:
+    delete:
+      operationId: chat-permissions.revoke
+      tags: *a5
+      summary: Forget a remembered tool permission
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: grant_id
+          in: path
+      responses:
+        '200':
+          description: Permission removal outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      removed:
+                        type: boolean
+                    required:
+                      - removed
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
           content:
             application/json:
               schema:

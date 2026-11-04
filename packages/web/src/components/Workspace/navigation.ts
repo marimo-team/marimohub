@@ -10,17 +10,19 @@ export function workspaceRoute(pathname: string) {
 		? 'jobs'
 		: matchPath(PROJECT_SEARCH_ROUTE, pathname)
 			? 'search'
-			: matchPath('/projects/:pid/data/*', pathname)
-				? 'data'
-				: matchPath('/projects/:pid/members', pathname)
-					? 'members'
-					: matchPath('/projects/:pid/integrations', pathname)
-						? 'integrations'
-						: matchPath('/projects/:pid/alerts', pathname)
-							? 'alerts'
-							: matchPath('/projects/:pid', pathname)
-								? 'notebooks'
-								: null;
+			: matchPath('/projects/:pid/chat', pathname)
+				? 'chat'
+				: matchPath('/projects/:pid/data/*', pathname)
+					? 'data'
+					: matchPath('/projects/:pid/members', pathname)
+						? 'members'
+						: matchPath('/projects/:pid/integrations', pathname)
+							? 'integrations'
+							: matchPath('/projects/:pid/alerts', pathname)
+								? 'alerts'
+								: matchPath('/projects/:pid', pathname)
+									? 'notebooks'
+									: null;
 	return { pid, section };
 }
 

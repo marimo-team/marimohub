@@ -25,6 +25,7 @@
 		"@hono/zod-openapi": "catalog:",
 		"@marimo-hub/core": "workspace:*",
 		"@modelcontextprotocol/sdk": "catalog:",
+		"ai": "catalog:",
 		"better-all": "catalog:",
 		"fflate": "catalog:",
 		"hono": "catalog:",
@@ -32,6 +33,7 @@
 		"zod": "catalog:"
 	},
 	"devDependencies": {
+		"@ai-sdk/provider": "catalog:",
 		"@marimo-hub/tsconfig": "workspace:*",
 		"@types/node": "catalog:",
 		"smol-toml": "catalog:",

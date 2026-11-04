@@ -20,7 +20,7 @@ The toolchain is **vite-plus** (`vp`). `pnpm check` runs `vp check`
 runs each package's `test` script (vitest); `pnpm build` builds every package.
 Use these as the done-criteria for any change.
 
-## Architecture (5 bullets)
+## Architecture
 
 - **Ports and adapters.** Every external dependency — storage, compute, identity
   — sits behind a TypeScript interface (a _port_). The domain depends on the
@@ -47,6 +47,11 @@ Use these as the done-criteria for any change.
 - **`packages/config`** is the ONLY package that imports concrete adapters: it
   reads `MARIMOHUB_*` env vars, selects an adapter per `*_BACKEND` selector, and
   wires the system together.
+- **Project chat's turn runner lives in `packages/api/src/chat`**, not core: it
+  depends on the vendor-neutral `ai` SDK and the in-process MCP tool server. Core
+  keeps the conversation record and its invariants (`ConversationService`); the
+  concrete model is still built in `config`. Do not use this as precedent for
+  moving other domain logic into `api`.
 - **Entrypoints** compose everything: `apps/server` (Node, for Docker/k8s) and
   `examples/cloudflare-worker` (Cloudflare Workers). See
   [`development_docs/architecture.md`](./development_docs/architecture.md).
@@ -143,6 +148,11 @@ These CAS-managed records also have one writer each:
   `_system/oauth-authorizations/{authorization-id}.json`.
 - `OAuthRateLimitService` owns each shared MCP OAuth request window at
   `_system/oauth-rate-limits/{endpoint}.json`.
+- `ConversationService` owns each private chat conversation at
+  `projects/{pid}/conversations/{uid}/{cid}.json` (turn claim, stop flag, and
+  consent decisions included) and the per-user index `…/{uid}/_index.json`.
+- `ChatPermissionStore` owns remembered chat consents at
+  `projects/{pid}/chat-permissions/{uid}.json`.
 - `ProjectAlertStore` owns each project alert configuration at
   `projects/{pid}/alerts.json`.
 - `SessionService` owns each editor claim at

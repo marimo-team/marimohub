@@ -3,6 +3,7 @@ export { generateCliManifest } from './cliManifest';
 export type { CliManifest, CliOperation } from './cliManifest';
 export type {
 	ApiDeps,
+	ChatConfig,
 	ConfigSummary,
 	HonoEnv,
 	JobsConfig,
@@ -12,7 +13,7 @@ export type {
 	Services,
 	SessionLifetimeConfig,
 } from './context';
-export { DEFAULT_JOBS_CONFIG } from './context';
+export { DEFAULT_CHAT_CONFIG, DEFAULT_JOBS_CONFIG } from './context';
 export { resolveJobSandboxEnv } from './sandboxEnv';
 export { createApp, assertProjectRole } from './shared';
 export { scheduleProjectAlert } from './notifications';

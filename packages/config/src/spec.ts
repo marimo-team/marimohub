@@ -103,6 +103,29 @@ const AI_TOKEN_TTL_SECONDS: ConfigVar = {
 	default: '3600',
 };
 
+const AI_CHAT: ConfigVar = {
+	id: 'MARIMOHUB_AI_CHAT',
+	name: 'Project chat',
+	description:
+		'Project chat in the hub UI, MCP, and API: a private per-user assistant that uses the hub tools with per-call consent for changes. `off` keeps the notebook assistant proxy only.',
+	default: 'on',
+};
+
+const AI_CHAT_TASK_TIMEOUT_SECONDS: ConfigVar = {
+	id: 'MARIMOHUB_AI_CHAT_TASK_TIMEOUT_SECONDS',
+	name: 'Chat turn timeout (seconds)',
+	description: 'Wall-clock budget for one chat reply, including tool calls (30–900).',
+	default: '300',
+};
+
+const AI_CHAT_PERMISSION_TIMEOUT_SECONDS: ConfigVar = {
+	id: 'MARIMOHUB_AI_CHAT_PERMISSION_TIMEOUT_SECONDS',
+	name: 'Chat consent timeout (seconds)',
+	description:
+		'How long a chat consent card waits for an answer before the tool call is skipped (30–900).',
+	default: '300',
+};
+
 export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Theme',
@@ -2224,6 +2247,9 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					AI_MAX_TOKENS,
 					AI_RULES,
 					AI_TOKEN_TTL_SECONDS,
+					AI_CHAT,
+					AI_CHAT_TASK_TIMEOUT_SECONDS,
+					AI_CHAT_PERMISSION_TIMEOUT_SECONDS,
 				],
 			},
 			{
@@ -2260,6 +2286,9 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 					AI_MAX_TOKENS,
 					AI_RULES,
 					AI_TOKEN_TTL_SECONDS,
+					AI_CHAT,
+					AI_CHAT_TASK_TIMEOUT_SECONDS,
+					AI_CHAT_PERMISSION_TIMEOUT_SECONDS,
 				],
 			},
 		],

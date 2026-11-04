@@ -7,9 +7,10 @@ blockExoticSubdeps: true
 
 catalog:
   parse5: ^8.0.1
-  '@ai-sdk/amazon-bedrock': ^5.0.72
-  '@ai-sdk/openai-compatible': ^3.0.17
-  '@ai-sdk/provider': ^4.0.4
+  '@ai-sdk/amazon-bedrock': ^5.0.120
+  '@ai-sdk/openai-compatible': ^3.0.74
+  '@ai-sdk/provider': ^4.0.31
+  '@ai-sdk/react': ^4.0.151
   '@aws-crypto/sha256-js': ^5.2.0
   '@aws-sdk/client-ecs': ^3.1066.0
   '@aws-sdk/client-s3': ^3.1066.0
@@ -70,7 +71,7 @@ catalog:
   '@types/pg-cursor': ^2.7.2
   '@vitejs/plugin-react': ^6.1.0
   '@vitest/coverage-v8': 5.0.5
-  ai: ^7.0.42
+  ai: ^7.0.147
   better-all: ^0.0.7
   class-variance-authority: ^0.7.1
   clsx: ^2.1.1
@@ -100,6 +101,8 @@ catalog:
   react-aria-components: ^1.20.0
   react-doctor: 0.9.12
   react-image-crop: ^11.1.2
+  react-markdown: ^10.1.0
+  remark-gfm: ^4.0.1
   simple-icons: ^16.27.0
   smol-toml: ^1.9.0
   sonner: ^2.0.7
