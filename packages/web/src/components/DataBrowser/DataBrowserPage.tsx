@@ -6,25 +6,8 @@ import type { ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
-import {
-	ArrowLeft,
-	ChevronDown,
-	ChevronRight,
-	Database,
-	Folder,
-	RefreshCw,
-	Table2,
-} from 'lucide-react';
-import {
-	Button,
-	Chip,
-	EmptyState,
-	IconLink,
-	Page,
-	SearchField,
-	Skeleton,
-	TextField,
-} from '@/components/ui';
+import { ChevronDown, ChevronRight, Database, Folder, RefreshCw, Table2 } from 'lucide-react';
+import { Button, Chip, EmptyState, Page, SearchField, Skeleton, TextField } from '@/components/ui';
 import {
 	refreshBrowseQueries,
 	useBrowseCapabilityQuery,
@@ -293,17 +276,6 @@ export default function DataBrowserPage() {
 			context={project.name}
 			width="full"
 			scroll="panels"
-			leading={
-				<IconLink
-					to={`/projects/${pid}`}
-					label="Back to project"
-					tooltip="Back to project"
-					variant="bordered"
-					size="md"
-				>
-					<ArrowLeft className="size-4" />
-				</IconLink>
-			}
 			actions={
 				available && (
 					<Button variant="default" onPress={() => void refresh()} isDisabled={refreshing}>

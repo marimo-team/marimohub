@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ProjectAlertsDialog } from './ProjectAlertsDialog';
+import { ProjectAlertsPanel } from './ProjectAlertsPanel';
 import { projectKeys } from '@/api/queryKeys';
 import { createTestQueryClient } from '@/test/render';
 import type { ProjectAlertDestination, ProjectAlertKind } from '@/types';
@@ -35,7 +35,7 @@ function destinationPage(items: ProjectAlertDestination[]) {
 	return { items, next_cursor: null };
 }
 
-function renderDialog(
+function renderPanel(
 	destinations: ProjectAlertDestination[] = [],
 	handler?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
 ) {
@@ -47,9 +47,7 @@ function renderDialog(
 	);
 	return {
 		...render(
-			<ProjectAlertsDialog
-				isOpen
-				onClose={() => {}}
+			<ProjectAlertsPanel
 				projectId="proj-0123456789abcdef"
 				selectableKinds={KINDS}
 				maxDestinations={10}
@@ -81,9 +79,7 @@ function slackDestination(
 	} as ProjectAlertDestination;
 }
 
-async function patchBody(
-	fetchMock: ReturnType<typeof renderDialog>['fetchMock'],
-): Promise<unknown> {
+async function patchBody(fetchMock: ReturnType<typeof renderPanel>['fetchMock']): Promise<unknown> {
 	await waitFor(() =>
 		expect(
 			fetchMock.mock.calls.some(([input, init]) =>
@@ -98,7 +94,7 @@ async function patchBody(
 }
 
 function testRequestIdempotencyKeys(
-	fetchMock: ReturnType<typeof renderDialog>['fetchMock'],
+	fetchMock: ReturnType<typeof renderPanel>['fetchMock'],
 ): (string | null)[] {
 	return fetchMock.mock.calls
 		.filter(([input, init]) =>
@@ -123,10 +119,73 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe('ProjectAlertsDialog', () => {
+describe('ProjectAlertsPanel', () => {
+	it('opens destination creation in a modal and restores focus when dismissed', async () => {
+		const user = userEvent.setup();
+		renderPanel();
+		await screen.findByText('No alert destinations');
+		expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+		const add = screen.getByRole('button', { name: 'Add destination' });
+		await user.click(add);
+		const dialog = screen.getByRole('dialog', { name: 'New destination' });
+		await user.type(within(dialog).getByLabelText('Name'), 'Unsaved destination');
+		await user.keyboard('{Escape}');
+		await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+		await waitFor(() => expect(add).toHaveFocus());
+		await user.click(add);
+		expect(screen.getByLabelText('Name')).toHaveValue('');
+	});
+
+	it('closes the creation modal and refreshes the destination list after saving', async () => {
+		const user = userEvent.setup();
+		const destination = slackDestination('alert-create-000001', { name: 'Engineering' });
+		let created = false;
+		renderPanel([], async (input, init) => {
+			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+			if (method === 'POST') {
+				created = true;
+				return ok(destination);
+			}
+			return ok(destinationPage(created ? [destination] : []));
+		});
+		await screen.findByText('No alert destinations');
+		await user.click(screen.getByRole('button', { name: 'Add destination' }));
+		await user.type(screen.getByLabelText('Name'), 'Engineering');
+		await user.type(
+			screen.getByLabelText('Slack incoming webhook URL'),
+			'https://hooks.example.com/alerts',
+		);
+		await user.click(screen.getByRole('button', { name: 'Save' }));
+		await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+		expect(await screen.findByText('Engineering')).toBeVisible();
+		expect(screen.getByRole('button', { name: 'Enable' })).toBeDisabled();
+	});
+
+	it('shows a retry action when destinations cannot be loaded', async () => {
+		const user = userEvent.setup();
+		let unavailable = true;
+		renderPanel([], async () =>
+			unavailable
+				? new Response(
+						JSON.stringify({
+							success: false,
+							error: { code: 'SERVICE_UNAVAILABLE', message: 'Unavailable' },
+						}),
+						{ status: 503, headers: { 'content-type': 'application/json' } },
+					)
+				: ok(destinationPage([])),
+		);
+		await screen.findByText('Could not load alert destinations.');
+		expect(screen.queryByText('No alert destinations')).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Add destination' })).toBeDisabled();
+		unavailable = false;
+		await user.click(screen.getByRole('button', { name: 'Retry' }));
+		expect(await screen.findByText('No alert destinations')).toBeVisible();
+	});
+
 	it('selects every actionable event for a new destination', async () => {
 		const user = userEvent.setup();
-		renderDialog();
+		renderPanel();
 		await waitFor(() => expect(screen.getByText('No alert destinations')).toBeInTheDocument());
 		await user.click(screen.getByRole('button', { name: 'Add destination' }));
 		expect(screen.getAllByRole('checkbox')).toHaveLength(10);
@@ -135,7 +194,7 @@ describe('ProjectAlertsDialog', () => {
 
 	it('never places stored endpoint or secret material in edit fields', async () => {
 		const user = userEvent.setup();
-		renderDialog([
+		renderPanel([
 			{
 				id: 'alert-0123456789abcdef',
 				name: 'Production hook',
@@ -152,6 +211,7 @@ describe('ProjectAlertsDialog', () => {
 			},
 		]);
 		await user.click(await screen.findByRole('button', { name: 'Edit Production hook' }));
+		expect(screen.getByRole('dialog', { name: 'Edit destination' })).toBeVisible();
 		const endpoint = screen.getByRole('textbox', { name: 'Webhook URL' });
 		expect(endpoint).toHaveValue('');
 		expect(endpoint).toHaveAttribute('placeholder', expect.stringContaining('alerts.example.com'));
@@ -159,7 +219,7 @@ describe('ProjectAlertsDialog', () => {
 	});
 
 	it('disables creation when the project has reached its destination limit', async () => {
-		renderDialog(
+		renderPanel(
 			Array.from({ length: 10 }, (_, index) =>
 				slackDestination(`alert-limit-${index.toString().padStart(8, '0')}`),
 			),
@@ -169,7 +229,7 @@ describe('ProjectAlertsDialog', () => {
 	});
 
 	it('allows enablement only for verified destinations', async () => {
-		renderDialog([
+		renderPanel([
 			slackDestination('alert-unverified-0001', { name: 'Unverified' }),
 			slackDestination('alert-verified-00002', {
 				name: 'Verified',
@@ -183,7 +243,7 @@ describe('ProjectAlertsDialog', () => {
 
 	it('does not allow a destination with no selected events to be saved', async () => {
 		const user = userEvent.setup();
-		renderDialog();
+		renderPanel();
 		await user.click(await screen.findByRole('button', { name: 'Add destination' }));
 		await user.type(screen.getByLabelText('Name'), 'No events');
 		await user.type(
@@ -196,7 +256,7 @@ describe('ProjectAlertsDialog', () => {
 
 	it('requires endpoint and signing-secret fields before creating a destination', async () => {
 		const user = userEvent.setup();
-		renderDialog();
+		renderPanel();
 		await user.click(await screen.findByRole('button', { name: 'Add destination' }));
 		await user.type(screen.getByLabelText('Name'), 'Webhook');
 		await user.selectOptions(screen.getByLabelText('Destination type'), 'webhook');
@@ -210,7 +270,7 @@ describe('ProjectAlertsDialog', () => {
 
 	it('shows API failures while saving and keeps the editor open', async () => {
 		const user = userEvent.setup();
-		renderDialog([], async (input, init) => {
+		renderPanel([], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
 			if (method === 'POST') {
 				return new Response(
@@ -238,7 +298,7 @@ describe('ProjectAlertsDialog', () => {
 	it('confirms deletion before removing a destination', async () => {
 		const user = userEvent.setup();
 		const destination = slackDestination('alert-delete-000001', { name: 'Production Slack' });
-		const { fetchMock } = renderDialog([destination], async (input, init) => {
+		const { fetchMock } = renderPanel([destination], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
 			return method === 'DELETE' ? ok(undefined) : ok(destinationPage([destination]));
 		});
@@ -256,7 +316,7 @@ describe('ProjectAlertsDialog', () => {
 	it('shows delete conflicts and leaves the confirmation open', async () => {
 		const user = userEvent.setup();
 		const destination = slackDestination('alert-delete-000002', { name: 'Production Slack' });
-		renderDialog([destination], async (input, init) => {
+		renderPanel([destination], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
 			if (method === 'DELETE') {
 				return new Response(
@@ -284,7 +344,7 @@ describe('ProjectAlertsDialog', () => {
 		const user = userEvent.setup();
 		const destination = slackDestination('alert-test-00000001', { name: 'Production Slack' });
 		let attempts = 0;
-		const { fetchMock } = renderDialog([destination], async (input, init) => {
+		const { fetchMock } = renderPanel([destination], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
 			if (method !== 'POST') return ok(destinationPage([destination]));
 			attempts++;
@@ -317,7 +377,7 @@ describe('ProjectAlertsDialog', () => {
 		const user = userEvent.setup();
 		const destination = slackDestination('alert-test-00000002', { name: 'Production Slack' });
 		let attempts = 0;
-		const { client, fetchMock } = renderDialog([destination], async (input, init) => {
+		const { client, fetchMock } = renderPanel([destination], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
 			if (method !== 'POST') return ok(destinationPage([destination]));
 			attempts++;
@@ -358,7 +418,7 @@ describe('ProjectAlertsDialog', () => {
 			name: 'Production Slack',
 			kinds: ['app.unavailable', 'unknown'],
 		});
-		const { fetchMock } = renderDialog([destination], async (input, init) => {
+		const { fetchMock } = renderPanel([destination], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
 			return method === 'PATCH' ? ok(destination) : ok(destinationPage([destination]));
 		});
@@ -375,7 +435,7 @@ describe('ProjectAlertsDialog', () => {
 	it('sends kinds on an edit once the selection changes', async () => {
 		const user = userEvent.setup();
 		const destination = slackDestination('alert-edit-00000003', { name: 'Production Slack' });
-		const { fetchMock } = renderDialog([destination], async (input, init) => {
+		const { fetchMock } = renderPanel([destination], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
 			return method === 'PATCH' ? ok(destination) : ok(destinationPage([destination]));
 		});
@@ -393,7 +453,7 @@ describe('ProjectAlertsDialog', () => {
 			name: 'Production Slack',
 			kinds: ['app.unavailable', 'unknown'],
 		});
-		const { fetchMock } = renderDialog([destination], async (input, init) => {
+		const { fetchMock } = renderPanel([destination], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
 			return method === 'PATCH' ? ok(destination) : ok(destinationPage([destination]));
 		});
@@ -411,7 +471,7 @@ describe('ProjectAlertsDialog', () => {
 			name: 'Production Slack',
 			kinds: ['app.unavailable', 'unknown'],
 		});
-		const { fetchMock } = renderDialog([destination], async (input, init) => {
+		const { fetchMock } = renderPanel([destination], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
 			return method === 'PATCH' ? ok(destination) : ok(destinationPage([destination]));
 		});
@@ -432,7 +492,7 @@ describe('ProjectAlertsDialog', () => {
 			verified_at: '2026-08-12T12:05:00.000Z',
 			enabled: true,
 		});
-		const { fetchMock } = renderDialog([destination], async (input, init) => {
+		const { fetchMock } = renderPanel([destination], async (input, init) => {
 			const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
 			return method === 'PATCH'
 				? ok({ ...destination, enabled: false, verified_at: null })
