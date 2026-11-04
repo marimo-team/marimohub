@@ -1,3 +1,4 @@
+import notebookMovesApp from './routes/notebookMoves';
 import searchApp from './routes/search';
 import conversationsApp from './routes/conversations';
 import { WORKSPACE_LIMITS } from '@marimo-hub/core/remote-workspace';
@@ -599,6 +600,7 @@ export function createApi(rawDeps: ApiDeps) {
 	app.route(API_PREFIX, adminApp);
 	app.route(API_PREFIX, policyAnalyzerApp);
 	app.route(API_PREFIX, notebooksApp);
+	app.route(API_PREFIX, notebookMovesApp);
 	app.route(API_PREFIX, thumbnailsApp);
 	app.route(API_PREFIX, deepLinksApp);
 	app.route(API_PREFIX, searchApp);

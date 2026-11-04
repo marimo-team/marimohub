@@ -447,6 +447,7 @@ app.openapi(listProjects, async (c) => {
 	const user = c.get('user');
 	const query = c.req.valid('query');
 	const all = await deps.services.projects.listProjects({
+		action: query.managed_only === 'true' ? 'notebook.manage' : 'project.read',
 		subject: user,
 		policy: deps.policy,
 		resourceSecurity: deps.resourceSecurity,

@@ -1,3 +1,5 @@
+import { copyMovePrefix, moveJson } from '../content/moveObjects';
+import { guardNotebookMutations, notebookMutation } from '../content/NotebookMutationGate';
 import type { Bucket } from '../../ports/bucket';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
@@ -125,10 +127,27 @@ export function indexedJobs(snapshot: Snapshot): IndexedJob[] {
  * job index. Runs are owned by `JobRunService`.
  */
 export class JobsService {
+	async copyForMove(source: ProjectId, destination: ProjectId, nid: NotebookId): Promise<void> {
+		const from = paths.project(source).notebook(nid);
+		const to = paths.project(destination).notebook(nid);
+		await copyMovePrefix(this.bucket, from.jobsPrefix, to.jobsPrefix, {
+			include: (key) => key.endsWith('/job.json'),
+			transform: (_key, bytes) => moveJson(bytes, (job) => ({ ...job, project_id: destination })),
+		});
+		await copyMovePrefix(this.bucket, from.jobIndexPrefix, to.jobIndexPrefix);
+	}
+
 	constructor(
 		private bucket: Bucket,
 		private catalog: CatalogService,
-	) {}
+	) {
+		guardNotebookMutations<JobsService>(this, bucket, {
+			createJob: notebookMutation,
+			updateJob: notebookMutation,
+			beginDelete: notebookMutation,
+			finishDelete: notebookMutation,
+		});
+	}
 
 	async listJobs(projectId: ProjectId, notebookId: NotebookId): Promise<JobDefinition[]> {
 		const jobs: JobDefinition[] = [];

@@ -96,12 +96,13 @@ describe('app operation budgets', () => {
 		expect(await f.proxy(true)).toMatchObject({ kind: 'forward' });
 		expect(renew).not.toHaveBeenCalled();
 		expect(counts(f.bucket.operations)).toMatchObject({
-			metadataReads: 21 * 4,
+			// Each authorization also checks the live notebook move fence.
+			metadataReads: 21 * 5,
 			identityReads: 0,
 			putAttempts: 0,
 			deletes: 0,
 		});
-		expect(heartbeatReads).toBe(5);
+		expect(heartbeatReads).toBe(6);
 	});
 
 	it('reads changed notebook constraints on the next proxy request', async () => {

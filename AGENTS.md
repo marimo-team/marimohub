@@ -133,7 +133,14 @@ stopped, replaces it with one ETag CAS.
 
 These CAS-managed records also have one writer each:
 
-- `BucketSearchIndex` owns `_system/search/projects/{pid}/{source}/head.json`, immutable search snapshots, and retained deletion tombstones. `SearchIndexer` owns resumable crawl checkpoints, immutable pages, and `_system/search/cursor.json`.
+- `NotebookMutationGate` owns `_system/notebook-mutations/{pid}.json`, including
+  writer admissions, move reservations, and retained source tombstones.
+- `NotebookMoveService` owns `_system/notebook-moves/{id}.json`. Transfer helpers
+  on existing owners run under its reservations. Offline recovery requires all
+  writers stopped; it retains unfinished move reservations.
+
+- `BucketSearchIndex` owns `_system/search/projects/{pid}/{source}/head.json`, immutable search snapshots, and retained deletion tombstones. `SearchIndexer` owns resumable crawl checkpoints, immutable pages, and `_system/search/cursor.json`. It also owns last-writer-wins refresh revisions at
+  `_system/search/refresh/{pid}.json`.
 - `ThumbnailService` owns each notebook-local `thumbnail.json` CAS record, immutable
   `thumbnails/{id}.png` images, and create-once `thumbnail-attempts/{sandbox-id}.json` markers.
 - `DeepLinkService` owns each slug at `_system/deep-links/{slug}.json` and each

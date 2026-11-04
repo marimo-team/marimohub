@@ -51,6 +51,14 @@ export class ConfiguredSourceControlRegistry implements SourceControlRegistry {
 		this.repositoryHosts = hosts;
 	}
 
+	assertRepositoryAllowed(provider: string, repository: string, projectId: ProjectId): void {
+		const policies = new Set([
+			this.readers.get(provider)?.authorize,
+			this.publishers.get(provider)?.authorize,
+		]);
+		for (const authorize of policies) authorize?.(repository, projectId);
+	}
+
 	getReader(provider: string, projectId?: ProjectId): SourceControlReader | undefined {
 		const registration = this.readers.get(provider);
 		if (!registration) return undefined;

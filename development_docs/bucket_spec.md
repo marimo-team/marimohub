@@ -1781,3 +1781,12 @@ crawl to an empty checkpoint after publishing the tombstone. Retain both records
 to fence delayed writers; reclaim detached pages and snapshots after the grace period.
 See the [search design](./search.md) for consistency assumptions, budgets, tradeoffs, scaling limits,
 and performance evidence. The [search guide](../docs/search.md) covers configuration.
+
+## Notebook moves
+
+`NotebookMoveService` owns the CAS transfer receipts under
+`_system/notebook-moves/`. `NotebookMutationGate` owns project writer admissions,
+move reservations, and retained source tombstones under `_system/notebook-mutations/`.
+Existing object owners copy their records under those reservations. The catalog
+changes through `CatalogService.mutateSnapshot`; search refresh requests go through
+`SearchIndexer`. See [notebook moves](./notebook_moves.md) for behavior and recovery.

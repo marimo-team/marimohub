@@ -1,3 +1,4 @@
+import { thumbnailPng } from '@marimo-hub/core/testing/thumbnail';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	AppPoolService,
@@ -2164,5 +2165,107 @@ describe('source discovery cancellation', () => {
 		expect(signal.reason).toBe(reason);
 		proceed.resolve();
 		await expectOk(await request);
+	});
+});
+
+it('moves prepared previews and hidden runtimes with their parent notebook', async () => {
+	const created = await expectOk<{ id: string }>(
+		await api.request('POST', base, body, { 'Idempotency-Key': 'preview' }),
+		202,
+	);
+	const record = await prepare(created.id);
+	const thumbnail = await api.deps.services.notebooks.thumbnails.setCustom(
+		pid,
+		record.current!.notebook_id,
+		thumbnailPng(),
+	);
+	const destination = await api.deps.services.projects.createProject(
+		{ name: 'Destination', description: '' },
+		ACTOR,
+	);
+	const meta = await api.deps.services.notebooks.getNotebookMeta(pid, nid);
+	await expectOk(
+		await api.request(
+			'POST',
+			`/projects/${pid}/notebooks/${nid}/move`,
+			{ destination_project_id: destination.id },
+			{ 'Idempotency-Key': 'preview-move', 'If-Match': `"${meta.updated_at}"` },
+		),
+	);
+	const replay = await expectOk<{ id: string }>(
+		await api.request('POST', `/projects/${destination.id}/notebooks/${nid}/previews`, body, {
+			'Idempotency-Key': 'preview',
+		}),
+		202,
+	);
+	expect(replay.id).toBe(record.id);
+	const moved = await api.deps.services.previews.get(destination.id, nid, record.id);
+	expect(moved).toEqual({ ...record, project_id: destination.id });
+	expect(
+		await api.deps.services.notebooks.thumbnails.metadata(
+			destination.id,
+			record.current!.notebook_id,
+		),
+	).toEqual(thumbnail);
+	expect(
+		await api.deps.services.notebooks.getNotebookContent(
+			destination.id,
+			record.current!.notebook_id,
+		),
+	).toContain('import marimo');
+	expect((await api.deps.services.previews.store.project(pid)).entries).toHaveLength(0);
+	expect(
+		(await api.deps.services.notebooks.listNotebooks(destination.id)).map((entry) => entry.id),
+	).toEqual([nid]);
+});
+
+it('blocks moves until storage writes from an aborted preview refresh settle', async () => {
+	const record = await create();
+	const destination = await api.deps.services.projects.createProject(
+		{ name: 'Destination', description: '' },
+		ACTOR,
+	);
+	const started = Promise.withResolvers<void>();
+	const finish = Promise.withResolvers<void>();
+	const put = api.bucket.put.bind(api.bucket);
+	vi.spyOn(api.bucket, 'put').mockImplementation(async (key, bytes, options) => {
+		if (key.endsWith('/preview-runtime.json')) {
+			started.resolve();
+			await finish.promise;
+		}
+		return put(key, bytes, options);
+	});
+	head = NEXT;
+	const controller = new AbortController();
+	const preparation = api.deps.services.previews.prepare(
+		record,
+		api.deps.sourceControl,
+		true,
+		controller.signal,
+	);
+	await started.promise;
+	controller.abort();
+	await preparation;
+	const input = {
+		source: pid,
+		destination: destination.id,
+		notebookId: nid,
+		actor: ACTOR,
+		idempotencyKey: 'late-write',
+		authorize: async () => {},
+	};
+	try {
+		await expect(api.deps.services.moves.move(input)).rejects.toMatchObject({ code: 'CONFLICT' });
+	} finally {
+		finish.resolve();
+	}
+	await vi.waitFor(async () => {
+		const gate = await (await api.bucket.get(paths.notebookMutation(pid)))!.json<{
+			writers: unknown[];
+		}>();
+		expect(gate.writers).toHaveLength(0);
+	});
+	await expect(api.deps.services.moves.move(input)).resolves.toMatchObject({
+		project_id: destination.id,
 	});
 });

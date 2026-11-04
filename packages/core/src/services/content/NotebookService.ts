@@ -1,3 +1,11 @@
+import {
+	NotebookMutationGate,
+	awaitNotebookWrites,
+	guardNotebookMutations,
+	notebookMutation,
+	projectMutation,
+} from './NotebookMutationGate';
+import { copyMovePrefix, moveJson } from './moveObjects';
 import { ResumableUploads } from './ResumableUploads';
 import type { WorkspaceLimits } from '../../integrations/remoteWorkspace';
 import { MetadataCache } from './metadataCache';
@@ -165,6 +173,37 @@ export class NotebookService {
 	readonly workspace: NotebookWorkspaceService;
 	readonly imports: NotebookImportService;
 
+	async removeMovedObjects(projectId: ProjectId, notebookId: NotebookId): Promise<void> {
+		await deleteByPrefix(this.bucket, `${paths.project(projectId).notebook(notebookId).base}/`);
+	}
+
+	async copyForMove(
+		source: ProjectId,
+		destination: ProjectId,
+		nid: NotebookId,
+		updatedAt: string,
+	): Promise<void> {
+		await copyMovePrefix(
+			this.bucket,
+			`${paths.project(source).notebook(nid).base}/`,
+			`${paths.project(destination).notebook(nid).base}/`,
+			{
+				include: (key) =>
+					!/^(jobs\/|job-index\/|proposals\/|thumbnail.json$|thumbnails\/|thumbnail-attempts\/|deep-links\/|uploads\/|workspace_mutation_claim.json$|integration_sync_token.json$|fs_snapshot.json$)/.test(
+						key,
+					),
+				transform: (key, bytes) =>
+					key === 'meta.json' || key === 'preview-runtime.json'
+						? moveJson(bytes, (meta) => ({
+								...meta,
+								project_id: destination,
+								updated_at: updatedAt,
+							}))
+						: bytes,
+			},
+		);
+	}
+
 	constructor(
 		private bucket: Bucket,
 		private catalog: CatalogService,
@@ -174,6 +213,19 @@ export class NotebookService {
 		repositoryHosts?: GitProviderHosts,
 		workspaceLimits?: WorkspaceLimits,
 	) {
+		guardNotebookMutations<NotebookService>(this, bucket, {
+			createNotebook: projectMutation,
+			stageImportNotebook: notebookMutation,
+			publishImportNotebook: notebookMutation,
+			duplicateNotebook: notebookMutation,
+			setSecurityLabels: notebookMutation,
+			updateNotebook: notebookMutation,
+			restoreVersion: notebookMutation,
+			commitSession: notebookMutation,
+			deleteNotebookWithMutation: notebookMutation,
+			setFsSnapshot: notebookMutation,
+			hardDeleteNotebook: notebookMutation,
+		});
 		this.metaCache = new MetadataCache(bucket, NOTEBOOK_META_CACHE_MAX_ENTRIES);
 		this.thumbnails = new ThumbnailService(bucket, this);
 		this.imports = new NotebookImportService(bucket, this);
@@ -301,6 +353,7 @@ export class NotebookService {
 		notebookId: NotebookId,
 		options: { consistency?: ReadConsistency } = {},
 	): Promise<NotebookMeta> {
+		await new NotebookMutationGate(this.bucket).assertReadable(projectId, notebookId);
 		const nb = paths.project(projectId).notebook(notebookId);
 		// Separate preview metadata keeps old replicas from stripping the preview marker.
 		const meta = await this.metaCache.read(
@@ -365,6 +418,7 @@ export class NotebookService {
 	}
 
 	async getNotebookSource(projectId: ProjectId, notebookId: NotebookId): Promise<Source> {
+		await new NotebookMutationGate(this.bucket).assertReadable(projectId, notebookId);
 		const key = paths.project(projectId).notebook(notebookId).source;
 		const obj = await this.bucket.get(key);
 		if (!obj) throw new NotFoundError(`Notebook ${notebookId} not found`);
@@ -901,7 +955,7 @@ export class NotebookService {
 
 			const ver = nb.version(versionId);
 			await assertWritable?.();
-			await Promise.all([
+			await awaitNotebookWrites([
 				this.bucket.put(nb.workspaceFile(workspaceSourcePolicy(source).entryNotebook), code),
 				this.bucket.put(nb.source, JSON.stringify(newSource)),
 				this.bucket.put(nb.deps, deps),
@@ -1049,7 +1103,7 @@ export class NotebookService {
 			const newSource = localSource(versionId, source.entry_notebook);
 
 			const ver = nb.version(versionId);
-			await Promise.all([
+			await awaitNotebookWrites([
 				// Live notebook files reflect the session's final state.
 				this.bucket.put(nb.workspaceFile(workspaceSourcePolicy(source).entryNotebook), input.code),
 				this.bucket.put(nb.deps, deps),
@@ -1102,7 +1156,7 @@ export class NotebookService {
 			const ver = nb.version(versionId);
 			const metaObj = await this.bucket.get(ver.meta);
 			if (metaObj) {
-				await Promise.all([
+				await awaitNotebookWrites([
 					...(input.html !== undefined
 						? [
 								this.bucket.put(ver.html, input.html, {

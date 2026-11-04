@@ -261,6 +261,7 @@ export interface SourceControlReader {
 
 /** Server-side source-control capabilities configured for this deployment. */
 export interface SourceControlRegistry {
+	assertRepositoryAllowed?(provider: string, repository: string, projectId: ProjectId): void;
 	readonly repositoryHosts?: GitProviderHosts;
 	getPublisher(provider: string, projectId?: ProjectId): SourceControlPublisher | undefined;
 	getReader(provider: string, projectId?: ProjectId): SourceControlReader | undefined;

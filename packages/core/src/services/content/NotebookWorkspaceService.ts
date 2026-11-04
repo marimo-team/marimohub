@@ -1,3 +1,4 @@
+import { guardNotebookMutations, notebookMutation } from './NotebookMutationGate';
 import { ResumableUploads, uploadStatus } from './ResumableUploads';
 import { KeyedSerialQueue } from '../../concurrency';
 import { z } from 'zod';
@@ -177,6 +178,14 @@ export class NotebookWorkspaceService {
 		private readonly owner: WorkspaceServiceOwner,
 		readonly limits: WorkspaceLimits = WORKSPACE_LIMITS,
 	) {
+		guardNotebookMutations<NotebookWorkspaceService>(this, bucket, {
+			withMutation: notebookMutation,
+			startUpload: notebookMutation,
+			putUploadPart: notebookMutation,
+			cancelUpload: notebookMutation,
+			completeUpload: notebookMutation,
+			sweepUploads: notebookMutation,
+		});
 		this.limits = validateWorkspaceLimits(limits);
 	}
 

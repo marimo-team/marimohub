@@ -1,3 +1,4 @@
+import { guardNotebookMutations, notebookMutation, projectMutation } from './NotebookMutationGate';
 import type { GitProviderHosts } from '../../integrations/gitRepo';
 import type { Bucket } from '../../ports/bucket';
 import { BadRequestError, ConflictError, NotFoundError } from '../../errors';
@@ -63,7 +64,14 @@ export class SyncedNotebookService {
 		private catalog: CatalogService,
 		private metrics: Metrics,
 		private hooks: SyncedNotebookServiceHooks,
-	) {}
+	) {
+		guardNotebookMutations<SyncedNotebookService>(this, bucket, {
+			create: projectMutation,
+			rotateToken: notebookMutation,
+			updateSource: notebookMutation,
+			sync: notebookMutation,
+		});
+	}
 
 	async create(
 		projectId: ProjectId,

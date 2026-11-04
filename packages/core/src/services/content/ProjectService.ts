@@ -1,3 +1,8 @@
+import {
+	NotebookMutationGate,
+	guardNotebookMutations,
+	projectMutation,
+} from './NotebookMutationGate';
 import { ResumableUploads } from './ResumableUploads';
 import { cachedRead } from '../../async';
 import { MetadataCache } from './metadataCache';
@@ -240,6 +245,15 @@ export class ProjectService {
 		private resolveIdentitiesByEmail: InviteIdentityResolver = async () => new Map(),
 		private deepLinks = new DeepLinkService(bucket, metrics),
 	) {
+		guardNotebookMutations<ProjectService>(this, bucket, {
+			updateProject: projectMutation,
+			setSecurityLabels: projectMutation,
+			addMemberWithMutation: projectMutation,
+			updateMemberRoleWithMutation: projectMutation,
+			removeMemberWithMutation: projectMutation,
+			deleteProjectWithMutation: projectMutation,
+			hardDeleteProject: projectMutation,
+		});
 		this.projectCache = new MetadataCache(bucket, METADATA_CACHE_MAX_ENTRIES);
 	}
 
@@ -249,14 +263,20 @@ export class ProjectService {
 			subject: AuthorizationSubject;
 			policy?: AuthorizationPolicy;
 			resourceSecurity?: ResourceSecurityPolicy;
-			action?: 'project.read' | 'app.read';
+			action?: 'project.read' | 'app.read' | 'notebook.manage';
 		},
 	): Promise<PublicProjectEntry[]> {
 		const authz = filter
 			? new AuthorizationService(filter.policy, filter.resourceSecurity)
 			: undefined;
 		const action = filter?.action ?? 'project.read';
-		if (filter && authz && !authz.credentialAllowsAction(filter.subject, action)) {
+		if (
+			filter &&
+			authz &&
+			(!authz.credentialAllowsAction(filter.subject, action) ||
+				(action === 'notebook.manage' &&
+					!authz.credentialAllowsAction(filter.subject, 'project.read')))
+		) {
 			throw new ForbiddenError('Token grant does not permit project listing');
 		}
 		const loaded = new Map<ProjectId, Promise<Project>>();
@@ -767,6 +787,15 @@ export class ProjectService {
 	}
 
 	private async claimProjectInvites(
+		candidate: SnapshotProjectEntry,
+		resolver: InviteIdentityResolver,
+	): Promise<number> {
+		return new NotebookMutationGate(this.bucket).write(candidate.id, undefined, () =>
+			this.claimProjectInvitesUnlocked(candidate, resolver),
+		);
+	}
+
+	private async claimProjectInvitesUnlocked(
 		candidate: SnapshotProjectEntry,
 		resolveIdentitiesByEmail: InviteIdentityResolver,
 	): Promise<number> {

@@ -26,7 +26,9 @@ import { WarmPoolRecordSchema } from '../services/runtime/WarmPoolStore';
 import { AppPoolSchema } from '../services/runtime/AppPoolRouter';
 import { ThumbnailRecordSchema } from '../services/content/ThumbnailService';
 import { DeepLinkRecordSchema } from '../deepLinks';
-import type { z } from 'zod';
+import { z } from 'zod';
+import { NotebookMoveSchema } from '../services/content/NotebookMoveService';
+import { NotebookMutationGateSchema } from '../services/content/NotebookMutationGate';
 import { jsonSchema } from './jsonSchema';
 import type {
 	ImportId,
@@ -133,6 +135,33 @@ const orgIntegration = paths.orgIntegration(IID);
 const integrationVersionTemplate = (key: string) => key.replace('000000', '{n}');
 
 const OBJECTS: BucketObject[] = [
+	{
+		name: 'NotebookMove',
+		key: paths.notebookMove('{id}'),
+		schema: NotebookMoveSchema,
+		summary: 'Resumable cross-project notebook transfer.',
+		mutability: 'cas',
+		owner: 'NotebookMoveService',
+		tag: 'notebook',
+	},
+	{
+		name: 'NotebookMutationGate',
+		key: paths.notebookMutation(PID),
+		schema: NotebookMutationGateSchema,
+		summary: 'Writer admissions, move reservations, and retained source tombstones.',
+		mutability: 'cas',
+		owner: 'NotebookMutationGate',
+		tag: 'notebook',
+	},
+	{
+		name: 'SearchRefresh',
+		key: '_system/search/refresh/{pid}.json',
+		schema: z.string(),
+		summary: 'Revision requesting a fresh project search crawl.',
+		mutability: 'last-writer-wins',
+		owner: 'SearchIndexer',
+		tag: 'search',
+	},
 	{
 		name: 'SearchHead',
 		key: '_system/search/projects/{pid}/{source}/head.json',

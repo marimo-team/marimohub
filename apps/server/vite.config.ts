@@ -22,6 +22,7 @@ export default defineConfig({
 			'src/duckdbWorker.ts',
 			'src/postgresWorker.ts',
 			'src/catalog-recovery.ts',
+			'src/notebook-move-recovery.ts',
 		],
 		platform: 'node',
 		format: ['esm'],

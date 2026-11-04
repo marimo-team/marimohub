@@ -1,3 +1,4 @@
+import { guardNotebookMutations, projectMutation } from './NotebookMutationGate';
 import { z } from 'zod';
 import {
 	BadRequestError,
@@ -67,7 +68,12 @@ export class NotebookImportService {
 	constructor(
 		private bucket: Bucket,
 		private notebooks: NotebookService,
-	) {}
+	) {
+		guardNotebookMutations<NotebookImportService>(this, bucket, {
+			publish: projectMutation,
+			sweep: projectMutation,
+		});
+	}
 
 	async prepare(projectId: ProjectId, bytes: Uint8Array, actor: UserId) {
 		const files = this.parse(bytes);

@@ -1098,6 +1098,23 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/move': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Move a notebook to another project */
+		post: operations['notebooks.move'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/thumbnails': {
 		parameters: {
 			query?: never;
@@ -5727,6 +5744,8 @@ export interface operations {
 			query?: {
 				limit?: number;
 				cursor?: string;
+				/** @description Only include projects the caller can manage notebooks in. */
+				managed_only?: 'true' | 'false';
 				/** @description Path-tag namespace. Matches whole path segments: `research` matches `research` and `research/vision`, but not `researchx`. Segments are separated by `/`. Each segment must start with a lowercase letter or digit, followed by lowercase letters, digits, `.`, `_`, or `-`. An empty value applies no filter. */
 				tag_namespace?: string;
 				/** @description Project status to match. Deleted projects are excluded when omitted. */
@@ -12688,6 +12707,126 @@ export interface operations {
 			};
 			/** @description Not found */
 			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.move': {
+		parameters: {
+			query?: never;
+			header: {
+				/** @description Stable client-generated key reused for retries of the same operation. */
+				'idempotency-key': string;
+				'if-match': string;
+			};
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					destination_project_id: string;
+				};
+			};
+		};
+		responses: {
+			/** @description Notebook moved */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookMeta'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Precondition failed (If-Match did not match the current version) */
+			412: {
 				headers: {
 					[name: string]: unknown;
 				};

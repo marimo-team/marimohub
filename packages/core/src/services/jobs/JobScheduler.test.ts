@@ -1130,10 +1130,11 @@ describe('JobScheduler', () => {
 			const s = scheduler(fakeRunner(env, 'hang'));
 			const result = await s.tick();
 			expect(result).toMatchObject({ fired: 0, skipped: 1 });
-			expect((await env.jobRuns.listRuns(pid, nid, job.id)).map((r) => r.status).sort()).toEqual([
-				'provisioning',
-				'skipped',
-			]);
+			const runs = await env.jobRuns.listRuns(pid, nid, job.id);
+			expect(runs.filter((run) => run.status === 'skipped')).toHaveLength(1);
+			expect(
+				runs.filter((run) => ['queued', 'provisioning', 'running'].includes(run.status)),
+			).toHaveLength(1);
 		});
 
 		it('does not retry a cancelled run', async () => {

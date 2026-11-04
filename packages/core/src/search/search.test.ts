@@ -24,6 +24,39 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 describe('authorized search', () => {
+	it('refreshes both projects after a move without waiting for the recrawl interval', async () => {
+		const f = await setup();
+		const destination = await f.services.projects.createProject(
+			{ name: 'Destination', description: '' },
+			owner.id,
+		);
+		const indexer = new SearchIndexer(
+			f.bucket,
+			f.index,
+			[f.source],
+			f.services.catalog,
+			f.services.projects,
+		);
+		await indexer.step(destination.id, f.source, signal());
+		await f.services.moves.move({
+			source: f.project.id,
+			destination: destination.id,
+			notebookId: f.notebook.id,
+			actor: owner.id,
+			idempotencyKey: 'search-move',
+			authorize: async () => {},
+		});
+		expect((await f.search.search(owner, f.query)).items).toHaveLength(0);
+		await indexer.step(f.project.id, f.source, signal());
+		await indexer.step(destination.id, f.source, signal());
+		expect(
+			(await f.search.search(owner, { ...f.query, project_id: destination.id })).items,
+		).toHaveLength(1);
+		expect(
+			(await f.index.read({ projectId: f.project.id, source: f.source.id })).snapshot?.documents,
+		).toHaveLength(0);
+	});
+
 	it.each(['राजस्व', 'รายได้', 'café'])('keeps combining marks in the token %s', (text) => {
 		expect(terms(`${text} ${text}`)).toEqual([text.normalize('NFC')]);
 	});

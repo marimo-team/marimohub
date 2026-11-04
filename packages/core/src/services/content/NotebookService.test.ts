@@ -130,7 +130,9 @@ describe('NotebookService', () => {
 			expect(
 				await notebooks.getSecurityLabels(projectId, notebook.id, { consistency: 'validated' }),
 			).toEqual(labels);
-			expect(get).toHaveBeenCalledTimes(1);
+			expect(
+				get.mock.calls.filter(([key]) => !key.startsWith(paths.notebookMutations)),
+			).toHaveLength(1);
 			await notebooks.deleteNotebook(projectId, notebook.id, ACTOR);
 			await expect(
 				notebooks.getSecurityLabels(projectId, notebook.id, { consistency: 'validated' }),
@@ -429,8 +431,10 @@ describe('NotebookService', () => {
 			).rejects.toThrow('catalog boom');
 
 			// Saga compensation deleted the orphaned notebook blobs: no new keys remain.
-			const after = (await listAllKeys(bucket, '')).sort();
-			expect(after).toEqual(before);
+			const after = (await listAllKeys(bucket, ''))
+				.filter((key) => !key.startsWith(paths.notebookMutations))
+				.sort();
+			expect(after).toEqual(before.filter((key) => !key.startsWith(paths.notebookMutations)));
 		});
 	});
 

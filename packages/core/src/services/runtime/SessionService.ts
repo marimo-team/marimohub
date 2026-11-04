@@ -1,3 +1,5 @@
+import { copyMoveObject } from '../content/moveObjects';
+import { guardNotebookMutations, notebookMutation } from '../content/NotebookMutationGate';
 import { readForInspection } from './inspection';
 import type { Bucket, BucketObject } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
@@ -150,11 +152,55 @@ const byCapOrder = (a: Session, b: Session) => {
 };
 
 export class SessionService {
+	async assertReadyForMove(
+		projectId: ProjectId,
+		notebookIds: ReadonlySet<NotebookId>,
+	): Promise<void> {
+		for (const item of await listAllObjects(this.bucket, paths.sessionsForProject(projectId))) {
+			const object = await this.bucket.get(item.key);
+			if (!object) continue;
+			const session = await readStored(SessionSchema, object, item.key);
+			if (
+				notebookIds.has(session.notebook_id) &&
+				(!['terminated', 'failed'].includes(session.status) ||
+					(session.sandbox_id && !session.sandbox_reclaimed_at))
+			)
+				throw new ConflictError('Stop notebook and preview sessions before moving');
+		}
+	}
+
+	async copyPruneCutoffForMove(
+		source: ProjectId,
+		destination: ProjectId,
+		nid: NotebookId,
+	): Promise<void> {
+		await copyMoveObject(
+			this.bucket,
+			paths.versionPruneCutoff(source, nid),
+			paths.versionPruneCutoff(destination, nid),
+		);
+	}
+
+	async finishNotebookMove(source: ProjectId, nid: NotebookId): Promise<void> {
+		await this.bucket.delete([
+			paths.editorClaim(source, nid),
+			paths.appClaim(source, nid),
+			paths.versionPruneCutoff(source, nid),
+		]);
+	}
+
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
 		private readonly recordCache: EtagRecordCache<Session> = new EtagRecordCache(),
-	) {}
+	) {
+		guardNotebookMutations<SessionService>(this, bucket, {
+			createSession: (input) => notebookMutation(input.project_id, input.notebook_id),
+			advanceVersionPruneCutoff: notebookMutation,
+			claimEditor: notebookMutation,
+			claimApp: notebookMutation,
+		});
+	}
 
 	/**
 	 * Compare-and-swap a session record so every status transition is atomic: a

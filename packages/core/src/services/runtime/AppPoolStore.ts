@@ -7,7 +7,7 @@ import { listAllObjects } from '../catalog/storage';
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
-import { NotFoundError } from '../../errors';
+import { ConflictError, NotFoundError } from '../../errors';
 import { paths } from '../../paths';
 import { readStored } from '../../schema';
 import { withCasRetry } from '../catalog/cas';
@@ -34,6 +34,37 @@ const InspectablePoolSchema = AppPoolSchema.refine(
 );
 
 export class AppPoolStore {
+	async freezeForMove(pid: ProjectId, nid: NotebookId): Promise<void> {
+		await withCasRetry(this.bucket, async (cas) => {
+			const key = paths.appPool(pid, nid);
+			const object = await this.bucket.get(key);
+			const pool = object ? await readStored(AppPoolSchema, object, key) : emptyAppPool();
+			if (pool.members.length > 0)
+				throw new ConflictError('Wait for app pool cleanup before moving');
+			await cas.put(
+				key,
+				JSON.stringify({ ...emptyAppPool(), deleted_at: pool.deleted_at ?? Date.now() }),
+				object ? { onlyIfEtagMatches: object.etag } : { onlyIfNotExists: true },
+			);
+		});
+	}
+
+	async finishNotebookMove(
+		source: ProjectId,
+		destination: ProjectId,
+		nid: NotebookId,
+	): Promise<void> {
+		for (const pid of [source, destination]) {
+			await withCasRetry(this.bucket, async (cas) => {
+				const key = paths.appPool(pid, nid);
+				const object = await this.bucket.get(key);
+				if (!object) return;
+				const next = { ...emptyAppPool(), ...(pid === source ? { deleted_at: Date.now() } : {}) };
+				await cas.put(key, JSON.stringify(next), { onlyIfEtagMatches: object.etag });
+			});
+		}
+	}
+
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,

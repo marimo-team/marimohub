@@ -1,3 +1,4 @@
+import { guardNotebookMutations, notebookMutation } from './NotebookMutationGate';
 import { ulid } from 'ulidx';
 import type { Bucket } from '../../ports/bucket';
 import type { Metrics } from '../../ports/metrics';
@@ -19,10 +20,51 @@ function sameTarget(a: DeepLinkTarget, b: DeepLinkTarget): boolean {
 }
 
 export class DeepLinkService {
+	async moveNotebook(source: ProjectId, destination: ProjectId, nid: NotebookId): Promise<void> {
+		const prefix = paths.project(source).notebook(nid).deepLinksPrefix;
+		for (const key of await listAllKeys(this.bucket, prefix)) {
+			const slug = key.slice(prefix.length).replace(/\.json$/, '');
+			await putIfAbsent(
+				this.bucket,
+				paths.project(destination).notebook(nid).deepLinkIndex(slug),
+				'',
+			);
+			await withCasRetry(this.bucket, async (cas) => {
+				const current = await this.read(slug);
+				if (
+					!current ||
+					'released' in current.record ||
+					current.record.target.project_id !== source ||
+					current.record.target.notebook_id !== nid
+				)
+					return;
+				await cas.put(
+					paths.deepLink(slug),
+					JSON.stringify({
+						...current.record,
+						target: { ...current.record.target, project_id: destination },
+					}),
+					{ onlyIfEtagMatches: current.etag },
+				);
+			});
+		}
+	}
+
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
-	) {}
+	) {
+		guardNotebookMutations<DeepLinkService>(this, bucket, {
+			register: (slug, target) => {
+				this.slug(slug);
+				return notebookMutation(target.project_id, target.notebook_id);
+			},
+			release: (slug, target) => {
+				this.slug(slug);
+				return notebookMutation(target.project_id, target.notebook_id);
+			},
+		});
+	}
 
 	private slug(value: string): string {
 		const result = DeepLinkSlugSchema.safeParse(value);

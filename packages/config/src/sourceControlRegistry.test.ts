@@ -53,6 +53,23 @@ class Provider implements SourceControlReader, SourceControlPublisher {
 }
 
 describe('ConfiguredSourceControlRegistry', () => {
+	it('checks reader and publisher repository policy without external calls', () => {
+		const adapter = new Provider();
+		const readPolicy = vi.fn();
+		const publishPolicy = vi.fn(() => {
+			throw new Error('Destination denied');
+		});
+		const registry = new ConfiguredSourceControlRegistry([
+			{ reader: adapter, authorize: readPolicy },
+			{ publisher: adapter, authorize: publishPolicy },
+		]);
+		expect(() => registry.assertRepositoryAllowed('test', 'team/repo', projectId)).toThrow(
+			'Destination denied',
+		);
+		expect(readPolicy).toHaveBeenCalledWith('team/repo', projectId);
+		expect(publishPolicy).toHaveBeenCalledWith('team/repo', projectId);
+	});
+
 	it('keeps adapter receivers and forwards project authorization for every operation', async () => {
 		const adapter = new Provider();
 		const authorize = vi.fn();

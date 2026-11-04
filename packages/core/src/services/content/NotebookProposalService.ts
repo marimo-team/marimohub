@@ -1,4 +1,10 @@
-import { mapWithConcurrency } from '../../concurrency';
+import {
+	NotebookMutationGate,
+	guardNotebookMutations,
+	notebookMutation,
+} from './NotebookMutationGate';
+import { copyMovePrefix, moveJson } from './moveObjects';
+import { forEachConcurrentUntilFailure } from '../../async';
 import { Millis } from '../../duration';
 import {
 	ConflictError,
@@ -42,7 +48,7 @@ import type {
 	Session,
 } from '../../schema';
 import { mutateObject } from '../catalog/cas';
-import { listAllObjects } from '../catalog/storage';
+import { deleteByPrefix, listAllObjects } from '../catalog/storage';
 import { sessionMode } from '../runtime/sessionState';
 import { metricsObserver, saga } from '../../saga';
 import { captureProposalChanges } from './proposalCapture';
@@ -103,10 +109,36 @@ interface PublishedChangeRequestTarget {
 }
 
 export class NotebookProposalService {
+	async finishMove(source: ProjectId, nid: NotebookId): Promise<void> {
+		await deleteByPrefix(this.bucket, `_system/proposal-payloads/${source}/${nid}/`);
+	}
+
+	async copyForMove(source: ProjectId, destination: ProjectId, nid: NotebookId): Promise<void> {
+		await copyMovePrefix(
+			this.bucket,
+			`${paths.project(source).notebook(nid).base}/proposals/`,
+			`${paths.project(destination).notebook(nid).base}/proposals/`,
+		);
+		await copyMovePrefix(
+			this.bucket,
+			`_system/proposal-payloads/${source}/${nid}/`,
+			`_system/proposal-payloads/${destination}/${nid}/`,
+			{
+				transform: (_key, bytes) =>
+					moveJson(bytes, (marker) => ({ ...marker, project_id: destination })),
+			},
+		);
+	}
+
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
-	) {}
+	) {
+		guardNotebookMutations<NotebookProposalService>(this, bucket, {
+			captureProposalWithOutcome: (input) => notebookMutation(input.projectId, input.notebookId),
+			publishChangeRequest: (input) => notebookMutation(input.projectId, input.notebookId),
+		});
+	}
 
 	async resolveSourceRevision(
 		projectId: ProjectId,
@@ -285,10 +317,10 @@ export class NotebookProposalService {
 					}
 				}
 
-				await mapWithConcurrency(
-					capturedChanges.changes,
-					16,
-					async ({ change, content }, index) => {
+				await forEachConcurrentUntilFailure({
+					items: capturedChanges.changes,
+					concurrency: 16,
+					run: async ({ change, content }, index) => {
 						if (change.operation === 'delete') return;
 						if (!content)
 							throw new ConflictError(`Captured proposal change ${index} has no content`);
@@ -309,7 +341,7 @@ export class NotebookProposalService {
 							}
 						}
 					},
-				);
+				});
 
 				const publication: ProposalPublication = {
 					state: 'pending',
@@ -391,17 +423,23 @@ export class NotebookProposalService {
 				if (Date.parse(marker.expires_at) + DEFAULT_PROPOSAL_PAYLOAD_SWEEP_GRACE_MS > nowMs) {
 					continue;
 				}
-				const proposalPaths = paths
-					.project(marker.project_id)
-					.notebook(marker.notebook_id)
-					.proposal(marker.proposal_id);
-				if (marker.change_indexes.length > 0) {
-					await this.bucket.delete(
-						marker.change_indexes.map((index) => proposalPaths.change(index)),
-					);
-				}
-				await this.bucket.delete(listed.key);
-				pruned++;
+				await new NotebookMutationGate(this.bucket).write(
+					marker.project_id,
+					marker.notebook_id,
+					async () => {
+						const proposalPaths = paths
+							.project(marker.project_id)
+							.notebook(marker.notebook_id)
+							.proposal(marker.proposal_id);
+						if (marker.change_indexes.length > 0) {
+							await this.bucket.delete(
+								marker.change_indexes.map((index) => proposalPaths.change(index)),
+							);
+						}
+						await this.bucket.delete(listed.key);
+						pruned++;
+					},
+				);
 			} catch (error) {
 				logOperationalError(
 					'proposal_payload_prune_failed',

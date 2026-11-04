@@ -295,6 +295,10 @@ function projectPaths(pid: ProjectId): ProjectPaths {
 }
 
 export const paths = {
+	notebookMoves: '_system/notebook-moves/',
+	notebookMove: (id: string) => `_system/notebook-moves/${id}.json`,
+	notebookMutations: '_system/notebook-mutations/',
+	notebookMutation: (pid: ProjectId) => `_system/notebook-mutations/${pid}.json`,
 	deepLink: (slug: string) => `_system/deep-links/${slug}.json`,
 	catalog: '_system/catalog.json',
 	snapshot: (id: SnapshotId) => `_system/snapshots/${id}.json`,

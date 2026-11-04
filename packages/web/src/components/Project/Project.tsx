@@ -1,3 +1,6 @@
+import { pendingNotebookMoves } from '@/components/Notebook/pendingMoves';
+import type { MovableNotebook } from '@/components/Notebook/pendingMoves';
+import { MoveNotebookDialog } from '@/components/Notebook/MoveNotebookDialog';
 import { TagFieldValue } from '@/lib/tagFieldValue';
 import { isPathTag } from '@marimo-hub/core/tag-paths';
 import { hasNotebookPreviews } from '@/api/previews';
@@ -202,6 +205,8 @@ function useProjectContent() {
 	const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
 	const deleteModal = useDialogTarget<NotebookEntry>();
 	const renameModal = useDialogTarget<NotebookEntry>();
+	const [pendingMove] = useState(() => pendingNotebookMoves(pid!)[0]);
+	const moveModal = useDialogTarget<MovableNotebook>(pendingMove?.notebook);
 	const baseImageModal = useDialogTarget<NotebookEntry>();
 	const computeProfileModal = useDialogTarget<NotebookEntry>();
 	const historyModal = useDialogTarget<NotebookEntry>();
@@ -495,6 +500,7 @@ function useProjectContent() {
 	const handleNotebookAction = (nb: NotebookEntry, key: string, stoppableEdit?: Session) => {
 		if (key === 'thumbnail') thumbnailModal.open(nb);
 		else if (key === 'rename') renameModal.open(nb);
+		else if (key === 'move') moveModal.open(nb);
 		else if (key === 'duplicate') handleDuplicate(nb);
 		else if (key === 'stop-kernel' && stoppableEdit)
 			stopModal.open({ notebook: nb, session: stoppableEdit });
@@ -567,6 +573,9 @@ function useProjectContent() {
 					? [{ id: 'thumbnail', label: 'Edit thumbnail', icon: <FileText className="size-4" /> }]
 					: []),
 				{ id: 'duplicate', label: 'Duplicate', icon: <Copy className="size-4" /> },
+				...(canManage
+					? [{ id: 'move', label: 'Move to project…', icon: <FolderArchive className="size-4" /> }]
+					: []),
 			],
 			runtimeActions,
 			[
@@ -939,6 +948,16 @@ function useProjectContent() {
 					)}
 				</div>
 			</FormDialog>
+
+			{moveModal.target && (
+				<MoveNotebookDialog
+					key={moveModal.target.id}
+					isOpen={moveModal.isOpen}
+					onClose={moveModal.close}
+					projectId={pid!}
+					notebook={notebooks.find((item) => item.id === moveModal.target!.id) ?? moveModal.target}
+				/>
+			)}
 
 			{renameModal.target && (
 				<RenameNotebookDialog

@@ -1,3 +1,4 @@
+import { NotebookMutationGate } from '../content/NotebookMutationGate';
 import type { z } from 'zod';
 import type { Bucket, BucketObjectBody } from '../../ports/bucket';
 import { ConflictError } from '../../errors';
@@ -128,6 +129,7 @@ export async function planCatalogRecovery(
 	bucket: Bucket,
 	source: CatalogRecoverySource,
 ): Promise<CatalogRecoveryReport> {
+	await NotebookMutationGate.assertRecoverySafe(bucket);
 	const before = await inventory(bucket);
 	const keys = new Set(before.objects.map((object) => object.key));
 	const projectKeys = indexProjectKeys(keys);

@@ -33,6 +33,10 @@ import type {
 } from './contracts';
 
 export class SearchIndexer {
+	static async requestRefresh(bucket: Bucket, projectId: ProjectId): Promise<void> {
+		await bucket.put(searchPaths.refresh(projectId), JSON.stringify(crypto.randomUUID()));
+	}
+
 	constructor(
 		private readonly bucket: Bucket,
 		private readonly index: SearchSnapshotStore,
@@ -48,11 +52,13 @@ export class SearchIndexer {
 		const paths = searchPaths.scope(scope);
 		const key = paths.checkpoint;
 		const stored = await this.bucket.get(key);
+		const refresh = await this.bucket.get(searchPaths.refresh(projectId));
 		const build = SearchBuildSchema.parse({
 			revision: 1,
 			source_revision: source.revision,
 			configuration: JSON.stringify({
 				source: source.configuration ?? '',
+				refresh: refresh ? await refresh.json() : null,
 				embedding: source.embeddable ? (this.embeddings?.space ?? null) : null,
 			}),
 		});
