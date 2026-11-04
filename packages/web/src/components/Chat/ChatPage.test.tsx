@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { jsonError, jsonOk, renderWithClient } from '@/test/render';
+import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
 import { makeCapabilities } from '@/test/apiStub';
 import { notebookKeys } from '@/api/queryKeys';
 import { ChatPage } from './ChatPage';
@@ -98,7 +98,8 @@ function setup(
 	options: {
 		route?: string;
 		listFails?: boolean;
-		detailResponse?: Promise<Response> | Response | (() => Response | Promise<Response>);
+		detailResponse?: Promise<Response> | Response | ((cid: string) => Response | Promise<Response>);
+		conversations?: { id: string; title: string }[];
 		createResponse?: Promise<Response>;
 		streamResponse?: Promise<Response> | (() => Response | Promise<Response>);
 		reconnectResponse?: () => Response;
@@ -174,12 +175,20 @@ function setup(
 				listRequests += 1;
 				if (options.listFails && listRequests === 1)
 					return jsonError('INTERNAL_ERROR', 'History unavailable');
-				return jsonOk({ conversations: deleted ? [] : [{ ...record, message_count: 1 }] });
+				return jsonOk({
+					conversations: deleted
+						? []
+						: (options.conversations ?? [record]).map((item) => ({
+								...record,
+								...item,
+								message_count: 1,
+							})),
+				});
 			}
 			if (path.includes('/conversations/'))
 				return (
 					(typeof options.detailResponse === 'function'
-						? options.detailResponse()
+						? options.detailResponse(path.split('/').at(-1)!)
 						: options.detailResponse) ?? jsonOk({ conversation: current })
 				);
 			return jsonOk({
@@ -213,6 +222,7 @@ beforeAll(() =>
 );
 afterAll(() => Reflect.deleteProperty(HTMLElement.prototype, 'scrollTo'));
 beforeEach(() => {
+	installMatchMedia();
 	sessionStorage.clear();
 	localStorage.clear();
 	vi.stubGlobal(
@@ -226,11 +236,65 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('ChatPage', () => {
-	it('starts a conversation from home, streams the reply, and refreshes project data', async () => {
+	it('keeps the empty state focused and fills the composer from a prompt chip', async () => {
+		const { user, writes } = setup();
+		await screen.findByRole('heading', { name: 'How can I help?' });
+		expect(screen.queryByText('Recent conversations')).not.toBeInTheDocument();
+		expect(screen.queryByRole('link', { name: 'Sales report' })).not.toBeInTheDocument();
+		await user.click(screen.getByRole('button', { name: 'Explore this project' }));
+		expect(textbox()).toHaveFocus();
+		expect(textbox()).toHaveValue('Give me an overview of this project and what I can work on.');
+		expect(writes).toEqual([]);
+	});
+
+	it('switches between conversations without closing history and preserves the draft when toggling it', async () => {
+		const { user } = setup({
+			conversations: [
+				{ id: 'conversation-1', title: 'First chat' },
+				{ id: 'conversation-2', title: 'Second chat' },
+			],
+			detailResponse: (cid) =>
+				jsonOk({
+					conversation: {
+						...record,
+						id: cid,
+						messages: [textMessage(`reply-${cid}`, 'assistant', `Answer for ${cid}`)],
+					},
+				}),
+		});
+		await user.click(await screen.findByRole('button', { name: 'History' }));
+		const history = screen.getByRole('complementary', { name: 'Your conversations' });
+		await user.click(within(history).getByRole('button', { name: /^First chat/ }));
+		await screen.findByText('Answer for conversation-1');
+		await user.click(within(history).getByRole('button', { name: /^Second chat/ }));
+		await screen.findByText('Answer for conversation-2');
+		expect(within(history).getByRole('button', { name: /^Second chat/ })).toHaveAttribute(
+			'aria-current',
+			'page',
+		);
+		await user.click(within(history).getByRole('button', { name: /^First chat/ }));
+		await screen.findByText('Answer for conversation-1');
+		await user.type(textbox(), 'Keep this draft');
+		await user.click(within(history).getByRole('button', { name: /^First chat/ }));
+		expect(textbox()).toHaveValue('Keep this draft');
+		await user.click(screen.getByRole('button', { name: 'Collapse history' }));
+		expect(
+			screen.queryByRole('complementary', { name: 'Your conversations' }),
+		).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'History' })).toHaveAttribute(
+			'aria-expanded',
+			'false',
+		);
+		await user.click(screen.getByRole('button', { name: 'History' }));
+		expect(textbox()).toHaveValue('Keep this draft');
+		expect(screen.getByRole('complementary', { name: 'Your conversations' })).toBeVisible();
+	});
+
+	it('starts a conversation from the empty state, streams the reply, and refreshes project data', async () => {
 		const { user, writes, client } = setup();
 		client.setQueryData(notebookKeys.detail('sales', 'existing'), { title: 'Cached notebook' });
 		client.setQueryData(notebookKeys.detail('finance', 'existing'), { title: 'Other notebook' });
-		await screen.findByRole('heading', { name: 'What would you like to do?' });
+		await screen.findByRole('heading', { name: 'How can I help?' });
 		await user.type(textbox(), 'What notebooks are here?');
 		await user.click(screen.getByRole('button', { name: 'Send message' }));
 		expect(await screen.findByText('Live project answer')).toBeInTheDocument();
@@ -353,15 +417,22 @@ describe('ChatPage', () => {
 	it('opens saved conversations through accessible history and confirms deletion', async () => {
 		const { user, writes } = setup();
 		await user.click(await screen.findByRole('button', { name: 'History' }));
-		const history = await screen.findByRole('dialog', { name: 'Your conversations' });
+		const history = await screen.findByRole('complementary', { name: 'Your conversations' });
 		await user.click(within(history).getByRole('button', { name: /^Saved investigation/ }));
 		expect(await screen.findByText('Persisted project findings')).toBeInTheDocument();
+		expect(within(history).getByRole('button', { name: /^Saved investigation/ })).toHaveAttribute(
+			'aria-current',
+			'page',
+		);
 		expect(screen.getByTestId('location')).toHaveTextContent('conversation=conversation-1');
-		await user.click(screen.getByRole('button', { name: 'History' }));
+		expect(history).toBeVisible();
 		await user.click(
-			within(screen.getByRole('dialog', { name: 'Your conversations' })).getByRole('button', {
-				name: 'Delete conversation Saved investigation',
-			}),
+			within(screen.getByRole('complementary', { name: 'Your conversations' })).getByRole(
+				'button',
+				{
+					name: 'Delete conversation Saved investigation',
+				},
+			),
 		);
 		expect(writes).toHaveLength(0);
 		await user.click(
@@ -440,7 +511,7 @@ describe('ChatPage', () => {
 		const { user } = setup({ listFails: true });
 		await screen.findByText('History unavailable');
 		await user.click(screen.getByRole('button', { name: 'Retry' }));
-		await screen.findByRole('heading', { name: 'What would you like to do?' });
+		await screen.findByRole('heading', { name: 'How can I help?' });
 		expect(screen.queryByText('Select a conversation first')).not.toBeInTheDocument();
 		await user.type(textbox(), 'Ready');
 		expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();

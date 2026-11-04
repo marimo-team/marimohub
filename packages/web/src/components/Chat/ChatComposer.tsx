@@ -29,7 +29,7 @@ export function ChatComposer({
 	onStop?: () => void;
 }) {
 	return (
-		<div className={cn('mx-auto w-full', home ? 'max-w-4xl' : 'max-w-3xl')}>
+		<div className="mx-auto w-full max-w-3xl">
 			{error ? (
 				<p role="alert" className="mb-3 text-sm text-destructive">
 					{error}
@@ -51,7 +51,7 @@ export function ChatComposer({
 					aria-label="Message the project assistant"
 					value={draft}
 					onChange={(event) => onDraftChange(event.target.value)}
-					rows={1}
+					rows={home ? 3 : 1}
 					maxLength={MAX_MESSAGE_CHARACTERS}
 					placeholder={queueing ? 'Queue the next message…' : 'What can I help you with?'}
 					className="max-h-36 min-h-7 min-w-0 flex-1 resize-none bg-transparent py-1 text-sm leading-6 outline-none placeholder:text-muted-foreground"
@@ -89,7 +89,6 @@ export function ChatComposer({
 				)}
 			</form>
 			<div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-				{home ? <span>Uses your project permissions · changes ask for consent</span> : null}
 				<span>
 					{queueing
 						? 'Enter to queue · the button stops the response while the box is empty'

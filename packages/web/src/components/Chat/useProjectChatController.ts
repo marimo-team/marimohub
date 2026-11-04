@@ -129,11 +129,11 @@ export function useProjectChatController(pid: string) {
 	const home = !cid;
 	const canSubmit = canSend || canQueue;
 	const select = (id: string | null) => {
+		if (id !== null && id === cid) return;
 		setParams(id ? { conversation: id } : {});
 		setError(null);
 		setDraft('');
 		chat.clearQueue();
-		setHistoryOpen(false);
 	};
 	const report = (cause: unknown, fallback: string) => {
 		if (mounted.current) setError(cause instanceof Error ? cause.message : fallback);
@@ -300,6 +300,5 @@ export function useProjectChatController(pid: string) {
 			if (!cid) return Promise.resolve({ accepted: false });
 			return decide.mutateAsync({ cid, rid, decision });
 		},
-		projectPath: `/projects/${encodeURIComponent(pid)}`,
 	};
 }
