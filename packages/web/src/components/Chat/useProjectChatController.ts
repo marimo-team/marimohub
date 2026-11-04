@@ -126,7 +126,7 @@ export function useProjectChatController(pid: string) {
 		latestAssistant?.parts.some((part) => part.type === 'text' && part.text.trim()),
 	);
 	const conversations = list.data?.conversations ?? [];
-	const home = !cid;
+	const home = !cid || (chat.ready && messages.length === 0 && !busy);
 	const canSubmit = canSend || canQueue;
 	const select = (id: string | null) => {
 		if (id !== null && id === cid) return;
@@ -217,7 +217,10 @@ export function useProjectChatController(pid: string) {
 	};
 	const openPane = async () => {
 		if (cid) {
-			setPaneOpen(!paneOpen);
+			const next = new URLSearchParams(params);
+			next.delete('inspect');
+			next.set('notebook', paneOpen && !inspect ? '0' : '1');
+			setParams(next);
 			return;
 		}
 		try {

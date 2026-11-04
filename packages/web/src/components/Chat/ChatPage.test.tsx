@@ -229,6 +229,7 @@ beforeEach(() => {
 		'ResizeObserver',
 		class {
 			observe = vi.fn();
+			unobserve = vi.fn();
 			disconnect = vi.fn();
 		},
 	);
@@ -911,6 +912,67 @@ describe('ChatPage', () => {
 	});
 
 	describe('notebook pane', () => {
+		it('keeps the starting screen for an existing chat with no messages', async () => {
+			const { user, writes } = setup({
+				route: saved,
+				detailResponse: jsonOk({ conversation: { ...record, messages: [] } }),
+			});
+			await screen.findByRole('heading', { name: 'How can I help?' });
+			await user.click(screen.getByRole('button', { name: 'Add context' }));
+			await user.click(screen.getByRole('menuitem', { name: 'Open notebook beside chat' }));
+			await screen.findByRole('combobox', { name: 'Notebook to open' });
+			expect(screen.getByRole('heading', { name: 'How can I help?' })).toBeVisible();
+			await user.type(textbox(), 'Explain this notebook');
+			await user.click(screen.getByRole('button', { name: 'Send message' }));
+			await waitFor(() => expect(writes.map((write) => write.path)).toEqual([streamPath]));
+		});
+
+		it('opens the notebook picker from the empty composer without sending or clearing its draft', async () => {
+			const { user, writes } = setup();
+			await screen.findByRole('heading', { name: 'How can I help?' });
+			await user.type(textbox(), 'Explain this notebook');
+			await user.click(screen.getByRole('button', { name: 'Add context' }));
+			expect(writes).toEqual([]);
+			await user.click(screen.getByRole('menuitem', { name: 'Open notebook beside chat' }));
+			await screen.findByRole('combobox', { name: 'Notebook to open' });
+			expect(textbox()).toHaveValue('Explain this notebook');
+			expect(writes.map((write) => write.path)).toEqual(['/api/v1/projects/sales/conversations']);
+			await user.click(screen.getByRole('button', { name: 'Open notebook' }));
+			await screen.findByRole('button', { name: 'Hide notebook Sales report' });
+			expect(textbox()).toHaveValue('Explain this notebook');
+		});
+
+		it('keeps the draft and reports a failure to open a notebook chat', async () => {
+			const { user } = setup({
+				createResponse: Promise.resolve(jsonError('UNAVAILABLE', 'Chat unavailable')),
+			});
+			await screen.findByRole('heading', { name: 'How can I help?' });
+			await user.type(textbox(), 'Keep this question');
+			await user.click(screen.getByRole('button', { name: 'Add context' }));
+			await user.click(screen.getByRole('menuitem', { name: 'Open notebook beside chat' }));
+			expect(await screen.findByRole('alert')).toHaveTextContent('Chat unavailable');
+			expect(textbox()).toHaveValue('Keep this question');
+			expect(screen.getByRole('button', { name: 'Add context' })).toBeEnabled();
+		});
+
+		it('opens the notebook from the composer when the inspector is in front of it', async () => {
+			const { user } = setup({
+				route: `${saved}&inspect=missing-call`,
+				workingNotebook: 'notebook-1',
+			});
+			await screen.findByText('This tool call is not in this conversation.');
+			await user.click(screen.getByRole('button', { name: 'Add context' }));
+			await user.click(screen.getByRole('menuitem', { name: 'Open notebook beside chat' }));
+			await screen.findByTitle('Notebook Sales report');
+			expect(screen.getByTestId('location')).not.toHaveTextContent('inspect=');
+			await user.click(screen.getByRole('button', { name: 'Add context' }));
+			await user.click(screen.getByRole('menuitem', { name: 'Hide notebook pane' }));
+			expect(
+				screen.queryByRole('complementary', { name: 'Notebook pane' }),
+			).not.toBeInTheDocument();
+			expect(screen.getByRole('button', { name: 'Show notebook Sales report' })).toBeVisible();
+		});
+
 		it('opens the saved working notebook beside the chat and lets the user close or change it', async () => {
 			const { user, writes } = setup({ route: saved, workingNotebook: 'notebook-1' });
 			const frame = await screen.findByTitle('Notebook Sales report');
@@ -934,7 +996,7 @@ describe('ChatPage', () => {
 				screen.queryByRole('complementary', { name: 'Notebook pane' }),
 			).not.toBeInTheDocument();
 			expect(screen.getByTestId('location')).toHaveTextContent('notebook=0');
-			await user.click(screen.getByRole('button', { name: 'Notebook' }));
+			await user.click(screen.getByRole('button', { name: 'Show notebook Costs' }));
 			expect(await screen.findByTitle('Notebook Costs')).toBeInTheDocument();
 		});
 

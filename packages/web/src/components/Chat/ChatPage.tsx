@@ -1,4 +1,4 @@
-import { PanelLeft, Notebook, Plus, ShieldCheck } from 'lucide-react';
+import { PanelLeft, Plus, ShieldCheck } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import { Button, ConfirmDialog } from '@/components/ui';
 import { PageTitle } from '@/components/ui/PageTitle';
@@ -19,6 +19,15 @@ function ProjectChat({ pid }: { pid: string }) {
 	const composerElement = (
 		<ChatComposer
 			home={c.home}
+			onToggleNotebook={() => void c.openPane()}
+			notebookOpen={c.paneOpen && !c.inspect}
+			notebookDisabled={c.creating || Boolean(c.cid && (c.detail.isPending || c.detail.isError))}
+			notebookTitle={
+				c.conversation?.working_notebook
+					? (c.notebooks.find((notebook) => notebook.id === c.conversation?.working_notebook)
+							?.title ?? 'Notebook')
+					: undefined
+			}
 			error={c.error ?? c.conversation?.last_error}
 			composer={c.composer}
 			draft={c.draft}
@@ -69,16 +78,6 @@ function ProjectChat({ pid }: { pid: string }) {
 								</span>
 							</div>
 							<div className="flex shrink-0 items-center gap-1">
-								<Button
-									variant="ghost"
-									size="sm"
-									isDisabled={c.creating}
-									onPress={() => void c.openPane()}
-									aria-pressed={c.paneOpen}
-								>
-									<Notebook className="size-4" aria-hidden />
-									<span className="@max-3xl:sr-only">Notebook</span>
-								</Button>
 								<Button variant="ghost" size="sm" onPress={() => c.setPermissionsOpen(true)}>
 									<ShieldCheck className="size-4" aria-hidden />
 									<span className="@max-3xl:sr-only">Permissions</span>

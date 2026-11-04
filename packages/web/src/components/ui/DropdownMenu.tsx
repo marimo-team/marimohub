@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { MenuTrigger, Button, Popover, Menu, MenuItem, Separator } from 'react-aria-components';
+import type { PopoverProps } from 'react-aria-components';
 import { ChevronDown } from 'lucide-react';
 import { Tooltip } from './Tooltip';
 import { cn } from '@/lib/utils';
@@ -28,6 +29,7 @@ export interface DropdownMenuProps {
 	tooltip?: string;
 	/** Override the trigger button styling. */
 	triggerClassName?: string;
+	placement?: PopoverProps['placement'];
 	isDisabled?: boolean;
 	options: DropdownMenuOption[];
 	onAction: (key: string) => void;
@@ -46,6 +48,7 @@ export function DropdownMenu({
 	header,
 	tooltip,
 	triggerClassName,
+	placement = 'bottom end',
 	isDisabled,
 	options,
 	onAction,
@@ -82,7 +85,7 @@ export function DropdownMenu({
 				button
 			)}
 			<Popover
-				placement="bottom end"
+				placement={placement}
 				className="scrollable-overlay z-50 min-w-[200px] rounded-md border bg-popover text-popover-foreground shadow-lg entering:animate-in entering:fade-in-0 entering:zoom-in-95 exiting:animate-out exiting:fade-out-0 exiting:zoom-out-95"
 			>
 				{header && <div className="border-b px-3 py-2 text-xs">{header}</div>}

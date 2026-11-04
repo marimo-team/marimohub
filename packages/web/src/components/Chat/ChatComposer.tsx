@@ -1,6 +1,6 @@
 import type { RefObject } from 'react';
-import { ArrowUp, ListPlus, Square } from 'lucide-react';
-import { Button } from '@/components/ui';
+import { ArrowUp, ListPlus, Notebook, Plus, Square } from 'lucide-react';
+import { Button, DropdownMenu } from '@/components/ui';
 import { cn } from '@/lib/utils';
 
 export const MAX_MESSAGE_CHARACTERS = 8000;
@@ -15,8 +15,16 @@ export function ChatComposer({
 	canSubmit,
 	queueing = false,
 	onStop,
+	onToggleNotebook,
+	notebookTitle,
+	notebookOpen,
+	notebookDisabled,
 }: {
 	home: boolean;
+	onToggleNotebook: () => void;
+	notebookTitle?: string;
+	notebookOpen: boolean;
+	notebookDisabled: boolean;
 	error?: string | null;
 	composer: RefObject<HTMLTextAreaElement | null>;
 	draft: string;
@@ -41,7 +49,7 @@ export function ChatComposer({
 					onSubmit();
 				}}
 				className={cn(
-					'flex items-end gap-3 rounded-3xl border border-input bg-background shadow-xs transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30',
+					'flex flex-col gap-2 rounded-3xl border border-input bg-background shadow-xs transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30',
 					home ? 'px-5 py-4' : 'px-4 py-3',
 				)}
 			>
@@ -51,10 +59,10 @@ export function ChatComposer({
 					aria-label="Message the project assistant"
 					value={draft}
 					onChange={(event) => onDraftChange(event.target.value)}
-					rows={home ? 3 : 1}
+					rows={home ? 2 : 1}
 					maxLength={MAX_MESSAGE_CHARACTERS}
 					placeholder={queueing ? 'Queue the next message…' : 'What can I help you with?'}
-					className="max-h-36 min-h-7 min-w-0 flex-1 resize-none bg-transparent py-1 text-sm leading-6 outline-none placeholder:text-muted-foreground"
+					className="max-h-36 min-h-7 w-full min-w-0 resize-none bg-transparent py-1 text-sm leading-6 outline-none placeholder:text-muted-foreground"
 					onKeyDown={(event) => {
 						if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
 							event.preventDefault();
@@ -62,31 +70,67 @@ export function ChatComposer({
 						}
 					}}
 				/>
-				{onStop && !draft.trim() ? (
-					<Button
-						type="button"
-						variant="unstyled"
-						onPress={onStop}
-						aria-label="Stop response"
-						className="flex size-8 shrink-0 items-center justify-center rounded-full text-destructive outline-none hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-ring"
-					>
-						<Square className="size-4 fill-current" aria-hidden />
-					</Button>
-				) : (
-					<Button
-						type="submit"
-						variant="unstyled"
-						isDisabled={!draft.trim() || !canSubmit}
-						aria-label={queueing ? 'Queue message' : 'Send message'}
-						className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background outline-none hover:bg-foreground/80 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-35"
-					>
-						{queueing ? (
-							<ListPlus className="size-5" aria-hidden />
-						) : (
-							<ArrowUp className="size-5" aria-hidden />
-						)}
-					</Button>
-				)}
+				<div className="flex items-center justify-between gap-3">
+					<div className="flex min-w-0 items-center gap-2">
+						<DropdownMenu
+							label="Add context"
+							placement="top start"
+							icon={<Plus className="size-5" aria-hidden />}
+							triggerClassName="size-8 shrink-0 rounded-full max-md:size-10"
+							isDisabled={notebookDisabled}
+							options={[
+								{
+									id: 'notebook',
+									label: notebookOpen ? 'Hide notebook pane' : 'Open notebook beside chat',
+									icon: <Notebook className="size-4" aria-hidden />,
+								},
+							]}
+							onAction={onToggleNotebook}
+						/>
+						{notebookTitle ? (
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								isDisabled={notebookDisabled}
+								onPress={onToggleNotebook}
+								aria-label={`${notebookOpen ? 'Hide' : 'Show'} notebook ${notebookTitle}`}
+								aria-pressed={notebookOpen}
+								className="min-w-0 gap-1.5 rounded-full bg-muted/60 font-normal"
+							>
+								<Notebook className="size-3.5 shrink-0" aria-hidden />
+								<span className="truncate" title={notebookTitle}>
+									{notebookTitle}
+								</span>
+							</Button>
+						) : null}
+					</div>
+					{onStop && !draft.trim() ? (
+						<Button
+							type="button"
+							variant="unstyled"
+							onPress={onStop}
+							aria-label="Stop response"
+							className="flex size-8 shrink-0 items-center justify-center rounded-full text-destructive outline-none hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-ring"
+						>
+							<Square className="size-4 fill-current" aria-hidden />
+						</Button>
+					) : (
+						<Button
+							type="submit"
+							variant="unstyled"
+							isDisabled={!draft.trim() || !canSubmit}
+							aria-label={queueing ? 'Queue message' : 'Send message'}
+							className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background outline-none hover:bg-foreground/80 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-35"
+						>
+							{queueing ? (
+								<ListPlus className="size-5" aria-hidden />
+							) : (
+								<ArrowUp className="size-5" aria-hidden />
+							)}
+						</Button>
+					)}
+				</div>
 			</form>
 			<div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
 				<span>
