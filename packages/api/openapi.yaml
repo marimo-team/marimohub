@@ -15126,7 +15126,7 @@ paths:
                                                   required:
                                                     - label
                                                     - value
-                                                maxItems: 6
+                                                maxItems: 8
                                               scope:
                                                 type: object
                                                 properties:
@@ -15250,7 +15250,7 @@ paths:
                                   required:
                                     - id
                                     - name
-                                maxItems: 24
+                                maxItems: 48
                             required:
                               - status
                               - task
@@ -15488,7 +15488,7 @@ paths:
                                                   required:
                                                     - label
                                                     - value
-                                                maxItems: 6
+                                                maxItems: 8
                                               scope:
                                                 type: object
                                                 properties:
@@ -15612,7 +15612,7 @@ paths:
                                   required:
                                     - id
                                     - name
-                                maxItems: 24
+                                maxItems: 48
                             required:
                               - status
                               - task
@@ -15866,7 +15866,7 @@ paths:
                                                   required:
                                                     - label
                                                     - value
-                                                maxItems: 6
+                                                maxItems: 8
                                               scope:
                                                 type: object
                                                 properties:
@@ -15990,7 +15990,7 @@ paths:
                                   required:
                                     - id
                                     - name
-                                maxItems: 24
+                                maxItems: 48
                             required:
                               - status
                               - task
@@ -16312,7 +16312,7 @@ paths:
                                                   required:
                                                     - label
                                                     - value
-                                                maxItems: 6
+                                                maxItems: 8
                                               scope:
                                                 type: object
                                                 properties:
@@ -16436,7 +16436,7 @@ paths:
                                   required:
                                     - id
                                     - name
-                                maxItems: 24
+                                maxItems: 48
                             required:
                               - status
                               - task
@@ -16684,7 +16684,7 @@ paths:
                                                   required:
                                                     - label
                                                     - value
-                                                maxItems: 6
+                                                maxItems: 8
                                               scope:
                                                 type: object
                                                 properties:
@@ -16808,7 +16808,7 @@ paths:
                                   required:
                                     - id
                                     - name
-                                maxItems: 24
+                                maxItems: 48
                             required:
                               - status
                               - task
@@ -17268,7 +17268,7 @@ paths:
                                                   required:
                                                     - label
                                                     - value
-                                                maxItems: 6
+                                                maxItems: 8
                                               scope:
                                                 type: object
                                                 properties:
@@ -17392,7 +17392,7 @@ paths:
                                   required:
                                     - id
                                     - name
-                                maxItems: 24
+                                maxItems: 48
                             required:
                               - status
                               - task

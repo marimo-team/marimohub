@@ -28,7 +28,9 @@ export function useProjectChatSession(
 	const lastSent = useRef('');
 	const [localTurn, setLocalTurn] = useState<{ cid: string; baseline: number } | null>(null);
 	// Each entry remembers its conversation so a history navigation that changes
-	// `cid` without `select()` cannot deliver it to the wrong conversation.
+	// `cid` without `select()` cannot deliver it to the wrong conversation. Entries
+	// for other conversations stay queued until their own is selected again; only an
+	// explicit `select()` or stop discards them.
 	const [queue, setQueue] = useState<{ id: string; cid: string; text: string }[]>([]);
 	const queued = useMemo(() => queue.filter((item) => item.cid === cid), [queue, cid]);
 	const [live, setLive] = useState(false);
@@ -93,16 +95,9 @@ export function useProjectChatSession(
 	);
 	// onFinish can precede SDK readiness and server finalization; queue dispatch waits for both.
 	useEffect(() => {
-		// A new conversation's message is queued before the URL carries its id, so
-		// only prune once a conversation is selected.
-		if (!cid) return;
-		if (queue.length !== queued.length) {
-			setQueue(queued);
-			return;
-		}
 		const next = queued[0];
 		if (canSend && next) dispatch(next);
-	}, [canSend, queue, queued, cid, dispatch]);
+	}, [canSend, queued, dispatch]);
 	return {
 		detail,
 		ready: chat.ready,

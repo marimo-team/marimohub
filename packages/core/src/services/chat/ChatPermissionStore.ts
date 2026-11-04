@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CHAT_LIMITS } from './schema';
 import type { Bucket } from '../../ports/bucket';
 import type { ProjectId, UserId } from '../../ids';
 import { paths } from '../../paths';
@@ -18,7 +19,7 @@ export type ChatPermissionGrant = z.infer<typeof ChatPermissionGrantSchema>;
 
 export const ChatPermissionRecordSchema = z.object({
 	schema_version: z.literal(1),
-	grants: z.array(ChatPermissionGrantSchema).max(200),
+	grants: z.array(ChatPermissionGrantSchema).max(CHAT_LIMITS.rememberedGrants),
 });
 
 export class ChatPermissionStore {
@@ -50,7 +51,7 @@ export class ChatPermissionStore {
 			[
 				...grants.filter((item) => item.kind !== grant.kind || item.scope_key !== grant.scope_key),
 				grant,
-			].slice(-200),
+			].slice(-CHAT_LIMITS.rememberedGrants),
 		);
 		return grant;
 	}

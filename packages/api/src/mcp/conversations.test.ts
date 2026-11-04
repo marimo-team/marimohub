@@ -81,6 +81,12 @@ describe('project_conversations MCP tool', () => {
 		);
 		expect(viaHttp.conversation.messages).toHaveLength(2);
 		expect(await call({ action: 'permissions' })).toEqual({ grants: [], has_more: false });
+		// Nothing runs and nothing is paused, so both controls are no-ops that still answer.
+		expect(await call({ action: 'stop', conversation: conversation.id })).toEqual({
+			stopped: false,
+		});
+		const dismissed = await call({ action: 'dismiss_continuation', conversation: conversation.id });
+		expect(dismissed.conversation).toMatchObject({ id: conversation.id });
 		expect(await call({ action: 'delete', conversation: conversation.id })).toEqual({
 			deleted: true,
 		});
@@ -89,6 +95,7 @@ describe('project_conversations MCP tool', () => {
 			arguments: { project: project.id, request: { action: 'get', conversation: conversation.id } },
 		});
 		expect(gone.isError).toBe(true);
+		expect(gone.structuredContent).toMatchObject({ code: 'NOT_FOUND' });
 	});
 
 	it('refuses machine identities', async () => {

@@ -4355,7 +4355,7 @@ components:
                               type: string
                               maxLength: 120
                             details:
-                              maxItems: 6
+                              maxItems: 8
                               type: array
                               items:
                                 type: object
@@ -4480,7 +4480,7 @@ components:
                   - name
                   - result
             unresolved_calls:
-              maxItems: 24
+              maxItems: 48
               type: array
               items:
                 type: object

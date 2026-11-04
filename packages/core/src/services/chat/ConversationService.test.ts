@@ -187,6 +187,32 @@ describe('ConversationService', () => {
 		expect(failed.messages.map(messageText)).toEqual(['hello']);
 	});
 
+	it('bounds the assistant text across parts and the stored record across cards', async () => {
+		const service = new ConversationService(new MemoryBucket());
+		const created = await service.create(pid, alice);
+		const held = heldTurn();
+		const turn = service.send(pid, alice, created.id, 'task', held.complete);
+		const context = await held.entered;
+		const half = text('x'.repeat(CHAT_LIMITS.answerCharacters / 2 + 1));
+		await expect(context.saveParts([half, half])).rejects.toBeInstanceOf(ValidationError);
+		// Consent cards count toward the record size even though they are not visible text.
+		const value = 'c'.repeat(CHAT_LIMITS.consentDetailCharacters);
+		const card = (id: string): ConversationMessagePart => ({
+			type: 'data-permission',
+			id: crypto.randomUUID(),
+			data: permission(id, {
+				details: Array.from({ length: 8 }, (_, i) => ({ label: `f${i}`, value })),
+			}),
+		});
+		const cards = Array.from({ length: 4 }, (_, i) => card(`call-${i}`));
+		await context.saveParts([...cards, text('done')]);
+		held.release.resolve([...cards, text('done')]);
+		await turn;
+		await expect(service.send(pid, alice, created.id, 'more', answer('x'))).rejects.toThrow(
+			/Conversation is full/,
+		);
+	});
+
 	it('rejects an empty or oversized final answer', async () => {
 		const service = new ConversationService(new MemoryBucket());
 		const created = await service.create(pid, alice);
@@ -413,14 +439,60 @@ describe('ConversationService', () => {
 		expect(saved.continuation?.status).toBe('needs_review');
 	});
 
-	it('caps unresolved tool starts at the per-turn limit', async () => {
+	it('keeps acknowledged uncertain calls listed when the resumed turn fails too', async () => {
+		const service = new ConversationService(new MemoryBucket());
+		const created = await service.create(pid, alice);
+		const held = heldTurn();
+		const turn = service.send(pid, alice, created.id, 'deploy', held.complete);
+		const context = await held.entered;
+		await context.checkpoint({ type: 'tool_started', id: 'c1', name: 'run_job' });
+		held.release.reject(new Error('crash'));
+		await expect(turn).rejects.toThrow('crash');
+		const again = heldTurn();
+		const resumed = service.resume(pid, alice, created.id, again.complete, {
+			acknowledgeUncertain: true,
+		});
+		const resumedContext = await again.entered;
+		expect(
+			(await service.get(pid, alice, created.id)).continuation?.unresolved_calls.map((c) => c.name),
+		).toEqual(['run_job']);
+		await resumedContext.checkpoint({ type: 'tool_started', id: 'c2', name: 'update_notebook' });
+		again.release.reject(new Error('crash again'));
+		await expect(resumed).rejects.toThrow('crash again');
+		const after = await service.get(pid, alice, created.id);
+		expect(after.continuation).toMatchObject({ status: 'needs_review' });
+		expect(after.continuation?.unresolved_calls.map((c) => c.name)).toEqual([
+			'run_job',
+			'update_notebook',
+		]);
+		// Finishing clears only the acknowledged ones; this turn's own starts still need review.
+		const third = heldTurn();
+		const finished = service.resume(pid, alice, created.id, third.complete, {
+			acknowledgeUncertain: true,
+		});
+		const thirdContext = await third.entered;
+		await thirdContext.checkpoint({ type: 'tool_started', id: 'c3', name: 'delete_notebook' });
+		third.release.resolve([text('done')]);
+		expect((await finished).continuation?.unresolved_calls.map((c) => c.name)).toEqual([
+			'delete_notebook',
+		]);
+	});
+
+	it('caps tool starts at the per-turn limit even when earlier calls completed', async () => {
 		const service = new ConversationService(new MemoryBucket());
 		const created = await service.create(pid, alice);
 		const held = heldTurn();
 		const turn = service.send(pid, alice, created.id, 'task', held.complete);
 		const context = await held.entered;
-		for (let index = 0; index < CHAT_LIMITS.toolCallsPerTurn; index++)
+		for (let index = 0; index < CHAT_LIMITS.toolCallsPerTurn; index++) {
 			await context.checkpoint({ type: 'tool_started', id: `c${index}`, name: 'create_notebook' });
+			await context.checkpoint({
+				type: 'tool_completed',
+				id: `c${index}`,
+				name: 'create_notebook',
+				result: 'ok',
+			});
+		}
 		await expect(
 			context.checkpoint({ type: 'tool_started', id: 'extra', name: 'create_notebook' }),
 		).rejects.toBeInstanceOf(ResourceExhaustedError);

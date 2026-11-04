@@ -10,11 +10,13 @@ import {
 	createConversation,
 	decidePermission,
 	deleteConversation,
+	dismissContinuation,
 	executeTurn,
 	getConversation,
 	listChatPermissions,
 	listConversations,
 	revokeChatPermission,
+	stopConversation,
 } from '../chat/operations';
 import { CreateConversationBody, ResumeConversationBody, SendMessageBody } from '../chat/schemas';
 import { failureResult, result, toolError } from './results';
@@ -44,6 +46,8 @@ const RequestSchema = z.discriminatedUnion('action', [
 		conversation: ConversationIdSchema,
 		...ResumeConversationBody.shape,
 	}),
+	z.strictObject({ action: z.literal('stop'), conversation: ConversationIdSchema }),
+	z.strictObject({ action: z.literal('dismiss_continuation'), conversation: ConversationIdSchema }),
 	z.strictObject({ action: z.literal('delete'), conversation: ConversationIdSchema }),
 	z.strictObject({
 		action: z.literal('permissions'),
@@ -98,7 +102,7 @@ export function registerConversationTools(
 		name,
 		{
 			description:
-				'Manage your private project chat conversations: list, read, create, send a message, continue an interrupted task, delete, and review or revoke remembered tool permissions. Sending can change project resources through consented tools.',
+				'Manage your private project chat conversations: list, read, create, send a message, stop a running reply, continue or dismiss an interrupted task, delete, and review or revoke remembered tool permissions. Sending can change project resources through consented tools.',
 			inputSchema: z.strictObject({
 				project: z.string().describe(PROJECT_REFERENCE_DESCRIPTION),
 				request: RequestSchema,
@@ -168,6 +172,15 @@ export function registerConversationTools(
 							message: compactMessage(message, false),
 							continuation: conversation.continuation,
 						});
+					}
+					case 'stop':
+						return result(await stopConversation({ ...context, cid: action.conversation }));
+					case 'dismiss_continuation': {
+						const { conversation } = await dismissContinuation({
+							...context,
+							cid: action.conversation,
+						});
+						return result({ conversation: summarizeConversation(conversation) });
 					}
 					case 'delete':
 						return result(await deleteConversation({ ...context, cid: action.conversation }));

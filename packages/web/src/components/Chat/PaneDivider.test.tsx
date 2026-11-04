@@ -78,4 +78,14 @@ it('supports bounded arrow-key resizing and cancels a pointer drag without a wid
 	fireEvent.pointerCancel(divider, { pointerId: 1 });
 	expect(screen.queryByTestId('pane-resize-guide')).not.toBeInTheDocument();
 	expect(changed).not.toHaveBeenCalled();
+	fireEvent.pointerDown(divider, { pointerId: 2, button: 0, clientX: 300 });
+	fireEvent.pointerMove(divider, { pointerId: 2, clientX: 450 });
+	expect(screen.getByTestId('pane-resize-guide')).toBeInTheDocument();
+	fireEvent.keyDown(divider, { key: 'Escape' });
+	expect(screen.queryByTestId('pane-resize-guide')).not.toBeInTheDocument();
+	expect(changed).not.toHaveBeenCalled();
+	fireEvent.pointerUp(divider, { pointerId: 2, clientX: 450 });
+	expect(changed).not.toHaveBeenCalled();
+	fireEvent.keyDown(divider, { key: 'End' });
+	expect(changed).toHaveBeenCalledExactlyOnceWith(70);
 });

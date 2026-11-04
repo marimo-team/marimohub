@@ -110,6 +110,10 @@ export async function checkPermission(
 		const status = decision === 'deny' ? 'denied' : decision;
 		await ctx.record({ ...permission, status });
 		return { allowed: false, status, message: MESSAGES[status] };
+	} catch (error) {
+		// The turn is failing; leave no card open in the transcript.
+		await ctx.record({ ...permission, status: 'cancelled' }).catch(() => {});
+		throw error;
 	} finally {
 		controller.abort();
 	}

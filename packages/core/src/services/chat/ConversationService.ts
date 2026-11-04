@@ -20,6 +20,7 @@ import {
 	ConversationObservationSchema,
 	ConversationSchema,
 	StoredConversationSchema,
+	conversationRecordLength,
 	conversationTextLength,
 	messageText,
 	summarizeConversation,
@@ -484,11 +485,17 @@ export class ConversationService {
 		if (
 			conversationTextLength(previous.messages) + text.length + CHAT_LIMITS.answerCharacters >
 				CHAT_LIMITS.conversationCharacters ||
+			conversationRecordLength(previous.messages) > CHAT_LIMITS.conversationRecordCharacters ||
 			previous.messages.length > CHAT_LIMITS.messagesPerConversation
 		)
 			throw new ValidationError('Conversation is full; start a new conversation');
 
 		const savedTask = options.resume ? previous.continuation : review;
+		// Acknowledged uncertain calls stay on the head until this turn ends, so a
+		// failure here still leaves them listed for review.
+		const carried = new Set(
+			options.resume ? previous.continuation!.unresolved_calls.map((call) => call.id) : [],
+		);
 		const timestamp = new Date(this.now()).toISOString();
 		const pending = {
 			id: ulid(),
@@ -507,7 +514,7 @@ export class ConversationService {
 				task: savedTask?.task ?? text,
 				observations: savedTask?.observations ?? [],
 				omitted_observations: savedTask?.omitted_observations,
-				unresolved_calls: review?.unresolved_calls ?? [],
+				unresolved_calls: savedTask?.unresolved_calls ?? [],
 			},
 			messages: [
 				...previous.messages,
@@ -568,7 +575,11 @@ export class ConversationService {
 		const stamp = () => new Date(this.now()).toISOString();
 		const validateParts = (parts: readonly ConversationMessagePart[]) => {
 			const result = z.array(ConversationMessagePartSchema).max(80).safeParse(parts);
-			if (!result.success) throw new ValidationError('Invalid assistant response');
+			if (
+				!result.success ||
+				messageText({ parts: result.data }).length > CHAT_LIMITS.answerCharacters
+			)
+				throw new ValidationError('Invalid assistant response');
 			return result.data;
 		};
 		const saveParts = (parts: readonly ConversationMessagePart[]) =>
@@ -580,15 +591,20 @@ export class ConversationService {
 					messages: replaceAssistant(latest, (message) => ({ ...message, parts: validated })),
 				}));
 			});
+		// Completed calls free no budget: the cap is on starts, not on open calls.
+		let started = 0;
 		const checkpoint = (event: TurnCheckpoint) =>
 			serialized(async () => {
+				if (event.type === 'tool_started') {
+					if (started >= CHAT_LIMITS.toolCallsPerTurn)
+						throw new ResourceExhaustedError('Tool call limit reached');
+					started++;
+				}
 				await saveTurn((latest) => {
 					const state = latest.continuation!;
 					let next: ConversationContinuation = { ...state };
 					if (event.type === 'paused') next = { ...state, status: 'paused', reason: event.reason };
 					else if (event.type === 'tool_started') {
-						if (state.unresolved_calls.length >= CHAT_LIMITS.toolCallsPerTurn)
-							throw new ResourceExhaustedError('Tool call limit reached');
 						const call = ConversationObservationSchema.omit({ result: true }).parse({
 							id: `${pending.id}:${event.id}`,
 							name: event.name,
@@ -642,14 +658,7 @@ export class ConversationService {
 		try {
 			const parts = await complete(claimed.messages.slice(0, -1), {
 				assistantMessageId: assistantId,
-				...(options.resume
-					? {
-							continuation: {
-								...claimed.continuation!,
-								unresolved_calls: previous.continuation!.unresolved_calls,
-							},
-						}
-					: {}),
+				...(options.resume ? { continuation: claimed.continuation! } : {}),
 				...(review ? { review } : {}),
 				stopSignal: stop.signal,
 				saveParts,
@@ -661,19 +670,29 @@ export class ConversationService {
 				throw new ValidationError('Invalid assistant response');
 			await headWrites;
 			const finished = await serialized(() =>
-				saveTurn((latest) => ({
-					...latest,
-					pending: undefined,
-					permission_decisions: undefined,
-					updated_at: stamp(),
-					continuation:
-						latest.continuation!.unresolved_calls.length > 0
-							? { ...latest.continuation!, status: 'needs_review', reason: 'interrupted' }
-							: latest.continuation!.status === 'paused'
-								? latest.continuation
-								: undefined,
-					messages: replaceAssistant(latest, (message) => ({ ...message, parts: finalParts })),
-				})),
+				saveTurn((latest) => {
+					const state = latest.continuation!;
+					// The acknowledged calls were reviewed by the user; only this turn's own count.
+					const open = state.unresolved_calls.filter((call) => !carried.has(call.id));
+					return {
+						...latest,
+						pending: undefined,
+						permission_decisions: undefined,
+						updated_at: stamp(),
+						continuation:
+							open.length > 0
+								? {
+										...state,
+										unresolved_calls: open,
+										status: 'needs_review',
+										reason: 'interrupted',
+									}
+								: state.status === 'paused'
+									? state
+									: undefined,
+						messages: replaceAssistant(latest, (message) => ({ ...message, parts: finalParts })),
+					};
+				}),
 			);
 			return ConversationSchema.parse(finished);
 		} catch (error) {

@@ -279,13 +279,14 @@ interface ChatSession {
 	cid: string;
 	resume: boolean;
 	chat: Chat<ChatUIMessage>;
+	/** Set by this session's own onError, so a superseded session cannot fail the current one. */
+	failed: boolean;
 }
 
 function createSession(
 	pid: string,
 	conversation: Conversation,
 	callbacks: RefObject<ConversationChatCallbacks>,
-	failed: RefObject<boolean>,
 ): ChatSession {
 	const cid = conversation.id;
 	const api = streamUrl(pid, cid);
@@ -295,9 +296,10 @@ function createSession(
 	// so seed without it to avoid a duplicate; when no instance replays it (204),
 	// the record poll restores the saved partial.
 	const inProgress = pending && seed.at(-1)?.role === 'assistant';
-	return {
+	const session: ChatSession = {
 		cid,
 		resume: pending,
+		failed: false,
 		chat: new Chat<ChatUIMessage>({
 			id: cid,
 			messages: inProgress ? seed.slice(0, -1) : seed,
@@ -308,7 +310,7 @@ function createSession(
 			}),
 			onFinish: () => callbacks.current.onFinish?.(cid),
 			onError: (error) => {
-				failed.current = true;
+				session.failed = true;
 				callbacks.current.onError?.(error, cid);
 			},
 			onData: (part) => {
@@ -317,6 +319,7 @@ function createSession(
 			},
 		}),
 	};
+	return session;
 }
 
 /** One AI SDK chat session per conversation, seeded from the saved record. */
@@ -334,7 +337,6 @@ export function useConversationChat(
 	useEffect(() => {
 		latest.current = callbacks;
 	});
-	const failed = useRef(false);
 	const cid = conversation?.id ?? null;
 	const [session, setSession] = useState<ChatSession | null>(null);
 	// A session is created when its record first arrives and dropped with the
@@ -351,8 +353,10 @@ export function useConversationChat(
 			setSession(null);
 			setResuming(false);
 		}
-		if (cid && conversation && session?.cid !== cid) {
-			const next = createSession(pid, conversation, latest, failed);
+		// StrictMode replays this effect with the same closure; the ref already
+		// holds the session the first run created, so do not orphan its resume.
+		if (cid && conversation && session?.cid !== cid && current.current?.cid !== cid) {
+			const next = createSession(pid, conversation, latest);
 			current.current = next;
 			setSession(next);
 			if (next.resume) {
@@ -392,22 +396,22 @@ export function useConversationChat(
 	const { sendMessage } = helpers;
 	const send = useCallback(
 		async (content: string) => {
-			failed.current = false;
+			if (active) active.failed = false;
 			await sendMessage({ text: content }, { body: { content } satisfies TurnBody });
-			return !failed.current;
+			return !(active?.failed ?? false);
 		},
-		[sendMessage],
+		[active, sendMessage],
 	);
 	const resume = useCallback(
 		async (acknowledgeUncertain: boolean) => {
-			failed.current = false;
+			if (active) active.failed = false;
 			await sendMessage(
 				{ text: 'Continue the interrupted task.' },
 				{ body: { resume: true, acknowledge_uncertain: acknowledgeUncertain } satisfies TurnBody },
 			);
-			return !failed.current;
+			return !(active?.failed ?? false);
 		},
-		[sendMessage],
+		[active, sendMessage],
 	);
 	return { ...helpers, ready: active !== null, live, resuming, send, resume };
 }

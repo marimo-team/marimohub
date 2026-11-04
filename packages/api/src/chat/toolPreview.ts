@@ -88,10 +88,39 @@ function pythonErrorType(value: unknown): string | undefined {
 	return errorType;
 }
 
-export function redactPreviewText(value: string): string {
+const SECRET_ASSIGNMENT =
+	/\b(password|passwd|passphrase|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credentials?|authorization)\b\s*[=:]\s*["']?(?!\[Redacted\])[^\s"',;&]+["']?/gi;
+
+/** Mask inline credentials in free text; links survive so the model can still use them. */
+export function redactSecretText(value: string): string {
 	return value
-		.replaceAll(/\bBearer\s+\S+/gi, 'Bearer [Redacted]')
-		.replaceAll(/[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi, '[URL omitted]');
+		.replaceAll(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/g, '$1 [Redacted]')
+		.replaceAll(SECRET_ASSIGNMENT, '$1=[Redacted]')
+		.replaceAll(/([a-z][a-z0-9+.-]*:\/\/)[^\s"'/@]+@/gi, '$1[Redacted]@');
+}
+
+/** Previews additionally drop links: stored transcripts should not point at internal hosts. */
+export function redactPreviewText(value: string): string {
+	return redactSecretText(value).replaceAll(/[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi, '[URL omitted]');
+}
+
+/**
+ * Redact credential-like keys and inline secrets everywhere in a tool result,
+ * keeping payloads such as code or output intact. Saved observations use this:
+ * the model needs the data back on resume, but the record must not keep secrets.
+ */
+export function redactSecrets(value: unknown, depth = 0): unknown {
+	if (depth > 12) return value;
+	if (typeof value === 'string') return redactSecretText(value);
+	if (Array.isArray(value)) return value.map((item) => redactSecrets(item, depth + 1));
+	if (value !== null && typeof value === 'object')
+		return Object.fromEntries(
+			Object.entries(value).map(([key, child]) => [
+				key,
+				isPrivateKey(key) ? '[Redacted]' : redactSecrets(child, depth + 1),
+			]),
+		);
+	return value;
 }
 
 /** Short, redacted failure line for a tool error. */

@@ -59,16 +59,35 @@ describe('PermissionBroker', () => {
 		await expect(failing).resolves.toBe('expired');
 	});
 
-	it('surfaces a read failure instead of waiting for the timeout', async () => {
+	it('keeps waiting through failed reads and still takes a local decision', async () => {
 		const broker = new PermissionBroker();
-		const pending = broker.wait('k', {
-			timeoutMs: 10_000,
-			pollMs: 50,
-			readDecision: () => Promise.reject(new Error('bucket down')),
+		const saved = vi.fn(() => Promise.reject(new Error('bucket down')));
+		const pending = broker.wait('k', { timeoutMs: 10_000, pollMs: 50, readDecision: saved });
+		await vi.advanceTimersByTimeAsync(160);
+		expect(saved.mock.calls.length).toBeGreaterThanOrEqual(3);
+		expect(broker.decide('k', 'allow')).toBe(true);
+		await expect(pending).resolves.toBe('allow');
+		// With no decision anywhere, an unreadable record expires like a silent one.
+		const silent = broker.wait('s', { timeoutMs: 100, pollMs: 1000, readDecision: saved });
+		await vi.advanceTimersByTimeAsync(100);
+		await expect(silent).resolves.toBe('expired');
+	});
+
+	it('bounds the final read at the deadline', async () => {
+		const broker = new PermissionBroker();
+		const hanging = broker.wait('h', {
+			timeoutMs: 100,
+			pollMs: 1000,
+			readDecision: () => new Promise(() => {}),
 		});
-		const rejected = expect(pending).rejects.toThrow('bucket down');
-		await vi.advanceTimersByTimeAsync(60);
-		await rejected;
-		expect(broker.decide('k', 'allow')).toBe(false);
+		await vi.advanceTimersByTimeAsync(100);
+		let settled = false;
+		void hanging.then(() => {
+			settled = true;
+		});
+		await vi.advanceTimersByTimeAsync(1999);
+		expect(settled).toBe(false);
+		await vi.advanceTimersByTimeAsync(1);
+		await expect(hanging).resolves.toBe('expired');
 	});
 });

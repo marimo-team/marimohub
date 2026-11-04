@@ -23,7 +23,7 @@ export function isGated(tool: GatedTool): boolean {
 }
 
 /** Code the user is asked to approve must be readable in full; other fields stay short. */
-const DETAIL_LIMITS = { code: CHAT_LIMITS.consentDetailCharacters, other: 300 } as const;
+const DETAIL_LIMITS = { code: CHAT_LIMITS.consentDetailCharacters, other: 2000 } as const;
 const LABEL_LIMIT = 40;
 const TRUNCATED = '\n… [truncated]';
 
@@ -55,7 +55,7 @@ function detail(
 }
 
 function details(...entries: (Detail | undefined)[]): Detail[] {
-	return entries.filter((entry): entry is Detail => entry !== undefined).slice(0, 6);
+	return entries.filter((entry): entry is Detail => entry !== undefined).slice(0, 8);
 }
 
 function humanize(name: string): string {
@@ -74,7 +74,9 @@ const ACTIONS: Record<
 			['Title', 'title'],
 			['Description', 'description'],
 			['Tags', 'tags'],
+			['Readme', 'readme', DETAIL_LIMITS.code],
 			['Code', 'code', DETAIL_LIMITS.code],
+			['Start a session', 'launch'],
 		],
 	},
 	update_notebook: {
@@ -85,6 +87,7 @@ const ACTIONS: Record<
 			['Title', 'title'],
 			['Description', 'description'],
 			['Tags', 'tags'],
+			['Readme', 'readme', DETAIL_LIMITS.code],
 			['Code', 'code', DETAIL_LIMITS.code],
 			['Version message', 'message'],
 		],
@@ -110,16 +113,13 @@ const ACTIONS: Record<
 	stop_session: {
 		action: 'Stop a notebook session',
 		label: 'stopping sessions',
-		fields: [
-			['Notebook', 'notebook'],
-			['Session', 'session'],
-		],
+		fields: [['Session', 'session_id']],
 	},
 	execute_code: {
 		action: 'Run code in a notebook session',
 		label: 'running code',
 		fields: [
-			['Notebook', 'notebook'],
+			['Session', 'session_id'],
 			['Code', 'code', DETAIL_LIMITS.code],
 		],
 		// Arbitrary code is never a standing grant.
@@ -155,6 +155,23 @@ const ACTIONS: Record<
 		],
 	},
 };
+
+/**
+ * A code-like field too long for its card. Approval covers the whole input, so
+ * such a call is refused before it reaches the gate instead of shown truncated.
+ */
+export function oversizedDetail(
+	tool: GatedTool,
+	input: Record<string, unknown>,
+): { label: string; limit: number } | undefined {
+	if (!isGated(tool)) return undefined;
+	for (const [label, key, limit] of ACTIONS[tool.name]?.fields ?? []) {
+		if (limit === undefined) continue;
+		const text = render(input[key]);
+		if (text !== undefined && text.length > limit) return { label, limit };
+	}
+	return undefined;
+}
 
 /** Build the consent card for one gated call, or nothing when the tool runs freely. */
 export function permissionRequest(

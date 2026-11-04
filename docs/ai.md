@@ -112,8 +112,11 @@ saved task to continue or dismiss.
 Earlier turns reach the model as text only; it re-reads what it needs rather than
 replaying old tool results. Stored tool inputs and results are redacted previews:
 credential-like fields and large payloads (code, query results, stdout) are omitted,
-URLs and bearer tokens masked. Any call opens in an inspector that links the
-notebooks and jobs it touched.
+URLs and bearer tokens masked. The observations a saved task keeps for resuming hold
+the payloads but mask credential-like fields and inline secrets. Code or source
+longer than a consent card can show (20,000 characters) is refused rather than
+approved unseen. Any call opens in an inspector that links the notebooks and jobs it
+touched.
 
 | Variable                                       | Default | Description                                                         |
 | ---------------------------------------------- | ------- | ------------------------------------------------------------------- |

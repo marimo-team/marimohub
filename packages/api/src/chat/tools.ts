@@ -15,8 +15,9 @@ import type { StartRequestContext } from '../mcp/server';
 import { loadVisibleProject } from '../shared';
 import { assertChatPrincipalCurrent } from './access';
 import { checkPermission } from './permissions/gate';
+import { oversizedDetail } from './permissions/policies';
 import type { GatedTool } from './permissions/policies';
-import { boundedOutput } from './toolPreview';
+import { boundedOutput, redactSecrets } from './toolPreview';
 
 const TOOL_LIMIT_MESSAGE = 'The tool call budget for this turn is exhausted. Stop and summarize.';
 
@@ -50,15 +51,27 @@ export interface ToolSession {
 	close(): Promise<void>;
 }
 
-/** The model never addresses a project; the session injects the current one. */
+/** Inputs that pick a project; the model never sees them and the session fills them in. */
+const SCOPE_FIELDS: readonly string[] = ['project', 'project_id'];
+
+function scopeFieldsOf(schema: Record<string, unknown>): string[] {
+	const properties = z.record(z.string(), z.unknown()).safeParse(schema.properties);
+	const names = properties.success ? Object.keys(properties.data) : [];
+	return SCOPE_FIELDS.filter((field) => names.includes(field));
+}
+
 function modelSchema(schema: Record<string, unknown>): Record<string, unknown> {
 	const properties = z.record(z.string(), z.unknown()).safeParse(schema.properties);
-	const { project: _project, ...visible } = properties.success ? properties.data : {};
+	const visible = Object.fromEntries(
+		Object.entries(properties.success ? properties.data : {}).filter(
+			([name]) => !SCOPE_FIELDS.includes(name),
+		),
+	);
 	return {
 		...schema,
 		properties: visible,
 		required: Array.isArray(schema.required)
-			? schema.required.filter((name) => name !== 'project')
+			? schema.required.filter((name) => typeof name !== 'string' || !SCOPE_FIELDS.includes(name))
 			: [],
 	};
 }
@@ -101,10 +114,11 @@ export async function openToolSession(
 			annotations: tool.annotations,
 			readOnly: tool.annotations?.readOnlyHint === true,
 		}));
-		const projectFields = new Set(
-			exposed
-				.filter((tool) => Object.hasOwn(tool.inputSchema.properties ?? {}, 'project'))
-				.map((tool) => tool.name),
+		const scopeFields = new Map(
+			exposed.map((tool) => [
+				tool.name,
+				scopeFieldsOf(tool.inputSchema as Record<string, unknown>),
+			]),
 		);
 		const state: ToolSessionState = { calls: 0, toolLimit: false };
 		const timeoutMs =
@@ -141,12 +155,21 @@ export async function openToolSession(
 						return { code: 'INVALID_TOOL_ARGUMENTS', message: 'Tool arguments must be an object' };
 					}
 					const args = parsed.data;
-					if (
-						args.project !== undefined &&
-						args.project !== project.id &&
-						args.project !== project.name
-					)
-						throw new ForbiddenError('Chat tools are scoped to the current project');
+					const scoped: Record<string, unknown> = { ...args };
+					for (const field of scopeFields.get(definition.name) ?? []) {
+						const value = args[field];
+						if (value !== undefined && value !== project.id && value !== project.name)
+							throw new ForbiddenError('Chat tools are scoped to the current project');
+						scoped[field] = project.id;
+					}
+					const oversized = oversizedDetail(definition, args);
+					if (oversized) {
+						state.calls--;
+						return {
+							code: 'INPUT_TOO_LARGE',
+							message: `${oversized.label} exceeds the ${oversized.limit} characters a user can review before approving. Split the change into smaller steps.`,
+						};
+					}
 					// Only a mutating call can leave the project in an unknown state; a
 					// read-only call that never returns is simply repeated next time.
 					if (!definition.readOnly)
@@ -187,17 +210,10 @@ export async function openToolSession(
 					await loadVisibleProject(deps.services.projects, project.id, principal, deps);
 					let reply: Awaited<ReturnType<Client['callTool']>>;
 					try {
-						reply = await client.callTool(
-							{
-								name: definition.name,
-								arguments: {
-									...args,
-									...(projectFields.has(definition.name) ? { project: project.id } : {}),
-								},
-							},
-							undefined,
-							{ signal, timeout: timeoutMs },
-						);
+						reply = await client.callTool({ name: definition.name, arguments: scoped }, undefined, {
+							signal,
+							timeout: timeoutMs,
+						});
 					} catch (error) {
 						if (signal.aborted) throw error;
 						// The call may have reached the server; only the server's answer is known.
@@ -219,7 +235,7 @@ export async function openToolSession(
 									.map((block) => (typeof block.text === 'string' ? block.text : '')),
 							};
 					const output = boundedOutput(data);
-					await complete(JSON.stringify(output), 'known');
+					await complete(JSON.stringify(redactSecrets(output)), 'known');
 					if (reply.isError) throw toolFailure(output);
 					if (definition.name === 'create_notebook' && onNotebookCreated) {
 						const created = z.object({ notebook_id: z.string() }).safeParse(output);

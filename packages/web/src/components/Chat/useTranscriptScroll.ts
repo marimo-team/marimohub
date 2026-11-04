@@ -9,7 +9,7 @@ export function useTranscriptScroll(
 	const content = useRef<HTMLDivElement>(null);
 	const following = useRef(true);
 	const pendingMessage = useRef(messageId);
-	const dimensions = useRef({ height: 0, total: 0 });
+	const dimensions = useRef({ height: 0, total: 0, top: 0 });
 
 	const align = useCallback(() => {
 		if (!conversationId) return;
@@ -24,7 +24,11 @@ export function useTranscriptScroll(
 			}
 		}
 		if (following.current) element.scrollTo({ top: element.scrollHeight });
-		dimensions.current = { height: element.clientHeight, total: element.scrollHeight };
+		dimensions.current = {
+			height: element.clientHeight,
+			total: element.scrollHeight,
+			top: element.scrollTop,
+		};
 	}, [conversationId]);
 	const follow = () => {
 		following.current = true;
@@ -36,9 +40,17 @@ export function useTranscriptScroll(
 		const resized =
 			previous.height > 0 &&
 			(previous.height !== element.clientHeight || previous.total !== element.scrollHeight);
-		dimensions.current = { height: element.clientHeight, total: element.scrollHeight };
+		// Content appended at the end never lowers scrollTop, so a decrease is the
+		// reader moving away (scrollbar, touch, or keyboard) even in a frame where the
+		// transcript also resized.
+		const movedUp = element.scrollTop < previous.top;
+		dimensions.current = {
+			height: element.clientHeight,
+			total: element.scrollHeight,
+			top: element.scrollTop,
+		};
 		// Layout-driven scrolling must not be mistaken for the reader moving away from the end.
-		if (!resized)
+		if (!resized || movedUp)
 			following.current = element.scrollHeight - element.clientHeight - element.scrollTop <= 64;
 	};
 	const onWheel = (event: WheelEvent<HTMLElement>) => {

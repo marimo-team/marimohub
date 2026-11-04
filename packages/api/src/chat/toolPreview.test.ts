@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boundedOutput, toolErrorSummary, toolPreview } from './toolPreview';
+import { boundedOutput, redactSecrets, toolErrorSummary, toolPreview } from './toolPreview';
 
 describe('toolPreview', () => {
 	it('redacts credential-like keys by segment and keeps look-alikes', () => {
@@ -52,7 +52,12 @@ describe('toolPreview', () => {
 		expect(toolPreview(deep)).toContain('[Omitted]');
 		const wide = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`k${i}`, i]));
 		expect(Object.keys(JSON.parse(toolPreview(wide)) as object)).toHaveLength(20);
-		expect(toolPreview({ text: 'x'.repeat(10_000) }).length).toBeLessThanOrEqual(2000);
+		const many = Object.fromEntries(
+			Array.from({ length: 10 }, (_, i) => [`t${i}`, 'x'.repeat(400)]),
+		);
+		const capped = toolPreview(many);
+		expect(capped.length).toBe(2000);
+		expect(capped.endsWith('…')).toBe(true);
 		expect(toolPreview('y'.repeat(5000))).toMatch(/…"$/);
 	});
 
@@ -61,6 +66,25 @@ describe('toolPreview', () => {
 			toolPreview({ success: false, stderr: 'Traceback\nValueError: bad\n' }),
 		) as Record<string, unknown>;
 		expect(preview.error_type).toBe('ValueError');
+	});
+
+	it('masks inline credentials in free text and keeps links for the model', () => {
+		const text =
+			'Basic dXNlcjpwYXNz then token=abc123 and api_key: "k-9" at postgres://bob:hunter2@db.internal/app; token_count=7';
+		const secrets = redactSecrets({
+			note: text,
+			password: 'p',
+			nested: [{ accessKeyId: 'AKIA', href: 'https://hub.example.com/x' }],
+		}) as Record<string, unknown>;
+		expect(secrets.password).toBe('[Redacted]');
+		expect(secrets.nested).toEqual([
+			{ accessKeyId: '[Redacted]', href: 'https://hub.example.com/x' },
+		]);
+		expect(secrets.note).toBe(
+			'Basic [Redacted] then token=[Redacted] and api_key=[Redacted] at postgres://[Redacted]@db.internal/app; token_count=7',
+		);
+		expect(toolErrorSummary(text)).toContain('[URL omitted]');
+		expect(toolErrorSummary(text)).not.toContain('hunter2');
 	});
 
 	it('summarizes errors briefly and safely', () => {

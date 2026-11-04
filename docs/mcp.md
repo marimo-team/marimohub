@@ -258,15 +258,17 @@ Use `stop_session` to stop a session explicitly.
 With [managed AI](./ai.md#project-chat) on, `project_conversations` manages the caller's
 private chat conversations. Human credentials only.
 
-| Action              | Purpose                                                               |
-| ------------------- | --------------------------------------------------------------------- |
-| `list`, `get`       | Browse your conversations in a project and read recent messages.      |
-| `create`, `send`    | Start a conversation or send a message and wait for the saved reply.  |
-| `resume`            | Continue an interrupted task; set `acknowledge_uncertain` when asked. |
-| `delete`            | Remove a conversation.                                                |
-| `permissions`       | List remembered "always allow" tool consents.                         |
-| `revoke_permission` | Forget a remembered consent.                                          |
-| `decide_permission` | Answer an open consent card of a running turn.                        |
+| Action                 | Purpose                                                               |
+| ---------------------- | --------------------------------------------------------------------- |
+| `list`, `get`          | Browse your conversations in a project and read recent messages.      |
+| `create`, `send`       | Start a conversation or send a message and wait for the saved reply.  |
+| `resume`               | Continue an interrupted task; set `acknowledge_uncertain` when asked. |
+| `stop`                 | Stop a reply in progress, wherever it runs.                           |
+| `dismiss_continuation` | Drop an interrupted task without resuming it.                         |
+| `delete`               | Remove a conversation.                                                |
+| `permissions`          | List remembered "always allow" tool consents.                         |
+| `revoke_permission`    | Forget a remembered consent.                                          |
+| `decide_permission`    | Answer an open consent card of a running turn.                        |
 
 Consent-gated tools cannot prompt during an MCP `send`: they are skipped and the
 assistant is told. Approve changes in the hub UI.

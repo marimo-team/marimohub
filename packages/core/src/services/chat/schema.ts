@@ -19,6 +19,10 @@ export const CHAT_LIMITS = {
 	previewCharacters: 2000,
 	/** One field on a consent card, enough to read the code being approved. */
 	consentDetailCharacters: 20_000,
+	/** Everything stored for a conversation: text, tool previews, and consent details. */
+	conversationRecordCharacters: 480_000,
+	/** Remembered "always allow" grants per person per project. */
+	rememberedGrants: 200,
 } as const;
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -52,7 +56,7 @@ export const ConversationPermissionSchema = z.object({
 				value: z.string().max(CHAT_LIMITS.consentDetailCharacters),
 			}),
 		)
-		.max(6),
+		.max(8),
 	scope: z.object({ key: z.string().max(200), label: z.string().max(120) }),
 	/** Whether "always allow" is offered; destructive actions ask every time. */
 	can_remember: z.boolean(),
@@ -124,6 +128,23 @@ export function messageToolParts(message: Pick<ConversationMessage, 'parts'>) {
 export function conversationTextLength(messages: readonly Pick<ConversationMessage, 'parts'>[]) {
 	return messages.reduce((total, message) => total + messageText(message).length, 0);
 }
+/** Stored size of every part, not just visible text: previews and consent cards count too. */
+export function conversationRecordLength(messages: readonly Pick<ConversationMessage, 'parts'>[]) {
+	let total = 0;
+	for (const message of messages)
+		for (const part of message.parts) {
+			if (part.type === 'text') total += part.text.length;
+			else if (part.type === 'dynamic-tool')
+				total +=
+					(part.input?.length ?? 0) + (part.output?.length ?? 0) + (part.errorText?.length ?? 0);
+			else
+				total += part.data.details.reduce(
+					(size, detail) => size + detail.label.length + detail.value.length,
+					0,
+				);
+		}
+	return total;
+}
 
 export const ConversationObservationSchema = z.object({
 	id: z.string().min(1).max(CHECKPOINT_ID_CHARACTERS),
@@ -146,10 +167,13 @@ export const ConversationContinuationSchema = z.object({
 		.array(ConversationObservationSchema)
 		.max(16)
 		.refine((items) => items.reduce((total, item) => total + item.result.length, 0) <= 32000),
-	/** Mutating tool calls that started without a saved outcome. */
+	/**
+	 * Mutating tool calls that started without a saved outcome. A resumed turn
+	 * keeps the acknowledged ones from before beside its own until it finishes.
+	 */
 	unresolved_calls: z
 		.array(z.object({ id: z.string().max(CHECKPOINT_ID_CHARACTERS), name: z.string().max(128) }))
-		.max(CHAT_LIMITS.toolCallsPerTurn),
+		.max(CHAT_LIMITS.toolCallsPerTurn * 2),
 });
 export type ConversationContinuation = z.infer<typeof ConversationContinuationSchema>;
 

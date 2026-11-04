@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { UIMessageChunk } from 'ai';
 import { ACTOR } from '@marimo-hub/core/testing';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
+import { CHAT_LIMITS } from '@marimo-hub/core/chat';
 import type { TurnCheckpoint, TurnContext } from '@marimo-hub/core/chat';
+import type { SearchIndexer, SearchService } from '@marimo-hub/core/search';
+import type { ApiDeps } from '../context';
 import { createInitializedBucket, createTestApi, expectOk } from '../testing';
 import { openToolSession } from './tools';
 
@@ -12,9 +15,9 @@ const principal: AuthenticatedPrincipal = {
 	credential: { kind: 'development' },
 };
 
-async function session() {
+async function session(overrides: Partial<ApiDeps> = {}) {
 	const bucket = await createInitializedBucket();
-	const api = createTestApi({ bucket });
+	const api = createTestApi({ bucket, deps: overrides });
 	const created = await expectOk<{ id: string }>(
 		await api.request('POST', '/projects', { name: 'Sales', description: 'd' }),
 		201,
@@ -90,6 +93,41 @@ describe('chat tool session', () => {
 		await expect(call('list_catalog', { project: 'proj-0000000000000000' })).rejects.toThrow(
 			/scoped to the current project/,
 		);
+		await tools.close();
+	});
+
+	it('pins workspace search to the current project', async () => {
+		const search = vi.fn<SearchService['search']>(async () => ({
+			items: [],
+			partial: false,
+			coverage: [],
+		}));
+		const { call, tools, project } = await session({
+			search: { service: { search } as unknown as SearchService, indexer: {} as SearchIndexer },
+		});
+		const definition = tools.definitions.find((tool) => tool.name === 'search_workspace')!;
+		expect(Object.keys(definition.inputSchema.properties as object)).not.toContain('project_id');
+		await call('search_workspace', { q: 'revenue' });
+		const request = search.mock.calls[0].find(
+			(argument) => typeof argument === 'object' && argument !== null && 'q' in argument,
+		) as { project_id?: string };
+		expect(request.project_id).toBe(project.id);
+		await expect(
+			call('search_workspace', { q: 'revenue', project_id: 'proj-0000000000000000' }),
+		).rejects.toThrow(/scoped to the current project/);
+		await tools.close();
+	});
+
+	it('refuses code too long to review instead of asking for consent', async () => {
+		const { call, checkpoints, chunks, tools } = await session();
+		const output = await call('create_notebook', {
+			title: 'Big',
+			code: 'x'.repeat(CHAT_LIMITS.consentDetailCharacters + 1),
+		});
+		expect(output).toMatchObject({ code: 'INPUT_TOO_LARGE' });
+		expect(checkpoints).toEqual([]);
+		expect(chunks).toEqual([]);
+		expect(tools.state.calls).toBe(0);
 		await tools.close();
 	});
 

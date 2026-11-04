@@ -42,6 +42,11 @@ describe('AssistantMessage', () => {
 		expect(isInternalHref('/projects/sales')).toBe(true);
 		expect(isInternalHref('//evil.example')).toBe(false);
 		expect(isInternalHref('/\\evil.example')).toBe(false);
+		// Browsers drop tab, CR, and LF while parsing, so these are protocol-relative too.
+		expect(isInternalHref('/\t/evil.example')).toBe(false);
+		expect(isInternalHref('/\n/evil.example')).toBe(false);
+		expect(isInternalHref('/\r\\evil.example')).toBe(false);
+		expect(isInternalHref('\t/projects/sales')).toBe(true);
 		// Markdown percent-encodes the backslash, so the rendered link stays same-origin.
 		renderMessage('[x](/\\evil.example)');
 		expect(screen.getByRole('link', { name: 'x' })).toHaveAttribute('href', '/%5Cevil.example');

@@ -37,10 +37,9 @@ export function useProjectChatController(pid: string) {
 	const client = useQueryClient();
 	const [params, setParams] = useSearchParams();
 	const cid = params.get('conversation');
-	// The page redirects once capabilities report chat unavailable; skip the guaranteed 404.
-	const list = useConversations(pid, {
-		enabled: capabilities === undefined || capabilities.chat.available,
-	});
+	// The page redirects once capabilities report chat unavailable; until they
+	// load, the list request would be a guaranteed 404 on such deployments.
+	const list = useConversations(pid, { enabled: capabilities?.chat.available === true });
 	const create = useCreateConversation(pid);
 	const remove = useDeleteConversation(pid);
 	const decide = useDecidePermission(pid);

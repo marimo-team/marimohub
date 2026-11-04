@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
 import { makeCapabilities } from '@/test/apiStub';
+import { conversationKeys } from '@/api/conversations';
 import { notebookKeys } from '@/api/queryKeys';
 import { ChatPage } from './ChatPage';
 
@@ -406,7 +407,7 @@ describe('ChatPage', () => {
 		fireEvent.scroll(history);
 		const update = (content: string) =>
 			act(() => {
-				client.setQueryData(['conversations', 'sales', record.id], {
+				client.setQueryData(conversationKeys.detail('sales', record.id), {
 					conversation: {
 						...record,
 						messages: [...record.messages, textMessage('reply', 'assistant', content)],
@@ -767,7 +768,7 @@ describe('ChatPage', () => {
 			await user.type(textbox(), 'Second question{Enter}');
 			stale = true;
 			await act(async () => hold.resolve());
-			const key = ['conversations', 'sales', 'conversation-1'];
+			const key = conversationKeys.detail('sales', 'conversation-1');
 			await waitFor(() =>
 				expect(client.getQueryData(key)).toMatchObject({
 					conversation: { pending: pending.pending },

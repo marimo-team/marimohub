@@ -215,18 +215,24 @@ describe('project conversations', () => {
 	});
 
 	it('answers the blocking endpoint and refuses overlapping turns', async () => {
-		const { request } = await fixture([textStream('First'), textStream('Second')]);
+		const { request } = await fixture([textStream('First'), hangingStream(), textStream('Second')]);
 		const pid = await createProject(request);
 		const path = await startConversation(request, pid);
 		const result = await expectOk<ConversationResult>(
 			await request('POST', `${path}/messages`, { content: 'hello' }),
 		);
 		expect(messageText(result.conversation.messages.at(-1)!)).toBe('First');
+		// Nothing was interrupted, so there is nothing to resume.
 		await expectError(await request('POST', `${path}/resume`, {}), 409);
+		const streaming = request('POST', `${path}/stream`, { content: 'long task' });
+		await waitForRecord(request, path, (c) => Boolean(c.pending));
+		await expectError(await request('POST', `${path}/messages`, { content: 'overlap' }), 409);
+		await expectOk(await request('POST', `${path}/stop`));
+		await readChunks(await streaming);
 		const again = await expectOk<ConversationResult>(
 			await request('POST', `${path}/messages`, { content: 'again' }),
 		);
-		expect(again.conversation.messages).toHaveLength(4);
+		expect(messageText(again.conversation.messages.at(-1)!)).toBe('Second');
 	});
 
 	it('runs read-only tools without consent and records redacted previews', async () => {

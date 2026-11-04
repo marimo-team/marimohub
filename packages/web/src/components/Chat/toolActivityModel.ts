@@ -71,10 +71,14 @@ export function toolEntries(
 ): ToolActivityEntry[] {
 	return parts.map((part) => {
 		const permission = permissions.findLast((item) => item.data.tool_call_id === part.toolCallId);
+		// A call refused at the consent gate still returns a normal output describing
+		// the refusal, so the tool part alone would read as a success.
+		const refused =
+			permission !== undefined && permissionStatus(permission.data.status) === 'failed';
 		return {
 			id: part.toolCallId,
 			name: part.toolName,
-			status: toolStatus(part),
+			status: refused ? 'failed' : toolStatus(part),
 			summary: part.state === 'output-error' ? part.errorText : undefined,
 			input_preview: preview(part.input),
 			output_preview: preview(part.output),
@@ -134,14 +138,14 @@ export function messageBlocks(message: ChatUIMessage): MessageBlock[] {
 			calls: orphaned.map((part) => ({
 				id: part.data.tool_call_id,
 				name: part.data.action,
-				status: orphanedPermissionStatus(part.data.status),
+				status: permissionStatus(part.data.status),
 				permission: part.data,
 			})),
 		});
 	return blocks;
 }
 
-function orphanedPermissionStatus(status: ConversationPermission['status']): ToolStatus {
+function permissionStatus(status: ConversationPermission['status']): ToolStatus {
 	switch (status) {
 		case 'open':
 			return 'running';
