@@ -59,15 +59,16 @@ export class ChatPermissionStore {
 		let removed = false;
 		await this.mutate(pid, user, (grants) => {
 			removed = grants.some((grant) => grant.id === grantId);
-			return grants.filter((grant) => grant.id !== grantId);
+			return removed ? grants.filter((grant) => grant.id !== grantId) : null;
 		});
 		return removed;
 	}
 
+	/** Rewrite the record; `apply` returns null to leave it untouched. */
 	private async mutate(
 		pid: ProjectId,
 		user: UserId,
-		apply: (grants: ChatPermissionGrant[]) => ChatPermissionGrant[],
+		apply: (grants: ChatPermissionGrant[]) => ChatPermissionGrant[] | null,
 	): Promise<void> {
 		const key = paths.chatPermissions(pid, user);
 		await withCasRetry(this.bucket, async (cas) => {
@@ -75,7 +76,9 @@ export class ChatPermissionStore {
 			const grants = object
 				? (await readStored(ChatPermissionRecordSchema, object, key)).grants
 				: [];
-			const next = ChatPermissionRecordSchema.parse({ schema_version: 1, grants: apply(grants) });
+			const applied = apply(grants);
+			if (applied === null) return;
+			const next = ChatPermissionRecordSchema.parse({ schema_version: 1, grants: applied });
 			await cas.put(
 				key,
 				JSON.stringify(next),

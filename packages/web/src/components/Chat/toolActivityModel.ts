@@ -132,15 +132,31 @@ export function messageBlocks(message: ChatUIMessage): MessageBlock[] {
 			calls: orphaned.map((part) => ({
 				id: part.data.tool_call_id,
 				name: part.data.action,
-				status: part.data.status === 'open' ? 'running' : 'succeeded',
+				status: orphanedPermissionStatus(part.data.status),
 				permission: part.data,
 			})),
 		});
 	return blocks;
 }
 
+function orphanedPermissionStatus(status: ConversationPermission['status']): ToolStatus {
+	switch (status) {
+		case 'open':
+			return 'running';
+		case 'allowed':
+		case 'remembered':
+			return 'succeeded';
+		case 'denied':
+		case 'expired':
+		case 'cancelled':
+		case 'unavailable':
+			return 'failed';
+	}
+}
+
+/** Every call the transcript renders for this message, orphaned consent rows included. */
 export function messageToolEntries(message: ChatUIMessage): ToolActivityEntry[] {
-	return toolEntries(message.parts.filter(isToolPart), message.parts.filter(isPermissionPart));
+	return messageBlocks(message).flatMap((block) => (block.kind === 'tools' ? block.calls : []));
 }
 
 export interface ToolReference {

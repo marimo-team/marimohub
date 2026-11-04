@@ -39,6 +39,26 @@ describe('PermissionBroker', () => {
 		expect(() => broker.wait('b', { timeoutMs: 10 })).not.toThrow();
 	});
 
+	it('reads the record one last time before giving up', async () => {
+		const broker = new PermissionBroker();
+		const saved = vi
+			.fn<() => Promise<'deny' | undefined>>()
+			.mockResolvedValue(undefined)
+			.mockResolvedValueOnce(undefined);
+		const pending = broker.wait('k', { timeoutMs: 1000, pollMs: 400, readDecision: saved });
+		await vi.advanceTimersByTimeAsync(900);
+		saved.mockResolvedValue('deny');
+		await vi.advanceTimersByTimeAsync(100);
+		await expect(pending).resolves.toBe('deny');
+		const failing = broker.wait('f', {
+			timeoutMs: 100,
+			pollMs: 1000,
+			readDecision: () => Promise.reject(new Error('down')),
+		});
+		await vi.advanceTimersByTimeAsync(100);
+		await expect(failing).resolves.toBe('expired');
+	});
+
 	it('surfaces a read failure instead of waiting for the timeout', async () => {
 		const broker = new PermissionBroker();
 		const pending = broker.wait('k', {

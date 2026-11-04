@@ -60,7 +60,17 @@ export class PermissionBroker {
 			};
 			const abort = () => finish('cancelled');
 			this.pending.set(key, finish);
-			const timer = setTimeout(() => finish('expired'), timeoutMs);
+			// A decision saved by another replica just before the deadline still counts.
+			const expire = async () => {
+				if (settled) return;
+				try {
+					const decision = readDecision ? await readDecision() : undefined;
+					finish(decision ?? 'expired');
+				} catch {
+					finish('expired');
+				}
+			};
+			const timer = setTimeout(() => void expire(), timeoutMs);
 			signal?.addEventListener('abort', abort, { once: true });
 			if (signal?.aborted) abort();
 			if (!settled && readDecision) pollTimer = setTimeout(() => void poll(), pollMs);

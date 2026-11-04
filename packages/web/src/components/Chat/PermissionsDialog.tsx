@@ -24,7 +24,7 @@ export function PermissionsDialog({ pid, onClose }: { pid: string; onClose: () =
 							</time>
 						</div>
 						<Button
-							isDisabled={revoke.isPending}
+							isDisabled={revoke.isPending && revoke.variables === grant.id}
 							onPress={() => revoke.mutate(grant.id)}
 							aria-label={`Remove ${grant.action} for ${grant.scope_label}`}
 						>

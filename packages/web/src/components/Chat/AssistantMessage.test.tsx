@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { renderWithClient } from '@/test/render';
-import { AssistantMessage } from './AssistantMessage';
+import { AssistantMessage, isInternalHref } from './AssistantMessage';
 
 function renderMessage(content: string) {
 	return renderWithClient(<AssistantMessage content={content} />, {
@@ -35,6 +35,15 @@ describe('AssistantMessage', () => {
 			'noopener noreferrer',
 		);
 		expect(screen.getByRole('link', { name: 'Documentation' })).toHaveAttribute('target', '_blank');
+	});
+
+	it('treats protocol-relative links as external', () => {
+		expect(isInternalHref('/projects/sales')).toBe(true);
+		expect(isInternalHref('//evil.example')).toBe(false);
+		expect(isInternalHref('/\\evil.example')).toBe(false);
+		// Markdown percent-encodes the backslash, so the rendered link stays same-origin.
+		renderMessage('[x](/\\evil.example)');
+		expect(screen.getByRole('link', { name: 'x' })).toHaveAttribute('href', '/%5Cevil.example');
 	});
 
 	it('uses default URL sanitization to block JavaScript links', () => {

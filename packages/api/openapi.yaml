@@ -15066,7 +15066,7 @@ paths:
                                             maxLength: 80
                                           toolCallId:
                                             type: string
-                                            maxLength: 80
+                                            maxLength: 128
                                           state:
                                             type: string
                                             enum:
@@ -15105,7 +15105,7 @@ paths:
                                                 format: uuid
                                               tool_call_id:
                                                 type: string
-                                                maxLength: 80
+                                                maxLength: 128
                                               kind:
                                                 type: string
                                                 maxLength: 40
@@ -15122,7 +15122,7 @@ paths:
                                                       maxLength: 40
                                                     value:
                                                       type: string
-                                                      maxLength: 4000
+                                                      maxLength: 20000
                                                   required:
                                                     - label
                                                     - value
@@ -15174,7 +15174,7 @@ paths:
                                 - role
                                 - metadata
                                 - parts
-                            maxItems: 160
+                            maxItems: 80
                           pending:
                             type: object
                             properties:
@@ -15223,7 +15223,7 @@ paths:
                                     id:
                                       type: string
                                       minLength: 1
-                                      maxLength: 256
+                                      maxLength: 155
                                     name:
                                       type: string
                                       minLength: 1
@@ -15243,7 +15243,7 @@ paths:
                                   properties:
                                     id:
                                       type: string
-                                      maxLength: 256
+                                      maxLength: 155
                                     name:
                                       type: string
                                       maxLength: 128
@@ -15428,7 +15428,7 @@ paths:
                                             maxLength: 80
                                           toolCallId:
                                             type: string
-                                            maxLength: 80
+                                            maxLength: 128
                                           state:
                                             type: string
                                             enum:
@@ -15467,7 +15467,7 @@ paths:
                                                 format: uuid
                                               tool_call_id:
                                                 type: string
-                                                maxLength: 80
+                                                maxLength: 128
                                               kind:
                                                 type: string
                                                 maxLength: 40
@@ -15484,7 +15484,7 @@ paths:
                                                       maxLength: 40
                                                     value:
                                                       type: string
-                                                      maxLength: 4000
+                                                      maxLength: 20000
                                                   required:
                                                     - label
                                                     - value
@@ -15536,7 +15536,7 @@ paths:
                                 - role
                                 - metadata
                                 - parts
-                            maxItems: 160
+                            maxItems: 80
                           pending:
                             type: object
                             properties:
@@ -15585,7 +15585,7 @@ paths:
                                     id:
                                       type: string
                                       minLength: 1
-                                      maxLength: 256
+                                      maxLength: 155
                                     name:
                                       type: string
                                       minLength: 1
@@ -15605,7 +15605,7 @@ paths:
                                   properties:
                                     id:
                                       type: string
-                                      maxLength: 256
+                                      maxLength: 155
                                     name:
                                       type: string
                                       maxLength: 128
@@ -15806,7 +15806,7 @@ paths:
                                             maxLength: 80
                                           toolCallId:
                                             type: string
-                                            maxLength: 80
+                                            maxLength: 128
                                           state:
                                             type: string
                                             enum:
@@ -15845,7 +15845,7 @@ paths:
                                                 format: uuid
                                               tool_call_id:
                                                 type: string
-                                                maxLength: 80
+                                                maxLength: 128
                                               kind:
                                                 type: string
                                                 maxLength: 40
@@ -15862,7 +15862,7 @@ paths:
                                                       maxLength: 40
                                                     value:
                                                       type: string
-                                                      maxLength: 4000
+                                                      maxLength: 20000
                                                   required:
                                                     - label
                                                     - value
@@ -15914,7 +15914,7 @@ paths:
                                 - role
                                 - metadata
                                 - parts
-                            maxItems: 160
+                            maxItems: 80
                           pending:
                             type: object
                             properties:
@@ -15963,7 +15963,7 @@ paths:
                                     id:
                                       type: string
                                       minLength: 1
-                                      maxLength: 256
+                                      maxLength: 155
                                     name:
                                       type: string
                                       minLength: 1
@@ -15983,7 +15983,7 @@ paths:
                                   properties:
                                     id:
                                       type: string
-                                      maxLength: 256
+                                      maxLength: 155
                                     name:
                                       type: string
                                       maxLength: 128
@@ -16163,6 +16163,7 @@ paths:
                   maxLength: 8000
               required:
                 - content
+              additionalProperties: false
       responses:
         '200':
           description: Private project conversation
@@ -16251,7 +16252,7 @@ paths:
                                             maxLength: 80
                                           toolCallId:
                                             type: string
-                                            maxLength: 80
+                                            maxLength: 128
                                           state:
                                             type: string
                                             enum:
@@ -16290,7 +16291,7 @@ paths:
                                                 format: uuid
                                               tool_call_id:
                                                 type: string
-                                                maxLength: 80
+                                                maxLength: 128
                                               kind:
                                                 type: string
                                                 maxLength: 40
@@ -16307,7 +16308,7 @@ paths:
                                                       maxLength: 40
                                                     value:
                                                       type: string
-                                                      maxLength: 4000
+                                                      maxLength: 20000
                                                   required:
                                                     - label
                                                     - value
@@ -16359,7 +16360,7 @@ paths:
                                 - role
                                 - metadata
                                 - parts
-                            maxItems: 160
+                            maxItems: 80
                           pending:
                             type: object
                             properties:
@@ -16408,7 +16409,7 @@ paths:
                                     id:
                                       type: string
                                       minLength: 1
-                                      maxLength: 256
+                                      maxLength: 155
                                     name:
                                       type: string
                                       minLength: 1
@@ -16428,7 +16429,7 @@ paths:
                                   properties:
                                     id:
                                       type: string
-                                      maxLength: 256
+                                      maxLength: 155
                                     name:
                                       type: string
                                       maxLength: 128
@@ -16623,7 +16624,7 @@ paths:
                                             maxLength: 80
                                           toolCallId:
                                             type: string
-                                            maxLength: 80
+                                            maxLength: 128
                                           state:
                                             type: string
                                             enum:
@@ -16662,7 +16663,7 @@ paths:
                                                 format: uuid
                                               tool_call_id:
                                                 type: string
-                                                maxLength: 80
+                                                maxLength: 128
                                               kind:
                                                 type: string
                                                 maxLength: 40
@@ -16679,7 +16680,7 @@ paths:
                                                       maxLength: 40
                                                     value:
                                                       type: string
-                                                      maxLength: 4000
+                                                      maxLength: 20000
                                                   required:
                                                     - label
                                                     - value
@@ -16731,7 +16732,7 @@ paths:
                                 - role
                                 - metadata
                                 - parts
-                            maxItems: 160
+                            maxItems: 80
                           pending:
                             type: object
                             properties:
@@ -16780,7 +16781,7 @@ paths:
                                     id:
                                       type: string
                                       minLength: 1
-                                      maxLength: 256
+                                      maxLength: 155
                                     name:
                                       type: string
                                       minLength: 1
@@ -16800,7 +16801,7 @@ paths:
                                   properties:
                                     id:
                                       type: string
-                                      maxLength: 256
+                                      maxLength: 155
                                     name:
                                       type: string
                                       maxLength: 128
@@ -16920,6 +16921,7 @@ paths:
                         - false
                   required:
                     - content
+                  additionalProperties: false
                 - type: object
                   properties:
                     resume:
@@ -17206,7 +17208,7 @@ paths:
                                             maxLength: 80
                                           toolCallId:
                                             type: string
-                                            maxLength: 80
+                                            maxLength: 128
                                           state:
                                             type: string
                                             enum:
@@ -17245,7 +17247,7 @@ paths:
                                                 format: uuid
                                               tool_call_id:
                                                 type: string
-                                                maxLength: 80
+                                                maxLength: 128
                                               kind:
                                                 type: string
                                                 maxLength: 40
@@ -17262,7 +17264,7 @@ paths:
                                                       maxLength: 40
                                                     value:
                                                       type: string
-                                                      maxLength: 4000
+                                                      maxLength: 20000
                                                   required:
                                                     - label
                                                     - value
@@ -17314,7 +17316,7 @@ paths:
                                 - role
                                 - metadata
                                 - parts
-                            maxItems: 160
+                            maxItems: 80
                           pending:
                             type: object
                             properties:
@@ -17363,7 +17365,7 @@ paths:
                                     id:
                                       type: string
                                       minLength: 1
-                                      maxLength: 256
+                                      maxLength: 155
                                     name:
                                       type: string
                                       minLength: 1
@@ -17383,7 +17385,7 @@ paths:
                                   properties:
                                     id:
                                       type: string
-                                      maxLength: 256
+                                      maxLength: 155
                                     name:
                                       type: string
                                       maxLength: 128
@@ -17554,7 +17556,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/chat-permissions:
     get:
-      operationId: chatPermissions.list
+      operationId: chat-permissions.list
       tags: *a5
       summary: List remembered tool permissions
       parameters:
@@ -17638,7 +17640,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/chat-permissions/{grant_id}:
     delete:
-      operationId: chatPermissions.revoke
+      operationId: chat-permissions.revoke
       tags: *a5
       summary: Forget a remembered tool permission
       parameters:

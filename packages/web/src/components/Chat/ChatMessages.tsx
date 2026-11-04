@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Check, ChevronRight, Copy, LoaderCircle, Pencil } from 'lucide-react';
 import type { ChatUIMessage } from '@/api/conversations';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
@@ -38,14 +38,15 @@ function Work({
 	active,
 	...activity
 }: ActivityProps & { blocks: readonly MessageBlock[]; active: boolean }) {
-	const [expanded, setExpanded] = useState(() =>
-		blocks.some(
-			(block) =>
-				block.kind === 'tools' && block.calls.some((call) => call.id === activity.inspecting),
-		),
-	);
-	const id = useId();
 	const calls = blocks.flatMap((block) => (block.kind === 'tools' ? block.calls : []));
+	const { inspecting } = activity;
+	const inspectingHere = Boolean(inspecting) && calls.some((call) => call.id === inspecting);
+	const [expanded, setExpanded] = useState(inspectingHere);
+	// A later `?inspect=` link into this section must open it, not just the initial one.
+	useEffect(() => {
+		if (inspectingHere) setExpanded(true);
+	}, [inspecting, inspectingHere]);
+	const id = useId();
 	const failed = calls.filter((call) => call.status === 'failed').length;
 	const waiting = calls.some((call) => call.permission?.status === 'open');
 	const open = active || expanded;

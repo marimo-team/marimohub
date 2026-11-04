@@ -42,7 +42,8 @@ export function useTranscriptScroll(
 			following.current = element.scrollHeight - element.clientHeight - element.scrollTop <= 64;
 	};
 	const onWheel = (event: WheelEvent<HTMLElement>) => {
-		if (event.deltaY < 0) following.current = false;
+		// A transcript that cannot scroll up has nothing to disengage from.
+		if (event.deltaY < 0 && event.currentTarget.scrollTop > 0) following.current = false;
 	};
 
 	useLayoutEffect(() => {

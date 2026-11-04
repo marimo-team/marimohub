@@ -432,10 +432,11 @@ describe('project conversations', () => {
 		expect((await request('GET', `${path}/stream`)).status).toBe(204);
 		const streaming = request('POST', `${path}/stream`, { content: 'long task' });
 		await waitForRecord(request, path, (c) => Boolean(c.pending));
-		const reconnect = request('GET', `${path}/stream`);
-		await new Promise((resolve) => setTimeout(resolve, 50));
+		// Response headers arrive once the subscriber is attached; only then stop.
+		const reconnect = await request('GET', `${path}/stream`);
+		expect(reconnect.status).toBe(200);
 		await expectOk(await request('POST', `${path}/stop`));
-		const replay = await readChunks(await reconnect);
+		const replay = await readChunks(reconnect);
 		expect(replay.map((chunk) => chunk.type).slice(0, 3)).toEqual([
 			'start',
 			'message-metadata',

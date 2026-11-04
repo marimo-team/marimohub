@@ -68,7 +68,7 @@ export function ToolActivity({
 								{onInspect ? (
 									<button
 										type="button"
-										aria-label={`Inspect ${toolLabel(call.name)}`}
+										aria-label={`Inspect ${toolLabel(call.name)} (${TOOL_STATUS_LABELS[call.status]})`}
 										aria-pressed={inspecting === call.id}
 										onClick={() => onInspect(call.id)}
 										className={cn(
@@ -108,8 +108,9 @@ export function ChatProgress({
 	/** Text is arriving right now, so the model is past planning. */
 	writing?: boolean;
 }) {
-	const running = calls.filter((call) => call.status === 'running').at(-1);
-	const waitingForConsent = running?.permission?.status === 'open';
+	const runningCalls = calls.filter((call) => call.status === 'running');
+	const running = runningCalls.at(-1);
+	const waitingForConsent = runningCalls.some((call) => call.permission?.status === 'open');
 	let message = writing || calls.length > 0 ? 'Writing…' : 'Planning the next step…';
 	if (running) message = `Running ${toolLabel(running.name)}…`;
 	if (waitingForConsent) message = 'Waiting for your permission…';

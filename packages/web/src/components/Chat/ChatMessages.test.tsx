@@ -39,7 +39,7 @@ describe('ChatMessages', () => {
 		const work = screen.getByRole('button', { name: 'Worked · 1 step' });
 		expect(work).toHaveAttribute('aria-expanded', 'false');
 		await user.click(work);
-		expect(screen.getByRole('button', { name: 'Inspect list notebooks' })).toBeVisible();
+		expect(screen.getByRole('button', { name: /^Inspect list notebooks/ })).toBeVisible();
 		expect(screen.getByText('I will look through the project.')).toBeVisible();
 		await user.click(work);
 		expect(screen.getByText('I will look through the project.')).not.toBeVisible();

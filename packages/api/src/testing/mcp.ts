@@ -11,18 +11,23 @@ import type { ApiDeps } from '../context';
 import { createMcpServer } from '../mcp/server';
 import type { StartRequestContext } from '../mcp/server';
 
+export const mcpRequest: StartRequestContext = {
+	requestId: 'mcp-test',
+	method: 'POST',
+	path: '/mcp',
+	hostname: 'hub.example.com',
+	appBaseUrl: 'https://hub.example.com',
+};
+
+/** Connect an in-memory client; `configure` adds tools the app would register around the server. */
 export async function connectMcpClient(
 	deps: ApiDeps,
 	principal: AuthenticatedPrincipal,
-	request: StartRequestContext = {
-		requestId: 'mcp-test',
-		method: 'POST',
-		path: '/mcp',
-		hostname: 'hub.example.com',
-		appBaseUrl: 'https://hub.example.com',
-	},
+	request: StartRequestContext = mcpRequest,
+	configure?: (server: ReturnType<typeof createMcpServer>) => void,
 ) {
 	const server = createMcpServer(deps, principal, request);
+	configure?.(server);
 	const client = new Client({ name: 'test', version: '1' });
 	onTestFinished(async () => {
 		await client.close();

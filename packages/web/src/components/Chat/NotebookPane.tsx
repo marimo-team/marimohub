@@ -39,9 +39,15 @@ export function NotebookPane({
 		try {
 			await onChange(next);
 			setChoosing(false);
+		} catch {
+			// The controller has already shown the error; the picker stays open for a retry.
 		} finally {
 			setSaving(false);
 		}
+	};
+	const startChoosing = () => {
+		setChoice(workingNotebook ?? notebooks[0]?.id ?? '');
+		setChoosing(true);
 	};
 	const picker = (
 		<form
@@ -108,12 +114,7 @@ export function NotebookPane({
 			actions={
 				workingNotebook && !choosing ? (
 					<>
-						<Button
-							size="sm"
-							variant="ghost"
-							isDisabled={busy || saving}
-							onPress={() => setChoosing(true)}
-						>
+						<Button size="sm" variant="ghost" isDisabled={busy || saving} onPress={startChoosing}>
 							Change
 						</Button>
 						<a

@@ -44,9 +44,27 @@ it('keeps the pane stationary during drag and commits the ghost position on rele
 	expect(screen.queryByTestId('pane-resize-shield')).not.toBeInTheDocument();
 });
 it('supports bounded arrow-key resizing and cancels a pointer drag without a width change', () => {
+	vi.stubGlobal(
+		'PointerEvent',
+		class extends MouseEvent {
+			readonly pointerId: number;
+			constructor(type: string, options: PointerEventInit) {
+				super(type, options);
+				this.pointerId = options.pointerId ?? 0;
+			}
+		},
+	);
 	const changed = vi.fn();
-	render(<PaneDivider width={70} onWidth={changed} />);
+	const { container } = render(
+		<div>
+			<PaneDivider width={70} onWidth={changed} />
+		</div>,
+	);
+	const parent = container.firstElementChild!;
+	vi.spyOn(parent, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 10, 1000, 500));
 	const divider = screen.getByRole('separator', { name: 'Notebook pane width' });
+	Object.defineProperty(divider, 'setPointerCapture', { value: vi.fn() });
+	Object.defineProperty(divider, 'releasePointerCapture', { value: vi.fn() });
 	fireEvent.keyDown(divider, { key: 'ArrowLeft' });
 	expect(changed).toHaveBeenLastCalledWith(70);
 	fireEvent.keyDown(divider, { key: 'ArrowRight' });
@@ -54,6 +72,10 @@ it('supports bounded arrow-key resizing and cancels a pointer drag without a wid
 	fireEvent.keyDown(divider, { key: 'Home' });
 	expect(changed).toHaveBeenLastCalledWith(30);
 	changed.mockClear();
-	fireEvent.pointerCancel(divider);
+	fireEvent.pointerDown(divider, { pointerId: 1, button: 0, clientX: 300 });
+	fireEvent.pointerMove(divider, { pointerId: 1, clientX: 450 });
+	expect(screen.getByTestId('pane-resize-guide')).toBeInTheDocument();
+	fireEvent.pointerCancel(divider, { pointerId: 1 });
+	expect(screen.queryByTestId('pane-resize-guide')).not.toBeInTheDocument();
 	expect(changed).not.toHaveBeenCalled();
 });

@@ -31,7 +31,8 @@ describe('live turn registry', () => {
 		const reader = cancelled.getReader();
 		await reader.read();
 		await reader.cancel();
-		// Closed without cancel: enqueue would throw on this one.
+		// Cancelled through the stream itself, after its reader let go: the
+		// registry's controller is already closed, so enqueue would throw here.
 		const closedEarly = subscribeLiveTurn('p', 'c2')!;
 		const earlyReader = closedEarly.getReader();
 		await earlyReader.read();

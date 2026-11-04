@@ -49,9 +49,10 @@ function streamUrl(pid: string, cid: string): string {
 	);
 }
 
-export function useConversations(pid: string) {
+export function useConversations(pid: string, options: { enabled?: boolean } = {}) {
 	return useQuery({
 		queryKey: conversationKeys.list(pid),
+		enabled: options.enabled ?? true,
 		queryFn: ({ signal }) =>
 			apiData(
 				apiClient.GET('/api/v1/projects/{pid}/conversations', {
@@ -337,21 +338,28 @@ export function useConversationChat(
 	// settles (replayed, 204, or failed) the caller must not sync the store from
 	// the record, or the saved partial comes back beside the replay.
 	const [resuming, setResuming] = useState(false);
+	const current = useRef<ChatSession | null>(null);
 	useEffect(() => {
 		if (session && session.cid !== cid) {
 			// The server keeps the turn; only this tab's view of it is dropped.
 			void session.chat.stop();
+			current.current = null;
 			setSession(null);
+			setResuming(false);
 		}
 		if (cid && conversation && session?.cid !== cid) {
 			const next = createSession(pid, conversation, latest, failed);
+			current.current = next;
 			setSession(next);
 			if (next.resume) {
 				setResuming(true);
 				void next.chat
 					.resumeStream()
 					.catch(() => {})
-					.finally(() => setResuming(false));
+					.finally(() => {
+						// A superseded session must not clear the flag for the one now reconnecting.
+						if (current.current === next) setResuming(false);
+					});
 			}
 		}
 	}, [pid, cid, conversation, session]);

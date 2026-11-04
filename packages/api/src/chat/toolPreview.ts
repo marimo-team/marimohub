@@ -8,7 +8,10 @@ import { CHAT_LIMITS } from '@marimo-hub/core/chat';
 const PRIVATE_WORDS = new Set([
 	'password',
 	'passwd',
+	'passphrase',
 	'secret',
+	'privatekey',
+	'accesskey',
 	'token',
 	'credential',
 	'credentials',
@@ -88,7 +91,7 @@ function pythonErrorType(value: unknown): string | undefined {
 export function redactPreviewText(value: string): string {
 	return value
 		.replaceAll(/\bBearer\s+\S+/gi, 'Bearer [Redacted]')
-		.replaceAll(/https?:\/\/[^\s"']+/gi, '[URL omitted]');
+		.replaceAll(/[a-z][a-z0-9+.-]*:\/\/[^\s"']+/gi, '[URL omitted]');
 }
 
 /** Short, redacted failure line for a tool error. */
@@ -168,6 +171,7 @@ export function boundedOutput(data: Record<string, unknown>): Record<string, unk
 			return value.slice(0, 20).map((entry, index) => visit(entry, `${path}[${index}]`, depth + 1));
 		}
 		if (value !== null && typeof value === 'object') {
+			if (Object.keys(value).length > 100) truncated.push(path);
 			return Object.fromEntries(
 				Object.entries(value)
 					.slice(0, 100)

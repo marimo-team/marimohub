@@ -14,8 +14,16 @@ describe('toolPreview', () => {
 				curl: 'yes',
 				token_count: 7,
 				label: 'Bearer abc.def https://example.com/x',
+				private_key: '-----BEGIN',
+				accessKeyId: 'AKIA',
+				passphrase: 'open sesame',
+				note: 'see postgres://user:pw@db.internal/app',
 			}),
 		) as Record<string, unknown>;
+		expect(preview.private_key).toBe('[Redacted or omitted]');
+		expect(preview.accessKeyId).toBe('[Redacted or omitted]');
+		expect(preview.passphrase).toBe('[Redacted or omitted]');
+		expect(preview.note).toBe('see [URL omitted]');
 		expect(preview.access_token).toBe('[Redacted or omitted]');
 		expect(preview.apiKey).toBe('[Redacted or omitted]');
 		expect(preview.connection_string).toBe('[Redacted or omitted]');
@@ -72,5 +80,10 @@ describe('toolPreview', () => {
 		expect(String(output.long)).toContain('[Remaining content omitted]');
 		expect((output.many as unknown[]).length).toBe(20);
 		expect(output.truncated_paths).toEqual(['$.long', '$.many']);
+		const wide = boundedOutput({
+			rows: Object.fromEntries(Array.from({ length: 120 }, (_, i) => [`k${i}`, i])),
+		});
+		expect(Object.keys(wide.rows as object)).toHaveLength(100);
+		expect(wide.truncated_paths).toEqual(['$.rows']);
 	});
 });

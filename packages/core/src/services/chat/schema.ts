@@ -9,7 +9,7 @@ export const CHAT_LIMITS = {
 	answerCharacters: 24000,
 	/** Total visible text per conversation before sends are refused. */
 	conversationCharacters: 96000,
-	/** Messages per conversation before sends are refused (schema allows slack for one more turn). */
+	/** Messages per conversation before sends are refused; the schema allows one more turn. */
 	messagesPerConversation: 78,
 	/** Tool calls per assistant turn. One number so the model, tools, and storage agree. */
 	toolCallsPerTurn: 24,
@@ -17,9 +17,14 @@ export const CHAT_LIMITS = {
 	conversationsPerProject: 50,
 	/** Redacted tool input/output preview length. */
 	previewCharacters: 2000,
+	/** One field on a consent card, enough to read the code being approved. */
+	consentDetailCharacters: 20_000,
 } as const;
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+/** Provider tool-call ids; checkpoint ids prefix them with a ULID claim id and a colon. */
+const TOOL_CALL_ID_CHARACTERS = 128;
+const CHECKPOINT_ID_CHARACTERS = 26 + 1 + TOOL_CALL_ID_CHARACTERS;
 
 export const ConversationIdSchema = z.string().regex(ULID);
 
@@ -37,10 +42,17 @@ export type PermissionStatus = z.infer<typeof PermissionStatusSchema>;
 /** One consent request for a gated tool call, stored as a `data-permission` part. */
 export const ConversationPermissionSchema = z.object({
 	id: z.uuid(),
-	tool_call_id: z.string().max(80),
+	tool_call_id: z.string().max(TOOL_CALL_ID_CHARACTERS),
 	kind: z.string().max(40),
 	action: z.string().max(120),
-	details: z.array(z.object({ label: z.string().max(40), value: z.string().max(4000) })).max(6),
+	details: z
+		.array(
+			z.object({
+				label: z.string().max(40),
+				value: z.string().max(CHAT_LIMITS.consentDetailCharacters),
+			}),
+		)
+		.max(6),
 	scope: z.object({ key: z.string().max(200), label: z.string().max(120) }),
 	/** Whether "always allow" is offered; destructive actions ask every time. */
 	can_remember: z.boolean(),
@@ -65,7 +77,7 @@ export type ConversationTextPart = z.infer<typeof ConversationTextPartSchema>;
 export const ConversationToolPartSchema = z.object({
 	type: z.literal('dynamic-tool'),
 	toolName: z.string().max(80),
-	toolCallId: z.string().max(80),
+	toolCallId: z.string().max(TOOL_CALL_ID_CHARACTERS),
 	state: z.enum(['input-streaming', 'input-available', 'output-available', 'output-error']),
 	input: z.string().max(CHAT_LIMITS.previewCharacters).optional(),
 	output: z.string().max(CHAT_LIMITS.previewCharacters).optional(),
@@ -114,7 +126,7 @@ export function conversationTextLength(messages: readonly Pick<ConversationMessa
 }
 
 export const ConversationObservationSchema = z.object({
-	id: z.string().min(1).max(256),
+	id: z.string().min(1).max(CHECKPOINT_ID_CHARACTERS),
 	name: z.string().min(1).max(128),
 	result: z.string().max(4000),
 });
@@ -136,7 +148,7 @@ export const ConversationContinuationSchema = z.object({
 		.refine((items) => items.reduce((total, item) => total + item.result.length, 0) <= 32000),
 	/** Mutating tool calls that started without a saved outcome. */
 	unresolved_calls: z
-		.array(z.object({ id: z.string().max(256), name: z.string().max(128) }))
+		.array(z.object({ id: z.string().max(CHECKPOINT_ID_CHARACTERS), name: z.string().max(128) }))
 		.max(CHAT_LIMITS.toolCallsPerTurn),
 });
 export type ConversationContinuation = z.infer<typeof ConversationContinuationSchema>;
@@ -156,7 +168,7 @@ export const ConversationSchema = z.object({
 	updated_at: z.iso.datetime(),
 	messages: z
 		.array(ConversationMessageSchema)
-		.max(160)
+		.max(CHAT_LIMITS.messagesPerConversation + 2)
 		.refine(
 			(messages) => conversationTextLength(messages) <= CHAT_LIMITS.conversationCharacters,
 			'Conversation text exceeds the limit',

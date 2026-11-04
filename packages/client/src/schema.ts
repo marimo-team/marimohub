@@ -1383,7 +1383,7 @@ export interface paths {
 			cookie?: never;
 		};
 		/** List remembered tool permissions */
-		get: operations['chatPermissions.list'];
+		get: operations['chat-permissions.list'];
 		put?: never;
 		post?: never;
 		delete?: never;
@@ -1403,7 +1403,7 @@ export interface paths {
 		put?: never;
 		post?: never;
 		/** Forget a remembered tool permission */
-		delete: operations['chatPermissions.revoke'];
+		delete: operations['chat-permissions.revoke'];
 		options?: never;
 		head?: never;
 		patch?: never;
@@ -15383,7 +15383,7 @@ export interface operations {
 			};
 		};
 	};
-	'chatPermissions.list': {
+	'chat-permissions.list': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -15447,7 +15447,7 @@ export interface operations {
 			};
 		};
 	};
-	'chatPermissions.revoke': {
+	'chat-permissions.revoke': {
 		parameters: {
 			query?: never;
 			header?: never;

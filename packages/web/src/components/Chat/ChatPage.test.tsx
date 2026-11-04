@@ -50,14 +50,19 @@ function uiStream(
 		encoder.encode(`data: ${typeof chunk === 'string' ? chunk : JSON.stringify(chunk)}\n\n`);
 	const body = new ReadableStream<Uint8Array>({
 		async start(controller) {
-			for (const chunk of chunks) controller.enqueue(encode(chunk));
-			if (options.hold) {
-				await options.hold;
-				for (const chunk of options.rest ?? []) controller.enqueue(encode(chunk));
+			try {
+				for (const chunk of chunks) controller.enqueue(encode(chunk));
+				if (options.hold) {
+					await options.hold;
+					for (const chunk of options.rest ?? []) controller.enqueue(encode(chunk));
+				}
+				controller.enqueue(encode('[DONE]'));
+				controller.close();
+			} catch {
+				// The consumer cancelled the stream (stop, or leaving the conversation).
+			} finally {
+				options.onDone?.();
 			}
-			controller.enqueue(encode('[DONE]'));
-			options.onDone?.();
-			controller.close();
 		},
 	});
 	return new Response(body, {
@@ -319,18 +324,19 @@ describe('ChatPage', () => {
 	it('sends a follow-up question while an interrupted operation awaits review', async () => {
 		const { user, writes } = setup({
 			route: saved,
-			detailResponse: jsonOk({
-				conversation: {
-					...record,
-					continuation: {
-						status: 'needs_review',
-						reason: 'interrupted',
-						task: 'Create a notebook',
-						observations: [],
-						unresolved_calls: [{ id: 'call-1', name: 'execute_code' }],
+			detailResponse: () =>
+				jsonOk({
+					conversation: {
+						...record,
+						continuation: {
+							status: 'needs_review',
+							reason: 'interrupted',
+							task: 'Create a notebook',
+							observations: [],
+							unresolved_calls: [{ id: 'call-1', name: 'execute_code' }],
+						},
 					},
-				},
-			}),
+				}),
 		});
 		await screen.findByText('Review the interrupted task');
 		await user.type(textbox(), 'Why did it fail?');
@@ -349,18 +355,19 @@ describe('ChatPage', () => {
 	it('dismisses a saved task without continuing it', async () => {
 		const { user, writes } = setup({
 			route: saved,
-			detailResponse: jsonOk({
-				conversation: {
-					...record,
-					continuation: {
-						status: 'paused',
-						reason: 'stopped',
-						task: 'Long task',
-						observations: [],
-						unresolved_calls: [],
+			detailResponse: () =>
+				jsonOk({
+					conversation: {
+						...record,
+						continuation: {
+							status: 'paused',
+							reason: 'stopped',
+							task: 'Long task',
+							observations: [],
+							unresolved_calls: [],
+						},
 					},
-				},
-			}),
+				}),
 		});
 		await screen.findByText('Task paused');
 		expect(screen.getByText(/You stopped the reply/)).toBeInTheDocument();
@@ -458,7 +465,7 @@ describe('ChatPage', () => {
 				detailResponse:
 					state === 'loading'
 						? pending.promise
-						: jsonError('NOT_FOUND', 'Conversation missing', 404),
+						: () => jsonError('NOT_FOUND', 'Conversation missing', 404),
 			});
 			await screen.findByRole('textbox', { name: 'Message the project assistant' });
 			if (state === 'failed') await screen.findByText('Conversation missing');
@@ -530,11 +537,15 @@ describe('ChatPage', () => {
 		await waitFor(() => expect(writes).toHaveLength(1));
 		await user.click(screen.getByRole('button', { name: 'Switch project' }));
 		await screen.findByText('Finance');
-		await act(async () => pending.resolve(jsonOk({ conversation: record })));
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		expect(writes.map((write) => write.path)).toEqual(['/api/v1/projects/sales/conversations']);
-		expect(screen.getByTestId('location')).toHaveTextContent('/projects/finance/chat');
+		await act(async () => {
+			pending.resolve(jsonOk({ conversation: record }));
+			await pending.promise;
+		});
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveTextContent('/projects/finance/chat'),
+		);
 		expect(screen.getByTestId('location')).not.toHaveTextContent('conversation=');
+		expect(writes.map((write) => write.path)).toEqual(['/api/v1/projects/sales/conversations']);
 	});
 
 	it('streams live tool activity in order and keeps the composer usable', async () => {
@@ -823,6 +834,7 @@ describe('ChatPage', () => {
 	describe('leaving a streaming conversation', () => {
 		it('does not leak an abandoned stream error or draft into the next conversation', async () => {
 			const hold = deferred<void>();
+			let streamDone = false;
 			const { user, writes } = setup({
 				route: saved,
 				streamResponse: () =>
@@ -832,7 +844,13 @@ describe('ChatPage', () => {
 							{ type: 'text-start', id: 't1' },
 							{ type: 'text-delta', id: 't1', delta: 'Partial' },
 						],
-						{ hold: hold.promise, rest: [{ type: 'error', errorText: 'Model quota exceeded' }] },
+						{
+							hold: hold.promise,
+							rest: [{ type: 'error', errorText: 'Model quota exceeded' }],
+							onDone: () => {
+								streamDone = true;
+							},
+						},
 					),
 			});
 			await screen.findByText('Persisted project findings');
@@ -843,7 +861,7 @@ describe('ChatPage', () => {
 				expect(screen.getByTestId('location')).toHaveTextContent('conversation=conversation-2'),
 			);
 			await act(async () => hold.resolve());
-			await new Promise((resolve) => setTimeout(resolve, 50));
+			await waitFor(() => expect(streamDone).toBe(true));
 			expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 			expect(textbox()).toHaveValue('');
 			expect(screen.queryByRole('button', { name: 'Stop response' })).not.toBeInTheDocument();
@@ -986,7 +1004,7 @@ describe('ChatPage', () => {
 		it('keeps the starting screen for an existing chat with no messages', async () => {
 			const { user, writes } = setup({
 				route: saved,
-				detailResponse: jsonOk({ conversation: { ...record, messages: [] } }),
+				detailResponse: () => jsonOk({ conversation: { ...record, messages: [] } }),
 			});
 			await screen.findByRole('heading', { name: 'What should we build, Ada?' });
 			await user.click(screen.getByRole('button', { name: 'Add context' }));
@@ -1134,7 +1152,7 @@ describe('ChatPage', () => {
 			});
 			await screen.findByText('Done.');
 			await user.click(screen.getByRole('button', { name: 'Worked · 1 step' }));
-			await user.click(screen.getByRole('button', { name: 'Inspect create notebook' }));
+			await user.click(screen.getByRole('button', { name: /^Inspect create notebook/ }));
 			const details = await screen.findByRole('complementary', { name: 'Tool call details' });
 			expect(screen.getByTestId('location')).toHaveTextContent('inspect=call-9');
 			expect(within(details).getByRole('region', { name: 'Input' })).toHaveTextContent(
@@ -1173,7 +1191,7 @@ describe('ChatPage', () => {
 			});
 			const details = await screen.findByRole('complementary', { name: 'Tool call details' });
 			expect(within(details).getByRole('heading', { name: 'create notebook' })).toBeInTheDocument();
-			expect(screen.getByRole('button', { name: 'Inspect create notebook' })).toHaveAttribute(
+			expect(screen.getByRole('button', { name: /^Inspect create notebook/ })).toHaveAttribute(
 				'aria-pressed',
 				'true',
 			);
@@ -1264,7 +1282,7 @@ describe('ChatPage', () => {
 			});
 			await screen.findByText('I could not do either.');
 			await user.click(screen.getByRole('button', { name: /Worked · 2 steps/ }));
-			await user.click(screen.getByRole('button', { name: 'Inspect delete notebook' }));
+			await user.click(screen.getByRole('button', { name: /^Inspect delete notebook/ }));
 			let details = await screen.findByRole('complementary', { name: 'Tool call details' });
 			expect(within(details).getByRole('region', { name: 'Permission' })).toHaveTextContent(
 				'Not allowed',
@@ -1272,7 +1290,7 @@ describe('ChatPage', () => {
 			expect(
 				within(details).queryByRole('button', { name: 'Show beside chat' }),
 			).not.toBeInTheDocument();
-			await user.click(screen.getByRole('button', { name: 'Inspect run job' }));
+			await user.click(screen.getByRole('button', { name: /^Inspect run job/ }));
 			details = await screen.findByRole('complementary', { name: 'Tool call details' });
 			expect(within(details).getByText('Failed')).toBeInTheDocument();
 			expect(within(details).getByRole('note')).toHaveTextContent('NOT_FOUND: Job not found');
@@ -1282,11 +1300,11 @@ describe('ChatPage', () => {
 			expect(
 				within(details).getByRole('link', { name: 'Open job-0123456789abcdef in a new tab' }),
 			).toHaveAttribute('href', '/projects/sales/jobs');
-			expect(screen.getByRole('button', { name: 'Inspect run job' })).toHaveAttribute(
+			expect(screen.getByRole('button', { name: /^Inspect run job/ })).toHaveAttribute(
 				'aria-pressed',
 				'true',
 			);
-			expect(screen.getByRole('button', { name: 'Inspect delete notebook' })).toHaveAttribute(
+			expect(screen.getByRole('button', { name: /^Inspect delete notebook/ })).toHaveAttribute(
 				'aria-pressed',
 				'false',
 			);
@@ -1361,7 +1379,7 @@ describe('ChatPage', () => {
 			});
 			await screen.findByText('Persisted project findings');
 			await user.type(textbox(), 'Read the sales report{Enter}');
-			await user.click(await screen.findByRole('button', { name: 'Inspect get notebook' }));
+			await user.click(await screen.findByRole('button', { name: /^Inspect get notebook/ }));
 			const details = await screen.findByRole('complementary', { name: 'Tool call details' });
 			expect(within(details).getByText('Running')).toBeInTheDocument();
 			expect(within(details).getByRole('region', { name: 'Result' })).toHaveTextContent(
@@ -1438,7 +1456,7 @@ describe('ChatPage', () => {
 			});
 			await screen.findByTitle('Notebook Sales report');
 			await user.click(screen.getByRole('button', { name: 'Worked · 1 step' }));
-			await user.click(screen.getByRole('button', { name: 'Inspect get notebook' }));
+			await user.click(screen.getByRole('button', { name: /^Inspect get notebook/ }));
 			await screen.findByRole('complementary', { name: 'Tool call details' });
 			expect(
 				screen.queryByRole('complementary', { name: 'Notebook pane' }),
@@ -1646,38 +1664,39 @@ describe('ChatPage', () => {
 		it('restores an open permission card from a saved conversation and hides "always" for irreversible actions', async () => {
 			setup({
 				route: saved,
-				detailResponse: jsonOk({
-					conversation: {
-						...record,
-						pending: { id: 'turn', expires_at: '2099-01-01T00:00:00Z' },
-						messages: [
-							{
-								id: 'saved-permission',
-								role: 'assistant',
-								metadata: { created_at: record.created_at },
-								parts: [
-									{
-										type: 'dynamic-tool',
-										toolName: 'delete_notebook',
-										toolCallId: 'saved-call',
-										state: 'input-available',
-										input: '{"notebook":"Old"}',
-									},
-									{
-										type: 'data-permission',
-										id: permissionRequest.id,
-										data: {
-											...permissionRequest,
-											tool_call_id: 'saved-call',
-											action: 'Delete a notebook',
-											can_remember: false,
+				detailResponse: () =>
+					jsonOk({
+						conversation: {
+							...record,
+							pending: { id: 'turn', expires_at: '2099-01-01T00:00:00Z' },
+							messages: [
+								{
+									id: 'saved-permission',
+									role: 'assistant',
+									metadata: { created_at: record.created_at },
+									parts: [
+										{
+											type: 'dynamic-tool',
+											toolName: 'delete_notebook',
+											toolCallId: 'saved-call',
+											state: 'input-available',
+											input: '{"notebook":"Old"}',
 										},
-									},
-								],
-							},
-						],
-					},
-				}),
+										{
+											type: 'data-permission',
+											id: permissionRequest.id,
+											data: {
+												...permissionRequest,
+												tool_call_id: 'saved-call',
+												action: 'Delete a notebook',
+												can_remember: false,
+											},
+										},
+									],
+								},
+							],
+						},
+					}),
 			});
 			expect(await screen.findByRole('button', { name: 'Allow once' })).toBeEnabled();
 			expect(screen.queryByRole('button', { name: /Always allow/ })).not.toBeInTheDocument();

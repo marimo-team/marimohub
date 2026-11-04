@@ -1,3 +1,4 @@
+import { CHAT_LIMITS } from '@marimo-hub/core/chat';
 import type { ConversationPermission } from '@marimo-hub/core/chat';
 
 export type PermissionRequest = Pick<
@@ -21,22 +22,36 @@ export function isGated(tool: GatedTool): boolean {
 	return tool.annotations?.readOnlyHint !== true;
 }
 
-function scalar(value: unknown): string | undefined {
+/** Code the user is asked to approve must be readable in full; other fields stay short. */
+const DETAIL_LIMITS = { code: CHAT_LIMITS.consentDetailCharacters, other: 300 } as const;
+const LABEL_LIMIT = 40;
+const TRUNCATED = '\n… [truncated]';
+
+function render(value: unknown): string | undefined {
+	if (value === undefined || value === null || value === '') return undefined;
 	if (typeof value === 'string') return value;
 	if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-	return undefined;
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch {
+		return undefined;
+	}
 }
 
-/** Code the user is asked to approve must be readable in full; other fields stay short. */
-const DETAIL_LIMITS = { code: 4000, other: 300 } as const;
+/** Over-cap values end in a visible marker so nobody approves text they could not see. */
+function clamp(text: string, limit: number): string {
+	return text.length <= limit ? text : text.slice(0, limit - TRUNCATED.length) + TRUNCATED;
+}
 
 function detail(
 	label: string,
 	value: unknown,
 	limit: number = DETAIL_LIMITS.other,
 ): Detail | undefined {
-	const text = scalar(value);
-	return text === undefined || text === '' ? undefined : { label, value: text.slice(0, limit) };
+	const text = render(value);
+	return text === undefined
+		? undefined
+		: { label: label.slice(0, LABEL_LIMIT), value: clamp(text, limit) };
 }
 
 function details(...entries: (Detail | undefined)[]): Detail[] {
@@ -57,6 +72,8 @@ const ACTIONS: Record<
 		label: 'creating notebooks',
 		fields: [
 			['Title', 'title'],
+			['Description', 'description'],
+			['Tags', 'tags'],
 			['Code', 'code', DETAIL_LIMITS.code],
 		],
 	},
@@ -66,8 +83,10 @@ const ACTIONS: Record<
 		fields: [
 			['Notebook', 'notebook'],
 			['Title', 'title'],
-			['Status', 'status'],
+			['Description', 'description'],
+			['Tags', 'tags'],
 			['Code', 'code', DETAIL_LIMITS.code],
+			['Version message', 'message'],
 		],
 	},
 	sync_notebook_source: {
@@ -109,14 +128,32 @@ const ACTIONS: Record<
 	create_job: {
 		action: 'Create a job',
 		label: 'creating jobs',
-		fields: [['Notebook', 'notebook']],
+		fields: [
+			['Notebook', 'notebook'],
+			['Name', 'name'],
+			['Schedule', 'schedule'],
+			['Enabled', 'enabled'],
+			['Parameters', 'parameters'],
+			['Concurrency', 'concurrency_policy'],
+		],
 	},
 	schedule_job: {
 		action: 'Change a job schedule',
 		label: 'changing job schedules',
-		fields: [['Job', 'job']],
+		fields: [
+			['Job', 'job'],
+			['Schedule', 'schedule'],
+			['Enabled', 'enabled'],
+		],
 	},
-	run_job: { action: 'Run a job', label: 'running jobs', fields: [['Job', 'job']] },
+	run_job: {
+		action: 'Run a job',
+		label: 'running jobs',
+		fields: [
+			['Job', 'job'],
+			['Parameters', 'parameters'],
+		],
+	},
 };
 
 /** Build the consent card for one gated call, or nothing when the tool runs freely. */

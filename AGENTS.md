@@ -20,7 +20,7 @@ The toolchain is **vite-plus** (`vp`). `pnpm check` runs `vp check`
 runs each package's `test` script (vitest); `pnpm build` builds every package.
 Use these as the done-criteria for any change.
 
-## Architecture (5 bullets)
+## Architecture
 
 - **Ports and adapters.** Every external dependency — storage, compute, identity
   — sits behind a TypeScript interface (a _port_). The domain depends on the

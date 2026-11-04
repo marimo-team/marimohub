@@ -6,7 +6,7 @@ export const CreateConversationBody = z.object({
 	title: z.string().trim().min(1).max(120).optional(),
 });
 
-export const SendMessageBody = z.object({
+export const SendMessageBody = z.strictObject({
 	content: z.string().trim().min(1).max(CHAT_LIMITS.messageCharacters),
 });
 

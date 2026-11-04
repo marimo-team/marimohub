@@ -267,6 +267,24 @@ describe('ConversationService', () => {
 		expect(final.pending).toBeUndefined();
 	});
 
+	it('fences a runner whose lease lapsed even before anyone reclaims the turn', async () => {
+		const bucket = new MemoryBucket();
+		let now = Date.parse('2026-01-01T00:00:00Z');
+		const service = new ConversationService(bucket, () => now, { leaseDurationMs: 60_000 });
+		const created = await service.create(pid, alice);
+		const held = heldTurn();
+		const stale = service.send(pid, alice, created.id, 'first', held.complete);
+		const context = await held.entered;
+		now += 61_000;
+		await expect(context.saveParts([text('late')])).rejects.toBeInstanceOf(PreconditionFailedError);
+		expect(context.stopSignal.aborted).toBe(true);
+		held.release.resolve([text('late answer')]);
+		await expect(stale).rejects.toBeInstanceOf(PreconditionFailedError);
+		const final = await service.get(pid, alice, created.id);
+		expect(final.messages.map(messageText)).toEqual(['first']);
+		expect(final.continuation).toMatchObject({ status: 'paused', reason: 'interrupted' });
+	});
+
 	it('records checkpoints into the saved task and resumes it', async () => {
 		const service = new ConversationService(new MemoryBucket());
 		const created = await service.create(pid, alice);
@@ -555,9 +573,12 @@ describe('ConversationService', () => {
 			let now = Date.now();
 			const service = new ConversationService(bucket, () => now);
 			const { created, card, context, held, turn } = await openCard(service);
-			expect(
-				await service.decidePermission(pid, alice, created.id, crypto.randomUUID(), 'allow'),
-			).toBe('missing');
+			// A card that has not reached the head yet is still undecided, not cancelled.
+			const unseen = crypto.randomUUID();
+			expect(await service.permissionDecision(pid, alice, created.id, unseen)).toBeUndefined();
+			expect(await service.decidePermission(pid, alice, created.id, unseen, 'allow')).toBe(
+				'missing',
+			);
 			await expect(
 				service.decidePermission(pid, bob, created.id, card.id, 'allow'),
 			).rejects.toBeInstanceOf(NotFoundError);
@@ -575,6 +596,11 @@ describe('ConversationService', () => {
 			);
 			held.release.resolve([text('done')]);
 			await turn;
+			// Once the turn is over nothing can be waiting on a decision.
+			expect(await service.decidePermission(pid, alice, created.id, unseen, 'allow')).toBe(
+				'rejected',
+			);
+			expect(await service.permissionDecision(pid, alice, created.id, unseen)).toBe('cancelled');
 		});
 
 		it('does not carry a decision into a later turn', async () => {

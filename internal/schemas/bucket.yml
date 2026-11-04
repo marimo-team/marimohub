@@ -4253,7 +4253,7 @@ components:
           format: date-time
           pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z))$
         messages:
-          maxItems: 160
+          maxItems: 80
           type: array
           items:
             type: object
@@ -4307,7 +4307,7 @@ components:
                           maxLength: 80
                         toolCallId:
                           type: string
-                          maxLength: 80
+                          maxLength: 128
                         state:
                           type: string
                           enum:
@@ -4347,7 +4347,7 @@ components:
                               pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
                             tool_call_id:
                               type: string
-                              maxLength: 80
+                              maxLength: 128
                             kind:
                               type: string
                               maxLength: 40
@@ -4365,7 +4365,7 @@ components:
                                     maxLength: 40
                                   value:
                                     type: string
-                                    maxLength: 4000
+                                    maxLength: 20000
                                 required:
                                   - label
                                   - value
@@ -4467,7 +4467,7 @@ components:
                   id:
                     type: string
                     minLength: 1
-                    maxLength: 256
+                    maxLength: 155
                   name:
                     type: string
                     minLength: 1
@@ -4487,7 +4487,7 @@ components:
                 properties:
                   id:
                     type: string
-                    maxLength: 256
+                    maxLength: 155
                   name:
                     type: string
                     maxLength: 128

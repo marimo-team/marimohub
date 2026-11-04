@@ -418,8 +418,8 @@
 			"accepts_idempotency_key": false
 		},
 		{
-			"id": "chatPermissions.list",
-			"command": ["chatPermissions", "list"],
+			"id": "chat-permissions.list",
+			"command": ["chat-permissions", "list"],
 			"method": "GET",
 			"path": "/api/v1/projects/{pid}/chat-permissions",
 			"summary": "List remembered tool permissions",
@@ -440,8 +440,8 @@
 			"accepts_idempotency_key": false
 		},
 		{
-			"id": "chatPermissions.revoke",
-			"command": ["chatPermissions", "revoke"],
+			"id": "chat-permissions.revoke",
+			"command": ["chat-permissions", "revoke"],
 			"method": "DELETE",
 			"path": "/api/v1/projects/{pid}/chat-permissions/{grant_id}",
 			"summary": "Forget a remembered tool permission",

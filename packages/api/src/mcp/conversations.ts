@@ -58,7 +58,7 @@ const RequestSchema = z.discriminatedUnion('action', [
 	}),
 ]);
 
-/** Compact message view for agents: text plus tool names, previews on request. */
+/** Compact message view for agents: text, tool names, and consent outcomes; previews on request. */
 function compactMessage(message: ConversationMessage, includeToolDetails: boolean) {
 	return {
 		id: message.id,
@@ -73,6 +73,16 @@ function compactMessage(message: ConversationMessage, includeToolDetails: boolea
 				...(includeToolDetails
 					? { input: part.input, output: part.output, error: part.errorText }
 					: {}),
+			})),
+		// Open cards are how an agent learns a turn is waiting on `decide`.
+		permissions: message.parts
+			.filter((part) => part.type === 'data-permission')
+			.map((part) => ({
+				id: part.id,
+				tool_call_id: part.data.tool_call_id,
+				action: part.data.action,
+				status: part.data.status,
+				expires_at: part.data.expires_at,
 			})),
 	};
 }

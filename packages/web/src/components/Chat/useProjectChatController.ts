@@ -37,7 +37,10 @@ export function useProjectChatController(pid: string) {
 	const client = useQueryClient();
 	const [params, setParams] = useSearchParams();
 	const cid = params.get('conversation');
-	const list = useConversations(pid);
+	// The page redirects once capabilities report chat unavailable; skip the guaranteed 404.
+	const list = useConversations(pid, {
+		enabled: capabilities === undefined || capabilities.chat.available,
+	});
 	const create = useCreateConversation(pid);
 	const remove = useDeleteConversation(pid);
 	const decide = useDecidePermission(pid);
@@ -165,7 +168,7 @@ export function useProjectChatController(pid: string) {
 			if (!mounted.current) return;
 			// The new conversation's session mounts on the next render; the queue
 			// delivers the message once it is ready.
-			chat.enqueue(content);
+			chat.enqueue(content, created.conversation.id);
 			setParams({ conversation: created.conversation.id }, { replace: true });
 		} catch (cause) {
 			if (mounted.current) {

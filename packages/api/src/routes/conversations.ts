@@ -337,7 +337,7 @@ app.openapi(
 	createRoute({
 		method: 'get',
 		path: '/projects/{pid}/chat-permissions',
-		operationId: 'chatPermissions.list',
+		operationId: 'chat-permissions.list',
 		tags: TAGS,
 		summary: 'List remembered tool permissions',
 		request: { params: ProjectIdParam },
@@ -359,7 +359,7 @@ app.openapi(
 	createRoute({
 		method: 'delete',
 		path: '/projects/{pid}/chat-permissions/{grant_id}',
-		operationId: 'chatPermissions.revoke',
+		operationId: 'chat-permissions.revoke',
 		tags: TAGS,
 		summary: 'Forget a remembered tool permission',
 		request: { params: ProjectIdParam.extend({ grant_id: z.uuid() }) },

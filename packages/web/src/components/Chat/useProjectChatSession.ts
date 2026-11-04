@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
 	conversationKeys,
@@ -28,7 +28,10 @@ export function useProjectChatSession(
 	const client = useQueryClient();
 	const lastSent = useRef('');
 	const [localTurn, setLocalTurn] = useState<{ cid: string; baseline: number } | null>(null);
-	const [queue, setQueue] = useState<{ id: string; text: string }[]>([]);
+	// Each entry remembers its conversation so a history navigation that changes
+	// `cid` without `select()` cannot deliver it to the wrong conversation.
+	const [queue, setQueue] = useState<{ id: string; cid: string; text: string }[]>([]);
+	const queued = useMemo(() => queue.filter((item) => item.cid === cid), [queue, cid]);
 	const [live, setLive] = useState(false);
 	const detail = useConversation(pid, cid, {
 		pollWhileSending: creating,
@@ -87,12 +90,19 @@ export function useProjectChatSession(
 	);
 	// onFinish can precede SDK readiness and server finalization; queue dispatch waits for both.
 	useEffect(() => {
-		if (!canSend || queue.length === 0 || !cid) return;
+		// A new conversation's message is queued before the URL carries its id, so
+		// only prune once a conversation is selected.
+		if (!cid) return;
+		if (queue.length !== queued.length) {
+			setQueue(queued);
+			return;
+		}
+		if (!canSend || queue.length === 0) return;
 		const [next, ...rest] = queue;
 		if (!next) return;
 		setQueue(rest);
 		void send(cid, next.text);
-	}, [canSend, queue, cid, send]);
+	}, [canSend, queue, queued, cid, send]);
 	return {
 		detail,
 		ready: chat.ready,
@@ -101,10 +111,12 @@ export function useProjectChatSession(
 		busy,
 		canSend,
 		canQueue,
-		queue,
+		queue: queued,
 		clearQueue: () => setQueue([]),
-		enqueue: (text: string) =>
-			setQueue((current) => [...current, { id: crypto.randomUUID(), text }]),
+		enqueue: (text: string, forCid: string | null = cid) => {
+			if (!forCid) return;
+			setQueue((current) => [...current, { id: crypto.randomUUID(), cid: forCid, text }]);
+		},
 		removeQueued: (id: string) => setQueue((current) => current.filter((item) => item.id !== id)),
 		send,
 		resume(id: string, acknowledgeUncertain: boolean) {
@@ -112,6 +124,8 @@ export function useProjectChatSession(
 				cid: id,
 				baseline: client.getQueryState(conversationKeys.detail(pid, id))?.dataUpdatedAt ?? 0,
 			});
+			// A failed continuation has no message to restore as the draft.
+			lastSent.current = '';
 			return chat.resume(acknowledgeUncertain);
 		},
 		async stop() {

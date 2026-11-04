@@ -132,9 +132,14 @@ export async function openToolSession(
 						state.toolLimit = true;
 						return { code: 'TOOL_LIMIT', message: TOOL_LIMIT_MESSAGE };
 					}
+					// Reserve the slot before the first await so parallel calls cannot all
+					// pass the check; a refused call hands it back.
+					state.calls++;
 					const parsed = z.record(z.string(), z.unknown()).safeParse(rawInput ?? {});
-					if (!parsed.success)
+					if (!parsed.success) {
+						state.calls--;
 						return { code: 'INVALID_TOOL_ARGUMENTS', message: 'Tool arguments must be an object' };
+					}
 					const args = parsed.data;
 					if (
 						args.project !== undefined &&
@@ -172,11 +177,11 @@ export async function openToolSession(
 						args,
 					);
 					if (!decision.allowed) {
+						state.calls--;
 						const output = { permission: decision.status, message: decision.message };
 						await complete(JSON.stringify(output), 'known');
 						return output;
 					}
-					state.calls++;
 					signal.throwIfAborted();
 					await assertChatPrincipalCurrent(deps, principal, signal);
 					await loadVisibleProject(deps.services.projects, project.id, principal, deps);

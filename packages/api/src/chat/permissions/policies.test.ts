@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CHAT_LIMITS } from '@marimo-hub/core/chat';
 import { isGated, permissionRequest } from './policies';
 
 describe('consent policies', () => {
@@ -18,8 +19,39 @@ describe('consent policies', () => {
 		)!;
 		expect(request.action).toBe('Run code in a notebook session');
 		expect(request.details.map((d) => d.label)).toEqual(['Notebook', 'Code']);
-		expect(request.details[1].value.length).toBe(4000);
+		expect(request.details[1].value).toBe(code);
 		expect(request.can_remember).toBe(false);
+	});
+
+	it('marks code that exceeds the card limit instead of cutting it silently', () => {
+		const code = 'x'.repeat(CHAT_LIMITS.consentDetailCharacters + 1);
+		const request = permissionRequest({ name: 'create_notebook' }, { title: 'T', code })!;
+		const shown = request.details.find((d) => d.label === 'Code')!.value;
+		expect(shown.length).toBeLessThanOrEqual(CHAT_LIMITS.consentDetailCharacters);
+		expect(shown.endsWith('[truncated]')).toBe(true);
+	});
+
+	it('shows the fields each hub tool actually accepts, rendering structured values', () => {
+		const update = permissionRequest(
+			{ name: 'update_notebook' },
+			{ project: 'p', notebook: 'nb', description: 'd', tags: ['a', 'b'], message: 'bump' },
+		)!;
+		expect(update.details.map((d) => d.label)).toEqual([
+			'Notebook',
+			'Description',
+			'Tags',
+			'Version message',
+		]);
+		expect(JSON.parse(update.details[2].value)).toEqual(['a', 'b']);
+		const schedule = permissionRequest(
+			{ name: 'schedule_job' },
+			{ job: 'nightly', schedule: { cron: '0 6 * * *', timezone: 'UTC' }, enabled: false },
+		)!;
+		expect(schedule.details.map((d) => d.label)).toEqual(['Job', 'Schedule', 'Enabled']);
+		expect(schedule.details[1].value).toContain('0 6 * * *');
+		expect(schedule.details[2].value).toBe('false');
+		const run = permissionRequest({ name: 'run_job' }, { job: 'j', parameters: { day: '1' } })!;
+		expect(run.details.map((d) => d.label)).toEqual(['Job', 'Parameters']);
 	});
 
 	it('never remembers destructive actions and remembers routine ones', () => {
@@ -41,7 +73,7 @@ describe('consent policies', () => {
 		});
 	});
 
-	it('describes unknown tools from their scalar inputs without the project', () => {
+	it('describes unknown tools from their inputs without the project', () => {
 		const request = permissionRequest(
 			{ name: 'ship_it' },
 			{ project: 'p', target: 'prod', count: 3, nested: { a: 1 }, flag: true, empty: '' },
@@ -50,6 +82,7 @@ describe('consent policies', () => {
 		expect(request.details).toEqual([
 			{ label: 'target', value: 'prod' },
 			{ label: 'count', value: '3' },
+			{ label: 'nested', value: '{\n  "a": 1\n}' },
 			{ label: 'flag', value: 'true' },
 		]);
 		expect(request.can_remember).toBe(true);
@@ -63,6 +96,8 @@ describe('consent policies', () => {
 		expect(request.action.length).toBeLessThanOrEqual(120);
 		expect(request.scope.key.length).toBeLessThanOrEqual(200);
 		expect(request.scope.label.length).toBeLessThanOrEqual(120);
+		expect(request.details[0].label.length).toBeLessThanOrEqual(40);
 		expect(request.details[0].value.length).toBe(300);
+		expect(request.details[0].value.endsWith('[truncated]')).toBe(true);
 	});
 });

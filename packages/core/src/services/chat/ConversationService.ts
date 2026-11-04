@@ -231,9 +231,9 @@ export class ConversationService {
 			messages: [],
 		};
 		const key = this.key(pid, owner, conversation.id);
-		await this.bucket.put(key, JSON.stringify(conversation), { onlyIfNotExists: true });
 		const indexKey = this.indexKey(pid, owner);
 		try {
+			await this.bucket.put(key, JSON.stringify(conversation), { onlyIfNotExists: true });
 			await this.mutateIndex(pid, owner, async (stale) => {
 				const ids = await this.liveIds(pid, owner, stale);
 				if (ids.length >= CHAT_LIMITS.conversationsPerProject)
@@ -244,7 +244,8 @@ export class ConversationService {
 			});
 			return conversation;
 		} catch (error) {
-			// A lost PUT response may still have published the ID; check before cleanup.
+			// A lost PUT response may still have committed the head or published the
+			// ID; check the index before cleaning up the orphan.
 			let published: boolean;
 			try {
 				const head = await this.bucket.get(indexKey);
@@ -330,20 +331,31 @@ export class ConversationService {
 		return stopped;
 	}
 
-	/** The consent card for `requestId` on the running turn, or why it cannot be answered. */
+	/**
+	 * The consent card for `requestId` on the running turn, or why it cannot be
+	 * answered: `missing` (not on the saved head yet, or the turn is over),
+	 * `expired` (past its deadline), or `closed` (already settled).
+	 */
 	private openPermission(
 		head: StoredConversation,
 		requestId: string,
-	): { permission: ConversationPermission; turnId: string } | 'cancelled' | 'expired' {
-		if (!this.live(head.pending)) return 'cancelled';
+	): { permission: ConversationPermission; turnId: string } | 'missing' | 'expired' | 'closed' {
+		if (!this.live(head.pending)) return 'missing';
 		const message = head.messages.at(-1);
-		if (message?.role !== 'assistant') return 'cancelled';
+		if (message?.role !== 'assistant') return 'missing';
 		const part = message.parts.find(
 			(part) => part.type === 'data-permission' && part.id === requestId,
 		);
-		if (part?.type !== 'data-permission') return 'cancelled';
+		if (part?.type !== 'data-permission') {
+			// A card from an earlier turn is settled; one not saved anywhere may still be in flight.
+			const earlier = head.messages.some((message) =>
+				message.parts.some((part) => part.type === 'data-permission' && part.id === requestId),
+			);
+			return earlier ? 'closed' : 'missing';
+		}
 		if (Date.parse(part.data.expires_at) <= this.now()) return 'expired';
-		if (['expired', 'cancelled', 'unavailable'].includes(part.data.status)) return 'cancelled';
+		if (['expired', 'cancelled', 'unavailable', 'denied'].includes(part.data.status))
+			return 'closed';
 		return { permission: part.data, turnId: head.pending!.id };
 	}
 
@@ -368,13 +380,13 @@ export class ConversationService {
 		let outcome: 'accepted' | 'rejected' | 'missing' = 'rejected';
 		await this.mutate(pid, owner, id, (head) => {
 			outcome = 'rejected';
-			if (!this.live(head.pending)) return;
 			const open = this.openPermission(head, requestId);
-			if (open === 'cancelled') {
-				outcome = 'missing';
+			if (open === 'missing') {
+				// A turn that is over cannot gain a card; only a live turn is worth a retry.
+				outcome = this.live(head.pending) ? 'missing' : 'rejected';
 				return;
 			}
-			if (open === 'expired') return;
+			if (typeof open === 'string') return;
 			const existing = this.recordedDecision(head, open.turnId, requestId);
 			if (existing) {
 				outcome = existing === decision ? 'accepted' : 'rejected';
@@ -405,7 +417,11 @@ export class ConversationService {
 			throw error;
 		}
 		const open = this.openPermission(head, requestId);
-		if (typeof open === 'string') return open;
+		// The card streams before the head write lands: no card on a live turn is
+		// "no decision yet", not a cancellation.
+		if (open === 'missing') return this.live(head.pending) ? undefined : 'cancelled';
+		if (open === 'closed') return 'cancelled';
+		if (open === 'expired') return 'expired';
 		return this.recordedDecision(head, open.turnId, requestId);
 	}
 
@@ -531,7 +547,8 @@ export class ConversationService {
 				const current = await this.bucket.get(key);
 				if (!current) throw new PreconditionFailedError('Conversation was deleted');
 				const latest = await readStored(StoredConversationSchema, current, key);
-				if (latest.deleted_at || latest.pending?.id !== pending.id) {
+				// A lapsed lease is no longer ours even if nobody reclaimed it yet.
+				if (latest.deleted_at || latest.pending?.id !== pending.id || !this.live(latest.pending)) {
 					stop.abort(new ChatTurnStoppedError('The turn claim changed.'));
 					throw new PreconditionFailedError('Turn claim changed');
 				}
@@ -616,7 +633,7 @@ export class ConversationService {
 					if (stop.signal.aborted) return;
 					if (!current) return stop.abort(new ChatTurnStoppedError('The turn claim changed.'));
 					const latest = await readStored(StoredConversationSchema, current, key);
-					if (latest.deleted_at || latest.pending?.id !== pending.id)
+					if (latest.deleted_at || latest.pending?.id !== pending.id || !this.live(latest.pending))
 						stop.abort(new ChatTurnStoppedError('The turn claim changed.'));
 					else if (latest.pending.stop_requested) stop.abort(new ChatTurnStoppedError());
 				})

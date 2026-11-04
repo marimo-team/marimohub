@@ -3,42 +3,49 @@ import { ACTOR, MemoryBucket } from '@marimo-hub/core/testing';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import { createTestApi, expectOk, makeTestDeps } from '../testing';
 import { chatAi, chatModel, textStream } from '../testing/chat';
-import { connectMcpClient } from '../testing/mcp';
+import { connectMcpClient, mcpRequest, postMcp, readMcpResult } from '../testing/mcp';
+import { createApi } from '../createApi';
 import { registerConversationTools } from './conversations';
-import { createMcpServer } from './server';
-import type { StartRequestContext } from './server';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 const principal: AuthenticatedPrincipal = {
 	id: ACTOR,
 	email: 'actor@example.com',
-	credential: { kind: 'personal-access-token' },
-};
-const request: StartRequestContext = {
-	requestId: 'mcp-test',
-	method: 'POST',
-	path: '/mcp',
-	hostname: 'hub.example.com',
-	appBaseUrl: 'https://hub.example.com',
+	credential: {
+		kind: 'personal-access-token',
+		id: 'token',
+		oauth: { clientId: 'client', resource: `${mcpRequest.appBaseUrl}/mcp`, scopes: ['mcp:tools'] },
+	},
 };
 
-async function connectWithChat(deps: ReturnType<typeof makeTestDeps>, who = principal) {
-	const server = createMcpServer(deps, who, request);
-	registerConversationTools(server, deps, who, request);
-	const client = new Client({ name: 'test', version: '1' });
-	const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-	await server.connect(serverTransport);
-	await client.connect(clientTransport);
-	return client;
+function connectWithChat(deps: ReturnType<typeof makeTestDeps>, who = principal) {
+	return connectMcpClient(deps, who, mcpRequest, (server) =>
+		registerConversationTools(server, deps, who, mcpRequest),
+	);
 }
 
 describe('project_conversations MCP tool', () => {
-	it('is not offered to the chat model itself', async () => {
-		const deps = makeTestDeps(new MemoryBucket(), chatAi(chatModel(textStream('hi'))));
-		const client = await connectMcpClient(deps, principal, request);
+	it('is offered over HTTP when chat is on, but not to the chat model itself', async () => {
+		const deps = makeTestDeps(new MemoryBucket(), {
+			...chatAi(chatModel(textStream('hi'))),
+			mcp: { publicBaseUrl: mcpRequest.appBaseUrl },
+			authenticator: { authenticate: async () => principal },
+		});
+		const client = await connectMcpClient(deps, principal);
 		const { tools } = await client.listTools();
 		expect(tools.map((tool) => tool.name)).not.toContain('project_conversations');
+		const listed = await readMcpResult<{ tools: { name: string }[] }>(
+			await postMcp(createApi(deps), { method: 'tools/list' }, { Authorization: 'Bearer t' }),
+		);
+		expect(listed.tools.map((tool) => tool.name)).toContain('project_conversations');
+		const off = makeTestDeps(new MemoryBucket(), {
+			...chatAi(chatModel(textStream('hi')), { chat: undefined }),
+			mcp: { publicBaseUrl: mcpRequest.appBaseUrl },
+			authenticator: { authenticate: async () => principal },
+		});
+		const withoutChat = await readMcpResult<{ tools: { name: string }[] }>(
+			await postMcp(createApi(off), { method: 'tools/list' }, { Authorization: 'Bearer t' }),
+		);
+		expect(withoutChat.tools.map((tool) => tool.name)).not.toContain('project_conversations');
 	});
 
 	it('creates, sends, reads, and deletes a private conversation through MCP', async () => {
