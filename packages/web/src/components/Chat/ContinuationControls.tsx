@@ -25,7 +25,7 @@ export function ContinuationControls({
 	if (!continuation || continuation.status === 'running') return null;
 	const needsReview = continuation.status === 'needs_review';
 	return (
-		<aside aria-label="Saved task" className="rounded-lg border bg-background p-4 text-sm">
+		<aside aria-label="Saved task" className="rounded-lg border bg-background p-3 text-sm">
 			<p className="font-medium">{needsReview ? 'Review the interrupted task' : 'Task paused'}</p>
 			<p className="mt-1 text-muted-foreground">
 				{continuation.reason ? `${REASONS[continuation.reason]} ` : ''}

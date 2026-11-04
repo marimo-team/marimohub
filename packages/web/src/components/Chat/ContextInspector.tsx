@@ -20,7 +20,7 @@ const STATUS_CLASS: Record<ToolStatus, string> = {
 };
 
 const newTabLink =
-	'inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary';
+	'inline-flex items-center gap-1 rounded-md px-2 py-1 max-md:min-h-11 text-xs text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary';
 
 function Block({ title, value }: { title: string; value?: string }) {
 	const { copied, copy } = useCopyToClipboard();
@@ -78,7 +78,7 @@ function ReferenceRow({
 	return (
 		<li className="flex items-center justify-between gap-3 py-2">
 			<div className="min-w-0">
-				<p className="truncate text-sm">{title ?? reference.id}</p>
+				<p className="truncate text-[13px]">{title ?? reference.id}</p>
 				<p className="truncate font-mono text-[11px] text-muted-foreground">
 					{reference.kind}
 					{title ? ` · ${reference.id}` : ''}
@@ -140,7 +140,7 @@ export function ContextInspector({
 			onClose={onClose}
 			title={
 				<>
-					<h2 className="truncate text-sm font-semibold capitalize">{toolLabel(entry.name)}</h2>
+					<h2 className="truncate text-[13px] font-semibold capitalize">{toolLabel(entry.name)}</h2>
 					<p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
 						<span
 							className={cn('rounded-md px-1.5 py-0.5 font-medium', STATUS_CLASS[entry.status])}
@@ -158,13 +158,13 @@ export function ContextInspector({
 					target="_blank"
 					rel="noopener noreferrer"
 					aria-label="Open details in a new tab"
-					className={cn(newTabLink, 'size-8 justify-center px-0')}
+					className={cn(newTabLink, 'size-8 max-md:size-11 justify-center px-0')}
 				>
 					<ExternalLink className="size-4" aria-hidden />
 				</a>
 			}
 		>
-			<div className="min-h-0 flex-1 space-y-6 overflow-auto px-4 py-4">
+			<div className="min-h-0 flex-1 space-y-4 overflow-auto p-3">
 				{entry.permission ? (
 					<section aria-label="Permission" className="rounded-md border p-3 text-sm">
 						<p className="font-medium">{entry.permission.action}</p>

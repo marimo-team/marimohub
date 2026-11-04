@@ -39,7 +39,7 @@ function ProjectChat({ pid }: { pid: string }) {
 		/>
 	);
 	return (
-		<section className="m-2 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card shadow-xs sm:m-3">
+		<section className="m-2 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card sm:m-3">
 			<PageTitle>Chat</PageTitle>
 			{c.permissionsOpen && (
 				<PermissionsDialog pid={pid} onClose={() => c.setPermissionsOpen(false)} />
@@ -59,7 +59,7 @@ function ProjectChat({ pid }: { pid: string }) {
 				/>
 				<div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto lg:flex-row lg:overflow-hidden">
 					<div className="@container flex min-h-0 min-w-0 flex-1 flex-col">
-						<header className="flex shrink-0 items-center justify-between gap-4 px-4 py-4 sm:px-9 sm:py-5">
+						<header className="flex shrink-0 items-center justify-between gap-3 px-3 py-2 sm:px-5">
 							<div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
 								<Button
 									variant="ghost"
@@ -101,12 +101,12 @@ function ProjectChat({ pid }: { pid: string }) {
 							onWheel={c.scroll.onWheel}
 							aria-label="Chat history"
 							tabIndex={0}
-							className="min-h-0 flex-1 overflow-auto px-4 pb-4 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-10"
+							className="min-h-0 flex-1 overflow-auto px-3 pb-3 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-6"
 						>
 							{c.detail.isError || (c.list.isError && !c.historyOpen) ? (
 								<div
 									role="alert"
-									className="mx-auto mb-5 max-w-4xl rounded-lg border border-destructive/30 p-4 text-sm"
+									className="mx-auto mb-4 max-w-3xl rounded-lg border border-destructive/30 p-3 text-sm"
 								>
 									<p>{c.detail.error?.message ?? c.list.error?.message}</p>
 									<Button
@@ -138,7 +138,7 @@ function ProjectChat({ pid }: { pid: string }) {
 									role="log"
 									aria-label="Conversation"
 									aria-live="polite"
-									className="mx-auto max-w-3xl space-y-6 pt-6"
+									className="mx-auto max-w-3xl space-y-4 pt-4"
 								>
 									<ChatMessages
 										messages={c.messages}
@@ -191,7 +191,7 @@ function ProjectChat({ pid }: { pid: string }) {
 						</section>
 						{/* oxlint-enable jsx-a11y/no-noninteractive-tabindex */}
 						{!c.home ? (
-							<div className="max-h-[45%] shrink-0 overflow-y-auto px-4 pb-4 pt-2 sm:px-10">
+							<div className="max-h-[45%] shrink-0 overflow-y-auto px-3 pb-3 pt-2 sm:px-6">
 								{composerElement}
 							</div>
 						) : null}

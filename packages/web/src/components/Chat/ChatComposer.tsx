@@ -49,8 +49,8 @@ export function ChatComposer({
 					onSubmit();
 				}}
 				className={cn(
-					'flex flex-col gap-2 rounded-3xl border border-input bg-background shadow-xs transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30',
-					home ? 'px-5 py-4' : 'px-4 py-3',
+					'flex flex-col gap-2 rounded-2xl border border-input bg-background transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30',
+					home ? 'px-4 py-3' : 'px-3 py-2',
 				)}
 			>
 				<textarea
@@ -76,7 +76,7 @@ export function ChatComposer({
 							label="Add context"
 							placement="top start"
 							icon={<Plus className="size-5" aria-hidden />}
-							triggerClassName="size-8 shrink-0 rounded-full max-md:size-10"
+							triggerClassName="size-8 shrink-0 rounded-full max-md:size-11"
 							isDisabled={notebookDisabled}
 							options={[
 								{
@@ -111,7 +111,7 @@ export function ChatComposer({
 							variant="unstyled"
 							onPress={onStop}
 							aria-label="Stop response"
-							className="flex size-8 shrink-0 items-center justify-center rounded-full text-destructive outline-none hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-ring"
+							className="flex size-8 max-md:size-11 shrink-0 items-center justify-center rounded-full text-destructive outline-none hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-ring"
 						>
 							<Square className="size-4 fill-current" aria-hidden />
 						</Button>
@@ -121,7 +121,7 @@ export function ChatComposer({
 							variant="unstyled"
 							isDisabled={!draft.trim() || !canSubmit}
 							aria-label={queueing ? 'Queue message' : 'Send message'}
-							className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background outline-none hover:bg-foreground/80 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-35"
+							className="flex size-8 max-md:size-11 shrink-0 items-center justify-center rounded-full bg-foreground text-background outline-none hover:bg-foreground/80 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-35"
 						>
 							{queueing ? (
 								<ListPlus className="size-5" aria-hidden />

@@ -50,7 +50,7 @@ function Work({
 	const waiting = calls.some((call) => call.permission?.status === 'open');
 	const open = active || expanded;
 	return (
-		<section aria-label="Assistant work" className="mb-5">
+		<section aria-label="Assistant work" className="mb-4">
 			<button
 				type="button"
 				aria-expanded={open}
@@ -59,7 +59,7 @@ function Work({
 				onClick={() => {
 					if (!active) setExpanded(!open);
 				}}
-				className="flex w-full items-center gap-2 border-b border-border/60 pb-3 text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-ring"
+				className="flex w-full items-center gap-2 border-b border-border/60 pb-2 max-md:min-h-11 text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-ring"
 			>
 				{active ? (
 					<LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
@@ -76,7 +76,7 @@ function Work({
 				) : null}
 				<ChevronRight className={cn('size-3.5', open && 'rotate-90')} aria-hidden />
 			</button>
-			<div id={id} hidden={!open} className="space-y-3 border-l border-border/60 pl-4 pt-4">
+			<div id={id} hidden={!open} className="space-y-3 border-l border-border/60 pl-3 pt-3">
 				<Blocks blocks={blocks} {...activity} />
 			</div>
 		</section>
@@ -119,7 +119,7 @@ function Message({
 	const user = message.role === 'user';
 	const createdAt = message.metadata?.created_at;
 	const actionClass =
-		'flex size-7 items-center justify-center rounded-full outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40';
+		'flex size-7 max-md:size-11 items-center justify-center rounded-full outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40';
 	return (
 		<article
 			id={`chat-message-${message.id}`}
@@ -127,7 +127,7 @@ function Message({
 			className={cn('group/message min-w-0', user && 'flex flex-col items-end')}
 		>
 			{user ? (
-				<div className="max-w-[90%] whitespace-pre-wrap [overflow-wrap:anywhere] rounded-3xl rounded-br-lg bg-blue-50 px-5 py-3 text-sm leading-7 text-blue-950 dark:bg-blue-400/15 dark:text-blue-100 sm:max-w-[85%]">
+				<div className="max-w-[90%] whitespace-pre-wrap [overflow-wrap:anywhere] rounded-3xl rounded-br-lg bg-blue-50 px-4 py-2.5 text-sm leading-6 text-blue-950 dark:bg-blue-400/15 dark:text-blue-100 sm:max-w-[85%]">
 					{text}
 				</div>
 			) : (

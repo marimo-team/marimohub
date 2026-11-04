@@ -51,12 +51,12 @@ export function ChatEmptyState({
 			: []),
 	];
 	return (
-		<div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center py-12 sm:pb-24">
-			<h1 className="mb-8 text-balance text-center text-3xl font-medium tracking-tight sm:text-4xl">
+		<div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center py-8 sm:pb-16">
+			<h1 className="mb-6 text-balance text-center text-2xl font-medium tracking-tight sm:text-3xl">
 				What should we build{firstName ? `, ${firstName}` : ''}?
 			</h1>
 			{composer}
-			<div className="mt-5 flex flex-wrap justify-center gap-2">
+			<div className="mt-4 flex flex-wrap justify-center gap-2">
 				{prompts.map(({ icon: Icon, title, prompt }) => (
 					<Button
 						key={title}

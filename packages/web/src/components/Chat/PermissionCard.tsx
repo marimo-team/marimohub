@@ -80,7 +80,7 @@ export function PermissionCard({
 	return (
 		<section
 			aria-label="Tool permission"
-			className="mt-3 space-y-3 rounded-lg border border-primary/30 bg-primary/[0.03] p-4 text-sm"
+			className="mt-3 space-y-2 rounded-lg border border-primary/30 bg-primary/[0.03] p-3 text-sm"
 		>
 			<p className="font-medium">{permission.action}</p>
 			{permission.details.length > 0 ? (

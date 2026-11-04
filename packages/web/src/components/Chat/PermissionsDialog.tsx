@@ -15,7 +15,7 @@ export function PermissionsDialog({ pid, onClose }: { pid: string; onClose: () =
 			{permissions.data?.grants.length === 0 && <p>No remembered permissions in this project.</p>}
 			<ul className="divide-y">
 				{permissions.data?.grants.map((grant) => (
-					<li key={grant.id} className="flex items-center justify-between gap-4 py-3">
+					<li key={grant.id} className="flex items-center justify-between gap-3 py-2">
 						<div className="min-w-0 break-words">
 							<p className="font-medium">{grant.action}</p>
 							<p className="text-sm text-muted-foreground">{grant.scope_label}</p>

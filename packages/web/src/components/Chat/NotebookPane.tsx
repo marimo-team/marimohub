@@ -45,7 +45,7 @@ export function NotebookPane({
 	};
 	const picker = (
 		<form
-			className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center"
+			className="flex flex-1 flex-col items-center justify-center gap-3 p-4 text-center"
 			onSubmit={(event) => {
 				event.preventDefault();
 				if (choice) void choose(choice);
@@ -64,7 +64,7 @@ export function NotebookPane({
 						aria-label="Notebook to open"
 						value={choice}
 						onChange={(event) => setChoice(event.target.value)}
-						className="w-full max-w-xs rounded-md border bg-background px-3 py-2 text-sm"
+						className="w-full max-w-xs rounded-md border bg-background px-2.5 py-1.5 text-[13px] max-md:min-h-11"
 					>
 						{notebooks.map((notebook) => (
 							<option key={notebook.id} value={notebook.id}>
@@ -120,7 +120,7 @@ export function NotebookPane({
 							href={withBasePath(notebookPath!)}
 							target="_blank"
 							rel="noopener noreferrer"
-							className="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
+							className="inline-flex items-center gap-1 rounded-sm px-2 py-1 max-md:min-h-11 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
 						>
 							Open full page <ExternalLink className="size-3" aria-hidden />
 						</a>

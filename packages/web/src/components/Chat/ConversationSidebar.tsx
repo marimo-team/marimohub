@@ -35,13 +35,13 @@ export function ConversationSidebar({
 	};
 	const content = (
 		<>
-			<div className="flex h-16 shrink-0 items-center justify-between px-4">
-				<h2 className="text-sm font-medium">Chats</h2>
+			<div className="flex h-11 max-md:h-15 shrink-0 items-center justify-between px-3">
+				<h2 className="text-[13px] font-medium">Chats</h2>
 				<Button variant="ghost" size="sm" aria-label="Collapse history" onPress={onClose}>
 					<PanelLeftClose className="size-4" aria-hidden />
 				</Button>
 			</div>
-			<div className="px-3 pb-3">
+			<div className="px-3 pb-2">
 				<Button
 					variant="ghost"
 					onPress={() => select(null)}
@@ -104,7 +104,7 @@ export function ConversationSidebar({
 		<aside
 			id="chat-conversations"
 			aria-label="Your conversations"
-			className="flex w-60 shrink-0 flex-col border-r bg-muted/20"
+			className="flex w-56 shrink-0 flex-col border-r bg-muted/20"
 		>
 			{content}
 		</aside>
