@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { renderWorkspace, stubApi } from '@/test/apiStub';
 import { jsonError } from '@/test/render';
-import type { ProjectRole } from '@/types';
+import type { Capabilities, ProjectDefaultRole, ProjectMember, ProjectRole } from '@/types';
 import { lastProjectKey } from './lastProject';
 import { WorkspaceLayout } from './WorkspaceLayout';
 
@@ -31,6 +31,10 @@ function setup({
 	search = false,
 	projectError = false,
 	listError = false,
+	defaultRole = 'inherit',
+	inheritedRole = null,
+	owner = 'u',
+	members = [],
 	branding,
 }: {
 	route?: string | string[];
@@ -43,6 +47,10 @@ function setup({
 	search?: boolean;
 	projectError?: boolean;
 	listError?: boolean;
+	defaultRole?: ProjectDefaultRole;
+	inheritedRole?: Capabilities['default_role'];
+	owner?: string;
+	members?: ProjectMember[];
 	branding?: Partial<ThemeConfig>;
 } = {}) {
 	const { requests } = stubApi(
@@ -63,9 +71,9 @@ function setup({
 				return {
 					id,
 					name: id === 'alpha' ? 'Alpha' : id === 'beta' ? 'Beta' : 'Archived project',
-					owner: 'u',
-					members: [],
-					default_role: 'inherit',
+					owner,
+					members,
+					default_role: defaultRole,
 					your_role: role,
 				};
 			},
@@ -73,6 +81,7 @@ function setup({
 		{
 			me: { app_only: appOnly },
 			capabilities: {
+				default_role: inheritedRole,
 				jobs: { available: jobs },
 				data_browser: { available: data },
 				search: { available: search },
@@ -97,6 +106,78 @@ afterEach(() => {
 });
 
 describe('Workspace navigation', () => {
+	it.each([
+		['none', 'Private'],
+		['inherit', 'Default sharing'],
+		['app-user', 'Signed-in users · App user'],
+		['viewer', 'Signed-in users · Viewer'],
+		['editor', 'Signed-in users · Editor'],
+		['manager', 'Signed-in users · Manager'],
+	] as const)('shows %s sharing from existing sidebar requests', async (defaultRole, label) => {
+		const { requests } = setup({ defaultRole });
+		expect(await screen.findByRole('link', { name: `Project sharing: ${label}` })).toHaveAttribute(
+			'href',
+			'/projects/alpha/members',
+		);
+		expect(requests.filter((url) => url.startsWith('/api/v1/projects/'))).toEqual([
+			'/api/v1/projects/alpha',
+		]);
+		expect(requests.filter((url) => url === '/api/v1/capabilities')).toHaveLength(1);
+	});
+
+	it.each<{ owner: string; members: ProjectMember[]; label: string }>([
+		{ owner: 'u', members: [{ user_id: 'u', role: 'admin' }], label: 'Private' },
+		{
+			owner: 'u',
+			members: [{ email: 'user@example.com', role: 'viewer' }],
+			label: 'Members only',
+		},
+		{ owner: 'u', members: [{ user_id: 'other', role: 'viewer' }], label: 'Members only' },
+		{ owner: 'u', members: [{ group: '/team', role: 'viewer' }], label: 'Members only' },
+		{
+			owner: 'u',
+			members: [{ email: 'invite@example.com', role: 'viewer' }],
+			label: 'Members only',
+		},
+		{ owner: 'other', members: [], label: 'Members only' },
+	])(
+		'labels restricted access as $label for owner=$owner and members=$members',
+		async (options) => {
+			setup({ defaultRole: 'none', ...options });
+			expect(
+				await screen.findByRole('link', { name: `Project sharing: ${options.label}` }),
+			).toBeVisible();
+		},
+	);
+
+	it('explains the super-admin exception for private projects', async () => {
+		const { user } = setup({ defaultRole: 'none' });
+		await screen.findByRole('link', { name: 'Project sharing: Private' });
+		screen.getByRole('button', { name: /Alpha/ }).focus();
+		await user.tab();
+		expect(await screen.findByRole('tooltip')).toHaveTextContent(
+			'This project is private to you. Deployment super admins retain access.',
+		);
+	});
+
+	it.each([null, 'editor'] as const)(
+		'keeps inherited sharing distinct from private access (default=%s)',
+		async (inheritedRole) => {
+			const { user } = setup({ inheritedRole });
+			const link = await screen.findByRole('link', { name: 'Project sharing: Default sharing' });
+			screen.getByRole('button', { name: /Alpha/ }).focus();
+			await user.tab();
+			expect(link).toHaveFocus();
+			expect(await screen.findByRole('tooltip')).toHaveTextContent(
+				`Deployment and sign-in defaults apply. Your default access: ${inheritedRole === null ? 'Members only' : 'Editor'}.`,
+			);
+			await user.click(link);
+			expect(screen.getByRole('status', { name: 'Location' })).toHaveTextContent(
+				'/projects/alpha/members',
+			);
+		},
+	);
+
 	it.each([false, true])(
 		'preserves shell customization with workspace navigation (mobile=%s)',
 		async (mobile) => {
