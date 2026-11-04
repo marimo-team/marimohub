@@ -11,6 +11,7 @@ import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { withDeadline } from '../../async';
 import { ByteBudget } from './byteBudget';
 import type { NotebookBridgeRuntime } from '../../ports/notebookBridge';
+import { notebookBridgePaths } from './notebookBridgePaths';
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
 import { Millis } from '../../duration';
@@ -886,7 +887,7 @@ export class SandboxProvisioner {
 			launchStrategy === 'uv-sandbox'
 		)
 			return;
-		const directory = `/tmp/marimohub-bridge/${options.sandboxId}`;
+		const { directory, launcher } = notebookBridgePaths(options.sandboxId, payload.launcher);
 		try {
 			await withSandboxSpan(sw, 'bridge_prepare', (time) =>
 				time(() =>
@@ -901,8 +902,7 @@ export class SandboxProvisioner {
 					),
 				),
 			);
-			const path = `${directory}/${payload.launcher}`;
-			return sandbox.resolveProcessPath?.(path) ?? path;
+			return sandbox.resolveProcessPath?.(launcher) ?? launcher;
 		} catch {
 			logEvent(
 				{

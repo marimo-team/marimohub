@@ -150,6 +150,7 @@ export async function startMcpSession(input: {
 	} else if (session.status === 'starting' || session.status === 'running') {
 		const startedAt = Date.now();
 		let failure: unknown;
+		let bootstrapDiagnostics: KernelBootstrapResult['diagnostics'];
 		try {
 			execution = await withMcpSessionActivity(
 				deps,
@@ -172,9 +173,20 @@ export async function startMcpSession(input: {
 						const outcome = session.sandbox_id
 							? await bootstrapKernel(
 									deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) }),
-									{ timeoutMs, inspectOnly: waitSeconds === 0, signal },
+									{
+										timeoutMs,
+										inspectOnly: waitSeconds === 0,
+										signal,
+										bridge: deps.sandbox.notebookBridge
+											? {
+													sandboxId: session.sandbox_id,
+													launcher: deps.sandbox.notebookBridge.launcher,
+												}
+											: undefined,
+									},
 								)
 							: { status: 'unavailable' as const };
+						bootstrapDiagnostics = outcome.diagnostics;
 						return bootstrapReadiness(outcome.status, notebookUrl);
 					} catch (error) {
 						signal.throwIfAborted();
@@ -194,7 +206,12 @@ export async function startMcpSession(input: {
 				event: 'mcp_kernel_bootstrap',
 				request_id: request.requestId ?? null,
 				project_id: project.id,
+				notebook_id: notebookId,
 				session_id: session.session_id,
+				sandbox_id: session.sandbox_id ?? null,
+				inspect_only: waitSeconds === 0,
+				wait_seconds: waitSeconds,
+				...(bootstrapDiagnostics ? { bootstrap: bootstrapDiagnostics } : {}),
 				outcome: failure ? 'failed' : execution.status,
 				duration_ms: Date.now() - startedAt,
 				...(failure ? { error: errorMetadataChain(failure) } : {}),

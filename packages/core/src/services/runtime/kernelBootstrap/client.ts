@@ -9,6 +9,9 @@ from urllib.request import Request, build_opener, ProxyHandler
 class Incompatible(Exception):
     pass
 
+class InitializationFailed(Exception):
+    pass
+
 class EditorData(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -34,6 +37,7 @@ class EditorData(HTMLParser):
 
 class MarimoClient:
     def __init__(self, cfg, remaining):
+        self.diagnostics = cfg.get("diagnostics", {})
         self.remaining = remaining
         self.base = "http://127.0.0.1:" + str(cfg["port"]) + cfg["base_url"]
         self.opener = build_opener(ProxyHandler({}))
@@ -44,6 +48,10 @@ class MarimoClient:
         self.headers = dict(self.auth)
 
     def request(self, path, body=None, session_id=None):
+        self.diagnostics["stage"] = {
+            "/api/sessions": "sessions", "/": "configure",
+            "/api/kernel/status": "kernel_status", "/api/kernel/instantiate": "instantiate",
+        }[path]
         headers = dict(self.headers)
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -89,15 +97,16 @@ class MarimoClient:
             "objectIds": [], "values": [], "autoRun": self.auto_run,
         }, session_id))
         if not isinstance(response, dict) or response.get("success") is not True:
-            raise RuntimeError()
+            raise InitializationFailed()
         if not self.is_live(session_id):
-            raise RuntimeError()
+            raise InitializationFailed()
 
     @contextmanager
     def session(self, sessions):
         if sessions:
             yield next(iter(sessions))
             return
+        self.diagnostics["stage"] = "websocket"
         from websockets.sync.client import connect
         session_id = str(uuid.uuid4())
         with connect(
@@ -129,6 +138,7 @@ def bootstrap_lock(token_file, inspect, remaining):
 
 def bootstrap(cfg, remaining):
     client = MarimoClient(cfg, remaining)
+    client.diagnostics["stage"] = "lock"
     with bootstrap_lock(cfg["token_file"], cfg["inspect"], remaining):
         sessions = client.sessions()
         if cfg["inspect"]:
@@ -138,7 +148,11 @@ def bootstrap(cfg, remaining):
             client.initialize(session_id)
         return "ready"
 
-def run_client(cfg):
+def run_client(cfg, diagnostics=None):
+    if diagnostics is None:
+        diagnostics = {}
+    diagnostics["stage"] = "client"
+    cfg = {**cfg, "diagnostics": diagnostics}
     deadline = time.monotonic() + cfg["seconds"]
     def remaining():
         value = deadline - time.monotonic()
@@ -158,23 +172,36 @@ def run_client(cfg):
             except (URLError, ConnectionError):
                 # Briefly tolerate startup races without polling a dead server for the full wait window.
                 if cfg["inspect"] or attempt == 2:
+                    diagnostics["reason"] = "connection_error"
                     return "unavailable"
                 time.sleep(min(0.1, remaining()))
-    except (ImportError, Incompatible):
+    except ImportError:
+        diagnostics["reason"] = "missing_dependency"
+        return "awaiting_client"
+    except Incompatible:
+        diagnostics["reason"] = "incompatible_runtime"
         return "awaiting_client"
     except TimeoutError:
+        diagnostics["reason"] = "timeout"
         return "initializing"
     except HTTPError as error:
+        diagnostics.update(reason="http_error", http_status=error.code)
         return "awaiting_client" if error.code in (404, 405) else "unavailable"
+    except InitializationFailed:
+        diagnostics["reason"] = "initialization_failed"
+        return "unavailable"
     except Exception:
+        diagnostics["reason"] = "client_error"
         return "unavailable"
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
 
 if __name__ == "__main__":
+    diagnostics = {}
     try:
-        status = run_client(json.load(sys.stdin))
+        status = run_client(json.load(sys.stdin), diagnostics)
     except Exception:
+        diagnostics.update(stage="client", reason="client_error")
         status = "unavailable"
-    print(json.dumps({"status": status}))
+    print(json.dumps({"status": status, "diagnostics": diagnostics}))
 `;

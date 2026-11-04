@@ -728,10 +728,21 @@ describe('MCP session execution readiness', () => {
 		{ ready: false, status: 'unavailable' as const },
 		{ ready: true, status: 'ready' as const },
 	])('reports $status independently of sandbox status', async ({ ready, status }) => {
-		vi.mocked(bootstrapKernel).mockResolvedValue({ status });
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		const diagnostics = {
+			stage: 'discovery' as const,
+			reason: 'runtime_not_found' as const,
+			processes_scanned: 4,
+			port_matches: 1,
+		};
+		vi.mocked(bootstrapKernel).mockResolvedValue({ status, diagnostics });
 		const { instance } = makeFakeSandbox();
 		const proxy = vi.fn(async () => Response.json([]));
 		const { deps, project } = await setup({ compute: { ...fakeComputeFrom(instance), proxy } });
+		deps.sandbox.notebookBridge = {
+			launcher: 'custom bridge.py',
+			files: [{ name: 'custom bridge.py', content: 'bridge' }],
+		};
 		const notebook = await deps.services.notebooks.createNotebook(
 			project.id,
 			{ title: 'Notebook', description: '', code: NOTEBOOK_CODE },
@@ -758,6 +769,28 @@ describe('MCP session execution readiness', () => {
 			notebook_url: string;
 			session_id: string;
 		};
+		const bootstrapLogs = log.mock.calls
+			.map(([line]) => JSON.parse(String(line)) as { event: string; sandbox_id: string })
+			.filter((entry) => entry.event === 'mcp_kernel_bootstrap');
+		expect(bootstrapLogs).toEqual([
+			expect.objectContaining({
+				project_id: project.id,
+				notebook_id: notebook.id,
+				session_id: data.session_id,
+				sandbox_id: expect.any(String),
+				inspect_only: true,
+				wait_seconds: 0,
+				outcome: status,
+				bootstrap: diagnostics,
+			}),
+		]);
+		expect(bootstrapKernel).toHaveBeenCalledWith(
+			instance,
+			expect.objectContaining({
+				bridge: { sandboxId: bootstrapLogs[0].sandbox_id, launcher: 'custom bridge.py' },
+			}),
+		);
+		expect(data.execution).not.toHaveProperty('diagnostics');
 		if (!ready) {
 			expect(data.execution).toMatchObject({
 				next_step: expect.stringContaining(

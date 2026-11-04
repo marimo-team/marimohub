@@ -85,6 +85,7 @@ with TemporaryDirectory() as directory:
                                       ({"browser": {}}, [True], "ready"),
                                       ({"stopped": {}, "browser": {}}, [False, True], "ready")):
         client = Mock()
+        client.diagnostics = {}
         client.sessions.return_value = sessions
         client.is_live.side_effect = states
         with patch.dict(globals(), {"MarimoClient": lambda *_: client}):
@@ -119,9 +120,37 @@ cases = [(ImportError("secret"), "awaiting_client"), (Incompatible(), "awaiting_
          (HTTPError("secret", 500, "secret", {}, None), "unavailable"),
          (HTTPError("secret", 404, "secret", {}, None), "awaiting_client")]
 for error, expected in cases:
+    diagnostics = {}
     with patch.dict(globals(), {"bootstrap": lambda *args: (_ for _ in ()).throw(error)}):
-        assert run_client({"seconds": 1}) == expected
+        assert run_client({"seconds": 1}, diagnostics) == expected
         assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+    reason = ("missing_dependency" if isinstance(error, ImportError) else
+              "incompatible_runtime" if isinstance(error, Incompatible) else
+              "timeout" if isinstance(error, TimeoutError) else
+              "http_error" if isinstance(error, HTTPError) else "client_error")
+    assert diagnostics == {"stage": "client", "reason": reason, **({"http_status": error.code} if isinstance(error, HTTPError) else {})}
+`);
+	});
+	it('records the failing HTTP or editor parsing stage without recording private response data', async () => {
+		await python(String.raw`
+from tempfile import TemporaryDirectory
+from unittest.mock import MagicMock, patch
+with TemporaryDirectory() as directory:
+    cfg = {"token_file": directory + "/token", "inspect": False, "authenticated": False,
+           "port": 2718, "base_url": "/private-prefix", "seconds": 1}
+    opener = MagicMock()
+    for code in (401, 404, 405, 500):
+        opener.open.side_effect = HTTPError("private-url", code, "private-reason", {}, None)
+        diagnostics = {}
+        with patch.dict(globals(), {"build_opener": lambda *_: opener}):
+            assert run_client(cfg, diagnostics) == ("awaiting_client" if code in (404, 405) else "unavailable")
+        assert diagnostics == {"stage": "sessions", "reason": "http_error", "http_status": code}
+    opener.open.side_effect = None
+    opener.open.return_value.__enter__.return_value.read.side_effect = [b"[]", b"private HTML"]
+    diagnostics = {}
+    with patch.dict(globals(), {"build_opener": lambda *_: opener}):
+        assert run_client(cfg, diagnostics) == "awaiting_client"
+    assert diagnostics == {"stage": "configure", "reason": "incompatible_runtime"}
 `);
 	});
 	it('bounds persistent connection failures and allows transient startup recovery', async () => {
@@ -156,6 +185,29 @@ assert probe.call_count == 1
 assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
 `);
 	});
+	it('reports initialization failures at the failing stage without leaking response data', async () => {
+		await python(String.raw`
+from tempfile import TemporaryDirectory
+from unittest.mock import MagicMock, patch
+editor = b'<marimo-server-token data-token="private-token"></marimo-server-token><marimo-user-config data-config=\'{"runtime":{"auto_instantiate":false}}\'></marimo-user-config>'
+cases = [([b'{"success":false,"error":"private-error"}'], "instantiate"),
+         ([b'null'], "instantiate"),
+         ([b'{"success":true}', b'{"state":"stopped","error":"private-error"}'], "kernel_status"),
+         ([b'{"success":true}', b'{}'], "kernel_status")]
+with TemporaryDirectory() as directory:
+    cfg = {"token_file": directory + "/token", "inspect": False, "authenticated": False,
+           "port": 2718, "base_url": "", "seconds": 1}
+    for responses, stage in cases:
+        opener = MagicMock()
+        opener.open.return_value.__enter__.return_value.read.side_effect = [b'{"existing":{}}', editor, *responses]
+        diagnostics = {}
+        with patch.dict(globals(), {"build_opener": lambda *_: opener}):
+            assert run_client(cfg, diagnostics) == "unavailable"
+        assert diagnostics == {"stage": stage, "reason": "initialization_failed"}
+        assert opener.open.call_count == 2 + len(responses)
+        assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+`);
+	});
 	it('rejects failed initialization responses and stopped kernels', async () => {
 		await python(String.raw`
 from unittest.mock import Mock
@@ -166,13 +218,13 @@ for response in ('null', '[]', '{}', '{"success":false}', '{"success":1}'):
     try:
         client.initialize("live")
         raise AssertionError("accepted failed initialization")
-    except RuntimeError:
+    except InitializationFailed:
         pass
 client.request = Mock(side_effect=['{"success":true}', '{"state":"stopped"}'])
 try:
     client.initialize("live")
     raise AssertionError("accepted a stopped kernel")
-except RuntimeError:
+except InitializationFailed:
     pass
 for auto_run in (True, False):
     client.auto_run = auto_run
