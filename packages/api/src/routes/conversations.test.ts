@@ -343,12 +343,9 @@ describe('project conversations', () => {
 		const cid = path.split('/').at(-1)!;
 		// Wait for the card to be persisted, then answer from a "different" client.
 		const card = openCard(await waitForRecord(request, path, (c) => Boolean(openCard(c))));
-		expect(card).toMatchObject({
-			status: 'open',
-			action: 'Create a notebook',
-			details: [{ label: 'Title', value: 'Revenue' }],
-			can_remember: true,
-		});
+		expect(card).toMatchObject({ status: 'open', action: 'Create a notebook', can_remember: true });
+		expect(card!.details).toContainEqual({ label: 'Title', value: 'Revenue' });
+		expect(card!.details).toContainEqual({ label: 'Code', value: 'import marimo as mo' });
 		expect(
 			await expectOk(
 				await request('POST', `${path}/permissions/${card!.id}`, { decision: 'allow' }),
@@ -378,6 +375,29 @@ describe('project conversations', () => {
 			),
 		).toEqual({ accepted: false, reason: 'closed' });
 		expect(cid).toBe(saved.conversation.id);
+	});
+
+	it('leaves a stopped consent wait resumable without an uncertainty review', async () => {
+		const { request } = await fixture([
+			toolCallStream('create_notebook', { title: 'Later', code: 'import marimo' }),
+			textStream('Resumed after the stop.'),
+		]);
+		const pid = await createProject(request);
+		const path = await startConversation(request, pid);
+		const streaming = request('POST', `${path}/stream`, { content: 'make it' });
+		await waitForRecord(request, path, (c) => Boolean(openCard(c)));
+		await expectOk(await request('POST', `${path}/stop`));
+		const chunks = await readChunks(await streaming);
+		expect(permissionChunks(chunks).at(-1)?.status).toBe('cancelled');
+		const stopped = await expectOk<ConversationResult>(await request('GET', path));
+		// The call never ran, so nothing is uncertain: a plain pause, no acknowledgement needed.
+		expect(stopped.conversation.continuation).toMatchObject({
+			status: 'paused',
+			reason: 'stopped',
+			unresolved_calls: [],
+		});
+		const resumed = await expectOk<ConversationResult>(await request('POST', `${path}/resume`, {}));
+		expect(messageText(resumed.conversation.messages.at(-1)!)).toBe('Resumed after the stop.');
 	});
 
 	it('remembers "always" grants and lets the user revoke them', async () => {

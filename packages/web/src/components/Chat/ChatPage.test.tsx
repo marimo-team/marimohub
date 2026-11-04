@@ -820,6 +820,57 @@ describe('ChatPage', () => {
 		});
 	});
 
+	describe('leaving a streaming conversation', () => {
+		it('does not leak an abandoned stream error or draft into the next conversation', async () => {
+			const hold = deferred<void>();
+			const { user, writes } = setup({
+				route: saved,
+				streamResponse: () =>
+					uiStream(
+						[
+							{ type: 'start', messageId: 'reply-1' },
+							{ type: 'text-start', id: 't1' },
+							{ type: 'text-delta', id: 't1', delta: 'Partial' },
+						],
+						{ hold: hold.promise, rest: [{ type: 'error', errorText: 'Model quota exceeded' }] },
+					),
+			});
+			await screen.findByText('Persisted project findings');
+			await user.type(textbox(), 'Long question{Enter}');
+			await screen.findByRole('button', { name: 'Stop response' });
+			await user.click(screen.getByRole('button', { name: 'Switch conversation' }));
+			await waitFor(() =>
+				expect(screen.getByTestId('location')).toHaveTextContent('conversation=conversation-2'),
+			);
+			await act(async () => hold.resolve());
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+			expect(textbox()).toHaveValue('');
+			expect(screen.queryByRole('button', { name: 'Stop response' })).not.toBeInTheDocument();
+			// Leaving the tab's view does not stop the server turn.
+			expect(writes.map((write) => write.path)).toEqual([streamPath]);
+		});
+
+		it('keeps the stop control available while the user types a follow-up', async () => {
+			const hold = deferred<void>();
+			const { user } = setup({
+				route: saved,
+				streamResponse: () =>
+					uiStream([{ type: 'start', messageId: 'reply-1' }], {
+						hold: hold.promise,
+						rest: [{ type: 'finish' }],
+					}),
+			});
+			await screen.findByText('Persisted project findings');
+			await user.type(textbox(), 'First{Enter}');
+			await screen.findByRole('button', { name: 'Stop response' });
+			await user.type(textbox(), 'Second');
+			expect(screen.getByRole('button', { name: 'Stop response' })).toBeInTheDocument();
+			expect(screen.getByRole('button', { name: 'Queue message' })).toBeInTheDocument();
+			await act(async () => hold.resolve());
+		});
+	});
+
 	describe('reconnecting to a running reply', () => {
 		const pendingRecord = {
 			...record,
@@ -874,10 +925,29 @@ describe('ChatPage', () => {
 					),
 			});
 			expect(await screen.findByRole('button', { name: 'Stop response' })).toBeInTheDocument();
-			expect(screen.getAllByText('Partial so far')).toHaveLength(1);
+			expect(await screen.findAllByText('Partial so far')).toHaveLength(1);
 			await act(async () => hold.resolve());
 			expect(await screen.findByText('Partial so far and done')).toBeInTheDocument();
 			await waitFor(() => expect(screen.getByRole('button', { name: 'New chat' })).toBeEnabled());
+			expect(writes).toEqual([]);
+		});
+
+		it('replaces the saved partial reply even when the replay uses another message id', async () => {
+			const { writes } = setup({
+				route: saved,
+				detailResponse: () => jsonOk({ conversation: pendingRecord }),
+				reconnectResponse: () =>
+					uiStream([
+						{ type: 'start', messageId: 'reply-renamed' },
+						{ type: 'text-start', id: 't1' },
+						{ type: 'text-delta', id: 't1', delta: 'Partial so far and done' },
+						{ type: 'text-end', id: 't1' },
+						{ type: 'finish' },
+					]),
+			});
+			expect(await screen.findByText('Partial so far and done')).toBeInTheDocument();
+			expect(screen.queryByText(/^Partial so far$/)).not.toBeInTheDocument();
+			expect(screen.getAllByRole('article', { name: 'Assistant message' })).toHaveLength(2);
 			expect(writes).toEqual([]);
 		});
 

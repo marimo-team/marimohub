@@ -269,8 +269,9 @@ export function chatErrorMessage(error: unknown, fallback: string): string {
 
 export interface ConversationChatCallbacks {
 	onFinish?: (cid: string) => void;
-	onError?: (error: Error) => void;
-	onWorkingNotebook?: (notebookId: string) => void;
+	/** `cid` names the session the error came from; a superseded session may still report. */
+	onError?: (error: Error, cid: string) => void;
+	onWorkingNotebook?: (notebookId: string, cid: string) => void;
 }
 
 interface ChatSession {
@@ -287,14 +288,18 @@ function createSession(
 ): ChatSession {
 	const cid = conversation.id;
 	const api = streamUrl(pid, cid);
+	const pending = isTurnPending(conversation);
+	const seed = toUIMessages(conversation);
+	// A reply still in progress is re-streamed from its first chunk on reconnect,
+	// so seed without it to avoid a duplicate; when no instance replays it (204),
+	// the record poll restores the saved partial.
+	const inProgress = pending && seed.at(-1)?.role === 'assistant';
 	return {
 		cid,
-		// The SDK replays the live stream from its first chunk, replacing the
-		// partially saved reply; a 204 leaves the saved reply in place.
-		resume: isTurnPending(conversation),
+		resume: pending,
 		chat: new Chat<ChatUIMessage>({
 			id: cid,
-			messages: toUIMessages(conversation),
+			messages: inProgress ? seed.slice(0, -1) : seed,
 			transport: new DefaultChatTransport<ChatUIMessage>({
 				api,
 				prepareSendMessagesRequest: ({ body }) => ({ api, body: body as TurnBody }),
@@ -303,11 +308,11 @@ function createSession(
 			onFinish: () => callbacks.current.onFinish?.(cid),
 			onError: (error) => {
 				failed.current = true;
-				callbacks.current.onError?.(error);
+				callbacks.current.onError?.(error, cid);
 			},
 			onData: (part) => {
 				if (part.type === 'data-working-notebook')
-					callbacks.current.onWorkingNotebook?.(part.data.notebook_id);
+					callbacks.current.onWorkingNotebook?.(part.data.notebook_id, cid);
 			},
 		}),
 	};
@@ -334,10 +339,28 @@ export function useConversationChat(
 	const [session, setSession] = useState<ChatSession | null>(null);
 	// The session is created once its record first arrives and dropped with the
 	// selection; later refetches of the same record are applied via setMessages.
+	// A pending record seeds without its partial reply and re-attaches to the
+	// live stream. Until that attempt settles (replayed, 204, or failed) the
+	// caller must not overwrite the store from the record, or the partial comes
+	// back and the replay lands beside it.
+	const [resuming, setResuming] = useState(false);
 	useEffect(() => {
-		if (cid && conversation && session?.cid !== cid)
-			setSession(createSession(pid, conversation, latest, failed));
-		else if (!cid && session) setSession(null);
+		if (session && session.cid !== cid) {
+			// The server keeps the turn; only this tab's view of it is dropped.
+			void session.chat.stop();
+			setSession(null);
+		}
+		if (cid && conversation && session?.cid !== cid) {
+			const next = createSession(pid, conversation, latest, failed);
+			setSession(next);
+			if (next.resume) {
+				setResuming(true);
+				void next.chat
+					.resumeStream()
+					.catch(() => {})
+					.finally(() => setResuming(false));
+			}
+		}
 	}, [pid, cid, conversation, session]);
 	const active = session?.cid === cid ? session : null;
 	const fallback = useMemo(
@@ -349,7 +372,8 @@ export function useConversationChat(
 			}),
 		[pid],
 	);
-	const helpers = useChat({ chat: active?.chat ?? fallback, resume: active?.resume ?? false });
+	// Re-rendering Markdown for every token is wasteful; batch store updates.
+	const helpers = useChat({ chat: active?.chat ?? fallback, throttle: 80 });
 	const live = helpers.status === 'submitted' || helpers.status === 'streaming';
 	const { sendMessage } = helpers;
 	const send = useCallback(
@@ -371,5 +395,5 @@ export function useConversationChat(
 		},
 		[sendMessage],
 	);
-	return { ...helpers, ready: active !== null, live, send, resume };
+	return { ...helpers, ready: active !== null, live, resuming, send, resume };
 }

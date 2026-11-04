@@ -70,8 +70,8 @@ export function PermissionCard({
 			>
 				<span className="font-medium text-foreground">{permission.action}</span>
 				{permission.details.map((detail) => (
-					<span key={`${detail.label}:${detail.value}`} className="truncate">
-						{detail.label}: {detail.value}
+					<span key={`${detail.label}:${detail.value}`} className="max-w-xs truncate">
+						{detail.label}: {detail.value.split('\n')[0]}
 					</span>
 				))}
 				{outcomeBadge}
@@ -85,12 +85,23 @@ export function PermissionCard({
 			<p className="font-medium">{permission.action}</p>
 			{permission.details.length > 0 ? (
 				<dl className="space-y-1">
-					{permission.details.map((detail) => (
-						<div key={`${detail.label}:${detail.value}`} className="flex gap-2 break-all">
-							<dt className="text-muted-foreground">{detail.label}:</dt>
-							<dd className="whitespace-pre-wrap">{detail.value}</dd>
-						</div>
-					))}
+					{permission.details.map((detail) =>
+						detail.value.includes('\n') || detail.value.length > 120 ? (
+							<div key={`${detail.label}:${detail.value}`}>
+								<dt className="text-muted-foreground">{detail.label}:</dt>
+								<dd>
+									<pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded-md border bg-muted/40 p-2 font-mono text-[11px] leading-5">
+										{detail.value}
+									</pre>
+								</dd>
+							</div>
+						) : (
+							<div key={`${detail.label}:${detail.value}`} className="flex gap-2 break-all">
+								<dt className="text-muted-foreground">{detail.label}:</dt>
+								<dd className="whitespace-pre-wrap">{detail.value}</dd>
+							</div>
+						),
+					)}
 				</dl>
 			) : null}
 			<div className="flex flex-wrap gap-2">

@@ -40,7 +40,7 @@ export const ConversationPermissionSchema = z.object({
 	tool_call_id: z.string().max(80),
 	kind: z.string().max(40),
 	action: z.string().max(120),
-	details: z.array(z.object({ label: z.string().max(40), value: z.string().max(300) })).max(6),
+	details: z.array(z.object({ label: z.string().max(40), value: z.string().max(4000) })).max(6),
 	scope: z.object({ key: z.string().max(200), label: z.string().max(120) }),
 	/** Whether "always allow" is offered; destructive actions ask every time. */
 	can_remember: z.boolean(),

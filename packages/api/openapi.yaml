@@ -15122,7 +15122,7 @@ paths:
                                                       maxLength: 40
                                                     value:
                                                       type: string
-                                                      maxLength: 300
+                                                      maxLength: 4000
                                                   required:
                                                     - label
                                                     - value
@@ -15484,7 +15484,7 @@ paths:
                                                       maxLength: 40
                                                     value:
                                                       type: string
-                                                      maxLength: 300
+                                                      maxLength: 4000
                                                   required:
                                                     - label
                                                     - value
@@ -15862,7 +15862,7 @@ paths:
                                                       maxLength: 40
                                                     value:
                                                       type: string
-                                                      maxLength: 300
+                                                      maxLength: 4000
                                                   required:
                                                     - label
                                                     - value
@@ -16307,7 +16307,7 @@ paths:
                                                       maxLength: 40
                                                     value:
                                                       type: string
-                                                      maxLength: 300
+                                                      maxLength: 4000
                                                   required:
                                                     - label
                                                     - value
@@ -16679,7 +16679,7 @@ paths:
                                                       maxLength: 40
                                                     value:
                                                       type: string
-                                                      maxLength: 300
+                                                      maxLength: 4000
                                                   required:
                                                     - label
                                                     - value
@@ -17262,7 +17262,7 @@ paths:
                                                       maxLength: 40
                                                     value:
                                                       type: string
-                                                      maxLength: 300
+                                                      maxLength: 4000
                                                   required:
                                                     - label
                                                     - value

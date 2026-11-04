@@ -97,8 +97,10 @@ use chat.
 The assistant has the same tools as the [MCP server](./mcp.md), under the caller's
 project permissions. Read-only tools run freely. Tools that change something show a
 consent card: allow once, always allow that kind of action in this project, or refuse.
-Irreversible actions (`delete_notebook`, `stop_session`) always ask. Remembered grants
-are managed under **Permissions** on the chat page or with the `project_conversations`
+Consent cards show the code or source the call would submit. Irreversible actions
+(`update_notebook`, `sync_notebook_source`, `delete_notebook`, `stop_session`) and
+`execute_code` always ask; the other actions can be remembered. Remembered grants are
+managed under **Permissions** on the chat page or with the `project_conversations`
 MCP tool.
 
 Replies stream over the AI SDK UI message protocol and keep running if the browser
@@ -107,7 +109,9 @@ shows the saved progress. Stop requests and consent decisions are written to the
 conversation record, so they reach the instance running the turn without session
 affinity. A stopped or interrupted reply leaves a saved task to continue or dismiss.
 
-Tool inputs and results are stored as redacted previews: credential-like fields and
+Earlier turns reach the model as text only; tool results from a previous turn are not
+replayed, so the assistant re-reads what it needs. Tool inputs and results are stored as
+redacted previews: credential-like fields and
 large payloads (code, query results, stdout) are omitted, URLs and bearer tokens masked.
 Each call can be opened in an inspector that links the notebooks and jobs it touched.
 

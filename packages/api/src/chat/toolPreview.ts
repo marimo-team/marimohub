@@ -3,8 +3,36 @@ import { CHAT_LIMITS } from '@marimo-hub/core/chat';
 // Previews are what the UI shows and what the conversation record keeps. They
 // drop payload fields (code, data, query results) and anything that looks like a
 // credential, so a stored transcript never becomes a secret store.
-const PRIVATE_FIELD =
-	/(?:password|secret|token|credential|authorization|cookie|api[_-]?key|session[_-]?key|connection[_-]?string|dsn|url|uri)/i;
+// Keys are split into words (snake, kebab, camel) and matched whole, so
+// `access_token` and `apiKey` are redacted while `tokens` or `security` are not.
+const PRIVATE_WORDS = new Set([
+	'password',
+	'passwd',
+	'secret',
+	'token',
+	'credential',
+	'credentials',
+	'authorization',
+	'cookie',
+	'apikey',
+	'sessionkey',
+	'connectionstring',
+	'dsn',
+	'url',
+	'uri',
+]);
+function isPrivateKey(key: string): boolean {
+	const words = key
+		.replaceAll(/([a-z0-9])([A-Z])/g, '$1 $2')
+		.toLowerCase()
+		.split(/[\s_-]+/)
+		.filter(Boolean);
+	return words.some(
+		(word, index) =>
+			PRIVATE_WORDS.has(word) ||
+			(index + 1 < words.length && PRIVATE_WORDS.has(word + words[index + 1])),
+	);
+}
 const PAYLOAD_FIELD =
 	/^(?:code|source|source_code|notebook_code|python_code|sql|content|stdout|stderr|query|prompt|reasoning|data|rows|records|values)$/i;
 const MAX_PREVIEW = CHAT_LIMITS.previewCharacters;
@@ -96,7 +124,7 @@ export function toolPreview(value: unknown): string {
 						remaining -= key.length;
 						const isErrorCode =
 							key === 'code' && typeof child === 'string' && /^[A-Z][A-Z0-9_]{1,79}$/.test(child);
-						if (PRIVATE_FIELD.test(key) || (PAYLOAD_FIELD.test(key) && !isErrorCode))
+						if (isPrivateKey(key) || (PAYLOAD_FIELD.test(key) && !isErrorCode))
 							return [key, '[Redacted or omitted]'];
 						return [key, visit(child, depth + 1)];
 					}),

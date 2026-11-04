@@ -47,6 +47,11 @@ Use these as the done-criteria for any change.
 - **`packages/config`** is the ONLY package that imports concrete adapters: it
   reads `MARIMOHUB_*` env vars, selects an adapter per `*_BACKEND` selector, and
   wires the system together.
+- **Project chat's turn runner lives in `packages/api/src/chat`**, not core: it
+  depends on the vendor-neutral `ai` SDK and the in-process MCP tool server. Core
+  keeps the conversation record and its invariants (`ConversationService`); the
+  concrete model is still built in `config`. Do not use this as precedent for
+  moving other domain logic into `api`.
 - **Entrypoints** compose everything: `apps/server` (Node, for Docker/k8s) and
   `examples/cloudflare-worker` (Cloudflare Workers). See
   [`development_docs/architecture.md`](./development_docs/architecture.md).

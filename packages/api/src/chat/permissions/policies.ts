@@ -27,9 +27,16 @@ function scalar(value: unknown): string | undefined {
 	return undefined;
 }
 
-function detail(label: string, value: unknown): Detail | undefined {
+/** Code the user is asked to approve must be readable in full; other fields stay short. */
+const DETAIL_LIMITS = { code: 4000, other: 300 } as const;
+
+function detail(
+	label: string,
+	value: unknown,
+	limit: number = DETAIL_LIMITS.other,
+): Detail | undefined {
 	const text = scalar(value);
-	return text === undefined || text === '' ? undefined : { label, value: text.slice(0, 300) };
+	return text === undefined || text === '' ? undefined : { label, value: text.slice(0, limit) };
 }
 
 function details(...entries: (Detail | undefined)[]): Detail[] {
@@ -41,11 +48,17 @@ function humanize(name: string): string {
 }
 
 /** Labels for the hub's own tools; anything else gets a generic card. */
-const ACTIONS: Record<string, { action: string; label: string; fields: [string, string][] }> = {
+const ACTIONS: Record<
+	string,
+	{ action: string; label: string; fields: [string, string, number?][]; remember?: false }
+> = {
 	create_notebook: {
 		action: 'Create a notebook',
 		label: 'creating notebooks',
-		fields: [['Title', 'title']],
+		fields: [
+			['Title', 'title'],
+			['Code', 'code', DETAIL_LIMITS.code],
+		],
 	},
 	update_notebook: {
 		action: 'Change a notebook',
@@ -54,6 +67,7 @@ const ACTIONS: Record<string, { action: string; label: string; fields: [string, 
 			['Notebook', 'notebook'],
 			['Title', 'title'],
 			['Status', 'status'],
+			['Code', 'code', DETAIL_LIMITS.code],
 		],
 	},
 	sync_notebook_source: {
@@ -87,8 +101,10 @@ const ACTIONS: Record<string, { action: string; label: string; fields: [string, 
 		label: 'running code',
 		fields: [
 			['Notebook', 'notebook'],
-			['Code', 'code'],
+			['Code', 'code', DETAIL_LIMITS.code],
 		],
+		// Arbitrary code is never a standing grant.
+		remember: false,
 	},
 	create_job: {
 		action: 'Create a job',
@@ -111,7 +127,7 @@ export function permissionRequest(
 	if (!isGated(tool)) return undefined;
 	const known = ACTIONS[tool.name];
 	const fields = known
-		? known.fields.map(([label, key]) => detail(label, input[key]))
+		? known.fields.map(([label, key, limit]) => detail(label, input[key], limit))
 		: Object.entries(input)
 				.filter(([key]) => key !== 'project')
 				.slice(0, 6)
@@ -124,7 +140,7 @@ export function permissionRequest(
 			key: `tool:${tool.name}`.slice(0, 200),
 			label: `${known?.label ?? humanize(tool.name)} in this project`.slice(0, 120),
 		},
-		// Irreversible actions ask every time; a remembered grant would hide them.
-		can_remember: tool.annotations?.destructiveHint !== true,
+		// Irreversible actions and arbitrary code ask every time; a remembered grant would hide them.
+		can_remember: tool.annotations?.destructiveHint !== true && known?.remember !== false,
 	};
 }

@@ -132,7 +132,6 @@ export async function openToolSession(
 						state.toolLimit = true;
 						return { code: 'TOOL_LIMIT', message: TOOL_LIMIT_MESSAGE };
 					}
-					state.calls++;
 					const parsed = z.record(z.string(), z.unknown()).safeParse(rawInput ?? {});
 					if (!parsed.success)
 						return { code: 'INVALID_TOOL_ARGUMENTS', message: 'Tool arguments must be an object' };
@@ -143,7 +142,10 @@ export async function openToolSession(
 						args.project !== project.name
 					)
 						throw new ForbiddenError('Chat tools are scoped to the current project');
-					await turn.checkpoint({ type: 'tool_started', id: toolCallId, name: definition.name });
+					// Only a mutating call can leave the project in an unknown state; a
+					// read-only call that never returns is simply repeated next time.
+					if (!definition.readOnly)
+						await turn.checkpoint({ type: 'tool_started', id: toolCallId, name: definition.name });
 					const complete = (result: string, outcome: 'known' | 'uncertain') =>
 						turn.checkpoint({
 							type: 'tool_completed',
@@ -174,6 +176,7 @@ export async function openToolSession(
 						await complete(JSON.stringify(output), 'known');
 						return output;
 					}
+					state.calls++;
 					signal.throwIfAborted();
 					await assertChatPrincipalCurrent(deps, principal, signal);
 					await loadVisibleProject(deps.services.projects, project.id, principal, deps);

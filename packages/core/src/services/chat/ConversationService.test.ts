@@ -534,9 +534,15 @@ describe('ConversationService', () => {
 			const service = new ConversationService(new MemoryBucket());
 			const { created, card, held, turn } = await openCard(service);
 			expect(await service.permissionDecision(pid, alice, created.id, card.id)).toBeUndefined();
-			expect(await service.decidePermission(pid, alice, created.id, card.id, 'always')).toBe(true);
-			expect(await service.decidePermission(pid, alice, created.id, card.id, 'always')).toBe(true);
-			expect(await service.decidePermission(pid, alice, created.id, card.id, 'deny')).toBe(false);
+			expect(await service.decidePermission(pid, alice, created.id, card.id, 'always')).toBe(
+				'accepted',
+			);
+			expect(await service.decidePermission(pid, alice, created.id, card.id, 'always')).toBe(
+				'accepted',
+			);
+			expect(await service.decidePermission(pid, alice, created.id, card.id, 'deny')).toBe(
+				'rejected',
+			);
 			expect(await service.permissionDecision(pid, alice, created.id, card.id)).toBe('always');
 			held.release.resolve([text('done')]);
 			const saved = await turn;
@@ -551,18 +557,22 @@ describe('ConversationService', () => {
 			const { created, card, context, held, turn } = await openCard(service);
 			expect(
 				await service.decidePermission(pid, alice, created.id, crypto.randomUUID(), 'allow'),
-			).toBe(false);
+			).toBe('missing');
 			await expect(
 				service.decidePermission(pid, bob, created.id, card.id, 'allow'),
 			).rejects.toBeInstanceOf(NotFoundError);
 			now += 61_000;
-			expect(await service.decidePermission(pid, alice, created.id, card.id, 'allow')).toBe(false);
+			expect(await service.decidePermission(pid, alice, created.id, card.id, 'allow')).toBe(
+				'rejected',
+			);
 			expect(await service.permissionDecision(pid, alice, created.id, card.id)).toBe('expired');
 			now -= 61_000;
 			await context.saveParts([
 				{ type: 'data-permission', id: card.id, data: { ...card, status: 'denied' } },
 			]);
-			expect(await service.decidePermission(pid, alice, created.id, card.id, 'allow')).toBe(false);
+			expect(await service.decidePermission(pid, alice, created.id, card.id, 'allow')).toBe(
+				'rejected',
+			);
 			held.release.resolve([text('done')]);
 			await turn;
 		});

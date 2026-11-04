@@ -365,22 +365,31 @@ export class ConversationService {
 		)?.decision;
 	}
 
-	/** Record a consent decision for an open permission card of the running turn. */
+	/**
+	 * Record a consent decision for a card of the running turn. `missing` means
+	 * the card is not on the saved head yet; a caller that just saw it stream may
+	 * retry briefly before treating the request as closed.
+	 */
 	async decidePermission(
 		pid: ProjectId,
 		owner: UserId,
 		id: string,
 		requestId: string,
 		decision: PermissionDecision,
-	): Promise<boolean> {
-		let accepted = false;
+	): Promise<'accepted' | 'rejected' | 'missing'> {
+		let outcome: 'accepted' | 'rejected' | 'missing' = 'rejected';
 		await this.mutate(pid, owner, id, (head) => {
-			accepted = false;
+			outcome = 'rejected';
+			if (!this.live(head.pending)) return;
 			const open = this.openPermission(head, requestId);
-			if (typeof open === 'string') return;
+			if (open === 'cancelled') {
+				outcome = 'missing';
+				return;
+			}
+			if (open === 'expired') return;
 			const existing = this.recordedDecision(head, open.turnId, requestId);
 			if (existing) {
-				accepted = existing === decision;
+				outcome = existing === decision ? 'accepted' : 'rejected';
 				return;
 			}
 			if (open.permission.status !== 'open') return;
@@ -388,9 +397,9 @@ export class ConversationService {
 				...(head.permission_decisions ?? []),
 				{ turn_id: open.turnId, request_id: requestId, decision },
 			];
-			accepted = true;
+			outcome = 'accepted';
 		});
-		return accepted;
+		return outcome;
 	}
 
 	/** The turn owner polls this to pick up decisions recorded by any replica. */

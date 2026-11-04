@@ -6,6 +6,7 @@ import {
 	ConversationService,
 } from '@marimo-hub/core/chat';
 import type { Conversation, PermissionDecision } from '@marimo-hub/core/chat';
+import { sleep } from '@marimo-hub/core';
 import type { NotebookId } from '@marimo-hub/core';
 import { DomainError, UnavailableError } from '@marimo-hub/core/errors';
 import { DEFAULT_CHAT_CONFIG } from '../context';
@@ -105,17 +106,32 @@ export async function stopConversation(input: ConversationOperationContext & { c
 	return { stopped: durable || local };
 }
 
+const DECISION_RETRY = { attempts: 10, delayMs: 200 };
+
+/**
+ * Answer a consent card. The card streams to the client slightly before it is
+ * written to the head, so a fast click can arrive first; wait briefly for the
+ * card to land before calling the request closed.
+ */
 export async function decidePermission(
 	input: ConversationOperationContext & { cid: string; rid: string; decision: PermissionDecision },
 ) {
 	await authorizeConversation(input);
-	const accepted = await conversations(input.deps).decidePermission(
-		input.pid,
-		input.principal.id,
-		input.cid,
-		input.rid,
-		input.decision,
-	);
+	const service = conversations(input.deps);
+	let outcome: Awaited<ReturnType<ConversationService['decidePermission']>> = 'missing';
+	for (let attempt = 0; attempt < DECISION_RETRY.attempts; attempt++) {
+		outcome = await service.decidePermission(
+			input.pid,
+			input.principal.id,
+			input.cid,
+			input.rid,
+			input.decision,
+		);
+		if (outcome !== 'missing') break;
+		input.signal?.throwIfAborted();
+		await sleep(DECISION_RETRY.delayMs);
+	}
+	const accepted = outcome === 'accepted';
 	if (accepted)
 		permissionBroker.decide(permissionKey(input.pid, input.cid, input.rid), input.decision);
 	return { accepted, ...(accepted ? {} : { reason: 'closed' as const }) };

@@ -17,29 +17,49 @@ class LiveTurn {
 	publish(chunk: UIMessageChunk): void {
 		if (this.closed) return;
 		this.chunks.push(chunk);
-		for (const subscriber of this.subscribers) subscriber.enqueue(chunk);
+		for (const subscriber of this.subscribers) this.deliver(subscriber, chunk);
 	}
 
 	close(): void {
 		if (this.closed) return;
 		this.closed = true;
-		for (const subscriber of this.subscribers) subscriber.close();
+		for (const subscriber of this.subscribers) {
+			try {
+				subscriber.close();
+			} catch {
+				// Already cancelled by its reader.
+			}
+		}
 		this.subscribers.clear();
 	}
 
 	/** Everything emitted so far, then live chunks until the turn ends. */
 	subscribe(): ReadableStream<UIMessageChunk> {
+		let own: ReadableStreamDefaultController<UIMessageChunk> | undefined;
 		return new ReadableStream<UIMessageChunk>({
 			start: (controller) => {
+				own = controller;
 				for (const chunk of this.chunks) controller.enqueue(chunk);
 				if (this.closed) controller.close();
 				else this.subscribers.add(controller);
 			},
 			cancel: () => {
-				for (const subscriber of this.subscribers)
-					if (subscriber.desiredSize === null) this.subscribers.delete(subscriber);
+				if (own) this.subscribers.delete(own);
 			},
 		});
+	}
+
+	// A reader that went away without cancelling makes enqueue throw; the turn
+	// must outlive any one viewer, so drop that subscriber instead of failing.
+	private deliver(
+		subscriber: ReadableStreamDefaultController<UIMessageChunk>,
+		chunk: UIMessageChunk,
+	): void {
+		try {
+			subscriber.enqueue(chunk);
+		} catch {
+			this.subscribers.delete(subscriber);
+		}
 	}
 }
 

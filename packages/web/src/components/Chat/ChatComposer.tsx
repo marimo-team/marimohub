@@ -105,37 +105,40 @@ export function ChatComposer({
 							</Button>
 						) : null}
 					</div>
-					{onStop && !draft.trim() ? (
-						<Button
-							type="button"
-							variant="unstyled"
-							onPress={onStop}
-							aria-label="Stop response"
-							className="flex size-8 max-md:size-11 shrink-0 items-center justify-center rounded-full text-destructive outline-none hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-ring"
-						>
-							<Square className="size-4 fill-current" aria-hidden />
-						</Button>
-					) : (
-						<Button
-							type="submit"
-							variant="unstyled"
-							isDisabled={!draft.trim() || !canSubmit}
-							aria-label={queueing ? 'Queue message' : 'Send message'}
-							className="flex size-8 max-md:size-11 shrink-0 items-center justify-center rounded-full bg-foreground text-background outline-none hover:bg-foreground/80 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-35"
-						>
-							{queueing ? (
-								<ListPlus className="size-5" aria-hidden />
-							) : (
-								<ArrowUp className="size-5" aria-hidden />
-							)}
-						</Button>
-					)}
+					<div className="flex shrink-0 items-center gap-1">
+						{onStop ? (
+							<Button
+								type="button"
+								variant="unstyled"
+								onPress={onStop}
+								aria-label="Stop response"
+								className="flex size-8 max-md:size-11 shrink-0 items-center justify-center rounded-full text-destructive outline-none hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-ring"
+							>
+								<Square className="size-4 fill-current" aria-hidden />
+							</Button>
+						) : null}
+						{!onStop || draft.trim() ? (
+							<Button
+								type="submit"
+								variant="unstyled"
+								isDisabled={!draft.trim() || !canSubmit}
+								aria-label={queueing ? 'Queue message' : 'Send message'}
+								className="flex size-8 max-md:size-11 shrink-0 items-center justify-center rounded-full bg-foreground text-background outline-none hover:bg-foreground/80 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-35"
+							>
+								{queueing ? (
+									<ListPlus className="size-5" aria-hidden />
+								) : (
+									<ArrowUp className="size-5" aria-hidden />
+								)}
+							</Button>
+						) : null}
+					</div>
 				</div>
 			</form>
 			<div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
 				<span>
 					{queueing
-						? 'Enter to queue · the button stops the response while the box is empty'
+						? 'Enter to queue · stop ends the current response'
 						: 'Enter to send · Shift + Enter for a new line'}
 				</span>
 			</div>

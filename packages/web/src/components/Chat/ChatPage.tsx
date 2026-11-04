@@ -1,5 +1,5 @@
 import { PanelLeft, Plus, ShieldCheck } from 'lucide-react';
-import { useParams } from 'react-router-dom';
+import { Navigate, useParams } from 'react-router-dom';
 import { Button, ConfirmDialog } from '@/components/ui';
 import { PageTitle } from '@/components/ui/PageTitle';
 import { ChatMessages } from './ChatMessages';
@@ -16,6 +16,8 @@ import { useProjectChatController } from './useProjectChatController';
 
 function ProjectChat({ pid }: { pid: string }) {
 	const c = useProjectChatController(pid);
+	if (c.capabilities && !c.capabilities.chat.available)
+		return <Navigate to={`/projects/${encodeURIComponent(pid)}`} replace />;
 	const composerElement = (
 		<ChatComposer
 			home={c.home}
@@ -137,7 +139,7 @@ function ProjectChat({ pid }: { pid: string }) {
 									ref={c.scroll.content}
 									role="log"
 									aria-label="Conversation"
-									aria-live="polite"
+									aria-live={c.live ? 'off' : 'polite'}
 									className="mx-auto max-w-3xl space-y-4 pt-4"
 								>
 									<ChatMessages

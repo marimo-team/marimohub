@@ -37,18 +37,21 @@ export function useProjectChatSession(
 	const conversation = detail.data?.conversation;
 	const chat = useConversationChat(pid, conversation?.id === cid ? conversation : undefined, {
 		onFinish: (finishedCid) => {
+			// Also for a re-attached stream: the record still shows the turn as
+			// pending, so hold the live result until a newer snapshot arrives.
 			const baseline =
 				client.getQueryState(conversationKeys.detail(pid, finishedCid))?.dataUpdatedAt ?? 0;
-			setLocalTurn((current) =>
-				current?.cid === finishedCid ? { ...current, baseline } : current,
-			);
+			setLocalTurn({ cid: finishedCid, baseline });
 			void refreshProject(client, pid, finishedCid);
 		},
-		onError: (error) => {
+		onError: (error, fromCid) => {
+			if (fromCid !== cid) return;
 			setLocalTurn(null);
 			callbacks.onError(error, lastSent.current);
 		},
-		onWorkingNotebook: callbacks.onWorkingNotebook,
+		onWorkingNotebook: (notebookId, fromCid) => {
+			if (fromCid === cid) callbacks.onWorkingNotebook?.(notebookId);
+		},
 	});
 	useEffect(() => {
 		setLive(chat.live);
@@ -60,10 +63,12 @@ export function useProjectChatSession(
 		localTurn?.cid === cid && (detail.dataUpdatedAt <= localTurn.baseline || recordPending);
 	const { setMessages } = chat;
 	const streaming = chat.live;
+	const { resuming } = chat;
 	useEffect(() => {
-		if (streaming || awaitingSnapshot || !conversation || conversation.id !== cid) return;
+		if (streaming || resuming || awaitingSnapshot || !conversation || conversation.id !== cid)
+			return;
 		setMessages(toUIMessages(conversation));
-	}, [conversation, cid, streaming, awaitingSnapshot, setMessages]);
+	}, [conversation, cid, streaming, resuming, awaitingSnapshot, setMessages]);
 	const busy = chat.live || creating || recordPending || awaitingSnapshot;
 	const conversationReady = !detail.isError && (!cid || (!detail.isPending && chat.ready));
 	const canSend = !busy && conversationReady;
