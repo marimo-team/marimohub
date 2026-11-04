@@ -127,7 +127,11 @@ describe('Workspace navigation', () => {
 
 	it.each<{ owner: string; members: ProjectMember[]; label: string }>([
 		{ owner: 'u', members: [{ user_id: 'u', role: 'admin' }], label: 'Private' },
-		{ owner: 'u', members: [{ email: 'user@example.com', role: 'viewer' }], label: 'Private' },
+		{
+			owner: 'u',
+			members: [{ email: 'user@example.com', role: 'viewer' }],
+			label: 'Members only',
+		},
 		{ owner: 'u', members: [{ user_id: 'other', role: 'viewer' }], label: 'Members only' },
 		{ owner: 'u', members: [{ group: '/team', role: 'viewer' }], label: 'Members only' },
 		{

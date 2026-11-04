@@ -1,7 +1,6 @@
 import { Lock, LockOpen, Users } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Tooltip } from '@/components/ui';
-import { isSelf } from '@/components/Project/ProjectMembersPanel/memberIdentity';
 import { defaultAccessSummary, roleLabel } from '@/lib/roles';
 import type { Capabilities, ProjectDetail, User } from '@/types';
 
@@ -20,7 +19,7 @@ export function ProjectSharingIndicator({
 	const isPrivate =
 		role === 'none' &&
 		project.owner === user?.id &&
-		project.members.every((member) => isSelf(member, user));
+		project.members.every((member) => member.user_id === project.owner);
 	const Icon = role === 'none' ? Lock : role === 'inherit' ? Users : LockOpen;
 	const label = isPrivate
 		? 'Private'
