@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ROLES } from './constants';
+import { SessionLinkTemplatesSchema } from './sessionLinks';
 
 export function isThemeAssetUrl(value: string): boolean {
 	if (/[\s\\]/u.test(value)) return false;
@@ -59,6 +60,12 @@ export const ThemeConfigSchema = z.object({
 });
 
 export type ThemeConfig = z.infer<typeof ThemeConfigSchema>;
+
+// Session templates can name private infrastructure and must not enter the public theme response.
+export const DeploymentThemeConfigSchema = ThemeConfigSchema.extend({
+	session_links: SessionLinkTemplatesSchema.optional(),
+});
+export type DeploymentThemeConfig = z.infer<typeof DeploymentThemeConfigSchema>;
 
 export const ThemeResponseSchema = z.object({
 	success: z.literal(true),

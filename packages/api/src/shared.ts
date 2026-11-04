@@ -1,3 +1,4 @@
+import { SessionLinkSchema } from '@marimo-hub/core/session-links';
 import { SEARCH_KINDS } from '@marimo-hub/core/search';
 import { OpenAPIHono, z } from '@hono/zod-openapi';
 import type { Context, TypedResponse } from 'hono';
@@ -1381,6 +1382,7 @@ export const SessionResponseSchema = z
 		 * only to callers the kernel gates would admit.
 		 */
 		sandbox_url: z.string().optional(),
+		links: z.array(SessionLinkSchema).optional(),
 		started_at: dt(),
 		last_heartbeat: dt(),
 		/**

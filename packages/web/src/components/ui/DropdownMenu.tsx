@@ -10,6 +10,7 @@ export interface DropdownMenuOption {
 	label: ReactNode;
 	icon?: ReactNode;
 	href?: string;
+	target?: '_blank';
 	separatorBefore?: boolean;
 	isDisabled?: boolean;
 	/** Render the item in the destructive style (e.g. Delete). */
@@ -94,6 +95,8 @@ export function DropdownMenu({
 							key={opt.id}
 							id={opt.id}
 							href={opt.href}
+							target={opt.target}
+							rel={opt.target === '_blank' ? 'noopener noreferrer' : undefined}
 							isDisabled={opt.isDisabled}
 							className={cn(
 								'flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] outline-none transition-colors data-[disabled]:cursor-default data-[disabled]:opacity-50 max-md:min-h-11',

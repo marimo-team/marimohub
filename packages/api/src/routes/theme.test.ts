@@ -39,6 +39,13 @@ describe('GET /api/v1/theme', () => {
 			name: 'Research Hub',
 			logo: '/brand.svg',
 			secret: 'not-public',
+			session_links: [
+				{
+					id: 'lookout',
+					label: 'Lookout',
+					href_template: 'https://private-console.example/?jobSet={sandbox_id}',
+				},
+			],
 		};
 		const { request } = createTestApi({ deps: { theme } });
 		expect(await expectOk(await request('GET', '/theme'))).toEqual({

@@ -1,5 +1,7 @@
 import { notebookCssCacheFor, notebookCssUrl } from '../notebookCss';
 import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
+import { resolveSessionLinks } from '@marimo-hub/core/session-links';
+import type { SessionLinkTemplate } from '@marimo-hub/core/session-links';
 import { createRoute, z } from '@hono/zod-openapi';
 import { all } from 'better-all';
 import type {
@@ -518,7 +520,11 @@ function publicSurfaces(s: Session, can: { attach: boolean; surface: boolean }) 
  * users who can list the project's sessions. Internal infrastructure fields
  * (`sandbox_id`, `used_fallback`) stay private.
  */
-export function toSessionResponse(s: Session, can: Awaited<ReturnType<typeof sessionGrantsFor>>) {
+export function toSessionResponse(
+	s: Session,
+	can: Awaited<ReturnType<typeof sessionGrantsFor>>,
+	linkTemplates: readonly SessionLinkTemplate[] = [],
+) {
 	const { appReadOnly } = can;
 	return {
 		session_id: s.session_id,
@@ -529,6 +535,10 @@ export function toSessionResponse(s: Session, can: Awaited<ReturnType<typeof ses
 		user_id: appReadOnly ? undefined : s.user_id,
 		status: s.status,
 		sandbox_url: can.attach ? s.sandbox_url : undefined,
+		links:
+			can.attach && !appReadOnly && sessionMode(s) === 'edit' && linkTemplates.length > 0
+				? resolveSessionLinks(linkTemplates, { ...s, notebook_id: sessionResourceNotebookId(s) })
+				: undefined,
 		can: {
 			attach: can.attach,
 			stop: can.stop,
@@ -849,6 +859,7 @@ function withoutConnectionUrls(response: ReturnType<typeof toSessionResponse>) {
 		...response,
 		can: { ...response.can, attach: false },
 		sandbox_url: undefined,
+		links: undefined,
 		surfaces:
 			response.surfaces &&
 			Object.fromEntries(
@@ -867,7 +878,7 @@ export async function presentSession(
 	grants: Awaited<ReturnType<typeof sessionGrantsFor>>,
 	poolView?: () => ReturnType<AppPoolService['view']> | undefined,
 ) {
-	const response = toSessionResponse(session, grants);
+	const response = toSessionResponse(session, grants, deps.theme?.session_links);
 	try {
 		await assertSessionPreviewActive(deps, session.project_id, session);
 	} catch (error) {
@@ -1625,10 +1636,9 @@ export async function startNotebookSession(input: {
 			}
 			// Probing and surface startup can overlap a stop or an authorization update.
 			if (mode === 'edit') reusable = await revalidateEditorReuse(reusable);
+			const response = toSessionResponse(reusable, reusableGrants, deps.theme?.session_links);
 			return {
-				...(body?.replace_app_session_id
-					? withoutConnectionUrls(toSessionResponse(reusable, reusableGrants))
-					: toSessionResponse(reusable, reusableGrants)),
+				...(body?.replace_app_session_id ? withoutConnectionUrls(response) : response),
 				reused: true,
 				...(appAssignment ? { app_assignment: appAssignment } : {}),
 				...(mode === 'edit'
@@ -2252,7 +2262,7 @@ export async function startNotebookSession(input: {
 				}
 				const winnerGrants = await grants(winner);
 				return {
-					...toSessionResponse(winner, winnerGrants),
+					...toSessionResponse(winner, winnerGrants, deps.theme?.session_links),
 					reused: true,
 					editor_session: {
 						sharing,
@@ -2348,10 +2358,9 @@ export async function startNotebookSession(input: {
 		else await audit;
 	}
 
+	const response = toSessionResponse(updated!, await grants(updated!), deps.theme?.session_links);
 	return {
-		...(body?.replace_app_session_id
-			? withoutConnectionUrls(toSessionResponse(updated!, await grants(updated!)))
-			: toSessionResponse(updated!, await grants(updated!))),
+		...(body?.replace_app_session_id ? withoutConnectionUrls(response) : response),
 		reused: false,
 		...(appAssignment ? { app_assignment: appAssignment } : {}),
 		...(mode === 'edit'
@@ -2470,6 +2479,7 @@ app.openapi(heartbeatSession, async (c) => {
 	const response = toSessionResponse(
 		updated,
 		await sessionGrantsFor(project, user, updated, deps, labels),
+		deps.theme?.session_links,
 	);
 	const terminalApp =
 		sessionMode(updated) === 'app' && updated.status !== 'running' && updated.status !== 'starting';

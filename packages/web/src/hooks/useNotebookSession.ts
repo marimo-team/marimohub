@@ -47,6 +47,7 @@ export type SessionEnded = Session['status'] | 'gone' | 'access_lost' | 'takeove
 
 export interface NotebookSession {
 	session: Session | null;
+	diagnosticSession: Session | null;
 	error: SessionError | null;
 	/** Provisioning: the start request is in flight, or the kernel is booting. */
 	isProvisioning: boolean;
@@ -101,6 +102,7 @@ export function useNotebookSession(
 	const restartApp = useRestartApp(projectId, notebookId, { suppressErrorToast: true });
 
 	const [session, setSession] = useState<Session | null>(null);
+	const [diagnosticSession, setDiagnosticSession] = useState<Session | null>(null);
 	const [error, setError] = useState<SessionError | null>(null);
 	const [ended, setEnded] = useState<SessionEnded | null>(null);
 	const [endedByUserId, setEndedByUserId] = useState<string | null>(null);
@@ -125,6 +127,7 @@ export function useNotebookSession(
 	// under an older render read, so a `setSession` without it re-arms a session
 	// the user has already left behind.
 	const commitSession = useCallback((next: Session | null) => {
+		setDiagnosticSession(null);
 		// Polls for the same startup must not reset its timeout.
 		if (next?.status !== 'starting') {
 			startingSinceRef.current = null;
@@ -161,6 +164,7 @@ export function useNotebookSession(
 
 	const startWithMutation = useCallback(
 		(mutation: typeof startSession) => {
+			setDiagnosticSession(null);
 			const gen = generation.bump();
 			setError(null);
 			setEnded(null);
@@ -265,7 +269,7 @@ export function useNotebookSession(
 		mode === 'app' ? 'The app failed to start.' : 'The kernel failed to start.';
 
 	const failStart = useCallback(
-		(failure?: Session['error'], code?: string) => {
+		(failure?: Session['error'], code?: string, failedSession?: Session) => {
 			// Terminal: invalidate in-flight polls so a late `running` response
 			// cannot resurrect the session after the failure is shown.
 			generation.bump();
@@ -280,6 +284,7 @@ export function useNotebookSession(
 						},
 			);
 			commitSession(null);
+			setDiagnosticSession(failedSession ?? null);
 		},
 		[startFailedMessage, commitSession, generation],
 	);
@@ -319,10 +324,14 @@ export function useNotebookSession(
 			const timeoutSeconds = startupTimeoutSeconds ?? DEFAULT_STARTUP_TIMEOUT_S;
 			const deadlineMs = sessionStartupDeadlineMs(timeoutSeconds);
 			if (elapsed !== null && elapsed > deadlineMs) {
-				failStart({
-					code: 'STARTUP_TIMEOUT',
-					message: `${mode === 'app' ? 'The app' : 'The kernel'} did not start within ${timeoutSeconds}s.`,
-				});
+				failStart(
+					{
+						code: 'STARTUP_TIMEOUT',
+						message: `${mode === 'app' ? 'The app' : 'The kernel'} did not start within ${timeoutSeconds}s.`,
+					},
+					undefined,
+					session,
+				);
 				return;
 			}
 			pollSession(
@@ -330,10 +339,10 @@ export function useNotebookSession(
 				(next) => {
 					if (next.status === 'running' && !next.sandbox_url) {
 						concludeAccessLost(next.can?.attach ?? false);
-					} else if (next.status === 'running') {
+					} else if (next.status === 'running' || next.status === 'starting') {
 						commitSession(next);
-					} else if (next.status !== 'starting' && next.status !== 'terminating') {
-						failStart(next.error);
+					} else if (next.status !== 'terminating') {
+						failStart(next.error, undefined, next.status === 'failed' ? next : undefined);
 					}
 				},
 				// The record vanished mid-start (reaped, or the notebook deleted).
@@ -363,6 +372,7 @@ export function useNotebookSession(
 					next.ended_reason === 'takeover' ? 'takeover' : next.status,
 					next.ended_by_user_id ?? null,
 				);
+				if (next.status === 'failed') setDiagnosticSession(next);
 			}
 		},
 		[commitSession, concludeAccessLost, concludeSession],
@@ -437,6 +447,7 @@ export function useNotebookSession(
 
 	return {
 		session,
+		diagnosticSession,
 		error,
 		isProvisioning,
 		isRunning,

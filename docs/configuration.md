@@ -16,13 +16,14 @@ Every marimohub configuration variable, grouped by category and backend. A categ
 
 ## Theme
 
-Deployment branding for the hub UI. All values are public. See the [theming guide](./theming.md) for examples and asset hosting.
+Deployment branding and session links for the hub UI. Session link templates stay on the server. Other values are public. See the [theming guide](./theming.md) for examples and asset hosting.
 
 ### Branding
 
 | Variable | Description | Required | Default | Example |
 | --- | --- | --- | --- | --- |
 | `MARIMOHUB_THEME_NAV_LINKS` | JSON array of up to 12 {label, href, placement?, external?, roles?} links. Roles control visibility only; all links are public. | — | — | `[{"label":"Platform","href":"https://example.com","placement":"header"}]` |
+| `MARIMOHUB_THEME_SESSION_LINKS` | JSON array of up to 12 {id, label, href_template} diagnostic links for authorized editor sessions. Templates stay server-side. See the [theming guide](./theming.md#session-links) for placeholders and limits. | — | — | `[{"id":"lookout","label":"Lookout","href_template":"https://lookout.example/?jobSet={sandbox_id}"}]` |
 | `MARIMOHUB_THEME_DOCS_URL` | HTTPS URL or root-relative path for the help menu documentation link. | — | — | `https://docs.example.com` |
 | `MARIMOHUB_THEME_SUPPORT_URL` | HTTPS URL or root-relative path for the Help menu Get help link, the sign-in "Contact your administrator" link, and the problem-report portal link. | — | — | `https://support.example.com` |
 | `MARIMOHUB_THEME_ANNOUNCEMENT` | JSON {id, text, href?, level?, dismissible?}. Change id to show a previously dismissed banner again. | — | — | `{"id":"maintenance-1","text":"Maintenance Friday","level":"info","dismissible":true}` |

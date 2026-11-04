@@ -194,9 +194,8 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 			'terminating_at',
 			'takeover_capture_completed_at',
 		];
-		// `can` is response-only: the caller's evaluated grants, computed per
-		// request — never stored on the record.
-		const responseOnlyFields = ['app_assignment', 'app_pool', 'can', 'resource_path'];
+		// Grants and configured links are resolved per request, never stored on the session.
+		const responseOnlyFields = ['app_assignment', 'app_pool', 'can', 'links', 'resource_path'];
 		const coreKeys = shapeKeys(CoreSessionSchema);
 		const apiKeys = shapeKeys(SessionResponseSchema);
 		expect(coreKeys.filter((k) => !internalSessionFields.includes(k))).toEqual(

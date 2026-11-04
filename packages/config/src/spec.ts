@@ -107,7 +107,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 	{
 		name: 'Theme',
 		description:
-			'Deployment branding for the hub UI. All values are public. See the [theming guide](./theming.md) for examples and asset hosting.',
+			'Deployment branding and session links for the hub UI. Session link templates stay on the server. Other values are public. See the [theming guide](./theming.md) for examples and asset hosting.',
 		backends: [
 			{
 				name: 'Branding',
@@ -118,6 +118,15 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						description:
 							'JSON array of up to 12 {label, href, placement?, external?, roles?} links. Roles control visibility only; all links are public.',
 						example: '[{"label":"Platform","href":"https://example.com","placement":"header"}]',
+						optIn: true,
+					},
+					{
+						id: 'MARIMOHUB_THEME_SESSION_LINKS',
+						name: 'Session links',
+						description:
+							'JSON array of up to 12 {id, label, href_template} diagnostic links for authorized editor sessions. Templates stay server-side. See the [theming guide](./theming.md#session-links) for placeholders and limits.',
+						example:
+							'[{"id":"lookout","label":"Lookout","href_template":"https://lookout.example/?jobSet={sandbox_id}"}]',
 						optIn: true,
 					},
 					{
