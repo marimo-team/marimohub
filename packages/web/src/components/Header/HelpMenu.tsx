@@ -2,7 +2,7 @@ import { useProblemReport } from '@/components/Support/ReportProblemDialog';
 import type { SupportContext } from '@/components/Support/diagnostics';
 import { DialogModal } from '@/components/ui/Dialog';
 import { useDisclosure } from '@/hooks/useDisclosure';
-import { CircleHelp } from 'lucide-react';
+import { ArrowUpRight, CircleHelp } from 'lucide-react';
 import { MenuTrigger, Button, Popover, Menu, MenuItem, Separator } from 'react-aria-components';
 import type { ThemeLinkRole } from '@marimo-hub/core/theme';
 import { useBranding } from '@/context/BrandingContext';
@@ -10,7 +10,8 @@ import { DOCS_BASE } from '@/lib/links';
 import { shellLinkTarget, useShellLinks } from '@/components/Shell/useShellLinks';
 import { AboutHub } from './AboutHub';
 
-const ITEM_CLASS = 'block cursor-pointer rounded px-3 py-2 text-sm outline-none focus:bg-muted';
+const ITEM_CLASS =
+	'flex items-center gap-1 cursor-pointer rounded px-3 py-2 text-sm outline-none focus:bg-muted';
 
 export function HelpMenu({
 	linkRole,
@@ -52,6 +53,9 @@ export function HelpMenu({
 								className={ITEM_CLASS}
 							>
 								{link.label}
+								{shellLinkTarget(link) === '_blank' && (
+									<ArrowUpRight aria-hidden="true" className="size-3.5 shrink-0" />
+								)}
 							</MenuItem>
 						))}
 						<MenuItem id="report" onAction={() => void report.open()} className={ITEM_CLASS}>

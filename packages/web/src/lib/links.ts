@@ -1,11 +1,10 @@
-// External docs links surfaced in the UI. GitHub for now; swap for hosted docs later.
 import { withBasePath } from './basePath';
 
-export const DOCS_BASE = 'https://github.com/marimo-team/marimohub/blob/main/docs';
+export const DOCS_BASE = 'https://marimohub.docs.marimo.io';
 
-export const DOCS_FEDERATION_URL = `${DOCS_BASE}/workload-identity-federation.md`;
-export const DOCS_SYNCING_URL = `${DOCS_BASE}/syncing.md`;
-export const DOCS_MCP_URL = `${DOCS_BASE}/mcp.md`;
+export const DOCS_FEDERATION_URL = `${DOCS_BASE}/workload-identity-federation`;
+export const DOCS_SYNCING_URL = `${DOCS_BASE}/syncing`;
+export const DOCS_MCP_URL = `${DOCS_BASE}/mcp`;
 
 /**
  * The push-sync endpoint a CI workflow posts archives to. Derived from the
