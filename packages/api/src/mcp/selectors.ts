@@ -31,10 +31,11 @@ export async function resolveProject(
 		| 'integration.use' = 'project.read',
 	appAccess = false,
 ): Promise<Project> {
+	const integrationAction = action === 'integration.read' || action === 'integration.use';
 	const loadProject = async (id: ProjectId) => {
 		if (appAccess) return loadSessionProject(deps.services.projects, id, principal, deps);
 		const project = await deps.services.projects.getProject(id);
-		if (effectiveRole(project, principal, deps.policy) === null) {
+		if (!integrationAction && effectiveRole(project, principal, deps.policy) === null) {
 			throw new NotFoundError(`Project ${id} not found`);
 		}
 		await assertProjectActionOn(project, principal, action, deps);
@@ -72,6 +73,16 @@ export async function resolveProject(
 			candidates.map((project) => ({ kind: 'project', project })),
 		);
 		matches = matches.filter((_, index) => decisions[index].allowed);
+		if (integrationAction && matches.length === 0) {
+			// Prefer allowed matches, but preserve each action's denial contract when none qualify.
+			for (const candidate of candidates) {
+				try {
+					return await loadProject(candidate.id);
+				} catch (error) {
+					if (!(error instanceof NotFoundError)) throw error;
+				}
+			}
+		}
 	}
 	if (matches.length === 0) throw new NotFoundError(`Project '${value}' not found`);
 	if (matches.length > 1) {
