@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MARIMO_PORT } from '../../constants';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { bootstrapKernel } from './kernelBootstrap';
 import { createKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
@@ -141,7 +142,7 @@ if __name__ == "__main__":
 		)
 		.toBe(200);
 	const sandbox = {
-		resolveProcessUrl: (url: string) => url.replace(':2718', `:${port}`),
+		resolveProcessUrl: (url: string) => url.replace(`:${MARIMO_PORT}`, `:${port}`),
 		async exec(command, options) {
 			try {
 				const result = await exec(command.replaceAll(KERNEL_AUTH_TOKEN_FILE, tokenFile), {
