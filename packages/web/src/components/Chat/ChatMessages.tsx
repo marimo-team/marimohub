@@ -16,9 +16,13 @@ function userText(message: ChatUIMessage): string {
 export function ChatMessages({
 	messages,
 	onDecide,
+	onInspect,
+	inspecting,
 }: {
 	messages: readonly ChatUIMessage[];
 	onDecide: DecidePermission;
+	onInspect?: (toolCallId: string) => void;
+	inspecting?: string | null;
 }) {
 	return (
 		<>
@@ -51,7 +55,13 @@ export function ChatMessages({
 								block.kind === 'text' ? (
 									<AssistantMessage key={block.key} content={block.text} />
 								) : (
-									<ToolActivity key={block.key} calls={block.calls} onDecide={onDecide} />
+									<ToolActivity
+										key={block.key}
+										calls={block.calls}
+										onDecide={onDecide}
+										onInspect={onInspect}
+										inspecting={inspecting}
+									/>
 								),
 							)
 						) : (

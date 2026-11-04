@@ -10,6 +10,7 @@ import { ConversationList } from './ConversationList';
 import { ChatProgress } from './ToolActivity';
 import { PermissionsDialog } from './PermissionsDialog';
 import { NotebookPane } from './NotebookPane';
+import { ContextInspector } from './ContextInspector';
 import { PaneDivider } from './PaneDivider';
 import { useProjectChatController } from './useProjectChatController';
 
@@ -122,7 +123,12 @@ function ProjectChat({ pid }: { pid: string }) {
 								aria-live="polite"
 								className="mx-auto max-w-3xl space-y-7 pt-6"
 							>
-								<ChatMessages messages={c.messages} onDecide={c.decidePermission} />
+								<ChatMessages
+									messages={c.messages}
+									onDecide={c.decidePermission}
+									onInspect={c.setInspect}
+									inspecting={c.inspect}
+								/>
 								{!c.busy ? (
 									<ContinuationControls
 										continuation={c.conversation?.continuation}
@@ -171,8 +177,21 @@ function ProjectChat({ pid }: { pid: string }) {
 						</div>
 					) : null}
 				</div>
-				{c.paneOpen && c.cid ? <PaneDivider width={c.paneWidth} onWidth={c.setPaneWidth} /> : null}
-				{c.paneOpen && c.cid ? (
+				{(c.inspected || c.paneOpen) && c.cid ? (
+					<PaneDivider width={c.paneWidth} onWidth={c.setPaneWidth} />
+				) : null}
+				{c.inspected && c.cid ? (
+					<ContextInspector
+						key={c.inspected.id}
+						pid={pid}
+						entry={c.inspected}
+						notebooks={c.notebooks}
+						permalink={c.inspectPermalink}
+						width={c.paneWidth}
+						onShowNotebook={(id) => void c.showNotebook(id)}
+						onClose={() => c.setInspect(null)}
+					/>
+				) : c.paneOpen && c.cid ? (
 					<NotebookPane
 						key={c.cid}
 						pid={pid}

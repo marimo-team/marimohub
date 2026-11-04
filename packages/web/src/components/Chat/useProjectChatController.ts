@@ -14,7 +14,7 @@ import {
 import type { ConversationSummary } from '@/api/conversations';
 import { useCapabilitiesQuery, useProjectContentQueries } from '@/api/hooks';
 import { lastConversation } from './lastConversation';
-import { messageToolEntries } from './toolActivityModel';
+import { findToolEntry, messageToolEntries } from './toolActivityModel';
 import { useTranscriptScroll } from './useTranscriptScroll';
 import { useProjectChatSession } from './useProjectChatSession';
 
@@ -86,6 +86,10 @@ export function useProjectChatController(pid: string) {
 	});
 	const { detail, messages, queue, busy, canSend, canQueue } = chat;
 	const conversation = detail.data?.conversation;
+	const inspect = params.get('inspect');
+	const inspected = inspect ? findToolEntry(messages, inspect) : undefined;
+	const setInspect = (toolCallId: string | null) =>
+		setParam('inspect', toolCallId === inspect ? null : toolCallId);
 	const paneOpen =
 		Boolean(cid) &&
 		(params.get('notebook') === '1' ||
@@ -180,6 +184,14 @@ export function useProjectChatController(pid: string) {
 			report(cause, 'Could not dismiss the task.');
 		}
 	};
+	const showNotebook = async (notebookId: string) => {
+		if (!cid) return;
+		await update.mutateAsync({ cid, working_notebook: notebookId });
+		const next = new URLSearchParams(params);
+		next.set('notebook', '1');
+		next.delete('inspect');
+		setParams(next);
+	};
 	const setWorkingNotebook = async (notebookId: string | null) => {
 		if (!cid) return;
 		try {
@@ -245,6 +257,13 @@ export function useProjectChatController(pid: string) {
 		setDeleting,
 		deleteSelected,
 		removing: remove.isPending,
+		inspect,
+		inspected,
+		setInspect,
+		showNotebook,
+		inspectPermalink: cid
+			? `/projects/${encodeURIComponent(pid)}/chat?conversation=${encodeURIComponent(cid)}&inspect=${encodeURIComponent(inspect ?? '')}`
+			: '',
 		paneOpen,
 		setPaneOpen,
 		paneWidth,

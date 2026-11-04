@@ -873,6 +873,110 @@ describe('ChatPage', () => {
 		});
 	});
 
+	describe('tool call inspector', () => {
+		const withTool = {
+			...record,
+			messages: [
+				...record.messages,
+				textMessage('user-2', 'user', 'Create it'),
+				{
+					id: 'reply-2',
+					role: 'assistant',
+					metadata: { created_at: '2026-10-14T01:02:00Z' },
+					parts: [
+						{
+							type: 'dynamic-tool',
+							toolName: 'create_notebook',
+							toolCallId: 'call-9',
+							state: 'output-available',
+							input: '{\n  "title": "Sales report"\n}',
+							output: '{\n  "notebook_id": "notebook-1",\n  "ok": true\n}',
+						},
+						{ type: 'text', text: 'Done.' },
+					],
+				},
+			],
+		};
+		const withResource = {
+			...withTool,
+			messages: [
+				...withTool.messages.slice(0, -1),
+				{
+					id: 'reply-2',
+					role: 'assistant',
+					metadata: { created_at: '2026-10-14T01:02:00Z' },
+					parts: [
+						{
+							type: 'dynamic-tool',
+							toolName: 'create_notebook',
+							toolCallId: 'call-9',
+							state: 'output-available',
+							input: '{\n  "title": "Sales report"\n}',
+							output: '{\n  "notebook_id": "nb-0123456789abcdef"\n}',
+						},
+						{ type: 'text', text: 'Done.' },
+					],
+				},
+			],
+		};
+
+		it('opens a call from the transcript, addresses it in the URL, and links its resources', async () => {
+			const { user, writes } = setup({
+				route: saved,
+				detailResponse: () => jsonOk({ conversation: withResource }),
+			});
+			await screen.findByText('Done.');
+			await user.click(screen.getByRole('button', { name: 'Inspect create notebook' }));
+			const details = await screen.findByRole('complementary', { name: 'Tool call details' });
+			expect(screen.getByTestId('location')).toHaveTextContent('inspect=call-9');
+			expect(within(details).getByRole('region', { name: 'Input' })).toHaveTextContent(
+				'"title": "Sales report"',
+			);
+			expect(within(details).getByRole('region', { name: 'Result' })).toHaveTextContent(
+				'nb-0123456789abcdef',
+			);
+			expect(
+				within(details).getByRole('link', { name: 'Open details in a new tab' }),
+			).toHaveAttribute('href', '/projects/sales/chat?conversation=conversation-1&inspect=call-9');
+			expect(
+				within(details).getByRole('link', { name: 'Open nb-0123456789abcdef in a new tab' }),
+			).toHaveAttribute('href', '/projects/sales/notebooks/nb-0123456789abcdef');
+			await user.click(within(details).getByRole('button', { name: 'Show beside chat' }));
+			await waitFor(() =>
+				expect(writes).toContainEqual({
+					method: 'PATCH',
+					path: '/api/v1/projects/sales/conversations/conversation-1',
+					body: { working_notebook: 'nb-0123456789abcdef' },
+				}),
+			);
+			await waitFor(() =>
+				expect(
+					screen.queryByRole('complementary', { name: 'Tool call details' }),
+				).not.toBeInTheDocument(),
+			);
+			expect(screen.getByTestId('location')).toHaveTextContent('notebook=1');
+			expect(screen.getByTestId('location')).not.toHaveTextContent('inspect=');
+		});
+
+		it('restores the inspector from the URL and closes it', async () => {
+			const { user } = setup({
+				route: `${saved}&inspect=call-9`,
+				detailResponse: () => jsonOk({ conversation: withTool }),
+			});
+			const details = await screen.findByRole('complementary', { name: 'Tool call details' });
+			expect(within(details).getByRole('heading', { name: 'create notebook' })).toBeInTheDocument();
+			expect(screen.getByRole('button', { name: 'Inspect create notebook' })).toHaveAttribute(
+				'aria-pressed',
+				'true',
+			);
+			await user.click(within(details).getByRole('button', { name: 'Close details' }));
+			expect(
+				screen.queryByRole('complementary', { name: 'Tool call details' }),
+			).not.toBeInTheDocument();
+			expect(screen.getByTestId('location')).not.toHaveTextContent('inspect=');
+		});
+	});
+
 	describe('search message deep links', () => {
 		it('reveals the matched message after conversation loading', async () => {
 			const reveal = vi.fn();

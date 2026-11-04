@@ -112,3 +112,45 @@ export function messageBlocks(message: ChatUIMessage): MessageBlock[] {
 export function messageToolEntries(message: ChatUIMessage): ToolActivityEntry[] {
 	return toolEntries(message.parts.filter(isToolPart), message.parts.filter(isPermissionPart));
 }
+
+export interface ToolReference {
+	kind: 'notebook' | 'job' | 'session';
+	id: string;
+}
+
+const REFERENCE_PATTERNS: readonly [ToolReference['kind'], RegExp][] = [
+	['notebook', /\bnb-[0-9a-z]{16}\b/g],
+	['job', /\bjob-[0-9a-z]{16}\b/g],
+	['session', /\bsess-[0-9a-z]{16}\b/g],
+];
+
+/** Hub resource ids mentioned in a call's saved input and result, so the UI can link them. */
+export function toolReferences(entry: ToolActivityEntry): ToolReference[] {
+	const text = `${entry.input_preview ?? ''}\n${entry.output_preview ?? ''}`;
+	const seen = new Set<string>();
+	const references: ToolReference[] = [];
+	for (const [kind, pattern] of REFERENCE_PATTERNS)
+		for (const match of text.matchAll(pattern)) {
+			if (seen.has(match[0])) continue;
+			seen.add(match[0]);
+			references.push({ kind, id: match[0] });
+		}
+	return references;
+}
+
+export interface InspectedTool extends ToolActivityEntry {
+	messageId: string;
+	createdAt?: string;
+}
+
+export function findToolEntry(
+	messages: readonly ChatUIMessage[],
+	toolCallId: string,
+): InspectedTool | undefined {
+	for (const message of messages) {
+		if (message.role !== 'assistant') continue;
+		const entry = messageToolEntries(message).find((call) => call.id === toolCallId);
+		if (entry) return { ...entry, messageId: message.id, createdAt: message.metadata?.created_at };
+	}
+	return undefined;
+}

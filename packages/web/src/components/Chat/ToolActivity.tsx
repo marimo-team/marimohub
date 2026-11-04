@@ -2,6 +2,7 @@ import { CheckCircle2, ChevronRight, CircleAlert, LoaderCircle } from 'lucide-re
 import type { ToolActivityEntry, ToolStatus } from './toolActivityModel';
 import { PermissionCard } from './PermissionCard';
 import type { DecidePermission } from './PermissionCard';
+import { cn } from '@/lib/utils';
 
 const labels = { running: 'Running', succeeded: 'Completed', failed: 'Failed' } as const;
 
@@ -33,79 +34,75 @@ function ToolStatusIcon({ status }: { status: ToolStatus }) {
 export function ToolActivity({
 	calls,
 	onDecide,
+	onInspect,
+	inspecting,
 }: {
 	calls: readonly ToolActivityEntry[];
 	onDecide?: DecidePermission;
+	/** Opens the call in the inspector; rows are plain text without it. */
+	onInspect?: (toolCallId: string) => void;
+	inspecting?: string | null;
 }) {
 	if (calls.length === 0) return null;
 	return (
 		<section aria-label="marimohub tool activity" className="my-3 rounded-lg border bg-card/60 p-3">
 			<p className="mb-2 text-xs font-medium text-muted-foreground">Tool activity</p>
-			<ul className="space-y-3">
-				{calls.map((call) => (
-					<li key={call.id} className="flex gap-2.5 text-xs">
-						<ToolStatusIcon status={call.status} />
-						<div className="min-w-0 flex-1">
-							<details className="group">
-								<summary className="flex cursor-pointer list-none items-center justify-between gap-2 rounded-sm focus-visible:outline-2 focus-visible:outline-primary [&::-webkit-details-marker]:hidden">
-									<span className="flex items-center gap-1.5 capitalize">
-										<ChevronRight
-											className="size-3 transition-transform group-open:rotate-90"
-											aria-hidden
-										/>
-										{toolLabel(call.name)}
-									</span>
-									<span
-										className={
-											call.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'
-										}
+			<ul className="space-y-2">
+				{calls.map((call) => {
+					const row = (
+						<>
+							<span className="flex min-w-0 items-center gap-1.5 capitalize">
+								{onInspect ? (
+									<ChevronRight className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+								) : null}
+								<span className="truncate">{toolLabel(call.name)}</span>
+							</span>
+							<span
+								className={cn(
+									'shrink-0',
+									call.status === 'failed' ? 'text-destructive' : 'text-muted-foreground',
+								)}
+							>
+								{labels[call.status]}
+							</span>
+						</>
+					);
+					return (
+						<li key={call.id} className="flex gap-2.5 text-xs">
+							<ToolStatusIcon status={call.status} />
+							<div className="min-w-0 flex-1">
+								{onInspect ? (
+									<button
+										type="button"
+										aria-label={`Inspect ${toolLabel(call.name)}`}
+										aria-pressed={inspecting === call.id}
+										onClick={() => onInspect(call.id)}
+										className={cn(
+											'-mx-1.5 flex w-[calc(100%+0.75rem)] items-center justify-between gap-2 rounded-md px-1.5 py-0.5 text-left outline-none hover:bg-accent/70 focus-visible:ring-2 focus-visible:ring-ring',
+											inspecting === call.id && 'bg-accent',
+										)}
 									>
-										{labels[call.status]}
-									</span>
-								</summary>
-								<div className="mt-3 space-y-3 rounded-md border bg-background/70 p-3">
-									<p className="font-mono text-muted-foreground">{call.name}</p>
-									<ToolPreview label="Input preview" value={call.input_preview} />
-									<ToolPreview
-										label={call.status === 'failed' ? 'Error details' : 'Result preview'}
-										value={call.output_preview}
+										{row}
+									</button>
+								) : (
+									<div className="flex items-center justify-between gap-2 py-0.5">{row}</div>
+								)}
+								{call.summary ? (
+									<p className="mt-1 break-words text-muted-foreground">{call.summary}</p>
+								) : null}
+								{call.permission && (
+									<PermissionCard
+										key={call.permission.id}
+										permission={call.permission}
+										onDecide={onDecide}
 									/>
-									{!call.input_preview && !call.output_preview ? (
-										<p className="text-muted-foreground">Details were not saved for this call.</p>
-									) : (
-										<p className="text-muted-foreground">
-											Previews are limited; sensitive fields and large content are omitted.
-										</p>
-									)}
-								</div>
-							</details>
-							{call.summary ? (
-								<p className="mt-1 break-words text-muted-foreground">{call.summary}</p>
-							) : null}
-							{call.permission && (
-								<PermissionCard
-									key={call.permission.id}
-									permission={call.permission}
-									onDecide={onDecide}
-								/>
-							)}
-						</div>
-					</li>
-				))}
+								)}
+							</div>
+						</li>
+					);
+				})}
 			</ul>
 		</section>
-	);
-}
-
-function ToolPreview({ label, value }: { label: string; value?: string }) {
-	if (!value) return null;
-	return (
-		<div>
-			<p className="mb-1 font-medium">{label}</p>
-			<pre className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[11px]">
-				{value}
-			</pre>
-		</div>
 	);
 }
 
