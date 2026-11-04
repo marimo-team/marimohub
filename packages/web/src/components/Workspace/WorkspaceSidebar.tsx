@@ -14,6 +14,7 @@ import {
 import { projectQueryOptions, useProjectsQuery } from '@/api/hooks';
 import { useSearchAccess } from '@/hooks/useSearchAccess';
 import { ProjectPicker } from './ProjectPicker';
+import { ProjectSharingIndicator } from './ProjectSharingIndicator';
 import { ProjectSettingsNavigation } from './ProjectSettingsNavigation';
 import { SidebarLink } from './SidebarLink';
 import { Button } from '@/components/ui';
@@ -57,6 +58,14 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void }) {
 					canCreate={user?.can_create_projects ?? false}
 					onNavigate={onNavigate}
 				/>
+				{canRead && project ? (
+					<ProjectSharingIndicator
+						project={project}
+						user={user}
+						inheritedRole={capabilities.data?.default_role}
+						onNavigate={onNavigate}
+					/>
+				) : null}
 				{projects.isError ? (
 					<div role="alert" className="px-2 text-xs text-muted-foreground">
 						<p>Project list unavailable.</p>
