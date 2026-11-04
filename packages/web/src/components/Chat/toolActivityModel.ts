@@ -123,7 +123,9 @@ export function messageBlocks(message: ChatUIMessage): MessageBlock[] {
 	flushText();
 	// A consent card whose tool call never streamed (for example after a reload
 	// that lost the tool part) still deserves a place in the transcript.
-	const shown = new Set(message.parts.filter(isToolPart).map((part) => part.toolCallId));
+	const shown = new Set(
+		message.parts.flatMap((part) => (isToolPart(part) ? [part.toolCallId] : [])),
+	);
 	const orphaned = permissions.filter((part) => !shown.has(part.data.tool_call_id));
 	if (orphaned.length > 0)
 		blocks.push({

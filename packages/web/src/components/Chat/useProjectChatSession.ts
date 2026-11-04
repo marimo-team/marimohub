@@ -4,7 +4,6 @@ import {
 	conversationKeys,
 	isTurnPending,
 	refreshProject,
-	toUIMessages,
 	useConversation,
 	useConversationChat,
 	useStopConversation,
@@ -38,40 +37,37 @@ export function useProjectChatSession(
 		suspendPolling: live,
 	});
 	const conversation = detail.data?.conversation;
-	const chat = useConversationChat(pid, conversation?.id === cid ? conversation : undefined, {
-		onFinish: (finishedCid) => {
-			// Also for a re-attached stream: the record still shows the turn as
-			// pending, so hold the live result until a newer snapshot arrives.
-			const baseline =
-				client.getQueryState(conversationKeys.detail(pid, finishedCid))?.dataUpdatedAt ?? 0;
-			setLocalTurn({ cid: finishedCid, baseline });
-			void refreshProject(client, pid, finishedCid);
-		},
-		onError: (error, fromCid) => {
-			if (fromCid !== cid) return;
-			setLocalTurn(null);
-			callbacks.onError(error, lastSent.current);
-		},
-		onWorkingNotebook: (notebookId, fromCid) => {
-			if (fromCid === cid) callbacks.onWorkingNotebook?.(notebookId);
-		},
-	});
-	useEffect(() => {
-		setLive(chat.live);
-	}, [chat.live]);
-	const stop = useStopConversation(pid);
 	const recordPending = isTurnPending(conversation);
 	// A finished stream can precede both the refreshed record and release of its claim.
 	const awaitingSnapshot =
 		localTurn?.cid === cid && (detail.dataUpdatedAt <= localTurn.baseline || recordPending);
-	const { setMessages } = chat;
-	const streaming = chat.live;
-	const { resuming } = chat;
+	const chat = useConversationChat(
+		pid,
+		conversation?.id === cid ? conversation : undefined,
+		{
+			onFinish: (finishedCid) => {
+				// Also for a re-attached stream: the record still shows the turn as
+				// pending, so hold the live result until a newer snapshot arrives.
+				const baseline =
+					client.getQueryState(conversationKeys.detail(pid, finishedCid))?.dataUpdatedAt ?? 0;
+				setLocalTurn({ cid: finishedCid, baseline });
+				void refreshProject(client, pid, finishedCid);
+			},
+			onError: (error, fromCid) => {
+				if (fromCid !== cid) return;
+				setLocalTurn(null);
+				callbacks.onError(error, lastSent.current);
+			},
+			onWorkingNotebook: (notebookId, fromCid) => {
+				if (fromCid === cid) callbacks.onWorkingNotebook?.(notebookId);
+			},
+		},
+		{ hold: awaitingSnapshot },
+	);
 	useEffect(() => {
-		if (streaming || resuming || awaitingSnapshot || !conversation || conversation.id !== cid)
-			return;
-		setMessages(toUIMessages(conversation));
-	}, [conversation, cid, streaming, resuming, awaitingSnapshot, setMessages]);
+		setLive(chat.live);
+	}, [chat.live]);
+	const stop = useStopConversation(pid);
 	const busy = chat.live || creating || recordPending || awaitingSnapshot;
 	const conversationReady = !detail.isError && (!cid || (!detail.isPending && chat.ready));
 	const canSend = !busy && conversationReady;
@@ -88,6 +84,13 @@ export function useProjectChatSession(
 		},
 		[client, pid, sendMessage],
 	);
+	const dispatch = useCallback(
+		(item: { id: string; cid: string; text: string }) => {
+			setQueue((current) => current.filter((entry) => entry.id !== item.id));
+			void send(item.cid, item.text);
+		},
+		[send],
+	);
 	// onFinish can precede SDK readiness and server finalization; queue dispatch waits for both.
 	useEffect(() => {
 		// A new conversation's message is queued before the URL carries its id, so
@@ -97,12 +100,9 @@ export function useProjectChatSession(
 			setQueue(queued);
 			return;
 		}
-		if (!canSend || queue.length === 0) return;
-		const [next, ...rest] = queue;
-		if (!next) return;
-		setQueue(rest);
-		void send(cid, next.text);
-	}, [canSend, queue, queued, cid, send]);
+		const next = queued[0];
+		if (canSend && next) dispatch(next);
+	}, [canSend, queue, queued, cid, dispatch]);
 	return {
 		detail,
 		ready: chat.ready,

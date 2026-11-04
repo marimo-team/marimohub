@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { renderWithClient } from '@/test/render';
-import { AssistantMessage, isInternalHref } from './AssistantMessage';
+import { AssistantMessage } from './AssistantMessage';
+import { isInternalHref } from './internalHref';
 
 function renderMessage(content: string) {
 	return renderWithClient(<AssistantMessage content={content} />, {

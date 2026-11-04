@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useId, useState } from 'react';
 import { Check, ChevronRight, Copy, LoaderCircle, Pencil } from 'lucide-react';
 import type { ChatUIMessage } from '@/api/conversations';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
@@ -17,10 +17,7 @@ type ActivityProps = {
 };
 
 function messageText(message: ChatUIMessage): string {
-	return message.parts
-		.filter((part) => part.type === 'text')
-		.map((part) => part.text)
-		.join('\n\n');
+	return message.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n\n');
 }
 
 function Blocks({ blocks, ...activity }: ActivityProps & { blocks: readonly MessageBlock[] }) {
@@ -41,11 +38,15 @@ function Work({
 	const calls = blocks.flatMap((block) => (block.kind === 'tools' ? block.calls : []));
 	const { inspecting } = activity;
 	const inspectingHere = Boolean(inspecting) && calls.some((call) => call.id === inspecting);
-	const [expanded, setExpanded] = useState(inspectingHere);
-	// A later `?inspect=` link into this section must open it, not just the initial one.
-	useEffect(() => {
-		if (inspectingHere) setExpanded(true);
-	}, [inspecting, inspectingHere]);
+	// The user's toggle holds until the inspected call changes; a new `?inspect=`
+	// link into this section then opens it, while other sections keep their choice.
+	const [toggled, setToggled] = useState<{ inspecting: typeof inspecting; open: boolean } | null>(
+		null,
+	);
+	const expanded =
+		toggled !== null && toggled.inspecting === inspecting
+			? toggled.open
+			: inspectingHere || Boolean(toggled?.open);
 	const id = useId();
 	const failed = calls.filter((call) => call.status === 'failed').length;
 	const waiting = calls.some((call) => call.permission?.status === 'open');
@@ -58,7 +59,7 @@ function Work({
 				aria-controls={id}
 				aria-disabled={active}
 				onClick={() => {
-					if (!active) setExpanded(!open);
+					if (!active) setToggled({ inspecting, open: !open });
 				}}
 				className="flex w-full items-center gap-2 border-b border-border/60 pb-2 max-md:min-h-11 text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-ring"
 			>

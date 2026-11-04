@@ -2,11 +2,7 @@ import Markdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Link } from 'react-router-dom';
-
-/** Browsers treat both `//host` and `/\host` as protocol-relative, so neither is an in-app path. */
-export function isInternalHref(href: string): boolean {
-	return href.startsWith('/') && href[1] !== '/' && href[1] !== '\\';
-}
+import { isInternalHref } from './internalHref';
 
 const components: Components = {
 	a: ({ children, href }) => {

@@ -325,6 +325,10 @@ export function useConversationChat(
 	/** The loaded record for the selected conversation; undefined until it has loaded. */
 	conversation: Conversation | undefined,
 	callbacks: ConversationChatCallbacks,
+	options: {
+		/** Keep the live store while the caller waits for a newer snapshot of the record. */
+		hold?: boolean;
+	} = {},
 ) {
 	const latest = useRef(callbacks);
 	useEffect(() => {
@@ -376,6 +380,15 @@ export function useConversationChat(
 	// Re-rendering Markdown for every token is wasteful; batch store updates.
 	const helpers = useChat({ chat: active?.chat ?? fallback, throttle: 80 });
 	const live = helpers.status === 'submitted' || helpers.status === 'streaming';
+	// The store is the truth while this tab streams, re-attaches, or waits for the
+	// finalized record; otherwise the record takes over so a stale snapshot never
+	// erases live output or resurrects a finished turn.
+	const { hold = false } = options;
+	useEffect(() => {
+		if (!active || !conversation || conversation.id !== active.cid) return;
+		if (live || resuming || hold) return;
+		active.chat.messages = toUIMessages(conversation);
+	}, [active, conversation, live, resuming, hold]);
 	const { sendMessage } = helpers;
 	const send = useCallback(
 		async (content: string) => {
