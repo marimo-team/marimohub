@@ -61,10 +61,14 @@ async function assertBrowsable(
 	integrations: ProjectIntegrationsService,
 	pid: ProjectId,
 	iid: IntegrationId,
+	options: { preview?: boolean } = {},
 ): Promise<string> {
 	const capability = await integrations.browseCapability(pid, iid);
 	if (!capability.metadata) {
 		throw new ValidationError(capability.reason ?? 'This integration cannot be browsed.');
+	}
+	if (options.preview && !capability.hub_preview) {
+		throw new ValidationError('This integration does not support row preview on this deployment.');
 	}
 	return `${capability.current_version}:${capability.updated_at}`;
 }
@@ -423,8 +427,8 @@ export async function previewIntegrationTable(
 	);
 	const wif = federationFor(project, deps.wif);
 	if (!preview) throw new NotFoundError('Row preview is not enabled on this deployment');
+	await assertBrowsable(integrations, pid, iid, { preview: true });
 	assertIntegrationBudget(deps, 'browse', user.id);
-	await assertBrowsable(integrations, pid, iid);
 	const sessionId = createSessionId();
 	const data = await integrations.browseTablePreview(
 		pid,

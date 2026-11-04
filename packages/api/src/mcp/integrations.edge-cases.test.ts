@@ -207,6 +207,33 @@ describe('MCP discovery edge cases', () => {
 		expect(objectBrowser.listBuckets).not.toHaveBeenCalled();
 	});
 
+	it('rejects unavailable table previews before provider calls, success audits, or browse budget charges', async () => {
+		const { call, integrations, project, catalog, deps, previewRows } = await setupDiscovery();
+		const capability = await integrations.browseCapability(project.id, catalog.id);
+		const capabilityLookup = vi.spyOn(integrations, 'browseCapability').mockResolvedValue({
+			...capability,
+			hub_preview: false,
+			surfaces: { ...capability.surfaces, tables: { available: true, preview: false } },
+		});
+		const preview = vi.spyOn(integrations, 'browseTablePreview');
+		const audit = vi.spyOn(deps.services.events, 'append');
+		expect(await call('preview_table', { namespace: ['sales'], table: 'orders' })).toMatchObject({
+			isError: true,
+			structuredContent: { code: 'VALIDATION_ERROR' },
+		});
+		expect(capabilityLookup).toHaveBeenCalledOnce();
+		expect(preview).not.toHaveBeenCalled();
+		expect(previewRows).not.toHaveBeenCalled();
+		expect(audit).not.toHaveBeenCalled();
+		for (let index = 0; index < 20; index++) {
+			expect((await call('list_namespaces', { fresh: true })).isError).not.toBe(true);
+		}
+		expect(await call('list_namespaces', { fresh: true })).toMatchObject({
+			isError: true,
+			structuredContent: { code: 'RESOURCE_EXHAUSTED' },
+		});
+	});
+
 	it('rejects unavailable object previews without a success audit or download', async () => {
 		const { call, objects, objectBrowser, deps } = await setupDiscovery();
 		const capability = objectBrowser.capability;

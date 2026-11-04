@@ -1801,7 +1801,7 @@ describe('Data browser routes', () => {
 		});
 	});
 
-	it('rechecks runtime preview support instead of rejecting a stale capability verdict', async () => {
+	it('rejects unavailable runtime previews and allows a retry after readiness changes', async () => {
 		const pid = await createProject();
 		const selected = await expectOk<{ id: string }>(
 			await request('POST', `/projects/${pid}/integrations`, {
@@ -1812,10 +1812,8 @@ describe('Data browser routes', () => {
 			201,
 		);
 		let availabilityChecks = 0;
-		const dataPreview = previewService(
-			async () => ({ columns: ['id'], rows: [[1]] }),
-			() => ++availabilityChecks > 1,
-		);
+		const execute = vi.fn(async () => ({ columns: ['id'], rows: [[1]] }));
+		const dataPreview = previewService(execute, () => ++availabilityChecks > 1);
 		const full = createTestApi({
 			bucket,
 			userId: ACTOR,
@@ -1825,6 +1823,17 @@ describe('Data browser routes', () => {
 			},
 		}).request;
 
+		await expectError(
+			await full('POST', `/projects/${pid}/integrations/${selected.id}/browse/preview`, {
+				namespace: ['sales'],
+				table: 'orders',
+			}),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect(availabilityChecks).toBe(1);
+		expect(execute).not.toHaveBeenCalled();
+
 		expect(
 			await expectOk(
 				await full('POST', `/projects/${pid}/integrations/${selected.id}/browse/preview`, {
@@ -1833,7 +1842,7 @@ describe('Data browser routes', () => {
 				}),
 			),
 		).toEqual({ columns: ['id'], rows: [[1]] });
-		expect(availabilityChecks).toBeGreaterThanOrEqual(2);
+		expect(execute).toHaveBeenCalledOnce();
 	});
 
 	it.each([false, true])(
