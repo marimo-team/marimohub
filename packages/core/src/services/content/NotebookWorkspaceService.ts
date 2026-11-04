@@ -183,7 +183,6 @@ export class NotebookWorkspaceService {
 			startUpload: notebookMutation,
 			putUploadPart: notebookMutation,
 			cancelUpload: notebookMutation,
-			completeUpload: notebookMutation,
 			sweepUploads: notebookMutation,
 		});
 		this.limits = validateWorkspaceLimits(limits);

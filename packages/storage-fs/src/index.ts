@@ -16,8 +16,8 @@
  * advertised via `casScope: 'process'` and surfaced by preflight as a startup
  * warning — never point two hub replicas at the same root.
  *
- * `httpMetadata`/`customMetadata` are accepted and ignored (parity with
- * MemoryBucket), and a key cannot be both an object and a prefix of another
+ * `httpMetadata`/`customMetadata` are accepted and ignored. A key cannot be
+ * both an object and a prefix of another
  * (`a` vs `a/b`); marimohub's key layout never does this.
  */
 import { createHash, randomUUID } from 'node:crypto';

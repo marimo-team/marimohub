@@ -10,6 +10,7 @@ import type {
 } from '../ports/bucket';
 
 interface StoredObject {
+	metadata: Pick<BucketPutOptions, 'httpMetadata' | 'customMetadata'>;
 	body: Uint8Array;
 	etag: string;
 	uploaded: Date;
@@ -34,6 +35,7 @@ export class MemoryBucket implements Bucket {
 			etag,
 			size: body.length,
 			uploaded,
+			...structuredClone(stored.metadata),
 			text: async () => new TextDecoder().decode(body),
 			json: async <T>() => JSON.parse(new TextDecoder().decode(body)) as T,
 			bytes: async () => body,
@@ -49,6 +51,7 @@ export class MemoryBucket implements Bucket {
 			etag: stored.etag,
 			size: stored.body.length,
 			uploaded: stored.uploaded,
+			...structuredClone(stored.metadata),
 		};
 	}
 
@@ -75,7 +78,11 @@ export class MemoryBucket implements Bucket {
 		const body = typeof value === 'string' ? new TextEncoder().encode(value) : value;
 		const etag = this.nextEtag();
 		const uploaded = new Date();
-		this.store.set(key, { body, etag, uploaded });
+		const metadata = structuredClone({
+			...(options?.httpMetadata ? { httpMetadata: options.httpMetadata } : {}),
+			...(options?.customMetadata ? { customMetadata: options.customMetadata } : {}),
+		});
+		this.store.set(key, { body, etag, uploaded, metadata });
 
 		return { key, etag, size: body.length, uploaded };
 	}

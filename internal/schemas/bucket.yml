@@ -2971,6 +2971,9 @@ components:
             required:
               - snapshot_id
               - captured_at
+        search_refreshed:
+          default: false
+          type: boolean
         meta:
           type: object
           properties:

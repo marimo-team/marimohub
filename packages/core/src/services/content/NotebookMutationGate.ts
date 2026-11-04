@@ -71,8 +71,12 @@ export class NotebookMutationGate {
 	static async assertRecoverySafe(bucket: Bucket): Promise<void> {
 		for (const object of await listAllObjects(bucket, paths.notebookMutations)) {
 			const record = await bucket.get(object.key);
-			if (record && NotebookMutationGateSchema.parse(await record.json()).moves.length > 0)
+			if (!record) continue;
+			const gate = NotebookMutationGateSchema.parse(await record.json());
+			if (gate.moves.length > 0)
 				throw new ConflictError('Complete pending notebook moves before catalog recovery');
+			if (gate.writers.length > 0)
+				throw new ConflictError('Recover abandoned notebook writers before catalog recovery');
 		}
 	}
 
@@ -99,7 +103,7 @@ export class NotebookMutationGate {
 			return await run();
 		} catch (error) {
 			// An uncertain storage failure can complete remotely after the caller stops waiting.
-			release = error instanceof DomainError && error.code !== 'SERVICE_UNAVAILABLE';
+			release = !isUncertainWriteFailure(error);
 			throw error;
 		} finally {
 			if (release)
@@ -167,11 +171,16 @@ export const notebookMutation = (projectId: ProjectId, notebookId: NotebookId): 
 });
 export const projectMutation = (projectId: ProjectId): Scope => ({ projectId });
 
+function isUncertainWriteFailure(error: unknown): boolean {
+	return !(error instanceof DomainError) || error.code === 'SERVICE_UNAVAILABLE';
+}
+
 /** Keep the mutation admission until every submitted write has settled. */
 export async function awaitNotebookWrites(writes: Promise<unknown>[]): Promise<void> {
 	const results = await Promise.allSettled(writes);
-	const failure = results.find(
+	const failures = results.filter(
 		(result): result is PromiseRejectedResult => result.status === 'rejected',
 	);
+	const failure = failures.find((result) => isUncertainWriteFailure(result.reason)) ?? failures[0];
 	if (failure) throw failure.reason;
 }

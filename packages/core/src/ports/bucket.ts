@@ -1,4 +1,7 @@
 export interface BucketObject {
+	/** Metadata exposed by adapters that retain it; list results can omit these fields. */
+	httpMetadata?: BucketPutOptions['httpMetadata'];
+	customMetadata?: BucketPutOptions['customMetadata'];
 	key: string;
 	/**
 	 * Non-empty tag that `get`, `head`, and `list` report identically for an unchanged

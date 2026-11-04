@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { apiClient, ApiRequestError } from '@/api/client';
 import { notebookKeys } from '@/api/queryKeys';
 import {
 	pendingNotebookMoves,
@@ -60,21 +59,9 @@ export function MoveNotebookDialog({
 				toast.success(`Moved "${notebook.title}"`);
 				onClose();
 				void navigate(`/projects/${result.project_id}`);
-			} catch (error) {
-				if (error instanceof ApiRequestError && error.status && error.status < 500) {
-					try {
-						const source = await apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}', {
-							params: { path: { pid: projectId, nid: notebook.id } },
-						});
-						if (source.data?.success) {
-							clearPendingNotebookMove(projectId, notebook.id);
-							setPending(undefined);
-							void queryClient.invalidateQueries({ queryKey: notebookKeys.all });
-						}
-					} catch {
-						/* Keep the original request when its state cannot be verified. */
-					}
-				}
+			} catch {
+				// Even a readable source can have an executor waiting to claim its move fences.
+				void queryClient.invalidateQueries({ queryKey: notebookKeys.all });
 			}
 		},
 	});
@@ -128,6 +115,7 @@ export function MoveNotebookDialog({
 			{move.error && (
 				<p role="alert" className="text-sm text-destructive">
 					{move.error.message}
+					{' Retry this move to the same destination.'}
 				</p>
 			)}
 		</FormDialog>

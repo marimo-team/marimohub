@@ -270,13 +270,7 @@ export class ProjectService {
 			? new AuthorizationService(filter.policy, filter.resourceSecurity)
 			: undefined;
 		const action = filter?.action ?? 'project.read';
-		if (
-			filter &&
-			authz &&
-			(!authz.credentialAllowsAction(filter.subject, action) ||
-				(action === 'notebook.manage' &&
-					!authz.credentialAllowsAction(filter.subject, 'project.read')))
-		) {
+		if (filter && authz && !authz.credentialAllowsAction(filter.subject, action)) {
 			throw new ForbiddenError('Token grant does not permit project listing');
 		}
 		const loaded = new Map<ProjectId, Promise<Project>>();

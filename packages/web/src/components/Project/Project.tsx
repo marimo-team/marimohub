@@ -176,7 +176,7 @@ const NEW_NOTEBOOK_CODE = (name: string) => {
 	return `import marimo\n\napp = marimo.App(width="medium", sql_output="native")\n\n\nwith app.setup:\n    import marimo as mo\n\n\n@app.cell(hide_code=True)\ndef _():\n    mo.md(${heading})\n    return\n\n\nif __name__ == "__main__":\n    app.run()\n`;
 };
 
-function useProjectContent() {
+function ProjectContent() {
 	const { pid } = useParams<{ pid: string }>();
 	const navigate = useNavigate();
 	const {
@@ -1140,5 +1140,6 @@ function useProjectContent() {
 }
 
 export function Project() {
-	return useProjectContent();
+	const { pid } = useParams<{ pid: string }>();
+	return <ProjectContent key={pid} />;
 }

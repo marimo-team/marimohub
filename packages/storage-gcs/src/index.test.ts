@@ -68,7 +68,16 @@ describe('generationParam', () => {
  * concurrent CAS winner), which is what those contract tests assert.
  */
 function makeFakeGcsFetch(): typeof fetch {
-	const store = new Map<string, { content: Uint8Array; generation: number; updated: string }>();
+	const store = new Map<
+		string,
+		{
+			content: Uint8Array;
+			generation: number;
+			updated: string;
+			contentType?: string;
+			metadata?: Record<string, string>;
+		}
+	>();
 	let genCounter = 1000;
 
 	// Locate a byte subsequence (used to carve the media part out of a multipart body).
@@ -122,9 +131,20 @@ function makeFakeGcsFetch(): typeof fetch {
 			// and the closing boundary; media is the raw body) — all at the byte level
 			// so binary payloads survive.
 			let content = bodyBytes();
+			let metadata: { contentType?: string; metadata?: Record<string, string> } = {
+				contentType: new Headers(init?.headers).get('content-type') ?? undefined,
+			};
 			if (q.get('uploadType') === 'multipart') {
 				const sep = new TextEncoder().encode('\r\n\r\n');
 				const first = indexOfBytes(content, sep);
+				const jsonEnd = indexOfBytes(
+					content,
+					new TextEncoder().encode('\r\n--'),
+					first + sep.length,
+				);
+				metadata = JSON.parse(
+					new TextDecoder().decode(content.subarray(first + sep.length, jsonEnd)),
+				) as typeof metadata;
 				const second = first >= 0 ? indexOfBytes(content, sep, first + sep.length) : -1;
 				if (second >= 0) {
 					let media = content.subarray(second + sep.length);
@@ -137,7 +157,7 @@ function makeFakeGcsFetch(): typeof fetch {
 			}
 			const generation = ++genCounter;
 			const updated = new Date(generation).toISOString();
-			store.set(name, { content, generation, updated });
+			store.set(name, { content, generation, updated, ...metadata });
 			return json({ name, generation: String(generation), size: String(content.length), updated });
 		}
 
@@ -216,6 +236,8 @@ function makeFakeGcsFetch(): typeof fetch {
 				generation: String(obj.generation),
 				size: String(obj.content.length),
 				updated: obj.updated,
+				contentType: obj.contentType,
+				metadata: obj.metadata,
 			});
 		}
 
@@ -243,6 +265,7 @@ function headerValue(headers: HeadersInit | undefined, name: string): string | n
 bucketContract(
 	'GcsStorage (in-memory fetch)',
 	() => new GcsStorage({ bucket: 'test', fetchImpl: makeFakeGcsFetch() }),
+	{ metadata: true },
 );
 
 describe('GcsStorage auth and request mapping', () => {
@@ -426,7 +449,9 @@ describe('GcsStorage auth and request mapping', () => {
 		expect(body?.etag).toBe('456');
 		expect(await body?.text()).toBe('payload');
 		expect(urls[0]).toContain('alt=media');
-		expect(new URL(urls[1]).searchParams.get('fields')).toBe('generation,size,updated');
+		expect(new URL(urls[1]).searchParams.get('fields')).toBe(
+			'generation,size,updated,contentType,metadata',
+		);
 	});
 
 	it('maps list pagination and delimiter parameters', async () => {
@@ -650,6 +675,7 @@ if (liveBucket) {
 				accessToken: process.env.MARIMOHUB_TEST_GCS_TOKEN,
 				serviceAccountKey: process.env.MARIMOHUB_TEST_GCS_SA_KEY,
 			}),
+		{ metadata: true },
 	);
 } else {
 	describe.skip('GcsStorage live contract', () => {

@@ -136,6 +136,7 @@ export class PreviewStore {
 		const ids = (await this.project(source)).entries
 			.filter((entry) => entry.intent.notebook_id === nid)
 			.map((entry) => entry.intent.id);
+		for (const id of ids) await this.pruneReceipts(source, id);
 		await this.changeProject(
 			source,
 			(project) => {
@@ -143,7 +144,6 @@ export class PreviewStore {
 			},
 			{ fence: true },
 		);
-		for (const id of ids) await this.pruneReceipts(source, id);
 	}
 
 	constructor(private readonly bucket: Bucket) {}

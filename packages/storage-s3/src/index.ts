@@ -211,6 +211,8 @@ export class S3Storage implements Bucket {
 				etag: stripETag(res.ETag),
 				size: res.ContentLength ?? bodyBytes.length,
 				uploaded: res.LastModified ?? new Date(),
+				httpMetadata: { contentType: res.ContentType },
+				customMetadata: res.Metadata,
 				text: async () => decode(),
 				json: async <T = unknown>() => JSON.parse(decode()) as T,
 				bytes: async () => bodyBytes,
@@ -231,6 +233,8 @@ export class S3Storage implements Bucket {
 				etag: stripETag(res.ETag),
 				size: res.ContentLength ?? 0,
 				uploaded: res.LastModified ?? new Date(),
+				httpMetadata: { contentType: res.ContentType },
+				customMetadata: res.Metadata,
 			};
 		} catch (err) {
 			if (isNotFound(err)) return null;

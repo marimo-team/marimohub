@@ -10,6 +10,8 @@ import { R2BucketAdapter } from './index';
 // ---------------------------------------------------------------------------
 
 interface FakeStored {
+	httpMetadata?: R2HTTPMetadata;
+	customMetadata?: Record<string, string>;
 	body: Uint8Array;
 	etag: string;
 	size: number;
@@ -33,8 +35,8 @@ function makeR2Object(key: string, stored: FakeStored): R2Object {
 		size: stored.size,
 		uploaded: stored.uploaded,
 		checksums: {} as R2Checksums,
-		httpMetadata: {} as R2HTTPMetadata,
-		customMetadata: {},
+		httpMetadata: stored.httpMetadata ?? {},
+		customMetadata: stored.customMetadata ?? {},
 		range: undefined as unknown as R2Range,
 		storageClass: 'Standard',
 		writeHttpMetadata: () => {},
@@ -129,7 +131,14 @@ class FakeR2Bucket {
 		etagCounter++;
 		const etag = `etag-${etagCounter}`;
 		const body = toBytes(value);
-		const stored: FakeStored = { body, etag, size: body.length, uploaded: new Date() };
+		const stored: FakeStored = {
+			body,
+			etag,
+			size: body.length,
+			uploaded: new Date(),
+			httpMetadata: options?.httpMetadata as R2HTTPMetadata | undefined,
+			customMetadata: options?.customMetadata,
+		};
 		this.store.set(key, stored);
 		return makeR2Object(key, stored);
 	}
@@ -209,7 +218,7 @@ function makeFakeR2(): R2Bucket {
 // Run the shared bucket contract suite against the R2BucketAdapter + fake R2.
 // This validates CAS / create-if-absent parity with MemoryBucket and S3Storage.
 // ---------------------------------------------------------------------------
-bucketContract('R2BucketAdapter', () => new R2BucketAdapter(makeFakeR2()));
+bucketContract('R2BucketAdapter', () => new R2BucketAdapter(makeFakeR2()), { metadata: true });
 
 // ---------------------------------------------------------------------------
 // Focused unit tests for the null→PreconditionFailedError mapping.

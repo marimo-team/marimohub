@@ -33,8 +33,12 @@ import type {
 } from './contracts';
 
 export class SearchIndexer {
-	static async requestRefresh(bucket: Bucket, projectId: ProjectId): Promise<void> {
-		await bucket.put(searchPaths.refresh(projectId), JSON.stringify(crypto.randomUUID()));
+	static async requestRefresh(
+		bucket: Bucket,
+		projectId: ProjectId,
+		revision: string = crypto.randomUUID(),
+	): Promise<void> {
+		await bucket.put(searchPaths.refresh(projectId), JSON.stringify(revision));
 	}
 
 	constructor(

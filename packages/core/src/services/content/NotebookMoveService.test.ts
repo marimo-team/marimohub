@@ -1,12 +1,13 @@
-import { ConflictError, ForbiddenError } from '../../errors';
+import { ConflictError, ForbiddenError, UnavailableError } from '../../errors';
 import { thumbnailPng } from '../../testing/thumbnail';
-import { NotebookMoveService } from './NotebookMoveService';
+import { NotebookMoveService, NotebookMoveSchema } from './NotebookMoveService';
 import { describe, expect, it, vi } from 'vitest';
 import { createServices } from '../index';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { ACTOR } from '../../testing';
 import { paths } from '../../paths';
-import { NotebookMutationGate } from './NotebookMutationGate';
+import { searchPaths } from '../../search/paths';
+import { NotebookMutationGate, awaitNotebookWrites } from './NotebookMutationGate';
 
 async function setup() {
 	const bucket = new MemoryBucket();
@@ -39,6 +40,128 @@ async function setup() {
 }
 
 describe('NotebookMoveService', () => {
+	it('retries both search refreshes after a completion-side refresh failure', async () => {
+		const { bucket, services, from, to, notebook, input } = await setup();
+		const put = bucket.put.bind(bucket);
+		let fail = true;
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, bytes, options) => {
+			if (key === searchPaths.refresh(to.id) && fail) {
+				fail = false;
+				throw new Error('refresh interrupted');
+			}
+			return put(key, bytes, options);
+		});
+		await expect(services.moves.move(input)).rejects.toThrow('refresh interrupted');
+		expect(await services.notebooks.getNotebookContent(to.id, notebook.id)).toBe('print(1)');
+		const key = (await bucket.list({ prefix: paths.notebookMoves })).objects[0].key;
+		expect(await (await bucket.get(key))!.json()).toMatchObject({
+			phase: 'complete',
+			search_refreshed: false,
+		});
+		await services.moves.move(input);
+		expect(await (await bucket.get(key))!.json()).toMatchObject({
+			phase: 'complete',
+			search_refreshed: true,
+		});
+		expect(await (await bucket.get(searchPaths.refresh(from.id)))!.text()).toBe(
+			await (await bucket.get(searchPaths.refresh(to.id)))!.text(),
+		);
+	});
+
+	it('does not request new crawls when completed moves are replayed out of order', async () => {
+		const { bucket, services, from, to, input } = await setup();
+		await services.moves.move(input);
+		const second = await services.notebooks.createNotebook(
+			from.id,
+			{ title: 'Second', description: '', code: 'print(2)' },
+			ACTOR,
+		);
+		await services.moves.move({
+			...input,
+			notebookId: second.id,
+			expectedVersion: second.updated_at,
+			idempotencyKey: 'second',
+		});
+		const before = await Promise.all(
+			[from, to].map(async (project) =>
+				(await bucket.get(searchPaths.refresh(project.id)))!.text(),
+			),
+		);
+		const put = vi.spyOn(bucket, 'put');
+		await services.moves.move(input);
+		await NotebookMoveService.recover(bucket, { writersStopped: true });
+		expect(
+			put.mock.calls.filter(
+				([key]) => key === searchPaths.refresh(from.id) || key === searchPaths.refresh(to.id),
+			),
+		).toEqual([]);
+		expect(
+			await Promise.all(
+				[from, to].map(async (project) =>
+					(await bucket.get(searchPaths.refresh(project.id)))!.text(),
+				),
+			),
+		).toEqual(before);
+	});
+
+	it.each(['committed', 'pending'] as const)(
+		'keeps fences after a %s copying-phase write loses its response',
+		async (outcome) => {
+			const { bucket, services, from, to, notebook, input } = await setup();
+			const put = bucket.put.bind(bucket);
+			let failed = false;
+			let lateWrite: (() => ReturnType<typeof put>) | undefined;
+			vi.spyOn(bucket, 'put').mockImplementation(async (key, bytes, options) => {
+				if (
+					!failed &&
+					key.startsWith(paths.notebookMoves) &&
+					typeof bytes === 'string' &&
+					NotebookMoveSchema.parse(JSON.parse(bytes)).phase === 'copying'
+				) {
+					failed = true;
+					if (outcome === 'committed') await put(key, bytes, options);
+					else lateWrite = () => put(key, bytes, options);
+					throw new Error('phase response lost');
+				}
+				return put(key, bytes, options);
+			});
+			await expect(services.moves.move(input)).rejects.toThrow('phase response lost');
+			for (const project of [from, to]) {
+				await expect(services.notebooks.getNotebook(project.id, notebook.id)).rejects.toMatchObject(
+					{ code: 'NOT_FOUND' },
+				);
+				await expect(
+					new NotebookMutationGate(bucket).write(project.id, notebook.id, async () => {}),
+				).rejects.toMatchObject({ code: 'CONFLICT' });
+			}
+			if (lateWrite)
+				await expect(lateWrite()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+			await expect(services.moves.move(input)).resolves.toMatchObject({ project_id: to.id });
+			expect(await services.notebooks.getNotebookContent(to.id, notebook.id)).toBe('print(1)');
+		},
+	);
+
+	it.each([new Error('uncertain write'), new UnavailableError('uncertain write')])(
+		'retains writer admissions when a later sibling fails uncertainly: %s',
+		async (uncertain) => {
+			const { bucket, services, from, notebook, input } = await setup();
+			await expect(
+				new NotebookMutationGate(bucket).write(from.id, notebook.id, () =>
+					awaitNotebookWrites([
+						Promise.reject(new ConflictError('deterministic failure')),
+						Promise.reject(uncertain),
+					]),
+				),
+			).rejects.toBe(uncertain);
+			await expect(services.moves.move(input)).rejects.toMatchObject({ code: 'CONFLICT' });
+			await expect(services.catalog.planRecovery({ mode: 'rebuild' })).rejects.toThrow(
+				'Recover abandoned notebook writers',
+			);
+			await NotebookMoveService.recover(bucket, { writersStopped: true });
+			await expect(services.catalog.planRecovery({ mode: 'rebuild' })).resolves.toBeDefined();
+		},
+	);
+
 	it('rejects a move to the same project without changing the notebook', async () => {
 		const { services, from, notebook, input } = await setup();
 		const before = await services.catalog.getCurrentSnapshot();

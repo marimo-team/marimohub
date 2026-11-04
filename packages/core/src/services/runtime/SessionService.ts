@@ -156,14 +156,10 @@ export class SessionService {
 		projectId: ProjectId,
 		notebookIds: ReadonlySet<NotebookId>,
 	): Promise<void> {
-		for (const item of await listAllObjects(this.bucket, paths.sessionsForProject(projectId))) {
-			const object = await this.bucket.get(item.key);
-			if (!object) continue;
-			const session = await readStored(SessionSchema, object, item.key);
+		for (const session of await this.listByProject(projectId)) {
 			if (
 				notebookIds.has(session.notebook_id) &&
-				(!['terminated', 'failed'].includes(session.status) ||
-					(session.sandbox_id && !session.sandbox_reclaimed_at))
+				(!isTerminal(session.status) || (session.sandbox_id && !session.sandbox_reclaimed_at))
 			)
 				throw new ConflictError('Stop notebook and preview sessions before moving');
 		}

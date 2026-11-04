@@ -47,6 +47,7 @@ export const NotebookMoveSchema = z.object({
 	executor: z.string().nullable(),
 	runtimes: z.array(NotebookIdSchema),
 	snapshots: z.array(FsSnapshotSchema).default([]),
+	search_refreshed: z.boolean().default(false),
 	meta: NotebookMetaSchema,
 	source_record: SourceSchema,
 });
@@ -62,8 +63,25 @@ async function releaseCompletedMove(bucket: Bucket, move: Move): Promise<Noteboo
 		await gate.release(move.source, nid, move.id, true);
 		await gate.release(move.destination, nid, move.id, false);
 	}
-	await SearchIndexer.requestRefresh(bucket, move.source);
-	await SearchIndexer.requestRefresh(bucket, move.destination);
+	if (!move.search_refreshed) {
+		const current = await bucket.get(paths.notebookMove(move.id));
+		if (!current) throw new ConflictError('Move record is missing');
+		if (NotebookMoveSchema.parse(await current.json()).search_refreshed)
+			return movedNotebookMeta(move);
+		await SearchIndexer.requestRefresh(bucket, move.source, move.id);
+		await SearchIndexer.requestRefresh(bucket, move.destination, move.id);
+		await withCasRetry(bucket, async (cas) => {
+			const key = paths.notebookMove(move.id);
+			const object = await bucket.get(key);
+			if (!object) throw new ConflictError('Move record is missing');
+			const record = NotebookMoveSchema.parse(await object.json());
+			if (record.phase !== 'complete') throw new ConflictError('Move is not complete');
+			if (!record.search_refreshed)
+				await cas.put(key, JSON.stringify({ ...record, search_refreshed: true }), {
+					onlyIfEtagMatches: object.etag,
+				});
+		});
+	}
 	return movedNotebookMeta(move);
 }
 
@@ -239,6 +257,7 @@ export class NotebookMoveService {
 						executor: null,
 						runtimes: [],
 						snapshots: [],
+						search_refreshed: false,
 						meta: context.notebook,
 						source_record: context.source,
 					};
@@ -276,6 +295,7 @@ export class NotebookMoveService {
 				return next;
 			});
 		};
+		let releaseOnFailure = move.phase === 'preparing';
 		try {
 			const { source, destination, notebook_id: nid } = move;
 			const pools = new AppPoolStore(this.bucket);
@@ -322,6 +342,7 @@ export class NotebookMoveService {
 				await save({ runtimes, snapshots });
 				const ids = new Set([nid, ...runtimes]);
 				for (const id of ids) {
+					await this.owners.jobs.assertReadyForMove(source, id);
 					if (
 						(await pools.read(source, id))?.members.length ||
 						(await pools.read(destination, id))?.members.length
@@ -356,6 +377,8 @@ export class NotebookMoveService {
 				)
 					throw new ConflictError('Notebook source changed. Start a new move.');
 				await input.authorize(await this.context(source, destination, nid, move));
+				// A failed response cannot prove that the phase write did not commit.
+				releaseOnFailure = false;
 				await save({ phase: 'copying' });
 			}
 			if (move.phase === 'copying') {
@@ -450,7 +473,7 @@ export class NotebookMoveService {
 			await save({ phase: 'complete', executor: null });
 			return await releaseCompletedMove(this.bucket, move);
 		} catch (error) {
-			if (move.phase === 'preparing') {
+			if (releaseOnFailure) {
 				for (const nid of [move.notebook_id, ...move.runtimes]) {
 					await gate.release(move.source, nid, id);
 					await gate.release(move.destination, nid, id);

@@ -22,6 +22,27 @@ function setup() {
 	return { bucket, service };
 }
 describe('resumable workspace uploads', () => {
+	it('does not carry stale upload reservations into the destination', async () => {
+		const bucket = new MemoryBucket();
+		const source = new ResumableUploads(bucket, 'source/uploads/');
+		const input = {
+			path: 'data.bin',
+			size: 100,
+			content_type: 'application/octet-stream',
+			create_only: false,
+		};
+		const upload = await source.start(input, actor, 100);
+		const staleIndex = await (await bucket.get('source/uploads/index.json'))!.text();
+		await source.cancel(upload.id, actor);
+		await bucket.put('source/uploads/index.json', staleIndex);
+		await source.copyForMove('destination/uploads/');
+		expect(await bucket.head('destination/uploads/index.json')).toBeNull();
+		const destination = new ResumableUploads(bucket, 'destination/uploads/');
+		await expect(destination.start(input, actor, 100)).resolves.toMatchObject({
+			status: 'uploading',
+		});
+	});
+
 	it('resumes missing parts, preserves an upload blocked by an editor, and publishes once', async () => {
 		const { bucket, service } = setup();
 		const upload = await service.startUpload(

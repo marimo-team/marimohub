@@ -85,12 +85,15 @@ app.openapi(moveNotebook, async (c) => {
 			if (source.type !== 'git') return;
 			for (const revision of repositories) {
 				const provider = providerForRepo(
-					{ ...source, provider: revision.provider },
+					{ ...source, provider: revision.provider ?? source.provider },
 					revision.repo,
 					deps.sourceControl?.repositoryHosts,
 				);
-				if (provider)
-					deps.sourceControl?.assertRepositoryAllowed?.(provider, revision.repo, destination);
+				if (provider) {
+					if (!deps.sourceControl?.assertRepositoryAllowed)
+						throw new ValidationError('Destination repository authorization is unavailable');
+					deps.sourceControl.assertRepositoryAllowed(provider, revision.repo, destination);
+				}
 			}
 			if (source.sync_mode === 'pull') {
 				assertPullSourceSupported(deps, source, destination);

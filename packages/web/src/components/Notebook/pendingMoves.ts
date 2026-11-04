@@ -24,14 +24,24 @@ export function pendingNotebookMoves(pid: string): PendingNotebookMove[] {
 	}
 }
 
+function writePendingNotebookMoves(pid: string, moves: PendingNotebookMove[]): void {
+	try {
+		sessionStorage.setItem(storageKey(pid), JSON.stringify(moves));
+	} catch {
+		// Storage can be disabled or full; the dialog retains its current attempt in memory.
+	}
+}
+
 export function savePendingNotebookMove(pid: string, move: PendingNotebookMove): void {
 	const remaining = pendingNotebookMoves(pid).filter(
 		(item) => item.notebook.id !== move.notebook.id,
 	);
-	sessionStorage.setItem(storageKey(pid), JSON.stringify([...remaining, move]));
+	writePendingNotebookMoves(pid, [...remaining, move]);
 }
 
 export function clearPendingNotebookMove(pid: string, nid: string): void {
-	const remaining = pendingNotebookMoves(pid).filter((item) => item.notebook.id !== nid);
-	sessionStorage.setItem(storageKey(pid), JSON.stringify(remaining));
+	writePendingNotebookMoves(
+		pid,
+		pendingNotebookMoves(pid).filter((item) => item.notebook.id !== nid),
+	);
 }

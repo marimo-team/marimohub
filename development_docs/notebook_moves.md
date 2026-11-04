@@ -29,6 +29,8 @@ Transfer records block writes and hide partial notebooks. Retries check copied
 bytes before publication. Source tombstones reject delayed writes.
 Admissions and executors never expire because storage writes can finish late.
 
+The CLI supports `s3`, `gcs`, `azure`, and `fs`. Other adapters use `NotebookMoveService.recover` directly.
+
 After a crash or uncertain storage failure:
 
 1. Stop all API, scheduler, maintenance, and sandbox writers.

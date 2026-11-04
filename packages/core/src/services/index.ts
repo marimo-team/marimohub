@@ -681,15 +681,24 @@ export function createServices(
 		notebooks,
 		proposals,
 		previews,
-		moves: new NotebookMoveService(bucket, catalog, {
-			notebooks,
-			sessions,
-			jobs,
-			jobRuns,
-			proposals,
-			previews,
-			deepLinks,
-		}),
+		moves: wrap(
+			'NotebookMoveService',
+			new NotebookMoveService(bucket, catalog, {
+				notebooks,
+				sessions,
+				jobs,
+				jobRuns,
+				proposals,
+				previews,
+				deepLinks,
+			}),
+			{
+				move: (input) => ({
+					...notebook(input.source, input.notebookId),
+					'marimohub.destination_project_id': input.destination,
+				}),
+			},
+		),
 		sessions,
 		runtimeInspection,
 		jobs,

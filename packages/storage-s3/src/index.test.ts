@@ -21,6 +21,8 @@ const CFG = {
 // ---------------------------------------------------------------------------
 
 interface Stored {
+	contentType?: string;
+	metadata?: Record<string, string>;
 	body: Uint8Array;
 	etag: string;
 	lastModified: Date;
@@ -105,6 +107,8 @@ function installFakeS3(opts: { ignoreIfMatch?: boolean } = {}) {
 					const etag = `etag-${store.n}`;
 					store.map.set(input.Key, {
 						body: toBytes(input.Body),
+						contentType: input.ContentType,
+						metadata: input.Metadata,
 						etag,
 						lastModified: new Date(),
 					});
@@ -121,6 +125,8 @@ function installFakeS3(opts: { ignoreIfMatch?: boolean } = {}) {
 						ETag: `"${s.etag}"`,
 						ContentLength: s.body.length,
 						LastModified: s.lastModified,
+						ContentType: s.contentType,
+						Metadata: s.metadata,
 					};
 				}
 				case 'HeadObjectCommand': {
@@ -130,6 +136,8 @@ function installFakeS3(opts: { ignoreIfMatch?: boolean } = {}) {
 						ETag: `"${s.etag}"`,
 						ContentLength: s.body.length,
 						LastModified: s.lastModified,
+						ContentType: s.contentType,
+						Metadata: s.metadata,
 					};
 				}
 				case 'DeleteObjectCommand':
@@ -190,6 +198,8 @@ function installFakeS3(opts: { ignoreIfMatch?: boolean } = {}) {
 								ETag: `"${s.etag}"`,
 								Size: s.body.length,
 								LastModified: s.lastModified,
+								ContentType: s.contentType,
+								Metadata: s.metadata,
 							};
 						}),
 						IsTruncated: truncated,
@@ -217,7 +227,7 @@ describe('S3Storage against a fake S3 transport', () => {
 	beforeEach(() => installFakeS3());
 	afterEach(() => vi.restoreAllMocks());
 
-	bucketContract('S3Storage (fake transport)', () => new S3Storage(CFG));
+	bucketContract('S3Storage (fake transport)', () => new S3Storage(CFG), { metadata: true });
 });
 
 describe('S3Storage command mapping', () => {
@@ -591,6 +601,7 @@ if (endpoint) {
 					secretAccessKey: process.env.MARIMOHUB_TEST_S3_SECRET ?? 'minioadmin',
 				},
 			}),
+		{ metadata: true },
 	);
 } else {
 	describe.skip('S3Storage live contract', () => {

@@ -24,6 +24,30 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 describe('authorized search', () => {
+	it('does not restart a crawl when a refresh revision is replayed', async () => {
+		const f = await setup();
+		const indexer = new SearchIndexer(
+			f.bucket,
+			f.index,
+			[f.source],
+			f.services.catalog,
+			f.services.projects,
+		);
+		await SearchIndexer.requestRefresh(f.bucket, f.project.id, 'move-one');
+		await indexer.step(f.project.id, f.source, signal());
+		const checkpointKey = searchPaths.scope({
+			projectId: f.project.id,
+			source: f.source.id,
+		}).checkpoint;
+		const checkpoint = await (await f.bucket.get(checkpointKey))!.text();
+		await SearchIndexer.requestRefresh(f.bucket, f.project.id, 'move-one');
+		await indexer.step(f.project.id, f.source, signal());
+		expect(await (await f.bucket.get(checkpointKey))!.text()).toBe(checkpoint);
+		await SearchIndexer.requestRefresh(f.bucket, f.project.id, 'move-two');
+		await indexer.step(f.project.id, f.source, signal());
+		expect(await (await f.bucket.get(checkpointKey))!.text()).not.toBe(checkpoint);
+	});
+
 	it('refreshes both projects after a move without waiting for the recrawl interval', async () => {
 		const f = await setup();
 		const destination = await f.services.projects.createProject(

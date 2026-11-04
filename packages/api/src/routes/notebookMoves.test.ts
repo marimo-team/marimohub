@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { UserId, ForbiddenError } from '@marimo-hub/core';
+import { UserId, ForbiddenError, paths } from '@marimo-hub/core';
 import { localResourceSecurity, makeSubjectContext, ACTOR } from '@marimo-hub/core/testing';
 import {
 	createInitializedBucket,
@@ -20,7 +20,7 @@ const GIT_INPUT = {
 
 async function setup() {
 	const bucket = await createInitializedBucket();
-	const api = createTestApi({ bucket });
+	const api = createTestApi({ bucket, deps: { sourceControl: stubSourceControl() } });
 	const { projects, notebooks } = api.deps.services;
 	const source = await projects.createProject({ name: 'Source', description: '' }, ACTOR);
 	const destination = await projects.createProject({ name: 'Destination', description: '' }, ACTOR);
@@ -35,6 +35,96 @@ async function setup() {
 }
 
 describe('POST notebook move', () => {
+	it('preserves the source provider for same-host history without its own provider claim', async () => {
+		const { api, bucket, source, destination } = await setup();
+		const repo = 'https://code.example.com/team/current';
+		const historical = 'https://code.example.com/team/restricted';
+		const { notebooks } = api.deps.services;
+		const { meta } = await notebooks.synced.create(
+			source.id,
+			{ ...GIT_INPUT, repo, provider: 'github' },
+			ACTOR,
+		);
+		await notebooks.synced.sync(source.id, meta.id, {
+			repo,
+			branch: 'main',
+			root_path: '',
+			commit: 'a'.repeat(40),
+			files: [{ path: 'app.py', bytes: new TextEncoder().encode('print(1)') }],
+		});
+		const version = (await notebooks.listVersions(source.id, meta.id))[0];
+		const key = paths.project(source.id).notebook(meta.id).version(version.version_id).meta;
+		await bucket.put(
+			key,
+			JSON.stringify({
+				...version,
+				git_source: { ...version.git_source, repo: historical, provider: null },
+			}),
+		);
+		const authorize = vi.fn((_provider: string, repository: string) => {
+			if (repository === historical) throw new ForbiddenError('Historical repository denied');
+		});
+		const restricted = createTestApi({
+			bucket,
+			deps: { sourceControl: { ...stubSourceControl(), assertRepositoryAllowed: authorize } },
+		});
+		const before = await notebooks.getNotebook(source.id, meta.id);
+		await expectError(
+			await restricted.request(
+				'POST',
+				`/projects/${source.id}/notebooks/${meta.id}/move`,
+				{ destination_project_id: destination.id },
+				{ 'Idempotency-Key': 'history', 'If-Match': `"${before.meta.updated_at}"` },
+			),
+			403,
+			'FORBIDDEN',
+		);
+		expect(authorize).toHaveBeenCalledWith('github', historical, destination.id);
+		expect(await notebooks.getNotebookContent(source.id, meta.id)).toBe('print(1)');
+	});
+
+	it('lists managed projects with an independent notebook.manage token grant', async () => {
+		const { bucket, source, destination, path, headers } = await setup();
+		const scoped = createTestApi({
+			bucket,
+			subject: {
+				credential: {
+					kind: 'personal-access-token',
+					grant: { actions: ['notebook.manage'], projects: [source.id] },
+				},
+			},
+		});
+		const projects = await expectOk<{ items: { id: string }[] }>(
+			await scoped.request('GET', '/projects?managed_only=true'),
+		);
+		expect(projects.items.map((project) => project.id)).toEqual([source.id]);
+		await expectError(
+			await scoped.request('POST', path, { destination_project_id: destination.id }, headers),
+			404,
+			'NOT_FOUND',
+		);
+	});
+
+	it('fails closed when a Git registry cannot authorize destination repositories', async () => {
+		const { api, bucket, source, destination } = await setup();
+		const { meta } = await api.deps.services.notebooks.synced.create(source.id, GIT_INPUT, ACTOR);
+		const registry = stubSourceControl();
+		delete registry.assertRepositoryAllowed;
+		const legacy = createTestApi({ bucket, deps: { sourceControl: registry } });
+		await expectError(
+			await legacy.request(
+				'POST',
+				`/projects/${source.id}/notebooks/${meta.id}/move`,
+				{ destination_project_id: destination.id },
+				{ 'Idempotency-Key': 'missing-policy', 'If-Match': `"${meta.updated_at}"` },
+			),
+			422,
+			'VALIDATION_ERROR',
+		);
+		expect((await api.deps.services.notebooks.getNotebook(source.id, meta.id)).meta).toEqual(meta);
+		expect(await api.deps.services.notebooks.listNotebooks(destination.id)).toEqual([]);
+	});
+
 	it.each(['Idempotency-Key', 'If-Match'] as const)(
 		'rejects a missing %s header without moving data',
 		async (missing) => {

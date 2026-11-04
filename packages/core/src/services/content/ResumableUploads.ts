@@ -85,6 +85,7 @@ export class ResumableUploads {
 	async copyForMove(destination: string): Promise<void> {
 		await this.assertReadyForMove();
 		await copyMovePrefix(this.bucket, this.prefix, destination, {
+			include: (key) => key !== 'index.json',
 			transform: (key, bytes) =>
 				key.endsWith('.json') && key !== 'index.json'
 					? moveJson(bytes, (raw) => {
