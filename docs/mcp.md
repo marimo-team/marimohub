@@ -286,7 +286,8 @@ For another page, pass `next_cursor` as `cursor` with the same filters.
 `list_namespaces`, `list_tables`, `get_table_schema`, `list_object_buckets`, and `list_objects`
 accept `fresh: true` to bypass cached results and consume browse budget.
 
-Previews default to 20 rows, with a maximum of 100. Object previews also enforce byte limits.
+Table and tabular object previews default to a `limit` of 20 rows, with a maximum of 100.
+Text, image, and Parquet previews also enforce [configured byte limits](./configuration.md#integrations).
 Image previews return an absolute `content_url` that requires authentication. Unsupported object formats return a reason.
 
 ## Project chat
