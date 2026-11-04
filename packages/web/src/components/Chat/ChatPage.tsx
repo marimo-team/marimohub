@@ -121,10 +121,12 @@ function ProjectChat({ pid }: { pid: string }) {
 								role="log"
 								aria-label="Conversation"
 								aria-live="polite"
-								className="mx-auto max-w-3xl space-y-7 pt-6"
+								className="mx-auto max-w-3xl space-y-6 pt-6"
 							>
 								<ChatMessages
 									messages={c.messages}
+									onReuse={(text) => c.pickPrompt(text)}
+									canReuse={!c.draft}
 									onDecide={c.decidePermission}
 									onInspect={c.setInspect}
 									inspecting={c.inspect}
@@ -172,7 +174,7 @@ function ProjectChat({ pid }: { pid: string }) {
 					</section>
 					{/* oxlint-enable jsx-a11y/no-noninteractive-tabindex */}
 					{!c.home ? (
-						<div className="max-h-[45%] shrink-0 overflow-y-auto border-t bg-muted/40 px-4 py-3 sm:px-10">
+						<div className="max-h-[45%] shrink-0 overflow-y-auto px-4 pb-4 pt-2 sm:px-10">
 							{composerElement}
 						</div>
 					) : null}

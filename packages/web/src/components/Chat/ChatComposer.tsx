@@ -1,5 +1,5 @@
 import type { RefObject } from 'react';
-import { ArrowRight, ListPlus, Square } from 'lucide-react';
+import { ArrowUp, ListPlus, Square } from 'lucide-react';
 import { Button } from '@/components/ui';
 import { cn } from '@/lib/utils';
 
@@ -41,8 +41,8 @@ export function ChatComposer({
 					onSubmit();
 				}}
 				className={cn(
-					'flex items-end gap-3 rounded-xl border border-input bg-background shadow-xs transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30',
-					home ? 'px-5 py-4' : 'p-3',
+					'flex items-end gap-3 rounded-3xl border border-input bg-background shadow-xs transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30',
+					home ? 'px-5 py-4' : 'px-4 py-3',
 				)}
 			>
 				<textarea
@@ -68,7 +68,7 @@ export function ChatComposer({
 						variant="unstyled"
 						onPress={onStop}
 						aria-label="Stop response"
-						className="flex size-8 shrink-0 items-center justify-center rounded-lg text-destructive outline-none hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-ring"
+						className="flex size-8 shrink-0 items-center justify-center rounded-full text-destructive outline-none hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-ring"
 					>
 						<Square className="size-4 fill-current" aria-hidden />
 					</Button>
@@ -78,18 +78,18 @@ export function ChatComposer({
 						variant="unstyled"
 						isDisabled={!draft.trim() || !canSubmit}
 						aria-label={queueing ? 'Queue message' : 'Send message'}
-						className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-35"
+						className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background outline-none hover:bg-foreground/80 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-35"
 					>
 						{queueing ? (
 							<ListPlus className="size-5" aria-hidden />
 						) : (
-							<ArrowRight className="size-5" aria-hidden />
+							<ArrowUp className="size-5" aria-hidden />
 						)}
 					</Button>
 				)}
 			</form>
-			<div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
-				<span>Uses your project permissions · changes ask for consent</span>
+			<div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+				{home ? <span>Uses your project permissions · changes ask for consent</span> : null}
 				<span>
 					{queueing
 						? 'Enter to queue · the button stops the response while the box is empty'

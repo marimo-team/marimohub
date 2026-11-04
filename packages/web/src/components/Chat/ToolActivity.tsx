@@ -40,8 +40,7 @@ export function ToolActivity({
 }) {
 	if (calls.length === 0) return null;
 	return (
-		<section aria-label="marimohub tool activity" className="my-3 rounded-lg border bg-card/60 p-3">
-			<p className="mb-2 text-xs font-medium text-muted-foreground">Tool activity</p>
+		<section aria-label="marimohub tool activity" className="my-1">
 			<ul className="space-y-2">
 				{calls.map((call) => {
 					const row = (

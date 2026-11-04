@@ -552,6 +552,7 @@ describe('ChatPage', () => {
 		await waitFor(() =>
 			expect(screen.queryByText('Running get notebook…')).not.toBeInTheDocument(),
 		);
+		await user.click(screen.getByRole('button', { name: 'Worked · 1 step' }));
 		expect(
 			within(screen.getByRole('region', { name: 'marimohub tool activity' })).getByText(
 				'Completed',
@@ -928,6 +929,7 @@ describe('ChatPage', () => {
 				detailResponse: () => jsonOk({ conversation: withResource }),
 			});
 			await screen.findByText('Done.');
+			await user.click(screen.getByRole('button', { name: 'Worked · 1 step' }));
 			await user.click(screen.getByRole('button', { name: 'Inspect create notebook' }));
 			const details = await screen.findByRole('complementary', { name: 'Tool call details' });
 			expect(screen.getByTestId('location')).toHaveTextContent('inspect=call-9');
@@ -1057,6 +1059,7 @@ describe('ChatPage', () => {
 				detailResponse: () => jsonOk({ conversation: failedTool }),
 			});
 			await screen.findByText('I could not do either.');
+			await user.click(screen.getByRole('button', { name: /Worked · 2 steps/ }));
 			await user.click(screen.getByRole('button', { name: 'Inspect delete notebook' }));
 			let details = await screen.findByRole('complementary', { name: 'Tool call details' });
 			expect(within(details).getByRole('region', { name: 'Permission' })).toHaveTextContent(
@@ -1230,6 +1233,7 @@ describe('ChatPage', () => {
 				detailResponse: () => jsonOk({ conversation: withTool }),
 			});
 			await screen.findByTitle('Notebook Sales report');
+			await user.click(screen.getByRole('button', { name: 'Worked · 1 step' }));
 			await user.click(screen.getByRole('button', { name: 'Inspect get notebook' }));
 			await screen.findByRole('complementary', { name: 'Tool call details' });
 			expect(
@@ -1429,6 +1433,7 @@ describe('ChatPage', () => {
 			act(() => release.resolve());
 			await screen.findByText('Allowed once');
 			await screen.findByText('Created it.');
+			await user.click(await screen.findByRole('button', { name: 'Worked · 1 step' }));
 			await waitFor(() =>
 				expect(screen.getAllByRole('region', { name: 'Tool permission' })).toHaveLength(1),
 			);
