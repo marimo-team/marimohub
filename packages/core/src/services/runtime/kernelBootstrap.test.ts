@@ -6,6 +6,25 @@ import { kernelBootstrapCommand } from './kernelBootstrap/command';
 afterEach(() => vi.useRealTimers());
 
 describe('bootstrapKernel', () => {
+	it.each([
+		['http://127.0.0.1:43210', 43210],
+		['http://127.0.0.1:80', 80],
+		['http://127.0.0.1', 80],
+		['https://127.0.0.1:443', 443],
+		['http://127.0.0.1:0', 2718],
+	] as const)('discovers the sandbox port from %s', async (url, port) => {
+		const { instance } = makeFakeSandbox();
+		instance.resolveProcessUrl = () => url;
+		const exec = vi.spyOn(instance, 'exec').mockResolvedValue({
+			success: true,
+			stdout: '{"status":"ready"}',
+			stderr: '',
+		});
+		expect(await bootstrapKernel(instance, { timeoutMs: 1_000 })).toEqual({ status: 'ready' });
+		expect(exec).toHaveBeenCalledWith(kernelBootstrapCommand(900, false, port), {
+			timeout: 2_000,
+		});
+	});
 	it.each(['ready', 'awaiting_client', 'unavailable'] as const)(
 		'returns the bounded %s result',
 		async (status) => {

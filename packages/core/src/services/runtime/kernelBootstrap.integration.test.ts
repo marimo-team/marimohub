@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MARIMO_PORT } from '../../constants';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { bootstrapKernel } from './kernelBootstrap';
 import { createKernelAuthToken, KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
@@ -16,12 +17,17 @@ afterEach(async () => {
 	for (const close of cleanup.splice(0).reverse()) await close();
 });
 
-async function runtime(autoRun: boolean, prefix = '', fault?: 'fail' | 'delay') {
+async function runtime(
+	autoRun: boolean,
+	prefix = '',
+	fault?: 'fail' | 'delay',
+	authenticated = true,
+) {
 	const root = await mkdtemp(join(tmpdir(), 'mhub-bootstrap-'));
 	cleanup.push(() => rm(root, { recursive: true, force: true }));
 	const token = createKernelAuthToken();
 	const tokenFile = join(root, 'token');
-	await writeFile(tokenFile, token, { mode: 0o600 });
+	if (authenticated) await writeFile(tokenFile, token, { mode: 0o600 });
 	await writeFile(join(root, '.marimo.toml'), `[runtime]\nauto_instantiate = ${autoRun}\n`);
 	await writeFile(
 		join(root, 'notebook.py'),
@@ -71,18 +77,16 @@ if __name__ == "__main__":
     from marimo._cli.cli import main
     main(prog_name="marimo")
 `;
-	await writeFile(join(root, 'server.py'), serverMain);
+	await writeFile(join(root, 'marimo'), serverMain);
 	const child = spawn(
 		python!,
 		[
-			join(root, 'server.py'),
+			join(root, 'marimo'),
 			'--quiet',
 			'edit',
 			'notebook.py',
 			'--headless',
-			'--token',
-			'--token-password-file',
-			tokenFile,
+			...(authenticated ? ['--token', '--token-password-file', tokenFile] : ['--no-token']),
 			'--host',
 			'127.0.0.1',
 			...(prefix ? [`--base-url=${prefix}`] : []),
@@ -126,7 +130,7 @@ if __name__ == "__main__":
 				try {
 					return (
 						await fetch(`${base}/`, {
-							headers: { Authorization: `Bearer ${token}` },
+							headers: authenticated ? { Authorization: `Bearer ${token}` } : {},
 							signal: AbortSignal.timeout(1_000),
 						})
 					).status;
@@ -138,6 +142,7 @@ if __name__ == "__main__":
 		)
 		.toBe(200);
 	const sandbox = {
+		resolveProcessUrl: (url: string) => url.replace(`:${MARIMO_PORT}`, `:${port}`),
 		async exec(command, options) {
 			try {
 				const result = await exec(command.replaceAll(KERNEL_AUTH_TOKEN_FILE, tokenFile), {
@@ -150,7 +155,7 @@ if __name__ == "__main__":
 			}
 		},
 	} as SandboxInstance;
-	const request = { kernelAuthToken: token };
+	const request = { kernelAuthToken: authenticated ? token : undefined };
 	return {
 		root,
 		tokenFile,
@@ -218,10 +223,15 @@ with connect(cfg["base"].replace("http:", "ws:") + "/ws?session_id=browser-sessi
 }
 
 describe.skipIf(!python)('real marimo headless bootstrap', () => {
-	it.each([true, false])(
-		'initializes with auto execution %s, serializes starts, and preserves state',
-		async (autoRun) => {
-			const rt = await runtime(autoRun, '/nested/prefix');
+	it.each([
+		{ autoRun: true, authenticated: true },
+		{ autoRun: false, authenticated: true },
+		{ autoRun: true, authenticated: false },
+		{ autoRun: false, authenticated: false },
+	])(
+		'initializes with auto execution $autoRun and authentication $authenticated, serializes starts, and preserves state',
+		async ({ autoRun, authenticated }) => {
+			const rt = await runtime(autoRun, '/nested/prefix', undefined, authenticated);
 			expect(await bootstrapKernel(rt.sandbox, { timeoutMs: 5_000, inspectOnly: true })).toEqual({
 				status: 'initializing',
 			});

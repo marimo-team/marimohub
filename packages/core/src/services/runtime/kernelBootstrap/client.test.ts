@@ -9,6 +9,27 @@ async function python(assertions: string) {
 }
 
 describe('sandbox bootstrap protocol', () => {
+	it('omits bearer authentication for tokenless servers without reading a token file', async () => {
+		await python(String.raw`
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+with TemporaryDirectory() as directory:
+    cfg = {"token_file": directory + "/tmp/token", "port": 2718, "base_url": "/prefix", "authenticated": False}
+    with patch.object(Path, "read_text", side_effect=AssertionError("read a token for a tokenless server")):
+        client = MarimoClient(cfg, lambda: 1)
+    assert client.auth == {}
+    assert client.headers == {}
+    assert client.base == "http://127.0.0.1:2718/prefix"
+    with bootstrap_lock(cfg["token_file"], False, lambda: 1):
+        assert Path(cfg["token_file"] + ".bootstrap.lock").exists()
+    assert not Path(cfg["token_file"]).exists()
+    Path(cfg["token_file"]).write_text("test-token\n")
+    cfg["authenticated"] = True
+    client = MarimoClient(cfg, lambda: 1)
+    assert client.auth == {"Authorization": "Bearer test-token"}
+    assert client.headers == client.auth
+`);
+	});
 	it('normalizes session maps, arrays, and envelopes without accepting missing identifiers', async () => {
 		await python(String.raw`
 from unittest.mock import Mock
