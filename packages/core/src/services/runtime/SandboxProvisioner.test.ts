@@ -472,6 +472,55 @@ describe('SandboxProvisioner', () => {
 		);
 	});
 
+	it.each(['edit', 'app', 'job'] as const)(
+		'injects logging outside the workspace and maps its launch path for %s',
+		async (mode) => {
+			const { instance, calls } = makeFakeSandbox();
+			instance.resolveProcessPath = (path) => `/local${path}`;
+			const options: ProvisionOptions = {
+				...startupOptions,
+				launchMode: mode,
+				sessionEnv: {
+					logging: [
+						{
+							name: 'logs',
+							url: 'https://example.test/v1/logs',
+							headers: { Authorization: 'secret-token' },
+							level: 'INFO',
+							serviceName: 'test',
+							attributes: {},
+						},
+					],
+				},
+				bridgeParentOrigin: 'https://hub.example.com',
+				notebookBridge: {
+					launcher: 'marimo-bridge.py',
+					files: [{ name: 'marimo-bridge.py', content: 'launcher' }],
+				},
+			};
+			const prepared = await new SandboxProvisioner(fakeComputeFrom(instance)).prepare(options);
+			const files = calls.writeFiles.flat();
+			const config = files.find((file) => file.path.endsWith('/logging.json'))!;
+			expect(config.path).toBe(`/tmp/marimohub-logging/${sandboxId}/logging.json`);
+			expect(JSON.parse(config.content as string)).toMatchObject([
+				{ attributes: { 'marimohub.notebook_id': notebookId, 'marimohub.mode': mode } },
+			]);
+			expect(prepared.launch.start).toContain(
+				`env PYTHONPATH='/local/tmp/marimohub-logging/${sandboxId}'`,
+			);
+			expect(prepared.launch.start).not.toContain('secret-token');
+			expect(prepared.launch.start).not.toContain('--with');
+			expect(prepared.launch.setup.some((step) => step.command.includes('marimohub-logging'))).toBe(
+				false,
+			);
+			expect(calls.setEnvVars.some((vars) => 'PYTHONPATH' in vars)).toBe(false);
+			if (mode !== 'job')
+				expect(prepared.launch.start).toContain(
+					`python '/local/tmp/marimohub-bridge/${sandboxId}/marimo-bridge.py'`,
+				);
+		},
+	);
+
 	it('sets the process-visible context path before launch, overriding session variables', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		instance.resolveProcessPath = (path) => `/sandbox-root${path}`;

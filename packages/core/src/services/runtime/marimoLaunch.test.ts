@@ -33,6 +33,32 @@ describe('buildMarimoLaunch', () => {
 		expect(plan).toEqual(buildMarimoLaunch(BASE));
 		expect(plan.start).not.toContain('--with');
 	});
+	it.each(['edit', 'app', 'job'] as const)(
+		'keeps uv-sandbox marimo provisioning with logging in %s mode',
+		(mode) => {
+			const plan = buildMarimoLaunch(
+				{ ...BASE, mode, loggingDirectory: '/tmp/logging' },
+				'uv-sandbox',
+			);
+			expect(plan.start).toMatch(/^uv run --with marimo env PYTHONPATH=/);
+			expect(plan.start).toContain('python -m marimo');
+			expect(plan.start).toContain('--sandbox');
+			expect(plan.start).not.toContain('--no-sync');
+			expect(plan.start).not.toContain('marimohub_marimo_version');
+		},
+	);
+	it.each([undefined, '/tmp/logging'])(
+		'layers sandbox runtime packages without a preinstalled marimo: %s',
+		(loggingDirectory) => {
+			const plan = buildMarimoLaunch(
+				{ ...BASE, loggingDirectory, runtimePackages: ['rich==13.9.4'] },
+				'uv-sandbox',
+			);
+			expect(plan.start).toMatch(/^uv run --with marimo --with 'rich==13.9.4' /);
+			expect(plan.start).toContain('python -m marimo --quiet edit --sandbox');
+			expect(plan.start).not.toContain('marimohub_marimo_version');
+		},
+	);
 	it('defaults to edit mode', () => {
 		const { start } = buildMarimoLaunch(BASE);
 		expect(start).toContain('marimo --quiet edit');

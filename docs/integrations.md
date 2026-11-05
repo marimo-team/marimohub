@@ -38,6 +38,7 @@ Disabling or deleting an integration removes its contributions from subsequent l
 | --------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | Environment variables and configuration files | Outside the notebook workspace          | New sandboxes omit them. Snapshots can retain old values and files unless the integration provides cleanup. |
 | Runtime packages                              | Separate layer for the notebook process | Launches omit the layer, including after snapshot restores. Caches can remain.                              |
+| Remote logging                                | Python server, kernels, and job exports | New launches stop exporting, including snapshot restores. Old configuration files can remain.               |
 | Startup scripts                               | Before dependency setup                 | Launches stop running the script. Files and other script side effects can remain.                           |
 | Custom CSS and HTML head                      | Marimo pages and HTML exports           | New launches omit them, including snapshot restores. Existing sessions and exports retain them.             |
 | Agent context                                 | Outside the notebook workspace          | Restored sandboxes remove obsolete hub-managed home files.                                                  |
@@ -1143,6 +1144,67 @@ fails session and job startup in each project without AWS workload identity.
 The hub does not fall back to public PyPI. To opt a project out, create a disabled project integration with the same name.
 
 <!--@include: ./partials/integrations/aws_codeartifact.md-->
+
+## Remote logging
+
+Logging integrations export Python `logging` records from notebook code and marimo to remote destinations.
+They apply to new editor sessions, app sessions, and job runs.
+Hub injects a Python standard-library handler that sends OTLP/HTTP JSON, without installing packages or changing sandbox images.
+Changes take effect on subsequent launches, including snapshot restores.
+
+Create an `otlp_logs` integration with a full logs URL that accepts OTLP/HTTP JSON and any required headers:
+
+```json
+{
+	"url": "https://collector.example.com/v1/logs",
+	"headers": [{ "name": "Authorization", "value": "Bearer YOUR_TOKEN" }],
+	"level": "INFO",
+	"service_name": "analytics-notebooks"
+}
+```
+
+Hub sends the URL unchanged and rejects redirects. Use HTTPS for remote destinations, or HTTP for collectors on trusted networks.
+The exporter uses `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables for proxy configuration, including their lowercase forms. It does not discover operating-system proxy settings.
+Header names must be unique, regardless of case. HTTP framing headers, such as `Host`, `Content-Type`, and `Content-Length`, are reserved.
+All header values use the integration secret store and remain hidden after save.
+This includes tenant identifiers such as `X-Scope-OrgID`. Use `otlp_logs` for endpoints that require these headers.
+
+Use **Test connection** to send an empty OTLP request with the configured credentials. This test sends no log records.
+The request runs from the hub. A successful result does not verify network access from each sandbox.
+
+Use the standard Python logging API in notebook code:
+
+```python
+import logging
+
+logging.getLogger(__name__).info("Loaded dataset", extra={"rows": 1200})
+```
+
+Each destination has separate credentials and a minimum `level` (default: `INFO`). The default `service_name` is `marimohub-notebook`.
+Records include project, notebook, workload, sandbox, integration, mode, and process identifiers.
+Logger levels, filters, or disabled propagation in notebook code can prevent export.
+
+Delivery is best effort. Each destination has a background exporter and a queue of 2,048 records per process.
+Records larger than 64 KiB are dropped. Installed OpenTelemetry packages remain unchanged and are not required.
+Full queues discard new records. Failed deliveries report dropped records to stderr. Shutdown allows three seconds to drain all destinations.
+Network failures, forced termination, and sandbox destruction can lose logs.
+
+The integrations capture `logging.exception()` but exclude `print()`, rich cell output, unlogged cell errors, existing log files, and exporter diagnostics.
+
+Fresh Python interpreters and spawned multiprocessing children run the bootstrap and import marimo.
+This adds startup time even when they do not use marimo.
+Forked children inherit the marimo hooks and start new exporters without importing marimo again. Parent queues stay with the parent and are not replayed.
+
+### Configuration reference
+
+For Grafana Cloud, use the full OTLP logs URL, instance ID as `username`, and access policy `token`.
+For Better Stack, use the full OTLP logs URL and `source_token`.
+
+<!--@include: ./partials/integrations/otlp_logs.md-->
+
+<!--@include: ./partials/integrations/grafana_cloud_logs.md-->
+
+<!--@include: ./partials/integrations/better_stack_logs.md-->
 
 ## marimo Studio (experimental)
 

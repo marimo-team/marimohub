@@ -24,6 +24,7 @@ import {
 } from '../../integrations/remoteWorkspace';
 
 import { logEvent } from '../../logs';
+import { loggingDirectory, loggingFiles } from './logging';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import type {
@@ -1222,6 +1223,15 @@ export class SandboxProvisioner {
 					{ restored: options.restoreFilesystemSnapshotId !== undefined, mode: options.launchMode },
 				);
 				const files = [...(sessionEnv?.files ?? [])];
+				if (resolvedEnv?.logging?.length) {
+					files.push(
+						...loggingFiles(resolvedEnv.logging, {
+							sandboxId: options.sandboxId,
+							notebookId: options.notebookId,
+							mode: options.launchMode ?? 'edit',
+						}),
+					);
+				}
 				if (options.contextFile?.content !== undefined) {
 					files.push({ path: options.contextFile.path, content: options.contextFile.content });
 				}
@@ -1307,6 +1317,10 @@ export class SandboxProvisioner {
 		sw: Stopwatch,
 		launchStrategy: MarimoLaunchStrategyName,
 	): Promise<MarimoStartup> {
+		const sessionEnv = await options.sessionEnv;
+		const loggingPath = sessionEnv?.logging?.length
+			? loggingDirectory(options.sandboxId)
+			: undefined;
 		const startup: MarimoStartup = {
 			plan: buildMarimoLaunch(
 				{
@@ -1319,7 +1333,10 @@ export class SandboxProvisioner {
 					tokenPasswordFile:
 						options.kernelAuthToken !== undefined ? KERNEL_AUTH_TOKEN_FILE : undefined,
 					watch: options.marimoWatch,
-					...mergeRuntimeContributions(await options.sessionEnv),
+					...mergeRuntimeContributions(sessionEnv),
+					loggingDirectory: loggingPath
+						? (sandbox.resolveProcessPath?.(loggingPath) ?? loggingPath)
+						: undefined,
 				},
 				launchStrategy,
 			),

@@ -18,6 +18,7 @@ export { icebergRest } from './icebergRest';
 export { huggingFace, wandb } from './mlPlatforms';
 export { mongodb } from './mongodb';
 export { marimoStudio } from './marimoStudio';
+export { otlpLogs, grafanaCloudLogs, betterStackLogs } from './logging';
 export { motherduck } from './motherduck';
 export { mysql } from './mysql';
 export { azureBlob, gcs, s3 } from './objectStores';

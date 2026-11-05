@@ -192,6 +192,39 @@ paths:
       responses:
         '204':
           description: Accepted.
+  /kinds/better_stack_logs/config:
+    summary: Better Stack logs
+    description: Export notebook Python logging and marimo logs to Better Stack
+      using OTLP/HTTP JSON.
+    x-kind-schema-version: 1
+    x-category: other
+    x-brand-color: '#6366F1'
+    x-secret-paths:
+      - source_token
+    x-supports-test: true
+    x-requirements: []
+    get:
+      operationId: read_better_stack_logs_config
+      summary: Stored better_stack_logs config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/better_stack_logs_stored'
+    put:
+      operationId: write_better_stack_logs_config
+      summary: Input better_stack_logs config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/better_stack_logs'
+      responses:
+        '204':
+          description: Accepted.
   /kinds/bigquery/config:
     summary: BigQuery
     description: Query BigQuery from SQL cells, with ADC or a service-account key.
@@ -508,6 +541,39 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/gitlab_packages'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/grafana_cloud_logs/config:
+    summary: Grafana Cloud logs
+    description: Export notebook Python logging and marimo logs to Grafana Cloud
+      using OTLP/HTTP JSON.
+    x-kind-schema-version: 1
+    x-category: other
+    x-brand-color: '#F46800'
+    x-secret-paths:
+      - token
+    x-supports-test: true
+    x-requirements: []
+    get:
+      operationId: read_grafana_cloud_logs_config
+      summary: Stored grafana_cloud_logs config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/grafana_cloud_logs_stored'
+    put:
+      operationId: write_grafana_cloud_logs_config
+      summary: Input grafana_cloud_logs config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/grafana_cloud_logs'
       responses:
         '204':
           description: Accepted.
@@ -1039,6 +1105,39 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/mysql'
+      responses:
+        '204':
+          description: Accepted.
+  /kinds/otlp_logs/config:
+    summary: OpenTelemetry logs
+    description: Export notebook Python logging and marimo logs to an OTLP/HTTP JSON
+      endpoint.
+    x-kind-schema-version: 1
+    x-category: other
+    x-brand-color: '#F5A800'
+    x-secret-paths:
+      - headers.*.value
+    x-supports-test: true
+    x-requirements: []
+    get:
+      operationId: read_otlp_logs_config
+      summary: Stored otlp_logs config
+      responses:
+        '200':
+          description: A stored config every reader and migration must accept.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/otlp_logs_stored'
+    put:
+      operationId: write_otlp_logs_config
+      summary: Input otlp_logs config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/otlp_logs'
       responses:
         '204':
           description: Accepted.
@@ -2162,6 +2261,74 @@ components:
         - endpoint_suffix
         - auth
         - ambient_env
+      additionalProperties: false
+    better_stack_logs:
+      type: object
+      properties:
+        url:
+          type: string
+          pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
+          format: uri
+          x-marimohub-refinement: A valid http(s) logs URL with an authority, no userinfo,
+            query, fragment, or port 0
+          description: Full OTLP/HTTP JSON logs URL, including /v1/logs
+        source_token:
+          type: string
+          minLength: 1
+          x-marimohub-secret: true
+          writeOnly: true
+        level:
+          default: INFO
+          type: string
+          enum:
+            - DEBUG
+            - INFO
+            - WARNING
+            - ERROR
+            - CRITICAL
+        service_name:
+          default: marimohub-notebook
+          type: string
+          minLength: 1
+          maxLength: 128
+      required:
+        - url
+        - source_token
+      additionalProperties: false
+    better_stack_logs_stored:
+      type: object
+      properties:
+        url:
+          type: string
+          pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
+          format: uri
+          x-marimohub-refinement: A valid http(s) logs URL with an authority, no userinfo,
+            query, fragment, or port 0
+          description: Full OTLP/HTTP JSON logs URL, including /v1/logs
+        source_token:
+          oneOf:
+            - $ref: '#/components/schemas/ManagedStoredSecret'
+            - $ref: '#/components/schemas/ReferenceStoredSecret'
+          x-marimohub-secret: true
+        level:
+          default: INFO
+          type: string
+          enum:
+            - DEBUG
+            - INFO
+            - WARNING
+            - ERROR
+            - CRITICAL
+        service_name:
+          default: marimohub-notebook
+          type: string
+          minLength: 1
+          maxLength: 128
+      required:
+        - url
+        - source_token
+        - level
+        - service_name
       additionalProperties: false
     bigquery:
       type: object
@@ -3308,6 +3475,90 @@ components:
         - scope_id
         - auth
         - default_index
+      additionalProperties: false
+    grafana_cloud_logs:
+      type: object
+      properties:
+        url:
+          type: string
+          pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
+          format: uri
+          x-marimohub-refinement: A valid http(s) logs URL with an authority, no userinfo,
+            query, fragment, or port 0
+          description: Full OTLP/HTTP JSON logs URL, including /v1/logs
+        username:
+          type: string
+          minLength: 1
+          maxLength: 256
+          pattern: ^[^:\s]+$
+          description: Grafana Cloud OTLP instance ID
+        token:
+          type: string
+          minLength: 1
+          x-marimohub-secret: true
+          description: Access policy token with permission to write logs
+          writeOnly: true
+        level:
+          default: INFO
+          type: string
+          enum:
+            - DEBUG
+            - INFO
+            - WARNING
+            - ERROR
+            - CRITICAL
+        service_name:
+          default: marimohub-notebook
+          type: string
+          minLength: 1
+          maxLength: 128
+      required:
+        - url
+        - username
+        - token
+      additionalProperties: false
+    grafana_cloud_logs_stored:
+      type: object
+      properties:
+        url:
+          type: string
+          pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
+          format: uri
+          x-marimohub-refinement: A valid http(s) logs URL with an authority, no userinfo,
+            query, fragment, or port 0
+          description: Full OTLP/HTTP JSON logs URL, including /v1/logs
+        username:
+          type: string
+          minLength: 1
+          maxLength: 256
+          pattern: ^[^:\s]+$
+          description: Grafana Cloud OTLP instance ID
+        token:
+          oneOf:
+            - $ref: '#/components/schemas/ManagedStoredSecret'
+            - $ref: '#/components/schemas/ReferenceStoredSecret'
+          x-marimohub-secret: true
+          description: Access policy token with permission to write logs
+        level:
+          default: INFO
+          type: string
+          enum:
+            - DEBUG
+            - INFO
+            - WARNING
+            - ERROR
+            - CRITICAL
+        service_name:
+          default: marimohub-notebook
+          type: string
+          minLength: 1
+          maxLength: 128
+      required:
+        - url
+        - username
+        - token
+        - level
+        - service_name
       additionalProperties: false
     html_head:
       type: object
@@ -5361,6 +5612,103 @@ components:
         - password
         - ssl
         - ambient_env
+      additionalProperties: false
+    otlp_logs:
+      type: object
+      properties:
+        url:
+          type: string
+          pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
+          format: uri
+          x-marimohub-refinement: A valid http(s) logs URL with an authority, no userinfo,
+            query, fragment, or port 0
+          description: Full OTLP/HTTP JSON logs URL, including /v1/logs
+        headers:
+          default: []
+          maxItems: 32
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                pattern: ^[!#$%&'*+.^_`|~0-9A-Za-z-]+$
+              value:
+                type: string
+                minLength: 1
+                x-marimohub-secret: true
+                writeOnly: true
+            required:
+              - name
+              - value
+            additionalProperties: false
+          x-unique-by: name
+        level:
+          default: INFO
+          type: string
+          enum:
+            - DEBUG
+            - INFO
+            - WARNING
+            - ERROR
+            - CRITICAL
+        service_name:
+          default: marimohub-notebook
+          type: string
+          minLength: 1
+          maxLength: 128
+      required:
+        - url
+      additionalProperties: false
+    otlp_logs_stored:
+      type: object
+      properties:
+        url:
+          type: string
+          pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
+          format: uri
+          x-marimohub-refinement: A valid http(s) logs URL with an authority, no userinfo,
+            query, fragment, or port 0
+          description: Full OTLP/HTTP JSON logs URL, including /v1/logs
+        headers:
+          default: []
+          maxItems: 32
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                pattern: ^[!#$%&'*+.^_`|~0-9A-Za-z-]+$
+              value:
+                oneOf:
+                  - $ref: '#/components/schemas/ManagedStoredSecret'
+                  - $ref: '#/components/schemas/ReferenceStoredSecret'
+                x-marimohub-secret: true
+            required:
+              - name
+              - value
+            additionalProperties: false
+          x-unique-by: name
+        level:
+          default: INFO
+          type: string
+          enum:
+            - DEBUG
+            - INFO
+            - WARNING
+            - ERROR
+            - CRITICAL
+        service_name:
+          default: marimohub-notebook
+          type: string
+          minLength: 1
+          maxLength: 128
+      required:
+        - url
+        - headers
+        - level
+        - service_name
       additionalProperties: false
     postgres:
       type: object
