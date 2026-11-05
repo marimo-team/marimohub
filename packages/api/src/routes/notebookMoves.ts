@@ -13,6 +13,7 @@ import {
 	commonErrors,
 	createApp,
 	errorResponses,
+	EtagResponseHeader,
 	etagFor,
 	ifMatchToken,
 	jsonBody,
@@ -42,6 +43,7 @@ const moveNotebook = createRoute({
 		200: jsonContent(
 			z.object({ success: z.literal(true), data: NotebookMetaResponseSchema }),
 			'Notebook moved',
+			EtagResponseHeader,
 		),
 		...commonErrors(),
 		...errorResponses(403, 404, 409, 412),

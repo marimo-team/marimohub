@@ -12784,6 +12784,8 @@ export interface operations {
 			/** @description Notebook moved */
 			200: {
 				headers: {
+					/** @description Strong validator (the resource version). Echo as `If-Match` to guard a write. */
+					ETag: string;
 					[name: string]: unknown;
 				};
 				content: {

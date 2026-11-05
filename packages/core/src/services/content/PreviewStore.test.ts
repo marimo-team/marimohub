@@ -58,8 +58,11 @@ describe('PreviewStore membership and receipts', () => {
 			.mockRejectedValueOnce(new Error('receipt write failed'));
 		await expect(store.finishMove(pid, record.notebook_id)).rejects.toThrow('receipt write failed');
 		expect((await store.project(pid)).entries).toHaveLength(2);
+		const marker = previewActiveProjectKey(pid, (await store.project(pid)).work_id!);
 		await store.finishMove(pid, record.notebook_id);
 		expect((await store.project(pid)).entries).toEqual([]);
+		expect(await bucket.head(marker)).toBeNull();
+		expect(await store.nextProjects('cleanup')).toEqual([]);
 		const receipts = await (await bucket.get(previewReceiptsKey(pid)))!.json<{
 			entries: { deleted: boolean }[];
 		}>();

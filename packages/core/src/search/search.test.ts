@@ -78,6 +78,11 @@ describe('authorized search', () => {
 		expect(
 			(await f.index.read({ projectId: f.project.id, source: f.source.id })).snapshot?.documents,
 		).toHaveLength(0);
+		// Deleting the emptied source project also retires its refresh marker.
+		await f.services.projects.deleteProject(f.project.id, owner.id);
+		for (let i = 0; i < 4; i++) await indexer.tick(signal());
+		expect(await f.bucket.get(searchPaths.refresh(f.project.id))).toBeNull();
+		expect(await f.bucket.get(searchPaths.refresh(destination.id))).not.toBeNull();
 	});
 
 	it.each(['राजस्व', 'รายได้', 'café'])('keeps combining marks in the token %s', (text) => {

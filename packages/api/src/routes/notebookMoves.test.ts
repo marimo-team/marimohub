@@ -503,7 +503,7 @@ describe('POST notebook move', () => {
 	});
 
 	it('does not let a source-scoped API token move into another project', async () => {
-		const { bucket, source, destination, path, headers } = await setup();
+		const { api, bucket, source, destination, notebook, path, headers } = await setup();
 		const scoped = createTestApi({
 			bucket,
 			subject: {
@@ -513,10 +513,16 @@ describe('POST notebook move', () => {
 				},
 			},
 		});
-		expect(
-			(await scoped.request('POST', path, { destination_project_id: destination.id }, headers))
-				.status,
-		).not.toBe(200);
+		// The destination is outside the grant, so it does not exist for this caller.
+		await expectError(
+			await scoped.request('POST', path, { destination_project_id: destination.id }, headers),
+			404,
+			'NOT_FOUND',
+		);
+		expect(await api.deps.services.notebooks.getNotebookContent(source.id, notebook.id)).toBe(
+			'print(1)',
+		);
+		expect(await api.deps.services.notebooks.listNotebooks(destination.id)).toEqual([]);
 	});
 
 	it('lists only managed projects for the destination picker', async () => {

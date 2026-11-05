@@ -36,7 +36,14 @@ function installFakeS3(opts: { ignoreIfMatch?: boolean } = {}) {
 	// One store per client instance so each `new S3Storage(CFG)` is isolated, even
 	// though the spy lives on the shared prototype.
 	const stores = new WeakMap<object, { map: Map<string, Stored>; n: number }>();
-	const uploads = new Map<string, Map<number, { bytes: Uint8Array; etag: string }>>();
+	const uploads = new Map<
+		string,
+		{
+			parts: Map<number, { bytes: Uint8Array; etag: string }>;
+			contentType?: string;
+			metadata?: Record<string, string>;
+		}
+	>();
 	const calls: { name: string; input: Record<string, unknown> }[] = [];
 	const toBytes = (v: unknown): Uint8Array =>
 		typeof v === 'string' ? new TextEncoder().encode(v) : (v as Uint8Array);
@@ -61,19 +68,24 @@ function installFakeS3(opts: { ignoreIfMatch?: boolean } = {}) {
 			switch (name) {
 				case 'CreateMultipartUploadCommand': {
 					const id = crypto.randomUUID();
-					uploads.set(id, new Map());
+					uploads.set(id, {
+						parts: new Map(),
+						contentType: input.ContentType,
+						metadata: input.Metadata,
+					});
 					return { UploadId: id };
 				}
 				case 'UploadPartCommand': {
-					const upload = uploads.get(input.UploadId);
+					const upload = uploads.get(input.UploadId)?.parts;
 					if (!upload) throw namedError('NoSuchUpload');
 					const etag = crypto.randomUUID();
 					upload.set(input.PartNumber, { bytes: toBytes(input.Body), etag });
 					return { ETag: etag };
 				}
 				case 'CompleteMultipartUploadCommand': {
-					const upload = uploads.get(input.UploadId);
-					if (!upload) throw namedError('NoSuchUpload');
+					const session = uploads.get(input.UploadId);
+					if (!session) throw namedError('NoSuchUpload');
+					const upload = session.parts;
 					const parts = input.MultipartUpload.Parts as { PartNumber: number; ETag: string }[];
 					let previous = 0;
 					const body = Buffer.concat(
@@ -88,7 +100,13 @@ function installFakeS3(opts: { ignoreIfMatch?: boolean } = {}) {
 						}),
 					);
 					const etag = `etag-${++store.n}`;
-					store.map.set(input.Key, { body, etag, lastModified: new Date() });
+					store.map.set(input.Key, {
+						body,
+						etag,
+						contentType: session.contentType,
+						metadata: session.metadata,
+						lastModified: new Date(),
+					});
 					uploads.delete(input.UploadId);
 					return { ETag: etag };
 				}
@@ -298,6 +316,20 @@ describe('S3Storage command mapping', () => {
 		const call = puts().at(-1)!;
 		expect(call.input.ContentType).toBe('application/json');
 		expect(call.input.Metadata).toEqual({ author: 'me' });
+	});
+
+	it('keeps content type and custom metadata on completed multipart uploads', async () => {
+		const s3 = new S3Storage(CFG);
+		const { uploadId } = await s3.multipart.create('m', {
+			httpMetadata: { contentType: 'application/octet-stream' },
+			customMetadata: { author: 'me' },
+		});
+		const part = await s3.multipart.putPart('m', uploadId, 1, new Uint8Array([1]));
+		await s3.multipart.complete('m', uploadId, [part]);
+		expect(await s3.head('m')).toMatchObject({
+			httpMetadata: { contentType: 'application/octet-stream' },
+			customMetadata: { author: 'me' },
+		});
 	});
 
 	it('get returns a bare (unquoted) etag and the byte size', async () => {

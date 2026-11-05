@@ -68,6 +68,8 @@ export class SearchIndexer {
 		});
 		const project = await this.liveProject(projectId);
 		if (!project) {
+			// A deleted project never recrawls, so its move refresh marker is retired here.
+			if (refresh) await this.bucket.delete([searchPaths.refresh(projectId)]);
 			const head = await this.index.head(scope, signal);
 			// Keep both CAS records: late first writes must not recreate a deleted scope.
 			if (!head.deleted && !(await this.index.publish(scope, null, head.revision, signal)))

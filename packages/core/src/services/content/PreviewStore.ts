@@ -137,13 +137,15 @@ export class PreviewStore {
 			.filter((entry) => entry.intent.notebook_id === nid)
 			.map((entry) => entry.intent.id);
 		for (const id of ids) await this.pruneReceipts(source, id);
-		await this.changeProject(
+		const workId = await this.changeProject(
 			source,
 			(project) => {
 				project.entries = project.entries.filter((entry) => entry.intent.notebook_id !== nid);
+				return project.entries.length === 0 ? project.work_id : undefined;
 			},
 			{ fence: true },
 		);
+		if (workId) await this.removeInactiveWork(source, workId);
 	}
 
 	constructor(private readonly bucket: Bucket) {}

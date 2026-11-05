@@ -13895,6 +13895,16 @@ paths:
       responses:
         '200':
           description: Notebook moved
+          headers:
+            ETag:
+              schema:
+                type: string
+                description: Strong validator (the resource version). Echo as `If-Match` to
+                  guard a write.
+                example: '"2025-03-05T14:00:00Z"'
+              required: true
+              description: Strong validator (the resource version). Echo as `If-Match` to
+                guard a write.
           content:
             application/json:
               schema:
