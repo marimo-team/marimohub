@@ -594,7 +594,13 @@ describe('createGuardedProbe node transport (real local server)', () => {
 		});
 	});
 
-	it.each([200, 204, 401, 302])('probes a logging endpoint over HTTP: %s', async (status) => {
+	it.each([
+		{ status: 200, responseBody: '{}' },
+		{ status: 200, responseBody: '' },
+		{ status: 204, responseBody: '' },
+		{ status: 401, responseBody: '{}' },
+		{ status: 302, responseBody: '{}' },
+	])('probes logging over HTTP: $status $responseBody', async ({ status, responseBody }) => {
 		const received: unknown[] = [];
 		const base = await serve((req, res) => {
 			let body = '';
@@ -606,7 +612,7 @@ describe('createGuardedProbe node transport (real local server)', () => {
 				received.push({ method: req.method, path: req.url, headers: req.headers, body });
 				res.statusCode = status;
 				if (status === 302) res.setHeader('location', `${base}/redirected`);
-				res.end(status === 204 ? undefined : '{}');
+				res.end(responseBody);
 			});
 		});
 		const definition = defaultRegistry().get('otlp_logs');

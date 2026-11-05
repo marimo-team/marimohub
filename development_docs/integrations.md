@@ -510,7 +510,11 @@ All destination queues share a three-second shutdown deadline.
 Two marimo compatibility hooks preserve remote verbosity (`_loggers.set_level`) and flush before kernel `os._exit()` (`handlers.construct_sigterm_handler`).
 Normal exit and multiprocessing finalization use the same shutdown function.
 Each hook initializes independently after handler installation. A failed hook emits a diagnostic while ordinary log export remains active.
-The bootstrap imports marimo in each Python child process. This adds startup cost to subprocesses that do not otherwise use marimo.
+Fresh Python interpreters and spawned multiprocessing children import marimo through the bootstrap.
+This adds startup cost even when they do not otherwise use marimo.
+Forked children inherit the hooks without rerunning `sitecustomize`. An at-fork callback replaces inherited handlers, queues, locks, and workers without replaying parent records.
+Multiprocessing clears its finalizer registry after that callback, so a separate multiprocessing callback restores the child's shutdown finalizer.
+Proxy configuration comes only from environment variables. This avoids macOS system-proxy discovery, which can crash a forked child through CFNetwork.
 
 All three kinds probe their configured URL through `IntegrationProbe`, with the same header validation and credentials as runtime export.
 The probe posts an empty `resourceLogs` array and never returns response bodies or transport error text.

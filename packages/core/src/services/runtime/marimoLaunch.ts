@@ -7,6 +7,7 @@ import type { SessionMode } from '../../constants';
 import { runtimePackageCommand } from './runtimePackageCommand';
 import { shellQuote } from './shell';
 import { loggingCommand } from './logging';
+import { mergeRuntimePackages } from '../integrations/runtimePackages';
 export { MARIMO_VERSION_COMMAND } from './runtimePackageCommand';
 
 /**
@@ -116,18 +117,22 @@ function marimoCommand(p: MarimoLaunchParams, extraFlags = ''): string {
 }
 
 function launchCommand(p: MarimoLaunchParams, sandbox = false): string {
+	if (sandbox) {
+		const packages = mergeRuntimePackages(p.runtimePackages ?? []);
+		const flags = packages.map((requirement) => ` --with ${shellQuote(requirement)}`).join('');
+		const command = marimoCommand(p, '--sandbox ');
+		return `uv run --with marimo${flags} ${loggingCommand(
+			p.loggingDirectory,
+			p.loggingDirectory || packages.length > 0 ? `python -m ${command}` : command,
+		)}`;
+	}
 	if (p.runtimePackages?.length || p.loggingDirectory) {
 		return runtimePackageCommand(
 			p.runtimePackages ?? [],
-			loggingCommand(
-				p.loggingDirectory,
-				`python -m ${marimoCommand(p, sandbox ? '--sandbox ' : '')}`,
-			),
+			loggingCommand(p.loggingDirectory, `python -m ${marimoCommand(p)}`),
 		);
 	}
-	return sandbox
-		? `uv run --with marimo ${marimoCommand(p, '--sandbox ')}`
-		: runtimePackageCommand([], marimoCommand(p));
+	return runtimePackageCommand([], marimoCommand(p));
 }
 
 // Sync only when the notebook declares real deps; an empty one just gets a

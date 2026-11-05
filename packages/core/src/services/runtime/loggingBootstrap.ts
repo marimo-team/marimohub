@@ -21,8 +21,8 @@ import threading
 import time
 from email.utils import parsedate_to_datetime
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.parse import unquote, urlsplit
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener, getproxies_environment, proxy_bypass_environment
 import weakref
 
 _processors = []
@@ -117,6 +117,20 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
+def configure_proxy(request, proxies):
+    proxy = proxies.get(request.type)
+    if not proxy or proxy_bypass_environment(request.host, proxies):
+        return
+    proxy = urlsplit(proxy if "://" in proxy else request.type + "://" + proxy)
+    if proxy.scheme not in ("http", "https") or not proxy.hostname:
+        raise ValueError("Invalid proxy URL")
+    if proxy.username and proxy.password:
+        credentials = unquote(proxy.username) + ":" + unquote(proxy.password)
+        request.add_header("Proxy-Authorization", "Basic " + base64.b64encode(credentials.encode()).decode("ascii"))
+    request.add_unredirected_header("Host", request.host)
+    request.set_proxy(unquote(proxy.netloc.rsplit("@", 1)[-1]), proxy.scheme)
+
+
 class Processor:
     def __init__(self, destination):
         self.name = destination["name"]
@@ -129,7 +143,9 @@ class Processor:
             **destination["attributes"], "service.name": destination["serviceName"],
             "marimohub.integration": self.name, "process.pid": os.getpid(),
         })}
-        self.opener = build_opener(NoRedirect())
+        # Both macOS proxy discovery and bypass checks call fork-unsafe CFNetwork.
+        self.proxies = getproxies_environment()
+        self.opener = build_opener(ProxyHandler({}), NoRedirect())
         self.queue = queue.Queue(maxsize=2048)
         self.stop = threading.Event()
         self.lock = threading.Lock()
@@ -157,6 +173,7 @@ class Processor:
             {"scope": {"name": name}, "logRecords": records} for name, records in scopes.items()
         ]}]}
         request = Request(self.url, data=json.dumps(payload).encode(), headers=self.headers)
+        configure_proxy(request, self.proxies)
         deadline = time.monotonic() + 2
         for attempt in range(2):
             retry_after = None
@@ -260,6 +277,29 @@ def shutdown():
         stop_processors(_processors)
 
 
+def arm_finalizer(_=None):
+    from multiprocessing.util import Finalize
+    Finalize(None, shutdown, exitpriority=10)
+
+
+def after_fork():
+    global _processors, _pid, _stopped, _diagnostic_lock
+    # Only the calling thread survives fork. Never join inherited workers or
+    # acquire their queues, events, or locks; another vanished thread may own them.
+    _processors = []
+    _pid = os.getpid()
+    _stopped = False
+    _diagnostic_lock = threading.Lock()
+    try:
+        for logger in (logging.getLogger(), logging.getLogger("marimo")):
+            for handler in list(logger.handlers):
+                if isinstance(handler, Handler):
+                    logger.removeHandler(handler)
+        _install(install_hooks=False)
+    except Exception:
+        diagnostic("initialization_failed")
+
+
 def install():
     global _pid
     if _pid == os.getpid():
@@ -267,11 +307,17 @@ def install():
     _pid = os.getpid()
     try:
         _install()
+        if hasattr(os, "register_at_fork"):
+            from multiprocessing.util import register_after_fork
+            # multiprocessing clears inherited finalizers after os.register_at_fork
+            # callbacks, then runs its own after-fork callbacks.
+            register_after_fork(shutdown, arm_finalizer)
+            os.register_at_fork(after_in_child=after_fork)
     except Exception:
         diagnostic("initialization_failed")
 
 
-def _install():
+def _install(install_hooks=True):
     destinations = json.loads(Path(__file__).with_name("logging.json").read_text())
     minimum = min(getattr(logging, d["level"]) for d in destinations)
     prepared = []
@@ -307,10 +353,10 @@ def _install():
         root.addHandler(handler)
         marimo_logger.addHandler(handler)
 
-    atexit.register(shutdown)
-    from multiprocessing.util import Finalize
-    Finalize(None, shutdown, exitpriority=10)
-    install_marimo_hooks(marimo_logger, minimum)
+    arm_finalizer()
+    if install_hooks:
+        atexit.register(shutdown)
+        install_marimo_hooks(marimo_logger, minimum)
 
 
 def install_marimo_hooks(marimo_logger, minimum):

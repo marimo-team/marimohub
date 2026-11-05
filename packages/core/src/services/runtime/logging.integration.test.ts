@@ -30,6 +30,19 @@ describe.runIf(Boolean(python))('notebook OTLP logging', () => {
 	])('exports and shuts down correctly: %s', (mode) => runScenario(mode), 70_000);
 });
 
+describe.runIf(Boolean(python) && process.platform !== 'win32')('forked notebook logging', () => {
+	it.each([
+		'fork',
+		'raw-fork',
+		'fork-locked-state',
+		'fork-after-shutdown',
+		'fork-initialization-failure',
+		'fork-proxy',
+		'fork-proxy-bypass',
+		'fork-proxy-env-cleared',
+	])('exports safely after %s', (mode) => runScenario(mode, 'logging_fork.py'), 30_000);
+});
+
 async function runScenario(
 	mode: string,
 	fixture = 'logging_driver.py',

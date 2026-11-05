@@ -1164,6 +1164,7 @@ Create an `otlp_logs` integration with a full logs URL that accepts OTLP/HTTP JS
 ```
 
 Hub sends the URL unchanged and rejects redirects. Use HTTPS for remote destinations, or HTTP for collectors on trusted networks.
+The exporter uses `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables for proxy configuration, including their lowercase forms. It does not discover operating-system proxy settings.
 Header names must be unique, regardless of case. HTTP framing headers, such as `Host`, `Content-Type`, and `Content-Length`, are reserved.
 All header values use the integration secret store and remain hidden after save.
 This includes tenant identifiers such as `X-Scope-OrgID`. Use `otlp_logs` for endpoints that require these headers.
@@ -1190,8 +1191,9 @@ Network failures, forced termination, and sandbox destruction can lose logs.
 
 The integrations capture `logging.exception()` but exclude `print()`, rich cell output, unlogged cell errors, existing log files, and exporter diagnostics.
 
-Python child processes inherit the logging bootstrap and export their own records.
-Each child also imports marimo for compatibility hooks, which adds startup time even when the child does not use marimo.
+Fresh Python interpreters and spawned multiprocessing children run the bootstrap and import marimo.
+This adds startup time even when they do not use marimo.
+Forked children inherit the marimo hooks and start new exporters without importing marimo again. Parent queues stay with the parent and are not replayed.
 
 ### Configuration reference
 
