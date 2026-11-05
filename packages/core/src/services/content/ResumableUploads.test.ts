@@ -22,6 +22,42 @@ function setup() {
 	return { bucket, service };
 }
 describe('resumable workspace uploads', () => {
+	it('does not carry stale upload reservations into the destination', async () => {
+		const bucket = new MemoryBucket();
+		const source = new ResumableUploads(bucket, 'source/uploads/');
+		const input = {
+			path: 'data.bin',
+			size: 100,
+			content_type: 'application/octet-stream',
+			create_only: false,
+		};
+		const finished = await source.start({ ...input, path: 'done.bin', size: 3 }, actor, 100);
+		await source.putPart(finished.id, 1, new Uint8Array([1, 2, 3]), actor);
+		const publish = async () => async () => ({ published: true });
+		const result = await source.complete(finished.id, actor, publish);
+		const upload = await source.start(input, actor, 100);
+		const staleIndex = await (await bucket.get('source/uploads/index.json'))!.text();
+		await source.cancel(upload.id, actor);
+		await bucket.put('source/uploads/index.json', staleIndex);
+		const retained = (await bucket.list({ prefix: `source/uploads/${finished.id}` })).objects.map(
+			(object) => object.key.slice('source/uploads/'.length),
+		);
+		expect(retained.length).toBeGreaterThan(0);
+		await source.copyForMove('destination/uploads/');
+		expect(await bucket.head('destination/uploads/index.json')).toBeNull();
+		expect(
+			(await bucket.list({ prefix: `destination/uploads/${finished.id}` })).objects.map((object) =>
+				object.key.slice('destination/uploads/'.length),
+			),
+		).toEqual(retained);
+		const destination = new ResumableUploads(bucket, 'destination/uploads/');
+		expect(await destination.get(finished.id, actor)).toMatchObject({ status: 'complete' });
+		expect(await destination.complete(finished.id, actor, publish)).toEqual(result);
+		await expect(destination.start(input, actor, 100)).resolves.toMatchObject({
+			status: 'uploading',
+		});
+	});
+
 	it('resumes missing parts, preserves an upload blocked by an editor, and publishes once', async () => {
 		const { bucket, service } = setup();
 		const upload = await service.startUpload(

@@ -33,6 +33,14 @@ import type {
 } from './contracts';
 
 export class SearchIndexer {
+	static async requestRefresh(
+		bucket: Bucket,
+		projectId: ProjectId,
+		revision: string = crypto.randomUUID(),
+	): Promise<void> {
+		await bucket.put(searchPaths.refresh(projectId), JSON.stringify(revision));
+	}
+
 	constructor(
 		private readonly bucket: Bucket,
 		private readonly index: SearchSnapshotStore,
@@ -48,16 +56,20 @@ export class SearchIndexer {
 		const paths = searchPaths.scope(scope);
 		const key = paths.checkpoint;
 		const stored = await this.bucket.get(key);
+		const refresh = await this.bucket.get(searchPaths.refresh(projectId));
 		const build = SearchBuildSchema.parse({
 			revision: 1,
 			source_revision: source.revision,
 			configuration: JSON.stringify({
 				source: source.configuration ?? '',
+				refresh: refresh ? await refresh.json() : null,
 				embedding: source.embeddable ? (this.embeddings?.space ?? null) : null,
 			}),
 		});
 		const project = await this.liveProject(projectId);
 		if (!project) {
+			// A deleted project never recrawls, so its move refresh marker is retired here.
+			if (refresh) await this.bucket.delete([searchPaths.refresh(projectId)]);
 			const head = await this.index.head(scope, signal);
 			// Keep both CAS records: late first writes must not recreate a deleted scope.
 			if (!head.deleted && !(await this.index.publish(scope, null, head.revision, signal)))

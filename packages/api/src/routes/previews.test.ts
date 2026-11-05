@@ -1,3 +1,4 @@
+import { thumbnailPng } from '@marimo-hub/core/testing/thumbnail';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	AppPoolService,
@@ -2165,4 +2166,120 @@ describe('source discovery cancellation', () => {
 		proceed.resolve();
 		await expectOk(await request);
 	});
+});
+
+it('fences hidden runtimes during a move and restores them when the move is cancelled', async () => {
+	const record = await create();
+	const runtime = record.current!.notebook_id;
+	const destination = await api.deps.services.projects.createProject(
+		{ name: 'Destination', description: '' },
+		ACTOR,
+	);
+	const runtimeMeta = paths.project(destination.id).notebook(runtime).previewMeta;
+	const put = api.bucket.put.bind(api.bucket);
+	let interrupted = false;
+	vi.spyOn(api.bucket, 'put').mockImplementation(async (key, bytes, options) => {
+		if (!interrupted && key === runtimeMeta) {
+			interrupted = true;
+			throw new Error('copy interrupted');
+		}
+		return put(key, bytes, options);
+	});
+	const meta = await api.deps.services.notebooks.getNotebookMeta(pid, nid);
+	const movePath = `/projects/${pid}/notebooks/${nid}/move`;
+	expect(
+		(
+			await api.request(
+				'POST',
+				movePath,
+				{ destination_project_id: destination.id },
+				{ 'If-Match': `"${meta.updated_at}"` },
+			)
+		).status,
+	).toBe(500);
+	const { notebooks } = api.deps.services;
+	await expectError(
+		await api.request('GET', `/projects/${pid}/notebooks/${nid}`),
+		404,
+		'NOT_FOUND',
+	);
+	await expect(notebooks.getNotebook(pid, runtime)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+	await expectOk(await api.request('DELETE', movePath));
+	await expectOk(await api.request('GET', `/projects/${pid}/notebooks/${nid}`));
+	expect(await notebooks.getNotebookContent(pid, runtime)).toContain('import marimo');
+	expect(await api.deps.services.previews.get(pid, nid, record.id)).toEqual(record);
+	expect((await api.deps.services.previews.store.project(destination.id)).entries).toEqual([]);
+	for (const id of [nid, runtime]) {
+		expect(
+			(await api.bucket.list({ prefix: `${paths.project(destination.id).notebook(id).base}/` }))
+				.objects,
+		).toEqual([]);
+	}
+	expect(
+		(await api.bucket.list({ prefix: `_system/previews/${destination.id}/${nid}/` })).objects,
+	).toEqual([]);
+	await expectOk(
+		await api.request(
+			'POST',
+			movePath,
+			{ destination_project_id: destination.id },
+			{ 'If-Match': `"${meta.updated_at}"` },
+		),
+	);
+	expect(await api.deps.services.previews.get(destination.id, nid, record.id)).toEqual({
+		...record,
+		project_id: destination.id,
+	});
+	expect(await notebooks.getNotebookContent(destination.id, runtime)).toContain('import marimo');
+});
+
+it('moves prepared previews and hidden runtimes with their parent notebook', async () => {
+	const created = await expectOk<{ id: string }>(
+		await api.request('POST', base, body, { 'Idempotency-Key': 'preview' }),
+		202,
+	);
+	const record = await prepare(created.id);
+	const thumbnail = await api.deps.services.notebooks.thumbnails.setCustom(
+		pid,
+		record.current!.notebook_id,
+		thumbnailPng(),
+	);
+	const destination = await api.deps.services.projects.createProject(
+		{ name: 'Destination', description: '' },
+		ACTOR,
+	);
+	const meta = await api.deps.services.notebooks.getNotebookMeta(pid, nid);
+	await expectOk(
+		await api.request(
+			'POST',
+			`/projects/${pid}/notebooks/${nid}/move`,
+			{ destination_project_id: destination.id },
+			{ 'If-Match': `"${meta.updated_at}"` },
+		),
+	);
+	const replay = await expectOk<{ id: string }>(
+		await api.request('POST', `/projects/${destination.id}/notebooks/${nid}/previews`, body, {
+			'Idempotency-Key': 'preview',
+		}),
+		202,
+	);
+	expect(replay.id).toBe(record.id);
+	const moved = await api.deps.services.previews.get(destination.id, nid, record.id);
+	expect(moved).toEqual({ ...record, project_id: destination.id });
+	expect(
+		await api.deps.services.notebooks.thumbnails.metadata(
+			destination.id,
+			record.current!.notebook_id,
+		),
+	).toEqual(thumbnail);
+	expect(
+		await api.deps.services.notebooks.getNotebookContent(
+			destination.id,
+			record.current!.notebook_id,
+		),
+	).toContain('import marimo');
+	expect((await api.deps.services.previews.store.project(pid)).entries).toHaveLength(0);
+	expect(
+		(await api.deps.services.notebooks.listNotebooks(destination.id)).map((entry) => entry.id),
+	).toEqual([nid]);
 });

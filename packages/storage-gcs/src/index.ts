@@ -103,6 +103,8 @@ function encodeObjectName(key: string): string {
 }
 
 interface GcsObjectResource {
+	contentType?: string;
+	metadata?: Record<string, string>;
 	name?: string;
 	generation?: string;
 	size?: string;
@@ -264,9 +266,12 @@ export class GcsStorage implements Bucket {
 	}
 
 	async head(key: string): Promise<BucketObject | null> {
-		const res = await this.client.raw(this.objectUrl(key, '?fields=generation,size,updated'), {
-			headers: await this.authHeaders(),
-		});
+		const res = await this.client.raw(
+			this.objectUrl(key, '?fields=generation,size,updated,contentType,metadata'),
+			{
+				headers: await this.authHeaders(),
+			},
+		);
 		if (res.status === 404) return null;
 		if (!res.ok) return this.failNonOk(res, 'head', key);
 		const meta = (await res.json()) as GcsObjectResource;
@@ -275,6 +280,8 @@ export class GcsStorage implements Bucket {
 			etag: meta.generation ?? '',
 			size: Number(meta.size ?? 0),
 			uploaded: meta.updated ? new Date(meta.updated) : new Date(),
+			httpMetadata: { contentType: meta.contentType },
+			customMetadata: meta.metadata,
 		};
 	}
 

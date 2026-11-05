@@ -1,3 +1,4 @@
+import { copyMovePrefix, moveJson } from './moveObjects';
 import { withAbortSignal } from '../../async';
 import { logOperationalError } from '../../operationalLog';
 import type { Bucket } from '../../ports/bucket';
@@ -36,6 +37,41 @@ type RetireRuntime = (pid: ProjectId, nid: NotebookId) => Promise<boolean>;
 
 export class NotebookPreviewService {
 	readonly store: PreviewStore;
+	async finishMove(source: ProjectId, nid: NotebookId): Promise<void> {
+		await this.store.finishMove(source, nid);
+		await deleteByPrefix(this.bucket, `_system/previews/${source}/${nid}/`);
+	}
+
+	async copyForMove(
+		source: ProjectId,
+		destination: ProjectId,
+		nid: NotebookId,
+		updatedAt: string,
+		moveId: string,
+	): Promise<NotebookId[]> {
+		const entries = (await this.store.project(source)).entries.filter(
+			(entry) => entry.intent.notebook_id === nid,
+		);
+		const runtimes = entries.flatMap((entry) =>
+			entry.artifacts.map((artifact) => artifact.notebook_id),
+		);
+		await this.store.copyForMove(source, destination, nid);
+		await copyMovePrefix(
+			this.bucket,
+			`_system/previews/${source}/${nid}/`,
+			`_system/previews/${destination}/${nid}/`,
+			{
+				transform: (_key, bytes) =>
+					moveJson(bytes, (record) => ({ ...record, project_id: destination })),
+			},
+		);
+		for (const id of runtimes) {
+			await this.notebooks.copyForMove(source, destination, id, updatedAt, moveId);
+			await this.notebooks.thumbnails.copyForMove(source, destination, id);
+		}
+		return runtimes;
+	}
+
 	constructor(
 		private bucket: Bucket,
 		private notebooks: NotebookService,

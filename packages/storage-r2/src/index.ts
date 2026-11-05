@@ -16,6 +16,8 @@ function toObject(r2obj: R2Object): BucketObject {
 		etag: r2obj.etag,
 		size: r2obj.size,
 		uploaded: r2obj.uploaded,
+		httpMetadata: { contentType: r2obj.httpMetadata?.contentType },
+		customMetadata: r2obj.customMetadata,
 	};
 }
 

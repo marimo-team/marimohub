@@ -249,7 +249,7 @@ export class ProjectService {
 			subject: AuthorizationSubject;
 			policy?: AuthorizationPolicy;
 			resourceSecurity?: ResourceSecurityPolicy;
-			action?: 'project.read' | 'app.read';
+			action?: 'project.read' | 'app.read' | 'notebook.manage';
 		},
 	): Promise<PublicProjectEntry[]> {
 		const authz = filter

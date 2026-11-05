@@ -85,6 +85,7 @@ export function stubSourceControl(
 ): SourceControlRegistry {
 	const { publisher, reader } = options;
 	return {
+		assertRepositoryAllowed: () => {},
 		getPublisher: (provider) => (provider === publisher?.provider ? publisher : undefined),
 		getReader: (provider) => (provider === reader?.provider ? reader : undefined),
 		publisherProviders: () => (publisher ? [publisher.provider] : []),

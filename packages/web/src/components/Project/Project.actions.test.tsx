@@ -29,6 +29,7 @@ describe('Project — Notebook Actions: configuration', () => {
 			'Rename',
 			'Edit thumbnail',
 			'Duplicate',
+			'Move to project…',
 			'Run as app',
 			'Browse files',
 			'View static outputs',

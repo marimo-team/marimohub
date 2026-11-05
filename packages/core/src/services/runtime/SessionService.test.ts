@@ -22,6 +22,7 @@ import {
 import { ConflictError, PreconditionFailedError } from '../../errors';
 
 import type { SessionId } from '../../ids';
+import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { Millis } from '../../duration';
 import { paths } from '../../paths';
 import type { Source } from '../../schema';
@@ -137,6 +138,70 @@ describe('SessionService', () => {
 				expect(remove).not.toHaveBeenCalled();
 			},
 		);
+	});
+
+	describe('assertReadyForMove', () => {
+		it.each(['none', 'live', 'reclaimed'] as const)(
+			'checks an expired session with a %s sandbox',
+			async (sandbox) => {
+				const session = await sessions.createSession({
+					project_id: projectId,
+					notebook_id: notebookId,
+					user_id: ACTOR,
+					...(sandbox === 'none' ? {} : { sandbox_id: SandboxId.create() }),
+				});
+				const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6 * 60_000);
+				try {
+					await sessions.expireStale();
+				} finally {
+					clock.mockRestore();
+				}
+				if (sandbox === 'reclaimed')
+					await sessions.markSandboxReclaimed(
+						projectId,
+						session.session_id,
+						new Date().toISOString(),
+					);
+				const check = sessions.assertReadyForMove(projectId, new Set([notebookId]));
+				if (sandbox === 'live') await expect(check).rejects.toThrow(ConflictError);
+				else await expect(check).resolves.toBeUndefined();
+			},
+		);
+
+		it('reads retained session records with bounded concurrency', async () => {
+			for (let i = 0; i < BUCKET_SCAN_CONCURRENCY + 1; i++) {
+				const session = await sessions.createSession({
+					project_id: projectId,
+					notebook_id: notebookId,
+					user_id: ACTOR,
+				});
+				await sessions.markFailed(projectId, session.session_id);
+			}
+			const get = bucket.get.bind(bucket);
+			let reading = 0;
+			let peak = 0;
+			vi.spyOn(bucket, 'get').mockImplementation(async (key) => {
+				if (!key.startsWith(paths.sessionsForProject(projectId))) return get(key);
+				reading++;
+				peak = Math.max(peak, reading);
+				try {
+					await Promise.resolve();
+					return await get(key);
+				} finally {
+					reading--;
+				}
+			});
+			await sessions.assertReadyForMove(projectId, new Set([notebookId]));
+			expect(peak).toBeGreaterThan(1);
+			expect(peak).toBeLessThanOrEqual(BUCKET_SCAN_CONCURRENCY);
+		});
+
+		it('rejects corrupt session records during the bounded project scan', async () => {
+			await bucket.put(paths.session(projectId, createSessionId()), '{"broken": true}');
+			await expect(sessions.assertReadyForMove(projectId, new Set([notebookId]))).rejects.toThrow(
+				StoredObjectError,
+			);
+		});
 	});
 
 	describe('listEditorsBlockingSourceUpdate', () => {

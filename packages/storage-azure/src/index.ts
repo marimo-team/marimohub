@@ -183,6 +183,8 @@ export class AzureStorage implements Bucket {
 				etag: normalizeETag(response.etag),
 				size: response.contentLength ?? bodyBytes.length,
 				uploaded: response.lastModified ?? new Date(),
+				httpMetadata: { contentType: response.contentType },
+				customMetadata: response.metadata,
 				text: async () => decode(),
 				json: async <T = unknown>() => JSON.parse(decode()) as T,
 				bytes: async () => bodyBytes,
@@ -201,6 +203,8 @@ export class AzureStorage implements Bucket {
 				etag: normalizeETag(response.etag),
 				size: response.contentLength ?? 0,
 				uploaded: response.lastModified ?? new Date(),
+				httpMetadata: { contentType: response.contentType },
+				customMetadata: response.metadata,
 			};
 		} catch (err) {
 			if (isNotFound(err)) return null;

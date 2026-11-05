@@ -48,6 +48,8 @@ function makeFakeContainer(
 				etag: item.etag,
 				contentLength: item.body.length,
 				lastModified: item.uploaded,
+				contentType: item.contentType,
+				metadata: item.metadata,
 			},
 		};
 	};
@@ -105,6 +107,8 @@ function makeFakeContainer(
 						etag: item.etag,
 						contentLength: item.body.length,
 						lastModified: item.uploaded,
+						contentType: item.contentType,
+						metadata: item.metadata,
 						readableStreamBody: Readable.from([item.body]),
 					};
 				},
@@ -115,6 +119,8 @@ function makeFakeContainer(
 						etag: item.etag,
 						contentLength: item.body.length,
 						lastModified: item.uploaded,
+						contentType: item.contentType,
+						metadata: item.metadata,
 					};
 				},
 				async deleteIfExists() {
@@ -181,10 +187,14 @@ function makeFakeContainer(
 	return { client, store, calls, deleteFailures };
 }
 
-bucketContract('AzureStorage (fake ContainerClient)', () => {
-	const fake = makeFakeContainer();
-	return new AzureStorage({ containerClient: fake.client });
-});
+bucketContract(
+	'AzureStorage (fake ContainerClient)',
+	() => {
+		const fake = makeFakeContainer();
+		return new AzureStorage({ containerClient: fake.client });
+	},
+	{ metadata: true },
+);
 
 describe('AzureStorage construction', () => {
 	it('accepts an injected container client', () => {
@@ -458,10 +468,13 @@ const liveContainer = process.env.MARIMOHUB_TEST_AZURE_CONTAINER;
 const liveConnectionString = process.env.MARIMOHUB_TEST_AZURE_CONNECTION_STRING;
 const liveAccountUrl = process.env.MARIMOHUB_TEST_AZURE_ACCOUNT_URL;
 if (liveContainer && (liveConnectionString || liveAccountUrl)) {
-	bucketContract('AzureStorage (live)', () =>
-		liveConnectionString
-			? new AzureStorage({ container: liveContainer, connectionString: liveConnectionString })
-			: new AzureStorage({ container: liveContainer, accountUrl: liveAccountUrl! }),
+	bucketContract(
+		'AzureStorage (live)',
+		() =>
+			liveConnectionString
+				? new AzureStorage({ container: liveContainer, connectionString: liveConnectionString })
+				: new AzureStorage({ container: liveContainer, accountUrl: liveAccountUrl! }),
+		{ metadata: true },
 	);
 } else {
 	describe.skip('AzureStorage live contract', () => {

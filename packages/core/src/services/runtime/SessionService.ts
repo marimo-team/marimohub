@@ -1,3 +1,4 @@
+import { copyMoveObject } from '../content/moveObjects';
 import { readForInspection } from './inspection';
 import type { Bucket, BucketObject } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
@@ -150,6 +151,39 @@ const byCapOrder = (a: Session, b: Session) => {
 };
 
 export class SessionService {
+	async assertReadyForMove(
+		projectId: ProjectId,
+		notebookIds: ReadonlySet<NotebookId>,
+	): Promise<void> {
+		for (const session of await this.listByProject(projectId)) {
+			if (
+				notebookIds.has(session.notebook_id) &&
+				(!isTerminal(session.status) || (session.sandbox_id && !session.sandbox_reclaimed_at))
+			)
+				throw new ConflictError('Stop notebook and preview sessions before moving');
+		}
+	}
+
+	async copyPruneCutoffForMove(
+		source: ProjectId,
+		destination: ProjectId,
+		nid: NotebookId,
+	): Promise<void> {
+		await copyMoveObject(
+			this.bucket,
+			paths.versionPruneCutoff(source, nid),
+			paths.versionPruneCutoff(destination, nid),
+		);
+	}
+
+	async finishNotebookMove(source: ProjectId, nid: NotebookId): Promise<void> {
+		await this.bucket.delete([
+			paths.editorClaim(source, nid),
+			paths.appClaim(source, nid),
+			paths.versionPruneCutoff(source, nid),
+		]);
+	}
+
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,

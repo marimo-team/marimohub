@@ -295,6 +295,8 @@ function projectPaths(pid: ProjectId): ProjectPaths {
 }
 
 export const paths = {
+	notebookMoves: '_system/notebook-moves/',
+	notebookMove: (nid: NotebookId) => `_system/notebook-moves/${nid}.json`,
 	deepLink: (slug: string) => `_system/deep-links/${slug}.json`,
 	catalog: '_system/catalog.json',
 	snapshot: (id: SnapshotId) => `_system/snapshots/${id}.json`,

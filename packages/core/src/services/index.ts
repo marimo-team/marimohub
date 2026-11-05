@@ -1,3 +1,6 @@
+import { NotebookMoveService } from './content/NotebookMoveService';
+export { NotebookMoveService } from './content/NotebookMoveService';
+export type { NotebookMoveContext } from './content/NotebookMoveService';
 import type { WorkspaceLimits } from '../integrations/remoteWorkspace';
 import { NotebookPreviewService } from './content/NotebookPreviewService';
 import { previewKey } from './content/notebookPreviews';
@@ -655,27 +658,48 @@ export function createServices(
 		lookup: scope,
 		record: scope,
 	});
+	const previews = wrap('NotebookPreviewService', new NotebookPreviewService(bucket, notebooks), {
+		get: preview,
+		projectRecords: (pid, nid) => (nid ? notebook(pid, nid) : project(pid)),
+		list: notebook,
+		source: notebook,
+		create: notebook,
+		prepare: previewRecord,
+		reapAdmissions: previewRecord,
+		reserveAdmission: previewRecord,
+		releaseAdmission: previewRecord,
+		commitAdmission: previewRecord,
+		retire: previewRecord,
+		cleanup: previewRecord,
+		prune: previewRecord,
+	});
+
 	return {
 		catalog,
 		events,
 		projects,
 		notebooks,
 		proposals,
-		previews: wrap('NotebookPreviewService', new NotebookPreviewService(bucket, notebooks), {
-			get: preview,
-			projectRecords: (pid, nid) => (nid ? notebook(pid, nid) : project(pid)),
-			list: notebook,
-			source: notebook,
-			create: notebook,
-			prepare: previewRecord,
-			reapAdmissions: previewRecord,
-			reserveAdmission: previewRecord,
-			releaseAdmission: previewRecord,
-			commitAdmission: previewRecord,
-			retire: previewRecord,
-			cleanup: previewRecord,
-			prune: previewRecord,
-		}),
+		previews,
+		moves: wrap(
+			'NotebookMoveService',
+			new NotebookMoveService(bucket, catalog, {
+				notebooks,
+				sessions,
+				jobs,
+				jobRuns,
+				proposals,
+				previews,
+				deepLinks,
+			}),
+			{
+				move: (input) => ({
+					...notebook(input.source, input.notebookId),
+					'marimohub.destination_project_id': input.destination,
+				}),
+				cancel: (input) => notebook(input.source, input.notebookId),
+			},
+		),
 		sessions,
 		runtimeInspection,
 		jobs,

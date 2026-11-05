@@ -1781,3 +1781,13 @@ crawl to an empty checkpoint after publishing the tombstone. Retain both records
 to fence delayed writers; reclaim detached pages and snapshots after the grace period.
 See the [search design](./search.md) for consistency assumptions, budgets, tradeoffs, scaling limits,
 and performance evidence. The [search guide](../docs/search.md) covers configuration.
+
+## Notebook moves
+
+`NotebookMoveService` owns the leased CAS record at `_system/notebook-moves/{nid}.json`
+and the `move_id` stamp it places in the notebook's `meta.json` (and each hidden
+runtime's `preview-runtime.json`) from fencing until cleanup. Every writer already
+reads or compare-and-swaps that record, so the fence costs no extra object or request.
+Other owners copy their records under the move record. The catalog changes through
+`CatalogService.mutateSnapshot`; search refreshes go through `SearchIndexer`.
+See [notebook moves](./notebook_moves.md) for behavior and stuck-move handling.

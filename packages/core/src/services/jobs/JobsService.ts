@@ -1,7 +1,9 @@
+import { copyMovePrefix, moveJson } from '../content/moveObjects';
 import type { Bucket } from '../../ports/bucket';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import {
+	ConflictError,
 	NotFoundError,
 	ResourceExhaustedError,
 	ValidationError,
@@ -125,6 +127,26 @@ export function indexedJobs(snapshot: Snapshot): IndexedJob[] {
  * job index. Runs are owned by `JobRunService`.
  */
 export class JobsService {
+	async assertReadyForMove(projectId: ProjectId, notebookId: NotebookId): Promise<void> {
+		const pending = await this.bucket.list({
+			prefix: paths.jobDeletionClaimsForNotebook(projectId, notebookId),
+			limit: 1,
+		});
+		if (pending.objects.length > 0)
+			throw new ConflictError('Wait for notebook job deletion before moving');
+	}
+
+	async copyForMove(source: ProjectId, destination: ProjectId, nid: NotebookId): Promise<void> {
+		await this.assertReadyForMove(source, nid);
+		const from = paths.project(source).notebook(nid);
+		const to = paths.project(destination).notebook(nid);
+		await copyMovePrefix(this.bucket, from.jobsPrefix, to.jobsPrefix, {
+			include: (key) => key.endsWith('/job.json'),
+			transform: (_key, bytes) => moveJson(bytes, (job) => ({ ...job, project_id: destination })),
+		});
+		await copyMovePrefix(this.bucket, from.jobIndexPrefix, to.jobIndexPrefix);
+	}
+
 	constructor(
 		private bucket: Bucket,
 		private catalog: CatalogService,

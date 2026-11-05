@@ -50,7 +50,10 @@ import type {
 // imports (`ProjectSummary`, `NotebookEntry`, ...) continue to work.
 export type ProjectSummary = SnapshotProjectEntry;
 type ProjectListQuery = NonNullable<paths['/api/v1/projects']['get']['parameters']['query']>;
-export type ProjectListFilters = Pick<ProjectListQuery, 'q' | 'status' | 'tag' | 'tag_namespace'>;
+export type ProjectListFilters = Pick<
+	ProjectListQuery,
+	'q' | 'status' | 'tag' | 'tag_namespace' | 'managed_only'
+>;
 /** The full project meta returned by `GET /api/v1/projects/:id` (includes `federation`). */
 export type ProjectDetail = ClientProject;
 export type ProjectDefaultRole = NonNullable<ProjectDetail['default_role']>;

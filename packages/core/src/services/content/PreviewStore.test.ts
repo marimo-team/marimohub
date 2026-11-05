@@ -45,6 +45,32 @@ afterEach(() => {
 });
 
 describe('PreviewStore membership and receipts', () => {
+	it('retains membership until moved preview receipts are retired, including failed cleanup retries', async () => {
+		const { bucket, store, pid, intent } = fixture();
+		const first = await store.receipt(pid, 'first', 'one');
+		const second = await store.receipt(pid, 'second', 'two');
+		const record = intent(first.id);
+		await store.reserve(record);
+		await store.reserve({ ...intent(second.id), notebook_id: record.notebook_id });
+		const prune = store.pruneReceipts.bind(store);
+		vi.spyOn(store, 'pruneReceipts')
+			.mockImplementationOnce(prune)
+			.mockRejectedValueOnce(new Error('receipt write failed'));
+		await expect(store.finishMove(pid, record.notebook_id)).rejects.toThrow('receipt write failed');
+		expect((await store.project(pid)).entries).toHaveLength(2);
+		const marker = previewActiveProjectKey(pid, (await store.project(pid)).work_id!);
+		await store.finishMove(pid, record.notebook_id);
+		expect((await store.project(pid)).entries).toEqual([]);
+		expect(await bucket.head(marker)).toBeNull();
+		expect(await store.nextProjects('cleanup')).toEqual([]);
+		const receipts = await (await bucket.get(previewReceiptsKey(pid)))!.json<{
+			entries: { deleted: boolean }[];
+		}>();
+		expect(receipts.entries).toHaveLength(2);
+		expect(receipts.entries.every((entry) => entry.deleted)).toBe(true);
+		await expect(store.receipt(pid, 'second', 'two')).rejects.toThrow('deleted');
+	});
+
 	it('reserves a single membership under concurrent retries', async () => {
 		const { store, pid, intent } = fixture();
 		const record = intent();

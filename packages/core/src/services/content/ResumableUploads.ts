@@ -1,3 +1,4 @@
+import { copyMovePrefix, moveJson } from './moveObjects';
 import { z } from 'zod';
 import {
 	BadRequestError,
@@ -70,6 +71,39 @@ async function partHash(bytes: Uint8Array): Promise<string> {
 
 /** Each owner supplies a scoped prefix; no key or backend upload ID comes from a client. */
 export class ResumableUploads {
+	async assertReadyForMove(): Promise<void> {
+		for (const object of await listAllObjects(this.bucket, this.prefix)) {
+			if (!object.key.endsWith('.json') || object.key === `${this.prefix}index.json`) continue;
+			const head = await this.bucket.get(object.key);
+			if (!head) continue;
+			const upload = await readStored(UploadRecordSchema, head, head.key);
+			if (upload.status === 'uploading' || upload.status === 'publishing')
+				throw new ConflictError('Finish or cancel workspace uploads before moving');
+		}
+	}
+
+	async copyForMove(destination: string): Promise<void> {
+		await this.assertReadyForMove();
+		await copyMovePrefix(this.bucket, this.prefix, destination, {
+			include: (key) => key !== 'index.json',
+			transform: (key, bytes) =>
+				key.endsWith('.json') && key !== 'index.json'
+					? moveJson(bytes, (raw) => {
+							const record = UploadRecordSchema.parse(raw);
+							return {
+								...record,
+								parts: record.parts.map((part) => ({
+									...part,
+									...(part.key?.startsWith(this.prefix)
+										? { key: destination + part.key.slice(this.prefix.length) }
+										: {}),
+								})),
+							};
+						})
+					: bytes,
+		});
+	}
+
 	constructor(
 		private readonly bucket: Bucket,
 		private readonly prefix: string,

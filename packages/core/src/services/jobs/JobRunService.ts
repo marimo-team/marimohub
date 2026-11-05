@@ -1,3 +1,4 @@
+import { copyMovePrefix, moveJson } from '../content/moveObjects';
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
@@ -111,6 +112,21 @@ function operationHolderToken(holder: string): string {
  * rewritten.
  */
 export class JobRunService {
+	async copyForMove(source: ProjectId, destination: ProjectId, nid: NotebookId): Promise<void> {
+		await copyMovePrefix(
+			this.bucket,
+			paths.project(source).notebook(nid).jobsPrefix,
+			paths.project(destination).notebook(nid).jobsPrefix,
+			{
+				include: (key) => !key.endsWith('/job.json'),
+				transform: (key, bytes) =>
+					key.endsWith('/run.json')
+						? moveJson(bytes, (run) => ({ ...run, project_id: destination }))
+						: bytes,
+			},
+		);
+	}
+
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,

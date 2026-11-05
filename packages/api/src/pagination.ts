@@ -57,6 +57,10 @@ const ListFilterQuery = {
 };
 
 export const ProjectListQuery = PaginationQuery.extend({
+	managed_only: z
+		.enum(['true', 'false'])
+		.optional()
+		.openapi({ description: 'Only include projects the caller can manage notebooks in.' }),
 	tag_namespace: OptionalTagNamespaceSchema.openapi({
 		param: { name: 'tag_namespace', in: 'query' },
 		description: `${TAG_NAMESPACE_DESCRIPTION} An empty value applies no filter.`,

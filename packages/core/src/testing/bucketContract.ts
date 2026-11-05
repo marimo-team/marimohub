@@ -13,13 +13,36 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { PreconditionFailedError } from '../errors';
 import type { Bucket } from '../ports/bucket';
 
-export function bucketContract(name: string, makeBucket: () => Bucket | Promise<Bucket>): void {
+export function bucketContract(
+	name: string,
+	makeBucket: () => Bucket | Promise<Bucket>,
+	options: { metadata?: boolean } = {},
+): void {
 	describe(`Bucket contract: ${name}`, () => {
 		let bucket: Bucket;
 
 		beforeEach(async () => {
 			bucket = await makeBucket();
 		});
+
+		if (options.metadata) {
+			it('preserves HTTP and custom metadata in head reads and conditional copies', async () => {
+				const metadata = {
+					httpMetadata: { contentType: 'image/png' },
+					customMetadata: { source: 'notebook', revision: '42' },
+				};
+				await bucket.put('metadata/source', new Uint8Array([1, 2]), metadata);
+				const source = await bucket.head('metadata/source');
+				expect(source).toMatchObject(metadata);
+				await bucket.put('metadata/copy', await (await bucket.get('metadata/source'))!.bytes(), {
+					httpMetadata: source!.httpMetadata,
+					customMetadata: source!.customMetadata,
+					onlyIfNotExists: true,
+				});
+				expect(await bucket.head('metadata/copy')).toMatchObject(metadata);
+				await bucket.delete(['metadata/source', 'metadata/copy']);
+			});
+		}
 
 		for (const size of [1, 3]) {
 			it(`putStream rejects a ${size}-byte source declared as 2 bytes`, async ({ skip }) => {

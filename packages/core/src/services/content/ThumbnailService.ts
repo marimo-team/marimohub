@@ -1,3 +1,4 @@
+import { copyMoveObject, copyMovePrefix } from './moveObjects';
 import { utcTimestamp } from '../../stringFormats';
 import { all } from 'better-all';
 import { z } from 'zod';
@@ -54,6 +55,13 @@ export interface ThumbnailCapture {
 }
 
 export class ThumbnailService {
+	async copyForMove(source: ProjectId, destination: ProjectId, nid: NotebookId): Promise<void> {
+		const from = paths.project(source).notebook(nid);
+		const to = paths.project(destination).notebook(nid);
+		await copyMovePrefix(this.bucket, from.thumbnailImages, to.thumbnailImages);
+		await copyMoveObject(this.bucket, from.thumbnail, to.thumbnail);
+	}
+
 	constructor(
 		private bucket: Bucket,
 		private notebooks: Pick<NotebookService, 'getNotebook' | 'getVersionHtmlSnapshot'>,

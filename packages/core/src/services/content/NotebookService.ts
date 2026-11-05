@@ -1,3 +1,4 @@
+import { copyMoveObject, copyMovePrefix, moveJson } from './moveObjects';
 import { ResumableUploads } from './ResumableUploads';
 import type { WorkspaceLimits } from '../../integrations/remoteWorkspace';
 import { MetadataCache } from './metadataCache';
@@ -165,6 +166,46 @@ export class NotebookService {
 	readonly workspace: NotebookWorkspaceService;
 	readonly imports: NotebookImportService;
 
+	/** Removes the metadata records first so the source stops resolving before its files go. */
+	async removeMovedObjects(projectId: ProjectId, notebookId: NotebookId): Promise<void> {
+		const nb = paths.project(projectId).notebook(notebookId);
+		await this.bucket.delete([nb.meta, nb.previewMeta]);
+		await deleteByPrefix(this.bucket, `${nb.base}/`);
+	}
+
+	/**
+	 * Copies notebook files, versions, and source into the destination. The metadata record is
+	 * written last and still fenced by `moveId`, so the copy never resolves before publication.
+	 */
+	async copyForMove(
+		source: ProjectId,
+		destination: ProjectId,
+		nid: NotebookId,
+		updatedAt: string,
+		moveId: string,
+	): Promise<void> {
+		const from = paths.project(source).notebook(nid);
+		const to = paths.project(destination).notebook(nid);
+		const metaFiles = ['meta.json', 'preview-runtime.json'];
+		await copyMovePrefix(this.bucket, `${from.base}/`, `${to.base}/`, {
+			include: (key) =>
+				!metaFiles.includes(key) &&
+				!/^(jobs\/|job-index\/|proposals\/|thumbnail.json$|thumbnails\/|thumbnail-attempts\/|deep-links\/|uploads\/|workspace_mutation_claim.json$|integration_sync_token.json$|fs_snapshot.json$)/.test(
+					key,
+				),
+		});
+		for (const file of metaFiles) {
+			await copyMoveObject(this.bucket, `${from.base}/${file}`, `${to.base}/${file}`, (bytes) =>
+				moveJson(bytes, (meta) => ({
+					...meta,
+					project_id: destination,
+					updated_at: updatedAt,
+					move_id: moveId,
+				})),
+			);
+		}
+	}
+
 	constructor(
 		private bucket: Bucket,
 		private catalog: CatalogService,
@@ -312,6 +353,9 @@ export class NotebookService {
 			options.consistency,
 		);
 		if (!meta) throw new NotFoundError(`Notebook ${notebookId} not found`);
+		// A notebook in transit is unreadable and unwritable in both projects until the move
+		// publishes; every writer reads or compare-and-swaps this record first.
+		if (meta.move_id) throw new NotFoundError(`Notebook ${notebookId} is being moved`);
 		return meta;
 	}
 

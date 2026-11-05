@@ -125,6 +125,33 @@ describe('traced', () => {
 });
 
 describe('createServices tracing option', () => {
+	it('traces notebook moves with both project ids', async () => {
+		const services = createServices(new MemoryBucket(), undefined, { tracing: true });
+		const source = createProjectId();
+		const destination = createProjectId();
+		const notebookId = createNotebookId();
+		await expect(
+			services.moves.move({
+				source,
+				destination,
+				notebookId,
+				actor: 'actor' as UserId,
+				authorize: async () => {},
+			}),
+		).rejects.toThrow(NotFoundError);
+		const spans = exporter.getFinishedSpans();
+		const move = spans.find((span) => span.name === 'NotebookMoveService.move');
+		expect(move?.status.code).toBe(2);
+		expect(move?.attributes).toEqual({
+			'marimohub.project_id': source,
+			'marimohub.notebook_id': notebookId,
+			'marimohub.destination_project_id': destination,
+		});
+		expect(spans.find((span) => span.name === 'Bucket.get')?.parentSpanContext?.spanId).toBe(
+			move?.spanContext().spanId,
+		);
+	});
+
 	it('spans service and bucket calls with id/key attributes when enabled', async () => {
 		const services = createServices(new MemoryBucket(), undefined, { tracing: true });
 		await services.identities.get('user-1' as UserId);

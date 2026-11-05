@@ -3867,6 +3867,88 @@
 			"accepts_idempotency_key": false
 		},
 		{
+			"id": "notebooks.move",
+			"command": ["notebooks", "move"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/move",
+			"summary": "Move a notebook to another project",
+			"description": "Repeat the same request to resume a move that was interrupted; the notebook is unavailable in both projects until it completes.",
+			"parameters": [
+				{
+					"name": "if-match",
+					"cli_name": "if-match",
+					"in": "header",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "destination_project_id",
+						"cli_name": "destination-project-id",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": true,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.move.cancel",
+			"command": ["notebooks", "move", "cancel"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/move",
+			"summary": "Cancel an unpublished notebook move",
+			"description": "Removes destination copies and makes the notebook available in its source project again. A move that has already published cannot be cancelled; repeat it to finish.",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
 			"id": "notebooks.previews.create",
 			"command": ["notebooks", "previews", "create"],
 			"method": "POST",
@@ -5201,6 +5283,15 @@
 					"in": "query",
 					"required": false,
 					"value_type": "integer",
+					"repeatable": false
+				},
+				{
+					"name": "managed_only",
+					"cli_name": "managed-only",
+					"in": "query",
+					"required": false,
+					"description": "Only include projects the caller can manage notebooks in.",
+					"value_type": "string",
 					"repeatable": false
 				},
 				{

@@ -1129,11 +1129,13 @@ describe('JobScheduler', () => {
 			await env.jobRuns.enqueue({ job, trigger: 'manual', timeoutSeconds: 60 });
 			const s = scheduler(fakeRunner(env, 'hang'));
 			const result = await s.tick();
-			expect(result).toMatchObject({ fired: 0, skipped: 1 });
-			expect((await env.jobRuns.listRuns(pid, nid, job.id)).map((r) => r.status).sort()).toEqual([
-				'provisioning',
-				'skipped',
-			]);
+			expect(result).toMatchObject({ fired: 0, skipped: 1, dispatched: 1 });
+			const runs = await env.jobRuns.listRuns(pid, nid, job.id);
+			expect(runs).toHaveLength(2);
+			expect(runs.filter((run) => run.status === 'skipped')).toHaveLength(1);
+			expect(
+				runs.filter((run) => ['queued', 'provisioning', 'running'].includes(run.status)),
+			).toHaveLength(1);
 		});
 
 		it('does not retry a cancelled run', async () => {

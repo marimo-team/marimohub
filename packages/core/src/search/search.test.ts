@@ -24,6 +24,67 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 describe('authorized search', () => {
+	it('does not restart a crawl when a refresh revision is replayed', async () => {
+		const f = await setup();
+		const indexer = new SearchIndexer(
+			f.bucket,
+			f.index,
+			[f.source],
+			f.services.catalog,
+			f.services.projects,
+		);
+		await SearchIndexer.requestRefresh(f.bucket, f.project.id, 'move-one');
+		await indexer.step(f.project.id, f.source, signal());
+		const checkpointKey = searchPaths.scope({
+			projectId: f.project.id,
+			source: f.source.id,
+		}).checkpoint;
+		const checkpoint = await (await f.bucket.get(checkpointKey))!.text();
+		await SearchIndexer.requestRefresh(f.bucket, f.project.id, 'move-one');
+		await indexer.step(f.project.id, f.source, signal());
+		expect(await (await f.bucket.get(checkpointKey))!.text()).toBe(checkpoint);
+		await SearchIndexer.requestRefresh(f.bucket, f.project.id, 'move-two');
+		await indexer.step(f.project.id, f.source, signal());
+		expect(await (await f.bucket.get(checkpointKey))!.text()).not.toBe(checkpoint);
+	});
+
+	it('refreshes both projects after a move without waiting for the recrawl interval', async () => {
+		const f = await setup();
+		const destination = await f.services.projects.createProject(
+			{ name: 'Destination', description: '' },
+			owner.id,
+		);
+		const indexer = new SearchIndexer(
+			f.bucket,
+			f.index,
+			[f.source],
+			f.services.catalog,
+			f.services.projects,
+		);
+		await indexer.step(destination.id, f.source, signal());
+		await f.services.moves.move({
+			source: f.project.id,
+			destination: destination.id,
+			notebookId: f.notebook.id,
+			actor: owner.id,
+			authorize: async () => {},
+		});
+		expect((await f.search.search(owner, f.query)).items).toHaveLength(0);
+		await indexer.step(f.project.id, f.source, signal());
+		await indexer.step(destination.id, f.source, signal());
+		expect(
+			(await f.search.search(owner, { ...f.query, project_id: destination.id })).items,
+		).toHaveLength(1);
+		expect(
+			(await f.index.read({ projectId: f.project.id, source: f.source.id })).snapshot?.documents,
+		).toHaveLength(0);
+		// Deleting the emptied source project also retires its refresh marker.
+		await f.services.projects.deleteProject(f.project.id, owner.id);
+		for (let i = 0; i < 4; i++) await indexer.tick(signal());
+		expect(await f.bucket.get(searchPaths.refresh(f.project.id))).toBeNull();
+		expect(await f.bucket.get(searchPaths.refresh(destination.id))).not.toBeNull();
+	});
+
 	it.each(['राजस्व', 'รายได้', 'café'])('keeps combining marks in the token %s', (text) => {
 		expect(terms(`${text} ${text}`)).toEqual([text.normalize('NFC')]);
 	});

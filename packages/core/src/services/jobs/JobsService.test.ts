@@ -28,6 +28,26 @@ describe('JobsService', () => {
 		nid = notebook.id;
 	});
 
+	it('blocks moves while deferred job deletion still retains a head', async () => {
+		const job = await env.jobs.createJob(pid, nid, { name: 'deleting' }, ACTOR);
+		const destination = await env.projects.createProject(
+			{ name: 'destination', description: '' },
+			ACTOR,
+		);
+		await env.jobs.beginDelete(pid, nid, job.id, ACTOR);
+		expect(await env.jobs.listJobs(pid, nid)).toEqual([]);
+		expect(await env.bucket.head(paths.project(pid).notebook(nid).job(job.id).head)).not.toBeNull();
+		await expect(env.jobs.assertReadyForMove(pid, nid)).rejects.toThrow('job deletion');
+		await expect(env.jobs.copyForMove(pid, destination.id, nid)).rejects.toThrow('job deletion');
+		expect(
+			await env.bucket.head(paths.project(destination.id).notebook(nid).job(job.id).head),
+		).toBeNull();
+		await env.jobs.finishDelete(pid, nid, job.id);
+		await expect(env.jobs.assertReadyForMove(pid, nid)).resolves.toBeUndefined();
+		await env.jobs.copyForMove(pid, destination.id, nid);
+		expect(await env.jobs.listJobs(destination.id, nid)).toEqual([]);
+	});
+
 	it('creates a definition, indexes it in the snapshot, and lists it', async () => {
 		const job = await env.jobs.createJob(
 			pid,
