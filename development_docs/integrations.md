@@ -483,3 +483,36 @@ pnpm typecheck
 pnpm test
 pnpm build
 ```
+
+## Logging runtime
+
+The logging kinds render typed `logging` destinations and share pinned OpenTelemetry packages through `runtimePackages`.
+See [Remote logging](../docs/integrations.md#remote-logging) for configuration and delivery limits.
+
+`SandboxProvisioner` writes the bootstrap and destination configuration under `/tmp/marimohub-logging/{sandbox-id}`.
+The launch command adds that directory to `PYTHONPATH` after uv selects the package environment.
+Only the workload command receives this path. Launches without logging contributions leave retained bootstrap files inactive.
+Credentials remain outside the integration manifest.
+
+The bootstrap chains an existing `sitecustomize` and initializes once per process, including spawned kernels.
+Each destination has one handler, attached to both root and marimo loggers, with duplicate records suppressed.
+Initialization prepares all exporters before it attaches handlers. Failure closes prepared exporters and removes the diagnostic filter.
+Global OpenTelemetry providers remain unchanged.
+
+Two marimo compatibility hooks preserve remote verbosity (`_loggers.set_level`) and flush before kernel `os._exit()` (`handlers.construct_sigterm_handler`).
+Normal exit and multiprocessing finalization use the same shutdown function.
+
+### Runtime tests
+
+Use a Python environment with the marimo and uv versions from `.github/workflows/ci.yml` and exporter packages from `runtime/logging.ts`.
+Run the suite with that environment:
+
+```sh
+PATH="/absolute/path/to/venv/bin:$PATH" \
+MARIMO_INTEGRATION_PYTHON=/absolute/path/to/venv/bin/python \
+pnpm exec vp test packages/core/src/services/runtime/logging.integration.test.ts
+```
+
+The suite executes the generated bootstrap in real Python and marimo processes and decodes requests at a local OTLP receiver.
+It covers editor kernels, apps, jobs, spawned processes, destination isolation, startup failures, and bounded shutdown.
+CI enables this suite. Without `MARIMO_INTEGRATION_PYTHON`, tests are skipped.

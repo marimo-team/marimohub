@@ -3,6 +3,19 @@
  * Not imported by production code.
  */
 export const SAMPLE_CONFIGS: Record<string, unknown> = {
+	otlp_logs: {
+		url: 'https://collector.example.test/v1/logs',
+		headers: [{ name: 'Authorization', value: 'Bearer otlp-token' }],
+	},
+	grafana_cloud_logs: {
+		url: 'https://otlp-gateway.example.test/otlp/v1/logs',
+		username: '123',
+		token: 'grafana-token',
+	},
+	better_stack_logs: {
+		url: 'https://ingest.example.test/v1/logs',
+		source_token: 'better-stack-token',
+	},
 	agent_context: { instructions: 'Use polars for data analysis.' },
 	marimo_studio: {},
 	startup_script: { script: '#!/bin/sh\necho ready\n' },

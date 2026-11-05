@@ -88,7 +88,7 @@ jobs:
             echo "::error::Missing or invalid sandbox marimo version"
             exit 1
           fi
-          "$RUNNER_TEMP/thumbnail-python/bin/pip" install "marimo==$MARIMO_INTEGRATION_VERSION" playwright==1.58.0
+          "$RUNNER_TEMP/thumbnail-python/bin/pip" install "marimo==$MARIMO_INTEGRATION_VERSION" playwright==1.58.0 opentelemetry-sdk==1.40.0 opentelemetry-exporter-otlp-proto-http==1.40.0
           # The Azure mirror can trickle data indefinitely without hitting apt's timeout.
           if [ -f /etc/apt/apt-mirrors.txt ]; then
             sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
@@ -122,7 +122,7 @@ jobs:
               with playwright.chromium.launch(chromium_sandbox=True) as browser:
                   print(f"Sandboxed Chromium {browser.version} started")
           PY
-          MARIMO_INTEGRATION_PYTHON="$RUNNER_TEMP/thumbnail-python/bin/python" vp test packages/core/src/services/runtime/kernelBootstrap.integration.test.ts packages/core/src/services/runtime/presentation.integration.test.ts --configLoader=runner --pool=threads
+          PATH="$RUNNER_TEMP/uv-python/bin:$PATH" MARIMO_INTEGRATION_PYTHON="$RUNNER_TEMP/thumbnail-python/bin/python" vp test packages/core/src/services/runtime/kernelBootstrap.integration.test.ts packages/core/src/services/runtime/presentation.integration.test.ts packages/core/src/services/runtime/logging.integration.test.ts --configLoader=runner --pool=threads
           MARIMOHUB_THUMBNAIL_TEST_PYTHON="$RUNNER_TEMP/thumbnail-python/bin/python" vp test packages/core/src/services/runtime/thumbnailProgram.live.test.ts --configLoader=runner --pool=threads
 
       - name: Test external adapter example

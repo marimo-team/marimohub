@@ -334,8 +334,19 @@ export interface PresentationFiles {
 	htmlHeadFile?: string;
 }
 
+export interface LoggingDestination {
+	name: string;
+	url: string;
+	headers: Record<string, string>;
+	level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
+	serviceName: string;
+	attributes: Record<string, string>;
+}
+
 /** Contributions consumed by the shared workload launch pipeline. */
 export interface RuntimeContributions {
+	/** Resolved OTLP/HTTP destinations; credentials never enter the audit manifest. */
+	logging?: LoggingDestination[];
 	/** Logical sandbox paths, resolved for the notebook process during injection. */
 	marimoPresentation?: PresentationFiles;
 	/** Require local filesystem semantics instead of an object-storage mount. */

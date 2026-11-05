@@ -6,10 +6,12 @@ export function mergeRuntimeContributions(
 ): RuntimeContributions {
 	const runtimePackages = layers.flatMap((layer) => layer?.runtimePackages ?? []);
 	const startupScripts = layers.flatMap((layer) => layer?.startupScripts ?? []);
+	const logging = layers.flatMap((layer) => layer?.logging ?? []);
 	const marimoPresentation = mergePresentationFiles(
 		...layers.map((layer) => layer?.marimoPresentation),
 	);
 	return {
+		...(logging.length > 0 ? { logging } : {}),
 		...(marimoPresentation ? { marimoPresentation } : {}),
 		...(layers.some((layer) => layer?.workspaceLoadMode === 'copy-only')
 			? { workspaceLoadMode: 'copy-only' as const }

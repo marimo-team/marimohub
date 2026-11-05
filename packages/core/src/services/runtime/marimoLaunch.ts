@@ -6,6 +6,7 @@ import type { RuntimeContributions } from '../../ports/integrations';
 import type { SessionMode } from '../../constants';
 import { runtimePackageCommand } from './runtimePackageCommand';
 import { shellQuote } from './shell';
+import { loggingCommand } from './logging';
 export { MARIMO_VERSION_COMMAND } from './runtimePackageCommand';
 
 /**
@@ -15,6 +16,8 @@ export { MARIMO_VERSION_COMMAND } from './runtimePackageCommand';
 export type MarimoLaunchMode = SessionMode | 'job';
 
 export interface MarimoLaunchParams extends RuntimeContributions {
+	/** Process-visible path to the Hub-managed Python logging bootstrap. */
+	loggingDirectory?: string;
 	notebookFile: string;
 	port: number;
 	/** Bind 0.0.0.0 so the external ingress can reach the kernel. */
@@ -116,7 +119,10 @@ function launchCommand(p: MarimoLaunchParams, sandbox = false): string {
 	if (p.runtimePackages?.length) {
 		return runtimePackageCommand(
 			p.runtimePackages,
-			`python -m ${marimoCommand(p, sandbox ? '--sandbox ' : '')}`,
+			loggingCommand(
+				p.loggingDirectory,
+				`python -m ${marimoCommand(p, sandbox ? '--sandbox ' : '')}`,
+			),
 		);
 	}
 	return sandbox
