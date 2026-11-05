@@ -1,6 +1,6 @@
 import { ConflictError, sleep } from '@marimo-hub/core';
 import type { HostRetryReply, HostRetryStore } from '@marimo-hub/core';
-import { HostProblemError } from './protocol';
+import { errorResponse, HostProblemError } from './protocol';
 
 async function storage<T>(work: () => Promise<T>): Promise<T> {
 	try {
@@ -13,6 +13,10 @@ async function storage<T>(work: () => Promise<T>): Promise<T> {
 
 const MAX_REQUESTS = 10_000;
 export type HostMutationReply = HostRetryReply;
+export interface HostMutationResult extends HostMutationReply {
+	/** The reply came from a stored receipt rather than from this request's work. */
+	replayed: boolean;
+}
 export interface HostRetryAttempt {
 	readonly sessionId?: string;
 	bindSession(sessionId: string): Promise<void>;
@@ -22,7 +26,7 @@ export interface HostRetryAttempt {
 export class HostRetries {
 	private readonly pending = new Map<
 		string,
-		{ fingerprint: string; result: Promise<HostMutationReply> }
+		{ fingerprint: string; result: Promise<HostMutationResult> }
 	>();
 
 	constructor(private readonly store: HostRetryStore) {}
@@ -34,7 +38,7 @@ export class HostRetries {
 		work: (attempt: HostRetryAttempt) => Promise<HostMutationReply>,
 		refresh = false,
 		signal?: AbortSignal,
-	): Promise<HostMutationReply> {
+	): Promise<HostMutationResult> {
 		const id = JSON.stringify([scope, key]);
 		const existing = this.pending.get(id);
 		if (existing) {
@@ -62,10 +66,10 @@ export class HostRetries {
 		work: (attempt: HostRetryAttempt) => Promise<HostMutationReply>,
 		refresh: boolean,
 		signal?: AbortSignal,
-	): Promise<HostMutationReply> {
+	): Promise<HostMutationResult> {
 		for (let poll = 0; poll < 50; poll++) {
 			const entry = await storage(() => this.store.acquire(scope, key, fingerprint, refresh));
-			if (entry.kind === 'reply') return entry.reply;
+			if (entry.kind === 'reply') return { ...entry.reply, replayed: true };
 			if (entry.kind === 'pending') {
 				await sleep(100, signal);
 				continue;
@@ -82,12 +86,18 @@ export class HostRetries {
 					dispatch: () => storage(() => this.store.dispatch(claim)),
 				});
 			} catch (error) {
-				await storage(() => this.store.finish(claim));
-				throw error;
+				// A definitive rejection proves nothing was mutated, so the key is free again. Only an
+				// unknown outcome keeps a dispatched claim pending.
+				const response = errorResponse(error);
+				if (response.status >= 500) {
+					await storage(() => this.store.finish(claim));
+					throw error;
+				}
+				reply = { status: response.status, body: await response.json() };
 			}
 			// A failed receipt write must leave the claim pending, not release it for duplicate work.
 			await storage(() => this.store.finish(claim, reply));
-			return reply;
+			return { ...reply, replayed: false };
 		}
 		throw HostProblemError.unavailable(
 			'This Idempotency-Key has an unresolved request; retry later',

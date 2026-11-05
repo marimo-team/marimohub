@@ -28,30 +28,33 @@ does not avoid runtime discovery work. Close streams when their consumer exits.
 
 All paths are relative to `/api/host/v1`.
 
-| Operation           | Endpoint                                       | Owner                   |
-| ------------------- | ---------------------------------------------- | ----------------------- |
-| Catalog stream      | `GET /events`                                  | Hub                     |
-| `notebook.create`   | `POST /notebooks`                              | Hub                     |
-| `notebook.update`   | `PATCH /notebooks/{id}`                        | Hub                     |
-| Notebook stream     | `GET /notebooks/{id}/events`                   | Hub and runtime         |
-| `runtime.start`     | `PUT /notebooks/{id}/runtime`                  | Hub and runtime         |
-| `notebook.edit`     | `POST /notebooks/{id}/edits`                   | Runtime                 |
-| `notebook.save`     | `POST /notebooks/{id}/save`                    | Runtime and hub storage |
-| `runtime.run`       | `POST /notebooks/{id}/runtime/runs`            | Runtime                 |
-| `runtime.interrupt` | `DELETE /notebooks/{id}/runtime/runs/{run_id}` | Runtime                 |
+| Operation           | Endpoint                                               | Owner                   |
+| ------------------- | ------------------------------------------------------ | ----------------------- |
+| Catalog stream      | `GET /events`                                          | Hub                     |
+| `notebook.create`   | `POST /notebooks`                                      | Hub                     |
+| `notebook.update`   | `PATCH /notebooks/{id}`                                | Hub                     |
+| Notebook stream     | `GET /notebooks/{id}/events`                           | Hub and runtime         |
+| `runtime.start`     | `PUT /notebooks/{id}/runtime`                          | Hub and runtime         |
+| `notebook.edit`     | `POST /notebooks/{id}/edits`                           | Runtime                 |
+| `notebook.save`     | `POST /notebooks/{id}/save`                            | Runtime and hub storage |
+| `runtime.run`       | `POST /notebooks/{id}/runtime/runs`                    | Runtime                 |
+| `runtime.interrupt` | `DELETE /notebooks/{id}/runtime/runs/{run_id}`         | Runtime                 |
+| `runtime.input`     | `POST /notebooks/{id}/runtime/inputs/{input_id}/reply` | Runtime                 |
 
 The `host` event lists implemented operations. Project and notebook records list
 operations permitted for the caller, even before a runtime starts.
 
 The hub owns notebook IDs, which combine project and notebook IDs with `:`.
 Clients must treat them as opaque. Projects have `root: null` and notebooks have
-`path: null`. Creation requires `project_id` and `name`. Renaming changes `name`
-and preserves the ID. Neither operation accepts filesystem paths.
+`path: null`. Creation requires `project_id` and `name`; a `path` is `400`.
+Renaming changes `name` and preserves the ID; a `path` on update is `501`.
 
-Creation and renaming need no compute. Notebook streams and runtime
-operations start or reuse an editor sandbox, with the same permissions
-as editor sessions. Readers can use the catalog but cannot open notebook streams,
-even with `types=cell,document`.
+Creation and renaming need no compute. Notebook streams, `runtime.start`,
+`notebook.edit`, `notebook.save`, and `runtime.run` start or reuse an editor
+sandbox, with the same permissions as editor sessions. `runtime.interrupt` and
+`runtime.input` act on existing work only: without a running runtime they return
+`no-runtime` and start nothing. Readers can use the catalog but cannot open
+notebook streams, even with `types=cell,document`.
 
 The runtime handles document parsing, cell etags, atomic edits, execution, and
 interruption. Saving writes the runtime document, then captures the session into
@@ -99,7 +102,8 @@ from that process's state directory. It checks ownership, permissions, process
 lifetime, loopback address, port, and API path. The discovery token stays inside
 the sandbox.
 
-Loopback requests select the notebook by its exact workspace path. The hub maps
+Loopback requests read the runtime's project and notebook records and select the
+notebook by its exact workspace path. The hub maps
 notebook IDs and prefixes runtime IDs with the session ID. Cell IDs, run IDs,
 etags, and code remain unchanged.
 
@@ -119,9 +123,14 @@ Catalog requests never start a sandbox. Use `types=host,project,notebook` to ski
   values with the same key return `409`. Concurrent identical requests share work.
 - Shared storage claims each key before work starts. Successful responses remain
   available for five minutes across API instances and process restarts. Changed
-  requests conflict while a claim or unexpired receipt exists. Rejected requests release
-  unbound keys. Runtime requests bind to a session before dispatch; retries use
-  that session and never start a replacement after a lost reply.
+  requests conflict while a claim or unexpired receipt exists. Rejected requests,
+  including definitive `4xx` rejections of hub-owned mutations, release unbound
+  keys; only an unknown outcome keeps a claim. Runtime requests bind to a session
+  before dispatch; retries use that session and never start a replacement after a
+  lost reply.
+- Repeating a `runtime.run` request refreshes its run record from the runtime for
+  the first four minutes. Later retries return the stored response, so the hub
+  never re-dispatches a run after the runtime's own receipt may have expired.
 - Concurrent requests on another instance wait up to five seconds, plus storage
   latency, for a receipt, then return `503`. Retry with the same key. An unresolved
   claim does not expire: a crashed process or a lost Hub write acknowledgement
@@ -133,10 +142,13 @@ Catalog requests never start a sandbox. Use `types=host,project,notebook` to ski
   all host streams to one dedicated API instance for complete attachment presence.
   Per-client affinity is insufficient. Shared mutation receipts alone do not make
   the catalog's presence information deployment-wide.
-- Both streams accept `types`. Notebook streams also accept `run_id`. Heartbeat
+- Both streams accept `types`; unknown kinds are `400`. Notebook streams also
+  accept `run_id`. The hub forwards both filters to the runtime. Heartbeat
   comments arrive every 15 seconds. Reconnection with `Last-Event-ID` sends `reset`
   and a fresh snapshot. The hub retains no downstream replay log.
-- Catalog polling can omit intermediate states. Runtime events keep their upstream
+- The catalog is recomputed when the catalog pointer changes and otherwise every
+  five seconds, so permission and session changes can take that long to appear.
+  Catalog polling can omit intermediate states. Runtime events keep their upstream
   order within each batch.
 - Request cancellation stops waiting but cannot terminate a dispatched sandbox command
   or undo an accepted mutation. Use `runtime.interrupt` to stop a run.

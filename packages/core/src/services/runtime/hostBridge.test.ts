@@ -153,7 +153,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
     def do_GET(self):
         seen.append((self.path, self.headers.get("Authorization")))
-        if self.path == redirect_path:
+        if self.path.split("?")[0] == redirect_path:
             self.send_response(302)
             self.send_header("Location", "http://127.0.0.1:" + str(target.server_port) + "/stolen")
             self.end_headers()
@@ -162,7 +162,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
-        if self.path.endswith("/events") and "/notebooks/" not in self.path:
+        if self.path.split("?")[0].endswith("/events") and "/notebooks/" not in self.path:
             records = [
                 ("project", {"project": {"id": "p", "root": "/workspace"}}),
                 ("notebook", {"notebook": {"id": "wrong", "project_id": "p", "path": "other.py", "operations": []}}),

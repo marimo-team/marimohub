@@ -3,13 +3,14 @@ import {
 	ForbiddenError,
 	HostNotebookId,
 	NotFoundError,
+	paths,
 	PreconditionFailedError,
 	ProjectId,
 	SessionId,
 	sleep,
 	UnavailableError,
 } from '@marimo-hub/core';
-import type { AuthenticatedPrincipal } from '@marimo-hub/core';
+import type { AuthenticatedPrincipal, Session } from '@marimo-hub/core';
 import type { HostEvent } from '@marimo-hub/core/host-bridge';
 import { sha256Hex } from '@marimo-hub/core/sha256';
 import { Hono } from 'hono';
@@ -27,32 +28,42 @@ import {
 	ifMatchToken,
 	loadVisibleProject,
 } from '../shared';
-import { catalogEvents, loadHostNotebook, notebookRecord } from './catalog';
+import { catalogEvents, hostNotebookSubject, loadHostNotebook, notebookRecord } from './catalog';
+import type { HostCatalog } from './catalog';
 import {
 	acceptsEvent,
+	CATALOG_KINDS,
 	errorResponse,
 	HostProblemError,
 	mapRuntimeEvent,
 	mapRuntimeProblem,
 	MAX_BODY_BYTES,
+	NOTEBOOK_KINDS,
+	parseTypes,
 	problemResponse,
 	RUNTIME_ROUTES,
 } from './protocol';
+import type { EventKinds } from './protocol';
 import { HostRetries } from './retries';
 import { RuntimeCatalogRefreshes } from './runtimeCatalogRefreshes';
 import type { HostMutationReply, HostRetryAttempt } from './retries';
-import { callRuntime, ensureHostSession, runtimeDecisions } from './runtime';
+import { callRuntime, ensureHostSession, existingHostSession, runtimeDecisions } from './runtime';
 import { authorizeMcpSession, sessionAuthorizationDeadline } from '../mcp/sessionActivity';
 import { CatalogStream, eventStream } from './streams';
 
-const UpdateNotebook = z.object({
-	name: z.string().trim().min(1).max(255),
-	path: z.never().optional(),
+const NotebookName = z.string().trim().min(1).max(255);
+const UpdateNotebook = z.object({ name: NotebookName.optional(), path: z.string().optional() });
+const CreateNotebook = z.object({
+	project_id: z.string(),
+	name: NotebookName,
+	path: z.string().optional(),
 });
-const CreateNotebook = UpdateNotebook.extend({ project_id: z.string() });
 const StartRuntime = z.object({ decisions: z.record(z.string(), z.string()).optional() });
 const EMPTY_NOTEBOOK =
 	'import marimo\n\napp = marimo.App()\n\nif __name__ == "__main__":\n    app.run()\n';
+// Permission and session changes do not move the catalog pointer; they are picked up on this cadence.
+const CATALOG_REFRESH_MS = 5_000;
+const WWW_AUTHENTICATE = 'Bearer realm="marimohub-host"';
 
 function attachmentHeaders(c: Context<HonoEnv>) {
 	return z
@@ -90,6 +101,21 @@ function originalRequestId(event: HostEvent, principal: AuthenticatedPrincipal):
 	};
 }
 
+function upstreamEventsPath(types: EventKinds, runId: string | undefined): string {
+	const query = new URLSearchParams();
+	// The hub publishes notebook and attachment records itself and tracks runtimes from the stream.
+	if (types) {
+		const kinds = new Set(
+			[...types].filter((kind) => kind !== 'notebook' && kind !== 'attachment'),
+		);
+		kinds.add('runtime');
+		query.set('types', [...kinds].join(','));
+	}
+	if (runId) query.set('run_id', runId);
+	const encoded = query.toString();
+	return encoded ? `/events?${encoded}` : '/events';
+}
+
 export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 	const app = new Hono<HonoEnv>();
 	let retries: HostRetries | undefined;
@@ -108,6 +134,7 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 		}
 		changes.set(id, { key, principalId: principal.id, expires: Date.now() + 5 * 60_000 });
 	}
+	const catalogVersion = async () => (await deps.bucket.head(paths.catalog))?.etag ?? null;
 
 	async function authenticate(c: Context<HonoEnv>) {
 		const user = bearerToken(c.req.raw) ? await deps.authenticator.authenticate(c.req.raw) : null;
@@ -131,8 +158,7 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 		const response = errorResponse(error);
 		if (response.status >= 500)
 			logEvent({ level: 'error', event: 'host_request_failed', error: describeError(error) });
-		if (response.status === 401)
-			response.headers.set('WWW-Authenticate', 'Bearer realm="marimohub-host"');
+		if (response.status === 401) response.headers.set('WWW-Authenticate', WWW_AUTHENTICATE);
 		return response;
 	});
 	app.use('*', requestId());
@@ -181,24 +207,32 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 			refreshRun,
 			c.req.raw.signal,
 		);
+		let body = result.body;
 		if (
+			result.replayed &&
 			result.status < 400 &&
 			(c.req.method === 'PATCH' || c.req.path.endsWith('/notebooks')) &&
-			result.body &&
-			typeof result.body === 'object' &&
-			'id' in result.body &&
-			typeof result.body.id === 'string'
+			body &&
+			typeof body === 'object' &&
+			'id' in body &&
+			typeof body.id === 'string'
 		) {
-			const { project, notebook } = await loadHostNotebook(deps, c.get('user'), result.body.id);
-			const projected = await notebookRecord(deps, c.get('user'), project, notebook.meta);
-			return Response.json(
-				{ ...result.body, operations: projected.operations },
-				{ status: result.status },
+			// A stored receipt carries the operations of its first call; permissions may have changed.
+			const { project, notebook } = await loadHostNotebook(deps, c.get('user'), body.id);
+			const projected = await notebookRecord(
+				deps,
+				c.get('user'),
+				project,
+				hostNotebookSubject(notebook),
 			);
+			body = { ...body, operations: projected.operations };
 		}
-		return result.status >= 400
-			? problemResponse(result.body, result.status)
-			: Response.json(result.body, { status: result.status });
+		if (result.status >= 400) {
+			const response = problemResponse(body, result.status);
+			if (result.status === 401) response.headers.set('WWW-Authenticate', WWW_AUTHENTICATE);
+			return response;
+		}
+		return Response.json(body, { status: result.status });
 	}
 
 	function rememberRuntime(events: HostEvent[], notebookId: HostNotebookId, sessionId: string) {
@@ -209,81 +243,104 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 		}
 	}
 
-	async function appendRuntimes(
-		current: HostEvent[],
-		visible: ReadonlySet<string>,
+	async function discoverRuntime(
+		session: Session,
+		pid: ProjectId,
 		user: AuthenticatedPrincipal,
 		signal: AbortSignal,
 	) {
-		for (const event of current.filter((entry) => entry.event === 'project')) {
-			const pid = ProjectId.parse((event.data.project as { id: string }).id);
-			const sessions = await deps.services.sessions.listActiveByProject(pid);
-			for (const session of sessions) {
-				if (session.mode === 'app' || session.status !== 'running') continue;
-				const id = HostNotebookId.create(
-					pid,
-					session.notebook_id,
-					session.ephemeral ? session.session_id : undefined,
-				);
-				if (!visible.has(id)) continue;
+		const id = HostNotebookId.create(
+			pid,
+			session.notebook_id,
+			session.ephemeral ? session.session_id : undefined,
+		);
+		const { project, notebook } = await loadHostNotebook(deps, user, id);
+		const decision = await authorizeMcpSession(deps, user, session);
+		sessionAuthorizationDeadline(session, user, decision.subjectContextExpiresAt);
+		await runtimeRefreshes.refresh(
+			session.session_id,
+			async (refreshSignal) => {
+				try {
+					const reply = await callRuntime(
+						deps,
+						user,
+						project,
+						notebook,
+						session,
+						{ method: 'GET', path: '/catalog' },
+						refreshSignal,
+						false,
+					);
+					runtimes.delete(id);
+					rememberRuntime(reply.events ?? [], id, session.session_id);
+				} catch (error) {
+					if (
+						!(error instanceof UnavailableError) &&
+						!(error instanceof HostProblemError && error.status === 409)
+					)
+						throw error;
+					runtimes.delete(id);
+				}
+			},
+			signal,
+		);
+	}
+
+	async function appendRuntimes(
+		current: HostEvent[],
+		visible: ReadonlySet<string>,
+		sessionsByProject: ReadonlyMap<ProjectId, Session[]>,
+		user: AuthenticatedPrincipal,
+		signal: AbortSignal,
+	) {
+		const projects = current
+			.filter((entry) => entry.event === 'project')
+			.map((event) => ProjectId.parse((event.data.project as { id: string }).id));
+		await Promise.all(
+			projects.map(async (pid) => {
+				const sessions = sessionsByProject.get(pid) ?? [];
 				if (deps.compute.connectExisting) {
-					try {
-						const { project, notebook } = await loadHostNotebook(deps, user, id);
-						const decision = await authorizeMcpSession(deps, user, session);
-						sessionAuthorizationDeadline(session, user, decision.subjectContextExpiresAt);
-						await runtimeRefreshes.refresh(
-							session.session_id,
-							async (refreshSignal) => {
-								try {
-									const reply = await callRuntime(
-										deps,
-										user,
-										project,
-										notebook,
-										session,
-										{ method: 'GET', path: '/catalog' },
-										refreshSignal,
-										false,
-									);
-									runtimes.delete(id);
-									rememberRuntime(reply.events ?? [], id, session.session_id);
-								} catch (error) {
-									if (
-										!(error instanceof UnavailableError) &&
-										!(error instanceof HostProblemError && error.status === 409)
-									)
-										throw error;
-									runtimes.delete(id);
-								}
-							},
-							signal,
-						);
-					} catch {
-						signal.throwIfAborted();
+					await Promise.all(
+						sessions.map(async (session) => {
+							if (session.mode === 'app' || session.status !== 'running') return;
+							const id = HostNotebookId.create(
+								pid,
+								session.notebook_id,
+								session.ephemeral ? session.session_id : undefined,
+							);
+							if (!visible.has(id)) return;
+							try {
+								await discoverRuntime(session, pid, user, signal);
+							} catch {
+								signal.throwIfAborted();
+							}
+						}),
+					);
+				}
+				for (const [id, runtime] of runtimes) {
+					if (HostNotebookId.parse(id).projectId !== pid) continue;
+					const session = sessions.find((entry) => entry.session_id === runtime.sessionId);
+					if (session?.status !== 'running') runtimes.delete(id);
+					else if (visible.has(id)) {
+						try {
+							const decision = await authorizeMcpSession(deps, user, session);
+							sessionAuthorizationDeadline(session, user, decision.subjectContextExpiresAt);
+							current.push(originalRequestId(runtime.event, user));
+						} catch {
+							signal.throwIfAborted();
+						}
 					}
 				}
-			}
-			for (const [id, runtime] of runtimes) {
-				if (HostNotebookId.parse(id).projectId !== pid) continue;
-				const session = sessions.find((entry) => entry.session_id === runtime.sessionId);
-				if (session?.status !== 'running') runtimes.delete(id);
-				else if (visible.has(id)) {
-					try {
-						const decision = await authorizeMcpSession(deps, user, session);
-						sessionAuthorizationDeadline(session, user, decision.subjectContextExpiresAt);
-						current.push(originalRequestId(runtime.event, user));
-					} catch {
-						signal.throwIfAborted();
-					}
-				}
-			}
-		}
+			}),
+		);
 	}
 
 	app.get('/events', async (c) => {
-		const initial = await catalogEvents(deps, c.get('user'));
+		const types = parseTypes(c.req.query('types'), CATALOG_KINDS);
+		let catalog: HostCatalog = await catalogEvents(deps, c.get('user'));
+		let version = await catalogVersion();
 		return eventStream(c.req.raw, async (send, signal) => {
-			const stream = new CatalogStream(c.req.query('types'));
+			const stream = new CatalogStream(types);
 			const pending: { event: HostEvent; notebookId: string }[] = [];
 			const listener = (event: HostEvent, notebookId: string) => {
 				if (pending.length < 10_000) pending.push({ event, notebookId });
@@ -291,16 +348,18 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 			attachmentListeners.add(listener);
 			try {
 				if (c.req.header('Last-Event-ID')) await send({ event: 'reset', data: {} });
-				let current = initial;
+				let user = c.get('user');
 				let first = true;
+				let refreshed = Date.now();
 				while (!signal.aborted) {
+					const current = catalog.events.map((event) => ({ ...event, data: { ...event.data } }));
 					const ids = new Set(
 						current
 							.filter((e) => e.event === 'notebook')
 							.map((e) => (e.data.notebook as { id: string }).id),
 					);
-					if (acceptsEvent(c.req.query('types'), 'runtime'))
-						await appendRuntimes(current, ids, await authenticate(c), signal);
+					if (acceptsEvent(types, 'runtime'))
+						await appendRuntimes(current, ids, catalog.sessions, user, signal);
 					for (const attachment of attachments.values()) {
 						if (ids.has((attachment.data.attachment as { notebook_id: string }).notebook_id))
 							current.push(attachment);
@@ -319,8 +378,13 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 					}
 					first = false;
 					await sleep(1_000, signal);
-					const user = await authenticate(c);
-					current = await catalogEvents(deps, user);
+					user = await authenticate(c);
+					const next = await catalogVersion();
+					if (next !== version || Date.now() - refreshed >= CATALOG_REFRESH_MS) {
+						catalog = await catalogEvents(deps, user);
+						version = next;
+						refreshed = Date.now();
+					}
 				}
 			} finally {
 				attachmentListeners.delete(listener);
@@ -330,6 +394,8 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 
 	app.post('/notebooks', async (c) => {
 		const input = CreateNotebook.parse(await c.req.json());
+		if (input.path !== undefined)
+			throw HostProblemError.invalidRequest('Hub projects have no root; omit path and set name');
 		if (!ProjectId.is(input.project_id)) throw HostProblemError.notFound('Project not found');
 		const project = await loadVisibleProject(
 			deps.services.projects,
@@ -340,7 +406,7 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 		await assertProjectActionOn(project, c.get('user'), 'notebook.write', deps);
 		return mutation(c, async (key, attempt) => {
 			await attempt.dispatch();
-			const notebook = await deps.services.notebooks.createNotebook(
+			const created = await deps.services.notebooks.createNotebook(
 				project.id,
 				{
 					title: input.name,
@@ -349,7 +415,12 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 				},
 				c.get('user').id,
 			);
-			const body = await notebookRecord(deps, c.get('user'), project, notebook);
+			const body = await notebookRecord(
+				deps,
+				c.get('user'),
+				project,
+				hostNotebookSubject(await deps.services.notebooks.getNotebook(project.id, created.id)),
+			);
 			rememberChange(body.id, key, c.get('user'));
 			return { status: 201, body };
 		});
@@ -362,6 +433,10 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 			c.get('user'),
 			c.req.param('id'),
 		);
+		if (input.path !== undefined)
+			throw HostProblemError.unsupportedOperation('Hub notebooks have no path; rename with name');
+		const name = input.name;
+		if (name === undefined) throw HostProblemError.invalidRequest('name is required');
 		if (session) throw new ForbiddenError('Temporary notebooks cannot be renamed');
 		await assertProjectActionOn(
 			project,
@@ -377,7 +452,7 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 				updated = await deps.services.notebooks.updateNotebook(
 					project.id,
 					notebook.meta.id,
-					{ title: input.name },
+					{ title: name },
 					c.get('user').id,
 					ifMatchToken(c),
 				);
@@ -386,7 +461,12 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 				const response = errorResponse(error);
 				return { status: response.status, body: await response.json() };
 			}
-			const body = await notebookRecord(deps, c.get('user'), project, updated);
+			const body = await notebookRecord(deps, c.get('user'), project, {
+				...hostNotebookSubject(notebook),
+				title: updated.title,
+				updated_at: updated.updated_at,
+				labels: updated.security_labels ?? null,
+			});
 			rememberChange(body.id, key, c.get('user'));
 			return { status: 200, body };
 		});
@@ -398,7 +478,7 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 			deps,
 			user,
 			context.project,
-			context.notebook.meta,
+			hostNotebookSubject(context.notebook),
 			context.session,
 		);
 		if (!record.operations.includes(operation))
@@ -415,6 +495,10 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 			} = await authorizedRuntime(c, route.operation);
 			const body: unknown = route.method === 'DELETE' ? undefined : await c.req.json();
 			const start = route.operation === 'runtime.start' ? StartRuntime.parse(body) : undefined;
+			const params = c.req.param() as Record<string, string | undefined>;
+			const path = route.path.replace(/:(run|input)\b/, (_match, name: string) =>
+				encodeURIComponent(params[name] ?? ''),
+			);
 			return mutation(
 				c,
 				async (key, attempt) => {
@@ -426,11 +510,13 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 										throw HostProblemError.noRuntime('The original runtime is no longer available');
 									throw error;
 								})
-						: await ensureHostSession(c, project, notebook, {
-								session: temporarySession,
-								decisions: start?.decisions,
-								key,
-							});
+						: route.provision
+							? await ensureHostSession(c, project, notebook, {
+									session: temporarySession,
+									decisions: start?.decisions,
+									key,
+								})
+							: await existingHostSession(deps, c.get('user'), project, notebook, temporarySession);
 					const notebookId = HostNotebookId.create(
 						project.id,
 						notebook.meta.id,
@@ -447,7 +533,7 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 						session,
 						{
 							method: route.method,
-							path: route.path.replace(':run', encodeURIComponent(c.req.param('run') ?? '')),
+							path,
 							body: start ? { ...start, decisions: runtimeDecisions(start.decisions) } : body,
 							headers: {
 								'Idempotency-Key': upstreamKey(c.get('user'), key),
@@ -483,6 +569,9 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 	}
 
 	app.get('/notebooks/:id/events', async (c) => {
+		const types = parseTypes(c.req.query('types'), NOTEBOOK_KINDS);
+		const runId = c.req.query('run_id');
+		if (runId === '') throw HostProblemError.invalidRequest('run_id must not be empty');
 		const {
 			project,
 			notebook,
@@ -490,10 +579,8 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 			session: temporarySession,
 		} = await authorizedRuntime(c, 'runtime.start');
 		const metadata = attachmentHeaders(c);
-		const runId = c.req.query('run_id');
-		if (runId === '') throw HostProblemError.invalidRequest('run_id must not be empty');
 		const session = await ensureHostSession(c, project, notebook, { session: temporarySession });
-		const path = `/events${runId ? `?run_id=${encodeURIComponent(runId)}` : ''}`;
+		const path = upstreamEventsPath(types, runId);
 		const first = await callRuntime(
 			deps,
 			c.get('user'),
@@ -523,7 +610,7 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 			let sequence = 0;
 			const epoch = crypto.randomUUID();
 			const emit = async (event: HostEvent) => {
-				if (acceptsEvent(c.req.query('types'), event.event))
+				if (acceptsEvent(types, event.event))
 					await send({ ...event, ...(event.id ? { id: `${epoch}:${++sequence}` } : {}) });
 			};
 			let latestNotebook = record;
@@ -613,6 +700,7 @@ export function createHostApp(deps: ApiDeps): Hono<HonoEnv> {
 			[/^\/notebooks\/[^/]+\/(?:edits|save|open|runtime\/restart|runtime\/runs)$/, ['POST']],
 			[/^\/notebooks\/[^/]+\/runtime$/, ['PUT', 'DELETE']],
 			[/^\/notebooks\/[^/]+\/runtime\/runs\/[^/]+$/, ['DELETE']],
+			[/^\/notebooks\/[^/]+\/runtime\/inputs\/[^/]+\/reply$/, ['POST']],
 		];
 		const methods = routes.find(([pattern]) => pattern.test(path))?.[1];
 		if (!methods) return HostProblemError.notFound('Route not found').toResponse();

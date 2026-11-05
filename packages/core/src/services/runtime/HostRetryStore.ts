@@ -8,6 +8,9 @@ import { readStored, StoredObjectError } from '../../schema';
 import { withCasRetry } from '../catalog/cas';
 
 export const HOST_RETRY_WINDOW_MS = 5 * 60_000;
+// Runtimes keep their own receipts for the same window, started on a later clock. Re-dispatching
+// a run after this age could reach an expired upstream receipt and execute it again.
+export const HOST_RETRY_REFRESH_MS = 4 * 60_000;
 const ReplySchema = z.object({ status: z.number().int().min(100).max(599), body: z.unknown() });
 export const HostRetryRecordSchema = z
 	.object({
@@ -52,7 +55,11 @@ export class HostRetryStore {
 			if (live && previous.fingerprint !== fingerprint)
 				throw new ConflictError('Idempotency-Key was used for a different request');
 			if (live && previous.owner) return { kind: 'pending' };
-			if (live && previous.reply && !refresh) return { kind: 'reply', reply: previous.reply };
+			if (live && previous.reply) {
+				const age = HOST_RETRY_WINDOW_MS - ((previous.expires ?? 0) - Date.now());
+				if (!refresh || age >= HOST_RETRY_REFRESH_MS)
+					return { kind: 'reply', reply: previous.reply };
+			}
 			const owner = crypto.randomUUID();
 			const record: Record = {
 				schema_version: 1,

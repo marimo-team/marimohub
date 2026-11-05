@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { HostRetryStore } from '@marimo-hub/core';
+import { ConflictError, HostRetryStore } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { HostRetries } from './retries';
 import type { HostMutationReply, HostRetryAttempt } from './retries';
@@ -35,7 +35,45 @@ describe('host retry bindings', () => {
 				},
 				true,
 			),
-		).rejects.toThrow('The request is bound to another runtime');
+		).resolves.toMatchObject({
+			status: 409,
+			body: { detail: 'The request is bound to another runtime' },
+		});
+	});
+
+	it('answers definitive rejections and frees the key while unknown outcomes stay pending', async () => {
+		const store = new HostRetryStore(new MemoryBucket());
+		const retries = new HostRetries(store);
+		const rejected = await retries.execute('user', 'key', 'create', async (attempt) => {
+			await attempt.dispatch();
+			throw new ConflictError('Name in use');
+		});
+		expect(rejected).toMatchObject({
+			status: 409,
+			replayed: false,
+			body: { type: 'tag:marimo.io,2026:host/conflict', detail: 'Name in use' },
+		});
+		const work = vi.fn(async (attempt: HostRetryAttempt) => {
+			await attempt.dispatch();
+			return { status: 201, body: { id: 'created' } };
+		});
+		expect(await retries.execute('user', 'key', 'create', work)).toMatchObject({
+			status: 201,
+			replayed: false,
+		});
+		expect(await retries.execute('user', 'key', 'create', work)).toMatchObject({
+			status: 201,
+			replayed: true,
+			body: { id: 'created' },
+		});
+		expect(work).toHaveBeenCalledOnce();
+		await expect(
+			retries.execute('user', 'unknown', 'create', async (attempt) => {
+				await attempt.dispatch();
+				throw new Error('Reply lost');
+			}),
+		).rejects.toThrow('Reply lost');
+		expect((await store.acquire('user', 'unknown', 'create', false)).kind).toBe('pending');
 	});
 
 	it('shares concurrent attempts, including after an ambiguous failure', async () => {
@@ -66,8 +104,8 @@ describe('host retry bindings', () => {
 		const second = retries.execute('user', 'key', 'run', work, true);
 		finish({ status: 202, body: { id: 'same-run' } });
 		expect(await Promise.all([first, second])).toEqual([
-			{ status: 202, body: { id: 'same-run' } },
-			{ status: 202, body: { id: 'same-run' } },
+			{ status: 202, body: { id: 'same-run' }, replayed: false },
+			{ status: 202, body: { id: 'same-run' }, replayed: false },
 		]);
 		expect(work).toHaveBeenCalledOnce();
 	});

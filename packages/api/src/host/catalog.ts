@@ -2,14 +2,18 @@ import {
 	HostNotebookId,
 	NotFoundError,
 	sessionMode,
-	workspaceSourcePolicy,
+	workspaceSourceTypePolicy,
 } from '@marimo-hub/core';
 import type {
 	AuthenticatedPrincipal,
-	NotebookMeta,
+	NotebookDetail,
+	NotebookId,
 	Project,
+	ProjectId,
 	PublicNotebookEntry,
+	ResourceSecurityLabels,
 	Session,
+	Source,
 } from '@marimo-hub/core';
 import type { HostEvent } from '@marimo-hub/core/host-bridge';
 import type { ApiDeps } from '../context';
@@ -76,18 +80,50 @@ export async function projectOperations(
 	return decision.allowed ? ['notebook.create'] : [];
 }
 
+/** The notebook facts a host record needs, so callers supply them from whatever they loaded. */
+export interface HostNotebookSubject {
+	id: NotebookId;
+	title: string;
+	updated_at: string;
+	sourceType: Source['type'];
+	labels: ResourceSecurityLabels | null;
+}
+
+export function hostNotebookSubject(detail: NotebookDetail): HostNotebookSubject {
+	return {
+		id: detail.meta.id,
+		title: detail.meta.title,
+		updated_at: detail.meta.updated_at,
+		sourceType: detail.source.type,
+		labels: detail.meta.security_labels ?? null,
+	};
+}
+
+async function listedNotebookSubject(
+	deps: ApiDeps,
+	project: Project,
+	entry: PublicNotebookEntry,
+): Promise<HostNotebookSubject> {
+	return {
+		id: entry.id,
+		title: entry.title,
+		updated_at: entry.updated_at,
+		sourceType: entry.source_type,
+		labels: await deps.services.notebooks.getSecurityLabels(project.id, entry.id, {
+			consistency: 'validated',
+		}),
+	};
+}
+
 export async function notebookRecord(
 	deps: ApiDeps,
 	principal: AuthenticatedPrincipal,
 	project: Project,
-	notebook: NotebookMeta | PublicNotebookEntry,
+	notebook: HostNotebookSubject,
 	session?: Session,
 ) {
 	const authz = authorizationService(deps);
-	const labels = await deps.services.notebooks.getSecurityLabels(project.id, notebook.id, {
-		consistency: 'validated',
-	});
-	const detail = await deps.services.notebooks.getNotebook(project.id, notebook.id);
+	const labels = notebook.labels;
 	const [write, start, attach] = await Promise.all([
 		authz.authorize(principal, 'notebook.write', {
 			kind: 'project',
@@ -125,7 +161,7 @@ export async function notebookRecord(
 						operation === 'notebook.save'
 							? !session &&
 								write.allowed &&
-								workspaceSourcePolicy(detail.source).persistSessionEdits
+								workspaceSourceTypePolicy(notebook.sourceType).persistSessionEdits
 							: operation !== 'notebook.edit' || write.allowed,
 					)
 				: []),
@@ -133,11 +169,18 @@ export async function notebookRecord(
 	};
 }
 
+export interface HostCatalog {
+	events: HostEvent[];
+	/** Present sessions per visible project, so runtime discovery need not list them again. */
+	sessions: Map<ProjectId, Session[]>;
+}
+
 export async function catalogEvents(
 	deps: ApiDeps,
 	principal: AuthenticatedPrincipal,
-): Promise<HostEvent[]> {
+): Promise<HostCatalog> {
 	const events: HostEvent[] = [{ event: 'host', data: { host: { operations: OPERATIONS } } }];
+	const sessionsByProject = new Map<ProjectId, Session[]>();
 	const projects = await deps.services.projects.listProjects({
 		subject: principal,
 		policy: deps.policy,
@@ -166,10 +209,19 @@ export async function catalogEvents(
 		for (const notebook of notebooks) {
 			events.push({
 				event: 'notebook',
-				data: { notebook: await notebookRecord(deps, principal, project, notebook) },
+				data: {
+					notebook: await notebookRecord(
+						deps,
+						principal,
+						project,
+						await listedNotebookSubject(deps, project, notebook),
+					),
+				},
 			});
 		}
-		for (const session of await deps.services.sessions.listActiveByProject(project.id)) {
+		const sessions = await deps.services.sessions.listActiveByProject(project.id);
+		sessionsByProject.set(project.id, sessions);
+		for (const session of sessions) {
 			if (!session.ephemeral || sessionMode(session) !== 'edit' || session.user_id !== principal.id)
 				continue;
 			const notebook = notebooks.find((entry) => entry.id === session.notebook_id);
@@ -181,9 +233,17 @@ export async function catalogEvents(
 			}
 			events.push({
 				event: 'notebook',
-				data: { notebook: await notebookRecord(deps, principal, project, notebook, session) },
+				data: {
+					notebook: await notebookRecord(
+						deps,
+						principal,
+						project,
+						await listedNotebookSubject(deps, project, notebook),
+						session,
+					),
+				},
 			});
 		}
 	}
-	return events;
+	return { events, sessions: sessionsByProject };
 }

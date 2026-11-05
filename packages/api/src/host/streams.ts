@@ -1,6 +1,7 @@
 import { sleep } from '@marimo-hub/core';
 import type { HostEvent } from '@marimo-hub/core/host-bridge';
 import { acceptsEvent, errorResponse, sse } from './protocol';
+import type { EventKinds } from './protocol';
 
 export type SendEvent = (event: HostEvent) => Promise<void>;
 
@@ -81,7 +82,7 @@ export class CatalogStream {
 	private cursor = 0;
 	private readonly epoch = crypto.randomUUID();
 
-	constructor(private types: string | undefined) {}
+	constructor(private types: EventKinds) {}
 
 	async change(event: HostEvent, send: SendEvent) {
 		if (event.event.endsWith('.removed') && typeof event.data.id === 'string') {

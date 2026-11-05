@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	ConflictError,
 	createServices,
 	HostNotebookId,
 	NotebookId,
@@ -1062,6 +1063,139 @@ describe('hub host protocol', () => {
 		});
 		const catalog = await readSnapshot(await request('GET', '/events?types=attachment'));
 		expect(catalog.map((event) => event.event)).toEqual(['ready']);
+	});
+});
+
+describe('host protocol conformance', () => {
+	it('rejects unknown stream kinds before touching compute', async () => {
+		const { request, id, deps } = await setup();
+		const create = vi.spyOn(deps.compute, 'create');
+		const catalog = await request('GET', '/events?types=notebook,bogus');
+		expect(catalog.status).toBe(400);
+		expect(await catalog.json()).toMatchObject({
+			type: 'tag:marimo.io,2026:host/invalid-request',
+			detail: 'types has no kind named bogus',
+		});
+		expect((await request('GET', `/notebooks/${id}/events?types=project`)).status).toBe(400);
+		expect(create).not.toHaveBeenCalled();
+		expect(requestRuntimeHost).not.toHaveBeenCalled();
+		const events = await readSnapshot(await request('GET', '/events?types=,'));
+		expect(events.map((event) => event.event)).toContain('host');
+	});
+
+	it('forwards stream filters and input replies to the runtime', async () => {
+		const { request, id, runtime } = await setup();
+		await runtime();
+		const bridge = vi.mocked(requestRuntimeHost);
+		bridge.mockResolvedValueOnce(
+			runtimeReply({
+				status: 200,
+				body: { id: 'in-1', execution_id: 'e1', seq: 1, status: 'answered' },
+			}),
+		);
+		const reply = await request(
+			'POST',
+			`/notebooks/${id}/runtime/inputs/in-1/reply`,
+			{ value: 'Trevor' },
+			'reply-1',
+		);
+		expect(reply.status).toBe(200);
+		expect(await reply.json()).toMatchObject({ id: 'in-1', status: 'answered' });
+		expect(bridge.mock.calls.at(-1)?.[1]).toMatchObject({
+			method: 'POST',
+			path: '/runtime/inputs/in-1/reply',
+			body: { value: 'Trevor' },
+		});
+		bridge.mockResolvedValue(
+			runtimeReply({ status: 200, events: [{ event: 'ready', id: 'cursor', data: {} }] }),
+		);
+		const events = await readSnapshot(
+			await request('GET', `/notebooks/${id}/events?types=cell,notebook,attachment&run_id=run-1`),
+		);
+		expect(events.map((event) => event.event)).toEqual(['notebook', 'attachment', 'ready']);
+		expect(bridge.mock.calls.at(-1)?.[1]).toMatchObject({
+			method: 'GET',
+			path: '/events?types=cell%2Cruntime&run_id=run-1',
+		});
+	});
+
+	it('answers no-runtime for interrupts and input replies without starting a sandbox', async () => {
+		const { request, id, deps, runtime } = await setup();
+		const create = vi.spyOn(deps.compute, 'create');
+		const sessions = vi.spyOn(deps.services.sessions, 'createSession');
+		const interrupt = () =>
+			request('DELETE', `/notebooks/${id}/runtime/runs/run-1`, undefined, 'interrupt');
+		for (const response of [
+			await interrupt(),
+			await request('POST', `/notebooks/${id}/runtime/inputs/in-1/reply`, { value: '' }, 'reply'),
+		]) {
+			expect(response.status).toBe(409);
+			expect(await response.json()).toMatchObject({ type: 'tag:marimo.io,2026:host/no-runtime' });
+		}
+		expect(create).not.toHaveBeenCalled();
+		expect(sessions).not.toHaveBeenCalled();
+		expect(requestRuntimeHost).not.toHaveBeenCalled();
+		await runtime();
+		sessions.mockClear();
+		vi.mocked(requestRuntimeHost).mockResolvedValue(
+			runtimeReply({ status: 202, body: { id: 'run-1', notebook_id: 'local' } }),
+		);
+		expect((await interrupt()).status).toBe(202);
+		expect(sessions).not.toHaveBeenCalled();
+	});
+
+	it('releases an idempotency key after a hub mutation is definitively rejected', async () => {
+		const { request, deps, project } = await setup();
+		vi.spyOn(deps.services.notebooks, 'createNotebook').mockRejectedValueOnce(
+			new ConflictError('Name in use'),
+		);
+		const body = { project_id: project.id, name: 'Twice' };
+		const rejected = await request('POST', '/notebooks', body, 'after-conflict');
+		expect(rejected.status).toBe(409);
+		expect(await rejected.json()).toMatchObject({
+			type: 'tag:marimo.io,2026:host/conflict',
+			detail: 'Name in use',
+		});
+		expect((await request('POST', '/notebooks', body, 'after-conflict')).status).toBe(201);
+	});
+
+	it('rejects path updates as unsupported and requires a name', async () => {
+		const { request, id } = await setup();
+		expect((await request('PATCH', `/notebooks/${id}`, { path: 'moved.py' }, 'move')).status).toBe(
+			501,
+		);
+		expect((await request('PATCH', `/notebooks/${id}`, {}, 'empty')).status).toBe(400);
+	});
+
+	it('recomputes the catalog only when its pointer moves or the refresh interval passes', async () => {
+		const { request, deps, project, notebook } = await setup();
+		const list = vi.spyOn(deps.services.notebooks, 'listNotebooks');
+		const reader = (await request('GET', '/events?types=notebook')).body!.getReader();
+		const decoder = new TextDecoder();
+		let text = '';
+		const readUntil = async (needle: string) => {
+			while (!text.includes(needle)) {
+				const next = await reader.read();
+				if (next.done) throw new Error('Stream ended before expected event');
+				text += decoder.decode(next.value);
+			}
+		};
+		try {
+			await readUntil('event: ready');
+			const listed = list.mock.calls.length;
+			await new Promise((resolve) => setTimeout(resolve, 1_300));
+			expect(list.mock.calls.length).toBe(listed);
+			await deps.services.notebooks.updateNotebook(
+				project.id,
+				notebook.id,
+				{ title: 'Moved pointer' },
+				user.id,
+			);
+			await readUntil('Moved pointer');
+			expect(list.mock.calls.length).toBeGreaterThan(listed);
+		} finally {
+			await reader.cancel();
+		}
 	});
 });
 

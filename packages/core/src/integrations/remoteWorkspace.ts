@@ -198,39 +198,51 @@ export function toSyncedWorkspaceFileMap(files: SyncedWorkspaceFile[]): SyncedWo
 	return mapped;
 }
 
+export type WorkspaceSourceTypePolicy = Omit<
+	WorkspaceSourcePolicy,
+	'entryNotebook' | 'protectedPaths'
+>;
+
 /**
  * Per-source-type policy. Adding a new source kind (a new `Source['type']`) means
  * adding one row here — the rest of the system reads the policy, never the type.
+ * Fields that depend on the entry notebook are derived in `workspaceSourcePolicy`.
  */
-const WORKSPACE_SOURCE_POLICIES: {
-	[K in Source['type']]: (source: Extract<Source, { type: K }>) => WorkspaceSourcePolicy;
-} = {
-	local: (source) => ({
-		entryNotebook: localEntryNotebook(source),
+const SOURCE_TYPE_POLICIES: Record<Source['type'], WorkspaceSourceTypePolicy> = {
+	local: {
 		loadMode: 'mount-or-copy',
 		persistSessionEdits: true,
 		restoreFilesystemSnapshot: true,
 		workspaceWritable: true,
 		allowedOperations: WORKSPACE_OPERATIONS,
-		protectedPaths: [
-			{ path: localEntryNotebook(source), deniedOperations: ['move', 'delete'] },
-			{ path: 'pyproject.toml', deniedOperations: ['move', 'delete'] },
-		],
-	}),
-	git: (source) => ({
-		entryNotebook: source.entry_notebook,
+	},
+	git: {
 		loadMode: 'copy-only',
 		persistSessionEdits: false,
 		restoreFilesystemSnapshot: false,
 		workspaceWritable: false,
 		allowedOperations: [],
-		protectedPaths: [],
-	}),
+	},
 };
 
+export function workspaceSourceTypePolicy(type: Source['type']): WorkspaceSourceTypePolicy {
+	return SOURCE_TYPE_POLICIES[type];
+}
+
 export function workspaceSourcePolicy(source: Source): WorkspaceSourcePolicy {
-	const policy = WORKSPACE_SOURCE_POLICIES[source.type] as (s: Source) => WorkspaceSourcePolicy;
-	return policy(source);
+	const entryNotebook =
+		source.type === 'local' ? localEntryNotebook(source) : source.entry_notebook;
+	return {
+		...SOURCE_TYPE_POLICIES[source.type],
+		entryNotebook,
+		protectedPaths:
+			source.type === 'local'
+				? [
+						{ path: entryNotebook, deniedOperations: ['move', 'delete'] },
+						{ path: 'pyproject.toml', deniedOperations: ['move', 'delete'] },
+					]
+				: [],
+	};
 }
 
 export function workspaceOperationDenied(

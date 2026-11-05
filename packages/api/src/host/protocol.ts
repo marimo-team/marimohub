@@ -4,16 +4,58 @@ import { z } from 'zod';
 import type { HostEvent } from '@marimo-hub/core/host-bridge';
 
 export const HOST_PREFIX = '/api/host/v1';
+// `provision` routes start a sandbox on demand; the others only reach a runtime that exists.
 export const RUNTIME_ROUTES = [
-	{ method: 'PUT', path: '/runtime', operation: 'runtime.start', event: 'runtime' },
-	{ method: 'POST', path: '/edits', operation: 'notebook.edit', event: 'edit' },
-	{ method: 'POST', path: '/save', operation: 'notebook.save', event: 'edit' },
-	{ method: 'POST', path: '/runtime/runs', operation: 'runtime.run', event: 'run' },
-	{ method: 'DELETE', path: '/runtime/runs/:run', operation: 'runtime.interrupt', event: 'run' },
+	{
+		method: 'PUT',
+		path: '/runtime',
+		operation: 'runtime.start',
+		event: 'runtime',
+		provision: true,
+	},
+	{ method: 'POST', path: '/edits', operation: 'notebook.edit', event: 'edit', provision: true },
+	{ method: 'POST', path: '/save', operation: 'notebook.save', event: 'edit', provision: true },
+	{
+		method: 'POST',
+		path: '/runtime/runs',
+		operation: 'runtime.run',
+		event: 'run',
+		provision: true,
+	},
+	{
+		method: 'DELETE',
+		path: '/runtime/runs/:run',
+		operation: 'runtime.interrupt',
+		event: 'run',
+		provision: false,
+	},
+	{
+		method: 'POST',
+		path: '/runtime/inputs/:input/reply',
+		operation: 'runtime.input',
+		event: 'input',
+		provision: false,
+	},
 ] as const;
 export const RUNTIME_OPERATIONS = RUNTIME_ROUTES.map((route) => route.operation);
 export const OPERATIONS = ['notebook.create', 'notebook.update', ...RUNTIME_OPERATIONS];
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
+export const CATALOG_KINDS = ['host', 'project', 'notebook', 'runtime', 'attachment'] as const;
+export const NOTEBOOK_KINDS = [
+	'notebook',
+	'document',
+	'cell',
+	'runtime',
+	'attachment',
+	'run',
+	'execution',
+	'console',
+	'display',
+	'input',
+	'variable',
+	'custom',
+] as const;
+export type EventKinds = ReadonlySet<string> | undefined;
 
 export interface HostDecision {
 	id: string;
@@ -136,12 +178,21 @@ export function sse(event: HostEvent): string {
 	return `${event.id ? `id: ${event.id}\n` : ''}event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`;
 }
 
-export function acceptsEvent(types: string | undefined, kind: string): boolean {
+export function parseTypes(raw: string | undefined, kinds: readonly string[]): EventKinds {
+	const asked = new Set((raw ?? '').split(',').filter((kind) => kind !== ''));
+	if (asked.size === 0) return undefined;
+	const unknown = [...asked].filter((kind) => !kinds.includes(kind)).sort();
+	if (unknown.length > 0)
+		throw HostProblemError.invalidRequest(`types has no kind named ${unknown.join(', ')}`);
+	return asked;
+}
+
+export function acceptsEvent(types: EventKinds, kind: string): boolean {
 	return (
 		kind === 'ready' ||
 		kind === 'reset' ||
 		types === undefined ||
-		types.split(',').includes(kind.replace(/\.removed$/, ''))
+		types.has(kind.replace(/\.removed$/, ''))
 	);
 }
 

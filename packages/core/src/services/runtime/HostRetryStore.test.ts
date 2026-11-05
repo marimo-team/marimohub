@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryBucket } from '../../testing/MemoryBucket';
-import { HostRetryStore, HOST_RETRY_WINDOW_MS } from './HostRetryStore';
+import { HostRetryStore, HOST_RETRY_REFRESH_MS, HOST_RETRY_WINDOW_MS } from './HostRetryStore';
 import type { HostRetryClaim } from './HostRetryStore';
 import { paths } from '../../paths';
 
@@ -86,6 +86,22 @@ describe('shared host retry receipts', () => {
 		await store.dispatch(corrected);
 		await store.finish(corrected, { status: 412, body: {} });
 		expect((await store.acquire('user', 'key', 'new-request', false)).kind).toBe('claimed');
+	});
+
+	it('stops refreshing run receipts before the runtime receipt can expire', async () => {
+		vi.useFakeTimers();
+		const store = new HostRetryStore(new MemoryBucket());
+		const run = { status: 202, body: { id: 'run' } };
+		const acquired = await claim(store, 'key', 'run');
+		await store.dispatch(acquired, 'session');
+		await store.finish(acquired, run);
+		const refreshed = await store.acquire('user', 'key', 'run', true);
+		expect(refreshed.kind).toBe('claimed');
+		await store.finish((refreshed as { kind: 'claimed'; claim: HostRetryClaim }).claim, run);
+		vi.advanceTimersByTime(HOST_RETRY_REFRESH_MS);
+		expect(await store.acquire('user', 'key', 'run', true)).toEqual({ kind: 'reply', reply: run });
+		vi.advanceTimersByTime(HOST_RETRY_WINDOW_MS - HOST_RETRY_REFRESH_MS + 1);
+		expect((await store.acquire('user', 'key', 'run', true)).kind).toBe('claimed');
 	});
 
 	it('persists runtime bindings across instances and expires them only after settlement', async () => {

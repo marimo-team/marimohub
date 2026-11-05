@@ -1,6 +1,7 @@
 import {
 	EditSessionOwnedError,
 	EditSessionChangedError,
+	NotFoundError,
 	SandboxProvisioner,
 	SessionId,
 	sessionOwner,
@@ -15,7 +16,12 @@ import type { HostRequest } from '@marimo-hub/core/host-bridge';
 import { sha256Hex } from '@marimo-hub/core/sha256';
 import type { Context } from 'hono';
 import type { ApiDeps, HonoEnv } from '../context';
-import { authorizeMcpSession, withMcpSessionActivity } from '../mcp/sessionActivity';
+import {
+	authorizeMcpSession,
+	SessionAuthorizationExpiredError,
+	SessionEndedError,
+	withMcpSessionActivity,
+} from '../mcp/sessionActivity';
 import {
 	getEditorSessionState,
 	startNotebookSession,
@@ -161,6 +167,34 @@ export async function ensureHostSession(
 	return session;
 }
 
+/**
+ * The runtime a notebook already has, for operations that act on existing work. Nothing is
+ * provisioned: without a running runtime there is no run to interrupt or input to answer.
+ */
+export async function existingHostSession(
+	deps: ApiDeps,
+	user: AuthenticatedPrincipal,
+	project: Project,
+	notebook: NotebookDetail,
+	temporary?: Session,
+): Promise<Session> {
+	const unavailable = () => HostProblemError.noRuntime('The notebook has no running runtime');
+	let session = temporary;
+	if (!session) {
+		const claim = await deps.services.sessions.getEditorClaim(project.id, notebook.meta.id);
+		if (!claim?.session_id) throw unavailable();
+		try {
+			session = await deps.services.sessions.getSession(project.id, claim.session_id);
+		} catch (error) {
+			if (error instanceof NotFoundError) throw unavailable();
+			throw error;
+		}
+		await authorizeMcpSession(deps, user, session);
+	}
+	if (session.status !== 'running' || !session.sandbox_id) throw unavailable();
+	return session;
+}
+
 export async function callRuntime(
 	deps: ApiDeps,
 	principal: AuthenticatedPrincipal,
@@ -222,5 +256,12 @@ export async function callRuntime(
 		await authorizeMcpSession(deps, principal, session);
 		return perform(signal);
 	}
-	return withMcpSessionActivity(deps, principal, project, session, perform, signal);
+	try {
+		return await withMcpSessionActivity(deps, principal, project, session, perform, signal);
+	} catch (error) {
+		if (error instanceof SessionEndedError) throw HostProblemError.noRuntime(error.message);
+		if (error instanceof SessionAuthorizationExpiredError)
+			throw HostProblemError.unauthorized(error.message);
+		throw error;
+	}
 }

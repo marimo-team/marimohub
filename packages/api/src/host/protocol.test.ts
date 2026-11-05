@@ -1,7 +1,28 @@
 import { PreconditionFailedError, UnavailableError } from '@marimo-hub/core';
 import { HTTPException } from 'hono/http-exception';
 import { describe, expect, it } from 'vitest';
-import { errorResponse, HostProblemError } from './protocol';
+import {
+	acceptsEvent,
+	CATALOG_KINDS,
+	errorResponse,
+	HostProblemError,
+	parseTypes,
+} from './protocol';
+
+describe('stream kind filters', () => {
+	it('parses and validates kinds and matches removal events', () => {
+		expect(parseTypes(undefined, CATALOG_KINDS)).toBeUndefined();
+		expect(parseTypes(',', CATALOG_KINDS)).toBeUndefined();
+		const types = parseTypes('notebook,runtime', CATALOG_KINDS);
+		expect(acceptsEvent(types, 'runtime.removed')).toBe(true);
+		expect(acceptsEvent(types, 'host')).toBe(false);
+		expect(acceptsEvent(types, 'ready')).toBe(true);
+		expect(acceptsEvent(undefined, 'attachment')).toBe(true);
+		expect(() => parseTypes('cell,bogus', CATALOG_KINDS)).toThrow(
+			'types has no kind named bogus, cell',
+		);
+	});
+});
 
 describe('host problem responses', () => {
 	it('keeps decision-required distinct from other 409 responses', async () => {
