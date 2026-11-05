@@ -27,6 +27,7 @@ describe('host runtime notebook paths', () => {
 		const compute = makeFakeCompute();
 		const deps = makeTestDeps(await createInitializedBucket(), { compute });
 		deps.sandbox.workdir = '/workspace';
+		deps.sandbox.notebookBridge = { launcher: 'marimo-bridge.py', files: [] };
 		const project = await deps.services.projects.createProject(
 			{ name: 'Host project', description: '' },
 			user.id,
@@ -78,6 +79,7 @@ describe('host runtime notebook paths', () => {
 			sandbox,
 			{ method: 'GET', path: '/catalog', notebookPath: `/host-root${expected}` },
 			expect.any(AbortSignal),
+			{ sandboxId: session.sandbox_id, launcher: 'marimo-bridge.py' },
 		);
 	});
 });

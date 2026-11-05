@@ -193,6 +193,9 @@ export async function callRuntime(
 				notebookPath: sandbox.resolveProcessPath?.(path) ?? path,
 			},
 			activeSignal,
+			deps.sandbox.notebookBridge
+				? { sandboxId: session.sandbox_id!, launcher: deps.sandbox.notebookBridge.launcher }
+				: undefined,
 		);
 		if (request.path === '/save' && reply.status < 400) {
 			if (!(await deps.services.sessions.ownsEditorClaim(session)))

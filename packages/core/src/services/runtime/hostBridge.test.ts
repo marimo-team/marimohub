@@ -55,9 +55,17 @@ for response in (io.BytesIO(live), TimedOut(live)):
 		},
 	);
 
-	it.each([['--no-token'], ['--token-password-file', KERNEL_AUTH_TOKEN_FILE]])(
-		'finds the matching notebook with server auth flags %j',
-		async (...auth) => {
+	it.each([
+		{ auth: ['--no-token'], port: 2718, bridgeLauncher: undefined },
+		{
+			auth: ['--token-password-file', KERNEL_AUTH_TOKEN_FILE],
+			port: 2718,
+			bridgeLauncher: undefined,
+		},
+		{ auth: ['--no-token'], port: 43128, bridgeLauncher: '/host root/marimo-bridge.py' },
+	])(
+		'finds the matching notebook with $auth on port $port (bridge=$bridgeLauncher)',
+		async ({ auth, port, bridgeLauncher }) => {
 			const script = String.raw`
 import json, shlex, sys, tempfile, types
 from pathlib import Path
@@ -66,12 +74,16 @@ with tempfile.TemporaryDirectory() as directory:
     request.write_text(json.dumps({"method": "GET", "path": "/events", "notebookPath": "/workspace/notebook.py"}))
     source = shlex.split(sys.argv[1])[2].replace(
         json.dumps("/tmp/host-bridge-test-request.json"), json.dumps(str(request)))
-    prefix, marker, body = source.partition("\ntry:\n    for args in commands(5):")
+    prefix, marker, body = source.partition("\ntry:\n    for args in commands(5, bridge_launcher):")
     assert marker
     exec(prefix)
-    server_args = ["python", "-m", "marimo", "edit", "--port", "2718", *json.loads(sys.argv[2])]
-    other_args = [arg if arg != "2718" else "2719" for arg in server_args]
-    commands = lambda timeout: iter([other_args, server_args])
+    options = json.loads(sys.argv[2])
+    port = str(options["port"])
+    entry = [options["bridgeLauncher"]] if options.get("bridgeLauncher") else ["-m", "marimo"]
+    server_args = ["python", *entry, "edit", "--port", port, *options["auth"]]
+    other_args = [arg if arg != port else "2719" for arg in server_args]
+    unrelated = ["python", "-m", "unrelated", "--port", port, "--no-token"]
+    commands = lambda timeout, launcher: iter([unrelated, other_args, server_args])
     calls = []
     def execute(command, **kwargs):
         config = json.loads(kwargs["input"])
@@ -82,7 +94,7 @@ with tempfile.TemporaryDirectory() as directory:
         return types.SimpleNamespace(returncode=0, stdout=json.dumps(reply))
     subprocess.run = execute
     exec(marker + body)
-    assert len(calls) == 2
+    assert len(calls) == (1 if "--no-token" in server_args else 2)
     assert calls[-1]["server_args"] == server_args
     assert calls[-1]["request"]["notebookPath"] == "/workspace/notebook.py"
     assert not request.exists()
@@ -90,8 +102,8 @@ with tempfile.TemporaryDirectory() as directory:
 			const result = await run('python3', [
 				'-c',
 				script,
-				hostBridgeCommand('/tmp/host-bridge-test-request.json'),
-				JSON.stringify(auth),
+				hostBridgeCommand('/tmp/host-bridge-test-request.json', port, bridgeLauncher),
+				JSON.stringify({ auth, port, bridgeLauncher }),
 			]);
 			expect(JSON.parse(result.stdout)).toMatchObject({ status: 200, notebook: { id: 'local' } });
 		},
@@ -307,15 +319,32 @@ target.shutdown()
 			}),
 			stderr: '',
 		});
-		const sandbox = { writeFiles, exec } as unknown as SandboxInstance;
+		const sandbox = {
+			writeFiles,
+			exec,
+			resolveProcessUrl: () => 'http://127.0.0.1:43128',
+			resolveProcessPath: (path: string) => `/host root${path}`,
+		} as unknown as SandboxInstance;
 		const code = 'x'.repeat(256_000);
-		await requestRuntimeHost(sandbox, {
-			method: 'POST',
-			path: '/edits',
-			notebookPath: '/workspace/notebook.py',
-			body: { code },
-		});
+		await requestRuntimeHost(
+			sandbox,
+			{
+				method: 'POST',
+				path: '/edits',
+				notebookPath: '/workspace/notebook.py',
+				body: { code },
+			},
+			undefined,
+			{ sandboxId: 'test-sandbox', launcher: 'marimo-bridge.py' },
+		);
 		expect(writeFiles.mock.calls[0][0][0].content).toContain(code);
+		expect(exec.mock.calls[0][0]).toBe(
+			hostBridgeCommand(
+				`/host root${writeFiles.mock.calls[0][0][0].path}`,
+				43128,
+				'/host root/tmp/marimohub-bridge/test-sandbox/marimo-bridge.py',
+			),
+		);
 		expect(exec.mock.calls[0][0]).not.toContain(code);
 		expect(exec.mock.calls[0][0]).toContain('unlink');
 		exec.mockResolvedValue({ success: true, stdout: 'private-token', stderr: '' });
