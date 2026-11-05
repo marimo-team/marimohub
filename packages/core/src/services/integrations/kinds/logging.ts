@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ValidationError } from '../../../errors';
-import type { LoggingDestination } from '../../../ports/integrations';
-import { basicAuthHeader, defineIntegration } from '../sdk';
+import type { IntegrationProbe, LoggingDestination } from '../../../ports/integrations';
+import { basicAuthHeader, defineIntegration, probeEndpoint } from '../sdk';
 import type { RenderInput, RenderOutput } from '../sdk';
 import { zSecret } from '../secretFields';
 import { HTTP_HEADER_NAME_REGEX, serviceUrlField } from './common';
@@ -10,7 +10,10 @@ const common = {
 	level: z.enum(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']).default('INFO'),
 	service_name: z.string().min(1).max(128).default('marimohub-notebook'),
 };
-const url = serviceUrlField().describe('Full OTLP/HTTP JSON logs URL, including /v1/logs');
+const url = serviceUrlField().describe('Full OTLP/HTTP JSON logs URL, including /v1/logs').meta({
+	'x-marimohub-refinement':
+		'A valid http(s) logs URL with an authority, no userinfo, query, fragment, or port 0',
+});
 const headers = z
 	.array(
 		z.strictObject({
@@ -26,11 +29,8 @@ const headers = z
 	.meta({ 'x-unique-by': 'name' })
 	.default([]);
 
-function renderLogging(
-	input: RenderInput<z.infer<z.ZodObject<typeof common>> & { url: string }>,
-	headers: Record<string, string>,
-): RenderOutput {
-	if (!url.safeParse(input.config.url).success) throw new ValidationError('Invalid OTLP logs URL.');
+function validateEndpoint(endpoint: string, headers: Record<string, string>): void {
+	if (!url.safeParse(endpoint).success) throw new ValidationError('Invalid OTLP logs URL.');
 	for (const [name, value] of Object.entries(headers)) {
 		if (
 			!HTTP_HEADER_NAME_REGEX.test(name) ||
@@ -40,6 +40,34 @@ function renderLogging(
 			throw new ValidationError('Invalid OTLP authentication header.');
 		}
 	}
+}
+
+function testLogging(
+	endpoint: string,
+	headers: Record<string, string>,
+	probe: IntegrationProbe,
+	signal?: AbortSignal,
+) {
+	validateEndpoint(endpoint, headers);
+	return probeEndpoint({
+		probe,
+		url: endpoint,
+		init: {
+			method: 'POST',
+			headers: { ...headers, 'Content-Type': 'application/json' },
+			body: JSON.stringify({ resourceLogs: [] }),
+			signal,
+		},
+		carriesSecrets: true,
+		describe: () => 'Endpoint accepted an empty OTLP logs request; no log records were sent.',
+	});
+}
+
+function renderLogging(
+	input: RenderInput<z.infer<z.ZodObject<typeof common>> & { url: string }>,
+	headers: Record<string, string>,
+): RenderOutput {
+	validateEndpoint(input.config.url, headers);
 	const destination: LoggingDestination = {
 		name: input.instanceName,
 		url: input.config.url,
@@ -64,6 +92,14 @@ export const otlpLogs = defineIntegration({
 	schemaVersion: 1,
 	configSchema: z.strictObject({ url, headers, ...common }),
 	uiHints: { 'headers.*.value': { widget: 'password' } },
+	testConnection(config, probe, options) {
+		return testLogging(
+			config.url,
+			Object.fromEntries(config.headers.map(({ name, value }) => [name, value])),
+			probe,
+			options?.signal,
+		);
+	},
 	render(input) {
 		return renderLogging(
 			input,
@@ -92,6 +128,14 @@ export const grafanaCloudLogs = defineIntegration({
 		...common,
 	}),
 	uiHints: { token: { widget: 'password' } },
+	testConnection(config, probe, options) {
+		return testLogging(
+			config.url,
+			{ Authorization: basicAuthHeader(config.username, config.token) },
+			probe,
+			options?.signal,
+		);
+	},
 	render(input) {
 		return renderLogging(input, {
 			Authorization: basicAuthHeader(input.config.username, input.config.token),
@@ -109,6 +153,14 @@ export const betterStackLogs = defineIntegration({
 	schemaVersion: 1,
 	configSchema: z.strictObject({ url, source_token: zSecret(), ...common }),
 	uiHints: { source_token: { widget: 'password' } },
+	testConnection(config, probe, options) {
+		return testLogging(
+			config.url,
+			{ Authorization: `Bearer ${config.source_token}` },
+			probe,
+			options?.signal,
+		);
+	},
 	render(input) {
 		return renderLogging(input, {
 			Authorization: `Bearer ${input.config.source_token}`,

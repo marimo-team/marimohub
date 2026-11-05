@@ -509,6 +509,12 @@ All destination queues share a three-second shutdown deadline.
 
 Two marimo compatibility hooks preserve remote verbosity (`_loggers.set_level`) and flush before kernel `os._exit()` (`handlers.construct_sigterm_handler`).
 Normal exit and multiprocessing finalization use the same shutdown function.
+Each hook initializes independently after handler installation. A failed hook emits a diagnostic while ordinary log export remains active.
+The bootstrap imports marimo in each Python child process. This adds startup cost to subprocesses that do not otherwise use marimo.
+
+All three kinds probe their configured URL through `IntegrationProbe`, with the same header validation and credentials as runtime export.
+The probe posts an empty `resourceLogs` array and never returns response bodies or transport error text.
+All custom header values remain secrets, including tenant identifiers. A future plain-header field can be additive without changing existing secret paths.
 
 ### Runtime tests
 

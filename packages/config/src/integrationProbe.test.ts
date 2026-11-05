@@ -4,7 +4,12 @@ import type { Server } from 'node:http';
 import { createServer as createTcpServer } from 'node:net';
 import type { Server as TcpServer, Socket } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ResourceExhaustedError, UnavailableError, ValidationError } from '@marimo-hub/core';
+import {
+	defaultRegistry,
+	ResourceExhaustedError,
+	UnavailableError,
+	ValidationError,
+} from '@marimo-hub/core';
 import { createGuardedHostResolver, createGuardedProbe } from './integrationProbe';
 import type { ProbeConnectionTransportRequest, ProbeTransportRequest } from './integrationProbe';
 
@@ -587,6 +592,49 @@ describe('createGuardedProbe node transport (real local server)', () => {
 			path: '/v1/info',
 			host: expect.stringContaining('localhost'),
 		});
+	});
+
+	it.each([200, 204, 401, 302])('probes a logging endpoint over HTTP: %s', async (status) => {
+		const received: unknown[] = [];
+		const base = await serve((req, res) => {
+			let body = '';
+			req.setEncoding('utf8');
+			req.on('data', (chunk: string) => {
+				body += chunk;
+			});
+			req.on('end', () => {
+				received.push({ method: req.method, path: req.url, headers: req.headers, body });
+				res.statusCode = status;
+				if (status === 302) res.setHeader('location', `${base}/redirected`);
+				res.end(status === 204 ? undefined : '{}');
+			});
+		});
+		const definition = defaultRegistry().get('otlp_logs');
+		const config = definition.configSchema.parse({
+			url: `${base}/otlp/v1/logs`,
+			headers: [
+				{ name: 'Authorization', value: 'Bearer test-token' },
+				{ name: 'X-Scope-OrgID', value: 'tenant-a' },
+			],
+		});
+		const result = await definition.testConnection!(
+			config,
+			createGuardedProbe({ allowPrivate: true }),
+		);
+		expect(result.ok).toBe(status === 200 || status === 204);
+		if (!result.ok) expect(result.details).toBe(`HTTP ${status}`);
+		expect(received).toEqual([
+			{
+				method: 'POST',
+				path: '/otlp/v1/logs',
+				body: '{"resourceLogs":[]}',
+				headers: expect.objectContaining({
+					authorization: 'Bearer test-token',
+					'x-scope-orgid': 'tenant-a',
+					'content-type': 'application/json',
+				}),
+			},
+		]);
 	});
 
 	it('does not follow redirects', async () => {

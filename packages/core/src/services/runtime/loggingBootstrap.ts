@@ -273,10 +273,6 @@ def install():
 
 def _install():
     destinations = json.loads(Path(__file__).with_name("logging.json").read_text())
-    from marimo import _loggers
-    from marimo._runtime import handlers
-    original_sigterm = handlers.construct_sigterm_handler
-    marimo_logger = _loggers.marimo_logger()
     minimum = min(getattr(logging, d["level"]) for d in destinations)
     prepared = []
     try:
@@ -303,13 +299,7 @@ def _install():
         console.setFormatter(logging.Formatter(logging.BASIC_FORMAT))
         root.addHandler(console)
     root.setLevel(min(root.level, minimum))
-    # marimo resets its logger threshold at CLI and kernel startup. Keep remote
-    # verbosity independent of the levels on its existing console/file handlers.
-    original_set_level = _loggers.set_level
-    def set_level(*args, **kwargs):
-        original_set_level(*args, **kwargs)
-        marimo_logger.setLevel(min(marimo_logger.level, minimum))
-    _loggers.set_level = set_level
+    marimo_logger = logging.getLogger("marimo")
     marimo_logger.setLevel(min(marimo_logger.level, minimum))
 
     for processor, handler in prepared:
@@ -320,13 +310,39 @@ def _install():
     atexit.register(shutdown)
     from multiprocessing.util import Finalize
     Finalize(None, shutdown, exitpriority=10)
+    install_marimo_hooks(marimo_logger, minimum)
+
+
+def install_marimo_hooks(marimo_logger, minimum):
+    # marimo resets its logger threshold at CLI and kernel startup. Keep remote
+    # verbosity independent of the levels on its existing console/file handlers.
+    try:
+        from marimo import _loggers
+        original_set_level = _loggers.set_level
+        if not callable(original_set_level):
+            raise TypeError("Unsupported marimo level hook")
+        def set_level(*args, **kwargs):
+            original_set_level(*args, **kwargs)
+            marimo_logger.setLevel(min(marimo_logger.level, minimum))
+        _loggers.set_level = set_level
+        marimo_logger.setLevel(min(marimo_logger.level, minimum))
+    except Exception:
+        diagnostic("marimo_level_hook_failed")
+
     # marimo's kernel SIGTERM handler uses os._exit(), bypassing both exit hooks.
-    def construct_sigterm_handler(kernel):
-        original = original_sigterm(kernel)
-        def terminate(signum, frame):
-            shutdown()
-            original(signum, frame)
-        return terminate
-    handlers.construct_sigterm_handler = construct_sigterm_handler
+    try:
+        from marimo._runtime import handlers
+        original_sigterm = handlers.construct_sigterm_handler
+        if not callable(original_sigterm):
+            raise TypeError("Unsupported marimo SIGTERM hook")
+        def construct_sigterm_handler(kernel):
+            original = original_sigterm(kernel)
+            def terminate(signum, frame):
+                shutdown()
+                original(signum, frame)
+            return terminate
+        handlers.construct_sigterm_handler = construct_sigterm_handler
+    except Exception:
+        diagnostic("marimo_sigterm_hook_failed")
 
 `;

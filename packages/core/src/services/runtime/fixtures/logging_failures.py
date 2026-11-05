@@ -117,6 +117,39 @@ assert not any(f.__class__.__module__ == 'marimohub_logging' for f in logging.ge
 logging.warning('still-running')
 print('workload-completed')
 '''
+elif mode in ('missing-level-hook', 'missing-sigterm-hook', 'missing-both-hooks', 'unavailable-marimo'):
+    env['MARIMOHUB_TEST_HOOK_FAILURE'] = mode
+    (custom / 'sitecustomize.py').write_text('''
+import os, sys
+mode = os.environ['MARIMOHUB_TEST_HOOK_FAILURE']
+if mode == 'unavailable-marimo':
+    sys.modules['marimo'] = None
+else:
+    from marimo import _loggers
+    from marimo._runtime import handlers
+    if mode in ('missing-level-hook', 'missing-both-hooks'):
+        del _loggers.set_level
+    if mode in ('missing-sigterm-hook', 'missing-both-hooks'):
+        del handlers.construct_sigterm_handler
+''')
+    workload = '''
+import logging, os, sys
+import marimohub_logging as bootstrap
+mode = os.environ['MARIMOHUB_TEST_HOOK_FAILURE']
+assert len(bootstrap._processors) == 2
+if mode == 'missing-sigterm-hook':
+    from marimo import _loggers
+    _loggers.set_level(logging.CRITICAL)
+    assert logging.getLogger('marimo').level == logging.INFO
+logging.getLogger('marimo').error('marimo-record')
+logging.error('fault-record')
+print('workload-completed', flush=True)
+if mode == 'missing-level-hook':
+    from types import SimpleNamespace
+    from marimo._runtime import handlers
+    handlers.get_context = lambda: SimpleNamespace(virtual_file_registry=SimpleNamespace(shutdown=lambda: None))
+    handlers.construct_sigterm_handler(None)(15, None)
+'''
 elif mode == 'response-timeout':
     workload = '''
 import logging, time
@@ -224,6 +257,16 @@ assert not Path('unexpected').exists()
 counts = Counter((body, attrs['marimohub.integration']) for body, attrs, *_ in server.records)
 failed_requests = [r for r in requests if r[0].startswith('/failed/')]
 diagnostics = [json.loads(line) for line in stderr.splitlines() if line.startswith('{')]
+
+if mode in ('missing-level-hook', 'missing-sigterm-hook', 'missing-both-hooks', 'unavailable-marimo'):
+    assert 'initialization_failed' not in stderr, stderr
+    expected = {'marimo_level_hook_failed', 'marimo_sigterm_hook_failed'}
+    if mode == 'missing-level-hook':
+        expected = {'marimo_level_hook_failed'}
+    elif mode == 'missing-sigterm-hook':
+        expected = {'marimo_sigterm_hook_failed'}
+    assert {d['reason'] for d in diagnostics} == expected, diagnostics
+    assert counts[('marimo-record', 'healthy')] == counts[('marimo-record', 'logs')] == 1, counts
 
 if initialization_failure:
     assert 'initialization_failed' in stderr, stderr

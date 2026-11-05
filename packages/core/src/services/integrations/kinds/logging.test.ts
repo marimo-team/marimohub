@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { IntegrationProbe } from '../../../ports/integrations';
 import { createIntegrationId, createProjectId, createSessionId, UserId } from '../../../ids';
 import { MemoryBucket } from '../../../testing/MemoryBucket';
 import { AesGcmSecretCodec } from '../../secrets/AesGcmSecretCodec';
@@ -18,6 +19,68 @@ const context = {
 };
 
 describe('logging integrations', () => {
+	describe.each(['otlp_logs', 'grafana_cloud_logs', 'better_stack_logs'])(
+		'%s connectivity',
+		(kind) => {
+			const definition = defaultRegistry().get(kind);
+			const config = definition.configSchema.parse(SAMPLE_CONFIGS[kind]);
+			const destination = definition.render({ ...context, config }).logging![0];
+			const probe = (status: number): IntegrationProbe => ({
+				fetch: vi.fn().mockResolvedValue({
+					ok: status >= 200 && status < 300,
+					status,
+					json: async () => ({ error: 'private-response' }),
+				}),
+				connect: vi.fn(),
+			});
+
+			it.each([200, 204])('posts no log records and accepts HTTP %s', async (status) => {
+				const transport = probe(status);
+				const signal = new AbortController().signal;
+				const result = await definition.testConnection!(config, transport, { signal });
+				expect(result).toMatchObject({ ok: true, latency_ms: expect.any(Number) });
+				expect(result.details).toContain('no log records were sent');
+				expect(result.details).not.toContain('private-response');
+				expect(transport.fetch).toHaveBeenCalledExactlyOnceWith(destination.url, {
+					method: 'POST',
+					headers: { ...destination.headers, 'Content-Type': 'application/json' },
+					body: '{"resourceLogs":[]}',
+					signal,
+				});
+			});
+
+			it.each([301, 401, 403, 404, 429, 500])(
+				'reports HTTP %s without response text',
+				async (status) => {
+					expect(await definition.testConnection!(config, probe(status))).toMatchObject({
+						ok: false,
+						details: `HTTP ${status}`,
+					});
+				},
+			);
+
+			it('sanitizes transport errors', async () => {
+				const transport = probe(200);
+				vi.mocked(transport.fetch).mockRejectedValue(new Error('private transport credentials'));
+				expect(await definition.testConnection!(config, transport)).toMatchObject({
+					ok: false,
+					details: 'request failed',
+				});
+			});
+		},
+	);
+
+	it.each([
+		{ url: 'https://user:secret@example.test/v1/logs' },
+		{ headers: [{ name: 'Host', value: 'secret' }] },
+		{ headers: [{ name: 'Authorization', value: 'secret\r\nInjected: true' }] },
+	])('validates probe URL and resolved headers before network access: %j', async (overrides) => {
+		const config = { ...otlpLogs.configSchema.parse(SAMPLE_CONFIGS.otlp_logs), ...overrides };
+		const probe: IntegrationProbe = { fetch: vi.fn(), connect: vi.fn() };
+		await expect(otlpLogs.testConnection!(config, probe)).rejects.toThrow(/Invalid OTLP/);
+		expect(probe.fetch).not.toHaveBeenCalled();
+	});
+
 	it('bundles destinations without changing notebook packages or exposing credentials in the manifest', () => {
 		const registry = defaultRegistry();
 		const result = bundleIntegrations(

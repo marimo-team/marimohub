@@ -1,6 +1,6 @@
 <!-- GENERATED from internal/schemas/integrations.yml — do not edit; run `pnpm schemas:generate`. -->
 
-<span style="display:inline-block;width:12px;height:12px;border-radius:9999px;background:#F5A800;vertical-align:-1px"></span> `otlp_logs` · other · config schema v1
+<span style="display:inline-block;width:12px;height:12px;border-radius:9999px;background:#F5A800;vertical-align:-1px"></span> `otlp_logs` · other · config schema v1 · connection test supported
 
 ::: details OpenTelemetry logs configuration reference
 

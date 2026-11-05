@@ -1165,7 +1165,11 @@ Create an `otlp_logs` integration with a full logs URL that accepts OTLP/HTTP JS
 
 Hub sends the URL unchanged and rejects redirects. Use HTTPS for remote destinations, or HTTP for collectors on trusted networks.
 Header names must be unique, regardless of case. HTTP framing headers, such as `Host`, `Content-Type`, and `Content-Length`, are reserved.
-All authentication values use the integration secret store.
+All header values use the integration secret store and remain hidden after save.
+This includes tenant identifiers such as `X-Scope-OrgID`. Use `otlp_logs` for endpoints that require these headers.
+
+Use **Test connection** to send an empty OTLP request with the configured credentials. This test sends no log records.
+The request runs from the hub. A successful result does not verify network access from each sandbox.
 
 Use the standard Python logging API in notebook code:
 
@@ -1185,6 +1189,9 @@ Full queues discard new records. Failed deliveries report dropped records to std
 Network failures, forced termination, and sandbox destruction can lose logs.
 
 The integrations capture `logging.exception()` but exclude `print()`, rich cell output, unlogged cell errors, existing log files, and exporter diagnostics.
+
+Python child processes inherit the logging bootstrap and export their own records.
+Each child also imports marimo for compatibility hooks, which adds startup time even when the child does not use marimo.
 
 ### Configuration reference
 

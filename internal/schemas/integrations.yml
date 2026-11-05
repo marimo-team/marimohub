@@ -201,7 +201,7 @@ paths:
     x-brand-color: '#6366F1'
     x-secret-paths:
       - source_token
-    x-supports-test: false
+    x-supports-test: true
     x-requirements: []
     get:
       operationId: read_better_stack_logs_config
@@ -553,7 +553,7 @@ paths:
     x-brand-color: '#F46800'
     x-secret-paths:
       - token
-    x-supports-test: false
+    x-supports-test: true
     x-requirements: []
     get:
       operationId: read_grafana_cloud_logs_config
@@ -1117,7 +1117,7 @@ paths:
     x-brand-color: '#F5A800'
     x-secret-paths:
       - headers.*.value
-    x-supports-test: false
+    x-supports-test: true
     x-requirements: []
     get:
       operationId: read_otlp_logs_config
@@ -2269,7 +2269,7 @@ components:
           type: string
           pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
           format: uri
-          x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
+          x-marimohub-refinement: A valid http(s) logs URL with an authority, no userinfo,
             query, fragment, or port 0
           description: Full OTLP/HTTP JSON logs URL, including /v1/logs
         source_token:
@@ -2302,7 +2302,7 @@ components:
           type: string
           pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
           format: uri
-          x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
+          x-marimohub-refinement: A valid http(s) logs URL with an authority, no userinfo,
             query, fragment, or port 0
           description: Full OTLP/HTTP JSON logs URL, including /v1/logs
         source_token:
@@ -3483,7 +3483,7 @@ components:
           type: string
           pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
           format: uri
-          x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
+          x-marimohub-refinement: A valid http(s) logs URL with an authority, no userinfo,
             query, fragment, or port 0
           description: Full OTLP/HTTP JSON logs URL, including /v1/logs
         username:
@@ -3524,7 +3524,7 @@ components:
           type: string
           pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
           format: uri
-          x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
+          x-marimohub-refinement: A valid http(s) logs URL with an authority, no userinfo,
             query, fragment, or port 0
           description: Full OTLP/HTTP JSON logs URL, including /v1/logs
         username:
@@ -5620,7 +5620,7 @@ components:
           type: string
           pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
           format: uri
-          x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
+          x-marimohub-refinement: A valid http(s) logs URL with an authority, no userinfo,
             query, fragment, or port 0
           description: Full OTLP/HTTP JSON logs URL, including /v1/logs
         headers:
@@ -5667,7 +5667,7 @@ components:
           type: string
           pattern: ^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$
           format: uri
-          x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
+          x-marimohub-refinement: A valid http(s) logs URL with an authority, no userinfo,
             query, fragment, or port 0
           description: Full OTLP/HTTP JSON logs URL, including /v1/logs
         headers:
