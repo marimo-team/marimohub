@@ -1,4 +1,3 @@
-import { PreconditionFailedError, UnavailableError } from '@marimo-hub/core';
 import { HTTPException } from 'hono/http-exception';
 import { describe, expect, it } from 'vitest';
 import {
@@ -6,8 +5,21 @@ import {
 	CATALOG_KINDS,
 	errorResponse,
 	HostProblemError,
+	mapRuntimeEvent,
+	mapRuntimeProblem,
 	parseTypes,
 } from './protocol';
+
+class PlatformError extends Error {
+	constructor(
+		readonly status: number,
+		message: string,
+	) {
+		super(message);
+		this.name = 'PlatformError';
+	}
+}
+const statusOf = (error: unknown) => (error instanceof PlatformError ? error.status : undefined);
 
 describe('stream kind filters', () => {
 	it('parses and validates kinds and matches removal events', () => {
@@ -21,6 +33,45 @@ describe('stream kind filters', () => {
 		expect(() => parseTypes('cell,bogus', CATALOG_KINDS)).toThrow(
 			'types has no kind named bogus, cell',
 		);
+	});
+});
+
+describe('runtime identity mapping', () => {
+	it('rewrites notebook and runtime identifiers and leaves cell data alone', () => {
+		const mapped = mapRuntimeEvent(
+			{
+				event: 'run',
+				data: { run: { id: 'r1', notebook_id: 'local', runtime_id: 'k1', cells: ['c1'] } },
+			},
+			'proj:nb',
+			'sess',
+		);
+		expect(mapped.data.run).toEqual({
+			id: 'r1',
+			notebook_id: 'proj:nb',
+			runtime_id: 'sess:k1',
+			cells: ['c1'],
+		});
+		expect(
+			mapRuntimeEvent({ event: 'runtime', data: { runtime: { id: 'k1' } } }, 'proj:nb', 'sess').data
+				.runtime,
+		).toEqual({ id: 'sess:k1' });
+		expect(
+			mapRuntimeEvent({ event: 'runtime.removed', data: { id: 'k1' } }, 'proj:nb', 'sess').data,
+		).toEqual({ id: 'sess:k1' });
+		expect(
+			mapRuntimeEvent(
+				{ event: 'edit', data: { edit: { document: { notebook_id: 'local', etag: 'e' } } } },
+				'proj:nb',
+				'sess',
+			).data.edit,
+		).toEqual({ document: { notebook_id: 'proj:nb', etag: 'e' } });
+		expect(
+			mapRuntimeProblem(
+				{ status: 409, edit: { document: { notebook_id: 'local' }, reason: 'stale' } },
+				'proj:nb',
+			),
+		).toEqual({ status: 409, edit: { document: { notebook_id: 'proj:nb' }, reason: 'stale' } });
 	});
 });
 
@@ -79,10 +130,10 @@ describe('host problem responses', () => {
 	});
 
 	it.each([
-		[new PreconditionFailedError('Stale version'), 409, 'conflict', 'Stale version'],
+		[new PlatformError(412, 'Stale version'), 409, 'conflict', 'Stale version'],
 		[new HTTPException(422, { message: 'Invalid field' }), 400, 'invalid-request', 'Invalid field'],
 		[
-			new UnavailableError('private upstream details'),
+			new PlatformError(503, 'private upstream details'),
 			503,
 			'unavailable',
 			'The host could not complete the request',
@@ -102,7 +153,7 @@ describe('host problem responses', () => {
 	] as const)(
 		'normalizes and sanitizes external errors: %s',
 		async (error, status, type, detail) => {
-			const response = errorResponse(error);
+			const response = errorResponse(error, statusOf);
 			expect(response.status).toBe(status);
 			expect(await response.json()).toEqual({
 				type: `tag:marimo.io,2026:host/${type}`,

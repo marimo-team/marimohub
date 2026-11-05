@@ -1,10 +1,8 @@
-import { DomainError } from '@marimo-hub/core';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
-import type { HostEvent } from '@marimo-hub/core/host-bridge';
+import type { HostEvent } from './events';
 
-export const HOST_PREFIX = '/api/host/v1';
-// `provision` routes start a sandbox on demand; the others only reach a runtime that exists.
+// `provision` routes start a runtime on demand; the others only reach a runtime that exists.
 export const RUNTIME_ROUTES = [
 	{
 		method: 'PUT',
@@ -37,8 +35,15 @@ export const RUNTIME_ROUTES = [
 		provision: false,
 	},
 ] as const;
-export const RUNTIME_OPERATIONS = RUNTIME_ROUTES.map((route) => route.operation);
-export const OPERATIONS = ['notebook.create', 'notebook.update', ...RUNTIME_OPERATIONS];
+export type RuntimeOperation = (typeof RUNTIME_ROUTES)[number]['operation'];
+export const RUNTIME_OPERATIONS: readonly RuntimeOperation[] = RUNTIME_ROUTES.map(
+	(route) => route.operation,
+);
+export const OPERATIONS: readonly string[] = [
+	'notebook.create',
+	'notebook.update',
+	...RUNTIME_OPERATIONS,
+];
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 export const CATALOG_KINDS = ['host', 'project', 'notebook', 'runtime', 'attachment'] as const;
 export const NOTEBOOK_KINDS = [
@@ -148,16 +153,15 @@ export function problemResponse(body: unknown, status: number): Response {
 	});
 }
 
-export function errorResponse(error: unknown): Response {
+/** The HTTP status a platform assigns to one of its own errors; `undefined` means 500. */
+export type ErrorStatus = (error: unknown) => number | undefined;
+export type ErrorResponder = (error: unknown) => Response;
+
+export function errorResponse(error: unknown, statusOf?: ErrorStatus): Response {
 	if (error instanceof HostProblemError) return error.toResponse();
 	if (error instanceof z.ZodError || error instanceof SyntaxError)
 		return HostProblemError.invalidRequest('Invalid request body or parameters').toResponse();
-	const status =
-		error instanceof DomainError
-			? error.status
-			: error instanceof HTTPException
-				? error.status
-				: 500;
+	const status = error instanceof HTTPException ? error.status : (statusOf?.(error) ?? 500);
 	const factories: Record<number, (message: string) => HostProblemError> = {
 		400: HostProblemError.invalidRequest,
 		401: HostProblemError.unauthorized,
@@ -196,15 +200,19 @@ export function acceptsEvent(types: EventKinds, kind: string): boolean {
 	);
 }
 
+/**
+ * Rewrite a runtime's event so its notebook ID is the platform's and its runtime IDs are
+ * prefixed with the runtime key, since one platform notebook may see several runtimes over time.
+ */
 export function mapRuntimeEvent(
 	event: HostEvent,
 	notebookId: string,
-	sessionId: string,
+	runtimeKey: string,
 ): HostEvent {
 	const value = event.data[event.event];
 	if (!value || typeof value !== 'object' || Array.isArray(value)) {
 		if (event.event === 'runtime.removed' && typeof event.data.id === 'string')
-			return { ...event, data: { ...event.data, id: `${sessionId}:${event.data.id}` } };
+			return { ...event, data: { ...event.data, id: `${runtimeKey}:${event.data.id}` } };
 		return event;
 	}
 	const record: Record<string, unknown> = { ...value };
@@ -212,9 +220,9 @@ export function mapRuntimeEvent(
 		record.document = { ...record.document, notebook_id: notebookId };
 	if ('notebook_id' in record) record.notebook_id = notebookId;
 	if (typeof record.runtime_id === 'string')
-		record.runtime_id = `${sessionId}:${record.runtime_id}`;
+		record.runtime_id = `${runtimeKey}:${record.runtime_id}`;
 	if (event.event === 'runtime' && typeof record.id === 'string')
-		record.id = `${sessionId}:${record.id}`;
+		record.id = `${runtimeKey}:${record.id}`;
 	return { ...event, data: { ...event.data, [event.event]: record } };
 }
 

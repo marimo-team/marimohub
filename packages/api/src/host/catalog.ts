@@ -15,11 +15,11 @@ import type {
 	Session,
 	Source,
 } from '@marimo-hub/core';
-import type { HostEvent } from '@marimo-hub/core/host-bridge';
+import { OPERATIONS, RUNTIME_OPERATIONS } from '@marimo-hub/host-protocol';
+import type { HostCatalogSnapshot, HostEvent, HostNotebookRecord } from '@marimo-hub/host-protocol';
 import type { ApiDeps } from '../context';
 import { authorizeMcpSession } from '../mcp/sessionActivity';
 import { authorizationService, loadAuthorizedNotebook, loadVisibleProject } from '../shared';
-import { OPERATIONS, RUNTIME_OPERATIONS } from './protocol';
 
 export async function loadHostNotebook(
 	deps: ApiDeps,
@@ -121,7 +121,7 @@ export async function notebookRecord(
 	project: Project,
 	notebook: HostNotebookSubject,
 	session?: Session,
-) {
+): Promise<HostNotebookRecord> {
 	const authz = authorizationService(deps);
 	const labels = notebook.labels;
 	const [write, start, attach] = await Promise.all([
@@ -169,8 +169,7 @@ export async function notebookRecord(
 	};
 }
 
-export interface HostCatalog {
-	events: HostEvent[];
+export interface HostCatalog extends HostCatalogSnapshot {
 	/** Present sessions per visible project, so runtime discovery need not list them again. */
 	sessions: Map<ProjectId, Session[]>;
 }

@@ -71,15 +71,23 @@ import { describeError, logEvent } from './log';
 export type { ApiDeps, HonoEnv } from './context';
 
 export function resolvePublicBaseUrl(c: Context<HonoEnv>, configured?: string): string {
+	return resolvePublicBaseUrlFor(c.req.raw, configured);
+}
+
+export function resolvePublicBaseUrlFor(request: Request, configured?: string): string {
 	const publicBaseUrl = configured?.trim();
 	if (publicBaseUrl) return normalizeBaseUrl(publicBaseUrl);
-	const requestUrl = new URL(c.req.url);
-	const forwardedProtocol = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
+	const requestUrl = new URL(request.url);
+	const forwardedProtocol = request.headers
+		.get('x-forwarded-proto')
+		?.split(',')[0]
+		?.trim()
+		.toLowerCase();
 	const protocol =
 		forwardedProtocol === 'http' || forwardedProtocol === 'https'
 			? forwardedProtocol
 			: requestUrl.protocol.slice(0, -1);
-	const host = c.req.header('host') ?? requestUrl.host;
+	const host = request.headers.get('host') ?? requestUrl.host;
 	return new URL(`${protocol}://${host}`).origin;
 }
 
@@ -901,7 +909,10 @@ export const RequiredIdempotencyKeyHeader = z.object({
  * already 404 a missing one). Strips the optional weak marker and the quotes.
  */
 export function ifMatchToken(c: Context): string | undefined {
-	const raw = c.req.header('if-match');
+	return parseIfMatch(c.req.header('if-match'));
+}
+
+export function parseIfMatch(raw: string | undefined): string | undefined {
 	if (!raw || raw.trim() === '*') return undefined;
 	return raw
 		.trim()

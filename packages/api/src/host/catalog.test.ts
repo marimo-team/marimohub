@@ -4,7 +4,7 @@ import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import { createApi } from '../createApi';
 import { createInitializedBucket, makeTestDeps } from '../testing';
 import { loadHostNotebook } from './catalog';
-import { HOST_PREFIX } from './protocol';
+import { HOST_PREFIX } from './createHostApp';
 
 const user: AuthenticatedPrincipal = {
 	id: UserId.parse('host-user'),

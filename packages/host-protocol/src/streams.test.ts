@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { HostEvent } from '@marimo-hub/core/host-bridge';
+import type { HostEvent } from './events';
 import { CatalogStream } from './streams';
 
 function attachment(name = 'Editor'): HostEvent {

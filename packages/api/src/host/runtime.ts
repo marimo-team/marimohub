@@ -14,8 +14,8 @@ import type { AuthenticatedPrincipal, NotebookDetail, Project, Session } from '@
 import { requestRuntimeHost } from '@marimo-hub/core/host-bridge';
 import type { HostRequest } from '@marimo-hub/core/host-bridge';
 import { sha256Hex } from '@marimo-hub/core/sha256';
-import type { Context } from 'hono';
-import type { ApiDeps, HonoEnv } from '../context';
+import { HostProblemError } from '@marimo-hub/host-protocol';
+import type { ApiDeps } from '../context';
 import {
 	authorizeMcpSession,
 	SessionAuthorizationExpiredError,
@@ -27,18 +27,26 @@ import {
 	startNotebookSession,
 	takeOverNotebookEditor,
 } from '../routes/sessionStart';
-import { resolvePublicBaseUrl } from '../shared';
-import { HostProblemError } from './protocol';
 
-const DECISION_PREFIX = 'hub-editor:';
+export const DECISION_PREFIX = 'hub-editor:';
 
-async function editorProblem(c: Context<HonoEnv>, project: Project, notebook: NotebookDetail) {
-	const state = await getEditorSessionState(
-		c.get('deps'),
-		c.get('user'),
-		project.id,
-		notebook.meta.id,
-	);
+/** What session start and takeover record about the originating request. */
+export interface HostSessionRequest {
+	requestId?: string;
+	method: string;
+	path: string;
+	hostname: string;
+	appBaseUrl: string;
+	signal?: AbortSignal;
+}
+
+async function editorProblem(
+	deps: ApiDeps,
+	user: AuthenticatedPrincipal,
+	project: Project,
+	notebook: NotebookDetail,
+) {
+	const state = await getEditorSessionState(deps, user, project.id, notebook.meta.id);
 	if (!state.can_take_over || !state.holder)
 		return HostProblemError.conflict('The editor session changed; retry runtime.start');
 	const holder = state.holder;
@@ -58,29 +66,14 @@ async function editorProblem(c: Context<HonoEnv>, project: Project, notebook: No
 	);
 }
 
-export function runtimeDecisions(decisions?: Record<string, string>) {
-	return decisions
-		? Object.fromEntries(
-				Object.entries(decisions).filter(([id]) => !id.startsWith(DECISION_PREFIX)),
-			)
-		: undefined;
-}
-
 export async function ensureHostSession(
-	c: Context<HonoEnv>,
+	deps: ApiDeps,
+	user: AuthenticatedPrincipal,
+	request: HostSessionRequest,
 	project: Project,
 	notebook: NotebookDetail,
 	options: { session?: Session; decisions?: Record<string, string>; key?: string } = {},
 ): Promise<Session> {
-	const deps = c.get('deps');
-	const user = c.get('user');
-	const request = {
-		requestId: c.get('requestId'),
-		method: c.req.method,
-		path: c.req.path,
-		hostname: new URL(c.req.url).hostname,
-		appBaseUrl: resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl),
-	};
 	let session = options.session;
 	let temporary = false;
 	const choices = Object.entries(options.decisions ?? {}).filter(([id]) =>
@@ -103,7 +96,7 @@ export async function ensureHostSession(
 		if (choice === 'temporary') {
 			const state = await getEditorSessionState(deps, user, project.id, notebook.meta.id);
 			if (!state.can_take_over || state.holder?.session_id !== holder)
-				throw await editorProblem(c, project, notebook);
+				throw await editorProblem(deps, user, project, notebook);
 			temporary = true;
 		} else {
 			const claim = await deps.services.sessions.getEditorClaim(project.id, notebook.meta.id);
@@ -129,7 +122,7 @@ export async function ensureHostSession(
 					});
 				} catch (error) {
 					if (error instanceof EditSessionChangedError)
-						throw await editorProblem(c, project, notebook);
+						throw await editorProblem(deps, user, project, notebook);
 					throw error;
 				}
 			}
@@ -150,7 +143,8 @@ export async function ensureHostSession(
 				SessionId.parse(started.session_id),
 			);
 		} catch (error) {
-			if (error instanceof EditSessionOwnedError) throw await editorProblem(c, project, notebook);
+			if (error instanceof EditSessionOwnedError)
+				throw await editorProblem(deps, user, project, notebook);
 			throw error;
 		}
 		// Never silently switch a persistent notebook to an independently editable runtime.
@@ -159,7 +153,7 @@ export async function ensureHostSession(
 	}
 	const deadline = Date.now() + 60_000;
 	while (session.status === 'starting' && Date.now() < deadline) {
-		await sleep(500, c.req.raw.signal);
+		await sleep(500, request.signal);
 		session = await deps.services.sessions.getSession(project.id, session.session_id);
 	}
 	if (session.status !== 'running' || !session.sandbox_id)

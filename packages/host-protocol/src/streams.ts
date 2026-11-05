@@ -1,13 +1,14 @@
-import { sleep } from '@marimo-hub/core';
-import type { HostEvent } from '@marimo-hub/core/host-bridge';
-import { acceptsEvent, errorResponse, sse } from './protocol';
-import type { EventKinds } from './protocol';
+import { sleep } from './async';
+import type { HostEvent } from './events';
+import { acceptsEvent, sse } from './protocol';
+import type { ErrorResponder, EventKinds } from './protocol';
 
 export type SendEvent = (event: HostEvent) => Promise<void>;
 
 export function eventStream(
 	request: Request,
 	work: (send: SendEvent, signal: AbortSignal) => Promise<void>,
+	toResponse: ErrorResponder,
 ): Response {
 	const cancelled = new AbortController();
 	const signal = AbortSignal.any([request.signal, cancelled.signal]);
@@ -35,7 +36,7 @@ export function eventStream(
 				await write(
 					sse({
 						event: 'effect/httpapi/stream/failure',
-						data: (await errorResponse(error).json()) as Record<string, unknown>,
+						data: (await toResponse(error).json()) as Record<string, unknown>,
 					}),
 				).catch(() => {});
 			}
@@ -77,6 +78,7 @@ function eventKey(event: HostEvent): string {
 	return `${event.event}:${value?.id ?? ''}`;
 }
 
+/** Diffs successive catalog snapshots into record, change, and removal events with a resumable cursor. */
 export class CatalogStream {
 	private previous = new Map<string, HostEvent>();
 	private cursor = 0;

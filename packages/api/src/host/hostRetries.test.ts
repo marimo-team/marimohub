@@ -1,8 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConflictError, HostRetryStore } from '@marimo-hub/core';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
-import { HostRetries } from './retries';
-import type { HostMutationReply, HostRetryAttempt } from './retries';
+import { errorResponse, HostRetries as ProtocolHostRetries } from '@marimo-hub/host-protocol';
+import type {
+	HostMutationReply,
+	HostRetryAttempt,
+	HostRetryStore as Store,
+} from '@marimo-hub/host-protocol';
+import { hubErrorStatus } from './platform';
+
+// The hub's store signals conflicts with core errors, which the orchestrator maps through
+// the platform's status function.
+class HostRetries extends ProtocolHostRetries {
+	constructor(store: Store) {
+		super(store, (error) => errorResponse(error, hubErrorStatus));
+	}
+}
 
 afterEach(() => vi.useRealTimers());
 

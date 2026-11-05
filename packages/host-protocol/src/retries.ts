@@ -1,14 +1,47 @@
-import { ConflictError, sleep } from '@marimo-hub/core';
-import type { HostRetryReply, HostRetryStore } from '@marimo-hub/core';
+import { sleep } from './async';
 import { errorResponse, HostProblemError } from './protocol';
+import type { ErrorResponder } from './protocol';
 
-async function storage<T>(work: () => Promise<T>): Promise<T> {
-	try {
-		return await work();
-	} catch (error) {
-		if (error instanceof ConflictError) throw error;
-		throw HostProblemError.unavailable('Host retry storage is unavailable');
-	}
+export interface HostRetryReply {
+	status: number;
+	body: unknown;
+}
+
+export interface HostRetryClaim {
+	/** Storage key of the record; opaque to the caller. */
+	key: string;
+	/** Owner token of this attempt; a later attempt invalidates it. */
+	owner: string;
+	/** Runtime the request was bound to by an earlier attempt, if any. */
+	sessionId?: string;
+}
+
+export type HostRetryAcquisition =
+	| { kind: 'claimed'; claim: HostRetryClaim }
+	| { kind: 'reply'; reply: HostRetryReply }
+	| { kind: 'pending' };
+
+/**
+ * Durable Idempotency-Key records shared by every host instance.
+ *
+ * Contract: a key's first request claims it. A later request with the same scope and key
+ * sees `pending` while a claim is held, the stored `reply` after a success, or a conflict
+ * (an error the platform maps to 409) when the fingerprint differs from a live record.
+ * `refresh` asks to redo work whose receipt is younger than the runtime's own retry window,
+ * so the runtime answers from its receipt instead of repeating the work. Receipts and
+ * session bindings expire after the retry window; an undispatched claim released by `finish`
+ * without a reply frees the key, while a dispatched one with no session binding stays pending
+ * because its outcome is unknown.
+ */
+export interface HostRetryStore {
+	acquire(
+		scope: string,
+		key: string,
+		fingerprint: string,
+		refresh: boolean,
+	): Promise<HostRetryAcquisition>;
+	dispatch(claim: HostRetryClaim, sessionId?: string): Promise<void>;
+	finish(claim: HostRetryClaim, reply?: HostRetryReply): Promise<void>;
 }
 
 const MAX_REQUESTS = 10_000;
@@ -29,7 +62,10 @@ export class HostRetries {
 		{ fingerprint: string; result: Promise<HostMutationResult> }
 	>();
 
-	constructor(private readonly store: HostRetryStore) {}
+	constructor(
+		private readonly store: HostRetryStore,
+		private readonly toResponse: ErrorResponder = (error) => errorResponse(error),
+	) {}
 
 	execute(
 		scope: string,
@@ -59,6 +95,15 @@ export class HostRetries {
 		return result;
 	}
 
+	private async storage<T>(work: () => Promise<T>): Promise<T> {
+		try {
+			return await work();
+		} catch (error) {
+			if (this.toResponse(error).status === 409) throw error;
+			throw HostProblemError.unavailable('Host retry storage is unavailable');
+		}
+	}
+
 	private async run(
 		scope: string,
 		key: string,
@@ -68,7 +113,7 @@ export class HostRetries {
 		signal?: AbortSignal,
 	): Promise<HostMutationResult> {
 		for (let poll = 0; poll < 50; poll++) {
-			const entry = await storage(() => this.store.acquire(scope, key, fingerprint, refresh));
+			const entry = await this.storage(() => this.store.acquire(scope, key, fingerprint, refresh));
 			if (entry.kind === 'reply') return { ...entry.reply, replayed: true };
 			if (entry.kind === 'pending') {
 				await sleep(100, signal);
@@ -82,21 +127,21 @@ export class HostRetries {
 					get sessionId() {
 						return claim.sessionId;
 					},
-					bindSession: (sessionId) => storage(() => this.store.dispatch(claim, sessionId)),
-					dispatch: () => storage(() => this.store.dispatch(claim)),
+					bindSession: (sessionId) => this.storage(() => this.store.dispatch(claim, sessionId)),
+					dispatch: () => this.storage(() => this.store.dispatch(claim)),
 				});
 			} catch (error) {
 				// A definitive rejection proves nothing was mutated, so the key is free again. Only an
 				// unknown outcome keeps a dispatched claim pending.
-				const response = errorResponse(error);
+				const response = this.toResponse(error);
 				if (response.status >= 500) {
-					await storage(() => this.store.finish(claim));
+					await this.storage(() => this.store.finish(claim));
 					throw error;
 				}
 				reply = { status: response.status, body: await response.json() };
 			}
 			// A failed receipt write must leave the claim pending, not release it for duplicate work.
-			await storage(() => this.store.finish(claim, reply));
+			await this.storage(() => this.store.finish(claim, reply));
 			return { ...reply, replayed: false };
 		}
 		throw HostProblemError.unavailable(

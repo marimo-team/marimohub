@@ -99,6 +99,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@marimo-hub/host-protocol": "workspace:*",
 		"@opentelemetry/api": "catalog:",
 		"@opentelemetry/api-logs": "catalog:",
 		"better-all": "catalog:",

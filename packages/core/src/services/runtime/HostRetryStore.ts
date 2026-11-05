@@ -1,3 +1,9 @@
+import type {
+	HostRetryAcquisition,
+	HostRetryClaim,
+	HostRetryReply,
+	HostRetryStore as HostRetryStorePort,
+} from '@marimo-hub/host-protocol';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
 import { ConflictError, PreconditionFailedError, UnavailableError } from '../../errors';
@@ -27,14 +33,10 @@ export const HostRetryRecordSchema = z
 	});
 export const HostRetryCleanupSchema = z.object({ after: z.string().optional() });
 type Record = z.infer<typeof HostRetryRecordSchema>;
-export type HostRetryReply = z.infer<typeof ReplySchema>;
-export interface HostRetryClaim {
-	key: string;
-	owner: string;
-	sessionId?: string;
-}
+export type { HostRetryClaim, HostRetryReply };
 
-export class HostRetryStore {
+/** The library's retry contract, kept in the bucket so every API instance shares one view. */
+export class HostRetryStore implements HostRetryStorePort {
 	constructor(private readonly bucket: Bucket) {}
 
 	async acquire(
@@ -42,11 +44,7 @@ export class HostRetryStore {
 		key: string,
 		fingerprint: string,
 		refresh: boolean,
-	): Promise<
-		| { kind: 'claimed'; claim: HostRetryClaim }
-		| { kind: 'reply'; reply: HostRetryReply }
-		| { kind: 'pending' }
-	> {
+	): Promise<HostRetryAcquisition> {
 		const objectKey = paths.hostRetry(await sha256Hex(JSON.stringify([scope, key])));
 		return withCasRetry(this.bucket, async (writer) => {
 			const object = await this.bucket.get(objectKey);

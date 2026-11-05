@@ -13,6 +13,9 @@ import { describe, expect, it } from 'vitest';
  * red test. A dependency that *reaches* something belongs behind a port.
  */
 const ALLOWED_DEPENDENCIES = new Set([
+	// The host protocol library's `./bridge` subpath only: zod schemas and the sandbox-side
+	// Python client source as a string. Core never imports its Hono server.
+	'@marimo-hub/host-protocol',
 	// The vendor-neutral OTEL facades: pure and I/O-free, every call is a no-op
 	// unless an entrypoint registers a provider (the SDK stays in apps/server).
 	// `api` backs the tracing wrapper; `api-logs` backs the emitLogRecord bridge.

@@ -33,8 +33,9 @@ Use these as the done-criteria for any change.
   `@opentelemetry/api` and `@opentelemetry/api-logs` (no-op
   tracing/logs facades unless an entrypoint registers a provider), the format
   serializers `smol-toml` and `yaml` (core renders `marimo.toml` and integration
-  config files), and `fflate` (in-memory archive decompression for workspace
-  ingest). A
+  config files), `fflate` (in-memory archive decompression for workspace
+  ingest), and the workspace library `@marimo-hub/host-protocol/bridge` (host
+  protocol schemas and the sandbox-side Python client; see below). A
   serializer is a pure function, not a vendor, so a
   port around it would buy no substitutability.
   Anything that _reaches_ something — a store, a cluster, an IdP — is a port.
@@ -47,6 +48,12 @@ Use these as the done-criteria for any change.
 - **`packages/config`** is the ONLY package that imports concrete adapters: it
   reads `MARIMOHUB_*` env vars, selects an adapter per `*_BACKEND` selector, and
   wires the system together.
+- **`packages/host-protocol`** is the platform-neutral server for the marimo host
+  protocol: routing, problem responses, SSE streams, catalog diffing, Idempotency-Key
+  semantics, and runtime ID rewriting, over a `HostPlatform` port. It depends on `hono`
+  and `zod` only. The hub's adapter lives in `packages/api/src/host` (`createHubHostPlatform`),
+  and core's `HostRetryStore` implements its retry port. Core imports only its `./bridge`
+  subpath (the loopback Python client and reply schemas), which pulls in no HTTP framework.
 - **Project chat's turn runner lives in `packages/api/src/chat`**, not core: it
   depends on the vendor-neutral `ai` SDK and the in-process MCP tool server. Core
   keeps the conversation record and its invariants (`ConversationService`); the

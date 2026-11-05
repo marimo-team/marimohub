@@ -24,6 +24,7 @@
 		"@hono/mcp": "catalog:",
 		"@hono/zod-openapi": "catalog:",
 		"@marimo-hub/core": "workspace:*",
+		"@marimo-hub/host-protocol": "workspace:*",
 		"@modelcontextprotocol/sdk": "catalog:",
 		"ai": "catalog:",
 		"better-all": "catalog:",

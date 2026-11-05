@@ -19,8 +19,8 @@ import { requestRuntimeHost } from '@marimo-hub/core/host-bridge';
 import { createApi } from '../createApi';
 import type { ApiDeps } from '../context';
 import { createInitializedBucket, makeTestDeps } from '../testing';
-import { HOST_PREFIX } from './protocol';
-import type { HostDecision } from './protocol';
+import type { HostDecision } from '@marimo-hub/host-protocol';
+import { HOST_PREFIX } from './createHostApp';
 
 vi.mock('@marimo-hub/core/host-bridge', () => ({ requestRuntimeHost: vi.fn() }));
 const user: AuthenticatedPrincipal = {
