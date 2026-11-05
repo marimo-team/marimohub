@@ -35,7 +35,6 @@ import { SandboxProvisioner } from './SandboxProvisioner';
 import type { BucketConfig, ProvisionOptions, WorkspaceLoadStrategies } from './SandboxProvisioner';
 import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { sandboxContextPath } from './sandboxContext';
-import { LOGGING_PACKAGES } from './logging';
 import { captureWorkspace } from './sandboxFiles';
 
 const MOUNT_PATH = '/workspace';
@@ -482,7 +481,6 @@ describe('SandboxProvisioner', () => {
 				...startupOptions,
 				launchMode: mode,
 				sessionEnv: {
-					runtimePackages: [...LOGGING_PACKAGES],
 					logging: [
 						{
 							name: 'logs',
@@ -511,6 +509,7 @@ describe('SandboxProvisioner', () => {
 				`env PYTHONPATH='/local/tmp/marimohub-logging/${sandboxId}'`,
 			);
 			expect(prepared.launch.start).not.toContain('secret-token');
+			expect(prepared.launch.start).not.toContain('--with');
 			expect(prepared.launch.setup.some((step) => step.command.includes('marimohub-logging'))).toBe(
 				false,
 			);

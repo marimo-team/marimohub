@@ -19,6 +19,23 @@ def respond(request):
         return False
     if mode.startswith('http-'):
         request.send_response(int(mode.split('-')[1]), 'private-token')
+    elif mode in ('partial-success', 'malformed-response', 'oversized-response'):
+        body = {
+            'partial-success': b'{"partialSuccess":{"rejectedLogRecords":"1","errorMessage":"private-token"}}',
+            'malformed-response': b'private-token',
+            'oversized-response': b' ' * (65 * 1024),
+        }[mode]
+        request.send_response(200)
+        request.send_header('Content-Type', 'application/json')
+        request.end_headers()
+        try:
+            request.wfile.write(body)
+        except BrokenPipeError:
+            pass
+        return True
+    elif mode in ('retry-after', 'retry-after-limit') and sum(path == request.path for path, _ in requests) == 1:
+        request.send_response(429)
+        request.send_header('Retry-After', '1' if mode == 'retry-after' else '60')
     elif mode == 'retry-success' and sum(path == request.path for path, _ in requests) == 1:
         request.send_response(503)
     elif mode == 'response-timeout':
@@ -34,7 +51,7 @@ def respond(request):
     return True
 
 
-server = OtlpReceiver(respond)
+server = OtlpReceiver(respond, success_status=204 if mode == 'empty-success' else 200)
 requests = server.requests
 config_path = Path(directory, 'logging.json')
 config = json.loads(config_path.read_text())
@@ -66,13 +83,16 @@ workload = "import logging\nlogging.error('fault-record')\nprint('workload-compl
 if initialization_failure:
     if mode == 'partial-initialization':
         (custom / 'sitecustomize.py').write_text('''
-from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-original = OTLPLogExporter.__init__
-def fail(self, *args, **kwargs):
-    if '/healthy/' in kwargs.get('endpoint', ''):
+import marimohub_logging as bootstrap
+original = bootstrap.build_opener
+created = 0
+def fail(*args, **kwargs):
+    global created
+    created += 1
+    if created == 2:
         raise RuntimeError('private-token')
-    original(self, *args, **kwargs)
-OTLPLogExporter.__init__ = fail
+    return original(*args, **kwargs)
+bootstrap.build_opener = fail
 ''')
     if mode == 'worker-start-failure':
         (custom / 'sitecustomize.py').write_text('''
@@ -115,7 +135,7 @@ for processor, event in zip(bootstrap._processors, entered):
     def hang(batch, event=event):
         event.set()
         never.wait(30)
-    processor.exporter.export = hang
+    processor.export = hang
 logging.error('fault-record')
 assert all(event.wait(5) for event in entered)
 started = time.monotonic()
@@ -132,19 +152,8 @@ import logging
 import marimohub_logging as bootstrap
 def fail(batch):
     raise RuntimeError('private-token')
-bootstrap._processors[0].exporter.export = fail
+bootstrap._processors[0].export = fail
 logging.error('fault-record')
-print('workload-completed')
-'''
-elif mode == 'shutdown-exception':
-    workload = '''
-import logging
-import marimohub_logging as bootstrap
-def fail():
-    raise RuntimeError('private-token')
-bootstrap._processors[0].exporter.shutdown = fail
-logging.error('fault-record')
-bootstrap.shutdown()
 print('workload-completed')
 '''
 elif mode == 'record-encoding':
@@ -225,19 +234,22 @@ elif mode == 'shutdown-deadline':
     assert all(d['dropped_records'] == 1 for d in timeouts), diagnostics
 else:
     assert counts[('fault-record', 'healthy')] == 1, (counts, stderr)
-    if mode.startswith('http-') or mode in ('connection-refused', 'response-timeout', 'connection-reset', 'tls-error', 'exporter-exception'):
+    if mode.startswith('http-') or mode in ('connection-refused', 'response-timeout', 'connection-reset', 'tls-error', 'exporter-exception', 'partial-success', 'malformed-response', 'oversized-response', 'retry-after-limit'):
         assert counts[('fault-record', 'logs')] == 0, counts
         reasons = ('delivery_failed_or_queue_full', 'shutdown_timeout') if mode == 'connection-refused' else ('delivery_failed_or_queue_full',)
         assert any(d['reason'] in reasons and d.get('destination') == 'logs' and d.get('dropped_records') == 1 for d in diagnostics), diagnostics
         assert len(failed_requests) <= 4, requests
-        if mode in ('http-400', 'http-401', 'http-403'):
+        if mode in ('http-400', 'http-401', 'http-403', 'http-500', 'partial-success', 'malformed-response', 'oversized-response', 'retry-after-limit'):
             assert len(failed_requests) == 1, requests
     else:
         assert counts[('fault-record', 'logs')] == 1, (counts, stderr)
+        assert not any(d['reason'] in ('delivery_failed_or_queue_full', 'shutdown_timeout') for d in diagnostics), diagnostics
         if mode == 'retry-success':
             assert len(failed_requests) == 2, requests
-        elif mode == 'shutdown-exception':
-            assert 'exporter_shutdown_failed' in stderr, stderr
+        elif mode == 'retry-after':
+            assert len(failed_requests) == 2, requests
+            times = [t for (path, _), t in zip(requests, server.request_times) if path.startswith('/failed/')]
+            assert times[1] - times[0] >= 1, times
         elif mode == 'record-encoding':
             assert 'record_encoding_failed' in stderr, stderr
         elif mode == 'sitecustomize-failure':

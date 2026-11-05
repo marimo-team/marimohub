@@ -486,7 +486,7 @@ pnpm build
 
 ## Logging runtime
 
-The logging kinds render typed `logging` destinations and share pinned OpenTelemetry packages through `runtimePackages`.
+The logging kinds render typed `logging` destinations. They do not contribute notebook `runtimePackages`.
 See [Remote logging](../docs/integrations.md#remote-logging) for configuration and delivery limits.
 
 `SandboxProvisioner` writes the bootstrap and destination configuration under `/tmp/marimohub-logging/{sandbox-id}`.
@@ -495,16 +495,24 @@ Only the workload command receives this path. Launches without logging contribut
 Credentials remain outside the integration manifest.
 
 The bootstrap chains an existing `sitecustomize` and initializes once per process, including spawned kernels.
-Each destination has one handler, attached to both root and marimo loggers, with duplicate records suppressed.
-Initialization prepares all exporters before it attaches handlers. Failure closes prepared exporters and removes the diagnostic filter.
+It attaches handlers to root and marimo loggers, with duplicate records suppressed.
 Global OpenTelemetry providers remain unchanged.
+
+Each destination uses a bounded queue and a background thread that sends [OTLP/HTTP JSON](https://opentelemetry.io/docs/specs/otlp/#json-protobuf-encoding) with `urllib.request`.
+The exporter uses only Python's standard library. It never installs packages or starts another process.
+Records retain timestamps, structured attributes, and exceptions. Trace context is read only when the notebook already loaded the OTel trace API.
+
+Each batch allows two HTTP attempts, with socket timeouts drawn from a two-second budget.
+Retries use jitter or `Retry-After` when it fits that budget.
+Partial acceptance is not retried. Response bodies are bounded to 64 KiB and never appear in diagnostics.
+All destination queues share a three-second shutdown deadline.
 
 Two marimo compatibility hooks preserve remote verbosity (`_loggers.set_level`) and flush before kernel `os._exit()` (`handlers.construct_sigterm_handler`).
 Normal exit and multiprocessing finalization use the same shutdown function.
 
 ### Runtime tests
 
-Use a Python environment with the marimo and uv versions from `.github/workflows/ci.yml` and exporter packages from `runtime/logging.ts`.
+Use a Python environment with the marimo, uv, and test dependency versions from `.github/workflows/ci.yml`.
 Run the suite with that environment:
 
 ```sh
@@ -513,6 +521,7 @@ MARIMO_INTEGRATION_PYTHON=/absolute/path/to/venv/bin/python \
 pnpm exec vp test packages/core/src/services/runtime/logging.integration.test.ts
 ```
 
-The suite executes the generated bootstrap in real Python and marimo processes and decodes requests at a local OTLP receiver.
-It covers editor kernels, apps, jobs, spawned processes, destination isolation, startup failures, and bounded shutdown.
+The suite executes the generated bootstrap in real Python and marimo processes and decodes JSON with the official Protobuf schema.
+It covers marimo sessions, absent and old OTel packages, typed attributes, retries, partial acceptance, and bounded shutdown.
+OTel packages are test dependencies only. Compatibility cases install OTel 1.20.0 into disposable environments.
 CI enables this suite. Without `MARIMO_INTEGRATION_PYTHON`, tests are skipped.

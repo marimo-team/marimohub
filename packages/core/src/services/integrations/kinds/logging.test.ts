@@ -18,7 +18,7 @@ const context = {
 };
 
 describe('logging integrations', () => {
-	it('bundles multiple destinations and one package layer without leaking credentials into the manifest', () => {
+	it('bundles destinations without changing notebook packages or exposing credentials in the manifest', () => {
 		const registry = defaultRegistry();
 		const result = bundleIntegrations(
 			['otlp_logs', 'grafana_cloud_logs', 'better_stack_logs'].map((kind, index) => {
@@ -39,7 +39,7 @@ describe('logging integrations', () => {
 			context.workload,
 		);
 		expect(result.logging).toHaveLength(3);
-		expect(result.runtimePackages).toHaveLength(2);
+		expect(result.runtimePackages).toBeUndefined();
 		expect(result.logging?.[0]).toMatchObject({
 			level: 'INFO',
 			serviceName: 'marimohub-notebook',

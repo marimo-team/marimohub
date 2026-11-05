@@ -2,11 +2,6 @@ import type { LoggingDestination } from '../../ports/integrations';
 import { shellQuote } from './shell';
 import { LOGGING_BOOTSTRAP, LOGGING_SITE_CUSTOMIZE } from './loggingBootstrap';
 
-export const LOGGING_PACKAGES = [
-	'opentelemetry-sdk==1.40.0',
-	'opentelemetry-exporter-otlp-proto-http==1.40.0',
-] as const;
-
 export function loggingDirectory(sandboxId: string): string {
 	return `/tmp/marimohub-logging/${sandboxId}`;
 }

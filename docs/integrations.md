@@ -1148,10 +1148,11 @@ The hub does not fall back to public PyPI. To opt a project out, create a disabl
 ## Remote logging
 
 Logging integrations export Python `logging` records from notebook code and marimo to remote destinations.
-They apply to new editor sessions, app sessions, and job runs. Hub supplies the exporter packages and initialization.
+They apply to new editor sessions, app sessions, and job runs.
+Hub injects a Python standard-library handler that sends OTLP/HTTP JSON, without installing packages or changing sandbox images.
 Changes take effect on subsequent launches, including snapshot restores.
 
-Create an `otlp_logs` integration with the full OTLP/HTTP logs URL and any required headers:
+Create an `otlp_logs` integration with a full logs URL that accepts OTLP/HTTP JSON and any required headers:
 
 ```json
 {
@@ -1179,6 +1180,7 @@ Records include project, notebook, workload, sandbox, integration, mode, and pro
 Logger levels, filters, or disabled propagation in notebook code can prevent export.
 
 Delivery is best effort. Each destination has a background exporter and a queue of 2,048 records per process.
+Records larger than 64 KiB are dropped. Installed OpenTelemetry packages remain unchanged and are not required.
 Full queues discard new records. Failed deliveries report dropped records to stderr. Shutdown allows three seconds to drain all destinations.
 Network failures, forced termination, and sandbox destruction can lose logs.
 

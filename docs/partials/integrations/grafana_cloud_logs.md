@@ -8,7 +8,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `url` | string | Yes |  | Full OTLP/HTTP logs URL, including /v1/logs |
+| `url` | string | Yes |  | Full OTLP/HTTP JSON logs URL, including /v1/logs |
 | `username` | string | Yes |  | Grafana Cloud OTLP instance ID |
 | `token` 🔒 | string | Yes |  | Access policy token with permission to write logs |
 | `level` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |  | `INFO` |  |

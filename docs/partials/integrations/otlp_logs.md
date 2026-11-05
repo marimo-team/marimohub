@@ -8,7 +8,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `url` | string | Yes |  | Full OTLP/HTTP logs URL, including /v1/logs |
+| `url` | string | Yes |  | Full OTLP/HTTP JSON logs URL, including /v1/logs |
 | `headers` | object[] |  |  |  |
 | `headers[].name` | string | Yes |  |  |
 | `headers[].value` 🔒 | string | Yes |  |  |

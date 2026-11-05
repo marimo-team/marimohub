@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { ValidationError } from '../../../errors';
 import type { LoggingDestination } from '../../../ports/integrations';
-import { LOGGING_PACKAGES } from '../../runtime/logging';
 import { basicAuthHeader, defineIntegration } from '../sdk';
 import type { RenderInput, RenderOutput } from '../sdk';
 import { zSecret } from '../secretFields';
@@ -11,7 +10,7 @@ const common = {
 	level: z.enum(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']).default('INFO'),
 	service_name: z.string().min(1).max(128).default('marimohub-notebook'),
 };
-const url = serviceUrlField().describe('Full OTLP/HTTP logs URL, including /v1/logs');
+const url = serviceUrlField().describe('Full OTLP/HTTP JSON logs URL, including /v1/logs');
 const headers = z
 	.array(
 		z.strictObject({
@@ -53,13 +52,13 @@ function renderLogging(
 			'marimohub.workload_id': input.workload.id,
 		},
 	};
-	return { logging: [destination], runtimePackages: [...LOGGING_PACKAGES] };
+	return { logging: [destination] };
 }
 
 export const otlpLogs = defineIntegration({
 	kind: 'otlp_logs',
 	title: 'OpenTelemetry logs',
-	description: 'Export notebook Python logging and marimo logs to an OTLP/HTTP endpoint.',
+	description: 'Export notebook Python logging and marimo logs to an OTLP/HTTP JSON endpoint.',
 	category: 'other',
 	brand: { color: '#F5A800' },
 	schemaVersion: 1,
@@ -76,7 +75,8 @@ export const otlpLogs = defineIntegration({
 export const grafanaCloudLogs = defineIntegration({
 	kind: 'grafana_cloud_logs',
 	title: 'Grafana Cloud logs',
-	description: 'Export notebook Python logging and marimo logs to Grafana Cloud using OTLP/HTTP.',
+	description:
+		'Export notebook Python logging and marimo logs to Grafana Cloud using OTLP/HTTP JSON.',
 	category: 'other',
 	brand: { color: '#F46800' },
 	schemaVersion: 1,
@@ -102,7 +102,8 @@ export const grafanaCloudLogs = defineIntegration({
 export const betterStackLogs = defineIntegration({
 	kind: 'better_stack_logs',
 	title: 'Better Stack logs',
-	description: 'Export notebook Python logging and marimo logs to Better Stack using OTLP/HTTP.',
+	description:
+		'Export notebook Python logging and marimo logs to Better Stack using OTLP/HTTP JSON.',
 	category: 'other',
 	brand: { color: '#6366F1' },
 	schemaVersion: 1,

@@ -3,8 +3,8 @@ import { copyFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
-import { loggingCommand, loggingFiles, LOGGING_PACKAGES } from './logging';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { loggingCommand, loggingFiles } from './logging';
 import { buildMarimoLaunch } from './marimoLaunch';
 import { shellQuote } from './shell';
 
@@ -30,7 +30,12 @@ describe.runIf(Boolean(python))('notebook OTLP logging', () => {
 	])('exports and shuts down correctly: %s', (mode) => runScenario(mode), 70_000);
 });
 
-async function runScenario(mode: string, fixture = 'logging_driver.py') {
+async function runScenario(
+	mode: string,
+	fixture = 'logging_driver.py',
+	runtimePython = python!,
+	extraEnv: NodeJS.ProcessEnv = {},
+) {
 	const root = await mkdtemp(
 		join(tmpdir(), mode === 'shell-path' ? "mhub logs ' $(touch unexpected) " : 'mhub-logging-'),
 	);
@@ -64,18 +69,21 @@ async function runScenario(mode: string, fixture = 'logging_driver.py') {
 		host: '127.0.0.1',
 		port: 2718,
 		mode: mode === 'job' ? 'job' : mode === 'app' ? 'app' : 'edit',
-		runtimePackages: [...LOGGING_PACKAGES],
 		loggingDirectory: directory,
 	});
 	const command = ['edit', 'app', 'job'].includes(mode)
 		? plan.start
 		: loggingCommand(
 				mode === 'disabled' ? undefined : directory,
-				`${shellQuote(python!)} workload.py`,
+				`${shellQuote(runtimePython)} workload.py`,
 			);
 	const { stdout, stderr } = await exec(python!, ['driver.py', directory, mode, command], {
 		cwd: root,
-		env: { ...process.env, UV_PROJECT_ENVIRONMENT: resolve(dirname(python!), '..') },
+		env: {
+			...process.env,
+			UV_PROJECT_ENVIRONMENT: resolve(dirname(runtimePython), '..'),
+			...extraEnv,
+		},
 		timeout: 65_000,
 		maxBuffer: 2 * 1024 * 1024,
 	});
@@ -85,6 +93,7 @@ async function runScenario(mode: string, fixture = 'logging_driver.py') {
 
 describe.runIf(Boolean(python))('notebook logging failure isolation', () => {
 	it.each([
+		'empty-success',
 		'http-400',
 		'http-401',
 		'http-403',
@@ -103,7 +112,11 @@ describe.runIf(Boolean(python))('notebook logging failure isolation', () => {
 		'partial-initialization',
 		'worker-start-failure',
 		'exporter-exception',
-		'shutdown-exception',
+		'partial-success',
+		'malformed-response',
+		'oversized-response',
+		'retry-after',
+		'retry-after-limit',
 		'record-encoding',
 		'sitecustomize-failure',
 		'existing-handler',
@@ -114,6 +127,86 @@ describe.runIf(Boolean(python))('notebook logging failure isolation', () => {
 	])(
 		'keeps notebook execution safe through %s',
 		(mode) => runScenario(mode, 'logging_failures.py'),
+		30_000,
+	);
+});
+
+describe.runIf(Boolean(python))('logging package isolation', () => {
+	let environments: string;
+	let missing: string;
+	let conflicting: string;
+	beforeAll(async () => {
+		environments = await mkdtemp(join(tmpdir(), 'mhub-logging-envs-'));
+		const { stdout } = await exec(python!, [
+			'-c',
+			'from importlib.metadata import version; print(version("marimo"))',
+		]);
+		for (const [name, packages] of [
+			['missing', []],
+			[
+				'conflicting',
+				[
+					'opentelemetry-sdk==1.20.0',
+					'opentelemetry-exporter-otlp-proto-http==1.20.0',
+					'opentelemetry-exporter-otlp-proto-grpc==1.20.0',
+				],
+			],
+		] as const) {
+			const env = join(environments, name);
+			await exec('uv', ['venv', '--python', python!, env]);
+			await exec(
+				'uv',
+				['pip', 'install', '--python', env, `marimo==${stdout.trim()}`, ...packages],
+				{
+					timeout: 120_000,
+				},
+			);
+		}
+		missing = join(environments, 'missing/bin/python');
+		conflicting = join(environments, 'conflicting/bin/python');
+	}, 180_000);
+	afterAll(async () => {
+		if (environments) await rm(environments, { recursive: true, force: true });
+	});
+
+	it.each(
+		['missing', 'conflicting'].flatMap((environment) =>
+			['python', 'edit', 'app', 'job'].map((mode) => ({ environment, mode })),
+		),
+	)(
+		'exports from $mode with $environment OTel packages',
+		({ environment, mode }) =>
+			runScenario(
+				mode,
+				'logging_driver.py',
+				environment === 'missing' ? missing : conflicting,
+				environment === 'conflicting' ? { MARIMOHUB_TEST_OTEL_VERSION: '1.20.0' } : {},
+			),
+		70_000,
+	);
+	it.each([
+		'without-otel',
+		'with-old-otel',
+		'with-current-otel',
+		'typed-values',
+		'oversized-record',
+		'cyclic-extras',
+	])(
+		'exports JSON without installing packages: %s',
+		(mode) =>
+			runScenario(
+				mode,
+				'logging_isolation.py',
+				mode === 'with-current-otel' ? python! : mode === 'with-old-otel' ? conflicting : missing,
+				{
+					MARIMOHUB_TEST_OTEL_VERSION:
+						mode === 'with-current-otel'
+							? '1.40.0'
+							: mode === 'with-old-otel'
+								? '1.20.0'
+								: 'absent',
+				},
+			),
 		30_000,
 	);
 });

@@ -195,7 +195,7 @@ paths:
   /kinds/better_stack_logs/config:
     summary: Better Stack logs
     description: Export notebook Python logging and marimo logs to Better Stack
-      using OTLP/HTTP.
+      using OTLP/HTTP JSON.
     x-kind-schema-version: 1
     x-category: other
     x-brand-color: '#6366F1'
@@ -547,7 +547,7 @@ paths:
   /kinds/grafana_cloud_logs/config:
     summary: Grafana Cloud logs
     description: Export notebook Python logging and marimo logs to Grafana Cloud
-      using OTLP/HTTP.
+      using OTLP/HTTP JSON.
     x-kind-schema-version: 1
     x-category: other
     x-brand-color: '#F46800'
@@ -1110,7 +1110,8 @@ paths:
           description: Accepted.
   /kinds/otlp_logs/config:
     summary: OpenTelemetry logs
-    description: Export notebook Python logging and marimo logs to an OTLP/HTTP endpoint.
+    description: Export notebook Python logging and marimo logs to an OTLP/HTTP JSON
+      endpoint.
     x-kind-schema-version: 1
     x-category: other
     x-brand-color: '#F5A800'
@@ -2270,7 +2271,7 @@ components:
           format: uri
           x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
             query, fragment, or port 0
-          description: Full OTLP/HTTP logs URL, including /v1/logs
+          description: Full OTLP/HTTP JSON logs URL, including /v1/logs
         source_token:
           type: string
           minLength: 1
@@ -2303,7 +2304,7 @@ components:
           format: uri
           x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
             query, fragment, or port 0
-          description: Full OTLP/HTTP logs URL, including /v1/logs
+          description: Full OTLP/HTTP JSON logs URL, including /v1/logs
         source_token:
           oneOf:
             - $ref: '#/components/schemas/ManagedStoredSecret'
@@ -3484,7 +3485,7 @@ components:
           format: uri
           x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
             query, fragment, or port 0
-          description: Full OTLP/HTTP logs URL, including /v1/logs
+          description: Full OTLP/HTTP JSON logs URL, including /v1/logs
         username:
           type: string
           minLength: 1
@@ -3525,7 +3526,7 @@ components:
           format: uri
           x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
             query, fragment, or port 0
-          description: Full OTLP/HTTP logs URL, including /v1/logs
+          description: Full OTLP/HTTP JSON logs URL, including /v1/logs
         username:
           type: string
           minLength: 1
@@ -5621,7 +5622,7 @@ components:
           format: uri
           x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
             query, fragment, or port 0
-          description: Full OTLP/HTTP logs URL, including /v1/logs
+          description: Full OTLP/HTTP JSON logs URL, including /v1/logs
         headers:
           default: []
           maxItems: 32
@@ -5668,7 +5669,7 @@ components:
           format: uri
           x-marimohub-refinement: A valid http(s) base URL with an authority, no userinfo,
             query, fragment, or port 0
-          description: Full OTLP/HTTP logs URL, including /v1/logs
+          description: Full OTLP/HTTP JSON logs URL, including /v1/logs
         headers:
           default: []
           maxItems: 32

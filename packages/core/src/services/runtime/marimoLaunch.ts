@@ -116,9 +116,9 @@ function marimoCommand(p: MarimoLaunchParams, extraFlags = ''): string {
 }
 
 function launchCommand(p: MarimoLaunchParams, sandbox = false): string {
-	if (p.runtimePackages?.length) {
+	if (p.runtimePackages?.length || p.loggingDirectory) {
 		return runtimePackageCommand(
-			p.runtimePackages,
+			p.runtimePackages ?? [],
 			loggingCommand(
 				p.loggingDirectory,
 				`python -m ${marimoCommand(p, sandbox ? '--sandbox ' : '')}`,

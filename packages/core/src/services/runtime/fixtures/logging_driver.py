@@ -34,6 +34,17 @@ config_path.write_text(json.dumps(config))
 
 Path('custom').mkdir()
 Path('custom/sitecustomize.py').write_text('import builtins\nbuiltins.hub_customization = True\n')
+if os.environ.get('MARIMOHUB_TEST_OTEL_VERSION'):
+    with Path('custom/sitecustomize.py').open('a') as custom:
+        custom.write('''
+import atexit, os
+from importlib.metadata import version
+def check_versions():
+    assert version('opentelemetry-sdk') == os.environ['MARIMOHUB_TEST_OTEL_VERSION']
+    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+check_versions()
+atexit.register(check_versions)
+''')
 env = {**os.environ, 'PYTHONPATH': str(Path('custom').resolve()), 'OTEL_EXPORTER_OTLP_HEADERS': 'Authorization=ambient-secret'}
 Path('workload.py').write_text('''
 import builtins, logging, multiprocessing, os, sys
@@ -82,20 +93,19 @@ logging.info('kernel-final-record')
 handlers.construct_sigterm_handler(None)(15, None)
 """)
 elif mode == 'initialization-failure':
-    Path('custom/sitecustomize.py').write_text("import sys\nsys.modules['opentelemetry'] = None\n")
+    config_path.write_text('{')
     Path('workload.py').write_text("print('workload-completed')\n")
 elif mode == 'overflow':
     Path('workload.py').write_text('''
 import logging, threading
 import marimohub_logging as bootstrap
-from opentelemetry.sdk._logs.export import LogRecordExportResult
 processor = bootstrap._processors[0]
 entered, release = threading.Event(), threading.Event()
 def block(batch):
     entered.set()
     release.wait(10)
-    return LogRecordExportResult.SUCCESS
-processor.exporter.export = block
+    return 0
+processor.export = block
 logging.info('block-export')
 assert entered.wait(5)
 for i in range(2200):
@@ -191,6 +201,7 @@ else:
 
 assert 'private-token' not in stderr, stderr
 assert 'ambient-secret' not in stderr, stderr
+assert 'AssertionError' not in stderr, stderr
 if mode == 'initialization-failure':
     assert 'initialization_failed' in stderr, stderr
     assert 'workload-completed' in stdout
