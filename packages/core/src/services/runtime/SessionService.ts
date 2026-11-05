@@ -1,5 +1,4 @@
 import { copyMoveObject } from '../content/moveObjects';
-import { guardNotebookMutations, notebookMutation } from '../content/NotebookMutationGate';
 import { readForInspection } from './inspection';
 import type { Bucket, BucketObject } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
@@ -189,14 +188,7 @@ export class SessionService {
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
 		private readonly recordCache: EtagRecordCache<Session> = new EtagRecordCache(),
-	) {
-		guardNotebookMutations<SessionService>(this, bucket, {
-			createSession: (input) => notebookMutation(input.project_id, input.notebook_id),
-			advanceVersionPruneCutoff: notebookMutation,
-			claimEditor: notebookMutation,
-			claimApp: notebookMutation,
-		});
-	}
+	) {}
 
 	/**
 	 * Compare-and-swap a session record so every status transition is atomic: a

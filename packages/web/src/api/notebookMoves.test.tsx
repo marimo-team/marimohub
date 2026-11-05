@@ -8,7 +8,6 @@ const input = {
 	notebookId: 'nb-1',
 	destination: 'proj-destination',
 	updatedAt: '2026-11-04T12:00:00Z',
-	idempotencyKey: 'move-one',
 };
 
 afterEach(() => {

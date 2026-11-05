@@ -1,5 +1,4 @@
 import { copyMoveObject, copyMovePrefix } from './moveObjects';
-import { guardNotebookMutations, notebookMutation } from './NotebookMutationGate';
 import { utcTimestamp } from '../../stringFormats';
 import { all } from 'better-all';
 import { z } from 'zod';
@@ -66,17 +65,7 @@ export class ThumbnailService {
 	constructor(
 		private bucket: Bucket,
 		private notebooks: Pick<NotebookService, 'getNotebook' | 'getVersionHtmlSnapshot'>,
-	) {
-		guardNotebookMutations<ThumbnailService>(this, bucket, {
-			setCustom: notebookMutation,
-			removeCustom: notebookMutation,
-			retire: notebookMutation,
-			claimAttempt: notebookMutation,
-			prepare: notebookMutation,
-			publish: notebookMutation,
-			prune: notebookMutation,
-		});
-	}
+	) {}
 
 	async get(pid: ProjectId, nid: NotebookId): Promise<ThumbnailRecord | null> {
 		const key = paths.project(pid).notebook(nid).thumbnail;

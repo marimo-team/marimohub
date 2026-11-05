@@ -133,12 +133,11 @@ stopped, replaces it with one ETag CAS.
 
 These CAS-managed records also have one writer each:
 
-- `NotebookMutationGate` owns `_system/notebook-mutations/{pid}.json`, including
-  writer admissions, move reservations, and retained source tombstones.
-- `NotebookMoveService` owns `_system/notebook-moves/{id}.json`. Transfer helpers
-  on existing owners run under its reservations. Offline recovery requires all
-  writers stopped; it retains unfinished move reservations.
-
+- `NotebookMoveService` owns the leased move record at
+  `_system/notebook-moves/{nid}.json` and the `move_id` stamp on a notebook's
+  `meta.json` while a move is in progress. Transfer helpers on other owners run
+  only under that record. Moves need no offline recovery: repeating the request
+  takes over an expired lease, and an unpublished move can be cancelled.
 - `BucketSearchIndex` owns `_system/search/projects/{pid}/{source}/head.json`, immutable search snapshots, and retained deletion tombstones. `SearchIndexer` owns resumable crawl checkpoints, immutable pages, and `_system/search/cursor.json`. It also owns last-writer-wins refresh revisions at
   `_system/search/refresh/{pid}.json`.
 - `ThumbnailService` owns each notebook-local `thumbnail.json` CAS record, immutable

@@ -3872,16 +3872,8 @@
 			"method": "POST",
 			"path": "/api/v1/projects/{pid}/notebooks/{nid}/move",
 			"summary": "Move a notebook to another project",
+			"description": "Repeat the same request to resume a move that was interrupted; the notebook is unavailable in both projects until it completes.",
 			"parameters": [
-				{
-					"name": "idempotency-key",
-					"cli_name": "idempotency-key",
-					"in": "header",
-					"required": true,
-					"description": "Stable client-generated key reused for retries of the same operation.",
-					"value_type": "string",
-					"repeatable": false
-				},
 				{
 					"name": "if-match",
 					"cli_name": "if-match",
@@ -3923,7 +3915,38 @@
 			"paginated": false,
 			"response_kind": "json",
 			"accepts_if_match": true,
-			"accepts_idempotency_key": true
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.move.cancel",
+			"command": ["notebooks", "move", "cancel"],
+			"method": "DELETE",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/move",
+			"summary": "Cancel an unpublished notebook move",
+			"description": "Removes destination copies and makes the notebook available in its source project again. A move that has already published cannot be cancelled; repeat it to finish.",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": true,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
 		},
 		{
 			"id": "notebooks.previews.create",

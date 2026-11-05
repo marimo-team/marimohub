@@ -1,5 +1,4 @@
 import { copyMovePrefix, moveJson } from '../content/moveObjects';
-import { guardNotebookMutations, notebookMutation } from '../content/NotebookMutationGate';
 import type { Bucket } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
@@ -131,18 +130,7 @@ export class JobRunService {
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
-	) {
-		guardNotebookMutations<JobRunService>(this, bucket, {
-			withJobMutation: (job) => notebookMutation(job.project_id, job.notebook_id),
-			enqueue: (input) => notebookMutation(input.job.project_id, input.job.notebook_id),
-			writeSkipped: (input) => notebookMutation(input.job.project_id, input.job.notebook_id),
-			transition: (run) => notebookMutation(run.project_id, run.notebook_id),
-			claimOccurrence: (job) => notebookMutation(job.project_id, job.notebook_id),
-			putOutputs: (run) => notebookMutation(run.project_id, run.notebook_id),
-			pruneJob: (job) => notebookMutation(job.project_id, job.notebook_id),
-			pruneDanglingMarker: (run) => notebookMutation(run.project_id, run.notebook_id),
-		});
-	}
+	) {}
 
 	private runPaths(run: Pick<JobRun, 'project_id' | 'notebook_id' | 'job_id' | 'run_id'>) {
 		return paths.project(run.project_id).notebook(run.notebook_id).job(run.job_id).run(run.run_id);

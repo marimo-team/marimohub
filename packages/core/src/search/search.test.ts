@@ -67,7 +67,6 @@ describe('authorized search', () => {
 			destination: destination.id,
 			notebookId: f.notebook.id,
 			actor: owner.id,
-			idempotencyKey: 'search-move',
 			authorize: async () => {},
 		});
 		expect((await f.search.search(owner, f.query)).items).toHaveLength(0);

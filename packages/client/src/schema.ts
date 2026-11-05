@@ -1107,9 +1107,16 @@ export interface paths {
 		};
 		get?: never;
 		put?: never;
-		/** Move a notebook to another project */
+		/**
+		 * Move a notebook to another project
+		 * @description Repeat the same request to resume a move that was interrupted; the notebook is unavailable in both projects until it completes.
+		 */
 		post: operations['notebooks.move'];
-		delete?: never;
+		/**
+		 * Cancel an unpublished notebook move
+		 * @description Removes destination copies and makes the notebook available in its source project again. A move that has already published cannot be cancelled; repeat it to finish.
+		 */
+		delete: operations['notebooks.move.cancel'];
 		options?: never;
 		head?: never;
 		patch?: never;
@@ -12758,8 +12765,6 @@ export interface operations {
 		parameters: {
 			query?: never;
 			header: {
-				/** @description Stable client-generated key reused for retries of the same operation. */
-				'idempotency-key': string;
 				'if-match': string;
 			};
 			path: {
@@ -12827,6 +12832,103 @@ export interface operations {
 			};
 			/** @description Precondition failed (If-Match did not match the current version) */
 			412: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.move.cancel': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Move cancelled */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
 				headers: {
 					[name: string]: unknown;
 				};

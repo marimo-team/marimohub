@@ -125,7 +125,7 @@ describe('traced', () => {
 });
 
 describe('createServices tracing option', () => {
-	it('traces notebook moves without exposing request keys', async () => {
+	it('traces notebook moves with both project ids', async () => {
 		const services = createServices(new MemoryBucket(), undefined, { tracing: true });
 		const source = createProjectId();
 		const destination = createProjectId();
@@ -136,7 +136,6 @@ describe('createServices tracing option', () => {
 				destination,
 				notebookId,
 				actor: 'actor' as UserId,
-				idempotencyKey: 'private-request-key',
 				authorize: async () => {},
 			}),
 		).rejects.toThrow(NotFoundError);

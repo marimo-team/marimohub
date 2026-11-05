@@ -1784,9 +1784,10 @@ and performance evidence. The [search guide](../docs/search.md) covers configura
 
 ## Notebook moves
 
-`NotebookMoveService` owns the CAS transfer receipts under
-`_system/notebook-moves/`. `NotebookMutationGate` owns project writer admissions,
-move reservations, and retained source tombstones under `_system/notebook-mutations/`.
-Existing object owners copy their records under those reservations. The catalog
-changes through `CatalogService.mutateSnapshot`; search refresh requests go through
-`SearchIndexer`. See [notebook moves](./notebook_moves.md) for behavior and recovery.
+`NotebookMoveService` owns the leased CAS record at `_system/notebook-moves/{nid}.json`
+and the `move_id` stamp it places in the notebook's `meta.json` (and each hidden
+runtime's `preview-runtime.json`) from fencing until cleanup. Every writer already
+reads or compare-and-swaps that record, so the fence costs no extra object or request.
+Other owners copy their records under the move record. The catalog changes through
+`CatalogService.mutateSnapshot`; search refreshes go through `SearchIndexer`.
+See [notebook moves](./notebook_moves.md) for behavior and stuck-move handling.

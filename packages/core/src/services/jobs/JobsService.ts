@@ -1,5 +1,4 @@
 import { copyMovePrefix, moveJson } from '../content/moveObjects';
-import { guardNotebookMutations, notebookMutation } from '../content/NotebookMutationGate';
 import type { Bucket } from '../../ports/bucket';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
@@ -151,14 +150,7 @@ export class JobsService {
 	constructor(
 		private bucket: Bucket,
 		private catalog: CatalogService,
-	) {
-		guardNotebookMutations<JobsService>(this, bucket, {
-			createJob: notebookMutation,
-			updateJob: notebookMutation,
-			beginDelete: notebookMutation,
-			finishDelete: notebookMutation,
-		});
-	}
+	) {}
 
 	async listJobs(projectId: ProjectId, notebookId: NotebookId): Promise<JobDefinition[]> {
 		const jobs: JobDefinition[] = [];

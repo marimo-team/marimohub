@@ -225,6 +225,8 @@ export const SnapshotNotebookEntrySchema = z.looseObject({
 	/** Job index (see `SnapshotJobEntrySchema`); absent = no jobs defined. */
 	jobs: z.array(SnapshotJobEntrySchema).optional(),
 	key_prefix: z.string(),
+	/** The move that published this entry, so a retried publication is recognized. */
+	move_id: z.string().optional(),
 });
 
 export type SnapshotNotebookEntry = z.infer<typeof SnapshotNotebookEntrySchema>;
@@ -549,6 +551,8 @@ export const NotebookMetaSchema = z.object({
 	 * notebook inherits the project labels unchanged.
 	 */
 	security_labels: ResourceSecurityLabelsSchema.optional(),
+	/** Set while a cross-project move is in progress; the notebook is unreadable until cleared. */
+	move_id: z.string().optional(),
 });
 
 export type NotebookMeta = z.infer<typeof NotebookMetaSchema>;
@@ -557,9 +561,9 @@ export const PreviewRuntimeMetaSchema = NotebookMetaSchema.extend({
 	preview: NotebookMetaSchema.shape.preview.unwrap(),
 });
 
-export type PublicNotebookMeta = Omit<NotebookMeta, 'schema_version' | 'preview'>;
+export type PublicNotebookMeta = Omit<NotebookMeta, 'schema_version' | 'preview' | 'move_id'>;
 export function toPublicNotebookMeta(meta: NotebookMeta): PublicNotebookMeta {
-	const { schema_version: _schema_version, preview: _preview, ...rest } = meta;
+	const { schema_version: _schema_version, preview: _preview, move_id: _move_id, ...rest } = meta;
 	return rest;
 }
 

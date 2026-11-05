@@ -42,10 +42,10 @@ tags:
   - name: ops
     description: Operational records
 paths:
-  /_system/notebook-moves/{id}.json:
-    summary: Resumable cross-project notebook transfer.
+  /_system/notebook-moves/{nid}.json:
+    summary: Resumable cross-project notebook transfer, leased by its running executor.
     parameters:
-      - name: id
+      - name: nid
         in: path
         required: true
         schema:
@@ -75,42 +75,6 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/NotebookMove'
-      responses:
-        '204':
-          description: Stored.
-  /_system/notebook-mutations/{pid}.json:
-    summary: Writer admissions, move reservations, and retained source tombstones.
-    parameters:
-      - name: pid
-        in: path
-        required: true
-        schema:
-          type: string
-    x-mutability: cas
-    x-owner: NotebookMutationGate
-    get:
-      operationId: read_system_notebook_mutations_json
-      summary: Read NotebookMutationGate
-      tags:
-        - notebook
-      responses:
-        '200':
-          description: The stored object.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/NotebookMutationGate'
-    put:
-      operationId: write_system_notebook_mutations_json
-      summary: Write NotebookMutationGate
-      tags:
-        - notebook
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/NotebookMutationGate'
       responses:
         '204':
           description: Stored.
@@ -2911,13 +2875,11 @@ components:
           const: 1
         id:
           type: string
-        idempotency_key:
+        notebook_id:
           type: string
         source:
           type: string
         destination:
-          type: string
-        notebook_id:
           type: string
         actor:
           type: string
@@ -2930,9 +2892,17 @@ components:
             - copying
             - published
             - complete
-        executor:
+        lease:
           anyOf:
-            - type: string
+            - type: object
+              properties:
+                executor:
+                  type: string
+                expires_at:
+                  type: number
+              required:
+                - executor
+                - expires_at
             - type: 'null'
         runtimes:
           type: array
@@ -3055,6 +3025,8 @@ components:
                 - classification
                 - compartments
               additionalProperties: false
+            move_id:
+              type: string
           required:
             - schema_version
             - id
@@ -3158,55 +3130,16 @@ components:
       required:
         - schema_version
         - id
-        - idempotency_key
+        - notebook_id
         - source
         - destination
-        - notebook_id
         - actor
         - updated_at
         - phase
-        - executor
+        - lease
         - runtimes
         - meta
         - source_record
-    NotebookMutationGate:
-      type: object
-      properties:
-        schema_version:
-          type: number
-          const: 1
-        writers:
-          type: array
-          items:
-            type: object
-            properties:
-              token:
-                type: string
-              notebook_id:
-                type: string
-            required:
-              - token
-        moves:
-          type: array
-          items:
-            type: object
-            properties:
-              token:
-                type: string
-              notebook_id:
-                type: string
-            required:
-              - token
-              - notebook_id
-        retired:
-          type: array
-          items:
-            type: string
-      required:
-        - schema_version
-        - writers
-        - moves
-        - retired
     SearchRefresh:
       type: string
     SearchHead:
@@ -4306,6 +4239,8 @@ components:
                         additionalProperties: {}
                     key_prefix:
                       type: string
+                    move_id:
+                      type: string
                   required:
                     - id
                     - title
@@ -5090,6 +5025,8 @@ components:
             - classification
             - compartments
           additionalProperties: false
+        move_id:
+          type: string
       required:
         - schema_version
         - id
@@ -5183,6 +5120,8 @@ components:
             - classification
             - compartments
           additionalProperties: false
+        move_id:
+          type: string
       required:
         - preview
         - schema_version
@@ -6597,6 +6536,8 @@ components:
                 - classification
                 - compartments
               additionalProperties: false
+            move_id:
+              type: string
           required:
             - schema_version
             - id

@@ -49,6 +49,16 @@ export class AppPoolStore {
 		});
 	}
 
+	/** Reopens the source pool after a cancelled move; the destination keeps its tombstone. */
+	async cancelNotebookMove(source: ProjectId, nid: NotebookId): Promise<void> {
+		await withCasRetry(this.bucket, async (cas) => {
+			const key = paths.appPool(source, nid);
+			const object = await this.bucket.get(key);
+			if (!object) return;
+			await cas.put(key, JSON.stringify(emptyAppPool()), { onlyIfEtagMatches: object.etag });
+		});
+	}
+
 	async finishNotebookMove(
 		source: ProjectId,
 		destination: ProjectId,
@@ -59,6 +69,9 @@ export class AppPoolStore {
 				const key = paths.appPool(pid, nid);
 				const object = await this.bucket.get(key);
 				if (!object) return;
+				const pool = await readStored(AppPoolSchema, object, key);
+				// A cleanup retry must not evict members admitted since the destination reopened.
+				if (pid === destination && pool.deleted_at === undefined) return;
 				const next = { ...emptyAppPool(), ...(pid === source ? { deleted_at: Date.now() } : {}) };
 				await cas.put(key, JSON.stringify(next), { onlyIfEtagMatches: object.etag });
 			});

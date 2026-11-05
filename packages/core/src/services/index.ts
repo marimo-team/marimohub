@@ -697,6 +697,7 @@ export function createServices(
 					...notebook(input.source, input.notebookId),
 					'marimohub.destination_project_id': input.destination,
 				}),
+				cancel: (input) => notebook(input.source, input.notebookId),
 			},
 		),
 		sessions,

@@ -1,8 +1,3 @@
-import {
-	NotebookMutationGate,
-	guardNotebookMutations,
-	notebookMutation,
-} from './NotebookMutationGate';
 import { copyMovePrefix, moveJson } from './moveObjects';
 import { forEachConcurrentUntilFailure } from '../../async';
 import { Millis } from '../../duration';
@@ -133,12 +128,7 @@ export class NotebookProposalService {
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
-	) {
-		guardNotebookMutations<NotebookProposalService>(this, bucket, {
-			captureProposalWithOutcome: (input) => notebookMutation(input.projectId, input.notebookId),
-			publishChangeRequest: (input) => notebookMutation(input.projectId, input.notebookId),
-		});
-	}
+	) {}
 
 	async resolveSourceRevision(
 		projectId: ProjectId,
@@ -423,23 +413,17 @@ export class NotebookProposalService {
 				if (Date.parse(marker.expires_at) + DEFAULT_PROPOSAL_PAYLOAD_SWEEP_GRACE_MS > nowMs) {
 					continue;
 				}
-				await new NotebookMutationGate(this.bucket).write(
-					marker.project_id,
-					marker.notebook_id,
-					async () => {
-						const proposalPaths = paths
-							.project(marker.project_id)
-							.notebook(marker.notebook_id)
-							.proposal(marker.proposal_id);
-						if (marker.change_indexes.length > 0) {
-							await this.bucket.delete(
-								marker.change_indexes.map((index) => proposalPaths.change(index)),
-							);
-						}
-						await this.bucket.delete(listed.key);
-						pruned++;
-					},
-				);
+				const proposalPaths = paths
+					.project(marker.project_id)
+					.notebook(marker.notebook_id)
+					.proposal(marker.proposal_id);
+				if (marker.change_indexes.length > 0) {
+					await this.bucket.delete(
+						marker.change_indexes.map((index) => proposalPaths.change(index)),
+					);
+				}
+				await this.bucket.delete(listed.key);
+				pruned++;
 			} catch (error) {
 				logOperationalError(
 					'proposal_payload_prune_failed',

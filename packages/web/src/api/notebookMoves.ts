@@ -5,17 +5,12 @@ import { appKeys, jobKeys, notebookKeys, previewKeys, projectKeys } from './quer
 
 export function useMoveNotebook(projectId: string) {
 	return useApiMutation(
-		(input: {
-			notebookId: string;
-			destination: string;
-			updatedAt: string;
-			idempotencyKey: string;
-		}) =>
+		(input: { notebookId: string; destination: string; updatedAt: string }) =>
 			apiData(
 				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/move', {
 					params: {
 						path: { pid: projectId, nid: input.notebookId },
-						header: { 'idempotency-key': input.idempotencyKey, 'if-match': `"${input.updatedAt}"` },
+						header: { 'if-match': `"${input.updatedAt}"` },
 					},
 					body: { destination_project_id: input.destination },
 				}),

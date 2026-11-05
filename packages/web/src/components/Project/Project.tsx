@@ -1,5 +1,3 @@
-import { pendingNotebookMoves } from '@/components/Notebook/pendingMoves';
-import type { MovableNotebook } from '@/components/Notebook/pendingMoves';
 import { MoveNotebookDialog } from '@/components/Notebook/MoveNotebookDialog';
 import { TagFieldValue } from '@/lib/tagFieldValue';
 import { isPathTag } from '@marimo-hub/core/tag-paths';
@@ -176,7 +174,7 @@ const NEW_NOTEBOOK_CODE = (name: string) => {
 	return `import marimo\n\napp = marimo.App(width="medium", sql_output="native")\n\n\nwith app.setup:\n    import marimo as mo\n\n\n@app.cell(hide_code=True)\ndef _():\n    mo.md(${heading})\n    return\n\n\nif __name__ == "__main__":\n    app.run()\n`;
 };
 
-function ProjectContent() {
+function useProjectContent() {
 	const { pid } = useParams<{ pid: string }>();
 	const navigate = useNavigate();
 	const {
@@ -205,8 +203,7 @@ function ProjectContent() {
 	const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
 	const deleteModal = useDialogTarget<NotebookEntry>();
 	const renameModal = useDialogTarget<NotebookEntry>();
-	const [pendingMove] = useState(() => pendingNotebookMoves(pid!)[0]);
-	const moveModal = useDialogTarget<MovableNotebook>(pendingMove?.notebook);
+	const moveModal = useDialogTarget<NotebookEntry>();
 	const baseImageModal = useDialogTarget<NotebookEntry>();
 	const computeProfileModal = useDialogTarget<NotebookEntry>();
 	const historyModal = useDialogTarget<NotebookEntry>();
@@ -1140,6 +1137,5 @@ function ProjectContent() {
 }
 
 export function Project() {
-	const { pid } = useParams<{ pid: string }>();
-	return <ProjectContent key={pid} />;
+	return useProjectContent();
 }

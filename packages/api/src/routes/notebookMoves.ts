@@ -19,8 +19,8 @@ import {
 	jsonContent,
 	NotebookIdParam,
 	NotebookMetaResponseSchema,
-	RequiredIdempotencyKeyHeader,
 	RequiredIfMatchHeader,
+	SuccessResponseSchema,
 } from '../shared';
 import { assertPullSourceSupported } from './sourcePullSync';
 
@@ -31,9 +31,11 @@ const moveNotebook = createRoute({
 	operationId: 'notebooks.move',
 	tags: ['Notebooks'],
 	summary: 'Move a notebook to another project',
+	description:
+		'Repeat the same request to resume a move that was interrupted; the notebook is unavailable in both projects until it completes.',
 	request: {
 		params: NotebookIdParam,
-		headers: RequiredIdempotencyKeyHeader.extend(RequiredIfMatchHeader.shape),
+		headers: RequiredIfMatchHeader,
 		body: jsonBody(z.object({ destination_project_id: z.string().refine(ProjectId.is) })),
 	},
 	responses: {
@@ -44,6 +46,31 @@ const moveNotebook = createRoute({
 		...commonErrors(),
 		...errorResponses(403, 404, 409, 412),
 	},
+});
+
+const cancelMove = createRoute({
+	method: 'delete',
+	path: '/projects/{pid}/notebooks/{nid}/move',
+	operationId: 'notebooks.move.cancel',
+	tags: ['Notebooks'],
+	summary: 'Cancel an unpublished notebook move',
+	description:
+		'Removes destination copies and makes the notebook available in its source project again. A move that has already published cannot be cancelled; repeat it to finish.',
+	request: { params: NotebookIdParam },
+	responses: {
+		200: jsonContent(SuccessResponseSchema, 'Move cancelled'),
+		...commonErrors(),
+		...errorResponses(403, 404, 409),
+	},
+});
+
+app.openapi(cancelMove, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, nid } = c.req.valid('param');
+	await assertProjectRole(deps.services.projects, pid, user, 'notebook.manage', deps);
+	await deps.services.moves.cancel({ source: pid, notebookId: nid });
+	return c.json({ success: true }, 200);
 });
 
 app.openapi(moveNotebook, async (c) => {
@@ -59,7 +86,6 @@ app.openapi(moveNotebook, async (c) => {
 		destination,
 		notebookId: nid,
 		actor: user.id,
-		idempotencyKey: c.req.valid('header')['idempotency-key'],
 		expectedVersion: ifMatchToken(c),
 		reclaimSnapshot: snapshotCompute
 			? async (snapshot) => {

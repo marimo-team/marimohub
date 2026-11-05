@@ -113,11 +113,11 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		expect(coreKeys).toContain('schema_version');
 	});
 
-	it('NotebookMeta omits storage version and internal preview ownership', () => {
+	it('NotebookMeta omits storage version, preview ownership, and the move fence', () => {
 		const coreKeys = shapeKeys(CoreNotebookMetaSchema);
-		expect(coreKeys).toContain('schema_version');
-		expect(coreKeys).toContain('preview');
-		expect(coreKeys.filter((key) => !['schema_version', 'preview'].includes(key))).toEqual(
+		const internal = ['schema_version', 'preview', 'move_id'];
+		expect(coreKeys).toEqual(expect.arrayContaining(internal));
+		expect(coreKeys.filter((key) => !internal.includes(key))).toEqual(
 			shapeKeys(NotebookMetaResponseSchema),
 		);
 	});
@@ -146,7 +146,13 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		const coreKeys = shapeKeys(CoreSnapshotNotebookEntrySchema);
 		const apiKeys = shapeKeys(SnapshotNotebookEntrySchema);
 		// `jobs` is the scheduler's index; clients read definitions from the jobs routes.
-		const internal = ['key_prefix', 'security_labels', 'security_labels_pending', 'jobs'];
+		const internal = [
+			'key_prefix',
+			'security_labels',
+			'security_labels_pending',
+			'jobs',
+			'move_id',
+		];
 		expect(coreKeys.filter((k) => !internal.includes(k))).toEqual(apiKeys);
 		expect(coreKeys).toEqual(expect.arrayContaining(internal));
 	});

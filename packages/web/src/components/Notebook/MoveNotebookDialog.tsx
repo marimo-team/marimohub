@@ -1,11 +1,3 @@
-import { useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { notebookKeys } from '@/api/queryKeys';
-import {
-	pendingNotebookMoves,
-	savePendingNotebookMove,
-	clearPendingNotebookMove,
-} from './pendingMoves';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { z } from 'zod';
@@ -27,7 +19,6 @@ export function MoveNotebookDialog({
 	notebook: { id: string; title: string; updated_at: string; source_type: string };
 }) {
 	const navigate = useNavigate();
-	const queryClient = useQueryClient();
 	const projects = useProjectsQuery(
 		{ managed_only: 'true' },
 		{ enabled: isOpen, throwOnError: false },
@@ -37,31 +28,21 @@ export function MoveNotebookDialog({
 	const destinations =
 		projects.data?.filter((project) => project.id !== projectId && project.status !== 'deleted') ??
 		[];
-	const [pending, setPending] = useState(() =>
-		pendingNotebookMoves(projectId).find((item) => item.notebook.id === notebook.id),
-	);
 	const form = useAppForm({
-		defaultValues: { destination: pending?.destination ?? '' },
+		defaultValues: { destination: '' },
 		validators: schemaValidators(schema),
 		onSubmit: async ({ value }) => {
-			const key = pending?.destination === value.destination ? pending.key : crypto.randomUUID();
-			const attempt = { notebook, destination: value.destination, key };
-			savePendingNotebookMove(projectId, attempt);
-			setPending(attempt);
 			try {
 				const result = await move.mutateAsync({
 					notebookId: notebook.id,
 					destination: value.destination,
 					updatedAt: notebook.updated_at,
-					idempotencyKey: key,
 				});
-				clearPendingNotebookMove(projectId, notebook.id);
 				toast.success(`Moved "${notebook.title}"`);
 				onClose();
 				void navigate(`/projects/${result.project_id}`);
 			} catch {
-				// Even a readable source can have an executor waiting to claim its move fences.
-				void queryClient.invalidateQueries({ queryKey: notebookKeys.all });
+				return;
 			}
 		},
 	});
@@ -102,7 +83,7 @@ export function MoveNotebookDialog({
 						{(field) => (
 							<field.RadioGroupField
 								label="Destination project"
-								isDisabled={move.isPending || Boolean(pending)}
+								isDisabled={move.isPending}
 								options={destinations.map((project) => ({
 									value: project.id,
 									label: project.name,
@@ -115,7 +96,7 @@ export function MoveNotebookDialog({
 			{move.error && (
 				<p role="alert" className="text-sm text-destructive">
 					{move.error.message}
-					{' Retry this move to the same destination.'}
+					{' An interrupted move resumes when you move to the same destination again.'}
 				</p>
 			)}
 		</FormDialog>

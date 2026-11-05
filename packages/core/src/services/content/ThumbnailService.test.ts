@@ -86,9 +86,7 @@ describe('thumbnails', () => {
 		const pending = thumbnails.removeCustom(pid, nid);
 		try {
 			await vi.waitFor(() => expect([...started].sort()).toEqual(keys));
-			expect(
-				put.mock.calls.filter(([key]) => !key.startsWith(paths.notebookMutations)),
-			).toHaveLength(0);
+			expect(put).not.toHaveBeenCalled();
 		} finally {
 			gate.resolve();
 			await pending;

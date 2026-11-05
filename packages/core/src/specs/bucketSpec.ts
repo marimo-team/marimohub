@@ -27,8 +27,7 @@ import { AppPoolSchema } from '../services/runtime/AppPoolRouter';
 import { ThumbnailRecordSchema } from '../services/content/ThumbnailService';
 import { DeepLinkRecordSchema } from '../deepLinks';
 import { z } from 'zod';
-import { NotebookMoveSchema } from '../services/content/NotebookMoveService';
-import { NotebookMutationGateSchema } from '../services/content/NotebookMutationGate';
+import { NotebookMoveSchema } from '../services/content/notebookMoveRecord';
 import { jsonSchema } from './jsonSchema';
 import type {
 	ImportId,
@@ -137,20 +136,11 @@ const integrationVersionTemplate = (key: string) => key.replace('000000', '{n}')
 const OBJECTS: BucketObject[] = [
 	{
 		name: 'NotebookMove',
-		key: paths.notebookMove('{id}'),
+		key: paths.notebookMove(NID),
 		schema: NotebookMoveSchema,
-		summary: 'Resumable cross-project notebook transfer.',
+		summary: 'Resumable cross-project notebook transfer, leased by its running executor.',
 		mutability: 'cas',
 		owner: 'NotebookMoveService',
-		tag: 'notebook',
-	},
-	{
-		name: 'NotebookMutationGate',
-		key: paths.notebookMutation(PID),
-		schema: NotebookMutationGateSchema,
-		summary: 'Writer admissions, move reservations, and retained source tombstones.',
-		mutability: 'cas',
-		owner: 'NotebookMutationGate',
 		tag: 'notebook',
 	},
 	{

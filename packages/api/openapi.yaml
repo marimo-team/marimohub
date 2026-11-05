@@ -13767,11 +13767,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/move:
-    post:
-      operationId: notebooks.move
+    delete:
+      operationId: notebooks.move.cancel
       tags:
         - Notebooks
-      summary: Move a notebook to another project
+      summary: Cancel an unpublished notebook move
+      description: Removes destination copies and makes the notebook available in its
+        source project again. A move that has already published cannot be
+        cancelled; repeat it to finish.
       parameters:
         - schema:
             type: string
@@ -13787,17 +13790,91 @@ paths:
           required: true
           name: nid
           in: path
+      responses:
+        '200':
+          description: Move cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      operationId: notebooks.move
+      tags:
+        - Notebooks
+      summary: Move a notebook to another project
+      description: Repeat the same request to resume a move that was interrupted; the
+        notebook is unavailable in both projects until it completes.
+      parameters:
         - schema:
             type: string
-            minLength: 1
-            maxLength: 255
-            description: Stable client-generated key reused for retries of the same
-              operation.
-            example: a1b2c3d4-e5f6-7890
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
           required: true
-          description: Stable client-generated key reused for retries of the same operation.
-          name: idempotency-key
-          in: header
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
         - schema:
             type: string
             example: '"2025-03-05T14:00:00Z"'

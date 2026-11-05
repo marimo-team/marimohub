@@ -1,4 +1,3 @@
-import { guardNotebookMutations, notebookMutation } from './NotebookMutationGate';
 import { ulid } from 'ulidx';
 import type { Bucket } from '../../ports/bucket';
 import type { Metrics } from '../../ports/metrics';
@@ -53,18 +52,7 @@ export class DeepLinkService {
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
-	) {
-		guardNotebookMutations<DeepLinkService>(this, bucket, {
-			register: (slug, target) => {
-				this.slug(slug);
-				return notebookMutation(target.project_id, target.notebook_id);
-			},
-			release: (slug, target) => {
-				this.slug(slug);
-				return notebookMutation(target.project_id, target.notebook_id);
-			},
-		});
-	}
+	) {}
 
 	private slug(value: string): string {
 		const result = DeepLinkSlugSchema.safeParse(value);

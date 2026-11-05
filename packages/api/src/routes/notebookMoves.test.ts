@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { UserId, ForbiddenError, paths } from '@marimo-hub/core';
+import { ProjectId, UserId, ForbiddenError, paths } from '@marimo-hub/core';
 import { localResourceSecurity, makeSubjectContext, ACTOR } from '@marimo-hub/core/testing';
 import {
 	createInitializedBucket,
@@ -30,7 +30,7 @@ async function setup() {
 		ACTOR,
 	);
 	const path = `/projects/${source.id}/notebooks/${notebook.id}/move`;
-	const headers = { 'Idempotency-Key': 'move', 'If-Match': `"${notebook.updated_at}"` };
+	const headers = { 'If-Match': `"${notebook.updated_at}"` };
 	return { api, bucket, source, destination, notebook, path, headers };
 }
 
@@ -74,7 +74,7 @@ describe('POST notebook move', () => {
 				'POST',
 				`/projects/${source.id}/notebooks/${meta.id}/move`,
 				{ destination_project_id: destination.id },
-				{ 'Idempotency-Key': 'history', 'If-Match': `"${before.meta.updated_at}"` },
+				{ 'If-Match': `"${before.meta.updated_at}"` },
 			),
 			403,
 			'FORBIDDEN',
@@ -116,7 +116,7 @@ describe('POST notebook move', () => {
 				'POST',
 				`/projects/${source.id}/notebooks/${meta.id}/move`,
 				{ destination_project_id: destination.id },
-				{ 'Idempotency-Key': 'missing-policy', 'If-Match': `"${meta.updated_at}"` },
+				{ 'If-Match': `"${meta.updated_at}"` },
 			),
 			422,
 			'VALIDATION_ERROR',
@@ -125,22 +125,16 @@ describe('POST notebook move', () => {
 		expect(await api.deps.services.notebooks.listNotebooks(destination.id)).toEqual([]);
 	});
 
-	it.each(['Idempotency-Key', 'If-Match'] as const)(
-		'rejects a missing %s header without moving data',
-		async (missing) => {
-			const { api, source, destination, notebook, path, headers } = await setup();
-			const remaining = { ...headers } as Record<string, string>;
-			delete remaining[missing];
-			expect(
-				(await api.request('POST', path, { destination_project_id: destination.id }, remaining))
-					.status,
-			).toBe(422);
-			expect(await api.deps.services.notebooks.getNotebookContent(source.id, notebook.id)).toBe(
-				'print(1)',
-			);
-			expect(await api.deps.services.notebooks.listNotebooks(destination.id)).toEqual([]);
-		},
-	);
+	it('rejects a missing If-Match header without moving data', async () => {
+		const { api, source, destination, notebook, path } = await setup();
+		expect(
+			(await api.request('POST', path, { destination_project_id: destination.id })).status,
+		).toBe(422);
+		expect(await api.deps.services.notebooks.getNotebookContent(source.id, notebook.id)).toBe(
+			'print(1)',
+		);
+		expect(await api.deps.services.notebooks.listNotebooks(destination.id)).toEqual([]);
+	});
 
 	it('does not replay a completed move after destination manager access is revoked', async () => {
 		const { api, bucket, source, destination, notebook, path, headers } = await setup();
@@ -215,7 +209,7 @@ describe('POST notebook move', () => {
 					'POST',
 					`/projects/${source.id}/notebooks/${meta.id}/move`,
 					{ destination_project_id: destination.id },
-					{ 'Idempotency-Key': 'git-policy', 'If-Match': `"${before.meta.updated_at}"` },
+					{ 'If-Match': `"${before.meta.updated_at}"` },
 				),
 				403,
 				'FORBIDDEN',
@@ -253,7 +247,7 @@ describe('POST notebook move', () => {
 				'POST',
 				`/projects/${source.id}/notebooks/${meta.id}/move`,
 				{ destination_project_id: destination.id },
-				{ 'Idempotency-Key': 'pull-failed', 'If-Match': `"${meta.updated_at}"` },
+				{ 'If-Match': `"${meta.updated_at}"` },
 			),
 			403,
 			'FORBIDDEN',
@@ -308,7 +302,86 @@ describe('POST notebook move', () => {
 		},
 	);
 
-	it('requires an idempotency key and notebook precondition', async () => {
+	it('lets a source manager cancel an interrupted move and resume editing', async () => {
+		const { api, bucket, source, destination, notebook, path, headers } = await setup();
+		const key = paths.project(destination.id).notebook(notebook.id).code;
+		const put = bucket.put.bind(bucket);
+		let interrupted = false;
+		vi.spyOn(bucket, 'put').mockImplementation(async (target, bytes, options) => {
+			if (!interrupted && target === key) {
+				interrupted = true;
+				throw new Error('copy interrupted');
+			}
+			return put(target, bytes, options);
+		});
+		expect(
+			(await api.request('POST', path, { destination_project_id: destination.id }, headers)).status,
+		).toBe(500);
+		await expectError(
+			await api.request('GET', `/projects/${source.id}/notebooks/${notebook.id}`),
+			404,
+			'NOT_FOUND',
+		);
+		await expectOk(await api.request('DELETE', path));
+		await expectOk(await api.request('GET', `/projects/${source.id}/notebooks/${notebook.id}`));
+		await expectError(await api.request('DELETE', path), 404, 'NOT_FOUND');
+		expect(await api.deps.services.notebooks.listNotebooks(destination.id)).toEqual([]);
+	});
+
+	it('returns 404 for a missing destination project or a deleted notebook', async () => {
+		const { api, source, destination, notebook, path, headers } = await setup();
+		await expectError(
+			await api.request('POST', path, { destination_project_id: ProjectId.create() }, headers),
+			404,
+			'NOT_FOUND',
+		);
+		expect(await api.deps.services.notebooks.getNotebookContent(source.id, notebook.id)).toBe(
+			'print(1)',
+		);
+		await api.deps.services.notebooks.deleteNotebookWithMutation(source.id, notebook.id, ACTOR);
+		const deleted = await api.deps.services.notebooks.getNotebookMeta(source.id, notebook.id);
+		await expectError(
+			await api.request(
+				'POST',
+				path,
+				{ destination_project_id: destination.id },
+				{ 'If-Match': `"${deleted.updated_at}"` },
+			),
+			404,
+			'NOT_FOUND',
+		);
+		expect(await api.deps.services.notebooks.listNotebooks(destination.id)).toEqual([]);
+	});
+
+	it('rejects cancellation from an editor and from the destination project', async () => {
+		const { api, bucket, source, destination, notebook, path, headers } = await setup();
+		const key = paths.project(destination.id).notebook(notebook.id).code;
+		const put = bucket.put.bind(bucket);
+		let interrupted = false;
+		vi.spyOn(bucket, 'put').mockImplementation(async (target, bytes, options) => {
+			if (!interrupted && target === key) {
+				interrupted = true;
+				throw new Error('copy interrupted');
+			}
+			return put(target, bytes, options);
+		});
+		expect(
+			(await api.request('POST', path, { destination_project_id: destination.id }, headers)).status,
+		).toBe(500);
+		const userId = UserId.parse('editor');
+		await api.deps.services.projects.addMember(source.id, { user_id: userId }, 'editor', ACTOR);
+		const editor = createTestApi({ bucket, userId });
+		await expectError(await editor.request('DELETE', path), 403, 'FORBIDDEN');
+		await expectError(
+			await api.request('DELETE', `/projects/${destination.id}/notebooks/${notebook.id}/move`),
+			404,
+			'NOT_FOUND',
+		);
+		await expectOk(await api.request('DELETE', path));
+		await expectOk(await api.request('GET', `/projects/${source.id}/notebooks/${notebook.id}`));
+	});
+
+	it('requires the notebook precondition', async () => {
 		const { api, destination, path, headers } = await setup();
 		const body = { destination_project_id: destination.id };
 		expect((await api.request('POST', path, body)).status).toBe(422);
@@ -337,7 +410,7 @@ describe('POST notebook move', () => {
 				'POST',
 				`/projects/${source.id}/notebooks/${meta.id}/move`,
 				{ destination_project_id: destination.id },
-				{ 'Idempotency-Key': 'git', 'If-Match': `"${before.meta.updated_at}"` },
+				{ 'If-Match': `"${before.meta.updated_at}"` },
 			),
 		);
 		expect((await notebooks.getNotebook(destination.id, meta.id)).source).toEqual(before.source);
@@ -370,7 +443,7 @@ describe('POST notebook move', () => {
 				'POST',
 				`/projects/${source.id}/notebooks/${meta.id}/move`,
 				{ destination_project_id: destination.id },
-				{ 'Idempotency-Key': 'git-policy', 'If-Match': `"${meta.updated_at}"` },
+				{ 'If-Match': `"${meta.updated_at}"` },
 			),
 			403,
 			'FORBIDDEN',
@@ -488,7 +561,7 @@ describe('POST notebook move', () => {
 				'POST',
 				`/projects/${source.id}/notebooks/${meta.id}/move`,
 				{ destination_project_id: destination.id },
-				{ 'Idempotency-Key': 'pull', 'If-Match': `"${meta.updated_at}"` },
+				{ 'If-Match': `"${meta.updated_at}"` },
 			),
 		);
 		expect(getReader).toHaveBeenCalledWith('github', destination.id);

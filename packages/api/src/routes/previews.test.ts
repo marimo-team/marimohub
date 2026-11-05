@@ -2168,6 +2168,71 @@ describe('source discovery cancellation', () => {
 	});
 });
 
+it('fences hidden runtimes during a move and restores them when the move is cancelled', async () => {
+	const record = await create();
+	const runtime = record.current!.notebook_id;
+	const destination = await api.deps.services.projects.createProject(
+		{ name: 'Destination', description: '' },
+		ACTOR,
+	);
+	const runtimeMeta = paths.project(destination.id).notebook(runtime).previewMeta;
+	const put = api.bucket.put.bind(api.bucket);
+	let interrupted = false;
+	vi.spyOn(api.bucket, 'put').mockImplementation(async (key, bytes, options) => {
+		if (!interrupted && key === runtimeMeta) {
+			interrupted = true;
+			throw new Error('copy interrupted');
+		}
+		return put(key, bytes, options);
+	});
+	const meta = await api.deps.services.notebooks.getNotebookMeta(pid, nid);
+	const movePath = `/projects/${pid}/notebooks/${nid}/move`;
+	expect(
+		(
+			await api.request(
+				'POST',
+				movePath,
+				{ destination_project_id: destination.id },
+				{ 'If-Match': `"${meta.updated_at}"` },
+			)
+		).status,
+	).toBe(500);
+	const { notebooks } = api.deps.services;
+	await expectError(
+		await api.request('GET', `/projects/${pid}/notebooks/${nid}`),
+		404,
+		'NOT_FOUND',
+	);
+	await expect(notebooks.getNotebook(pid, runtime)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+	await expectOk(await api.request('DELETE', movePath));
+	await expectOk(await api.request('GET', `/projects/${pid}/notebooks/${nid}`));
+	expect(await notebooks.getNotebookContent(pid, runtime)).toContain('import marimo');
+	expect(await api.deps.services.previews.get(pid, nid, record.id)).toEqual(record);
+	expect((await api.deps.services.previews.store.project(destination.id)).entries).toEqual([]);
+	for (const id of [nid, runtime]) {
+		expect(
+			(await api.bucket.list({ prefix: `${paths.project(destination.id).notebook(id).base}/` }))
+				.objects,
+		).toEqual([]);
+	}
+	expect(
+		(await api.bucket.list({ prefix: `_system/previews/${destination.id}/${nid}/` })).objects,
+	).toEqual([]);
+	await expectOk(
+		await api.request(
+			'POST',
+			movePath,
+			{ destination_project_id: destination.id },
+			{ 'If-Match': `"${meta.updated_at}"` },
+		),
+	);
+	expect(await api.deps.services.previews.get(destination.id, nid, record.id)).toEqual({
+		...record,
+		project_id: destination.id,
+	});
+	expect(await notebooks.getNotebookContent(destination.id, runtime)).toContain('import marimo');
+});
+
 it('moves prepared previews and hidden runtimes with their parent notebook', async () => {
 	const created = await expectOk<{ id: string }>(
 		await api.request('POST', base, body, { 'Idempotency-Key': 'preview' }),
@@ -2189,7 +2254,7 @@ it('moves prepared previews and hidden runtimes with their parent notebook', asy
 			'POST',
 			`/projects/${pid}/notebooks/${nid}/move`,
 			{ destination_project_id: destination.id },
-			{ 'Idempotency-Key': 'preview-move', 'If-Match': `"${meta.updated_at}"` },
+			{ 'If-Match': `"${meta.updated_at}"` },
 		),
 	);
 	const replay = await expectOk<{ id: string }>(
@@ -2217,55 +2282,4 @@ it('moves prepared previews and hidden runtimes with their parent notebook', asy
 	expect(
 		(await api.deps.services.notebooks.listNotebooks(destination.id)).map((entry) => entry.id),
 	).toEqual([nid]);
-});
-
-it('blocks moves until storage writes from an aborted preview refresh settle', async () => {
-	const record = await create();
-	const destination = await api.deps.services.projects.createProject(
-		{ name: 'Destination', description: '' },
-		ACTOR,
-	);
-	const started = Promise.withResolvers<void>();
-	const finish = Promise.withResolvers<void>();
-	const put = api.bucket.put.bind(api.bucket);
-	vi.spyOn(api.bucket, 'put').mockImplementation(async (key, bytes, options) => {
-		if (key.endsWith('/preview-runtime.json')) {
-			started.resolve();
-			await finish.promise;
-		}
-		return put(key, bytes, options);
-	});
-	head = NEXT;
-	const controller = new AbortController();
-	const preparation = api.deps.services.previews.prepare(
-		record,
-		api.deps.sourceControl,
-		true,
-		controller.signal,
-	);
-	await started.promise;
-	controller.abort();
-	await preparation;
-	const input = {
-		source: pid,
-		destination: destination.id,
-		notebookId: nid,
-		actor: ACTOR,
-		idempotencyKey: 'late-write',
-		authorize: async () => {},
-	};
-	try {
-		await expect(api.deps.services.moves.move(input)).rejects.toMatchObject({ code: 'CONFLICT' });
-	} finally {
-		finish.resolve();
-	}
-	await vi.waitFor(async () => {
-		const gate = await (await api.bucket.get(paths.notebookMutation(pid)))!.json<{
-			writers: unknown[];
-		}>();
-		expect(gate.writers).toHaveLength(0);
-	});
-	await expect(api.deps.services.moves.move(input)).resolves.toMatchObject({
-		project_id: destination.id,
-	});
 });

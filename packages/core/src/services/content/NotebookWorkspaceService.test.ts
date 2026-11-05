@@ -18,7 +18,6 @@ import {
 	WORKSPACE_LIMITS,
 	workspaceDirectoryMarkerPath,
 } from '../../integrations/remoteWorkspace';
-import { NotebookMutationGate, NotebookMutationGateSchema } from './NotebookMutationGate';
 import { WORKSPACE_MUTATION_HEARTBEAT_EVERY } from './NotebookWorkspaceService';
 import type { NotebookWorkspaceService } from './NotebookWorkspaceService';
 
@@ -106,44 +105,6 @@ describe('NotebookWorkspaceService', () => {
 	beforeEach(() => {
 		bucket = new MemoryBucket();
 		({ service, owner } = makeWorkspaceService(bucket));
-	});
-
-	it('keeps one move admission through upload publication', async () => {
-		const upload = await service.startUpload(
-			PROJECT_ID,
-			NOTEBOOK_ID,
-			{ path: 'data.bin', size: 3 },
-			ACTOR,
-		);
-		await service.putUploadPart(
-			PROJECT_ID,
-			NOTEBOOK_ID,
-			upload.id,
-			1,
-			new Uint8Array([1, 2, 3]),
-			ACTOR,
-		);
-		const key = paths.project(PROJECT_ID).notebook(NOTEBOOK_ID).workspaceFile('data.bin');
-		const put = bucket.put.bind(bucket);
-		let observed = false;
-		vi.spyOn(bucket, 'put').mockImplementation(async (target, bytes, options) => {
-			if (target === key) {
-				observed = true;
-				const gate = NotebookMutationGateSchema.parse(
-					await (await bucket.get(paths.notebookMutation(PROJECT_ID)))!.json(),
-				);
-				expect(gate.writers).toHaveLength(1);
-				await expect(
-					new NotebookMutationGate(bucket).claim(PROJECT_ID, NOTEBOOK_ID, 'move'),
-				).rejects.toThrow(ConflictError);
-			}
-			return put(target, bytes, options);
-		});
-		await service.completeUpload(PROJECT_ID, NOTEBOOK_ID, upload.id, ACTOR);
-		expect(observed).toBe(true);
-		await expect(
-			new NotebookMutationGate(bucket).claim(PROJECT_ID, NOTEBOOK_ID, 'move'),
-		).resolves.toBeUndefined();
 	});
 
 	it('lists files and synthetic directories without exposing directory markers', async () => {

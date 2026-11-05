@@ -1,11 +1,4 @@
-import {
-	NotebookMutationGate,
-	awaitNotebookWrites,
-	guardNotebookMutations,
-	notebookMutation,
-	projectMutation,
-} from './NotebookMutationGate';
-import { copyMovePrefix, moveJson } from './moveObjects';
+import { copyMoveObject, copyMovePrefix, moveJson } from './moveObjects';
 import { ResumableUploads } from './ResumableUploads';
 import type { WorkspaceLimits } from '../../integrations/remoteWorkspace';
 import { MetadataCache } from './metadataCache';
@@ -173,35 +166,44 @@ export class NotebookService {
 	readonly workspace: NotebookWorkspaceService;
 	readonly imports: NotebookImportService;
 
+	/** Removes the metadata records first so the source stops resolving before its files go. */
 	async removeMovedObjects(projectId: ProjectId, notebookId: NotebookId): Promise<void> {
-		await deleteByPrefix(this.bucket, `${paths.project(projectId).notebook(notebookId).base}/`);
+		const nb = paths.project(projectId).notebook(notebookId);
+		await this.bucket.delete([nb.meta, nb.previewMeta]);
+		await deleteByPrefix(this.bucket, `${nb.base}/`);
 	}
 
+	/**
+	 * Copies notebook files, versions, and source into the destination. The metadata record is
+	 * written last and still fenced by `moveId`, so the copy never resolves before publication.
+	 */
 	async copyForMove(
 		source: ProjectId,
 		destination: ProjectId,
 		nid: NotebookId,
 		updatedAt: string,
+		moveId: string,
 	): Promise<void> {
-		await copyMovePrefix(
-			this.bucket,
-			`${paths.project(source).notebook(nid).base}/`,
-			`${paths.project(destination).notebook(nid).base}/`,
-			{
-				include: (key) =>
-					!/^(jobs\/|job-index\/|proposals\/|thumbnail.json$|thumbnails\/|thumbnail-attempts\/|deep-links\/|uploads\/|workspace_mutation_claim.json$|integration_sync_token.json$|fs_snapshot.json$)/.test(
-						key,
-					),
-				transform: (key, bytes) =>
-					key === 'meta.json' || key === 'preview-runtime.json'
-						? moveJson(bytes, (meta) => ({
-								...meta,
-								project_id: destination,
-								updated_at: updatedAt,
-							}))
-						: bytes,
-			},
-		);
+		const from = paths.project(source).notebook(nid);
+		const to = paths.project(destination).notebook(nid);
+		const metaFiles = ['meta.json', 'preview-runtime.json'];
+		await copyMovePrefix(this.bucket, `${from.base}/`, `${to.base}/`, {
+			include: (key) =>
+				!metaFiles.includes(key) &&
+				!/^(jobs\/|job-index\/|proposals\/|thumbnail.json$|thumbnails\/|thumbnail-attempts\/|deep-links\/|uploads\/|workspace_mutation_claim.json$|integration_sync_token.json$|fs_snapshot.json$)/.test(
+					key,
+				),
+		});
+		for (const file of metaFiles) {
+			await copyMoveObject(this.bucket, `${from.base}/${file}`, `${to.base}/${file}`, (bytes) =>
+				moveJson(bytes, (meta) => ({
+					...meta,
+					project_id: destination,
+					updated_at: updatedAt,
+					move_id: moveId,
+				})),
+			);
+		}
 	}
 
 	constructor(
@@ -213,19 +215,6 @@ export class NotebookService {
 		repositoryHosts?: GitProviderHosts,
 		workspaceLimits?: WorkspaceLimits,
 	) {
-		guardNotebookMutations<NotebookService>(this, bucket, {
-			createNotebook: projectMutation,
-			stageImportNotebook: notebookMutation,
-			publishImportNotebook: notebookMutation,
-			duplicateNotebook: notebookMutation,
-			setSecurityLabels: notebookMutation,
-			updateNotebook: notebookMutation,
-			restoreVersion: notebookMutation,
-			commitSession: notebookMutation,
-			deleteNotebookWithMutation: notebookMutation,
-			setFsSnapshot: notebookMutation,
-			hardDeleteNotebook: notebookMutation,
-		});
 		this.metaCache = new MetadataCache(bucket, NOTEBOOK_META_CACHE_MAX_ENTRIES);
 		this.thumbnails = new ThumbnailService(bucket, this);
 		this.imports = new NotebookImportService(bucket, this);
@@ -353,7 +342,6 @@ export class NotebookService {
 		notebookId: NotebookId,
 		options: { consistency?: ReadConsistency } = {},
 	): Promise<NotebookMeta> {
-		await new NotebookMutationGate(this.bucket).assertReadable(projectId, notebookId);
 		const nb = paths.project(projectId).notebook(notebookId);
 		// Separate preview metadata keeps old replicas from stripping the preview marker.
 		const meta = await this.metaCache.read(
@@ -365,6 +353,9 @@ export class NotebookService {
 			options.consistency,
 		);
 		if (!meta) throw new NotFoundError(`Notebook ${notebookId} not found`);
+		// A notebook in transit is unreadable and unwritable in both projects until the move
+		// publishes; every writer reads or compare-and-swaps this record first.
+		if (meta.move_id) throw new NotFoundError(`Notebook ${notebookId} is being moved`);
 		return meta;
 	}
 
@@ -418,7 +409,6 @@ export class NotebookService {
 	}
 
 	async getNotebookSource(projectId: ProjectId, notebookId: NotebookId): Promise<Source> {
-		await new NotebookMutationGate(this.bucket).assertReadable(projectId, notebookId);
 		const key = paths.project(projectId).notebook(notebookId).source;
 		const obj = await this.bucket.get(key);
 		if (!obj) throw new NotFoundError(`Notebook ${notebookId} not found`);
@@ -955,7 +945,7 @@ export class NotebookService {
 
 			const ver = nb.version(versionId);
 			await assertWritable?.();
-			await awaitNotebookWrites([
+			await Promise.all([
 				this.bucket.put(nb.workspaceFile(workspaceSourcePolicy(source).entryNotebook), code),
 				this.bucket.put(nb.source, JSON.stringify(newSource)),
 				this.bucket.put(nb.deps, deps),
@@ -1103,7 +1093,7 @@ export class NotebookService {
 			const newSource = localSource(versionId, source.entry_notebook);
 
 			const ver = nb.version(versionId);
-			await awaitNotebookWrites([
+			await Promise.all([
 				// Live notebook files reflect the session's final state.
 				this.bucket.put(nb.workspaceFile(workspaceSourcePolicy(source).entryNotebook), input.code),
 				this.bucket.put(nb.deps, deps),
@@ -1156,7 +1146,7 @@ export class NotebookService {
 			const ver = nb.version(versionId);
 			const metaObj = await this.bucket.get(ver.meta);
 			if (metaObj) {
-				await awaitNotebookWrites([
+				await Promise.all([
 					...(input.html !== undefined
 						? [
 								this.bucket.put(ver.html, input.html, {
