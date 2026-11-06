@@ -10,7 +10,7 @@ import { sameComputeResources } from '../../ports/sandbox';
 import type { ComputeResources, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
 import type { SessionService } from './SessionService';
 import type { AppPoolStore } from './AppPoolStore';
-import { getOrCreateWarmPool } from './WarmPoolStore';
+import { getOrCreateWarmPool, WarmPoolMemberSchema } from './WarmPoolStore';
 import type { WarmPoolStore, WarmPoolMember } from './WarmPoolStore';
 
 export const WARM_POOL_MAX_IDLE_MS = 30 * 60_000;
@@ -97,7 +97,12 @@ export class WarmPoolService {
 				return member;
 			});
 			if (claimed) {
-				const sandbox = this.compute.connectExisting(claimed.sandbox_id, profile);
+				const sandbox = this.compute.connectExisting(
+					claimed.sandbox_id,
+					claimed.reconnect_reference === undefined
+						? profile
+						: { ...profile, reconnectReference: claimed.reconnect_reference },
+				);
 				await this.probe(sandbox);
 				if (this.isExpired(claimed))
 					throw new Error('Warm sandbox claim expired during readiness check');
@@ -192,9 +197,19 @@ export class WarmPoolService {
 							await this.retire(member);
 						} else if (this.now() - member.checked_at >= HEALTH_INTERVAL_MS) {
 							try {
-								await this.probe(this.compute.connectExisting!(member.sandbox_id));
+								const sandbox =
+									member.reconnect_reference === undefined
+										? this.compute.connectExisting!(member.sandbox_id)
+										: this.compute.connectExisting!(member.sandbox_id, {
+												reconnectReference: member.reconnect_reference,
+											});
+								await this.probe(sandbox);
+								const reference = WarmPoolMemberSchema.shape.reconnect_reference.parse(
+									sandbox.reconnectReference,
+								);
 								await this.store.updateMember(member, 'ready', (current) => {
 									current.checked_at = this.now();
+									if (reference !== undefined) current.reconnect_reference = reference;
 								});
 								continue;
 							} catch (error) {
@@ -304,10 +319,14 @@ export class WarmPoolService {
 				timeoutError: () => new Error('Warm sandbox creation timed out'),
 			});
 			booted = true;
+			const reference = WarmPoolMemberSchema.shape.reconnect_reference.parse(
+				instance.reconnectReference,
+			);
 			const published = await this.store.updateMember(member, 'creating', (current) => {
 				if (this.isExpired(current)) return false;
 				current.state = 'ready';
 				current.checked_at = this.now();
+				if (reference !== undefined) current.reconnect_reference = reference;
 				// Readiness bounds provider creation from above; later health checks cannot extend it.
 				if (this.config.providerLifetimeMs !== undefined) {
 					current.sandbox_deadline_at = current.checked_at + this.config.providerLifetimeMs;

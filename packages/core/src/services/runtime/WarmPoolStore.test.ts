@@ -7,6 +7,40 @@ import { WarmPoolStore } from './WarmPoolStore';
 afterEach(() => vi.restoreAllMocks());
 
 describe('WarmPoolStore', () => {
+	it('preserves optional reconnect references across storage reads and fenced updates', async () => {
+		const bucket = new MemoryBucket();
+		const store = new WarmPoolStore(bucket, 'provider');
+		const id = createSandboxId();
+		await store.mutate((record) => {
+			record.pools.push({
+				key: 'default',
+				failures: 0,
+				retry_at: 0,
+				members: [
+					{
+						sandbox_id: id,
+						state: 'ready',
+						token: 'owner',
+						created_at: 0,
+						ready_until: 100,
+						operation_until: 100,
+						checked_at: 0,
+						assigned: false,
+						reconnect_reference: 'opaque-locator',
+					},
+				],
+			});
+		});
+		const member = (await store.read()).pools[0].members[0];
+		expect(member.reconnect_reference).toBe('opaque-locator');
+		await store.updateMember(member, 'ready', (current) => {
+			current.checked_at = 10;
+		});
+		expect((await new WarmPoolStore(bucket, 'provider').getMember(id))?.reconnect_reference).toBe(
+			'opaque-locator',
+		);
+	});
+
 	it('discovers ownership from arbitrary providers across listing pages', async () => {
 		const bucket = new MemoryBucket();
 		const ids = [createSandboxId(), createSandboxId()];
