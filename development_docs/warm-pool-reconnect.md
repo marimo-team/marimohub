@@ -27,7 +27,11 @@ The SDK client and transport channels remain reused by the provider.
 
 `coreweave_ensure` reports `reconnect_by_reference=true`, `get_ms`, and zero
 `find_ms`, `create_ms`, and `boot_ms` on this path. Get time is not reported as
-container creation. Direct runner access can reduce command transport overhead;
+container creation. After a successful claim, optional adapter timing and counter
+buffers are drained so lookup/probe work is not counted again as provisioning.
+The claim cost remains in `warm_pool.claim_ms` and lookup details remain in
+`coreweave_ensure`. Diagnostic drain failures are logged safely and do not reject
+a healthy claim. Direct runner access can reduce command transport overhead;
 this change neither provisions that endpoint nor increases probe deadlines.
 
 ## Compatibility and lifecycle

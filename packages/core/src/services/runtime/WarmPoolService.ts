@@ -122,6 +122,7 @@ export class WarmPoolService {
 				await this.reconnectAndProbe(sandbox);
 				if (this.isExpired(claimed))
 					throw new Error('Warm sandbox claim expired during readiness check');
+				this.clearClaimDiagnostics(sandbox);
 				this.metrics.increment('warm_pool.hit', 1, { profile: profile!.name ?? 'default' });
 				return { member: claimed, sandbox };
 			}
@@ -417,6 +418,20 @@ export class WarmPoolService {
 			},
 		);
 		await this.probe(sandbox);
+	}
+
+	private clearClaimDiagnostics(sandbox: SandboxInstance): void {
+		for (const diagnostic of ['drainTimings', 'drainCounters'] as const) {
+			try {
+				sandbox[diagnostic]?.();
+			} catch (error) {
+				logOperationalError(
+					'warm_pool_diagnostics_failed',
+					{ operation: 'warm_pool.claim', diagnostic },
+					error,
+				);
+			}
+		}
 	}
 
 	private async probe(sandbox: SandboxInstance): Promise<void> {

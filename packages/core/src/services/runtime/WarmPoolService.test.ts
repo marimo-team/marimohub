@@ -116,6 +116,48 @@ describe('warm sandbox pools', () => {
 		expect(w.created).toHaveLength(1);
 	});
 
+	it('drains claim diagnostics before handing the sandbox to provisioning', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const sandbox = w.live.get((await w.members())[0].sandbox_id)!;
+		let timings = { get_ms: 125 };
+		let counters = { execs: 1 };
+		sandbox.drainTimings = vi.fn(function (this: SandboxInstance) {
+			expect(this).toBe(sandbox);
+			const result = timings;
+			timings = { get_ms: 0 };
+			return result;
+		});
+		sandbox.drainCounters = vi.fn(function (this: SandboxInstance) {
+			expect(this).toBe(sandbox);
+			const result = counters;
+			counters = { execs: 0 };
+			return result;
+		});
+		const claim = await w.service.claim(w.request());
+		expect(claim?.sandbox).toBe(sandbox);
+		expect(sandbox.drainTimings).toHaveBeenCalledTimes(1);
+		expect(sandbox.drainCounters).toHaveBeenCalledTimes(1);
+		expect(claim!.sandbox.drainTimings!()).toEqual({ get_ms: 0 });
+		expect(claim!.sandbox.drainCounters!()).toEqual({ execs: 0 });
+	});
+
+	it('keeps healthy claims when optional diagnostic drains fail', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const sandbox = w.live.get((await w.members())[0].sandbox_id)!;
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		sandbox.drainTimings = vi.fn(() => {
+			throw new Error('secret-provider-request');
+		});
+		sandbox.drainCounters = vi.fn(() => ({}));
+		expect((await w.service.claim(w.request()))?.sandbox).toBe(sandbox);
+		expect(sandbox.drainCounters).toHaveBeenCalledTimes(1);
+		expect((await w.members())[0].state).toBe('claimed');
+		expect(log.mock.calls.flat().join('')).toContain('warm_pool_diagnostics_failed');
+		expect(log.mock.calls.flat().join('')).not.toContain('secret-provider-request');
+	});
+
 	it('backfills legacy entries during successful health checks without replacing their container', async () => {
 		const w = setup();
 		await w.service.sweep();
