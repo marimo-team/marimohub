@@ -3,6 +3,7 @@ import type { PreviewAutomationPolicy } from '@marimo-hub/core/preview-policy';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { Button, DialogModal } from '@/components/ui';
+import { appBasePath } from '@/lib/basePath';
 import { copyText } from '@/lib/clipboard';
 import { previewWorkflow } from './previewWorkflow';
 
@@ -22,7 +23,7 @@ export function PreviewActionSetup({ pid, nid }: { pid: string; nid: string }) {
 	});
 	const workflow = policy.success
 		? previewWorkflow({
-				hubUrl: window.location.origin,
+				hubUrl: `${window.location.origin}${appBasePath()}`,
 				projectId: pid,
 				notebookId: nid,
 				...policy.data,
@@ -108,7 +109,7 @@ export function PreviewActionSetup({ pid, nid }: { pid: string; nid: string }) {
 						skipped.
 					</p>
 					<p className="text-sm text-muted-foreground">
-						Replace <code>@main</code> with a reviewed commit SHA to pin the Action version. The hub
+						The Action is pinned to a commit. Review a new revision before updating the pin. The hub
 						must be reachable from the runner.
 					</p>
 					<pre

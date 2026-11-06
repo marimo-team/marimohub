@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { previewWorkflow } from './previewWorkflow';
+import { PREVIEW_ACTION_REF, previewWorkflow } from './previewWorkflow';
 
 describe('preview workflow', () => {
 	it('generates PR events, scoped permissions, and queued concurrency without a checkout', () => {
@@ -18,6 +18,10 @@ describe('preview workflow', () => {
 		expect(workflow.permissions).toEqual({ actions: 'read', 'pull-requests': 'write' });
 		expect(workflow.concurrency).toMatchObject({ queue: 'max', 'cancel-in-progress': false });
 		expect(workflow.jobs.preview.steps).toHaveLength(1);
+		expect(PREVIEW_ACTION_REF).toMatch(/^[a-f0-9]{40}$/);
+		expect(workflow.jobs.preview.steps[0].uses).toBe(
+			`marimo-team/marimohub/actions/preview@${PREVIEW_ACTION_REF}`,
+		);
 		expect(workflow.jobs.preview.steps[0].with).toMatchObject({
 			mode: 'sticky',
 			eager: 'true',

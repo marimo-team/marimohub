@@ -59,6 +59,7 @@ export function usePreviewSession(pid: string, nid: string, previewId: string, u
 	const lastHeartbeat = useRef<{ runtime: Runtime | null; at: number } | null>(null);
 	const startupTimedOut = !!runtime && timedOutRuntime === runtime;
 	const preview = usePreviewQuery(pid, nid, previewId);
+	const { refetch: refetchPreview } = preview;
 	const [preparationError, setPreparationError] = useState<string | null>(null);
 	const prepare = async () => {
 		try {
@@ -68,7 +69,7 @@ export function usePreviewSession(pid: string, nid: string, previewId: string, u
 				}),
 			);
 			setPreparationError(null);
-			await preview.refetch();
+			await refetchPreview();
 		} catch {
 			setPreparationError('Unable to request preparation. Try again.');
 		}
@@ -82,13 +83,17 @@ export function usePreviewSession(pid: string, nid: string, previewId: string, u
 			apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}/prepare', {
 				params: { path: { pid, nid, prid: previewId } },
 			}),
-		).catch(() => {
-			if (active) setPreparationError('Unable to request preparation. Try again.');
-		});
+		)
+			.then(() => {
+				if (active) return refetchPreview();
+			})
+			.catch(() => {
+				if (active) setPreparationError('Unable to request preparation. Try again.');
+			});
 		return () => {
 			active = false;
 		};
-	}, [pid, nid, previewId, lazy, canPrepare]);
+	}, [pid, nid, previewId, lazy, canPrepare, refetchPreview]);
 	const capabilities = useCapabilitiesQuery();
 	const heartbeatInterval =
 		runtime?.mode === 'app'

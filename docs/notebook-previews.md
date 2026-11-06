@@ -14,13 +14,13 @@ Protect previewed branches, or pin a reviewed commit. See [Security model → Pr
 Select **Set up GitHub Action** on the notebook's **Previews** page to generate a workflow and token instructions.
 The Action supports same-repository PRs, including drafts, and skips forks.
 
-| Setting         | Behavior                                                                             | Default         |
-| --------------- | ------------------------------------------------------------------------------------ | --------------- |
-| `mode: sticky`  | One `<branch>` preview with a stable URL that follows HEAD                           | Yes             |
-| `mode: commits` | Separate `<branch>-<12-character-sha>` previews for the latest distinct pushed heads | Optional        |
-| `keep`          | Number of commit previews, from 1 to 25                                              | `5`             |
-| `eager`         | Prepare code after each update, or defer until an authorized visit                   | `true`          |
-| `idle-days`     | Expire after 1–30 days without a new head                                            | Until PR closes |
+| Setting         | Behavior                                                                                                                                                               | Default         |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| `mode: sticky`  | One `<branch>` preview with a stable URL that follows HEAD                                                                                                             | Yes             |
+| `mode: commits` | Separate `<branch>-<12-character-sha>` previews for the latest distinct pushed heads. Long branches use a truncated name and deterministic hash before the commit SHA. | Optional        |
+| `keep`          | Number of commit previews, from 1 to 25                                                                                                                                | `5`             |
+| `eager`         | Prepare code after each update, or defer until an authorized visit                                                                                                     | `true`          |
+| `idle-days`     | Expire after 1–30 days without a new head                                                                                                                              | Until PR closes |
 
 Compute starts when a user opens an app or editor. A push creates one preview for its head.
 New heads renew inactivity for all retained previews. Reruns do not.

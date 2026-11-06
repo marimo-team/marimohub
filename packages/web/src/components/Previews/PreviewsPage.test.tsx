@@ -145,3 +145,27 @@ describe('preview deletion', () => {
 		expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 	});
 });
+
+describe('preview revision display', () => {
+	it.each([undefined, 'a'.repeat(40)])(
+		'shows the served revision while a newer head is pending: %s',
+		(commit) => {
+			state.previews = [
+				{
+					id: 'preview-1',
+					name: 'Review build',
+					preparation: 'pending',
+					can: { manage: false, app: true, edit: false },
+					source_type: 'branch',
+					commit,
+					target_commit: 'b'.repeat(40),
+				} as PreviewsApi.NotebookPreview,
+			];
+			setup();
+			expect(
+				screen.getByText(commit ? /aaaaaaaaaaaa/ : /Awaiting first revision/),
+			).toBeInTheDocument();
+			expect(screen.queryByText(/bbbbbbbbbbbb/)).not.toBeInTheDocument();
+		},
+	);
+});

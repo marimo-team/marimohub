@@ -11,6 +11,7 @@ import {
 import { paths } from '../../paths';
 
 export { PreviewIdSchema } from '../../schema';
+const CommitShaSchema = z.string().regex(/^[a-fA-F0-9]{40}$/);
 export const PreviewSourceSchema = z.discriminatedUnion('type', [
 	z.strictObject({
 		type: z.literal('branch'),
@@ -23,7 +24,7 @@ export const PreviewSourceSchema = z.discriminatedUnion('type', [
 				/^(?!@(?:$|\{))(?![-/])(?!.*(?:\.\.|\/\/|@\{|[\x00-\x20\x7f~^:?*[\\]))(?!.*(?:^|\/)\.)(?!.*\.lock(?:\/|$))[^/]+(?:\/[^/]+)*(?<![/.])$/,
 			),
 	}),
-	z.strictObject({ type: z.literal('commit'), commit: z.string().regex(/^[a-fA-F0-9]{40}$/) }),
+	z.strictObject({ type: z.literal('commit'), commit: CommitShaSchema }),
 ]);
 export const PREVIEW_PREPARATIONS = [
 	'deferred',
@@ -53,8 +54,8 @@ export const PreviewRecordSchema = z.object({
 	compute_profile: z.string().optional(),
 	expires_at: utcTimestamp().nullable(),
 	eager: z.boolean().optional(),
-	requested_commit: z.string().optional(),
-	observed_commit: z.string().optional(),
+	requested_commit: CommitShaSchema.optional(),
+	observed_commit: CommitShaSchema.optional(),
 	demand: z.boolean().optional(),
 	automation: z.object({ key: z.string(), revision: z.number(), commit: z.string() }).optional(),
 	pull_request: z.number().int().positive().optional(),
@@ -70,6 +71,8 @@ export const PreviewRecordSchema = z.object({
 	lease: z
 		.object({
 			token: z.string(),
+			// Unlike requested_commit, this is unset during each metadata probe.
+			commit: CommitShaSchema.optional(),
 			expires_at: z.number().describe('Lease deadline in milliseconds since the Unix epoch.'),
 		})
 		.optional(),

@@ -162,7 +162,12 @@ describe('PR preview automation', () => {
 		await reconcile(3, THIRD, { mode: 'commits', keep: 2, eager: false });
 		const result = await reconcile(2, NEXT, { mode: 'sticky', eager: true });
 		expect(result.items).toHaveLength(2);
-		expect(result.items.every((item) => !item.eager && item.name.includes('-'))).toBe(true);
+		expect(result.items.map((item) => ({ name: item.name, eager: item.eager }))).toEqual(
+			expect.arrayContaining([
+				{ name: `feature/chart-${NEXT.slice(0, 12)}`, eager: false },
+				{ name: `feature/chart-${THIRD.slice(0, 12)}`, eager: false },
+			]),
+		);
 	});
 
 	it('preserves commit identities on force pushes and repeated retained SHAs', async () => {
@@ -556,5 +561,164 @@ describe('PR preview automation', () => {
 		await sweepPreviews(api.deps);
 		expect(await record(first.id)).toMatchObject({ state: 'active', automation: { commit: NEXT } });
 		expect((await reconcile(2, NEXT, { idle_days: 1 })).items[0].id).toBe(first.id);
+	});
+	it('honors lazy demand that arrives while maintenance probes the branch', async () => {
+		const first = (await reconcile(1, SHA, { eager: false })).items[0];
+		const started = Promise.withResolvers<void>();
+		const lookup = Promise.withResolvers<{ commit: string }>();
+		vi.mocked(reader.getBranchHead).mockImplementationOnce(() => {
+			started.resolve();
+			return lookup.promise;
+		});
+		const preparing = prepare(first.id);
+		try {
+			await started.promise;
+			expect((await record(first.id)).preparation).toBe('preparing');
+			await expectOk(await api.request('POST', `${base}/${first.id}/prepare`), 202);
+		} finally {
+			lookup.resolve({ commit: SHA });
+			await preparing;
+		}
+		expect((await record(first.id)).current?.commit).toBe(SHA);
+		expect(reader.fetchWorkspace).toHaveBeenCalledTimes(1);
+		await prepare(first.id);
+		expect(reader.fetchWorkspace).toHaveBeenCalledTimes(1);
+	});
+
+	it('reads project membership once per list and rechecks once per materialization batch', async () => {
+		await reconcile(1, SHA, { mode: 'commits' });
+		await reconcile(2, NEXT, { mode: 'commits' });
+		await reconcile(3, THIRD, { mode: 'commits' });
+		const project = vi.spyOn(api.deps.services.previews.store, 'project');
+		expect(await api.deps.services.previews.list(pid, nid)).toHaveLength(3);
+		expect(project).toHaveBeenCalledTimes(1);
+		project.mockClear();
+		expect(await api.deps.services.previews.projectRecords(pid, nid)).toHaveLength(3);
+		expect(project).toHaveBeenCalledTimes(2);
+	});
+
+	it('prepares new commit previews without repointing an already published commit', async () => {
+		const first = (await reconcile(1, SHA, { mode: 'commits' })).items[0];
+		await prepare(first.id);
+		head = NEXT;
+		const next = (await reconcile(2, NEXT, { mode: 'commits' })).items.find(
+			(item) => item.target_commit === NEXT,
+		)!;
+		expect(next.id).not.toBe(first.id);
+		await prepare(next.id);
+		await prepare(first.id);
+		expect(await record(first.id)).toMatchObject({
+			source: { type: 'commit', commit: SHA },
+			current: { commit: SHA },
+		});
+		expect(await record(next.id)).toMatchObject({
+			source: { type: 'commit', commit: NEXT },
+			current: { commit: NEXT },
+		});
+		expect(reader.fetchWorkspace).toHaveBeenCalledTimes(2);
+	});
+	it('omits membership removed by cleanup during a materialization batch', async () => {
+		const first = (await reconcile(1)).items[0];
+		const retired = await api.deps.services.previews.retire(await record(first.id));
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 16 * 60000);
+		const get = api.bucket.get.bind(api.bucket);
+		let cleaned = false;
+		vi.spyOn(api.bucket, 'get').mockImplementation(async (...args) => {
+			const object = await get(...args);
+			if (!cleaned && args[0] === paths.preview(pid, nid, retired.id)) {
+				cleaned = true;
+				await api.deps.services.previews.cleanup(retired, async () => true);
+			}
+			return object;
+		});
+		expect(await api.deps.services.previews.projectRecords(pid, nid)).toEqual([]);
+		expect(cleaned).toBe(true);
+		expect((await api.deps.services.previews.store.project(pid)).entries).toEqual([]);
+	});
+
+	it('does not carry duplicate demand from an active download into the next branch head', async () => {
+		const first = await expectOk<{ id: string }>(
+			await api.request('POST', base, {
+				name: 'Lazy branch',
+				source: { type: 'branch', branch: 'feature/chart' },
+				eager: false,
+			}),
+			202,
+		);
+		await expectOk(await api.request('POST', `${base}/${first.id}/prepare`), 202);
+		const started = Promise.withResolvers<void>();
+		const download = Promise.withResolvers<{ path: string; bytes: Uint8Array }[]>();
+		vi.mocked(reader.fetchWorkspace).mockImplementationOnce(() => {
+			started.resolve();
+			return download.promise;
+		});
+		const preparing = prepare(first.id);
+		try {
+			await started.promise;
+			await expectOk(await api.request('POST', `${base}/${first.id}/prepare`), 202);
+		} finally {
+			download.resolve([{ path: 'notebook.py', bytes: new TextEncoder().encode('import marimo') }]);
+			await preparing;
+		}
+		head = NEXT;
+		await prepare(first.id);
+		expect(await record(first.id)).toMatchObject({
+			preparation: 'deferred',
+			current: { commit: SHA },
+		});
+		expect(reader.fetchWorkspace).toHaveBeenCalledTimes(1);
+	});
+	it('persists a closure observed during the final membership check before cleanup', async () => {
+		const first = (await reconcile(1)).items[0];
+		const service = api.deps.services.previews;
+		const initial = await record(first.id);
+		const project = service.store.project.bind(service.store);
+		vi.spyOn(service.store, 'project')
+			.mockImplementationOnce(project)
+			.mockImplementationOnce(async (projectId) => {
+				await service.store.closeAutomation(
+					projectId,
+					initial.automation!.key,
+					initial.automation!.revision,
+				);
+				await service.store.planAutomations(projectId);
+				return project(projectId);
+			});
+		const [retired] = await service.projectRecords(pid, nid);
+		expect(retired.state).toBe('deleting');
+		const persisted = await api.bucket.get(paths.preview(pid, nid, retired.id));
+		expect(await persisted!.json()).toMatchObject({
+			state: 'deleting',
+			cleanup_after: retired.cleanup_after,
+		});
+		await service.cleanup(retired, async () => true);
+		vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 16 * 60000);
+		await sweepPreviews(api.deps);
+		expect((await project(pid)).entries).toEqual([]);
+	});
+	it('accepts fresh demand during the retry probe after a failed lazy download', async () => {
+		const first = (await reconcile(1, SHA, { eager: false })).items[0];
+		await expectOk(await api.request('POST', `${base}/${first.id}/prepare`), 202);
+		vi.mocked(reader.fetchWorkspace).mockRejectedValueOnce(new Error('archive interrupted'));
+		expect(await prepare(first.id)).toMatchObject({ preparation: 'failed', requested_commit: SHA });
+		const started = Promise.withResolvers<void>();
+		const lookup = Promise.withResolvers<{ commit: string }>();
+		vi.mocked(reader.getBranchHead).mockImplementationOnce(() => {
+			started.resolve();
+			return lookup.promise;
+		});
+		const preparing = prepare(first.id);
+		try {
+			await started.promise;
+			await expectOk(await api.request('POST', `${base}/${first.id}/prepare`), 202);
+		} finally {
+			lookup.resolve({ commit: NEXT });
+			await preparing;
+		}
+		expect(await record(first.id)).toMatchObject({
+			preparation: 'ready',
+			current: { commit: NEXT },
+		});
+		expect(reader.fetchWorkspace).toHaveBeenCalledTimes(2);
 	});
 });

@@ -13,6 +13,7 @@ import {
 	previewCleanupCursorKey,
 } from './PreviewStore';
 import { PreviewRecordSchema } from './notebookPreviews';
+import { PreviewReconcileSchema } from './previewAutomation';
 
 function fixture() {
 	const bucket = new MemoryBucket();
@@ -137,6 +138,63 @@ describe('PreviewStore membership and receipts', () => {
 		await store.project(pid);
 		expect(reads).toHaveBeenCalledExactlyOnceWith(previewProjectKey(pid));
 	});
+});
+
+describe('PreviewStore automation history', () => {
+	it.each(['closed', 'expired'] as const)(
+		'preserves %s replay fences at the project history limit',
+		async (state) => {
+			const { store, bucket, pid, intent } = fixture();
+			const record = {
+				...intent(),
+				automation: { key: 'original', revision: 0, commit: 'a'.repeat(40) },
+			};
+			const event = PreviewReconcileSchema.parse({
+				repository: record.repository,
+				pull_request: 1,
+				event: 'synchronize',
+				commit: record.automation.commit,
+				workflow_id: '1',
+				run_id: '1',
+				run_number: 1,
+				event_at: record.created_at,
+				policy: {},
+			});
+			const group = await store.reconcileAutomation(record, event, 'feature', 'b'.repeat(64));
+			const retired = { ...group, state, floor: group.run_number, heads: [] };
+			await bucket.put(
+				previewProjectKey(pid),
+				JSON.stringify({
+					entries: [],
+					automations: [
+						retired,
+						...Array.from({ length: 999 }, (_, index) => ({
+							...retired,
+							key: `history-${index}`,
+							pull_request: index + 2,
+						})),
+					],
+				}),
+			);
+			await expect(
+				store.reconcileAutomation(
+					{
+						...record,
+						automation: { ...record.automation, key: 'new-pr' },
+					},
+					{ ...event, pull_request: 1001 },
+					'feature',
+					'b'.repeat(64),
+				),
+			).rejects.toThrow(ResourceExhaustedError);
+			await expect(
+				store.reconcileAutomation(record, event, 'feature', 'b'.repeat(64)),
+			).resolves.toMatchObject({ state, heads: [] });
+			await store.planAutomations(pid);
+			expect((await store.project(pid)).entries).toEqual([]);
+			expect((await store.project(pid)).automations).toHaveLength(1000);
+		},
+	);
 });
 
 describe('PreviewStore artifact quotas', () => {

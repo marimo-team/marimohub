@@ -41,4 +41,20 @@ describe('preview automation names and compatibility', () => {
 		expect(previewExpired({ expires_at: '2000-01-01T00:00:00.000Z' })).toBe(true);
 		expect(previewExpired({ expires_at: null })).toBe(false);
 	});
+	it.each(['requested_commit', 'observed_commit'] as const)(
+		'validates persisted %s as a full commit SHA',
+		(field) => {
+			const schema = PreviewRecordSchema.shape[field];
+			for (const value of ['a'.repeat(40), 'ABCDEF0123'.repeat(4), undefined])
+				expect(schema.safeParse(value).success).toBe(true);
+			for (const value of [
+				'',
+				'a'.repeat(12),
+				'a'.repeat(41),
+				'g'.repeat(40),
+				`${'a'.repeat(39)}\n`,
+			])
+				expect(schema.safeParse(value).success).toBe(false);
+		},
+	);
 });

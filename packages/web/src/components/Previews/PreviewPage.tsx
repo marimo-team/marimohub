@@ -111,19 +111,24 @@ function PreviewRuntime({
 					A newer revision is available. Your session is still running its original commit.
 				</p>
 			)}
-			{record.eager === false && (record.preparation === 'deferred' || preparationError) && (
-				<div className="flex items-center gap-3 border-b p-4 text-sm">
-					<p>
-						{preparationError ??
-							'This revision prepares when opened. Existing sessions keep their original revision.'}
-					</p>
-					{(record.can.app || record.can.edit) && (
-						<Button variant="default" onPress={() => void prepare()}>
-							Prepare latest
-						</Button>
-					)}
-				</div>
-			)}
+			{record.eager === false &&
+				(record.preparation === 'deferred' ||
+					record.preparation === 'failed' ||
+					preparationError) && (
+					<div className="flex items-center gap-3 border-b p-4 text-sm">
+						<p role={preparationError ? 'alert' : undefined}>
+							{preparationError ??
+								(record.preparation === 'failed'
+									? 'Preparation failed. Try preparing this revision again.'
+									: 'This revision prepares when opened. Existing sessions keep their original revision.')}
+						</p>
+						{(record.can.app || record.can.edit) && (
+							<Button variant="default" onPress={() => void prepare()}>
+								Prepare latest
+							</Button>
+						)}
+					</div>
+				)}
 			{record.error && (
 				<p role="alert" className="px-4 py-2 text-sm">
 					{record.error} {record.commit && 'Serving the last prepared revision.'}

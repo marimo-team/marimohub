@@ -24,7 +24,26 @@ describe('GitHub Action setup', () => {
 		expect(copy).toHaveBeenCalledWith(expect.stringContaining("notebook-id: 'nb'"));
 		expect(copy).toHaveBeenCalledWith(expect.stringContaining('secrets.MARIMOHUB_TOKEN'));
 		expect(copy).toHaveBeenCalledWith(expect.stringContaining("eager: 'false'"));
+		expect(copy).toHaveBeenCalledWith(expect.stringContaining("keep: '3'"));
 		expect(copy).toHaveBeenCalledWith(expect.stringContaining("idle-days: '2'"));
+	});
+
+	it('includes the deployment prefix in the copied Hub URL', async () => {
+		const base = document.createElement('base');
+		base.href = '/nested/hub/';
+		document.head.append(base);
+		try {
+			const user = userEvent.setup();
+			const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
+			renderWithClient(<PreviewActionSetup pid="proj" nid="nb" />);
+			await user.click(screen.getByRole('button', { name: 'Set up GitHub Action' }));
+			await user.click(screen.getByRole('button', { name: 'Copy workflow' }));
+			expect(copy).toHaveBeenCalledWith(
+				expect.stringContaining(`hub-url: '${window.location.origin}/nested/hub'`),
+			);
+		} finally {
+			base.remove();
+		}
 	});
 
 	it('validates retention only in commit mode', async () => {

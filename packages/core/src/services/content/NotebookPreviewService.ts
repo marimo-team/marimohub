@@ -136,7 +136,11 @@ export class NotebookPreviewService {
 				entry.intent.state !== 'deleted',
 		)?.intent;
 		if (!intent) throw new NotFoundError('Preview not found');
-		const key = previewKey(pid, nid, id);
+		return this.readRecord(intent);
+	}
+
+	private async readRecord(intent: NotebookPreview): Promise<NotebookPreview> {
+		const key = previewKey(intent.project_id, intent.notebook_id, intent.id);
 		const object = await this.bucket.get(key);
 		if (!object) throw new NotFoundError('Preview not found');
 		const record = await readStored(PreviewRecordSchema, object, key);
@@ -158,20 +162,42 @@ export class NotebookPreviewService {
 			} catch (error) {
 				if (!(error instanceof PreconditionFailedError)) throw error;
 			}
-			// Cleanup may have forgotten the preview since the caller read its membership.
-			return this.get(intent.project_id, intent.notebook_id, intent.id);
+			return this.readRecord(intent);
 		}
-		await this.mutate(intent, (current) => applyAutomationIntent(current, intent));
-		return this.get(intent.project_id, intent.notebook_id, intent.id);
+		return this.mutate(intent, (current) => applyAutomationIntent(current, intent));
 	}
 
 	async projectRecords(pid: ProjectId, nid?: NotebookId): Promise<NotebookPreview[]> {
 		const entries = (await this.store.project(pid)).entries.filter(
 			(entry) => !nid || entry.intent.notebook_id === nid,
 		);
-		return mapWithConcurrency(entries, BUCKET_SCAN_CONCURRENCY, (entry) =>
-			this.materialize(entry.intent),
+		const records = await mapWithConcurrency(entries, BUCKET_SCAN_CONCURRENCY, async (entry) => {
+			try {
+				return await this.materialize(entry.intent);
+			} catch (error) {
+				if (error instanceof NotFoundError) return null;
+				throw error;
+			}
+		});
+		// Cleanup may remove membership while records are materialized.
+		const current = new Map(
+			(await this.store.project(pid)).entries.map(({ intent }) => [intent.id, intent]),
 		);
+		return (
+			await mapWithConcurrency(records, BUCKET_SCAN_CONCURRENCY, async (record) => {
+				if (!record) return [];
+				const intent = current.get(record.id);
+				if (!intent) return [];
+				if (intent.state === 'deleted') return [intent];
+				if (!applyAutomationIntent(record, intent)) return [record];
+				try {
+					return [await this.mutate(record, (latest) => applyAutomationIntent(latest, intent))];
+				} catch (error) {
+					if (error instanceof NotFoundError) return [];
+					throw error;
+				}
+			})
+		).flat();
 	}
 
 	async list(pid: ProjectId, nid: NotebookId): Promise<NotebookPreview[]> {
@@ -180,7 +206,7 @@ export class NotebookPreviewService {
 		);
 		const records = await mapWithConcurrency(entries, BUCKET_SCAN_CONCURRENCY, async (entry) => {
 			try {
-				return await this.get(pid, nid, entry.intent.id);
+				return await this.readRecord(entry.intent);
 			} catch (error) {
 				if (error instanceof NotFoundError) return entry.intent;
 				throw error;
@@ -353,7 +379,13 @@ export class NotebookPreviewService {
 		if (!previewAvailable(record)) throw new NotFoundError('Preview not found');
 		return this.mutate(record, (current) => {
 			if (!previewAvailable(current)) throw new NotFoundError('Preview not found');
-			if (current.eager !== false || current.demand || current.preparation === 'preparing')
+			if (
+				current.eager !== false ||
+				current.demand ||
+				(current.preparation === 'preparing' &&
+					current.lease?.commit &&
+					current.lease.expires_at > Date.now())
+			)
 				return null;
 			return {
 				...current,
@@ -527,29 +559,33 @@ export class NotebookPreviewService {
 									reader.resolveCommit!(record.repository, ref.commit, { signal }),
 								)
 							).commit;
-			if (
-				claimed.eager === false &&
-				claimed.current?.commit !== commit &&
-				!claimed.demand &&
-				claimed.requested_commit !== commit
-			) {
-				return await this.mutateLeased(record, token, (current) => ({
+			const requested = await this.mutateLeased(record, token, (current) => {
+				if (
+					current.eager === false &&
+					current.current?.commit !== commit &&
+					!current.demand &&
+					current.requested_commit !== commit
+				) {
+					return {
+						...current,
+						preparation: 'deferred',
+						observed_commit: commit,
+						requested_commit: undefined,
+						lease: undefined,
+						error: undefined,
+						checked_at: new Date().toISOString(),
+						next_attempt_at: Date.now() + PREVIEW_POLL_MS,
+					};
+				}
+				return {
 					...current,
-					preparation: 'deferred',
 					observed_commit: commit,
-					requested_commit: undefined,
-					lease: undefined,
-					error: undefined,
-					checked_at: new Date().toISOString(),
-					next_attempt_at: Date.now() + PREVIEW_POLL_MS,
-				}));
-			}
-			await this.mutateLeased(record, token, (current) => ({
-				...current,
-				observed_commit: commit,
-				requested_commit: commit,
-				demand: false,
-			}));
+					requested_commit: commit,
+					lease: { ...current.lease!, commit },
+					demand: false,
+				};
+			});
+			if (requested.state !== 'active' || requested.lease?.token !== token) return requested;
 			if (claimed.current?.commit === commit)
 				return await this.mutateLeased(record, token, (current) => ({
 					...current,

@@ -41,9 +41,11 @@ function setup({
 	lazy = false,
 	prepareStatus = 200,
 	canPrepare = true,
+	queueOnPrepare = false,
 } = {}) {
 	let heartbeatResponse = heartbeat;
 	let preparationStatus = prepareStatus;
+	let preparation = pending ? (lazy ? 'deferred' : 'pending') : 'ready';
 	let userId: string | null = 'alice';
 	let version = 'first-version';
 	let appStarts = 0;
@@ -64,7 +66,7 @@ function setup({
 				return jsonOk({
 					id: 'preview',
 					name: 'Review preview',
-					preparation: pending ? (lazy ? 'deferred' : 'pending') : 'ready',
+					preparation,
 					eager: !lazy,
 					source_type: 'branch',
 					commit: pending ? null : version === 'first-version' ? 'a'.repeat(40) : 'b'.repeat(40),
@@ -73,10 +75,12 @@ function setup({
 					can: { app: canPrepare, edit: canPrepare && !appUser, manage: false },
 				});
 			}
-			if (url === `${endpoint}/prepare`)
+			if (url === `${endpoint}/prepare`) {
+				if (preparationStatus === 200 && queueOnPrepare) preparation = 'pending';
 				return preparationStatus === 200
 					? jsonOk({})
 					: jsonError('ERROR', 'Preparation unavailable', preparationStatus);
+			}
 			if (url === `${endpoint}/sessions`) {
 				appStarts++;
 				return jsonOk({
@@ -140,6 +144,14 @@ function setup({
 	return {
 		...view,
 		calls,
+		async failPreparation() {
+			preparation = 'failed';
+			await act(async () => {
+				await view.client.invalidateQueries({
+					queryKey: previewKeys.detail('project', 'notebook', 'preview'),
+				});
+			});
+		},
 		setPrepareStatus(next: number) {
 			preparationStatus = next;
 		},
@@ -199,10 +211,32 @@ describe('PreviewPage', () => {
 		expect(screen.getByRole('button', { name: 'Open app' })).toBeDisabled();
 	});
 
+	it('refetches immediately after automatic preparation is accepted', async () => {
+		const { calls } = setup({ lazy: true, pending: true, queueOnPrepare: true });
+		await screen.findByText('Preparation queued');
+		expect(screen.queryByRole('button', { name: 'Prepare latest' })).not.toBeInTheDocument();
+		expect(calls.filter((call) => call.url === endpoint)).toHaveLength(2);
+		expect(calls.filter((call) => call.url === `${endpoint}/prepare`)).toHaveLength(1);
+	});
+
+	it('offers preparation retry after a background failure without reloading', async () => {
+		const user = userEvent.setup();
+		const { calls, failPreparation } = setup({ lazy: true, pending: true, queueOnPrepare: true });
+		await screen.findByText('Preparation queued');
+		await failPreparation();
+		await user.click(await screen.findByRole('button', { name: 'Prepare latest' }));
+		await screen.findByText('Preparation queued');
+		expect(screen.queryByRole('button', { name: 'Prepare latest' })).not.toBeInTheDocument();
+		expect(calls.filter((call) => call.url === `${endpoint}/prepare`)).toHaveLength(2);
+		expect(calls.filter((call) => call.url === `${endpoint}/sessions`)).toHaveLength(0);
+	});
+
 	it('retries a failed preparation request without starting compute', async () => {
 		const user = userEvent.setup();
 		const { calls, setPrepareStatus } = setup({ lazy: true, pending: true, prepareStatus: 503 });
-		await screen.findByText('Unable to request preparation. Try again.');
+		expect(await screen.findByRole('alert')).toHaveTextContent(
+			'Unable to request preparation. Try again.',
+		);
 		expect(calls.filter((call) => call.url === `${endpoint}/prepare`)).toHaveLength(1);
 		setPrepareStatus(200);
 		await user.click(screen.getByRole('button', { name: 'Prepare latest' }));

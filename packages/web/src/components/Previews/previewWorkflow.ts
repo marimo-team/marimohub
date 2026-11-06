@@ -6,6 +6,8 @@ export type PreviewWorkflowOptions = PreviewAutomationPolicy & {
 	notebookId: string;
 };
 
+export const PREVIEW_ACTION_REF = '9eaf45e8d4bbc2b90b7f7a5bb75d2c3df78eda32';
+
 const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
 export function previewWorkflow(options: PreviewWorkflowOptions): string {
@@ -25,7 +27,7 @@ jobs:
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: marimo-team/marimohub/actions/preview@main
+      - uses: marimo-team/marimohub/actions/preview@${PREVIEW_ACTION_REF} # preview Action
         with:
           hub-url: ${quote(options.hubUrl)}
           project-id: ${quote(options.projectId)}

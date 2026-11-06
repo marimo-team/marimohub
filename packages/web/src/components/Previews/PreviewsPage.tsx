@@ -67,8 +67,7 @@ export function PreviewsPage() {
 					</div>
 					<p className="text-sm text-muted-foreground">
 						{preview.source?.type === 'branch' ? `${preview.source.branch} · ` : ''}
-						{(preview.target_commit ?? preview.commit)?.slice(0, 12) ??
-							'Awaiting first revision'} ·{' '}
+						{preview.commit?.slice(0, 12) ?? 'Awaiting first revision'} ·{' '}
 						{preview.expires_at
 							? `Expires ${new Date(preview.expires_at).toLocaleString()}`
 							: 'Until PR closes'}

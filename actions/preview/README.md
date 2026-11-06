@@ -16,7 +16,7 @@ Previews use the notebook's access rules, integrations, and secrets.
 3. Create a Hub API token with this project's `preview.manage` grant.
 4. Add the token as the repository's `MARIMOHUB_TOKEN` Actions secret.
 5. Save the generated workflow as `.github/workflows/notebook-previews.yml`.
-6. Replace `@main` with a reviewed commit SHA that contains this Action.
+6. Review the pinned Action revision before committing the workflow.
 
 For installation without the UI, use the workflow below and replace `PROJECT`, `NOTEBOOK`, and the Hub URL.
 
@@ -39,7 +39,7 @@ jobs:
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: marimo-team/marimohub/actions/preview@main
+      - uses: marimo-team/marimohub/actions/preview@9eaf45e8d4bbc2b90b7f7a5bb75d2c3df78eda32 # preview Action
         with:
           hub-url: https://hub.example.com
           project-id: PROJECT
