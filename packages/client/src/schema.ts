@@ -1105,11 +1105,7 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		/**
-		 * Get a pending notebook move
-		 * @description Reports a move out of this project that has not completed, so it can be resumed by repeating the move or cancelled.
-		 */
-		get: operations['notebooks.move.get'];
+		get?: never;
 		put?: never;
 		/**
 		 * Move a notebook to another project
@@ -3977,15 +3973,6 @@ export interface components {
 			 * @example 9e107d9d372bb6826bd81d3542a419d6
 			 */
 			commit: string;
-		};
-		NotebookMove: {
-			/** @enum {string} */
-			phase: 'preparing' | 'copying' | 'published';
-			destination_project_id: string;
-			/** Format: date-time */
-			lease_expires_at: string | null;
-			/** Format: date-time */
-			updated_at: string;
 		};
 		DeepLink: {
 			/** @enum {number} */
@@ -12725,98 +12712,6 @@ export interface operations {
 						/** @enum {boolean} */
 						success: true;
 						data: components['schemas']['NotebookMeta'];
-					};
-				};
-			};
-			/** @description Authentication required */
-			401: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Access forbidden */
-			403: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Not found */
-			404: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Request body too large */
-			413: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Validation error */
-			422: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Internal server error */
-			500: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-			/** @description Service unavailable */
-			503: {
-				headers: {
-					/** @description Seconds to wait before retrying. */
-					'Retry-After': string;
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['ErrorResponse'];
-				};
-			};
-		};
-	};
-	'notebooks.move.get': {
-		parameters: {
-			query?: never;
-			header?: never;
-			path: {
-				pid: string;
-				nid: string;
-			};
-			cookie?: never;
-		};
-		requestBody?: never;
-		responses: {
-			/** @description Pending move */
-			200: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': {
-						/** @enum {boolean} */
-						success: true;
-						data: components['schemas']['NotebookMove'];
 					};
 				};
 			};

@@ -7,7 +7,6 @@ import { useEffect, useState } from 'react';
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { useAppQuery } from '@/api/apps';
 import { ApiRequestError } from '@/api/client';
-import { cachedProjectName, useNotebookMoveQuery } from '@/api/notebookMoves';
 import {
 	capabilitiesQueryOptions,
 	projectQueryOptions,
@@ -46,8 +45,7 @@ export function AppEntryPage({
 		if (prefetchProject) void queryClient.prefetchQuery(projectQueryOptions(pid));
 		void queryClient.prefetchQuery(capabilitiesQueryOptions());
 	}, [queryClient, pid, prefetchProject]);
-	if (isMoveInProgress(query.error))
-		return <NotebookMovingNotice key={`${pid}/${nid}`} pid={pid} nid={nid} />;
+	if (isMoveInProgress(query.error)) return <NotebookMovingNotice pid={pid} />;
 	if (query.isError)
 		return (
 			<NotebookFallback
@@ -78,33 +76,12 @@ function isMoveInProgress(error: Error | null): boolean {
 	return error instanceof ApiRequestError && error.code === 'MOVE_IN_PROGRESS';
 }
 
-function NotebookMovingNotice({ pid, nid }: { pid: string; nid: string }) {
-	const queryClient = useQueryClient();
-	// Only managers may read the move record; anyone else still gets the notice without a destination.
-	const move = useNotebookMoveQuery(pid, nid, true);
-	const destinationId = move.data?.destination_project_id;
-	const destination = destinationId
-		? (cachedProjectName(queryClient, destinationId) ?? destinationId)
-		: undefined;
+function NotebookMovingNotice({ pid }: { pid: string }) {
 	return (
 		<div className="flex flex-1 items-center justify-center p-6">
 			<Callout variant="info" className="flex max-w-md flex-col gap-2">
 				<p className="font-medium">This notebook is being moved</p>
 				<p className="text-muted-foreground">
-					{destinationId ? (
-						<>
-							It is moving to{' '}
-							<Link
-								to={`/projects/${destinationId}`}
-								className="text-primary underline-offset-4 hover:underline"
-							>
-								{destination}
-							</Link>
-							.{' '}
-						</>
-					) : (
-						'It is moving to another project. '
-					)}
 					It opens in its new project once the move finishes, or here if a project manager cancels
 					it.
 				</p>

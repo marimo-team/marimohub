@@ -76,36 +76,7 @@ const cancelMove = createRoute({
 	},
 });
 
-const getMove = createRoute({
-	method: 'get',
-	path: '/projects/{pid}/notebooks/{nid}/move',
-	operationId: 'notebooks.move.get',
-	tags: ['Notebooks'],
-	summary: 'Get a pending notebook move',
-	description:
-		'Reports a move out of this project that has not completed, so it can be resumed by repeating the move or cancelled.',
-	request: { params: NotebookIdParam },
-	responses: {
-		200: jsonContent(
-			z.object({
-				success: z.literal(true),
-				data: z
-					.object({
-						phase: z.enum(['preparing', 'copying', 'published']),
-						destination_project_id: z.string(),
-						lease_expires_at: z.string().openapi({ format: 'date-time' }).nullable(),
-						updated_at: z.string().openapi({ format: 'date-time' }),
-					})
-					.openapi('NotebookMove'),
-			}),
-			'Pending move',
-		),
-		...commonErrors(),
-		...errorResponses(403, 404),
-	},
-});
-
-/** Status and cancel both require managing the notebook in the source, labels included. */
+/** Cancel requires managing the notebook in the source, labels included. */
 function authorizeSourceManager(deps: ApiDeps, user: AuthorizationSubject) {
 	return async ({
 		sourceProject,
@@ -118,16 +89,6 @@ function authorizeSourceManager(deps: ApiDeps, user: AuthorizationSubject) {
 			await assertProjectActionOn(sourceProject, user, action, deps, notebook.security_labels);
 	};
 }
-
-app.openapi(getMove, async (c) => {
-	const deps = c.get('deps');
-	const { pid, nid } = c.req.valid('param');
-	const status = await deps.services.moves.status(
-		{ source: pid, notebookId: nid },
-		authorizeSourceManager(deps, c.get('user')),
-	);
-	return c.json({ success: true, data: status }, 200);
-});
 
 app.openapi(cancelMove, async (c) => {
 	const deps = c.get('deps');

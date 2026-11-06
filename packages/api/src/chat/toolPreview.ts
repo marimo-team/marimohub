@@ -175,9 +175,8 @@ export function toolPreview(value: unknown): string {
 }
 
 /**
- * Widest array or object the model receives. Paged tools are clamped to this
- * `limit`; items can still be cut by the character budget, which `boundedOutput`
- * reports on the page instead of returning a cursor that skips them.
+ * Widest array or object the model receives. Paged tools are clamped to this `limit`; a page
+ * cut by the character budget loses its `next_cursor`.
  */
 export const MODEL_OUTPUT_ITEMS = 100;
 const MODEL_OUTPUT_CHARACTERS = 20000;
@@ -195,11 +194,10 @@ function isSmallScalar(key: string, value: unknown): boolean {
  */
 export function boundedOutput(data: Record<string, unknown>): Record<string, unknown> {
 	let remaining = MODEL_OUTPUT_CHARACTERS;
-	let budgetCuts = 0;
+	let pageCut = false;
 	const truncated: string[] = [];
 	const visit = (value: unknown, path: string, depth: number): unknown => {
 		if (remaining <= 0 || depth > 12) {
-			if (remaining <= 0) budgetCuts += 1;
 			truncated.push(path);
 			return '[Content omitted]';
 		}
@@ -207,7 +205,6 @@ export function boundedOutput(data: Record<string, unknown>): Record<string, unk
 			const limit = Math.min(12000, remaining);
 			remaining -= Math.min(value.length, limit);
 			if (value.length > limit) {
-				if (limit < 12000) budgetCuts += 1;
 				truncated.push(path);
 				return `${value.slice(0, limit)}\n[Remaining content omitted]`;
 			}
@@ -233,49 +230,34 @@ export function boundedOutput(data: Record<string, unknown>): Record<string, unk
 		remaining -= String(value).length;
 		return value;
 	};
-	// Top-level scalars such as `next_cursor` must survive intact: a cut cursor is unusable.
+	// Upstream cursors are opaque, so a page cut by the budget keeps only its whole items and
+	// drops `next_cursor`, which would otherwise skip the cut items.
+	const page = (items: unknown[], path: string): unknown[] => {
+		const kept: unknown[] = [];
+		for (const [index, entry] of items.slice(0, MODEL_OUTPUT_ITEMS).entries()) {
+			const before = truncated.length;
+			const item = visit(entry, `${path}[${index}]`, 2);
+			if (remaining <= 0 && truncated.length > before) {
+				truncated.length = before;
+				pageCut = true;
+				break;
+			}
+			kept.push(item);
+		}
+		if (pageCut || items.length > MODEL_OUTPUT_ITEMS) truncated.push(path);
+		return kept;
+	};
+	// A cut cursor or count is unusable, so small top-level scalars bypass the budget.
 	const output: Record<string, unknown> = {};
-	let pageCut: { key: string; index: number } | undefined;
 	const entries = Object.entries(data);
 	if (entries.length > MODEL_OUTPUT_ITEMS) truncated.push('$');
 	for (const [key, child] of entries.slice(0, MODEL_OUTPUT_ITEMS)) {
 		remaining -= key.length;
-		if (isSmallScalar(key, child)) {
-			output[key] = child;
-			continue;
-		}
-		if (!Array.isArray(child)) {
-			output[key] = visit(child, `$.${key}`, 1);
-			continue;
-		}
-		if (child.length > MODEL_OUTPUT_ITEMS) truncated.push(`$.${key}`);
-		const items: unknown[] = [];
-		for (const [index, entry] of child.slice(0, MODEL_OUTPUT_ITEMS).entries()) {
-			const cutsBefore = budgetCuts;
-			items.push(visit(entry, `$.${key}[${index}]`, 2));
-			if (!pageCut && budgetCuts > cutsBefore) pageCut = { key, index };
-		}
-		if (!pageCut && child.length > MODEL_OUTPUT_ITEMS) pageCut = { key, index: MODEL_OUTPUT_ITEMS };
-		output[key] = items;
+		if (isSmallScalar(key, child)) output[key] = child;
+		else if (Array.isArray(child) && 'next_cursor' in data) output[key] = page(child, `$.${key}`);
+		else output[key] = visit(child, `$.${key}`, 1);
 	}
-	// Upstream cursors are opaque, so the hub cannot resume at the first omitted item. Returning
-	// the original cursor would silently skip the cut items, so ask for a smaller page instead.
-	// A partial first item is kept: no smaller page can return it whole.
-	const keep = pageCut ? Math.max(pageCut.index, 1) : 0;
-	if (!pageCut || !('next_cursor' in data) || keep >= (data[pageCut.key] as unknown[]).length) {
-		if (truncated.length > 0) output.truncated_paths = truncated.slice(0, 30);
-		return output;
-	}
-	const pageKey = pageCut.key;
-	const prefix = `$.${pageKey}[`;
-	const kept = truncated.filter(
-		(path) => !path.startsWith(prefix) || Number.parseInt(path.slice(prefix.length), 10) < keep,
-	);
-	output[pageKey] = (output[pageKey] as unknown[]).slice(0, keep);
-	delete output.next_cursor;
-	output.truncated_paths = [
-		`${prefix}${keep}:] omitted and next_cursor removed; repeat the call with the same cursor and limit ${keep}`,
-		...kept.filter((path) => path !== `$.${pageKey}`),
-	].slice(0, 30);
+	if (pageCut) delete output.next_cursor;
+	if (truncated.length > 0) output.truncated_paths = truncated.slice(0, 30);
 	return output;
 }

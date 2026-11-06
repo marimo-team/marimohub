@@ -37,7 +37,6 @@ describe('integration list ambient_env denormalisation', () => {
 	let org: OrgIntegrationsStore;
 	let pid: ProjectId;
 	let versionReads: string[];
-	let afterGet: (key: string) => Promise<void>;
 
 	const headKey = (id: IntegrationId) => paths.project(pid).integration(id).head;
 
@@ -60,13 +59,10 @@ describe('integration list ambient_env denormalisation', () => {
 		org = new OrgIntegrationsStore({ bucket, registry });
 		pid = createProjectId();
 		versionReads = [];
-		afterGet = async () => {};
 		const get = bucket.get.bind(bucket);
 		vi.spyOn(bucket, 'get').mockImplementation(async (key: string) => {
 			if (key.includes('/versions/')) versionReads.push(key);
-			const body = await get(key);
-			await afterGet(key);
-			return body;
+			return get(key);
 		});
 	});
 
@@ -94,7 +90,7 @@ describe('integration list ambient_env denormalisation', () => {
 		expect(await readHead(on.id)).toMatchObject({ ambient_env: true });
 	});
 
-	it('backfills a legacy head on the first list so the next list reads no version', async () => {
+	it('reads the current version once for a legacy head without writing it', async () => {
 		const created = await project.create(
 			pid,
 			{ kind: 'switch', name: 'legacy', config: { host: 'a', ambient_env: false } },
@@ -106,11 +102,7 @@ describe('integration list ambient_env denormalisation', () => {
 
 		expect((await project.list(pid))[0]?.ambient_env).toBe(false);
 		expect(versionReads).toHaveLength(1);
-		expect(await readHead(created.id)).toEqual({ ...before, ambient_env: false });
-
-		versionReads = [];
-		expect((await project.list(pid))[0]?.ambient_env).toBe(false);
-		expect(versionReads).toEqual([]);
+		expect(await readHead(created.id)).toEqual(before);
 	});
 
 	it('moves the head field with each config update', async () => {
@@ -131,26 +123,5 @@ describe('integration list ambient_env denormalisation', () => {
 		versionReads = [];
 		expect((await project.list(pid))[0]?.ambient_env).toBe(true);
 		expect(versionReads).toEqual([]);
-	});
-
-	it('leaves a head changed during the backfill untouched', async () => {
-		const created = await project.create(
-			pid,
-			{ kind: 'switch', name: 'raced', config: { host: 'a', ambient_env: false } },
-			ACTOR,
-		);
-		await stripHeadField(created.id);
-		const rival = { ...(await readHead(created.id)), enabled: false };
-		let raced = false;
-		versionReads = [];
-		afterGet = async (key) => {
-			if (key !== headKey(created.id) || versionReads.length === 0 || raced) return;
-			raced = true;
-			await bucket.put(key, JSON.stringify(rival));
-		};
-
-		expect((await project.list(pid))[0]?.ambient_env).toBe(false);
-		expect(raced).toBe(true);
-		expect(await readHead(created.id)).toEqual(rival);
 	});
 });

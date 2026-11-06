@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import type { ProjectSummary } from '@/types';
 import { apiClient, apiData } from './client';
@@ -48,21 +47,6 @@ export function useCancelNotebookMove(projectId: string) {
 			projectKeys.detail(input.destination),
 		],
 	);
-}
-
-export function useNotebookMoveQuery(projectId: string, notebookId: string, enabled: boolean) {
-	return useQuery({
-		queryKey: [...notebookKeys.detail(projectId, notebookId), 'move'],
-		queryFn: () =>
-			apiData(
-				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/move', {
-					params: { path: { pid: projectId, nid: notebookId } },
-				}),
-			),
-		enabled,
-		retry: false,
-		throwOnError: false,
-	});
 }
 
 /** Reads any project roster already in the cache, so naming a destination costs no request. */

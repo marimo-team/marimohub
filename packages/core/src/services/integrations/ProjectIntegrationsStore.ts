@@ -5,7 +5,6 @@ import {
 	BadRequestError,
 	DomainError,
 	NotFoundError,
-	PreconditionFailedError,
 	ResourceExhaustedError,
 	UnavailableError,
 	ValidationError,
@@ -488,47 +487,12 @@ class ScopedIntegrationsStore {
 				def,
 				await this.getVersion(scope, head, head.current_version),
 			);
-			const field = this.ambientEnvField(head.kind, config);
-			if (field.ambient_env !== undefined) await this.backfillAmbientEnv(scope, head, field);
-			return field.ambient_env;
+			// A legacy head lacks the field; it gains it on its next write.
+			return this.ambientEnvField(head.kind, config).ambient_env;
 		} catch (err) {
 			// A broken record is reported by the paths that use its config; the list stays readable.
 			if (err instanceof ValidationError || err instanceof NotFoundError) return undefined;
 			throw err;
-		}
-	}
-
-	/**
-	 * Best-effort upgrade of a head written before `ambient_env` was denormalised.
-	 * `updated_at` is kept: it is the caller-visible version token, and nothing the
-	 * caller can observe changed. Any concurrent head write wins the CAS and makes
-	 * this a no-op; the next list retries if that writer left the field unset.
-	 */
-	private async backfillAmbientEnv(
-		scope: IntegrationScope,
-		listed: IntegrationRecord,
-		field: { ambient_env?: boolean },
-	): Promise<void> {
-		const headPath = scope.integration(listed.id).head;
-		try {
-			const existing = await this.bucket.get(headPath);
-			if (!existing) return;
-			const raw = await readStoredJson(existing, headPath);
-			if (isTombstoned(raw)) return;
-			const current = this.parseHead(scope, listed.id, raw);
-			if (current.ambient_env !== undefined || current.current_version !== listed.current_version) {
-				return;
-			}
-			await this.bucket.put(headPath, JSON.stringify({ ...current, ...field }), {
-				onlyIfEtagMatches: existing.etag,
-			});
-		} catch (err) {
-			if (err instanceof PreconditionFailedError) return;
-			logOperationalError(
-				'integration_ambient_env_backfill_failed',
-				{ operation: 'integration.list', object: headPath },
-				err,
-			);
 		}
 	}
 

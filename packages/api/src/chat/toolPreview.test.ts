@@ -111,37 +111,27 @@ describe('toolPreview', () => {
 		expect(wide.truncated_paths).toEqual(['$.rows']);
 	});
 
-	it('keeps top-level scalars and drops a cursor that would skip budget-cut items', () => {
+	it('drops the cursor when the budget cuts a page and keeps other top-level values', () => {
 		const items = Array.from({ length: 100 }, (_, i) => ({
 			name: `item-${i}`,
 			doc: 'x'.repeat(500),
 		}));
-		const output = boundedOutput({ items, next_cursor: 'opaque-cursor', truncated: false });
-		const kept = output.items as { name: string; doc: string }[];
-		expect(kept.length).toBeGreaterThan(1);
-		expect(kept.length).toBeLessThan(100);
-		expect(kept.at(-1)?.doc).toBe('x'.repeat(500));
-		expect(output).not.toHaveProperty('next_cursor');
-		expect(output.truncated).toBe(false);
-		expect(output.truncated_paths).toEqual([
-			`$.items[${kept.length}:] omitted and next_cursor removed; repeat the call with the same cursor and limit ${kept.length}`,
-		]);
-
-		const smaller = boundedOutput({
-			items: items.slice(0, kept.length),
+		const output = boundedOutput({
+			items,
 			next_cursor: 'opaque-cursor',
+			total: 250,
+			truncated: false,
 		});
-		expect(smaller.items).toEqual(items.slice(0, kept.length));
-		expect(smaller.next_cursor).toBe('opaque-cursor');
-		expect(smaller).not.toHaveProperty('truncated_paths');
+		const kept = output.items as unknown[];
+		expect(kept.length).toBeGreaterThan(0);
+		expect(kept.length).toBeLessThan(100);
+		expect(kept).toEqual(items.slice(0, kept.length));
+		expect(output).not.toHaveProperty('next_cursor');
+		expect(output).toMatchObject({ total: 250, truncated: false, truncated_paths: ['$.items'] });
 	});
 
-	it('keeps the cursor when only a single oversized item is cut', () => {
-		const output = boundedOutput({
-			items: [{ a: 'x'.repeat(12_000), b: 'y'.repeat(12_000) }],
-			next_cursor: 'c'.repeat(400),
-		});
-		expect(output.next_cursor).toBe('c'.repeat(400));
-		expect(output.truncated_paths).toEqual(['$.items[0].b']);
+	it('never truncates a long cursor', () => {
+		const output = boundedOutput({ items: [1, 2], next_cursor: 'c'.repeat(30_000) });
+		expect(output).toEqual({ items: [1, 2], next_cursor: 'c'.repeat(30_000) });
 	});
 });

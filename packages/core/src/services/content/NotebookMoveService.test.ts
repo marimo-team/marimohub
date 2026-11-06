@@ -278,12 +278,8 @@ describe('NotebookMoveService', () => {
 		expect((await services.notebooks.listNotebooks(from.id))[0].moving).toBeUndefined();
 	});
 
-	it('stamps the source catalog entry once across a takeover and reports the pending move', async () => {
-		const { bucket, services, from, to, notebook, input } = await setup();
-		const authorize = vi.fn(async () => {});
-		const status = (source: ProjectId) =>
-			services.moves.status({ source, notebookId: notebook.id }, authorize);
-		await expect(status(from.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+	it('stamps the source catalog entry once across a takeover', async () => {
+		const { bucket, services, to, notebook, input } = await setup();
 		const stamps = vi.spyOn(services.catalog, 'updateNotebookEntry');
 		const entered = Promise.withResolvers<void>();
 		const resume = Promise.withResolvers<void>();
@@ -298,17 +294,6 @@ describe('NotebookMoveService', () => {
 		const paused = services.moves.move(input);
 		await entered.promise;
 		const record = (await moveRecord(bucket, notebook.id))!;
-		await expect(status(from.id)).resolves.toEqual({
-			phase: 'preparing',
-			destination_project_id: to.id,
-			lease_expires_at: new Date(record.lease!.expires_at).toISOString(),
-			updated_at: expect.any(String),
-		});
-		expect(authorize).toHaveBeenCalledWith({
-			sourceProject: expect.objectContaining({ id: from.id }),
-			notebook: expect.objectContaining({ id: notebook.id, move_id: record.id }),
-		});
-		await expect(status(to.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
 		await bucket.put(
 			paths.notebookMove(notebook.id),
 			JSON.stringify({ ...record, lease: { ...record.lease, expires_at: Date.now() - 1 } }),
@@ -319,7 +304,6 @@ describe('NotebookMoveService', () => {
 		expect(
 			stamps.mock.calls.filter(([operation]) => operation === 'notebook.move.fence'),
 		).toHaveLength(1);
-		await expect(status(from.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
 	});
 
 	it('waits for an admitted job operation and drops the source operation claims', async () => {

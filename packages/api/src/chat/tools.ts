@@ -68,8 +68,8 @@ const LimitSchema = z.looseObject({
 });
 
 /**
- * Clamp a paged tool's `limit` to what boundedOutput passes through. This bounds the item count
- * only; boundedOutput drops `next_cursor` when the character budget cuts the page.
+ * Clamp a paged tool's `limit` so boundedOutput never caps the item count; a page cut by the
+ * character budget comes back without `next_cursor` instead.
  */
 function pageLimitOf(schema: Record<string, unknown>): ToolDefinition['pageLimit'] {
 	const properties = z.record(z.string(), z.unknown()).safeParse(schema.properties);

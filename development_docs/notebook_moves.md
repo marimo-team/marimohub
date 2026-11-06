@@ -12,10 +12,8 @@ The caller needs a manager or admin role, `project.read`, and `notebook.manage` 
 Token scopes and the notebook's security labels apply.
 The destination project or the notebook must keep at least the source project's label restrictions.
 
-`GET …/notebooks/{nid}/move` returns a pending move's `phase`, `destination_project_id`,
-`lease_expires_at`, and `updated_at`. It returns 404 when no move out of this project is pending.
 `DELETE …/notebooks/{nid}/move` cancels a move that has not published.
-`GET` and `DELETE` need `project.read` and `notebook.manage` in the source, with the notebook's labels.
+It needs `project.read` and `notebook.manage` in the source, with the notebook's labels.
 
 ## Fence
 

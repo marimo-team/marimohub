@@ -81,7 +81,6 @@ Resource groups:
   manage versions, and rotate notebook sync tokens.
   [Move a notebook](./organizing-projects.md#move-a-notebook-to-another-project) to another project:
   - `POST /projects/{pid}/notebooks/{nid}/move` starts a move. It requires `If-Match`. Repeat it to resume.
-  - `GET …/move` returns a pending move's `phase` and `destination_project_id`.
   - `DELETE …/move` cancels a move that has not published.
 
   While a move is pending, list entries carry `moving: { destination_project_id }`.

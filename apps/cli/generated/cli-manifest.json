@@ -3915,8 +3915,7 @@
 			"paginated": false,
 			"response_kind": "json",
 			"accepts_if_match": true,
-			"accepts_idempotency_key": false,
-			"preflight_operation_id": "notebooks.move.get"
+			"accepts_idempotency_key": false
 		},
 		{
 			"id": "notebooks.move.cancel",
@@ -3944,37 +3943,6 @@
 				}
 			],
 			"destructive": true,
-			"paginated": false,
-			"response_kind": "json",
-			"accepts_if_match": false,
-			"accepts_idempotency_key": false
-		},
-		{
-			"id": "notebooks.move.get",
-			"command": ["notebooks", "move", "get"],
-			"method": "GET",
-			"path": "/api/v1/projects/{pid}/notebooks/{nid}/move",
-			"summary": "Get a pending notebook move",
-			"description": "Reports a move out of this project that has not completed, so it can be resumed by repeating the move or cancelled.",
-			"parameters": [
-				{
-					"name": "nid",
-					"cli_name": "nid",
-					"in": "path",
-					"required": true,
-					"value_type": "string",
-					"repeatable": false
-				},
-				{
-					"name": "pid",
-					"cli_name": "pid",
-					"in": "path",
-					"required": true,
-					"value_type": "string",
-					"repeatable": false
-				}
-			],
-			"destructive": false,
 			"paginated": false,
 			"response_kind": "json",
 			"accepts_if_match": false,

@@ -29,7 +29,7 @@ import type {
 import type { CatalogService } from '../catalog/CatalogService';
 import { deleteByPrefix, listAllObjects } from '../catalog/storage';
 import { withCasRetry } from '../catalog/cas';
-import { NOTEBOOK_MOVE_LEASE_MS, NotebookMoveSchema, readNotebookMove } from './notebookMoveRecord';
+import { NOTEBOOK_MOVE_LEASE_MS, readNotebookMove } from './notebookMoveRecord';
 import type { NotebookMove } from './notebookMoveRecord';
 import type { NotebookService } from './NotebookService';
 import type { SessionService } from '../runtime/SessionService';
@@ -52,12 +52,6 @@ export interface NotebookMoveContext {
 	notebook: NotebookMeta;
 	source: Source;
 	repositories: { repo: string; provider: string | null }[];
-}
-export interface NotebookMoveStatus {
-	phase: Exclude<NotebookMove['phase'], 'complete'>;
-	destination_project_id: ProjectId;
-	lease_expires_at: string | null;
-	updated_at: string;
 }
 interface MoveOwners {
 	notebooks: NotebookService;
@@ -605,30 +599,6 @@ export class NotebookMoveService {
 			await this.dropLease(key, executor);
 			throw error;
 		});
-	}
-
-	/** Reports a pending move out of `source`; `authorize` sees the same context as cancel. */
-	async status(
-		input: { source: ProjectId; notebookId: NotebookId },
-		authorize: (context: { sourceProject: Project; notebook: NotebookMeta }) => Promise<void>,
-	): Promise<NotebookMoveStatus> {
-		const key = paths.notebookMove(input.notebookId);
-		const object = await this.bucket.get(key);
-		const move = object ? await readStored(NotebookMoveSchema, object, key) : null;
-		if (!object || !move || move.phase === 'complete' || move.source !== input.source)
-			throw new NotFoundError('No pending move for this notebook');
-		const projectObject = await this.bucket.get(paths.project(input.source).meta);
-		if (!projectObject) throw new NotFoundError('Project not found');
-		await authorize({
-			sourceProject: await readStored(ProjectSchema, projectObject, projectObject.key),
-			notebook: (await this.readMeta(input.source, input.notebookId))?.meta ?? move.meta,
-		});
-		return {
-			phase: move.phase,
-			destination_project_id: move.destination,
-			lease_expires_at: move.lease ? new Date(move.lease.expires_at).toISOString() : null,
-			updated_at: object.uploaded.toISOString(),
-		};
 	}
 
 	private async dropLease(key: string, executor: string): Promise<void> {

@@ -745,8 +745,6 @@ describe('Project — pending moves', () => {
 		await renderProject();
 		expect(screen.getByRole('button', { name: 'Moving to proj-dest' })).toHaveTextContent('Moving');
 		expect(screen.queryByRole('link', { name: 'Forecast' })).not.toBeInTheDocument();
-		// Small screens drop the tooltip, so the destination is also inline.
-		expect(screen.getByText('to proj-dest')).toHaveClass('max-md:inline');
 		expect(screen.getByTestId('notebook-row')).toHaveClass('bg-muted/20');
 	});
 

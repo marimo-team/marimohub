@@ -25,24 +25,15 @@ export interface NotebookCollectionItem {
 
 function MovingBadge({ destination }: { destination: string }) {
 	return (
-		<>
-			<Tooltip content={`Moving to ${destination}`}>
-				<button
-					type="button"
-					aria-label={`Moving to ${destination}`}
-					className="flex shrink-0 cursor-help items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-300"
-				>
-					Moving
-				</button>
-			</Tooltip>
-			{/* Tooltip renders only its trigger below md, so name the destination inline there. */}
-			<span
-				aria-hidden="true"
-				className="hidden min-w-0 truncate text-xs text-muted-foreground max-md:inline"
+		<Tooltip content={`Moving to ${destination}`}>
+			<button
+				type="button"
+				aria-label={`Moving to ${destination}`}
+				className="flex shrink-0 cursor-help items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-300"
 			>
-				to {destination}
-			</span>
-		</>
+				Moving
+			</button>
+		</Tooltip>
 	);
 }
 
