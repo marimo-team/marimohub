@@ -51,3 +51,8 @@ failures distinguish `reconnect_timeout`, `reconnect_failed`, `command_timeout`,
 or arbitrary provider exception text. Enable the
 direct runner endpoint to reduce reconnect/exec transport overhead; increasing
 warm-pool size does not fix readiness failures.
+
+`readiness_reason` identifies the failing phase. For provider failures, the
+operational logger retains its existing allowlisted error type, code, and status
+from the original cause; provider messages, request bodies, and command output
+are still excluded.

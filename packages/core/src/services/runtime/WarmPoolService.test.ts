@@ -874,7 +874,38 @@ describe('warm pool failure boundaries', () => {
 			expect((await w.members())[0].state).toBe('retiring');
 			expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
 				event: 'warm_pool_claim_failed',
-				error: { name: 'WarmPoolReadinessError', reason },
+				readiness_reason: reason,
+				error:
+					reason === 'command_failed'
+						? { name: 'WarmPoolReadinessError', reason }
+						: { name: 'Error' },
+			});
+			expect(log.mock.calls.flat().join('')).not.toContain(secret);
+		},
+	);
+
+	it.each(['reconnect', 'command'] as const)(
+		'retains safe provider diagnostics for a %s failure',
+		async (phase) => {
+			const w = setup();
+			await w.service.sweep();
+			const sandbox = w.live.values().next().value!;
+			const secret = 'private-provider-token';
+			const cause = Object.assign(new Error(secret), {
+				code: 'UNAVAILABLE',
+				status: 503,
+				request: { token: secret },
+			});
+			if (phase === 'reconnect')
+				sandbox.ready = async () => {
+					throw cause;
+				};
+			else vi.spyOn(sandbox, 'exec').mockRejectedValue(cause);
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			expect(await w.service.claim(w.request())).toBeUndefined();
+			expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
+				readiness_reason: phase === 'reconnect' ? 'reconnect_failed' : 'command_transport_failed',
+				error: { name: 'Error', code: 'UNAVAILABLE', status: 503 },
 			});
 			expect(log.mock.calls.flat().join('')).not.toContain(secret);
 		},

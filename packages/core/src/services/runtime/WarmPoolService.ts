@@ -52,8 +52,9 @@ class WarmPoolReadinessError extends Error {
 			| 'command_timeout'
 			| 'command_transport_failed'
 			| 'command_failed',
+		cause?: unknown,
 	) {
-		super(`Warm sandbox readiness failed: ${reason}`);
+		super(`Warm sandbox readiness failed: ${reason}`, { cause });
 		this.name = 'WarmPoolReadinessError';
 	}
 }
@@ -387,8 +388,8 @@ export class WarmPoolService {
 			async () => {
 				try {
 					await sandbox.ready?.();
-				} catch {
-					throw new WarmPoolReadinessError('reconnect_failed');
+				} catch (error) {
+					throw new WarmPoolReadinessError('reconnect_failed', error);
 				}
 			},
 			{
@@ -402,8 +403,8 @@ export class WarmPoolService {
 	private async probe(sandbox: SandboxInstance): Promise<void> {
 		await withDeadline(
 			async () => {
-				const result = await sandbox.exec('true', { timeout: PROBE_TIMEOUT_MS }).catch(() => {
-					throw new WarmPoolReadinessError('command_transport_failed');
+				const result = await sandbox.exec('true', { timeout: PROBE_TIMEOUT_MS }).catch((error) => {
+					throw new WarmPoolReadinessError('command_transport_failed', error);
 				});
 				if (!result.success) throw new WarmPoolReadinessError('command_failed');
 			},
@@ -447,10 +448,15 @@ export class WarmPoolService {
 
 	private report(event: string, error: unknown, fields: Record<string, unknown> = {}): void {
 		this.metrics.increment(`warm_pool.${event}`);
+		const readiness = error instanceof WarmPoolReadinessError ? error : undefined;
 		logOperationalError(
 			`warm_pool_${event}`,
-			{ operation: `warm_pool.${event}`, ...fields },
-			error,
+			{
+				operation: `warm_pool.${event}`,
+				...fields,
+				...(readiness ? { readiness_reason: readiness.reason } : {}),
+			},
+			readiness?.cause !== undefined ? readiness.cause : error,
 		);
 	}
 }
