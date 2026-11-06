@@ -180,6 +180,17 @@ describe('warm sandbox pools', () => {
 		expect(w.created).toHaveLength(1);
 	});
 
+	it('ignores a request reference when the stored member has no reference', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const connect = vi.spyOn(w.compute, 'connectExisting');
+		const request = { ...w.request(), reconnectReference: 'untrusted-reference' };
+		const claim = await w.replica().claim(request);
+		expect(claim).toBeDefined();
+		expect(connect).toHaveBeenCalledExactlyOnceWith(claim!.member.sandbox_id, w.config.profiles[0]);
+		expect(claim!.member.reconnect_reference).toBeUndefined();
+	});
+
 	it('does not let a stale successful health check backfill a concurrently claimed member', async () => {
 		const w = setup();
 		await w.service.sweep();
@@ -214,13 +225,74 @@ describe('warm sandbox pools', () => {
 		expect(w.created).toHaveLength(1);
 	});
 
-	it('does not publish invalid provider references into the ownership record', async () => {
-		const w = setup({}, () => 'x'.repeat(4097));
-		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+	it.each(['', 'x'.repeat(4097)])(
+		'does not publish invalid provider references (%#)',
+		async (reference) => {
+			const w = setup({}, () => reference);
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			await w.service.sweep();
+			expect(await w.members()).toEqual([]);
+			expect(w.destroyed).toEqual(w.created);
+			expect(log.mock.calls.flat().join('')).not.toContain('x'.repeat(4097));
+		},
+	);
+
+	it('preserves a maximum-length reference when a later handle omits it', async () => {
+		const reference = 'x'.repeat(4096);
+		const w = setup({}, () => reference);
 		await w.service.sweep();
-		expect(await w.members()).toEqual([]);
-		expect(w.destroyed).toEqual(w.created);
-		expect(log.mock.calls.flat().join('')).not.toContain('x'.repeat(4097));
+		const member = (await w.members())[0];
+		expect(member.reconnect_reference).toBe(reference);
+		Object.defineProperty(w.live.get(member.sandbox_id)!, 'reconnectReference', {
+			value: undefined,
+		});
+		w.advance(30_001);
+		await w.replica().sweep();
+		expect((await w.members())[0]).toMatchObject({
+			sandbox_id: member.sandbox_id,
+			state: 'ready',
+			checked_at: w.now(),
+			reconnect_reference: reference,
+		});
+		expect(w.created).toHaveLength(1);
+		expect(w.destroyed).toEqual([]);
+	});
+
+	it('retires an invalid backfill without publishing it, even when cleanup fails', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const member = (await w.members())[0];
+		Object.defineProperty(w.live.get(member.sandbox_id)!, 'reconnectReference', { value: '' });
+		const create = w.compute.create.bind(w.compute);
+		vi.spyOn(w.compute, 'create').mockImplementation((id, options) => ({
+			...create(id, options),
+			destroy: async () => {
+				throw new Error('delete unavailable');
+			},
+		}));
+		w.advance(30_001);
+		await w.replica().sweep();
+		const current = (await w.members()).find((item) => item.sandbox_id === member.sandbox_id)!;
+		expect(current).toMatchObject({ state: 'retiring', checked_at: member.checked_at });
+		expect(current.reconnect_reference).toBeUndefined();
+		const claim = await w.service.claim(w.request());
+		expect(claim).toBeDefined();
+		expect(claim!.member.sandbox_id).not.toBe(member.sandbox_id);
+	});
+
+	it('does not read or publish a backfill reference after a failed health probe', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const member = (await w.members())[0];
+		const sandbox = w.live.get(member.sandbox_id)!;
+		const reference = vi.fn(() => 'unproven-reference');
+		Object.defineProperty(sandbox, 'reconnectReference', { get: reference });
+		vi.spyOn(sandbox, 'exec').mockRejectedValue(new Error('probe unavailable'));
+		w.advance(30_001);
+		await w.replica().sweep();
+		expect(reference).not.toHaveBeenCalled();
+		expect(w.destroyed).toContain(member.sandbox_id);
+		expect((await w.members()).some((item) => item.sandbox_id === member.sandbox_id)).toBe(false);
 	});
 
 	it('claims the resources requested when two profiles share a name', async () => {
@@ -416,18 +488,21 @@ describe('warm sandbox pools', () => {
 		expect((await w.members())[0].state).toBe('ready');
 	});
 
-	it('falls back after a missing sandbox or failed command probe', async () => {
-		const w = setup();
-		await w.service.sweep();
-		w.live.clear();
-		expect(await w.service.claim(w.request())).toBeUndefined();
-		await w.service.sweep();
-		vi.spyOn(w.live.values().next().value!, 'exec').mockResolvedValue(
-			execResult(false, '', 'failed'),
-		);
-		expect(await w.service.claim(w.request())).toBeUndefined();
-		expect((await w.members())[0].state).toBe('retiring');
-	});
+	it.each([undefined, 'saved-reference'])(
+		'falls back after a missing sandbox or failed command probe (%#)',
+		async (reference) => {
+			const w = setup({}, reference === undefined ? undefined : () => reference);
+			await w.service.sweep();
+			w.live.clear();
+			expect(await w.service.claim(w.request())).toBeUndefined();
+			await w.service.sweep();
+			vi.spyOn(w.live.values().next().value!, 'exec').mockResolvedValue(
+				execResult(false, '', 'failed'),
+			);
+			expect(await w.service.claim(w.request())).toBeUndefined();
+			expect((await w.members())[0].state).toBe('retiring');
+		},
+	);
 
 	it('falls back on unavailable pool storage', async () => {
 		const w = setup();
@@ -1227,11 +1302,16 @@ describe('warm pool failure boundaries', () => {
 	it('rejects a booted sandbox whose command probe fails', async () => {
 		const w = setup();
 		const create = w.compute.create.bind(w.compute);
+		const reference = vi.fn(() => 'unproven-reference');
 		vi.spyOn(w.compute, 'create').mockImplementation((id, options) => ({
 			...create(id, options),
+			get reconnectReference() {
+				return reference();
+			},
 			exec: async () => execResult(false, '', 'bootstrap failed'),
 		}));
 		await w.service.sweep();
+		expect(reference).not.toHaveBeenCalled();
 		expect(w.created).toHaveLength(1);
 		expect(w.destroyed).toEqual(w.created);
 		expect(await w.members()).toEqual([]);

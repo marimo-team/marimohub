@@ -1814,7 +1814,16 @@ describe('CoreWeave warm sandbox reconnect', () => {
 		}
 	});
 
-	it.each(['completed', 'terminated', 'failed'] as const)(
+	it.each([
+		'pending',
+		'creating',
+		'paused',
+		'terminating',
+		'completed',
+		'terminated',
+		'failed',
+		'unspecified',
+	] as const)(
 		'fails closed when a saved container is %s, without discovering or creating another',
 		async (status) => {
 			const world = makeWorld();
@@ -1822,10 +1831,14 @@ describe('CoreWeave warm sandbox reconnect', () => {
 			await source.ready!();
 			const reference = source.reconnectReference;
 			world.registry.get('cw-1')!.fake.status = status;
+			const get = vi.spyOn(world.client, 'fromId');
 			const sandbox = makeCompute(world).connectExisting(SANDBOX_ID, {
 				reconnectReference: reference,
 			});
 			await expect(sandbox.exec('true')).rejects.toThrow('no longer available');
+			await expect(sandbox.exec('true')).rejects.toThrow('no longer available');
+			expect(get.mock.calls).toEqual([['cw-1'], ['cw-1']]);
+			expect(sandbox.reconnectReference).toBeUndefined();
 			expect(world.registry.get('cw-1')!.fake.runCalls).toEqual([]);
 			expect(world.listCalls).toEqual([]);
 			expect(world.created).toHaveLength(1);
@@ -1868,8 +1881,55 @@ describe('CoreWeave warm sandbox reconnect', () => {
 		expect(world.listCalls).toEqual([]);
 	});
 
+	it('rejects a referenced handle without status metadata', async () => {
+		const world = makeWorld();
+		const source = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+		await source.ready!();
+		const get = world.client.fromId.bind(world.client);
+		vi.spyOn(world.client, 'fromId').mockImplementation(async (id) => ({
+			...(await get(id)),
+			status: undefined,
+		}));
+		const sandbox = makeCompute(world).connectExisting(SANDBOX_ID, {
+			reconnectReference: source.reconnectReference,
+		});
+		await expect(sandbox.exec('true')).rejects.toThrow('no longer available');
+		expect(sandbox.reconnectReference).toBeUndefined();
+		expect(world.registry.get('cw-1')!.fake.runCalls).toEqual([]);
+		expect(world.listCalls).toEqual([]);
+		expect(world.created).toHaveLength(1);
+	});
+
+	it('retries a failed Get by the same reference without discovery or creation', async () => {
+		const world = makeWorld();
+		const source = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+		await source.ready!();
+		const error = new CWSandboxUnavailableError('gateway unavailable');
+		const get = vi.spyOn(world.client, 'fromId').mockRejectedValueOnce(error);
+		const sandbox = makeCompute(world).connectExisting(SANDBOX_ID, {
+			reconnectReference: source.reconnectReference,
+		});
+		await expect(sandbox.exec('true')).rejects.toBe(error);
+		expect(sandbox.reconnectReference).toBeUndefined();
+		expect(world.registry.get('cw-1')!.fake.runCalls).toEqual([]);
+		expectExecResult(await sandbox.exec('true'), { success: true });
+		expect(get.mock.calls).toEqual([['cw-1'], ['cw-1']]);
+		expect(world.listCalls).toEqual([]);
+		expect(world.created).toHaveLength(1);
+	});
+
 	it.each([
 		'not-json',
+		'',
+		'null',
+		'[]',
+		'"reference"',
+		'42',
+		'{}',
+		JSON.stringify({ kind: 'coreweave-v1', hubId: SANDBOX_ID }),
+		JSON.stringify({ kind: 'coreweave-v1', hubId: SANDBOX_ID, sandboxId: 1 }),
+		JSON.stringify({ kind: 'coreweave-v1', hubId: SANDBOX_ID, sandboxId: 'x'.repeat(257) }),
+		JSON.stringify({ kind: 'coreweave-v1', hubId: SANDBOX_ID, sandboxId: 'cw-1' }).padEnd(4097),
 		JSON.stringify({ kind: 'coreweave-v2', hubId: SANDBOX_ID, sandboxId: 'cw-1' }),
 		JSON.stringify({ kind: 'coreweave-v1', hubId: 'different-hub-id', sandboxId: 'cw-1' }),
 		JSON.stringify({ kind: 'coreweave-v1', hubId: SANDBOX_ID, sandboxId: '' }),
@@ -1888,6 +1948,42 @@ describe('CoreWeave warm sandbox reconnect', () => {
 		expect(get).not.toHaveBeenCalled();
 		expect(world.listCalls).toEqual([]);
 		expect(world.created).toEqual([]);
+	});
+
+	it('accepts the reference and provider ID length limits', async () => {
+		const world = makeWorld();
+		const sandboxId = 'x'.repeat(256);
+		const reference = JSON.stringify({ kind: 'coreweave-v1', hubId: SANDBOX_ID, sandboxId }).padEnd(
+			4096,
+		);
+		const error = new CWSandboxNotFoundError('not found');
+		const get = vi.spyOn(world.client, 'fromId').mockRejectedValue(error);
+		const sandbox = makeCompute(world).connectExisting(SANDBOX_ID, {
+			reconnectReference: reference,
+		});
+		await expect(sandbox.ready!()).rejects.toBe(error);
+		expect(get).toHaveBeenCalledExactlyOnceWith(sandboxId);
+		expect(world.listCalls).toEqual([]);
+		expect(world.created).toEqual([]);
+	});
+
+	it('tolerates a missing referenced container on deletion but propagates other errors', async () => {
+		const world = makeWorld();
+		const source = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+		await source.ready!();
+		const sandbox = makeCompute(world).connectExisting(SANDBOX_ID, {
+			reconnectReference: source.reconnectReference,
+		});
+		const error = new CWSandboxUnavailableError('gateway unavailable');
+		const remove = vi
+			.spyOn(world.client, 'delete')
+			.mockRejectedValueOnce(error)
+			.mockRejectedValueOnce(new CWSandboxNotFoundError('not found'));
+		await expect(sandbox.destroy()).rejects.toBe(error);
+		await expect(sandbox.destroy()).resolves.toBeUndefined();
+		expect(remove.mock.calls).toEqual([['cw-1'], ['cw-1']]);
+		expect(world.listCalls).toEqual([]);
+		expect(world.created).toHaveLength(1);
 	});
 
 	it('destroys a saved container by its exact ID without discovery or recreation', async () => {
