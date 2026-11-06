@@ -4,6 +4,8 @@ import type {
 	BucketListResult,
 	BucketObject,
 	BucketObjectBody,
+	BucketGetOptions,
+	BucketGetResult,
 	BucketPutOptions,
 } from '../ports/bucket';
 import { MemoryBucket } from './MemoryBucket';
@@ -29,9 +31,11 @@ export class RecordingBucket implements Bucket {
 
 	constructor(private readonly inner: Bucket = new MemoryBucket()) {}
 
-	async get(key: string): Promise<BucketObjectBody | null> {
+	get(key: string): Promise<BucketObjectBody | null>;
+	get(key: string, options?: BucketGetOptions): Promise<BucketGetResult>;
+	async get(key: string, options?: BucketGetOptions): Promise<BucketGetResult> {
 		this.calls.get.push(key);
-		return this.inner.get(key);
+		return this.inner.get(key, options);
 	}
 
 	async head(key: string): Promise<BucketObject | null> {

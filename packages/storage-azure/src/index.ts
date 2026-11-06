@@ -17,6 +17,8 @@ import type {
 	BucketListResult,
 	BucketObject,
 	BucketObjectBody,
+	BucketGetOptions,
+	BucketGetResult,
 	BucketPutOptions,
 } from '@marimo-hub/core/ports/bucket';
 
@@ -172,9 +174,15 @@ export class AzureStorage implements Bucket {
 		abort: async () => {},
 	};
 
-	async get(key: string): Promise<BucketObjectBody | null> {
+	get(key: string): Promise<BucketObjectBody | null>;
+	get(key: string, options?: BucketGetOptions): Promise<BucketGetResult>;
+	async get(key: string, options?: BucketGetOptions): Promise<BucketGetResult> {
 		try {
-			const response = await this.client.getBlobClient(key).download();
+			const response = await this.client.getBlobClient(key).download(0, undefined, {
+				conditions: options?.ifNoneMatch
+					? { ifNoneMatch: conditionETag(options.ifNoneMatch) }
+					: undefined,
+			});
 			const bodyBytes = await streamToBytes(response.readableStreamBody);
 			let bodyText: string | undefined;
 			const decode = () => (bodyText ??= new TextDecoder().decode(bodyBytes));
@@ -191,6 +199,9 @@ export class AzureStorage implements Bucket {
 			};
 		} catch (err) {
 			if (isNotFound(err)) return null;
+			if (options?.ifNoneMatch && statusCode(err) === 304) {
+				return { key, etag: options.ifNoneMatch, notModified: true };
+			}
 			throw err;
 		}
 	}

@@ -50,6 +50,77 @@ describe('ProjectService', () => {
 		identities = env.identities;
 	});
 
+	it('reads only two candidate records among fifty projects for account and private listings', async () => {
+		const subject = { id: uid('candidate'), email: 'candidate@example.com' };
+		const ids: ProjectId[] = [];
+		for (let i = 0; i < 50; i++) {
+			const project = await projects.createProject(
+				{ name: `Project ${i}`, description: '' },
+				ACTOR,
+			);
+			ids.push(project.id);
+			if (i < 2) await projects.addMember(project.id, { user_id: subject.id }, 'viewer', ACTOR);
+		}
+		const get = vi.spyOn(bucket, 'get');
+		expect(await projects.isAppOnly(subject, { defaultRole: 'app-user' })).toBe(false);
+		expect(
+			get.mock.calls.filter(([key]) => key.endsWith('/project.json')).map(([key]) => key),
+		).toEqual(ids.slice(0, 2).map((id) => paths.project(id).meta));
+		get.mockClear();
+		expect(await projects.isAppOnly(subject)).toBe(false);
+		expect(get.mock.calls.filter(([key]) => key.endsWith('/project.json'))).toHaveLength(2);
+		get.mockClear();
+		expect((await projects.listProjects({ subject })).map((entry) => entry.id)).toEqual(
+			ids.slice(0, 2),
+		);
+		expect(get.mock.calls.filter(([key]) => key.endsWith('/project.json'))).toHaveLength(2);
+		get.mockClear();
+		expect(
+			await projects.listProjects({ subject, policy: { defaultRole: 'viewer' } }),
+		).toHaveLength(50);
+		expect(get.mock.calls.filter(([key]) => key.endsWith('/project.json'))).toHaveLength(50);
+	});
+
+	it.each(['membership', 'project-default'] as const)(
+		'keeps app-only classification when an app-user %s is absent from the projection',
+		async (kind) => {
+			const subject = { id: uid('unprojected'), email: 'unprojected@example.com' };
+			const project = await projects.createProject({ name: 'Private', description: '' }, ACTOR);
+			expect(await projects.isAppOnly(subject)).toBe(false);
+			await bucket.put(
+				paths.project(project.id).meta,
+				JSON.stringify({
+					...project,
+					...(kind === 'membership'
+						? { members: [...project.members, { user_id: subject.id, role: 'app-user' }] }
+						: { default_role: 'app-user' }),
+				}),
+			);
+			expect(await projects.isAppOnly(subject)).toBe(true);
+		},
+	);
+
+	it('always re-reads legacy membership and project-default candidates', async () => {
+		const subject = { id: uid('legacy'), email: 'legacy@example.com' };
+		const project = await projects.createProject({ name: 'Legacy', description: '' }, ACTOR);
+		await catalog.updateProjectEntry('test.legacy', ACTOR, project.id, () => ({
+			member_ids: undefined,
+			default_role: undefined,
+		}));
+		expect(await projects.listProjects({ subject })).toEqual([]);
+		await bucket.put(
+			paths.project(project.id).meta,
+			JSON.stringify({ ...project, default_role: 'viewer' }),
+		);
+		expect(await projects.listProjects({ subject })).toHaveLength(1);
+		await bucket.put(
+			paths.project(project.id).meta,
+			JSON.stringify({ ...project, members: [{ user_id: subject.id, role: 'app-user' }] }),
+		);
+		expect(await projects.isAppOnly(subject)).toBe(true);
+		expect(await projects.listProjects({ subject })).toEqual([]);
+	});
+
 	it('uses committed default access even when catalog projection fails', async () => {
 		const project = await projects.createProject({ name: 'Private', description: '' }, ACTOR);
 		const subject = { id: uid('user_out'), email: 'out@example.com' };
@@ -304,7 +375,7 @@ describe('ProjectService', () => {
 			expect(metaReads(get, project.id)).toHaveLength(1);
 		});
 
-		it('caches the fetched ETag when a write races between HEAD and GET', async () => {
+		it('caches the fetched ETag when a write races with a conditional GET', async () => {
 			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
 			await projects.getProject(project.id, { consistency: 'validated' });
 			await new ProjectService(bucket, catalog).updateProject(
@@ -312,20 +383,19 @@ describe('ProjectService', () => {
 				{ name: 'Intermediate' },
 				ACTOR,
 			);
-			const head = bucket.head.bind(bucket);
-			vi.spyOn(bucket, 'head').mockImplementationOnce(async (key) => {
-				const before = await head(key);
+			const originalGet = bucket.get.bind(bucket);
+			vi.spyOn(bucket, 'get').mockImplementationOnce(async (key, options) => {
 				await new ProjectService(bucket, catalog).updateProject(project.id, { name: 'New' }, ACTOR);
-				return before;
+				return originalGet(key, options);
 			});
 			expect((await projects.getProject(project.id, { consistency: 'validated' })).name).toBe(
 				'New',
 			);
-			const get = vi.spyOn(bucket, 'get');
+			const get = vi.spyOn(bucket, 'get').mockClear();
 			expect((await projects.getProject(project.id, { consistency: 'validated' })).name).toBe(
 				'New',
 			);
-			expect(metaReads(get, project.id)).toHaveLength(0);
+			expect(metaReads(get, project.id)).toHaveLength(1);
 		});
 
 		it('returns the project by id', async () => {
@@ -490,10 +560,10 @@ describe('ProjectService', () => {
 
 			it.each([
 				{ role: 'app-user', defaultRole: 'manager', visible: false, appOnly: true },
-				{ role: 'viewer', defaultRole: 'app-user', visible: true, appOnly: false },
-				{ role: 'editor', defaultRole: null, visible: true, appOnly: false },
+				{ role: 'viewer', defaultRole: 'app-user', visible: true, appOnly: true },
+				{ role: 'editor', defaultRole: null, visible: false, appOnly: false },
 			] as const)(
-				'uses the committed $role membership when default is $defaultRole',
+				'narrows candidates without granting access when $role membership projection fails (default $defaultRole)',
 				async ({ role, defaultRole, visible, appOnly }) => {
 					const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
 					vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(
@@ -513,7 +583,7 @@ describe('ProjectService', () => {
 					expect(await projects.isAppOnly(STRANGER, policy)).toBe(appOnly);
 					expect(
 						await projects.listProjects({ subject: STRANGER, policy, action: 'app.read' }),
-					).toHaveLength(1);
+					).toHaveLength(defaultRole === null ? 0 : 1);
 				},
 			);
 		});

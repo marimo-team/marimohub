@@ -101,9 +101,12 @@ class FakeR2Bucket {
 
 	private store = new Map<string, FakeStored>();
 
-	async get(key: string): Promise<R2ObjectBody | null> {
+	async get(key: string, options?: R2GetOptions): Promise<R2ObjectBody | R2Object | null> {
 		const stored = this.store.get(key);
-		return stored ? makeR2ObjectBody(key, stored) : null;
+		if (!stored) return null;
+		if ((options?.onlyIf as R2Conditional | undefined)?.etagDoesNotMatch === stored.etag)
+			return makeR2Object(key, stored);
+		return makeR2ObjectBody(key, stored);
 	}
 
 	async head(key: string): Promise<R2Object | null> {
@@ -412,4 +415,10 @@ describe('R2 multipart errors', () => {
 		});
 		await expect(bucket.multipart.abort('data', uploadId)).rejects.toBe(failure);
 	});
+});
+
+it('propagates conditional GET failures instead of returning cached metadata', async () => {
+	const failure = new Error('R2 unavailable');
+	const r2 = { get: vi.fn().mockRejectedValue(failure) } as unknown as R2Bucket;
+	await expect(new R2BucketAdapter(r2).get('key', { ifNoneMatch: 'etag' })).rejects.toBe(failure);
 });

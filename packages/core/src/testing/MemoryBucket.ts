@@ -6,6 +6,8 @@ import type {
 	BucketListResult,
 	BucketObject,
 	BucketObjectBody,
+	BucketGetOptions,
+	BucketGetResult,
 	BucketPutOptions,
 } from '../ports/bucket';
 
@@ -25,10 +27,15 @@ export class MemoryBucket implements Bucket {
 		return `etag-${this.etagCounter}`;
 	}
 
-	async get(key: string): Promise<BucketObjectBody | null> {
+	get(key: string): Promise<BucketObjectBody | null>;
+	get(key: string, options?: BucketGetOptions): Promise<BucketGetResult>;
+	async get(key: string, options?: BucketGetOptions): Promise<BucketGetResult> {
 		const stored = this.store.get(key);
 		if (!stored) return null;
 
+		if (options?.ifNoneMatch && options.ifNoneMatch === stored.etag) {
+			return { key, etag: stored.etag, notModified: true };
+		}
 		const { body, etag, uploaded } = stored;
 		return {
 			key,

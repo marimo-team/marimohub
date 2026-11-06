@@ -222,6 +222,8 @@ function makeFakeGcsFetch(): typeof fetch {
 
 		if (method === 'GET') {
 			if (!obj) return new Response('not found', { status: 404 });
+			if (q.get('ifGenerationNotMatch') === String(obj.generation))
+				return new Response(null, { status: 304 });
 			if (q.get('alt') === 'media') {
 				return new Response(new Uint8Array(obj.content), {
 					status: 200,
@@ -422,7 +424,7 @@ describe('GcsStorage auth and request mapping', () => {
 		expect(bodyText).toContain('print(1)');
 	});
 
-	it('falls back to metadata lookup when media get omits the generation header', async () => {
+	it('disables body caching when a media response omits its generation', async () => {
 		const urls: string[] = [];
 		const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
 			const url = new URL(String(input));
@@ -446,12 +448,10 @@ describe('GcsStorage auth and request mapping', () => {
 
 		const body = await bucket.get('dir/notebook.py');
 
-		expect(body?.etag).toBe('456');
+		expect(body?.etag).toBe('');
 		expect(await body?.text()).toBe('payload');
 		expect(urls[0]).toContain('alt=media');
-		expect(new URL(urls[1]).searchParams.get('fields')).toBe(
-			'generation,size,updated,contentType,metadata',
-		);
+		expect(urls).toHaveLength(1);
 	});
 
 	it('maps list pagination and delimiter parameters', async () => {
@@ -944,4 +944,18 @@ describe('GCS streaming failure recovery', () => {
 		expect(new Headers(requests[1].init!.headers).get('content-range')).toBe('bytes */0');
 		expect((requests[1].init!.body as Uint8Array).byteLength).toBe(0);
 	});
+});
+
+it.each([403, 412, 500])('propagates HTTP %s during a conditional GET', async (status) => {
+	const fetchImpl = vi.fn(async () => new Response('read failed', { status }));
+	const bucket = new GcsStorage({ bucket: 'test', accessToken: 'token', fetchImpl });
+	await expect(bucket.get('key', { ifNoneMatch: '123' })).rejects.toThrow(
+		`GCS get failed for "key": ${status}`,
+	);
+});
+
+it('does not accept an unsolicited 304 for an unconditional GET', async () => {
+	const fetchImpl = vi.fn(async () => new Response(null, { status: 304 }));
+	const bucket = new GcsStorage({ bucket: 'test', accessToken: 'token', fetchImpl });
+	await expect(bucket.get('key')).rejects.toThrow('GCS get failed for "key": 304');
 });

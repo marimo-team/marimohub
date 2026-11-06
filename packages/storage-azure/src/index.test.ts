@@ -100,9 +100,14 @@ function makeFakeContainer(
 	const client = {
 		getBlobClient(key: string) {
 			return {
-				async download() {
+				async download(
+					_offset: number,
+					_count: number | undefined,
+					options?: { conditions?: { ifNoneMatch?: string } },
+				) {
 					const item = store.get(key);
 					if (!item) throw azureError(404, 'BlobNotFound');
+					if (options?.conditions?.ifNoneMatch === item.etag) throw azureError(304, 'NotModified');
 					return {
 						etag: item.etag,
 						contentLength: item.body.length,
@@ -303,6 +308,32 @@ describe('AzureStorage request mapping', () => {
 });
 
 describe('AzureStorage error handling', () => {
+	it.each([403, 412, 500])('propagates HTTP %s during a conditional GET', async (status) => {
+		const failure = azureError(status, 'read failed');
+		const client = {
+			getBlobClient: () => ({
+				download: async () => {
+					throw failure;
+				},
+			}),
+		} as unknown as ContainerClient;
+		await expect(
+			new AzureStorage({ containerClient: client }).get('key', { ifNoneMatch: 'etag' }),
+		).rejects.toBe(failure);
+	});
+
+	it('does not accept an unsolicited 304 for an unconditional GET', async () => {
+		const failure = azureError(304, 'unexpected 304');
+		const client = {
+			getBlobClient: () => ({
+				download: async () => {
+					throw failure;
+				},
+			}),
+		} as unknown as ContainerClient;
+		await expect(new AzureStorage({ containerClient: client }).get('key')).rejects.toBe(failure);
+	});
+
 	it('returns null for missing get and head calls', async () => {
 		const fake = makeFakeContainer();
 		const bucket = new AzureStorage({ containerClient: fake.client });

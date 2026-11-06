@@ -64,6 +64,7 @@ import type {
 	Version,
 } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
+import { projectsById } from '../catalog/snapshotCache';
 import { mutateObject, mutateObjectWithOutcome } from '../catalog/cas';
 import {
 	buildNotebookEntry,
@@ -287,7 +288,7 @@ export class NotebookService {
 		shared?: Snapshot,
 	): Promise<PublicNotebookEntry[]> {
 		const snapshot = shared ?? (await this.catalog.getCurrentSnapshot());
-		const project = snapshot.projects.find((p) => p.id === projectId);
+		const project = projectsById(snapshot).get(projectId);
 		if (!project) {
 			throw new NotFoundError(`Project ${projectId} not found`);
 		}

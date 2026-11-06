@@ -260,16 +260,26 @@ export class ProjectService {
 			throw new ForbiddenError('Token grant does not permit project listing');
 		}
 		const loaded = new Map<ProjectId, Promise<Project>>();
-		const loadProject = (id: ProjectId) => cachedRead(loaded, id, () => this.getProject(id));
-		const snapshot = await this.catalog.getCurrentSnapshot();
-		const matching = snapshot.projects.filter(
-			createListFilter<SnapshotProjectEntry>(
-				filter,
-				(project) => [project.name, project.description],
-				{ allowUnknownTags: true },
-			),
-		);
-		// Resolve legacy tags after authorization, sharing the head memo with roles and labels.
+		const loadProject = (id: ProjectId) =>
+			cachedRead(loaded, id, () => this.getProject(id, { consistency: 'validated' }));
+		const snapshotEntry = await this.catalog.getCurrentSnapshotEntry();
+		const snapshot = snapshotEntry.snapshot;
+		const candidates =
+			filter &&
+			!isSuperAdmin(filter.subject, filter.policy?.superAdmins) &&
+			subjectDefaultRole(filter.subject, filter.policy) === null
+				? snapshotEntry.candidatesFor(filter.subject, true)
+				: undefined;
+		const matching = snapshot.projects
+			.filter((entry) => !candidates || candidates.has(entry.id))
+			.filter(
+				createListFilter<SnapshotProjectEntry>(
+					filter,
+					(project) => [project.name, project.description],
+					{ allowUnknownTags: true },
+				),
+			);
+		// Resolve legacy tags after authorization, reusing metadata reads for roles and labels.
 		const publicEntries = async (entries: SnapshotProjectEntry[]) => {
 			const resolved = await mapWithConcurrency(entries, BUCKET_SCAN_CONCURRENCY, async (entry) => {
 				let tags = entry.tags;
@@ -310,7 +320,7 @@ export class ProjectService {
 		{
 			subject,
 			policy,
-			loadProject = (id: ProjectId) => this.getProject(id),
+			loadProject = (id: ProjectId) => this.getProject(id, { consistency: 'validated' }),
 		}: {
 			subject: AuthorizationSubject;
 			policy?: AuthorizationPolicy;
@@ -332,20 +342,35 @@ export class ProjectService {
 		if (isSuperAdmin(subject, policy?.superAdmins)) return false;
 		const fallback = subjectDefaultRole(subject, policy);
 		if (!(await this.bucket.head(paths.catalog))) return fallback === 'app-user';
-		const snapshot = await this.catalog.getCurrentSnapshot();
-		const active = snapshot.projects.filter((entry) => entry.status !== 'deleted');
+		const snapshotEntry = await this.catalog.getCurrentSnapshotEntry();
+		const active = snapshotEntry.snapshot.projects.filter((entry) => entry.status !== 'deleted');
 		if (active.some((entry) => entry.owner === subject.id)) return false;
-		let hasAppRole = fallback === 'app-user';
-		for (let offset = 0; offset < active.length; offset += BUCKET_SCAN_CONCURRENCY) {
-			const roles = await mapWithConcurrency(
-				active.slice(offset, offset + BUCKET_SCAN_CONCURRENCY),
-				BUCKET_SCAN_CONCURRENCY,
-				(entry) => this.entryRole(entry, { subject, policy }),
-			);
-			if (roles.some((role) => roleAtLeast(role, 'viewer'))) return false;
-			hasAppRole ||= roles.includes('app-user');
+		const candidates = snapshotEntry.candidatesFor(subject, true);
+		// Granting defaults still need every record: explicit roles may restrict them.
+		const relevant = roleAtLeast(fallback, 'viewer')
+			? active
+			: active.filter((entry) => candidates.has(entry.id));
+		const scan = async (entries: SnapshotProjectEntry[]): Promise<'viewer' | 'app-user' | null> => {
+			let foundAppRole = false;
+			for (let offset = 0; offset < entries.length; offset += BUCKET_SCAN_CONCURRENCY) {
+				const roles = await mapWithConcurrency(
+					entries.slice(offset, offset + BUCKET_SCAN_CONCURRENCY),
+					BUCKET_SCAN_CONCURRENCY,
+					(entry) => this.entryRole(entry, { subject, policy }),
+				);
+				if (roles.some((role) => roleAtLeast(role, 'viewer'))) return 'viewer';
+				foundAppRole ||= roles.includes('app-user');
+			}
+			return foundAppRole ? 'app-user' : null;
+		};
+		const role = await scan(relevant);
+		if (role === 'viewer') return false;
+		if (role === 'app-user' || fallback === 'app-user') return true;
+		// With no default grant, an unprojected app membership must still block project creation.
+		if (fallback === null) {
+			return (await scan(active.filter((entry) => !candidates.has(entry.id)))) === 'app-user';
 		}
-		return hasAppRole;
+		return false;
 	}
 
 	async getProject(
@@ -398,22 +423,12 @@ export class ProjectService {
 						projects: [
 							...snap.projects,
 							{
+								...projectCatalogPatch(project, project),
 								id,
-								name: project.name,
-								description: project.description,
 								owner: actor,
-								status: 'active' as const,
 								created_at: now,
-								updated_at: now,
 								notebook_count: 0,
 								notebooks: [],
-								tags: project.tags,
-								member_ids: project.members.flatMap((m) =>
-									m.user_id !== undefined ? [m.user_id] : [],
-								),
-								member_emails: [],
-								member_groups: [],
-								security_labels: null,
 							},
 						],
 					}),

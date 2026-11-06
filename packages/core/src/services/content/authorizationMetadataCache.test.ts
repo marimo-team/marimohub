@@ -43,8 +43,9 @@ describe.each(['project', 'notebook'] as const)('%s metadata cache', (kind) => {
 		await read();
 		expect(head).not.toHaveBeenCalled();
 		await read();
-		expect(get.mock.calls.filter(([requestedKey]) => requestedKey === key)).toHaveLength(1);
-		expect(head).toHaveBeenCalledWith(key);
+		expect(get.mock.calls.filter(([requestedKey]) => requestedKey === key)).toHaveLength(2);
+		expect(head).not.toHaveBeenCalled();
+		expect(get.mock.calls.at(-1)?.[1]?.ifNoneMatch).toBeTruthy();
 	});
 
 	it('revalidates a deletion from another replica on the next read', async () => {
@@ -53,16 +54,13 @@ describe.each(['project', 'notebook'] as const)('%s metadata cache', (kind) => {
 		expect((await read()).status).toBe('deleted');
 	});
 
-	it.each(['head', 'get'] as const)(
-		'fails closed when %s fails during revalidation',
-		async (method) => {
-			const { bucket, read, deleteFromReplica } = await setup(kind);
-			await deleteFromReplica();
-			vi.spyOn(bucket, method).mockRejectedValueOnce(new Error('storage unavailable'));
-			await expect(read()).rejects.toThrow('storage unavailable');
-			expect((await read()).status).toBe('deleted');
-		},
-	);
+	it.each(['get'] as const)('fails closed when %s fails during revalidation', async (method) => {
+		const { bucket, read, deleteFromReplica } = await setup(kind);
+		await deleteFromReplica();
+		vi.spyOn(bucket, method).mockRejectedValueOnce(new Error('storage unavailable'));
+		await expect(read()).rejects.toThrow('storage unavailable');
+		expect((await read()).status).toBe('deleted');
+	});
 
 	it('serves concurrent validated misses and caches the current record', async () => {
 		const { bucket, key, read, original } = await setup(kind);
@@ -72,7 +70,7 @@ describe.each(['project', 'notebook'] as const)('%s metadata cache', (kind) => {
 		expect(await Promise.all([read(), read()])).toEqual([updated, updated]);
 		get.mockClear();
 		expect(await read()).toEqual(updated);
-		expect(get.mock.calls.filter(([requestedKey]) => requestedKey === key)).toHaveLength(0);
+		expect(get.mock.calls.filter(([requestedKey]) => requestedKey === key)).toHaveLength(1);
 	});
 
 	it.each([false, true])(
@@ -99,15 +97,14 @@ describe.each(['project', 'notebook'] as const)('%s metadata cache', (kind) => {
 		expect(await read()).toEqual(repaired);
 	});
 
-	it('rejects deletion between HEAD and GET and sees a recreated record', async () => {
+	it('rejects deletion before a conditional GET and sees a recreated record', async () => {
 		const { bucket, key, read, original } = await setup(kind);
 		const replacement = { ...original, status: 'deleted' as const };
 		await bucket.put(key, JSON.stringify(replacement));
-		const head = bucket.head.bind(bucket);
-		vi.spyOn(bucket, 'head').mockImplementationOnce(async (requestedKey) => {
-			const result = await head(requestedKey);
+		const get = bucket.get.bind(bucket);
+		vi.spyOn(bucket, 'get').mockImplementationOnce(async (requestedKey, options) => {
 			await bucket.delete(key);
-			return result;
+			return get(requestedKey, options);
 		});
 		await expect(read()).rejects.toThrow(NotFoundError);
 		await bucket.put(key, JSON.stringify(replacement));

@@ -452,9 +452,9 @@ describe('project-scoped app listing', () => {
 		await expectOk(await api.request('GET', '/me'));
 		const get = api.bucket.get.bind(api.bucket);
 		const keys: string[] = [];
-		const spy = vi.spyOn(api.bucket, 'get').mockImplementation(async (key) => {
+		const spy = vi.spyOn(api.bucket, 'get').mockImplementation(async (key, options) => {
 			keys.push(key);
-			return get(key);
+			return get(key, options);
 		});
 		try {
 			return { response: await run(), keys };
@@ -463,7 +463,7 @@ describe('project-scoped app listing', () => {
 		}
 	}
 
-	it('reads only the selected project head and one snapshot', async () => {
+	it('reads only the selected project head and validates the cached snapshot', async () => {
 		const others = await Promise.all(
 			['One', 'Two', 'Three'].map(async (name) => {
 				const project = await services.projects.createProject({ name, description: '' }, ACTOR);
@@ -480,10 +480,11 @@ describe('project-scoped app listing', () => {
 		expect(page.project).toEqual({ id: pid, name: 'Analytics', your_role: 'app-user' });
 		for (const other of others) expect(keys).not.toContain(paths.project(other.id).meta);
 		expect(keys.filter((key) => key === paths.project(pid).meta)).toHaveLength(1);
-		expect(keys.filter((key) => key.startsWith('_system/snapshots/'))).toHaveLength(1);
+		expect(keys.filter((key) => key === paths.catalog)).toHaveLength(1);
+		expect(keys.filter((key) => key.startsWith('_system/snapshots/'))).toHaveLength(0);
 	});
 
-	it('shares one snapshot read across every listed project', async () => {
+	it('shares one validated snapshot across every listed project', async () => {
 		await services.projects.addMember(
 			(await services.projects.createProject({ name: 'Second', description: '' }, ACTOR)).id,
 			{ user_id: STAKEHOLDER },
@@ -492,8 +493,9 @@ describe('project-scoped app listing', () => {
 		);
 		const { response, keys } = await recordGets(() => api.request('GET', '/apps'));
 		await expectPage(response);
-		// listProjects reads its own snapshot; the per-project notebook listings share one more.
-		expect(keys.filter((key) => key.startsWith('_system/snapshots/'))).toHaveLength(2);
+		// listProjects validates once; the notebook lists share the second validation.
+		expect(keys.filter((key) => key === paths.catalog)).toHaveLength(2);
+		expect(keys.filter((key) => key.startsWith('_system/snapshots/'))).toHaveLength(0);
 	});
 
 	it('denies a non-member the selected project without reading other heads', async () => {

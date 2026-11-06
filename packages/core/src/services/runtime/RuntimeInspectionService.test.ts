@@ -423,14 +423,14 @@ describe('runtime inspection', () => {
 				.sort((a, b) => (a ?? '').localeCompare(b ?? '')),
 		).toEqual([paths.appPoolsPrefix, paths.sessionsPrefix].sort((a, b) => a.localeCompare(b)));
 		const keys = get.mock.calls.map(([key]) => key);
-		expect(keys).toHaveLength(6); // catalog pointer + snapshot + pool + source + two sessions
+		expect(keys).toHaveLength(5); // catalog pointer + pool + source + two sessions
 		expect(new Set(keys).size).toBe(keys.length);
 		now += 29_999;
 		await inspection.inspect();
-		expect(get).toHaveBeenCalledTimes(6);
+		expect(get).toHaveBeenCalledTimes(5);
 		now++;
 		const refreshed = await inspection.inspect();
-		expect(get).toHaveBeenCalledTimes(12);
+		expect(get).toHaveBeenCalledTimes(10);
 		expect(refreshed.observed_at).not.toBe(snapshots[0].observed_at);
 	});
 

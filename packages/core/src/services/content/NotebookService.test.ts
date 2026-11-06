@@ -59,6 +59,12 @@ describe('NotebookService', () => {
 		projectId = project.id;
 	});
 
+	it('rejects notebook listing for an unknown project', async () => {
+		await expect(notebooks.listNotebooks('proj-missing' as ProjectId)).rejects.toThrow(
+			NotFoundError,
+		);
+	});
+
 	it.each([
 		{ prefix: '\ufeff', kind: 'current' },
 		{ prefix: '\ufeff', kind: 'version' },

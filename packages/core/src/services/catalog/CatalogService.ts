@@ -12,9 +12,7 @@ import { sleep } from '../../duration';
 import { createSnapshotId } from '../../ids';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import { paths } from '../../paths';
-import { mapWithConcurrency } from '../../concurrency';
-import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
-import { memberRefMatchesSubject, normalizeEmail } from '../../identityMatch';
+import { memberRefMatchesSubject } from '../../identityMatch';
 import {
 	CURRENT_SNAPSHOT_VERSION,
 	CatalogSchema,
@@ -23,6 +21,8 @@ import {
 	SnapshotSchema,
 } from '../../schema';
 import type { Catalog, Snapshot, SnapshotNotebookEntry, SnapshotProjectEntry } from '../../schema';
+import { MetadataCache } from '../content/metadataCache';
+import { projectsById, snapshotCache } from './snapshotCache';
 import { withCasRetry } from './cas';
 import { planCatalogRecovery } from './recovery';
 import type { CatalogRecoverySource } from './recovery';
@@ -60,14 +60,9 @@ export function upgradeSnapshot(raw: Snapshot): Snapshot {
 	return raw;
 }
 
-type ProjectInvolvement = {
-	userIds: Map<string, ProjectId[]>;
-	emails: Map<string, ProjectId[]>;
-	groups: Map<string, ProjectId[]>;
-};
-
 export class CatalogService {
-	private involvementIndex?: { snapshotKey: string; value: Promise<ProjectInvolvement> };
+	private readonly cache: ReturnType<typeof snapshotCache>;
+	private readonly pointer: MetadataCache<Catalog>;
 
 	constructor(
 		private bucket: Bucket,
@@ -76,7 +71,11 @@ export class CatalogService {
 		/** Retry timing override; metrics hooks remain owned by this service. */
 		private casRetry?: Pick<CasRetryOptions, 'retries' | 'backoffMs'>,
 		private initializeRecheckMs = INITIALIZE_RECHECK_MS,
-	) {}
+		cacheBucket: Bucket = bucket,
+	) {
+		this.cache = snapshotCache(cacheBucket);
+		this.pointer = new MetadataCache(bucket, 1, this.cache.pointer);
+	}
 
 	async initialize(actor: UserId): Promise<Snapshot> {
 		const existing = await this.bucket.get(paths.catalog);
@@ -171,8 +170,22 @@ export class CatalogService {
 		return results.every(Boolean);
 	}
 
+	/** Shared immutable snapshot; mutations must use mutateSnapshot. */
 	async getCurrentSnapshot(): Promise<Snapshot> {
 		return this.readSnapshot(await this.readCurrentCatalog());
+	}
+
+	async getCurrentSnapshotEntry() {
+		return this.readSnapshotEntry(await this.readCurrentCatalog());
+	}
+
+	async candidatesFor(user: { id: UserId; email: string; groups?: readonly string[] }) {
+		const entry = await this.getCurrentSnapshotEntry();
+		return new Set(
+			[...entry.candidatesFor(user)].filter(
+				(id) => entry.byProjectId.get(id)?.status !== 'deleted',
+			),
+		);
 	}
 
 	async hasProjectInvolvement(user: {
@@ -180,56 +193,7 @@ export class CatalogService {
 		email: string;
 		groups?: readonly string[];
 	}): Promise<boolean> {
-		// Refresh the pointer on every check; cache candidates, never authorization decisions.
-		const catalog = await this.readCurrentCatalog();
-		if (this.involvementIndex?.snapshotKey !== catalog.current_snapshot_key) {
-			const value = this.readSnapshot(catalog).then(async (snapshot) => {
-				const userIds = new Map<string, ProjectId[]>();
-				const emails = new Map<string, ProjectId[]>();
-				const groups = new Map<string, ProjectId[]>();
-				const legacy: ProjectId[] = [];
-				const add = (index: Map<string, ProjectId[]>, key: string, project: ProjectId) => {
-					const candidates = index.get(key) ?? [];
-					candidates.push(project);
-					index.set(key, candidates);
-				};
-				for (const project of snapshot.projects) {
-					if (project.status === 'deleted') continue;
-					add(userIds, project.owner, project.id);
-					if (project.member_ids === undefined) legacy.push(project.id);
-					for (const group of project.member_groups ?? []) add(groups, group, project.id);
-					for (const id of project.member_ids ?? []) add(userIds, id, project.id);
-					for (const email of project.member_emails ?? []) {
-						add(emails, normalizeEmail(email), project.id);
-					}
-				}
-				await mapWithConcurrency(legacy, BUCKET_SCAN_CONCURRENCY, async (id) => {
-					const project = await this.readProject(id);
-					if (!project || project.status === 'deleted') return;
-					add(userIds, project.owner, id);
-					for (const member of project.members) {
-						if (member.group !== undefined) add(groups, member.group, id);
-						if (member.user_id !== undefined) add(userIds, member.user_id, id);
-						if (member.email !== undefined) add(emails, normalizeEmail(member.email), id);
-					}
-				});
-				return { userIds, emails, groups };
-			});
-			this.involvementIndex = { snapshotKey: catalog.current_snapshot_key, value };
-		}
-		const cached = this.involvementIndex;
-		let index: ProjectInvolvement;
-		try {
-			index = await cached.value;
-		} catch (error) {
-			if (this.involvementIndex === cached) this.involvementIndex = undefined;
-			throw error;
-		}
-		const candidates = new Set([
-			...(index.userIds.get(user.id) ?? []),
-			...(index.emails.get(normalizeEmail(user.email)) ?? []),
-			...(user.groups ?? []).flatMap((group) => index.groups.get(group) ?? []),
-		]);
+		const candidates = await this.candidatesFor(user);
 		// A failed roster projection must not preserve a revoked directory grant.
 		for (const id of candidates) {
 			const project = await this.readProject(id);
@@ -251,25 +215,30 @@ export class CatalogService {
 	}
 
 	private async readCurrentCatalog(): Promise<Catalog> {
-		const catalogObj = await this.bucket.get(paths.catalog);
-		if (!catalogObj) {
-			throw new NotInitializedError('Catalog not found — call initialize() first');
-		}
-
-		return readStored(CatalogSchema, catalogObj, paths.catalog);
+		const catalog = await this.pointer.read(
+			[paths.catalog],
+			(object) => readStored(CatalogSchema, object, paths.catalog),
+			'validated',
+		);
+		if (!catalog) throw new NotInitializedError('Catalog not found — call initialize() first');
+		return catalog;
 	}
 
 	private async readSnapshot(catalog: Catalog): Promise<Snapshot> {
-		const snapshotObj = await this.bucket.get(catalog.current_snapshot_key);
-		if (!snapshotObj) {
-			throw new NotInitializedError(
-				`Catalog recovery required: snapshot ${catalog.current_snapshot_id} not found`,
-			);
-		}
+		return (await this.readSnapshotEntry(catalog)).snapshot;
+	}
 
-		return upgradeSnapshot(
-			await readStored(SnapshotSchema, snapshotObj, catalog.current_snapshot_key),
-		);
+	private readSnapshotEntry(catalog: Catalog) {
+		return this.cache.read(catalog.current_snapshot_key, async () => {
+			const object = await this.bucket.get(catalog.current_snapshot_key);
+			if (!object)
+				throw new NotInitializedError(
+					`Catalog recovery required: snapshot ${catalog.current_snapshot_id} not found`,
+				);
+			return upgradeSnapshot(
+				await readStored(SnapshotSchema, object, catalog.current_snapshot_key),
+			);
+		});
 	}
 
 	planRecovery(source: CatalogRecoverySource) {
@@ -362,6 +331,7 @@ export class CatalogService {
 			}
 			throw err;
 		}
+		this.cache.set(key, snapshot);
 		await this.appendAudit(snapshot.operation, snapshot.actor, context);
 		return snapshot;
 	}
@@ -378,9 +348,8 @@ export class CatalogService {
 
 	/**
 	 * `mutateFn` runs inside each catalog CAS attempt and may be asynchronous. It
-	 * must be safe to run again after a lost pointer race. Returning the snapshot it
-	 * was given signals a no-op: nothing is written or audited, and the current
-	 * snapshot is returned.
+	 * must be safe to run again after a lost pointer race. Returning its unchanged
+	 * input skips writes and audit events. In-place edits still commit.
 	 */
 	async mutateSnapshot(
 		operation: string,
@@ -400,8 +369,13 @@ export class CatalogService {
 				const catalog = await readStored(CatalogSchema, catalogObj, paths.catalog);
 				const currentSnapshot = await this.readSnapshot(catalog);
 
-				const mutated = await mutateFn(currentSnapshot);
-				if (mutated === currentSnapshot) return { snapshot: currentSnapshot, committed: false };
+				const draft = structuredClone(currentSnapshot);
+				const result = await mutateFn(draft);
+				if (result === draft && JSON.stringify(result) === JSON.stringify(currentSnapshot)) {
+					return { snapshot: currentSnapshot, committed: false };
+				}
+				// Callback-owned entries must not change while publication yields to storage.
+				const mutated = structuredClone(result);
 
 				const newSnapshotId = createSnapshotId();
 				const now = new Date().toISOString();
@@ -436,6 +410,7 @@ export class CatalogService {
 					await cas.put(paths.catalog, JSON.stringify(newCatalog), {
 						onlyIfEtagMatches: catalogObj.etag,
 					});
+					this.cache.set(newCatalog.current_snapshot_key, newSnapshot);
 					return { snapshot: newSnapshot, committed: true };
 				} catch (err) {
 					// Only a lost CAS proves the pointer never moved; any other error may follow a
@@ -477,7 +452,7 @@ export class CatalogService {
 			operation,
 			actor,
 			async (snap) => {
-				const project = snap.projects.find((entry) => entry.id === projectId);
+				const project = projectsById(snap).get(projectId);
 				if (project === undefined) return snap;
 				const projectPatch = (await patch(project)) ?? {};
 				return {
@@ -512,7 +487,7 @@ export class CatalogService {
 				operation,
 				actor,
 				(snap) => {
-					const project = snap.projects.find((p) => p.id === projectId);
+					const project = projectsById(snap).get(projectId);
 					if (options.ifAbsent) {
 						if (!project || project.status === 'deleted')
 							throw new NotFoundError('Project not found');

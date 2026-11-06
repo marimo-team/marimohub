@@ -43,7 +43,7 @@ function makeEscapingSymlink() {
 bucketContract('FsStorage', () => new FsStorage({ root: makeRoot() }));
 
 describe('FsStorage', () => {
-	it('hashes metadata and conditional writes without buffering the existing object', async () => {
+	it('reads metadata and validates conditional writes without reading the existing body', async () => {
 		const root = makeRoot();
 		const bucket = new FsStorage({ root });
 		const original = await bucket.put('large.bin', new Uint8Array(1024 * 1024).fill(7));
@@ -58,6 +58,11 @@ describe('FsStorage', () => {
 				size: original.size,
 			});
 			expect((await bucket.list()).objects).toEqual([await bucket.head('large.bin')]);
+			expect(await bucket.get('large.bin', { ifNoneMatch: original.etag })).toEqual({
+				key: 'large.bin',
+				etag: original.etag,
+				notModified: true,
+			});
 			await expect(
 				bucket.put('large.bin', 'replacement', { onlyIfEtagMatches: original.etag }),
 			).resolves.toMatchObject({ size: 11 });

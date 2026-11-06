@@ -21,6 +21,23 @@ export interface BucketObjectBody extends BucketObject {
 	bytes(): Promise<Uint8Array>;
 }
 
+export interface BucketGetOptions {
+	/** Opaque ETag from a previous read of this key. Empty tags disable validation. */
+	ifNoneMatch?: string;
+}
+
+export interface BucketNotModified {
+	key: string;
+	etag: string;
+	notModified: true;
+}
+
+export type BucketGetResult = BucketObjectBody | BucketNotModified | null;
+
+export function isNotModified(object: BucketGetResult): object is BucketNotModified {
+	return object !== null && 'notModified' in object && object.notModified;
+}
+
 export interface BucketListResult {
 	objects: BucketObject[];
 	/** Whether more objects or delimited prefixes remain after this page. */
@@ -101,6 +118,7 @@ export interface Bucket {
 	): Promise<BucketObject>;
 
 	get(key: string): Promise<BucketObjectBody | null>;
+	get(key: string, options?: BucketGetOptions): Promise<BucketGetResult>;
 	head(key: string): Promise<BucketObject | null>;
 	put(key: string, value: string | Uint8Array, options?: BucketPutOptions): Promise<BucketObject>;
 	delete(key: string | string[]): Promise<void>;
