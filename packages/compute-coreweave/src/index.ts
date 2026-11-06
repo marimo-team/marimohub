@@ -170,6 +170,27 @@ const FILE_WRITE_SLOTS_PER_SANDBOX = 8;
 // Workspace files can be several MiB; the bound exists so a hung RPC releases its slot.
 const FILE_WRITE_TIMEOUT_MS = 60_000;
 
+/**
+ * Keyed by provider sandbox ID so every handle to one sandbox (`create` and
+ * `connectExisting` alike) shares the cap. Idle entries are dropped.
+ */
+class SandboxFileWriteSlots {
+	private readonly bySandbox = new Map<string, Semaphore>();
+
+	async run<T>(sandboxId: string, fn: () => Promise<T>): Promise<T> {
+		let slots = this.bySandbox.get(sandboxId);
+		if (!slots) {
+			slots = new Semaphore(FILE_WRITE_SLOTS_PER_SANDBOX);
+			this.bySandbox.set(sandboxId, slots);
+		}
+		try {
+			return await slots.run(fn);
+		} finally {
+			if (slots.available === FILE_WRITE_SLOTS_PER_SANDBOX) this.bySandbox.delete(sandboxId);
+		}
+	}
+}
+
 async function cancelLaunchProcess(proc: CommandProcess): Promise<void> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
@@ -437,7 +458,6 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	private sandbox?: CoreWeaveSandbox;
 	private readonly reconnectId?: string;
 	private readonly invalidReference: boolean = false;
-	private readonly fileWriteSlots = new Semaphore(FILE_WRITE_SLOTS_PER_SANDBOX);
 	private lastEnsureTimings?: Timings;
 	/** Shell snippet to splice onto the next command; see `takeBootstrap`. */
 	private pendingBootstrap?: string;
@@ -453,6 +473,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		private readonly userHome?: SandboxUserHome,
 		private readonly existingOnly = false,
 		reference?: string,
+		private readonly fileWriteSlots = new SandboxFileWriteSlots(),
 	) {
 		this.idTag = ID_TAG_PREFIX + id;
 		if (reference !== undefined) {
@@ -822,7 +843,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	): Promise<void> {
 		// Whole-file writes are idempotent; retry only the file that saw UNAVAILABLE.
 		for (let attempt = 0; ; attempt++) {
-			const retry = await this.fileWriteSlots.run(async () => {
+			const retry = await this.fileWriteSlots.run(sandbox.sandboxId, async () => {
 				// Already-started uploads finish their retries after a sibling fails.
 				if (batchState.failed && attempt === 0) return;
 				try {
@@ -1202,6 +1223,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 	 */
 	readonly capabilities: { multiPort: boolean };
 	private client?: CoreWeaveClient;
+	private readonly fileWriteSlots = new SandboxFileWriteSlots();
 
 	constructor(
 		private readonly config: CoreWeaveConfig,
@@ -1274,6 +1296,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 			options?.userHome,
 			existingOnly,
 			reference,
+			this.fileWriteSlots,
 		);
 	}
 

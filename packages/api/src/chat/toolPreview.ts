@@ -176,20 +176,30 @@ export function toolPreview(value: unknown): string {
 
 /**
  * Widest array or object the model receives. Paged tools are clamped to this
- * `limit` so a page is never cut behind its `next_cursor`; the character budget
- * still bounds the total size.
+ * `limit`; items can still be cut by the character budget, which `boundedOutput`
+ * reports on the page instead of returning a cursor that skips them.
  */
 export const MODEL_OUTPUT_ITEMS = 100;
+const MODEL_OUTPUT_CHARACTERS = 20000;
+const SMALL_SCALAR_CHARACTERS = 256;
+
+function isSmallScalar(key: string, value: unknown): boolean {
+	if (typeof value === 'string')
+		return key === 'next_cursor' || value.length <= SMALL_SCALAR_CHARACTERS;
+	return value === null || typeof value === 'number' || typeof value === 'boolean';
+}
 
 /**
  * Cap what the model receives from a tool: long strings, deep nesting, and wide
  * arrays are trimmed and the trimmed paths are listed so the model knows.
  */
 export function boundedOutput(data: Record<string, unknown>): Record<string, unknown> {
-	let remaining = 20000;
+	let remaining = MODEL_OUTPUT_CHARACTERS;
+	let budgetCuts = 0;
 	const truncated: string[] = [];
 	const visit = (value: unknown, path: string, depth: number): unknown => {
 		if (remaining <= 0 || depth > 12) {
+			if (remaining <= 0) budgetCuts += 1;
 			truncated.push(path);
 			return '[Content omitted]';
 		}
@@ -197,6 +207,7 @@ export function boundedOutput(data: Record<string, unknown>): Record<string, unk
 			const limit = Math.min(12000, remaining);
 			remaining -= Math.min(value.length, limit);
 			if (value.length > limit) {
+				if (limit < 12000) budgetCuts += 1;
 				truncated.push(path);
 				return `${value.slice(0, limit)}\n[Remaining content omitted]`;
 			}
@@ -222,7 +233,49 @@ export function boundedOutput(data: Record<string, unknown>): Record<string, unk
 		remaining -= String(value).length;
 		return value;
 	};
-	const output = visit(data, '$', 0) as Record<string, unknown>;
-	if (truncated.length > 0) output.truncated_paths = truncated.slice(0, 30);
+	// Top-level scalars such as `next_cursor` must survive intact: a cut cursor is unusable.
+	const output: Record<string, unknown> = {};
+	let pageCut: { key: string; index: number } | undefined;
+	const entries = Object.entries(data);
+	if (entries.length > MODEL_OUTPUT_ITEMS) truncated.push('$');
+	for (const [key, child] of entries.slice(0, MODEL_OUTPUT_ITEMS)) {
+		remaining -= key.length;
+		if (isSmallScalar(key, child)) {
+			output[key] = child;
+			continue;
+		}
+		if (!Array.isArray(child)) {
+			output[key] = visit(child, `$.${key}`, 1);
+			continue;
+		}
+		if (child.length > MODEL_OUTPUT_ITEMS) truncated.push(`$.${key}`);
+		const items: unknown[] = [];
+		for (const [index, entry] of child.slice(0, MODEL_OUTPUT_ITEMS).entries()) {
+			const cutsBefore = budgetCuts;
+			items.push(visit(entry, `$.${key}[${index}]`, 2));
+			if (!pageCut && budgetCuts > cutsBefore) pageCut = { key, index };
+		}
+		if (!pageCut && child.length > MODEL_OUTPUT_ITEMS) pageCut = { key, index: MODEL_OUTPUT_ITEMS };
+		output[key] = items;
+	}
+	// Upstream cursors are opaque, so the hub cannot resume at the first omitted item. Returning
+	// the original cursor would silently skip the cut items, so ask for a smaller page instead.
+	// A partial first item is kept: no smaller page can return it whole.
+	const keep = pageCut ? Math.max(pageCut.index, 1) : 0;
+	if (!pageCut || !('next_cursor' in data) || keep >= (data[pageCut.key] as unknown[]).length) {
+		if (truncated.length > 0) output.truncated_paths = truncated.slice(0, 30);
+		return output;
+	}
+	const pageKey = pageCut.key;
+	const prefix = `$.${pageKey}[`;
+	const kept = truncated.filter(
+		(path) => !path.startsWith(prefix) || Number.parseInt(path.slice(prefix.length), 10) < keep,
+	);
+	output[pageKey] = (output[pageKey] as unknown[]).slice(0, keep);
+	delete output.next_cursor;
+	output.truncated_paths = [
+		`${prefix}${keep}:] omitted and next_cursor removed; repeat the call with the same cursor and limit ${keep}`,
+		...kept.filter((path) => path !== `$.${pageKey}`),
+	].slice(0, 30);
 	return output;
 }

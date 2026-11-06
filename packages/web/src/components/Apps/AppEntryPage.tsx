@@ -35,7 +35,10 @@ export function AppEntryPage({
 	const pid = target?.projectId ?? params.pid ?? '';
 	const nid = target?.notebookId ?? params.nid ?? '';
 	const location = useLocation();
-	const query = useAppQuery(pid, nid);
+	// A moving notebook reopens without a reload once a manager cancels the move.
+	const query = useAppQuery(pid, nid, {
+		refetchIntervalMs: (error) => (isMoveInProgress(error) ? 30_000 : undefined),
+	});
 	const user = useUserQuery();
 	const prefetchProject = !!user.data && !user.data.app_only;
 	const queryClient = useQueryClient();
@@ -43,7 +46,7 @@ export function AppEntryPage({
 		if (prefetchProject) void queryClient.prefetchQuery(projectQueryOptions(pid));
 		void queryClient.prefetchQuery(capabilitiesQueryOptions());
 	}, [queryClient, pid, prefetchProject]);
-	if (query.error instanceof ApiRequestError && query.error.code === 'MOVE_IN_PROGRESS')
+	if (isMoveInProgress(query.error))
 		return <NotebookMovingNotice key={`${pid}/${nid}`} pid={pid} nid={nid} />;
 	if (query.isError)
 		return (
@@ -71,6 +74,10 @@ export function AppEntryPage({
 	);
 }
 
+function isMoveInProgress(error: Error | null): boolean {
+	return error instanceof ApiRequestError && error.code === 'MOVE_IN_PROGRESS';
+}
+
 function NotebookMovingNotice({ pid, nid }: { pid: string; nid: string }) {
 	const queryClient = useQueryClient();
 	// Only managers may read the move record; anyone else still gets the notice without a destination.
@@ -84,8 +91,22 @@ function NotebookMovingNotice({ pid, nid }: { pid: string; nid: string }) {
 			<Callout variant="info" className="flex max-w-md flex-col gap-2">
 				<p className="font-medium">This notebook is being moved</p>
 				<p className="text-muted-foreground">
-					{destination ? `It is moving to ${destination}. ` : 'It is moving to another project. '}
-					It opens again once the move finishes or a project manager cancels it.
+					{destinationId ? (
+						<>
+							It is moving to{' '}
+							<Link
+								to={`/projects/${destinationId}`}
+								className="text-primary underline-offset-4 hover:underline"
+							>
+								{destination}
+							</Link>
+							.{' '}
+						</>
+					) : (
+						'It is moving to another project. '
+					)}
+					It opens in its new project once the move finishes, or here if a project manager cancels
+					it.
 				</p>
 				<Link to={`/projects/${pid}`} className="text-primary underline-offset-4 hover:underline">
 					Back to project

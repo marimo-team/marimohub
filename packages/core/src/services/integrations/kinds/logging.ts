@@ -34,9 +34,9 @@ const authSchema = z
 		}),
 		z.strictObject({
 			method: z.literal('headers'),
-			headers: secretHeadersField().describe(
-				'HTTP headers sent with every export request, such as an API key or tenant ID',
-			),
+			headers: secretHeadersField()
+				.min(1)
+				.describe('HTTP headers sent with every export request, such as an API key or tenant ID'),
 		}),
 	])
 	.default({ method: 'none' })

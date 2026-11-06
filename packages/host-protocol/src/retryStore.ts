@@ -127,10 +127,14 @@ export function settleHostRetryClaim(
 	// An unacknowledged mutation cannot be safely re-executed after a crash or lost reply.
 	if (!reply && record.dispatched && !record.sessionId) return record;
 	const kept = reply && reply.status < 400 ? reply : undefined;
+	// A runtime's receipt dates from dispatch, so a bound record's window starts at its claim; a
+	// slow reply must not extend the age within which `refresh` re-dispatches. An unbound reply is
+	// the only receipt, so it is kept for a full window after it lands.
+	const anchor = record.sessionId ? record.claimedAt : now;
 	return {
 		...record,
 		owner: undefined,
-		expires: record.sessionId || kept ? (record.expires ?? now + HOST_RETRY_WINDOW_MS) : 0,
+		expires: record.sessionId || kept ? (record.expires ?? anchor + HOST_RETRY_WINDOW_MS) : 0,
 		reply: kept,
 	};
 }

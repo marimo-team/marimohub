@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
-import { renderWithClient, jsonOk, jsonError } from '@/test/render';
+import { createTestQueryClient, renderWithClient, jsonOk, jsonError } from '@/test/render';
+import { notebookKeys } from '@/api/queryKeys';
 import { MoveNotebookDialog } from './MoveNotebookDialog';
 
 function projectList() {
@@ -19,13 +20,16 @@ const notebook = {
 	source_type: 'git',
 };
 
+const pendingNotebook = { ...notebook, moving: { destination_project_id: 'proj-destination' } };
+
 function renderDialog(
 	onClose = vi.fn(),
 	target: Parameters<typeof MoveNotebookDialog>[0]['notebook'] = notebook,
+	client = createTestQueryClient(),
 ) {
 	return renderWithClient(
 		<MoveNotebookDialog isOpen onClose={onClose} projectId="proj-source" notebook={target} />,
-		{ route: '/projects/proj-source' },
+		{ route: '/projects/proj-source', client },
 	);
 }
 
@@ -181,6 +185,7 @@ describe('MoveNotebookDialog', () => {
 
 	it.each([
 		[403, 'FORBIDDEN', 'You need manager access in both projects'],
+		[409, 'CONFLICT', 'The destination already contains this notebook'],
 		[412, 'PRECONDITION_FAILED', 'Notebook changed. Start a new move.'],
 	])('shows a %s error once, without the resume hint or cancel', async (status, code, message) => {
 		const user = userEvent.setup();
@@ -195,12 +200,35 @@ describe('MoveNotebookDialog', () => {
 		await user.click(screen.getByRole('button', { name: /^Move$/ }));
 		const alert = await screen.findByRole('alert');
 		expect(alert).toHaveTextContent(message);
-		expect(alert).not.toHaveTextContent('An interrupted move resumes');
+		expect(alert).not.toHaveTextContent('resumes');
 		expect(screen.getAllByText(message, { exact: false })).toHaveLength(1);
-		expect(screen.queryByRole('button', { name: 'Cancel move' })).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole('button', { name: /Cancel the pending move/ }),
+		).not.toBeInTheDocument();
 	});
 
-	it('cancels a conflicting move and resets the dialog', async () => {
+	it('refreshes the notebook list after a failed move so a pending move shows up', async () => {
+		const user = userEvent.setup();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: RequestInfo | URL) =>
+				String(input).endsWith('/move')
+					? jsonError('INTERNAL_ERROR', 'Copy interrupted', 500)
+					: projectList(),
+			),
+		);
+		const client = createTestQueryClient();
+		client.setQueryData(notebookKeys.list('proj-source'), []);
+		renderDialog(vi.fn(), notebook, client);
+		await user.click(await screen.findByRole('radio', { name: 'Destination' }));
+		await user.click(screen.getByRole('button', { name: /^Move$/ }));
+		expect(await screen.findByRole('alert')).toHaveTextContent('Copy interrupted');
+		await waitFor(() =>
+			expect(client.getQueryState(notebookKeys.list('proj-source'))?.isInvalidated).toBe(true),
+		);
+	});
+
+	it('cancels the pending move it names and resets the dialog', async () => {
 		const user = userEvent.setup();
 		const moves: string[] = [];
 		vi.stubGlobal(
@@ -215,15 +243,21 @@ describe('MoveNotebookDialog', () => {
 				return projectList();
 			}),
 		);
-		renderDialog();
-		await user.click(await screen.findByRole('radio', { name: 'Destination' }));
-		await user.click(screen.getByRole('button', { name: /^Move$/ }));
-		expect(await screen.findByRole('alert')).toHaveTextContent('An interrupted move resumes');
-		await user.click(screen.getByRole('button', { name: 'Cancel move' }));
+		renderDialog(vi.fn(), pendingNotebook);
+		expect(await screen.findByRole('radio', { name: 'Destination' })).toBeChecked();
+		await user.click(screen.getByRole('button', { name: 'Resume move' }));
+		expect(await screen.findByRole('alert')).toHaveTextContent(
+			'The pending move to Destination resumes when you move to it again.',
+		);
+		await user.click(
+			screen.getByRole('button', { name: 'Cancel the pending move to Destination' }),
+		);
 		expect(await screen.findByText('Cancelled the move of "Forecast"')).toBeInTheDocument();
 		expect(moves).toEqual(['POST', 'DELETE']);
 		expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-		expect(screen.getByRole('radio', { name: 'Destination' })).not.toBeChecked();
+		expect(
+			screen.queryByRole('button', { name: /Cancel the pending move/ }),
+		).not.toBeInTheDocument();
 	});
 
 	it('resumes a pending move to its stored destination', async () => {
@@ -239,10 +273,7 @@ describe('MoveNotebookDialog', () => {
 				return projectList();
 			}),
 		);
-		renderDialog(vi.fn(), {
-			...notebook,
-			moving: { destination_project_id: 'proj-destination' },
-		});
+		renderDialog(vi.fn(), pendingNotebook);
 		expect(await screen.findByRole('radio', { name: 'Destination' })).toBeChecked();
 		expect(screen.queryByRole('button', { name: /^Move$/ })).not.toBeInTheDocument();
 		await user.click(screen.getByRole('button', { name: 'Resume move' }));

@@ -111,6 +111,7 @@ From the notebook's menu, managers can choose **Resume move** or **Cancel move**
 - **Cancel:** Until the move publishes, choose **Cancel move**, run
   `mohub notebooks move cancel --pid <PROJECT_ID> --nid <NOTEBOOK_ID>`,
   or call `DELETE /api/v1/projects/{pid}/notebooks/{nid}/move`.
+  While the copy runs, cancel returns `409`. It succeeds after the move stops or its 60-second lease expires.
   Cancellation removes the destination copies and restores the notebook in the source project.
 
 The [API reference](./api.md) lists the move routes.

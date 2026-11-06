@@ -605,6 +605,8 @@ function useProjectContent() {
 									id: 'resume-move',
 									label: 'Resume move',
 									icon: <FolderInput className="size-4" />,
+									// A second resume while the first holds the lease fails with a misleading 409.
+									isDisabled: resumeMove.isPending && resumeMove.variables?.notebookId === nb.id,
 								},
 								{ id: 'cancel-move', label: 'Cancel move', icon: <X className="size-4" /> },
 							]

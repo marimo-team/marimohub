@@ -1,4 +1,4 @@
-import { ForbiddenError, ResourceExhaustedError } from '../../errors';
+import { ForbiddenError, ResourceExhaustedError, UnavailableError } from '../../errors';
 import { PreviewRecordSchema } from './notebookPreviews';
 import { PREVIEW_LIMITS, previewProjectKey } from './PreviewStore';
 import { thumbnailPng } from '../../testing/thumbnail';
@@ -176,6 +176,62 @@ describe('NotebookMoveService', () => {
 			title: 'Bypassed',
 		});
 		expect(await services.notebooks.listNotebooks(to.id)).toEqual([]);
+	});
+
+	it('refuses to publish when the source record changed during the copy', async () => {
+		const { bucket, services, from, to, notebook, input } = await setup();
+		const paused = pauseCopy(services);
+		const moving = services.moves.move(input);
+		await paused.entered;
+		const key = paths.project(from.id).notebook(notebook.id).source;
+		const source = await (await bucket.get(key))!.json<Record<string, unknown>>();
+		await bucket.put(key, JSON.stringify({ ...source, entry_notebook: 'other.py' }));
+		paused.resume();
+		await expect(moving).rejects.toThrow('Notebook changed');
+		expect(await services.notebooks.listNotebooks(to.id)).toEqual([]);
+	});
+
+	it('releases the notebook when an admitted job operation cannot be drained', async () => {
+		const { bucket, services, from, notebook, input } = await setup();
+		const job = await services.jobs.createJob(
+			from.id,
+			notebook.id,
+			{ name: 'Daily', enabled: true },
+			ACTOR,
+		);
+		await services.jobRuns.withJobMutation(job, async () => {});
+		const wait = vi.spyOn(services.jobRuns, 'waitForJobMutations');
+		vi.spyOn(services.jobRuns, 'withJobMutation').mockRejectedValue(
+			new UnavailableError('Job is busy; retry the operation'),
+		);
+		await expect(services.moves.move(input)).rejects.toThrow('Job is busy');
+		expect(wait).toHaveBeenCalledWith(from.id, notebook.id, { strict: true });
+		expect(await moveRecord(bucket, notebook.id)).toBeNull();
+		expect((await services.notebooks.getNotebook(from.id, notebook.id)).meta).not.toHaveProperty(
+			'move_id',
+		);
+	});
+
+	it('releases the notebook when a preview reserves a runtime before the fence', async () => {
+		const { bucket, services, from, notebook, input } = await setup();
+		const own = previewIntent(from.id, notebook.id);
+		await bucket.put(
+			previewProjectKey(from.id),
+			JSON.stringify({ entries: [{ intent: own, artifacts: [] }] }),
+		);
+		await bucket.put(paths.preview(from.id, notebook.id, own.id), JSON.stringify(own));
+		const capacity = services.previews.store.assertMoveCapacity.bind(services.previews.store);
+		vi.spyOn(services.previews.store, 'assertMoveCapacity').mockImplementationOnce(
+			async (...args) => {
+				await services.previews.store.reserveArtifact(own, createNotebookId(), 1);
+				return capacity(...args);
+			},
+		);
+		await expect(services.moves.move(input)).rejects.toThrow('Wait for preview preparation');
+		expect(await moveRecord(bucket, notebook.id)).toBeNull();
+		expect((await services.notebooks.getNotebook(from.id, notebook.id)).meta).not.toHaveProperty(
+			'move_id',
+		);
 	});
 
 	it('refuses a destination at its preview limit before fencing the source', async () => {

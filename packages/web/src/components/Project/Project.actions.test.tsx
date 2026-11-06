@@ -745,6 +745,9 @@ describe('Project — pending moves', () => {
 		await renderProject();
 		expect(screen.getByRole('button', { name: 'Moving to proj-dest' })).toHaveTextContent('Moving');
 		expect(screen.queryByRole('link', { name: 'Forecast' })).not.toBeInTheDocument();
+		// Small screens drop the tooltip, so the destination is also inline.
+		expect(screen.getByText('to proj-dest')).toHaveClass('max-md:inline');
+		expect(screen.getByTestId('notebook-row')).toHaveClass('bg-muted/20');
 	});
 
 	it('lets managers resume a pending move with the entry version as precondition', async () => {
@@ -765,6 +768,31 @@ describe('Project — pending moves', () => {
 			ifMatch: `"${notebook().updated_at}"`,
 			body: { destination_project_id: 'proj-dest' },
 		});
+	});
+
+	it('does not resume the same move again while the first request is in flight', async () => {
+		const user = userEvent.setup();
+		makeFetch({ notebooks: [moving()] });
+		const base = globalThis.fetch;
+		const posts: string[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+				if (!String(input).endsWith('/move')) return base(input, init);
+				posts.push(init?.method ?? 'GET');
+				return new Promise<Response>(() => {});
+			}),
+		);
+		await renderProject();
+		await chooseNotebookAction(user, 'Resume move');
+		await waitFor(() => expect(posts).toEqual(['POST']));
+		await user.click(screen.getByRole('button', { name: /Notebook actions for/ }));
+		const menu = await screen.findByRole('menu');
+		expect(within(menu).getByRole('menuitem', { name: 'Resume move' })).toHaveAttribute(
+			'aria-disabled',
+			'true',
+		);
+		expect(posts).toEqual(['POST']);
 	});
 
 	it('lets managers cancel a pending move', async () => {

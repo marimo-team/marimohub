@@ -30,7 +30,7 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `auth.headers` | object[] |  |  | HTTP headers sent with every export request, such as an API key or tenant ID |
+| `auth.headers` | object[] | Yes |  | HTTP headers sent with every export request, such as an API key or tenant ID |
 | `auth.headers[].name` | string | Yes |  | HTTP header name |
 | `auth.headers[].value` 🔒 | string | Yes |  | Header value, stored as a secret |
 

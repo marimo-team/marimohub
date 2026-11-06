@@ -244,8 +244,10 @@ has `project_id`, `notebook_id`, `session_id`, `sandbox_id`, `inspect_only`, `wa
 | `port_matches`      | The number of processes started with the expected kernel `--port`                                                                                                                                                         |
 
 For example, `stage: "discovery"` with `reason: "runtime_not_found"` and `port_matches: 0` means
-that no marimo server listens on the kernel port. The event never contains tokens, URLs, process arguments, or sandbox output.
-The hub drops any value that is not in this table.
+that no scanned process was started with the kernel `--port`. The event never contains tokens, URLs, process arguments, or sandbox output.
+The hub drops any `bootstrap` field or value that is not in this table.
+A failed event also has an `error` object. It holds only the name, code, status, and operation
+of the error and its causes.
 
 `wait_seconds` accepts integers from `0` to `120` (default `60`). It bounds kernel
 initialization retries after sandbox startup while readiness remains `initializing`.

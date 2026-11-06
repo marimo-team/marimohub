@@ -136,19 +136,40 @@ describe.each(['integration.read', 'integration.use'] as const)(
 			credential: { ...USER.credential, kind: 'personal-access-token', id: 'restricted', grant },
 		});
 
-		it('returns forbidden for insufficient roles by ID and name', async () => {
-			const principal = { ...USER, id: UserId.parse('limited-member') };
+		it.runIf(action === 'integration.use')(
+			'returns forbidden for insufficient roles by ID and name',
+			async () => {
+				const principal = { ...USER, id: UserId.parse('limited-member') };
+				await deps.services.projects.addMember(
+					project.id,
+					{ user_id: principal.id },
+					'viewer',
+					USER.id,
+				);
+				for (const reference of [project.id, project.name.toUpperCase()]) {
+					await expect(resolveProject(deps, principal, reference, action)).rejects.toBeInstanceOf(
+						ForbiddenError,
+					);
+				}
+			},
+		);
+
+		it('does not confirm a private project name to an app user', async () => {
+			const principal = { ...USER, id: UserId.parse('app-user') };
 			await deps.services.projects.addMember(
 				project.id,
 				{ user_id: principal.id },
-				action === 'integration.read' ? 'app-user' : 'viewer',
+				'app-user',
 				USER.id,
 			);
-			for (const reference of [project.id, project.name.toUpperCase()]) {
-				await expect(resolveProject(deps, principal, reference, action)).rejects.toBeInstanceOf(
-					ForbiddenError,
-				);
-			}
+			await expect(resolveProject(deps, principal, project.id, action)).rejects.toBeInstanceOf(
+				ForbiddenError,
+			);
+			const error = await resolveProject(deps, principal, project.name, action).catch(
+				(caught: unknown) => caught,
+			);
+			expect(error).toBeInstanceOf(NotFoundError);
+			expect((error as Error).message).not.toContain(project.id);
 		});
 
 		it('denies nonmembers by ID but hides the project by name', async () => {

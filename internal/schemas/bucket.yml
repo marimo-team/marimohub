@@ -4278,6 +4278,7 @@ components:
                       required:
                         - move_id
                         - destination_project_id
+                      additionalProperties: {}
                   required:
                     - id
                     - title
@@ -7085,6 +7086,7 @@ components:
               format: uuid
               pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
             claimed_at:
+              default: 0
               type: number
               minimum: 0
             session_id:
@@ -7109,7 +7111,6 @@ components:
           required:
             - schema_version
             - fingerprint
-            - claimed_at
             - dispatched
             - expires
     EventIdempotencyMarker:

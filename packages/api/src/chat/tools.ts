@@ -67,7 +67,10 @@ const LimitSchema = z.looseObject({
 	maximum: z.number().optional(),
 });
 
-/** A paged tool's page must fit through boundedOutput, or items before `next_cursor` are lost. */
+/**
+ * Clamp a paged tool's `limit` to what boundedOutput passes through. This bounds the item count
+ * only; boundedOutput drops `next_cursor` when the character budget cuts the page.
+ */
 function pageLimitOf(schema: Record<string, unknown>): ToolDefinition['pageLimit'] {
 	const properties = z.record(z.string(), z.unknown()).safeParse(schema.properties);
 	if (!properties.success || !('cursor' in properties.data)) return undefined;

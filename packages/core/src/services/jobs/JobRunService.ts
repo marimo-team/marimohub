@@ -4,6 +4,7 @@ import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
+import { forEachConcurrentUntilFailure } from '../../async';
 import { Millis, sleep } from '../../duration';
 import { NotFoundError, UnavailableError } from '../../errors';
 import { createRunId, JobId, NotebookId, RunId } from '../../ids';
@@ -102,6 +103,11 @@ function parseOperationHolder(raw: unknown): string | null {
 	return value;
 }
 
+function isOperationHolderLive(holder: string): boolean {
+	const expires = Number(holder.slice(0, holder.indexOf(':')));
+	return Number.isFinite(expires) && expires > Date.now();
+}
+
 function operationHolderToken(holder: string): string {
 	return holder.slice(holder.indexOf(':') + 1);
 }
@@ -127,9 +133,27 @@ export class JobRunService {
 		);
 	}
 
-	/** Drops the source's released operation claims once a moved notebook has left it. */
+	/**
+	 * Drops the source's released or expired operation claims once a moved notebook has left it.
+	 * A live claim stays with its holder: deleting it would admit a second holder for the job.
+	 */
 	async finishMove(source: ProjectId, nid: NotebookId): Promise<void> {
-		await deleteByPrefix(this.bucket, paths.jobOperationClaimsForNotebook(source, nid));
+		const idle: string[] = [];
+		for (const key of await listAllKeys(
+			this.bucket,
+			paths.jobOperationClaimsForNotebook(source, nid),
+		)) {
+			const object = await this.bucket.get(key);
+			if (!object) continue;
+			let holder: string | null = null;
+			try {
+				holder = parseOperationHolder(await object.json());
+			} catch {
+				// A corrupt claim is stale; acquisition replaces it the same way.
+			}
+			if (!holder || !isOperationHolderLive(holder)) idle.push(key);
+		}
+		if (idle.length > 0) await this.bucket.delete(idle);
 	}
 
 	constructor(
@@ -153,10 +177,7 @@ export class JobRunService {
 			key,
 			serialize: (value: string | null) => JSON.stringify({ holder: value }),
 			parseHolder: parseOperationHolder,
-			isHolderLive: async (value: string) => {
-				const expires = Number(value.slice(0, value.indexOf(':')));
-				return Number.isFinite(expires) && expires > Date.now();
-			},
+			isHolderLive: async (value: string) => isOperationHolderLive(value),
 		};
 		for (let attempt = 0; attempt < JOB_OPERATION_WAIT_ATTEMPTS; attempt++) {
 			const acquired = await acquireSingletonClaim(claim, holder);
@@ -620,8 +641,16 @@ export class JobRunService {
 		return this.cancelRunsWhere((marker) => marker.project_id === projectId, by);
 	}
 
-	/** Waits out operations admitted before the notebook or project stopped accepting them. */
-	async waitForJobMutations(projectId: ProjectId, notebookId?: NotebookId): Promise<void> {
+	/**
+	 * Waits out operations admitted before the notebook or project stopped accepting them.
+	 * `strict` rejects when a claim cannot be listed or drained instead of logging and moving on,
+	 * for callers that must not proceed while an operation may still write.
+	 */
+	async waitForJobMutations(
+		projectId: ProjectId,
+		notebookId?: NotebookId,
+		{ strict = false }: { strict?: boolean } = {},
+	): Promise<void> {
 		// Deletion marks the parent first. Earlier fires hold these claims before
 		// checking its status; later fires see the deletion and cannot enqueue.
 		const projectPrefix = paths.jobOperationClaimsForProject(projectId);
@@ -632,6 +661,7 @@ export class JobRunService {
 		try {
 			keys = await listAllKeys(this.bucket, prefix);
 		} catch (err) {
+			if (strict) throw err;
 			logOperationalError(
 				'job_operation_wait_failed',
 				{ operation: 'job.operation.wait', object: prefix },
@@ -639,24 +669,29 @@ export class JobRunService {
 			);
 			return;
 		}
-		await mapWithConcurrency(keys, BUCKET_SCAN_CONCURRENCY, async (key) => {
-			try {
-				const [notebook, job] = key.slice(projectPrefix.length).split('/');
-				await this.withJobMutation(
-					{
-						project_id: projectId,
-						notebook_id: NotebookId.parse(notebook),
-						id: JobId.parse(job.replace(/\.json$/, '')),
-					},
-					async () => {},
-				);
-			} catch (err) {
-				logOperationalError(
-					'job_operation_wait_failed',
-					{ operation: 'job.operation.wait', object: key },
-					err,
-				);
-			}
+		await forEachConcurrentUntilFailure({
+			items: keys,
+			concurrency: BUCKET_SCAN_CONCURRENCY,
+			run: async (key) => {
+				try {
+					const [notebook, job] = key.slice(projectPrefix.length).split('/');
+					await this.withJobMutation(
+						{
+							project_id: projectId,
+							notebook_id: NotebookId.parse(notebook),
+							id: JobId.parse(job.replace(/\.json$/, '')),
+						},
+						async () => {},
+					);
+				} catch (err) {
+					if (strict) throw err;
+					logOperationalError(
+						'job_operation_wait_failed',
+						{ operation: 'job.operation.wait', object: key },
+						err,
+					);
+				}
+			},
 		});
 	}
 

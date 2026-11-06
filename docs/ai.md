@@ -95,8 +95,8 @@ who started them; nobody else can read or change them, and service accounts cann
 use chat.
 
 The assistant has the same tools as the [MCP server](./mcp.md), under the caller's
-project permissions. Read-only tools run freely. Tools that change something show a
-consent card: allow once, always allow that kind of action in this project, or refuse.
+project permissions. Read-only tools run freely, except the data preview tools below.
+Tools that change something show a consent card: allow once, always allow that kind of action in this project, or refuse.
 Consent cards show the code or source the call would submit.
 Of the read-only [data discovery tools](./mcp.md#discover-data), only `preview_table` and
 `preview_object` show a consent card. They can start preview compute and send table rows or

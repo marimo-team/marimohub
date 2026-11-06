@@ -1,17 +1,19 @@
 import { useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { z } from 'zod';
 import { ApiRequestError } from '@/api/client';
 import { useProjectsQuery } from '@/api/hooks';
 import { useCancelNotebookMove, useMoveNotebook } from '@/api/notebookMoves';
+import { notebookKeys } from '@/api/queryKeys';
 import { FormDialog, requiredText, schemaValidators, useAppForm } from '@/components/form';
 import { Button } from '@/components/ui';
 import { Callout } from '@/components/ui/Callout';
 
 const schema = z.object({ destination: requiredText('Destination project') });
 
-// Only an interrupted or contended move recovers by repeating it; 403/412/422 need a different action.
+// Only an interrupted or contended pending move recovers by repeating it; 403/412/422 need a different action.
 function isResumable(error: Error): boolean {
 	if (!(error instanceof ApiRequestError)) return false;
 	if (error.code === 'NETWORK_ERROR') return true;
@@ -36,6 +38,7 @@ export function MoveNotebookDialog({
 	};
 }) {
 	const navigate = useNavigate();
+	const queryClient = useQueryClient();
 	const projects = useProjectsQuery(
 		{ managed_only: 'true', status: 'active' },
 		{ enabled: isOpen, throwOnError: false },
@@ -67,16 +70,20 @@ export function MoveNotebookDialog({
 				onClose();
 				void navigate(`/projects/${result.project_id}`);
 			} catch {
-				return;
+				// A failed move may have left a pending move; the list entry's `moving` reports it.
+				void queryClient.invalidateQueries({ queryKey: notebookKeys.list(projectId) });
 			}
 		},
 	});
 	const isPending = move.isPending || cancelMove.isPending;
+	const pendingDestination = notebook.moving?.destination_project_id;
+	const pendingDestinationName =
+		pendingDestination &&
+		(destinations.find((project) => project.id === pendingDestination)?.name ?? pendingDestination);
 	const handleCancelMove = async () => {
-		const destination = move.variables?.destination;
-		if (destination === undefined) return;
+		if (pendingDestination === undefined) return;
 		try {
-			await cancelMove.mutateAsync({ notebookId: notebook.id, destination });
+			await cancelMove.mutateAsync({ notebookId: notebook.id, destination: pendingDestination });
 		} catch {
 			return;
 		}
@@ -137,17 +144,20 @@ export function MoveNotebookDialog({
 				<Callout variant="error" className="flex flex-col items-start gap-2 text-destructive">
 					<p>
 						{move.error.message}
-						{isResumable(move.error) &&
-							' An interrupted move resumes when you move to the same destination again.'}
+						{pendingDestinationName &&
+							isResumable(move.error) &&
+							` The pending move to ${pendingDestinationName} resumes when you move to it again.`}
 					</p>
-					{move.error instanceof ApiRequestError && move.error.status === 409 && (
+					{pendingDestinationName && (
 						<Button
 							variant="default"
 							size="sm"
 							isDisabled={isPending}
 							onPress={() => void handleCancelMove()}
 						>
-							{cancelMove.isPending ? 'Cancelling move…' : 'Cancel move'}
+							{cancelMove.isPending
+								? 'Cancelling move…'
+								: `Cancel the pending move to ${pendingDestinationName}`}
 						</Button>
 					)}
 				</Callout>

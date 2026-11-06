@@ -543,6 +543,15 @@ describe('generic host app', () => {
 		}
 	});
 
+	it('removes the attachment when the notebook stream fails before its first poll', async () => {
+		const { request, platform } = fakePlatform();
+		vi.spyOn(platform, 'catalogVersion').mockRejectedValueOnce(new Error('Catalog unavailable'));
+		const failed = await request('GET', '/notebooks/p1%2Fn1/events');
+		expect(await failed.text()).toContain('event: effect/httpapi/stream/failure');
+		const events = await readUntilReady(await request('GET', '/events?types=attachment'));
+		expect(events.map((event) => event.event)).toEqual(['ready']);
+	});
+
 	it('tells catalog subscribers when a notebook stream client disconnects', async () => {
 		const { request } = fakePlatform();
 		const catalog = streamText(await request('GET', '/events?types=attachment'));

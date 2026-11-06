@@ -231,7 +231,9 @@ export const SnapshotNotebookEntrySchema = z.looseObject({
 	 * Set on the source entry from the move's fence until it publishes or is cancelled, so
 	 * lists can show the notebook as moving without reading the move record.
 	 */
-	moving: z.object({ move_id: z.string(), destination_project_id: ProjectIdSchema }).optional(),
+	moving: z
+		.looseObject({ move_id: z.string(), destination_project_id: ProjectIdSchema })
+		.optional(),
 });
 
 export type SnapshotNotebookEntry = z.infer<typeof SnapshotNotebookEntrySchema>;

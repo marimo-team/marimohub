@@ -89,15 +89,6 @@ jobs:
             exit 1
           fi
           "$RUNNER_TEMP/thumbnail-python/bin/pip" install "marimo==$MARIMO_INTEGRATION_VERSION" playwright==1.58.0 opentelemetry-sdk==1.40.0 opentelemetry-exporter-otlp-proto-http==1.40.0
-          # Logging integration environments, so those tests never reach PyPI. The pins live in
-          # these fixture files, which the tests also read when creating environments locally.
-          LOGGING_FIXTURES=packages/core/src/services/runtime/fixtures
-          UV="$RUNNER_TEMP/uv-python/bin/uv"
-          "$UV" venv --python "$RUNNER_TEMP/thumbnail-python/bin/python" "$RUNNER_TEMP/logging-env-missing"
-          "$UV" pip install --python "$RUNNER_TEMP/logging-env-missing" "marimo==$MARIMO_INTEGRATION_VERSION"
-          "$UV" venv --python "$RUNNER_TEMP/thumbnail-python/bin/python" "$RUNNER_TEMP/logging-env-conflicting"
-          "$UV" pip install --python "$RUNNER_TEMP/logging-env-conflicting" "marimo==$MARIMO_INTEGRATION_VERSION" -r "$LOGGING_FIXTURES/logging_conflicting_requirements.txt"
-          "$RUNNER_TEMP/thumbnail-python/bin/pip" download -d "$RUNNER_TEMP/logging-sandbox-wheels" "marimo==$MARIMO_INTEGRATION_VERSION" -r "$LOGGING_FIXTURES/logging_sandbox_requirements.txt"
           # The Azure mirror can trickle data indefinitely without hitting apt's timeout.
           if [ -f /etc/apt/apt-mirrors.txt ]; then
             sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
@@ -111,6 +102,21 @@ jobs:
           sudo apt-get update
           "$RUNNER_TEMP/thumbnail-python/bin/python" -m playwright install-deps chromium
           "$RUNNER_TEMP/thumbnail-python/bin/python" -m playwright install chromium
+
+      # Logging integration environments, so those tests never reach PyPI. The pins live in
+      # these fixture files, which the tests also read when creating environments locally.
+      - name: Prepare logging integration environments
+        if: matrix.suite == 'backend'
+        timeout-minutes: 8
+        run: |
+          MARIMO_INTEGRATION_VERSION="$(sed -n 's/^ARG MARIMO_VERSION=//p' images/marimo-sandbox/Dockerfile)"
+          LOGGING_FIXTURES=packages/core/src/services/runtime/fixtures
+          UV="$RUNNER_TEMP/uv-python/bin/uv"
+          "$UV" venv --python "$RUNNER_TEMP/thumbnail-python/bin/python" "$RUNNER_TEMP/logging-env-missing"
+          "$UV" pip install --python "$RUNNER_TEMP/logging-env-missing" "marimo==$MARIMO_INTEGRATION_VERSION"
+          "$UV" venv --python "$RUNNER_TEMP/thumbnail-python/bin/python" "$RUNNER_TEMP/logging-env-conflicting"
+          "$UV" pip install --python "$RUNNER_TEMP/logging-env-conflicting" "marimo==$MARIMO_INTEGRATION_VERSION" -r "$LOGGING_FIXTURES/logging_conflicting_requirements.txt"
+          "$RUNNER_TEMP/thumbnail-python/bin/pip" download -d "$RUNNER_TEMP/logging-sandbox-wheels" "marimo==$MARIMO_INTEGRATION_VERSION" -r "$LOGGING_FIXTURES/logging_sandbox_requirements.txt"
 
       - name: Test marimo runtime integrations (kernel, logging, thumbnails)
         if: matrix.suite == 'backend'

@@ -40,7 +40,12 @@ const RecordFields = z.object({
 // keeps that invariant in the generated JSON Schema.
 export const HostRetryRecordSchema = z.union([
 	RecordFields.extend({ owner: z.uuid() }),
-	RecordFields.extend({ expires: z.number().nonnegative() }),
+	// Compaction tombstones written by pre-release builds omit `claimed_at`; they hold no
+	// claim or receipt, so an epoch default changes nothing about how they settle.
+	RecordFields.extend({
+		expires: z.number().nonnegative(),
+		claimed_at: z.number().nonnegative().default(0),
+	}),
 ]);
 export const HostRetryCleanupSchema = z.object({ after: z.string().optional() });
 type Record = z.infer<typeof HostRetryRecordSchema>;

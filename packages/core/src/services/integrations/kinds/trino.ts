@@ -93,7 +93,7 @@ const trinoConfig = z.strictObject({
 		})
 		.meta({ 'x-unique-by': 'value' })
 		.default([]),
-	http_headers: secretHeadersField(),
+	http_headers: secretHeadersField().default([]),
 	extra_credentials: z
 		.array(z.strictObject({ name: z.string().regex(IDENTIFIER_REGEX), value: zSecret() }))
 		.refine((items) => new Set(items.map(({ name }) => name)).size === items.length, {

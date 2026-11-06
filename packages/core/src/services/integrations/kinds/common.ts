@@ -62,8 +62,7 @@ export const secretHeadersField = () =>
 		.refine((items) => new Set(items.map(({ name }) => name.toLowerCase())).size === items.length, {
 			message: 'Duplicate HTTP header name (case-insensitive)',
 		})
-		.meta({ 'x-unique-by': 'name', 'x-unique-case-insensitive': true })
-		.default([]);
+		.meta({ 'x-unique-by': 'name', 'x-unique-case-insensitive': true });
 
 /**
  * The shape above is what the form checks as you type; this is the one that

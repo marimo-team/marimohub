@@ -535,7 +535,6 @@ export function createHostApp<
 				let initial = true;
 				let previousNotebook = JSON.stringify(record);
 				let user = principal;
-				let version = await platform.catalogVersion(user);
 				let checked = Date.now();
 				const recheck = async () => {
 					user = await platform.authenticate(c.req.raw);
@@ -543,6 +542,7 @@ export function createHostApp<
 					checked = Date.now();
 				};
 				try {
+					let version = await platform.catalogVersion(user);
 					if (c.req.header('Last-Event-ID')) await emit({ event: 'reset', data: {} });
 					await emitSnapshot();
 					while (!signal.aborted) {

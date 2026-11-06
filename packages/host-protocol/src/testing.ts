@@ -9,16 +9,25 @@ import { errorResponse, HostProblemError } from './protocol';
 import type { ErrorStatus } from './protocol';
 import { HostRetries } from './retries';
 import type { HostMutationReply, HostRetryAttempt } from './retries';
-import { HOST_BOUND_CLAIM_LEASE_MS, HOST_CLAIM_LEASE_MS, HOST_RETRY_WINDOW_MS } from './retryStore';
+import {
+	HOST_BOUND_CLAIM_LEASE_MS,
+	HOST_CLAIM_LEASE_MS,
+	HOST_RETRY_REFRESH_MS,
+	HOST_RETRY_WINDOW_MS,
+} from './retryStore';
 import type { HostRetryClaim, HostRetryStore } from './retryStore';
+
+/** The orchestrator `createHostApp` runs over a store, for tests that drive a store through it. */
+export function hostRetriesFor(store: HostRetryStore, errorStatus?: ErrorStatus): HostRetries {
+	return new HostRetries(store, (error) => errorResponse(error, errorStatus));
+}
 
 export function hostRetryStoreContract(
 	name: string,
 	makeStore: () => HostRetryStore,
 	options: { errorStatus?: ErrorStatus } = {},
 ): void {
-	const retriesFor = (store: HostRetryStore) =>
-		new HostRetries(store, (error) => errorResponse(error, options.errorStatus));
+	const retriesFor = (store: HostRetryStore) => hostRetriesFor(store, options.errorStatus);
 	const reply = { status: 201, body: { id: 'one-notebook' } };
 	async function claim(store: HostRetryStore, fingerprint = 'create') {
 		const result = await store.acquire('user', 'key', fingerprint, false);
@@ -214,12 +223,52 @@ export function hostRetryStoreContract(
 
 		it('releases an acquired claim without work when its caller has already disconnected', async () => {
 			const store = makeStore();
+			const disconnect = new AbortController();
+			const acquire = store.acquire.bind(store);
+			vi.spyOn(store, 'acquire').mockImplementationOnce(async (...args) => {
+				const acquired = await acquire(...args);
+				disconnect.abort();
+				return acquired;
+			});
 			const work = vi.fn(async () => ({ status: 201, body: {} }));
 			await expect(
-				retriesFor(store).execute('user', 'key', 'create', work, false, AbortSignal.abort()),
+				retriesFor(store).execute('user', 'key', 'create', work, false, disconnect.signal),
 			).rejects.toThrow();
 			expect(work).not.toHaveBeenCalled();
 			expect((await store.acquire('user', 'key', 'create', false)).kind).toBe('claimed');
+		});
+
+		it('refreshes a stored reply only while the runtime still holds its receipt', async () => {
+			vi.useFakeTimers();
+			const store = makeStore();
+			const run = { status: 202, body: { id: 'run' } };
+			const acquired = await claim(store, 'run');
+			await store.dispatch(acquired, 'session');
+			await store.finish(acquired, run);
+			vi.advanceTimersByTime(HOST_RETRY_REFRESH_MS - 1);
+			const refreshed = await store.acquire('user', 'key', 'run', true);
+			expect(refreshed.kind).toBe('claimed');
+			await store.finish((refreshed as { kind: 'claimed'; claim: HostRetryClaim }).claim, run);
+			vi.advanceTimersByTime(1);
+			expect(await store.acquire('user', 'key', 'run', true)).toEqual({
+				kind: 'reply',
+				reply: run,
+			});
+		});
+
+		it('measures a late reply from its claim, not from when it finished', async () => {
+			vi.useFakeTimers();
+			const store = makeStore();
+			const run = { status: 202, body: { id: 'run' } };
+			const acquired = await claim(store, 'run');
+			await store.dispatch(acquired, 'session');
+			vi.advanceTimersByTime(HOST_RETRY_REFRESH_MS - 1);
+			await store.finish(acquired, run);
+			vi.advanceTimersByTime(1);
+			expect(await store.acquire('user', 'key', 'run', true)).toEqual({
+				kind: 'reply',
+				reply: run,
+			});
 		});
 
 		it('reclaims an undispatched claim after its lease and fences the stale owner', async () => {

@@ -102,7 +102,7 @@ export const s3 = defineIntegration({
 		'AWS_ENDPOINT_URL_S3',
 		'AWS_CONFIG_FILE',
 	],
-	sharedEnvironment: { group: 's3', title: 'S3', variables: 'shared AWS variables' },
+	sharedEnvironment: { group: 's3', title: 'S3', variables: 'AWS_* variables' },
 	requirements: ['boto3>=1.35', 's3fs>=2024.6'],
 	uiHints: {
 		allow_write: { group: 'Uploads', order: 20, widget: 'toggle' },
@@ -545,7 +545,7 @@ export const azureBlob = defineIntegration({
 	sharedEnvironment: {
 		group: 'azure',
 		title: 'Azure Blob',
-		variables: 'shared Azure storage or identity variables',
+		variables: 'AZURE_* variables',
 	},
 	requirements: ['adlfs>=2024.7', 'azure-storage-blob>=12.22', 'azure-identity>=1.17'],
 	uiHints: {

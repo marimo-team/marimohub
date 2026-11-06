@@ -132,15 +132,21 @@ describe('shared host retry receipts', () => {
 		const store = new HostRetryStore(bucket);
 		const acquired = await claim(store, '../unsafe/\n?token');
 		expect(acquired.key).toMatch(/^_system\/host-retries\/[a-f0-9]{64}\.json$/);
+		const held = { schema_version: 1, fingerprint: 'create', claimed_at: 0, dispatched: true };
 		for (const record of [
 			{ schema_version: 1 },
-			{ schema_version: 1, fingerprint: 'create', dispatched: true },
-			{ schema_version: 1, fingerprint: 'create', dispatched: true, owner: '' },
-			{ schema_version: 1, fingerprint: 'create', dispatched: true, owner: crypto.randomUUID() },
+			{ ...held, claimed_at: undefined, owner: crypto.randomUUID() },
+			held,
+			{ ...held, owner: '' },
+			{ ...held, owner: crypto.randomUUID(), expires: -1 },
 		]) {
 			await bucket.put(acquired.key, JSON.stringify(record));
 			await expect(store.acquire('user', '../unsafe/\n?token', 'create', false)).rejects.toThrow();
 		}
+		await bucket.put(acquired.key, JSON.stringify({ ...held, owner: crypto.randomUUID() }));
+		expect(await store.acquire('user', '../unsafe/\n?token', 'create', false)).toEqual({
+			kind: 'pending',
+		});
 	});
 
 	it('compacts expired replies without deleting heads or accepting a stale writer', async () => {
@@ -175,6 +181,8 @@ describe('shared host retry receipts', () => {
 		expect(await store.compactExpired()).toBe(0);
 		expect(await bucket.get(settled.key)).not.toBeNull();
 		vi.advanceTimersByTime(1);
+		// An accepted race, as in IdempotencyService.prune: the Bucket port has no conditional delete,
+		// so an acquire of this key between the compactor's read and this delete loses its claim.
 		expect(await store.compactExpired()).toBe(1);
 		expect(await bucket.get(settled.key)).toBeNull();
 		expect(await store.acquire('user', 'unresolved', 'create', false)).toEqual({

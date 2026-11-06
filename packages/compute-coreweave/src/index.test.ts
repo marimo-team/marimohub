@@ -22,6 +22,7 @@ import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing/res
 import { coreWeaveProfileResources, CoreWeaveCompute } from './index';
 import type { CoreWeaveClient, CoreWeaveConfig } from './index';
 import { contractLaunchProcess, fakeProcess, makeWorld, procResult } from './testWorld';
+import { instrumentCoreWeaveClient } from './tracing';
 
 /**
  * Tests for the CoreWeave compute adapter.
@@ -553,6 +554,57 @@ describe('CoreWeaveCompute', () => {
 			} finally {
 				vi.useRealTimers();
 			}
+		});
+
+		it('shares the upload cap across handles to the same sandbox', async () => {
+			vi.useFakeTimers();
+			try {
+				let active = 0;
+				let peak = 0;
+				const world = makeWorld({
+					writeImpl: async () => {
+						peak = Math.max(peak, ++active);
+						await new Promise<void>((resolve) => setTimeout(resolve, 100));
+						active--;
+					},
+				});
+				const compute = makeCompute(world);
+				const created = compute.create(SANDBOX_ID, { reuse: false });
+				await created.ready!();
+				const connected = compute.connectExisting(SANDBOX_ID);
+				await connected.ready!();
+				const writes = [created, connected].flatMap((instance, handle) =>
+					Array.from({ length: 3 }, (_, batch) =>
+						instance.writeFiles(
+							Array.from({ length: 4 }, (_, i) => ({
+								path: `/${handle}/${batch}/${i}`,
+								content: 'x',
+							})),
+						),
+					),
+				);
+				await vi.advanceTimersByTimeAsync(400);
+				await Promise.all(writes);
+				expect(world.registry.size).toBe(1);
+				expect(world.registry.get('cw-1')!.fake.batchWrites).toHaveLength(24);
+				expect(peak).toBe(8);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('forwards the write deadline through the instrumented client', async () => {
+			const timeouts: (number | undefined)[] = [];
+			const world = makeWorld({
+				writeImpl: async (_files, options) => {
+					timeouts.push(options?.timeoutMs);
+				},
+			});
+			const client = instrumentCoreWeaveClient(world.client, 'https://gateway.example');
+			await new CoreWeaveCompute(baseConfig, client)
+				.create(SANDBOX_ID, { reuse: false })
+				.writeFiles([{ path: '/w/x', content: 'x' }]);
+			expect(timeouts).toEqual([60_000]);
 		});
 
 		it('fails a hung write at its deadline and releases its upload slot', async () => {

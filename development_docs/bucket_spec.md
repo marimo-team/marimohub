@@ -1783,7 +1783,8 @@ configuration at equal revisions, fences older publication while preserving the 
 snapshot. Incompatible checkpoints restart.
 Publication cannot overwrite a newer head or resurrect a deletion tombstone.
 The maintenance lease uses `_system/search/lock.json`.
-The `catalog.json` write that publishes a notebook move sets `search_refresh` on both project entries.
+The `CatalogService.mutateSnapshot` write that publishes a notebook move sets `search_refresh`
+on both project entries in the new snapshot.
 The token is part of each source's configuration identity, so the next crawl claims a new build
 without waiting for the recrawl interval. The crawler reads the token from the snapshot it already holds.
 

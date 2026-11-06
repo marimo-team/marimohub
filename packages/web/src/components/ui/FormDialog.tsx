@@ -45,7 +45,13 @@ export function FormDialog({
 	width = 'sm',
 }: FormDialogProps) {
 	return (
-		<DialogModal isOpen={isOpen} onClose={onClose} title={title} width={width}>
+		<DialogModal
+			isOpen={isOpen}
+			onClose={onClose}
+			isDismissable={!isPending}
+			title={title}
+			width={width}
+		>
 			<form
 				onSubmit={(e) => {
 					e.preventDefault();

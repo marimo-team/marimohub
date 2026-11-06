@@ -30,7 +30,12 @@ export function useProjectAppsQuery(projectId: string) {
 	return useSuspenseInfiniteQuery(appsQueryOptions(projectId));
 }
 
-export function useAppQuery(pid: string, nid: string) {
+export function useAppQuery(
+	pid: string,
+	nid: string,
+	options: { refetchIntervalMs?: (error: Error | null) => number | undefined } = {},
+) {
+	const { refetchIntervalMs } = options;
 	return useQuery({
 		queryKey: appKeys.detail(pid, nid),
 		queryFn: ({ signal }) =>
@@ -41,5 +46,6 @@ export function useAppQuery(pid: string, nid: string) {
 				}),
 			),
 		staleTime: 0,
+		refetchInterval: refetchIntervalMs && ((query) => refetchIntervalMs(query.state.error)),
 	});
 }

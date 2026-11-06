@@ -450,8 +450,14 @@ export class NotebookMoveService {
 					// lease or a job operation claim; taking each once lets them finish before
 					// anything is copied. A session admitted in the same window is refused here.
 					await this.owners.notebooks.workspace.withMutation(source, nid, {}, async () => {});
-					for (const id of ids) await this.owners.jobRuns.waitForJobMutations(source, id);
+					for (const id of ids)
+						await this.owners.jobRuns.waitForJobMutations(source, id, { strict: true });
 					await this.owners.sessions.assertReadyForMove(source, ids);
+					// Runtimes were captured before the fence. A preparation reserves its runtime
+					// before it reads the parent, so one that can still write is visible here.
+					const reserved = await this.owners.previews.runtimesForMove(source, nid);
+					if (reserved.some((id) => !ids.has(id)))
+						throw new ConflictError('Wait for preview preparation or cleanup before moving');
 					move = await save({ phase: 'copying' });
 				}
 			} catch (error) {
@@ -654,11 +660,25 @@ export class NotebookMoveService {
 		await this.bucket.delete([paths.notebookMove(move.notebook_id)]);
 	}
 
-	/** Proves no metadata writer slipped past the fence before the captured copy is published. */
+	/**
+	 * Proves no writer slipped past the fence before the captured copy is published. `source.json`
+	 * carries no fence, so a writer that checked the metadata just before fencing can still land.
+	 */
 	private async assertSourceMetaUnchanged(move: NotebookMove): Promise<void> {
 		const stored = await this.readMeta(move.source, move.notebook_id);
 		const { move_id: fencedBy, ...current } = stored?.meta ?? {};
-		if (!stored || fencedBy !== move.id || JSON.stringify(current) !== JSON.stringify(move.meta))
+		const sourceObject = await this.bucket.get(
+			paths.project(move.source).notebook(move.notebook_id).source,
+		);
+		const sourceRecord = sourceObject
+			? await readStored(SourceSchema, sourceObject, sourceObject.key)
+			: null;
+		if (
+			!stored ||
+			fencedBy !== move.id ||
+			JSON.stringify(current) !== JSON.stringify(move.meta) ||
+			JSON.stringify(sourceRecord) !== JSON.stringify(move.source_record)
+		)
 			throw new ConflictError('Notebook changed. Start a new move.');
 	}
 

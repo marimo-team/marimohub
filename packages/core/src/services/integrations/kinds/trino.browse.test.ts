@@ -24,6 +24,10 @@ function queuedProbe(bodies: unknown[]) {
 }
 
 describe('trino browse', () => {
+	it('defaults http_headers to none', () => {
+		expect(config().http_headers).toEqual([]);
+	});
+
 	it('supports hub-safe auth and blocks sandbox-only auth or TLS', () => {
 		expect(browse.available(config())).toEqual({ ok: true });
 		expect(browse.available(config({ auth: { method: 'oauth2' } }))).toMatchObject({ ok: false });

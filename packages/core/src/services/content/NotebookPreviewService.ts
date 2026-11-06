@@ -42,6 +42,13 @@ export class NotebookPreviewService {
 		await deleteByPrefix(this.bucket, paths.previewRecords(source, nid));
 	}
 
+	/** Runtime notebooks the source's preview membership reserves for `nid`. */
+	async runtimesForMove(source: ProjectId, nid: NotebookId): Promise<NotebookId[]> {
+		return (await this.store.project(source)).entries
+			.filter((entry) => entry.intent.notebook_id === nid)
+			.flatMap((entry) => entry.artifacts.map((artifact) => artifact.notebook_id));
+	}
+
 	async copyForMove(
 		source: ProjectId,
 		destination: ProjectId,

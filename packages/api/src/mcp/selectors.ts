@@ -5,6 +5,7 @@ import {
 	NotFoundError,
 	NotebookId,
 	ProjectId,
+	roleAtLeast,
 } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, Project } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
@@ -74,10 +75,10 @@ export async function resolveProject(
 		);
 		matches = matches.filter((_, index) => decisions[index].allowed);
 		if (integrationAction && matches.length === 0) {
-			// Prefer allowed matches, but explain a denial to members. A name lookup must
-			// not tell a non-member that a private project with that name exists.
+			// Prefer allowed matches, but explain a denial to project readers. A name lookup must
+			// not tell anyone else, app users included, that a private project with that name exists.
 			for (const candidate of candidates) {
-				if (effectiveRole(candidate, principal, deps.policy) === null) continue;
+				if (!roleAtLeast(effectiveRole(candidate, principal, deps.policy), 'viewer')) continue;
 				try {
 					return await loadProject(candidate.id);
 				} catch (error) {

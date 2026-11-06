@@ -150,6 +150,8 @@ describe('logging integrations', () => {
 		{ auth: { method: 'basic', username: 'a' } },
 		{ headers: [{ name: 'Authorization', value: 'token' }] },
 		withHeaders(null),
+		withHeaders([]),
+		{ auth: { method: 'headers' } },
 		withHeaders([{ name: '', value: 'token' }]),
 		withHeaders([{ name: 'X-Key\r\nInjected', value: 'token' }]),
 		withHeaders(

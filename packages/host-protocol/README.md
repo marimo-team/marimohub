@@ -13,9 +13,10 @@ returns a Hono app to mount at any prefix.
 | --------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `./bridge`      | The host relay, the event and reply schemas it uses, and the request type it reads.                                |
 | `./retry-store` | The Idempotency-Key store contract and its timing constants. A durable store can use them without the HTTP server. |
+| `./testing`     | Test-only: the `HostRetryStore` conformance suite and `hostRetriesFor`. Imports `vitest`; load it only from tests. |
 
 The host relay is the loopback Python client that reaches a marimo host inside a sandbox through
 a sandbox `exec`. It is unrelated to the notebook bridge (`@marimo-hub/notebook-bridge`).
 
-Depends on `hono` and `zod` only. For the hub's endpoint, see
+Depends on `hono` and `zod` only at runtime. For the hub's endpoint, see
 [Host protocol](../../docs/host-protocol.md). Part of [marimohub](../../README.md).

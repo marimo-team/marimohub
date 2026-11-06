@@ -221,7 +221,7 @@ describe('MCP data discovery', () => {
 	});
 
 	it('resolves an integration by exact name and prefers the unshadowed entry', async () => {
-		const { call, orgIntegrations, catalog, listNamespaces } = await setupDiscovery();
+		const { call, orgIntegrations, listNamespaces } = await setupDiscovery();
 		await orgIntegrations.create(
 			{ kind: 'test_catalog', name: 'warehouse', config: { token: 'private-shadow-fixture' } },
 			mcpPrincipal.id,
@@ -230,6 +230,12 @@ describe('MCP data discovery', () => {
 			structuredContent: { items: [['sales', 'eu.central']] },
 		});
 		expect(listNamespaces).toHaveBeenCalledOnce();
+		// Browse receives only the resolved config, so its secret identifies the integration used.
+		expect(listNamespaces.mock.calls[0]).toEqual([
+			{ token: 'private-catalog-fixture' },
+			expect.anything(),
+			expect.anything(),
+		]);
 		expect(
 			await call('get_table_schema', {
 				integration: 'Warehouse',
@@ -240,7 +246,6 @@ describe('MCP data discovery', () => {
 			isError: true,
 			structuredContent: { code: 'NOT_FOUND', message: "Integration 'Warehouse' not found" },
 		});
-		expect(catalog.name).toBe('warehouse');
 	});
 
 	it('uses federated credentials when an ambient S3 integration requires them', async () => {

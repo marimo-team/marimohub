@@ -441,8 +441,8 @@ describe('POST notebook move', () => {
 				)
 			).status,
 		).toBe(500);
-		expect([403, 404]).toContain((await restricted.request('GET', path)).status);
-		expect([403, 404]).toContain((await restricted.request('DELETE', path)).status);
+		for (const method of ['GET', 'DELETE'] as const)
+			await expectError(await restricted.request(method, path), 404, 'NOT_FOUND');
 		await expectOk(await cleared.request('DELETE', path));
 		await expectOk(await cleared.request('GET', `/projects/${source.id}/notebooks/${notebook.id}`));
 	});

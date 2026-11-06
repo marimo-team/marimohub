@@ -5463,9 +5463,7 @@ components:
                   type: string
                   const: headers
                 headers:
-                  default: []
-                  description: HTTP headers sent with every export request, such as an API key or
-                    tenant ID
+                  minItems: 1
                   maxItems: 32
                   type: array
                   items:
@@ -5487,8 +5485,11 @@ components:
                     additionalProperties: false
                   x-unique-by: name
                   x-unique-case-insensitive: true
+                  description: HTTP headers sent with every export request, such as an API key or
+                    tenant ID
               required:
                 - method
+                - headers
               additionalProperties: false
           discriminator:
             propertyName: method
@@ -5577,9 +5578,7 @@ components:
                   type: string
                   const: headers
                 headers:
-                  default: []
-                  description: HTTP headers sent with every export request, such as an API key or
-                    tenant ID
+                  minItems: 1
                   maxItems: 32
                   type: array
                   items:
@@ -5601,6 +5600,8 @@ components:
                     additionalProperties: false
                   x-unique-by: name
                   x-unique-case-insensitive: true
+                  description: HTTP headers sent with every export request, such as an API key or
+                    tenant ID
               required:
                 - method
                 - headers

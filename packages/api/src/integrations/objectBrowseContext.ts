@@ -13,6 +13,7 @@ import {
 import type { AuthUser, ObjectBrowseContext, Project, TempS3Creds } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
 import { federationFor } from '../federation';
+import { errorMetadata, logEvent } from '../log';
 
 const CACHE_REFRESH_SKEW_MS = 5 * 60 * 1000;
 const MAX_CREDENTIAL_CACHE_ENTRIES = 256;
@@ -118,13 +119,25 @@ async function cachedFederatedCredentials(
 
 	try {
 		const loaded = await credentials.getOrLoad(key, async () => {
+			const sessionId = createSessionId();
+			// Logged inside the single-flight loader so concurrent waiters produce one event.
 			const value = await exchangeFederatedStorageCredentials(
 				wif.issuer,
 				wif.issuerUrl,
 				wif.target,
 				projectId,
-				{ kind: 'session', id: createSessionId() },
-			);
+				{ kind: 'session', id: sessionId },
+			).catch((error: unknown) => {
+				logEvent({
+					level: 'warn',
+					event: 'object_browse_wif_exchange_failed',
+					project_id: projectId,
+					session_id: sessionId,
+					...(integrationId ? { integration_id: integrationId } : {}),
+					...errorMetadata(error),
+				});
+				throw error;
+			});
 			const expiresAt = value.expiration ? Date.parse(value.expiration) : Number.NaN;
 			return { credentials: value, expiresAt };
 		});

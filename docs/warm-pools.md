@@ -91,5 +91,5 @@ A late result cannot revive a retired claim. A stale health check cannot retire 
 
 For readiness failures, `warm_pool_claim_failed` logs include `sandbox_id`, `elapsed_ms`, and `readiness_reason`.
 The reasons are `reconnect_timeout`, `reconnect_failed`, `command_timeout`, `command_transport_failed`, and `command_failed`.
-For provider failures, the log keeps allowlisted error fields from the original cause, such as the type, code, and status.
+For provider failures, the log keeps allowlisted error fields from the original cause, such as `name`, `code`, and `status`.
 It excludes provider messages, request bodies, and command output.
