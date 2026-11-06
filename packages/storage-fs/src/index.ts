@@ -10,7 +10,7 @@
  * stage into a reserved `.tmp/` dir (fsync, then rename into place — atomic on a
  * single filesystem).
  *
- * ETags are the sha-256 of the content, so they survive restarts (the catalog
+ * ETags use device, inode, size, and nanosecond mtime, so they survive restarts (the catalog
  * compare-and-swap depends on that). `onlyIfNotExists` (hard link) is atomic
  * even across processes; `onlyIfEtagMatches` is only atomic within one process,
  * advertised via `casScope: 'process'` and surfaced by preflight as a startup
@@ -20,9 +20,10 @@
  * both an object and a prefix of another
  * (`a` vs `a/b`); marimohub's key layout never does this.
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { KeyedSerialQueue } from '@marimo-hub/core/concurrency';
 import { constants, mkdirSync, realpathSync } from 'node:fs';
+import type { BigIntStats } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
@@ -33,6 +34,8 @@ import type {
 	BucketListResult,
 	BucketObject,
 	BucketObjectBody,
+	BucketGetOptions,
+	BucketGetResult,
 	BucketPutOptions,
 } from '@marimo-hub/core/ports/bucket';
 
@@ -66,8 +69,8 @@ function errCode(err: unknown): string | undefined {
 		: undefined;
 }
 
-function sha256hex(body: Uint8Array): string {
-	return createHash('sha256').update(body).digest('hex');
+function statEtag(stat: BigIntStats): string {
+	return `${stat.dev}-${stat.ino}-${stat.size}-${stat.mtimeNs}`;
 }
 
 function assertValidKey(key: string): void {
@@ -113,7 +116,7 @@ export class FsStorage implements Bucket {
 
 	private async withObject<T>(
 		key: string,
-		read: (handle: fsp.FileHandle, uploaded: Date) => Promise<T>,
+		read: (handle: fsp.FileHandle, stat: BigIntStats) => Promise<T>,
 	): Promise<T | null> {
 		const filePath = this.resolvePath(key);
 		let handle: fsp.FileHandle;
@@ -124,7 +127,7 @@ export class FsStorage implements Bucket {
 			throw err;
 		}
 		try {
-			const stat = await handle.stat();
+			const stat = await handle.stat({ bigint: true });
 			if (!stat.isFile()) return null;
 			// O_NOFOLLOW only guards the final component; an intermediate symlinked
 			// directory can still escape the root. Re-resolve the real path, refuse
@@ -138,11 +141,11 @@ export class FsStorage implements Bucket {
 			// win the open→realpath→stat window — but such an attacker already has write
 			// access to the hub's private storage tree and has fully compromised it.
 			let real: string;
-			let realStat: Awaited<ReturnType<typeof fsp.stat>>;
+			let realStat: BigIntStats;
 			try {
 				real = await fsp.realpath(filePath);
 				if (real !== this.root && !real.startsWith(this.rootPrefix)) return null;
-				realStat = await fsp.stat(real);
+				realStat = await fsp.stat(real, { bigint: true });
 			} catch (err) {
 				// The path vanished (or a segment did) after open — treat as absent so
 				// list()'s concurrent-delete behavior stays intact.
@@ -150,40 +153,39 @@ export class FsStorage implements Bucket {
 				throw err;
 			}
 			if (realStat.ino !== stat.ino || realStat.dev !== stat.dev) return null;
-			return await read(handle, stat.mtime);
+			return await read(handle, stat);
 		} finally {
 			await handle.close();
 		}
 	}
 
-	async get(key: string): Promise<BucketObjectBody | null> {
-		const read = await this.withObject(key, async (handle, uploaded) => ({
-			body: await handle.readFile(),
-			uploaded,
-		}));
-		if (!read) return null;
-		const { body, uploaded } = read;
-		return {
-			key,
-			etag: sha256hex(body),
-			size: body.length,
-			uploaded,
-			text: async () => new TextDecoder().decode(body),
-			json: async <T>() => JSON.parse(new TextDecoder().decode(body)) as T,
-			bytes: async () => body,
-		};
+	get(key: string): Promise<BucketObjectBody | null>;
+	get(key: string, options?: BucketGetOptions): Promise<BucketGetResult>;
+	async get(key: string, options?: BucketGetOptions): Promise<BucketGetResult> {
+		return this.withObject(key, async (handle, stat) => {
+			const etag = statEtag(stat);
+			if (options?.ifNoneMatch && options.ifNoneMatch === etag)
+				return { key, etag, notModified: true as const };
+			const body = await handle.readFile();
+			return {
+				key,
+				etag,
+				size: body.length,
+				uploaded: stat.mtime,
+				text: async () => new TextDecoder().decode(body),
+				json: async <T>() => JSON.parse(new TextDecoder().decode(body)) as T,
+				bytes: async () => body,
+			};
+		});
 	}
 
 	async head(key: string): Promise<BucketObject | null> {
-		return this.withObject(key, async (handle, uploaded) => {
-			const hash = createHash('sha256');
-			let size = 0;
-			for await (const chunk of handle.createReadStream({ autoClose: false })) {
-				hash.update(chunk);
-				size += chunk.length;
-			}
-			return { key, etag: hash.digest('hex'), size, uploaded };
-		});
+		return this.withObject(key, async (_handle, stat) => ({
+			key,
+			etag: statEtag(stat),
+			size: Number(stat.size),
+			uploaded: stat.mtime,
+		}));
 	}
 
 	private withKeyLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -235,7 +237,6 @@ export class FsStorage implements Bucket {
 		}
 		return this.withKeyLock(key, async () => {
 			await this.assertContainedParent(filePath);
-			const hash = createHash('sha256');
 			let written = 0;
 			const tmp = path.join(this.tmpDir, randomUUID());
 			try {
@@ -244,7 +245,6 @@ export class FsStorage implements Bucket {
 					for await (const chunk of chunks) {
 						written += chunk.byteLength;
 						if (written > size) throw new Error('Stream exceeds declared size');
-						hash.update(chunk);
 						await handle.writeFile(chunk);
 					}
 					if (written !== size) throw new Error('Stream does not match declared size');
@@ -255,7 +255,7 @@ export class FsStorage implements Bucket {
 					await handle.close();
 				}
 				// rename/link preserve mtime, so stat the staged file for `uploaded`.
-				const uploaded = (await fsp.stat(tmp)).mtime;
+				const stat = await fsp.stat(tmp, { bigint: true });
 				await fsp.mkdir(path.dirname(filePath), { recursive: true });
 				if (options?.onlyIfNotExists) {
 					try {
@@ -275,7 +275,7 @@ export class FsStorage implements Bucket {
 				} else {
 					await fsp.rename(tmp, filePath);
 				}
-				return { key, etag: hash.digest('hex'), size, uploaded };
+				return { key, etag: statEtag(stat), size, uploaded: stat.mtime };
 			} finally {
 				// ENOENT after a successful rename (the staged file was consumed).
 				await fsp.unlink(tmp).catch(() => {});

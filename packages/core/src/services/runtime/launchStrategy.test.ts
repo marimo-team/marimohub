@@ -52,7 +52,9 @@ describe('resolveLaunchStrategyForSession', () => {
 
 	it('falls back leniently when the bucket read throws', async () => {
 		const bucket = new MemoryBucket();
-		bucket.get = () => Promise.reject(new Error('boom'));
+		bucket.get = async () => {
+			throw new Error('boom');
+		};
 		const resolved = await resolveLaunchStrategyForSession({
 			entryNotebookKey: ENTRY_KEY,
 			bucket,

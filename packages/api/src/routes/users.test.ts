@@ -153,7 +153,7 @@ describe('User routes', () => {
 			await expectError(await other('GET', '/users/search?q=other'), 403);
 		}
 		expect(get.mock.calls.filter(([key]) => key === paths.catalog)).toHaveLength(3);
-		expect(get.mock.calls.filter(([key]) => key.startsWith('_system/snapshots/'))).toHaveLength(1);
+		expect(get.mock.calls.filter(([key]) => key.startsWith('_system/snapshots/'))).toHaveLength(0);
 	});
 
 	it('retains display identities but revokes search after the only project membership is deleted', async () => {

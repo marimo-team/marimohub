@@ -1420,9 +1420,9 @@ describe('CoreWeaveCompute', () => {
 			}).create(SANDBOX_ID);
 			await inst.exec('true');
 			const { url } = await inst.exposePort(2718, {
-				hostname: 'sandbox.86c6bc-marimo-hub.coreweave.app',
+				hostname: 'sandbox.example.com',
 			});
-			expect(url).toBe('https://cw-1.sandbox.86c6bc-marimo-hub.coreweave.app');
+			expect(url).toBe('https://cw-1.sandbox.example.com');
 		});
 	});
 

@@ -39,7 +39,7 @@ Because there is no database, the object store itself must provide the guarantee
 
 - **Strong read-after-write consistency** — a read (or list) immediately following a write reflects the latest data, so a writer always sees the snapshot it just committed.
 - **Conditional writes (compare-and-swap)** — `If-Match` on ETag for the atomic `catalog.json` swap, returning `412 Precondition Failed` on mismatch; `If-None-Match: *` (create-if-absent) for first-write bootstrapping.
-- **Stable ETags** — `head`, `list`, and `get` return the same non-empty ETag for an unchanged object, and the ETag changes whenever the contents change (a content-hash backend such as `storage-fs` may keep it across an identical rewrite). The per-process metadata and session caches, and the `ensureInitialized` catalog check, rely on this to skip downloads. A backend that cannot supply an ETag returns `''`, and none of these caches store or match such a value.
+- **Stable ETags** — `head`, `list`, and `get` return the same non-empty ETag for an unchanged object, and the ETag changes whenever the contents change (a content-hash backend can keep it across an identical rewrite). The per-process metadata and session caches, and the `ensureInitialized` catalog check, rely on this to skip downloads. A backend that cannot supply an ETag returns `''`, and none of these caches store or match such a value.
 
 AWS S3 provides both (strong read-after-write consistency since 2020; `If-Match` / `If-None-Match` on `PutObject` since 2024). **Verify these for any other S3-compatible target** (MinIO, Ceph RGW, Backblaze B2, Tigris, …) — conditional-write support in particular varies by implementation and version. This is the single most important portability constraint for the design.
 
@@ -60,6 +60,39 @@ only file ever mutated in place
 `catalog.json` is a tiny pointer file — it names the current snapshot. Every write operation clones the current snapshot, applies changes, writes a new immutable snapshot, then atomically swaps `catalog.json` to point at it using a conditional PUT on ETag. If two writers race, one gets a `412 Precondition Failed` and retries. No corruption is possible.
 
 `ensureInitialized` caches a positive "catalog populated" result for 30 seconds per process. A wiped or reset bucket can take up to 30 seconds per replica to be detected and re-initialized.
+
+### Conditional reads
+
+`Bucket.get(key, { ifNoneMatch: etag })` returns:
+
+- `{ key, etag, notModified: true }` if the ETag matches.
+- The current body if the ETag differs or the supplied tag is empty.
+- `null` if the object is missing.
+
+`MetadataCache` validates cached records against storage and returns a clone.
+Storage errors propagate. Cached records never replace failed reads. CAS
+operations read records directly from storage.
+
+### Snapshot cache and authorization
+
+Every catalog read validates `catalog.json`. Each bucket instance shares two
+parsed immutable snapshots, keyed by path, with project and involvement indexes.
+Only immutable snapshot loads share concurrent requests. Mutators receive a deep
+clone. Their results are cloned before publication. Successful commits populate
+the cache. All runtimes freeze cached snapshots.
+
+Project lists filter candidates when the subject has no default grant. App-only
+checks use candidates when the subject default is absent or `app-user`.
+Candidates include owners, projected members, incomplete legacy entries, and
+projects with a default grant. Candidate roles use validated `project.json`
+reads. Stale projections can deny new access but cannot preserve revoked access.
+If publication fails after a metadata write, listings can omit new grants until
+a retry or recovery repairs the projection.
+
+If neither the subject default nor the candidates supply a role, app-only checks
+read the remaining projects. This prevents an unprojected app membership from
+granting project creation. Subject defaults of viewer or higher require all
+project records because explicit roles can restrict access.
 
 A single GET on the current snapshot returns the complete project and notebook listing — all metadata, no code. At 10 projects × 100 notebooks with ~200 bytes of metadata per notebook, the snapshot is roughly 200KB. That's the entire index in one fast GET.
 

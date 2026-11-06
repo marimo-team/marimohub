@@ -30,6 +30,8 @@ import type {
 	BucketListResult,
 	BucketObject,
 	BucketObjectBody,
+	BucketGetOptions,
+	BucketGetResult,
 	BucketPutOptions,
 } from '@marimo-hub/core/ports/bucket';
 
@@ -234,25 +236,29 @@ export class GcsStorage implements Bucket {
 
 	// --- Bucket -------------------------------------------------------------
 
-	async get(key: string): Promise<BucketObjectBody | null> {
-		const res = await this.client.raw(this.objectUrl(key, '?alt=media'), {
+	get(key: string): Promise<BucketObjectBody | null>;
+	get(key: string, options?: BucketGetOptions): Promise<BucketGetResult>;
+	async get(key: string, options?: BucketGetOptions): Promise<BucketGetResult> {
+		const condition = options?.ifNoneMatch
+			? `&ifGenerationNotMatch=${encodeURIComponent(options.ifNoneMatch)}`
+			: '';
+		const res = await this.client.raw(this.objectUrl(key, `?alt=media${condition}`), {
 			headers: await this.authHeaders(),
 		});
 		if (res.status === 404) return null;
+		if (res.status === 304 && options?.ifNoneMatch)
+			return { key, etag: options.ifNoneMatch, notModified: true };
 		if (!res.ok) return this.failNonOk(res, 'get', key);
 
 		const bodyBytes = new Uint8Array(await res.arrayBuffer());
 		let bodyText: string | undefined;
 		const decode = () => (bodyText ??= new TextDecoder().decode(bodyBytes));
-		// Real GCS returns the generation in a response header on media downloads;
-		// fall back to a metadata lookup if a backend (e.g. an emulator) omits it.
-		let generation = res.headers.get('x-goog-generation') ?? '';
-		let uploaded = res.headers.get('last-modified');
+		// A later metadata lookup could label these bytes with a newer generation.
+		const generation = res.headers.get('x-goog-generation');
 		if (!generation) {
-			const meta = await this.head(key);
-			generation = meta?.etag ?? '';
-			uploaded = uploaded ?? meta?.uploaded.toISOString() ?? null;
+			throw new Error(`GCS get failed for "${key}": missing x-goog-generation header`);
 		}
+		const uploaded = res.headers.get('last-modified');
 		const size = Number(res.headers.get('content-length') ?? bodyBytes.length);
 		return {
 			key,

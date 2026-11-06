@@ -260,7 +260,7 @@ describe('group principals', () => {
 			role: 'app-user',
 		});
 	});
-	it('fails closed on missing group projections for directory access, but reads project heads for lists', async () => {
+	it('fails closed on unprojected group grants for directory access and private lists', async () => {
 		const { projects, catalog, bucket } = await setupTestEnv();
 		const project = await projects.createProject({ name: 'Groups', description: '' }, ACTOR);
 		await bucket.put(
@@ -268,7 +268,7 @@ describe('group principals', () => {
 			JSON.stringify({ ...project, members: [{ group: subject.groups[0], role: 'viewer' }] }),
 		);
 		expect(await catalog.hasProjectInvolvement(subject)).toBe(false);
-		expect((await projects.listProjects({ subject })).map((p) => p.id)).toContain(project.id);
+		expect((await projects.listProjects({ subject })).map((p) => p.id)).not.toContain(project.id);
 	});
 	it('does not grant directory access to a removed IdP group or a deleted project', async () => {
 		const { projects, catalog } = await setupTestEnv();

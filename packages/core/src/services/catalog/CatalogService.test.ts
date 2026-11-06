@@ -6,6 +6,7 @@ import {
 	makeSnapshot,
 	makeSnapshotProjectEntry,
 	MemoryBucket,
+	RecordingBucket,
 	setupTestEnv,
 	uid,
 } from '../../testing';
@@ -21,6 +22,7 @@ import { noopMetrics } from '../../ports/metrics';
 import { EventSchema, SnapshotSchema } from '../../schema';
 import type { Project, Snapshot, SnapshotProjectEntry } from '../../schema';
 import { CatalogService } from './CatalogService';
+import { createServices, ensureInitialized } from '../index';
 import { EventService } from './EventService';
 
 // Exhaustion tests should not spend 750 ms in production backoff timers.
@@ -33,6 +35,261 @@ describe('CatalogService', () => {
 	beforeEach(async () => {
 		bucket = new MemoryBucket();
 		catalog = new CatalogService(bucket, noopMetrics, undefined, ZERO_BACKOFF);
+	});
+
+	describe('snapshot cache', () => {
+		it('shares immutable loads while validating the pointer independently', async () => {
+			await catalog.initialize(ACTOR);
+			const get = vi.spyOn(bucket, 'get');
+			const snapshots = await Promise.all([
+				catalog.getCurrentSnapshot(),
+				catalog.getCurrentSnapshot(),
+			]);
+			expect(snapshots[0]).toBe(snapshots[1]);
+			expect(await catalog.getCurrentSnapshot()).toBe(snapshots[0]);
+			expect(get.mock.calls.filter(([key]) => key.startsWith(paths.snapshotsPrefix))).toHaveLength(
+				1,
+			);
+			expect(get.mock.calls.filter(([key]) => key === paths.catalog)).toHaveLength(3);
+			expect(get.mock.calls.at(-1)).toEqual([
+				paths.catalog,
+				{ ifNoneMatch: (await bucket.head(paths.catalog))!.etag },
+			]);
+		});
+
+		it('retains two snapshot keys and evicts the least recently read', async () => {
+			const snapshots = [makeSnapshot(), makeSnapshot(), makeSnapshot()];
+			const pointAt = async (snapshot: Snapshot) => {
+				await bucket.put(paths.catalog, JSON.stringify(makeCatalog(snapshot.snapshot_id)));
+				return catalog.getCurrentSnapshot();
+			};
+			for (const snapshot of snapshots)
+				await bucket.put(paths.snapshot(snapshot.snapshot_id), JSON.stringify(snapshot));
+			const first = await pointAt(snapshots[0]);
+			const second = await pointAt(snapshots[1]);
+			expect(await pointAt(snapshots[0])).toBe(first);
+			await pointAt(snapshots[2]);
+			expect(await pointAt(snapshots[0])).toBe(first);
+			const get = vi.spyOn(bucket, 'get');
+			expect(await pointAt(snapshots[1])).toEqual(second);
+			expect(
+				get.mock.calls.filter(([key]) => key === paths.snapshot(second.snapshot_id)),
+			).toHaveLength(1);
+		});
+
+		it('skips storage writes and audit events for an unchanged input', async () => {
+			await catalog.initialize(ACTOR);
+			const events = new EventService(bucket);
+			const append = vi.spyOn(events, 'append');
+			const service = new CatalogService(bucket, noopMetrics, events);
+			const before = await service.getCurrentSnapshot();
+			const put = vi.spyOn(bucket, 'put');
+			expect(await service.mutateSnapshot('noop', ACTOR, (snapshot) => snapshot)).toBe(before);
+			expect(put).not.toHaveBeenCalled();
+			expect(append).not.toHaveBeenCalled();
+		});
+
+		it('clones in-place mutators and warms the committed snapshot', async () => {
+			await catalog.initialize(ACTOR);
+			const before = await catalog.getCurrentSnapshot();
+			const project = makeSnapshotProjectEntry();
+			const after = await catalog.mutateSnapshot('test', ACTOR, (snapshot) => {
+				snapshot.projects.push(project);
+				return snapshot;
+			});
+			expect(before.projects).toEqual([]);
+			expect(after.projects).toEqual([project]);
+			expect(() => before.projects.push(project)).toThrow(TypeError);
+			const get = vi.spyOn(bucket, 'get');
+			expect(await catalog.getCurrentSnapshot()).toBe(after);
+			expect(get.mock.calls.filter(([key]) => key.startsWith(paths.snapshotsPrefix))).toHaveLength(
+				0,
+			);
+			await expect(
+				catalog.mutateSnapshot('test.fail', ACTOR, (snapshot) => {
+					snapshot.projects[0].notebooks.push({} as never);
+					throw new Error('mutation failed');
+				}),
+			).rejects.toThrow('mutation failed');
+			expect(after.projects[0].notebooks).toEqual([]);
+		});
+
+		it.each(['read', 'commit', 'noop'] as const)(
+			'protects snapshots and indexes exposed by %s in production',
+			async (source) => {
+				vi.stubEnv('NODE_ENV', 'production');
+				try {
+					await catalog.initialize(ACTOR);
+					const project = makeSnapshotProjectEntry({ name: 'Stored' });
+					const committed = await catalog.mutateSnapshot('test', ACTOR, (snapshot) => ({
+						...snapshot,
+						projects: [project],
+					}));
+					const entry = await catalog.getCurrentSnapshotEntry();
+					const subject = { id: project.owner, email: 'owner@example.com' };
+					expect(entry.candidatesFor(subject)).toContain(project.id);
+					const exposed =
+						source === 'commit'
+							? committed
+							: source === 'noop'
+								? await catalog.mutateSnapshot('noop', ACTOR, (snapshot) => snapshot)
+								: await new CatalogService(bucket).getCurrentSnapshot();
+					expect(() => exposed.projects.splice(0)).toThrow(TypeError);
+					expect(() => {
+						exposed.projects[0].name = 'Corrupted';
+					}).toThrow(TypeError);
+					expect(() => {
+						exposed.projects[0].owner = uid('outsider');
+					}).toThrow(TypeError);
+					expect(entry.byProjectId.get(project.id)?.name).toBe('Stored');
+					expect(entry.candidatesFor(subject)).toContain(project.id);
+					expect(await catalog.getCurrentSnapshot()).toEqual(
+						await (await bucket.get(paths.snapshot(committed.snapshot_id)))!.json(),
+					);
+				} finally {
+					vi.unstubAllEnvs();
+				}
+			},
+		);
+
+		it('detaches callback-owned entries before publishing in production', async () => {
+			vi.stubEnv('NODE_ENV', 'production');
+			try {
+				await catalog.initialize(ACTOR);
+				const project = makeSnapshotProjectEntry({ name: 'Stored' });
+				const put = bucket.put.bind(bucket);
+				vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+					const object = await put(key, value, options);
+					if (key.startsWith(paths.snapshotsPrefix)) project.name = 'Changed during publication';
+					return object;
+				});
+				const committed = await catalog.mutateSnapshot('test', ACTOR, (snapshot) => {
+					snapshot.projects.push(project);
+					return snapshot;
+				});
+				project.name = 'Changed after publication';
+				const current = await catalog.getCurrentSnapshot();
+				expect(current.projects[0].name).toBe('Stored');
+				expect(current).toEqual(
+					await (await bucket.get(paths.snapshot(committed.snapshot_id)))!.json(),
+				);
+			} finally {
+				vi.unstubAllEnvs();
+			}
+		});
+
+		it('retries an in-place mutation against the winning snapshot after a CAS conflict', async () => {
+			await catalog.initialize(ACTOR);
+			const before = await catalog.getCurrentSnapshot();
+			const competitor = makeSnapshotProjectEntry({ name: 'Competitor' });
+			const own = makeSnapshotProjectEntry({ name: 'Own' });
+			const put = bucket.put.bind(bucket);
+			let conflict = true;
+			vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (key === paths.catalog && conflict) {
+					conflict = false;
+					await new CatalogService(bucket).mutateSnapshot('competitor', ACTOR, (snapshot) => {
+						snapshot.projects.push(competitor);
+						return snapshot;
+					});
+				}
+				return put(key, value, options);
+			});
+			const mutate = vi.fn((snapshot: Snapshot) => {
+				snapshot.projects.push(own);
+				return snapshot;
+			});
+			const committed = await catalog.mutateSnapshot('own', ACTOR, mutate);
+			expect(mutate).toHaveBeenCalledTimes(2);
+			expect(before.projects).toEqual([]);
+			expect(committed.projects.map((project) => project.id)).toEqual([competitor.id, own.id]);
+			expect(await catalog.getCurrentSnapshot()).toEqual(committed);
+		});
+
+		it.each([false, true])(
+			'reconciles a failed pointer PUT with storage (committed: %s)',
+			async (committed) => {
+				await catalog.initialize(ACTOR);
+				const before = await catalog.getCurrentSnapshot();
+				const project = makeSnapshotProjectEntry();
+				const put = bucket.put.bind(bucket);
+				vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+					if (key === paths.catalog) {
+						if (committed) await put(key, value, options);
+						throw new Error('connection lost');
+					}
+					return put(key, value, options);
+				});
+				await expect(
+					catalog.mutateSnapshot('test', ACTOR, (snapshot) => {
+						snapshot.projects.push(project);
+						return snapshot;
+					}),
+				).rejects.toThrow('connection lost');
+				const current = await catalog.getCurrentSnapshot();
+				expect(current.projects).toEqual(committed ? [project] : []);
+				expect(before.projects).toEqual([]);
+				if (!committed) expect(current).toBe(before);
+			},
+		);
+
+		it('does not share identical snapshot keys across buckets', async () => {
+			const other = new MemoryBucket();
+			const snapshot = makeSnapshot();
+			for (const target of [bucket, other])
+				await target.put(paths.catalog, JSON.stringify(makeCatalog(snapshot.snapshot_id)));
+			await bucket.put(paths.snapshot(snapshot.snapshot_id), JSON.stringify(snapshot));
+			await other.put(
+				paths.snapshot(snapshot.snapshot_id),
+				JSON.stringify({ ...snapshot, operation: 'other' }),
+			);
+			expect((await catalog.getCurrentSnapshot()).operation).toBe(snapshot.operation);
+			expect((await new CatalogService(other).getCurrentSnapshot()).operation).toBe('other');
+		});
+
+		it('shares snapshots with traced service graphs and ensureInitialized', async () => {
+			await catalog.initialize(ACTOR);
+			const snapshot = await catalog.getCurrentSnapshot();
+			const get = vi.spyOn(bucket, 'get');
+			const wrapped = new RecordingBucket(bucket);
+			const wrappedCatalog = new CatalogService(
+				wrapped,
+				noopMetrics,
+				undefined,
+				undefined,
+				undefined,
+				bucket,
+			);
+			expect(await wrappedCatalog.getCurrentSnapshot()).toBe(snapshot);
+			expect(wrapped.calls.get).toEqual([paths.catalog]);
+			for (let i = 0; i < 2; i++) {
+				const services = createServices(bucket, undefined, { tracing: true });
+				expect(await services.catalog.getCurrentSnapshot()).toBe(snapshot);
+			}
+			await ensureInitialized(bucket, ACTOR, { createDefaultProject: async () => false });
+			expect(get.mock.calls.filter(([key]) => key.startsWith(paths.snapshotsPrefix))).toHaveLength(
+				0,
+			);
+		});
+
+		it('fails closed on missing or unreadable pointers despite a cached snapshot', async () => {
+			await catalog.initialize(ACTOR);
+			await catalog.getCurrentSnapshot();
+			vi.spyOn(bucket, 'get').mockRejectedValueOnce(new Error('unavailable'));
+			await expect(catalog.getCurrentSnapshot()).rejects.toThrow('unavailable');
+			await bucket.delete(paths.catalog);
+			await expect(catalog.getCurrentSnapshot()).rejects.toThrow(NotInitializedError);
+		});
+
+		it('retries a failed immutable load', async () => {
+			const snapshot = await catalog.initialize(ACTOR);
+			const get = bucket.get.bind(bucket);
+			vi.spyOn(bucket, 'get')
+				.mockImplementationOnce((key) => get(key))
+				.mockRejectedValueOnce(new Error('unavailable'));
+			await expect(catalog.getCurrentSnapshot()).rejects.toThrow('unavailable');
+			expect(await catalog.getCurrentSnapshot()).toEqual(snapshot);
+		});
 	});
 
 	describe('hasProjectInvolvement', () => {
@@ -54,6 +311,7 @@ describe('CatalogService', () => {
 						status: project.status,
 						member_ids: project.members.flatMap((m) => (m.user_id ? [m.user_id] : [])),
 						member_emails: project.members.flatMap((m) => (m.email ? [m.email] : [])),
+						member_groups: project.members.flatMap((m) => (m.group ? [m.group] : [])),
 						...projection,
 					}),
 				],
@@ -163,11 +421,11 @@ describe('CatalogService', () => {
 			expect(await catalog.hasProjectInvolvement(outsider)).toBe(false);
 			expect(get.mock.calls.filter(([key]) => key.endsWith('/project.json'))).toHaveLength(0);
 			expect(get.mock.calls.filter(([key]) => key.startsWith('_system/snapshots/'))).toHaveLength(
-				1,
+				0,
 			);
 		});
 
-		it('indexes legacy rosters once across concurrent and repeated denials', async () => {
+		it('validates legacy rosters on every concurrent and repeated denial', async () => {
 			const project = makeProject();
 			await seedProject(project, { member_ids: undefined });
 			const get = vi.spyOn(bucket, 'get');
@@ -176,10 +434,10 @@ describe('CatalogService', () => {
 			).toEqual([false, false, false, false, false]);
 			expect(await catalog.hasProjectInvolvement(outsider)).toBe(false);
 			expect(get.mock.calls.filter(([key]) => key === paths.project(project.id).meta)).toHaveLength(
-				1,
+				6,
 			);
 			expect(get.mock.calls.filter(([key]) => key.startsWith('_system/snapshots/'))).toHaveLength(
-				1,
+				0,
 			);
 		});
 
@@ -489,9 +747,8 @@ describe('CatalogService', () => {
 		it('throws NotInitializedError without retrying when the snapshot pointer dangles', async () => {
 			const increment = vi.fn();
 			const svc = new CatalogService(bucket, { increment, gauge: vi.fn() });
-			const current = await svc.getCurrentSnapshot();
-			// Leave the catalog pointing at a snapshot that no longer exists.
-			await bucket.delete(paths.snapshot(current.snapshot_id));
+			const missing = createSnapshotId();
+			await bucket.put(paths.catalog, JSON.stringify(makeCatalog(missing)));
 
 			await expect(svc.mutateSnapshot('test', ACTOR, (s) => ({ ...s }))).rejects.toBeInstanceOf(
 				NotInitializedError,
@@ -507,9 +764,10 @@ describe('CatalogService', () => {
 		});
 
 		it('throws a corrupted-object error on a malformed snapshot object', async () => {
-			const current = await catalog.getCurrentSnapshot();
-			await bucket.put(paths.snapshot(current.snapshot_id), JSON.stringify({ nope: true }));
-			await expect(catalog.mutateSnapshot('test', ACTOR, (s) => ({ ...s }))).rejects.toThrow(
+			const corrupt = createSnapshotId();
+			await bucket.put(paths.snapshot(corrupt), JSON.stringify({ nope: true }));
+			await bucket.put(paths.catalog, JSON.stringify(makeCatalog(corrupt)));
+			await expect(catalog.mutateSnapshot('test', ACTOR, (s) => s)).rejects.toThrow(
 				/Stored data is temporarily unavailable/,
 			);
 		});

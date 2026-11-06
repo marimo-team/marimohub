@@ -4589,6 +4589,15 @@ components:
                 type: array
                 items:
                   type: string
+              default_role:
+                type: string
+                enum:
+                  - inherit
+                  - none
+                  - manager
+                  - editor
+                  - viewer
+                  - app-user
               member_emails:
                 type: array
                 items:

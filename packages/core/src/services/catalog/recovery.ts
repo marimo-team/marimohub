@@ -302,17 +302,13 @@ async function planProject({
 	}
 	const entry: SnapshotProjectEntry = {
 		...previous,
+		...projectCatalogPatch(project, project, { finalizeSecurityLabels: true }),
 		id: project.id,
-		name: project.name,
-		description: project.description,
 		owner: project.owner,
-		status: project.status,
 		created_at: project.created_at,
-		updated_at: project.updated_at,
 		notebook_count: 0,
 		notebooks: [],
 	};
-	Object.assign(entry, projectCatalogPatch(project, entry, { finalizeSecurityLabels: true }));
 	const unpublished = new Set<NotebookId>();
 	for (const key of projectKeys?.importReceipts ?? []) {
 		const receipt = await read(key, NotebookImportItemSchema);

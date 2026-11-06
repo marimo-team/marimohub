@@ -238,6 +238,9 @@ export const SnapshotNotebookEntrySchema = z.looseObject({
 
 export type SnapshotNotebookEntry = z.infer<typeof SnapshotNotebookEntrySchema>;
 
+export const ProjectDefaultRoleSchema = z.enum(['inherit', 'none', ...ASSIGNABLE_ROLES]);
+export type ProjectDefaultRole = z.infer<typeof ProjectDefaultRoleSchema>;
+
 // `looseObject` for the same rolling-deploy reason as SnapshotSchema below:
 // entries round-trip through every replica's parse during a catalog CAS
 // mutation, and a strict object would strip fields added by a newer version
@@ -263,8 +266,9 @@ export const SnapshotProjectEntrySchema = z.looseObject({
 	// Set by a notebook move in the same snapshot write that moves the entry, so the search
 	// crawler sees the request from the snapshot it already holds instead of a separate record.
 	search_refresh: z.string().optional(),
-	// Roster projections can lag changes. Authorization reads project.json.
+	// Candidate projections can lag changes. Authorization reads project.json.
 	member_ids: z.array(UserIdSchema).optional(),
+	default_role: ProjectDefaultRoleSchema.optional(),
 	// Pending invite emails are normalized for identity reconciliation.
 	member_emails: z.array(z.string().transform((e) => e.toLowerCase())).optional(),
 	// Group ids are exact. Missing projections cannot grant access.
@@ -483,9 +487,6 @@ export const ProjectFederationSchema = z.object({
 });
 
 export type ProjectFederation = z.infer<typeof ProjectFederationSchema>;
-
-export const ProjectDefaultRoleSchema = z.enum(['inherit', 'none', ...ASSIGNABLE_ROLES]);
-export type ProjectDefaultRole = z.infer<typeof ProjectDefaultRoleSchema>;
 
 export const ProjectSchema = z.object({
 	schema_version: SchemaVersionSchema,

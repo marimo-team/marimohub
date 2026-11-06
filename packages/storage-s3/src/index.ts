@@ -33,6 +33,8 @@ import type {
 	BucketListResult,
 	BucketObject,
 	BucketObjectBody,
+	BucketGetOptions,
+	BucketGetResult,
 	BucketPutOptions,
 } from '@marimo-hub/core/ports/bucket';
 
@@ -183,11 +185,17 @@ export class S3Storage implements Bucket {
 		},
 	};
 
-	async get(key: string): Promise<BucketObjectBody | null> {
+	get(key: string): Promise<BucketObjectBody | null>;
+	get(key: string, options?: BucketGetOptions): Promise<BucketGetResult>;
+	async get(key: string, options?: BucketGetOptions): Promise<BucketGetResult> {
 		try {
 			const { res, bodyBytes } = await this.request(async (abortSignal) => {
 				const res = await this.client.send(
-					new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+					new GetObjectCommand({
+						Bucket: this.bucket,
+						Key: key,
+						...(options?.ifNoneMatch ? { IfNoneMatch: `"${options.ifNoneMatch}"` } : {}),
+					}),
 					{ abortSignal },
 				);
 				const body = res.Body;
@@ -219,6 +227,9 @@ export class S3Storage implements Bucket {
 			};
 		} catch (err) {
 			if (isNotFound(err)) return null;
+			if (options?.ifNoneMatch && httpStatus(err) === 304) {
+				return { key, etag: options.ifNoneMatch, notModified: true };
+			}
 			throw err;
 		}
 	}
