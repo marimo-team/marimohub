@@ -283,6 +283,9 @@ export {
 	SandboxProvisioner,
 } from './runtime/SandboxProvisioner';
 export type {
+	BootOptions,
+	BootedSandbox,
+	WorkspacePrefetch,
 	BucketConfig,
 	PreparedSandbox,
 	ProvisionOptions,

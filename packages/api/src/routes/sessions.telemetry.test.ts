@@ -72,7 +72,14 @@ describe('Session provision client telemetry', () => {
 	] as const)('groups REST requests using $kind as $client', async ({ kind, client }) => {
 		const env = await setup({ kind });
 		const session = await expectOk<SessionCreateResult>(await env.start());
-		env.expectProvision({ client, session_id: session.session_id });
+		env.expectProvision({
+			client,
+			session_id: session.session_id,
+			admission_ms: expect.any(Number),
+			cap_recheck_ms: expect.any(Number),
+			editor_claim_ms: expect.any(Number),
+			provision_boot_overlap_ms: expect.any(Number),
+		});
 	});
 
 	it.each(['development', 'personal-access-token', 'external-access-token'] as const)(
@@ -103,13 +110,10 @@ describe('Session provision client telemetry', () => {
 		} else {
 			await expectError(await env.start(), 500, 'INTERNAL_ERROR');
 		}
-		const sessions = await env.deps.services.sessions.listSessions(env.notebook.id);
-		expect(sessions).toHaveLength(1);
-		expect(sessions[0].status).toBe('failed');
+		expect(await env.deps.services.sessions.listSessions(env.notebook.id)).toEqual([]);
 		env.expectProvision({
 			client,
-			session_id: sessions[0].session_id,
-			provision_error_code: 'PROVISION_FAILED',
+			sandbox_boot_failed: true,
 		});
 	});
 

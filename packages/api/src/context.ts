@@ -405,6 +405,8 @@ export interface PolicyAnalyzerCapability {
 }
 
 export interface BackgroundTaskScheduler {
+	/** The host drains pending tasks on shutdown, without a request-lifetime deadline. */
+	drainsOnShutdown?: boolean;
 	defer(task: Promise<unknown>): void;
 }
 

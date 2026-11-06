@@ -378,12 +378,46 @@ describe('releaseSingletonClaim', () => {
 		await releaseSingletonClaim(claimCfg(bucket), 'A');
 		expect(await acquireSingletonClaim(claimCfg(bucket), 'B')).toEqual({
 			acquired: true,
+			etag: expect.any(String),
 			holder: 'B',
 		});
 		// A's compensation fires a second, stale release.
 		await releaseSingletonClaim(claimCfg(bucket), 'A');
 
 		expect(await holderAt(bucket)).toBe('B');
+	});
+
+	it('releases with the acquired ETag without another read', async () => {
+		const bucket = new MemoryBucket();
+		const claim = await acquireSingletonClaim(claimCfg(bucket), 'A');
+		if (!claim.acquired) throw new Error('claim not acquired');
+		const get = vi.spyOn(bucket, 'get');
+		await releaseSingletonClaim(claimCfg(bucket), 'A', claim.etag);
+		expect(get).not.toHaveBeenCalled();
+		expect(await holderAt(bucket)).toBeNull();
+	});
+
+	it('reports a failed fast-path release and leaves the claim held', async () => {
+		const bucket = new MemoryBucket();
+		const claim = await acquireSingletonClaim(claimCfg(bucket), 'A');
+		if (!claim.acquired) throw new Error('claim not acquired');
+		const failure = new Error('storage unavailable');
+		const get = vi.spyOn(bucket, 'get');
+		vi.spyOn(bucket, 'put').mockRejectedValueOnce(failure);
+		const onReleaseError = vi.fn();
+		await releaseSingletonClaim({ ...claimCfg(bucket), onReleaseError }, 'A', claim.etag);
+		expect(onReleaseError).toHaveBeenCalledExactlyOnceWith(failure);
+		expect(get).not.toHaveBeenCalled();
+		expect(await holderAt(bucket)).toBe('A');
+	});
+
+	it.each(['A', 'B'])('rechecks a stale release ETag with holder %s', async (holder) => {
+		const bucket = new MemoryBucket();
+		const claim = await acquireSingletonClaim(claimCfg(bucket), 'A');
+		if (!claim.acquired) throw new Error('claim not acquired');
+		await bucket.put(KEY, serialize(holder));
+		await releaseSingletonClaim(claimCfg(bucket), 'A', claim.etag);
+		expect(await holderAt(bucket)).toBe(holder === 'A' ? null : 'B');
 	});
 
 	it('reports a non-race failure instead of passing it off as a release', async () => {
@@ -421,6 +455,7 @@ describe('releaseSingletonClaim', () => {
 
 		expect(await acquireSingletonClaim(claimCfg(bucket), 'C')).toEqual({
 			acquired: true,
+			etag: expect.any(String),
 			holder: 'C',
 		});
 		expect(await holderAt(bucket)).toBe('C');

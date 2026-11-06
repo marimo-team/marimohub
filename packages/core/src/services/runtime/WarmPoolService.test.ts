@@ -100,6 +100,30 @@ function setup(overrides: Partial<WarmPoolConfig> = {}, referenceFor?: (id: Sand
 afterEach(() => vi.restoreAllMocks());
 
 describe('warm sandbox pools', () => {
+	it('reserves without probing, then retires a failed probe', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const sandbox = [...w.live.values()][0];
+		const probe = vi.spyOn(sandbox, 'exec').mockRejectedValue(new Error('transport failed'));
+		const claim = (await w.service.reserve(w.request()))!;
+		expect(probe).not.toHaveBeenCalled();
+		expect((await w.members())[0]).toMatchObject({ state: 'claimed', token: claim.member.token });
+		await expect(w.service.probe(claim)).rejects.toThrow('readiness failed');
+		expect((await w.members())[0].state).toBe('retiring');
+	});
+
+	it('checks claim expiry after an overlapping probe completes', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const claim = (await w.service.reserve(w.request()))!;
+		vi.spyOn(claim.sandbox, 'exec').mockImplementationOnce(async () => {
+			w.advance(60_000);
+			return { success: true, stdout: '', stderr: '', exitCode: 0 };
+		});
+		await expect(w.service.probe(claim)).rejects.toThrow('expired');
+		expect((await w.members())[0].state).toBe('retiring');
+	});
+
 	it('publishes provider references and claims them from another replica', async () => {
 		const w = setup({}, (id) => `provider-reference:${id}`);
 		await w.service.sweep();
@@ -1346,6 +1370,69 @@ describe('warm pool failure boundaries', () => {
 		await w.service.sweep();
 		expect((await w.service.store.read()).pools[0]).toMatchObject({ failures: 0, retry_at: 0 });
 		expect((await w.members())[0].state).toBe('ready');
+	});
+
+	it.each(['stopping', 'terminated', 'failed', 'replaced', 'deleted'])(
+		'rejects handoff when the session is %s during the warm probe',
+		async (change) => {
+			const w = setup();
+			await w.service.sweep();
+			const request = w.request();
+			const claim = (await w.service.reserve(request))!;
+			const session = await w.sessions.createSession({
+				...request.destination,
+				user_id: ACTOR,
+				sandbox_id: claim.member.sandbox_id,
+			});
+			let finishProbe!: () => void;
+			const probeGate = new Promise<void>((resolve) => {
+				finishProbe = resolve;
+			});
+			const exec = vi.spyOn(claim.sandbox, 'exec').mockImplementationOnce(async () => {
+				await probeGate;
+				return execResult(true, '', '');
+			});
+			const probe = w.service.probe(claim);
+			await vi.waitFor(() => expect(exec).toHaveBeenCalledOnce());
+			switch (change) {
+				case 'stopping':
+					await w.sessions.beginTerminating(session.project_id, session.session_id);
+					break;
+				case 'terminated':
+					await w.sessions.terminate(session.project_id, session.session_id);
+					break;
+				case 'failed':
+					await w.sessions.markFailed(session.project_id, session.session_id);
+					break;
+				case 'replaced':
+					await w.sessions.replaceStartingSandbox(
+						session.project_id,
+						session.session_id,
+						claim.member.sandbox_id,
+						createSandboxId(),
+					);
+					break;
+				case 'deleted':
+					await w.bucket.delete(paths.session(session.project_id, session.session_id));
+					break;
+			}
+			finishProbe();
+			await probe;
+			expect(session).toMatchObject({ status: 'starting', sandbox_id: claim.member.sandbox_id });
+			await expect(w.service.handoff(claim)).rejects.toThrow(
+				change === 'deleted' ? 'not found' : 'no longer starting',
+			);
+			expect((await w.members())[0]).toMatchObject({ state: 'claimed', assigned: false });
+		},
+	);
+
+	it('leaves the warm claim unassigned when the session read fails', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const claim = (await w.service.claim(w.request()))!;
+		vi.spyOn(w.sessions, 'getSession').mockRejectedValue(new Error('storage unavailable'));
+		await expect(w.service.handoff(claim)).rejects.toThrow('storage unavailable');
+		expect((await w.members())[0]).toMatchObject({ state: 'claimed', assigned: false });
 	});
 
 	it.each(['wrong sandbox', 'failed session', 'stale token', 'expired claim', 'expired lifetime'])(

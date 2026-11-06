@@ -413,6 +413,106 @@ describe('NotebookWorkspaceService', () => {
 		},
 	);
 
+	it('threads the lease ETag through heartbeat and release', async () => {
+		const get = vi.spyOn(bucket, 'get');
+		await service.withMutation(PROJECT_ID, NOTEBOOK_ID, {}, async (lease) => {
+			await lease.heartbeat();
+		});
+		expect(get.mock.calls.filter(([key]) => key === CLAIM_KEY)).toHaveLength(1);
+		expect((await readClaim(bucket)).holder).toBeNull();
+	});
+
+	it('defers release while a concurrent acquirer waits for its CAS', async () => {
+		const release = Promise.withResolvers<void>();
+		const put = bucket.put.bind(bucket);
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+			if (
+				key === CLAIM_KEY &&
+				WorkspaceMutationClaimSchema.parse(JSON.parse(String(value))).holder === null
+			)
+				await release.promise;
+			return put(key, value, options);
+		});
+		let pendingRelease: Promise<void> | undefined;
+		expect(
+			await service.withMutation(
+				PROJECT_ID,
+				NOTEBOOK_ID,
+				{
+					deferRelease: (pending) => {
+						pendingRelease = pending;
+					},
+				},
+				async () => 'published',
+			),
+		).toBe('published');
+		expect((await readClaim(bucket)).holder).not.toBeNull();
+		const mutation = vi.fn(async () => 'next');
+		const next = service.withMutation(PROJECT_ID, NOTEBOOK_ID, {}, mutation);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(mutation).not.toHaveBeenCalled();
+		release.resolve();
+		await pendingRelease;
+		expect(await next).toBe('next');
+		expect((await readClaim(bucket)).holder).toBeNull();
+	});
+
+	it('renews with a stale ETag after the same holder updates its claim', async () => {
+		await service.withMutation(PROJECT_ID, NOTEBOOK_ID, {}, async (lease) => {
+			const acquired = await readClaim(bucket);
+			const staleExpiresAt = new Date(Date.now() + 60_000).toISOString();
+			await bucket.put(CLAIM_KEY, JSON.stringify({ ...acquired, expires_at: staleExpiresAt }));
+			const get = vi.spyOn(bucket, 'get');
+			await lease.heartbeat();
+			expect(get.mock.calls.filter(([key]) => key === CLAIM_KEY)).toHaveLength(1);
+			const renewed = await readClaim(bucket);
+			expect(renewed.holder).toBe(acquired.holder);
+			expect(Date.parse(renewed.expires_at!)).toBeGreaterThan(Date.parse(staleExpiresAt));
+		});
+		expect((await readClaim(bucket)).holder).toBeNull();
+	});
+
+	it('does not release a successor after its deferred release loses the ETag race', async () => {
+		const release = Promise.withResolvers<void>();
+		const releasing = Promise.withResolvers<void>();
+		const put = bucket.put.bind(bucket);
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+			if (
+				key === CLAIM_KEY &&
+				WorkspaceMutationClaimSchema.parse(JSON.parse(String(value))).holder === null
+			) {
+				releasing.resolve();
+				await release.promise;
+			}
+			return put(key, value, options);
+		});
+		let pendingRelease: Promise<void> | undefined;
+		await service.withMutation(
+			PROJECT_ID,
+			NOTEBOOK_ID,
+			{
+				deferRelease: (pending) => {
+					pendingRelease = pending;
+				},
+			},
+			async (lease) => {
+				await lease.heartbeat();
+			},
+		);
+		await releasing.promise;
+		const successor = {
+			holder: VersionId.create(),
+			expires_at: new Date(Date.now() + 60_000).toISOString(),
+		};
+		try {
+			await put(CLAIM_KEY, JSON.stringify(successor));
+		} finally {
+			release.resolve();
+		}
+		await pendingRelease;
+		expect(await readClaim(bucket)).toEqual(successor);
+	});
+
 	it('releases a fresh lease after mutation failure and allows a retry', async () => {
 		await expect(
 			service.withMutation(PROJECT_ID, NOTEBOOK_ID, {}, async () => {
