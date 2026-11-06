@@ -192,6 +192,8 @@ export interface SetEnvVarsOptions {
 }
 
 export interface SandboxInstance {
+	/** Credential-free, serializable provider locator, available after readiness. */
+	readonly reconnectReference?: string;
 	/** HOME in sandbox file coordinates; adapters with mapped process paths must provide this. */
 	getHomeDirectory?(): Promise<string>;
 	/** Whether `mountBucket` is a real backend capability rather than a copy fallback signal. */
@@ -326,6 +328,11 @@ export interface CreateSandboxOptions {
 	owner?: SandboxOwner;
 }
 
+export interface ConnectSandboxOptions extends CreateSandboxOptions {
+	/** Opaque reference obtained from a ready instance, never from a user request. */
+	reconnectReference?: string;
+}
+
 export interface WarmPoolSupport {
 	/** Guaranteed lifetime from before creation; null means no provider lifetime cap. */
 	maxLifetimeMs: number | null;
@@ -345,7 +352,7 @@ export interface SandboxProvider {
 	};
 	create(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance;
 	/** Attach without creating; a missing or stopped sandbox must fail on first use. */
-	connectExisting?(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance;
+	connectExisting?(id: SandboxId, options?: ConnectSandboxOptions): SandboxInstance;
 	/**
 	 * Proxy an incoming request to a sandbox's exposed port.
 	 * Returns a Response if the request matched a sandbox URL, null otherwise.

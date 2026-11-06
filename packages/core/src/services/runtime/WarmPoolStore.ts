@@ -22,6 +22,7 @@ export const WarmPoolMemberSchema = z.object({
 	operation_until: Timestamp,
 	checked_at: Timestamp,
 	sandbox_deadline_at: Timestamp.optional(),
+	reconnect_reference: z.string().min(1).max(4096).optional(),
 	destination: z
 		.object({
 			project_id: ProjectIdSchema,

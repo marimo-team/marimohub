@@ -19,7 +19,7 @@ import { WarmPoolStore } from './WarmPoolStore';
 import { WarmPoolService, WARM_POOL_MAX_IDLE_MS } from './WarmPoolService';
 import type { WarmPoolConfig } from './WarmPoolService';
 
-function setup(overrides: Partial<WarmPoolConfig> = {}) {
+function setup(overrides: Partial<WarmPoolConfig> = {}, referenceFor?: (id: SandboxId) => string) {
 	const bucket = new MemoryBucket();
 	const sessions = new SessionService(bucket);
 	const live = new Map<SandboxId, SandboxInstance>();
@@ -27,7 +27,10 @@ function setup(overrides: Partial<WarmPoolConfig> = {}) {
 	const destroyed: SandboxId[] = [];
 	const compute: SandboxProvider = {
 		create(id) {
-			const instance = makeFakeSandbox().instance;
+			const instance = {
+				...makeFakeSandbox().instance,
+				...(referenceFor ? { reconnectReference: referenceFor(id) } : {}),
+			};
 			return {
 				...instance,
 				ready: async () => {
@@ -97,6 +100,87 @@ function setup(overrides: Partial<WarmPoolConfig> = {}) {
 afterEach(() => vi.restoreAllMocks());
 
 describe('warm sandbox pools', () => {
+	it('publishes provider references and claims them from another replica', async () => {
+		const w = setup({}, (id) => `provider-reference:${id}`);
+		await w.service.sweep();
+		const member = (await w.members())[0];
+		expect(member.reconnect_reference).toBe(`provider-reference:${member.sandbox_id}`);
+		const connect = vi.spyOn(w.compute, 'connectExisting');
+		const request = { ...w.request(), reconnectReference: 'untrusted-request-reference' };
+		const claim = await w.replica().claim(request);
+		expect(claim?.member.sandbox_id).toBe(member.sandbox_id);
+		expect(connect).toHaveBeenCalledWith(member.sandbox_id, {
+			...w.config.profiles[0],
+			reconnectReference: member.reconnect_reference,
+		});
+		expect(w.created).toHaveLength(1);
+	});
+
+	it('backfills legacy entries during successful health checks without replacing their container', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const member = (await w.members())[0];
+		expect(member.reconnect_reference).toBeUndefined();
+		Object.defineProperty(w.live.get(member.sandbox_id)!, 'reconnectReference', {
+			value: 'new-reference',
+		});
+		const connect = vi.spyOn(w.compute, 'connectExisting');
+		w.advance(30_001);
+		await w.replica().sweep();
+		expect((await w.members())[0].reconnect_reference).toBe('new-reference');
+		expect(connect).toHaveBeenCalledWith(member.sandbox_id);
+		connect.mockClear();
+		w.advance(30_001);
+		await w.replica().sweep();
+		expect(connect).toHaveBeenCalledWith(member.sandbox_id, {
+			reconnectReference: 'new-reference',
+		});
+		expect(w.created).toHaveLength(1);
+	});
+
+	it('does not let a stale successful health check backfill a concurrently claimed member', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const member = (await w.members())[0];
+		const sandbox = w.live.get(member.sandbox_id)!;
+		Object.defineProperty(sandbox, 'reconnectReference', { value: 'discovered-reference' });
+		let finishHealth!: () => void;
+		vi.spyOn(sandbox, 'exec').mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finishHealth = () => resolve(execResult(true, '', ''));
+				}),
+		);
+		w.advance(30_001);
+		const sweep = w.service.sweep();
+		await vi.waitFor(() => expect(finishHealth).toBeDefined());
+		const claim = (await w.replica().claim(w.request()))!;
+		finishHealth();
+		await sweep;
+		const current = (await w.members()).find((item) => item.sandbox_id === member.sandbox_id)!;
+		expect(current).toMatchObject({ state: 'claimed', token: claim.member.token });
+		expect(current.reconnect_reference).toBeUndefined();
+		expect(w.destroyed).not.toContain(member.sandbox_id);
+	});
+
+	it('retires a missing referenced sandbox rather than replacing it inside the claim', async () => {
+		const w = setup({}, () => 'saved-reference');
+		await w.service.sweep();
+		w.live.clear();
+		expect(await w.service.claim(w.request())).toBeUndefined();
+		expect((await w.members())[0].state).toBe('retiring');
+		expect(w.created).toHaveLength(1);
+	});
+
+	it('does not publish invalid provider references into the ownership record', async () => {
+		const w = setup({}, () => 'x'.repeat(4097));
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		await w.service.sweep();
+		expect(await w.members()).toEqual([]);
+		expect(w.destroyed).toEqual(w.created);
+		expect(log.mock.calls.flat().join('')).not.toContain('x'.repeat(4097));
+	});
+
 	it('claims the resources requested when two profiles share a name', async () => {
 		const w = setup({
 			profiles: [

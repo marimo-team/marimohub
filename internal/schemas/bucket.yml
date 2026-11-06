@@ -6270,6 +6270,10 @@ components:
                       type: integer
                       minimum: 0
                       maximum: 9007199254740991
+                    reconnect_reference:
+                      type: string
+                      minLength: 1
+                      maxLength: 4096
                     destination:
                       type: object
                       properties:

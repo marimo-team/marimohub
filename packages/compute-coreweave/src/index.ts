@@ -112,6 +112,7 @@ import type {
 	ComputeResources,
 	SandboxUserHome,
 	CreateSandboxOptions,
+	ConnectSandboxOptions,
 	ExecOptions,
 	ExecResult,
 	ExecStreamOptions,
@@ -401,11 +402,37 @@ function isDeadStatus(status: SandboxInfo['status']): boolean {
 
 let PROC_SEQ = 0;
 
+function reconnectSandboxId(reference: string, hubId: SandboxId): string {
+	try {
+		if (reference.length > 4096) throw new Error('Reference exceeds size limit');
+		const value: unknown = JSON.parse(reference);
+		if (
+			typeof value === 'object' &&
+			value !== null &&
+			!Array.isArray(value) &&
+			Object.keys(value).length === 3 &&
+			'kind' in value &&
+			value.kind === 'coreweave-v1' &&
+			'hubId' in value &&
+			value.hubId === hubId &&
+			'sandboxId' in value &&
+			typeof value.sandboxId === 'string' &&
+			value.sandboxId.length > 0 &&
+			value.sandboxId.length <= 256
+		)
+			return value.sandboxId;
+	} catch {
+		// Never include the opaque record in errors or logs.
+	}
+	throw new CWSandboxConfigurationError('Invalid CoreWeave sandbox reconnect reference');
+}
+
 class CoreWeaveSandboxInstance implements SandboxInstance {
 	readonly supportsBucketMount = false;
 	private readonly idTag: string;
 	private readonly kernelPort: number;
 	private sandbox?: CoreWeaveSandbox;
+	private readonly reconnectId?: string;
 	private lastEnsureTimings?: Timings;
 	/** Shell snippet to splice onto the next command; see `takeBootstrap`. */
 	private pendingBootstrap?: string;
@@ -420,9 +447,20 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		private readonly reuse = true,
 		private readonly userHome?: SandboxUserHome,
 		private readonly existingOnly = false,
+		reference?: string,
 	) {
 		this.idTag = ID_TAG_PREFIX + id;
+		if (reference !== undefined) this.reconnectId = reconnectSandboxId(reference, id);
 		this.kernelPort = config.kernelPort ?? DEFAULT_KERNEL_PORT;
+	}
+
+	get reconnectReference(): string | undefined {
+		if (!this.sandbox || this.sandbox.status !== 'running') return;
+		return JSON.stringify({
+			kind: 'coreweave-v1',
+			hubId: this.id,
+			sandboxId: this.sandbox.sandboxId,
+		});
 	}
 
 	/**
@@ -439,20 +477,29 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		// split because only that says whether the dominant startup cost is a real
 		// container start or time spent waiting on a poll.
 		const t0 = Date.now();
-		const existing = this.reuse ? await this.findByOurId() : undefined;
-		if (this.existingOnly && existing?.status !== 'running') {
+		const existing = !this.reconnectId && this.reuse ? await this.findByOurId() : undefined;
+		if (this.existingOnly && !this.reconnectId && existing?.status !== 'running') {
 			throw new Error(`CoreWeave sandbox ${this.id} is no longer available`);
 		}
 		const t1 = Date.now();
 		// Create-then-wait (rather than `waitUntilRunning: true`) keeps the create
 		// and boot phases separately measurable for the wide event below.
-		this.sandbox = existing
-			? await this.client.fromId(existing.sandboxId)
-			: this.config.templateId
-				? await this.client.runFromTemplate(this.config.templateId, this.templateOptions())
-				: await this.client.create(this.createOptions());
+		const sandbox = this.reconnectId
+			? await this.client.fromId(this.reconnectId)
+			: existing
+				? await this.client.fromId(existing.sandboxId)
+				: this.config.templateId
+					? await this.client.runFromTemplate(this.config.templateId, this.templateOptions())
+					: await this.client.create(this.createOptions());
 		const t2 = Date.now();
-		if (!existing) {
+		if (
+			this.reconnectId &&
+			(sandbox.sandboxId !== this.reconnectId || sandbox.status !== 'running')
+		) {
+			throw new Error('CoreWeave saved sandbox is no longer available');
+		}
+		this.sandbox = sandbox;
+		if (!this.reconnectId && !existing) {
 			await this.sandbox.wait();
 			// The SDK's wait() reports a `completed` sandbox as a satisfied
 			// running-wait. For us the keep-alive exiting during boot is a failed
@@ -467,18 +514,25 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		const t3 = Date.now();
 		// Armed, not run: the snippet is spliced onto the first command we were going
 		// to send anyway, so it costs no round-trip of its own.
-		if (!existing) {
+		if (!this.reconnectId && !existing) {
 			this.pendingBootstrap = this.createBootstrap();
 		}
-		this.lastEnsureTimings = { find: t1 - t0, create: t2 - t1, boot: t3 - t2 };
+		this.lastEnsureTimings = {
+			find: this.reconnectId ? 0 : t1 - t0,
+			create: this.reconnectId ? 0 : t2 - t1,
+			...(this.reconnectId ? { get: t2 - t1 } : {}),
+			boot: this.reconnectId ? 0 : t3 - t2,
+		};
 		logEvent(
 			{
 				event: 'coreweave_ensure',
 				sandbox_id: this.id,
-				reconnected: Boolean(existing),
-				find_ms: t1 - t0,
-				create_ms: t2 - t1,
-				boot_ms: t3 - t2,
+				reconnected: Boolean(this.reconnectId || existing),
+				...(this.reconnectId ? { reconnect_by_reference: true } : {}),
+				find_ms: this.reconnectId ? 0 : t1 - t0,
+				create_ms: this.reconnectId ? 0 : t2 - t1,
+				...(this.reconnectId ? { get_ms: t2 - t1 } : {}),
+				boot_ms: this.reconnectId ? 0 : t3 - t2,
 				...(t3 - t2 > SLOW_BOOT_MS ? { slow_boot_hint: SLOW_BOOT_HINT } : {}),
 				...(this.config.templateId ? { template_id: this.config.templateId } : {}),
 				...(this.userHome ? { user_home_attached: true } : {}),
@@ -1079,6 +1133,12 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			this.sandbox = undefined;
 			return;
 		}
+		const reconnectId = this.reconnectId;
+		if (reconnectId) {
+			await this.removeIngress(reconnectId);
+			await this.deleteTolerant(() => this.client.delete(reconnectId));
+			return;
+		}
 		// Re-resolved instance (no cached handle): delete every sandbox tagged with our
 		// id. Tolerate "already gone" so teardown is idempotent.
 		const { sandboxes } = await this.client.list({ tags: [this.idTag] });
@@ -1159,14 +1219,15 @@ export class CoreWeaveCompute implements SandboxProvider {
 		return this.instance(id, options);
 	}
 
-	connectExisting(id: SandboxId, options?: CreateSandboxOptions): SandboxInstance {
-		return this.instance(id, { ...options, reuse: true }, true);
+	connectExisting(id: SandboxId, options?: ConnectSandboxOptions): SandboxInstance {
+		return this.instance(id, { ...options, reuse: true }, true, options?.reconnectReference);
 	}
 
 	private instance(
 		id: SandboxId,
 		options?: CreateSandboxOptions,
 		existingOnly = false,
+		reference?: string,
 	): SandboxInstance {
 		if (options?.userHome && !this.config.userHomeTemplateId) {
 			// Failing here beats provisioning an editor without its mount: the
@@ -1192,6 +1253,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 			options?.reuse ?? true,
 			options?.userHome,
 			existingOnly,
+			reference,
 		);
 	}
 
