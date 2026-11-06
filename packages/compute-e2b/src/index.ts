@@ -38,7 +38,7 @@ import {
 } from '@marimo-hub/compute-commons';
 import { SandboxId } from '@marimo-hub/core/ids';
 import { NotFoundError } from '@marimo-hub/core/errors';
-import { Seconds } from '@marimo-hub/core/duration';
+import { Seconds, sleep } from '@marimo-hub/core/duration';
 import type {
 	BoundedReadOptions,
 	ActiveSandbox,
@@ -72,12 +72,6 @@ const OWNER_META_KEY = 'mh-owner';
 const DEFAULT_OWNER_TAG = 'marimohub';
 const KERNEL_LOG_PATH = '/tmp/marimohub-kernel.log';
 const LAUNCH_POLL_INTERVAL_MS = 50;
-
-function delay(ms: number): Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, ms);
-	});
-}
 
 function definedEnv(env?: Record<string, string | undefined>): Record<string, string> {
 	return Object.fromEntries(
@@ -436,7 +430,7 @@ class E2bSandboxInstance implements SandboxInstance {
 				deadline === undefined
 					? LAUNCH_POLL_INTERVAL_MS
 					: Math.min(LAUNCH_POLL_INTERVAL_MS, Math.max(1, deadline + LAUNCH_MARKER_GRACE_MS - now));
-			await delay(sleepFor);
+			await sleep(sleepFor);
 		}
 	}
 

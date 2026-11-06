@@ -75,6 +75,7 @@ import type {
 	ServiceUrl,
 } from '@coreweave/cwsandbox';
 import { forEachConcurrentUntilFailure } from '@marimo-hub/core/async';
+import { BoundedLruMap } from '@marimo-hub/core/cache';
 import { Semaphore } from '@marimo-hub/core/concurrency';
 import {
 	createSandboxClient,
@@ -516,38 +517,6 @@ async function waitUntilRunning(sandbox: CoreWeaveSandbox): Promise<SandboxStatu
 	}
 }
 
-/**
- * Provider sandbox ids this process has seen running for a hub id, so a re-resolved instance
- * can Get by id instead of paying the tag List. Entries are hints: every hit is validated, and
- * a stale one is dropped in favor of the tag lookup. Least recently used entries go first.
- */
-class ProviderIdCache {
-	private readonly ids = new Map<SandboxId, string>();
-
-	get(id: SandboxId): string | undefined {
-		const providerId = this.ids.get(id);
-		if (providerId !== undefined) {
-			this.ids.delete(id);
-			this.ids.set(id, providerId);
-		}
-		return providerId;
-	}
-
-	set(id: SandboxId, providerId: string): void {
-		this.ids.delete(id);
-		this.ids.set(id, providerId);
-		if (this.ids.size > PROVIDER_ID_CACHE_LIMIT) {
-			const oldest = this.ids.keys().next();
-			if (!oldest.done) this.ids.delete(oldest.value);
-		}
-	}
-
-	/** With `providerId`, evicts only if the entry still names it, so a newer entry survives. */
-	delete(id: SandboxId, providerId?: string): void {
-		if (providerId === undefined || this.ids.get(id) === providerId) this.ids.delete(id);
-	}
-}
-
 let PROC_SEQ = 0;
 
 function reconnectSandboxId(reference: string, hubId: SandboxId): string | undefined {
@@ -592,7 +561,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		private readonly id: SandboxId,
 		private readonly config: CoreWeaveConfig,
 		private readonly client: CoreWeaveClient,
-		private readonly providerIds: ProviderIdCache,
+		private readonly providerIds: BoundedLruMap<SandboxId, string>,
 		/** Reconnect-by-tag before creating. False on a fresh provision (skips a wasted list). */
 		private readonly reuse = true,
 		private readonly userHome?: SandboxUserHome,
@@ -718,7 +687,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		} catch {
 			// The tag lookup is authoritative and reports its own errors.
 		}
-		this.providerIds.delete(this.id, providerId);
+		// Another instance may have cached a newer provider id meanwhile; keep it.
+		if (this.providerIds.peek(this.id) === providerId) this.providerIds.delete(this.id);
 	}
 
 	/** Resolve the sandbox without spending a command round-trip to prove it is up. */
@@ -1367,7 +1337,12 @@ export class CoreWeaveCompute implements SandboxProvider {
 	readonly capabilities: { multiPort: boolean };
 	private client?: CoreWeaveClient;
 	private readonly fileWriteSlots = new SandboxFileWriteSlots();
-	private readonly providerIds = new ProviderIdCache();
+	/**
+	 * Provider sandbox ids this process has seen running for a hub id, so a re-resolved instance
+	 * can Get by id instead of paying the tag List. Entries are hints: every hit is validated, and
+	 * a stale one is dropped in favor of the tag lookup.
+	 */
+	private readonly providerIds = new BoundedLruMap<SandboxId, string>(PROVIDER_ID_CACHE_LIMIT);
 
 	constructor(
 		private readonly config: CoreWeaveConfig,

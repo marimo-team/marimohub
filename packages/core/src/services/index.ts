@@ -10,6 +10,7 @@ import type { Bucket, BucketObject } from '../ports/bucket';
 import { noopMetrics } from '../ports/metrics';
 import type { Metrics } from '../ports/metrics';
 import type { JobId, NotebookId, ProjectId, ProposalId, RunId, SessionId, UserId } from '../ids';
+import { SingleFlight } from '../cache';
 import { paths } from '../paths';
 import { traced } from '../tracing';
 import type { AttrExtractors } from '../tracing';
@@ -726,23 +727,10 @@ const CATALOG_POPULATED_TTL_MS = 30_000;
 // a missing pointer is the reset that needs recovery. Comparing ETags instead would re-read
 // the whole snapshot after nearly every save.
 const populatedCatalogCheckedAt = new WeakMap<Bucket, number>();
-const catalogHeads = new WeakMap<Bucket, Promise<BucketObject | null>>();
-const catalogPopulatedReads = new WeakMap<Bucket, Promise<boolean>>();
-const defaultProjectCreations = new WeakMap<Bucket, Promise<void>>();
-
-function singleFlight<T>(
-	inFlight: WeakMap<Bucket, Promise<T>>,
-	bucket: Bucket,
-	run: () => Promise<T>,
-): Promise<T> {
-	const existing = inFlight.get(bucket);
-	if (existing) return existing;
-	const pending = run().finally(() => {
-		if (inFlight.get(bucket) === pending) inFlight.delete(bucket);
-	});
-	inFlight.set(bucket, pending);
-	return pending;
-}
+// Entries leave on settlement, so these Maps never retain a bucket.
+const catalogHeads = new SingleFlight<Bucket, BucketObject | null>();
+const catalogPopulatedReads = new SingleFlight<Bucket, boolean>();
+const defaultProjectCreations = new SingleFlight<Bucket, void>();
 
 export async function ensureInitialized(
 	bucket: Bucket,
@@ -754,7 +742,7 @@ export async function ensureInitialized(
 	const checkedAt = Date.now();
 	if (seeding && populatedAt !== undefined && checkedAt - populatedAt < CATALOG_POPULATED_TTL_MS)
 		return;
-	const exists = await singleFlight(catalogHeads, bucket, () => bucket.head(paths.catalog));
+	const exists = await catalogHeads.run(bucket, () => bucket.head(paths.catalog));
 	if (exists && !seeding) return;
 	if (exists && populatedAt !== undefined) {
 		populatedCatalogCheckedAt.set(bucket, checkedAt);
@@ -768,8 +756,7 @@ export async function ensureInitialized(
 	if (!exists) await services.catalog.initialize(actor);
 	if (!seeding) return;
 
-	const populated = await singleFlight(
-		catalogPopulatedReads,
+	const populated = await catalogPopulatedReads.run(
 		bucket,
 		async () => (await services.catalog.getCurrentSnapshot()).projects.length > 0,
 	);
@@ -787,7 +774,7 @@ export async function ensureInitialized(
 	// A concurrent caller may have seeded the catalog while this caller was authorized.
 	if (populatedCatalogCheckedAt.has(bucket)) return;
 	// Shares one creation in-process; separate processes can still each seed a project.
-	await singleFlight(defaultProjectCreations, bucket, async () => {
+	await defaultProjectCreations.run(bucket, async () => {
 		await services.projects.createProject(
 			{ name: 'My Project', description: 'Default project' },
 			actor,

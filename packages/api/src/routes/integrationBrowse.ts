@@ -45,6 +45,7 @@ import {
 	ValidationError,
 	assertValidDataQuerySql,
 	createSessionId,
+	StaleWhileRevalidateCache,
 } from '@marimo-hub/core';
 import type { AuthUser, ProjectId, ProjectIntegrationsService } from '@marimo-hub/core';
 import {
@@ -941,41 +942,24 @@ function quoteSqlIdentifier(value: string): string {
 	return `"${value.replaceAll('"', '""')}"`;
 }
 
-const querySchemaCache = new Map<string, { expiresAt: number; value: unknown }>();
-const inflightQuerySchema = new Map<string, Promise<unknown>>();
 const QUERY_SCHEMA_CACHE_TTL_MS = 300_000;
 const QUERY_SCHEMA_CACHE_MAX_ENTRIES = 128;
 
+const querySchemaCache = new StaleWhileRevalidateCache<string, unknown>({
+	load: () => {
+		throw new Error('cachedQuerySchema always supplies a loader');
+	},
+	ttl: () => ({ freshForMs: QUERY_SCHEMA_CACHE_TTL_MS, staleForMs: 0 }),
+	maxSize: QUERY_SCHEMA_CACHE_MAX_ENTRIES,
+});
+
 async function cachedQuerySchema<T>(key: string, load: () => Promise<T>): Promise<T> {
-	const now = Date.now();
-	const hit = querySchemaCache.get(key);
-	if (hit && hit.expiresAt > now) return hit.value as T;
-	const pending = inflightQuerySchema.get(key);
-	if (pending) return pending as Promise<T>;
-	const promise = load().then((value) => {
-		for (const [cachedKey, entry] of querySchemaCache) {
-			if (entry.expiresAt <= now) querySchemaCache.delete(cachedKey);
-		}
-		while (querySchemaCache.size >= QUERY_SCHEMA_CACHE_MAX_ENTRIES) {
-			const oldest = querySchemaCache.keys().next().value;
-			if (oldest === undefined) break;
-			querySchemaCache.delete(oldest);
-		}
-		querySchemaCache.set(key, { expiresAt: Date.now() + QUERY_SCHEMA_CACHE_TTL_MS, value });
-		return value;
-	});
-	inflightQuerySchema.set(key, promise);
-	try {
-		return await promise;
-	} finally {
-		if (inflightQuerySchema.get(key) === promise) inflightQuerySchema.delete(key);
-	}
+	return (await querySchemaCache.get(key, load)) as T;
 }
 
 export function clearIntegrationBrowseStateForTests(): void {
 	clearBrowseStateForTests();
 	querySchemaCache.clear();
-	inflightQuerySchema.clear();
 }
 
 const app = createApp();

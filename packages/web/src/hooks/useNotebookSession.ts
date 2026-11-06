@@ -1,5 +1,7 @@
 import { leaveAppVisit } from '@/api/sessionVisits';
+import { MAX_TIMER_DELAY_MS } from '@marimo-hub/core/async';
 import { APP_HEARTBEAT_INTERVAL_MS } from '@marimo-hub/core/constants';
+import { sleep } from '@marimo-hub/core/duration';
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { apiClient, apiData, ApiRequestError } from '@/api/client';
 import {
@@ -23,21 +25,6 @@ const DEFAULT_APP_HEARTBEAT_INTERVAL_SECONDS = APP_HEARTBEAT_INTERVAL_MS / 1000;
 
 /** Startup-timeout fallback when capabilities are unavailable (server default). */
 const DEFAULT_STARTUP_TIMEOUT_S = 120;
-
-/** Resolves after `ms`, or as soon as `signal` aborts. */
-function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
-	return new Promise((resolve) => {
-		const onAbort = () => {
-			clearTimeout(timer);
-			resolve();
-		};
-		const timer = setTimeout(() => {
-			signal.removeEventListener('abort', onAbort);
-			resolve();
-		}, ms);
-		signal.addEventListener('abort', onAbort, { once: true });
-	});
-}
 
 export interface SessionError {
 	message: string;
@@ -380,15 +367,16 @@ export function useNotebookSession(
 		const { signal } = controller;
 		// Drops responses after cleanup too, e.g. once an app heartbeat reports `running`.
 		const isLive = () => !signal.aborted;
+		const pause = (ms: number) =>
+			sleep(ms, signal).catch((error: unknown) => {
+				if (isLive()) throw error;
+			});
 		// Each delay starts when the previous response is handled: overlapping polls can
 		// answer out of order, and a late `starting` would undo a newer `running`.
 		const pollWhileStarting = async () => {
 			for (let attempt = 0; ; attempt += 1) {
 				const since = startingSinceRef.current;
-				await abortableDelay(
-					sessionStartPollDelayMs(attempt, since === null ? 0 : Date.now() - since),
-					signal,
-				);
+				await pause(sessionStartPollDelayMs(attempt, since === null ? 0 : Date.now() - since));
 				if (!isLive()) return;
 				await pollStartingSession(startingSessionId, isLive);
 			}
@@ -397,11 +385,12 @@ export function useNotebookSession(
 		// Re-armed rather than set once because the timeout can change while starting.
 		const watchDeadline = async () => {
 			for (let wait = 0; ; ) {
-				await abortableDelay(wait, signal);
+				await pause(wait);
 				if (!isLive()) return;
 				const remaining = enforceStartupDeadline();
 				if (remaining === null) return;
-				wait = remaining + 1;
+				// sleep() rejects fractional or over-long delays, which a capability timeout can produce.
+				wait = Math.min(Math.ceil(remaining) + 1, MAX_TIMER_DELAY_MS);
 			}
 		};
 		void pollWhileStarting();

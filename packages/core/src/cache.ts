@@ -80,6 +80,45 @@ export class BoundedLruMap<K, V> {
 	}
 }
 
+/**
+ * Shares one in-flight promise per key and forgets it on settlement, so a burst of
+ * concurrent callers costs one load and the next call after it loads again. Compare
+ * `cachedRead`, which keeps results for the owner's lifetime, and `LazyMap`, which
+ * caches values.
+ */
+export class SingleFlight<K, V> {
+	private readonly pending = new Map<K, Promise<V>>();
+
+	get size(): number {
+		return this.pending.size;
+	}
+
+	has(key: K): boolean {
+		return this.pending.has(key);
+	}
+
+	run(key: K, load: () => Promise<V>): Promise<V> {
+		const existing = this.pending.get(key);
+		if (existing) return existing;
+		let started: Promise<V>;
+		try {
+			started = load();
+		} catch (error) {
+			started = Promise.reject(error instanceof Error ? error : new Error(String(error)));
+		}
+		const promise = started.finally(() => {
+			if (this.pending.get(key) === promise) this.pending.delete(key);
+		});
+		this.pending.set(key, promise);
+		return promise;
+	}
+
+	/** Later callers start a new load; the dropped promise still settles for its callers. */
+	delete(key: K): boolean {
+		return this.pending.delete(key);
+	}
+}
+
 export class LazyMap<K, V> {
 	private readonly values: BoundedLruMap<K, V>;
 	private readonly pending = new Map<K, Pending<V>>();
@@ -179,29 +218,34 @@ export class StaleWhileRevalidateCache<K, V> {
 		this.now = options.now ?? (() => Date.now());
 		this.backgroundRetryMs = options.backgroundRetryMs ?? 5_000;
 		assertDuration(this.backgroundRetryMs, 'backgroundRetryMs');
-		this.entries = new LazyMap(
-			async (key) => {
-				const value = await options.load(key);
-				const now = this.now();
-				return { value, loadedAt: now, nextRefreshAt: now };
-			},
-			{ maxSize: options.maxSize },
-		);
+		this.entries = new LazyMap((key) => this.timed(options.load, key), {
+			maxSize: options.maxSize,
+		});
 	}
 
-	async get(key: K): Promise<V> {
+	private async timed(load: (key: K) => Promise<V>, key: K): Promise<TimedValue<V>> {
+		const value = await load(key);
+		const now = this.now();
+		return { value, loadedAt: now, nextRefreshAt: now };
+	}
+
+	/** `load` replaces the configured loader for this call only, e.g. when it closes over request state. */
+	async get(key: K, load?: (key: K) => Promise<V>): Promise<V> {
+		const timed = load === undefined ? undefined : (k: K) => this.timed(load, k);
 		const cached = this.entries.getIfPresent(key);
-		if (!cached) return (await this.entries.get(key)).value;
+		if (!cached) {
+			return (timed ? await this.entries.getOrLoad(key, timed) : await this.entries.get(key)).value;
+		}
 
 		const now = this.now();
 		switch (ttlState(cached.loadedAt, now, this.options.ttl(cached.value, key))) {
 			case 'fresh':
 				return cached.value;
 			case 'stale':
-				this.refreshInBackground(key, cached, now);
+				this.refreshInBackground(key, cached, now, timed);
 				return cached.value;
 			case 'expired':
-				return (await this.entries.reload(key)).value;
+				return (await this.entries.reload(key, timed ? { load: timed } : {})).value;
 		}
 	}
 
@@ -225,12 +269,22 @@ export class StaleWhileRevalidateCache<K, V> {
 		return this.entries.delete(key);
 	}
 
-	private refreshInBackground(key: K, cached: TimedValue<V>, now: number): void {
+	clear(): void {
+		this.entries.clear();
+		this.refreshing.clear();
+	}
+
+	private refreshInBackground(
+		key: K,
+		cached: TimedValue<V>,
+		now: number,
+		load?: (key: K) => Promise<TimedValue<V>>,
+	): void {
 		if (this.refreshing.has(key) || now < cached.nextRefreshAt) return;
 		this.refreshing.add(key);
 		this.entries.set(key, { ...cached, nextRefreshAt: now + this.backgroundRetryMs });
 		void this.entries
-			.reload(key)
+			.reload(key, load ? { load } : {})
 			.catch((error) => this.options.onBackgroundError?.(error, key))
 			.finally(() => this.refreshing.delete(key));
 	}

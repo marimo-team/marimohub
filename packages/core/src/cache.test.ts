@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { BoundedLruMap, LazyMap, StaleWhileRevalidateCache, ttlState } from './cache';
+import { BoundedLruMap, LazyMap, SingleFlight, StaleWhileRevalidateCache, ttlState } from './cache';
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -258,6 +258,60 @@ describe('LazyMap', () => {
 	});
 });
 
+describe('SingleFlight', () => {
+	it('shares one in-flight load per key and forgets it once settled', async () => {
+		const flight = new SingleFlight<string, number>();
+		const first = deferred<number>();
+		const load = vi.fn(() => first.promise);
+		const a = flight.run('k', load);
+		const b = flight.run('k', load);
+		expect(load).toHaveBeenCalledTimes(1);
+		expect(flight.has('k')).toBe(true);
+		expect(flight.size).toBe(1);
+		first.resolve(1);
+		await expect(a).resolves.toBe(1);
+		await expect(b).resolves.toBe(1);
+		expect(flight.has('k')).toBe(false);
+		await flight.run('k', load);
+		expect(load).toHaveBeenCalledTimes(2);
+	});
+
+	it('shares a rejection and clears it so the next call retries', async () => {
+		const flight = new SingleFlight<string, number>();
+		const load = vi
+			.fn<() => Promise<number>>()
+			.mockRejectedValueOnce(new Error('boom'))
+			.mockResolvedValueOnce(2);
+		const a = flight.run('k', load);
+		const b = flight.run('k', load);
+		await expect(a).rejects.toThrow('boom');
+		await expect(b).rejects.toThrow('boom');
+		await expect(flight.run('k', load)).resolves.toBe(2);
+	});
+
+	it('turns a synchronous loader throw into a rejected promise', async () => {
+		const flight = new SingleFlight<string, number>();
+		await expect(
+			flight.run('k', () => {
+				throw new Error('sync');
+			}),
+		).rejects.toThrow('sync');
+		expect(flight.size).toBe(0);
+	});
+
+	it('keys loads independently and lets delete start a new load', async () => {
+		const flight = new SingleFlight<string, number>();
+		const slow = deferred<number>();
+		const a = flight.run('a', () => slow.promise);
+		await expect(flight.run('b', () => Promise.resolve(2))).resolves.toBe(2);
+		expect(flight.delete('a')).toBe(true);
+		await expect(flight.run('a', () => Promise.resolve(3))).resolves.toBe(3);
+		slow.resolve(1);
+		await expect(a).resolves.toBe(1);
+		expect(flight.size).toBe(0);
+	});
+});
+
 describe('StaleWhileRevalidateCache', () => {
 	it.each([-1, Number.NaN, Infinity])(
 		'rejects an invalid background retry duration: %s',
@@ -502,5 +556,62 @@ describe('StaleWhileRevalidateCache', () => {
 		expect(cache.delete('a')).toBe(true);
 		expect(cache.delete('a')).toBe(false);
 		expect(await cache.get('a')).toBe('second');
+	});
+});
+
+describe('StaleWhileRevalidateCache per-call loaders', () => {
+	it('uses the per-call loader on a miss and after expiry, and shares in-flight loads', async () => {
+		let now = 1_000;
+		const configured = vi.fn(async (key: string) => `configured:${key}`);
+		const cache = new StaleWhileRevalidateCache<string, string>({
+			load: configured,
+			ttl: () => ({ freshForMs: 100, staleForMs: 0 }),
+			maxSize: 4,
+			now: () => now,
+		});
+		const first = deferred<string>();
+		const perCall = vi.fn(() => first.promise);
+		const a = cache.get('k', perCall);
+		const b = cache.get('k', perCall);
+		await Promise.resolve();
+		expect(perCall).toHaveBeenCalledTimes(1);
+		first.resolve('one');
+		await expect(a).resolves.toBe('one');
+		await expect(b).resolves.toBe('one');
+		await expect(cache.get('k', perCall)).resolves.toBe('one');
+		expect(perCall).toHaveBeenCalledTimes(1);
+		now += 100;
+		await expect(cache.get('k', async () => 'two')).resolves.toBe('two');
+		expect(configured).not.toHaveBeenCalled();
+	});
+
+	it('refreshes stale entries in the background with the per-call loader', async () => {
+		let now = 0;
+		const cache = new StaleWhileRevalidateCache<string, number>({
+			load: async () => -1,
+			ttl: () => ({ freshForMs: 10, staleForMs: 100 }),
+			maxSize: 4,
+			now: () => now,
+		});
+		await expect(cache.get('k', async () => 1)).resolves.toBe(1);
+		now = 20;
+		const refresh = deferred<number>();
+		await expect(cache.get('k', () => refresh.promise)).resolves.toBe(1);
+		refresh.resolve(2);
+		await refresh.promise;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(cache.getIfPresent('k')).toBe(2);
+	});
+
+	it('clears cached entries so the next get reloads', async () => {
+		const cache = new StaleWhileRevalidateCache<string, number>({
+			load: async () => 1,
+			ttl: () => ({ freshForMs: 1_000, staleForMs: 0 }),
+			maxSize: 4,
+		});
+		await expect(cache.get('k', async () => 5)).resolves.toBe(5);
+		cache.clear();
+		expect(cache.getIfPresent('k')).toBeUndefined();
+		await expect(cache.get('k')).resolves.toBe(1);
 	});
 });

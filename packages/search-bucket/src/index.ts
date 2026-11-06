@@ -5,6 +5,7 @@ import {
 } from '@marimo-hub/core/search/build';
 import { selectSearchCandidates } from '@marimo-hub/core/search/embeddings';
 import { withAbortSignal } from '@marimo-hub/core/async';
+import { SingleFlight } from '@marimo-hub/core/cache';
 import { LRUCache } from 'lru-cache';
 import type { Bucket } from '@marimo-hub/core/ports/bucket';
 import { PreconditionFailedError } from '@marimo-hub/core/errors';
@@ -36,7 +37,7 @@ interface Cached {
 
 export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 	private readonly cache: LRUCache<string, Cached>;
-	private readonly loading = new Map<string, Promise<Cached>>();
+	private readonly loading = new SingleFlight<string, Cached>();
 	constructor(
 		private readonly bucket: Bucket,
 		maxCacheBytes = 64 * 1024 * 1024,
@@ -129,14 +130,10 @@ export class BucketSearchIndex implements SearchRetriever, SearchSnapshotStore {
 		};
 	}
 	private loadSnapshot(key: string): Promise<Cached> {
-		const pending = this.loading.get(key);
-		if (pending) return pending;
-		if (this.loading.size >= MAX_PENDING_LOADS)
+		if (!this.loading.has(key) && this.loading.size >= MAX_PENDING_LOADS)
 			return Promise.reject(new Error('Search snapshot loading capacity exceeded'));
 		// Each caller cancels its own wait; immutable snapshot work is shared across callers.
-		const loading = this.fetchSnapshot(key).finally(() => this.loading.delete(key));
-		this.loading.set(key, loading);
-		return loading;
+		return this.loading.run(key, () => this.fetchSnapshot(key));
 	}
 	private async fetchSnapshot(key: string): Promise<Cached> {
 		const body = await this.bucket.get(key);

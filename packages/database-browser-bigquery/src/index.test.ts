@@ -445,6 +445,27 @@ describe('BigQuery token reuse and deadlines', () => {
 		expect(fetch.mock.calls.filter(([url]) => url.endsWith('/token'))).toHaveLength(2);
 	});
 
+	it('refetches a token for a caller whose shared fetch another caller aborted', async () => {
+		const { browser, fetch } = world(() => ({ datasets: [] }));
+		const controller = new AbortController();
+		fetch.mockImplementationOnce(
+			(_url, options) =>
+				new Promise((_resolve, reject) => {
+					options!.signal!.addEventListener('abort', () =>
+						reject(new DOMException('aborted', 'AbortError')),
+					);
+				}),
+		);
+		const aborted = browser.listNamespaces(source, { limit: 1, signal: controller.signal });
+		const assertion = expect(aborted).rejects.toThrow('canceled');
+		const shared = browser.listNamespaces(source, { limit: 1 });
+		await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+		controller.abort(new Error('sensitive abort reason'));
+		await assertion;
+		await expect(shared).resolves.toBeDefined();
+		expect(fetch.mock.calls.filter(([url]) => url.endsWith('/token'))).toHaveLength(2);
+	});
+
 	it('isolates tokens by credential and browser instance', async () => {
 		const { browser, probe, fetch } = world(() => ({ datasets: [] }));
 		const rotated = {

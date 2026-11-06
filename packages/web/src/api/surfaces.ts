@@ -1,3 +1,4 @@
+import { sleep } from '@marimo-hub/core/duration';
 import { useMutation, useMutationState } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { SURFACE_LABELS } from '@/lib/surfaces';
@@ -36,29 +37,6 @@ function surfaceParams(projectId: string, notebookId: string, variables: StopSur
 	};
 }
 
-function abortError(signal: AbortSignal | undefined): Error {
-	const reason: unknown = signal?.reason;
-	return reason instanceof Error ? reason : new DOMException('Aborted', 'AbortError');
-}
-
-function delay(ms: number, signal: AbortSignal | undefined): Promise<void> {
-	return new Promise((resolve, reject) => {
-		if (signal?.aborted) {
-			reject(abortError(signal));
-			return;
-		}
-		const onAbort = () => {
-			clearTimeout(timer);
-			reject(abortError(signal));
-		};
-		const timer = setTimeout(() => {
-			signal?.removeEventListener('abort', onAbort);
-			resolve();
-		}, ms);
-		signal?.addEventListener('abort', onAbort, { once: true });
-	});
-}
-
 export function useSurfaceActions(projectId: string, notebookId: string) {
 	const [states, setStates] = useState<Partial<Record<SecondarySurfaceId, SurfaceActionState>>>({});
 	const invalidate = useInvalidate();
@@ -88,7 +66,7 @@ export function useSurfaceActions(projectId: string, notebookId: string) {
 			);
 			const deadline = Date.now() + SURFACE_START_TIMEOUT_MS;
 			while (surface.status === 'starting' && Date.now() < deadline) {
-				await delay(SURFACE_POLL_INTERVAL_MS, signal);
+				await sleep(SURFACE_POLL_INTERVAL_MS, signal);
 				surface = await apiData(
 					apiClient.GET(
 						'/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}/surfaces/{surface}',
