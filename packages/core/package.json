@@ -28,6 +28,7 @@
 		"./integration-validation": "./src/services/integrations/validation.ts",
 		"./jobs": "./src/services/jobs/public.ts",
 		"./kernel-auth": "./src/services/runtime/kernelAuth.ts",
+		"./host-bridge": "./src/services/runtime/hostBridge.ts",
 		"./logs": "./src/logs.ts",
 		"./marimo-launch": "./src/services/runtime/marimoLaunch.ts",
 		"./notifications": "./src/notifications.ts",
@@ -98,6 +99,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@marimo-hub/host-protocol": "workspace:*",
 		"@opentelemetry/api": "catalog:",
 		"@opentelemetry/api-logs": "catalog:",
 		"better-all": "catalog:",

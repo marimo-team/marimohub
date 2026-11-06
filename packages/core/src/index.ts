@@ -34,6 +34,7 @@ export {
 	WORKSPACE_OPERATIONS,
 	workspaceOperationDenied,
 	workspaceSourcePolicy,
+	workspaceSourceTypePolicy,
 } from './integrations/remoteWorkspace';
 export type {
 	SyncedWorkspaceFile,

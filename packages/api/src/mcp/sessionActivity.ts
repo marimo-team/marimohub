@@ -3,9 +3,23 @@ import type { AuthenticatedPrincipal, Project, Session } from '@marimo-hub/core'
 import type { ApiDeps } from '../context';
 import { assertSessionAccess, assertSessionNotebookVisible, loadVisibleProject } from '../shared';
 
+export class SessionAuthorizationExpiredError extends BadRequestError {
+	constructor() {
+		super('Session authorization has expired');
+		this.name = 'SessionAuthorizationExpiredError';
+	}
+}
+
+export class SessionEndedError extends BadRequestError {
+	constructor() {
+		super('Session is no longer running');
+		this.name = 'SessionEndedError';
+	}
+}
+
 function assertAuthorizationDeadline(deadline: number): void {
 	if (Number.isNaN(deadline) || Date.now() >= deadline) {
-		throw new BadRequestError('Session authorization has expired');
+		throw new SessionAuthorizationExpiredError();
 	}
 }
 
@@ -33,7 +47,7 @@ function activeDeadline(
 	subjectContextExpiresAt?: string,
 ): number {
 	if (session.status !== 'running' && session.status !== 'starting') {
-		throw new BadRequestError('Session is no longer running');
+		throw new SessionEndedError();
 	}
 	return sessionAuthorizationDeadline(session, principal, subjectContextExpiresAt);
 }
@@ -80,7 +94,7 @@ export async function withMcpSessionActivity<T>(
 		if (expiryTimer !== undefined) clearTimeout(expiryTimer);
 		if (!Number.isFinite(deadline)) return;
 		expiryTimer = setTimeout(
-			() => controller.abort(new BadRequestError('Session authorization has expired')),
+			() => controller.abort(new SessionAuthorizationExpiredError()),
 			Math.min(2_147_483_647, Math.max(0, deadline - Date.now())),
 		);
 	};

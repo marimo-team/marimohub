@@ -10,7 +10,13 @@ export interface SyncedWorkspaceFile {
 export type SyncedWorkspaceFileMap = Map<string, Uint8Array>;
 
 export type WorkspaceLoadMode = 'mount-or-copy' | 'copy-only';
-export const WORKSPACE_OPERATIONS = ['create', 'write', 'move', 'copy', 'delete'] as const;
+export const WORKSPACE_OPERATIONS = Object.freeze([
+	'create',
+	'write',
+	'move',
+	'copy',
+	'delete',
+] as const);
 export type WorkspaceOperation = (typeof WORKSPACE_OPERATIONS)[number];
 export type WorkspaceReadOnlyReason = 'git_source' | 'viewer' | 'active_session';
 export const WORKSPACE_DIRECTORY_MARKER = '.marimohub-directory';
@@ -198,39 +204,56 @@ export function toSyncedWorkspaceFileMap(files: SyncedWorkspaceFile[]): SyncedWo
 	return mapped;
 }
 
+export type WorkspaceSourceTypePolicy = Omit<
+	WorkspaceSourcePolicy,
+	'entryNotebook' | 'protectedPaths'
+>;
+
 /**
  * Per-source-type policy. Adding a new source kind (a new `Source['type']`) means
  * adding one row here — the rest of the system reads the policy, never the type.
+ * Fields that depend on the entry notebook are derived in `workspaceSourcePolicy`.
  */
-const WORKSPACE_SOURCE_POLICIES: {
-	[K in Source['type']]: (source: Extract<Source, { type: K }>) => WorkspaceSourcePolicy;
-} = {
-	local: (source) => ({
-		entryNotebook: localEntryNotebook(source),
+const SOURCE_TYPE_POLICIES: Record<
+	Source['type'],
+	Readonly<WorkspaceSourceTypePolicy>
+> = Object.freeze({
+	local: Object.freeze({
 		loadMode: 'mount-or-copy',
 		persistSessionEdits: true,
 		restoreFilesystemSnapshot: true,
 		workspaceWritable: true,
 		allowedOperations: WORKSPACE_OPERATIONS,
-		protectedPaths: [
-			{ path: localEntryNotebook(source), deniedOperations: ['move', 'delete'] },
-			{ path: 'pyproject.toml', deniedOperations: ['move', 'delete'] },
-		],
 	}),
-	git: (source) => ({
-		entryNotebook: source.entry_notebook,
+	git: Object.freeze({
 		loadMode: 'copy-only',
 		persistSessionEdits: false,
 		restoreFilesystemSnapshot: false,
 		workspaceWritable: false,
-		allowedOperations: [],
-		protectedPaths: [],
+		allowedOperations: Object.freeze([]),
 	}),
-};
+});
+
+export function workspaceSourceTypePolicy(
+	type: Source['type'],
+): Readonly<WorkspaceSourceTypePolicy> {
+	return SOURCE_TYPE_POLICIES[type];
+}
 
 export function workspaceSourcePolicy(source: Source): WorkspaceSourcePolicy {
-	const policy = WORKSPACE_SOURCE_POLICIES[source.type] as (s: Source) => WorkspaceSourcePolicy;
-	return policy(source);
+	const entryNotebook =
+		source.type === 'local' ? localEntryNotebook(source) : source.entry_notebook;
+	return {
+		...SOURCE_TYPE_POLICIES[source.type],
+		entryNotebook,
+		protectedPaths:
+			source.type === 'local'
+				? [
+						{ path: entryNotebook, deniedOperations: ['move', 'delete'] },
+						{ path: 'pyproject.toml', deniedOperations: ['move', 'delete'] },
+					]
+				: [],
+	};
 }
 
 export function workspaceOperationDenied(

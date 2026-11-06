@@ -33,8 +33,9 @@ Use these as the done-criteria for any change.
   `@opentelemetry/api` and `@opentelemetry/api-logs` (no-op
   tracing/logs facades unless an entrypoint registers a provider), the format
   serializers `smol-toml` and `yaml` (core renders `marimo.toml` and integration
-  config files), and `fflate` (in-memory archive decompression for workspace
-  ingest). A
+  config files), `fflate` (in-memory archive decompression for workspace
+  ingest), and the framework-free `./bridge` and `./retry-store` subpaths of the
+  workspace library `@marimo-hub/host-protocol` (see below). A
   serializer is a pure function, not a vendor, so a
   port around it would buy no substitutability.
   Anything that _reaches_ something — a store, a cluster, an IdP — is a port.
@@ -47,6 +48,13 @@ Use these as the done-criteria for any change.
 - **`packages/config`** is the ONLY package that imports concrete adapters: it
   reads `MARIMOHUB_*` env vars, selects an adapter per `*_BACKEND` selector, and
   wires the system together.
+- **`packages/host-protocol`** is the platform-neutral server for the marimo host
+  protocol: routing, problem responses, SSE streams, catalog diffing, Idempotency-Key
+  semantics, and runtime ID rewriting, over a `HostPlatform` port. It depends on `hono`
+  and `zod` only. The hub's adapter lives in `packages/api/src/host` (`createHubHostPlatform`),
+  and core's `HostRetryStore` implements its retry port. Core imports only the `./bridge`
+  (loopback Python client and schemas) and `./retry-store` (retry contract) subpaths, which
+  pull in no HTTP framework; `dependencyRule.test.ts` fails on any other import path.
 - **Project chat's turn runner lives in `packages/api/src/chat`**, not core: it
   depends on the vendor-neutral `ai` SDK and the in-process MCP tool server. Core
   keeps the conversation record and its invariants (`ConversationService`); the
@@ -99,6 +107,7 @@ adapter task caches. Service-backed integration tests can use the focused
   `GET …/notebooks/{nid}/html`) return the bytes directly on success; their
   errors still use the envelope. `GET /api/wif/v1/credentials` also returns a
   raw body: the AWS container credential protocol requires it.
+  `/api/host/v1` uses the marimo host protocol's JSON, SSE, and RFC 9457 problem responses.
 - **Committed specs.** `packages/api/openapi.yaml` and
   `internal/schemas/{bucket,integrations}.yml` are generated from the zod
   schemas; drift tests fail the build when they are stale. Regenerate with
@@ -152,6 +161,11 @@ These CAS-managed records also have one writer each:
   `_system/oauth-clients/{client-id}.json`.
 - `OAuthAuthorizationService` owns each short-lived MCP OAuth grant at
   `_system/oauth-authorizations/{authorization-id}.json`.
+- `HostRetryStore` owns each host mutation claim and receipt at
+  `_system/host-retries/{digest}.json` and the cleanup cursor at
+  `_system/host-retry-cleanup.json`. All updates use CAS. Maintenance compacts
+  expired receipts but retains the heads. An undispatched claim is reclaimable after a
+  five-minute lease; a dispatched claim with no runtime binding never expires.
 - `OAuthRateLimitService` owns each shared MCP OAuth request window at
   `_system/oauth-rate-limits/{endpoint}.json`.
 - `ConversationService` owns each private chat conversation at
