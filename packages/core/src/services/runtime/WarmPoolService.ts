@@ -15,6 +15,7 @@ import type { WarmPoolStore, WarmPoolMember } from './WarmPoolStore';
 
 export const WARM_POOL_MAX_IDLE_MS = 30 * 60_000;
 const CLAIM_TIMEOUT_MS = 60_000;
+const RECONNECT_TIMEOUT_MS = 5_000;
 const PROBE_TIMEOUT_MS = 2_000;
 const HEALTH_INTERVAL_MS = 30_000;
 const MAX_CONCURRENT_CREATIONS = 2;
@@ -43,6 +44,20 @@ export class WarmPoolClaimExpiredError extends ConflictError {
 		this.name = 'WarmPoolClaimExpiredError';
 	}
 }
+class WarmPoolReadinessError extends Error {
+	constructor(
+		readonly reason:
+			| 'reconnect_timeout'
+			| 'reconnect_failed'
+			| 'command_timeout'
+			| 'command_transport_failed'
+			| 'command_failed',
+	) {
+		super(`Warm sandbox readiness failed: ${reason}`);
+		this.name = 'WarmPoolReadinessError';
+	}
+}
+
 interface ClaimRequest {
 	resources?: ComputeResources;
 	profile?: string;
@@ -98,14 +113,17 @@ export class WarmPoolService {
 			});
 			if (claimed) {
 				const sandbox = this.compute.connectExisting(claimed.sandbox_id, profile);
-				await this.probe(sandbox);
+				await this.reconnectAndProbe(sandbox);
 				if (this.isExpired(claimed))
 					throw new Error('Warm sandbox claim expired during readiness check');
 				this.metrics.increment('warm_pool.hit', 1, { profile: profile!.name ?? 'default' });
 				return { member: claimed, sandbox };
 			}
 		} catch (error) {
-			this.report('claim_failed', error);
+			this.report('claim_failed', error, {
+				...(claimed ? { sandbox_id: claimed.sandbox_id } : {}),
+				elapsed_ms: this.now() - started,
+			});
 			if (claimed) await this.retire(claimed).catch((cause) => this.report('retire_failed', cause));
 		} finally {
 			this.metrics.histogram?.('warm_pool.claim_ms', this.now() - started);
@@ -192,7 +210,7 @@ export class WarmPoolService {
 							await this.retire(member);
 						} else if (this.now() - member.checked_at >= HEALTH_INTERVAL_MS) {
 							try {
-								await this.probe(this.compute.connectExisting!(member.sandbox_id));
+								await this.reconnectAndProbe(this.compute.connectExisting!(member.sandbox_id));
 								await this.store.updateMember(member, 'ready', (current) => {
 									current.checked_at = this.now();
 								});
@@ -363,15 +381,35 @@ export class WarmPoolService {
 		return this.now() >= Math.min(member.operation_until, member.ready_until);
 	}
 
+	private async reconnectAndProbe(sandbox: SandboxInstance): Promise<void> {
+		// Lazy adapters resolve discovery and transport before the command probe's budget starts.
+		await withDeadline(
+			async () => {
+				try {
+					await sandbox.ready?.();
+				} catch {
+					throw new WarmPoolReadinessError('reconnect_failed');
+				}
+			},
+			{
+				timeoutMs: RECONNECT_TIMEOUT_MS,
+				timeoutError: () => new WarmPoolReadinessError('reconnect_timeout'),
+			},
+		);
+		await this.probe(sandbox);
+	}
+
 	private async probe(sandbox: SandboxInstance): Promise<void> {
 		await withDeadline(
 			async () => {
-				const result = await sandbox.exec('true', { timeout: PROBE_TIMEOUT_MS });
-				if (!result.success) throw new Error('Warm sandbox command probe failed');
+				const result = await sandbox.exec('true', { timeout: PROBE_TIMEOUT_MS }).catch(() => {
+					throw new WarmPoolReadinessError('command_transport_failed');
+				});
+				if (!result.success) throw new WarmPoolReadinessError('command_failed');
 			},
 			{
 				timeoutMs: PROBE_TIMEOUT_MS,
-				timeoutError: () => new Error('Warm sandbox probe timed out'),
+				timeoutError: () => new WarmPoolReadinessError('command_timeout'),
 			},
 		);
 	}
@@ -407,8 +445,12 @@ export class WarmPoolService {
 		await this.store.removeMember(current);
 	}
 
-	private report(event: string, error: unknown): void {
+	private report(event: string, error: unknown, fields: Record<string, unknown> = {}): void {
 		this.metrics.increment(`warm_pool.${event}`);
-		logOperationalError(`warm_pool_${event}`, { operation: `warm_pool.${event}` }, error);
+		logOperationalError(
+			`warm_pool_${event}`,
+			{ operation: `warm_pool.${event}`, ...fields },
+			error,
+		);
 	}
 }

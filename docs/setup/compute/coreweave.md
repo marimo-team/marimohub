@@ -36,3 +36,18 @@ the runner's default policy unless `MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID`
 selects an org-scoped sandbox template; personal storage uses its own
 template via `…_USER_HOME_TEMPLATE_ID`.
 :::
+
+## Warm-pool readiness budgets
+
+Claiming a warm sandbox and maintenance health checks first resolve the existing
+sandbox with a bounded five-second reconnect, then run a `true` command with a
+separate two-second deadline. Provider discovery does not consume the command
+probe's budget. Failed checks still retire the member and allow a cold launch;
+claims remain fenced against concurrent maintenance and late results.
+
+`warm_pool_claim_failed` logs include the sandbox ID and elapsed time. Readiness
+failures distinguish `reconnect_timeout`, `reconnect_failed`, `command_timeout`,
+`command_transport_failed`, and `command_failed` without logging command output
+or arbitrary provider exception text. Enable the
+direct runner endpoint to reduce reconnect/exec transport overhead; increasing
+warm-pool size does not fix readiness failures.
