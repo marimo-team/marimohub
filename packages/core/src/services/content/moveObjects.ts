@@ -2,6 +2,9 @@ import { z } from 'zod';
 import type { Bucket, BucketObject } from '../../ports/bucket';
 import { ConflictError, PreconditionFailedError } from '../../errors';
 import { toHex } from '../../internal/hex';
+import { BUCKET_SCAN_CONCURRENCY } from '../../constants';
+import { mapWithConcurrency } from '../../concurrency';
+import { iterateBucketPages } from '../catalog/storage';
 const digest = async (bytes: Uint8Array) =>
 	toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes))));
 
@@ -57,21 +60,18 @@ export async function copyMovePrefix(
 		transform?: (relative: string, bytes: Uint8Array) => Uint8Array;
 	} = {},
 ): Promise<void> {
-	let cursor: string | undefined;
-	do {
-		const page = await bucket.list({ prefix: source, cursor, limit: 100 });
-		for (const object of page.objects) {
+	for await (const page of iterateBucketPages(bucket, { prefix: source, limit: 100 })) {
+		await mapWithConcurrency(page.objects, BUCKET_SCAN_CONCURRENCY, async (object) => {
 			const relative = object.key.slice(source.length);
-			if (options.include && !options.include(relative)) continue;
+			if (options.include && !options.include(relative)) return;
 			await copyMoveObject(
 				bucket,
 				object.key,
 				destination + relative,
 				options.transform ? (bytes) => options.transform!(relative, bytes) : undefined,
 			);
-		}
-		cursor = page.truncated ? page.cursor : undefined;
-	} while (cursor);
+		});
+	}
 }
 
 export function moveJson(

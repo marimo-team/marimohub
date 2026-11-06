@@ -99,10 +99,10 @@ describe('toolPreview', () => {
 	it('caps what the model receives and lists the trimmed paths', () => {
 		const output = boundedOutput({
 			long: 'x'.repeat(13_000),
-			many: Array.from({ length: 25 }, (_, i) => i),
+			many: Array.from({ length: 120 }, (_, i) => i),
 		});
 		expect(String(output.long)).toContain('[Remaining content omitted]');
-		expect((output.many as unknown[]).length).toBe(20);
+		expect((output.many as unknown[]).length).toBe(100);
 		expect(output.truncated_paths).toEqual(['$.long', '$.many']);
 		const wide = boundedOutput({
 			rows: Object.fromEntries(Array.from({ length: 120 }, (_, i) => [`k${i}`, i])),

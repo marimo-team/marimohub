@@ -6,7 +6,7 @@ import type { UiHints } from '../../../ports/integrations';
 import { parseHttpUrl } from '../../../url';
 import { INTEGRATIONS_DIR } from '../bundle';
 import { envSegment, HOSTNAME_REGEX } from '../sdk';
-import type { RenderOutput } from '../sdk';
+import type { RenderOutput, SharedEnvironment } from '../sdk';
 import { zSecret } from '../secretFields';
 
 /** Bare server hostname for a kind that renders it into a URL authority. */
@@ -48,6 +48,22 @@ export const SERVICE_URL_REGEX = /^https?:\/\/[^@\s/?#]+(?:\/[^\s?#]*)?$/;
 
 /** RFC 9110 token grammar used by HTTP field names. */
 export const HTTP_HEADER_NAME_REGEX = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+/** HTTP headers with secret values; names are unique ignoring case, as HTTP compares them. */
+export const secretHeadersField = () =>
+	z
+		.array(
+			z.strictObject({
+				name: z.string().regex(HTTP_HEADER_NAME_REGEX).describe('HTTP header name'),
+				value: zSecret().describe('Header value, stored as a secret'),
+			}),
+		)
+		.max(32)
+		.refine((items) => new Set(items.map(({ name }) => name.toLowerCase())).size === items.length, {
+			message: 'Duplicate HTTP header name (case-insensitive)',
+		})
+		.meta({ 'x-unique-by': 'name', 'x-unique-case-insensitive': true })
+		.default([]);
 
 /**
  * The shape above is what the form checks as you type; this is the one that
@@ -336,6 +352,12 @@ export const awsAuthSchema = z
 	.default({ method: 'ambient' });
 
 export { AMBIENT_ENV_DESCRIPTION } from '../environmentHelp';
+
+export const GOOGLE_SHARED_ENVIRONMENT: SharedEnvironment = {
+	group: 'google',
+	title: 'Google Cloud',
+	variables: 'GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_CLOUD_PROJECT',
+};
 
 /**
  * The same switch for a kind whose client takes an explicit URL: the standard

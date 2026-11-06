@@ -96,6 +96,26 @@ export function rejectsMcpOnlyCredential(principal: AuthenticatedPrincipal): boo
 	return principal.credential.mcpResource !== undefined;
 }
 
+/** Why a principal cannot use a bearer-token-only surface, or `undefined` when it can. */
+export async function bearerPrincipalFailure(
+	deps: Pick<ApiDeps, 'services'>,
+	principal: AuthenticatedPrincipal,
+): Promise<'unauthenticated' | 'expired' | 'suspended' | undefined> {
+	if (authMethodFor(principal.credential.kind) !== 'pat' || rejectsMcpOnlyCredential(principal))
+		return 'unauthenticated';
+	const deadlines = [principal.credential.expiresAt, principal.entitlementsExpiresAt].filter(
+		(value) => value !== undefined,
+	);
+	if (
+		deadlines.some(
+			(value) => !Number.isFinite(Date.parse(value)) || Date.parse(value) <= Date.now(),
+		)
+	)
+		return 'expired';
+	if (await deps.services.identities.isSuspended(principal.id)) return 'suspended';
+	return undefined;
+}
+
 export function extensibleResponseEnum<const Values extends readonly [string, ...string[]]>(
 	knownValues: Values,
 	example: Values[number],
@@ -1196,6 +1216,8 @@ export const SnapshotNotebookEntrySchema = z
 		/** The notebook's non-default compute profile; absent = deployment default. */
 		compute_profile: z.string().optional(),
 		app_compute_profile: z.string().optional(),
+		/** Present while the notebook is being moved out; opening it returns 409 `MOVE_IN_PROGRESS`. */
+		moving: z.object({ destination_project_id: z.string() }).optional(),
 	})
 	.openapi('SnapshotNotebookEntry');
 

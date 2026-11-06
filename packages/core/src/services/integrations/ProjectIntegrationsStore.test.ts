@@ -2082,7 +2082,6 @@ describe('ProjectIntegrationsStore', () => {
 			'aws_codeartifact',
 			'azure_artifacts',
 			'azure_blob',
-			'better_stack_logs',
 			'bigquery',
 			'clickhouse',
 			'custom_css',
@@ -2092,7 +2091,6 @@ describe('ProjectIntegrationsStore', () => {
 			'ducklake',
 			'gcs',
 			'gitlab_packages',
-			'grafana_cloud_logs',
 			'html_head',
 			'huggingface',
 			'iceberg_bigquery',
@@ -2358,6 +2356,54 @@ describe('OrgIntegrationsStore + project inheritance', () => {
 			{ name: 'shared', scope: 'project', shadowed: undefined },
 			{ name: 'shared', scope: 'org', shadowed: true },
 		]);
+	});
+
+	it('projects each config ambient_env switch into list entries, and only for kinds that have one', async () => {
+		const options = { bucket: new MemoryBucket(), registry: defaultRegistry(), codec };
+		const builtInOrg = new OrgIntegrationsStore(options);
+		const builtInProject = new ProjectIntegrationsStore(options);
+		await builtInOrg.create(
+			{ kind: 's3', name: 'lake', config: { bucket: 'lake', ambient_env: false } },
+			ACTOR,
+		);
+		await builtInProject.create(
+			pid,
+			{ kind: 'bigquery', name: 'warehouse', config: { project_id: 'analytics' } },
+			ACTOR,
+		);
+		await builtInProject.create(
+			pid,
+			{ kind: 'wandb', name: 'tracking', config: { api_key: 'wandb-key' } },
+			ACTOR,
+		);
+
+		const entries = await builtInProject.list(pid);
+		expect(entries.map(({ name, ambient_env }) => ({ name, ambient_env }))).toEqual([
+			{ name: 'lake', ambient_env: false },
+			{ name: 'tracking', ambient_env: undefined },
+			{ name: 'warehouse', ambient_env: false },
+		]);
+		expect(entries.find(({ name }) => name === 'tracking')).not.toHaveProperty('ambient_env');
+		expect((await builtInOrg.list()).map(({ ambient_env }) => ambient_env)).toEqual([false]);
+	});
+
+	it('names the shared-environment group when two W&B integrations conflict at launch', async () => {
+		const options = { bucket: new MemoryBucket(), registry: defaultRegistry(), codec };
+		await new OrgIntegrationsStore(options).create(
+			{ kind: 'wandb', name: 'org-tracking', config: { api_key: 'org-key' } },
+			ACTOR,
+		);
+		const builtInProject = new ProjectIntegrationsStore(options);
+		await builtInProject.create(
+			pid,
+			{ kind: 'wandb', name: 'tracking', config: { api_key: 'project-key' } },
+			ACTOR,
+		);
+		await expect(
+			builtInProject.resolveForSession(pid, renderContext(createSessionId())),
+		).rejects.toThrow(
+			'For Weights & Biases connections: Give them the same settings or enable only one of them.',
+		);
 	});
 
 	it('a disabled project instance still shadows in listings — matching what renders', async () => {

@@ -7,7 +7,12 @@ import { logEvent } from '../../logs';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
 import { sameComputeResources } from '../../ports/sandbox';
-import type { ComputeResources, SandboxInstance, SandboxProvider } from '../../ports/sandbox';
+import type {
+	ComputeResources,
+	ConnectSandboxOptions,
+	SandboxInstance,
+	SandboxProvider,
+} from '../../ports/sandbox';
 import type { SessionService } from './SessionService';
 import type { AppPoolStore } from './AppPoolStore';
 import { getOrCreateWarmPool, WarmPoolMemberSchema } from './WarmPoolStore';
@@ -113,12 +118,7 @@ export class WarmPoolService {
 				return member;
 			});
 			if (claimed) {
-				const sandbox = this.compute.connectExisting(
-					claimed.sandbox_id,
-					claimed.reconnect_reference === undefined
-						? profile
-						: { ...profile, reconnectReference: claimed.reconnect_reference },
-				);
+				const sandbox = this.connect(claimed, profile);
 				await this.reconnectAndProbe(sandbox);
 				if (this.isExpired(claimed))
 					throw new Error('Warm sandbox claim expired during readiness check');
@@ -217,23 +217,16 @@ export class WarmPoolService {
 							await this.retire(member);
 						} else if (this.now() - member.checked_at >= HEALTH_INTERVAL_MS) {
 							try {
-								const sandbox =
-									member.reconnect_reference === undefined
-										? this.compute.connectExisting!(member.sandbox_id)
-										: this.compute.connectExisting!(member.sandbox_id, {
-												reconnectReference: member.reconnect_reference,
-											});
+								const sandbox = this.connect(member);
 								await this.reconnectAndProbe(sandbox);
-								const reference = WarmPoolMemberSchema.shape.reconnect_reference.parse(
-									sandbox.reconnectReference,
-								);
+								const reference = this.readReference(sandbox);
 								await this.store.updateMember(member, 'ready', (current) => {
 									current.checked_at = this.now();
 									if (reference !== undefined) current.reconnect_reference = reference;
 								});
 								continue;
 							} catch (error) {
-								this.report('health_failed', error);
+								this.report('health_failed', error, { sandbox_id: member.sandbox_id });
 								await this.retire(member);
 							}
 						} else continue;
@@ -339,9 +332,7 @@ export class WarmPoolService {
 				timeoutError: () => new Error('Warm sandbox creation timed out'),
 			});
 			booted = true;
-			const reference = WarmPoolMemberSchema.shape.reconnect_reference.parse(
-				instance.reconnectReference,
-			);
+			const reference = this.readReference(instance);
 			const published = await this.store.updateMember(member, 'creating', (current) => {
 				if (this.isExpired(current)) return false;
 				current.state = 'ready';
@@ -396,6 +387,18 @@ export class WarmPoolService {
 				current.state = 'retiring';
 		});
 		await this.cleanup(member, sandbox);
+	}
+
+	private connect(member: WarmPoolMember, options?: ConnectSandboxOptions): SandboxInstance {
+		const reference = member.reconnect_reference;
+		return this.compute.connectExisting!(member.sandbox_id, {
+			...options,
+			...(reference === undefined ? {} : { reconnectReference: reference }),
+		});
+	}
+
+	private readReference(sandbox: SandboxInstance): string | undefined {
+		return WarmPoolMemberSchema.shape.reconnect_reference.parse(sandbox.reconnectReference);
 	}
 
 	private isExpired(member: WarmPoolMember): boolean {

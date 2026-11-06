@@ -149,6 +149,11 @@ fn command_from_node(name: &str, node: &Node<'_>) -> Command {
             command = command.long_about(description.clone());
         }
         command = operation_args(command, operation);
+        // A node that is both an operation and a parent (`notebooks move` and
+        // `notebooks move cancel`) must not demand its own required args from a subcommand.
+        if !node.children.is_empty() {
+            command = command.subcommand_negates_reqs(true);
+        }
     }
     for (child_name, child) in &node.children {
         command = command.subcommand(command_from_node(child_name, child));
@@ -462,5 +467,38 @@ mod tests {
 
         assert!(notebooks.find_subcommand("update").is_some());
         assert!(notebooks.find_subcommand("deploy").is_some());
+    }
+
+    #[test]
+    fn subcommand_of_an_operation_skips_the_parent_required_args() {
+        let matches = build(&crate::manifest::load())
+            .try_get_matches_from([
+                "mohub",
+                "notebooks",
+                "move",
+                "cancel",
+                "--pid",
+                "P",
+                "--nid",
+                "N",
+                "-y",
+            ])
+            .expect("move cancel parses without the parent's args");
+        let (_, notebooks) = matches.subcommand().unwrap();
+        let (_, moves) = notebooks.subcommand().unwrap();
+
+        assert_eq!(moves.subcommand_name(), Some("cancel"));
+    }
+
+    #[test]
+    fn operation_with_subcommands_still_requires_its_own_args() {
+        let error = build(&crate::manifest::load())
+            .try_get_matches_from(["mohub", "notebooks", "move"])
+            .expect_err("bare move needs --pid and --nid");
+
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
     }
 }

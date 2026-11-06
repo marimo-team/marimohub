@@ -30,6 +30,7 @@ function setup({
 	alerts = true,
 	search = false,
 	projectError = false,
+	projectPending = false,
 	listError = false,
 	defaultRole = 'inherit',
 	inheritedRole = null,
@@ -46,6 +47,7 @@ function setup({
 	alerts?: boolean;
 	search?: boolean;
 	projectError?: boolean;
+	projectPending?: boolean;
 	listError?: boolean;
 	defaultRole?: ProjectDefaultRole;
 	inheritedRole?: Capabilities['default_role'];
@@ -67,6 +69,7 @@ function setup({
 				if (url.pathname.endsWith('/members')) return [];
 				if (url.pathname.endsWith('/alert-destinations')) return { items: [] };
 				if (projectError) return jsonError('FORBIDDEN', 'Forbidden', 403);
+				if (projectPending) return new Promise<never>(() => {});
 				const id = url.pathname.split('/').at(-1);
 				return {
 					id,
@@ -147,6 +150,16 @@ describe('Workspace navigation', () => {
 			expect(
 				await screen.findByRole('link', { name: `Project sharing: ${options.label}` }),
 			).toBeVisible();
+		},
+	);
+
+	it.each([{ projectPending: true }, { projectError: true }, { role: 'app-user' as const }])(
+		'hides the sharing indicator without a readable project: %j',
+		async (options) => {
+			const { requests } = setup(options);
+			await waitFor(() => expect(requests).toContain('/api/v1/projects/alpha'));
+			await screen.findByRole('button', { name: /Alpha/ });
+			expect(screen.queryByRole('link', { name: /Project sharing/ })).not.toBeInTheDocument();
 		},
 	);
 

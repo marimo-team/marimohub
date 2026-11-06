@@ -14,6 +14,7 @@ import type {
 	HostPlatform,
 	HostPrincipal,
 	HostRequestContext,
+	HostRuntimeDiscovery,
 	HostRuntimeHandle,
 } from './platform';
 import {
@@ -48,6 +49,8 @@ const CreateNotebook = z.object({
 const StartRuntime = z.object({ decisions: z.record(z.string(), z.string()).optional() });
 // Permission and runtime changes need not move the catalog version; they are picked up on this cadence.
 const CATALOG_REFRESH_MS = 5_000;
+// Bearer and notebook access are rechecked on this cadence, or sooner when the catalog moves.
+const NOTEBOOK_RECHECK_MS = 30_000;
 const CHANGE_CORRELATION_MS = 5 * 60_000;
 
 function attachmentHeaders(c: Context) {
@@ -153,9 +156,10 @@ export function createHostApp<
 		signal: c.req.raw.signal,
 	});
 
-	app.onError((error) => {
+	app.onError((error, c) => {
 		const response = toResponse(error);
-		if (response.status >= 500) options.onError?.(error, response);
+		// A client that hung up surfaces as an abort; that is not a host failure.
+		if (response.status >= 500 && !c.req.raw.signal.aborted) options.onError?.(error, response);
 		if (response.status === 401) response.headers.set('WWW-Authenticate', challenge);
 		return response;
 	});
@@ -261,8 +265,7 @@ export function createHostApp<
 		);
 	}
 
-	async function appendRuntimes(
-		current: HostEvent[],
+	async function discoverRuntimes(
 		visible: ReadonlySet<string>,
 		snapshot: S,
 		principal: P,
@@ -279,6 +282,15 @@ export function createHostApp<
 				}
 			}),
 		);
+		return discovered;
+	}
+
+	function appendRuntimes(
+		current: HostEvent[],
+		discovered: readonly HostRuntimeDiscovery<R>[],
+		principal: P,
+		prune: boolean,
+	) {
 		const projects = new Set(
 			current
 				.filter((event) => event.event === 'project')
@@ -289,8 +301,9 @@ export function createHostApp<
 			const match = discovered.find(
 				(entry) => entry.key === known.key && entry.notebookId === notebookId,
 			);
-			if (!match) runtimes.delete(notebookId);
-			else if (match.authorized) current.push(originalRequestId(known.event, principal));
+			if (!match) {
+				if (prune) runtimes.delete(notebookId);
+			} else if (match.authorized) current.push(originalRequestId(known.event, principal));
 		}
 	}
 
@@ -313,13 +326,18 @@ export function createHostApp<
 					if (c.req.header('Last-Event-ID')) await send({ event: 'reset', data: {} });
 					let first = true;
 					let refreshed = Date.now();
+					// Discovery re-authorizes every running session, so it follows the catalog cadence.
+					let discovered: HostRuntimeDiscovery<R>[] | undefined;
 					while (!signal.aborted) {
 						const current = catalog.events.map((event) => ({ ...event, data: { ...event.data } }));
 						const ids = new Set(
 							current.filter((e) => e.event === 'notebook').map((e) => recordId(e, 'notebook')),
 						);
-						if (acceptsEvent(types, 'runtime'))
-							await appendRuntimes(current, ids, catalog, principal, signal);
+						if (acceptsEvent(types, 'runtime')) {
+							const fresh = discovered === undefined;
+							discovered ??= await discoverRuntimes(ids, catalog, principal, signal);
+							appendRuntimes(current, discovered, principal, fresh);
+						}
 						for (const attachment of attachments.values()) {
 							if (ids.has((attachment.data.attachment as { notebook_id: string }).notebook_id))
 								current.push(attachment);
@@ -342,6 +360,7 @@ export function createHostApp<
 						const next = await platform.catalogVersion(principal);
 						if (next !== version || Date.now() - refreshed >= CATALOG_REFRESH_MS) {
 							catalog = await platform.catalog(principal, signal);
+							discovered = undefined;
 							version = next;
 							refreshed = Date.now();
 						}
@@ -516,6 +535,13 @@ export function createHostApp<
 				let initial = true;
 				let previousNotebook = JSON.stringify(record);
 				let user = principal;
+				let version = await platform.catalogVersion(user);
+				let checked = Date.now();
+				const recheck = async () => {
+					user = await platform.authenticate(c.req.raw);
+					latestNotebook = (await authorizedNotebook(c, 'runtime.start', user)).record;
+					checked = Date.now();
+				};
 				try {
 					if (c.req.header('Last-Event-ID')) await emit({ event: 'reset', data: {} });
 					await emitSnapshot();
@@ -537,6 +563,8 @@ export function createHostApp<
 							if (raw.event === 'ready' && !initial) continue;
 							if (raw.event === 'reset') {
 								initial = true;
+								await recheck();
+								previousNotebook = JSON.stringify(latestNotebook);
 								await emit(raw);
 								await emitSnapshot();
 								continue;
@@ -546,16 +574,18 @@ export function createHostApp<
 						}
 						for (const event of pendingAttachments.splice(0)) await emit(event);
 						await sleep(100, signal);
-						user = await platform.authenticate(c.req.raw);
-						const next = (await authorizedNotebook(c, 'runtime.start', user)).record;
-						latestNotebook = next;
-						if (JSON.stringify(next) !== previousNotebook) {
-							previousNotebook = JSON.stringify(next);
-							await emit({
-								event: 'notebook',
-								id: 'live',
-								data: { notebook: next, time: new Date().toISOString() },
-							});
+						const next = await platform.catalogVersion(user);
+						if (next !== version || Date.now() - checked >= NOTEBOOK_RECHECK_MS) {
+							version = next;
+							await recheck();
+							if (JSON.stringify(latestNotebook) !== previousNotebook) {
+								previousNotebook = JSON.stringify(latestNotebook);
+								await emit({
+									event: 'notebook',
+									id: 'live',
+									data: { notebook: latestNotebook, time: new Date().toISOString() },
+								});
+							}
 						}
 						batch = await call(user, cursor ? { 'Last-Event-ID': cursor } : {}, signal);
 					}

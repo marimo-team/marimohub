@@ -1,21 +1,29 @@
+/** One `otlp_logs` authoring config per `auth.method`. */
+export const OTLP_LOGS_AUTH_SAMPLES = {
+	none: { url: 'http://collector.internal:4318/v1/logs' },
+	bearer: {
+		url: 'https://ingest.example.test/v1/logs',
+		auth: { method: 'bearer', token: 'bearer-token' },
+	},
+	basic: {
+		url: 'https://otlp-gateway.example.test/otlp/v1/logs',
+		auth: { method: 'basic', username: '123', password: 'basic-token' },
+	},
+	headers: {
+		url: 'https://collector.example.test/v1/logs',
+		auth: {
+			method: 'headers',
+			headers: [{ name: 'Authorization', value: 'Bearer otlp-token' }],
+		},
+	},
+} as const;
+
 /**
  * One representative authoring config per kind, shared by the kind test suites.
  * Not imported by production code.
  */
 export const SAMPLE_CONFIGS: Record<string, unknown> = {
-	otlp_logs: {
-		url: 'https://collector.example.test/v1/logs',
-		headers: [{ name: 'Authorization', value: 'Bearer otlp-token' }],
-	},
-	grafana_cloud_logs: {
-		url: 'https://otlp-gateway.example.test/otlp/v1/logs',
-		username: '123',
-		token: 'grafana-token',
-	},
-	better_stack_logs: {
-		url: 'https://ingest.example.test/v1/logs',
-		source_token: 'better-stack-token',
-	},
+	otlp_logs: OTLP_LOGS_AUTH_SAMPLES.headers,
 	agent_context: { instructions: 'Use polars for data analysis.' },
 	marimo_studio: {},
 	startup_script: { script: '#!/bin/sh\necho ready\n' },

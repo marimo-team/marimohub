@@ -87,15 +87,15 @@ describe('integration search source', () => {
 			0,
 		);
 		const scope = { projectId: f.project.id, source: f.source.id };
-		expect(await indexer.step(f.project.id, f.source, signal)).toBe(false);
-		expect(await indexer.step(f.project.id, f.source, signal)).toBe(true);
+		expect(await indexer.step(f.project.id, f.source, signal, null)).toBe(false);
+		expect(await indexer.step(f.project.id, f.source, signal, null)).toBe(true);
 		const snapshot = (await index.read(scope)).snapshot!;
 		expect(snapshot.partial).toBe(true);
 		expect(snapshot.documents).toHaveLength(51);
 		expect((await bucket.get(searchPaths.scope(scope).checkpoint))!.size).toBeLessThanOrEqual(
 			MAX_SEARCH_CHECKPOINT_BYTES,
 		);
-		expect(await indexer.step(f.project.id, f.source, signal)).toBe(false);
+		expect(await indexer.step(f.project.id, f.source, signal, null)).toBe(false);
 	});
 	it.each([
 		{ kind: 'snowflake', schemas: true, surfaces: [] },

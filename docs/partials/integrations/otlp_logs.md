@@ -9,10 +9,29 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `url` | string | Yes |  | Full OTLP/HTTP JSON logs URL, including /v1/logs |
-| `headers` | object[] |  |  |  |
-| `headers[].name` | string | Yes |  |  |
-| `headers[].value` 🔒 | string | Yes |  |  |
-| `level` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |  | `INFO` |  |
-| `service_name` | string |  | `marimohub-notebook` |  |
+| `auth.method` | `none`, `bearer`, `basic`, `headers` |  | `none` | How export requests authenticate |
+| `level` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |  | `INFO` | Lowest Python log level to export |
+| `service_name` | string |  | `marimohub-notebook` | OpenTelemetry `service.name` resource attribute |
+
+**`auth.method: bearer`**
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `auth.token` 🔒 | string | Yes |  | Token sent as `Authorization: Bearer <token>` |
+
+**`auth.method: basic`**
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `auth.username` | string | Yes |  | Basic-auth username |
+| `auth.password` 🔒 | string | Yes |  | Basic-auth password or token |
+
+**`auth.method: headers`**
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `auth.headers` | object[] |  |  | HTTP headers sent with every export request, such as an API key or tenant ID |
+| `auth.headers[].name` | string | Yes |  | HTTP header name |
+| `auth.headers[].value` 🔒 | string | Yes |  | Header value, stored as a secret |
 
 :::

@@ -7,28 +7,37 @@ Part of [marimohub](../../README.md). See [docs/compute.md](../../docs/compute.m
 
 ## File uploads
 
-Uploads use up to four concurrent SDK writes per batch and sixteen active RPCs per
-process, across sessions and phases. Retry delays release their RPC slots.
-All destinations must be unique absolute paths. The adapter validates and copies
-the destinations before sandbox readiness.
+A batch runs up to four SDK writes at the same time.
+Each sandbox allows eight active write RPCs across all its phases, so sessions never queue behind each other.
+Each write has a 60 s deadline. A write that waits to retry releases its RPC slot.
+All destinations must be unique absolute paths.
+The adapter validates and copies the destinations before it waits for sandbox readiness.
 
-Only `UNAVAILABLE` triggers retries, after 250, 1,000, and 3,000 ms.
-Other errors or exhausted retries stop new uploads in that batch, including uploads
-queued for a slot. Active uploads finish their retry loops before the batch rejects.
-Other batches continue. Completed writes remain in the sandbox.
+Only `UNAVAILABLE` causes a retry, after 250, 1,000, and 3,000 ms.
+Any other error, or a write that runs out of retries, stops new uploads in that batch, including uploads that wait for a slot.
+Active uploads finish their retries, and then the batch rejects.
+Other batches continue. Completed writes stay in the sandbox.
 
-The SDK handles parent directories, file-size limits, streaming fallback, and direct
-mTLS or Gateway routing. File contents pass directly to the SDK.
+The SDK creates parent directories and handles file-size limits, streaming fallback, and direct mTLS or Gateway routing.
+File contents go directly to the SDK.
 
 ## Startup timings
 
-| Field                            | Measures                                                                                         |
-| -------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `provision_files_ms`             | Workspace restoration, including readiness waits.                                                |
-| `provision_files_waitready_ms`   | One shared readiness wait across workspace and Git restores.                                     |
-| `provision_files_non_waiting_ms` | Workspace duration minus that wait, including storage reads, queueing, uploads, and preparation. |
-| `provision_inject_files_ms`      | Session file preparation, uploads, and installation.                                             |
-| `provision_inject_env_ms`        | Environment configuration calls, concurrent with session file uploads.                           |
+Core emits the provisioning phase timings for every backend. See
+[session provision events](../../docs/operations.md#session-provision-events).
+On CoreWeave, the first command that needs the private environment file creates it.
+Its upload time counts toward that command, not toward `provision_inject_files_ms`.
 
-The command that creates the private environment file accounts for that upload time.
-Phases overlap. Use `provision_total_ms` for total provisioning time.
+## Warm-pool references
+
+A reference holds `kind: 'coreweave-v1'`, the Hub sandbox ID, and a provider container ID of 1–256 UTF-16 code units.
+Before any network request, the adapter rejects malformed references, extra fields, and mismatched Hub IDs.
+With a reference, a claim does a Get by container ID and a command probe.
+Without one, it does a List by Hub tag, a Get, and a probe.
+The Get result must have the expected container ID and `running` status.
+A handle without status metadata cannot satisfy a reference.
+
+On this path, `coreweave_ensure` reports `reconnect_by_reference=true` and `get_ms`, and zero for `find_ms`, `create_ms`, and `boot_ms`.
+Destroying a handle with a reference targets only its container ID.
+A not-found response counts as deleted. Other errors propagate.
+Pool reclamation re-reads ownership and uses tag-based cleanup.

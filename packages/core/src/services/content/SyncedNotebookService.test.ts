@@ -202,6 +202,28 @@ describe('SyncedNotebookService', () => {
 			).rejects.toThrow('repo must be owner/repo');
 		});
 
+		it('stops at a move fence stamped after the source was read', async () => {
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+			const key = paths.project(projectId).notebook(meta.id).meta;
+			const stored = await bucket.get(key);
+			const current = (await stored!.json()) as Record<string, unknown>;
+			await bucket.put(key, JSON.stringify({ ...current, move_id: 'mv_test' }));
+
+			await expect(
+				notebooks.synced.updateSource(
+					projectId,
+					meta.id,
+					{
+						repo: 'new/repo',
+						branch: 'release',
+						root_path: 'apps',
+						entry_notebook: 'dashboard.py',
+					},
+					ACTOR,
+				),
+			).rejects.toThrow('is being moved');
+		});
+
 		it('updates an unsynced draft immediately', async () => {
 			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
 

@@ -1,7 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act } from '@testing-library/react';
-import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
-import { useMoveNotebook } from './notebookMoves';
+import { createTestQueryClient, jsonError, jsonOk, renderHookWithClient } from '@/test/render';
+import { cachedProjectName, useCancelNotebookMove, useMoveNotebook } from './notebookMoves';
+import { notebookKeys, projectKeys } from './queryKeys';
 import { projectThumbnailsKey, thumbnailKey } from './thumbnails';
 
 const input = {
@@ -55,4 +56,39 @@ it('keeps thumbnail caches intact when a move fails', async () => {
 	});
 
 	expect(client.getQueryState(key)?.isInvalidated).toBe(false);
+});
+
+it('cancels through DELETE and refreshes both projects', async () => {
+	const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+		jsonOk({ message: 'Move cancelled' }),
+	);
+	vi.stubGlobal('fetch', fetch);
+	const { result, client } = renderHookWithClient(() => useCancelNotebookMove('proj-source'), {
+		toaster: false,
+	});
+	const keys = [
+		notebookKeys.all,
+		projectKeys.detail('proj-source'),
+		projectKeys.detail(input.destination),
+	];
+	for (const key of keys) client.setQueryData(key, {});
+
+	await act(async () => {
+		await result.current.mutateAsync(input);
+	});
+
+	expect(String(fetch.mock.calls[0][0])).toContain(
+		'/api/v1/projects/proj-source/notebooks/nb-1/move',
+	);
+	expect(fetch.mock.calls[0][1]?.method).toBe('DELETE');
+	for (const key of keys) expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+});
+
+it('names a destination from any cached project roster without fetching', () => {
+	const client = createTestQueryClient();
+	client.setQueryData(projectKeys.filteredList({ status: 'active' }), [
+		{ id: 'proj-destination', name: 'Destination' },
+	]);
+	expect(cachedProjectName(client, 'proj-destination')).toBe('Destination');
+	expect(cachedProjectName(client, 'proj-unknown')).toBeUndefined();
 });

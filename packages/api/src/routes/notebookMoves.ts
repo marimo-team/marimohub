@@ -7,6 +7,7 @@ import {
 	toPublicNotebookMeta,
 	asFilesystemSnapshots,
 } from '@marimo-hub/core';
+import type { AuthorizationSubject, NotebookMeta, Project } from '@marimo-hub/core';
 import {
 	assertProjectActionOn,
 	assertProjectRole,
@@ -23,6 +24,7 @@ import {
 	RequiredIfMatchHeader,
 	SuccessResponseSchema,
 } from '../shared';
+import type { ApiDeps } from '../context';
 import { assertPullSourceSupported } from './sourcePullSync';
 
 const app = createApp();
@@ -37,7 +39,15 @@ const moveNotebook = createRoute({
 	request: {
 		params: NotebookIdParam,
 		headers: RequiredIfMatchHeader,
-		body: jsonBody(z.object({ destination_project_id: z.string().refine(ProjectId.is) })),
+		body: jsonBody(
+			z.object({
+				destination_project_id: z
+					.string()
+					.regex(ProjectId.regex)
+					.refine(ProjectId.is)
+					.openapi({ example: 'proj-7h2k9qm4xz7rp3w8' }),
+			}),
+		),
 	},
 	responses: {
 		200: jsonContent(
@@ -46,7 +56,7 @@ const moveNotebook = createRoute({
 			EtagResponseHeader,
 		),
 		...commonErrors(),
-		...errorResponses(403, 404, 409, 412),
+		...errorResponses(403, 404, 409, 412, 429),
 	},
 });
 
@@ -66,12 +76,66 @@ const cancelMove = createRoute({
 	},
 });
 
+const getMove = createRoute({
+	method: 'get',
+	path: '/projects/{pid}/notebooks/{nid}/move',
+	operationId: 'notebooks.move.get',
+	tags: ['Notebooks'],
+	summary: 'Get a pending notebook move',
+	description:
+		'Reports a move out of this project that has not completed, so it can be resumed by repeating the move or cancelled.',
+	request: { params: NotebookIdParam },
+	responses: {
+		200: jsonContent(
+			z.object({
+				success: z.literal(true),
+				data: z
+					.object({
+						phase: z.enum(['preparing', 'copying', 'published']),
+						destination_project_id: z.string(),
+						lease_expires_at: z.string().openapi({ format: 'date-time' }).nullable(),
+						updated_at: z.string().openapi({ format: 'date-time' }),
+					})
+					.openapi('NotebookMove'),
+			}),
+			'Pending move',
+		),
+		...commonErrors(),
+		...errorResponses(403, 404),
+	},
+});
+
+/** Status and cancel both require managing the notebook in the source, labels included. */
+function authorizeSourceManager(deps: ApiDeps, user: AuthorizationSubject) {
+	return async ({
+		sourceProject,
+		notebook,
+	}: {
+		sourceProject: Project;
+		notebook: NotebookMeta;
+	}) => {
+		for (const action of ['project.read', 'notebook.manage'] as const)
+			await assertProjectActionOn(sourceProject, user, action, deps, notebook.security_labels);
+	};
+}
+
+app.openapi(getMove, async (c) => {
+	const deps = c.get('deps');
+	const { pid, nid } = c.req.valid('param');
+	const status = await deps.services.moves.status(
+		{ source: pid, notebookId: nid },
+		authorizeSourceManager(deps, c.get('user')),
+	);
+	return c.json({ success: true, data: status }, 200);
+});
+
 app.openapi(cancelMove, async (c) => {
 	const deps = c.get('deps');
-	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
-	await assertProjectRole(deps.services.projects, pid, user, 'notebook.manage', deps);
-	await deps.services.moves.cancel({ source: pid, notebookId: nid });
+	await deps.services.moves.cancel(
+		{ source: pid, notebookId: nid },
+		authorizeSourceManager(deps, c.get('user')),
+	);
 	return c.json({ success: true }, 200);
 });
 
@@ -79,7 +143,7 @@ app.openapi(moveNotebook, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
-	const destination = ProjectId.parse(c.req.valid('json').destination_project_id);
+	const destination = c.req.valid('json').destination_project_id;
 	await assertProjectRole(deps.services.projects, pid, user, 'notebook.manage', deps);
 	await assertProjectRole(deps.services.projects, destination, user, 'notebook.manage', deps);
 	const snapshotCompute = asFilesystemSnapshots(deps.compute);

@@ -55,7 +55,7 @@ export function FormDialog({
 				<div className="flex flex-col gap-4">
 					{children}
 					<div className="flex justify-end gap-2 pt-2 max-md:flex-col">
-						<Button variant="ghost" onPress={onClose}>
+						<Button variant="ghost" onPress={onClose} isDisabled={isPending}>
 							{cancelLabel}
 						</Button>
 						<Button type="submit" variant={submitVariant} isDisabled={isPending || submitDisabled}>

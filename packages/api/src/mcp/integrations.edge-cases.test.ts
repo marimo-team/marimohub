@@ -25,7 +25,7 @@ describe('MCP discovery edge cases', () => {
 		for (const [name, input] of [
 			['list_namespaces', {}],
 			['list_tables', { namespace: ['empty'] }],
-			['list_objects', { integration_id: objects.id, bucket: 'lake', prefix: '' }],
+			['list_objects', { integration: objects.id, bucket: 'lake', prefix: '' }],
 		] as const) {
 			const response = await call(name, input);
 			expect(response.isError).not.toBe(true);
@@ -52,7 +52,7 @@ describe('MCP discovery edge cases', () => {
 		const key = 'é'.repeat(512);
 		const version_id = 'v'.repeat(2048);
 		const response = await call('get_object_metadata', {
-			integration_id: objects.id,
+			integration: objects.id,
 			bucket: 'lake',
 			key,
 			version_id,
@@ -86,7 +86,7 @@ describe('MCP discovery edge cases', () => {
 		expect(
 			(
 				await call('preview_object', {
-					integration_id: objects.id,
+					integration: objects.id,
 					bucket: 'lake',
 					key: 'file.txt',
 					limit,
@@ -101,12 +101,12 @@ describe('MCP discovery edge cases', () => {
 	});
 
 	it.each([
-		['list_namespaces', { integration_id: 'invalid' }],
+		['list_namespaces', { integration: 'invalid' }],
 		['list_namespaces', { limit: 0 }],
 		['list_namespaces', { limit: -1 }],
 		['list_tables', { namespace: ['sales'], limit: 1.5 }],
 		['list_namespaces', { parent: ['sales\u001feu'] }],
-		['list_namespaces', { fresh: 'true' }],
+		['list_namespaces', { integration: '' }],
 		['get_table_schema', { namespace: ['sales'], table: '' }],
 		['preview_table', { namespace: ['sales'], table: 'orders', limit: '20' }],
 		['list_object_buckets', { limit: 101 }],
@@ -179,7 +179,7 @@ describe('MCP discovery edge cases', () => {
 						name,
 						arguments: {
 							project: project.id,
-							integration_id: name === 'preview_table' ? catalog.id : objects.id,
+							integration: name === 'preview_table' ? catalog.id : objects.id,
 							namespace: ['sales'],
 							table: 'orders',
 							bucket: 'lake',
@@ -195,11 +195,11 @@ describe('MCP discovery edge cases', () => {
 
 	it('rejects unsupported browse surfaces without reaching either provider', async () => {
 		const { call, catalog, objects, listNamespaces, objectBrowser } = await setupDiscovery();
-		expect(await call('list_namespaces', { integration_id: objects.id })).toMatchObject({
+		expect(await call('list_namespaces', { integration: objects.id })).toMatchObject({
 			isError: true,
 			structuredContent: { code: 'VALIDATION_ERROR' },
 		});
-		expect(await call('list_object_buckets', { integration_id: catalog.id })).toMatchObject({
+		expect(await call('list_object_buckets', { integration: catalog.id })).toMatchObject({
 			isError: true,
 			structuredContent: { code: 'VALIDATION_ERROR' },
 		});
@@ -226,9 +226,9 @@ describe('MCP discovery edge cases', () => {
 		expect(previewRows).not.toHaveBeenCalled();
 		expect(audit).not.toHaveBeenCalled();
 		for (let index = 0; index < 20; index++) {
-			expect((await call('list_namespaces', { fresh: true })).isError).not.toBe(true);
+			expect((await call('list_namespaces', { cursor: `c${index}` })).isError).not.toBe(true);
 		}
-		expect(await call('list_namespaces', { fresh: true })).toMatchObject({
+		expect(await call('list_namespaces', { cursor: 'over-budget' })).toMatchObject({
 			isError: true,
 			structuredContent: { code: 'RESOURCE_EXHAUSTED' },
 		});
@@ -243,7 +243,7 @@ describe('MCP discovery edge cases', () => {
 		}));
 		const audit = vi.spyOn(deps.services.events, 'append');
 		expect(
-			await call('preview_object', { integration_id: objects.id, bucket: 'lake', key: 'file.txt' }),
+			await call('preview_object', { integration: objects.id, bucket: 'lake', key: 'file.txt' }),
 		).toMatchObject({ isError: true, structuredContent: { code: 'NOT_FOUND' } });
 		expect(objectBrowser.previewObject).not.toHaveBeenCalled();
 		expect(objectBrowser.openObject).not.toHaveBeenCalled();
@@ -273,7 +273,7 @@ describe('MCP discovery edge cases', () => {
 			const { call, objects, objectBrowser } = await setupDiscovery();
 			vi.mocked(objectBrowser.previewObject).mockResolvedValue(preview);
 			const response = await call('preview_object', {
-				integration_id: objects.id,
+				integration: objects.id,
 				bucket: 'lake',
 				key: 'file.bin',
 			});
@@ -300,7 +300,7 @@ describe('MCP discovery edge cases', () => {
 			const audit = vi.spyOn(deps.services.events, 'append');
 			expect(
 				await call('preview_object', {
-					integration_id: objects.id,
+					integration: objects.id,
 					bucket: 'lake',
 					key: 'file.txt',
 				}),
@@ -325,7 +325,7 @@ describe('MCP discovery edge cases', () => {
 				kind === 'table' ? 'preview_table' : 'preview_object',
 				kind === 'table'
 					? { namespace: ['sales'], table: 'orders' }
-					: { integration_id: objects.id, bucket: 'lake', key: 'file.txt' },
+					: { integration: objects.id, bucket: 'lake', key: 'file.txt' },
 			);
 			expect(response).toMatchObject({
 				isError: true,
@@ -346,9 +346,7 @@ describe('MCP discovery edge cases', () => {
 			provider.mockRejectedValueOnce(new UnavailableError('Temporary outage'));
 			const name = kind === 'tables' ? 'list_tables' : 'list_objects';
 			const input =
-				kind === 'tables'
-					? { namespace: ['sales'] }
-					: { integration_id: objects.id, bucket: 'lake' };
+				kind === 'tables' ? { namespace: ['sales'] } : { integration: objects.id, bucket: 'lake' };
 			expect(await call(name, input)).toMatchObject({
 				isError: true,
 				structuredContent: { code: 'SERVICE_UNAVAILABLE' },
@@ -376,7 +374,7 @@ describe('MCP discovery edge cases', () => {
 				mcpPrincipal.id,
 			);
 			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-			const response = await call('list_object_buckets', { integration_id: ambient.id });
+			const response = await call('list_object_buckets', { integration: ambient.id });
 			expect(response.isError).toBe(true);
 			expect(JSON.stringify([response, log.mock.calls])).not.toContain(
 				'private-broker-credential-fixture',
@@ -398,7 +396,7 @@ describe('MCP discovery edge cases', () => {
 		const client = await connectMcpClient(deps, editor);
 		const request = {
 			name: 'list_namespaces',
-			arguments: { project: project.id, integration_id: catalog.id },
+			arguments: { project: project.id, integration: catalog.id },
 		};
 		expect((await client.callTool(request)).isError).not.toBe(true);
 		await deps.services.projects.updateMemberRole(project.id, editor.id, 'viewer', mcpPrincipal.id);
@@ -426,7 +424,7 @@ describe('MCP discovery edge cases', () => {
 		expect(
 			await client.callTool({
 				name: 'list_namespaces',
-				arguments: { project: project.id, integration_id: catalog.id },
+				arguments: { project: project.id, integration: catalog.id },
 			}),
 		).toMatchObject({ structuredContent: { items: [['sales', 'eu.central']] } });
 		expect(listNamespaces).toHaveBeenCalledTimes(2);
@@ -443,14 +441,14 @@ describe('MCP discovery edge cases', () => {
 			{ kind: 'test_catalog', name: 'inherited', config: { token: 'fixture' } },
 			mcpPrincipal.id,
 		);
-		await call('list_namespaces', { integration_id: inherited.id });
+		await call('list_namespaces', { integration: inherited.id });
 		const override = await integrations.create(
 			project.id,
 			{ kind: 'test_catalog', name: 'inherited', config: { token: 'fixture' } },
 			mcpPrincipal.id,
 		);
 		await integrations.update(project.id, override.id, { enabled: false }, mcpPrincipal.id);
-		expect(await call('list_namespaces', { integration_id: inherited.id })).toMatchObject({
+		expect(await call('list_namespaces', { integration: inherited.id })).toMatchObject({
 			isError: true,
 			structuredContent: { code: 'NOT_FOUND' },
 		});
@@ -460,7 +458,7 @@ describe('MCP discovery edge cases', () => {
 	it('enforces the independent object preview budget before provider calls and success audits', async () => {
 		const { call, objects, objectBrowser, deps } = await setupDiscovery();
 		const audit = vi.spyOn(deps.services.events, 'append');
-		const input = { integration_id: objects.id, bucket: 'lake', key: 'file.txt' };
+		const input = { integration: objects.id, bucket: 'lake', key: 'file.txt' };
 		for (let index = 0; index < 10; index++)
 			expect((await call('preview_object', input)).isError).not.toBe(true);
 		expect(await call('preview_object', input)).toMatchObject({
@@ -469,9 +467,7 @@ describe('MCP discovery edge cases', () => {
 		});
 		expect(objectBrowser.previewObject).toHaveBeenCalledTimes(10);
 		expect(audit).toHaveBeenCalledTimes(10);
-		expect((await call('list_object_buckets', { integration_id: objects.id })).isError).not.toBe(
-			true,
-		);
+		expect((await call('list_object_buckets', { integration: objects.id })).isError).not.toBe(true);
 	});
 
 	it('does no provider work for an already cancelled request', async () => {
@@ -486,7 +482,7 @@ describe('MCP discovery edge cases', () => {
 				name: 'preview_table',
 				arguments: {
 					project: project.id,
-					integration_id: catalog.id,
+					integration: catalog.id,
 					namespace: ['sales'],
 					table: 'orders',
 				},
@@ -508,7 +504,7 @@ describe('MCP discovery edge cases', () => {
 		});
 		const cancelled = client.callTool({
 			name: 'list_namespaces',
-			arguments: { project: project.id, integration_id: catalog.id },
+			arguments: { project: project.id, integration: catalog.id },
 		});
 		const other = call('list_namespaces');
 		try {

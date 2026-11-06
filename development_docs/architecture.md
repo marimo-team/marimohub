@@ -162,8 +162,8 @@ the Compute port.
 | **Adapters**      | **Cloudflare Containers** (Durable Object-backed) · **Modal** · **CoreWeave** (CoreWeave Sandboxes via the `@coreweave/cwsandbox` SDK, Node/gRPC) · **AWS ECS Fargate** (RunTask plus a private authenticated in-task agent) · **Kubernetes** (a Pod + Service and optional Ingress per session via the cluster API) · **Docker** / **Podman** (a container per kernel through the engine CLI) · **E2B** (E2B sandboxes; bring-your-own `e2b` SDK) · **local** (host subprocess via `uv run marimo edit`, dev only) |
 | **Orchestration** | `SandboxProvisioner` is provider-agnostic: it creates a sandbox, makes notebook files available (mount the bucket, or fall back to copying files in), starts marimo, waits for the port, and exposes a URL. Teardown reverses it.                                                                                                                                                                                                                                                                                   |
 
-Warm pools can persist an opaque, credential-free provider reconnect reference
-to avoid discovery during claims; see [warm-pool reconnect references](./warm-pool-reconnect.md).
+Warm-pool claims skip discovery when the member stores an opaque, credential-free
+[reconnect reference](./warm_pools.md#reconnect-references).
 
 An edit sandbox can also expose secondary **surfaces**. `SurfaceRegistry` owns
 the provider-neutral process specification, and `SurfaceManager` probes,

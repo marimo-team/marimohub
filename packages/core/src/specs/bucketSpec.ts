@@ -27,7 +27,7 @@ import { WarmPoolRecordSchema } from '../services/runtime/WarmPoolStore';
 import { AppPoolSchema } from '../services/runtime/AppPoolRouter';
 import { ThumbnailRecordSchema } from '../services/content/ThumbnailService';
 import { DeepLinkRecordSchema } from '../deepLinks';
-import { z } from 'zod';
+import type { z } from 'zod';
 import { NotebookMoveSchema } from '../services/content/notebookMoveRecord';
 import { jsonSchema } from './jsonSchema';
 import type {
@@ -139,19 +139,10 @@ const OBJECTS: BucketObject[] = [
 		name: 'NotebookMove',
 		key: paths.notebookMove(NID),
 		schema: NotebookMoveSchema,
-		summary: 'Resumable cross-project notebook transfer, leased by its running executor.',
+		summary: 'Resumable cross-project notebook move, leased by its running executor.',
 		mutability: 'cas',
 		owner: 'NotebookMoveService',
 		tag: 'notebook',
-	},
-	{
-		name: 'SearchRefresh',
-		key: '_system/search/refresh/{pid}.json',
-		schema: z.string(),
-		summary: 'Revision requesting a fresh project search crawl.',
-		mutability: 'last-writer-wins',
-		owner: 'SearchIndexer',
-		tag: 'search',
 	},
 	{
 		name: 'SearchHead',
@@ -638,7 +629,8 @@ const OBJECTS: BucketObject[] = [
 		name: 'HostRetryRecord',
 		key: paths.hostRetry('{digest}'),
 		schema: HostRetryRecordSchema,
-		summary: 'Shared host mutation claim, runtime binding, and retry receipt. Retain CAS heads.',
+		summary:
+			'Shared host mutation claim, runtime binding, and retry receipt. Compacted receipts are deleted after 24 h.',
 		mutability: 'cas',
 		owner: 'HostRetryStore',
 		tag: 'ops',

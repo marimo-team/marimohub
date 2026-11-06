@@ -228,6 +228,25 @@ Session `status` describes the sandbox lifecycle. `execution.status` reports ker
 | `app_mode`                                       | Call `start_session` with `mode: "edit"` to execute code.                                                   |
 | `terminating`, `terminated`, `failed`, `expired` | Check the session status and error before retrying `start_session`.                                         |
 
+If a kernel stays `initializing`, `awaiting_client`, or `unavailable`, search the server logs
+for the `mcp_kernel_bootstrap` event. The hub writes one event for each kernel check. Each event
+has `project_id`, `notebook_id`, `session_id`, `sandbox_id`, `inspect_only`, `wait_seconds`,
+`outcome`, and `duration_ms`. An optional `bootstrap` object records the last check:
+
+| Field               | Values                                                                                                                                                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stage`             | `discovery`, `client`, `lock`, `sessions`, `configure`, `websocket`, `instantiate`, `kernel_status`, `exec`                                                                                                               |
+| `reason`            | `runtime_not_found`, `missing_dependency`, `incompatible_runtime`, `http_error`, `connection_error`, `timeout`, `client_exit`, `invalid_output`, `launcher_error`, `client_error`, `initialization_failed`, `exec_failed` |
+| `runtime_kind`      | `marimo` (a marimo server) or `bridge` (the notebook bridge launcher)                                                                                                                                                     |
+| `authenticated`     | `true` if the server requires the sandbox token                                                                                                                                                                           |
+| `http_status`       | The marimo server's HTTP status when `reason` is `http_error`                                                                                                                                                             |
+| `processes_scanned` | The number of sandbox processes checked during discovery                                                                                                                                                                  |
+| `port_matches`      | The number of processes started with the expected kernel `--port`                                                                                                                                                         |
+
+For example, `stage: "discovery"` with `reason: "runtime_not_found"` and `port_matches: 0` means
+that no marimo server listens on the kernel port. The event never contains tokens, URLs, process arguments, or sandbox output.
+The hub drops any value that is not in this table.
+
 `wait_seconds` accepts integers from `0` to `120` (default `60`). It bounds kernel
 initialization retries after sandbox startup while readiness remains `initializing`.
 If the wait expires, call `start_session` again. Zero inspects existing kernels,
@@ -255,8 +274,9 @@ Use `stop_session` to stop a session explicitly.
 
 ## Discover data
 
-These read-only tools work through MCP and project chat. Chat runs them without consent cards.
-They share the [data browser's](./integrations.md#browse-data) access checks, caches, and request budgets.
+These read-only tools work through MCP and project chat. For chat consent, see
+[Project chat](./ai.md#project-chat). The tools share the [data browser's](./integrations.md#browse-data)
+access checks, caches, and request budgets.
 
 | Tool                  | Purpose                                                                                        |
 | --------------------- | ---------------------------------------------------------------------------------------------- |
@@ -268,27 +288,34 @@ They share the [data browser's](./integrations.md#browse-data) access checks, ca
 | `list_object_buckets` | List accessible buckets or containers.                                                         |
 | `list_objects`        | List objects and prefixes at one directory level.                                              |
 | `get_object_metadata` | Read metadata, tags, and an available loading snippet.                                         |
-| `preview_object`      | Preview text or rows, or return an authenticated image URL.                                    |
+| `preview_object`      | Preview text or rows, or describe an image.                                                    |
 
 `list_integrations` requires integrations to be enabled and `integration.read`.
-Other tools require the data browser and `integration.use` (editor or above).
-`preview_table` requires table previews. Object tools require the object browser.
+The other tools require the data browser and `integration.use` (editor or above).
+`preview_table` also requires table previews. Object tools also require the object browser.
 Disabled tools are absent from `tools/list`. Each integration must support the requested operation.
 Token grants must permit the required action in the selected project.
 
-All tools accept `project` as an ID or exact name.
-Browse tools require an `integration_id` from a `list_integrations` entry with `enabled: true` and `shadowed: false`.
-Namespaces use arrays from `list_namespaces`, such as `["sales", "eu.central"]`, with dots preserved within each part.
+All tools accept `project` as an ID or exact name. Browse tools also require an `integration`.
+Use the ID or exact name of a `list_integrations` entry with `enabled: true` and `shadowed: false`.
+A name selects the unshadowed entry with that name.
+Namespaces are arrays from `list_namespaces`, such as `["sales", "eu.central"]`. Each part keeps its dots.
 Schema and table preview calls also require a table name from `list_tables`.
 
-Lists return `items` and `next_cursor`, with a default `limit` of 50 and a maximum of 100.
-For another page, pass `next_cursor` as `cursor` with the same filters.
-`list_namespaces`, `list_tables`, `get_table_schema`, `list_object_buckets`, and `list_objects`
-accept `fresh: true` to bypass cached results and consume browse budget.
+Lists return `items` and `next_cursor`. For another page, pass `next_cursor` as `cursor` with the
+same filters. Results come from the data browser's metadata cache when possible. The `limit`
+values match the browse API:
 
-Table and tabular object previews default to a `limit` of 20 rows, with a maximum of 100.
+| Tools                                                 | Default `limit` | Maximum  |
+| ----------------------------------------------------- | --------------- | -------- |
+| `list_integrations`, `list_namespaces`, `list_tables` | 100             | 500      |
+| `list_object_buckets`, `list_objects`                 | 50              | 100      |
+| `preview_table`, tabular `preview_object`             | 20 rows         | 100 rows |
+
+Project chat caps every page at 100 items.
 Text, image, and Parquet previews also enforce [configured byte limits](./configuration.md#integrations).
-Image previews return an absolute `content_url` that requires authentication. Unsupported object formats return a reason.
+Image previews return only `kind`, `content_type`, and `size`. To view the image, open the Data page.
+Unsupported object formats return a reason.
 
 ## Project chat
 

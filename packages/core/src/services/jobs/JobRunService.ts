@@ -127,6 +127,11 @@ export class JobRunService {
 		);
 	}
 
+	/** Drops the source's released operation claims once a moved notebook has left it. */
+	async finishMove(source: ProjectId, nid: NotebookId): Promise<void> {
+		await deleteByPrefix(this.bucket, paths.jobOperationClaimsForNotebook(source, nid));
+	}
+
 	constructor(
 		private bucket: Bucket,
 		private metrics: Metrics = noopMetrics,
@@ -615,7 +620,8 @@ export class JobRunService {
 		return this.cancelRunsWhere((marker) => marker.project_id === projectId, by);
 	}
 
-	private async waitForJobMutations(projectId: ProjectId, notebookId?: NotebookId): Promise<void> {
+	/** Waits out operations admitted before the notebook or project stopped accepting them. */
+	async waitForJobMutations(projectId: ProjectId, notebookId?: NotebookId): Promise<void> {
 		// Deletion marks the parent first. Earlier fires hold these claims before
 		// checking its status; later fires see the deletion and cannot enqueue.
 		const projectPrefix = paths.jobOperationClaimsForProject(projectId);

@@ -15,6 +15,7 @@ export const DOMAIN_ERROR_CODES = [
 	'EDIT_SESSION_RETIRING',
 	'EDIT_SESSION_CHANGED',
 	'TAKEOVER_IN_PROGRESS',
+	'MOVE_IN_PROGRESS',
 	'FORBIDDEN',
 	'VALIDATION_ERROR',
 	'SYNC_NOT_CONFIGURED',
@@ -64,11 +65,25 @@ export class PreconditionFailedError extends DomainError {
 }
 
 export class NotFoundError extends DomainError {
-	readonly code = 'NOT_FOUND';
-	readonly status = 404;
+	readonly code: DomainErrorCode = 'NOT_FOUND';
+	readonly status: number = 404;
 	constructor(message = 'Not found') {
 		super(message);
 		this.name = 'NotFoundError';
+	}
+}
+
+/**
+ * A notebook fenced by a cross-project move. Clients get a 409 they can tell apart from a
+ * deleted notebook, while internal callers that skip unavailable notebooks on
+ * `instanceof NotFoundError` (search crawls, schedulers, session reconciliation) keep doing so.
+ */
+export class MoveInProgressError extends NotFoundError {
+	override readonly code = 'MOVE_IN_PROGRESS';
+	override readonly status = 409;
+	constructor(message = 'The notebook is being moved') {
+		super(message);
+		this.name = 'MoveInProgressError';
 	}
 }
 

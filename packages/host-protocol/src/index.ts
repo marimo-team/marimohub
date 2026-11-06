@@ -1,13 +1,7 @@
 export { createHostApp } from './createHostApp';
 export type { HostAppEnv } from './createHostApp';
-export { HostEventSchema, HostReplySchema } from './events';
 export type { HostEvent, HostReply, HostRequest } from './events';
-export {
-	HOST_CLAIM_LEASE_MS,
-	HOST_RETRY_REFRESH_MS,
-	HOST_RETRY_WINDOW_MS,
-	MemoryHostRetryStore,
-} from './memoryRetryStore';
+export { MemoryHostRetryStore } from './memoryRetryStore';
 export type {
 	HostAppOptions,
 	HostCatalogSnapshot,
@@ -25,31 +19,8 @@ export type {
 	HostRuntimeStartOptions,
 	HostUpdateNotebookInput,
 } from './platform';
-export {
-	acceptsEvent,
-	CATALOG_KINDS,
-	errorResponse,
-	HostProblemError,
-	mapRuntimeEvent,
-	mapRuntimeProblem,
-	MAX_BODY_BYTES,
-	NOTEBOOK_KINDS,
-	OPERATIONS,
-	parseTypes,
-	problemResponse,
-	RUNTIME_OPERATIONS,
-	RUNTIME_ROUTES,
-	sse,
-} from './protocol';
-export type {
-	ErrorResponder,
-	ErrorStatus,
-	EventKinds,
-	HostDecision,
-	RuntimeOperation,
-} from './protocol';
-export { UpstreamProblemError } from './protocol';
-export { HostRetries } from './retries';
+export { HostProblemError, OPERATIONS, RUNTIME_OPERATIONS } from './protocol';
+export type { ErrorStatus, HostDecision, RuntimeOperation } from './protocol';
 export type {
 	HostMutationReply,
 	HostMutationResult,
@@ -59,6 +30,3 @@ export type {
 	HostRetryReply,
 	HostRetryStore,
 } from './retries';
-export { RuntimeCatalogRefreshes } from './runtimeCatalogRefreshes';
-export { CatalogStream, eventStream } from './streams';
-export type { SendEvent } from './streams';

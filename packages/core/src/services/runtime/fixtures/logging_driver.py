@@ -64,6 +64,8 @@ if __name__ == '__main__':
     logger.propagate = True
     logger.error('one-record-per-destination')
     logging.info('parent-record')
+    logging.getLogger('requests_cache').info('requests-cache-record')
+    logging.getLogger('requests.adapters').info('requests-internal-record')
     import io
     from contextlib import redirect_stderr
     local = io.StringIO()
@@ -210,6 +212,8 @@ else:
 if mode == 'python':
     bodies = [body for body, *_ in received]
     assert bodies.count('parent-record') == 1, bodies
+    assert bodies.count('requests-cache-record') == 1, bodies
+    assert bodies.count('requests-internal-record') == 0, bodies
     assert bodies.count('spawn-record') == 1, bodies
     assert bodies.count('marimo-debug') == 1, bodies
     assert bodies.count('one-record-per-destination') == 2, bodies

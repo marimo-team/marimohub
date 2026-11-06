@@ -51,7 +51,7 @@ class MarimoClient:
         self.diagnostics["stage"] = {
             "/api/sessions": "sessions", "/": "configure",
             "/api/kernel/status": "kernel_status", "/api/kernel/instantiate": "instantiate",
-        }[path]
+        }.get(path, "client")
         headers = dict(self.headers)
         if body is not None:
             headers["Content-Type"] = "application/json"

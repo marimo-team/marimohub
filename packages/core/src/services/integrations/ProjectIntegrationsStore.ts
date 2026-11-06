@@ -5,6 +5,7 @@ import {
 	BadRequestError,
 	DomainError,
 	NotFoundError,
+	PreconditionFailedError,
 	ResourceExhaustedError,
 	UnavailableError,
 	ValidationError,
@@ -437,7 +438,98 @@ class ScopedIntegrationsStore {
 
 	async list(scope: IntegrationScope): Promise<IntegrationEntry[]> {
 		const heads = await this.listHeads(scope);
-		return heads.map((h) => toEntry(scope, h)).sort((a, b) => a.name.localeCompare(b.name));
+		const entries = await this.toEntries(scope, heads);
+		return entries.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	/** List projections, plus the non-secret `ambient_env` switch for kinds that have one. */
+	toEntries(
+		scope: IntegrationScope,
+		heads: IntegrationRecord[],
+		signal?: AbortSignal,
+	): Promise<IntegrationEntry[]> {
+		return mapWithConcurrency(heads, BUCKET_SCAN_CONCURRENCY, async (head) => {
+			signal?.throwIfAborted();
+			const ambientEnv = await this.ambientEnvOf(scope, head);
+			return {
+				...toEntry(scope, head),
+				...(ambientEnv === undefined ? {} : { ambient_env: ambientEnv }),
+			};
+		});
+	}
+
+	private hasAmbientSwitch(kind: string): boolean {
+		const properties = this.registry.jsonSchema(kind).properties as
+			| Record<string, unknown>
+			| undefined;
+		return properties !== undefined && 'ambient_env' in properties;
+	}
+
+	/** The head's copy of the config's `ambient_env`, so listing reads no version. */
+	private ambientEnvField(
+		kind: string,
+		config: Record<string, unknown>,
+	): { ambient_env?: boolean } {
+		return this.hasAmbientSwitch(kind) && typeof config.ambient_env === 'boolean'
+			? { ambient_env: config.ambient_env }
+			: {};
+	}
+
+	private async ambientEnvOf(
+		scope: IntegrationScope,
+		head: IntegrationRecord,
+	): Promise<boolean | undefined> {
+		if (head.ambient_env !== undefined) return head.ambient_env;
+		try {
+			if (!this.hasAmbientSwitch(head.kind)) return undefined;
+			const def = this.registry.get(head.kind);
+			const config = this.migrated(
+				head.name,
+				def,
+				await this.getVersion(scope, head, head.current_version),
+			);
+			const field = this.ambientEnvField(head.kind, config);
+			if (field.ambient_env !== undefined) await this.backfillAmbientEnv(scope, head, field);
+			return field.ambient_env;
+		} catch (err) {
+			// A broken record is reported by the paths that use its config; the list stays readable.
+			if (err instanceof ValidationError || err instanceof NotFoundError) return undefined;
+			throw err;
+		}
+	}
+
+	/**
+	 * Best-effort upgrade of a head written before `ambient_env` was denormalised.
+	 * `updated_at` is kept: it is the caller-visible version token, and nothing the
+	 * caller can observe changed. Any concurrent head write wins the CAS and makes
+	 * this a no-op; the next list retries if that writer left the field unset.
+	 */
+	private async backfillAmbientEnv(
+		scope: IntegrationScope,
+		listed: IntegrationRecord,
+		field: { ambient_env?: boolean },
+	): Promise<void> {
+		const headPath = scope.integration(listed.id).head;
+		try {
+			const existing = await this.bucket.get(headPath);
+			if (!existing) return;
+			const raw = await readStoredJson(existing, headPath);
+			if (isTombstoned(raw)) return;
+			const current = this.parseHead(scope, listed.id, raw);
+			if (current.ambient_env !== undefined || current.current_version !== listed.current_version) {
+				return;
+			}
+			await this.bucket.put(headPath, JSON.stringify({ ...current, ...field }), {
+				onlyIfEtagMatches: existing.etag,
+			});
+		} catch (err) {
+			if (err instanceof PreconditionFailedError) return;
+			logOperationalError(
+				'integration_ambient_env_backfill_failed',
+				{ operation: 'integration.list', object: headPath },
+				err,
+			);
+		}
 	}
 
 	async get(scope: IntegrationScope, id: IntegrationId): Promise<IntegrationDetail> {
@@ -480,6 +572,7 @@ class ScopedIntegrationsStore {
 			name: input.name,
 			enabled: true,
 			current_version: 1,
+			...this.ambientEnvField(def.kind, config),
 			created_by: actor,
 			created_at: timestamp,
 			updated_at: timestamp,
@@ -614,9 +707,13 @@ class ScopedIntegrationsStore {
 						...current,
 						...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
 						// Two concurrent config edits both land in history; the higher version
-						// number wins the pointer regardless of head-commit order.
-						...(appended !== undefined
-							? { current_version: Math.max(current.current_version, appended) }
+						// number wins the pointer regardless of head-commit order, and the
+						// denormalised `ambient_env` follows the pointer.
+						...(appended !== undefined && appended >= current.current_version
+							? {
+									current_version: appended,
+									...this.ambientEnvField(sealed!.def.kind, sealed!.config),
+								}
 							: {}),
 						updated_at: nextIsoTimestamp(current.updated_at, this.now()),
 					};
@@ -1603,6 +1700,14 @@ class ScopedIntegrationsStore {
 			version: version.version,
 			scope: scope.projectId ? 'project' : 'org',
 			requirements: def.resolveRequirements?.(parsed.data) ?? def.requirements,
+			...(def.sharedEnvironment
+				? {
+						sharedEnvironment: {
+							title: def.sharedEnvironment.title ?? def.title,
+							ambientEnvToggle: hasAmbientEnv(parsed.data),
+						},
+					}
+				: {}),
 			output,
 		};
 	}
@@ -2083,11 +2188,15 @@ export class ProjectIntegrationsStore implements ProjectIntegrationsService {
 			this.store.listHeads(ORG_SCOPE, options),
 		]);
 		const projectNames = new Set(project.map((h) => h.name));
+		const [projectEntries, orgEntries] = await Promise.all([
+			this.store.toEntries(scope, project, options?.signal),
+			this.store.toEntries(ORG_SCOPE, org, options?.signal),
+		]);
 		return [
-			...project.map((h) => toEntry(scope, h)),
-			...org.map((h) => ({
-				...toEntry(ORG_SCOPE, h),
-				...(projectNames.has(h.name) ? { shadowed: true } : {}),
+			...projectEntries,
+			...orgEntries.map((entry) => ({
+				...entry,
+				...(projectNames.has(entry.name) ? { shadowed: true } : {}),
 			})),
 		].sort(
 			(a, b) =>
@@ -2461,6 +2570,10 @@ function objectTestFailure(error: unknown, rootKind: 'bucket' | 'container'): st
 		case 'unsupported':
 			return 'object store unavailable';
 	}
+}
+
+function hasAmbientEnv(config: unknown): boolean {
+	return typeof (config as { ambient_env?: unknown }).ambient_env === 'boolean';
 }
 
 function toEntry(scope: IntegrationScope, head: IntegrationRecord): IntegrationEntry {

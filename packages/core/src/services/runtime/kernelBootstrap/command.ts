@@ -81,6 +81,16 @@ def server_runtime(args, token_file, expected_port, bridge_launcher=None):
     except (TypeError, ValueError, OSError, IndexError):
         return None
 
+def discover_runtimes(token_file, expected_port, bridge_launcher=None, timeout=5, diagnostics=None):
+    for args in commands(timeout, bridge_launcher):
+        if diagnostics is not None:
+            diagnostics["processes_scanned"] += 1
+            if server_port(args) == expected_port:
+                diagnostics["port_matches"] += 1
+        runtime = server_runtime(args, token_file, expected_port, bridge_launcher)
+        if runtime is not None:
+            yield args, runtime
+
 def client_outcome(result, diagnostics=None):
     if diagnostics is None:
         diagnostics = {}
@@ -105,13 +115,7 @@ def run_launcher(token_file, seconds, inspect, client, expected_port, bridge_lau
     diagnostics.update(stage="discovery", processes_scanned=0, port_matches=0)
     deadline = time.monotonic() + seconds
     try:
-        for args in commands(seconds, bridge_launcher):
-            diagnostics["processes_scanned"] += 1
-            if server_port(args) == expected_port:
-                diagnostics["port_matches"] += 1
-            runtime = server_runtime(args, token_file, expected_port, bridge_launcher)
-            if runtime is None:
-                continue
+        for args, runtime in discover_runtimes(token_file, expected_port, bridge_launcher, seconds, diagnostics):
             executable, port, base_url, authenticated = runtime
             remaining = deadline - time.monotonic()
             if remaining <= 0:

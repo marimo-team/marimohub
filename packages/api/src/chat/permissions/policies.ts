@@ -17,9 +17,15 @@ export interface GatedTool {
 
 type Detail = ConversationPermission['details'][number];
 
-/** Every tool that can change something asks first; read-only tools run freely. */
+/**
+ * Read-only for MCP clients, but they can start preview compute and send row or
+ * object content to the model provider, so chat asks first.
+ */
+const DATA_PREVIEW_TOOLS: ReadonlySet<string> = new Set(['preview_table', 'preview_object']);
+
+/** Every tool that can change something or send previewed data asks first; other reads run freely. */
 export function isGated(tool: GatedTool): boolean {
-	return tool.annotations?.readOnlyHint !== true;
+	return tool.annotations?.readOnlyHint !== true || DATA_PREVIEW_TOOLS.has(tool.name);
 }
 
 /** Code the user is asked to approve must be readable in full; other fields stay short. */
@@ -144,6 +150,27 @@ const ACTIONS: Record<
 			['Job', 'job'],
 			['Schedule', 'schedule'],
 			['Enabled', 'enabled'],
+		],
+	},
+	preview_table: {
+		action: 'Preview table rows',
+		label: 'previewing table rows',
+		fields: [
+			['Integration', 'integration'],
+			['Namespace', 'namespace'],
+			['Table', 'table'],
+			['Rows', 'limit'],
+		],
+	},
+	preview_object: {
+		action: 'Preview object content',
+		label: 'previewing object content',
+		fields: [
+			['Integration', 'integration'],
+			['Bucket', 'bucket'],
+			['Key', 'key'],
+			['Version', 'version_id'],
+			['Rows', 'limit'],
 		],
 	},
 	run_job: {

@@ -29,6 +29,7 @@ const user: AuthenticatedPrincipal = {
 	credential: { kind: 'personal-access-token', id: 'host-token' },
 };
 afterEach(() => {
+	vi.useRealTimers();
 	vi.restoreAllMocks();
 	vi.mocked(requestRuntimeHost).mockReset();
 });
@@ -332,6 +333,11 @@ describe('hub host protocol', () => {
 			status: 401,
 		});
 		setUser({ ...user, credential: { kind: 'sso' } });
+		expect((await request('GET', '/events')).status).toBe(401);
+		setUser({
+			...user,
+			credential: { ...user.credential, mcpResource: 'https://hub.example.com/mcp' },
+		});
 		expect((await request('GET', '/events')).status).toBe(401);
 	});
 
@@ -901,6 +907,8 @@ describe('hub host protocol', () => {
 				const chunk = await reader.read();
 				text += decoder.decode(chunk.value);
 			}
+			// Access is rechecked periodically rather than on every poll.
+			vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 31_000 });
 			setUser(
 				revocation === 'bearer'
 					? null

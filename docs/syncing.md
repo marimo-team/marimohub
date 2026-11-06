@@ -487,6 +487,8 @@ POST /api/v1/projects/{pid}/notebooks/{nid}/sync-token/rotate
 ```
 
 Returns a fresh `sync_url` + `sync_token`.
+Rotate the token after a [move to another project](./organizing-projects.md#move-a-notebook-to-another-project),
+then update CI with the new `sync_url` and `sync_token`.
 
 ## Dependencies
 

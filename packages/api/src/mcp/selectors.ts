@@ -74,8 +74,10 @@ export async function resolveProject(
 		);
 		matches = matches.filter((_, index) => decisions[index].allowed);
 		if (integrationAction && matches.length === 0) {
-			// Prefer allowed matches, but preserve each action's denial contract when none qualify.
+			// Prefer allowed matches, but explain a denial to members. A name lookup must
+			// not tell a non-member that a private project with that name exists.
 			for (const candidate of candidates) {
+				if (effectiveRole(candidate, principal, deps.policy) === null) continue;
 				try {
 					return await loadProject(candidate.id);
 				} catch (error) {

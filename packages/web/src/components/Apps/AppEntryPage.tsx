@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { useAppQuery } from '@/api/apps';
 import { ApiRequestError } from '@/api/client';
+import { cachedProjectName, useNotebookMoveQuery } from '@/api/notebookMoves';
 import {
 	capabilitiesQueryOptions,
 	projectQueryOptions,
@@ -17,6 +18,7 @@ import { NotebookPage } from '@/components/NotebookPage/NotebookPage';
 import { NotebookFrame } from '@/components/NotebookPage/NotebookFrame';
 import { ShareUrlMenu } from '@/components/NotebookPage/ShareMenu';
 import { Button } from '@/components/ui';
+import { Callout } from '@/components/ui/Callout';
 import { useTheme } from '@/context/ThemeContext';
 import { useNotebookSession } from '@/hooks/useNotebookSession';
 import { useNotebookFrameLocation } from '@/hooks/useNotebookFrameLocation';
@@ -41,6 +43,8 @@ export function AppEntryPage({
 		if (prefetchProject) void queryClient.prefetchQuery(projectQueryOptions(pid));
 		void queryClient.prefetchQuery(capabilitiesQueryOptions());
 	}, [queryClient, pid, prefetchProject]);
+	if (query.error instanceof ApiRequestError && query.error.code === 'MOVE_IN_PROGRESS')
+		return <NotebookMovingNotice key={`${pid}/${nid}`} pid={pid} nid={nid} />;
 	if (query.isError)
 		return (
 			<NotebookFallback
@@ -64,6 +68,30 @@ export function AppEntryPage({
 			title={query.data.title}
 			canRun={query.data.can.run}
 		/>
+	);
+}
+
+function NotebookMovingNotice({ pid, nid }: { pid: string; nid: string }) {
+	const queryClient = useQueryClient();
+	// Only managers may read the move record; anyone else still gets the notice without a destination.
+	const move = useNotebookMoveQuery(pid, nid, true);
+	const destinationId = move.data?.destination_project_id;
+	const destination = destinationId
+		? (cachedProjectName(queryClient, destinationId) ?? destinationId)
+		: undefined;
+	return (
+		<div className="flex flex-1 items-center justify-center p-6">
+			<Callout variant="info" className="flex max-w-md flex-col gap-2">
+				<p className="font-medium">This notebook is being moved</p>
+				<p className="text-muted-foreground">
+					{destination ? `It is moving to ${destination}. ` : 'It is moving to another project. '}
+					It opens again once the move finishes or a project manager cancels it.
+				</p>
+				<Link to={`/projects/${pid}`} className="text-primary underline-offset-4 hover:underline">
+					Back to project
+				</Link>
+			</Callout>
+		</div>
 	);
 }
 

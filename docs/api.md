@@ -57,6 +57,9 @@ curl --fail --location \
 The repository source is
 [`packages/api/openapi.yaml`](https://github.com/marimo-team/marimohub/blob/main/packages/api/openapi.yaml).
 
+The spec excludes two separate protocols: [MCP](./mcp.md) (`/mcp`) and the
+[host protocol](./host-protocol.md) (`/api/host/v1`).
+
 Resource groups:
 
 - **Projects** — list/create/update/delete projects; add/update/remove members
@@ -65,6 +68,7 @@ Resource groups:
   [`default_role`](./auth.md#default-access-for-non-members) for non-member
   access. Project list items carry `tags`. `GET /projects` accepts
   `tag_namespace` to filter [project namespaces](./organizing-projects.md).
+  With `managed_only=true`, it returns only projects where the caller can manage notebooks.
   Project responses carry `your_role` (the caller's
   effective role). Managers can read the audit log one UTC day at a time
   (`GET /projects/{pid}/events?date=YYYY-MM-DD`, defaults to today) — every
@@ -75,6 +79,14 @@ Resource groups:
   inclusive range cannot contain more than 30 days.
 - **Notebooks** — create and manage local or Git-synced notebooks, read code,
   manage versions, and rotate notebook sync tokens.
+  [Move a notebook](./organizing-projects.md#move-a-notebook-to-another-project) to another project:
+  - `POST /projects/{pid}/notebooks/{nid}/move` starts a move. It requires `If-Match`. Repeat it to resume.
+  - `GET …/move` returns a pending move's `phase` and `destination_project_id`.
+  - `DELETE …/move` cancels a move that has not published.
+
+  While a move is pending, list entries carry `moving: { destination_project_id }`.
+  Opening the notebook returns 409 `MOVE_IN_PROGRESS`.
+
 - **Sessions** — list, create, inspect, heartbeat, and stop kernel sessions.
   The session routes also expose editor ownership and exclusive takeover.
   [Secondary surfaces](/surfaces) provide VS Code and OpenCode access within edit sessions.

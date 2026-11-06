@@ -70,6 +70,7 @@ components:
                 - EDIT_SESSION_RETIRING
                 - EDIT_SESSION_CHANGED
                 - TAKEOVER_IN_PROGRESS
+                - MOVE_IN_PROGRESS
                 - FORBIDDEN
                 - VALIDATION_ERROR
                 - SYNC_NOT_CONFIGURED
@@ -2695,6 +2696,13 @@ components:
           type: string
         app_compute_profile:
           type: string
+        moving:
+          type: object
+          properties:
+            destination_project_id:
+              type: string
+          required:
+            - destination_project_id
       required:
         - id
         - title
@@ -3061,6 +3069,30 @@ components:
         - root_path
         - entry_notebook
         - commit
+    NotebookMove:
+      type: object
+      properties:
+        phase:
+          type: string
+          enum:
+            - preparing
+            - copying
+            - published
+        destination_project_id:
+          type: string
+        lease_expires_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - phase
+        - destination_project_id
+        - lease_expires_at
+        - updated_at
     DeepLink:
       type: object
       properties:
@@ -4423,6 +4455,24 @@ components:
           type: array
           items:
             type: string
+        shared_environment:
+          type: object
+          properties:
+            group:
+              type: string
+              minLength: 1
+              example: google
+            title:
+              type: string
+              minLength: 1
+              example: Google Cloud
+            variables:
+              type: string
+              minLength: 1
+          required:
+            - group
+            - title
+            - variables
       required:
         - kind
         - title
@@ -4483,6 +4533,8 @@ components:
             - project
             - org
         shadowed:
+          type: boolean
+        ambient_env:
           type: boolean
       required:
         - id
@@ -12571,6 +12623,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '413':
           description: Request body too large
           content:
@@ -13767,6 +13825,95 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/v1/projects/{pid}/notebooks/{nid}/move:
+    get:
+      operationId: notebooks.move.get
+      tags:
+        - Notebooks
+      summary: Get a pending notebook move
+      description: Reports a move out of this project that has not completed, so it
+        can be resumed by repeating the move or cancelled.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+      responses:
+        '200':
+          description: Pending move
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/NotebookMove'
+                required:
+                  - success
+                  - data
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       operationId: notebooks.move.cancel
       tags:
@@ -13890,6 +14037,8 @@ paths:
               properties:
                 destination_project_id:
                   type: string
+                  pattern: ^proj-[0-9a-z]{16}$
+                  example: proj-7h2k9qm4xz7rp3w8
               required:
                 - destination_project_id
       responses:
@@ -13957,6 +14106,20 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
           description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
           content:
             application/json:
               schema:
@@ -24810,11 +24973,9 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 255
-                  example: analytics-lake
                 key:
                   type: string
                   minLength: 1
-                  example: events/2026/part-001.jsonl
                 version_id:
                   type: string
                   minLength: 1

@@ -85,6 +85,8 @@ export interface KindDescriptor {
 	secret_sources: IntegrationSecretSources;
 	/** Informational package requirements for notebook code. */
 	requirements: string[];
+	/** Present when a second enabled instance in the same group can fail notebook startup. */
+	shared_environment?: { group: string; title: string; variables: string };
 }
 
 /** Connectivity result whose details must be safe to return to users. */
@@ -229,6 +231,8 @@ export interface IntegrationEntry {
 	scope: IntegrationScopeKind;
 	/** Org entries in a project listing only: a same-name project integration shadows this one. */
 	shadowed?: boolean;
+	/** The config's `ambient_env` switch, for kinds that have one. */
+	ambient_env?: boolean;
 }
 
 /** Detail projection whose secret fields are always redacted. */

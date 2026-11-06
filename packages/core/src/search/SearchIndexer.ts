@@ -33,14 +33,6 @@ import type {
 } from './contracts';
 
 export class SearchIndexer {
-	static async requestRefresh(
-		bucket: Bucket,
-		projectId: ProjectId,
-		revision: string = crypto.randomUUID(),
-	): Promise<void> {
-		await bucket.put(searchPaths.refresh(projectId), JSON.stringify(revision));
-	}
-
 	constructor(
 		private readonly bucket: Bucket,
 		private readonly index: SearchSnapshotStore,
@@ -50,26 +42,34 @@ export class SearchIndexer {
 		private readonly embeddings?: EmbeddingProvider,
 		private readonly minRecrawlIntervalMs = MIN_RECRAWL_INTERVAL_MS,
 	) {}
-	async step(projectId: ProjectId, source: SearchSource, signal: AbortSignal): Promise<boolean> {
+	/**
+	 * `refresh` is the project's `search_refresh` catalog token (a notebook move sets it); a new
+	 * value starts a new build without waiting for the recrawl interval. `tick` passes it from
+	 * the snapshot it already holds, so a step costs no extra read.
+	 */
+	async step(
+		projectId: ProjectId,
+		source: SearchSource,
+		signal: AbortSignal,
+		refresh?: string | null,
+	): Promise<boolean> {
 		signal.throwIfAborted();
 		const scope = { projectId, source: source.id };
 		const paths = searchPaths.scope(scope);
 		const key = paths.checkpoint;
 		const stored = await this.bucket.get(key);
-		const refresh = await this.bucket.get(searchPaths.refresh(projectId));
+		const refreshToken = refresh === undefined ? await this.refreshToken(projectId) : refresh;
 		const build = SearchBuildSchema.parse({
 			revision: 1,
 			source_revision: source.revision,
 			configuration: JSON.stringify({
 				source: source.configuration ?? '',
-				refresh: refresh ? await refresh.json() : null,
+				refresh: refreshToken ?? null,
 				embedding: source.embeddable ? (this.embeddings?.space ?? null) : null,
 			}),
 		});
 		const project = await this.liveProject(projectId);
 		if (!project) {
-			// A deleted project never recrawls, so its move refresh marker is retired here.
-			if (refresh) await this.bucket.delete([searchPaths.refresh(projectId)]);
 			const head = await this.index.head(scope, signal);
 			// Keep both CAS records: late first writes must not recreate a deleted scope.
 			if (!head.deleted && !(await this.index.publish(scope, null, head.revision, signal)))
@@ -258,6 +258,10 @@ export class SearchIndexer {
 		}
 		return true;
 	}
+	private async refreshToken(projectId: ProjectId): Promise<string | null> {
+		const snapshot = await this.catalog.getCurrentSnapshot();
+		return snapshot.projects.find((project) => project.id === projectId)?.search_refresh ?? null;
+	}
 	private async liveProject(projectId: ProjectId) {
 		try {
 			const project = await this.projects.getProject(projectId);
@@ -333,7 +337,7 @@ export class SearchIndexer {
 			if (!id || !ProjectIdValue.is(id)) continue;
 			for (const source of this.sources) {
 				const scope = { projectId: id, source: source.id };
-				if (!snapshot.projects.some((p) => p.id === id)) await this.step(id, source, signal);
+				if (!snapshot.projects.some((p) => p.id === id)) await this.step(id, source, signal, null);
 				const checkpoint = await this.bucket.get(searchPaths.scope(scope).checkpoint);
 				if (
 					!checkpoint ||
@@ -345,11 +349,14 @@ export class SearchIndexer {
 				}
 			}
 		}
-		if (task)
+		if (task) {
+			const refresh =
+				snapshot.projects.find((p) => p.id === task.projectId)?.search_refresh ?? null;
 			for (let i = 0; i < 4; i++) {
 				signal.throwIfAborted();
-				if (await this.step(task.projectId, task.source, signal)) break;
+				if (await this.step(task.projectId, task.source, signal, refresh)) break;
 			}
+		}
 	}
 	private async prunePages(projectId: ProjectId, source: string, signal: AbortSignal) {
 		const paths = searchPaths.scope({ projectId, source });

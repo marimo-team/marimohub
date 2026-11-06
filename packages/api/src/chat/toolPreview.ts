@@ -175,6 +175,13 @@ export function toolPreview(value: unknown): string {
 }
 
 /**
+ * Widest array or object the model receives. Paged tools are clamped to this
+ * `limit` so a page is never cut behind its `next_cursor`; the character budget
+ * still bounds the total size.
+ */
+export const MODEL_OUTPUT_ITEMS = 100;
+
+/**
  * Cap what the model receives from a tool: long strings, deep nesting, and wide
  * arrays are trimmed and the trimmed paths are listed so the model knows.
  */
@@ -196,14 +203,16 @@ export function boundedOutput(data: Record<string, unknown>): Record<string, unk
 			return value;
 		}
 		if (Array.isArray(value)) {
-			if (value.length > 20) truncated.push(path);
-			return value.slice(0, 20).map((entry, index) => visit(entry, `${path}[${index}]`, depth + 1));
+			if (value.length > MODEL_OUTPUT_ITEMS) truncated.push(path);
+			return value
+				.slice(0, MODEL_OUTPUT_ITEMS)
+				.map((entry, index) => visit(entry, `${path}[${index}]`, depth + 1));
 		}
 		if (value !== null && typeof value === 'object') {
-			if (Object.keys(value).length > 100) truncated.push(path);
+			if (Object.keys(value).length > MODEL_OUTPUT_ITEMS) truncated.push(path);
 			return Object.fromEntries(
 				Object.entries(value)
-					.slice(0, 100)
+					.slice(0, MODEL_OUTPUT_ITEMS)
 					.map(([key, child]) => {
 						remaining -= key.length;
 						return [key, visit(child, `${path}.${key}`, depth + 1)];

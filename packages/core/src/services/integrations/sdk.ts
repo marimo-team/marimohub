@@ -173,6 +173,15 @@ function decodeNameCursor(cursor: string | undefined): string | undefined {
 	}
 }
 
+export interface SharedEnvironment {
+	/** Stable identifier; kinds that export the same variables use the same group. */
+	group: string;
+	/** Label for the group in warnings, e.g. `Google Cloud`. Defaults to the kind's title. */
+	title?: string;
+	/** Prose naming the variables, e.g. `GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_CLOUD_PROJECT`. */
+	variables: string;
+}
+
 /** Complete contract for one registered integration kind. */
 export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	/** Registry discriminator. Stable forever; a rename is a migration. */
@@ -200,6 +209,12 @@ export interface IntegrationDefinition<S extends z.ZodType = z.ZodType> {
 	resolveRequirements?(config: z.infer<S>): string[];
 	/** Process-wide environment names this kind can claim outside its instance prefix. */
 	environmentVariables?: readonly string[];
+	/**
+	 * Declares that instances export process-wide variables a second enabled
+	 * instance in the same `group` can conflict on, which fails notebook startup.
+	 * Kinds sharing variables (GCS and BigQuery) share a group.
+	 */
+	sharedEnvironment?: SharedEnvironment;
 	/**
 	 * Pure and synchronous: same input → byte-identical output. No clock, RNG,
 	 * network, or storage — anything session-specific arrives via the input.

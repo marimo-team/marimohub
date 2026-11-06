@@ -501,13 +501,11 @@ describe('SandboxProvisioner', () => {
 			const prepared = await new SandboxProvisioner(fakeComputeFrom(instance)).prepare(options);
 			const files = calls.writeFiles.flat();
 			const config = files.find((file) => file.path.endsWith('/logging.json'))!;
-			expect(config.path).toBe(`/tmp/marimohub-logging/${sandboxId}/logging.json`);
+			expect(config.path).toBe('/tmp/marimohub-logging/logging.json');
 			expect(JSON.parse(config.content as string)).toMatchObject([
 				{ attributes: { 'marimohub.notebook_id': notebookId, 'marimohub.mode': mode } },
 			]);
-			expect(prepared.launch.start).toContain(
-				`env PYTHONPATH='/local/tmp/marimohub-logging/${sandboxId}'`,
-			);
+			expect(prepared.launch.start).toContain("env PYTHONPATH='/local/tmp/marimohub-logging'");
 			expect(prepared.launch.start).not.toContain('secret-token');
 			expect(prepared.launch.start).not.toContain('--with');
 			expect(prepared.launch.setup.some((step) => step.command.includes('marimohub-logging'))).toBe(

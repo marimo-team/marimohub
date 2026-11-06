@@ -486,39 +486,40 @@ pnpm build
 
 ## Logging runtime
 
-The logging kinds render typed `logging` destinations. They do not contribute notebook `runtimePackages`.
-See [Remote logging](../docs/integrations.md#remote-logging) for configuration and delivery limits.
+The `otlp_logs` kind renders typed `logging` destinations and no `runtimePackages`.
+[Remote logging](../docs/integrations.md#remote-logging) documents configuration, delivery limits, and process startup cost.
 
-`SandboxProvisioner` writes the bootstrap and destination configuration under `/tmp/marimohub-logging/{sandbox-id}`.
-The launch command adds that directory to `PYTHONPATH` after uv selects the package environment.
-Only the workload command receives this path. Launches without logging contributions leave retained bootstrap files inactive.
-Credentials remain outside the integration manifest.
+`SandboxProvisioner` writes the bootstrap and destination configuration to the fixed directory `/tmp/marimohub-logging`.
+Each launch overwrites the previous credentials there. Credentials stay outside the integration manifest.
+After uv selects the package environment, the launch command adds that directory to `PYTHONPATH` for the workload command only.
+Launches without logging contributions leave retained bootstrap files inactive.
 
 The bootstrap chains an existing `sitecustomize` and initializes once per process, including spawned kernels.
-It attaches handlers to root and marimo loggers, with duplicate records suppressed.
-Global OpenTelemetry providers remain unchanged.
+It attaches handlers to the root and marimo loggers and suppresses duplicate records.
+It does not change global OpenTelemetry providers.
 
-Each destination uses a bounded queue and a background thread that sends [OTLP/HTTP JSON](https://opentelemetry.io/docs/specs/otlp/#json-protobuf-encoding) with `urllib.request`.
-The exporter uses only Python's standard library. It never installs packages or starts another process.
-Records retain timestamps, structured attributes, and exceptions. Trace context is read only when the notebook already loaded the OTel trace API.
+Each destination has a bounded queue and a background thread.
+The thread sends [OTLP/HTTP JSON](https://opentelemetry.io/docs/specs/otlp/#json-protobuf-encoding) with `urllib.request`.
+The exporter uses only the Python standard library and starts no other process.
+Records keep timestamps, structured attributes, and exceptions.
+The exporter reads trace context only when the notebook already loaded the OTel trace API.
 
-Each batch allows two HTTP attempts, with socket timeouts drawn from a two-second budget.
-Retries use jitter or `Retry-After` when it fits that budget.
-Partial acceptance is not retried. Response bodies are bounded to 64 KiB and never appear in diagnostics.
-All destination queues share a three-second shutdown deadline.
+Each batch gets two HTTP attempts. Their socket timeouts share a two-second budget.
+A retry waits for jitter, or for `Retry-After` when it fits the budget.
+Partial acceptance is not retried. Response bodies are read up to 64 KiB and never appear in diagnostics.
 
-Two marimo compatibility hooks preserve remote verbosity (`_loggers.set_level`) and flush before kernel `os._exit()` (`handlers.construct_sigterm_handler`).
-Normal exit and multiprocessing finalization use the same shutdown function.
-Each hook initializes independently after handler installation. A failed hook emits a diagnostic while ordinary log export remains active.
-Fresh Python interpreters and spawned multiprocessing children import marimo through the bootstrap.
-This adds startup cost even when they do not otherwise use marimo.
-Forked children inherit the hooks without rerunning `sitecustomize`. An at-fork callback replaces inherited handlers, queues, locks, and workers without replaying parent records.
+Two marimo compatibility hooks keep remote verbosity (`_loggers.set_level`) and flush before kernel `os._exit()` (`handlers.construct_sigterm_handler`).
+Normal exit and multiprocessing finalization call the same shutdown function.
+Each hook initializes independently after handler installation. A failed hook emits a diagnostic, and log export continues.
+
+Forked children inherit the hooks without rerunning `sitecustomize`.
+An at-fork callback replaces inherited handlers, queues, locks, and workers, and does not replay parent records.
 Multiprocessing clears its finalizer registry after that callback, so a separate multiprocessing callback restores the child's shutdown finalizer.
-Proxy configuration comes only from environment variables. This avoids macOS system-proxy discovery, which can crash a forked child through CFNetwork.
+The exporter skips system-proxy discovery because on macOS it can crash a forked child through CFNetwork.
 
-All three kinds probe their configured URL through `IntegrationProbe`, with the same header validation and credentials as runtime export.
-The probe posts an empty `resourceLogs` array and never returns response bodies or transport error text.
-All custom header values remain secrets, including tenant identifiers. A future plain-header field can be additive without changing existing secret paths.
+The `otlp_logs` connection test probes the configured URL through `IntegrationProbe`, with the same header validation and credentials as runtime export.
+It posts an empty `resourceLogs` array and never returns response bodies or transport error text.
+All custom header values are secrets, including tenant identifiers. A later plain-header field can be additive without moving existing secret paths.
 
 ### Runtime tests
 

@@ -151,13 +151,24 @@ describe.each(['integration.read', 'integration.use'] as const)(
 			}
 		});
 
-		it('preserves existence-revealing role denials for nonmembers by ID and name', async () => {
+		it('denies nonmembers by ID but hides the project by name', async () => {
 			const principal = { ...USER, id: UserId.parse('stranger') };
-			for (const reference of [project.id, project.name]) {
-				await expect(resolveProject(deps, principal, reference, action)).rejects.toBeInstanceOf(
-					ForbiddenError,
-				);
-			}
+			await expect(resolveProject(deps, principal, project.id, action)).rejects.toBeInstanceOf(
+				ForbiddenError,
+			);
+			await expect(resolveProject(deps, principal, project.name, action)).rejects.toBeInstanceOf(
+				NotFoundError,
+			);
+		});
+
+		it('does not confirm a guessed private project name or reveal its ID', async () => {
+			const hidden = await createProject('Payroll 2026', UserId.parse('other-owner'));
+			const error = await resolveProject(deps, USER, 'payroll 2026', action).catch(
+				(caught: unknown) => caught,
+			);
+			expect(error).toBeInstanceOf(NotFoundError);
+			expect((error as Error).message).toBe("Project 'payroll 2026' not found");
+			expect((error as Error).message).not.toContain(hidden.id);
 		});
 
 		it('returns forbidden for missing token actions by ID and name', async () => {

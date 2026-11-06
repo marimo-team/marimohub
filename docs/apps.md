@@ -145,6 +145,7 @@ Removing a link releases its name immediately. Old shared URLs can then open
 another notebook that registers the same name. Removal does not stop running
 apps or change notebook permissions. Deleting the notebook or project also
 releases its names.
+Links follow a notebook that [moves to another project](./organizing-projects.md#move-a-notebook-to-another-project).
 
 ## Link between apps
 

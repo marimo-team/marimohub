@@ -495,7 +495,7 @@ const getNotebook = createRoute({
 			EtagResponseHeader,
 		),
 		...commonErrors(),
-		...errorResponses(404),
+		...errorResponses(404, 409),
 	},
 });
 

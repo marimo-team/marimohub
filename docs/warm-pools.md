@@ -76,3 +76,20 @@ MARIMOHUB_WARM_POOL_LIVE_TEST=true pnpm --filter @marimo-hub/config test warmPoo
 ```
 
 The test creates billable sandboxes, reconnects through another provider instance, checks replenishment, and destroys its sandboxes. It reports cold preparation and warm claim times.
+
+### Readiness budgets
+
+Warm claims and maintenance health checks run two deadlines in sequence:
+
+1. Reconnect to the existing sandbox: five seconds.
+2. Run `true` to check command execution: two seconds. This deadline starts after the reconnect succeeds.
+
+A readiness check therefore takes at most seven seconds.
+Initial sandbox creation uses the configured creation deadline, not the reconnect deadline.
+A failed check retires the member. A failed claim falls back to a cold launch, so an unhealthy member delays session start by up to seven seconds.
+A late result cannot revive a retired claim. A stale health check cannot retire a member that a session claimed in the meantime.
+
+For readiness failures, `warm_pool_claim_failed` logs include `sandbox_id`, `elapsed_ms`, and `readiness_reason`.
+The reasons are `reconnect_timeout`, `reconnect_failed`, `command_timeout`, `command_transport_failed`, and `command_failed`.
+For provider failures, the log keeps allowlisted error fields from the original cause, such as the type, code, and status.
+It excludes provider messages, request bodies, and command output.

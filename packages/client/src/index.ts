@@ -72,6 +72,7 @@ export type ApiRequestErrorCode = ServerErrorCode | 'NETWORK_ERROR' | 'PARSE_ERR
 // emit codes this client build doesn't know (deploy skew), and the compiler
 // forces this list back in sync whenever the generated union grows.
 const KNOWN_SERVER_ERROR_CODES = {
+	MOVE_IN_PROGRESS: true,
 	BAD_REQUEST: true,
 	UNAUTHORIZED: true,
 	USER_SUSPENDED: true,

@@ -33,18 +33,15 @@ describe('authorized search', () => {
 			f.services.catalog,
 			f.services.projects,
 		);
-		await SearchIndexer.requestRefresh(f.bucket, f.project.id, 'move-one');
-		await indexer.step(f.project.id, f.source, signal());
+		await indexer.step(f.project.id, f.source, signal(), 'move-one');
 		const checkpointKey = searchPaths.scope({
 			projectId: f.project.id,
 			source: f.source.id,
 		}).checkpoint;
 		const checkpoint = await (await f.bucket.get(checkpointKey))!.text();
-		await SearchIndexer.requestRefresh(f.bucket, f.project.id, 'move-one');
-		await indexer.step(f.project.id, f.source, signal());
+		await indexer.step(f.project.id, f.source, signal(), 'move-one');
 		expect(await (await f.bucket.get(checkpointKey))!.text()).toBe(checkpoint);
-		await SearchIndexer.requestRefresh(f.bucket, f.project.id, 'move-two');
-		await indexer.step(f.project.id, f.source, signal());
+		await indexer.step(f.project.id, f.source, signal(), 'move-two');
 		expect(await (await f.bucket.get(checkpointKey))!.text()).not.toBe(checkpoint);
 	});
 
@@ -78,11 +75,6 @@ describe('authorized search', () => {
 		expect(
 			(await f.index.read({ projectId: f.project.id, source: f.source.id })).snapshot?.documents,
 		).toHaveLength(0);
-		// Deleting the emptied source project also retires its refresh marker.
-		await f.services.projects.deleteProject(f.project.id, owner.id);
-		for (let i = 0; i < 4; i++) await indexer.tick(signal());
-		expect(await f.bucket.get(searchPaths.refresh(f.project.id))).toBeNull();
-		expect(await f.bucket.get(searchPaths.refresh(destination.id))).not.toBeNull();
 	});
 
 	it.each(['राजस्व', 'รายได้', 'café'])('keeps combining marks in the token %s', (text) => {

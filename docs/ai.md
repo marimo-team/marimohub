@@ -97,7 +97,10 @@ use chat.
 The assistant has the same tools as the [MCP server](./mcp.md), under the caller's
 project permissions. Read-only tools run freely. Tools that change something show a
 consent card: allow once, always allow that kind of action in this project, or refuse.
-Consent cards show the code or source the call would submit. Irreversible actions
+Consent cards show the code or source the call would submit.
+Of the read-only [data discovery tools](./mcp.md#discover-data), only `preview_table` and
+`preview_object` show a consent card. They can start preview compute and send table rows or
+object content to the model provider. Their consent can be remembered. Irreversible actions
 (`update_notebook`, `sync_notebook_source`, `delete_notebook`, `stop_session`) and
 `execute_code` always ask; the other actions can be remembered. Remembered grants are
 managed under **Permissions** on the chat page or with the `project_conversations`

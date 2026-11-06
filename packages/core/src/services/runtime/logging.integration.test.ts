@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { copyFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { loggingCommand, loggingFiles } from './logging';
@@ -9,6 +11,17 @@ import { buildMarimoLaunch } from './marimoLaunch';
 import { shellQuote } from './shell';
 
 const python = process.env.MARIMO_INTEGRATION_PYTHON;
+// CI pre-creates these venvs from the same requirements file so the suite never reaches PyPI.
+const preparedEnvironments = {
+	missing: process.env.MARIMOHUB_TEST_LOGGING_ENV_MISSING,
+	conflicting: process.env.MARIMOHUB_TEST_LOGGING_ENV_CONFLICTING,
+};
+const conflictingRequirements = fileURLToPath(
+	new URL('./fixtures/logging_conflicting_requirements.txt', import.meta.url),
+);
+const conflictingOtelVersion = /^opentelemetry-sdk==(\S+)$/m.exec(
+	readFileSync(conflictingRequirements, 'utf8'),
+)![1];
 const exec = promisify(execFile);
 const roots: string[] = [];
 afterEach(async () => {
@@ -149,38 +162,36 @@ describe.runIf(Boolean(python))('notebook logging failure isolation', () => {
 });
 
 describe.runIf(Boolean(python))('logging package isolation', () => {
-	let environments: string;
+	let environments: string | undefined;
 	let missing: string;
 	let conflicting: string;
 	beforeAll(async () => {
-		environments = await mkdtemp(join(tmpdir(), 'mhub-logging-envs-'));
-		const { stdout } = await exec(python!, [
-			'-c',
-			'from importlib.metadata import version; print(version("marimo"))',
-		]);
+		const pythons: Record<string, string> = {};
 		for (const [name, packages] of [
 			['missing', []],
-			[
-				'conflicting',
-				[
-					'opentelemetry-sdk==1.20.0',
-					'opentelemetry-exporter-otlp-proto-http==1.20.0',
-					'opentelemetry-exporter-otlp-proto-grpc==1.20.0',
-				],
-			],
+			['conflicting', ['-r', conflictingRequirements]],
 		] as const) {
-			const env = join(environments, name);
-			await exec('uv', ['venv', '--python', python!, env]);
-			await exec(
-				'uv',
-				['pip', 'install', '--python', env, `marimo==${stdout.trim()}`, ...packages],
-				{
-					timeout: 120_000,
-				},
-			);
+			let env = preparedEnvironments[name];
+			if (!env) {
+				environments ??= await mkdtemp(join(tmpdir(), 'mhub-logging-envs-'));
+				env = join(environments, name);
+				const { stdout } = await exec(python!, [
+					'-c',
+					'from importlib.metadata import version; print(version("marimo"))',
+				]);
+				await exec('uv', ['venv', '--python', python!, env]);
+				await exec(
+					'uv',
+					['pip', 'install', '--python', env, `marimo==${stdout.trim()}`, ...packages],
+					{
+						timeout: 120_000,
+					},
+				);
+			}
+			pythons[name] = join(env, 'bin/python');
 		}
-		missing = join(environments, 'missing/bin/python');
-		conflicting = join(environments, 'conflicting/bin/python');
+		missing = pythons.missing;
+		conflicting = pythons.conflicting;
 	}, 180_000);
 	afterAll(async () => {
 		if (environments) await rm(environments, { recursive: true, force: true });
@@ -197,7 +208,9 @@ describe.runIf(Boolean(python))('logging package isolation', () => {
 				mode,
 				'logging_driver.py',
 				environment === 'missing' ? missing : conflicting,
-				environment === 'conflicting' ? { MARIMOHUB_TEST_OTEL_VERSION: '1.20.0' } : {},
+				environment === 'conflicting'
+					? { MARIMOHUB_TEST_OTEL_VERSION: conflictingOtelVersion }
+					: {},
 			),
 		70_000,
 	);
@@ -220,7 +233,7 @@ describe.runIf(Boolean(python))('logging package isolation', () => {
 						mode === 'with-current-otel'
 							? '1.40.0'
 							: mode === 'with-old-otel'
-								? '1.20.0'
+								? conflictingOtelVersion
 								: 'absent',
 				},
 			),

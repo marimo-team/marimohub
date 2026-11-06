@@ -1105,7 +1105,11 @@ export interface paths {
 			path?: never;
 			cookie?: never;
 		};
-		get?: never;
+		/**
+		 * Get a pending notebook move
+		 * @description Reports a move out of this project that has not completed, so it can be resumed by repeating the move or cancelled.
+		 */
+		get: operations['notebooks.move.get'];
 		put?: never;
 		/**
 		 * Move a notebook to another project
@@ -2679,6 +2683,7 @@ export interface components {
 					| 'EDIT_SESSION_RETIRING'
 					| 'EDIT_SESSION_CHANGED'
 					| 'TAKEOVER_IN_PROGRESS'
+					| 'MOVE_IN_PROGRESS'
 					| 'FORBIDDEN'
 					| 'VALIDATION_ERROR'
 					| 'SYNC_NOT_CONFIGURED'
@@ -3772,6 +3777,9 @@ export interface components {
 			last_run_at: string | null;
 			compute_profile?: string;
 			app_compute_profile?: string;
+			moving?: {
+				destination_project_id: string;
+			};
 		};
 		NotebookMeta: {
 			id: string;
@@ -3969,6 +3977,15 @@ export interface components {
 			 * @example 9e107d9d372bb6826bd81d3542a419d6
 			 */
 			commit: string;
+		};
+		NotebookMove: {
+			/** @enum {string} */
+			phase: 'preparing' | 'copying' | 'published';
+			destination_project_id: string;
+			/** Format: date-time */
+			lease_expires_at: string | null;
+			/** Format: date-time */
+			updated_at: string;
 		};
 		DeepLink: {
 			/** @enum {number} */
@@ -4560,6 +4577,13 @@ export interface components {
 				}[];
 			};
 			requirements: string[];
+			shared_environment?: {
+				/** @example google */
+				group: string;
+				/** @example Google Cloud */
+				title: string;
+				variables: string;
+			};
 		};
 		IntegrationPage: {
 			items: components['schemas']['IntegrationEntry'][];
@@ -4579,6 +4603,7 @@ export interface components {
 			/** @enum {string} */
 			scope: 'project' | 'org';
 			shadowed?: boolean;
+			ambient_env?: boolean;
 		};
 		IntegrationDetail: components['schemas']['IntegrationEntry'] & {
 			config: {
@@ -11602,6 +11627,15 @@ export interface operations {
 					'application/json': components['schemas']['ErrorResponse'];
 				};
 			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
 			/** @description Request body too large */
 			413: {
 				headers: {
@@ -12761,6 +12795,98 @@ export interface operations {
 			};
 		};
 	};
+	'notebooks.move.get': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Pending move */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookMove'];
+					};
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
 	'notebooks.move': {
 		parameters: {
 			query?: never;
@@ -12776,6 +12902,7 @@ export interface operations {
 		requestBody: {
 			content: {
 				'application/json': {
+					/** @example proj-7h2k9qm4xz7rp3w8 */
 					destination_project_id: string;
 				};
 			};
@@ -12853,6 +12980,17 @@ export interface operations {
 			/** @description Validation error */
 			422: {
 				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
 					[name: string]: unknown;
 				};
 				content: {
@@ -21981,9 +22119,7 @@ export interface operations {
 		requestBody: {
 			content: {
 				'application/json': {
-					/** @example analytics-lake */
 					bucket: string;
-					/** @example events/2026/part-001.jsonl */
 					key: string;
 					version_id?: string;
 					/** @default 20 */

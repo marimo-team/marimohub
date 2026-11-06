@@ -45,8 +45,9 @@ import {
 	PaginationQuery,
 } from '../pagination';
 import { appendAudit } from '../log';
+import { requireIntegrations } from '../integrations/browse';
+import { makeObjectBrowseContext } from '../integrations/objectBrowseContext';
 import integrationBrowseApp from './integrationBrowse';
-import { makeObjectBrowseContext } from './objectBrowse';
 
 export { clearIntegrationBrowseStateForTests } from './integrationBrowse';
 
@@ -114,6 +115,14 @@ const KindDescriptorSchema = z
 		}),
 		/** Informational package requirements for the rendered sandbox contract. */
 		requirements: z.array(z.string()),
+		/** Present when a second enabled instance in the same group can fail notebook startup. */
+		shared_environment: z
+			.object({
+				group: z.string().min(1).openapi({ example: 'google' }),
+				title: z.string().min(1).openapi({ example: 'Google Cloud' }),
+				variables: z.string().min(1),
+			})
+			.optional(),
 	})
 	.openapi('IntegrationKind');
 
@@ -130,6 +139,8 @@ const IntegrationEntrySchema = z
 		scope: z.enum(['project', 'org']),
 		/** Org entries in a project listing: a same-name project integration overrides this one. */
 		shadowed: z.boolean().optional(),
+		/** The config's non-secret `ambient_env` switch, for kinds that have one. */
+		ambient_env: z.boolean().optional(),
 	})
 	.openapi('IntegrationEntry');
 
@@ -560,13 +571,6 @@ const queryOrgReadiness = createRoute({
 	},
 });
 
-function requireIntegrations(deps: ApiDeps): ProjectIntegrationsService {
-	if (!deps.integrations) {
-		throw new NotFoundError('Integrations are not enabled on this deployment');
-	}
-	return deps.integrations;
-}
-
 function requireOrgIntegrations(deps: ApiDeps): OrgIntegrationsService {
 	if (!deps.orgIntegrations) {
 		throw new NotFoundError('Integrations are not enabled on this deployment');
@@ -574,7 +578,7 @@ function requireOrgIntegrations(deps: ApiDeps): OrgIntegrationsService {
 	return deps.orgIntegrations;
 }
 
-function entryResponse(e: IntegrationEntry) {
+export function entryResponse(e: IntegrationEntry) {
 	return {
 		id: e.id,
 		kind: e.kind,
@@ -586,6 +590,7 @@ function entryResponse(e: IntegrationEntry) {
 		updated_at: e.updated_at,
 		scope: e.scope,
 		...(e.shadowed !== undefined ? { shadowed: e.shadowed } : {}),
+		...(e.ambient_env !== undefined ? { ambient_env: e.ambient_env } : {}),
 	};
 }
 

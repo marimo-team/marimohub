@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { withDeadline } from '../../async';
-import { MARIMO_PORT } from '../../constants';
 import { sleep } from '../../duration';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { kernelBootstrapCommand } from './kernelBootstrap/command';
-import { notebookBridgePaths } from './notebookBridgePaths';
+import { resolveBridgeLauncher, sandboxKernelPort } from './notebookBridgePaths';
+import type { NotebookBridgeTarget } from './notebookBridgePaths';
 
 const DiagnosticCount = z.number().int().nonnegative().max(1_000_000).optional().catch(undefined);
 
@@ -58,7 +58,7 @@ interface BootstrapOptions {
 	timeoutMs: number;
 	inspectOnly?: boolean;
 	signal?: AbortSignal;
-	bridge?: { sandboxId: string; launcher: string };
+	bridge?: NotebookBridgeTarget;
 }
 
 // Leave time for another probe when a startup attempt stalls.
@@ -92,19 +92,8 @@ async function bootstrapOnce(
 	options: BootstrapOptions,
 ): Promise<KernelBootstrapResult> {
 	try {
-		const kernelUrl = `http://127.0.0.1:${MARIMO_PORT}`;
-		const processUrl = new URL(sandbox.resolveProcessUrl?.(kernelUrl) ?? kernelUrl);
-		const mappedPort = Number(processUrl.port || (processUrl.protocol === 'https:' ? 443 : 80));
-		const port =
-			Number.isInteger(mappedPort) && mappedPort > 0 && mappedPort <= 65535
-				? mappedPort
-				: MARIMO_PORT;
-		const bridgePath = options.bridge
-			? notebookBridgePaths(options.bridge.sandboxId, options.bridge.launcher).launcher
-			: undefined;
-		const bridgeLauncher = bridgePath
-			? (sandbox.resolveProcessPath?.(bridgePath) ?? bridgePath)
-			: undefined;
+		const port = sandboxKernelPort(sandbox);
+		const bridgeLauncher = resolveBridgeLauncher(sandbox, options.bridge);
 		const executed = await withDeadline(
 			() =>
 				sandbox.exec(

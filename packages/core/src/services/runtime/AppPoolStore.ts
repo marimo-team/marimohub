@@ -49,13 +49,17 @@ export class AppPoolStore {
 		});
 	}
 
-	/** Reopens the source pool after a cancelled move; the destination keeps its tombstone. */
+	/**
+	 * Reopens the source pool after a cancelled move; the destination keeps its tombstone.
+	 * Members admitted before the fence stay so their sandboxes are still reclaimed.
+	 */
 	async cancelNotebookMove(source: ProjectId, nid: NotebookId): Promise<void> {
 		await withCasRetry(this.bucket, async (cas) => {
 			const key = paths.appPool(source, nid);
 			const object = await this.bucket.get(key);
 			if (!object) return;
-			await cas.put(key, JSON.stringify(emptyAppPool()), { onlyIfEtagMatches: object.etag });
+			const { deleted_at: _frozen, ...pool } = await readStored(AppPoolSchema, object, key);
+			await cas.put(key, JSON.stringify(pool), { onlyIfEtagMatches: object.etag });
 		});
 	}
 

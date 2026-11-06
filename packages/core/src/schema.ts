@@ -227,6 +227,11 @@ export const SnapshotNotebookEntrySchema = z.looseObject({
 	key_prefix: z.string(),
 	/** The move that published this entry, so a retried publication is recognized. */
 	move_id: z.string().optional(),
+	/**
+	 * Set on the source entry from the move's fence until it publishes or is cancelled, so
+	 * lists can show the notebook as moving without reading the move record.
+	 */
+	moving: z.object({ move_id: z.string(), destination_project_id: ProjectIdSchema }).optional(),
 });
 
 export type SnapshotNotebookEntry = z.infer<typeof SnapshotNotebookEntrySchema>;
@@ -253,6 +258,9 @@ export const SnapshotProjectEntrySchema = z.looseObject({
 	// Filtering aid added after the v1 snapshot shape shipped. Legacy entries
 	// omit it; ProjectService falls back to project.json for those entries.
 	tags: z.array(z.string()).optional(),
+	// Set by a notebook move in the same snapshot write that moves the entry, so the search
+	// crawler sees the request from the snapshot it already holds instead of a separate record.
+	search_refresh: z.string().optional(),
 	// Roster projections can lag changes. Authorization reads project.json.
 	member_ids: z.array(UserIdSchema).optional(),
 	// Pending invite emails are normalized for identity reconciliation.
@@ -296,7 +304,7 @@ export type PublicNotebookEntry = Pick<
 	| 'last_run_at'
 	| 'compute_profile'
 	| 'app_compute_profile'
->;
+> & { moving?: { destination_project_id: ProjectId } };
 
 // The project-list entry drops the nested `notebooks` array entirely: it is
 // unbounded (a project can hold thousands of notebooks) and would let one row
@@ -331,6 +339,7 @@ export function toPublicNotebookEntry(entry: SnapshotNotebookEntry): PublicNoteb
 		last_run_at: entry.last_run_at,
 		compute_profile: entry.compute_profile,
 		app_compute_profile: entry.app_compute_profile,
+		moving: entry.moving && { destination_project_id: entry.moving.destination_project_id },
 	};
 }
 
@@ -780,6 +789,12 @@ export const IntegrationRecordSchema = z.looseObject({
 	/** Disabled integrations are omitted from session rendering. */
 	enabled: z.boolean(),
 	current_version: z.number().int().positive(),
+	/**
+	 * Copy of `current_version`'s non-secret `ambient_env` switch, for kinds that
+	 * have one, so listing reads no version record. Older heads omit it until a
+	 * list backfills it.
+	 */
+	ambient_env: z.boolean().optional(),
 	created_by: UserIdSchema,
 	created_at: utcTimestamp(),
 	updated_at: utcTimestamp(),
