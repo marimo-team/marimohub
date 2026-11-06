@@ -602,6 +602,163 @@ describe('CoreWeaveCompute', () => {
 			expect(started).toBe(4);
 		});
 
+		it('skips queued uploads after a permanent error without stopping other batches', async () => {
+			vi.useFakeTimers();
+			const error = new Error('permission denied');
+			let releaseBlockers!: () => void;
+			const blocked = new Promise<void>((resolve) => {
+				releaseBlockers = resolve;
+			});
+			let blockersStarted = 0;
+			const attempted: string[] = [];
+			const world = makeWorld({
+				writeImpl: async (files) => {
+					const [file] = files as readonly { path: string }[];
+					if (file.path.startsWith('/blocker/')) {
+						blockersStarted++;
+						await blocked;
+						return;
+					}
+					attempted.push(file.path);
+					if (file.path === '/w/0') throw error;
+				},
+			});
+			const compute = makeCompute(world);
+			const blockers = Promise.all(
+				Array.from({ length: 15 }, (_, i) =>
+					compute
+						.create(SANDBOX_ID, { reuse: false })
+						.writeFiles([{ path: `/blocker/${i}`, content: 'x' }]),
+				),
+			);
+			try {
+				await vi.advanceTimersByTimeAsync(0);
+				expect(blockersStarted).toBe(15);
+				const instance = compute.create(SANDBOX_ID, { reuse: false });
+				const rejected = expect(
+					instance.writeFiles(
+						Array.from({ length: 8 }, (_, i) => ({ path: `/w/${i}`, content: 'x' })),
+					),
+				).rejects.toBe(error);
+				const otherBatch = compute
+					.create(SANDBOX_ID, { reuse: false })
+					.writeFiles([{ path: '/other-batch', content: 'x' }]);
+				await vi.runAllTimersAsync();
+				await Promise.all([rejected, otherBatch]);
+				expect(attempted).toEqual(['/w/0', '/other-batch']);
+				await instance.writeFiles([{ path: '/w/next-batch', content: 'x' }]);
+				expect(attempted.at(-1)).toBe('/w/next-batch');
+			} finally {
+				releaseBlockers();
+				await blockers;
+				vi.useRealTimers();
+			}
+		});
+
+		it('drains exhausted retries without starting the rest of the batch', async () => {
+			vi.useFakeTimers();
+			try {
+				const error = new CWSandboxUnavailableError('unavailable');
+				const attempts: string[] = [];
+				const world = makeWorld({
+					writeImpl: async (files) => {
+						const [file] = files as readonly { path: string }[];
+						if (file.path === '/healthy') return;
+						attempts.push(file.path);
+						throw error;
+					},
+				});
+				const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+				const rejected = expect(
+					instance.writeFiles(
+						Array.from({ length: 8 }, (_, i) => ({ path: `/w/${i}`, content: 'x' })),
+					),
+				).rejects.toBe(error);
+				await vi.runAllTimersAsync();
+				await rejected;
+				expect(attempts).toHaveLength(16);
+				for (const path of ['/w/0', '/w/1', '/w/2', '/w/3']) {
+					expect(attempts.filter((attempt) => attempt === path)).toHaveLength(4);
+				}
+				await instance.writeFiles([{ path: '/healthy', content: 'x' }]);
+			} finally {
+				await vi.runAllTimersAsync();
+				vi.useRealTimers();
+			}
+		});
+
+		it.each(['success', 'failure'] as const)(
+			'preserves the first error while draining an active retry to %s',
+			async (outcome) => {
+				vi.useFakeTimers();
+				try {
+					const firstError = new Error('permission denied');
+					const laterError = new Error('disk full');
+					const attempts: string[] = [];
+					const world = makeWorld({
+						writeImpl: async (files) => {
+							const [file] = files as readonly { path: string }[];
+							attempts.push(file.path);
+							if (file.path === '/w/0') {
+								await new Promise<void>((resolve) => setTimeout(resolve, 10));
+								throw firstError;
+							}
+							if (file.path === '/w/1') {
+								if (attempts.filter((path) => path === file.path).length === 1) {
+									throw new CWSandboxUnavailableError('unavailable');
+								}
+								if (outcome === 'failure') throw laterError;
+								return;
+							}
+							await new Promise<void>((resolve) => setTimeout(resolve, 50));
+						},
+					});
+					const write = makeCompute(world)
+						.create(SANDBOX_ID, { reuse: false })
+						.writeFiles(Array.from({ length: 8 }, (_, i) => ({ path: `/w/${i}`, content: 'x' })));
+					let rejected = false;
+					const checked = expect(write)
+						.rejects.toBe(firstError)
+						.then(() => {
+							rejected = true;
+						});
+					await vi.advanceTimersByTimeAsync(249);
+					expect(rejected).toBe(false);
+					expect(attempts).toEqual(['/w/0', '/w/1', '/w/2', '/w/3']);
+					await vi.advanceTimersByTimeAsync(1);
+					await checked;
+					expect(attempts).toEqual(['/w/0', '/w/1', '/w/2', '/w/3', '/w/1']);
+					const written = world.registry
+						.get('cw-1')!
+						.fake.batchWrites.flat()
+						.map((file) => file.path);
+					expect(written.sort()).toEqual(
+						outcome === 'success' ? ['/w/1', '/w/2', '/w/3'] : ['/w/2', '/w/3'],
+					);
+				} finally {
+					await vi.runAllTimersAsync();
+					vi.useRealTimers();
+				}
+			},
+		);
+
+		it('does not upload files when sandbox readiness fails', async () => {
+			const error = new Error('boot failed');
+			const writeImpl = vi.fn(async () => {});
+			const world = makeWorld({
+				waitImpl: async () => {
+					throw error;
+				},
+				writeImpl,
+			});
+			await expect(
+				makeCompute(world)
+					.create(SANDBOX_ID, { reuse: false })
+					.writeFiles([{ path: '/w/notebook.py', content: 'x' }]),
+			).rejects.toBe(error);
+			expect(writeImpl).not.toHaveBeenCalled();
+		});
+
 		it('retries a write the gateway answers with UNAVAILABLE', async () => {
 			vi.useFakeTimers();
 			try {
@@ -706,6 +863,29 @@ describe('CoreWeaveCompute', () => {
 				await vi.runAllTimersAsync();
 				await rejected;
 				expect(attempts).toBe(4);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('stops retrying when UNAVAILABLE changes to a permanent error', async () => {
+			vi.useFakeTimers();
+			try {
+				const error = new Error('permission denied');
+				const writeImpl = vi
+					.fn<() => Promise<void>>()
+					.mockRejectedValueOnce(new CWSandboxUnavailableError('unavailable'))
+					.mockRejectedValueOnce(error)
+					.mockResolvedValue(undefined);
+				const instance = makeCompute(makeWorld({ writeImpl })).create(SANDBOX_ID, { reuse: false });
+				const rejected = expect(
+					instance.writeFiles([{ path: '/w/retry', content: 'x' }]),
+				).rejects.toBe(error);
+				await vi.runAllTimersAsync();
+				await rejected;
+				expect(writeImpl).toHaveBeenCalledTimes(2);
+				await instance.writeFiles([{ path: '/w/next-batch', content: 'x' }]);
+				expect(writeImpl).toHaveBeenCalledTimes(3);
 			} finally {
 				vi.useRealTimers();
 			}

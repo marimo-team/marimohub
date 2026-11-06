@@ -1,32 +1,34 @@
 # @marimo-hub/compute-coreweave
 
-Compute adapter running kernel sandboxes on CoreWeave Sandboxes via the `@coreweave/cwsandbox` SDK (Sandbox v1; Node runtimes only; gRPC transport).
+Compute adapter for CoreWeave Sandboxes, using the `@coreweave/cwsandbox` SDK.
+Requires Node.js and uses Sandbox v1 over gRPC.
 
 Part of [marimohub](../../README.md). See [docs/compute.md](../../docs/compute.md) for configuration.
 
-## File-transfer concurrency
+## File uploads
 
-Workspace restore, integration files, and notebook bridge uploads use up to four
-single-file SDK writes concurrently per batch, rather than the SDK array helper's
-two-file waves. A process-wide semaphore caps active file RPCs at sixteen
-across sessions and phases; retry backoff does not occupy an RPC slot. The adapter validates the whole set before dispatch,
-passes binary content directly, and leaves parent-directory creation to the SDK.
+Uploads use up to four concurrent SDK writes per batch and sixteen active RPCs per
+process, across sessions and phases. Retry delays release their RPC slots.
+All destinations must be unique absolute paths. The adapter validates and copies
+the destinations before sandbox readiness.
 
-Only files receiving `UNAVAILABLE` are retried. Permanent failures stop further
-batch dispatch, and started uploads finish before the caller can retry or destroy
-the sandbox. Direct mTLS versus Gateway routing remains the SDK's responsibility.
-These limits bound fan-out; they do not change workspace persistence or place
-credentials/file contents in command arguments.
+Only `UNAVAILABLE` triggers retries, after 250, 1,000, and 3,000 ms.
+Other errors or exhausted retries stop new uploads in that batch, including uploads
+queued for a slot. Active uploads finish their retry loops before the batch rejects.
+Other batches continue. Completed writes remain in the sandbox.
 
-## Startup timing interpretation
+The SDK handles parent directories, file-size limits, streaming fallback, and direct
+mTLS or Gateway routing. File contents pass directly to the SDK.
 
-`provision_files_ms` includes waiting for sandbox readiness. The additional
-`provision_files_waitready_ms` reports that wait once, even if workspace and Git
-restores wait concurrently. `provision_files_non_waiting_ms` is the remainder:
-object listing/reads, copies, and workspace preparation, not just network time.
+## Startup timings
 
-`provision_inject_files_ms` and `provision_inject_env_ms` distinguish integration
-file writes from environment configuration calls, which still run in parallel.
-A lazy adapter's later private environment-file upload remains charged to the
-command phase that materializes it. Phase durations overlap; use
-`provision_total_ms` for end-to-end provisioning rather than adding every field.
+| Field                            | Measures                                                                                         |
+| -------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `provision_files_ms`             | Workspace restoration, including readiness waits.                                                |
+| `provision_files_waitready_ms`   | One shared readiness wait across workspace and Git restores.                                     |
+| `provision_files_non_waiting_ms` | Workspace duration minus that wait, including storage reads, queueing, uploads, and preparation. |
+| `provision_inject_files_ms`      | Session file preparation, uploads, and installation.                                             |
+| `provision_inject_env_ms`        | Environment configuration calls, concurrent with session file uploads.                           |
+
+The command that creates the private environment file accounts for that upload time.
+Phases overlap. Use `provision_total_ms` for total provisioning time.

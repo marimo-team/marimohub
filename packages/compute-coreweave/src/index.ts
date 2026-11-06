@@ -737,32 +737,42 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		}
 		// The SDK's array form serializes files in two-wide waves. Own concurrency
 		// here, draining started uploads before a caller can retry or destroy the pod.
+		const batchState = { failed: false };
 		await forEachConcurrentUntilFailure({
 			items: batch,
 			concurrency: FILE_WRITE_CONCURRENCY,
-			run: (file) => this.writeFile(sandbox, file),
+			run: (file) => this.writeFile(sandbox, file, batchState),
 		});
 	}
 
-	private async writeFile(sandbox: CoreWeaveSandbox, file: SandboxFileWrite): Promise<void> {
+	private async writeFile(
+		sandbox: CoreWeaveSandbox,
+		file: SandboxFileWrite,
+		batchState: { failed: boolean },
+	): Promise<void> {
 		// Whole-file writes are idempotent; retry only the file that saw UNAVAILABLE.
 		for (let attempt = 0; ; attempt++) {
-			try {
-				await FILE_WRITE_SLOTS.run(() =>
-					sandbox.files.write([{ path: file.path, content: file.content }]),
-				);
-				return;
-			} catch (err) {
-				if (
-					!(err instanceof CWSandboxUnavailableError) ||
-					attempt >= WRITE_RETRY_DELAYS_MS.length
-				) {
-					throw err;
+			const retry = await FILE_WRITE_SLOTS.run(async () => {
+				// Already-started uploads finish their retries after a sibling fails.
+				if (batchState.failed && attempt === 0) return;
+				try {
+					await sandbox.files.write([{ path: file.path, content: file.content }]);
+				} catch (err) {
+					if (
+						!(err instanceof CWSandboxUnavailableError) ||
+						attempt >= WRITE_RETRY_DELAYS_MS.length
+					) {
+						// Fence queued uploads before releasing this slot to another waiter.
+						batchState.failed = true;
+						throw err;
+					}
+					return true;
 				}
-				await new Promise<void>((resolve) => {
-					setTimeout(resolve, WRITE_RETRY_DELAYS_MS[attempt]);
-				});
-			}
+			});
+			if (!retry) return;
+			await new Promise<void>((resolve) => {
+				setTimeout(resolve, WRITE_RETRY_DELAYS_MS[attempt]);
+			});
 		}
 	}
 
