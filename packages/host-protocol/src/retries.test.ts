@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryHostRetryStore } from './memoryRetryStore';
+import { HOST_CLAIM_LEASE_MS, MemoryHostRetryStore } from './memoryRetryStore';
 import { HostProblemError } from './protocol';
 import { HostRetries } from './retries';
 import type { HostMutationReply, HostRetryAttempt } from './retries';
@@ -206,6 +206,52 @@ describe('host retry bindings', () => {
 		await vi.runAllTimersAsync();
 		await assertion;
 		expect(work).not.toHaveBeenCalled();
+	});
+
+	it('lets a duplicate caller disconnect without cancelling the shared attempt', async () => {
+		const retries = new HostRetries(new MemoryHostRetryStore());
+		let finish!: (reply: HostMutationReply) => void;
+		const work = vi.fn(
+			() =>
+				new Promise<HostMutationReply>((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const first = retries.execute('user', 'key', 'create', work);
+		const duplicate = new AbortController();
+		const second = retries.execute('user', 'key', 'create', work, false, duplicate.signal);
+		duplicate.abort();
+		await expect(second).rejects.toThrow();
+		finish({ status: 201, body: {} });
+		expect(await first).toMatchObject({ status: 201, replayed: false });
+		expect(work).toHaveBeenCalledOnce();
+	});
+
+	it('reclaims an undispatched claim after its lease and fences the stale owner', async () => {
+		vi.useFakeTimers();
+		const store = new MemoryHostRetryStore();
+		const retries = new HostRetries(store);
+		let stale!: HostRetryAttempt;
+		const stuck = retries.execute('user', 'key', 'create', async (attempt) => {
+			stale = attempt;
+			await new Promise(() => {});
+			return { status: 201, body: {} };
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect((await store.acquire('user', 'key', 'create', false)).kind).toBe('pending');
+		vi.advanceTimersByTime(HOST_CLAIM_LEASE_MS);
+		const recovered = await new HostRetries(store).execute(
+			'user',
+			'key',
+			'create',
+			async (attempt) => {
+				await attempt.dispatch();
+				return { status: 201, body: { id: 'second' } };
+			},
+		);
+		expect(recovered).toMatchObject({ status: 201, body: { id: 'second' } });
+		await expect(stale.dispatch()).rejects.toMatchObject({ status: 503 });
+		void stuck.catch(() => {});
 	});
 
 	it('releases an acquired claim without work when its caller has already disconnected', async () => {

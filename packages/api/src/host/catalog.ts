@@ -156,6 +156,8 @@ export async function notebookRecord(
 		updated_at: notebook.updated_at,
 		operations: [
 			...(write.allowed && !session ? ['notebook.update'] : []),
+			// A viewer's edit session is an ephemeral throwaway by policy (see startNotebookSession);
+			// the hub exposes those only as temporary notebooks, never as a persistent record's runtime.
 			...(start.allowed && start.role !== 'viewer' && attach.allowed
 				? RUNTIME_OPERATIONS.filter((operation) =>
 						operation === 'notebook.save'
@@ -177,6 +179,7 @@ export interface HostCatalog extends HostCatalogSnapshot {
 export async function catalogEvents(
 	deps: ApiDeps,
 	principal: AuthenticatedPrincipal,
+	signal?: AbortSignal,
 ): Promise<HostCatalog> {
 	const events: HostEvent[] = [{ event: 'host', data: { host: { operations: OPERATIONS } } }];
 	const sessionsByProject = new Map<ProjectId, Session[]>();
@@ -186,6 +189,7 @@ export async function catalogEvents(
 		resourceSecurity: deps.resourceSecurity,
 	});
 	for (const entry of projects) {
+		signal?.throwIfAborted();
 		const project = await loadVisibleProject(deps.services.projects, entry.id, principal, deps);
 		events.push({
 			event: 'project',
@@ -206,6 +210,7 @@ export async function catalogEvents(
 			resourceSecurity: deps.resourceSecurity,
 		});
 		for (const notebook of notebooks) {
+			signal?.throwIfAborted();
 			events.push({
 				event: 'notebook',
 				data: {

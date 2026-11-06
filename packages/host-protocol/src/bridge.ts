@@ -58,7 +58,7 @@ def discover(cfg):
             if abs(Process(process["pid"]).create_time() - started) > 1:
                 continue
             return record
-        except (OSError, ValueError, KeyError, Error):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, Error):
             continue
     raise RuntimeError("Host discovery unavailable")
 

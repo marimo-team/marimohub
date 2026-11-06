@@ -8,6 +8,8 @@ import {
 	mapRuntimeEvent,
 	mapRuntimeProblem,
 	parseTypes,
+	sse,
+	UpstreamProblemError,
 } from './protocol';
 
 class PlatformError extends Error {
@@ -33,6 +35,14 @@ describe('stream kind filters', () => {
 		expect(() => parseTypes('cell,bogus', CATALOG_KINDS)).toThrow(
 			'types has no kind named bogus, cell',
 		);
+	});
+});
+
+describe('server-sent event framing', () => {
+	it('keeps runtime-supplied names and ids on one line', () => {
+		expect(
+			sse({ event: 'cell\nevent: reset', id: 'u1\r\ndata: {}', data: { cell: { id: 'c\n1' } } }),
+		).toBe('id: u1data: {}\nevent: cellevent: reset\ndata: {"cell":{"id":"c\\n1"}}\n\n');
 	});
 });
 
@@ -127,6 +137,14 @@ describe('host problem responses', () => {
 			status: 400,
 			detail: 'Invalid request body or parameters',
 		});
+	});
+
+	it('relays a runtime problem with its own status and falls back without a body', async () => {
+		const relayed = errorResponse(new UpstreamProblemError(403, { type: 'x', detail: 'denied' }));
+		expect(relayed.status).toBe(403);
+		expect(await relayed.json()).toEqual({ type: 'x', detail: 'denied' });
+		const empty = errorResponse(new UpstreamProblemError(502, undefined));
+		expect(empty.status).toBe(503);
 	});
 
 	it.each([

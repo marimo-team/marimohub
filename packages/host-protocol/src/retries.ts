@@ -1,48 +1,14 @@
-import { sleep } from './async';
+import { sleep, withAbortSignal } from './async';
 import { errorResponse, HostProblemError } from './protocol';
 import type { ErrorResponder } from './protocol';
+import type { HostRetryReply, HostRetryStore } from './retryStore';
 
-export interface HostRetryReply {
-	status: number;
-	body: unknown;
-}
-
-export interface HostRetryClaim {
-	/** Storage key of the record; opaque to the caller. */
-	key: string;
-	/** Owner token of this attempt; a later attempt invalidates it. */
-	owner: string;
-	/** Runtime the request was bound to by an earlier attempt, if any. */
-	sessionId?: string;
-}
-
-export type HostRetryAcquisition =
-	| { kind: 'claimed'; claim: HostRetryClaim }
-	| { kind: 'reply'; reply: HostRetryReply }
-	| { kind: 'pending' };
-
-/**
- * Durable Idempotency-Key records shared by every host instance.
- *
- * Contract: a key's first request claims it. A later request with the same scope and key
- * sees `pending` while a claim is held, the stored `reply` after a success, or a conflict
- * (an error the platform maps to 409) when the fingerprint differs from a live record.
- * `refresh` asks to redo work whose receipt is younger than the runtime's own retry window,
- * so the runtime answers from its receipt instead of repeating the work. Receipts and
- * session bindings expire after the retry window; an undispatched claim released by `finish`
- * without a reply frees the key, while a dispatched one with no session binding stays pending
- * because its outcome is unknown.
- */
-export interface HostRetryStore {
-	acquire(
-		scope: string,
-		key: string,
-		fingerprint: string,
-		refresh: boolean,
-	): Promise<HostRetryAcquisition>;
-	dispatch(claim: HostRetryClaim, sessionId?: string): Promise<void>;
-	finish(claim: HostRetryClaim, reply?: HostRetryReply): Promise<void>;
-}
+export type {
+	HostRetryAcquisition,
+	HostRetryClaim,
+	HostRetryReply,
+	HostRetryStore,
+} from './retryStore';
 
 const MAX_REQUESTS = 10_000;
 export type HostMutationReply = HostRetryReply;
@@ -82,7 +48,7 @@ export class HostRetries {
 				return Promise.reject(
 					HostProblemError.conflict('Idempotency-Key was used for a different request'),
 				);
-			return existing.result;
+			return withAbortSignal(existing.result, signal);
 		}
 		if (this.pending.size >= MAX_REQUESTS)
 			return Promise.reject(
@@ -113,6 +79,7 @@ export class HostRetries {
 		signal?: AbortSignal,
 	): Promise<HostMutationResult> {
 		for (let poll = 0; poll < 50; poll++) {
+			signal?.throwIfAborted();
 			const entry = await this.storage(() => this.store.acquire(scope, key, fingerprint, refresh));
 			if (entry.kind === 'reply') return { ...entry.reply, replayed: true };
 			if (entry.kind === 'pending') {

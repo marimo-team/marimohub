@@ -28,6 +28,7 @@ import {
 	parseTypes,
 	problemResponse,
 	RUNTIME_ROUTES,
+	UpstreamProblemError,
 } from './protocol';
 import type { EventKinds } from './protocol';
 import { HostRetries } from './retries';
@@ -221,7 +222,9 @@ export function createHostApp<
 			if (result.status === 401) response.headers.set('WWW-Authenticate', challenge);
 			return response;
 		}
-		return Response.json(body, { status: result.status });
+		return body === undefined
+			? new Response(null, { status: result.status })
+			: Response.json(body, { status: result.status });
 	}
 
 	function rememberRuntime(events: HostEvent[], runtime: HostRuntimeHandle) {
@@ -267,8 +270,8 @@ export function createHostApp<
 	) {
 		const discovered = await platform.runtimes(principal, snapshot, visible, signal);
 		await Promise.all(
-			discovered.map(async ({ connect }) => {
-				if (!connect) return;
+			discovered.map(async ({ connect, authorized }) => {
+				if (!connect || !authorized) return;
 				try {
 					await discoverRuntime(principal, connect, signal);
 				} catch {
@@ -469,7 +472,11 @@ export function createHostApp<
 				keepAlive: true,
 			});
 		const first = await call(principal, {}, c.req.raw.signal);
-		if (first.status !== 200) return problemResponse(first.body, first.status);
+		if (first.status !== 200) {
+			const response = problemResponse(mapRuntimeProblem(first.body, record.id), first.status);
+			if (first.status === 401) response.headers.set('WWW-Authenticate', challenge);
+			return response;
+		}
 		const attachment = {
 			id: crypto.randomUUID(),
 			notebook_id: record.id,
@@ -514,7 +521,10 @@ export function createHostApp<
 					await emitSnapshot();
 					while (!signal.aborted) {
 						if (batch.status !== 200)
-							throw HostProblemError.unavailable('Runtime event stream unavailable');
+							throw new UpstreamProblemError(
+								batch.status,
+								mapRuntimeProblem(batch.body, record.id),
+							);
 						rememberRuntime(batch.events ?? [], { ...runtime, notebookId: record.id });
 						for (const raw of batch.events ?? []) {
 							if (raw.id) cursor = raw.id;

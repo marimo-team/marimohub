@@ -34,8 +34,8 @@ Use these as the done-criteria for any change.
   tracing/logs facades unless an entrypoint registers a provider), the format
   serializers `smol-toml` and `yaml` (core renders `marimo.toml` and integration
   config files), `fflate` (in-memory archive decompression for workspace
-  ingest), and the workspace library `@marimo-hub/host-protocol/bridge` (host
-  protocol schemas and the sandbox-side Python client; see below). A
+  ingest), and the framework-free `./bridge` and `./retry-store` subpaths of the
+  workspace library `@marimo-hub/host-protocol` (see below). A
   serializer is a pure function, not a vendor, so a
   port around it would buy no substitutability.
   Anything that _reaches_ something — a store, a cluster, an IdP — is a port.
@@ -52,8 +52,9 @@ Use these as the done-criteria for any change.
   protocol: routing, problem responses, SSE streams, catalog diffing, Idempotency-Key
   semantics, and runtime ID rewriting, over a `HostPlatform` port. It depends on `hono`
   and `zod` only. The hub's adapter lives in `packages/api/src/host` (`createHubHostPlatform`),
-  and core's `HostRetryStore` implements its retry port. Core imports only its `./bridge`
-  subpath (the loopback Python client and reply schemas), which pulls in no HTTP framework.
+  and core's `HostRetryStore` implements its retry port. Core imports only the `./bridge`
+  (loopback Python client and schemas) and `./retry-store` (retry contract) subpaths, which
+  pull in no HTTP framework; `dependencyRule.test.ts` fails on any other import path.
 - **Project chat's turn runner lives in `packages/api/src/chat`**, not core: it
   depends on the vendor-neutral `ai` SDK and the in-process MCP tool server. Core
   keeps the conversation record and its invariants (`ConversationService`); the
@@ -163,7 +164,8 @@ These CAS-managed records also have one writer each:
 - `HostRetryStore` owns each host mutation claim and receipt at
   `_system/host-retries/{digest}.json` and the cleanup cursor at
   `_system/host-retry-cleanup.json`. All updates use CAS. Maintenance compacts
-  expired receipts but retains the heads. Pending claims never expire automatically.
+  expired receipts but retains the heads. An undispatched claim is reclaimable after a
+  five-minute lease; a dispatched claim with no runtime binding never expires.
 - `OAuthRateLimitService` owns each shared MCP OAuth request window at
   `_system/oauth-rate-limits/{endpoint}.json`.
 - `ConversationService` owns each private chat conversation at

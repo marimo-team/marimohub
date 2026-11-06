@@ -104,14 +104,14 @@ function fakePlatform() {
 		async catalogVersion() {
 			return String(version);
 		},
-		async runtimes(_principal, snapshot, visible) {
+		async runtimes(principal, snapshot, visible) {
 			return [...running.values()]
 				.filter((runtime) => snapshot.projectIds.includes(runtime.projectId))
 				.map((runtime) => ({
 					notebookId: runtime.notebookId,
 					projectId: runtime.projectId,
 					key: runtime.key,
-					authorized: visible.has(runtime.notebookId),
+					authorized: visible.has(runtime.notebookId) && writers.has(principal.id),
 					connect: async () => runtime,
 				}));
 		},
@@ -341,12 +341,19 @@ describe('generic host app', () => {
 	});
 
 	it('answers no-runtime for interrupts without starting anything', async () => {
-		const { request, callRuntime, ensureRuntime } = fakePlatform();
+		const { request, callRuntime, ensureRuntime, reply } = fakePlatform();
 		const response = await request('DELETE', '/notebooks/p1%2Fn1/runtime/runs/r1', { key: 'stop' });
 		expect(response.status).toBe(409);
 		expect(await response.json()).toMatchObject({ type: 'tag:marimo.io,2026:host/no-runtime' });
 		expect(callRuntime).not.toHaveBeenCalled();
 		expect(ensureRuntime).not.toHaveBeenCalled();
+
+		callRuntime.mockResolvedValueOnce(reply(202, { id: 'kernel', notebook_id: 'local' }));
+		await request('PUT', '/notebooks/p1%2Fn1/runtime', { body: {}, key: 'start' });
+		callRuntime.mockResolvedValueOnce(reply(204));
+		const stopped = await request('DELETE', '/notebooks/p1%2Fn1/runtime/runs/r1', { key: 'stop2' });
+		expect(stopped.status).toBe(204);
+		expect(await stopped.text()).toBe('');
 	});
 
 	it('serves the notebook stream with the platform record, attachments, and mapped runtime events', async () => {
@@ -390,6 +397,20 @@ describe('generic host app', () => {
 			path: '/events?types=cell%2Cruntime',
 		});
 		expect((await request('GET', '/notebooks/p1%2Fn1/events', { as: 'bob' })).status).toBe(403);
+		callRuntime.mockResolvedValueOnce(reply(401, { type: 'x', detail: 'runtime token expired' }));
+		const rejected = await request('GET', '/notebooks/p1%2Fn1/events');
+		expect(rejected.status).toBe(401);
+		expect(rejected.headers.get('WWW-Authenticate')).toBe('Bearer realm="fake"');
+		callRuntime
+			.mockResolvedValueOnce(reply(200, undefined, [{ event: 'ready', data: {} }]))
+			.mockResolvedValueOnce(
+				reply(409, { type: 'x', edit: { document: { notebook_id: 'local' } } }),
+			);
+		const failed = await request('GET', '/notebooks/p1%2Fn1/events');
+		const text = await failed.text();
+		expect(text).toContain('event: effect/httpapi/stream/failure');
+		expect(text).toContain('"type":"x"');
+		expect(text).toContain('"notebook_id":"p1/n1"');
 	});
 
 	it('lists discovered runtimes in the catalog only for principals who may see them', async () => {
@@ -417,5 +438,11 @@ describe('generic host app', () => {
 		});
 		expect(events[0].data.request_id).toBeUndefined();
 		expect(callRuntime.mock.calls.at(-1)![3]).toBeInstanceOf(AbortSignal);
+		const probes = callRuntime.mock.calls.length;
+		const hidden = await readUntilReady(
+			await request('GET', '/events?types=runtime', { as: 'bob' }),
+		);
+		expect(hidden.map((event) => event.event)).toEqual(['ready']);
+		expect(callRuntime.mock.calls.length).toBe(probes);
 	});
 });

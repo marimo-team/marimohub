@@ -146,6 +146,17 @@ function problem(
 	);
 }
 
+/** A failure reported by the runtime itself, relayed with its own status and problem body. */
+export class UpstreamProblemError extends Error {
+	constructor(
+		readonly status: number,
+		readonly body: unknown,
+	) {
+		super('The runtime rejected the request');
+		this.name = 'UpstreamProblemError';
+	}
+}
+
 export function problemResponse(body: unknown, status: number): Response {
 	return Response.json(body, {
 		status,
@@ -159,6 +170,10 @@ export type ErrorResponder = (error: unknown) => Response;
 
 export function errorResponse(error: unknown, statusOf?: ErrorStatus): Response {
 	if (error instanceof HostProblemError) return error.toResponse();
+	if (error instanceof UpstreamProblemError)
+		return error.body === undefined
+			? HostProblemError.unavailable('Runtime event stream unavailable').toResponse()
+			: problemResponse(error.body, error.status);
 	if (error instanceof z.ZodError || error instanceof SyntaxError)
 		return HostProblemError.invalidRequest('Invalid request body or parameters').toResponse();
 	const status = error instanceof HTTPException ? error.status : (statusOf?.(error) ?? 500);
@@ -178,8 +193,12 @@ export function errorResponse(error: unknown, statusOf?: ErrorStatus): Response 
 	return factories[status]?.(detail).toResponse() ?? problem(status, 'internal', detail);
 }
 
+// Runtime-supplied names and IDs must not be able to open a new SSE field.
+const sseField = (value: string) => value.replaceAll(/[\r\n]/g, '');
+
 export function sse(event: HostEvent): string {
-	return `${event.id ? `id: ${event.id}\n` : ''}event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`;
+	const id = event.id ? `id: ${sseField(event.id)}\n` : '';
+	return `${id}event: ${sseField(event.event)}\ndata: ${JSON.stringify(event.data)}\n\n`;
 }
 
 export function parseTypes(raw: string | undefined, kinds: readonly string[]): EventKinds {

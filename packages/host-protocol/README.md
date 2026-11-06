@@ -10,6 +10,8 @@ runtime lifecycle, and the transport to a running runtime. `createHostApp(platfo
 a Hono app to mount at any prefix.
 
 `./bridge` exports the loopback Python client that reaches a marimo host inside a sandbox
-from a sandbox `exec`, plus the request and reply schemas it speaks.
+from a sandbox `exec`, the event and reply schemas it speaks, and the request type it reads.
+`./retry-store` exports the Idempotency-Key store contract and its timing constants, so a
+durable store can be implemented without importing the HTTP server.
 
 Depends on `hono` and `zod` only. Part of [marimohub](../../README.md).

@@ -1,9 +1,14 @@
+import {
+	HOST_CLAIM_LEASE_MS,
+	HOST_RETRY_REFRESH_MS,
+	HOST_RETRY_WINDOW_MS,
+} from '@marimo-hub/host-protocol/retry-store';
 import type {
 	HostRetryAcquisition,
 	HostRetryClaim,
 	HostRetryReply,
 	HostRetryStore as HostRetryStorePort,
-} from '@marimo-hub/host-protocol';
+} from '@marimo-hub/host-protocol/retry-store';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
 import { ConflictError, PreconditionFailedError, UnavailableError } from '../../errors';
@@ -13,24 +18,24 @@ import { logOperationalError } from '../../operationalLog';
 import { readStored, StoredObjectError } from '../../schema';
 import { withCasRetry } from '../catalog/cas';
 
-export const HOST_RETRY_WINDOW_MS = 5 * 60_000;
-// Runtimes keep their own receipts for the same window, started on a later clock. Re-dispatching
-// a run after this age could reach an expired upstream receipt and execute it again.
-export const HOST_RETRY_REFRESH_MS = 4 * 60_000;
+export { HOST_CLAIM_LEASE_MS, HOST_RETRY_REFRESH_MS, HOST_RETRY_WINDOW_MS };
 const ReplySchema = z.object({ status: z.number().int().min(100).max(599), body: z.unknown() });
-export const HostRetryRecordSchema = z
-	.object({
-		schema_version: z.literal(1),
-		fingerprint: z.string().min(1),
-		owner: z.uuid().optional(),
-		session_id: z.string().min(1).optional(),
-		dispatched: z.boolean(),
-		expires: z.number().nonnegative().optional(),
-		reply: ReplySchema.optional(),
-	})
-	.refine((record) => record.owner !== undefined || record.expires !== undefined, {
-		message: 'Host retry record requires an owner or expiry',
-	});
+const RecordFields = z.object({
+	schema_version: z.literal(1),
+	fingerprint: z.string().min(1),
+	owner: z.uuid().optional(),
+	claimed_at: z.number().nonnegative().optional(),
+	session_id: z.string().min(1).optional(),
+	dispatched: z.boolean(),
+	expires: z.number().nonnegative().optional(),
+	reply: ReplySchema.optional(),
+});
+// A record is either held by an owner or carries an expiry. A union, rather than a refinement,
+// keeps that invariant in the generated JSON Schema.
+export const HostRetryRecordSchema = z.union([
+	RecordFields.extend({ owner: z.uuid() }),
+	RecordFields.extend({ expires: z.number().nonnegative() }),
+]);
 export const HostRetryCleanupSchema = z.object({ after: z.string().optional() });
 type Record = z.infer<typeof HostRetryRecordSchema>;
 export type { HostRetryClaim, HostRetryReply };
@@ -49,12 +54,21 @@ export class HostRetryStore implements HostRetryStorePort {
 		return withCasRetry(this.bucket, async (writer) => {
 			const object = await this.bucket.get(objectKey);
 			const previous = object ? await readStored(HostRetryRecordSchema, object, objectKey) : null;
-			const live = previous && (previous.owner || (previous.expires ?? 0) > Date.now());
-			if (live && previous.fingerprint !== fingerprint)
+			const now = Date.now();
+			// Records written before leases exist carry no claimed_at and stay held, as they did then.
+			const held =
+				!!previous?.owner &&
+				!(
+					!previous.dispatched &&
+					previous.claimed_at !== undefined &&
+					previous.claimed_at + HOST_CLAIM_LEASE_MS <= now
+				);
+			const retained = !!previous && (previous.expires ?? 0) > now;
+			if (previous && (held || retained) && previous.fingerprint !== fingerprint)
 				throw new ConflictError('Idempotency-Key was used for a different request');
-			if (live && previous.owner) return { kind: 'pending' };
-			if (live && previous.reply) {
-				const age = HOST_RETRY_WINDOW_MS - ((previous.expires ?? 0) - Date.now());
+			if (held) return { kind: 'pending' };
+			if (previous && retained && previous.reply) {
+				const age = HOST_RETRY_WINDOW_MS - ((previous.expires ?? 0) - now);
 				if (!refresh || age >= HOST_RETRY_REFRESH_MS)
 					return { kind: 'reply', reply: previous.reply };
 			}
@@ -63,8 +77,11 @@ export class HostRetryStore implements HostRetryStorePort {
 				schema_version: 1,
 				fingerprint,
 				owner,
+				claimed_at: now,
 				dispatched: false,
-				...(live ? { session_id: previous.session_id, expires: previous.expires } : {}),
+				...(previous && retained
+					? { session_id: previous.session_id, expires: previous.expires }
+					: {}),
 			};
 			await writer.put(
 				objectKey,

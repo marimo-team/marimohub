@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryBucket } from '../../testing/MemoryBucket';
-import { HostRetryStore, HOST_RETRY_REFRESH_MS, HOST_RETRY_WINDOW_MS } from './HostRetryStore';
+import {
+	HostRetryStore,
+	HOST_CLAIM_LEASE_MS,
+	HOST_RETRY_REFRESH_MS,
+	HOST_RETRY_WINDOW_MS,
+} from './HostRetryStore';
 import type { HostRetryClaim } from './HostRetryStore';
 import { paths } from '../../paths';
 
@@ -62,6 +67,21 @@ describe('shared host retry receipts', () => {
 		expect(await new HostRetryStore(bucket).acquire('user', 'key', 'create', false)).toEqual({
 			kind: 'pending',
 		});
+	});
+
+	it('reclaims an undispatched claim after its lease and fences the stale owner', async () => {
+		vi.useFakeTimers();
+		const bucket = new MemoryBucket();
+		const store = new HostRetryStore(bucket);
+		const stale = await claim(store);
+		vi.advanceTimersByTime(HOST_CLAIM_LEASE_MS - 1);
+		expect((await store.acquire('user', 'key', 'create', false)).kind).toBe('pending');
+		vi.advanceTimersByTime(1);
+		await expect(store.acquire('user', 'key', 'other', false)).resolves.toMatchObject({
+			kind: 'claimed',
+		});
+		await expect(store.dispatch(stale)).rejects.toThrow('no longer owned');
+		await expect(store.finish(stale, reply)).rejects.toThrow('no longer owned');
 	});
 
 	it('retains claims after a receipt write failure, even when the side effect succeeded', async () => {

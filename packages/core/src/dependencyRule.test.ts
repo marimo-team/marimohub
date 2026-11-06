@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -13,8 +13,9 @@ import { describe, expect, it } from 'vitest';
  * red test. A dependency that *reaches* something belongs behind a port.
  */
 const ALLOWED_DEPENDENCIES = new Set([
-	// The host protocol library's `./bridge` subpath only: zod schemas and the sandbox-side
-	// Python client source as a string. Core never imports its Hono server.
+	// Only through the framework-free subpaths checked below: `./bridge` (zod schemas and the
+	// sandbox-side Python client source) and `./retry-store` (the retry contract). Core never
+	// imports the package root, which carries the Hono server.
 	'@marimo-hub/host-protocol',
 	// The vendor-neutral OTEL facades: pure and I/O-free, every call is a no-op
 	// unless an entrypoint registers a provider (the SDK stays in apps/server).
@@ -44,6 +45,25 @@ const pkg = JSON.parse(
 describe('@marimo-hub/core dependency rule', () => {
 	it('depends only on vendor-free utilities', () => {
 		expect(Object.keys(pkg.dependencies ?? {}).sort()).toEqual([...ALLOWED_DEPENDENCIES].sort());
+	});
+
+	it('imports the host protocol library only through its framework-free subpaths', () => {
+		const allowed = new Set([
+			'@marimo-hub/host-protocol/bridge',
+			'@marimo-hub/host-protocol/retry-store',
+		]);
+		const root = fileURLToPath(new URL('.', import.meta.url));
+		const offending: string[] = [];
+		for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
+			if (!entry.isFile() || !entry.name.endsWith('.ts')) continue;
+			const file = `${entry.parentPath}/${entry.name}`;
+			for (const match of readFileSync(file, 'utf8').matchAll(
+				/from\s+'(@marimo-hub\/host-protocol[^']*)'/g,
+			)) {
+				if (!allowed.has(match[1])) offending.push(`${file.slice(root.length)}: ${match[1]}`);
+			}
+		}
+		expect(offending).toEqual([]);
 	});
 
 	it('never depends on a sibling adapter package', () => {

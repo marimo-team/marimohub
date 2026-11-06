@@ -3,6 +3,7 @@ export type { HostAppEnv } from './createHostApp';
 export { HostEventSchema, HostReplySchema } from './events';
 export type { HostEvent, HostReply, HostRequest } from './events';
 export {
+	HOST_CLAIM_LEASE_MS,
 	HOST_RETRY_REFRESH_MS,
 	HOST_RETRY_WINDOW_MS,
 	MemoryHostRetryStore,
@@ -47,6 +48,7 @@ export type {
 	HostDecision,
 	RuntimeOperation,
 } from './protocol';
+export { UpstreamProblemError } from './protocol';
 export { HostRetries } from './retries';
 export type {
 	HostMutationReply,

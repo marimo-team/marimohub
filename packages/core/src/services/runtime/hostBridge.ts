@@ -53,10 +53,13 @@ export async function requestRuntimeHost(
 ): Promise<HostReply> {
 	const unavailable = () => new UnavailableError('The runtime host API is unavailable');
 	const requestPath = `/tmp/.marimohub-host-${crypto.randomUUID()}.json`;
+	const processPath = sandbox.resolveProcessPath?.(requestPath) ?? requestPath;
+	let written = false;
 	try {
 		const result = await withDeadline(
 			async (activeSignal) => {
 				await sandbox.writeFiles([{ path: requestPath, content: JSON.stringify(request) }]);
+				written = true;
 				activeSignal.throwIfAborted();
 				const kernelUrl = `http://127.0.0.1:${MARIMO_PORT}`;
 				const processUrl = new URL(sandbox.resolveProcessUrl?.(kernelUrl) ?? kernelUrl);
@@ -66,7 +69,7 @@ export async function requestRuntimeHost(
 					: undefined;
 				return sandbox.exec(
 					hostBridgeCommand(
-						sandbox.resolveProcessPath?.(requestPath) ?? requestPath,
+						processPath,
 						port,
 						launcherPath ? (sandbox.resolveProcessPath?.(launcherPath) ?? launcherPath) : undefined,
 					),
@@ -81,6 +84,9 @@ export async function requestRuntimeHost(
 		if (!result.success) throw unavailable();
 		return HostReplySchema.parse(JSON.parse(result.stdout));
 	} catch (error) {
+		// The command unlinks the file itself; a cancelled or failed dispatch may never have run it.
+		if (written)
+			void sandbox.exec(`rm -f ${shellQuote(processPath)}`, { timeout: 5_000 }).catch(() => {});
 		if (signal?.aborted) throw error;
 		throw unavailable();
 	}

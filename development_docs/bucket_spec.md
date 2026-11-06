@@ -128,7 +128,8 @@ s3-bucket/
 │   │       └── versions/
 │   │           └── {000001}.json           ← immutable configuration version
 │   ├── host-retries/
-│   │   └── {digest}.json              # CAS host request claims and replay receipts
+│   │   └── {digest}.json                   ← CAS host request claims and replay receipts
+│   ├── host-retry-cleanup.json             ← bounded compaction cursor for host-retries (CAS)
 │   ├── idempotency/
 │   │   └── {digest}.json                   ← replay record with a 24h TTL
 │   ├── events/

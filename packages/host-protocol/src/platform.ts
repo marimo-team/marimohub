@@ -41,7 +41,10 @@ export interface HostRuntimeDiscovery<R extends HostRuntimeHandle> {
 	key: string;
 	/** Whether the principal may observe this runtime's records. */
 	authorized: boolean;
-	/** Present when the host can read the runtime's catalog without a client stream attached. */
+	/**
+	 * Present when the host can read the runtime's catalog without a client stream attached.
+	 * Called only for authorized entries.
+	 */
 	connect?: () => Promise<R>;
 }
 

@@ -132,10 +132,12 @@ Catalog requests never start a sandbox. Use `types=host,project,notebook` to ski
   the first four minutes. Later retries return the stored response, so the hub
   never re-dispatches a run after the runtime's own receipt may have expired.
 - Concurrent requests on another instance wait up to five seconds, plus storage
-  latency, for a receipt, then return `503`. Retry with the same key. An unresolved
-  claim does not expire: a crashed process or a lost Hub write acknowledgement
-  cannot prove that a mutation failed. Inspect the notebook before recovery;
-  using a new key can duplicate the mutation. There is no automatic claim recovery.
+  latency, for a receipt, then return `503`. Retry with the same key. A claim that
+  never reached its mutation is released after five minutes, so a process that
+  crashed while authorizing or starting a sandbox does not block the key. A
+  dispatched claim does not expire: a crashed process or a lost Hub write
+  acknowledgement cannot prove that the mutation failed. Inspect the notebook
+  before recovery; using a new key can duplicate the mutation.
 - Maintenance compacts expired receipts in pages of 100 records. It retains CAS
   heads and unresolved claims. Cleanup progress is shared across maintenance instances.
 - Client attachments and catalog change correlation remain process-local. Route

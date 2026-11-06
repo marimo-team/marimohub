@@ -10,6 +10,7 @@
 	"exports": {
 		".": "./src/index.ts",
 		"./bridge": "./src/bridge.ts",
+		"./retry-store": "./src/retryStore.ts",
 		"./package.json": "./package.json"
 	},
 	"scripts": {

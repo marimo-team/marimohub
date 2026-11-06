@@ -141,7 +141,7 @@ export function createHubHostPlatform(deps: ApiDeps): HubHostPlatform {
 			if (user.credential.kind !== 'service-account') await initializeForSubject(deps, user);
 		},
 
-		catalog: (principal) => catalogEvents(deps, principal),
+		catalog: (principal, signal) => catalogEvents(deps, principal, signal),
 		catalogVersion: async () => (await deps.bucket.head(paths.catalog))?.etag ?? null,
 
 		async runtimes(principal, snapshot, visible, signal) {

@@ -1,19 +1,18 @@
 import { HostProblemError } from './protocol';
+import { HOST_CLAIM_LEASE_MS, HOST_RETRY_REFRESH_MS, HOST_RETRY_WINDOW_MS } from './retryStore';
 import type {
 	HostRetryAcquisition,
 	HostRetryClaim,
 	HostRetryReply,
 	HostRetryStore,
-} from './retries';
+} from './retryStore';
 
-export const HOST_RETRY_WINDOW_MS = 5 * 60_000;
-// Runtimes keep their own receipts for the same window, started on a later clock. Re-dispatching
-// a run after this age could reach an expired upstream receipt and execute it again.
-export const HOST_RETRY_REFRESH_MS = 4 * 60_000;
+export { HOST_CLAIM_LEASE_MS, HOST_RETRY_REFRESH_MS, HOST_RETRY_WINDOW_MS };
 
 interface Record {
 	fingerprint: string;
 	owner?: string;
+	claimedAt: number;
 	sessionId?: string;
 	dispatched: boolean;
 	expires?: number;
@@ -30,22 +29,26 @@ export class MemoryHostRetryStore implements HostRetryStore {
 		fingerprint: string,
 		refresh: boolean,
 	): Promise<HostRetryAcquisition> {
+		const now = Date.now();
+		this.sweep(now);
 		const id = JSON.stringify([scope, key]);
 		const previous = this.records.get(id);
-		const live = previous && (previous.owner || (previous.expires ?? 0) > Date.now());
-		if (live && previous.fingerprint !== fingerprint)
+		const held = !!previous?.owner && !expiredLease(previous, now);
+		const retained = !!previous && (previous.expires ?? 0) > now;
+		if (previous && (held || retained) && previous.fingerprint !== fingerprint)
 			throw HostProblemError.conflict('Idempotency-Key was used for a different request');
-		if (live && previous.owner) return { kind: 'pending' };
-		if (live && previous.reply) {
-			const age = HOST_RETRY_WINDOW_MS - ((previous.expires ?? 0) - Date.now());
+		if (held) return { kind: 'pending' };
+		if (previous && retained && previous.reply) {
+			const age = HOST_RETRY_WINDOW_MS - ((previous.expires ?? 0) - now);
 			if (!refresh || age >= HOST_RETRY_REFRESH_MS) return { kind: 'reply', reply: previous.reply };
 		}
 		const owner = crypto.randomUUID();
 		const record: Record = {
 			fingerprint,
 			owner,
+			claimedAt: now,
 			dispatched: false,
-			...(live ? { sessionId: previous.sessionId, expires: previous.expires } : {}),
+			...(previous && retained ? { sessionId: previous.sessionId, expires: previous.expires } : {}),
 		};
 		this.records.set(id, record);
 		return { kind: 'claimed', claim: { key: id, owner, sessionId: record.sessionId } };
@@ -78,4 +81,15 @@ export class MemoryHostRetryStore implements HostRetryStore {
 			throw HostProblemError.unavailable('Host retry claim is no longer owned by this request');
 		return record;
 	}
+
+	/** Settled records past their window hold nothing a retry could use. */
+	private sweep(now: number) {
+		for (const [id, record] of this.records) {
+			if (!record.owner && (record.expires ?? 0) <= now) this.records.delete(id);
+		}
+	}
+}
+
+function expiredLease(record: Record, now: number): boolean {
+	return !record.dispatched && record.claimedAt + HOST_CLAIM_LEASE_MS <= now;
 }

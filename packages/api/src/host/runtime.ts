@@ -100,9 +100,15 @@ export async function ensureHostSession(
 			temporary = true;
 		} else {
 			const claim = await deps.services.sessions.getEditorClaim(project.id, notebook.meta.id);
-			const current = claim?.session_id
-				? await deps.services.sessions.getSession(project.id, claim.session_id)
-				: undefined;
+			let current: Session | undefined;
+			if (claim?.session_id) {
+				try {
+					current = await deps.services.sessions.getSession(project.id, claim.session_id);
+				} catch (error) {
+					if (!(error instanceof NotFoundError)) throw error;
+					throw await editorProblem(deps, user, project, notebook);
+				}
+			}
 			if (current?.user_id !== user.id || claim?.transfer) {
 				try {
 					await takeOverNotebookEditor({
