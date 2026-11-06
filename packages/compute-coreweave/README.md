@@ -8,8 +8,8 @@ Part of [marimohub](../../README.md). See [docs/compute.md](../../docs/compute.m
 
 Workspace restore, integration files, and notebook bridge uploads use up to four
 single-file SDK writes concurrently per batch, rather than the SDK array helper's
-two-file waves. A process-wide semaphore caps in-flight file writes at sixteen
-across sessions and phases. The adapter validates the whole set before dispatch,
+two-file waves. A process-wide semaphore caps active file RPCs at sixteen
+across sessions and phases; retry backoff does not occupy an RPC slot. The adapter validates the whole set before dispatch,
 passes binary content directly, and leaves parent-directory creation to the SDK.
 
 Only files receiving `UNAVAILABLE` are retried. Permanent failures stop further

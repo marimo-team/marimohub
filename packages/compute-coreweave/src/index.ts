@@ -740,7 +740,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		await forEachConcurrentUntilFailure({
 			items: batch,
 			concurrency: FILE_WRITE_CONCURRENCY,
-			run: (file) => FILE_WRITE_SLOTS.run(() => this.writeFile(sandbox, file)),
+			run: (file) => this.writeFile(sandbox, file),
 		});
 	}
 
@@ -748,7 +748,9 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		// Whole-file writes are idempotent; retry only the file that saw UNAVAILABLE.
 		for (let attempt = 0; ; attempt++) {
 			try {
-				await sandbox.files.write([{ path: file.path, content: file.content }]);
+				await FILE_WRITE_SLOTS.run(() =>
+					sandbox.files.write([{ path: file.path, content: file.content }]),
+				);
 				return;
 			} catch (err) {
 				if (

@@ -623,6 +623,41 @@ describe('CoreWeaveCompute', () => {
 			}
 		});
 
+		it('releases global upload slots while unavailable files wait for retry', async () => {
+			vi.useFakeTimers();
+			try {
+				const seen = new Set<string>();
+				const world = makeWorld({
+					writeImpl: async (files) => {
+						const [file] = files as readonly { path: string }[];
+						if (file.path.startsWith('/retry/') && !seen.has(file.path)) {
+							seen.add(file.path);
+							throw new CWSandboxUnavailableError('temporarily unavailable');
+						}
+					},
+				});
+				const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+				await instance.ready!();
+				const retries = Promise.all(
+					Array.from({ length: 16 }, (_, i) =>
+						instance.writeFiles([{ path: `/retry/${i}`, content: 'x' }]),
+					),
+				);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(seen.size).toBe(16);
+				let healthyFinished = false;
+				const healthy = instance.writeFiles([{ path: '/healthy', content: 'x' }]).then(() => {
+					healthyFinished = true;
+				});
+				await vi.advanceTimersByTimeAsync(0);
+				expect(healthyFinished).toBe(true);
+				await vi.runAllTimersAsync();
+				await Promise.all([retries, healthy]);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
 		it('retries only unavailable files, without re-uploading successful siblings', async () => {
 			vi.useFakeTimers();
 			try {
