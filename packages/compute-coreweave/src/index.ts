@@ -51,6 +51,7 @@ import {
 	CWSandboxConfigurationError,
 	CWSandboxNotFoundError,
 	CWSandboxUnavailableError,
+	CWSandboxValidationError,
 } from '@coreweave/cwsandbox';
 import type {
 	CommandProcess,
@@ -68,6 +69,8 @@ import type {
 	Service,
 	ServiceUrl,
 } from '@coreweave/cwsandbox';
+import { forEachConcurrentUntilFailure } from '@marimo-hub/core/async';
+import { Semaphore } from '@marimo-hub/core/concurrency';
 import {
 	createSandboxClient,
 	DEFAULT_BASE_URL,
@@ -159,6 +162,9 @@ const SLOW_BOOT_HINT =
 const PROCESS_CANCEL_TIMEOUT_MS = 1_000;
 /** Backoff before each retry of a file write the gateway answered with UNAVAILABLE. */
 const WRITE_RETRY_DELAYS_MS = [250, 1_000, 3_000];
+const FILE_WRITE_CONCURRENCY = 4;
+// Bound fan-out across workspace, integration, and bridge uploads from all sessions.
+const FILE_WRITE_SLOTS = new Semaphore(16);
 
 async function cancelLaunchProcess(proc: CommandProcess): Promise<void> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -714,31 +720,59 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 
 	async writeFiles(files: readonly SandboxFileWrite[]): Promise<void> {
 		if (files.length === 0) return;
+		// Preserve the SDK batch's preflight validation before dispatching single-file calls.
+		const batch = files.map(({ path, content }) => ({ path, content }));
+		const paths = new Set<string>();
+		for (const file of batch) {
+			if (typeof file.path !== 'string' || !file.path.startsWith('/') || paths.has(file.path)) {
+				throw new CWSandboxValidationError('File writes require unique absolute paths');
+			}
+			paths.add(file.path);
+		}
 		const sandbox = await this.ensure();
 		// AddFile creates parent directories itself. The bootstrap links the user
 		// home into place, so a write beneath it must not race ahead of that.
-		if (this.pendingBootstrap && this.writesUnderUserHome(files)) {
+		if (this.pendingBootstrap && this.writesUnderUserHome(batch)) {
 			await this.exec('true');
 		}
-		// FileContent is `string | Uint8Array`, so bytes pass straight through.
-		const batch = files.map((f) => ({ path: f.path, content: f.content }));
-		// The W&B gateway intermittently answers a write with 503 shortly after
-		// boot. A whole-file write is idempotent, so retrying it is safe.
+		// The SDK's array form serializes files in two-wide waves. Own concurrency
+		// here, draining started uploads before a caller can retry or destroy the pod.
+		const batchState = { failed: false };
+		await forEachConcurrentUntilFailure({
+			items: batch,
+			concurrency: FILE_WRITE_CONCURRENCY,
+			run: (file) => this.writeFile(sandbox, file, batchState),
+		});
+	}
+
+	private async writeFile(
+		sandbox: CoreWeaveSandbox,
+		file: SandboxFileWrite,
+		batchState: { failed: boolean },
+	): Promise<void> {
+		// Whole-file writes are idempotent; retry only the file that saw UNAVAILABLE.
 		for (let attempt = 0; ; attempt++) {
-			try {
-				await sandbox.files.write(batch);
-				return;
-			} catch (err) {
-				if (
-					!(err instanceof CWSandboxUnavailableError) ||
-					attempt >= WRITE_RETRY_DELAYS_MS.length
-				) {
-					throw err;
+			const retry = await FILE_WRITE_SLOTS.run(async () => {
+				// Already-started uploads finish their retries after a sibling fails.
+				if (batchState.failed && attempt === 0) return;
+				try {
+					await sandbox.files.write([{ path: file.path, content: file.content }]);
+				} catch (err) {
+					if (
+						!(err instanceof CWSandboxUnavailableError) ||
+						attempt >= WRITE_RETRY_DELAYS_MS.length
+					) {
+						// Fence queued uploads before releasing this slot to another waiter.
+						batchState.failed = true;
+						throw err;
+					}
+					return true;
 				}
-				await new Promise<void>((resolve) => {
-					setTimeout(resolve, WRITE_RETRY_DELAYS_MS[attempt]);
-				});
-			}
+			});
+			if (!retry) return;
+			await new Promise<void>((resolve) => {
+				setTimeout(resolve, WRITE_RETRY_DELAYS_MS[attempt]);
+			});
 		}
 	}
 

@@ -809,6 +809,8 @@ export class SandboxProvisioner {
 		const sw = new Stopwatch();
 
 		const ensureReachable = () => this.ensureReachable(sandbox, sw);
+		// Git and workspace restores may wait concurrently; record one shared readiness wait.
+		let workspaceReadiness: Promise<void> | undefined;
 		const loadWorkspace = (waitUntilReady: () => Promise<void>) =>
 			withSandboxSpan(sw, 'files', async (time, span) => {
 				const loaded = await time(async () => {
@@ -824,7 +826,13 @@ export class SandboxProvisioner {
 					}
 					return loaded;
 				});
+				sw.timings.files_non_waiting = Math.max(
+					0,
+					sw.timings.files - (sw.timings.files_waitready ?? 0),
+				);
 				span.setAttributes({
+					readiness_wait_ms: sw.timings.files_waitready ?? 0,
+					non_waiting_ms: sw.timings.files_non_waiting,
 					objects: loaded.stats?.objectCount ?? 0,
 					bytes: loaded.stats?.bytes ?? 0,
 					used_fallback: loaded.usedFallback,
@@ -832,9 +840,13 @@ export class SandboxProvisioner {
 				return loaded;
 			});
 		const injectSessionEnv = () =>
-			withSandboxSpan(sw, 'inject', (time) =>
-				this.injectSessionEnv(sandbox, options, time, mountPath),
-			);
+			withSandboxSpan(sw, 'inject', async (time, span) => {
+				await this.injectSessionEnv(sandbox, options, time, mountPath, sw);
+				span.setAttributes({
+					files_ms: sw.timings.inject_files ?? 0,
+					environment_ms: sw.timings.inject_env ?? 0,
+				});
+			});
 		const setupEnvironment = async () =>
 			this.setupEnvironment(sandbox, options, mountPath, sw, await launchStrategy);
 		const uploadBridge = () =>
@@ -851,7 +863,9 @@ export class SandboxProvisioner {
 			},
 			async load() {
 				try {
-					return await loadWorkspace(() => this.$.reachable);
+					return await loadWorkspace(
+						() => (workspaceReadiness ??= sw.time('files_waitready', () => this.$.reachable)),
+					);
 				} finally {
 					await this.$.reachable;
 				}
@@ -1205,6 +1219,7 @@ export class SandboxProvisioner {
 		options: ProvisionOptions,
 		time: TimeSandboxPhase,
 		workdir: string,
+		sw: Stopwatch,
 	): Promise<void> {
 		const resolvedEnv = await options.sessionEnv;
 		const kernelAuthToken = options.kernelAuthToken;
@@ -1261,11 +1276,15 @@ export class SandboxProvisioner {
 					await prepared.install?.();
 				};
 				await Promise.all([
-					writeFiles(),
-					Object.keys(vars).length > 0 ? sandbox.setEnvVars(vars) : undefined,
-					defaults && Object.keys(defaults).length > 0
-						? sandbox.setEnvVars(defaults, { onlyIfUnset: true })
-						: undefined,
+					sw.time('inject_files', writeFiles),
+					sw.time('inject_env', async () => {
+						await Promise.all([
+							Object.keys(vars).length > 0 ? sandbox.setEnvVars(vars) : undefined,
+							defaults && Object.keys(defaults).length > 0
+								? sandbox.setEnvVars(defaults, { onlyIfUnset: true })
+								: undefined,
+						]);
+					}),
 				]);
 			} catch (err) {
 				throw provisionFailure('injecting session credentials', err);

@@ -52,7 +52,92 @@ describe('SandboxProvisioner tracing', () => {
 				hostname: 'localhost',
 				bucket,
 			});
-			expect(result.timings.files).toBe(450);
+			expect(result.timings).toMatchObject({
+				files: 450,
+				files_waitready: 0,
+				files_non_waiting: 450,
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each([0, 1_000])(
+		'counts readiness once with a second waiter delayed by %i ms',
+		async (delay) => {
+			vi.useFakeTimers();
+			try {
+				const { instance } = makeFakeSandbox();
+				instance.ready = () => new Promise<void>((resolve) => setTimeout(resolve, 3_500));
+				const loader = {
+					supportsPrefetch: true,
+					async load({
+						waitUntilReady,
+					}: Parameters<WorkspaceLoadStrategies['copyOnly']['load']>[0]) {
+						await Promise.all([
+							waitUntilReady?.(),
+							(async () => {
+								await new Promise<void>((resolve) => setTimeout(resolve, delay));
+								await waitUntilReady?.();
+							})(),
+						]);
+						await new Promise<void>((resolve) => setTimeout(resolve, 100));
+						await waitUntilReady?.();
+						return { usedFallback: true, stats: { objectCount: 4, bytes: 71_302 } };
+					},
+				};
+				const result = new SandboxProvisioner(fakeComputeFrom(instance), {
+					copyOnly: loader,
+					mountOrCopy: loader,
+				}).provision({ sandboxId, projectId, notebookId, hostname: 'localhost', bucket });
+				await vi.advanceTimersByTimeAsync(3_600);
+				expect((await result).timings).toMatchObject({
+					reachable: 3_500,
+					files: 3_600,
+					files_waitready: 3_500,
+					files_non_waiting: 100,
+				});
+				expect(
+					exporter.getFinishedSpans().find((span) => span.name === 'sandbox.files')?.attributes,
+				).toMatchObject({ readiness_wait_ms: 3_500, non_waiting_ms: 100 });
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it('measures injection files and environment configuration without serializing them', async () => {
+		vi.useFakeTimers();
+		try {
+			const { instance } = makeFakeSandbox();
+			instance.ready = async () => {};
+			instance.writeFiles = () => new Promise<void>((resolve) => setTimeout(resolve, 80));
+			instance.setEnvVars = () => new Promise<void>((resolve) => setTimeout(resolve, 120));
+			const loader = {
+				async load() {
+					return { usedFallback: true };
+				},
+			};
+			const result = new SandboxProvisioner(fakeComputeFrom(instance), {
+				copyOnly: loader,
+				mountOrCopy: loader,
+			}).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket,
+				sessionEnv: { vars: { TEST: 'value' }, files: [{ path: '/tmp/config', content: 'x' }] },
+			});
+			await vi.advanceTimersByTimeAsync(120);
+			expect((await result).timings).toMatchObject({
+				inject: 120,
+				inject_files: 80,
+				inject_env: 120,
+			});
+			expect(
+				exporter.getFinishedSpans().find((span) => span.name === 'sandbox.inject')?.attributes,
+			).toMatchObject({ files_ms: 80, environment_ms: 120 });
 		} finally {
 			vi.useRealTimers();
 		}
