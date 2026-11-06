@@ -54,6 +54,7 @@
 		"./ports/secrets": "./src/ports/secrets.ts",
 		"./ports/source-control": "./src/ports/sourceControl.ts",
 		"./ports/subject-context": "./src/ports/subjectContext.ts",
+		"./preview-policy": "./src/previewPolicy.ts",
 		"./project-resource-policy": "./src/projectResourcePolicy.ts",
 		"./remote-workspace": "./src/integrations/remoteWorkspace.ts",
 		"./tag-paths": "./src/tagPaths.ts",

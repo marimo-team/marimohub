@@ -1,0 +1,41 @@
+name: marimo Hub PR preview
+description: Publish and retain notebook previews for GitHub pull requests
+inputs:
+  hub-url:
+    description: Base URL of the marimo Hub deployment
+    required: true
+  project-id:
+    description: Project containing the notebook
+    required: true
+  notebook-id:
+    description: Git-synced notebook to preview
+    required: true
+  hub-token:
+    description: Hub API token with the preview.manage action for this project
+    required: true
+  github-token:
+    description: GitHub token with actions read and pull requests write permissions
+    default: ${{ github.token }}
+  mode:
+    description: sticky follows the branch; commits retains distinct pushed heads
+    default: sticky
+  keep:
+    description: Number of commit previews to retain, from 1 to 25
+    default: '5'
+  eager:
+    description: Prepare code before the first visit; compute always starts on demand
+    default: 'true'
+  idle-days:
+    description: Optional inactivity timeout from 1 to 30 days; omitted means until PR closes
+outputs:
+  previews:
+    description: JSON array of preview IDs, URLs, commits, and preparation states
+  preview-ids:
+    description: JSON array of retained preview IDs
+  preview-urls:
+    description: JSON array of retained preview URLs
+  commits:
+    description: JSON array of retained head commit SHAs
+runs:
+  using: node24
+  main: index.mjs

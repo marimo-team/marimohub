@@ -1,10 +1,12 @@
 import { utcTimestamp } from '@marimo-hub/core/string-formats';
 import { createRoute, z } from '@hono/zod-openapi';
 import {
+	previewAvailable,
 	PreviewNotReadyError,
 	ValidationError,
 	NotFoundError,
 	PreviewCreateSchema,
+	PreviewReconcileSchema,
 	PREVIEW_PREPARATIONS,
 	PreviewId,
 	PreviewSourceSchema,
@@ -56,7 +58,10 @@ const PublicPreview = z
 		version_id: z.string().optional(),
 		error: z.string().optional(),
 		pull_request: z.number().int().positive().optional(),
-		expires_at: utcTimestamp(),
+		expires_at: utcTimestamp().nullable(),
+		eager: z.boolean().optional(),
+		managed: z.boolean().optional(),
+		target_commit: z.string().optional(),
 		created_at: utcTimestamp(),
 		created_by: z.string(),
 		checked_at: utcTimestamp().optional(),
@@ -81,6 +86,36 @@ const create = createRoute({
 		body: jsonBody(PreviewCreateSchema),
 	},
 	responses: { 202: jsonContent(Response, 'Preview accepted for preparation'), ...errors },
+});
+const ReconcileResponse = z.object({
+	success: z.literal(true),
+	data: z.object({
+		state: z.enum(['active', 'closed', 'expired']),
+		pending: z.boolean(),
+		items: z.array(PublicPreview),
+	}),
+});
+const reconcile = createRoute({
+	method: 'post',
+	path: `${base}/reconcile`,
+	operationId: 'notebooks.previews.reconcile',
+	tags: ['Previews'],
+	summary: 'Reconcile previews for a GitHub pull request',
+	description:
+		'Records ordered workflow events and applies the PR retention policy. Preparation and capacity retries run asynchronously.',
+	request: { params: NotebookIdParam, body: jsonBody(PreviewReconcileSchema) },
+	responses: { 202: jsonContent(ReconcileResponse, 'Preview reconciliation accepted'), ...errors },
+});
+const requestPreparation = createRoute({
+	method: 'post',
+	path: `${base}/{prid}/prepare`,
+	operationId: 'notebooks.previews.prepare',
+	tags: ['Previews'],
+	summary: 'Request deferred preview preparation',
+	description:
+		'Queues preparation without starting compute. Requires permission to run an app or temporary editor.',
+	request: { params: Params },
+	responses: { 202: jsonContent(Response, 'Preparation requested'), ...errors },
 });
 const list = createRoute({
 	method: 'get',
@@ -225,6 +260,9 @@ function present(
 				}
 			: {}),
 		commit: record.current?.commit,
+		target_commit: record.automation?.commit ?? record.observed_commit,
+		eager: record.eager ?? true,
+		managed: !!record.automation,
 		version_id: record.current?.version_id,
 		error: record.error,
 		expires_at: record.expires_at,
@@ -290,6 +328,52 @@ app.openapi(create, async (c) => {
 		202,
 	);
 });
+app.openapi(reconcile, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, nid } = c.req.valid('param');
+	const access = await manageable(deps, pid, nid, user);
+	const result = await deps.services.previews.reconcile(
+		pid,
+		nid,
+		c.req.valid('json'),
+		user.id,
+		deps.sourceControl,
+	);
+	const can = await grants(deps, user, access);
+	const baseUrl = resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl);
+	return c.json(
+		{
+			success: true as const,
+			data: { ...result, items: result.items.map((record) => present(record, can, baseUrl)) },
+		},
+		202,
+	);
+});
+app.openapi(requestPreparation, async (c) => {
+	const deps = c.get('deps');
+	const user = c.get('user');
+	const { pid, nid, prid } = c.req.valid('param');
+	const access = await visible(deps, pid, nid, user);
+	const can = await grants(deps, user, access);
+	await authorizeSessionStart(
+		access.project,
+		user,
+		can.app ? 'app' : 'edit',
+		deps,
+		access.notebook.meta.security_labels ?? null,
+	);
+	const record = await deps.services.previews.requestPreparation(
+		await deps.services.previews.get(pid, nid, prid),
+	);
+	return c.json(
+		{
+			success: true as const,
+			data: present(record, can, resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl)),
+		},
+		202,
+	);
+});
 app.openapi(list, async (c) => {
 	const deps = c.get('deps');
 	const { pid, nid } = c.req.valid('param');
@@ -315,8 +399,7 @@ app.openapi(get, async (c) => {
 	const user = c.get('user');
 	const can = await grants(deps, user, await visible(deps, pid, nid, user));
 	const record = await deps.services.previews.get(pid, nid, prid);
-	if (record.state !== 'active' || Date.parse(record.expires_at) <= Date.now())
-		throw new NotFoundError('Preview not found');
+	if (!previewAvailable(record)) throw new NotFoundError('Preview not found');
 	return c.json(
 		{
 			success: true as const,
@@ -346,8 +429,7 @@ app.openapi(launch, async (c) => {
 		notebook.meta.security_labels ?? null,
 	);
 	const record = await deps.services.previews.get(pid, nid, prid);
-	if (record.state !== 'active' || Date.parse(record.expires_at) <= Date.now())
-		throw new NotFoundError('Preview not found');
+	if (!previewAvailable(record)) throw new NotFoundError('Preview not found');
 	if (!record.current) throw new PreviewNotReadyError();
 	const data = await startNotebookSession({
 		deps,

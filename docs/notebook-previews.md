@@ -5,9 +5,36 @@ Managers and admins can create and delete previews. Sharing a URL does not grant
 
 ::: warning Previews run branch code with the notebook's credentials
 A preview runs the code at the chosen branch or commit with the parent notebook's integrations and secrets.
-A branch preview publishes every new push, so anyone who can push to that branch can run code with those credentials after a manager creates the preview.
+Anyone who can push to a previewed branch can supply code that uses these credentials.
 Protect previewed branches, or pin a reviewed commit. See [Security model → Previews](security.md#previews).
 :::
+
+## Automatic PR previews
+
+Select **Set up GitHub Action** on the notebook's **Previews** page to generate a workflow and token instructions.
+The Action supports same-repository PRs, including drafts, and skips forks.
+
+| Setting         | Behavior                                                                                                                                                               | Default         |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| `mode: sticky`  | One `<branch>` preview with a stable URL that follows PR updates                                                                                                       | Yes             |
+| `mode: commits` | Separate `<branch>-<12-character-sha>` previews for the latest distinct pushed heads. Long branches use a truncated name and deterministic hash before the commit SHA. | Optional        |
+| `keep`          | Number of commit previews, from 1 to 25                                                                                                                                | `5`             |
+| `eager`         | Prepare code after each update, or defer until an authorized visit                                                                                                     | `true`          |
+| `idle-days`     | Expire after 1–30 days without a new head                                                                                                                              | Until PR closes |
+
+Each workflow event selects the full head SHA to prepare. Managed previews do not poll the branch for newer commits.
+Missed or canceled runs do not create targets. Commit retention uses the original event order, not arrival or rerun time.
+New heads renew inactivity for all retained previews. Reruns do not.
+Closing or merging the PR retires its managed previews.
+
+Lazy preparation requires an authorized visit for each new target. Once requested, preparation retries after failures without another visit.
+Compute starts when a user opens an app or editor.
+
+The Action updates one PR comment and includes links in the workflow summary.
+The Hub retries capacity waits and checks closure even when the close workflow is missed. Retired groups do not consume active-group capacity.
+See the [Action README](https://github.com/marimo-team/marimohub/tree/main/actions/preview) for installation, permissions, limits, and version pinning.
+Stop Hub writers while upgrading all replicas. Older versions cannot read compact project intents or null expiry.
+Upgrade API clients to accept `expires_at: null` for previews without a timeout. Existing records remain readable by the new version.
 
 ## Create a preview
 
@@ -54,30 +81,27 @@ History reads check current parent permissions. Live operations also require an 
 
 ## API and CLI
 
-Create, list, get, delete, and session creation endpoints use this base path:
+Preview endpoints use this base path:
 
 ```text
 /api/v1/projects/{pid}/notebooks/{nid}/previews
 ```
 
-Get, delete, and session creation address one preview at `…/previews/{prid}`. Preview IDs use the `prev-` prefix, for example `prev-7h2k9qm4xz7rp3w8`.
+| Method and suffix       | Operation                                      |
+| ----------------------- | ---------------------------------------------- |
+| `POST` (base)           | Create a manual preview                        |
+| `GET` (base)            | List previews                                  |
+| `GET /{prid}`           | Read a preview                                 |
+| `DELETE /{prid}`        | Revoke a preview                               |
+| `POST /reconcile`       | Apply a PR workflow event and retention policy |
+| `POST /{prid}/prepare`  | Request preparation without starting compute   |
+| `POST /{prid}/sessions` | Open an app or temporary editor                |
+
+Preview IDs use the `prev-` prefix, for example `prev-7h2k9qm4xz7rp3w8`.
+List and get requests never trigger preparation. The prepare endpoint requires permission to launch an app or temporary editor.
 
 Source suggestions use `GET /api/v1/projects/{pid}/notebooks/{nid}/source/refs`.
 The `type` parameter accepts `branch` or `commit`. The optional `query` parameter filters suggestions and defaults to an empty string.
-For example, `?type=branch&query=feature` returns matching branches:
-
-```json
-{
-	"success": true,
-	"data": [
-		{
-			"value": "feature/chart",
-			"commit": "0123456789abcdef0123456789abcdef01234567",
-			"label": "feature/chart"
-		}
-	]
-}
-```
 
 The generated [CLI](cli.md#use-the-cli) exposes the same operations:
 
@@ -93,7 +117,7 @@ mohub notebooks previews delete --pid "$PROJECT" --nid "$NOTEBOOK" \
   --prid "$PREVIEW" --yes
 ```
 
-Creation returns `202` with a pending preview and its share URL. Poll the get endpoint until a revision is prepared.
+Creation returns `202` with a preview and its share URL. For lazy previews, request preparation before polling for a ready revision.
 Launches return `409 PREVIEW_NOT_READY` until then. Delete returns `202` after revoking access; cleanup runs asynchronously.
 List responses use `data.items` and `data.next_cursor`, with `limit` and `cursor` query parameters.
 
@@ -104,15 +128,16 @@ API tokens need the corresponding project grants and actions. Management and sou
 Session creation accepts a mode without a ref override.
 
 Optional `pull_request` tracking retires a preview after its PR closes or merges. Branch previews must select the PR's head branch.
-Fork PRs and automatic label triggers are unsupported. Preparation fails if a tracked PR's head branch is not in the notebook's repository. CI can use the API or CLI to create and delete previews on label changes.
+Fork PRs and built-in label triggers are unsupported. Preparation fails if a tracked PR's head branch is not in the notebook's repository. CI can use the API or CLI to create and delete previews on label changes.
 
 ## Operation and limits
 
 The Node preparation worker runs independently every 15 seconds on maintenance replicas.
-It checks moving sources at most once per minute and selects one due preview per project.
+It checks manual branch previews at most once per minute and selects one due preview per project.
+Managed previews prepare the full commit SHA selected by a workflow event. Maintenance checks PR closure independently of preparation, including for lazy previews.
 Each tick visits up to four projects with outstanding preview work, rotating through projects and due previews.
 Empty retained project records do not participate in scheduling.
-Creation and session launch never wait for GitHub. Failed refreshes leave the last prepared revision available.
+Manual creation and session launch never wait for GitHub. PR reconciliation checks live PR metadata before accepting an event.
 
 Preparation has a two-minute lease and aborts network requests before that deadline.
 Failures retry with exponential backoff and jitter, capped near one hour.
@@ -121,7 +146,9 @@ The reference Cloudflare Worker does not configure a GitHub App registry or run 
 Previews are unavailable in that example. A custom Worker deployment must configure both before enabling previews.
 Automatic updates, expiry, and cleanup require maintenance.
 
-Previews expire after seven days by default, with an API maximum of 30 days.
+Manual previews expire after seven days by default, with an API maximum of 30 days.
+Action-managed previews use their PR lifetime and optional inactivity timeout.
+Their `expires_at` is `null` when no inactivity timeout is configured.
 Deletion immediately blocks access. Cleanup waits for starting sessions and retries failed destruction.
 Deleting a parent notebook or project also retires its previews.
 
@@ -134,6 +161,8 @@ Lower deployment limits still apply. Idle retirement uses five minutes, subject 
 Cleanup removes unused revisions after reclaiming their sessions.
 
 A project can own up to 25 previews, including previews awaiting cleanup.
+Each project can have up to 1,000 active automation groups, including groups waiting for preview capacity.
+Retired groups retain compact replay records outside that limit, so delayed events cannot restore retired previews.
 Each preview can retain up to 12 revisions; a project has a 500 MiB workspace budget.
 Preparation reserves the maximum archive size before download, then charges the stored workspace size.
 Reservations remain until cleanup confirms reclamation. Unpublished artifacts have a 15-minute cleanup grace period.

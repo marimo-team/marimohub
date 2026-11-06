@@ -11,15 +11,19 @@ import {
 	previewActiveProjectPrefix,
 	previewActiveProjectKey,
 	previewCleanupCursorKey,
+	previewAutomationKey,
+	previewAutomationPrefix,
 } from './PreviewStore';
-import { PreviewRecordSchema } from './notebookPreviews';
+import { PreviewIntentSchema, PreviewRecordSchema } from './notebookPreviews';
+import { PreviewReconcileSchema } from './previewAutomation';
+import type { PreviewReconcile } from './previewAutomation';
 
 function fixture() {
 	const bucket = new MemoryBucket();
 	const store = new PreviewStore(bucket);
 	const pid = createProjectId();
 	const intent = (id = createPreviewId()) =>
-		PreviewRecordSchema.parse({
+		PreviewIntentSchema.parse({
 			schema_version: 1,
 			id,
 			project_id: pid,
@@ -136,6 +140,359 @@ describe('PreviewStore membership and receipts', () => {
 		const reads = vi.spyOn(bucket, 'get');
 		await store.project(pid);
 		expect(reads).toHaveBeenCalledExactlyOnceWith(previewProjectKey(pid));
+	});
+});
+
+function automationFixture() {
+	const context = fixture();
+	const record = {
+		...context.intent(),
+		pull_request: 1,
+		automation: { key: 'original', revision: 0, commit: 'a'.repeat(40) },
+	};
+	const event = (order: number, action: PreviewReconcile['event'] = 'synchronize') =>
+		PreviewReconcileSchema.parse({
+			repository: record.repository,
+			pull_request: record.pull_request,
+			event: action,
+			commit: record.automation.commit,
+			workflow_id: '1',
+			run_id: String(order),
+			run_number: order,
+			event_at: record.created_at,
+			policy: {},
+		});
+	const reconcile = (order: number, action: PreviewReconcile['event'] = 'synchronize') =>
+		context.store.reconcileAutomation(record, event(order, action), 'feature', 'b'.repeat(64));
+	return { ...context, record, event, reconcile };
+}
+
+describe('PreviewStore automation history', () => {
+	it.each(['closed', 'expired'] as const)(
+		'archives %s replay fences without consuming active capacity',
+		async (state) => {
+			const { store, bucket, pid, record, event, reconcile } = automationFixture();
+			const group = await reconcile(1);
+			const retired = { ...group, state, floor: group.run_number, heads: [] };
+			await bucket.put(
+				previewProjectKey(pid),
+				JSON.stringify({
+					entries: [],
+					automations: [
+						retired,
+						...Array.from({ length: 999 }, (_, index) => ({
+							...retired,
+							key: `history-${index}`,
+							pull_request: index + 2,
+						})),
+					],
+				}),
+			);
+			await expect(
+				store.reconcileAutomation(
+					{
+						...record,
+						automation: { ...record.automation, key: 'new-pr' },
+					},
+					{ ...event(1), pull_request: 1001 },
+					'feature',
+					'b'.repeat(64),
+				),
+			).resolves.toMatchObject({ state: 'active' });
+			expect((await store.project(pid)).automations).toHaveLength(1);
+			await expect(reconcile(1)).resolves.toMatchObject({ state, heads: [] });
+			expect((await store.project(pid)).entries).toHaveLength(1);
+			expect(await store.getAutomation(pid, record.automation.key)).toMatchObject({
+				state,
+				floor: 1,
+				heads: [],
+			});
+			const archive = await bucket.get(previewAutomationKey(pid, record.automation.key));
+			expect(await archive!.json()).not.toHaveProperty('heads');
+		},
+	);
+
+	it('keeps admitting new PRs after more than 1,000 completed lifecycles', async () => {
+		const { store, bucket, pid, record, event } = automationFixture();
+		for (let index = 0; index <= PREVIEW_LIMITS.automationsPerProject; index++) {
+			const desired = {
+				...record,
+				pull_request: index + 1,
+				automation: { ...record.automation, key: `pr-${index}` },
+			};
+			const opened = await store.reconcileAutomation(
+				desired,
+				{ ...event(1), pull_request: index + 1 },
+				'feature',
+				'b'.repeat(64),
+			);
+			await store.closeAutomation(pid, desired.automation.key, opened.revision);
+			const [entry] = (await store.project(pid)).entries;
+			expect(entry.intent.state).toBe('deleting');
+			await store.markCleaned(entry.intent);
+			await store.forget(entry.intent);
+		}
+		expect((await store.project(pid)).automations).toEqual([]);
+		expect((await store.project(pid)).entries).toEqual([]);
+		const archives = await bucket.list({ prefix: previewAutomationPrefix(pid), limit: 2000 });
+		expect(archives.objects).toHaveLength(1001);
+		const replay = await store.reconcileAutomation(
+			{ ...record, automation: { ...record.automation, key: 'pr-0' } },
+			event(1),
+			'feature',
+			'b'.repeat(64),
+		);
+		expect(replay).toMatchObject({ state: 'closed', heads: [] });
+		expect((await store.project(pid)).entries).toEqual([]);
+	}, 20_000);
+
+	it('reopens from its archived fence and rejects older events', async () => {
+		const { store, pid, record, reconcile } = automationFixture();
+		const first = await reconcile(1);
+		await reconcile(2, 'closed');
+		expect((await store.project(pid)).entries[0].intent.state).toBe('deleting');
+		const reopened = await reconcile(3, 'reopened');
+		expect(reopened.heads[0].intent.id).not.toBe(first.heads[0].intent.id);
+		await reconcile(2, 'closed');
+		expect(await store.getAutomation(pid, record.automation.key)).toMatchObject({
+			state: 'active',
+			run_number: 3,
+		});
+		expect(
+			(await store.project(pid)).entries.filter((entry) => entry.intent.state === 'active'),
+		).toHaveLength(1);
+	});
+
+	it.each(['archive', 'project'] as const)(
+		'recovers a failed %s write without trusting a speculative retirement',
+		async (failure) => {
+			const { store, bucket, pid, record, reconcile } = automationFixture();
+			await reconcile(1);
+			const put = bucket.put.bind(bucket);
+			let failed = false;
+			vi.spyOn(bucket, 'put').mockImplementation(async (...args) => {
+				const key =
+					failure === 'archive'
+						? previewAutomationKey(pid, record.automation.key)
+						: previewProjectKey(pid);
+				if (!failed && args[0] === key) {
+					failed = true;
+					throw new Error('interrupted archival');
+				}
+				return put(...args);
+			});
+			await expect(reconcile(2, 'closed')).rejects.toThrow('interrupted archival');
+			expect(await store.getAutomation(pid, record.automation.key)).toMatchObject({
+				state: 'active',
+				run_number: 1,
+			});
+			expect((await store.project(pid)).entries[0].intent.state).toBe('active');
+			await reconcile(2, 'closed');
+			expect(await store.getAutomation(pid, record.automation.key)).toMatchObject({
+				state: 'closed',
+				run_number: 2,
+			});
+			expect((await store.project(pid)).automations).toEqual([]);
+			expect((await store.project(pid)).entries[0].intent.state).toBe('deleting');
+		},
+	);
+
+	it('keeps a concurrent reopen authoritative over a retired archive', async () => {
+		const { store, bucket, pid, record, reconcile } = automationFixture();
+		await reconcile(1);
+		const put = bucket.put.bind(bucket);
+		const archived = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		let delayed = false;
+		vi.spyOn(bucket, 'put').mockImplementation(async (...args) => {
+			if (!delayed && args[0] === previewProjectKey(pid)) {
+				delayed = true;
+				archived.resolve();
+				await resume.promise;
+			}
+			return put(...args);
+		});
+		const close = reconcile(2, 'closed');
+		try {
+			await archived.promise;
+			await reconcile(3, 'reopened');
+			expect(await store.getAutomation(pid, record.automation.key)).toMatchObject({
+				state: 'active',
+				run_number: 3,
+			});
+			await reconcile(4, 'closed');
+		} finally {
+			resume.resolve();
+			await close;
+		}
+		expect(await store.getAutomation(pid, record.automation.key)).toMatchObject({
+			state: 'closed',
+			run_number: 4,
+		});
+	});
+
+	it('retains the newer event when concurrent closures share a revision', async () => {
+		const { store, bucket, pid, record, reconcile } = automationFixture();
+		await reconcile(1);
+		const put = bucket.put.bind(bucket);
+		const archived = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		let delayed = false;
+		vi.spyOn(bucket, 'put').mockImplementation(async (...args) => {
+			if (!delayed && args[0] === previewProjectKey(pid)) {
+				delayed = true;
+				archived.resolve();
+				await resume.promise;
+			}
+			return put(...args);
+		});
+		const first = reconcile(2, 'closed');
+		try {
+			await archived.promise;
+			await reconcile(3, 'closed');
+		} finally {
+			resume.resolve();
+			await first;
+		}
+		expect(await store.getAutomation(pid, record.automation.key)).toMatchObject({
+			state: 'closed',
+			run_number: 3,
+		});
+	});
+
+	it('copies archived history on moves, retains source fences, and preserves newer destination state', async () => {
+		const { store, bucket, pid, record, event, reconcile } = automationFixture();
+		await reconcile(1);
+		await reconcile(2, 'closed');
+		const destination = createProjectId();
+		await store.copyForMove(pid, destination, record.notebook_id);
+		await store.finishMove(pid, record.notebook_id);
+		expect(await store.getAutomation(pid, record.automation.key)).toMatchObject({
+			state: 'closed',
+			run_number: 2,
+		});
+		expect(await store.getAutomation(destination, record.automation.key)).toMatchObject({
+			state: 'closed',
+			run_number: 2,
+		});
+		await store.reconcileAutomation(
+			{ ...record, project_id: destination },
+			event(3, 'reopened'),
+			'feature',
+			'b'.repeat(64),
+		);
+		await store.copyForMove(pid, destination, record.notebook_id);
+		const moved = await store.getAutomation(destination, record.automation.key);
+		expect(moved).toMatchObject({ state: 'active', run_number: 3 });
+		expect(moved!.heads[0].intent.project_id).toBe(destination);
+		expect(await bucket.get(previewAutomationKey(pid, record.automation.key))).not.toBeNull();
+	});
+
+	it('fences a concurrent first delivery when closing a group absent from the project head', async () => {
+		const { store, bucket, pid, record, reconcile } = automationFixture();
+		await bucket.put(previewProjectKey(pid), JSON.stringify({ entries: [], automations: [] }));
+		const get = bucket.get.bind(bucket);
+		const readArchive = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		let delayed = false;
+		vi.spyOn(bucket, 'get').mockImplementation(async (...args) => {
+			const object = await get(...args);
+			if (!delayed && args[0] === previewAutomationKey(pid, record.automation.key)) {
+				delayed = true;
+				readArchive.resolve();
+				await resume.promise;
+			}
+			return object;
+		});
+		const opening = reconcile(1, 'opened');
+		try {
+			await readArchive.promise;
+			await reconcile(2, 'closed');
+		} finally {
+			resume.resolve();
+		}
+		expect(await opening).toMatchObject({ state: 'closed', run_number: 2, heads: [] });
+		expect((await store.project(pid)).entries).toEqual([]);
+	});
+
+	it('bounds active groups while permitting retired history to grow', async () => {
+		const { store, bucket, pid, record, event, reconcile } = automationFixture();
+		const group = await reconcile(1);
+		await bucket.put(
+			previewProjectKey(pid),
+			JSON.stringify({
+				entries: [],
+				automations: Array.from({ length: PREVIEW_LIMITS.automationsPerProject }, (_, index) => ({
+					...group,
+					key: `active-${index}`,
+					heads: [],
+				})),
+			}),
+		);
+		await expect(reconcile(1)).rejects.toThrow(ResourceExhaustedError);
+		await expect(
+			store.reconcileAutomation(record, event(2, 'closed'), 'feature', 'b'.repeat(64)),
+		).resolves.toMatchObject({ state: 'closed' });
+		expect((await store.project(pid)).automations).toHaveLength(
+			PREVIEW_LIMITS.automationsPerProject,
+		);
+		expect(await store.getAutomation(pid, record.automation.key)).toMatchObject({
+			state: 'closed',
+			run_number: 2,
+		});
+	});
+
+	it('archives legacy retired groups before removing the source of a move', async () => {
+		const { store, bucket, pid, record, reconcile } = automationFixture();
+		const group = await reconcile(1);
+		await bucket.put(
+			previewProjectKey(pid),
+			JSON.stringify({
+				entries: [],
+				automations: [{ ...group, state: 'closed', floor: 1, heads: [] }],
+			}),
+		);
+		const destination = createProjectId();
+		await store.copyForMove(pid, destination, record.notebook_id);
+		await store.finishMove(pid, record.notebook_id);
+		for (const projectId of [pid, destination]) {
+			expect((await store.project(projectId)).automations).toEqual([]);
+			expect(await store.getAutomation(projectId, record.automation.key)).toMatchObject({
+				state: 'closed',
+				floor: 1,
+			});
+		}
+	});
+
+	it('stores only desired configuration when reserving and cleaning runtime records', async () => {
+		const { store, bucket, pid, record } = automationFixture();
+		const runtime = PreviewRecordSchema.parse({
+			...record,
+			preparation: 'failed',
+			revisions: [],
+			demand: true,
+			cleanup_after: Date.now(),
+			lease: { token: 'attempt', expires_at: Date.now() + 1000 },
+		});
+		await store.reserve(runtime);
+		const readIntent = async () =>
+			(
+				await (await bucket.get(previewProjectKey(pid)))!.json<{
+					entries: { intent: object }[];
+				}>()
+			).entries[0].intent;
+		const runtimeKeys = [
+			'preparation',
+			'demand',
+			'lease',
+			'revisions',
+			'admissions',
+			'cleanup_after',
+		];
+		for (const key of runtimeKeys) expect(await readIntent()).not.toHaveProperty(key);
+		await store.markCleaned(runtime);
+		expect(await readIntent()).toMatchObject({ state: 'deleted' });
+		for (const key of runtimeKeys) expect(await readIntent()).not.toHaveProperty(key);
 	});
 });
 

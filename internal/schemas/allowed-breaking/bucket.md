@@ -16,3 +16,15 @@ GET /_system/search/refresh/{pid}.json api path removed without deprecation
 PUT /_system/search/refresh/{pid}.json api path removed without deprecation
 PUT /_system/notebook-moves/{nid}.json the request property `snapshots` became required
 ```
+
+PR-managed previews add unbounded lifetimes and remove duplicated runtime state
+from project membership. New readers accept older full intents and preserve
+runtime state in the individual preview records. Stop writers while upgrading
+all Hub replicas: older readers require the removed fields and finite expiry.
+
+```text
+GET /_system/preview-projects/{pid}.json response property `entries/items/intent/expires_at` list-of-types was widened by adding types `null` to media type `application/json` of response `200`
+GET /_system/previews/{pid}/{nid}/{preview_id}.json response property `expires_at` list-of-types was widened by adding types `null` to media type `application/json` of response `200`
+GET /_system/preview-projects/{pid}.json removed the required property `entries/items/intent/preparation` from the response with the `200` status
+GET /_system/preview-projects/{pid}.json removed the required property `entries/items/intent/revisions` from the response with the `200` status
+```

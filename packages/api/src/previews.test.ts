@@ -302,7 +302,7 @@ describe('preview maintenance', () => {
 		'handles a %s preview without a source-control registry',
 		async (state) => {
 			if (state === 'expired')
-				vi.spyOn(Date, 'now').mockReturnValue(Date.parse(preview.expires_at) + 1);
+				vi.spyOn(Date, 'now').mockReturnValue(Date.parse(preview.expires_at!) + 1);
 			if (state === 'deleted notebook')
 				await api.deps.services.notebooks.deleteNotebook(pid, nid, ACTOR);
 			if (state === 'deleted project') await api.deps.services.projects.deleteProject(pid, ACTOR);

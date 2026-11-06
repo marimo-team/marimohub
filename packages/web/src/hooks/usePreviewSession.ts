@@ -59,6 +59,41 @@ export function usePreviewSession(pid: string, nid: string, previewId: string, u
 	const lastHeartbeat = useRef<{ runtime: Runtime | null; at: number } | null>(null);
 	const startupTimedOut = !!runtime && timedOutRuntime === runtime;
 	const preview = usePreviewQuery(pid, nid, previewId);
+	const { refetch: refetchPreview } = preview;
+	const [preparationError, setPreparationError] = useState<string | null>(null);
+	const prepare = async () => {
+		try {
+			await apiData(
+				apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}/prepare', {
+					params: { path: { pid, nid, prid: previewId } },
+				}),
+			);
+			setPreparationError(null);
+			await refetchPreview();
+		} catch {
+			setPreparationError('Unable to request preparation. Try again.');
+		}
+	};
+	const lazy = preview.data?.eager === false;
+	const canPrepare = !!(preview.data?.can.app || preview.data?.can.edit);
+	useEffect(() => {
+		if (!lazy || !canPrepare) return;
+		let active = true;
+		void apiData(
+			apiClient.POST('/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}/prepare', {
+				params: { path: { pid, nid, prid: previewId } },
+			}),
+		)
+			.then(() => {
+				if (active) return refetchPreview();
+			})
+			.catch(() => {
+				if (active) setPreparationError('Unable to request preparation. Try again.');
+			});
+		return () => {
+			active = false;
+		};
+	}, [pid, nid, previewId, lazy, canPrepare, refetchPreview]);
 	const capabilities = useCapabilitiesQuery();
 	const heartbeatInterval =
 		runtime?.mode === 'app'
@@ -188,5 +223,15 @@ export function usePreviewSession(pid: string, nid: string, previewId: string, u
 		!sessionEnded && !startupTimedOut && !preview.isError && session.data?.status === 'running'
 			? session.data.sandbox_url
 			: undefined;
-	return { preview, runtime, start, session, sessionEnded, startupTimedOut, sandboxUrl };
+	return {
+		prepare,
+		preparationError,
+		preview,
+		runtime,
+		start,
+		session,
+		sessionEnded,
+		startupTimedOut,
+		sandboxUrl,
+	};
 }

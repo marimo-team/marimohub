@@ -5,6 +5,7 @@ import type { Context, TypedResponse } from 'hono';
 import { all } from 'better-all';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
+	previewAvailable,
 	ASSIGNABLE_ROLES,
 	AuthorizationService,
 	BUCKET_SCAN_CONCURRENCY,
@@ -294,8 +295,7 @@ export async function assertSessionPreviewActive(
 		origin.preview_id,
 	);
 	if (
-		preview.state !== 'active' ||
-		Date.parse(preview.expires_at) <= Date.now() ||
+		!previewAvailable(preview) ||
 		!preview.revisions.some(
 			(revision) => revision.notebook_id === session.notebook_id && revision.state === 'ready',
 		)

@@ -11,6 +11,7 @@ import {
 import { paths } from '../../paths';
 
 export { PreviewIdSchema } from '../../schema';
+const CommitShaSchema = z.string().regex(/^[a-fA-F0-9]{40}$/);
 export const PreviewSourceSchema = z.discriminatedUnion('type', [
 	z.strictObject({
 		type: z.literal('branch'),
@@ -23,13 +24,20 @@ export const PreviewSourceSchema = z.discriminatedUnion('type', [
 				/^(?!@(?:$|\{))(?![-/])(?!.*(?:\.\.|\/\/|@\{|[\x00-\x20\x7f~^:?*[\\]))(?!.*(?:^|\/)\.)(?!.*\.lock(?:\/|$))[^/]+(?:\/[^/]+)*(?<![/.])$/,
 			),
 	}),
-	z.strictObject({ type: z.literal('commit'), commit: z.string().regex(/^[a-fA-F0-9]{40}$/) }),
+	z.strictObject({ type: z.literal('commit'), commit: CommitShaSchema }),
 ]);
-export const PREVIEW_PREPARATIONS = ['pending', 'preparing', 'ready', 'failed'] as const;
+export const PREVIEW_PREPARATIONS = [
+	'deferred',
+	'pending',
+	'preparing',
+	'ready',
+	'failed',
+] as const;
 export const PreviewCreateSchema = z.strictObject({
 	name: z.string().trim().min(1).max(100),
 	source: PreviewSourceSchema,
 	compute_profile: z.string().min(1).optional(),
+	eager: z.boolean().optional(),
 	expires_at: utcTimestamp().optional(),
 	pull_request: z.number().int().positive().optional(),
 });
@@ -44,7 +52,20 @@ export const PreviewRecordSchema = z.object({
 	root_path: z.string(),
 	entry_notebook: z.string(),
 	compute_profile: z.string().optional(),
-	expires_at: utcTimestamp(),
+	expires_at: utcTimestamp().nullable(),
+	eager: z.boolean().optional(),
+	requested_generation: z.number().int().nonnegative().optional(),
+	requested_commit: CommitShaSchema.optional(),
+	observed_commit: CommitShaSchema.optional(),
+	demand: z.boolean().optional(),
+	automation: z
+		.object({
+			key: z.string(),
+			revision: z.number(),
+			generation: z.number().int().nonnegative().optional(),
+			commit: CommitShaSchema,
+		})
+		.optional(),
 	pull_request: z.number().int().positive().optional(),
 	created_by: UserIdSchema,
 	created_at: utcTimestamp(),
@@ -58,6 +79,8 @@ export const PreviewRecordSchema = z.object({
 	lease: z
 		.object({
 			token: z.string(),
+			// Unlike requested_commit, this is unset during each metadata probe.
+			commit: CommitShaSchema.optional(),
 			expires_at: z.number().describe('Lease deadline in milliseconds since the Unix epoch.'),
 		})
 		.optional(),
@@ -88,9 +111,63 @@ export const PreviewRecordSchema = z.object({
 		.describe('Earliest ownership removal time in milliseconds since the Unix epoch.')
 		.optional(),
 });
+export const PreviewIntentSchema = PreviewRecordSchema.pick({
+	schema_version: true,
+	id: true,
+	project_id: true,
+	notebook_id: true,
+	name: true,
+	source: true,
+	repository: true,
+	root_path: true,
+	entry_notebook: true,
+	compute_profile: true,
+	expires_at: true,
+	eager: true,
+	automation: true,
+	pull_request: true,
+	created_by: true,
+	created_at: true,
+	request_fingerprint: true,
+	state: true,
+});
+export type PreviewIntent = z.infer<typeof PreviewIntentSchema>;
+
+export function initialPreviewRecord(intent: PreviewIntent): NotebookPreview {
+	return {
+		...intent,
+		preparation: intent.eager === false ? 'deferred' : 'pending',
+		preparation_failures: 0,
+		revisions: [],
+		admissions: [],
+		...(intent.state === 'deleted' ? { cleanup_after: 0 } : {}),
+	};
+}
+
+export function previewGeneration(record: Pick<NotebookPreview, 'automation'>): number | undefined {
+	return record.automation?.generation ?? record.automation?.revision;
+}
+
+export function requestedPreviewGeneration(record: NotebookPreview): number | undefined {
+	return (
+		record.requested_generation ??
+		(record.automation && (record.demand || record.requested_commit === record.automation.commit)
+			? previewGeneration(record)
+			: undefined)
+	);
+}
+
 export type NotebookPreview = z.infer<typeof PreviewRecordSchema>;
 export type PreviewCreate = z.infer<typeof PreviewCreateSchema>;
 export const previewKey = paths.preview;
 export const PREVIEW_POLL_MS = 60_000;
 export const PREVIEW_IDLE_MS = 5 * 60_000;
 export const PREVIEW_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
+
+export function previewExpired(record: Pick<NotebookPreview, 'expires_at'>): boolean {
+	return record.expires_at !== null && Date.parse(record.expires_at) <= Date.now();
+}
+
+export function previewAvailable(record: Pick<NotebookPreview, 'state' | 'expires_at'>): boolean {
+	return record.state === 'active' && !previewExpired(record);
+}

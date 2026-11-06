@@ -28,6 +28,7 @@ import type {
 	WorkloadRef,
 } from '@marimo-hub/core';
 import {
+	previewAvailable,
 	AppPoolService,
 	sessionResourceNotebookId,
 	sessionResourcePath,
@@ -1391,15 +1392,12 @@ export async function startNotebookSession(input: {
 				notebook.meta.preview!.preview_id,
 			)
 		: undefined;
-	if (
-		previewRecord &&
-		(previewRecord.state !== 'active' || Date.parse(previewRecord.expires_at) <= Date.now())
-	)
+	if (previewRecord && !previewAvailable(previewRecord))
 		throw new NotFoundError('Preview not found');
 	// Sessions must end before their credentials, security context, or preview expires.
 	const authorizationExpiresAt = earliestDeadline(
 		entitlementAuthorizationDeadline(user),
-		earliestDeadline(authorization.subjectContextExpiresAt, previewRecord?.expires_at),
+		earliestDeadline(authorization.subjectContextExpiresAt, previewRecord?.expires_at ?? undefined),
 	);
 	const existingEditorClaim = mode === 'edit' ? await sessions.getEditorClaim(pid, nid) : undefined;
 	const sharing = isPreview

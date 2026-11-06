@@ -33,8 +33,17 @@ function PreviewRuntime({
 	previewId: string;
 	userId: string;
 }) {
-	const { preview, runtime, start, session, sessionEnded, startupTimedOut, sandboxUrl } =
-		usePreviewSession(pid, nid, previewId, userId);
+	const {
+		prepare,
+		preparationError,
+		preview,
+		runtime,
+		start,
+		session,
+		sessionEnded,
+		startupTimedOut,
+		sandboxUrl,
+	} = usePreviewSession(pid, nid, previewId, userId);
 	const { theme } = useTheme();
 	const frame = useNotebookFrameLocation(sandboxUrl, theme, runtime?.mode === 'app');
 	if (preview.isError)
@@ -53,6 +62,17 @@ function PreviewRuntime({
 				</Link>
 				<h1 className="font-medium">{record.name}</h1>
 				<PreviewBadge preview={record} />
+				<output className="text-xs text-muted-foreground">
+					{record.preparation === 'pending'
+						? 'Preparation queued'
+						: record.preparation === 'preparing'
+							? 'Preparing code…'
+							: record.preparation === 'deferred'
+								? 'Preparation deferred'
+								: record.preparation === 'failed'
+									? 'Preparation failed'
+									: 'Ready'}
+				</output>
 				<span className="text-xs text-muted-foreground">
 					{record.commit ? `Latest: ${record.commit.slice(0, 12)}` : 'Awaiting first revision'}
 				</span>
@@ -91,6 +111,24 @@ function PreviewRuntime({
 					A newer revision is available. Your session is still running its original commit.
 				</p>
 			)}
+			{record.eager === false &&
+				(record.preparation === 'deferred' ||
+					record.preparation === 'failed' ||
+					preparationError) && (
+					<div className="flex items-center gap-3 border-b p-4 text-sm">
+						<p role={preparationError ? 'alert' : undefined}>
+							{preparationError ??
+								(record.preparation === 'failed'
+									? 'Preparation failed. Try preparing this revision again.'
+									: 'This revision prepares when opened. Existing sessions keep their original revision.')}
+						</p>
+						{(record.can.app || record.can.edit) && (
+							<Button variant="default" onPress={() => void prepare()}>
+								Prepare latest
+							</Button>
+						)}
+					</div>
+				)}
 			{record.error && (
 				<p role="alert" className="px-4 py-2 text-sm">
 					{record.error} {record.commit && 'Serving the last prepared revision.'}
