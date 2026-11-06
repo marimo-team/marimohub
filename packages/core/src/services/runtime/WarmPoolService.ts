@@ -1,4 +1,3 @@
-import type { Session } from '../../schema';
 import { withDeadline } from '../../async';
 import { mapWithConcurrency } from '../../concurrency';
 import { ConflictError, NotFoundError } from '../../errors';
@@ -164,8 +163,9 @@ export class WarmPoolService {
 		}
 	}
 
-	async handoff(claim: WarmPoolClaim, session: Session): Promise<void> {
+	async handoff(claim: WarmPoolClaim): Promise<void> {
 		const destination = claim.member.destination!;
+		const session = await this.sessions.getSession(destination.project_id, destination.session_id);
 		if (
 			session.session_id !== destination.session_id ||
 			session.project_id !== destination.project_id ||

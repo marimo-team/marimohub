@@ -11,7 +11,7 @@ Notebook files, credentials, and kernels load after assignment.
 1. Maintenance persists creation reservations before provider calls. Creating and ready members count toward the target.
 2. A sandbox becomes ready after `ready()` and a bounded command probe succeed.
 3. Reservation records the destination and changes the operation token. Reconnect and a bounded probe overlap session publication and admission.
-4. Handoff checks the published session, claim token, and deadline while URL preparation runs. Notebook data and credentials wait for handoff.
+4. Handoff checks the current session, claim token, and deadline while URL preparation runs. Workspace writes and credential injection wait for handoff.
 5. Session teardown owns assigned sandboxes. Claims never return to the pool. Failed cleanup retains ownership for retry.
 
 If the probe fails or the claim expires, the route replaces the starting session's sandbox ID and repeats URL preparation.

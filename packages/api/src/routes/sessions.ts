@@ -2186,7 +2186,7 @@ export async function startNotebookSession(input: {
 								provision: () => Promise<ProvisionResult>;
 							}>({
 								handoff: async () => {
-									if (warmClaim) await deps.warmPool!.handoff(warmClaim, session!);
+									if (warmClaim) await deps.warmPool!.handoff(warmClaim);
 								},
 								async provision(): Promise<ProvisionResult> {
 									const { baseUrl, publicUrl } = await sandboxExposure.prepare(exposureCtx);

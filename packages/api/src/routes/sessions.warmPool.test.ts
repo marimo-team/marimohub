@@ -654,19 +654,76 @@ describe('session warm sandbox assignment', () => {
 				return create(input);
 			});
 			const prefix = paths.project(w.project.id).notebook(w.notebook.id).workspacePrefix;
+			const dataKey = `${prefix}data.txt`;
+			await w.bucket.put(dataKey, 'workspace data');
 			const list = vi.spyOn(w.bucket, 'list');
+			const get = vi.spyOn(w.bucket, 'get');
 			const request = w.api.request('POST', w.path, { mode });
 			try {
 				await publishing.promise;
 				expect(list.mock.calls.filter(([options]) => options?.prefix === prefix)).toEqual([]);
+				expect(get).not.toHaveBeenCalledWith(dataKey);
 				expect(w.fake.calls.writeFiles).toEqual([]);
 			} finally {
 				publish.resolve();
 			}
 			await expectOk(await request);
 			expect(list.mock.calls.filter(([options]) => options?.prefix === prefix)).not.toEqual([]);
+			expect(get).toHaveBeenCalledWith(dataKey);
 		},
 	);
+
+	it('prefetches an immutable synced workspace before publication without writing to the sandbox', async () => {
+		const w = await setup();
+		await w.warmPool.sweep();
+		const { meta } = await w.services.notebooks.synced.create(
+			w.project.id,
+			{
+				title: 'Synced notebook',
+				description: '',
+				repo: 'owner/repo',
+				branch: 'main',
+				entry_notebook: 'app.py',
+			},
+			ACTOR,
+		);
+		const { versionId } = await w.services.notebooks.synced.sync(w.project.id, meta.id, {
+			repo: 'owner/repo',
+			branch: 'main',
+			root_path: '',
+			commit: 'commit-aaaa',
+			files: [{ path: 'app.py', bytes: new TextEncoder().encode('import marimo') }],
+		});
+		const archive = paths
+			.project(w.project.id)
+			.notebook(meta.id)
+			.version(versionId!).workspaceArchive;
+		const publishing = Promise.withResolvers<void>();
+		const publish = Promise.withResolvers<void>();
+		const sessions = w.api.deps.services.sessions;
+		const create = sessions.createSession.bind(sessions);
+		vi.spyOn(sessions, 'createSession').mockImplementationOnce(async (input) => {
+			publishing.resolve();
+			await publish.promise;
+			return create(input);
+		});
+		const get = vi.spyOn(w.bucket, 'get');
+		const request = w.api.request(
+			'POST',
+			`/projects/${w.project.id}/notebooks/${meta.id}/sessions`,
+		);
+		try {
+			await publishing.promise;
+			expect(get).toHaveBeenCalledWith(archive);
+			expect(w.fake.calls.writeFiles).toEqual([]);
+			expect(w.fake.calls.setEnvVars).toEqual([]);
+		} finally {
+			publish.resolve();
+		}
+		await expectOk(await request);
+		expect(get.mock.calls.filter(([key]) => key === archive)).toHaveLength(1);
+		expect(w.fake.calls.writeFiles.length).toBeGreaterThan(0);
+	});
 
 	it('uses ordinary creation on a pool miss', async () => {
 		const w = await setup();

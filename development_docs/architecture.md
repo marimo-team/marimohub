@@ -188,7 +188,7 @@ teardown:  read notebook back → cut a new version (if code changed)
 
 Boot or a warm probe overlaps session publication and admission. The cap recheck,
 preview commit, and editor claim run concurrently, with cap errors taking precedence.
-Workspace writes and credentials wait for admission and [warm handoff](./warm_pools.md#ownership-and-lifecycle).
+Workspace writes and credential injection wait for admission and [warm handoff](./warm_pools.md#ownership-and-lifecycle).
 Rejected starts await boot before cleanup. `provision_boot_overlap_ms` records the boot duration.
 
 Prefetch starts at warm reservation for immutable workspaces. Mutable workspace reads
