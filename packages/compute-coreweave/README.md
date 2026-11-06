@@ -7,7 +7,7 @@ Part of [marimohub](../../README.md). See [docs/compute.md](../../docs/compute.m
 
 ## File uploads
 
-A batch runs up to four SDK writes at the same time.
+A batch runs up to eight SDK writes at the same time.
 Each sandbox allows eight active write RPCs across all its phases, so sessions never queue behind each other.
 Each write has a 60 s deadline. A write that waits to retry releases its RPC slot.
 All destinations must be unique absolute paths.
@@ -20,6 +20,28 @@ Other batches continue. Completed writes stay in the sandbox.
 
 The SDK creates parent directories and handles file-size limits, streaming fallback, and direct mTLS or Gateway routing.
 File contents go directly to the SDK.
+
+## Data-plane mode
+
+With `dataPlaneMode: 'auto'` (the default), an unreachable runner direct endpoint can add up
+to 1 s to the first data-plane call per sandbox, and again every 30 s. Use `gateway` when the
+hub cannot reach the runner direct endpoints, and `direct` once it can.
+
+## Sandbox resolution
+
+A new sandbox is polled every 250 ms, for up to 60 s. The wait ends on the first poll that
+reports one of these statuses:
+
+- `running` or `paused`: the sandbox is ready.
+- `completed` (or `unspecified`): the main process exited during boot, so the create fails.
+- `failed`, `terminated`, or `terminating`: the create fails at once, without waiting for
+  the deadline.
+
+Each `CoreWeaveCompute` instance remembers the provider sandbox it last saw running for a
+hub sandbox id, for up to 4,096 ids. Other provider instances do not share these entries.
+A new sandbox instance for that id gets the sandbox by id, which skips the tag List.
+If that sandbox is not running, is missing, or has a different id, the adapter drops the
+entry and uses the tag lookup. Destroy also drops the entry.
 
 ## Startup timings
 

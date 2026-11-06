@@ -378,7 +378,9 @@ export class CatalogService {
 
 	/**
 	 * `mutateFn` runs inside each catalog CAS attempt and may be asynchronous. It
-	 * must be safe to run again after a lost pointer race.
+	 * must be safe to run again after a lost pointer race. Returning the snapshot it
+	 * was given signals a no-op: nothing is written or audited, and the current
+	 * snapshot is returned.
 	 */
 	async mutateSnapshot(
 		operation: string,
@@ -389,7 +391,7 @@ export class CatalogService {
 		// One CAS attempt: read the catalog + its current snapshot, write a new
 		// snapshot, and conditionally swap the catalog pointer onto it. The retry
 		// loop / backoff / conflict accounting lives in `withCasRetry`.
-		const snapshot = await withCasRetry(
+		const { snapshot, committed } = await withCasRetry(
 			this.bucket,
 			async (cas) => {
 				const catalogObj = await this.bucket.get(paths.catalog);
@@ -398,10 +400,11 @@ export class CatalogService {
 				const catalog = await readStored(CatalogSchema, catalogObj, paths.catalog);
 				const currentSnapshot = await this.readSnapshot(catalog);
 
+				const mutated = await mutateFn(currentSnapshot);
+				if (mutated === currentSnapshot) return { snapshot: currentSnapshot, committed: false };
+
 				const newSnapshotId = createSnapshotId();
 				const now = new Date().toISOString();
-
-				const mutated = await mutateFn(currentSnapshot);
 				const newSnapshot: Snapshot = {
 					...mutated,
 					snapshot_id: newSnapshotId,
@@ -433,7 +436,7 @@ export class CatalogService {
 					await cas.put(paths.catalog, JSON.stringify(newCatalog), {
 						onlyIfEtagMatches: catalogObj.etag,
 					});
-					return newSnapshot;
+					return { snapshot: newSnapshot, committed: true };
 				} catch (err) {
 					// Only a lost CAS proves the pointer never moved; any other error may follow a
 					// commit whose response was lost, so the snapshot is kept (see initialize()).
@@ -452,15 +455,15 @@ export class CatalogService {
 			},
 		);
 		// Audit once per WINNING commit, never per CAS attempt.
-		await this.appendAudit(operation, actor, context);
+		if (committed) await this.appendAudit(operation, actor, context);
 		return snapshot;
 	}
 
 	/**
 	 * CAS-mutate the snapshot to patch a single project's summary entry. `patch`
 	 * receives the matched entry and returns the fields to merge; a project that
-	 * doesn't match is left untouched (and if none matches, the snapshot is
-	 * rewritten unchanged). Returning `undefined` applies no entry fields. Async
+	 * doesn't match is left untouched (and if none matches, nothing is
+	 * committed). Returning `undefined` applies no entry fields. Async
 	 * patches run again when the catalog CAS retries.
 	 */
 	updateProjectEntry(

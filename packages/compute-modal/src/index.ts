@@ -27,6 +27,7 @@ import {
 	WRITE_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import type { LaunchProtocolOutcome } from '@marimo-hub/compute-commons';
+import { sleep } from '@marimo-hub/core/duration';
 import { NotFoundError } from '@marimo-hub/core/errors';
 import { logOperationalError } from '@marimo-hub/core/operational-log';
 import { SandboxId } from '@marimo-hub/core/ids';
@@ -200,12 +201,6 @@ async function runProcess(process: ContainerProcess<string>): Promise<ExecResult
 		process.wait(),
 	]);
 	return execResult(exitCode === 0, stdout, stderr);
-}
-
-function delay(ms: number): Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, ms);
-	});
 }
 
 let processSequence = 0;
@@ -534,7 +529,7 @@ class ModalSandboxInstance implements SandboxInstance {
 						)}`,
 					);
 					if (probe.success) return;
-					await delay(250);
+					await sleep(250);
 				}
 				throw new Error(
 					`timed out waiting for port ${port} after ${timeout}ms.\n${stderrTail.text || stdoutTail.text}`,

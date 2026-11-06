@@ -7,6 +7,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import './index.css';
 import App from './App.tsx';
 import { queryClient } from './api/queryClient';
+import { capabilitiesQueryOptions, userQueryOptions } from './api/hooks';
 
 // Dev-only: the React Query devtools are loaded via a dynamic import gated on
 // `import.meta.env.DEV`, so the production build tree-shakes the module out
@@ -20,6 +21,10 @@ const ReactQueryDevtools = import.meta.env.DEV
 	: () => null;
 
 async function bootstrap() {
+	// Neither request depends on the theme, so start them before it blocks the first
+	// render; the hooks share these query keys and pick up the in-flight requests.
+	void queryClient.prefetchQuery(userQueryOptions());
+	void queryClient.prefetchQuery(capabilitiesQueryOptions());
 	// Apply the stored preference before awaiting the theme request so a
 	// dark-mode user does not see a light page while it is in flight.
 	try {

@@ -97,24 +97,40 @@ app.openapi(
 		const selectedProject = query.project_id
 			? await loadAppProject(deps.services.projects, query.project_id, user, deps)
 			: undefined;
-		const projects = await deps.services.projects.listProjects({
-			subject: user,
-			policy: deps.policy,
-			resourceSecurity: deps.resourceSecurity,
-			action: 'app.read',
-			status: 'active',
-		});
-		const candidates: { project: Project; notebook: { id: NotebookId; title: string } }[] = [];
-		// Notebook listing already bounds label reads; nesting project workers would multiply that limit.
-		for (const entry of projects.filter((p) => !query.project_id || p.id === query.project_id)) {
-			try {
-				const project = await loadAppProject(deps.services.projects, entry.id, user, deps);
-				const notebooks = await deps.services.notebooks.listNotebooks(project.id, {
+		// A selected project is already authorized, so skip listProjects: it reads every
+		// project.json in the deployment.
+		const listed = selectedProject
+			? []
+			: await deps.services.projects.listProjects({
 					subject: user,
 					policy: deps.policy,
 					resourceSecurity: deps.resourceSecurity,
 					action: 'app.read',
+					status: 'active',
 				});
+		const snapshot = await deps.services.catalog.getCurrentSnapshot();
+		// listProjects' `status: 'active'` filter reads the catalog entry, not project.json.
+		const projectIds = selectedProject
+			? snapshot.projects.some((p) => p.id === selectedProject.id && p.status === 'active')
+				? [selectedProject.id]
+				: []
+			: listed.map((entry) => entry.id);
+		const candidates: { project: Project; notebook: { id: NotebookId; title: string } }[] = [];
+		// Notebook listing already bounds label reads; nesting project workers would multiply that limit.
+		for (const id of projectIds) {
+			try {
+				const project =
+					selectedProject ?? (await loadAppProject(deps.services.projects, id, user, deps));
+				const notebooks = await deps.services.notebooks.listNotebooks(
+					project.id,
+					{
+						subject: user,
+						policy: deps.policy,
+						resourceSecurity: deps.resourceSecurity,
+						action: 'app.read',
+					},
+					snapshot,
+				);
 				for (const notebook of notebooks) {
 					if (
 						!query.q ||

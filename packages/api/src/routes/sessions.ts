@@ -1746,6 +1746,7 @@ export async function startNotebookSession(input: {
 	let usedFallback = false;
 	let provisionedSandbox: SandboxInstance;
 	let preparedContextFile: ReturnType<typeof sandboxContextFile> | undefined;
+	let contextPublication: Promise<void> | undefined;
 	const contextFor = (publicUrl: string) =>
 		buildSandboxContext({
 			session: session!,
@@ -2152,6 +2153,8 @@ export async function startNotebookSession(input: {
 					({ clientUrl, originUrl } = await sandboxExposure.finalize(url, exposureCtx));
 				},
 				compensate: async () => {
+					// Never destroy the sandbox under an in-flight context write.
+					await contextPublication;
 					if (warmClaim) return;
 					await compute.create(sandboxId, { owner: { projectId: pid, userId: user.id } }).destroy();
 					await recordSandboxCleanup();
@@ -2159,10 +2162,15 @@ export async function startNotebookSession(input: {
 			})
 			.step('sandbox_context', async () => {
 				if (preparedContextFile) return;
-				try {
-					await writeSandboxContext(provisionedSandbox, sandboxId, contextFor(clientUrl));
-				} catch (error) {
-					// Optional metadata must not reclaim an already-running kernel.
+				// Consumers tolerate a missing file, so the publication overlaps the remaining
+				// steps and the response instead of delaying them.
+				contextPublication = writeSandboxContext(
+					provisionedSandbox,
+					sandboxId,
+					contextFor(clientUrl),
+				).catch((error: unknown) => {
+					// Optional metadata must not reclaim an already-running kernel. The tag only
+					// reaches the provision event when the failure precedes its flush.
 					observer.tag('sandbox_context', 'unavailable');
 					logEvent({
 						level: 'warn',
@@ -2173,7 +2181,7 @@ export async function startNotebookSession(input: {
 						...errorMetadata(error),
 						message: error instanceof Error ? error.message.slice(-2200) : undefined,
 					});
-				}
+				});
 			})
 			.step('mark_running', async () => {
 				if (isPastAuthorizationDeadline(session!, Date.now())) {
@@ -2241,6 +2249,7 @@ export async function startNotebookSession(input: {
 			})
 			.run();
 	} catch (err) {
+		await contextPublication;
 		if (warmClaim) {
 			await deps.warmPool!.abandon(warmClaim).catch(() => {});
 		}
@@ -2344,6 +2353,8 @@ export async function startNotebookSession(input: {
 		return config && (config.start === 'eager' || requestedSurfaces.includes(id));
 	});
 	if (mode === 'edit' && surfaceGrant && eagerSurfaces.length > 0 && updated) {
+		// Eagerly started surfaces should find the published context.
+		await contextPublication;
 		updated = await beginSessionSurfaces({
 			deps,
 			session: updated,
@@ -2372,6 +2383,11 @@ export async function startNotebookSession(input: {
 		);
 		if (deps.backgroundTasks) deps.backgroundTasks.defer(audit);
 		else await audit;
+	}
+
+	if (contextPublication) {
+		if (deps.backgroundTasks) deps.backgroundTasks.defer(contextPublication);
+		else await contextPublication;
 	}
 
 	const response = toSessionResponse(updated!, await grants(updated!), deps.theme?.session_links);

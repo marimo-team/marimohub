@@ -9,6 +9,7 @@
  */
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import type { SecretsManagerClientConfig } from '@aws-sdk/client-secrets-manager';
+import { SingleFlight } from '@marimo-hub/core/cache';
 import { SecretResolutionError } from '@marimo-hub/core/ports/secrets';
 import { allowsProjectResource } from '@marimo-hub/core/project-resource-policy';
 import type { ProjectResourceRule } from '@marimo-hub/core/project-resource-policy';
@@ -53,7 +54,7 @@ export class AwsSecretsManagerResolver implements SecretResolver {
 	private readonly cacheTtlMs: number;
 	private readonly now: () => number;
 	private readonly cache = new Map<string, CacheEntry>();
-	private readonly inFlight = new Map<string, Promise<GetSecretValueResult>>();
+	private readonly inFlight = new SingleFlight<string, GetSecretValueResult>();
 	private readonly allowedSecrets?: readonly ProjectResourceRule[];
 
 	constructor(opts: AwsSecretsManagerResolverOptions) {
@@ -112,16 +113,7 @@ export class AwsSecretsManagerResolver implements SecretResolver {
 			const hit = this.cache.get(secretId);
 			if (hit && hit.expires > this.now()) return hit.result;
 		}
-		const pending = this.inFlight.get(secretId);
-		if (pending) return pending;
-
-		const fetch = this.fetchAndCache(secretId);
-		this.inFlight.set(secretId, fetch);
-		try {
-			return await fetch;
-		} finally {
-			this.inFlight.delete(secretId);
-		}
+		return this.inFlight.run(secretId, () => this.fetchAndCache(secretId));
 	}
 
 	private async fetchAndCache(secretId: string): Promise<GetSecretValueResult> {

@@ -15,7 +15,9 @@ MARIMOHUB_COMPUTE_COREWEAVE_RUNNER_ID=marimohub    # your sandbox runner's id
 
 Exec, logs, and file transfers prefer direct runner connections with mTLS.
 The default `MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE=auto` allows Gateway fallback.
-Set this variable to `direct` to require direct connections, or `gateway` to disable them.
+Set it to `gateway` when the hub cannot reach runner direct endpoints:
+`auto` can then add up to 1 s to the first data-plane call per sandbox, and again every 30 s.
+Set it to `direct` once those endpoints are reachable.
 Lifecycle calls still use the API.
 
 ::: tip Best for CoreWeave deployments

@@ -45,7 +45,9 @@ export function useAppQuery(
 					signal,
 				}),
 			),
-		staleTime: 0,
+		// Short enough that role changes surface on a later visit, without refetching on
+		// every focus and remount.
+		staleTime: 30_000,
 		refetchInterval: refetchIntervalMs && ((query) => refetchIntervalMs(query.state.error)),
 	});
 }

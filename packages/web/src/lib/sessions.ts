@@ -5,6 +5,13 @@ export const SESSION_STATUS_INTERVAL_MS = 30_000;
 export const SESSION_START_POLL_INTERVAL_MS = 2_000;
 export const SESSION_START_SLOW_POLL_AFTER_MS = 30_000;
 export const SESSION_START_SLOW_POLL_INTERVAL_MS = 5_000;
+const SESSION_START_POLL_BACKOFF_MS = [0, 250, 500, 1_000] as const;
+
+/** Delay before 0-based startup poll `attempt` of a session `starting` for `elapsedMs`. */
+export function sessionStartPollDelayMs(attempt: number, elapsedMs: number): number {
+	if (elapsedMs > SESSION_START_SLOW_POLL_AFTER_MS) return SESSION_START_SLOW_POLL_INTERVAL_MS;
+	return SESSION_START_POLL_BACKOFF_MS[attempt] ?? SESSION_START_POLL_INTERVAL_MS;
+}
 
 export function sessionStartupDeadlineMs(timeoutSeconds = 120): number {
 	// Allow the server time to report its own startup failure before giving up locally.

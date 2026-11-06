@@ -232,57 +232,114 @@ describe('Session routes', () => {
 		},
 	);
 
-	it('waits for URL resolution and context publication before marking the session running', async () => {
+	it.each([false, true])(
+		'waits for URL resolution but not context publication before marking the session running (deferred: %s)',
+		async (deferred) => {
+			const { instance, calls } = makeFakeSandbox();
+			const exposing = Promise.withResolvers<void>();
+			const exposed = Promise.withResolvers<void>();
+			const publishing = Promise.withResolvers<void>();
+			const published = Promise.withResolvers<void>();
+			const expose = instance.exposePort;
+			vi.spyOn(instance, 'exposePort').mockImplementation(async (...args) => {
+				exposing.resolve();
+				await exposed.promise;
+				return expose(...args);
+			});
+			const exec = instance.exec;
+			vi.spyOn(instance, 'exec').mockImplementation(async (...args) => {
+				if (isSandboxContextCommand(args[0])) {
+					publishing.resolve();
+					await published.promise;
+				}
+				return exec(...args);
+			});
+			const tasks: Promise<unknown>[] = [];
+			const request = exclusiveApi(ACTOR, fakeComputeFrom(instance), {
+				backgroundTasks: deferred ? { defer: (task) => tasks.push(task) } : undefined,
+			});
+			let responded = false;
+			const pending = Promise.resolve(request('POST', sessionsPath())).then((response) => {
+				responded = true;
+				return response;
+			});
+			const sessions = createServices(bucket).sessions;
+			await exposing.promise;
+			try {
+				const [starting] = await sessions.listSessions(nid);
+				expect(starting.status).toBe('starting');
+				expect(calls.setEnvVars).toContainEqual(
+					expect.objectContaining({
+						MARIMOHUB_CONTEXT_FILE: sandboxContextPath(starting.sandbox_id!),
+					}),
+				);
+				expect(readSandboxContexts(calls)).toEqual([]);
+				exposed.resolve();
+				await publishing.promise;
+				await vi.waitFor(async () =>
+					expect(await sessions.getSession(pid, starting.session_id)).toMatchObject({
+						status: 'running',
+					}),
+				);
+				if (deferred) {
+					await vi.waitFor(() => expect(responded).toBe(true));
+					expect(tasks).toHaveLength(1);
+				} else {
+					expect(responded).toBe(false);
+				}
+			} finally {
+				exposed.resolve();
+				published.resolve();
+				await pending;
+				await Promise.all(tasks);
+			}
+			const response = await expectOk<ApiSession>(await pending);
+			expect(response.status).toBe('running');
+			const contextWrites = calls.exec.filter(isSandboxContextCommand);
+			expect(contextWrites).toHaveLength(1);
+			const reused = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+			expect(reused.session_id).toBe(response.session_id);
+			expect(reused.reused).toBe(true);
+			expect(calls.exec.filter(isSandboxContextCommand)).toEqual(contextWrites);
+		},
+	);
+
+	it('keeps a deferred session running when context publication fails after the response', async () => {
 		const { instance, calls } = makeFakeSandbox();
-		const exposing = Promise.withResolvers<void>();
-		const exposed = Promise.withResolvers<void>();
-		const publishing = Promise.withResolvers<void>();
 		const published = Promise.withResolvers<void>();
-		const expose = instance.exposePort;
-		vi.spyOn(instance, 'exposePort').mockImplementation(async (...args) => {
-			exposing.resolve();
-			await exposed.promise;
-			return expose(...args);
-		});
 		const exec = instance.exec;
 		vi.spyOn(instance, 'exec').mockImplementation(async (...args) => {
-			if (isSandboxContextCommand(args[0])) {
-				publishing.resolve();
-				await published.promise;
-			}
-			return exec(...args);
+			if (!isSandboxContextCommand(args[0])) return exec(...args);
+			await published.promise;
+			throw new Error('transport unavailable');
 		});
-		const request = exclusiveApi(ACTOR, fakeComputeFrom(instance));
-		const pending = request('POST', sessionsPath());
-		const sessions = createServices(bucket).sessions;
-		await exposing.promise;
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		const tasks: Promise<unknown>[] = [];
 		try {
-			const [starting] = await sessions.listSessions(nid);
-			expect(starting.status).toBe('starting');
-			expect(calls.setEnvVars).toContainEqual(
-				expect.objectContaining({
-					MARIMOHUB_CONTEXT_FILE: sandboxContextPath(starting.sandbox_id!),
-				}),
-			);
-			expect(readSandboxContexts(calls)).toEqual([]);
-			exposed.resolve();
-			await publishing.promise;
-			expect(await sessions.getSession(pid, starting.session_id)).toMatchObject({
-				status: 'starting',
+			const request = exclusiveApi(ACTOR, fakeComputeFrom(instance), {
+				backgroundTasks: { defer: (task) => tasks.push(task) },
+			});
+			const response = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+			expect(response.status).toBe('running');
+			expect(tasks).toHaveLength(1);
+			published.resolve();
+			await Promise.all(tasks);
+			const stored = await createServices(bucket).sessions.getSession(pid, response.session_id);
+			expect(stored).toMatchObject({ status: 'running' });
+			expect(stored.sandbox_reclaimed_at).toBeUndefined();
+			expect(calls.destroy).toBe(0);
+			const line = log.mock.calls.find((call) =>
+				String(call[0]).includes('sandbox_context_unavailable'),
+			)?.[0];
+			expect(JSON.parse(String(line))).toMatchObject({
+				level: 'warn',
+				session_id: response.session_id,
+				message: expect.stringContaining('transport unavailable'),
 			});
 		} finally {
-			exposed.resolve();
 			published.resolve();
-			await pending;
+			log.mockRestore();
 		}
-		const response = await expectOk<ApiSession>(await pending);
-		expect(response.status).toBe('running');
-		const contextWrites = calls.exec.filter(isSandboxContextCommand);
-		expect(contextWrites).toHaveLength(1);
-		const reused = await expectOk<ApiSession>(await request('POST', sessionsPath()));
-		expect(reused.session_id).toBe(response.session_id);
-		expect(reused.reused).toBe(true);
-		expect(calls.exec.filter(isSandboxContextCommand)).toEqual(contextWrites);
 	});
 
 	it('reclaims the sandbox and allows retry after the startup file batch fails', async () => {
@@ -816,7 +873,8 @@ describe('Session routes', () => {
 		try {
 			if (deferred) await vi.waitFor(() => expect(responded).toBe(true));
 			else expect(responded).toBe(false);
-			expect(tasks).toHaveLength(deferred ? 1 : 0);
+			// The app audit and the sandbox context publication.
+			expect(tasks).toHaveLength(deferred ? 2 : 0);
 		} finally {
 			releaseAudit.resolve();
 			await Promise.all(tasks);
@@ -2816,6 +2874,67 @@ describe('Session routes', () => {
 				},
 			});
 		} finally {
+			nowSpy.mockRestore();
+		}
+	});
+
+	it('destroys a failed start only after its context write settles', async () => {
+		const now = Date.parse('2026-08-04T12:00:00.000Z');
+		const deadline = now + Millis.minutes(1);
+		const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+		const { instance } = makeFakeSandbox();
+		const events: string[] = [];
+		const exposePort = instance.exposePort.bind(instance);
+		instance.exposePort = async (...args) => {
+			const exposed = await exposePort(...args);
+			nowSpy.mockReturnValue(deadline);
+			return exposed;
+		};
+		const publishing = Promise.withResolvers<void>();
+		const published = Promise.withResolvers<void>();
+		const exec = instance.exec.bind(instance);
+		vi.spyOn(instance, 'exec').mockImplementation(async (...args) => {
+			if (!isSandboxContextCommand(args[0])) return exec(...args);
+			events.push('context_started');
+			publishing.resolve();
+			await published.promise;
+			events.push('context_settled');
+			throw new Error('transport unavailable');
+		});
+		const destroy = instance.destroy.bind(instance);
+		instance.destroy = async () => {
+			events.push('destroy');
+			return destroy();
+		};
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+		const groupEditor = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: fakeComputeFrom(instance),
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						credential: { kind: 'development' },
+						id: STRANGER,
+						email: `${STRANGER}@example.com`,
+						entitlements: ['default-role:editor'],
+						entitlementsExpiresAt: new Date(deadline).toISOString(),
+					}),
+				},
+			},
+		}).request;
+
+		try {
+			const pending = Promise.resolve(groupEditor('POST', sessionsPath()));
+			await publishing.promise;
+			// Give the failed saga time to reach its sandbox compensation.
+			for (let turn = 0; turn < 20; turn++) await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(events).toEqual(['context_started']);
+			published.resolve();
+			await expectError(await pending, 403, 'FORBIDDEN');
+			expect(events).toEqual(['context_started', 'context_settled', 'destroy']);
+		} finally {
+			published.resolve();
 			nowSpy.mockRestore();
 		}
 	});

@@ -34,6 +34,7 @@ import type {
 	StartProcessOptions,
 	WaitForPortOptions,
 } from '@marimo-hub/core/ports/sandbox';
+import { sleep } from '@marimo-hub/core/duration';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import { execResult, listFilesFailure, readFileFailure } from '@marimo-hub/core/ports/sandbox';
 import { createFargateClient } from './client';
@@ -82,12 +83,6 @@ export type { AwsFargateClientOptions } from './client';
 
 const POLL_BASE_INTERVAL_MS = 100;
 const POLL_MAX_INTERVAL_MS = 2_000;
-
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, ms);
-	});
-}
 
 function pollDelay(attempt: number): number {
 	const ceiling = Math.min(POLL_MAX_INTERVAL_MS, POLL_BASE_INTERVAL_MS * 2 ** attempt);

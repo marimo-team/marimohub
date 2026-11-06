@@ -6,10 +6,11 @@ import { NotebookPreviewService } from './content/NotebookPreviewService';
 import { previewKey } from './content/notebookPreviews';
 import type { NotebookPreview } from './content/notebookPreviews';
 import type { GitProviderHosts } from '../integrations/gitRepo';
-import type { Bucket } from '../ports/bucket';
+import type { Bucket, BucketObject } from '../ports/bucket';
 import { noopMetrics } from '../ports/metrics';
 import type { Metrics } from '../ports/metrics';
 import type { JobId, NotebookId, ProjectId, ProposalId, RunId, SessionId, UserId } from '../ids';
+import { SingleFlight } from '../cache';
 import { paths } from '../paths';
 import { traced } from '../tracing';
 import type { AttrExtractors } from '../tracing';
@@ -722,53 +723,64 @@ export function createServices(
 
 // Storage resets can remain undetected until this cache expires.
 const CATALOG_POPULATED_TTL_MS = 30_000;
-const populatedCatalogEtags = new WeakMap<Bucket, { etag: string; checkedAt: number }>();
+// A catalog seen populated never needs seeding again, so later checks only HEAD the pointer:
+// a missing pointer is the reset that needs recovery. Comparing ETags instead would re-read
+// the whole snapshot after nearly every save.
+const populatedCatalogCheckedAt = new WeakMap<Bucket, number>();
+// Entries leave on settlement, so these Maps never retain a bucket.
+const catalogHeads = new SingleFlight<Bucket, BucketObject | null>();
+const catalogPopulatedReads = new SingleFlight<Bucket, boolean>();
+const defaultProjectCreations = new SingleFlight<Bucket, void>();
 
 export async function ensureInitialized(
 	bucket: Bucket,
 	actor: UserId,
 	options: { createDefaultProject?: boolean | (() => Promise<boolean>) } = {},
 ): Promise<void> {
-	const cached = populatedCatalogEtags.get(bucket);
+	const seeding = options.createDefaultProject !== false;
+	const populatedAt = populatedCatalogCheckedAt.get(bucket);
 	const checkedAt = Date.now();
-	if (
-		options.createDefaultProject !== false &&
-		cached &&
-		checkedAt - cached.checkedAt < CATALOG_POPULATED_TTL_MS
-	)
+	if (seeding && populatedAt !== undefined && checkedAt - populatedAt < CATALOG_POPULATED_TTL_MS)
 		return;
-	const exists = await bucket.head(paths.catalog);
-	if (exists && options.createDefaultProject === false) return;
-	// An empty ETag (adapter fallback) would match forever and hide a storage reset.
-	if (exists?.etag && cached?.etag === exists.etag) {
-		populatedCatalogEtags.set(bucket, { etag: exists.etag, checkedAt });
+	const exists = await catalogHeads.run(bucket, () => bucket.head(paths.catalog));
+	if (exists && !seeding) return;
+	if (exists && populatedAt !== undefined) {
+		populatedCatalogCheckedAt.set(bucket, checkedAt);
 		return;
 	}
-	if (!exists) populatedCatalogEtags.delete(bucket);
+	if (!exists) populatedCatalogCheckedAt.delete(bucket);
 
 	const services = createServices(bucket);
 	// initialize() is atomic (create-if-absent on catalog.json), so concurrent
 	// callers converge on a single catalog rather than clobbering one another.
 	if (!exists) await services.catalog.initialize(actor);
-	if (options.createDefaultProject === false) return;
+	if (!seeding) return;
 
-	const snapshot = await services.catalog.getCurrentSnapshot();
+	const populated = await catalogPopulatedReads.run(
+		bucket,
+		async () => (await services.catalog.getCurrentSnapshot()).projects.length > 0,
+	);
 	// Empty catalogs must retry authorization for a later caller with project creation access.
-	if (snapshot.projects.length > 0 && exists?.etag) {
-		populatedCatalogEtags.set(bucket, { etag: exists.etag, checkedAt });
+	if (populated) {
+		populatedCatalogCheckedAt.set(bucket, checkedAt);
+		return;
 	}
-	if (snapshot.projects.length === 0) {
-		if (
-			typeof options.createDefaultProject === 'function' &&
-			!(await options.createDefaultProject())
-		) {
-			return;
-		}
+	if (
+		typeof options.createDefaultProject === 'function' &&
+		!(await options.createDefaultProject())
+	) {
+		return;
+	}
+	// A concurrent caller may have seeded the catalog while this caller was authorized.
+	if (populatedCatalogCheckedAt.has(bucket)) return;
+	// Shares one creation in-process; separate processes can still each seed a project.
+	await defaultProjectCreations.run(bucket, async () => {
 		await services.projects.createProject(
 			{ name: 'My Project', description: 'Default project' },
 			actor,
 		);
-	}
+	});
+	populatedCatalogCheckedAt.set(bucket, checkedAt);
 }
 
 export {

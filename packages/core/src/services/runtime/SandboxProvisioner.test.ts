@@ -654,6 +654,38 @@ describe('SandboxProvisioner', () => {
 		}
 	});
 
+	it('bounds the prefetched Python path read by a short startup timeout', async () => {
+		vi.useFakeTimers();
+		try {
+			const { instance, calls } = makeFakeSandbox();
+			const exec = instance.exec.bind(instance);
+			const read = vi.fn<(timeout: number | undefined) => void>();
+			vi.spyOn(instance, 'exec').mockImplementation((command, options) => {
+				if (!command.includes('PYTHONPATH')) return exec(command, options);
+				read(options?.timeout);
+				return new Promise((_resolve, reject) =>
+					setTimeout(() => reject(new Error('exec timed out')), (options?.timeout ?? 0) + 1),
+				);
+			});
+			const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				entryNotebook: 'reports/revenue.py',
+				startupTimeoutMs: Millis.of(50),
+			});
+			const failed = expect(provision).rejects.toThrow('configuring the workspace Python path');
+			await vi.advanceTimersByTimeAsync(100);
+			await failed;
+			expect(read).toHaveBeenCalledExactlyOnceWith(50);
+			expect(calls.startProcess).toEqual([]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('leaves the Python path unchanged for a root entry notebook', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
@@ -1196,6 +1228,111 @@ describe('SandboxProvisioner', () => {
 				{ path: `/tmp/marimohub-bridge/${sandboxId}/marimo-bridge.py`, content: 'launcher' },
 			]);
 			expect(calls.startProcess[0].cmd).toContain('uv run --no-sync python');
+		});
+	});
+
+	describe('environment file reuse', () => {
+		// Shell-environment adapters write a new private env file before any command that sees a
+		// different environment; count those writes the same way.
+		function trackEnvironmentFiles(instance: SandboxInstance) {
+			const env: Record<string, string> = {};
+			const commands: string[] = [];
+			let observed = '{}';
+			let writes = 0;
+			const observe = (command: string) => {
+				commands.push(command);
+				const content = JSON.stringify(env);
+				if (content === observed) return;
+				observed = content;
+				writes++;
+			};
+			const setEnvVars = instance.setEnvVars.bind(instance);
+			vi.spyOn(instance, 'setEnvVars').mockImplementation(async (vars, options) => {
+				commands.push(`setEnvVars ${Object.keys(vars).join(',')}`);
+				await setEnvVars(vars, options);
+				for (const [name, value] of Object.entries(vars)) {
+					if (!options?.onlyIfUnset || env[name] === undefined) env[name] = value;
+				}
+			});
+			const exec = instance.exec.bind(instance);
+			vi.spyOn(instance, 'exec').mockImplementation(async (command, options) => {
+				observe(command);
+				return exec(command, options);
+			});
+			const startProcess = instance.startProcess.bind(instance);
+			vi.spyOn(instance, 'startProcess').mockImplementation(async (command, options) => {
+				observe(command);
+				return startProcess(command, options);
+			});
+			return {
+				commands,
+				get writes() {
+					return writes;
+				},
+			};
+		}
+
+		const options = {
+			sandboxId,
+			projectId,
+			notebookId,
+			hostname: 'localhost',
+			bucket: bucketConfig,
+			launchStrategy: 'uv-script-pins' as const,
+			sessionEnv: { vars: { SESSION_TOKEN: 'secret' } },
+			bridgeParentOrigin: 'https://hub.example',
+			notebookBridge: {
+				launcher: 'marimo-bridge.py',
+				files: [{ name: 'marimo-bridge.py', content: 'launcher' }],
+			},
+		};
+
+		it('applies bridge variables before setup so the launch reuses its environment file', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const tracked = trackEnvironmentFiles(instance);
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision(options);
+
+			const setup = tracked.commands.findIndex((command) => command.includes('uv sync'));
+			expect(setup).toBeGreaterThan(-1);
+			expect(
+				tracked.commands.slice(setup).filter((command) => command.startsWith('setEnvVars')),
+			).toEqual([]);
+			expect(calls.setEnvVars).toContainEqual(
+				expect.objectContaining({ MARIMOHUB_BRIDGE_PARENT_ORIGIN: 'https://hub.example' }),
+			);
+			expect(calls.startProcess[0].cmd).toContain(
+				`python '/tmp/marimohub-bridge/${sandboxId}/marimo-bridge.py' --quiet edit`,
+			);
+			expect(tracked.writes).toBe(1);
+		});
+
+		it('reads a nested entry Python path during the workspace restore', async () => {
+			const { instance, calls } = makeFakeSandbox();
+			const tracked = trackEnvironmentFiles(instance);
+			const restore = deferred<void>();
+			const mount = instance.mountBucket.bind(instance);
+			vi.spyOn(instance, 'mountBucket').mockImplementation(async (mountOptions) => {
+				await restore.promise;
+				return mount(mountOptions);
+			});
+			const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...options,
+				entryNotebook: 'reports/revenue.py',
+			});
+			await vi.waitFor(() =>
+				expect(tracked.commands.some((command) => command.includes('PYTHONPATH'))).toBe(true),
+			);
+			expect(tracked.commands.some((command) => command.includes('uv sync'))).toBe(false);
+			restore.resolve();
+			await provision;
+
+			const setup = tracked.commands.findIndex((command) => command.includes('uv sync'));
+			expect(
+				tracked.commands.slice(setup).filter((command) => command.startsWith('setEnvVars')),
+			).toEqual([]);
+			expect(calls.setEnvVars.at(-1)).toEqual({ PYTHONPATH: MOUNT_PATH });
+			// The Python path read and setup each see a new environment; the launch reuses setup's.
+			expect(tracked.writes).toBe(2);
 		});
 	});
 

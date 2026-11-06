@@ -9,8 +9,9 @@
  * Bridging the port to the SDK (the SDK is shaped quite differently):
  *  - `create(id)` is synchronous and id-addressed, but the SDK creates sandboxes
  *    asynchronously and assigns its OWN `sandboxId`. We return a lazy instance and
- *    resolve the real sandbox on first use (`ensure()`): cache → reconnect to the
- *    sandbox tagged with our id → else create one. We tag every sandbox with
+ *    resolve the real sandbox on first use (`ensure()`): cached handle → Get by a
+ *    provider id this process saw running → reconnect to the sandbox tagged with
+ *    our id → else create one. We tag every sandbox with
  *    `idTag(ourId)` so the API can re-resolve an instance for teardown
  *    (`compute.create(id).destroy()`) and so file-copy teardown reconnects to the
  *    SAME sandbox before saving notebook files back.
@@ -49,7 +50,11 @@
  */
 import {
 	CWSandboxConfigurationError,
+	CWSandboxFailedError,
 	CWSandboxNotFoundError,
+	CWSandboxResourceExhaustedError,
+	CWSandboxTerminatedError,
+	CWSandboxTimeoutError,
 	CWSandboxUnavailableError,
 	CWSandboxValidationError,
 } from '@coreweave/cwsandbox';
@@ -70,6 +75,7 @@ import type {
 	ServiceUrl,
 } from '@coreweave/cwsandbox';
 import { forEachConcurrentUntilFailure } from '@marimo-hub/core/async';
+import { BoundedLruMap } from '@marimo-hub/core/cache';
 import { Semaphore } from '@marimo-hub/core/concurrency';
 import {
 	createSandboxClient,
@@ -163,7 +169,9 @@ const SLOW_BOOT_HINT =
 const PROCESS_CANCEL_TIMEOUT_MS = 1_000;
 /** Backoff before each retry of a file write the gateway answered with UNAVAILABLE. */
 const WRITE_RETRY_DELAYS_MS = [250, 1_000, 3_000];
-const FILE_WRITE_CONCURRENCY = 4;
+// Each file is one unary RPC, so a batch costs ceil(n / this) round trips; matching the
+// per-sandbox slot cap lets one batch use every slot its sandbox has.
+const FILE_WRITE_CONCURRENCY = 8;
 // Per sandbox, so concurrent workspace, integration, and bridge uploads stay bounded
 // without one session's transfers queueing behind another's.
 const FILE_WRITE_SLOTS_PER_SANDBOX = 8;
@@ -190,6 +198,21 @@ class SandboxFileWriteSlots {
 		}
 	}
 }
+
+/**
+ * The SDK's `wait()` backs off from 200 ms by 1.5x to a 2 s cap, so it noticed `running` up
+ * to 2 s late. A flat interval costs a few extra Gets per cold start.
+ */
+const READY_POLL_INTERVAL_MS = 250;
+// The SDK `wait()` defaults this loop replaces: overall deadline, per-Get timeout, and the
+// window in which transient Get failures are retried.
+const READY_TIMEOUT_MS = 60_000;
+const READY_POLL_RPC_TIMEOUT_MS = 15_000;
+const READY_POLL_RETRY_BUDGET_MS = 30_000;
+const READY_POLL_MAX_RETRY_DELAY_MS = 2_000;
+const READY_WAIT_OPERATION = 'Wait for sandbox';
+
+const PROVIDER_ID_CACHE_LIMIT = 4096;
 
 async function cancelLaunchProcess(proc: CommandProcess): Promise<void> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -391,14 +414,14 @@ export interface CoreWeaveSandbox {
 	readonly sandboxId: string;
 	/**
 	 * Per-service public URLs from the handle's last metadata refresh (create,
-	 * `wait()` polls, and reconnect Gets all update it) — readable without an
+	 * readiness polls, and reconnect Gets all update it) — readable without an
 	 * extra round-trip by `resolveExposedUrl` implementations.
 	 */
 	readonly serviceUrls?: readonly ServiceUrl[] | undefined;
 	/** Last observed status, from the same metadata refresh as `serviceUrls`. */
 	readonly status?: SandboxStatus | undefined;
-	/** Block until the sandbox reaches `running` (the SDK polls with backoff). */
-	wait(): Promise<unknown>;
+	/** One Get; it also refreshes `status` and `serviceUrls`. */
+	getStatus(options?: { timeoutMs?: number }): Promise<SandboxStatus>;
 	readonly commands: {
 		run(
 			command: readonly string[],
@@ -422,6 +445,76 @@ export interface CoreWeaveSandbox {
 /** A CoreWeave status that means the sandbox is gone (not a reconnect/teardown target). */
 function isDeadStatus(status: SandboxInfo['status']): boolean {
 	return status === 'terminated' || status === 'failed' || status === 'completed';
+}
+
+function isTransientPollError(error: unknown): boolean {
+	return (
+		error instanceof CWSandboxUnavailableError ||
+		error instanceof CWSandboxTimeoutError ||
+		error instanceof CWSandboxResourceExhaustedError
+	);
+}
+
+function readinessTimeout(sandboxId: string): CWSandboxTimeoutError {
+	return new CWSandboxTimeoutError(
+		`Timed out waiting for sandbox '${sandboxId}' to reach status 'running'.`,
+		{ operation: READY_WAIT_OPERATION, sandboxId },
+	);
+}
+
+/**
+ * Poll until the sandbox leaves its boot states, with the SDK `wait()`'s deadline, transient
+ * retry, and terminal-status errors. Returns the status that ended the wait.
+ */
+async function waitUntilRunning(sandbox: CoreWeaveSandbox): Promise<SandboxStatus> {
+	const { sandboxId } = sandbox;
+	const deadline = Date.now() + READY_TIMEOUT_MS;
+	let retryUntil: number | undefined;
+	let retries = 0;
+	for (;;) {
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) throw readinessTimeout(sandboxId);
+		let status: SandboxStatus | undefined;
+		try {
+			status = await sandbox.getStatus({
+				timeoutMs: Math.min(READY_POLL_RPC_TIMEOUT_MS, remaining),
+			});
+		} catch (error) {
+			if (Date.now() >= deadline) throw readinessTimeout(sandboxId);
+			if (!isTransientPollError(error)) throw error;
+			retryUntil ??= Date.now() + READY_POLL_RETRY_BUDGET_MS;
+			if (Date.now() >= retryUntil) throw error;
+		}
+		let delay = READY_POLL_INTERVAL_MS;
+		if (status === undefined) {
+			delay = Math.min(READY_POLL_INTERVAL_MS * 2 ** retries++, READY_POLL_MAX_RETRY_DELAY_MS);
+		} else {
+			retryUntil = undefined;
+			retries = 0;
+			if (status === 'running' || status === 'paused' || status === 'completed') return status;
+			// The SDK reads an unspecified status as completed.
+			if (status === 'unspecified') return 'completed';
+			if (status === 'failed') {
+				throw new CWSandboxFailedError(`Sandbox '${sandboxId}' failed to start`, {
+					operation: READY_WAIT_OPERATION,
+					sandboxId,
+				});
+			}
+			// The SDK's wait() keeps polling through terminating; it cannot come back, so fail fast.
+			if (status === 'terminated' || status === 'terminating') {
+				throw new CWSandboxTerminatedError(`Sandbox '${sandboxId}' was terminated`, {
+					operation: READY_WAIT_OPERATION,
+					sandboxId,
+				});
+			}
+		}
+		const wait = Math.min(delay, deadline - Date.now());
+		if (wait > 0) {
+			await new Promise<void>((resolve) => {
+				setTimeout(resolve, wait);
+			});
+		}
+	}
 }
 
 let PROC_SEQ = 0;
@@ -468,6 +561,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		private readonly id: SandboxId,
 		private readonly config: CoreWeaveConfig,
 		private readonly client: CoreWeaveClient,
+		private readonly providerIds: BoundedLruMap<SandboxId, string>,
 		/** Reconnect-by-tag before creating. False on a fresh provision (skips a wasted list). */
 		private readonly reuse = true,
 		private readonly userHome?: SandboxUserHome,
@@ -508,20 +602,24 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		// split because only that says whether the dominant startup cost is a real
 		// container start or time spent waiting on a poll.
 		const t0 = Date.now();
-		const existing = !this.reconnectId && this.reuse ? await this.findByOurId() : undefined;
-		if (this.existingOnly && !this.reconnectId && existing?.status !== 'running') {
+		const cached = this.reconnectId || !this.reuse ? undefined : await this.fromCachedId();
+		const existing =
+			this.reconnectId || !this.reuse || cached ? undefined : await this.findByOurId();
+		if (this.existingOnly && !this.reconnectId && !cached && existing?.status !== 'running') {
 			throw new Error(`CoreWeave sandbox ${this.id} is no longer available`);
 		}
 		const t1 = Date.now();
 		// Create-then-wait (rather than `waitUntilRunning: true`) keeps the create
 		// and boot phases separately measurable for the wide event below.
-		const sandbox = this.reconnectId
-			? await this.client.fromId(this.reconnectId)
-			: existing
-				? await this.client.fromId(existing.sandboxId)
-				: this.config.templateId
-					? await this.client.runFromTemplate(this.config.templateId, this.templateOptions())
-					: await this.client.create(this.createOptions());
+		const sandbox =
+			cached ??
+			(this.reconnectId
+				? await this.client.fromId(this.reconnectId)
+				: existing
+					? await this.client.fromId(existing.sandboxId)
+					: this.config.templateId
+						? await this.client.runFromTemplate(this.config.templateId, this.templateOptions())
+						: await this.client.create(this.createOptions()));
 		const t2 = Date.now();
 		if (
 			this.reconnectId &&
@@ -530,40 +628,40 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			throw new Error('CoreWeave saved sandbox is no longer available');
 		}
 		this.sandbox = sandbox;
-		if (!this.reconnectId && !existing) {
-			await this.sandbox.wait();
-			// The SDK's wait() reports a `completed` sandbox as a satisfied
-			// running-wait. For us the keep-alive exiting during boot is a failed
-			// provision — surface it here with the real cause rather than as
-			// NOT_FOUND on the first command.
-			if (this.sandbox.status === 'completed') {
-				throw new Error(
-					`CoreWeave sandbox ${this.sandbox.sandboxId} completed before running (main process exited during boot)`,
-				);
-			}
+		const fresh = !this.reconnectId && !cached && !existing;
+		// `wait()` semantics treat a `completed` sandbox as a satisfied running-wait.
+		// For us the keep-alive exiting during boot is a failed provision — surface it
+		// here with the real cause rather than as NOT_FOUND on the first command.
+		if (fresh && (await waitUntilRunning(sandbox)) === 'completed') {
+			throw new Error(
+				`CoreWeave sandbox ${sandbox.sandboxId} completed before running (main process exited during boot)`,
+			);
 		}
 		const t3 = Date.now();
 		// Armed, not run: the snippet is spliced onto the first command we were going
 		// to send anyway, so it costs no round-trip of its own.
-		if (!this.reconnectId && !existing) {
+		if (fresh) {
 			this.pendingBootstrap = this.createBootstrap();
 		}
+		if (sandbox.status === 'running') this.providerIds.set(this.id, sandbox.sandboxId);
+		const byId = Boolean(this.reconnectId || cached);
 		this.lastEnsureTimings = {
-			find: this.reconnectId ? 0 : t1 - t0,
-			create: this.reconnectId ? 0 : t2 - t1,
-			...(this.reconnectId ? { get: t2 - t1 } : {}),
-			boot: this.reconnectId ? 0 : t3 - t2,
+			find: byId ? 0 : t1 - t0,
+			create: byId ? 0 : t2 - t1,
+			...(byId ? { get: t2 - t0 } : {}),
+			boot: byId ? 0 : t3 - t2,
 		};
 		logEvent(
 			{
 				event: 'coreweave_ensure',
 				sandbox_id: this.id,
-				reconnected: Boolean(this.reconnectId || existing),
+				reconnected: !fresh,
 				...(this.reconnectId ? { reconnect_by_reference: true } : {}),
-				find_ms: this.reconnectId ? 0 : t1 - t0,
-				create_ms: this.reconnectId ? 0 : t2 - t1,
-				...(this.reconnectId ? { get_ms: t2 - t1 } : {}),
-				boot_ms: this.reconnectId ? 0 : t3 - t2,
+				...(cached ? { reconnect_by_cached_id: true } : {}),
+				find_ms: byId ? 0 : t1 - t0,
+				create_ms: byId ? 0 : t2 - t1,
+				...(byId ? { get_ms: t2 - t0 } : {}),
+				boot_ms: byId ? 0 : t3 - t2,
 				...(t3 - t2 > SLOW_BOOT_MS ? { slow_boot_hint: SLOW_BOOT_HINT } : {}),
 				...(this.config.templateId ? { template_id: this.config.templateId } : {}),
 				...(this.userHome ? { user_home_attached: true } : {}),
@@ -577,6 +675,20 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		if (this.invalidReference) {
 			throw new CWSandboxConfigurationError('Invalid CoreWeave sandbox reconnect reference');
 		}
+	}
+
+	/** Get the sandbox this process last saw running for our id; undefined means use the tag lookup. */
+	private async fromCachedId(): Promise<CoreWeaveSandbox | undefined> {
+		const providerId = this.providerIds.get(this.id);
+		if (providerId === undefined) return;
+		try {
+			const sandbox = await this.client.fromId(providerId);
+			if (sandbox.sandboxId === providerId && sandbox.status === 'running') return sandbox;
+		} catch {
+			// The tag lookup is authoritative and reports its own errors.
+		}
+		// Another instance may have cached a newer provider id meanwhile; keep it.
+		if (this.providerIds.peek(this.id) === providerId) this.providerIds.delete(this.id);
 	}
 
 	/** Resolve the sandbox without spending a command round-trip to prove it is up. */
@@ -1166,6 +1278,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	}
 
 	async destroy(): Promise<void> {
+		this.providerIds.delete(this.id);
 		if (this.sandbox) {
 			await this.removeIngress(this.sandbox.sandboxId);
 			await this.deleteTolerant(() => this.sandbox!.delete());
@@ -1224,6 +1337,12 @@ export class CoreWeaveCompute implements SandboxProvider {
 	readonly capabilities: { multiPort: boolean };
 	private client?: CoreWeaveClient;
 	private readonly fileWriteSlots = new SandboxFileWriteSlots();
+	/**
+	 * Provider sandbox ids this process has seen running for a hub id, so a re-resolved instance
+	 * can Get by id instead of paying the tag List. Entries are hints: every hit is validated, and
+	 * a stale one is dropped in favor of the tag lookup.
+	 */
+	private readonly providerIds = new BoundedLruMap<SandboxId, string>(PROVIDER_ID_CACHE_LIMIT);
 
 	constructor(
 		private readonly config: CoreWeaveConfig,
@@ -1292,6 +1411,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 			id,
 			config,
 			this.getClient(),
+			this.providerIds,
 			options?.reuse ?? true,
 			options?.userHome,
 			existingOnly,

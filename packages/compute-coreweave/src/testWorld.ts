@@ -104,8 +104,8 @@ export interface FakeSandbox {
 	batchWrites: { path: string; content: unknown }[][];
 	reads: Record<string, string>;
 	deleted: number;
-	/** Number of `wait()` calls the adapter issued. */
-	waitCalls: number;
+	/** Number of `getStatus()` calls the adapter issued. */
+	statusPolls: number;
 }
 
 type WriteImpl = (files: FileWrites, options?: { timeoutMs?: number }) => Promise<void>;
@@ -143,8 +143,10 @@ function recordWrite(fake: FakeSandbox, writeImpl?: WriteImpl) {
 export function makeWorld(opts?: {
 	runImpl?: (cmd: readonly string[]) => Promise<ProcessResult>;
 	startImpl?: (cmd: readonly string[]) => Promise<CommandProcess>;
-	/** Runs inside the boot `wait()`; use it to simulate a slow boot. */
-	waitImpl?: () => Promise<void>;
+	/** Runs inside each `getStatus()` poll; use it to simulate a slow or failing Get. */
+	pollImpl?: () => Promise<void>;
+	/** Status of newly created sandboxes. Default `running`. */
+	bootStatus?: SandboxStatus;
 	/** Runs before each `files.write`; throw to fail that write. */
 	writeImpl?: WriteImpl;
 	/** State for started processes; omit to leave them running. */
@@ -157,15 +159,16 @@ export function makeWorld(opts?: {
 	}[] = [];
 	const deleted: string[] = [];
 	const listCalls: (readonly string[])[] = [];
+	const fromIdCalls: string[] = [];
 	const registry = new Map<string, { fake: FakeSandbox; tags: string[] }>();
 	let seq = 0;
 	const runImpl = opts?.runImpl ?? (async () => procResult());
-	const waitImpl = opts?.waitImpl ?? (async () => {});
+	const pollImpl = opts?.pollImpl ?? (async () => {});
 
 	function build(sandboxId: string, services: readonly Service[] = []) {
 		const fake: FakeSandbox = {
 			sandboxId,
-			status: 'running',
+			status: opts?.bootStatus ?? 'running',
 			serviceUrls: services.map((service) => ({
 				name: service.name ?? `port-${service.port}`,
 				port: service.port,
@@ -177,7 +180,7 @@ export function makeWorld(opts?: {
 			batchWrites: [],
 			reads: {},
 			deleted: 0,
-			waitCalls: 0,
+			statusPolls: 0,
 		};
 		const sandbox = {
 			sandboxId,
@@ -187,9 +190,10 @@ export function makeWorld(opts?: {
 			get serviceUrls() {
 				return fake.serviceUrls;
 			},
-			wait: async () => {
-				fake.waitCalls++;
-				await waitImpl();
+			getStatus: async () => {
+				fake.statusPolls++;
+				await pollImpl();
+				return fake.status;
 			},
 			commands: {
 				run: async (command: readonly string[]) => {
@@ -243,6 +247,7 @@ export function makeWorld(opts?: {
 			return sandbox;
 		},
 		fromId: async (cwId) => {
+			fromIdCalls.push(cwId);
 			const entry = registry.get(cwId);
 			if (!entry) throw new Error(`no sandbox ${cwId}`);
 			return reconnect(entry, cwId);
@@ -274,8 +279,10 @@ export function makeWorld(opts?: {
 			get serviceUrls() {
 				return entry.fake.serviceUrls;
 			},
-			wait: async () => {
-				entry.fake.waitCalls++;
+			getStatus: async () => {
+				entry.fake.statusPolls++;
+				await pollImpl();
+				return entry.fake.status;
 			},
 			commands: {
 				run: async (command: readonly string[]) => {
@@ -312,5 +319,5 @@ export function makeWorld(opts?: {
 		};
 	}
 
-	return { client, created, createdFromTemplate, deleted, listCalls, registry };
+	return { client, created, createdFromTemplate, deleted, fromIdCalls, listCalls, registry };
 }

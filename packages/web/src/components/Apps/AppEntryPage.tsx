@@ -8,7 +8,7 @@ import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { useAppQuery } from '@/api/apps';
 import { ApiRequestError } from '@/api/client';
 import {
-	capabilitiesQueryOptions,
+	editorSessionQueryOptions,
 	projectQueryOptions,
 	useCapabilitiesQuery,
 	useUserQuery,
@@ -39,17 +39,55 @@ export function AppEntryPage({
 		refetchIntervalMs: (error) => (isMoveInProgress(error) ? 30_000 : undefined),
 	});
 	const user = useUserQuery();
-	const prefetchProject = !!user.data && !user.data.app_only;
+	const canLoadProject = !!user.data && !user.data.app_only;
+	const project = useQuery({ ...projectQueryOptions(pid), enabled: canLoadProject });
+	const { data: capabilities } = useCapabilitiesQuery();
+	const projectRole = project.data?.your_role;
+	// The project's `your_role` and the app's come from the same server-side role
+	// resolution, so a fresh non-app-user project role opens the editor without
+	// waiting for `/app`, which still reroutes an app-user when it answers.
+	const projectGrantsEditor =
+		canLoadProject &&
+		project.isSuccess &&
+		!project.isStale &&
+		!!projectRole &&
+		projectRole !== 'app-user';
+	// Viewers never take the editor lease, so wait for a role that does.
+	const prefetchEditorSession =
+		variant === 'edit' &&
+		projectGrantsEditor &&
+		projectRole !== 'viewer' &&
+		capabilities?.editor_sandbox_sharing === 'exclusive';
 	const queryClient = useQueryClient();
 	useEffect(() => {
-		if (prefetchProject) void queryClient.prefetchQuery(projectQueryOptions(pid));
-		void queryClient.prefetchQuery(capabilitiesQueryOptions());
-	}, [queryClient, pid, prefetchProject]);
+		if (prefetchEditorSession) void queryClient.prefetchQuery(editorSessionQueryOptions(pid, nid));
+	}, [queryClient, pid, nid, prefetchEditorSession]);
+	const entryKey = `${pid}/${nid}`;
+	const [projectGateKey, setProjectGateKey] = useState<string | null>(null);
+	// Latched: moving to the direct NotebookPage branch later would remount the editor
+	// and restart its session.
+	const projectGated =
+		projectGateKey === entryKey ||
+		(query.data === undefined &&
+			((query.isError && !isMoveInProgress(query.error)) || projectGrantsEditor));
+	if (projectGated && projectGateKey !== entryKey) setProjectGateKey(entryKey);
 	if (isMoveInProgress(query.error)) return <NotebookMovingNotice pid={pid} />;
-	if (query.isError)
+	if (query.data?.your_role === 'app-user') {
+		if (variant === 'edit') return <Navigate to={`${query.data.url}${location.search}`} replace />;
+		return (
+			<StakeholderApp
+				key={entryKey}
+				pid={pid}
+				nid={nid}
+				title={query.data.title}
+				canRun={query.data.can.run}
+			/>
+		);
+	}
+	if (projectGated)
 		return (
 			<NotebookFallback
-				key={`${pid}/${nid}`}
+				key={entryKey}
 				pid={pid}
 				nid={nid}
 				variant={variant}
@@ -58,18 +96,7 @@ export function AppEntryPage({
 			/>
 		);
 	if (!query.data) return <p className="p-6">Opening app…</p>;
-	if (query.data.your_role !== 'app-user')
-		return <NotebookPage variant={variant} target={{ projectId: pid, notebookId: nid }} />;
-	if (variant === 'edit') return <Navigate to={`${query.data.url}${location.search}`} replace />;
-	return (
-		<StakeholderApp
-			key={`${pid}/${nid}`}
-			pid={pid}
-			nid={nid}
-			title={query.data.title}
-			canRun={query.data.can.run}
-		/>
-	);
+	return <NotebookPage variant={variant} target={{ projectId: pid, notebookId: nid }} />;
 }
 
 function isMoveInProgress(error: Error | null): boolean {
@@ -103,7 +130,7 @@ function NotebookFallback({
 	pid: string;
 	nid: string;
 	variant: 'app' | 'edit';
-	error: Error;
+	error: Error | null;
 	user: ReturnType<typeof useUserQuery>;
 }) {
 	const canLoadProject = !!user.data && !user.data.app_only;
@@ -129,7 +156,11 @@ function NotebookFallback({
 		!project.data?.your_role ||
 		project.data.your_role === 'app-user'
 	)
-		return <AppAccessError error={error} />;
+		return (
+			<AppAccessError
+				error={error ?? project.error ?? user.error ?? new Error('You cannot open this notebook.')}
+			/>
+		);
 	return <NotebookPage variant={variant} target={{ projectId: pid, notebookId: nid }} />;
 }
 

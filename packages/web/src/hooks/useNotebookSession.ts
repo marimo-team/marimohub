@@ -1,6 +1,8 @@
 import { leaveAppVisit } from '@/api/sessionVisits';
+import { MAX_TIMER_DELAY_MS } from '@marimo-hub/core/async';
 import { APP_HEARTBEAT_INTERVAL_MS } from '@marimo-hub/core/constants';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { sleep } from '@marimo-hub/core/duration';
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { apiClient, apiData, ApiRequestError } from '@/api/client';
 import {
 	useRestartApp,
@@ -15,9 +17,7 @@ import type { Session } from '@/types';
 import {
 	EDITOR_HEARTBEAT_INTERVAL_MS,
 	SESSION_STATUS_INTERVAL_MS,
-	SESSION_START_POLL_INTERVAL_MS,
-	SESSION_START_SLOW_POLL_AFTER_MS,
-	SESSION_START_SLOW_POLL_INTERVAL_MS,
+	sessionStartPollDelayMs,
 	sessionStartupDeadlineMs,
 } from '@/lib/sessions';
 
@@ -110,7 +110,6 @@ export function useNotebookSession(
 	// StrictMode can orphan the mutation observer during its mount/remount cycle,
 	// leaving `startSession.isPending` stuck. Track this request independently.
 	const [starting, setStarting] = useState(false);
-	const [startPollInterval, setStartPollInterval] = useState(SESSION_START_POLL_INTERVAL_MS);
 	// Keep the loading panel visible while teardown or replacement precedes admission.
 	const [restarting, setRestarting] = useState(false);
 	const sessionRef = useRef<Session | null>(null);
@@ -136,7 +135,6 @@ export function useNotebookSession(
 			sessionRef.current?.session_id !== next.session_id
 		) {
 			startingSinceRef.current = Date.now();
-			setStartPollInterval(SESSION_START_POLL_INTERVAL_MS);
 		}
 		const committed =
 			next && next.session_id === sessionRef.current?.session_id && !next.app_assignment
@@ -290,10 +288,17 @@ export function useNotebookSession(
 	);
 
 	// Ignore stale responses. Retry request failures except 404 on the next tick.
+	// The promise settles once the response has been handled and never rejects.
 	const pollSession = useCallback(
-		(sessionId: string, onNext: (next: Session) => void, onGone: () => void) => {
+		(
+			sessionId: string,
+			onNext: (next: Session) => void,
+			onGone: () => void,
+			isLive: () => boolean = () => true,
+		): Promise<void> => {
 			const gen = generation.current();
-			apiData(
+			const current = () => generation.isCurrent(gen) && isLive();
+			return apiData(
 				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}', {
 					params: {
 						path: { pid: projectId, nid: notebookId, sid: sessionId },
@@ -301,41 +306,45 @@ export function useNotebookSession(
 				}),
 			)
 				.then((next) => {
-					if (generation.isCurrent(gen)) onNext(next);
+					if (current()) onNext(next);
 				})
 				.catch((err: unknown) => {
-					if (generation.isCurrent(gen) && isNotFoundError(err)) onGone();
+					if (current() && isNotFoundError(err)) onGone();
 				});
 		},
 		[projectId, notebookId, generation],
 	);
 
+	// A lost provisioning request can leave the record starting indefinitely. Returns the
+	// ms left before the deadline, or null once startup is over or has been failed.
+	const enforceStartupDeadline = useEffectEvent((): number | null => {
+		// These timers can fire after a commit but before its re-render, so read the ref.
+		const session = sessionRef.current;
+		if (session?.status !== 'starting' || startingSinceRef.current === null) return null;
+		// Match the server's timeout message, which excludes the grace period.
+		const timeoutSeconds = startupTimeoutSeconds ?? DEFAULT_STARTUP_TIMEOUT_S;
+		const remaining =
+			sessionStartupDeadlineMs(timeoutSeconds) - (Date.now() - startingSinceRef.current);
+		if (remaining >= 0) return remaining;
+		failStart(
+			{
+				code: 'STARTUP_TIMEOUT',
+				message: `${mode === 'app' ? 'The app' : 'The kernel'} did not start within ${timeoutSeconds}s.`,
+			},
+			undefined,
+			session,
+		);
+		return null;
+	});
+
 	// Reused sessions can return before provisioning finishes, so watch them until ready.
-	useInterval(
-		() => {
-			if (session?.status !== 'starting') return;
-			const elapsed =
-				startingSinceRef.current === null ? null : Date.now() - startingSinceRef.current;
-			if (elapsed !== null && elapsed > SESSION_START_SLOW_POLL_AFTER_MS) {
-				setStartPollInterval(SESSION_START_SLOW_POLL_INTERVAL_MS);
-			}
-			// A lost provisioning request can leave the record starting indefinitely.
-			// Match the server's timeout message, which excludes the grace period.
-			const timeoutSeconds = startupTimeoutSeconds ?? DEFAULT_STARTUP_TIMEOUT_S;
-			const deadlineMs = sessionStartupDeadlineMs(timeoutSeconds);
-			if (elapsed !== null && elapsed > deadlineMs) {
-				failStart(
-					{
-						code: 'STARTUP_TIMEOUT',
-						message: `${mode === 'app' ? 'The app' : 'The kernel'} did not start within ${timeoutSeconds}s.`,
-					},
-					undefined,
-					session,
-				);
-				return;
-			}
-			pollSession(
-				session.session_id,
+	const pollStartingSession = useEffectEvent(
+		(sessionId: string, isLive: () => boolean): Promise<void> => {
+			const current = sessionRef.current;
+			if (current?.session_id !== sessionId || current.status !== 'starting')
+				return Promise.resolve();
+			return pollSession(
+				sessionId,
 				(next) => {
 					if (next.status === 'running' && !next.sandbox_url) {
 						concludeAccessLost(next.can?.attach ?? false);
@@ -347,10 +356,47 @@ export function useNotebookSession(
 				},
 				// The record vanished mid-start (reaped, or the notebook deleted).
 				() => failStart(undefined, 'NOT_FOUND'),
+				isLive,
 			);
 		},
-		session?.status === 'starting' ? startPollInterval : null,
 	);
+	const startingSessionId = session?.status === 'starting' ? session.session_id : null;
+	useEffect(() => {
+		if (startingSessionId === null) return;
+		const controller = new AbortController();
+		const { signal } = controller;
+		// Drops responses after cleanup too, e.g. once an app heartbeat reports `running`.
+		const isLive = () => !signal.aborted;
+		const pause = (ms: number) =>
+			sleep(ms, signal).catch((error: unknown) => {
+				if (isLive()) throw error;
+			});
+		// Each delay starts when the previous response is handled: overlapping polls can
+		// answer out of order, and a late `starting` would undo a newer `running`.
+		const pollWhileStarting = async () => {
+			for (let attempt = 0; ; attempt += 1) {
+				const since = startingSinceRef.current;
+				await pause(sessionStartPollDelayMs(attempt, since === null ? 0 : Date.now() - since));
+				if (!isLive()) return;
+				await pollStartingSession(startingSessionId, isLive);
+			}
+		};
+		// Timed separately from polling so a hung poll cannot postpone the deadline.
+		// Re-armed rather than set once because the timeout can change while starting.
+		const watchDeadline = async () => {
+			for (let wait = 0; ; ) {
+				await pause(wait);
+				if (!isLive()) return;
+				const remaining = enforceStartupDeadline();
+				if (remaining === null) return;
+				// sleep() rejects fractional or over-long delays, which a capability timeout can produce.
+				wait = Math.min(Math.ceil(remaining) + 1, MAX_TIMER_DELAY_MS);
+			}
+		};
+		void pollWhileStarting();
+		void watchDeadline();
+		return () => controller.abort();
+	}, [startingSessionId]);
 
 	const concludeSession = useCallback(
 		(status: SessionEnded, endedBy: string | null = null) => {
@@ -382,7 +428,7 @@ export function useNotebookSession(
 		() => {
 			const sid = session?.session_id;
 			if (!sid) return;
-			pollSession(sid, updateRunningSession, () => concludeSession('gone'));
+			void pollSession(sid, updateRunningSession, () => concludeSession('gone'));
 		},
 		mode !== 'app' && session?.status === 'running' ? SESSION_STATUS_INTERVAL_MS : null,
 	);

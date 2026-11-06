@@ -90,12 +90,16 @@ export function useAuditLogsQuery(filters: AuditLogFilters) {
 }
 
 // Auth
-export function useUserQuery() {
-	return useQuery({
+export function userQueryOptions() {
+	return queryOptions({
 		queryKey: userKeys.me(),
 		queryFn: () => apiData(apiClient.GET('/api/v1/me')),
 		...IMMUTABLE_QUERY,
 	});
+}
+
+export function useUserQuery() {
+	return useQuery(userQueryOptions());
 }
 
 // Personal access tokens (self-service, on the account menu)
@@ -2228,13 +2232,8 @@ export function useStopSession(
 	);
 }
 
-export function useEditorSessionQuery(
-	projectId: string,
-	notebookId: string,
-	enabled = true,
-	currentUserId?: string,
-) {
-	return useQuery({
+export function editorSessionQueryOptions(projectId: string, notebookId: string) {
+	return queryOptions({
 		queryKey: sessionKeys.editor(projectId, notebookId),
 		queryFn: () =>
 			apiData(
@@ -2242,6 +2241,17 @@ export function useEditorSessionQuery(
 					params: { path: { pid: projectId, nid: notebookId } },
 				}),
 			),
+	});
+}
+
+export function useEditorSessionQuery(
+	projectId: string,
+	notebookId: string,
+	enabled = true,
+	currentUserId?: string,
+) {
+	return useQuery({
+		...editorSessionQueryOptions(projectId, notebookId),
 		enabled,
 		refetchInterval: (query) =>
 			currentUserId && query.state.data?.holder?.user_id === currentUserId ? false : 10_000,

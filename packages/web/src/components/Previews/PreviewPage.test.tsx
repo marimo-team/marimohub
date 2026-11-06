@@ -268,6 +268,34 @@ describe('PreviewPage', () => {
 		},
 	);
 
+	it('backs off editor startup checks and settles on the status cadence once running', async () => {
+		vi.useFakeTimers();
+		const { setHeartbeatResponse } = setup({ heartbeat: 'starting' });
+		const inner = globalThis.fetch;
+		const checks: number[] = [];
+		vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+			if (String(input).includes('/sessions/alice-session')) checks.push(Date.now());
+			return inner(input, init);
+		});
+		await vi.waitFor(() =>
+			expect(screen.getByRole('button', { name: 'Open temporary editor' })).toBeInTheDocument(),
+		);
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', { name: 'Open temporary editor' }));
+			await vi.advanceTimersByTimeAsync(1);
+		});
+		await vi.waitFor(() => expect(checks).toHaveLength(1));
+		await act(() => vi.advanceTimersByTimeAsync(5_800));
+		expect(checks.slice(1).map((at, i) => at - checks[i])).toEqual([250, 500, 1_000, 2_000, 2_000]);
+
+		setHeartbeatResponse('running');
+		await act(() => vi.advanceTimersByTimeAsync(2_000));
+		expect(screen.getByTitle('Review preview')).toBeInTheDocument();
+		const running = checks.length;
+		await act(() => vi.advanceTimersByTimeAsync(29_000));
+		expect(checks).toHaveLength(running);
+	});
+
 	it('cancels the startup deadline once the runtime is running', async () => {
 		vi.useFakeTimers();
 		setup({ appUser: true, heartbeat: 'running', startupTimeoutSeconds: 5 });

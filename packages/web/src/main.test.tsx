@@ -9,6 +9,8 @@ const theme = vi.hoisted(() => ({
 	applyThemeConfig: vi.fn(),
 }));
 const render = vi.hoisted(() => vi.fn());
+const fetch = vi.hoisted(() => vi.fn<(input: RequestInfo | URL) => Promise<Response>>());
+const pendingFetches: ((response: Response) => void)[] = [];
 
 vi.mock('@/lib/theme', () => theme);
 vi.mock('react-dom/client', () => ({ createRoot: () => ({ render }) }));
@@ -33,14 +35,56 @@ beforeEach(() => {
 	theme.loadThemeConfig.mockResolvedValue(DEFAULT_THEME_CONFIG);
 	document.body.innerHTML = '<div id="root"></div>';
 	vi.spyOn(console, 'warn').mockImplementation(() => {});
+	fetch.mockImplementation(() => new Promise((resolve) => pendingFetches.push(resolve)));
+	vi.stubGlobal('fetch', fetch);
 });
 
-afterEach(() => {
+afterEach(async () => {
+	// Bootstrap prefetches into the module's client; stop it before the next test resets modules.
+	const { queryClient } = await import('./api/queryClient');
+	await queryClient.cancelQueries();
+	for (const resolve of pendingFetches.splice(0))
+		resolve(Response.json({ success: true, data: null }));
+	queryClient.clear();
+	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
 	document.body.innerHTML = '';
 });
 
+function requestedPaths(): string[] {
+	return fetch.mock.calls.map(
+		([input]) =>
+			new URL(input instanceof Request ? input.url : String(input), 'http://localhost').pathname,
+	);
+}
+
 describe('app bootstrap', () => {
+	it('requests the user and capabilities while the theme is still loading', async () => {
+		let resolve!: (value: typeof DEFAULT_THEME_CONFIG) => void;
+		theme.loadThemeConfig.mockReturnValue(
+			new Promise((complete) => {
+				resolve = complete;
+			}),
+		);
+		await import('./main');
+		await vi.waitFor(() =>
+			expect(requestedPaths()).toEqual(
+				expect.arrayContaining(['/api/v1/me', '/api/v1/capabilities']),
+			),
+		);
+		expect(render).not.toHaveBeenCalled();
+		const [{ queryClient }, { systemKeys, userKeys }] = await Promise.all([
+			import('./api/queryClient'),
+			import('./api/queryKeys'),
+		]);
+		// The hooks read these keys, so they join the in-flight requests instead of refetching.
+		for (const key of [userKeys.me(), systemKeys.capabilities()])
+			expect(queryClient.getQueryState(key)?.fetchStatus).toBe('fetching');
+		resolve(DEFAULT_THEME_CONFIG);
+		await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
+		expect(requestedPaths()).toHaveLength(2);
+	});
+
 	it('applies branding before the first render', async () => {
 		const config = { ...DEFAULT_THEME_CONFIG, name: 'Research Hub', primary_color: '#123456' };
 		let resolve!: (value: typeof config) => void;

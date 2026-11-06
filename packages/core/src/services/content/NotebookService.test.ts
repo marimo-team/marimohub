@@ -2388,6 +2388,28 @@ describe('NotebookService', () => {
 			expect(result!.newVersion).toBe(true);
 		});
 
+		it('writes the catalog only when a save changes the notebook code', async () => {
+			const created = await notebooks.createNotebook(
+				projectId,
+				{ title: 'NB', description: 'D', code: 'v1' },
+				ACTOR,
+			);
+			const put = vi.spyOn(bucket, 'put');
+			const writes = () => {
+				const keys = put.mock.calls.map(([key]) => key);
+				return {
+					pointer: keys.filter((key) => key === paths.catalog).length,
+					snapshots: keys.filter((key) => key.startsWith(paths.snapshotsPrefix)).length,
+				};
+			};
+
+			await notebooks.commitSession(projectId, created.id, { code: 'v1', html: '<p>1</p>' }, ACTOR);
+			expect(writes()).toEqual({ pointer: 0, snapshots: 0 });
+
+			await notebooks.commitSession(projectId, created.id, { code: 'v2' }, ACTOR);
+			expect(writes()).toEqual({ pointer: 1, snapshots: 1 });
+		});
+
 		it('chains parent_id across consecutive session commits', async () => {
 			const created = await notebooks.createNotebook(
 				projectId,

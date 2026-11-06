@@ -6,7 +6,7 @@ import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
 import {
 	SESSION_START_POLL_INTERVAL_MS,
 	SESSION_START_SLOW_POLL_AFTER_MS,
-	SESSION_START_SLOW_POLL_INTERVAL_MS,
+	sessionStartPollDelayMs,
 } from '@/lib/sessions';
 import { useNotebookSession } from './useNotebookSession';
 
@@ -55,12 +55,17 @@ async function setupAppHeartbeat(
 	return { ...hook, fetchMock };
 }
 
-const FAST_START_POLLS = SESSION_START_SLOW_POLL_AFTER_MS / SESSION_START_POLL_INTERVAL_MS + 1;
-
-async function advanceStartupPastBackoff() {
-	// Flush React between ticks so delay changes take effect.
-	for (let tick = 0; tick < FAST_START_POLLS; tick++) {
-		await act(() => vi.advanceTimersByTimeAsync(SESSION_START_POLL_INTERVAL_MS));
+/**
+ * Offsets from the start of startup at which the backoff schedule polls, up to `untilMs`.
+ * Each delay runs from the previous response; mocked responses settle without advancing
+ * the clock, so these are also the request offsets.
+ */
+function startPollOffsets(untilMs: number): number[] {
+	const offsets: number[] = [];
+	for (let attempt = 0, at = 0; ; attempt++) {
+		at += sessionStartPollDelayMs(attempt, at);
+		if (at > untilMs) return offsets;
+		offsets.push(at);
 	}
 }
 
@@ -224,9 +229,6 @@ describe('useNotebookSession', () => {
 		expect(result.current.session?.app_assignment).toEqual(assignment);
 		const heartbeat = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/heartbeat'));
 		expect(JSON.parse(heartbeat![1]!.body as string)).toEqual(assignment);
-		expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/sessions/sess-1'))).toBe(
-			false,
-		);
 	});
 
 	it.each([
@@ -286,49 +288,137 @@ describe('useNotebookSession', () => {
 				toaster: false,
 			});
 			await settleHook();
-			await advanceStartupPastBackoff();
+			await act(() => vi.advanceTimersByTimeAsync(SESSION_START_SLOW_POLL_AFTER_MS + 1_000));
 			act(() => result.current.stop());
 			await settleHook();
 			act(() => result.current.start());
 			await settleHook();
 			expect(result.current.session?.session_id).toBe('sess-2');
 			fetchMock.mockClear();
-			await act(() => vi.advanceTimersByTimeAsync(SESSION_START_POLL_INTERVAL_MS - 1));
-			expect(fetchMock).not.toHaveBeenCalled();
+			const polls = () =>
+				fetchMock.mock.calls
+					.map(([url]) => String(url))
+					.filter((url) => url.endsWith('/sessions/sess-2'));
+			await act(() => vi.advanceTimersByTimeAsync(0));
+			expect(polls()).toHaveLength(1);
+			await act(() => vi.advanceTimersByTimeAsync(249));
+			expect(polls()).toHaveLength(1);
 			await act(() => vi.advanceTimersByTimeAsync(1));
-			expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
-				`/api/v1/projects/${PID}/notebooks/${NID}/sessions/sess-2`,
-			]);
+			expect(polls()).toHaveLength(2);
 		},
 	);
 
 	it.each(['edit', 'app'] as const)(
-		'slows %s startup polling after 30 seconds under StrictMode',
+		'backs off %s startup polling, slows after 30 seconds, and stops once running under StrictMode',
 		async (mode) => {
 			vi.useFakeTimers();
-			const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
-				jsonOk(makeSession({ status: 'starting', sandbox_url: undefined })),
-			);
+			const pollTimes: number[] = [];
+			const fetchMock = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => {
+				if (String(url).endsWith('/sessions/sess-1')) pollTimes.push(Date.now());
+				return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
+			});
 			vi.stubGlobal('fetch', fetchMock);
 			const { result } = renderHookWithClient(() => useNotebookSession(PID, NID, { mode }), {
 				toaster: false,
 				reactStrictMode: true,
 			});
 			await settleHook();
-			const polls = () =>
-				fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/sessions/sess-1'));
-			await advanceStartupPastBackoff();
-			expect(polls()).toHaveLength(FAST_START_POLLS);
-			await act(() => vi.advanceTimersByTimeAsync(SESSION_START_SLOW_POLL_INTERVAL_MS - 1));
-			expect(polls()).toHaveLength(FAST_START_POLLS);
-			await act(() => vi.advanceTimersByTimeAsync(1));
-			expect(polls()).toHaveLength(FAST_START_POLLS + 1);
+			const startedAt = Date.now();
+			const horizon = SESSION_START_SLOW_POLL_AFTER_MS + 12_000;
+			await act(() => vi.advanceTimersByTimeAsync(horizon));
+			const expected = startPollOffsets(horizon);
+			expect(expected.slice(0, 6)).toEqual([0, 250, 750, 1_750, 3_750, 5_750]);
+			expect(expected.slice(-3)).toEqual([31_750, 36_750, 41_750]);
+			expect(pollTimes.map((at) => at - startedAt)).toEqual(expected);
 
 			fetchMock.mockResolvedValue(jsonOk(makeSession()));
-			await act(() => vi.advanceTimersByTimeAsync(SESSION_START_SLOW_POLL_INTERVAL_MS));
+			await act(() => vi.advanceTimersByTimeAsync(5_000));
 			expect(result.current.isRunning).toBe(true);
+			const settled = pollTimes.length;
+			await act(() => vi.advanceTimersByTimeAsync(10_000));
+			expect(pollTimes).toHaveLength(settled);
 		},
 	);
+
+	it('keeps a newer running poll when an earlier slow starting poll answers late', async () => {
+		vi.useFakeTimers();
+		const slowStarting = deferred<Response>();
+		let polls = 0;
+		const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+			if (init?.method === 'POST') {
+				return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
+			}
+			if (String(url).endsWith('/sessions/sess-1')) {
+				polls += 1;
+				return polls === 1 ? slowStarting.promise : jsonOk(makeSession());
+			}
+			throw new Error(`unexpected fetch: ${String(url)}`);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		await settleHook();
+
+		await act(() => vi.advanceTimersByTimeAsync(5_000));
+		await act(async () => {
+			slowStarting.resolve(jsonOk(makeSession({ status: 'starting', sandbox_url: undefined })));
+			await vi.advanceTimersByTimeAsync(1_000);
+		});
+		expect(result.current.isRunning).toBe(true);
+		const settled = polls;
+		await act(() => vi.advanceTimersByTimeAsync(10_000));
+		expect(polls).toBe(settled);
+		expect(result.current.session?.status).toBe('running');
+	});
+
+	it('ignores a startup poll that answers after an app heartbeat reports running', async () => {
+		const slowStarting = deferred<Response>();
+		let polls = 0;
+		const { result, fetchMock } = await setupAppHeartbeat(() =>
+			jsonOk(makeSession({ mode: 'app' })),
+		);
+		fetchMock.mockImplementation(async (url: RequestInfo | URL) => {
+			if (String(url).endsWith('/heartbeat')) return jsonOk(makeSession({ mode: 'app' }));
+			polls += 1;
+			return slowStarting.promise;
+		});
+		await act(() => vi.advanceTimersByTimeAsync(1_000));
+		expect(polls).toBe(1);
+		expect(result.current.isRunning).toBe(true);
+		await act(async () => {
+			slowStarting.resolve(
+				jsonOk(makeSession({ mode: 'app', status: 'starting', sandbox_url: undefined })),
+			);
+			await vi.advanceTimersByTimeAsync(5_000);
+		});
+		expect(result.current.session?.status).toBe('running');
+		expect(polls).toBe(1);
+	});
+
+	it('never has more than one startup poll in flight', async () => {
+		vi.useFakeTimers();
+		let inFlight = 0;
+		let maxInFlight = 0;
+		let polls = 0;
+		const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+			if (init?.method === 'POST') {
+				return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
+			}
+			polls += 1;
+			inFlight += 1;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			// Slower than every early backoff delay.
+			await new Promise((resolve) => setTimeout(resolve, 1_500));
+			inFlight -= 1;
+			return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		await settleHook();
+
+		await act(() => vi.advanceTimersByTimeAsync(20_000));
+		expect(polls).toBeGreaterThan(3);
+		expect(maxInFlight).toBe(1);
+	});
 
 	it('captures the error message when start fails', async () => {
 		vi.stubGlobal(
@@ -908,12 +998,13 @@ describe('useNotebookSession', () => {
 		expect(result.current.session?.status).toBe('starting');
 
 		await act(async () => {
-			await vi.advanceTimersByTimeAsync(2_000);
+			await vi.advanceTimersByTimeAsync(0);
 		});
+		expect(polls).toBe(1);
 		expect(result.current.session?.status).toBe('starting');
 
 		await act(async () => {
-			await vi.advanceTimersByTimeAsync(2_000);
+			await vi.advanceTimersByTimeAsync(250);
 		});
 		expect(result.current.isRunning).toBe(true);
 		expect(polls).toBe(2);
@@ -1663,7 +1754,7 @@ describe('session diagnostic links', () => {
 				toaster: false,
 			});
 			await settleHook();
-			await act(() => vi.advanceTimersByTimeAsync(SESSION_START_POLL_INTERVAL_MS));
+			await act(() => vi.advanceTimersByTimeAsync(0));
 			expect(fetchMock).toHaveBeenCalledTimes(2);
 			act(() => result.current[action]());
 			await settleHook();

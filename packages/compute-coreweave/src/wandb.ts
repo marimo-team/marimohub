@@ -15,7 +15,7 @@
  * Kernel URLs: the W&B managed runner has no static hostname scheme, so this
  * backend ignores the hostname-template machinery and resolves URLs at expose
  * time from `serviceUrls`. The handle's metadata — refreshed by the boot
- * `wait()` — usually already carries them, so the common path costs no extra
+ * readiness polls — usually already carries them, so the common path costs no extra
  * Get round-trip.
  * The managed runner only assigns ingress through an HTTPS product endpoint,
  * so the kernel service requests one; its URL arrives on `serviceUrls`.
@@ -47,7 +47,7 @@ export interface WandbConfig extends Pick<
 
 /**
  * Build a `resolveExposedUrl` from the sandbox handle plus a metadata lookup.
- * The handle's `serviceUrls` (kept fresh by the SDK's create/wait/reconnect
+ * The handle's `serviceUrls` (kept fresh by the create, readiness, and reconnect
  * Gets) answer without a round-trip; the lookup covers a URL assigned only
  * after the handle's last refresh.
  */

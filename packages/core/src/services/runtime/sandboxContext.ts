@@ -25,8 +25,9 @@ temporary.write_bytes(decode(sys.argv[2]))
 temporary.replace(path)
 `;
 
-// The context is optional metadata on the critical path before `mark_running`;
-// a hung adapter exec must not hold the session in `starting`.
+// The context is optional metadata; the write runs in the background after the
+// kernel is ready, but surfaces wait for it, so a hung adapter exec still needs
+// a bound.
 const WRITE_CONTEXT_TIMEOUT_MS = 15_000;
 
 export interface SandboxContext {

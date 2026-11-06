@@ -1,5 +1,6 @@
 import { importPKCS8, SignJWT } from 'jose';
 import { z } from 'zod';
+import { StaleWhileRevalidateCache } from '@marimo-hub/core/cache';
 import { ResourceExhaustedError, UnavailableError, ValidationError } from '@marimo-hub/core/errors';
 import type { IntegrationProbe } from '@marimo-hub/core/ports/integrations';
 
@@ -18,36 +19,67 @@ const tokenSchema = z.object({
 	expires_in: z.number().int().positive().max(86_400),
 });
 
+const TOKEN_REFRESH_MARGIN_MS = 60_000;
+
+class SharedFetchAbortedError extends Error {
+	override readonly name = 'SharedFetchAbortedError';
+}
+
+interface CachedToken {
+	token: string;
+	expiresAt: number;
+	issuedAt: number;
+}
+
 export class BigQueryTokenCache {
-	private readonly entries = new Map<string, { token: string; expiresAt: number }>();
+	private readonly entries = new StaleWhileRevalidateCache<string, CachedToken>({
+		load: () => Promise.reject(new Error('BigQuery tokens load through a per-request loader')),
+		maxSize: 100,
+		// The cache measures freshness from load time, so `issuedAt` (taken at load completion)
+		// turns the absolute expiry into a relative window. A token too close to expiry gets a
+		// zero window and is refetched on the next request.
+		ttl: (entry) => ({
+			freshForMs: Math.max(0, entry.expiresAt - TOKEN_REFRESH_MARGIN_MS - entry.issuedAt),
+			staleForMs: 0,
+		}),
+	});
 
 	async get(raw: string, probe: IntegrationProbe, signal: AbortSignal): Promise<string> {
 		signal.throwIfAborted();
 		const key = await credentialKey(raw);
 		signal.throwIfAborted();
-		const now = Date.now();
-		for (const [key, entry] of this.entries) {
-			if (entry.expiresAt <= now + 60_000) this.entries.delete(key);
+		const load = async (): Promise<CachedToken> => {
+			const requestedAt = Date.now();
+			let result: Awaited<ReturnType<typeof accessToken>>;
+			try {
+				result = await accessToken(raw, probe, signal);
+			} catch (error) {
+				if (signal.aborted) throw new SharedFetchAbortedError();
+				throw error;
+			}
+			return {
+				token: result.access_token,
+				expiresAt: requestedAt + result.expires_in * 1000,
+				issuedAt: Date.now(),
+			};
+		};
+		let entry: CachedToken | undefined;
+		for (let attempt = 0; entry === undefined; attempt += 1) {
+			try {
+				entry = await this.entries.get(key, load);
+			} catch (error) {
+				signal.throwIfAborted();
+				// Concurrent callers share one fetch bound to whichever signal started it. Its
+				// abort must not fail a caller whose own request is still live.
+				if (!(error instanceof SharedFetchAbortedError) || attempt > 0) throw error;
+			}
 		}
-		const cached = this.entries.get(key);
-		if (cached) {
-			this.entries.delete(key);
-			this.entries.set(key, cached);
-			return cached.token;
-		}
-		const result = await accessToken(raw, probe, signal);
-		signal.throwIfAborted();
-		const expiresAt = now + result.expires_in * 1000;
-		if (expiresAt > Date.now() + 60_000) {
-			if (this.entries.size >= 100) this.entries.delete(this.entries.keys().next().value!);
-			this.entries.set(key, { token: result.access_token, expiresAt });
-		}
-		return result.access_token;
+		return entry.token;
 	}
 
 	async invalidate(raw: string, token: string): Promise<void> {
 		const key = await credentialKey(raw);
-		if (this.entries.get(key)?.token === token) this.entries.delete(key);
+		if (this.entries.getIfPresent(key)?.token === token) this.entries.delete(key);
 	}
 }
 
