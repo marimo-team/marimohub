@@ -39,20 +39,20 @@ template via `…_USER_HOME_TEMPLATE_ID`.
 
 ## Warm-pool readiness budgets
 
-Claiming a warm sandbox and maintenance health checks first resolve the existing
-sandbox with a bounded five-second reconnect, then run a `true` command with a
-separate two-second deadline. Provider discovery does not consume the command
-probe's budget. Failed checks still retire the member and allow a cold launch;
-claims remain fenced against concurrent maintenance and late results.
+Warm claims and maintenance health checks use two sequential deadlines:
 
-`warm_pool_claim_failed` logs include the sandbox ID and elapsed time. Readiness
-failures distinguish `reconnect_timeout`, `reconnect_failed`, `command_timeout`,
-`command_transport_failed`, and `command_failed` without logging command output
-or arbitrary provider exception text. Enable the
-direct runner endpoint to reduce reconnect/exec transport overhead; increasing
-warm-pool size does not fix readiness failures.
+1. Reconnect to the existing sandbox: five seconds.
+2. Run `true` to check command execution: two seconds, starting after reconnect succeeds.
 
-`readiness_reason` identifies the failing phase. For provider failures, the
-operational logger retains its existing allowlisted error type, code, and status
-from the original cause; provider messages, request bodies, and command output
-are still excluded.
+The readiness check can take up to seven seconds. Initial sandbox creation uses
+the configured creation deadline instead of the reconnect deadline.
+Failed checks retire the member. Failed claims allow a cold launch.
+Late results cannot revive a retired claim, and stale health checks cannot retire
+a concurrently claimed member.
+
+For readiness failures, `warm_pool_claim_failed` logs include `sandbox_id`,
+`elapsed_ms`, and `readiness_reason`. The reasons are `reconnect_timeout`,
+`reconnect_failed`, `command_timeout`, `command_transport_failed`, and `command_failed`.
+For provider failures, the logger retains allowlisted error fields from the original
+cause, including the type, code, and status. It excludes provider messages,
+request bodies, and command output.
