@@ -1,5 +1,11 @@
 import { cachedRead } from '@marimo-hub/core/async';
-import { AppPoolStore, logOperationalError, NotFoundError, sessionMode } from '@marimo-hub/core';
+import {
+	previewExpired,
+	AppPoolStore,
+	logOperationalError,
+	NotFoundError,
+	sessionMode,
+} from '@marimo-hub/core';
 import type { NotebookId, NotebookPreview, ProjectId } from '@marimo-hub/core';
 import type { ApiDeps } from './context';
 import { sessionRetirer } from './shared';
@@ -93,14 +99,10 @@ export async function sweepPreviews(deps: ApiDeps): Promise<void> {
 						if (error instanceof NotFoundError) return null;
 						throw error;
 					});
-				if (
-					!project ||
-					project.status === 'deleted' ||
-					!parent ||
-					parent.status === 'deleted' ||
-					Date.parse(record.expires_at) <= Date.now()
-				)
+				if (!project || project.status === 'deleted' || !parent || parent.status === 'deleted')
 					record = await deps.services.previews.retire(record);
+				else if (previewExpired(record))
+					record = await deps.services.previews.retireExpired(record);
 			}
 			if (record.state !== 'active') await cleanupPreview(deps, record);
 			else {

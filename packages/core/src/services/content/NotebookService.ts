@@ -6,7 +6,7 @@ import { MetadataCache } from './metadataCache';
 import type { ReadConsistency } from './metadataCache';
 import { NotebookImportService } from './NotebookImportService';
 import { PreviewStore } from './PreviewStore';
-import { previewKey, PreviewRecordSchema } from './notebookPreviews';
+import { previewAvailable, previewKey, PreviewRecordSchema } from './notebookPreviews';
 import type { GitProviderHosts } from '../../integrations/gitRepo';
 import { ThumbnailService } from './ThumbnailService';
 import { all } from 'better-all';
@@ -383,7 +383,7 @@ export class NotebookService {
 		if (
 			!(await new PreviewStore(this.bucket).project(projectId)).entries.some(
 				(entry) =>
-					entry.intent.state !== 'deleted' &&
+					entry.intent.state === 'active' &&
 					entry.intent.id === meta.preview!.preview_id &&
 					entry.intent.notebook_id === meta.preview!.notebook_id,
 			)
@@ -396,8 +396,7 @@ export class NotebookService {
 			throw new NotFoundError('Preview not found');
 		const record = await readStored(PreviewRecordSchema, object, recordKey);
 		if (
-			record.state !== 'active' ||
-			Date.parse(record.expires_at) <= Date.now() ||
+			!previewAvailable(record) ||
 			!record.revisions.some(
 				(revision) => revision.notebook_id === notebookId && revision.state === 'ready',
 			)

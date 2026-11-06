@@ -1096,7 +1096,7 @@ describe('Preview failure recovery and boundaries', () => {
 		const record = await create();
 		const child = record.current!.notebook_id;
 		await api.deps.services.notebooks.getNotebookMeta(pid, child, { consistency: 'validated' });
-		vi.spyOn(Date, 'now').mockReturnValue(Date.parse(record.expires_at));
+		vi.spyOn(Date, 'now').mockReturnValue(Date.parse(record.expires_at!));
 		await expect(
 			api.deps.services.notebooks.getNotebookMeta(pid, child, { consistency: 'validated' }),
 		).rejects.toThrow('Preview not found');
@@ -1983,7 +1983,7 @@ describe('preview session resource identity', () => {
 				const result = await getNotebook(projectId, notebookId);
 				if (notebookId === record.current!.notebook_id) {
 					if (state === 'deleting') await api.deps.services.previews.retire(record);
-					else vi.spyOn(Date, 'now').mockReturnValue(Date.parse(record.expires_at));
+					else vi.spyOn(Date, 'now').mockReturnValue(Date.parse(record.expires_at!));
 				}
 				return result;
 			});

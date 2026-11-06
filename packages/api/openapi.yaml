@@ -3286,13 +3286,14 @@ components:
         preparation:
           type: string
           enum:
+            - deferred
             - pending
             - preparing
             - ready
             - failed
             - unknown
-          description: 'Known values: pending, preparing, ready, failed. Unrecognized
-            values normalize to unknown.'
+          description: 'Known values: deferred, pending, preparing, ready, failed.
+            Unrecognized values normalize to unknown.'
           example: ready
         source_type:
           type: string
@@ -3344,8 +3345,16 @@ components:
           type: integer
           exclusiveMinimum: 0
         expires_at:
-          type: string
+          type:
+            - string
+            - 'null'
           format: date-time
+        eager:
+          type: boolean
+        managed:
+          type: boolean
+        target_commit:
+          type: string
         created_at:
           type: string
           format: date-time
@@ -18058,6 +18067,8 @@ paths:
                 compute_profile:
                   type: string
                   minLength: 1
+                eager:
+                  type: boolean
                 expires_at:
                   type: string
                   format: date-time
@@ -18208,6 +18219,331 @@ paths:
                       - true
                   data:
                     $ref: '#/components/schemas/NotebookPreviewPage'
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/previews/reconcile:
+    post:
+      operationId: notebooks.previews.reconcile
+      tags:
+        - Previews
+      summary: Reconcile previews for a GitHub pull request
+      description: Records ordered workflow events and applies the PR retention
+        policy. Preparation and capacity retries run asynchronously.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                repository:
+                  type: string
+                  minLength: 1
+                  maxLength: 500
+                pull_request:
+                  type: integer
+                  exclusiveMinimum: 0
+                event:
+                  type: string
+                  enum:
+                    - opened
+                    - reopened
+                    - synchronize
+                    - closed
+                commit:
+                  type: string
+                  pattern: ^[a-f0-9]{40}$
+                workflow_id:
+                  type: string
+                  pattern: ^\d+$
+                run_id:
+                  type: string
+                  pattern: ^\d+$
+                run_number:
+                  type: integer
+                  exclusiveMinimum: 0
+                event_at:
+                  type: string
+                  format: date-time
+                policy:
+                  type: object
+                  properties:
+                    mode:
+                      type: string
+                      enum:
+                        - sticky
+                        - commits
+                      default: sticky
+                    keep:
+                      type: integer
+                      minimum: 1
+                      maximum: 25
+                      default: 5
+                    eager:
+                      type: boolean
+                      default: true
+                    idle_days:
+                      type: integer
+                      minimum: 1
+                      maximum: 30
+                  additionalProperties: false
+              required:
+                - repository
+                - pull_request
+                - event
+                - commit
+                - workflow_id
+                - run_id
+                - run_number
+                - event_at
+                - policy
+              additionalProperties: false
+      responses:
+        '202':
+          description: Preview reconciliation accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    type: object
+                    properties:
+                      state:
+                        type: string
+                        enum:
+                          - active
+                          - closed
+                          - expired
+                      pending:
+                        type: boolean
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/NotebookPreview'
+                    required:
+                      - state
+                      - pending
+                      - items
+                required:
+                  - success
+                  - data
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Resource limit reached
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Seconds to wait before retrying.
+                example: '5'
+              required: true
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}/prepare:
+    post:
+      operationId: notebooks.previews.prepare
+      tags:
+        - Previews
+      summary: Request deferred preview preparation
+      description: Queues preparation without starting compute. Requires permission to
+        run an app or temporary editor.
+      parameters:
+        - schema:
+            type: string
+            pattern: ^proj-[0-9a-z]{16}$
+            example: proj-7h2k9qm4xz7rp3w8
+          required: true
+          name: pid
+          in: path
+        - schema:
+            type: string
+            pattern: ^nb-[0-9a-z]{16}$
+            example: nb-3w8h2k9qm4xz7rp3
+          required: true
+          name: nid
+          in: path
+        - schema:
+            type: string
+            pattern: ^prev-[0-9a-z]{16}$
+            example: prev-7h2k9qm4xz7rp3w8
+          required: true
+          name: prid
+          in: path
+      responses:
+        '202':
+          description: Preparation requested
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                  data:
+                    $ref: '#/components/schemas/NotebookPreview'
                 required:
                   - success
                   - data

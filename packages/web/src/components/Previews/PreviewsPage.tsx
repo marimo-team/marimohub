@@ -1,3 +1,4 @@
+import { PreviewActionSetup } from './PreviewActionSetup';
 import { useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { RadioButton, RadioField, RadioGroup, Label } from 'react-aria-components';
@@ -66,8 +67,11 @@ export function PreviewsPage() {
 					</div>
 					<p className="text-sm text-muted-foreground">
 						{preview.source?.type === 'branch' ? `${preview.source.branch} · ` : ''}
-						{preview.commit?.slice(0, 12) ?? 'Awaiting first revision'} · Expires{' '}
-						{new Date(preview.expires_at).toLocaleString()}
+						{(preview.target_commit ?? preview.commit)?.slice(0, 12) ??
+							'Awaiting first revision'} ·{' '}
+						{preview.expires_at
+							? `Expires ${new Date(preview.expires_at).toLocaleString()}`
+							: 'Until PR closes'}
 					</p>
 					{preview.error && (
 						<p role="alert" className="text-sm">
@@ -154,7 +158,10 @@ function PreviewCreation({
 }) {
 	const notebook = useNotebookQuery(pid, nid);
 	return notebook.data?.source.type === 'git' ? (
-		<Button onPress={onCreate}>Create preview</Button>
+		<div className="flex flex-wrap gap-2">
+			<PreviewActionSetup pid={pid} nid={nid} />
+			<Button onPress={onCreate}>Create preview</Button>
+		</div>
 	) : notebook.data ? (
 		<p className="text-sm text-muted-foreground">Preview creation requires a Git notebook.</p>
 	) : null;

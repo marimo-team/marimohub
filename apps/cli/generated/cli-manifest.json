@@ -3993,6 +3993,13 @@
 						"repeatable": false
 					},
 					{
+						"name": "eager",
+						"cli_name": "eager",
+						"required": false,
+						"value_type": "boolean",
+						"repeatable": false
+					},
+					{
 						"name": "expires_at",
 						"cli_name": "expires-at",
 						"required": false,
@@ -4146,6 +4153,144 @@
 			],
 			"destructive": false,
 			"paginated": true,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.previews.prepare",
+			"command": ["notebooks", "previews", "prepare"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}/prepare",
+			"summary": "Request deferred preview preparation",
+			"description": "Queues preparation without starting compute. Requires permission to run an app or temporary editor.",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "prid",
+					"cli_name": "prid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"destructive": false,
+			"paginated": false,
+			"response_kind": "json",
+			"accepts_if_match": false,
+			"accepts_idempotency_key": false
+		},
+		{
+			"id": "notebooks.previews.reconcile",
+			"command": ["notebooks", "previews", "reconcile"],
+			"method": "POST",
+			"path": "/api/v1/projects/{pid}/notebooks/{nid}/previews/reconcile",
+			"summary": "Reconcile previews for a GitHub pull request",
+			"description": "Records ordered workflow events and applies the PR retention policy. Preparation and capacity retries run asynchronously.",
+			"parameters": [
+				{
+					"name": "nid",
+					"cli_name": "nid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				},
+				{
+					"name": "pid",
+					"cli_name": "pid",
+					"in": "path",
+					"required": true,
+					"value_type": "string",
+					"repeatable": false
+				}
+			],
+			"body": {
+				"required": true,
+				"properties": [
+					{
+						"name": "commit",
+						"cli_name": "commit",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "event",
+						"cli_name": "event",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "event_at",
+						"cli_name": "event-at",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "policy",
+						"cli_name": "policy",
+						"required": true,
+						"value_type": "object",
+						"repeatable": false
+					},
+					{
+						"name": "pull_request",
+						"cli_name": "pull-request",
+						"required": true,
+						"value_type": "integer",
+						"repeatable": false
+					},
+					{
+						"name": "repository",
+						"cli_name": "repository",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "run_id",
+						"cli_name": "run-id",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					},
+					{
+						"name": "run_number",
+						"cli_name": "run-number",
+						"required": true,
+						"value_type": "integer",
+						"repeatable": false
+					},
+					{
+						"name": "workflow_id",
+						"cli_name": "workflow-id",
+						"required": true,
+						"value_type": "string",
+						"repeatable": false
+					}
+				]
+			},
+			"destructive": false,
+			"paginated": false,
 			"response_kind": "json",
 			"accepts_if_match": false,
 			"accepts_idempotency_key": false

@@ -810,3 +810,5 @@ export * from './content/notebookPreviews';
 
 export { ResumableUploads, uploadStatus } from './content/ResumableUploads';
 export type { UploadRecord } from './content/ResumableUploads';
+
+export * from './content/previewAutomation';

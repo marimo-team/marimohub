@@ -16,3 +16,12 @@ GET /_system/search/refresh/{pid}.json api path removed without deprecation
 PUT /_system/search/refresh/{pid}.json api path removed without deprecation
 PUT /_system/notebook-moves/{nid}.json the request property `snapshots` became required
 ```
+
+PR-managed previews add unbounded lifetimes. Existing records keep their finite
+expiry and still parse without migration. Upgrade all Hub replicas before
+enabling the Action; older replicas cannot read new records with null expiry.
+
+```text
+GET /_system/preview-projects/{pid}.json response property `entries/items/intent/expires_at` list-of-types was widened by adding types `null` to media type `application/json` of response `200`
+GET /_system/previews/{pid}/{nid}/{preview_id}.json response property `expires_at` list-of-types was widened by adding types `null` to media type `application/json` of response `200`
+```

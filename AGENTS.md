@@ -192,7 +192,8 @@ These CAS-managed records also have one writer each:
 - `PreviewStore` owns the bounded project membership and artifact reservations at
   `_system/preview-projects/{pid}.json`, seven-day receipts at `_system/preview-receipts/{pid}.json`,
   preparation claims at `_system/preview-work.json`, and `_system/preview-cleanup-cursor.json`.
-  It also owns removable active-project markers at `_system/preview-active-projects/{pid}/{work_id}.json`.
+  PR automation groups, retention decisions, event ordering, and pending memberships
+  also live in its project CAS head. It also owns removable active-project markers at `_system/preview-active-projects/{pid}/{work_id}.json`.
   Marker removal must CAS-fence the project head first; each activation uses a new work ID.
   Retain these CAS heads; remove individual preview records after confirmed cleanup.
 - `NotebookProposalService` owns each proposal publication at

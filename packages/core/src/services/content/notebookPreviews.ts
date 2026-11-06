@@ -25,11 +25,18 @@ export const PreviewSourceSchema = z.discriminatedUnion('type', [
 	}),
 	z.strictObject({ type: z.literal('commit'), commit: z.string().regex(/^[a-fA-F0-9]{40}$/) }),
 ]);
-export const PREVIEW_PREPARATIONS = ['pending', 'preparing', 'ready', 'failed'] as const;
+export const PREVIEW_PREPARATIONS = [
+	'deferred',
+	'pending',
+	'preparing',
+	'ready',
+	'failed',
+] as const;
 export const PreviewCreateSchema = z.strictObject({
 	name: z.string().trim().min(1).max(100),
 	source: PreviewSourceSchema,
 	compute_profile: z.string().min(1).optional(),
+	eager: z.boolean().optional(),
 	expires_at: utcTimestamp().optional(),
 	pull_request: z.number().int().positive().optional(),
 });
@@ -44,7 +51,12 @@ export const PreviewRecordSchema = z.object({
 	root_path: z.string(),
 	entry_notebook: z.string(),
 	compute_profile: z.string().optional(),
-	expires_at: utcTimestamp(),
+	expires_at: utcTimestamp().nullable(),
+	eager: z.boolean().optional(),
+	requested_commit: z.string().optional(),
+	observed_commit: z.string().optional(),
+	demand: z.boolean().optional(),
+	automation: z.object({ key: z.string(), revision: z.number(), commit: z.string() }).optional(),
 	pull_request: z.number().int().positive().optional(),
 	created_by: UserIdSchema,
 	created_at: utcTimestamp(),
@@ -94,3 +106,11 @@ export const previewKey = paths.preview;
 export const PREVIEW_POLL_MS = 60_000;
 export const PREVIEW_IDLE_MS = 5 * 60_000;
 export const PREVIEW_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
+
+export function previewExpired(record: Pick<NotebookPreview, 'expires_at'>): boolean {
+	return record.expires_at !== null && Date.parse(record.expires_at) <= Date.now();
+}
+
+export function previewAvailable(record: Pick<NotebookPreview, 'state' | 'expires_at'>): boolean {
+	return record.state === 'active' && !previewExpired(record);
+}

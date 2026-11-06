@@ -1454,6 +1454,46 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/previews/reconcile': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Reconcile previews for a GitHub pull request
+		 * @description Records ordered workflow events and applies the PR retention policy. Preparation and capacity retries run asynchronously.
+		 */
+		post: operations['notebooks.previews.reconcile'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}/prepare': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/**
+		 * Request deferred preview preparation
+		 * @description Queues preparation without starting compute. Requires permission to run an app or temporary editor.
+		 */
+		post: operations['notebooks.previews.prepare'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/v1/projects/{pid}/notebooks/{nid}/previews/{prid}': {
 		parameters: {
 			query?: never;
@@ -4065,11 +4105,11 @@ export interface components {
 			id: string;
 			name: string;
 			/**
-			 * @description Known values: pending, preparing, ready, failed. Unrecognized values normalize to unknown.
+			 * @description Known values: deferred, pending, preparing, ready, failed. Unrecognized values normalize to unknown.
 			 * @example ready
 			 * @enum {string}
 			 */
-			preparation: 'pending' | 'preparing' | 'ready' | 'failed' | 'unknown';
+			preparation: 'deferred' | 'pending' | 'preparing' | 'ready' | 'failed' | 'unknown';
 			/**
 			 * @description Known values: branch, commit. Unrecognized values normalize to unknown.
 			 * @example branch
@@ -4093,7 +4133,10 @@ export interface components {
 			error?: string;
 			pull_request?: number;
 			/** Format: date-time */
-			expires_at: string;
+			expires_at: string | null;
+			eager?: boolean;
+			managed?: boolean;
+			target_commit?: string;
 			/** Format: date-time */
 			created_at: string;
 			created_by: string;
@@ -15941,6 +15984,7 @@ export interface operations {
 								commit: string;
 						  };
 					compute_profile?: string;
+					eager?: boolean;
 					/** Format: date-time */
 					expires_at?: string;
 					pull_request?: number;
@@ -15949,6 +15993,281 @@ export interface operations {
 		};
 		responses: {
 			/** @description Preview accepted for preparation */
+			202: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: components['schemas']['NotebookPreview'];
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.previews.reconcile': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+			};
+			cookie?: never;
+		};
+		requestBody: {
+			content: {
+				'application/json': {
+					repository: string;
+					pull_request: number;
+					/** @enum {string} */
+					event: 'opened' | 'reopened' | 'synchronize' | 'closed';
+					commit: string;
+					workflow_id: string;
+					run_id: string;
+					run_number: number;
+					/** Format: date-time */
+					event_at: string;
+					policy: {
+						/**
+						 * @default sticky
+						 * @enum {string}
+						 */
+						mode?: 'sticky' | 'commits';
+						/** @default 5 */
+						keep?: number;
+						/** @default true */
+						eager?: boolean;
+						idle_days?: number;
+					};
+				};
+			};
+		};
+		responses: {
+			/** @description Preview reconciliation accepted */
+			202: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						/** @enum {boolean} */
+						success: true;
+						data: {
+							/** @enum {string} */
+							state: 'active' | 'closed' | 'expired';
+							pending: boolean;
+							items: components['schemas']['NotebookPreview'][];
+						};
+					};
+				};
+			};
+			/** @description Bad request */
+			400: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Authentication required */
+			401: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Access forbidden */
+			403: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Not found */
+			404: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Request body too large */
+			413: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Validation error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Internal server error */
+			500: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Service unavailable */
+			503: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+		};
+	};
+	'notebooks.previews.prepare': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				pid: string;
+				nid: string;
+				prid: string;
+			};
+			cookie?: never;
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Preparation requested */
 			202: {
 				headers: {
 					[name: string]: unknown;

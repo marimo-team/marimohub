@@ -10,6 +10,13 @@ import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
 import { PreviewRecordSchema, PreviewIdSchema } from './notebookPreviews';
 import type { NotebookPreview } from './notebookPreviews';
+import {
+	PreviewAutomationGroupSchema,
+	applyPreviewEvent,
+	automationExpiresAt,
+	retireAutomationGroup,
+} from './previewAutomation';
+import type { PreviewReconcile } from './previewAutomation';
 
 export const PREVIEW_LIMITS = {
 	projectsPerTick: 4,
@@ -29,6 +36,7 @@ export const PREVIEW_LIMITS = {
 } as const;
 const Epoch = z.number().describe('Milliseconds since the Unix epoch.');
 export const PreviewProjectSchema = z.object({
+	automations: z.array(PreviewAutomationGroupSchema).optional(),
 	revision: z.string().optional(),
 	work_id: z.string().optional(),
 	entries: z.array(
@@ -116,11 +124,17 @@ function admitMovedReceipts(record: PreviewReceipts, receipts: PreviewReceipts['
 		throw new ResourceExhaustedError('Destination preview request limit reached');
 }
 
+function hasWork(project: PreviewProject): boolean {
+	return (
+		project.entries.length > 0 || !!project.automations?.some((group) => group.state === 'active')
+	);
+}
+
 export class PreviewStore {
 	private async movedRecords(source: ProjectId, nid: NotebookId) {
-		const entries = (await this.project(source)).entries.filter(
-			(entry) => entry.intent.notebook_id === nid,
-		);
+		const project = await this.project(source);
+		const entries = project.entries.filter((entry) => entry.intent.notebook_id === nid);
+		const groups = project.automations?.filter((group) => group.notebook_id === nid) ?? [];
 		const receiptObject = await this.bucket.get(previewReceiptsKey(source));
 		const ids = new Set(entries.map((entry) => entry.intent.id));
 		const receipts = receiptObject
@@ -128,7 +142,7 @@ export class PreviewStore {
 					(entry) => ids.has(entry.id) && entry.expires_at > Date.now(),
 				)
 			: null;
-		return { entries, receipts };
+		return { entries, receipts, groups };
 	}
 
 	/**
@@ -147,10 +161,23 @@ export class PreviewStore {
 	}
 
 	async copyForMove(source: ProjectId, destination: ProjectId, nid: NotebookId): Promise<void> {
-		const { entries, receipts } = await this.movedRecords(source, nid);
+		const { entries, receipts, groups } = await this.movedRecords(source, nid);
 		await this.changeProject(
 			destination,
-			(project) => admitMovedEntries(project, entries, destination, nid),
+			(project) => {
+				for (const group of groups) {
+					project.automations ??= [];
+					if (!project.automations.some((item) => item.key === group.key))
+						project.automations.push({
+							...group,
+							heads: group.heads.map((head) => ({
+								...head,
+								intent: { ...head.intent, project_id: destination },
+							})),
+						});
+				}
+				admitMovedEntries(project, entries, destination, nid);
+			},
 			{ fence: true },
 		);
 		if (receipts)
@@ -171,11 +198,85 @@ export class PreviewStore {
 			source,
 			(project) => {
 				project.entries = project.entries.filter((entry) => entry.intent.notebook_id !== nid);
-				return project.entries.length === 0 ? project.work_id : undefined;
+				project.automations = project.automations?.filter((group) => group.notebook_id !== nid);
+				return !hasWork(project) ? project.work_id : undefined;
 			},
 			{ fence: true },
 		);
 		if (workId) await this.removeInactiveWork(source, workId);
+	}
+
+	async reconcileAutomation(
+		intent: NotebookPreview,
+		input: PreviewReconcile,
+		branch: string,
+		branchHash: string,
+	) {
+		return this.changeProject(intent.project_id, (project) => {
+			const groups = (project.automations ??= []);
+			const index = groups.findIndex((group) => group.key === intent.automation!.key);
+			if (index === -1 && groups.length >= 1000)
+				throw new ResourceExhaustedError('Project preview automation limit reached');
+			const group = applyPreviewEvent(groups[index], input, intent, branch, branchHash);
+			if (index === -1) groups.push(group);
+			else groups[index] = group;
+			return group;
+		});
+	}
+
+	async closeAutomation(pid: ProjectId, key: string, revision: number) {
+		await this.changeProject(pid, (project) => {
+			const group = project.automations?.find((item) => item.key === key);
+			if (!group || group.revision !== revision || group.state !== 'active') return;
+			retireAutomationGroup(group, 'closed');
+		});
+	}
+
+	async checkedAutomation(pid: ProjectId, key: string, revision: number) {
+		await this.changeProject(pid, (project) => {
+			const group = project.automations?.find((item) => item.key === key);
+			if (group?.revision === revision) group.checked_at = Date.now();
+		});
+	}
+
+	async retireAutomationPreview(record: NotebookPreview) {
+		if (!record.automation) return;
+		await this.changeProject(record.project_id, (project) => {
+			const group = project.automations?.find((item) => item.key === record.automation!.key);
+			const head = group?.heads.find((item) => item.intent.id === record.id);
+			if (!group || !head) return;
+			group.floor = Math.max(group.floor, head.order);
+			group.heads = group.heads.filter((item) => item !== head);
+			group.revision++;
+		});
+	}
+
+	async planAutomations(pid: ProjectId) {
+		await this.changeProject(pid, (project) => {
+			for (const group of project.automations ?? []) {
+				const expiry = automationExpiresAt(group);
+				if (group.state === 'active' && expiry && Date.parse(expiry) <= Date.now())
+					retireAutomationGroup(group, 'expired');
+				for (const entry of project.entries) {
+					if (entry.intent.automation?.key !== group.key) continue;
+					const head = group.heads.find((item) => item.intent.id === entry.intent.id);
+					if (!head || group.state !== 'active') {
+						if (entry.intent.state === 'active')
+							entry.intent = {
+								...entry.intent,
+								state: 'deleting',
+								automation: { ...entry.intent.automation, revision: group.revision },
+							};
+					} else if (entry.intent.state === 'active') entry.intent = head.intent;
+				}
+				if (group.state !== 'active') continue;
+				for (const head of group.heads) {
+					if (project.entries.some((entry) => entry.intent.id === head.intent.id)) continue;
+					if (project.entries.length >= PREVIEW_LIMITS.perProject) break;
+					project.entries.push({ intent: head.intent, artifacts: [] });
+				}
+			}
+		});
 	}
 
 	constructor(private readonly bucket: Bucket) {}
@@ -212,18 +313,14 @@ export class PreviewStore {
 			PreviewProjectSchema,
 			{ entries: [] },
 			async (project) => {
-				const wasEmpty = project.entries.length === 0;
+				const wasEmpty = !hasWork(project);
 				const before = JSON.stringify(project);
 				const result = apply(project);
-				if (
-					!fence &&
-					JSON.stringify(project) === before &&
-					(project.entries.length === 0 || project.work_id)
-				)
+				if (!fence && JSON.stringify(project) === before && (!hasWork(project) || project.work_id))
 					return result;
 				// A fresh revision also fences writers when membership returns to the same empty value.
 				project.revision = crypto.randomUUID();
-				if (project.entries.length > 0 && (wasEmpty || !project.work_id)) {
+				if (hasWork(project) && (wasEmpty || !project.work_id)) {
 					project.work_id = crypto.randomUUID();
 					// Publish discovery before membership so interrupted creation remains recoverable.
 					await this.bucket.put(
@@ -243,7 +340,7 @@ export class PreviewStore {
 	private async removeInactiveWork(pid: ProjectId, workId: string) {
 		const removed = await this.changeProject(
 			pid,
-			(project) => project.entries.length === 0 || project.work_id !== workId,
+			(project) => !hasWork(project) || project.work_id !== workId,
 			{ fence: true },
 		);
 		// The CAS fences a pending publication before its marker is removed. Tokens are never reused.
@@ -370,7 +467,7 @@ export class PreviewStore {
 		await this.pruneReceipts(record.project_id, record.id);
 		const workId = await this.changeProject(record.project_id, (project) => {
 			project.entries = project.entries.filter((entry) => entry.intent.id !== record.id);
-			return project.entries.length === 0 ? project.work_id : undefined;
+			return !hasWork(project) ? project.work_id : undefined;
 		});
 		if (workId) await this.removeInactiveWork(record.project_id, workId);
 	}
@@ -390,7 +487,7 @@ export class PreviewStore {
 					const projectId = ProjectIdSchema.parse(pid);
 					const workId = filename.slice(0, -5);
 					const project = await this.project(projectId);
-					if (project.entries.length > 0 && project.work_id === workId) projects.push(projectId);
+					if (hasWork(project) && project.work_id === workId) projects.push(projectId);
 					else await this.removeInactiveWork(projectId, workId);
 				} catch (error) {
 					logOperationalError(
