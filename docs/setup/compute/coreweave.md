@@ -36,3 +36,21 @@ the runner's default policy unless `MARIMOHUB_COMPUTE_COREWEAVE_TEMPLATE_ID`
 selects an org-scoped sandbox template; personal storage uses its own
 template via `…_USER_HOME_TEMPLATE_ID`.
 :::
+
+## Warm-pool readiness budgets
+
+Warm claims and maintenance health checks use two sequential deadlines:
+
+1. Reconnect to the existing sandbox: five seconds.
+2. Run `true` to check command execution: two seconds, starting after reconnect succeeds.
+
+The readiness check can take up to seven seconds. Initial sandbox creation uses
+the configured creation deadline instead of the reconnect deadline.
+Failed checks retire the member. Failed claims allow a cold launch.
+Late results cannot revive a retired claim, and stale health checks cannot retire
+a concurrently claimed member.
+
+For readiness failures, `warm_pool_claim_failed` logs include `sandbox_id`,
+`elapsed_ms`, and a safe failure reason. Readiness reasons are `reconnect_timeout`, `reconnect_failed`,
+`command_timeout`, `command_transport_failed`, and `command_failed`.
+These errors exclude command output and provider exception text.

@@ -766,24 +766,302 @@ describe('warm pool failure boundaries', () => {
 		expect(await w.members()).toEqual([]);
 	});
 
-	it('bounds a hanging claim probe and retires it before another claimant can use it', async () => {
+	it.each([
+		{ reconnectMs: 1_500, commandMs: 1_000 },
+		{ reconnectMs: 4_999, commandMs: 1_999 },
+	])(
+		'allows a $reconnectMs ms reconnect followed by a $commandMs ms command',
+		async ({ reconnectMs, commandMs }) => {
+			vi.useFakeTimers();
+			try {
+				const w = setup();
+				await w.service.sweep();
+				const sandbox = w.live.values().next().value!;
+				sandbox.ready = vi.fn(
+					() => new Promise<void>((resolve) => setTimeout(resolve, reconnectMs)),
+				);
+				const exec = vi
+					.spyOn(sandbox, 'exec')
+					.mockImplementation(
+						() =>
+							new Promise((resolve) =>
+								setTimeout(() => resolve(execResult(true, '', '')), commandMs),
+							),
+					);
+				const claim = w.service.claim(w.request());
+				await vi.advanceTimersByTimeAsync(reconnectMs - 1);
+				expect(exec).not.toHaveBeenCalled();
+				await vi.advanceTimersByTimeAsync(commandMs + 1);
+				expect((await claim)?.sandbox).toBe(sandbox);
+				expect(exec).toHaveBeenCalledWith('true', { timeout: 2_000 });
+				expect(w.destroyed).toEqual([]);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it('also separates reconnect and command budgets for maintenance health checks', async () => {
 		vi.useFakeTimers();
 		try {
 			const w = setup();
 			await w.service.sweep();
-			vi.spyOn(w.live.values().next().value!, 'exec').mockImplementation(
-				() => new Promise(() => {}),
+			const sandbox = w.live.values().next().value!;
+			sandbox.ready = () => new Promise<void>((resolve) => setTimeout(resolve, 1_500));
+			vi.spyOn(sandbox, 'exec').mockImplementation(
+				() => new Promise((resolve) => setTimeout(() => resolve(execResult(true, '', '')), 1_000)),
 			);
-			const claim = w.service.claim(w.request());
-			await vi.advanceTimersByTimeAsync(2_000);
-			expect(await claim).toBeUndefined();
+			w.advance(30_001);
+			const sweep = w.service.sweep();
+			await vi.advanceTimersByTimeAsync(2_500);
+			await sweep;
+			expect(w.destroyed).toEqual([]);
+			expect((await w.members())[0]).toMatchObject({ state: 'ready', checked_at: w.now() });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(['resolve', 'reject'] as const)(
+		'does not probe a reconnect that settles with %s after timeout',
+		async (settlement) => {
+			vi.useFakeTimers();
+			try {
+				const w = setup();
+				await w.service.sweep();
+				const sandbox = w.live.values().next().value!;
+				let ready!: () => void;
+				sandbox.ready = () =>
+					new Promise((resolve, reject) => {
+						ready = () =>
+							settlement === 'resolve' ? resolve() : reject(new Error('late reconnect failure'));
+					});
+				const exec = vi.spyOn(sandbox, 'exec');
+				const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+				const claim = w.service.claim(w.request());
+				await vi.advanceTimersByTimeAsync(4_999);
+				expect((await w.members())[0].state).toBe('claimed');
+				expect(log).not.toHaveBeenCalled();
+				w.advance(5_000);
+				await vi.advanceTimersByTimeAsync(1);
+				expect(await claim).toBeUndefined();
+				expect((await w.members())[0].state).toBe('retiring');
+				expect(await w.replica().claim(w.request())).toBeUndefined();
+				const failure = log.mock.calls
+					.map(([line]) => JSON.parse(line))
+					.find(
+						(event) =>
+							typeof event === 'object' &&
+							event !== null &&
+							'event' in event &&
+							event.event === 'warm_pool_claim_failed',
+					);
+				expect(failure).toMatchObject({
+					sandbox_id: (await w.members())[0].sandbox_id,
+					elapsed_ms: 5_000,
+					error: { name: 'WarmPoolReadinessError', reason: 'reconnect_timeout' },
+				});
+				ready();
+				await vi.advanceTimersByTimeAsync(0);
+				expect(exec).not.toHaveBeenCalled();
+				expect((await w.members())[0].state).toBe('retiring');
+				await w.replica({ enabled: false }).sweep();
+				expect(w.live.size).toBe(0);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it.each([
+		{ deadline: 'provider lifetime', providerLifetimeMs: 90_000, elapsed: 30_000 },
+		{ deadline: 'claim lease', providerLifetimeMs: undefined, elapsed: 60_000 },
+	])(
+		'rejects a claim when its $deadline expires during reconnect',
+		async ({ providerLifetimeMs, elapsed }) => {
+			const w = setup({ providerLifetimeMs });
+			await w.service.sweep();
+			const sandbox = w.live.values().next().value!;
+			sandbox.ready = async () => w.advance(elapsed);
+			expect(await w.service.claim(w.request())).toBeUndefined();
 			expect((await w.members())[0].state).toBe('retiring');
 			expect(await w.replica().claim(w.request())).toBeUndefined();
 			await w.replica({ enabled: false }).sweep();
 			expect(w.live.size).toBe(0);
+		},
+	);
+
+	it.each(['reconnect_failed', 'reconnect_timeout'] as const)(
+		'replaces an idle member after a maintenance %s',
+		async (reason) => {
+			vi.useFakeTimers();
+			try {
+				const w = setup();
+				await w.service.sweep();
+				const id = w.created[0];
+				const sandbox = w.live.get(id)!;
+				sandbox.ready =
+					reason === 'reconnect_failed'
+						? async () => {
+								throw new Error('private provider error');
+							}
+						: () => new Promise(() => {});
+				const exec = vi.spyOn(sandbox, 'exec');
+				const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+				w.advance(30_001);
+				const sweep = w.service.sweep();
+				await vi.advanceTimersByTimeAsync(5_000);
+				await sweep;
+				expect(exec).not.toHaveBeenCalled();
+				expect(w.destroyed).toEqual([id]);
+				expect(w.created).toHaveLength(2);
+				expect(await w.members()).toEqual([
+					expect.objectContaining({ sandbox_id: w.created[1], state: 'ready' }),
+				]);
+				expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
+					event: 'warm_pool_health_failed',
+					error: { name: 'WarmPoolReadinessError', reason },
+				});
+				expect(log.mock.calls.flat().join('')).not.toContain('private provider error');
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it('preserves a concurrent claim when a maintenance reconnect times out', async () => {
+		vi.useFakeTimers();
+		try {
+			const w = setup();
+			await w.service.sweep();
+			const sandbox = w.live.values().next().value!;
+			sandbox.ready = vi
+				.fn<NonNullable<SandboxInstance['ready']>>()
+				.mockImplementationOnce(() => new Promise(() => {}))
+				.mockResolvedValue(undefined);
+			w.advance(30_001);
+			const sweep = w.service.sweep();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(sandbox.ready).toHaveBeenCalledTimes(1);
+			const claim = (await w.replica().claim(w.request()))!;
+			await vi.advanceTimersByTimeAsync(5_000);
+			await sweep;
+			expect(w.destroyed).not.toContain(claim.member.sandbox_id);
+			expect(await w.service.store.getMember(claim.member.sandbox_id)).toMatchObject({
+				state: 'claimed',
+				token: claim.member.token,
+			});
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it('lets initial creation exceed the reconnect deadline', async () => {
+		vi.useFakeTimers();
+		try {
+			const w = setup({ creationTimeoutMs: 10_000 });
+			const create = w.compute.create.bind(w.compute);
+			vi.spyOn(w.compute, 'create').mockImplementation((...args) => {
+				const sandbox = create(...args);
+				return {
+					...sandbox,
+					ready: async () => {
+						await new Promise((resolve) => setTimeout(resolve, 6_000));
+						await sandbox.ready!();
+					},
+				};
+			});
+			const sweep = w.service.sweep();
+			await vi.advanceTimersByTimeAsync(5_000);
+			expect((await w.members())[0].state).toBe('creating');
+			await vi.advanceTimersByTimeAsync(1_000);
+			await sweep;
+			expect((await w.members())[0].state).toBe('ready');
+			expect(w.destroyed).toEqual([]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(['reconnect_failed', 'command_transport_failed', 'command_failed'] as const)(
+		'logs a safe reason for %s without provider output',
+		async (reason) => {
+			const w = setup();
+			await w.service.sweep();
+			const sandbox = w.live.values().next().value!;
+			const secret = 'provider-error-with-private-credentials';
+			const providerError = Object.assign(new Error(secret), {
+				name: secret,
+				code: secret,
+				reason: secret,
+			});
+			if (reason === 'reconnect_failed') {
+				sandbox.ready = async () => {
+					throw providerError;
+				};
+			} else if (reason === 'command_transport_failed') {
+				vi.spyOn(sandbox, 'exec').mockRejectedValue(providerError);
+			} else {
+				vi.spyOn(sandbox, 'exec').mockResolvedValue(execResult(false, secret, secret));
+			}
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			expect(await w.service.claim(w.request())).toBeUndefined();
+			expect((await w.members())[0].state).toBe('retiring');
+			expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
+				event: 'warm_pool_claim_failed',
+				error: { name: 'WarmPoolReadinessError', reason },
+			});
+			expect(log.mock.calls.flat().join('')).not.toContain(secret);
+		},
+	);
+
+	it.each(['resolve', 'reject'] as const)(
+		'keeps a claim retired when its command settles with %s after timeout',
+		async (settlement) => {
+			vi.useFakeTimers();
+			try {
+				const w = setup();
+				await w.service.sweep();
+				let finish!: () => void;
+				vi.spyOn(w.live.values().next().value!, 'exec').mockImplementation(
+					() =>
+						new Promise((resolve, reject) => {
+							finish = () =>
+								settlement === 'resolve'
+									? resolve(execResult(true, '', ''))
+									: reject(new Error('late command failure'));
+						}),
+				);
+				const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+				const claim = w.service.claim(w.request());
+				await vi.advanceTimersByTimeAsync(2_000);
+				expect(await claim).toBeUndefined();
+				expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
+					event: 'warm_pool_claim_failed',
+					error: { name: 'WarmPoolReadinessError', reason: 'command_timeout' },
+				});
+				expect((await w.members())[0].state).toBe('retiring');
+				expect(await w.replica().claim(w.request())).toBeUndefined();
+				finish();
+				await vi.advanceTimersByTimeAsync(0);
+				expect((await w.members())[0].state).toBe('retiring');
+				await w.replica({ enabled: false }).sweep();
+				expect(w.live.size).toBe(0);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it('still requires a successful command when the adapter has no ready hook', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const sandbox = w.live.values().next().value!;
+		delete sandbox.ready;
+		const exec = vi.spyOn(sandbox, 'exec').mockResolvedValue(execResult(false, '', 'unhealthy'));
+		expect(await w.service.claim(w.request())).toBeUndefined();
+		expect(exec).toHaveBeenCalledWith('true', { timeout: 2_000 });
+		expect((await w.members())[0].state).toBe('retiring');
 	});
 
 	it('rejects a booted sandbox whose command probe fails', async () => {
