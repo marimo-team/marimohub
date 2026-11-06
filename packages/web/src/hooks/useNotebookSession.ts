@@ -1,6 +1,6 @@
 import { leaveAppVisit } from '@/api/sessionVisits';
 import { APP_HEARTBEAT_INTERVAL_MS } from '@marimo-hub/core/constants';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { apiClient, apiData, ApiRequestError } from '@/api/client';
 import {
 	useRestartApp,
@@ -15,9 +15,7 @@ import type { Session } from '@/types';
 import {
 	EDITOR_HEARTBEAT_INTERVAL_MS,
 	SESSION_STATUS_INTERVAL_MS,
-	SESSION_START_POLL_INTERVAL_MS,
-	SESSION_START_SLOW_POLL_AFTER_MS,
-	SESSION_START_SLOW_POLL_INTERVAL_MS,
+	sessionStartPollDelayMs,
 	sessionStartupDeadlineMs,
 } from '@/lib/sessions';
 
@@ -110,7 +108,6 @@ export function useNotebookSession(
 	// StrictMode can orphan the mutation observer during its mount/remount cycle,
 	// leaving `startSession.isPending` stuck. Track this request independently.
 	const [starting, setStarting] = useState(false);
-	const [startPollInterval, setStartPollInterval] = useState(SESSION_START_POLL_INTERVAL_MS);
 	// Keep the loading panel visible while teardown or replacement precedes admission.
 	const [restarting, setRestarting] = useState(false);
 	const sessionRef = useRef<Session | null>(null);
@@ -136,7 +133,6 @@ export function useNotebookSession(
 			sessionRef.current?.session_id !== next.session_id
 		) {
 			startingSinceRef.current = Date.now();
-			setStartPollInterval(SESSION_START_POLL_INTERVAL_MS);
 		}
 		const committed =
 			next && next.session_id === sessionRef.current?.session_id && !next.app_assignment
@@ -311,46 +307,56 @@ export function useNotebookSession(
 	);
 
 	// Reused sessions can return before provisioning finishes, so watch them until ready.
-	useInterval(
-		() => {
-			if (session?.status !== 'starting') return;
-			const elapsed =
-				startingSinceRef.current === null ? null : Date.now() - startingSinceRef.current;
-			if (elapsed !== null && elapsed > SESSION_START_SLOW_POLL_AFTER_MS) {
-				setStartPollInterval(SESSION_START_SLOW_POLL_INTERVAL_MS);
-			}
-			// A lost provisioning request can leave the record starting indefinitely.
-			// Match the server's timeout message, which excludes the grace period.
-			const timeoutSeconds = startupTimeoutSeconds ?? DEFAULT_STARTUP_TIMEOUT_S;
-			const deadlineMs = sessionStartupDeadlineMs(timeoutSeconds);
-			if (elapsed !== null && elapsed > deadlineMs) {
-				failStart(
-					{
-						code: 'STARTUP_TIMEOUT',
-						message: `${mode === 'app' ? 'The app' : 'The kernel'} did not start within ${timeoutSeconds}s.`,
-					},
-					undefined,
-					session,
-				);
-				return;
-			}
-			pollSession(
-				session.session_id,
-				(next) => {
-					if (next.status === 'running' && !next.sandbox_url) {
-						concludeAccessLost(next.can?.attach ?? false);
-					} else if (next.status === 'running' || next.status === 'starting') {
-						commitSession(next);
-					} else if (next.status !== 'terminating') {
-						failStart(next.error, undefined, next.status === 'failed' ? next : undefined);
-					}
+	const pollStartingSession = useEffectEvent(() => {
+		if (session?.status !== 'starting') return;
+		const elapsed =
+			startingSinceRef.current === null ? null : Date.now() - startingSinceRef.current;
+		// A lost provisioning request can leave the record starting indefinitely.
+		// Match the server's timeout message, which excludes the grace period.
+		const timeoutSeconds = startupTimeoutSeconds ?? DEFAULT_STARTUP_TIMEOUT_S;
+		const deadlineMs = sessionStartupDeadlineMs(timeoutSeconds);
+		if (elapsed !== null && elapsed > deadlineMs) {
+			failStart(
+				{
+					code: 'STARTUP_TIMEOUT',
+					message: `${mode === 'app' ? 'The app' : 'The kernel'} did not start within ${timeoutSeconds}s.`,
 				},
-				// The record vanished mid-start (reaped, or the notebook deleted).
-				() => failStart(undefined, 'NOT_FOUND'),
+				undefined,
+				session,
 			);
-		},
-		session?.status === 'starting' ? startPollInterval : null,
-	);
+			return;
+		}
+		pollSession(
+			session.session_id,
+			(next) => {
+				if (next.status === 'running' && !next.sandbox_url) {
+					concludeAccessLost(next.can?.attach ?? false);
+				} else if (next.status === 'running' || next.status === 'starting') {
+					commitSession(next);
+				} else if (next.status !== 'terminating') {
+					failStart(next.error, undefined, next.status === 'failed' ? next : undefined);
+				}
+			},
+			// The record vanished mid-start (reaped, or the notebook deleted).
+			() => failStart(undefined, 'NOT_FOUND'),
+		);
+	});
+	const startingSessionId = session?.status === 'starting' ? session.session_id : null;
+	useEffect(() => {
+		if (startingSessionId === null) return;
+		let attempt = 0;
+		const nextDelay = () => {
+			const since = startingSinceRef.current;
+			return sessionStartPollDelayMs(attempt, since === null ? 0 : Date.now() - since);
+		};
+		const tick = () => {
+			attempt += 1;
+			pollStartingSession();
+			timer = setTimeout(tick, nextDelay());
+		};
+		let timer = setTimeout(tick, nextDelay());
+		return () => clearTimeout(timer);
+	}, [startingSessionId]);
 
 	const concludeSession = useCallback(
 		(status: SessionEnded, endedBy: string | null = null) => {

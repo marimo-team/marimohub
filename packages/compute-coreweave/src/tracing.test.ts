@@ -31,7 +31,7 @@ const SANDBOX = 'cwsandbox.Sandbox';
 function fakeSandbox(over: Partial<CoreWeaveSandbox> = {}): CoreWeaveSandbox {
 	return {
 		sandboxId: SANDBOX_ID,
-		wait: vi.fn(async () => {}),
+		getStatus: vi.fn(async () => 'running' as const),
 		commands: {
 			run: vi.fn(async () => procResult()),
 			start: vi.fn(async () => fakeProcess({ exitCode: 0 })),
@@ -60,7 +60,7 @@ describe('instrumentCoreWeaveClient', () => {
 		const client = instrumentCoreWeaveClient(fakeClient(), 'https://gateway.example:8443/api');
 
 		const sandbox = await client.create({});
-		await sandbox.wait();
+		await sandbox.getStatus();
 		await sandbox.commands.run(['sh', '-lc', 'run-marimo-secret']);
 		await sandbox.files.readText('/workspace/private.txt');
 		await sandbox.files.write([{ path: '/workspace/private.txt', content: 'secret' }]);
@@ -72,7 +72,7 @@ describe('instrumentCoreWeaveClient', () => {
 		const spans = exporter.getFinishedSpans();
 		expect(spans.map((span) => span.name)).toEqual([
 			`${CLIENT}/create`,
-			`${SANDBOX}/wait`,
+			`${SANDBOX}/getStatus`,
 			`${SANDBOX}/exec`,
 			`${SANDBOX}/readFile`,
 			`${SANDBOX}/writeFiles`,

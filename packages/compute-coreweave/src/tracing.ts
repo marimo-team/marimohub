@@ -3,8 +3,8 @@
  * `CoreWeaveClient` / `CoreWeaveSandbox` seam. The SDK exports no transport
  * to intercept, so spans cover the adapter's client operations rather than
  * individual gRPC
- * requests — `Sandbox/wait` is one span over the whole poll loop, and
- * `Sandbox/writeFiles` one span over the batched AddFile fan-out.
+ * requests — `Sandbox/getStatus` is one span per readiness poll, and
+ * `Sandbox/writeFiles` one span per SDK write call.
  *
  * Attribute hygiene: spans carry the endpoint and sandbox id but never command
  * argv or file paths/contents (notebook names and code are user data).
@@ -126,7 +126,8 @@ function instrumentSandbox(sandbox: CoreWeaveSandbox, endpoint: Attributes): Cor
 		get status() {
 			return sandbox.status;
 		},
-		wait: () => opRequest(op('wait'), attributes, () => sandbox.wait()),
+		getStatus: (options) =>
+			opRequest(op('getStatus'), attributes, () => sandbox.getStatus(options)),
 		commands: {
 			run: (command, options) =>
 				opRequest(op('exec'), attributes, () => sandbox.commands.run(command, options)),

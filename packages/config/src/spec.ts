@@ -659,7 +659,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE',
 						name: 'CoreWeave data connection mode',
 						description:
-							'Connection mode for exec, logs, and file transfers. `direct` requires runner mTLS and fails if unavailable. `auto` tries direct, then uses the Gateway if unavailable. `gateway` always uses the Gateway. Lifecycle calls still use the API.',
+							'Connection mode for exec, logs, and file transfers. `direct` requires runner mTLS and fails if unavailable. `auto` tries direct, then uses the Gateway if unavailable. `gateway` always uses the Gateway. Lifecycle calls still use the API. Use `gateway` when the hub cannot reach runner direct endpoints: `auto` can then add up to 1 s to the first data-plane call per sandbox, and again every 30 s. Use `direct` once they are reachable.',
 						default: 'auto',
 					},
 					{

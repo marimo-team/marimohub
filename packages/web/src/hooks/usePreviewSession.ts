@@ -9,7 +9,7 @@ import { leaveAppVisit } from '@/api/sessionVisits';
 import {
 	EDITOR_HEARTBEAT_INTERVAL_MS,
 	SESSION_STATUS_INTERVAL_MS,
-	SESSION_START_POLL_INTERVAL_MS,
+	sessionStartPollDelayMs,
 	sessionStartupDeadlineMs,
 } from '@/lib/sessions';
 
@@ -145,7 +145,12 @@ export function usePreviewSession(pid: string, nid: string, previewId: string, u
 					? heartbeatInterval
 					: query.state.data?.status === 'running'
 						? SESSION_STATUS_INTERVAL_MS
-						: SESSION_START_POLL_INTERVAL_MS,
+						: // Counts restart with each runtime because the key is per session; a 0 ms
+							// interval would disable polling, hence the floor of one attempt.
+							sessionStartPollDelayMs(
+								Math.max(1, query.state.dataUpdateCount + query.state.errorUpdateCount),
+								runtime ? Date.now() - runtime.startedAt : 0,
+							),
 		refetchIntervalInBackground: true,
 		retry: false,
 		gcTime: 0,

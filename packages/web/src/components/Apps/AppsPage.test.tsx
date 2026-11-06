@@ -9,7 +9,7 @@ import { Route, Routes } from 'react-router-dom';
 import type { Theme } from '@/context/ThemeContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { projectKeys, userKeys } from '@/api/queryKeys';
-import { projectQueryOptions } from '@/api/hooks';
+import { projectQueryOptions, userQueryOptions } from '@/api/hooks';
 import { deferred } from '@/test/deferred';
 import { createTestQueryClient, renderWithClient } from '@/test/render';
 import { AppsPage } from './AppsPage';
@@ -41,6 +41,7 @@ function setup(
 		colorMode?: Theme;
 		branding?: Partial<ThemeConfig>;
 		appStatus?: number;
+		appReloadStatus?: number;
 		appReady?: Promise<void>;
 		client?: QueryClient;
 		projectStatus?: number;
@@ -59,6 +60,7 @@ function setup(
 	});
 	let projectReads = 0;
 	let userReads = 0;
+	let appReads = 0;
 	const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = new URL(input instanceof Request ? input.url : String(input), 'http://localhost');
 		if (url.pathname === '/api/v1/me' && ++userReads > 1 && options.userReloadStatus)
@@ -66,15 +68,19 @@ function setup(
 				{ success: false, error: { code: 'UNAVAILABLE', message: 'Unavailable' } },
 				{ status: options.userReloadStatus },
 			);
-		if (url.pathname.endsWith(`/notebooks/${NID}/app`)) await options.appReady;
+		const isApp = url.pathname.endsWith(`/notebooks/${NID}/app`);
+		if (isApp) await options.appReady;
+		const isAppReload = isApp && ++appReads > 1;
 		const isProject = url.pathname === `/api/v1/projects/${PID}`;
 		const isReload = isProject && ++projectReads > 1;
 		if (isProject) {
 			await options.projectReady;
 			if (isReload) await options.projectReload;
 		}
-		const status = url.pathname.endsWith(`/notebooks/${NID}/app`)
-			? options.appStatus
+		const status = isApp
+			? isAppReload && options.appReloadStatus
+				? options.appReloadStatus
+				: options.appStatus
 			: isReload && options.projectReloadStatus
 				? options.projectReloadStatus
 				: isProject
@@ -321,25 +327,113 @@ describe('stakeholder apps', () => {
 		},
 	);
 
-	it('prefetches project and capabilities while app details are still pending', async () => {
+	it('opens the editor once the project role arrives while app details are still pending', async () => {
 		const appGate = deferred();
-		const { fetch, existing, container } = setup(app.url, [app], {
+		const { existing, container } = setup(app.url, [app], {
 			role: 'editor',
 			appReady: appGate.promise,
 		});
 		try {
-			await waitFor(() =>
-				expect(fetch.mock.calls.map(([input]) => String(input))).toEqual(
-					expect.arrayContaining([`/api/v1/projects/${PID}`, '/api/v1/capabilities']),
-				),
-			);
-			expect(screen.getByText('Opening app…')).toBeVisible();
-			expect(sessionPosts(existing)).toHaveLength(0);
+			await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+			expect(sessionPosts(existing)).toHaveLength(1);
 		} finally {
 			await act(async () => appGate.resolve());
 		}
-		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		expect(container.querySelector('iframe')).not.toBeNull();
 		expect(sessionPosts(existing)).toHaveLength(1);
+	});
+
+	async function cachedEditorProject() {
+		const client = createTestQueryClient();
+		makeFetch({ role: 'editor' });
+		await Promise.all([
+			client.fetchQuery(userQueryOptions()),
+			client.fetchQuery(projectQueryOptions(PID)),
+		]);
+		return client;
+	}
+
+	it('opens the editor from a cached project role without waiting for app details', async () => {
+		const client = await cachedEditorProject();
+		const appGate = deferred();
+		const { existing, container, fetch } = setup(`/projects/${PID}/notebooks/${NID}`, [app], {
+			client,
+			role: 'editor',
+			appReady: appGate.promise,
+		});
+		try {
+			expect(screen.queryByText('Opening app…')).toBeNull();
+			await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+			expect(sessionPosts(existing)).toHaveLength(1);
+			expect(fetch.mock.calls.map(([input]) => String(input))).not.toContain(
+				`/api/v1/projects/${PID}`,
+			);
+		} finally {
+			await act(async () => appGate.resolve());
+		}
+		expect(container.querySelector('iframe')).not.toBeNull();
+		expect(sessionPosts(existing)).toHaveLength(1);
+	});
+
+	it('moves to the app view when app details later report an app-user role', async () => {
+		const client = await cachedEditorProject();
+		const appGate = deferred();
+		const { container } = setup(`/projects/${PID}/notebooks/${NID}`, [app], {
+			client,
+			role: 'app-user',
+			appOnly: false,
+			appReady: appGate.promise,
+		});
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		expect(screen.getByRole('link', { name: 'Back to project' })).toBeVisible();
+		await act(async () => appGate.resolve());
+		expect(await screen.findByRole('link', { name: 'Back to apps' })).toBeVisible();
+		expect(screen.queryByRole('link', { name: 'Back to project' })).toBeNull();
+	});
+
+	it('keeps the editor mounted when a background app refresh fails', async () => {
+		const projectGate = deferred();
+		const { client, container, existing } = setup(`/projects/${PID}/notebooks/${NID}`, [app], {
+			role: 'editor',
+			appReloadStatus: 503,
+			projectReady: projectGate.promise,
+		});
+		const appKey = ['apps', 'detail', PID, NID];
+		await waitFor(() => expect(client.getQueryState(appKey)?.status).toBe('success'));
+		await act(async () => projectGate.resolve());
+		await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
+		const frame = container.querySelector('iframe');
+		await act(async () => {
+			await client.invalidateQueries({ queryKey: appKey });
+		});
+		await waitFor(() => expect(client.getQueryState(appKey)?.status).toBe('error'));
+		expect(container.querySelector('iframe')).toBe(frame);
+		expect(screen.queryByText('Opening notebook…')).toBeNull();
+		expect(sessionPosts(existing)).toHaveLength(1);
+	});
+
+	it('requests the exclusive editor lease alongside app details', async () => {
+		const appGate = deferred();
+		const projectGate = deferred();
+		const { fetch } = setup(`/projects/${PID}/notebooks/${NID}`, [app], {
+			role: 'editor',
+			editorSharing: 'exclusive',
+			appReady: appGate.promise,
+			projectReady: projectGate.promise,
+		});
+		try {
+			await waitFor(() =>
+				expect(fetch.mock.calls.map(([input]) => String(input))).toContain(
+					`/api/v1/projects/${PID}/notebooks/${NID}/editor-session`,
+				),
+			);
+			expect(screen.getByText('Opening app…')).toBeVisible();
+		} finally {
+			await act(async () => {
+				appGate.resolve();
+				projectGate.resolve();
+			});
+		}
 	});
 
 	it('opens an authorized app when project prefetch is forbidden without an error toast', async () => {

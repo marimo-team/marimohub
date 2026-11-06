@@ -159,7 +159,7 @@ describe('ensureInitialized', () => {
 		expect(await bucket.head(paths.catalog)).toBeNull();
 	});
 
-	it('never reuses a populated catalog whose backend reports an empty ETag', async () => {
+	it('detects pointer loss when the backend reports empty ETags', async () => {
 		const inner = new MemoryBucket();
 		const bucket = new RecordingBucket(inner);
 		const blankEtag = <T extends { etag: string } | null>(result: T): T =>
@@ -168,25 +168,29 @@ describe('ensureInitialized', () => {
 		vi.spyOn(bucket, 'get').mockImplementation(async (key) => blankEtag(await inner.get(key)));
 		await ensureInitialized(bucket, ACTOR);
 		await ensureInitialized(bucket, ACTOR);
+		await inner.delete(paths.catalog);
 		advanceTime(30_000);
-		const get = vi.spyOn(bucket, 'get');
 
-		await ensureInitialized(bucket, ACTOR);
-
-		expect(get).toHaveBeenCalledWith(paths.catalog);
+		const result = expect(ensureInitialized(bucket, ACTOR)).rejects.toThrow(
+			'Catalog recovery required',
+		);
+		await vi.runAllTimersAsync();
+		await result;
 	});
 
-	it('rechecks a changed catalog and refuses to hide existing projects after pointer loss', async () => {
+	it('rechecks a changed catalog with a HEAD and refuses to hide projects after pointer loss', async () => {
 		const bucket = new MemoryBucket();
 		await ensureInitialized(bucket, ACTOR);
 		await ensureInitialized(bucket, ACTOR);
 		const services = createServices(bucket);
 		await services.projects.createProject({ name: 'Another project', description: '' }, ACTOR);
+		const head = vi.spyOn(bucket, 'head');
 		const get = vi.spyOn(bucket, 'get');
 
 		advanceTime(30_000);
 		await ensureInitialized(bucket, ACTOR);
-		expect(get).toHaveBeenCalledWith(paths.catalog);
+		expect(head).toHaveBeenCalledTimes(1);
+		expect(get).not.toHaveBeenCalled();
 		expect(await services.projects.listProjects()).toHaveLength(2);
 
 		await bucket.delete(paths.catalog);
@@ -199,6 +203,30 @@ describe('ensureInitialized', () => {
 		await vi.runAllTimersAsync();
 		await result;
 		expect(put).not.toHaveBeenCalled();
+	});
+
+	it('shares one catalog HEAD among concurrent callers after the TTL expires', async () => {
+		advanceTime(0);
+		const bucket = await populatedCatalog();
+		await ensureInitialized(bucket, ACTOR);
+		await createServices(bucket).projects.createProject({ name: 'Busy', description: '' }, ACTOR);
+		bucket.calls.head.length = 0;
+		bucket.calls.get.length = 0;
+
+		advanceTime(30_000);
+		await Promise.all(Array.from({ length: 8 }, () => ensureInitialized(bucket, ACTOR)));
+
+		expect(bucket.calls.head).toEqual([paths.catalog]);
+		expect(bucket.calls.get).toEqual([]);
+	});
+
+	it('shares one snapshot read among concurrent callers on first contact', async () => {
+		const bucket = await populatedCatalog();
+
+		await Promise.all(Array.from({ length: 8 }, () => ensureInitialized(bucket, ACTOR)));
+
+		expect(bucket.calls.head).toEqual([paths.catalog]);
+		expect(bucket.calls.get.filter((key) => key.startsWith('_system/snapshots/'))).toHaveLength(1);
 	});
 
 	it("lets a later authorized user seed an app-only user's empty catalog", async () => {

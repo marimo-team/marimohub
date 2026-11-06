@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { Session } from '@/types';
-import { isSessionStale, rankSession, sessionsByNotebook } from './sessions';
+import {
+	isSessionStale,
+	rankSession,
+	SESSION_START_SLOW_POLL_AFTER_MS,
+	sessionStartPollDelayMs,
+	sessionsByNotebook,
+} from './sessions';
 
 function session(
 	notebookId: string,
@@ -18,6 +24,20 @@ function session(
 		last_heartbeat: '2025-03-05T14:00:00Z',
 	} as Session;
 }
+
+describe('sessionStartPollDelayMs', () => {
+	it('polls immediately, then backs off to a 2 s cap', () => {
+		expect([0, 1, 2, 3, 4, 5, 20].map((attempt) => sessionStartPollDelayMs(attempt, 0))).toEqual([
+			0, 250, 500, 1_000, 2_000, 2_000, 2_000,
+		]);
+	});
+
+	it('slows to 5 s once startup has run past 30 s', () => {
+		expect(sessionStartPollDelayMs(10, SESSION_START_SLOW_POLL_AFTER_MS)).toBe(2_000);
+		expect(sessionStartPollDelayMs(0, SESSION_START_SLOW_POLL_AFTER_MS + 1)).toBe(5_000);
+		expect(sessionStartPollDelayMs(10, SESSION_START_SLOW_POLL_AFTER_MS + 1)).toBe(5_000);
+	});
+});
 
 describe('rankSession', () => {
 	it('orders running > starting > terminating > everything else', () => {

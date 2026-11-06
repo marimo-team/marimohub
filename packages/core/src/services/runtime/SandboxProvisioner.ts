@@ -349,6 +349,21 @@ interface MarimoStartup {
 
 type SandboxLaunchFailure = Extract<SandboxLaunchResult, { success: false }>;
 
+async function readWorkspacePythonPath(
+	sandbox: SandboxInstance,
+	mountPath: string,
+): Promise<string> {
+	const result = await sandbox.exec('printf \'%s\' "${PYTHONPATH-}"', {
+		timeout: 10_000,
+		maxOutputBytes: 64 * 1024,
+	});
+	if (!result.success || new TextEncoder().encode(result.stdout).byteLength >= 64 * 1024)
+		throw new Error('Could not read the sandbox Python path');
+	const root = sandbox.resolveProcessPath?.(mountPath) ?? mountPath;
+	if (result.stdout === root || result.stdout.startsWith(`${root}:`)) return result.stdout;
+	return result.stdout ? `${root}:${result.stdout}` : root;
+}
+
 function remainingStartupMs(startup: MarimoStartup): number {
 	const { startedAt, timeoutMs } = startup.deadline;
 	return timeoutMs === 0 ? 0 : Math.max(0, timeoutMs - (Date.now() - startedAt));
@@ -847,17 +862,21 @@ export class SandboxProvisioner {
 					environment_ms: sw.timings.inject_env ?? 0,
 				});
 			});
-		const setupEnvironment = async () =>
-			this.setupEnvironment(sandbox, options, mountPath, sw, await launchStrategy);
+		let pythonPath: Promise<string> | undefined;
+		const setupEnvironment = async (bridgeLauncher: string | undefined) =>
+			this.setupEnvironment(sandbox, options, mountPath, sw, await launchStrategy, {
+				bridgeLauncher,
+				pythonPath,
+			});
 		const uploadBridge = () =>
 			launchStrategy.then(
 				(strategy) => this.uploadNotebookBridge(sandbox, options, sw, strategy),
 				// Setup reports strategy failures after workspace loading and injection finish.
-				() => {},
+				(): undefined => {},
 			);
 
 		// Prefetch overlaps boot; files timing includes readiness waits.
-		const { load, setup, bridge } = await all({
+		const { load, setup } = await all({
 			async reachable() {
 				await ensureReachable();
 			},
@@ -873,6 +892,12 @@ export class SandboxProvisioner {
 			async inject() {
 				await this.$.reachable;
 				await injectSessionEnv();
+				if (options.entryNotebook?.includes('/')) {
+					// Reading the inherited path overlaps the workspace restore instead of delaying
+					// setup; setup bounds the wait and reports failures.
+					pythonPath = readWorkspacePythonPath(sandbox, mountPath);
+					pythonPath.catch(() => {});
+				}
 			},
 			async bridge() {
 				await this.$.reachable;
@@ -881,10 +906,11 @@ export class SandboxProvisioner {
 			async setup() {
 				await this.$.load;
 				await this.$.inject;
-				return setupEnvironment();
+				// Waiting for the bridge upload lets setup write the final environment file, which
+				// the launch command then reuses instead of rewriting it.
+				return setupEnvironment(await this.$.bridge);
 			},
 		});
-		if (bridge) await this.configureNotebookBridge(sandbox, options, setup, bridge);
 		return { load, startup: setup, sw, mountPath };
 	}
 
@@ -1297,7 +1323,7 @@ export class SandboxProvisioner {
 
 	private async configureWorkspacePythonPath(
 		sandbox: SandboxInstance,
-		mountPath: string,
+		pythonPath: Promise<string>,
 		startup: MarimoStartup,
 	): Promise<void> {
 		const timeoutMs =
@@ -1306,21 +1332,7 @@ export class SandboxProvisioner {
 		try {
 			await withDeadline(
 				(async () => {
-					const result = await sandbox.exec('printf \'%s\' "${PYTHONPATH-}"', {
-						timeout: timeoutMs,
-						maxOutputBytes: 64 * 1024,
-					});
-					if (!result.success || new TextEncoder().encode(result.stdout).byteLength >= 64 * 1024)
-						throw new Error('Could not read the sandbox Python path');
-					const root = sandbox.resolveProcessPath?.(mountPath) ?? mountPath;
-					await sandbox.setEnvVars({
-						PYTHONPATH:
-							result.stdout === root || result.stdout.startsWith(`${root}:`)
-								? result.stdout
-								: result.stdout
-									? `${root}:${result.stdout}`
-									: root,
-					});
+					await sandbox.setEnvVars({ PYTHONPATH: await pythonPath });
 				})(),
 				{
 					timeoutMs,
@@ -1338,6 +1350,7 @@ export class SandboxProvisioner {
 		mountPath: string,
 		sw: Stopwatch,
 		launchStrategy: MarimoLaunchStrategyName,
+		prepared: { bridgeLauncher?: string; pythonPath?: Promise<string> },
 	): Promise<MarimoStartup> {
 		const sessionEnv = await options.sessionEnv;
 		const loggingPath = sessionEnv?.logging?.length ? LOGGING_DIR : undefined;
@@ -1365,10 +1378,16 @@ export class SandboxProvisioner {
 				timeoutMs: options.startupTimeoutMs ?? DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS,
 			},
 		};
-		if (options.entryNotebook?.includes('/')) {
+		// Environment changes must land before the first setup or launch command so that every
+		// command shares one environment file.
+		if (prepared.bridgeLauncher) {
+			await this.configureNotebookBridge(sandbox, options, startup, prepared.bridgeLauncher);
+		}
+		const { pythonPath } = prepared;
+		if (pythonPath) {
 			// marimo adds the entry's directory; other workspace tools also need the shared root.
 			await withSandboxSpan(sw, 'pythonpath', (time) =>
-				time(() => this.configureWorkspacePythonPath(sandbox, mountPath, startup)),
+				time(() => this.configureWorkspacePythonPath(sandbox, pythonPath, startup)),
 			);
 		}
 		if (startup.plan.setup.length === 0) return startup;

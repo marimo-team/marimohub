@@ -3,10 +3,12 @@ import { context, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { BasicTracerProvider } from '@opentelemetry/sdk-trace-base';
 import {
+	CWSandboxFailedError,
 	CWSandboxNotFoundError,
+	CWSandboxTerminatedError,
+	CWSandboxTimeoutError,
 	CWSandboxUnavailableError,
 	CWSandboxConfigurationError,
-	CWSandboxTimeoutError,
 	CWSandboxValidationError,
 } from '@coreweave/cwsandbox';
 import type { SandboxInfo } from '@coreweave/cwsandbox';
@@ -36,6 +38,8 @@ const SANDBOX_ID = 'sb-abc' as SandboxId;
 const ID_TAG = 'mh-sbx-sb-abc';
 
 const baseConfig: CoreWeaveConfig = { apiKey: 'key', image: 'my-image' };
+/** Per-batch and process-wide file write concurrency. */
+const WRITE_WAVE = 8;
 
 function makeCompute(world: ReturnType<typeof makeWorld>, config: CoreWeaveConfig = baseConfig) {
 	return new CoreWeaveCompute(config, world.client);
@@ -459,6 +463,128 @@ describe('CoreWeaveCompute', () => {
 		});
 	});
 
+	describe('provider id cache', () => {
+		it('re-resolves a sandbox this process created by Get, without the tag List', async () => {
+			const world = makeWorld();
+			const compute = makeCompute(world);
+			await compute.create(SANDBOX_ID, { reuse: false }).ready!();
+
+			const reresolved = compute.create(SANDBOX_ID);
+			await reresolved.exec('true');
+			await compute.connectExisting(SANDBOX_ID).ready!();
+			expect(world.listCalls).toEqual([]);
+			expect(world.fromIdCalls).toEqual(['cw-1', 'cw-1']);
+			expect(world.created).toHaveLength(1);
+			expect(reresolved.drainTimings!()).toMatchObject({ find: 0, create: 0, boot: 0 });
+		});
+
+		it('remembers sandboxes found by tag or by saved reference', async () => {
+			const world = makeWorld();
+			const source = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+			await source.ready!();
+			const other = 'sb-other' as SandboxId;
+			await makeCompute(world).create(other, { reuse: false }).ready!();
+
+			const compute = makeCompute(world);
+			await compute.create(SANDBOX_ID).ready!();
+			await compute.connectExisting(other, {
+				reconnectReference: JSON.stringify({
+					kind: 'coreweave-v1',
+					hubId: other,
+					sandboxId: 'cw-2',
+				}),
+			}).ready!();
+			expect(world.listCalls).toEqual([[ID_TAG]]);
+			await compute.create(SANDBOX_ID).ready!();
+			await compute.create(other).ready!();
+			expect(world.listCalls).toEqual([[ID_TAG]]);
+		});
+
+		it('falls back to the tag List on a cache miss', async () => {
+			const world = makeWorld();
+			await makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!();
+			await makeCompute(world).create(SANDBOX_ID).ready!();
+			expect(world.listCalls).toEqual([[ID_TAG]]);
+			expect(world.created).toHaveLength(1);
+		});
+
+		it.each(['stopped', 'missing', 'mismatched'] as const)(
+			'falls back to the tag List when the cached sandbox is %s',
+			async (stale) => {
+				const world = makeWorld();
+				const fromId = world.client.fromId.bind(world.client);
+				const compute = makeCompute(world);
+				await compute.create(SANDBOX_ID, { reuse: false }).ready!();
+				// Another replica replaced it with a sandbox under the same tag.
+				await makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!();
+				if (stale === 'stopped') world.registry.get('cw-1')!.fake.status = 'terminated';
+				if (stale === 'missing') world.registry.delete('cw-1');
+				if (stale === 'mismatched') {
+					vi.spyOn(world.client, 'fromId').mockImplementationOnce(async () => fromId('cw-2'));
+					world.registry.get('cw-1')!.fake.status = 'terminated';
+				}
+
+				const sandbox = compute.create(SANDBOX_ID);
+				expectExecResult(await sandbox.exec('true'), { success: true });
+				expect(world.listCalls).toEqual([[ID_TAG]]);
+				expect(world.created).toHaveLength(2);
+				expect(world.registry.get('cw-2')!.fake.runCalls).toHaveLength(1);
+				await compute.create(SANDBOX_ID).ready!();
+				expect(world.listCalls).toEqual([[ID_TAG]]);
+			},
+		);
+
+		it('evicts a stale entry and never creates for connectExisting', async () => {
+			const world = makeWorld();
+			const compute = makeCompute(world);
+			await compute.create(SANDBOX_ID, { reuse: false }).ready!();
+			world.registry.get('cw-1')!.fake.status = 'terminated';
+
+			await expect(compute.connectExisting(SANDBOX_ID).ready!()).rejects.toThrow(
+				'no longer available',
+			);
+			await expect(compute.connectExisting(SANDBOX_ID).ready!()).rejects.toThrow(
+				'no longer available',
+			);
+			expect(world.fromIdCalls).toEqual(['cw-1']);
+			expect(world.listCalls).toEqual([[ID_TAG], [ID_TAG]]);
+			expect(world.created).toHaveLength(1);
+		});
+
+		it('evicts on destroy', async () => {
+			const world = makeWorld();
+			const compute = makeCompute(world);
+			await compute.create(SANDBOX_ID, { reuse: false }).ready!();
+			await compute.create(SANDBOX_ID).destroy();
+			expect(world.deleted).toEqual(['cw-1']);
+
+			await compute.create(SANDBOX_ID).ready!();
+			expect(world.fromIdCalls).toEqual([]);
+			expect(world.created).toHaveLength(2);
+		});
+
+		it('keeps at most 4096 entries, dropping the least recently used', async () => {
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				const world = makeWorld();
+				const compute = makeCompute(world);
+				const id = (i: number) => `sb-bound-${i}` as SandboxId;
+				for (let i = 0; i < 4096; i++) await compute.create(id(i), { reuse: false }).ready!();
+				await compute.create(id(0)).ready!();
+				await compute.create(id(4096), { reuse: false }).ready!();
+				expect(world.listCalls).toEqual([]);
+
+				await compute.create(id(0)).ready!();
+				await compute.create(id(4096)).ready!();
+				expect(world.listCalls).toEqual([]);
+				await compute.create(id(1)).ready!();
+				expect(world.listCalls).toEqual([[`mh-sbx-${id(1)}`]]);
+			} finally {
+				warn.mockRestore();
+			}
+		});
+	});
+
 	describe('writeFiles()', () => {
 		it('writes the set with bounded single-file calls and no exec in front of it', async () => {
 			const world = makeWorld();
@@ -483,7 +609,7 @@ describe('CoreWeaveCompute', () => {
 			]);
 		});
 
-		it('uploads eight files in two four-wide RPC waves', async () => {
+		it('uploads two waves of files with one RPC per file', async () => {
 			vi.useFakeTimers();
 			try {
 				let active = 0;
@@ -497,15 +623,18 @@ describe('CoreWeaveCompute', () => {
 						active--;
 					},
 				});
-				const files = Array.from({ length: 8 }, (_, i) => ({ path: `/w/${i}`, content: `${i}` }));
+				const files = Array.from({ length: 2 * WRITE_WAVE }, (_, i) => ({
+					path: `/w/${i}`,
+					content: `${i}`,
+				}));
 				const write = makeCompute(world).create(SANDBOX_ID, { reuse: false }).writeFiles(files);
 				await vi.advanceTimersByTimeAsync(99);
-				expect(started).toBe(4);
+				expect(started).toBe(WRITE_WAVE);
 				await vi.advanceTimersByTimeAsync(1);
-				expect(started).toBe(8);
+				expect(started).toBe(2 * WRITE_WAVE);
 				await vi.advanceTimersByTimeAsync(100);
 				await write;
-				expect(peak).toBe(4);
+				expect(peak).toBe(WRITE_WAVE);
 				expect(active).toBe(0);
 				expect(world.registry.get('cw-1')!.fake.batchWrites.flat()).toEqual(files);
 			} finally {
@@ -660,7 +789,7 @@ describe('CoreWeaveCompute', () => {
 		it('keeps validated destinations stable while lazy sandbox readiness is pending', async () => {
 			let ready!: () => void;
 			const world = makeWorld({
-				waitImpl: () =>
+				pollImpl: () =>
 					new Promise<void>((resolve) => {
 						ready = resolve;
 					}),
@@ -686,7 +815,10 @@ describe('CoreWeaveCompute', () => {
 					await new Promise<void>((resolve) => releases.push(resolve));
 				},
 			});
-			const files = Array.from({ length: 8 }, (_, i) => ({ path: `/w/${i}`, content: 'x' }));
+			const files = Array.from({ length: 2 * WRITE_WAVE }, (_, i) => ({
+				path: `/w/${i}`,
+				content: 'x',
+			}));
 			const write = makeCompute(world).create(SANDBOX_ID, { reuse: false }).writeFiles(files);
 			let rejected = false;
 			const checked = expect(write)
@@ -694,11 +826,11 @@ describe('CoreWeaveCompute', () => {
 				.then(() => {
 					rejected = true;
 				});
-			await vi.waitFor(() => expect(started).toBe(4));
+			await vi.waitFor(() => expect(started).toBe(WRITE_WAVE));
 			expect(rejected).toBe(false);
 			for (const release of releases) release();
 			await checked;
-			expect(started).toBe(4);
+			expect(started).toBe(WRITE_WAVE);
 		});
 
 		it('skips queued uploads after a permanent error without stopping other batches', async () => {
@@ -766,14 +898,14 @@ describe('CoreWeaveCompute', () => {
 				const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
 				const rejected = expect(
 					instance.writeFiles(
-						Array.from({ length: 8 }, (_, i) => ({ path: `/w/${i}`, content: 'x' })),
+						Array.from({ length: 2 * WRITE_WAVE }, (_, i) => ({ path: `/w/${i}`, content: 'x' })),
 					),
 				).rejects.toBe(error);
 				await vi.runAllTimersAsync();
 				await rejected;
-				expect(attempts).toHaveLength(16);
-				for (const path of ['/w/0', '/w/1', '/w/2', '/w/3']) {
-					expect(attempts.filter((attempt) => attempt === path)).toHaveLength(4);
+				expect(attempts).toHaveLength(4 * WRITE_WAVE);
+				for (let i = 0; i < WRITE_WAVE; i++) {
+					expect(attempts.filter((attempt) => attempt === `/w/${i}`)).toHaveLength(4);
 				}
 				await instance.writeFiles([{ path: '/healthy', content: 'x' }]);
 			} finally {
@@ -808,9 +940,12 @@ describe('CoreWeaveCompute', () => {
 							await new Promise<void>((resolve) => setTimeout(resolve, 50));
 						},
 					});
+					const firstWave = Array.from({ length: WRITE_WAVE }, (_, i) => `/w/${i}`);
 					const write = makeCompute(world)
 						.create(SANDBOX_ID, { reuse: false })
-						.writeFiles(Array.from({ length: 8 }, (_, i) => ({ path: `/w/${i}`, content: 'x' })));
+						.writeFiles(
+							Array.from({ length: 2 * WRITE_WAVE }, (_, i) => ({ path: `/w/${i}`, content: 'x' })),
+						);
 					let rejected = false;
 					const checked = expect(write)
 						.rejects.toBe(firstError)
@@ -819,17 +954,15 @@ describe('CoreWeaveCompute', () => {
 						});
 					await vi.advanceTimersByTimeAsync(249);
 					expect(rejected).toBe(false);
-					expect(attempts).toEqual(['/w/0', '/w/1', '/w/2', '/w/3']);
+					expect(attempts).toEqual(firstWave);
 					await vi.advanceTimersByTimeAsync(1);
 					await checked;
-					expect(attempts).toEqual(['/w/0', '/w/1', '/w/2', '/w/3', '/w/1']);
+					expect(attempts).toEqual([...firstWave, '/w/1']);
 					const written = world.registry
 						.get('cw-1')!
 						.fake.batchWrites.flat()
 						.map((file) => file.path);
-					expect(written.sort()).toEqual(
-						outcome === 'success' ? ['/w/1', '/w/2', '/w/3'] : ['/w/2', '/w/3'],
-					);
+					expect(written.sort()).toEqual(firstWave.slice(outcome === 'success' ? 1 : 2).sort());
 				} finally {
 					await vi.runAllTimersAsync();
 					vi.useRealTimers();
@@ -841,7 +974,7 @@ describe('CoreWeaveCompute', () => {
 			const error = new Error('boot failed');
 			const writeImpl = vi.fn(async () => {});
 			const world = makeWorld({
-				waitImpl: async () => {
+				pollImpl: async () => {
 					throw error;
 				},
 				writeImpl,
@@ -1082,7 +1215,7 @@ describe('CoreWeaveCompute', () => {
 			const world = makeWorld();
 			await makeCompute(world).create(SANDBOX_ID, { reuse: false }).exec('true');
 			expect(world.created[0]).toMatchObject({ waitUntilRunning: false });
-			expect(world.registry.get('cw-1')!.fake.waitCalls).toBe(1);
+			expect(world.registry.get('cw-1')!.fake.statusPolls).toBe(1);
 		});
 
 		it('flags a boot over 10 s as a probable cold image pull', async () => {
@@ -1090,7 +1223,7 @@ describe('CoreWeaveCompute', () => {
 			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 			try {
 				const world = makeWorld({
-					waitImpl: async () => {
+					pollImpl: async () => {
 						vi.setSystemTime(Date.now() + 16_500);
 					},
 				});
@@ -1127,7 +1260,99 @@ describe('CoreWeaveCompute', () => {
 			const compute = makeCompute(world);
 			await compute.create(SANDBOX_ID).exec('true');
 			await compute.create(SANDBOX_ID).exec('true'); // reconnects to cw-1
-			expect(world.registry.get('cw-1')!.fake.waitCalls).toBe(1);
+			expect(world.registry.get('cw-1')!.fake.statusPolls).toBe(1);
+		});
+
+		it('notices running within one 250 ms poll interval, without busy polling', async () => {
+			vi.useFakeTimers();
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				const world = makeWorld({ bootStatus: 'pending' });
+				let ready = false;
+				const waiting = makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!().then(
+					() => {
+						ready = true;
+					},
+				);
+				await vi.advanceTimersByTimeAsync(0);
+				const fake = world.registry.get('cw-1')!.fake;
+				expect(fake.statusPolls).toBe(1);
+				await vi.advanceTimersByTimeAsync(249);
+				expect(fake.statusPolls).toBe(1);
+				await vi.advanceTimersByTimeAsync(701);
+				expect(fake.statusPolls).toBe(4);
+				fake.status = 'running';
+				await vi.advanceTimersByTimeAsync(49);
+				expect(ready).toBe(false);
+				await vi.advanceTimersByTimeAsync(1);
+				await waiting;
+				expect(fake.statusPolls).toBe(5);
+				const ensureEvent = warn.mock.calls
+					.map(([message]) => JSON.parse(String(message)) as Record<string, unknown>)
+					.find((event) => event.event === 'coreweave_ensure');
+				expect(ensureEvent).toMatchObject({ reconnected: false, create_ms: 0, boot_ms: 1_000 });
+			} finally {
+				warn.mockRestore();
+				vi.useRealTimers();
+			}
+		});
+
+		it('times out after 60 s of boot polling', async () => {
+			vi.useFakeTimers();
+			try {
+				const world = makeWorld({ bootStatus: 'creating' });
+				let error: unknown;
+				const waiting = makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!().catch(
+					(caught: unknown) => {
+						error = caught;
+					},
+				);
+				await vi.advanceTimersByTimeAsync(59_999);
+				expect(error).toBeUndefined();
+				await vi.advanceTimersByTimeAsync(1);
+				await waiting;
+				expect(error).toBeInstanceOf(CWSandboxTimeoutError);
+				expect(world.registry.get('cw-1')!.fake.statusPolls).toBe(240);
+				expect(vi.getTimerCount()).toBe(0);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it.each([
+			['failed', CWSandboxFailedError],
+			['terminated', CWSandboxTerminatedError],
+		] as const)('rejects a sandbox that is %s during boot', async (status, ErrorType) => {
+			const world = makeWorld({ bootStatus: status });
+			await expect(
+				makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!(),
+			).rejects.toBeInstanceOf(ErrorType);
+			expect(world.registry.get('cw-1')!.fake.statusPolls).toBe(1);
+		});
+
+		it('retries transient status errors with backoff', async () => {
+			vi.useFakeTimers();
+			try {
+				let failures = 2;
+				const world = makeWorld({
+					pollImpl: async () => {
+						if (failures-- > 0) throw new CWSandboxUnavailableError('unavailable');
+					},
+				});
+				const waiting = makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!();
+				await vi.advanceTimersByTimeAsync(0);
+				const fake = world.registry.get('cw-1')!.fake;
+				expect(fake.statusPolls).toBe(1);
+				await vi.advanceTimersByTimeAsync(250);
+				expect(fake.statusPolls).toBe(2);
+				await vi.advanceTimersByTimeAsync(499);
+				expect(fake.statusPolls).toBe(2);
+				await vi.advanceTimersByTimeAsync(1);
+				await waiting;
+				expect(fake.statusPolls).toBe(3);
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 	});
 
@@ -1664,7 +1889,7 @@ describe('CoreWeaveCompute', () => {
 			const client: CoreWeaveClient = {
 				create: async () => ({
 					sandboxId: 'cw-x',
-					wait: async () => {},
+					getStatus: async () => 'running' as const,
 					commands: { run: async () => procResult(), start: async () => fakeProcess() },
 					files: { readText: async () => '', write: async () => {} },
 					delete: async () => {
@@ -1676,7 +1901,7 @@ describe('CoreWeaveCompute', () => {
 				},
 				fromId: async (id) => ({
 					sandboxId: id,
-					wait: async () => {},
+					getStatus: async () => 'running' as const,
 					commands: { run: async () => procResult(), start: async () => fakeProcess() },
 					files: { readText: async () => '', write: async () => {} },
 					delete: async () => {},
@@ -1693,7 +1918,7 @@ describe('CoreWeaveCompute', () => {
 	describe('reconnect / dead-status handling', () => {
 		const bareSandbox = (sandboxId: string) => ({
 			sandboxId,
-			wait: async () => {},
+			getStatus: async () => 'running' as const,
 			commands: { run: async () => procResult(), start: async () => fakeProcess() },
 			files: { readText: async () => '', write: async () => {} },
 			delete: async () => {},
@@ -1703,7 +1928,11 @@ describe('CoreWeaveCompute', () => {
 			// v1's wait() reports `completed` as a satisfied running-wait; the
 			// adapter must turn that into a boot failure, not a working sandbox.
 			const client: CoreWeaveClient = {
-				create: async () => ({ ...bareSandbox('cw-done'), status: 'completed' as const }),
+				create: async () => ({
+					...bareSandbox('cw-done'),
+					status: 'completed' as const,
+					getStatus: async () => 'completed' as const,
+				}),
 				runFromTemplate: async () => {
 					throw new Error('unused');
 				},

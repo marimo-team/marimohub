@@ -147,6 +147,8 @@ describe('Session surface routes', () => {
 			},
 		}).request;
 		const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
+		// Session start defers its sandbox context publication.
+		await Promise.all(deferred.splice(0));
 		instance.startProcess = vi.fn(async () => ({
 			id: 'surface-vscode',
 			command: 'code-server',

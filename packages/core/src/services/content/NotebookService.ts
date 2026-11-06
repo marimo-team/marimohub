@@ -283,8 +283,10 @@ export class NotebookService {
 			resourceSecurity?: ResourceSecurityPolicy;
 			action?: 'project.read' | 'app.read';
 		},
+		/** A caller listing several projects can share one snapshot read. */
+		shared?: Snapshot,
 	): Promise<PublicNotebookEntry[]> {
-		const snapshot = await this.catalog.getCurrentSnapshot();
+		const snapshot = shared ?? (await this.catalog.getCurrentSnapshot());
 		const project = snapshot.projects.find((p) => p.id === projectId);
 		if (!project) {
 			throw new NotFoundError(`Project ${projectId} not found`);

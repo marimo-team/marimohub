@@ -6,7 +6,7 @@ import { NotebookPreviewService } from './content/NotebookPreviewService';
 import { previewKey } from './content/notebookPreviews';
 import type { NotebookPreview } from './content/notebookPreviews';
 import type { GitProviderHosts } from '../integrations/gitRepo';
-import type { Bucket } from '../ports/bucket';
+import type { Bucket, BucketObject } from '../ports/bucket';
 import { noopMetrics } from '../ports/metrics';
 import type { Metrics } from '../ports/metrics';
 import type { JobId, NotebookId, ProjectId, ProposalId, RunId, SessionId, UserId } from '../ids';
@@ -722,53 +722,71 @@ export function createServices(
 
 // Storage resets can remain undetected until this cache expires.
 const CATALOG_POPULATED_TTL_MS = 30_000;
-const populatedCatalogEtags = new WeakMap<Bucket, { etag: string; checkedAt: number }>();
+// A catalog seen populated never needs seeding again, so later checks only HEAD the pointer:
+// a missing pointer is the reset that needs recovery. Comparing ETags instead would re-read
+// the whole snapshot after nearly every save.
+const populatedCatalogCheckedAt = new WeakMap<Bucket, number>();
+const catalogHeads = new WeakMap<Bucket, Promise<BucketObject | null>>();
+const catalogPopulatedReads = new WeakMap<Bucket, Promise<boolean>>();
+
+function singleFlight<T>(
+	inFlight: WeakMap<Bucket, Promise<T>>,
+	bucket: Bucket,
+	run: () => Promise<T>,
+): Promise<T> {
+	const existing = inFlight.get(bucket);
+	if (existing) return existing;
+	const pending = run().finally(() => {
+		if (inFlight.get(bucket) === pending) inFlight.delete(bucket);
+	});
+	inFlight.set(bucket, pending);
+	return pending;
+}
 
 export async function ensureInitialized(
 	bucket: Bucket,
 	actor: UserId,
 	options: { createDefaultProject?: boolean | (() => Promise<boolean>) } = {},
 ): Promise<void> {
-	const cached = populatedCatalogEtags.get(bucket);
+	const seeding = options.createDefaultProject !== false;
+	const populatedAt = populatedCatalogCheckedAt.get(bucket);
 	const checkedAt = Date.now();
-	if (
-		options.createDefaultProject !== false &&
-		cached &&
-		checkedAt - cached.checkedAt < CATALOG_POPULATED_TTL_MS
-	)
+	if (seeding && populatedAt !== undefined && checkedAt - populatedAt < CATALOG_POPULATED_TTL_MS)
 		return;
-	const exists = await bucket.head(paths.catalog);
-	if (exists && options.createDefaultProject === false) return;
-	// An empty ETag (adapter fallback) would match forever and hide a storage reset.
-	if (exists?.etag && cached?.etag === exists.etag) {
-		populatedCatalogEtags.set(bucket, { etag: exists.etag, checkedAt });
+	const exists = await singleFlight(catalogHeads, bucket, () => bucket.head(paths.catalog));
+	if (exists && !seeding) return;
+	if (exists && populatedAt !== undefined) {
+		populatedCatalogCheckedAt.set(bucket, checkedAt);
 		return;
 	}
-	if (!exists) populatedCatalogEtags.delete(bucket);
+	if (!exists) populatedCatalogCheckedAt.delete(bucket);
 
 	const services = createServices(bucket);
 	// initialize() is atomic (create-if-absent on catalog.json), so concurrent
 	// callers converge on a single catalog rather than clobbering one another.
 	if (!exists) await services.catalog.initialize(actor);
-	if (options.createDefaultProject === false) return;
+	if (!seeding) return;
 
-	const snapshot = await services.catalog.getCurrentSnapshot();
+	const populated = await singleFlight(
+		catalogPopulatedReads,
+		bucket,
+		async () => (await services.catalog.getCurrentSnapshot()).projects.length > 0,
+	);
 	// Empty catalogs must retry authorization for a later caller with project creation access.
-	if (snapshot.projects.length > 0 && exists?.etag) {
-		populatedCatalogEtags.set(bucket, { etag: exists.etag, checkedAt });
+	if (populated) {
+		populatedCatalogCheckedAt.set(bucket, checkedAt);
+		return;
 	}
-	if (snapshot.projects.length === 0) {
-		if (
-			typeof options.createDefaultProject === 'function' &&
-			!(await options.createDefaultProject())
-		) {
-			return;
-		}
-		await services.projects.createProject(
-			{ name: 'My Project', description: 'Default project' },
-			actor,
-		);
+	if (
+		typeof options.createDefaultProject === 'function' &&
+		!(await options.createDefaultProject())
+	) {
+		return;
 	}
+	await services.projects.createProject(
+		{ name: 'My Project', description: 'Default project' },
+		actor,
+	);
 }
 
 export {

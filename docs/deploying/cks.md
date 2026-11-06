@@ -126,11 +126,13 @@ cwic sandbox runner describe marimohub
 
 Wait for `dataPlaneStatus.state` to report `RUNNER_DATA_PLANE_STATE_READY`.
 The hub must reach the advertised Service in `cw-sandbox-system` on TCP port `9443`.
-Keep `MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE=auto` (the default) for Gateway fallback.
+Set `MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE=gateway` until the hub can reach that Service.
+The default, `auto`, tries the direct path first.
+If the direct endpoint is unreachable, `auto` can add up to 1 s to the first data-plane call per sandbox, and again every 30 s.
 
-To verify the direct path, temporarily set the mode to `direct`.
+To verify the direct path, set the mode to `direct`.
 Restart the hub and start a new notebook session.
-After verification, restore `auto`.
+If the session starts, keep `direct`. Otherwise, set the mode back to `gateway`.
 For clients outside the cluster, use a LoadBalancer or custom TLS passthrough endpoint.
 See [CoreWeave's runner setup guide](https://docs.coreweave.com/products/sandboxes/operations/direct-data-plane).
 

@@ -232,7 +232,7 @@ describe('catalog recovery', () => {
 			const { bucket, services, project } = await fixture();
 			const report = await services.catalog.planRecovery(SOURCE);
 			if (change === 'catalog')
-				await services.catalog.mutateSnapshot('test', ACTOR, (snapshot) => snapshot);
+				await services.catalog.mutateSnapshot('test', ACTOR, (snapshot) => ({ ...snapshot }));
 			else if (change === 'metadata')
 				await bucket.put(
 					paths.project(project.id).meta,
@@ -279,7 +279,7 @@ describe('catalog recovery', () => {
 	it('recovers a dangling pointer from its previous snapshot without guessing the newest candidate', async () => {
 		const { bucket, services } = await fixture();
 		const current = await services.catalog.getCurrentSnapshot();
-		await services.catalog.mutateSnapshot('later', ACTOR, (snapshot) => snapshot);
+		await services.catalog.mutateSnapshot('later', ACTOR, (snapshot) => ({ ...snapshot }));
 		const missing = await services.catalog.getCurrentSnapshot();
 		await bucket.delete(paths.snapshot(missing.snapshot_id));
 		const source = { mode: 'snapshot', snapshotId: current.snapshot_id } as const;
@@ -696,8 +696,8 @@ describe('catalog recovery', () => {
 	it('reads only the selected and pointer snapshots in snapshot mode', async () => {
 		const { bucket, services } = await fixture();
 		const selected = await services.catalog.getCurrentSnapshot();
-		await services.catalog.mutateSnapshot('later', ACTOR, (snapshot) => snapshot);
-		await services.catalog.mutateSnapshot('latest', ACTOR, (snapshot) => snapshot);
+		await services.catalog.mutateSnapshot('later', ACTOR, (snapshot) => ({ ...snapshot }));
+		await services.catalog.mutateSnapshot('latest', ACTOR, (snapshot) => ({ ...snapshot }));
 		const get = vi.spyOn(bucket, 'get');
 		const report = await services.catalog.planRecovery({
 			mode: 'snapshot',
@@ -780,7 +780,7 @@ describe('catalog recovery', () => {
 			if (key === paths.catalog) throw new Error('Response lost');
 			return result;
 		});
-		await expect(services.catalog.mutateSnapshot('lost', ACTOR, (s) => s)).rejects.toThrow(
+		await expect(services.catalog.mutateSnapshot('lost', ACTOR, (s) => ({ ...s }))).rejects.toThrow(
 			'Response lost',
 		);
 		vi.restoreAllMocks();
@@ -799,7 +799,9 @@ describe('catalog recovery', () => {
 			retries: 2,
 			backoffMs: () => 0,
 		});
-		await expect(catalog.mutateSnapshot('lost', ACTOR, (s) => s)).rejects.toThrow('conflict');
+		await expect(catalog.mutateSnapshot('lost', ACTOR, (s) => ({ ...s }))).rejects.toThrow(
+			'conflict',
+		);
 		expect((await listAllObjects(bucket, paths.snapshotsPrefix)).map((o) => o.key)).toEqual(before);
 	});
 });

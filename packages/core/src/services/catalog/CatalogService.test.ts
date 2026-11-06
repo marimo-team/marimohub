@@ -15,7 +15,7 @@ import {
 	NotInitializedError,
 	PreconditionFailedError,
 } from '../../errors';
-import { createNotebookId, createSnapshotId } from '../../ids';
+import { createNotebookId, createProjectId, createSnapshotId } from '../../ids';
 import { paths } from '../../paths';
 import { noopMetrics } from '../../ports/metrics';
 import { EventSchema, SnapshotSchema } from '../../schema';
@@ -379,7 +379,7 @@ describe('CatalogService', () => {
 
 		it('preserves snapshot chain — previous_snapshot_id is set', async () => {
 			const before = await catalog.getCurrentSnapshot();
-			await catalog.mutateSnapshot('test', ACTOR, (s) => s);
+			await catalog.mutateSnapshot('test', ACTOR, (s) => ({ ...s }));
 
 			const catalogObj = await bucket.get(paths.catalog);
 			const catalogData = await catalogObj!.json<any>();
@@ -404,7 +404,7 @@ describe('CatalogService', () => {
 				return originalPut(key, value, opts);
 			};
 
-			const result = await catalog.mutateSnapshot('test', ACTOR, (s) => s);
+			const result = await catalog.mutateSnapshot('test', ACTOR, (s) => ({ ...s }));
 			expect(result).toBeDefined();
 			expect(callCount).toBe(1); // retried once
 		});
@@ -419,7 +419,9 @@ describe('CatalogService', () => {
 				return originalPut(key, value, opts);
 			};
 
-			await expect(catalog.mutateSnapshot('test', ACTOR, (s) => s)).rejects.toThrow(ConflictError);
+			await expect(catalog.mutateSnapshot('test', ACTOR, (s) => ({ ...s }))).rejects.toThrow(
+				ConflictError,
+			);
 		});
 
 		it('deletes the orphan snapshot it wrote when the CAS swap loses the race', async () => {
@@ -438,7 +440,7 @@ describe('CatalogService', () => {
 				return originalPut(key, value, opts);
 			};
 
-			await catalog.mutateSnapshot('test', ACTOR, (s) => s);
+			await catalog.mutateSnapshot('test', ACTOR, (s) => ({ ...s }));
 
 			// The losing attempt's orphan + the winning commit.
 			expect(snapshotPuts).toHaveLength(2);
@@ -458,7 +460,7 @@ describe('CatalogService', () => {
 				return originalPut(key, value, opts);
 			};
 
-			await expect(svc.mutateSnapshot('test', ACTOR, (s) => s)).rejects.toThrow(
+			await expect(svc.mutateSnapshot('test', ACTOR, (s) => ({ ...s }))).rejects.toThrow(
 				'snapshot put boom',
 			);
 
@@ -491,7 +493,7 @@ describe('CatalogService', () => {
 			// Leave the catalog pointing at a snapshot that no longer exists.
 			await bucket.delete(paths.snapshot(current.snapshot_id));
 
-			await expect(svc.mutateSnapshot('test', ACTOR, (s) => s)).rejects.toBeInstanceOf(
+			await expect(svc.mutateSnapshot('test', ACTOR, (s) => ({ ...s }))).rejects.toBeInstanceOf(
 				NotInitializedError,
 			);
 			expect(increment.mock.calls.filter(([n]) => n === 'catalog.cas.attempt')).toHaveLength(1);
@@ -499,7 +501,7 @@ describe('CatalogService', () => {
 
 		it('throws a corrupted-object error on malformed catalog JSON', async () => {
 			await bucket.put(paths.catalog, JSON.stringify({ not: 'a catalog' }));
-			await expect(catalog.mutateSnapshot('test', ACTOR, (s) => s)).rejects.toThrow(
+			await expect(catalog.mutateSnapshot('test', ACTOR, (s) => ({ ...s }))).rejects.toThrow(
 				/Stored data is temporarily unavailable/,
 			);
 		});
@@ -507,7 +509,7 @@ describe('CatalogService', () => {
 		it('throws a corrupted-object error on a malformed snapshot object', async () => {
 			const current = await catalog.getCurrentSnapshot();
 			await bucket.put(paths.snapshot(current.snapshot_id), JSON.stringify({ nope: true }));
-			await expect(catalog.mutateSnapshot('test', ACTOR, (s) => s)).rejects.toThrow(
+			await expect(catalog.mutateSnapshot('test', ACTOR, (s) => ({ ...s }))).rejects.toThrow(
 				/Stored data is temporarily unavailable/,
 			);
 		});
@@ -557,7 +559,7 @@ describe('CatalogService', () => {
 			await bucket.put(paths.snapshot(v2.snapshot_id), JSON.stringify(v2));
 			await bucket.put(paths.catalog, JSON.stringify(makeCatalog(v2.snapshot_id)));
 
-			const result = await catalog.mutateSnapshot('test.op', ACTOR, (s) => s);
+			const result = await catalog.mutateSnapshot('test.op', ACTOR, (s) => ({ ...s }));
 
 			// Downgrade-guard: the committed version is the max of read vs current code.
 			expect(result.schema_version).toBe(2);
@@ -590,7 +592,7 @@ describe('CatalogService', () => {
 				return originalPut(key, value, opts);
 			};
 
-			await expect(instrumented.mutateSnapshot('t', ACTOR, (s) => s)).rejects.toThrow(
+			await expect(instrumented.mutateSnapshot('t', ACTOR, (s) => ({ ...s }))).rejects.toThrow(
 				ConflictError,
 			);
 			expect(increment).toHaveBeenCalledWith('catalog.cas.conflict');
@@ -611,7 +613,7 @@ describe('CatalogService', () => {
 		const listEvents = async () => (await bucket.list({ prefix: paths.eventsPrefix })).objects;
 
 		it('appends exactly one event per successful mutation, with context', async () => {
-			await audited.mutateSnapshot('project.update', ACTOR, (s) => s, {
+			await audited.mutateSnapshot('project.update', ACTOR, (s) => ({ ...s }), {
 				project_id: 'proj-7h2k9qm4xz7rp3w8',
 			});
 
@@ -636,7 +638,7 @@ describe('CatalogService', () => {
 				return originalPut(key, value, opts);
 			};
 
-			await audited.mutateSnapshot('project.update', ACTOR, (s) => s);
+			await audited.mutateSnapshot('project.update', ACTOR, (s) => ({ ...s }));
 
 			expect(callCount).toBe(1); // the race actually happened
 			expect(await listEvents()).toHaveLength(1);
@@ -647,15 +649,73 @@ describe('CatalogService', () => {
 			const flaky = new CatalogService(bucket, { increment, gauge: vi.fn() }, events);
 			vi.spyOn(events, 'append').mockRejectedValueOnce(new Error('events boom'));
 
-			const result = await flaky.mutateSnapshot('project.update', ACTOR, (s) => s);
+			const result = await flaky.mutateSnapshot('project.update', ACTOR, (s) => ({ ...s }));
 
 			expect(result.operation).toBe('project.update');
 			expect(increment).toHaveBeenCalledWith('events.append_failed');
 			expect(await listEvents()).toHaveLength(0);
 		});
 
+		it('commits and audits nothing when the mutator returns its input', async () => {
+			const before = await audited.getCurrentSnapshot();
+			const pointer = await bucket.head(paths.catalog);
+			const put = vi.spyOn(bucket, 'put');
+
+			const result = await audited.mutateSnapshot('project.update', ACTOR, (s) => s);
+			await audited.updateProjectEntry('project.update', ACTOR, createProjectId(), () => ({
+				name: 'Missing',
+			}));
+
+			expect(result).toEqual(before);
+			expect(put).not.toHaveBeenCalled();
+			expect((await bucket.head(paths.catalog))?.etag).toBe(pointer?.etag);
+			expect(await listEvents()).toHaveLength(0);
+		});
+
+		it('writes one snapshot, one pointer swap, and one event for a real change', async () => {
+			const put = vi.spyOn(bucket, 'put');
+
+			await audited.mutateSnapshot('project.create', ACTOR, (s) => ({
+				...s,
+				projects: [...s.projects, makeSnapshotProjectEntry()],
+			}));
+
+			const keys = put.mock.calls.map(([key]) => key);
+			expect(keys.filter((key) => key === paths.catalog)).toHaveLength(1);
+			expect(keys.filter((key) => key.startsWith(paths.snapshotsPrefix))).toHaveLength(1);
+			expect(await listEvents()).toHaveLength(1);
+		});
+
+		it('retries a lost race and skips the commit once the retry finds the change applied', async () => {
+			const entry = makeSnapshotProjectEntry();
+			const addEntry = (s: Snapshot): Snapshot =>
+				s.projects.some((p) => p.id === entry.id) ? s : { ...s, projects: [...s.projects, entry] };
+			const rival = new CatalogService(bucket, noopMetrics);
+			const snapshotPuts: string[] = [];
+			let raced = false;
+			const originalPut = bucket.put.bind(bucket);
+			bucket.put = async (key, value, opts) => {
+				if (key.startsWith(paths.snapshotsPrefix)) snapshotPuts.push(key);
+				if (key === paths.catalog && opts?.onlyIfEtagMatches && !raced) {
+					raced = true;
+					await rival.mutateSnapshot('project.create', ACTOR, addEntry);
+				}
+				return originalPut(key, value, opts);
+			};
+
+			const result = await audited.mutateSnapshot('project.create', ACTOR, addEntry);
+
+			expect(raced).toBe(true);
+			expect(result.projects.filter((p) => p.id === entry.id)).toHaveLength(1);
+			// Ours lost the CAS and was removed; only the rival's snapshot remains.
+			expect(snapshotPuts).toHaveLength(2);
+			expect(await bucket.get(snapshotPuts[0])).toBeNull();
+			expect(result.snapshot_id).toBe((await rival.getCurrentSnapshot()).snapshot_id);
+			expect(await listEvents()).toHaveLength(0);
+		});
+
 		it('writes no events when no EventService is injected', async () => {
-			await catalog.mutateSnapshot('project.update', ACTOR, (s) => s);
+			await catalog.mutateSnapshot('project.update', ACTOR, (s) => ({ ...s }));
 			expect(await listEvents()).toHaveLength(0);
 		});
 	});

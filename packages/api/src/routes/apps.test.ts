@@ -7,6 +7,7 @@ import {
 	createJobId,
 	createRunId,
 	SECONDARY_SURFACE_IDS,
+	paths,
 } from '@marimo-hub/core';
 import type {
 	NotebookId,
@@ -442,6 +443,83 @@ describe('app-user boundaries', () => {
 		]);
 		expect(second.next_cursor).toBeNull();
 		await expectError(await api.request('GET', `/apps?project_id=${hidden.id}`), 404);
+	});
+});
+
+describe('project-scoped app listing', () => {
+	async function recordGets(run: () => Response | Promise<Response>) {
+		// Settle the auto-init middleware so only the handler's reads are recorded.
+		await expectOk(await api.request('GET', '/me'));
+		const get = api.bucket.get.bind(api.bucket);
+		const keys: string[] = [];
+		const spy = vi.spyOn(api.bucket, 'get').mockImplementation(async (key) => {
+			keys.push(key);
+			return get(key);
+		});
+		try {
+			return { response: await run(), keys };
+		} finally {
+			spy.mockRestore();
+		}
+	}
+
+	it('reads only the selected project head and one snapshot', async () => {
+		const others = await Promise.all(
+			['One', 'Two', 'Three'].map(async (name) => {
+				const project = await services.projects.createProject({ name, description: '' }, ACTOR);
+				await services.projects.addMember(project.id, { user_id: STAKEHOLDER }, 'app-user', ACTOR);
+				return project;
+			}),
+		);
+		const unscoped = await expectPage<{ project_id: string }>(await api.request('GET', '/apps'));
+		const { response, keys } = await recordGets(() =>
+			api.request('GET', `/apps?project_id=${pid}`),
+		);
+		const page = await expectOk<{ items: unknown[]; project: unknown }>(response);
+		expect(page.items).toEqual(unscoped.filter((item) => item.project_id === pid));
+		expect(page.project).toEqual({ id: pid, name: 'Analytics', your_role: 'app-user' });
+		for (const other of others) expect(keys).not.toContain(paths.project(other.id).meta);
+		expect(keys.filter((key) => key === paths.project(pid).meta)).toHaveLength(1);
+		expect(keys.filter((key) => key.startsWith('_system/snapshots/'))).toHaveLength(1);
+	});
+
+	it('shares one snapshot read across every listed project', async () => {
+		await services.projects.addMember(
+			(await services.projects.createProject({ name: 'Second', description: '' }, ACTOR)).id,
+			{ user_id: STAKEHOLDER },
+			'app-user',
+			ACTOR,
+		);
+		const { response, keys } = await recordGets(() => api.request('GET', '/apps'));
+		await expectPage(response);
+		// listProjects reads its own snapshot; the per-project notebook listings share one more.
+		expect(keys.filter((key) => key.startsWith('_system/snapshots/'))).toHaveLength(2);
+	});
+
+	it('denies a non-member the selected project without reading other heads', async () => {
+		const hidden = await services.projects.createProject(
+			{ name: 'Hidden', description: '' },
+			ACTOR,
+		);
+		const { response, keys } = await recordGets(() =>
+			api.request('GET', `/apps?project_id=${hidden.id}`),
+		);
+		await expectError(response, 404);
+		expect(keys).not.toContain(paths.project(pid).meta);
+		expect(keys.filter((key) => key.startsWith('_system/snapshots/'))).toHaveLength(0);
+	});
+
+	it('returns no apps for a selected project whose catalog entry is not active', async () => {
+		await services.catalog.updateProjectEntry('test.tombstone', ACTOR, pid, () => ({
+			status: 'deleted',
+		}));
+		const page = await expectOk<{ items: unknown[]; project: unknown }>(
+			await api.request('GET', `/apps?project_id=${pid}`),
+		);
+		expect(page.items).toEqual([]);
+		expect(page.project).toEqual({ id: pid, name: 'Analytics', your_role: 'app-user' });
+		await services.projects.deleteProject(pid, ACTOR);
+		await expectError(await api.request('GET', `/apps?project_id=${pid}`), 404);
 	});
 });
 
