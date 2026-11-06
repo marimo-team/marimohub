@@ -364,6 +364,48 @@ paths:
       responses:
         '204':
           description: Stored.
+  /_system/preview-automations/{pid}/{automation_key}.json:
+    summary: Retired PR automation replay fence, retained independently of active
+      project membership.
+    parameters:
+      - name: pid
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: automation_key
+        in: path
+        required: true
+        schema:
+          type: string
+    x-mutability: cas
+    x-owner: PreviewStore
+    get:
+      operationId: read_system_preview_automations_json
+      summary: Read PreviewAutomationTombstone
+      tags:
+        - notebook
+      responses:
+        '200':
+          description: The stored object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreviewAutomationTombstone'
+    put:
+      operationId: write_system_preview_automations_json
+      summary: Write PreviewAutomationTombstone
+      tags:
+        - notebook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreviewAutomationTombstone'
+      responses:
+        '204':
+          description: Stored.
   /_system/preview-active-projects/{pid}/{work_id}.json:
     summary: Active project discovery marker, removed after its project CAS fences
       publication.
@@ -3565,6 +3607,10 @@ components:
             - type: 'null'
         eager:
           type: boolean
+        requested_generation:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
         requested_commit:
           type: string
           pattern: ^[a-fA-F0-9]{40}$
@@ -3580,8 +3626,13 @@ components:
               type: string
             revision:
               type: number
+            generation:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
             commit:
               type: string
+              pattern: ^[a-fA-F0-9]{40}$
           required:
             - key
             - revision
@@ -3844,14 +3895,6 @@ components:
                             - type: 'null'
                         eager:
                           type: boolean
-                        requested_commit:
-                          type: string
-                          pattern: ^[a-fA-F0-9]{40}$
-                        observed_commit:
-                          type: string
-                          pattern: ^[a-fA-F0-9]{40}$
-                        demand:
-                          type: boolean
                         automation:
                           type: object
                           properties:
@@ -3859,8 +3902,13 @@ components:
                               type: string
                             revision:
                               type: number
+                            generation:
+                              type: integer
+                              minimum: 0
+                              maximum: 9007199254740991
                             commit:
                               type: string
+                              pattern: ^[a-fA-F0-9]{40}$
                           required:
                             - key
                             - revision
@@ -3883,100 +3931,6 @@ components:
                             - active
                             - deleting
                             - deleted
-                        preparation:
-                          type: string
-                          enum:
-                            - deferred
-                            - pending
-                            - preparing
-                            - ready
-                            - failed
-                        checked_at:
-                          type: string
-                          format: date-time
-                          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
-                        next_attempt_at:
-                          type: number
-                        preparation_failures:
-                          default: 0
-                          type: integer
-                          minimum: 0
-                          maximum: 9007199254740991
-                        error:
-                          type: string
-                        lease:
-                          type: object
-                          properties:
-                            token:
-                              type: string
-                            commit:
-                              type: string
-                              pattern: ^[a-fA-F0-9]{40}$
-                            expires_at:
-                              type: number
-                              description: Lease deadline in milliseconds since the Unix epoch.
-                          required:
-                            - token
-                            - expires_at
-                        current:
-                          type: object
-                          properties:
-                            notebook_id:
-                              type: string
-                            version_id:
-                              type: string
-                            commit:
-                              type: string
-                          required:
-                            - notebook_id
-                            - version_id
-                            - commit
-                        revisions:
-                          type: array
-                          items:
-                            type: object
-                            properties:
-                              notebook_id:
-                                type: string
-                              state:
-                                type: string
-                                enum:
-                                  - preparing
-                                  - ready
-                                  - retiring
-                              cleanup_after:
-                                type: number
-                            required:
-                              - notebook_id
-                              - state
-                              - cleanup_after
-                        admissions:
-                          default: []
-                          type: array
-                          items:
-                            type: object
-                            properties:
-                              session_id:
-                                type: string
-                              notebook_id:
-                                type: string
-                              expires_at:
-                                type: number
-                                description:
-                                  Uncommitted admission deadline in milliseconds since the Unix
-                                  epoch.
-                              committed:
-                                default: false
-                                type: boolean
-                            required:
-                              - session_id
-                              - notebook_id
-                              - expires_at
-                        cleanup_after:
-                          type: number
-                          description:
-                            Earliest ownership removal time in milliseconds since the Unix
-                            epoch.
                       required:
                         - schema_version
                         - id
@@ -3992,8 +3946,6 @@ components:
                         - created_at
                         - request_fingerprint
                         - state
-                        - preparation
-                        - revisions
                   required:
                     - commit
                     - order
@@ -4080,14 +4032,6 @@ components:
                       - type: 'null'
                   eager:
                     type: boolean
-                  requested_commit:
-                    type: string
-                    pattern: ^[a-fA-F0-9]{40}$
-                  observed_commit:
-                    type: string
-                    pattern: ^[a-fA-F0-9]{40}$
-                  demand:
-                    type: boolean
                   automation:
                     type: object
                     properties:
@@ -4095,8 +4039,13 @@ components:
                         type: string
                       revision:
                         type: number
+                      generation:
+                        type: integer
+                        minimum: 0
+                        maximum: 9007199254740991
                       commit:
                         type: string
+                        pattern: ^[a-fA-F0-9]{40}$
                     required:
                       - key
                       - revision
@@ -4119,98 +4068,6 @@ components:
                       - active
                       - deleting
                       - deleted
-                  preparation:
-                    type: string
-                    enum:
-                      - deferred
-                      - pending
-                      - preparing
-                      - ready
-                      - failed
-                  checked_at:
-                    type: string
-                    format: date-time
-                    pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
-                  next_attempt_at:
-                    type: number
-                  preparation_failures:
-                    default: 0
-                    type: integer
-                    minimum: 0
-                    maximum: 9007199254740991
-                  error:
-                    type: string
-                  lease:
-                    type: object
-                    properties:
-                      token:
-                        type: string
-                      commit:
-                        type: string
-                        pattern: ^[a-fA-F0-9]{40}$
-                      expires_at:
-                        type: number
-                        description: Lease deadline in milliseconds since the Unix epoch.
-                    required:
-                      - token
-                      - expires_at
-                  current:
-                    type: object
-                    properties:
-                      notebook_id:
-                        type: string
-                      version_id:
-                        type: string
-                      commit:
-                        type: string
-                    required:
-                      - notebook_id
-                      - version_id
-                      - commit
-                  revisions:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        notebook_id:
-                          type: string
-                        state:
-                          type: string
-                          enum:
-                            - preparing
-                            - ready
-                            - retiring
-                        cleanup_after:
-                          type: number
-                      required:
-                        - notebook_id
-                        - state
-                        - cleanup_after
-                  admissions:
-                    default: []
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        session_id:
-                          type: string
-                        notebook_id:
-                          type: string
-                        expires_at:
-                          type: number
-                          description: Uncommitted admission deadline in milliseconds since the Unix
-                            epoch.
-                        committed:
-                          default: false
-                          type: boolean
-                      required:
-                        - session_id
-                        - notebook_id
-                        - expires_at
-                  cleanup_after:
-                    type: number
-                    description: Earliest ownership removal time in milliseconds since the Unix
-                      epoch.
                 required:
                   - schema_version
                   - id
@@ -4226,8 +4083,6 @@ components:
                   - created_at
                   - request_fingerprint
                   - state
-                  - preparation
-                  - revisions
               artifacts:
                 type: array
                 items:
@@ -4246,6 +4101,81 @@ components:
               - artifacts
       required:
         - entries
+    PreviewAutomationTombstone:
+      type: object
+      properties:
+        key:
+          type: string
+        notebook_id:
+          type: string
+        repository:
+          type: string
+        pull_request:
+          type: integer
+          exclusiveMinimum: 0
+          maximum: 9007199254740991
+        workflow_id:
+          type: string
+        run_number:
+          type: number
+        run_id:
+          type: string
+        floor:
+          type: number
+        revision:
+          type: number
+        state:
+          type: string
+          enum:
+            - closed
+            - expired
+        head:
+          type: string
+        last_commit_at:
+          type: string
+          format: date-time
+          pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+        policy:
+          type: object
+          properties:
+            mode:
+              default: sticky
+              type: string
+              enum:
+                - sticky
+                - commits
+            keep:
+              default: 5
+              type: integer
+              minimum: 1
+              maximum: 25
+            eager:
+              default: true
+              type: boolean
+            idle_days:
+              type: integer
+              minimum: 1
+              maximum: 30
+          additionalProperties: false
+        created_by:
+          type: string
+        checked_at:
+          type: number
+      required:
+        - key
+        - notebook_id
+        - repository
+        - pull_request
+        - workflow_id
+        - run_number
+        - run_id
+        - floor
+        - revision
+        - state
+        - head
+        - last_commit_at
+        - policy
+        - created_by
     PreviewActiveProject:
       type: object
       properties:

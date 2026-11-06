@@ -32,9 +32,13 @@ import {
 	previewExpired,
 	PREVIEW_POLL_MS,
 	PreviewRecordSchema,
+	PreviewIntentSchema,
+	initialPreviewRecord,
+	previewGeneration,
+	requestedPreviewGeneration,
 	previewKey,
 } from './notebookPreviews';
-import type { NotebookPreview, PreviewCreate } from './notebookPreviews';
+import type { NotebookPreview, PreviewCreate, PreviewIntent } from './notebookPreviews';
 import type { PreviewReconcile } from './previewAutomation';
 
 type RetireRuntime = (pid: ProjectId, nid: NotebookId) => Promise<boolean>;
@@ -55,14 +59,13 @@ function retirePreviewRecord(current: NotebookPreview): NotebookPreview | null {
 
 function applyAutomationIntent(
 	current: NotebookPreview,
-	intent: NotebookPreview,
+	intent: PreviewIntent,
 ): NotebookPreview | null {
 	if (!intent.automation) return null;
 	if (current.state !== 'active') return null;
 	if (intent.state !== 'active') return retirePreviewRecord(current);
 	if ((current.automation?.revision ?? -1) >= intent.automation.revision) return null;
-	const changed =
-		current.automation?.commit !== intent.automation.commit || current.eager !== intent.eager;
+	const changed = previewGeneration(current) !== previewGeneration(intent);
 	return {
 		...current,
 		name: intent.name,
@@ -72,8 +75,9 @@ function applyAutomationIntent(
 		automation: intent.automation,
 		...(changed
 			? {
-					observed_commit: intent.automation.commit,
-					demand: false,
+					requested_generation: undefined,
+					observed_commit: undefined,
+					demand: undefined,
 					requested_commit: undefined,
 					lease: undefined,
 					next_attempt_at: 0,
@@ -139,7 +143,7 @@ export class NotebookPreviewService {
 		return this.readRecord(intent);
 	}
 
-	private async readRecord(intent: NotebookPreview): Promise<NotebookPreview> {
+	private async readRecord(intent: PreviewIntent): Promise<NotebookPreview> {
 		const key = previewKey(intent.project_id, intent.notebook_id, intent.id);
 		const object = await this.bucket.get(key);
 		if (!object) throw new NotFoundError('Preview not found');
@@ -148,16 +152,15 @@ export class NotebookPreviewService {
 		return applyAutomationIntent(record, intent) ?? record;
 	}
 
-	private async materialize(intent: NotebookPreview): Promise<NotebookPreview> {
-		if (intent.state === 'deleted') return intent;
+	private async materialize(intent: PreviewIntent): Promise<NotebookPreview> {
+		if (intent.state === 'deleted') return initialPreviewRecord(intent);
 		const key = previewKey(intent.project_id, intent.notebook_id, intent.id);
 		const object = await this.bucket.get(key);
 		if (!object) {
 			try {
-				const initial =
-					intent.state === 'deleting' && intent.cleanup_after === undefined
-						? { ...intent, cleanup_after: Date.now() + PREVIEW_LIMITS.cleanupGraceMs }
-						: intent;
+				const initial = initialPreviewRecord(intent);
+				if (initial.state === 'deleting')
+					initial.cleanup_after = Date.now() + PREVIEW_LIMITS.cleanupGraceMs;
 				await this.bucket.put(key, JSON.stringify(initial), { onlyIfNotExists: true });
 			} catch (error) {
 				if (!(error instanceof PreconditionFailedError)) throw error;
@@ -188,7 +191,7 @@ export class NotebookPreviewService {
 				if (!record) return [];
 				const intent = current.get(record.id);
 				if (!intent) return [];
-				if (intent.state === 'deleted') return [intent];
+				if (intent.state === 'deleted') return [initialPreviewRecord(intent)];
 				if (!applyAutomationIntent(record, intent)) return [record];
 				try {
 					return [await this.mutate(record, (latest) => applyAutomationIntent(latest, intent))];
@@ -208,7 +211,7 @@ export class NotebookPreviewService {
 			try {
 				return await this.readRecord(entry.intent);
 			} catch (error) {
-				if (error instanceof NotFoundError) return entry.intent;
+				if (error instanceof NotFoundError) return initialPreviewRecord(entry.intent);
 				throw error;
 			}
 		});
@@ -337,7 +340,7 @@ export class NotebookPreviewService {
 		if (Date.parse(input.event_at) > Date.now() + 60_000)
 			throw new BadRequestError('Workflow event time is in the future');
 		const key = await sha256Hex(JSON.stringify([nid, source.repo, input.pull_request]));
-		const template = PreviewRecordSchema.parse({
+		const template = PreviewIntentSchema.parse({
 			schema_version: 1,
 			id: createPreviewId(),
 			project_id: pid,
@@ -353,16 +356,12 @@ export class NotebookPreviewService {
 			expires_at: null,
 			request_fingerprint: key,
 			state: 'active',
-			preparation: input.policy.eager ? 'pending' : 'deferred',
 			eager: input.policy.eager,
-			observed_commit: input.commit,
 			automation: { key, revision: 0, commit: input.commit },
-			revisions: [],
 		});
 		await this.store.reconcileAutomation(template, input, pr.branch, await sha256Hex(pr.branch));
-		await this.store.planAutomations(pid);
 		const records = await this.projectRecords(pid, nid);
-		const group = (await this.store.project(pid)).automations!.find((item) => item.key === key)!;
+		const group = (await this.store.getAutomation(pid, key))!;
 		return {
 			state: group.state,
 			pending: group.heads.some((head) => !records.some((record) => record.id === head.intent.id)),
@@ -377,10 +376,26 @@ export class NotebookPreviewService {
 
 	async requestPreparation(record: NotebookPreview): Promise<NotebookPreview> {
 		if (!previewAvailable(record)) throw new NotFoundError('Preview not found');
-		return this.mutate(record, (current) => {
+		return this.mutate(record, (persisted) => {
+			const applied = applyAutomationIntent(persisted, record);
+			const current = applied ?? persisted;
 			if (!previewAvailable(current)) throw new NotFoundError('Preview not found');
+			if (current.eager !== false) return applied;
+			if (current.automation) {
+				const generation = previewGeneration(current)!;
+				if (requestedPreviewGeneration(current) === generation && current.preparation !== 'failed')
+					return applied;
+				return {
+					...current,
+					requested_generation: generation,
+					demand: undefined,
+					requested_commit: undefined,
+					observed_commit: undefined,
+					next_attempt_at: 0,
+					preparation: current.preparation === 'deferred' ? 'pending' : current.preparation,
+				};
+			}
 			if (
-				current.eager !== false ||
 				current.demand ||
 				(current.preparation === 'preparing' &&
 					current.lease?.commit &&
@@ -531,7 +546,7 @@ export class NotebookPreviewService {
 				source.entry_notebook !== record.entry_notebook
 			)
 				throw new ConflictError('Notebook source configuration changed');
-			if (record.pull_request) {
+			if (record.pull_request && !record.automation) {
 				if (!reader.getPullRequest)
 					throw new BadRequestError('Pull request tracking is unavailable');
 				const pr = await bounded(() =>
@@ -544,7 +559,8 @@ export class NotebookPreviewService {
 			}
 			const ref = record.source;
 			const commit =
-				ref.type === 'commit' && claimed.current
+				record.automation?.commit ??
+				(ref.type === 'commit' && claimed.current
 					? claimed.current.commit
 					: ref.type === 'branch'
 						? (
@@ -558,8 +574,32 @@ export class NotebookPreviewService {
 								await bounded(() =>
 									reader.resolveCommit!(record.repository, ref.commit, { signal }),
 								)
-							).commit;
+							).commit);
 			const requested = await this.mutateLeased(record, token, (current) => {
+				if (current.automation) {
+					const generation = previewGeneration(current)!;
+					const requestedGeneration = requestedPreviewGeneration(current);
+					if (
+						current.eager === false &&
+						current.current?.commit !== commit &&
+						requestedGeneration !== generation
+					) {
+						return {
+							...current,
+							preparation: 'deferred',
+							lease: undefined,
+							error: undefined,
+							next_attempt_at: Date.now() + PREVIEW_POLL_MS,
+						};
+					}
+					return {
+						...current,
+						requested_generation: requestedGeneration,
+						demand: undefined,
+						requested_commit: undefined,
+						observed_commit: undefined,
+					};
+				}
 				if (
 					current.eager === false &&
 					current.current?.commit !== commit &&

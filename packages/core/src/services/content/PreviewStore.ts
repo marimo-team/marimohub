@@ -6,23 +6,25 @@ import { createPreviewId } from '../../ids';
 import { ConflictError, NotFoundError, ResourceExhaustedError } from '../../errors';
 import { readStored, ProjectIdSchema, NotebookIdSchema } from '../../schema';
 import { withCasRetry } from '../catalog/cas';
+import { iterateBucketPages } from '../catalog/storage';
 import { logOperationalError } from '../../operationalLog';
 import { paths } from '../../paths';
-import { PreviewRecordSchema, PreviewIdSchema } from './notebookPreviews';
-import type { NotebookPreview } from './notebookPreviews';
+import { PreviewIntentSchema, PreviewIdSchema } from './notebookPreviews';
+import type { PreviewIntent } from './notebookPreviews';
 import {
 	PreviewAutomationGroupSchema,
 	applyPreviewEvent,
 	automationExpiresAt,
 	retireAutomationGroup,
 } from './previewAutomation';
-import type { PreviewReconcile } from './previewAutomation';
+import type { PreviewAutomationGroup, PreviewReconcile } from './previewAutomation';
 
 export const PREVIEW_LIMITS = {
 	projectsPerTick: 4,
 	workPagesPerTick: 16,
 	creationMs: 60_000,
 	perProject: 25,
+	automationsPerProject: 1000,
 	receiptsPerProject: 1000,
 	bytesPerProject: 500 * 1024 * 1024,
 	revisionsPerPreview: 12,
@@ -41,13 +43,19 @@ export const PreviewProjectSchema = z.object({
 	work_id: z.string().optional(),
 	entries: z.array(
 		z.object({
-			intent: PreviewRecordSchema,
+			intent: PreviewIntentSchema,
 			artifacts: z.array(
 				z.object({ notebook_id: NotebookIdSchema, bytes: z.number().nonnegative() }),
 			),
 		}),
 	),
 });
+export const PreviewAutomationTombstoneSchema = PreviewAutomationGroupSchema.omit({
+	heads: true,
+}).extend({
+	state: z.enum(['closed', 'expired']),
+});
+type PreviewAutomationTombstone = z.infer<typeof PreviewAutomationTombstoneSchema>;
 export const PreviewReceiptsSchema = z.object({
 	entries: z.array(
 		z.object({
@@ -79,6 +87,8 @@ export const PreviewActiveProjectSchema = z.object({
 	project_id: ProjectIdSchema,
 	work_id: z.string(),
 });
+export const previewAutomationKey = paths.previewAutomation;
+export const previewAutomationPrefix = paths.previewAutomations;
 export const previewReceiptsKey = paths.previewReceipts;
 export const previewWorkKey = paths.previewWork;
 export const previewCleanupCursorKey = paths.previewCleanupCursor;
@@ -111,6 +121,34 @@ function admitMovedEntries(
 		throw new ResourceExhaustedError('Destination preview storage limit reached');
 }
 
+function admitMovedGroups(
+	project: PreviewProject,
+	groups: PreviewAutomationGroup[],
+	destination: ProjectId,
+): void {
+	for (const group of groups) {
+		const automations = (project.automations ??= []);
+		const index = automations.findIndex((item) => item.key === group.key);
+		if (index !== -1 && compareAutomationOrder(automations[index], group) >= 0) continue;
+		if (
+			index === -1 &&
+			group.state === 'active' &&
+			automations.filter((item) => item.state === 'active').length >=
+				PREVIEW_LIMITS.automationsPerProject
+		)
+			throw new ResourceExhaustedError('Destination preview automation limit reached');
+		const moved = {
+			...group,
+			heads: group.heads.map((head) => ({
+				...head,
+				intent: { ...head.intent, project_id: destination },
+			})),
+		};
+		if (index === -1) automations.push(moved);
+		else automations[index] = moved;
+	}
+}
+
 function admitMovedReceipts(record: PreviewReceipts, receipts: PreviewReceipts['entries']): void {
 	record.entries = record.entries.filter((entry) => entry.expires_at > Date.now());
 	for (const receipt of receipts) {
@@ -128,6 +166,43 @@ function hasWork(project: PreviewProject): boolean {
 	return (
 		project.entries.length > 0 || !!project.automations?.some((group) => group.state === 'active')
 	);
+}
+
+function compareAutomationOrder(
+	left: Pick<PreviewAutomationGroup, 'revision' | 'run_number' | 'state'>,
+	right: Pick<PreviewAutomationGroup, 'revision' | 'run_number' | 'state'>,
+): number {
+	return (
+		left.revision - right.revision ||
+		left.run_number - right.run_number ||
+		Number(left.state === 'closed') - Number(right.state === 'closed')
+	);
+}
+
+function planProjectAutomations(project: PreviewProject): void {
+	for (const group of project.automations ?? []) {
+		const expiry = automationExpiresAt(group);
+		if (group.state === 'active' && expiry && Date.parse(expiry) <= Date.now())
+			retireAutomationGroup(group, 'expired');
+		for (const entry of project.entries) {
+			if (entry.intent.automation?.key !== group.key) continue;
+			const head = group.heads.find((item) => item.intent.id === entry.intent.id);
+			if (!head || group.state !== 'active') {
+				if (entry.intent.state === 'active')
+					entry.intent = {
+						...entry.intent,
+						state: 'deleting',
+						automation: { ...entry.intent.automation, revision: group.revision },
+					};
+			} else if (entry.intent.state === 'active') entry.intent = head.intent;
+		}
+		if (group.state !== 'active') continue;
+		for (const head of group.heads) {
+			if (project.entries.some((entry) => entry.intent.id === head.intent.id)) continue;
+			if (project.entries.length >= PREVIEW_LIMITS.perProject) break;
+			project.entries.push({ intent: head.intent, artifacts: [] });
+		}
+	}
 }
 
 export class PreviewStore {
@@ -150,8 +225,10 @@ export class PreviewStore {
 	 * refuse before it fences the source.
 	 */
 	async assertMoveCapacity(source: ProjectId, destination: ProjectId, nid: NotebookId) {
-		const { entries, receipts } = await this.movedRecords(source, nid);
-		admitMovedEntries(await this.project(destination), entries, destination, nid);
+		const { entries, receipts, groups } = await this.movedRecords(source, nid);
+		const project = await this.project(destination);
+		admitMovedGroups(project, groups, destination);
+		admitMovedEntries(project, entries, destination, nid);
 		if (!receipts) return;
 		const object = await this.bucket.get(previewReceiptsKey(destination));
 		admitMovedReceipts(
@@ -162,20 +239,20 @@ export class PreviewStore {
 
 	async copyForMove(source: ProjectId, destination: ProjectId, nid: NotebookId): Promise<void> {
 		const { entries, receipts, groups } = await this.movedRecords(source, nid);
+		for await (const page of iterateBucketPages(this.bucket, {
+			prefix: previewAutomationPrefix(source),
+		})) {
+			for (const object of page.objects) {
+				const archive = await this.bucket.get(object.key);
+				if (!archive) continue;
+				const group = await readStored(PreviewAutomationTombstoneSchema, archive, object.key);
+				if (group.notebook_id === nid) await this.archiveAutomation(destination, group);
+			}
+		}
 		await this.changeProject(
 			destination,
 			(project) => {
-				for (const group of groups) {
-					project.automations ??= [];
-					if (!project.automations.some((item) => item.key === group.key))
-						project.automations.push({
-							...group,
-							heads: group.heads.map((head) => ({
-								...head,
-								intent: { ...head.intent, project_id: destination },
-							})),
-						});
-				}
+				admitMovedGroups(project, groups, destination);
 				admitMovedEntries(project, entries, destination, nid);
 			},
 			{ fence: true },
@@ -196,7 +273,10 @@ export class PreviewStore {
 		for (const id of ids) await this.pruneReceipts(source, id);
 		const workId = await this.changeProject(
 			source,
-			(project) => {
+			async (project) => {
+				for (const group of project.automations ?? [])
+					if (group.notebook_id === nid && group.state !== 'active')
+						await this.archiveAutomation(source, group);
 				project.entries = project.entries.filter((entry) => entry.intent.notebook_id !== nid);
 				project.automations = project.automations?.filter((group) => group.notebook_id !== nid);
 				return !hasWork(project) ? project.work_id : undefined;
@@ -207,20 +287,84 @@ export class PreviewStore {
 	}
 
 	async reconcileAutomation(
-		intent: NotebookPreview,
+		intent: PreviewIntent,
 		input: PreviewReconcile,
 		branch: string,
 		branchHash: string,
 	) {
-		return this.changeProject(intent.project_id, (project) => {
-			const groups = (project.automations ??= []);
-			const index = groups.findIndex((group) => group.key === intent.automation!.key);
-			if (index === -1 && groups.length >= 1000)
-				throw new ResourceExhaustedError('Project preview automation limit reached');
-			const group = applyPreviewEvent(groups[index], input, intent, branch, branchHash);
-			if (index === -1) groups.push(group);
-			else groups[index] = group;
-			return group;
+		return this.changeProject(
+			intent.project_id,
+			async (project) => {
+				const groups = (project.automations ??= []);
+				const index = groups.findIndex((group) => group.key === intent.automation!.key);
+				const previous =
+					groups[index] ??
+					(await this.archivedAutomation(intent.project_id, intent.automation!.key));
+				const group = applyPreviewEvent(
+					previous,
+					input,
+					PreviewIntentSchema.parse(intent),
+					branch,
+					branchHash,
+				);
+				if (
+					index === -1 &&
+					group.state === 'active' &&
+					groups.filter((item) => item.state === 'active').length >=
+						PREVIEW_LIMITS.automationsPerProject
+				)
+					throw new ResourceExhaustedError('Project preview automation limit reached');
+				if (index === -1) groups.push(group);
+				else groups[index] = group;
+				return group;
+			},
+			// Archive-only events must fence a concurrent first delivery too.
+			{ fence: true },
+		);
+	}
+
+	private async archivedAutomation(
+		pid: ProjectId,
+		key: string,
+	): Promise<PreviewAutomationGroup | undefined> {
+		const path = previewAutomationKey(pid, key);
+		const object = await this.bucket.get(path);
+		return object
+			? { ...(await readStored(PreviewAutomationTombstoneSchema, object, path)), heads: [] }
+			: undefined;
+	}
+
+	async getAutomation(pid: ProjectId, key: string): Promise<PreviewAutomationGroup | undefined> {
+		return (
+			(await this.project(pid)).automations?.find((group) => group.key === key) ??
+			this.archivedAutomation(pid, key)
+		);
+	}
+
+	private async archiveAutomation(
+		pid: ProjectId,
+		group: PreviewAutomationGroup | PreviewAutomationTombstone,
+	): Promise<void> {
+		const tombstone = PreviewAutomationTombstoneSchema.parse(group);
+		const path = previewAutomationKey(pid, group.key);
+		await withCasRetry(this.bucket, async (cas) => {
+			const object = await this.bucket.get(path);
+			if (object) {
+				const previous = await readStored(PreviewAutomationTombstoneSchema, object, path);
+				if (
+					previous.workflow_id !== tombstone.workflow_id ||
+					(previous.revision === tombstone.revision &&
+						previous.run_number === tombstone.run_number &&
+						previous.run_id !== tombstone.run_id)
+				)
+					throw new ConflictError('Preview automation history conflicts with another workflow run');
+				if (compareAutomationOrder(previous, tombstone) >= 0) return;
+			}
+			await cas.put(
+				path,
+				JSON.stringify(tombstone),
+				object ? { onlyIfEtagMatches: object.etag } : { onlyIfNotExists: true },
+			);
 		});
 	}
 
@@ -239,7 +383,7 @@ export class PreviewStore {
 		});
 	}
 
-	async retireAutomationPreview(record: NotebookPreview) {
+	async retireAutomationPreview(record: PreviewIntent) {
 		if (!record.automation) return;
 		await this.changeProject(record.project_id, (project) => {
 			const group = project.automations?.find((item) => item.key === record.automation!.key);
@@ -252,31 +396,7 @@ export class PreviewStore {
 	}
 
 	async planAutomations(pid: ProjectId) {
-		await this.changeProject(pid, (project) => {
-			for (const group of project.automations ?? []) {
-				const expiry = automationExpiresAt(group);
-				if (group.state === 'active' && expiry && Date.parse(expiry) <= Date.now())
-					retireAutomationGroup(group, 'expired');
-				for (const entry of project.entries) {
-					if (entry.intent.automation?.key !== group.key) continue;
-					const head = group.heads.find((item) => item.intent.id === entry.intent.id);
-					if (!head || group.state !== 'active') {
-						if (entry.intent.state === 'active')
-							entry.intent = {
-								...entry.intent,
-								state: 'deleting',
-								automation: { ...entry.intent.automation, revision: group.revision },
-							};
-					} else if (entry.intent.state === 'active') entry.intent = head.intent;
-				}
-				if (group.state !== 'active') continue;
-				for (const head of group.heads) {
-					if (project.entries.some((entry) => entry.intent.id === head.intent.id)) continue;
-					if (project.entries.length >= PREVIEW_LIMITS.perProject) break;
-					project.entries.push({ intent: head.intent, artifacts: [] });
-				}
-			}
-		});
+		await this.changeProject(pid, () => null);
 	}
 
 	constructor(private readonly bucket: Bucket) {}
@@ -305,7 +425,7 @@ export class PreviewStore {
 
 	private changeProject<R>(
 		pid: ProjectId,
-		apply: (project: z.infer<typeof PreviewProjectSchema>) => R,
+		apply: (project: PreviewProject) => R | Promise<R>,
 		{ fence = false } = {},
 	) {
 		return this.change(
@@ -315,7 +435,13 @@ export class PreviewStore {
 			async (project) => {
 				const wasEmpty = !hasWork(project);
 				const before = JSON.stringify(project);
-				const result = apply(project);
+				const result = await apply(project);
+				planProjectAutomations(project);
+				// Persist replay fences before removing retired groups from the bounded project head.
+				for (const group of project.automations ?? [])
+					if (group.state !== 'active') await this.archiveAutomation(pid, group);
+				if (project.automations)
+					project.automations = project.automations.filter((group) => group.state === 'active');
 				if (!fence && JSON.stringify(project) === before && (!hasWork(project) || project.work_id))
 					return result;
 				// A fresh revision also fences writers when membership returns to the same empty value.
@@ -392,9 +518,10 @@ export class PreviewStore {
 	}
 
 	async reserve(
-		intent: NotebookPreview,
+		input: PreviewIntent,
 		creationDeadline = Date.now() + PREVIEW_LIMITS.creationMs,
-	): Promise<NotebookPreview> {
+	): Promise<PreviewIntent> {
+		const intent = PreviewIntentSchema.parse(input);
 		return this.changeProject(
 			intent.project_id,
 			(record) => {
@@ -416,7 +543,7 @@ export class PreviewStore {
 	}
 
 	async reserveArtifact(
-		record: NotebookPreview,
+		record: PreviewIntent,
 		nid: NotebookId,
 		bytes: number,
 		expiresAt = Infinity,
@@ -437,7 +564,7 @@ export class PreviewStore {
 		});
 	}
 
-	async commitArtifactBytes(record: NotebookPreview, nid: NotebookId, bytes: number) {
+	async commitArtifactBytes(record: PreviewIntent, nid: NotebookId, bytes: number) {
 		await this.changeProject(record.project_id, (project) => {
 			const artifact = project.entries
 				.find((entry) => entry.intent.id === record.id)
@@ -449,21 +576,21 @@ export class PreviewStore {
 		});
 	}
 
-	async markCleaned(record: NotebookPreview) {
+	async markCleaned(record: PreviewIntent) {
 		await this.changeProject(record.project_id, (project) => {
 			const entry = project.entries.find((item) => item.intent.id === record.id);
-			if (entry) entry.intent = { ...record, state: 'deleted' };
+			if (entry) entry.intent = { ...entry.intent, state: 'deleted' };
 		});
 	}
 
-	async releaseArtifact(record: NotebookPreview, nid: NotebookId) {
+	async releaseArtifact(record: PreviewIntent, nid: NotebookId) {
 		await this.changeProject(record.project_id, (project) => {
 			const entry = project.entries.find((item) => item.intent.id === record.id);
 			if (entry) entry.artifacts = entry.artifacts.filter((item) => item.notebook_id !== nid);
 		});
 	}
 
-	async forget(record: NotebookPreview) {
+	async forget(record: PreviewIntent) {
 		await this.pruneReceipts(record.project_id, record.id);
 		const workId = await this.changeProject(record.project_id, (project) => {
 			project.entries = project.entries.filter((entry) => entry.intent.id !== record.id);

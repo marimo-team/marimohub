@@ -132,6 +132,17 @@ async function prepare(id: string) {
 	return api.deps.services.previews.prepare(await record(id), api.deps.sourceControl, true);
 }
 
+async function createLazyBranch() {
+	return expectOk<{ id: string }>(
+		await api.request('POST', base, {
+			name: 'Lazy branch',
+			source: { type: 'branch', branch: 'feature/chart' },
+			eager: false,
+		}),
+		202,
+	);
+}
+
 describe('PR preview automation', () => {
 	it('reuses the sticky ID across commits and retries, with no finite expiry', async () => {
 		const first = await reconcile(1);
@@ -187,7 +198,7 @@ describe('PR preview automation', () => {
 
 	it('recovers an interrupted materialization on the maintenance pass', async () => {
 		const plan = vi
-			.spyOn(api.deps.services.previews.store, 'planAutomations')
+			.spyOn(api.deps.services.previews, 'projectRecords')
 			.mockRejectedValueOnce(new Error('interrupted'));
 		await expectError(await api.request('POST', `${base}/reconcile`, event(1)), 500);
 		plan.mockRestore();
@@ -563,7 +574,7 @@ describe('PR preview automation', () => {
 		expect((await reconcile(2, NEXT, { idle_days: 1 })).items[0].id).toBe(first.id);
 	});
 	it('honors lazy demand that arrives while maintenance probes the branch', async () => {
-		const first = (await reconcile(1, SHA, { eager: false })).items[0];
+		const first = await createLazyBranch();
 		const started = Promise.withResolvers<void>();
 		const lookup = Promise.withResolvers<{ commit: string }>();
 		vi.mocked(reader.getBranchHead).mockImplementationOnce(() => {
@@ -697,7 +708,7 @@ describe('PR preview automation', () => {
 		expect((await project(pid)).entries).toEqual([]);
 	});
 	it('accepts fresh demand during the retry probe after a failed lazy download', async () => {
-		const first = (await reconcile(1, SHA, { eager: false })).items[0];
+		const first = await createLazyBranch();
 		await expectOk(await api.request('POST', `${base}/${first.id}/prepare`), 202);
 		vi.mocked(reader.fetchWorkspace).mockRejectedValueOnce(new Error('archive interrupted'));
 		expect(await prepare(first.id)).toMatchObject({ preparation: 'failed', requested_commit: SHA });
@@ -721,4 +732,100 @@ describe('PR preview automation', () => {
 		});
 		expect(reader.fetchWorkspace).toHaveBeenCalledTimes(2);
 	});
+	it('preserves accepted lazy demand after reconciliation stops before materialization', async () => {
+		const first = (await reconcile(1, SHA, { eager: false })).items[0];
+		await expectOk(await api.request('POST', `${base}/${first.id}/prepare`), 202);
+		await prepare(first.id);
+		head = NEXT;
+		vi.spyOn(api.deps.services.previews, 'projectRecords').mockRejectedValueOnce(
+			new Error('interrupted'),
+		);
+		await expectError(
+			await api.request('POST', `${base}/reconcile`, event(2, NEXT, { eager: false })),
+			500,
+		);
+		await expectOk(await api.request('POST', `${base}/${first.id}/prepare`), 202);
+		await prepare(first.id);
+		expect((await record(first.id)).current?.commit).toBe(NEXT);
+	});
+	it('does not retire a newer reopen event after an old coordinator probe returns closed', async () => {
+		const first = (await reconcile(1)).items[0];
+		vi.mocked(reader.getPullRequest!).mockImplementationOnce(async () => {
+			head = NEXT;
+			await reconcile(2, NEXT, {}, 'reopened');
+			return {
+				number: 1,
+				state: 'closed',
+				branch: 'feature/chart',
+				commit: SHA,
+				sameRepository: true,
+			};
+		});
+		await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+		expect(await record(first.id)).toMatchObject({ state: 'active', automation: { commit: NEXT } });
+		expect(
+			(await api.deps.services.previews.store.project(pid)).automations?.[0].heads,
+		).toHaveLength(1);
+	});
+
+	it('prepares managed previews from accepted targets without probing PR state or branch HEAD', async () => {
+		const first = (await reconcile(1, SHA, { eager: false })).items[0];
+		vi.mocked(reader.getPullRequest!).mockClear();
+		head = NEXT;
+		await prepare(first.id);
+		expect(reader.fetchWorkspace).not.toHaveBeenCalled();
+		await expectOk(await api.request('POST', `${base}/${first.id}/prepare`), 202);
+		await prepare(first.id);
+		expect((await record(first.id)).current?.commit).toBe(SHA);
+		expect(reader.getPullRequest).not.toHaveBeenCalled();
+		expect(reader.getBranchHead).not.toHaveBeenCalled();
+		expect(reader.resolveCommit).not.toHaveBeenCalled();
+	});
+
+	it('keeps a delayed reopen behind the latest archived close event', async () => {
+		const first = (await reconcile(1)).items[0];
+		state = 'closed';
+		await reconcile(2, SHA, {}, 'closed');
+		await reconcile(4, NEXT, {}, 'closed');
+		state = 'open';
+		head = THIRD;
+		expect(await reconcile(3, NEXT, {}, 'reopened')).toMatchObject({ state: 'closed', items: [] });
+		const reopened = await reconcile(5, THIRD, {}, 'reopened');
+		expect(reopened.items).toHaveLength(1);
+		expect(reopened.items[0].id).not.toBe(first.id);
+		expect(reopened.items[0].target_commit).toBe(THIRD);
+	});
+
+	it('preserves generation demand across retained-head and expiry policy updates', async () => {
+		const first = (await reconcile(1, SHA, { eager: false, mode: 'commits' })).items[0];
+		await expectOk(await api.request('POST', `${base}/${first.id}/prepare`), 202);
+		const generation = (await record(first.id)).requested_generation;
+		await reconcile(2, NEXT, { eager: false, mode: 'commits', idle_days: 3 });
+		expect((await record(first.id)).requested_generation).toBe(generation);
+		await prepare(first.id);
+		expect((await record(first.id)).current?.commit).toBe(SHA);
+	});
+
+	it.each(['demand', 'requested_commit'] as const)(
+		'migrates legacy managed %s without losing preparation authorization',
+		async (field) => {
+			const first = (await reconcile(1, SHA, { eager: false })).items[0];
+			const legacy = await record(first.id);
+			delete legacy.automation!.generation;
+			if (field === 'demand') legacy.demand = true;
+			else legacy.requested_commit = SHA;
+			await api.bucket.put(paths.preview(pid, nid, legacy.id), JSON.stringify(legacy));
+			const project = await api.deps.services.previews.store.project(pid);
+			project.entries[0].intent = legacy;
+			project.automations![0].heads[0].intent = legacy;
+			await api.bucket.put(paths.previewProject(pid), JSON.stringify(project));
+
+			await reconcile(2, SHA, { eager: false, idle_days: 2 });
+			const prepared = await prepare(first.id);
+			expect(prepared.current?.commit).toBe(SHA);
+			expect(prepared.requested_generation).toBe(legacy.automation!.revision);
+			expect(prepared.demand).toBeUndefined();
+			expect(prepared.requested_commit).toBeUndefined();
+		},
+	);
 });

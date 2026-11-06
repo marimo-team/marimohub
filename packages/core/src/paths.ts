@@ -395,6 +395,9 @@ export const paths = {
 		`_system/previews/${projectId}/${notebookId}/`,
 	preview: (projectId: ProjectId, notebookId: NotebookId, previewId: string) =>
 		`_system/previews/${projectId}/${notebookId}/${previewId}.json`,
+	previewAutomations: (projectId: ProjectId) => `_system/preview-automations/${projectId}/`,
+	previewAutomation: (projectId: ProjectId, key: string) =>
+		`_system/preview-automations/${projectId}/${key}.json`,
 	previewProjectsPrefix: '_system/preview-projects/',
 	previewProject: (projectId: ProjectId) => `_system/preview-projects/${projectId}.json`,
 	previewActiveProjectsPrefix: '_system/preview-active-projects/',

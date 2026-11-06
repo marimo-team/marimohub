@@ -54,10 +54,18 @@ export const PreviewRecordSchema = z.object({
 	compute_profile: z.string().optional(),
 	expires_at: utcTimestamp().nullable(),
 	eager: z.boolean().optional(),
+	requested_generation: z.number().int().nonnegative().optional(),
 	requested_commit: CommitShaSchema.optional(),
 	observed_commit: CommitShaSchema.optional(),
 	demand: z.boolean().optional(),
-	automation: z.object({ key: z.string(), revision: z.number(), commit: z.string() }).optional(),
+	automation: z
+		.object({
+			key: z.string(),
+			revision: z.number(),
+			generation: z.number().int().nonnegative().optional(),
+			commit: CommitShaSchema,
+		})
+		.optional(),
 	pull_request: z.number().int().positive().optional(),
 	created_by: UserIdSchema,
 	created_at: utcTimestamp(),
@@ -103,6 +111,52 @@ export const PreviewRecordSchema = z.object({
 		.describe('Earliest ownership removal time in milliseconds since the Unix epoch.')
 		.optional(),
 });
+export const PreviewIntentSchema = PreviewRecordSchema.pick({
+	schema_version: true,
+	id: true,
+	project_id: true,
+	notebook_id: true,
+	name: true,
+	source: true,
+	repository: true,
+	root_path: true,
+	entry_notebook: true,
+	compute_profile: true,
+	expires_at: true,
+	eager: true,
+	automation: true,
+	pull_request: true,
+	created_by: true,
+	created_at: true,
+	request_fingerprint: true,
+	state: true,
+});
+export type PreviewIntent = z.infer<typeof PreviewIntentSchema>;
+
+export function initialPreviewRecord(intent: PreviewIntent): NotebookPreview {
+	return {
+		...intent,
+		preparation: intent.eager === false ? 'deferred' : 'pending',
+		preparation_failures: 0,
+		revisions: [],
+		admissions: [],
+		...(intent.state === 'deleted' ? { cleanup_after: 0 } : {}),
+	};
+}
+
+export function previewGeneration(record: Pick<NotebookPreview, 'automation'>): number | undefined {
+	return record.automation?.generation ?? record.automation?.revision;
+}
+
+export function requestedPreviewGeneration(record: NotebookPreview): number | undefined {
+	return (
+		record.requested_generation ??
+		(record.automation && (record.demand || record.requested_commit === record.automation.commit)
+			? previewGeneration(record)
+			: undefined)
+	);
+}
+
 export type NotebookPreview = z.infer<typeof PreviewRecordSchema>;
 export type PreviewCreate = z.infer<typeof PreviewCreateSchema>;
 export const previewKey = paths.preview;

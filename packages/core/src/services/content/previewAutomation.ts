@@ -5,8 +5,8 @@ import { utcTimestamp } from '../../stringFormats';
 import { NotebookIdSchema, UserIdSchema } from '../../schema';
 import { createPreviewId } from '../../ids';
 import { ConflictError } from '../../errors';
-import { PreviewRecordSchema } from './notebookPreviews';
-import type { NotebookPreview } from './notebookPreviews';
+import { PreviewIntentSchema } from './notebookPreviews';
+import type { PreviewIntent } from './notebookPreviews';
 
 export const PreviewReconcileSchema = z.strictObject({
 	repository: z.string().min(1).max(500),
@@ -36,7 +36,7 @@ export const PreviewAutomationGroupSchema = z.object({
 	policy: PreviewAutomationPolicySchema,
 	created_by: UserIdSchema,
 	checked_at: z.number().optional(),
-	heads: z.array(z.object({ commit: z.string(), order: z.number(), intent: PreviewRecordSchema })),
+	heads: z.array(z.object({ commit: z.string(), order: z.number(), intent: PreviewIntentSchema })),
 });
 export type PreviewAutomationGroup = z.infer<typeof PreviewAutomationGroupSchema>;
 
@@ -69,7 +69,7 @@ export function retireAutomationGroup(
 export function applyPreviewEvent(
 	previous: PreviewAutomationGroup | undefined,
 	input: PreviewReconcile,
-	template: NotebookPreview,
+	template: PreviewIntent,
 	branch: string,
 	branchHash: string,
 ): PreviewAutomationGroup {
@@ -92,7 +92,7 @@ export function applyPreviewEvent(
 				(previous.state === 'expired' &&
 					input.event === 'synchronize' &&
 					input.commit !== previous.head));
-		if (!resume) return previous;
+		if (!resume && !(newest && input.event === 'closed')) return previous;
 	}
 	if (
 		!newest &&
@@ -156,15 +156,18 @@ export function applyPreviewEvent(
 	for (const head of removed) group.floor = Math.max(group.floor, head.order);
 	for (const head of group.heads) {
 		const sticky = group.policy.mode === 'sticky';
+		const previousTarget = head.intent.automation;
+		const generation =
+			previousTarget?.commit === head.commit && head.intent.eager === group.policy.eager
+				? (previousTarget.generation ?? previousTarget.revision)
+				: group.revision;
 		head.intent = {
 			...head.intent,
 			name: automationName(branch, branchHash, sticky ? undefined : head.commit),
 			source: sticky ? { type: 'branch', branch } : { type: 'commit', commit: head.commit },
 			eager: group.policy.eager,
-			observed_commit: head.commit,
-			preparation: group.policy.eager ? 'pending' : 'deferred',
 			expires_at: automationExpiresAt(group),
-			automation: { key: group.key, revision: group.revision, commit: head.commit },
+			automation: { key: group.key, revision: group.revision, generation, commit: head.commit },
 		};
 	}
 	return group;

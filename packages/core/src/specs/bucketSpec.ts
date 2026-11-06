@@ -12,6 +12,8 @@ import {
 } from '../services/content/NotebookImportService';
 import {
 	PreviewProjectSchema,
+	PreviewAutomationTombstoneSchema,
+	previewAutomationKey,
 	PreviewReceiptsSchema,
 	PreviewWorkSchema,
 	PreviewCursorSchema,
@@ -201,6 +203,16 @@ const OBJECTS: BucketObject[] = [
 		key: previewProjectKey(PID),
 		schema: PreviewProjectSchema,
 		summary: 'Bounded active preview membership, recovery intents, and artifact reservations.',
+		mutability: 'cas',
+		owner: 'PreviewStore',
+		tag: 'notebook',
+	},
+	{
+		name: 'PreviewAutomationTombstone',
+		key: previewAutomationKey(PID, '{automation_key}'),
+		schema: PreviewAutomationTombstoneSchema,
+		summary:
+			'Retired PR automation replay fence, retained independently of active project membership.',
 		mutability: 'cas',
 		owner: 'PreviewStore',
 		tag: 'notebook',

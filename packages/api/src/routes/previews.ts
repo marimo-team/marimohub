@@ -260,7 +260,7 @@ function present(
 				}
 			: {}),
 		commit: record.current?.commit,
-		target_commit: record.observed_commit ?? record.automation?.commit,
+		target_commit: record.automation?.commit ?? record.observed_commit,
 		eager: record.eager ?? true,
 		managed: !!record.automation,
 		version_id: record.current?.version_id,

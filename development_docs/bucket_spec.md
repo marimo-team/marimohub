@@ -1676,7 +1676,8 @@ Records hold the source, prepared revision, runtime ownership ledger, and sessio
 
 `PreviewStore` owns these CAS records:
 
-- `_system/preview-projects/{pid}.json`: bounded membership, recovery intents, and artifact reservations.
+- `_system/preview-projects/{pid}.json`: bounded membership, desired configuration, active automation groups, and artifact reservations.
+- `_system/preview-automations/{pid}/{automation_key}.json`: compact, permanent replay fences for retired automation groups.
 - `_system/preview-receipts/{pid}.json`: bounded idempotency receipts, valid for seven days from creation.
 - `_system/preview-work.json`: rotating project cursor and deployment-wide preparation leases.
 - `_system/preview-cleanup-cursor.json`: independent rotating cleanup cursor.
@@ -1684,6 +1685,12 @@ Records hold the source, prepared revision, runtime ownership ledger, and sessio
 A one-minute deadline fences each creation attempt, independently of the receipt’s seven-day deduplication window.
 A rejected capacity reservation can retry with the same key and a fresh attempt deadline. Deleted receipts still reject retries.
 Expired receipts are pruned on project activity; idle receipt heads hold at most 1,000 entries and do not participate in scheduling.
+
+Project membership stores desired configuration only. Preparation, revisions, leases, admissions, and cleanup deadlines live in each preview record.
+Every project mutation applies automation retention and membership changes in the same CAS write.
+Retired groups leave the bounded project head only after their tombstones are durable. Failed or concurrent archival retries preserve the newest revision and event order.
+Only active groups consume the 1,000-group limit. Archived groups retain their workflow identity, event order, and lifecycle state indefinitely.
+Notebook moves copy these tombstones without deleting the source history. An active project group takes precedence over an older tombstone.
 
 Creation reserves membership before writing the preview record. Workers can materialize interrupted writes from the stored intent.
 Listing reads only this bounded membership; it never scans historical preview records or receipts.

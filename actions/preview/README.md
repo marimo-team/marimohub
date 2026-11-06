@@ -56,7 +56,7 @@ It supports same-repository PRs, including drafts, and skips forks.
 Use a separate job and concurrency group for each notebook.
 
 The runner must support the Node 24 Action runtime. The GitHub instance must support `concurrency.queue: max`.
-GitHub queues up to 100 runs per group. Canceled or undelivered events do not create commit previews.
+GitHub queues up to 100 runs per group.
 
 ## Inputs
 
@@ -75,9 +75,12 @@ GitHub queues up to 100 runs per group. Canceled or undelivered events do not cr
 ## Behavior
 
 Sticky mode keeps one `<branch>` preview at a stable URL. Commit mode keeps separate `<branch>-<12-character-sha>` previews for the latest distinct pushed heads.
-A push creates one preview for its head. Long names use a truncated branch and deterministic hash suffix.
+Each workflow event selects one full head SHA. The Hub prepares that commit, even if the branch advances before preparation starts.
+Canceled or missed workflow runs do not create targets. Commit retention uses the original event order, not arrival or rerun time.
+Long names use a truncated branch and deterministic hash suffix.
 
-Eager mode prepares code after each update. Lazy mode requires an authorized visit for each new head.
+Eager mode prepares each accepted target automatically. Lazy mode requires an authorized visit for each new target.
+Once requested, preparation retries after failures without another visit. A later target requires a new visit.
 Compute starts when a user opens an app or editor. Existing sessions keep their revision, and failed updates preserve the last prepared revision.
 
 Closing or merging the PR retires all managed previews. With `idle-days`, a new head renews the timeout for the whole group.
@@ -97,15 +100,17 @@ All outputs are JSON:
 
 The shared project limit is 25 previews, including manual previews and pending cleanup.
 The Hub retries capacity waits without another commit. The Previews page shows previews created after the Action returns.
-Existing workspace and compute limits apply. Each project retains up to 1,000 automation groups, including closed groups, to reject delayed replays.
+Existing workspace and compute limits apply. Each project can have up to 1,000 active automation groups, including groups waiting for preview capacity.
+Retired groups retain compact replay records outside that limit. Old PRs do not exhaust capacity for new groups.
 
 ## Maintenance and upgrades
 
-Maintenance prepares code, retries pending work, and checks PR closure even when the close workflow does not run.
+Maintenance prepares accepted targets and retries pending work. It checks PR closure independently, even for lazy previews or a missed close workflow.
+It does not discover new commits for managed previews. New targets come from workflow events.
 GitHub outages delay closure checks. Configured inactivity expiry still applies.
 
 Keep the managing workflow file in place: each notebook and PR group is bound to one GitHub workflow ID.
 Pin the Action to a reviewed commit SHA. Deploy a compatible Hub version before updating that pin.
 
-Before first use, upgrade all Hub replicas and API clients. Clients must accept `expires_at: null` for previews without a timeout.
-Older Hub versions cannot read these records. Existing finite-expiry records need no migration.
+Stop Hub writers while upgrading all replicas. The new version reads older records, but older versions cannot read compact project intents or null expiry.
+Upgrade API clients to accept `expires_at: null` for previews without a timeout. Existing manual previews retain their finite expiry.

@@ -5,7 +5,7 @@ Managers and admins can create and delete previews. Sharing a URL does not grant
 
 ::: warning Previews run branch code with the notebook's credentials
 A preview runs the code at the chosen branch or commit with the parent notebook's integrations and secrets.
-A branch preview publishes every new push, so anyone who can push to that branch can run code with those credentials after a manager creates the preview.
+Anyone who can push to a previewed branch can supply code that uses these credentials.
 Protect previewed branches, or pin a reviewed commit. See [Security model → Previews](security.md#previews).
 :::
 
@@ -16,20 +16,25 @@ The Action supports same-repository PRs, including drafts, and skips forks.
 
 | Setting         | Behavior                                                                                                                                                               | Default         |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
-| `mode: sticky`  | One `<branch>` preview with a stable URL that follows HEAD                                                                                                             | Yes             |
+| `mode: sticky`  | One `<branch>` preview with a stable URL that follows PR updates                                                                                                       | Yes             |
 | `mode: commits` | Separate `<branch>-<12-character-sha>` previews for the latest distinct pushed heads. Long branches use a truncated name and deterministic hash before the commit SHA. | Optional        |
 | `keep`          | Number of commit previews, from 1 to 25                                                                                                                                | `5`             |
 | `eager`         | Prepare code after each update, or defer until an authorized visit                                                                                                     | `true`          |
 | `idle-days`     | Expire after 1–30 days without a new head                                                                                                                              | Until PR closes |
 
-Compute starts when a user opens an app or editor. A push creates one preview for its head.
+Each workflow event selects the full head SHA to prepare. Managed previews do not poll the branch for newer commits.
+Missed or canceled runs do not create targets. Commit retention uses the original event order, not arrival or rerun time.
 New heads renew inactivity for all retained previews. Reruns do not.
 Closing or merging the PR retires its managed previews.
 
+Lazy preparation requires an authorized visit for each new target. Once requested, preparation retries after failures without another visit.
+Compute starts when a user opens an app or editor.
+
 The Action updates one PR comment and includes links in the workflow summary.
-The Hub retries capacity waits and checks closure even when a workflow run is missed.
+The Hub retries capacity waits and checks closure even when the close workflow is missed. Retired groups do not consume active-group capacity.
 See the [Action README](https://github.com/marimo-team/marimohub/tree/main/actions/preview) for installation, permissions, limits, and version pinning.
-Upgrade all Hub replicas and API clients before enabling automation. Clients must accept `expires_at: null` for previews without a timeout.
+Stop Hub writers while upgrading all replicas. Older versions cannot read compact project intents or null expiry.
+Upgrade API clients to accept `expires_at: null` for previews without a timeout. Existing records remain readable by the new version.
 
 ## Create a preview
 
@@ -128,7 +133,8 @@ Fork PRs and built-in label triggers are unsupported. Preparation fails if a tra
 ## Operation and limits
 
 The Node preparation worker runs independently every 15 seconds on maintenance replicas.
-It checks moving sources at most once per minute and selects one due preview per project.
+It checks manual branch previews at most once per minute and selects one due preview per project.
+Managed previews prepare the full commit SHA selected by a workflow event. Maintenance checks PR closure independently of preparation, including for lazy previews.
 Each tick visits up to four projects with outstanding preview work, rotating through projects and due previews.
 Empty retained project records do not participate in scheduling.
 Manual creation and session launch never wait for GitHub. PR reconciliation checks live PR metadata before accepting an event.
@@ -155,6 +161,8 @@ Lower deployment limits still apply. Idle retirement uses five minutes, subject 
 Cleanup removes unused revisions after reclaiming their sessions.
 
 A project can own up to 25 previews, including previews awaiting cleanup.
+Each project can have up to 1,000 active automation groups, including groups waiting for preview capacity.
+Retired groups retain compact replay records outside that limit, so delayed events cannot restore retired previews.
 Each preview can retain up to 12 revisions; a project has a 500 MiB workspace budget.
 Preparation reserves the maximum archive size before download, then charges the stored workspace size.
 Reservations remain until cleanup confirms reclamation. Unpublished artifacts have a 15-minute cleanup grace period.
