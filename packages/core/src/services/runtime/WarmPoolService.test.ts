@@ -100,6 +100,30 @@ function setup(overrides: Partial<WarmPoolConfig> = {}, referenceFor?: (id: Sand
 afterEach(() => vi.restoreAllMocks());
 
 describe('warm sandbox pools', () => {
+	it('reserves without probing, then retires a failed probe', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const sandbox = [...w.live.values()][0];
+		const probe = vi.spyOn(sandbox, 'exec').mockRejectedValue(new Error('transport failed'));
+		const claim = (await w.service.reserve(w.request()))!;
+		expect(probe).not.toHaveBeenCalled();
+		expect((await w.members())[0]).toMatchObject({ state: 'claimed', token: claim.member.token });
+		await expect(w.service.probe(claim)).rejects.toThrow('readiness failed');
+		expect((await w.members())[0].state).toBe('retiring');
+	});
+
+	it('checks claim expiry after an overlapping probe completes', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const claim = (await w.service.reserve(w.request()))!;
+		vi.spyOn(claim.sandbox, 'exec').mockImplementationOnce(async () => {
+			w.advance(60_000);
+			return { success: true, stdout: '', stderr: '', exitCode: 0 };
+		});
+		await expect(w.service.probe(claim)).rejects.toThrow('expired');
+		expect((await w.members())[0].state).toBe('retiring');
+	});
+
 	it('publishes provider references and claims them from another replica', async () => {
 		const w = setup({}, (id) => `provider-reference:${id}`);
 		await w.service.sweep();
@@ -524,7 +548,15 @@ describe('warm sandbox pools', () => {
 		w.advance(61_000);
 		await w.replica({ enabled: false }).sweep();
 		expect(w.destroyed).not.toContain(claim.member.sandbox_id);
-		await expect(w.service.handoff(claim)).rejects.toThrow('expired');
+		await expect(
+			w.service.handoff(
+				claim,
+				await w.sessions.getSession(
+					claim.member.destination!.project_id,
+					claim.member.destination!.session_id,
+				),
+			),
+		).rejects.toThrow('expired');
 	});
 
 	it('hands off to session teardown and removes the record only after reclamation', async () => {
@@ -537,7 +569,13 @@ describe('warm sandbox pools', () => {
 			user_id: ACTOR,
 			sandbox_id: claim.member.sandbox_id,
 		});
-		await w.service.handoff(claim);
+		await w.service.handoff(
+			claim,
+			await w.sessions.getSession(
+				claim.member.destination!.project_id,
+				claim.member.destination!.session_id,
+			),
+		);
 		w.advance(WARM_POOL_MAX_IDLE_MS);
 		await w.replica({ enabled: false }).sweep();
 		expect((await w.members())[0].assigned).toBe(true);
@@ -563,7 +601,13 @@ describe('warm sandbox pools', () => {
 				user_id: ACTOR,
 				sandbox_id: claim.member.sandbox_id,
 			});
-			await w.service.handoff(claim);
+			await w.service.handoff(
+				claim,
+				await w.sessions.getSession(
+					claim.member.destination!.project_id,
+					claim.member.destination!.session_id,
+				),
+			);
 			await w.sessions.markFailed(session.project_id, session.session_id, {
 				code: 'STARTUP_FAILED',
 				message: 'failed',
@@ -595,7 +639,13 @@ describe('warm sandbox pools', () => {
 			user_id: ACTOR,
 			sandbox_id: claim.member.sandbox_id,
 		});
-		await w.service.handoff(claim);
+		await w.service.handoff(
+			claim,
+			await w.sessions.getSession(
+				claim.member.destination!.project_id,
+				claim.member.destination!.session_id,
+			),
+		);
 		vi.spyOn(w.sessions, 'getSession').mockRejectedValue(new Error('storage unavailable'));
 		w.advance(61_000);
 		await w.replica({ enabled: false }).sweep();
@@ -616,7 +666,15 @@ describe('warm sandbox pools', () => {
 			user_id: ACTOR,
 			sandbox_id: claim.member.sandbox_id,
 		});
-		await expect(w.service.handoff(claim)).rejects.toThrow('expired');
+		await expect(
+			w.service.handoff(
+				claim,
+				await w.sessions.getSession(
+					claim.member.destination!.project_id,
+					claim.member.destination!.session_id,
+				),
+			),
+		).rejects.toThrow('expired');
 		expect(w.created).toHaveLength(1);
 	});
 
@@ -803,7 +861,13 @@ describe('warm pool recovery races', () => {
 			user_id: ACTOR,
 			sandbox_id: claim.member.sandbox_id,
 		});
-		await w.service.handoff(claim);
+		await w.service.handoff(
+			claim,
+			await w.sessions.getSession(
+				claim.member.destination!.project_id,
+				claim.member.destination!.session_id,
+			),
+		);
 		w.advance(61_000);
 		finish();
 		await sweep;
@@ -1370,7 +1434,15 @@ describe('warm pool failure boundaries', () => {
 			if (reason === 'stale token') claim.member.token = 'stale';
 			if (reason === 'expired claim') w.advance(60_000);
 			if (reason === 'expired lifetime') w.advance(30_000);
-			await expect(w.service.handoff(claim)).rejects.toThrow();
+			await expect(
+				w.service.handoff(
+					claim,
+					await w.sessions.getSession(
+						claim.member.destination!.project_id,
+						claim.member.destination!.session_id,
+					),
+				),
+			).rejects.toThrow();
 			expect((await w.members())[0].assigned).toBe(false);
 		},
 	);

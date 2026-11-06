@@ -81,6 +81,8 @@ export interface WorkspaceMutationOptions {
 	 * the lease would otherwise restore over (and later mirror-delete) the write.
 	 */
 	assertMutable?: () => Promise<void>;
+	/** Session publication can release in the background once its record fences source writes. */
+	deferRelease?: (release: Promise<void>) => void;
 }
 
 interface MutationLease {
@@ -690,13 +692,18 @@ export class NotebookWorkspaceService {
 		const claim = this.claimConfig(key);
 		const holder = VersionId.create();
 		for (let attempt = 0; attempt < WORKSPACE_MUTATION_WAIT_ATTEMPTS; attempt++) {
-			if ((await acquireSingletonClaim(claim, holder)).acquired) {
+			const acquired = await acquireSingletonClaim(claim, holder);
+			if (acquired.acquired) {
+				let etag = acquired.etag;
 				let renewalInFlight: Promise<void> | undefined;
 				let leaseLost = false;
 				const heartbeat = (): Promise<void> => {
 					if (leaseLost) return Promise.reject(new MutationLeaseLostError());
 					if (renewalInFlight) return renewalInFlight;
-					renewalInFlight = this.renewClaim(key, holder)
+					renewalInFlight = this.renewClaim(key, holder, etag)
+						.then((renewedEtag) => {
+							etag = renewedEtag;
+						})
 						.catch((error) => {
 							leaseLost = true;
 							throw error;
@@ -719,7 +726,9 @@ export class NotebookWorkspaceService {
 				} finally {
 					clearInterval(renewalTimer);
 					await renewalInFlight?.catch(() => {});
-					await releaseSingletonClaim(claim, holder);
+					const release = releaseSingletonClaim(claim, holder, etag);
+					if (options.deferRelease) options.deferRelease(release);
+					else await release;
 				}
 				if (leaseLost) throw new MutationLeaseLostError();
 				return result;
@@ -749,7 +758,16 @@ export class NotebookWorkspaceService {
 	 * Extend the lease while a long mutation runs. `acquireSingletonClaim` is a
 	 * no-op for the current holder, so renewal needs its own CAS write.
 	 */
-	private async renewClaim(key: string, holder: string): Promise<void> {
+	private async renewClaim(key: string, holder: string, etag: string): Promise<string> {
+		try {
+			return (
+				await this.bucket.put(key, serializeWorkspaceMutationClaim(holder), {
+					onlyIfEtagMatches: etag,
+				})
+			).etag;
+		} catch (error) {
+			if (!(error instanceof PreconditionFailedError)) throw error;
+		}
 		const renewed = await withCasRetry(this.bucket, async (cas) => {
 			const existing = await this.bucket.get(key);
 			if (!existing) return false;
@@ -760,12 +778,13 @@ export class NotebookWorkspaceService {
 				return false;
 			}
 			if (current.holder !== holder) return false;
-			await cas.put(key, serializeWorkspaceMutationClaim(holder), {
+			const written = await cas.put(key, serializeWorkspaceMutationClaim(holder), {
 				onlyIfEtagMatches: existing.etag,
 			});
-			return true;
+			return written.etag;
 		});
 		if (!renewed) throw new MutationLeaseLostError();
+		return renewed;
 	}
 
 	private async context(projectId: ProjectId, notebookId: NotebookId): Promise<WorkspaceContext> {

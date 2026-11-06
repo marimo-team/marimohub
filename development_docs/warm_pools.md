@@ -10,9 +10,12 @@ Notebook files, credentials, and kernels load after assignment.
 
 1. Maintenance persists creation reservations before provider calls. Creating and ready members count toward the target.
 2. A sandbox becomes ready after `ready()` and a bounded command probe succeed.
-3. A claim records its destination and changes its operation token. Strict reconnect and another command probe precede acceptance.
-4. Handoff checks the token and deadline before notebook data or credentials enter the sandbox. If the claim expires, the session uses cold creation with a new sandbox ID.
+3. Reservation records the destination and changes the operation token. Reconnect and a bounded probe overlap session publication and admission.
+4. Handoff checks the published session, claim token, and deadline while URL preparation runs. Notebook data and credentials wait for handoff.
 5. Session teardown owns assigned sandboxes. Claims never return to the pool. Failed cleanup retains ownership for retry.
+
+If the probe fails or the claim expires, the route replaces the starting session's sandbox ID and repeats URL preparation.
+The old member remains owned until cleanup succeeds.
 
 Maintenance runs every five seconds under its own lease. Idle members rotate after at most 30 minutes, sooner for limited provider lifetimes.
 Disabling pooling drains unassigned members. Unreadable ownership blocks orphan deletion.
@@ -37,7 +40,7 @@ They are server-owned mappings, not authorization tokens.
 
 Claims and health checks pass the stored reference to `connectExisting(id, { reconnectReference })`.
 That call resolves exactly the referenced sandbox or fails. It never discovers or creates a sandbox.
-A failed lookup or probe retires the member. A claim then falls back to cold creation, and a health check schedules a replacement.
+Failed lookups or probes retire the member. Maintenance replenishes the pool.
 Members without a reference use the adapter's discovery path.
 
 Upgrades and rollbacks:
@@ -47,8 +50,8 @@ Upgrades and rollbacks:
 - If the adapter rejects a reference kind, each member with that kind retires once. The result is one wave of cold starts within a health-check interval, with no leaked sandboxes.
 - A new reference kind must keep accepting older kinds, so that upgrades and rollbacks do not churn the pool.
 
-After a claim, the service drains optional adapter timings and counters, so provisioning does not count the lookup and probe twice.
-`warm_pool.claim_ms` records the claim cost.
+After a successful probe, the service drains adapter diagnostics to exclude them from provisioning telemetry.
+`warm_pool.claim_ms` measures reservation time.
 The CoreWeave reference format is in its [adapter README](../packages/compute-coreweave/README.md#warm-pool-references).
 
 ## Code

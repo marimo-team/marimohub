@@ -121,15 +121,15 @@ export interface SingletonClaimConfig {
 export async function acquireSingletonClaim(
 	cfg: SingletonClaimConfig,
 	holder: string,
-): Promise<{ acquired: boolean; holder: string }> {
+): Promise<{ acquired: true; holder: string; etag: string } | { acquired: false; holder: string }> {
 	const body = cfg.serialize(holder);
 	return withCasRetry(
 		cfg.bucket,
 		async (cas) => {
 			const existing = await cfg.bucket.get(cfg.key);
 			if (!existing) {
-				await cas.put(cfg.key, body, { onlyIfNotExists: true });
-				return { acquired: true, holder };
+				const written = await cas.put(cfg.key, body, { onlyIfNotExists: true });
+				return { acquired: true, holder, etag: written.etag };
 			}
 			let current: string | null | undefined;
 			try {
@@ -142,13 +142,13 @@ export async function acquireSingletonClaim(
 				);
 				// Corrupt claim — stale by definition; replaced below.
 			}
-			if (current === holder) return { acquired: true, holder };
+			if (current === holder) return { acquired: true, holder, etag: existing.etag };
 			if (current && (await cfg.isHolderLive(current))) {
 				return { acquired: false, holder: current };
 			}
 			// CAS the replacement so two concurrent stale-claim replacers can't both win.
-			await cas.put(cfg.key, body, { onlyIfEtagMatches: existing.etag });
-			return { acquired: true, holder };
+			const written = await cas.put(cfg.key, body, { onlyIfEtagMatches: existing.etag });
+			return { acquired: true, holder, etag: written.etag };
 		},
 		cfg.retry,
 	);
@@ -167,8 +167,17 @@ export async function releaseSingletonClaim(
 		'bucket' | 'key' | 'serialize' | 'parseHolder' | 'onReleaseError'
 	>,
 	holder: string,
+	etag?: string,
 ): Promise<void> {
 	try {
+		if (etag !== undefined) {
+			try {
+				await cfg.bucket.put(cfg.key, cfg.serialize(null), { onlyIfEtagMatches: etag });
+				return;
+			} catch (error) {
+				if (!(error instanceof PreconditionFailedError)) throw error;
+			}
+		}
 		const existing = await cfg.bucket.get(cfg.key);
 		if (!existing) return;
 		if (cfg.parseHolder(await readStoredJson(existing, cfg.key)) !== holder) return;

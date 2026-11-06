@@ -1,3 +1,4 @@
+import type { Session } from '../../schema';
 import { withDeadline } from '../../async';
 import { mapWithConcurrency } from '../../concurrency';
 import { ConflictError, NotFoundError } from '../../errors';
@@ -41,6 +42,7 @@ export interface WarmPoolConfig {
 }
 export interface WarmPoolClaim {
 	member: WarmPoolMember;
+	profile?: string;
 	sandbox: SandboxInstance;
 }
 export class WarmPoolClaimExpiredError extends ConflictError {
@@ -85,6 +87,17 @@ export class WarmPoolService {
 	) {}
 
 	async claim(request: ClaimRequest): Promise<WarmPoolClaim | undefined> {
+		const claim = await this.reserve(request);
+		if (!claim) return;
+		try {
+			await this.probe(claim);
+			return claim;
+		} catch {
+			return;
+		}
+	}
+
+	async reserve(request: ClaimRequest): Promise<WarmPoolClaim | undefined> {
 		if (!this.config.enabled) return;
 		const started = this.now();
 		const profile = this.config.profiles.find(
@@ -119,12 +132,7 @@ export class WarmPoolService {
 			});
 			if (claimed) {
 				const sandbox = this.connect(claimed, profile);
-				await this.reconnectAndProbe(sandbox);
-				if (this.isExpired(claimed))
-					throw new Error('Warm sandbox claim expired during readiness check');
-				this.clearClaimDiagnostics(sandbox);
-				this.metrics.increment('warm_pool.hit', 1, { profile: profile!.name ?? 'default' });
-				return { member: claimed, sandbox };
+				return { member: claimed, sandbox, profile: profile!.name };
 			}
 		} catch (error) {
 			this.report('claim_failed', error, {
@@ -138,10 +146,33 @@ export class WarmPoolService {
 		this.metrics.increment('warm_pool.miss');
 	}
 
-	async handoff(claim: WarmPoolClaim): Promise<void> {
+	async probe(claim: WarmPoolClaim): Promise<void> {
+		const started = this.now();
+		try {
+			await this.reconnectAndProbe(claim.sandbox);
+			if (this.isExpired(claim.member)) throw new WarmPoolClaimExpiredError();
+			this.clearClaimDiagnostics(claim.sandbox);
+			this.metrics.increment('warm_pool.hit', 1, { profile: claim.profile ?? 'default' });
+		} catch (error) {
+			this.report('claim_failed', error, {
+				sandbox_id: claim.member.sandbox_id,
+				elapsed_ms: this.now() - started,
+			});
+			await this.retire(claim.member).catch((cause) => this.report('retire_failed', cause));
+			this.metrics.increment('warm_pool.miss');
+			throw error;
+		}
+	}
+
+	async handoff(claim: WarmPoolClaim, session: Session): Promise<void> {
 		const destination = claim.member.destination!;
-		const session = await this.sessions.getSession(destination.project_id, destination.session_id);
-		if (session.sandbox_id !== claim.member.sandbox_id || session.status !== 'starting') {
+		if (
+			session.session_id !== destination.session_id ||
+			session.project_id !== destination.project_id ||
+			session.notebook_id !== destination.notebook_id ||
+			session.sandbox_id !== claim.member.sandbox_id ||
+			session.status !== 'starting'
+		) {
 			throw new ConflictError('The warm sandbox session is no longer starting');
 		}
 		const assigned = await this.store.updateMember(claim.member, 'claimed', (member) => {
@@ -238,7 +269,7 @@ export class WarmPoolService {
 			}
 		}
 		if (this.config.enabled) {
-			const reservations = await this.reserve();
+			const reservations = await this.reserveCreations();
 			await mapWithConcurrency(reservations, MAX_CONCURRENT_CREATIONS, ({ profile, member }) =>
 				this.fill(profile, member),
 			);
@@ -264,7 +295,7 @@ export class WarmPoolService {
 		}
 	}
 
-	private reserve() {
+	private reserveCreations() {
 		return this.store.mutate((record) => {
 			const reservations: { profile: WarmPoolProfile; member: WarmPoolMember }[] = [];
 			for (const profile of this.config.profiles) {
@@ -318,7 +349,7 @@ export class WarmPoolService {
 			const boot = (async () => {
 				try {
 					await instance.ready?.();
-					await this.probe(instance);
+					await this.probeCommand(instance);
 				} finally {
 					// A provider create may finish after our local deadline; reclaim its late result.
 					if (abandoned)
@@ -420,7 +451,7 @@ export class WarmPoolService {
 				timeoutError: () => new WarmPoolReadinessError('reconnect_timeout'),
 			},
 		);
-		await this.probe(sandbox);
+		await this.probeCommand(sandbox);
 	}
 
 	private clearClaimDiagnostics(sandbox: SandboxInstance): void {
@@ -437,7 +468,7 @@ export class WarmPoolService {
 		}
 	}
 
-	private async probe(sandbox: SandboxInstance): Promise<void> {
+	private async probeCommand(sandbox: SandboxInstance): Promise<void> {
 		await withDeadline(
 			async () => {
 				const result = await sandbox.exec('true', { timeout: PROBE_TIMEOUT_MS }).catch((error) => {

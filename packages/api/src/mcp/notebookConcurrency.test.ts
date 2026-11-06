@@ -219,11 +219,14 @@ describe('MCP source replacement and editor admission', () => {
 				);
 			await expect(fixture.start()).rejects.toThrow();
 			const [session] = await starter.services.sessions.listSessions(notebook.id);
-			expect(session.status).toBe('failed');
-			expect(!!session.sandbox_reclaimed_at).toBe(!cleanupFails);
-			if (phase === 'before provision' || phase === 'handle creation')
+			if (phase === 'handle creation') {
+				expect(session).toBeUndefined();
 				expect(destroy).not.toHaveBeenCalled();
-			else expect(destroy).toHaveBeenCalledOnce();
+			} else {
+				expect(session.status).toBe('failed');
+				expect(!!session.sandbox_reclaimed_at).toBe(!cleanupFails);
+				expect(destroy).toHaveBeenCalledOnce();
+			}
 			const update = await fixture.update();
 			if (cleanupFails)
 				expect(update).toMatchObject({ isError: true, structuredContent: { code: 'CONFLICT' } });

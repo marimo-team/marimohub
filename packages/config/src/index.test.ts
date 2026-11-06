@@ -1078,14 +1078,13 @@ describe('createFromEnv sandbox-host isolation guard', () => {
 		expect(deps.sandbox.hostname).toBe('sandboxes.example.net');
 	});
 
-	it('allows the CKS app and sandbox sibling subdomains', () => {
+	it('allows sibling app and sandbox subdomains', () => {
 		const deps = createFromEnv({
 			...env,
-			MARIMOHUB_AUTH_OIDC_REDIRECT_URI:
-				'https://app.cwf663-marimohub.coreweave.app/api/auth/callback',
-			MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'sandbox.cwf663-marimohub.coreweave.app',
+			MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://app.example.com/api/auth/callback',
+			MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME: 'sandbox.example.com',
 		});
-		expect(deps.sandbox.hostname).toBe('sandbox.cwf663-marimohub.coreweave.app');
+		expect(deps.sandbox.hostname).toBe('sandbox.example.com');
 	});
 
 	it('is a no-op when no sandbox host is configured', () => {

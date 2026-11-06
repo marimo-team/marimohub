@@ -177,12 +177,27 @@ client uses root-relative paths.
 **Lifecycle (provider-independent):**
 
 ```
-provision: create sandbox → mount bucket (or copy files) → start marimo
-           → wait for port → expose URL
+provision: capacity → warm reservation → start boot or probe
+           → publish session → concurrent admission checks
+           → await boot or probe + warm handoff → restore workspace + inject credentials
+           → start marimo → wait for port → expose URL
 teardown:  read notebook back → cut a new version (if code changed)
            → copy __marimo__ snapshots (notebook.html / session.json, if present)
            into that version → destroy sandbox
 ```
+
+Boot or a warm probe overlaps session publication and admission. The cap recheck,
+preview commit, and editor claim run concurrently, with cap errors taking precedence.
+Workspace writes and credentials wait for admission and [warm handoff](./warm_pools.md#ownership-and-lifecycle).
+Rejected starts await boot before cleanup. `provision_boot_overlap_ms` records the boot duration.
+
+Prefetch starts at warm reservation for immutable workspaces. Mutable workspace reads
+wait for session publication. A shared byte budget bounds prefetch memory, and failed starts
+cancel prefetch before cleanup.
+
+Persistent editors publish under the source lease and heartbeat it before proceeding.
+Heartbeat and release reuse the acquired ETag. Node session starts defer release through
+a scheduler that drains on shutdown. Workers and other mutation callers await release.
 
 > **Teardown versions the session's edits.** Interactive kernel edits land on the
 > live `notebook.py` without going through the API write path, so teardown reads

@@ -4,7 +4,7 @@ import type { SessionEnv } from './sandboxEnvironment';
 import { prepareMarimoPresentation } from '../marimoConfig';
 export type { SessionEnv } from './sandboxEnvironment';
 import type { WorkspaceLimits, WorkspaceLoadMode } from '../../integrations/remoteWorkspace';
-import { all, allSettled } from 'better-all';
+import { allSettled } from 'better-all';
 import { prepareAgentHomeFiles } from './agentContextFiles';
 import type { Attributes, Span as OtelSpan } from '@opentelemetry/api';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
@@ -202,9 +202,37 @@ export interface BucketConfig {
 	};
 }
 
+export type BootOptions = Pick<
+	ProvisionOptions,
+	| 'sandboxId'
+	| 'projectId'
+	| 'userId'
+	| 'image'
+	| 'resources'
+	| 'userHome'
+	| 'sessionIdleTimeoutMs'
+	| 'restoreFilesystemSnapshotId'
+>;
+
+export interface BootedSandbox {
+	sandbox: SandboxInstance;
+	ready: Promise<void>;
+	timings: Timings;
+}
+
+export interface WorkspacePrefetch {
+	consume(waitUntilReady: () => Promise<void>): Promise<WorkspaceLoadResult>;
+	cancel(): Promise<void>;
+}
+
 export interface ProvisionOptions {
 	workspaceLimits?: WorkspaceLimits;
 	existingSandbox?: SandboxInstance;
+	bootedSandbox?: BootedSandbox;
+	workspacePrefetch?: WorkspacePrefetch;
+	/** Pool assignment must succeed before any workspace or credential writes. */
+	beforePrepare?: Promise<void>;
+	destroyOnFailure?: boolean;
 	/** Called when failure leaves no handle or sandbox destruction succeeds. */
 	onSandboxDestroyed?: () => void | Promise<void>;
 	sandboxId: SandboxId;
@@ -642,6 +670,18 @@ function loadCounters(load: WorkspaceLoadResult): Record<string, number> {
 	return counters;
 }
 
+function workspaceLocation(options: ProvisionOptions) {
+	return {
+		layout: sandboxWorkspaceLayout(
+			options.workdir ?? DEFAULT_WORKDIR,
+			options.gitPrefix ? (options.gitRootPath ?? '') : '',
+		),
+		prefix:
+			options.workspacePrefix ??
+			paths.project(options.projectId).notebook(options.notebookId).workspacePrefix,
+	};
+}
+
 function normalizeAbsoluteSandboxPath(value: string): string {
 	if (!value.startsWith('/')) return value;
 	const segments: string[] = [];
@@ -689,82 +729,75 @@ export class SandboxProvisioner {
 		this.prefetchBudget = options.prefetchBudget ?? DEFAULT_PREFETCH_BUDGET;
 	}
 
+	boot(options: BootOptions): BootedSandbox {
+		const started = Date.now();
+		const sandbox = this.createSandbox(options);
+		const sw = new Stopwatch();
+		sw.timings.handle = Date.now() - started;
+		const ready = this.ensureReachable(sandbox, sw).finally(() => {
+			sw.timings.boot_overlap = Date.now() - started;
+		});
+		ready.catch(() => {});
+		return { sandbox, ready, timings: sw.timings };
+	}
+
+	prefetchWorkspace(sandbox: SandboxInstance, options: ProvisionOptions): WorkspacePrefetch {
+		const gate = Promise.withResolvers<void>();
+		gate.promise.catch(() => {});
+		const { layout, prefix } = workspaceLocation(options);
+		const loaded = this.loadWorkspace(sandbox, options, layout, prefix, () => gate.promise);
+		loaded.catch(() => {});
+		return {
+			consume(waitUntilReady) {
+				gate.resolve(waitUntilReady());
+				return loaded;
+			},
+			async cancel() {
+				gate.reject(new Error('Workspace prefetch cancelled'));
+				await loaded.catch(() => {});
+			},
+		};
+	}
+
 	async provision(options: ProvisionOptions): Promise<ProvisionResult> {
 		const provisionStart = Date.now();
+		options.beforePrepare?.catch(() => {});
 		// A restored sandbox boots from the snapshot image; the workspace load below
 		// still refreshes the code from the bucket cache.
 		const createStart = Date.now();
 		let sandbox: SandboxInstance | undefined;
 		try {
 			sandbox =
-				options.existingSandbox ??
-				createOrRestoreSandbox(
-					this.provider,
-					options.sandboxId,
-					options.restoreFilesystemSnapshotId,
-					{
-						image: options.image,
-						resources: options.resources,
-						userHome: options.userHome,
-						sessionIdleTimeoutMs: options.sessionIdleTimeoutMs,
-						owner: {
-							projectId: options.projectId,
-							...(options.userId ? { userId: options.userId } : {}),
-						},
-					},
-				);
-			if (options.existingSandbox) {
+				options.bootedSandbox?.sandbox ?? options.existingSandbox ?? this.createSandbox(options);
+			if (options.existingSandbox && !options.bootedSandbox) {
 				// Claim-time probes belong to warm-pool telemetry, not provisioning.
 				sandbox.drainTimings?.();
 				sandbox.drainCounters?.();
 			}
 			const createMs = Date.now() - createStart;
 			const result = await this.provisionInto(sandbox, options);
-			// Constructing the (usually lazy) handle, NOT the backend's create — that
-			// lands in `reachable_create` once the adapter resolves it.
-			result.timings.handle = createMs;
+			// Backend creation is timed during readiness, not handle construction.
+			result.timings.handle = options.bootedSandbox?.timings.handle ?? createMs;
 			result.timings.total = Date.now() - provisionStart;
 			return result;
 		} catch (err) {
 			// The caller retains cleanup ownership for a supplied sandbox.
-			if (options.existingSandbox) throw err;
+			if ((options.existingSandbox || options.bootedSandbox) && !options.destroyOnFailure)
+				throw err;
 			// The saga does not compensate the step that throws. A failed handle
 			// constructor leaves nothing to destroy but still needs a cleanup marker.
-			try {
-				await sandbox?.destroy();
-				await options.onSandboxDestroyed?.();
-			} catch {
-				// Preserve the original failure if destruction or its marker fails.
-			}
+			await this.reclaimAfterFailure(sandbox, options);
 			throw err;
 		}
 	}
 
-	/**
-	 * Create a sandbox and run the prepare phases only — no kernel start, no
-	 * exposed port. The session path (`provision`) is the same phases plus start +
-	 * expose; a failure here self-destroys the partial sandbox exactly like it.
-	 */
+	/** Prepare a headless workload without starting or exposing a kernel. */
 	async prepare(options: ProvisionOptions): Promise<PreparedSandbox> {
 		const prepareStart = Date.now();
 		const createStart = Date.now();
 		let sandbox: SandboxInstance | undefined;
 		try {
-			sandbox = createOrRestoreSandbox(
-				this.provider,
-				options.sandboxId,
-				options.restoreFilesystemSnapshotId,
-				{
-					image: options.image,
-					resources: options.resources,
-					userHome: options.userHome,
-					sessionIdleTimeoutMs: options.sessionIdleTimeoutMs,
-					owner: {
-						projectId: options.projectId,
-						...(options.userId ? { userId: options.userId } : {}),
-					},
-				},
-			);
+			sandbox = this.createSandbox(options);
 			const createMs = Date.now() - createStart;
 			const { load, startup, sw, mountPath } = await this.prepareInto(sandbox, options);
 			const counters = loadCounters(load);
@@ -780,13 +813,38 @@ export class SandboxProvisioner {
 				counters,
 			};
 		} catch (err) {
-			try {
-				await sandbox?.destroy();
-				await options.onSandboxDestroyed?.();
-			} catch {
-				// Preserve the original failure if destruction or its marker fails.
-			}
+			await this.reclaimAfterFailure(sandbox, options);
 			throw err;
+		}
+	}
+
+	private createSandbox(options: BootOptions): SandboxInstance {
+		return createOrRestoreSandbox(
+			this.provider,
+			options.sandboxId,
+			options.restoreFilesystemSnapshotId,
+			{
+				image: options.image,
+				resources: options.resources,
+				userHome: options.userHome,
+				sessionIdleTimeoutMs: options.sessionIdleTimeoutMs,
+				owner: {
+					projectId: options.projectId,
+					...(options.userId ? { userId: options.userId } : {}),
+				},
+			},
+		);
+	}
+
+	private async reclaimAfterFailure(
+		sandbox: SandboxInstance | undefined,
+		options: ProvisionOptions,
+	): Promise<void> {
+		try {
+			await sandbox?.destroy();
+			await options.onSandboxDestroyed?.();
+		} catch {
+			// Cleanup must not replace the provisioning error.
 		}
 	}
 
@@ -816,27 +874,24 @@ export class SandboxProvisioner {
 	}> {
 		const launchStrategy = Promise.resolve(options.launchStrategy ?? DEFAULT_LAUNCH_STRATEGY);
 		launchStrategy.catch(() => {});
-		const nb = paths.project(options.projectId).notebook(options.notebookId);
-		const layout = sandboxWorkspaceLayout(
-			options.workdir ?? DEFAULT_WORKDIR,
-			options.gitPrefix ? (options.gitRootPath ?? '') : '',
-		);
+		const { layout, prefix } = workspaceLocation(options);
 		const mountPath = layout.workdir;
 		const sw = new Stopwatch();
 
-		const ensureReachable = () => this.ensureReachable(sandbox, sw);
+		const ensureReachable = async () => {
+			if (options.bootedSandbox) {
+				await options.bootedSandbox.ready;
+				Object.assign(sw.timings, options.bootedSandbox.timings);
+			} else await this.ensureReachable(sandbox, sw);
+			await options.beforePrepare;
+		};
 		// Git and workspace restores may wait concurrently; record one shared readiness wait.
 		let workspaceReadiness: Promise<void> | undefined;
 		const loadWorkspace = (waitUntilReady: () => Promise<void>) =>
 			withSandboxSpan(sw, 'files', async (time, span) => {
 				const loaded = await time(async () => {
-					const loaded = await this.loadWorkspace(
-						sandbox,
-						options,
-						layout,
-						options.workspacePrefix ?? nb.workspacePrefix,
-						waitUntilReady,
-					);
+					const loaded = await (options.workspacePrefetch?.consume(waitUntilReady) ??
+						this.loadWorkspace(sandbox, options, layout, prefix, waitUntilReady));
 					if (!loaded.overlayApplied) {
 						await this.applyWorkspaceOverlay(sandbox, options, mountPath);
 					}
@@ -876,12 +931,18 @@ export class SandboxProvisioner {
 				(): undefined => {},
 			);
 
-		// Prefetch overlaps boot; files timing includes readiness waits.
-		const { load, setup } = await all({
-			async reachable() {
+		// Settle every writer before the caller can reclaim the sandbox.
+		const prepared = await allSettled<{
+			reachable: () => Promise<void>;
+			load: () => Promise<WorkspaceLoadResult>;
+			inject: () => Promise<void>;
+			bridge: () => Promise<string | undefined>;
+			setup: () => Promise<MarimoStartup>;
+		}>({
+			async reachable(): Promise<void> {
 				await ensureReachable();
 			},
-			async load() {
+			async load(): Promise<WorkspaceLoadResult> {
 				try {
 					return await loadWorkspace(
 						() => (workspaceReadiness ??= sw.time('files_waitready', () => this.$.reachable)),
@@ -890,7 +951,7 @@ export class SandboxProvisioner {
 					await this.$.reachable;
 				}
 			},
-			async inject() {
+			async inject(): Promise<void> {
 				await this.$.reachable;
 				await injectSessionEnv();
 				if (options.entryNotebook?.includes('/')) {
@@ -907,11 +968,11 @@ export class SandboxProvisioner {
 					pythonPath.catch(() => {});
 				}
 			},
-			async bridge() {
+			async bridge(): Promise<string | undefined> {
 				await this.$.reachable;
 				return uploadBridge();
 			},
-			async setup() {
+			async setup(): Promise<MarimoStartup> {
 				await this.$.load;
 				await this.$.inject;
 				// Waiting for the bridge upload lets setup write the final environment file, which
@@ -919,7 +980,12 @@ export class SandboxProvisioner {
 				return setupEnvironment(await this.$.bridge);
 			},
 		});
-		return { load, startup: setup, sw, mountPath };
+		if (prepared.reachable.status === 'rejected') throw prepared.reachable.reason;
+		if (prepared.load.status === 'rejected') throw prepared.load.reason;
+		if (prepared.inject.status === 'rejected') throw prepared.inject.reason;
+		if (prepared.bridge.status === 'rejected') throw prepared.bridge.reason;
+		if (prepared.setup.status === 'rejected') throw prepared.setup.reason;
+		return { load: prepared.load.value, startup: prepared.setup.value, sw, mountPath };
 	}
 
 	private async uploadNotebookBridge(
@@ -1238,9 +1304,20 @@ export class SandboxProvisioner {
 		};
 		const copyPath =
 			options.workspaceLoadMode === 'copy-only' || sandbox.supportsBucketMount === false;
-		const [loaded, gitStats] = copyPath
-			? await Promise.all([load, restoreGit()])
-			: [await load, await restoreGit()];
+		const restore = await allSettled<{
+			load: () => Promise<WorkspaceLoadResult>;
+			git: () => Promise<WorkspaceRestoreStats>;
+		}>({
+			load: () => load,
+			async git(): Promise<WorkspaceRestoreStats> {
+				if (!copyPath) await this.$.load;
+				return restoreGit();
+			},
+		});
+		if (restore.load.status === 'rejected') throw restore.load.reason;
+		if (restore.git.status === 'rejected') throw restore.git.reason;
+		const loaded = restore.load.value;
+		const gitStats = restore.git.value;
 		if (!loaded.stats) return { ...loaded, stats: gitStats };
 		return {
 			...loaded,

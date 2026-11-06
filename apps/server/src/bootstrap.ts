@@ -101,6 +101,7 @@ export async function bootstrap(
 	deps.sandbox.thumbnailDeadline = () => thumbnailDeadline;
 	const backgroundTasks = new InFlightWork();
 	deps.backgroundTasks = {
+		drainsOnShutdown: true,
 		defer(task) {
 			void backgroundTasks.track(task).catch(() => {});
 		},

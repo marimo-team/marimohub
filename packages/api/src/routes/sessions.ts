@@ -3,9 +3,10 @@ import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
 import { resolveSessionLinks } from '@marimo-hub/core/session-links';
 import type { SessionLinkTemplate } from '@marimo-hub/core/session-links';
 import { createRoute, z } from '@hono/zod-openapi';
-import { all } from 'better-all';
+import { all, allSettled } from 'better-all';
 import type {
 	Millis,
+	ProvisionResult,
 	SecondarySurfaceId,
 	WarmPoolClaim,
 	ResourceSecurityLabels,
@@ -1721,22 +1722,17 @@ export async function startNotebookSession(input: {
 	let sandboxId = admission?.member.sandbox_id ?? createSandboxId();
 	const sessionId = admission?.member.session_id ?? createSessionId();
 	let warmClaim: WarmPoolClaim | undefined;
+	let warmProbe: Promise<void> | undefined;
+	let bootedSandbox: ReturnType<SandboxProvisioner['boot']> | undefined;
+	let workspacePrefetch: ReturnType<SandboxProvisioner['prefetchWorkspace']> | undefined;
 	const kernelAuthToken = sandbox.auth === 'on' ? createKernelAuthToken() : undefined;
 
-	// Saga compensation retires the session and destroys its sandbox.
-	// Cold provisioning cleans up its own failures. The outer catch abandons warm
-	// claims so the pool retains ownership after failed cleanup.
 	let session: Session | undefined;
 	let sessionRecordAttempted = false;
 	let sandboxMayExist = false;
 	const recordSandboxCleanup = async () => {
-		if (session) {
-			await sessions.markSandboxReclaimed(
-				pid,
-				session.session_id,
-				new Date().toISOString(),
-				sandboxId,
-			);
+		if (sessionRecordAttempted) {
+			await sessions.markSandboxReclaimed(pid, sessionId, new Date().toISOString(), sandboxId);
 		}
 	};
 	let updated: Session | undefined;
@@ -1919,6 +1915,78 @@ export async function startNotebookSession(input: {
 					resources: toComputeResourcesResponse(requestedComputeProfile.resources),
 				};
 		observer.tag('compute_profile', appliedComputeProfile.name);
+		const provisionOptions = (): Parameters<SandboxProvisioner['provision']>[0] => ({
+			onSandboxDestroyed: recordSandboxCleanup,
+			sandboxId,
+			projectId: pid,
+			userId: user.id,
+			notebookId: nid,
+			hostname,
+			bucket: sandbox.bucket,
+			bucketHandle,
+			workspaceLimits: notebooks.workspace.limits,
+			workdir: sandbox.workdir,
+			assetUrl: sandbox.assetUrl,
+			notebookBridge: sandbox.notebookBridge,
+			bridgeParentOrigin: new URL(appBaseUrl).origin,
+			startupTimeoutMs: sandbox.startupTimeoutMs,
+			kernelAuthToken,
+			// A second editor writes the notebook file, so marimo must reload it.
+			marimoWatch: mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
+			restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
+			image,
+			resources: requestedComputeProfile.resources,
+			userHome,
+			sessionIdleTimeoutMs: isPreview
+				? (previewIdleTimeout(sandbox.sessionLifetime?.idleTimeoutMsByMode[mode]) as Millis)
+				: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
+			sessionEnv: envResolution!.sessionEnv,
+			entryNotebook: workspacePolicy.entryNotebook,
+			launchStrategy: envResolution!.launchStrategy,
+			launchMode: mode,
+			// Viewer sandboxes copy files: mounts expose bucket credentials and write
+			// through to the source, bypassing persistence guards and racing editors.
+			workspaceLoadMode:
+				ephemeral || MODE_POLICY[mode].workspaceLoad === 'copy-only'
+					? 'copy-only'
+					: workspacePolicy.loadMode,
+			workspacePrefix,
+			...pullSourceGit,
+			workspaceArchive,
+			workspaceOverlay: launchSource.workspaceOverlay,
+		});
+		const bootSandbox = () => {
+			bootedSandbox = provisioner.boot(provisionOptions());
+			sandboxMayExist = true;
+		};
+		const bindAppSandbox = async () => {
+			if (admission) {
+				await appPool.bindWarmSandbox(
+					pid,
+					nid,
+					sessionId,
+					admission.member.operation_token,
+					sandboxId,
+				);
+			}
+		};
+		const prefetchWarmWorkspace = () => {
+			if (warmClaim)
+				workspacePrefetch ??= provisioner.prefetchWorkspace(warmClaim.sandbox, provisionOptions());
+		};
+
+		let coldCleanup: Promise<void> | undefined;
+		const cleanupColdSandbox = async () => {
+			const boot = bootedSandbox;
+			if (warmClaim || !boot || !sandboxMayExist) return;
+			return (coldCleanup ??= (async () => {
+				await boot.ready.catch(() => {});
+				await boot.sandbox.destroy();
+				sandboxMayExist = false;
+				await recordSandboxCleanup();
+			})());
+		};
+
 		await saga(observer)
 			.step('preview_admission', async () => {
 				if (!previewRecord) return;
@@ -1942,7 +2010,7 @@ export async function startNotebookSession(input: {
 				envResolution = startEnvResolution();
 			})
 			.step('warm_sandbox', async () => {
-				warmClaim = await deps.warmPool?.claim({
+				warmClaim = await deps.warmPool?.reserve({
 					profile: requestedComputeProfile.name,
 					resources: requestedComputeProfile.resources,
 					image,
@@ -1951,19 +2019,22 @@ export async function startNotebookSession(input: {
 					destination: { project_id: pid, notebook_id: nid, session_id: sessionId },
 				});
 				if (!warmClaim) return;
+				warmProbe = deps.warmPool!.probe(warmClaim);
+				warmProbe.catch(() => {});
 				sandboxId = warmClaim.member.sandbox_id;
 				sandboxMayExist = true;
 				observer.tag('sandbox_id', sandboxId);
 				observer.tag('warm_pool_hit', true);
-				if (admission) {
-					await appPool.bindWarmSandbox(
-						pid,
-						nid,
-						sessionId,
-						admission.member.operation_token,
-						sandboxId,
-					);
-				}
+				// Mutable workspace reads must follow publication under the source lease.
+				if (workspacePrefix) prefetchWarmWorkspace();
+				await bindAppSandbox();
+			})
+			.step('sandbox_boot', {
+				do: () => {
+					if (warmClaim) return;
+					bootSandbox();
+				},
+				compensate: cleanupColdSandbox,
 			})
 			.step('session_record', async () => {
 				const create = () => {
@@ -1996,41 +2067,69 @@ export async function startNotebookSession(input: {
 				// the session itself blocks source replacement through sandbox reclamation.
 				session =
 					mode === 'edit' && !ephemeral
-						? await notebooks.workspace.withMutation(pid, nid, {}, async (lease) => {
-								session = await create();
-								await lease.heartbeat();
-								return session;
-							})
+						? await notebooks.workspace.withMutation(
+								pid,
+								nid,
+								{
+									deferRelease: deps.backgroundTasks?.drainsOnShutdown
+										? (release) => deps.backgroundTasks!.defer(release)
+										: undefined,
+								},
+								async (lease) => {
+									session = await create();
+									await lease.heartbeat();
+									return session;
+								},
+							)
 						: await create();
 				observer.tag('session_id', session.session_id);
+				prefetchWarmWorkspace();
 			})
-			// The pre-flight cap check alone is raceable; re-rank now that this
-			// session is visible to every concurrent create.
-			.step('cap_recheck', () =>
-				assertCapAfterCreate(
-					deps,
-					mode,
-					pid,
-					user.id,
-					session!.session_id,
-					temporaryToRetire?.session_id,
-				),
-			)
-			.step('preview_admission_commit', async () => {
-				if (previewRecord) await deps.services.previews.commitAdmission(previewRecord, sessionId);
-			})
-			.step('editor_claim', {
+			.step('admission', {
 				do: async () => {
-					if (mode !== 'edit' || ephemeral) return;
-					const result = await sessions.claimEditor(
-						pid,
-						nid,
-						session!.session_id,
-						sharing,
-						user.id,
-					);
-					if (!result.claimed && result.claim.session_id) {
-						throw new EditorClaimLostError(result.claim.session_id);
+					const timed = async (name: string, task: () => Promise<unknown>) => {
+						const started = Date.now();
+						try {
+							await task();
+							observer.tag(`${name}_succeeded`, true);
+						} catch (error) {
+							observer.tag(`${name}_failed`, true);
+							throw error;
+						} finally {
+							observer.tag(`${name}_ms`, Date.now() - started);
+						}
+					};
+					// Settle every writer before compensation; cap errors retain precedence.
+					const checks = await allSettled({
+						cap: () =>
+							timed('cap_recheck', () =>
+								assertCapAfterCreate(
+									deps,
+									mode,
+									pid,
+									user.id,
+									sessionId,
+									temporaryToRetire?.session_id,
+								),
+							),
+						preview: () =>
+							timed('preview_admission_commit', async () => {
+								if (previewRecord)
+									await deps.services.previews.commitAdmission(previewRecord, sessionId);
+							}),
+						editor: () =>
+							timed('editor_claim', async () => {
+								if (mode !== 'edit' || ephemeral) return;
+								const result = await sessions.claimEditor(pid, nid, sessionId, sharing, user.id);
+								if (!result.claimed && result.claim.session_id)
+									throw new EditorClaimLostError(result.claim.session_id);
+							}),
+					});
+					for (const result of [checks.cap, checks.preview, checks.editor]) {
+						if (result.status === 'rejected') {
+							await sessions.releaseEditorFor(session!).catch(() => {});
+							throw result.reason;
+						}
 					}
 				},
 				compensate: async () => {
@@ -2039,35 +2138,26 @@ export async function startNotebookSession(input: {
 			})
 			.step('sandbox_provision', {
 				do: async () => {
-					// `prepare` picks marimo's `--base-url`; `finalize` maps the adapter's
-					// exposed URL to the client URL + the origin to persist.
-					const exposureCtx = {
-						sessionId: session!.session_id,
-						projectId: pid,
-						notebookId: nid,
-						sandboxId,
-						kernelAuthToken,
-						appBaseUrl,
-					};
-					if (warmClaim) {
-						try {
-							await deps.warmPool!.handoff(warmClaim);
-						} catch (error) {
-							if (!(error instanceof WarmPoolClaimExpiredError)) throw error;
-							const expired = warmClaim;
+					try {
+						// `prepare` picks marimo's `--base-url`; `finalize` maps the adapter's
+						// exposed URL to the client URL + the origin to persist.
+						const exposureCtx = {
+							sessionId: session!.session_id,
+							projectId: pid,
+							notebookId: nid,
+							sandboxId,
+							kernelAuthToken,
+							appBaseUrl,
+						};
+						const replaceWarmSandbox = async (reason: string) => {
+							const expired = warmClaim!;
+							await workspacePrefetch?.cancel();
+							workspacePrefetch = undefined;
 							await deps.warmPool!.abandon(expired).catch(() => {});
-							// A late pool cleanup must never target the cold replacement.
+							// Pool cleanup must never target the cold replacement.
 							sandboxId = createSandboxId();
 							sandboxMayExist = false;
-							if (admission) {
-								await appPool.bindWarmSandbox(
-									pid,
-									nid,
-									sessionId,
-									admission.member.operation_token,
-									sandboxId,
-								);
-							}
+							await bindAppSandbox();
 							session = await sessions.replaceStartingSandbox(
 								pid,
 								sessionId,
@@ -2078,84 +2168,72 @@ export async function startNotebookSession(input: {
 							exposureCtx.sandboxId = sandboxId;
 							observer.tag('sandbox_id', sandboxId);
 							observer.tag('warm_pool_hit', false);
-							observer.tag('warm_pool_fallback', 'claim_expired');
+							observer.tag('warm_pool_fallback', reason);
+							bootSandbox();
+						};
+						if (warmClaim) {
+							try {
+								await warmProbe;
+							} catch (error) {
+								await replaceWarmSandbox(
+									error instanceof WarmPoolClaimExpiredError ? 'claim_expired' : 'probe_failed',
+								);
+							}
 						}
+						const runProvision = async () => {
+							const results = await allSettled<{
+								handoff: () => Promise<void>;
+								provision: () => Promise<ProvisionResult>;
+							}>({
+								handoff: async () => {
+									if (warmClaim) await deps.warmPool!.handoff(warmClaim, session!);
+								},
+								async provision(): Promise<ProvisionResult> {
+									const { baseUrl, publicUrl } = await sandboxExposure.prepare(exposureCtx);
+									preparedContextFile =
+										publicUrl === undefined
+											? undefined
+											: sandboxContextFile(sandboxId, contextFor(publicUrl));
+									return provisioner.provision({
+										...provisionOptions(),
+										existingSandbox: warmClaim?.sandbox,
+										bootedSandbox,
+										workspacePrefetch,
+										beforePrepare: this.$.handoff,
+										baseUrl,
+										contextFile: preparedContextFile ?? { path: sandboxContextPath(sandboxId) },
+									});
+								},
+							});
+							if (results.handoff.status === 'rejected') throw results.handoff.reason;
+							if (results.provision.status === 'rejected') throw results.provision.reason;
+							return results.provision.value;
+						};
+						const provision = await runProvision().catch(async (error) => {
+							if (!warmClaim || !(error instanceof WarmPoolClaimExpiredError)) throw error;
+							await replaceWarmSandbox('claim_expired');
+							return runProvision();
+						});
+						({ url, usedFallback } = provision);
+						provisionedSandbox = provision.sandbox;
+						for (const [phase, ms] of Object.entries(provision.timings)) {
+							observer.tag(`provision_${phase}_ms`, ms);
+						}
+						for (const [name, value] of Object.entries(provision.counters)) {
+							observer.tag(`provision_${name}`, value);
+						}
+						observer.tag('provision_used_fallback', usedFallback);
+						({ clientUrl, originUrl } = await sandboxExposure.finalize(url, exposureCtx));
+					} catch (error) {
+						// Reclaim a failed cold provision before the saga releases its editor claim.
+						await cleanupColdSandbox().catch(() => {});
+						throw error;
 					}
-					const { baseUrl, publicUrl } = await sandboxExposure.prepare(exposureCtx);
-					preparedContextFile =
-						publicUrl === undefined
-							? undefined
-							: sandboxContextFile(sandboxId, contextFor(publicUrl));
-					sandboxMayExist = true;
-					const provision = await provisioner.provision({
-						existingSandbox: warmClaim?.sandbox,
-						onSandboxDestroyed: recordSandboxCleanup,
-						sandboxId,
-						projectId: pid,
-						userId: user.id,
-						notebookId: nid,
-						hostname,
-						bucket: sandbox.bucket,
-						bucketHandle,
-						workspaceLimits: notebooks.workspace.limits,
-						workdir: sandbox.workdir,
-						assetUrl: sandbox.assetUrl,
-						notebookBridge: sandbox.notebookBridge,
-						bridgeParentOrigin: new URL(appBaseUrl).origin,
-						startupTimeoutMs: sandbox.startupTimeoutMs,
-						baseUrl,
-						kernelAuthToken,
-						contextFile: preparedContextFile ?? { path: sandboxContextPath(sandboxId) },
-						// A second editor writes the notebook file, so marimo must reload it.
-						marimoWatch:
-							mode === 'edit' && SECONDARY_SURFACE_IDS.some((id) => sandbox.surfaces?.[id]),
-						restoreFilesystemSnapshotId: restoreFilesystemSnapshot?.snapshot_id,
-						image,
-						resources: requestedComputeProfile.resources,
-						userHome,
-						sessionIdleTimeoutMs: isPreview
-							? (previewIdleTimeout(sandbox.sessionLifetime?.idleTimeoutMsByMode[mode]) as Millis)
-							: sandbox.sessionLifetime?.idleTimeoutMsByMode[mode],
-						sessionEnv: envResolution!.sessionEnv,
-						entryNotebook: workspacePolicy.entryNotebook,
-						launchStrategy: envResolution!.launchStrategy,
-						launchMode: mode,
-						// Ephemeral and app sandboxes never mount the live workspace: a mount
-						// writes straight through to the bucket (bypassing every persistEdits
-						// guard), puts the deployment's bucket credentials inside a viewer's
-						// sandbox, and — for apps — would race the edit kernel's autosaves on
-						// the same objects. Copy-only loads the files server-side.
-						workspaceLoadMode:
-							ephemeral || MODE_POLICY[mode].workspaceLoad === 'copy-only'
-								? 'copy-only'
-								: workspacePolicy.loadMode,
-						workspacePrefix,
-						...pullSourceGit,
-						workspaceArchive,
-						workspaceOverlay: launchSource.workspaceOverlay,
-					});
-					({ url, usedFallback } = provision);
-					provisionedSandbox = provision.sandbox;
-					// Per-phase durations onto the session_provision event.
-					for (const [phase, ms] of Object.entries(provision.timings)) {
-						observer.tag(`provision_${phase}_ms`, ms);
-					}
-					// Counts, not durations: workspace objects/bytes copied, and the
-					// command round-trips the provision spent.
-					for (const [name, value] of Object.entries(provision.counters)) {
-						observer.tag(`provision_${name}`, value);
-					}
-					// Whether the files phase mounted the bucket (false) or copied it in
-					// (true) — files is the largest phase, so this says which path to optimize.
-					observer.tag('provision_used_fallback', usedFallback);
-					({ clientUrl, originUrl } = await sandboxExposure.finalize(url, exposureCtx));
 				},
 				compensate: async () => {
 					// Never destroy the sandbox under an in-flight context write.
 					await contextPublication;
-					if (warmClaim) return;
-					await compute.create(sandboxId, { owner: { projectId: pid, userId: user.id } }).destroy();
-					await recordSandboxCleanup();
+					await cleanupColdSandbox();
 				},
 			})
 			.step('sandbox_context', async () => {
@@ -2248,6 +2326,8 @@ export async function startNotebookSession(input: {
 			.run();
 	} catch (err) {
 		await contextPublication;
+		await warmProbe?.catch(() => {});
+		await workspacePrefetch?.cancel();
 		if (warmClaim) {
 			await deps.warmPool!.abandon(warmClaim).catch(() => {});
 		}

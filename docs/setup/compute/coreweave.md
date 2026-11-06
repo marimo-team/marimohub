@@ -20,6 +20,9 @@ Set it to `gateway` when the hub cannot reach runner direct endpoints:
 Set it to `direct` once those endpoints are reachable.
 Lifecycle calls still use the API.
 
+Optional [warm pools](/warm-pools) reduce startup latency by keeping unused sandboxes
+ready. Unhealthy sandboxes or expired claims trigger cold creation.
+
 ::: tip Best for CoreWeave deployments
 This is the compute half of the [CKS deployment](/deploying/cks) — pair it
 with CAIOS storage. If you're already on CoreWeave, it's the lowest-friction

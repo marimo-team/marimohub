@@ -108,6 +108,199 @@ describe('SandboxProvisioner', () => {
 			command.includes('sh -e ') ? result : exec(command, options);
 	}
 
+	it('boots before preparation and preserves cold adapter diagnostics', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const ready = deferred<void>();
+		instance.ready = vi.fn(() => ready.promise);
+		const drain = vi.fn(() => ({ create: 12 }));
+		instance.drainTimings = drain;
+		instance.drainCounters = vi.fn(() => ({ exec_calls: 2 }));
+		const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+		const bootedSandbox = provisioner.boot(startupOptions);
+		expect(instance.ready).toHaveBeenCalledOnce();
+		expect(drain).not.toHaveBeenCalled();
+		expect(calls.writeFiles).toEqual([]);
+		ready.resolve();
+		await bootedSandbox.ready;
+		expect(drain).toHaveBeenCalledOnce();
+		const result = await provisioner.provision({ ...startupOptions, bootedSandbox });
+		expect(instance.ready).toHaveBeenCalledOnce();
+		expect(instance.drainCounters).toHaveBeenCalledOnce();
+		expect(result.counters.exec_calls).toBe(2);
+		expect(result.timings).toMatchObject({
+			reachable_create: 12,
+			boot_overlap: expect.any(Number),
+		});
+		expect(calls.destroy).toBe(0);
+	});
+
+	it.each(['boot', 'setup'] as const)(
+		'reclaims an externally booted sandbox on %s failure when requested',
+		async (phase) => {
+			const { instance, calls } = makeFakeSandbox();
+			instance.ready = async () => {
+				if (phase === 'boot') throw new Error('boot failed');
+			};
+			if (phase === 'setup')
+				vi.spyOn(instance, 'exec').mockRejectedValue(new Error('setup failed'));
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const bootedSandbox = provisioner.boot(startupOptions);
+			const marker = vi.fn();
+			await expect(
+				provisioner.provision({
+					...startupOptions,
+					bootedSandbox,
+					destroyOnFailure: true,
+					onSandboxDestroyed: marker,
+				}),
+			).rejects.toThrow();
+			expect(calls.destroy).toBe(1);
+			expect(marker).toHaveBeenCalledOnce();
+		},
+	);
+
+	it.each([0, 1024])(
+		'consumes claim-time prefetch once with a %i byte budget',
+		async (capacity) => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const nb = paths.project(projectId).notebook(notebookId);
+			await bucketHandle.put(nb.workspaceFile('notebook.py'), 'print(1)');
+			const list = vi.spyOn(bucketHandle, 'list');
+			const get = vi.spyOn(bucketHandle, 'get');
+			const budget = new ByteBudget(capacity);
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance), undefined, {
+				prefetchBudget: budget,
+			});
+			const options: ProvisionOptions = {
+				...startupOptions,
+				bucketHandle,
+				workspaceLoadMode: 'copy-only',
+			};
+			const workspacePrefetch = provisioner.prefetchWorkspace(instance, options);
+			await vi.waitFor(() => expect(list).toHaveBeenCalled());
+			if (capacity > 0) await vi.waitFor(() => expect(get).toHaveBeenCalled());
+			else expect(get).not.toHaveBeenCalled();
+			expect(calls.writeFiles).toEqual([]);
+			await provisioner.provision({ ...options, existingSandbox: instance, workspacePrefetch });
+			expect(list).toHaveBeenCalledOnce();
+			expect(get).toHaveBeenCalledOnce();
+			expect(budget.available).toBe(capacity);
+			expect(calls.writeFiles.flat()).toContainEqual({
+				path: '/workspace/notebook.py',
+				content: new TextEncoder().encode('print(1)'),
+			});
+		},
+	);
+
+	it('cancels unused prefetch without writes and returns its byte reservation', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const bucketHandle = new MemoryBucket();
+		await bucketHandle.put(
+			paths.project(projectId).notebook(notebookId).workspaceFile('notebook.py'),
+			'print(1)',
+		);
+		const budget = new ByteBudget(1024);
+		const provisioner = new SandboxProvisioner(fakeComputeFrom(instance), undefined, {
+			prefetchBudget: budget,
+		});
+		const prefetch = provisioner.prefetchWorkspace(instance, {
+			...startupOptions,
+			bucketHandle,
+			workspaceLoadMode: 'copy-only',
+		});
+		await vi.waitFor(() => expect(budget.available).toBeLessThan(1024));
+		await prefetch.cancel();
+		expect(budget.available).toBe(1024);
+		expect(calls.writeFiles).toEqual([]);
+	});
+
+	it.each(['objects', 'archive'] as const)(
+		'cancels %s prefetch during a storage read without leaking bytes or writing files',
+		async (source) => {
+			const { instance, calls } = makeFakeSandbox();
+			const bucketHandle = new MemoryBucket();
+			const nb = paths.project(projectId).notebook(notebookId);
+			const key =
+				source === 'archive'
+					? nb.version(createVersionId()).workspaceArchive
+					: nb.workspaceFile('notebook.py');
+			await bucketHandle.put(key, 'prefetched bytes');
+			const readStarted = deferred<void>();
+			const finishRead = deferred<void>();
+			const get = bucketHandle.get.bind(bucketHandle);
+			vi.spyOn(bucketHandle, 'get').mockImplementation(async (requested) => {
+				const object = await get(requested);
+				if (requested !== key || !object) return object;
+				return {
+					...object,
+					bytes: async () => {
+						readStarted.resolve();
+						await finishRead.promise;
+						return object.bytes();
+					},
+				};
+			});
+			const budget = new ByteBudget(1024);
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance), undefined, {
+				prefetchBudget: budget,
+			});
+			const prefetch = provisioner.prefetchWorkspace(instance, {
+				...startupOptions,
+				bucketHandle,
+				workspaceLoadMode: 'copy-only',
+				workspaceArchive: source === 'archive' ? key : undefined,
+			});
+			await readStarted.promise;
+			let cancelled = false;
+			const cancellation = prefetch.cancel().then(() => {
+				cancelled = true;
+			});
+			try {
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				expect(cancelled).toBe(false);
+				expect(budget.available).toBeLessThan(1024);
+				expect(calls.writeFiles).toEqual([]);
+			} finally {
+				finishRead.resolve();
+			}
+			await cancellation;
+			expect(budget.available).toBe(1024);
+			expect(calls.writeFiles).toEqual([]);
+			expect(calls.exec).toEqual([]);
+			expect(calls.setEnvVars).toEqual([]);
+		},
+	);
+
+	it('propagates an early prefetch read failure without listing again', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		const bucketHandle = new MemoryBucket();
+		const failedRead = new Error('workspace storage unavailable');
+		const list = vi.spyOn(bucketHandle, 'list').mockRejectedValue(failedRead);
+		const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+		const options: ProvisionOptions = {
+			...startupOptions,
+			bucketHandle,
+			workspaceLoadMode: 'copy-only',
+		};
+		const workspacePrefetch = provisioner.prefetchWorkspace(instance, options);
+		await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
+		await expect(
+			provisioner.provision({
+				...options,
+				existingSandbox: instance,
+				workspacePrefetch,
+				destroyOnFailure: true,
+			}),
+		).rejects.toMatchObject({
+			cause: failedRead,
+			message: expect.stringContaining('restoring the notebook workspace'),
+		});
+		expect(list).toHaveBeenCalledOnce();
+		expect(calls.startProcess).toEqual([]);
+		expect(calls.destroy).toBe(1);
+	});
+
 	it('injects mapped presentation configuration before launching an app', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		instance.resolveProcessPath = (path) => `/local${path}`;
@@ -1018,8 +1211,8 @@ describe('SandboxProvisioner', () => {
 				);
 				await vi.waitFor(() => expect(get).toHaveBeenCalledWith(key));
 				ready.reject(new Error('pod failed'));
-				await rejected;
 				read.resolve();
+				await rejected;
 				await new Promise((resolve) => setTimeout(resolve, 0));
 				expect(calls.writeFiles).toHaveLength(0);
 				expect(calls.exec).toHaveLength(0);

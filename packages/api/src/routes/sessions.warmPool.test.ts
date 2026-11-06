@@ -7,6 +7,7 @@ import {
 	WarmPoolService,
 	WarmPoolStore,
 	WarmPoolClaimExpiredError,
+	SubdomainExposure,
 	paths,
 } from '@marimo-hub/core';
 import type { SandboxProvider, Session } from '@marimo-hub/core';
@@ -83,6 +84,17 @@ async function setup(
 	return { bucket, services, project, notebook, fake, create, compute, warmPool, api, path };
 }
 
+async function setupWarmReplacement() {
+	const w = await setup();
+	await w.warmPool.sweep();
+	const oldId = (await w.warmPool.store.read()).pools[0].members[0].sandbox_id;
+	const cold = makeFakeSandbox();
+	vi.spyOn(w.compute, 'create').mockImplementation((id) =>
+		id === oldId ? w.fake.instance : cold.instance,
+	);
+	return { ...w, oldId, cold };
+}
+
 async function seedEditorClaim(
 	w: Awaited<ReturnType<typeof setup>>,
 	overrides: Partial<Session> = {},
@@ -112,7 +124,7 @@ describe('session warm sandbox assignment', () => {
 	it.each(['edit', 'app'] as const)('claims the %s profile from a warm pool', async (mode) => {
 		const w = await setup({}, undefined, mode);
 		await w.warmPool.sweep();
-		const claim = vi.spyOn(w.warmPool, 'claim');
+		const claim = vi.spyOn(w.warmPool, 'reserve');
 		const response = await expectOk<Session>(await w.api.request('POST', w.path, { mode }));
 		expect(claim).toHaveBeenCalledWith(
 			expect.objectContaining({ profile: mode, resources: { cpu: mode === 'edit' ? 2 : 1 } }),
@@ -180,7 +192,7 @@ describe('session warm sandbox assignment', () => {
 					metrics,
 				},
 			});
-			const claim = vi.spyOn(w.warmPool, 'claim');
+			const claim = vi.spyOn(w.warmPool, 'reserve');
 			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 			w.create.mockClear();
 			await expectError(await api.request('POST', w.path), 409, 'EDIT_SESSION_RETIRING');
@@ -248,7 +260,7 @@ describe('session warm sandbox assignment', () => {
 			const holder = await seedEditorClaim(w, {
 				sandbox_deadline_at: new Date(now + offset).toISOString(),
 			});
-			const claim = vi.spyOn(w.warmPool, 'claim');
+			const claim = vi.spyOn(w.warmPool, 'reserve');
 			const response = await w.api.request('POST', w.path);
 			if (offset > 0) {
 				await expectError(response, 409, 'EDIT_SESSION_RETIRING');
@@ -290,7 +302,7 @@ describe('session warm sandbox assignment', () => {
 			'ready',
 			replacement.session_id,
 		);
-		const claim = vi.spyOn(w.warmPool, 'claim');
+		const claim = vi.spyOn(w.warmPool, 'reserve');
 		w.create.mockClear();
 		await expectError(await w.api.request('POST', w.path), 409, 'EDIT_SESSION_RETIRING');
 		expect(claim).not.toHaveBeenCalled();
@@ -315,8 +327,8 @@ describe('session warm sandbox assignment', () => {
 			const warmId = (await w.warmPool.store.read()).pools[0].members[0].sandbox_id;
 			const writes = [...w.fake.calls.writeFiles];
 			let holder: Session | undefined;
-			const claim = w.warmPool.claim.bind(w.warmPool);
-			vi.spyOn(w.warmPool, 'claim').mockImplementationOnce(async (request) => {
+			const claim = w.warmPool.reserve.bind(w.warmPool);
+			vi.spyOn(w.warmPool, 'reserve').mockImplementationOnce(async (request) => {
 				const result = await claim(request);
 				holder = await seedEditorClaim(w);
 				return result;
@@ -360,7 +372,7 @@ describe('session warm sandbox assignment', () => {
 		},
 	);
 
-	it.each(['claim', 'holder'] as const)(
+	it.each(['reserve', 'holder'] as const)(
 		'does not take warm capacity when the stored %s is corrupt',
 		async (record) => {
 			const w = await setup();
@@ -368,12 +380,12 @@ describe('session warm sandbox assignment', () => {
 			const holder = await seedEditorClaim(w);
 			const before = await w.warmPool.store.read();
 			await w.bucket.put(
-				record === 'claim'
+				record === 'reserve'
 					? paths.editorClaim(w.project.id, w.notebook.id)
 					: paths.session(w.project.id, holder.session_id),
 				'{invalid JSON',
 			);
-			const claim = vi.spyOn(w.warmPool, 'claim');
+			const claim = vi.spyOn(w.warmPool, 'reserve');
 			w.create.mockClear();
 			const response = await w.api.request('POST', w.path);
 			expect(response.headers.get('Retry-After')).toBe('2');
@@ -404,7 +416,7 @@ describe('session warm sandbox assignment', () => {
 		vi.spyOn(w.api.deps.services.sessions, 'getSession').mockRejectedValueOnce(
 			new Error('storage unavailable'),
 		);
-		const claim = vi.spyOn(w.warmPool, 'claim');
+		const claim = vi.spyOn(w.warmPool, 'reserve');
 		w.create.mockClear();
 		expect((await w.api.request('POST', w.path)).status).toBe(500);
 		expect(claim).not.toHaveBeenCalled();
@@ -429,7 +441,7 @@ describe('session warm sandbox assignment', () => {
 				expect(record.members[0].sandbox_id).toBe(member.sandbox_id);
 			}
 			await w.warmPool.sweep();
-			const claim = vi.spyOn(w.warmPool, 'claim');
+			const claim = vi.spyOn(w.warmPool, 'reserve');
 			const reused = await expectOk<Session & { reused: boolean }>(
 				await w.api.request('POST', w.path, { mode }),
 			);
@@ -442,15 +454,10 @@ describe('session warm sandbox assignment', () => {
 	it.each(['edit', 'app'])(
 		'falls back to a fresh sandbox after a %s claim is reaped before session publication',
 		async (mode) => {
-			const w = await setup();
-			await w.warmPool.sweep();
-			const oldId = (await w.warmPool.store.read()).pools[0].members[0].sandbox_id;
-			const cold = makeFakeSandbox();
-			vi.spyOn(w.compute, 'create').mockImplementation((id) =>
-				id === oldId ? w.fake.instance : cold.instance,
-			);
-			const claim = w.warmPool.claim.bind(w.warmPool);
-			vi.spyOn(w.warmPool, 'claim').mockImplementationOnce(async (request) => {
+			const w = await setupWarmReplacement();
+			const { oldId, cold } = w;
+			const claim = w.warmPool.reserve.bind(w.warmPool);
+			vi.spyOn(w.warmPool, 'reserve').mockImplementationOnce(async (request) => {
 				const result = await claim(request);
 				await w.warmPool.store.mutate((record) => {
 					record.pools[0].members[0].operation_until = 0;
@@ -479,13 +486,8 @@ describe('session warm sandbox assignment', () => {
 	);
 
 	it('keeps delayed cleanup of an expired claim separate from its cold replacement', async () => {
-		const w = await setup();
-		await w.warmPool.sweep();
-		const oldId = (await w.warmPool.store.read()).pools[0].members[0].sandbox_id;
-		const cold = makeFakeSandbox();
-		vi.spyOn(w.compute, 'create').mockImplementation((id) =>
-			id === oldId ? w.fake.instance : cold.instance,
-		);
+		const w = await setupWarmReplacement();
+		const { oldId, cold } = w;
 		vi.spyOn(w.warmPool, 'handoff').mockRejectedValueOnce(new WarmPoolClaimExpiredError());
 		vi.spyOn(w.fake.instance, 'destroy').mockRejectedValueOnce(new Error('delete unavailable'));
 		const response = await expectOk<Session>(await w.api.request('POST', w.path, { mode: 'edit' }));
@@ -502,6 +504,169 @@ describe('session warm sandbox assignment', () => {
 			(await w.services.sessions.getSession(w.project.id, session.session_id)).sandbox_reclaimed_at,
 		).toBeUndefined();
 	});
+
+	it.each(['edit', 'app'])(
+		'replaces the published %s record when an overlapping probe fails',
+		async (mode) => {
+			const w = await setupWarmReplacement();
+			const { oldId, cold } = w;
+			const probe = Promise.withResolvers<void>();
+			vi.spyOn(w.warmPool, 'probe').mockImplementationOnce(() => probe.promise);
+			const published = vi.spyOn(w.api.deps.services.sessions, 'createSession');
+			const replace = vi.spyOn(w.api.deps.services.sessions, 'replaceStartingSandbox');
+			const request = w.api.request('POST', w.path, { mode });
+			await vi.waitFor(() => expect(published).toHaveBeenCalledOnce());
+			expect(w.fake.calls.writeFiles).toEqual([]);
+			probe.reject(new Error('unhealthy sandbox'));
+			const response = await expectOk<Session>(await request);
+			const session = await w.services.sessions.getSession(w.project.id, response.session_id);
+			expect(replace).toHaveBeenCalledWith(
+				w.project.id,
+				session.session_id,
+				oldId,
+				session.sandbox_id,
+			);
+			expect(session.sandbox_id).not.toBe(oldId);
+			expect(session.sandbox_reclaimed_at).toBeUndefined();
+			expect(cold.calls.startProcess).toHaveLength(1);
+			if (mode === 'app') {
+				const pool = await new AppPoolService(w.bucket, w.services.sessions).store.read(
+					w.project.id,
+					w.notebook.id,
+				);
+				expect(pool?.members[0].sandbox_id).toBe(session.sandbox_id);
+			}
+		},
+	);
+
+	it('overlaps exposure preparation with handoff and prepares again after expiry', async () => {
+		const w = await setupWarmReplacement();
+		const { oldId, cold } = w;
+		const handoff = Promise.withResolvers<void>();
+		vi.spyOn(w.warmPool, 'handoff').mockImplementationOnce(() => handoff.promise);
+		const prepare = vi.spyOn(SubdomainExposure.prototype, 'prepare');
+		const request = w.api.request('POST', w.path, { mode: 'edit' });
+		await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+		expect(w.fake.calls.writeFiles).toEqual([]);
+		expect(w.fake.calls.setEnvVars).toEqual([]);
+		handoff.reject(new WarmPoolClaimExpiredError());
+		const response = await expectOk<Session>(await request);
+		const session = await w.services.sessions.getSession(w.project.id, response.session_id);
+		expect(prepare).toHaveBeenCalledTimes(2);
+		expect(session.sandbox_id).not.toBe(oldId);
+		expect(prepare.mock.calls[1][0].sandboxId).toBe(session.sandbox_id);
+		expect(cold.calls.destroy).toBe(0);
+	});
+
+	it('waits for an in-flight handoff before abandoning a failed exposure preparation', async () => {
+		const w = await setup();
+		await w.warmPool.sweep();
+		const assigned = Promise.withResolvers<void>();
+		const handoff = w.warmPool.handoff.bind(w.warmPool);
+		vi.spyOn(w.warmPool, 'handoff').mockImplementationOnce(async (...args) => {
+			await assigned.promise;
+			return handoff(...args);
+		});
+		const prepare = vi
+			.spyOn(SubdomainExposure.prototype, 'prepare')
+			.mockRejectedValueOnce(new Error('exposure unavailable'));
+		const abandon = vi.spyOn(w.warmPool, 'abandon');
+		const request = w.api.request('POST', w.path, { mode: 'edit' });
+		try {
+			await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+			expect(abandon).not.toHaveBeenCalled();
+			expect(w.fake.calls.destroy).toBe(0);
+		} finally {
+			assigned.resolve();
+		}
+		await expectError(await request, 500);
+		expect(abandon).toHaveBeenCalledOnce();
+		expect(w.fake.calls.destroy).toBe(1);
+		expect(w.fake.calls.writeFiles).toEqual([]);
+		expect(w.fake.calls.setEnvVars).toEqual([]);
+		expect((await w.warmPool.store.read()).pools[0].members).toEqual([]);
+		expect(await w.services.sessions.listSessions(w.notebook.id)).toMatchObject([
+			{ status: 'failed', sandbox_reclaimed_at: expect.any(String) },
+		]);
+	});
+
+	it.each(['edit', 'app'] as const)(
+		'reclaims the replacement when cold boot fails after a warm %s probe failure',
+		async (mode) => {
+			const w = await setupWarmReplacement();
+			const { oldId, cold } = w;
+			cold.instance.ready = async () => {
+				throw new Error('cold boot failed');
+			};
+			vi.spyOn(w.warmPool, 'probe').mockRejectedValueOnce(new Error('warm probe failed'));
+			await expectError(await w.api.request('POST', w.path, { mode }), 503, 'SERVICE_UNAVAILABLE');
+			const [session] = await w.services.sessions.listSessions(w.notebook.id);
+			expect(session.sandbox_id).not.toBe(oldId);
+			expect(session).toMatchObject({ status: 'failed', sandbox_reclaimed_at: expect.any(String) });
+			expect(w.fake.calls.destroy).toBe(1);
+			expect(cold.calls.destroy).toBe(1);
+			expect(w.fake.calls.writeFiles).toEqual([]);
+			expect(cold.calls.writeFiles).toEqual([]);
+			expect(cold.calls.setEnvVars).toEqual([]);
+			expect((await w.warmPool.store.read()).pools[0].members).toEqual([]);
+		},
+	);
+
+	it.each([false, true])(
+		'does not boot a replacement after its record update fails (committed: %s)',
+		async (committed) => {
+			const w = await setup();
+			await w.warmPool.sweep();
+			const oldId = (await w.warmPool.store.read()).pools[0].members[0].sandbox_id;
+			const create = vi.spyOn(w.compute, 'create');
+			create.mockClear();
+			vi.spyOn(w.warmPool, 'probe').mockRejectedValueOnce(new Error('warm probe failed'));
+			const sessions = w.api.deps.services.sessions;
+			const replace = sessions.replaceStartingSandbox.bind(sessions);
+			vi.spyOn(sessions, 'replaceStartingSandbox').mockImplementationOnce(async (...args) => {
+				if (committed) await replace(...args);
+				throw new Error('replacement response lost');
+			});
+			await expectError(await w.api.request('POST', w.path, { mode: 'app' }), 500);
+			const [session] = await sessions.listSessions(w.notebook.id);
+			expect(session).toMatchObject({ status: 'failed', sandbox_reclaimed_at: expect.any(String) });
+			expect(session.sandbox_id === oldId).toBe(!committed);
+			expect(create.mock.calls.every(([id]) => id === oldId)).toBe(true);
+			expect(w.fake.calls.destroy).toBe(1);
+			expect(w.fake.calls.writeFiles).toEqual([]);
+			expect((await w.warmPool.store.read()).pools[0].members).toEqual([]);
+		},
+	);
+
+	it.each(['edit', 'app'] as const)(
+		'does not prefetch a mutable %s workspace before session publication',
+		async (mode) => {
+			const w = await setup();
+			await w.warmPool.sweep();
+			w.api.deps.sandbox.bucket.mountable = false;
+			const publishing = Promise.withResolvers<void>();
+			const publish = Promise.withResolvers<void>();
+			const sessions = w.api.deps.services.sessions;
+			const create = sessions.createSession.bind(sessions);
+			vi.spyOn(sessions, 'createSession').mockImplementationOnce(async (input) => {
+				publishing.resolve();
+				await publish.promise;
+				return create(input);
+			});
+			const prefix = paths.project(w.project.id).notebook(w.notebook.id).workspacePrefix;
+			const list = vi.spyOn(w.bucket, 'list');
+			const request = w.api.request('POST', w.path, { mode });
+			try {
+				await publishing.promise;
+				expect(list.mock.calls.filter(([options]) => options?.prefix === prefix)).toEqual([]);
+				expect(w.fake.calls.writeFiles).toEqual([]);
+			} finally {
+				publish.resolve();
+			}
+			await expectOk(await request);
+			expect(list.mock.calls.filter(([options]) => options?.prefix === prefix)).not.toEqual([]);
+		},
+	);
 
 	it('uses ordinary creation on a pool miss', async () => {
 		const w = await setup();
@@ -608,7 +773,7 @@ describe('session warm sandbox assignment', () => {
 			user_id: ACTOR,
 			mode: 'app',
 		});
-		const claim = vi.spyOn(w.warmPool, 'claim');
+		const claim = vi.spyOn(w.warmPool, 'reserve');
 		const api = createTestApi({
 			bucket: w.bucket,
 			compute: w.compute,
