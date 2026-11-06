@@ -455,7 +455,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	}
 
 	get reconnectReference(): string | undefined {
-		if (!this.sandbox || this.sandbox.status !== 'running') return;
+		if (this.sandbox?.status !== 'running') return;
 		return JSON.stringify({
 			kind: 'coreweave-v1',
 			hubId: this.id,
