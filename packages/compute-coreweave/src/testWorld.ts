@@ -107,9 +107,9 @@ export interface FakeSandbox {
 
 // `FileWrites` also admits a path→content record, but the adapter only ever
 // sends the array form; normalize so the fake satisfies the SDK type.
-function recordWrite(fake: FakeSandbox, writeImpl?: () => Promise<void>) {
+function recordWrite(fake: FakeSandbox, writeImpl?: (files: FileWrites) => Promise<void>) {
 	return async (files: FileWrites): Promise<void> => {
-		await writeImpl?.();
+		await writeImpl?.(files);
 		const list = Array.isArray(files)
 			? (files as readonly { path: string; content: unknown }[]).map((f) => ({ ...f }))
 			: Object.entries(files).map(([path, content]) => ({ path, content }));
@@ -123,7 +123,7 @@ export function makeWorld(opts?: {
 	/** Runs inside the boot `wait()`; use it to simulate a slow boot. */
 	waitImpl?: () => Promise<void>;
 	/** Runs before each `files.write`; throw to fail that write. */
-	writeImpl?: () => Promise<void>;
+	writeImpl?: (files: FileWrites) => Promise<void>;
 	/** State for started processes; omit to leave them running. */
 	proc?: FakeProcessState;
 }) {
