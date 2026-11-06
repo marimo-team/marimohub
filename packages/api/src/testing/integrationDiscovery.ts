@@ -171,7 +171,7 @@ export async function setupDiscovery() {
 	const call = (name: string, args: Record<string, unknown> = {}) =>
 		client.callTool({
 			name,
-			arguments: { project: project.id, integration_id: catalog.id, ...args },
+			arguments: { project: project.id, integration: catalog.id, ...args },
 		});
 	return {
 		bucket,

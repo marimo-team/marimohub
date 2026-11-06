@@ -240,6 +240,9 @@ class Processor:
                     self.last_report = time.monotonic()
 
 
+EXCLUDED_LOGGERS = ("opentelemetry", "urllib3", "requests")
+
+
 class Handler(logging.Handler):
     def __init__(self, level, processor):
         super().__init__(level)
@@ -247,7 +250,8 @@ class Handler(logging.Handler):
         self.seen = weakref.WeakSet()
 
     def filter(self, record):
-        return not record.name.startswith(("opentelemetry", "urllib3", "requests")) and super().filter(record)
+        name = record.name
+        return not any(name == prefix or name.startswith(prefix + ".") for prefix in EXCLUDED_LOGGERS) and super().filter(record)
 
     def emit(self, record):
         if record in self.seen:

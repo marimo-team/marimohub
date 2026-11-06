@@ -74,3 +74,44 @@ Tags grant no access. Tags are visible to anyone who can discover the project.
 Project membership and access policies determine which projects each user can see.
 To grant access to a team, add its [IdP group](./auth.md#idp-groups) as a project member.
 To change access for users who are not members, set the project's [default access](./auth.md#default-access-for-non-members).
+
+## Move a notebook to another project
+
+From the project page, open a notebook's menu and select **Move to project…**.
+You must be a project manager or admin in both projects.
+API token scopes and security labels also apply.
+
+Before you move a notebook:
+
+- Stop its sessions and wait for running jobs and sandbox cleanup to finish.
+- Complete or cancel uploads, and wait for preview preparation to finish.
+- If the source project has security labels, the destination project or the notebook must keep at least the same restrictions.
+
+The notebook keeps its ID, content, versions, thumbnails, proposals, jobs, run history, outputs, and prepared previews.
+[App links](./apps.md#authenticated-app-links) follow the notebook. Old notebook URLs return 404.
+Members of the destination project can then read the notebook's run logs and outputs.
+
+Other items stay in the source project or do not move:
+
+- Sessions, chat conversations, alerts, and existing audit events stay in the source project.
+- The destination project's integrations, credentials, and membership apply.
+- Filesystem caches are reclaimed.
+
+A Git-synced notebook keeps its sync configuration and history.
+It must pass the destination's [repository policy](./syncing.md#repository-project-policies).
+A pull source also needs checkout support and branch access in the destination.
+A push source needs a new sync token. After the move, [rotate the token](./syncing.md#rotating-the-sync-token) and update CI with the new sync URL and token.
+
+While the move runs, the notebook is unavailable in both projects, and opening it returns `409 MOVE_IN_PROGRESS`.
+The project list shows a **Moving** badge on the notebook.
+From the notebook's menu, managers can choose **Resume move** or **Cancel move**.
+
+- **Resume:** If a move stops before it finishes, choose **Resume move** or repeat the move request.
+  After the move publishes, the destination serves the notebook; resume to finish the cleanup.
+- **Cancel:** Until the move publishes, choose **Cancel move**, run
+  `mohub notebooks move cancel --pid <PROJECT_ID> --nid <NOTEBOOK_ID>`,
+  or call `DELETE /api/v1/projects/{pid}/notebooks/{nid}/move`.
+  While the copy runs, cancel returns `409`. It succeeds after the move stops or its 60-second lease expires.
+  Cancellation removes the destination copies and restores the notebook in the source project.
+
+The [API reference](./api.md) lists the move routes.

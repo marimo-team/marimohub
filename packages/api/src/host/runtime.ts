@@ -5,6 +5,7 @@ import {
 	SandboxProvisioner,
 	SessionId,
 	sessionOwner,
+	sessionPersistsEdits,
 	sessionWorkspaceDir,
 	sleep,
 	UnavailableError,
@@ -16,6 +17,7 @@ import type { HostRequest } from '@marimo-hub/core/host-bridge';
 import { sha256Hex } from '@marimo-hub/core/sha256';
 import { HostProblemError } from '@marimo-hub/host-protocol';
 import type { ApiDeps } from '../context';
+import { notebookBridgeFor } from '../mcp/bridge';
 import {
 	authorizeMcpSession,
 	SessionAuthorizationExpiredError,
@@ -227,9 +229,7 @@ export async function callRuntime(
 				notebookPath: sandbox.resolveProcessPath?.(path) ?? path,
 			},
 			activeSignal,
-			deps.sandbox.notebookBridge
-				? { sandboxId: session.sandbox_id!, launcher: deps.sandbox.notebookBridge.launcher }
-				: undefined,
+			notebookBridgeFor(deps, session.sandbox_id!),
 		);
 		if (request.path === '/save' && reply.status < 400) {
 			if (!(await deps.services.sessions.ownsEditorClaim(session)))
@@ -243,7 +243,7 @@ export async function callRuntime(
 				principal.id,
 				deps.sandbox.persistWorkspace,
 				deps.sandbox.workdir,
-				{ persistEdits: true },
+				{ persistEdits: sessionPersistsEdits(session) },
 			);
 			if (!saved)
 				throw HostProblemError.unsupportedOperation(

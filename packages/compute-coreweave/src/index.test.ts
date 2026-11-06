@@ -6,6 +6,7 @@ import {
 	CWSandboxNotFoundError,
 	CWSandboxUnavailableError,
 	CWSandboxConfigurationError,
+	CWSandboxTimeoutError,
 	CWSandboxValidationError,
 } from '@coreweave/cwsandbox';
 import type { SandboxInfo } from '@coreweave/cwsandbox';
@@ -21,6 +22,7 @@ import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing/res
 import { coreWeaveProfileResources, CoreWeaveCompute } from './index';
 import type { CoreWeaveClient, CoreWeaveConfig } from './index';
 import { contractLaunchProcess, fakeProcess, makeWorld, procResult } from './testWorld';
+import { instrumentCoreWeaveClient } from './tracing';
 
 /**
  * Tests for the CoreWeave compute adapter.
@@ -511,34 +513,130 @@ describe('CoreWeaveCompute', () => {
 			}
 		});
 
-		it('caps process-wide file uploads across concurrent sandbox instances', async () => {
+		it('caps concurrent uploads per sandbox while other sandboxes upload independently', async () => {
+			vi.useFakeTimers();
+			try {
+				const active = { a: 0, b: 0 };
+				const peak = { a: 0, b: 0 };
+				const started = { a: 0, b: 0 };
+				const world = makeWorld({
+					writeImpl: async (files) => {
+						const [file] = files as readonly { path: string }[];
+						const key = file.path.startsWith('/a/') ? 'a' : 'b';
+						started[key]++;
+						peak[key] = Math.max(peak[key], ++active[key]);
+						await new Promise<void>((resolve) => setTimeout(resolve, 100));
+						active[key]--;
+					},
+				});
+				const compute = makeCompute(world);
+				const writes = (['a', 'b'] as const).map(async (key) => {
+					const instance = compute.create(SANDBOX_ID, { reuse: false });
+					await instance.ready!();
+					await Promise.all(
+						Array.from({ length: 3 }, (_, batch) =>
+							instance.writeFiles(
+								Array.from({ length: 4 }, (_, i) => ({
+									path: `/${key}/${batch}/${i}`,
+									content: 'x',
+								})),
+							),
+						),
+					);
+				});
+				await vi.advanceTimersByTimeAsync(99);
+				expect(started).toEqual({ a: 8, b: 8 });
+				await vi.advanceTimersByTimeAsync(101);
+				await Promise.all(writes);
+				expect(started).toEqual({ a: 12, b: 12 });
+				expect(peak).toEqual({ a: 8, b: 8 });
+				expect(active).toEqual({ a: 0, b: 0 });
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('shares the upload cap across handles to the same sandbox', async () => {
 			vi.useFakeTimers();
 			try {
 				let active = 0;
 				let peak = 0;
-				let started = 0;
 				const world = makeWorld({
 					writeImpl: async () => {
-						started++;
 						peak = Math.max(peak, ++active);
 						await new Promise<void>((resolve) => setTimeout(resolve, 100));
 						active--;
 					},
 				});
 				const compute = makeCompute(world);
-				const files = Array.from({ length: 4 }, (_, i) => ({ path: `/w/${i}`, content: 'x' }));
-				const writes = Promise.all(
-					Array.from({ length: 5 }, () =>
-						compute.create(SANDBOX_ID, { reuse: false }).writeFiles(files),
+				const created = compute.create(SANDBOX_ID, { reuse: false });
+				await created.ready!();
+				const connected = compute.connectExisting(SANDBOX_ID);
+				await connected.ready!();
+				const writes = [created, connected].flatMap((instance, handle) =>
+					Array.from({ length: 3 }, (_, batch) =>
+						instance.writeFiles(
+							Array.from({ length: 4 }, (_, i) => ({
+								path: `/${handle}/${batch}/${i}`,
+								content: 'x',
+							})),
+						),
 					),
 				);
-				await vi.advanceTimersByTimeAsync(99);
-				expect(started).toBe(16);
-				await vi.advanceTimersByTimeAsync(101);
-				await writes;
-				expect(started).toBe(20);
-				expect(peak).toBe(16);
-				expect(active).toBe(0);
+				await vi.advanceTimersByTimeAsync(400);
+				await Promise.all(writes);
+				expect(world.registry.size).toBe(1);
+				expect(world.registry.get('cw-1')!.fake.batchWrites).toHaveLength(24);
+				expect(peak).toBe(8);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('forwards the write deadline through the instrumented client', async () => {
+			const timeouts: (number | undefined)[] = [];
+			const world = makeWorld({
+				writeImpl: async (_files, options) => {
+					timeouts.push(options?.timeoutMs);
+				},
+			});
+			const client = instrumentCoreWeaveClient(world.client, 'https://gateway.example');
+			await new CoreWeaveCompute(baseConfig, client)
+				.create(SANDBOX_ID, { reuse: false })
+				.writeFiles([{ path: '/w/x', content: 'x' }]);
+			expect(timeouts).toEqual([60_000]);
+		});
+
+		it('fails a hung write at its deadline and releases its upload slot', async () => {
+			vi.useFakeTimers();
+			try {
+				const timeouts: (number | undefined)[] = [];
+				const world = makeWorld({
+					writeImpl: async (files, options) => {
+						timeouts.push(options?.timeoutMs);
+						const [file] = files as readonly { path: string }[];
+						if (file.path.startsWith('/hung/')) await new Promise<never>(() => {});
+					},
+				});
+				const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+				await instance.ready!();
+				const hung = Array.from({ length: 8 }, (_, i) =>
+					expect(
+						instance.writeFiles([{ path: `/hung/${i}`, content: 'x' }]),
+					).rejects.toBeInstanceOf(CWSandboxTimeoutError),
+				);
+				let healthyFinished = false;
+				const healthy = instance.writeFiles([{ path: '/healthy', content: 'x' }]).then(() => {
+					healthyFinished = true;
+				});
+				await vi.advanceTimersByTimeAsync(59_999);
+				expect(healthyFinished).toBe(false);
+				await vi.advanceTimersByTimeAsync(1);
+				await Promise.all([...hung, healthy]);
+				expect(timeouts).toEqual(Array.from({ length: 9 }, () => 60_000));
+				expect(world.registry.get('cw-1')!.fake.batchWrites.flat()).toEqual([
+					{ path: '/healthy', content: 'x' },
+				]);
 			} finally {
 				vi.useRealTimers();
 			}
@@ -624,27 +722,23 @@ describe('CoreWeaveCompute', () => {
 					if (file.path === '/w/0') throw error;
 				},
 			});
-			const compute = makeCompute(world);
+			const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+			await instance.ready!();
 			const blockers = Promise.all(
-				Array.from({ length: 15 }, (_, i) =>
-					compute
-						.create(SANDBOX_ID, { reuse: false })
-						.writeFiles([{ path: `/blocker/${i}`, content: 'x' }]),
+				Array.from({ length: 7 }, (_, i) =>
+					instance.writeFiles([{ path: `/blocker/${i}`, content: 'x' }]),
 				),
 			);
 			try {
 				await vi.advanceTimersByTimeAsync(0);
-				expect(blockersStarted).toBe(15);
-				const instance = compute.create(SANDBOX_ID, { reuse: false });
+				expect(blockersStarted).toBe(7);
 				const rejected = expect(
 					instance.writeFiles(
 						Array.from({ length: 8 }, (_, i) => ({ path: `/w/${i}`, content: 'x' })),
 					),
 				).rejects.toBe(error);
-				const otherBatch = compute
-					.create(SANDBOX_ID, { reuse: false })
-					.writeFiles([{ path: '/other-batch', content: 'x' }]);
-				await vi.runAllTimersAsync();
+				const otherBatch = instance.writeFiles([{ path: '/other-batch', content: 'x' }]);
+				await vi.advanceTimersByTimeAsync(0);
 				await Promise.all([rejected, otherBatch]);
 				expect(attempted).toEqual(['/w/0', '/other-batch']);
 				await instance.writeFiles([{ path: '/w/next-batch', content: 'x' }]);
@@ -781,7 +875,7 @@ describe('CoreWeaveCompute', () => {
 			}
 		});
 
-		it('releases global upload slots while unavailable files wait for retry', async () => {
+		it('releases upload slots while unavailable files wait for retry', async () => {
 			vi.useFakeTimers();
 			try {
 				const seen = new Set<string>();
@@ -1939,16 +2033,24 @@ describe('CoreWeave warm sandbox reconnect', () => {
 			sandboxId: 'cw-1',
 			token: 'private-value',
 		}),
-	])('rejects invalid or mismatched references without network operations (%#)', (reference) => {
-		const world = makeWorld();
-		const get = vi.spyOn(world.client, 'fromId');
-		expect(() =>
-			makeCompute(world).connectExisting(SANDBOX_ID, { reconnectReference: reference }),
-		).toThrow(CWSandboxConfigurationError);
-		expect(get).not.toHaveBeenCalled();
-		expect(world.listCalls).toEqual([]);
-		expect(world.created).toEqual([]);
-	});
+	])(
+		'rejects invalid or mismatched references without network operations (%#)',
+		async (reference) => {
+			const world = makeWorld();
+			const get = vi.spyOn(world.client, 'fromId');
+			const sandbox = makeCompute(world).connectExisting(SANDBOX_ID, {
+				reconnectReference: reference,
+			});
+			await expect(sandbox.ready!()).rejects.toBeInstanceOf(CWSandboxConfigurationError);
+			await expect(sandbox.exec('true')).rejects.toBeInstanceOf(CWSandboxConfigurationError);
+			await expect(sandbox.destroy()).rejects.toBeInstanceOf(CWSandboxConfigurationError);
+			expect(sandbox.reconnectReference).toBeUndefined();
+			expect(get).not.toHaveBeenCalled();
+			expect(world.deleted).toEqual([]);
+			expect(world.listCalls).toEqual([]);
+			expect(world.created).toEqual([]);
+		},
+	);
 
 	it('accepts the reference and provider ID length limits', async () => {
 		const world = makeWorld();

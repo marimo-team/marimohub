@@ -3000,6 +3000,7 @@ describe('connection kinds (golden)', () => {
 				name,
 				kind: 's3',
 				version: 1,
+				sharedEnvironment: { title: 'S3', ambientEnvToggle: true },
 				output: renderFixture(
 					s3,
 					{

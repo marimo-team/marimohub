@@ -169,8 +169,9 @@ The [session provision event](../operations.md#session-provision-events) records
 | `provision_waitport_ms`             | marimo launch until its port answers      |
 
 Workspace reads overlap pod boot, and `files` includes readiness waits.
-Compare the `sandbox.files` and `sandbox.reachable` trace spans to distinguish
-boot time from transfer time. Do not sum their durations.
+The [phase timing fields](../operations.md#session-provision-events)
+`provision_files_waitready_ms` and `provision_files_non_waiting_ms` separate boot
+time from transfer time. Do not sum phase durations.
 
 The API process holds at most 64 MiB of read-ahead workspace bytes across all
 concurrent cold starts. A workspace archive or restore batch that does not fit

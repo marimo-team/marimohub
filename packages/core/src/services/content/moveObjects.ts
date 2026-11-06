@@ -2,6 +2,12 @@ import { z } from 'zod';
 import type { Bucket, BucketObject } from '../../ports/bucket';
 import { ConflictError, PreconditionFailedError } from '../../errors';
 import { toHex } from '../../internal/hex';
+import { forEachConcurrentUntilFailure } from '../../async';
+import { iterateBucketPages } from '../catalog/storage';
+
+// Each copy holds a whole object in memory, so keep a Worker's peak to a few objects.
+const MOVE_COPY_CONCURRENCY = 4;
+
 const digest = async (bytes: Uint8Array) =>
 	toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes))));
 
@@ -57,21 +63,23 @@ export async function copyMovePrefix(
 		transform?: (relative: string, bytes: Uint8Array) => Uint8Array;
 	} = {},
 ): Promise<void> {
-	let cursor: string | undefined;
-	do {
-		const page = await bucket.list({ prefix: source, cursor, limit: 100 });
-		for (const object of page.objects) {
-			const relative = object.key.slice(source.length);
-			if (options.include && !options.include(relative)) continue;
-			await copyMoveObject(
-				bucket,
-				object.key,
-				destination + relative,
-				options.transform ? (bytes) => options.transform!(relative, bytes) : undefined,
-			);
-		}
-		cursor = page.truncated ? page.cursor : undefined;
-	} while (cursor);
+	for await (const page of iterateBucketPages(bucket, { prefix: source, limit: 100 })) {
+		// A failed move must not keep writing the destination behind a retry or cancel.
+		await forEachConcurrentUntilFailure({
+			items: page.objects,
+			concurrency: MOVE_COPY_CONCURRENCY,
+			run: async (object) => {
+				const relative = object.key.slice(source.length);
+				if (options.include && !options.include(relative)) return;
+				await copyMoveObject(
+					bucket,
+					object.key,
+					destination + relative,
+					options.transform ? (bytes) => options.transform!(relative, bytes) : undefined,
+				);
+			},
+		});
+	}
 }
 
 export function moveJson(

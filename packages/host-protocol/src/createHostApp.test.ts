@@ -164,7 +164,10 @@ function fakePlatform() {
 		},
 		callRuntime,
 	};
-	const app = new Hono().route(PREFIX, createHostApp(platform, { realm: 'fake' }));
+	const runtimes = vi.spyOn(platform, 'runtimes');
+	const resolveNotebook = vi.spyOn(platform, 'resolveNotebook');
+	const onError = vi.fn();
+	const app = new Hono().route(PREFIX, createHostApp(platform, { realm: 'fake', onError }));
 	const request = (
 		method: string,
 		path: string,
@@ -173,6 +176,7 @@ function fakePlatform() {
 			key?: string;
 			as?: string | null;
 			headers?: Record<string, string>;
+			signal?: AbortSignal;
 		} = {},
 	) =>
 		app.request(`${PREFIX}${path}`, {
@@ -184,8 +188,41 @@ function fakePlatform() {
 				...options.headers,
 			},
 			...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+			signal: options.signal,
 		});
-	return { app, request, writers, running, callRuntime, ensureRuntime, reply };
+	return {
+		app,
+		platform,
+		request,
+		writers,
+		running,
+		callRuntime,
+		ensureRuntime,
+		reply,
+		runtimes,
+		resolveNotebook,
+		onError,
+	};
+}
+
+/** Reads an open stream without cancelling it, so the stream keeps polling. */
+function streamText(response: Response) {
+	const reader = response.body!.getReader();
+	const decoder = new TextDecoder();
+	let text = '';
+	return {
+		get text() {
+			return text;
+		},
+		async until(needle: string) {
+			while (!text.includes(needle)) {
+				const chunk = await reader.read();
+				if (chunk.done) throw new Error(`Stream ended before ${needle}`);
+				text += decoder.decode(chunk.value, { stream: true });
+			}
+		},
+		cancel: () => reader.cancel(),
+	};
 }
 
 async function readUntilReady(response: Response): Promise<HostEvent[]> {
@@ -289,6 +326,33 @@ describe('generic host app', () => {
 		// A principal who lost write access cannot replay a stored success.
 		writers.delete('alice');
 		expect((await request('POST', '/notebooks', { body, key: 'k1' })).status).toBe(403);
+	});
+
+	it('does not replay a stored run after the caller loses the operation', async () => {
+		const { request, writers, callRuntime } = fakePlatform();
+		const run = () =>
+			request('POST', '/notebooks/p1%2Fn1/runtime/runs', { body: { cells: ['c1'] }, key: 'run' });
+		expect((await run()).status).toBe(200);
+		const calls = callRuntime.mock.calls.length;
+		writers.delete('alice');
+		const replay = await run();
+		expect(replay.status).toBe(403);
+		expect(await replay.json()).toMatchObject({ type: 'tag:marimo.io,2026:host/forbidden' });
+		expect(callRuntime.mock.calls.length).toBe(calls);
+	});
+
+	it('reports host failures but not requests the client abandoned', async () => {
+		const { request, platform, onError } = fakePlatform();
+		const catalog = vi.spyOn(platform, 'catalog').mockRejectedValue(new Error('storage down'));
+		expect((await request('GET', '/events')).status).toBe(500);
+		expect(onError).toHaveBeenCalledTimes(1);
+		const controller = new AbortController();
+		catalog.mockImplementation(async () => {
+			controller.abort();
+			throw new Error('cancelled read');
+		});
+		expect((await request('GET', '/events', { signal: controller.signal })).status).toBe(500);
+		expect(onError).toHaveBeenCalledTimes(1);
 	});
 
 	it('forwards runtime operations with mapped identifiers and scoped retry keys', async () => {
@@ -444,5 +508,64 @@ describe('generic host app', () => {
 		);
 		expect(hidden.map((event) => event.event)).toEqual(['ready']);
 		expect(callRuntime.mock.calls.length).toBe(probes);
+	});
+
+	it('discovers runtimes when the catalog is recomputed, not on every tick', async () => {
+		const { request, runtimes } = fakePlatform();
+		await request('PUT', '/notebooks/p1%2Fn1/runtime', { body: {}, key: 'start' });
+		const stream = streamText(await request('GET', '/events?types=runtime'));
+		try {
+			await stream.until('event: ready\n');
+			await new Promise((resolve) => setTimeout(resolve, 1_300));
+			expect(runtimes).toHaveBeenCalledTimes(1);
+			// A catalog move recomputes the snapshot and its runtime discovery.
+			await request('PATCH', '/notebooks/p1%2Fn1', { body: { name: 'Moved' }, key: 'rename' });
+			await vi.waitFor(() => expect(runtimes).toHaveBeenCalledTimes(2), { timeout: 2_000 });
+		} finally {
+			await stream.cancel();
+		}
+	});
+
+	it('rechecks notebook access when the catalog moves rather than on every poll', async () => {
+		const { request, callRuntime, resolveNotebook } = fakePlatform();
+		const stream = streamText(await request('GET', '/notebooks/p1%2Fn1/events'));
+		try {
+			await stream.until('event: ready\n');
+			const resolved = resolveNotebook.mock.calls.length;
+			const polls = callRuntime.mock.calls.length;
+			await vi.waitFor(() => expect(callRuntime.mock.calls.length).toBeGreaterThan(polls + 2));
+			expect(resolveNotebook.mock.calls.length).toBe(resolved);
+			await request('PATCH', '/notebooks/p1%2Fn1', { body: { name: 'Renamed' }, key: 'rename' });
+			await stream.until('"name":"Renamed"');
+			expect(resolveNotebook.mock.calls.length).toBeGreaterThan(resolved);
+		} finally {
+			await stream.cancel();
+		}
+	});
+
+	it('removes the attachment when the notebook stream fails before its first poll', async () => {
+		const { request, platform } = fakePlatform();
+		vi.spyOn(platform, 'catalogVersion').mockRejectedValueOnce(new Error('Catalog unavailable'));
+		const failed = await request('GET', '/notebooks/p1%2Fn1/events');
+		expect(await failed.text()).toContain('event: effect/httpapi/stream/failure');
+		const events = await readUntilReady(await request('GET', '/events?types=attachment'));
+		expect(events.map((event) => event.event)).toEqual(['ready']);
+	});
+
+	it('tells catalog subscribers when a notebook stream client disconnects', async () => {
+		const { request } = fakePlatform();
+		const catalog = streamText(await request('GET', '/events?types=attachment'));
+		try {
+			await catalog.until('event: ready\n');
+			const notebook = streamText(await request('GET', '/notebooks/p1%2Fn1/events'));
+			await notebook.until('event: ready\n');
+			await catalog.until('event: attachment\n');
+			const attachment = /"attachment":\{"id":"([^"]+)"/.exec(catalog.text)![1];
+			await notebook.cancel();
+			await catalog.until('event: attachment.removed\n');
+			expect(catalog.text.split('event: attachment.removed\n')[1]).toContain(attachment);
+		} finally {
+			await catalog.cancel();
+		}
 	});
 });

@@ -1,5 +1,7 @@
 import {
+	BUCKET_SCAN_CONCURRENCY,
 	HostNotebookId,
+	mapWithConcurrency,
 	NotFoundError,
 	sessionMode,
 	workspaceSourceTypePolicy,
@@ -209,27 +211,25 @@ export async function catalogEvents(
 			policy: deps.policy,
 			resourceSecurity: deps.resourceSecurity,
 		});
-		for (const notebook of notebooks) {
-			signal?.throwIfAborted();
-			events.push({
-				event: 'notebook',
-				data: {
-					notebook: await notebookRecord(
-						deps,
-						principal,
-						project,
-						await listedNotebookSubject(deps, project, notebook),
-					),
-				},
-			});
-		}
+		const subjects = new Map<NotebookId, HostNotebookSubject>();
+		const records = await mapWithConcurrency(
+			notebooks,
+			BUCKET_SCAN_CONCURRENCY,
+			async (notebook) => {
+				signal?.throwIfAborted();
+				const subject = await listedNotebookSubject(deps, project, notebook);
+				subjects.set(notebook.id, subject);
+				return notebookRecord(deps, principal, project, subject);
+			},
+		);
+		for (const notebook of records) events.push({ event: 'notebook', data: { notebook } });
 		const sessions = await deps.services.sessions.listActiveByProject(project.id);
 		sessionsByProject.set(project.id, sessions);
 		for (const session of sessions) {
 			if (!session.ephemeral || sessionMode(session) !== 'edit' || session.user_id !== principal.id)
 				continue;
-			const notebook = notebooks.find((entry) => entry.id === session.notebook_id);
-			if (!notebook || !['starting', 'running'].includes(session.status)) continue;
+			const subject = subjects.get(session.notebook_id);
+			if (!subject || !['starting', 'running'].includes(session.status)) continue;
 			try {
 				await authorizeMcpSession(deps, principal, session);
 			} catch {
@@ -238,13 +238,7 @@ export async function catalogEvents(
 			events.push({
 				event: 'notebook',
 				data: {
-					notebook: await notebookRecord(
-						deps,
-						principal,
-						project,
-						await listedNotebookSubject(deps, project, notebook),
-						session,
-					),
+					notebook: await notebookRecord(deps, principal, project, subject, session),
 				},
 			});
 		}

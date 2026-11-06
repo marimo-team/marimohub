@@ -207,6 +207,51 @@ describe('JobRunService', () => {
 		},
 	);
 
+	it('rejects a strict wait when a claim cannot be drained or listed', async () => {
+		const blocked = Promise.withResolvers<void>();
+		const entered = Promise.withResolvers<void>();
+		vi.useFakeTimers();
+		const busy = runs.withJobMutation(job, () => {
+			entered.resolve();
+			return blocked.promise;
+		});
+		try {
+			await entered.promise;
+			const waiting = runs.waitForJobMutations(pid, nid, { strict: true });
+			const settled = expect(waiting).rejects.toThrow('Job is busy');
+			await vi.advanceTimersByTimeAsync(5000);
+			await settled;
+		} finally {
+			blocked.resolve();
+			await busy;
+			vi.useRealTimers();
+		}
+		const list = vi.spyOn(env.bucket, 'list').mockRejectedValueOnce(new Error('claim list failed'));
+		await expect(runs.waitForJobMutations(pid, nid, { strict: true })).rejects.toThrow(
+			'claim list failed',
+		);
+		list.mockRestore();
+	});
+
+	it('keeps a live operation claim when a move drops the source claims', async () => {
+		const other = await env.jobs.createJob(pid, nid, { name: 'other' }, ACTOR);
+		await runs.withJobMutation(other, async () => {});
+		const blocked = Promise.withResolvers<void>();
+		const entered = Promise.withResolvers<void>();
+		const busy = runs.withJobMutation(job, () => {
+			entered.resolve();
+			return blocked.promise;
+		});
+		await entered.promise;
+		await runs.finishMove(pid, nid);
+		expect(await env.bucket.head(paths.jobOperationClaim(pid, nid, job.id))).not.toBeNull();
+		expect(await env.bucket.head(paths.jobOperationClaim(pid, nid, other.id))).toBeNull();
+		blocked.resolve();
+		await busy;
+		await runs.finishMove(pid, nid);
+		expect(await env.bucket.head(paths.jobOperationClaim(pid, nid, job.id))).toBeNull();
+	});
+
 	it('renews the per-job mutation lease while work is still active', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime('2026-09-02T00:00:00.000Z');

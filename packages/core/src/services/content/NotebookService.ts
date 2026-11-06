@@ -1,4 +1,5 @@
 import { copyMoveObject, copyMovePrefix, moveJson } from './moveObjects';
+import { assertNotMoving, readNotebookMove } from './notebookMoveRecord';
 import { ResumableUploads } from './ResumableUploads';
 import type { WorkspaceLimits } from '../../integrations/remoteWorkspace';
 import { MetadataCache } from './metadataCache';
@@ -158,6 +159,11 @@ export interface CommitSessionResult {
 	capturedSession: boolean;
 }
 
+/**
+ * A notebook in transit is unreadable and unwritable in both projects until the move
+ * publishes. Every `meta.json` CAS callback repeats this check, because a writer that read
+ * before the fence would otherwise retry onto the fenced record and keep its stamp.
+ */
 export class NotebookService {
 	private readonly metaCache: MetadataCache<NotebookMeta>;
 
@@ -353,9 +359,7 @@ export class NotebookService {
 			options.consistency,
 		);
 		if (!meta) throw new NotFoundError(`Notebook ${notebookId} not found`);
-		// A notebook in transit is unreadable and unwritable in both projects until the move
-		// publishes; every writer reads or compare-and-swaps this record first.
-		if (meta.move_id) throw new NotFoundError(`Notebook ${notebookId} is being moved`);
+		assertNotMoving(meta, notebookId);
 		return meta;
 	}
 
@@ -752,6 +756,7 @@ export class NotebookService {
 				nb.meta,
 				(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
 				(current) => {
+					assertNotMoving(current, notebookId);
 					assertVersionMatch(current.updated_at, expectedVersion);
 					if (current.status === 'deleted') {
 						throw new NotFoundError(`Notebook ${notebookId} not found`);
@@ -887,6 +892,7 @@ export class NotebookService {
 			nb.meta,
 			(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
 			(current) => {
+				assertNotMoving(current, notebookId);
 				assertVersionMatch(current.updated_at, expectedVersion);
 				if (current.status === 'deleted') {
 					throw new NotFoundError(`Notebook ${notebookId} not found`);
@@ -1119,10 +1125,13 @@ export class NotebookService {
 				this.bucket,
 				nb.meta,
 				(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
-				(current) => ({
-					...current,
-					updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),
-				}),
+				(current) => {
+					assertNotMoving(current, notebookId);
+					return {
+						...current,
+						updated_at: nextIsoTimestamp(current.updated_at, new Date().toISOString()),
+					};
+				},
 				{ notFound: () => new NotFoundError(`Notebook ${notebookId} not found`) },
 			);
 			await this.catalog.updateNotebookEntry(
@@ -1219,6 +1228,7 @@ export class NotebookService {
 			nb.meta,
 			(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
 			(current) => {
+				assertNotMoving(current, notebookId);
 				assertVersionMatch(current.updated_at, expectedVersion);
 				if (current.status === 'deleted') return null;
 				return {
@@ -1534,6 +1544,10 @@ export class NotebookService {
 		await this.bucket.delete(paths.appClaim(projectId, notebookId));
 		await this.bucket.delete(paths.editorClaim(projectId, notebookId));
 		await this.bucket.delete(paths.versionPruneCutoff(projectId, notebookId));
+		const move = await readNotebookMove(this.bucket, paths.notebookMove(notebookId));
+		// Only a completed record is the notebook's own; a pending move is another writer's.
+		if (move?.move.phase === 'complete' && move.move.destination === projectId)
+			await this.bucket.delete(paths.notebookMove(notebookId));
 		await deleteByPrefix(this.bucket, paths.jobOperationClaimsForNotebook(projectId, notebookId));
 		await deleteByPrefix(this.bucket, paths.jobDeletionClaimsForNotebook(projectId, notebookId));
 

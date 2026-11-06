@@ -1,8 +1,6 @@
-import type { ProjectId } from '../ids';
 import type { SearchScope } from './contracts';
 
 export const searchPaths = {
-	refresh: (pid: ProjectId) => `_system/search/refresh/${pid}.json`,
 	projects: '_system/search/projects/',
 	cursor: '_system/search/cursor.json',
 	lock: '_system/search/lock.json',

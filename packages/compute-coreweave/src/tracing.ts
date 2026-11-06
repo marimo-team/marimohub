@@ -137,7 +137,8 @@ function instrumentSandbox(sandbox: CoreWeaveSandbox, endpoint: Attributes): Cor
 		},
 		files: {
 			readText: (path) => opRequest(op('readFile'), attributes, () => sandbox.files.readText(path)),
-			write: (files) => opRequest(op('writeFiles'), attributes, () => sandbox.files.write(files)),
+			write: (files, options) =>
+				opRequest(op('writeFiles'), attributes, () => sandbox.files.write(files, options)),
 		},
 		delete: () => opRequest(op('delete'), attributes, () => sandbox.delete()),
 	};

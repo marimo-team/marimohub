@@ -1,11 +1,10 @@
-import { SearchIndexer } from '../../search/SearchIndexer';
 import { buildNotebookEntry } from './notebookMeta';
 import { jobIndexEntry } from '../jobs/JobsService';
-import { UserId as UserIdValue } from '../../ids';
+import { SYSTEM_ACTOR, UserId as UserIdValue } from '../../ids';
 import { ResumableUploads } from './ResumableUploads';
 import { AppPoolStore } from '../runtime/AppPoolStore';
 import { EventService } from '../catalog/EventService';
-import { z } from 'zod';
+import { nextIsoTimestamp } from '../../utcDate';
 import type { Bucket } from '../../ports/bucket';
 import type { NotebookId, ProjectId, UserId } from '../../ids';
 import { ConflictError, NotFoundError, assertVersionMatch } from '../../errors';
@@ -13,12 +12,20 @@ import { ulid } from 'ulidx';
 import { paths } from '../../paths';
 import {
 	NotebookMetaSchema,
+	NotebookProposalSchema,
 	ProjectSchema,
 	SourceSchema,
 	FsSnapshotSchema,
 	readStored,
 } from '../../schema';
-import type { NotebookMeta, Project, Source, FsSnapshot } from '../../schema';
+import type {
+	NotebookMeta,
+	Project,
+	Source,
+	FsSnapshot,
+	Snapshot,
+	SnapshotNotebookEntry,
+} from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import { deleteByPrefix, listAllObjects } from '../catalog/storage';
 import { withCasRetry } from '../catalog/cas';
@@ -150,9 +157,8 @@ export class NotebookMoveService {
 				const record = await this.bucket.get(object.key);
 				if (record)
 					repositories.push(
-						z
-							.object({ source: z.object({ repo: z.string(), provider: z.string().nullable() }) })
-							.parse(await record.json()).source,
+						(await readStored(NotebookProposalSchema.pick({ source: true }), record, object.key))
+							.source,
 					);
 			}
 		}
@@ -200,6 +206,42 @@ export class NotebookMoveService {
 		});
 	}
 
+	/**
+	 * Sets (`destination`) or clears (`null`) the source catalog entry's `moving` stamp for this
+	 * move. Lists read it from the snapshot they already hold; only move steps pay for it.
+	 */
+	private async stampCatalog(
+		pid: ProjectId,
+		nid: NotebookId,
+		moveId: string,
+		destination: ProjectId | null,
+		actor: UserId,
+	): Promise<void> {
+		const settled = (entry: SnapshotNotebookEntry | undefined) =>
+			!entry || (destination ? entry.moving?.move_id === moveId : entry.moving?.move_id !== moveId);
+		const entryIn = (snapshot: Snapshot) =>
+			snapshot.projects
+				.find((project) => project.id === pid)
+				?.notebooks.find((entry) => entry.id === nid);
+		if (settled(entryIn(await this.catalog.getCurrentSnapshot()))) return;
+		await this.catalog.updateNotebookEntry(
+			destination ? 'notebook.move.fence' : 'notebook.move.release',
+			actor,
+			pid,
+			nid,
+			(entry) =>
+				settled(entry)
+					? undefined
+					: {
+							moving: destination
+								? { move_id: moveId, destination_project_id: destination }
+								: undefined,
+						},
+			undefined,
+			{ project_id: pid, notebook_id: nid, move_id: moveId },
+		);
+	}
+
 	private async unfence(pid: ProjectId, moveId: string, nid: NotebookId): Promise<void> {
 		await withCasRetry(this.bucket, async (cas) => {
 			const stored = await this.readMeta(pid, nid);
@@ -207,23 +249,6 @@ export class NotebookMoveService {
 			const { move_id: _moving, ...meta } = stored.meta;
 			await cas.put(stored.key, JSON.stringify(meta), { onlyIfEtagMatches: stored.etag });
 		});
-	}
-
-	private async finishCompleted(move: NotebookMove): Promise<NotebookMeta> {
-		if (!move.search_refreshed) {
-			await SearchIndexer.requestRefresh(this.bucket, move.source, move.id);
-			await SearchIndexer.requestRefresh(this.bucket, move.destination, move.id);
-			await withCasRetry(this.bucket, async (cas) => {
-				const stored = await readNotebookMove(this.bucket, paths.notebookMove(move.notebook_id));
-				if (!stored || stored.move.id !== move.id || stored.move.search_refreshed) return;
-				await cas.put(
-					paths.notebookMove(move.notebook_id),
-					JSON.stringify({ ...stored.move, search_refreshed: true }),
-					{ onlyIfEtagMatches: stored.etag },
-				);
-			});
-		}
-		return movedNotebookMeta(move);
 	}
 
 	/**
@@ -321,7 +346,7 @@ export class NotebookMoveService {
 		const previous = replay ? existing : pending;
 		const context = await this.context(source, destination, nid, previous);
 		await input.authorize(context);
-		if (replay) return this.finishCompleted(existing);
+		if (replay) return movedNotebookMeta(existing);
 		assertVersionMatch(context.notebook.updated_at, input.expectedVersion);
 
 		const executor = crypto.randomUUID();
@@ -332,12 +357,11 @@ export class NotebookMoveService {
 			source,
 			destination,
 			actor: input.actor,
-			updated_at: new Date().toISOString(),
+			updated_at: nextIsoTimestamp(context.notebook.updated_at, new Date().toISOString()),
 			phase: 'preparing',
 			lease: null,
 			runtimes: [],
 			snapshots: [],
-			search_refreshed: false,
 			meta: context.notebook,
 			source_record: context.source,
 		}));
@@ -404,6 +428,7 @@ export class NotebookMoveService {
 							throw new ConflictError('Wait for preview preparation or cleanup before moving');
 					}
 					await uploads.assertReadyForMove();
+					await this.owners.previews.store.assertMoveCapacity(source, destination, nid);
 					const currentSource = await this.bucket.get(paths.project(source).notebook(nid).source);
 					if (
 						!currentSource ||
@@ -414,9 +439,19 @@ export class NotebookMoveService {
 					await input.authorize(await this.context(source, destination, nid, move));
 					for (const id of ids)
 						await this.fence(source, move, id, id === nid ? move.meta : undefined);
+					await this.stampCatalog(source, nid, move.id, destination, input.actor);
 					// Writers admitted before the fence may still hold the workspace mutation
-					// lease; taking it once lets them finish before anything is copied.
+					// lease or a job operation claim; taking each once lets them finish before
+					// anything is copied. A session admitted in the same window is refused here.
 					await this.owners.notebooks.workspace.withMutation(source, nid, {}, async () => {});
+					for (const id of ids)
+						await this.owners.jobRuns.waitForJobMutations(source, id, { strict: true });
+					await this.owners.sessions.assertReadyForMove(source, ids);
+					// Runtimes were captured before the fence. A preparation reserves its runtime
+					// before it reads the parent, so one that can still write is visible here.
+					const reserved = await this.owners.previews.runtimesForMove(source, nid);
+					if (reserved.some((id) => !ids.has(id)))
+						throw new ConflictError('Wait for preview preparation or cleanup before moving');
 					move = await save({ phase: 'copying' });
 				}
 			} catch (error) {
@@ -455,6 +490,7 @@ export class NotebookMoveService {
 						source,
 						destination,
 						nid,
+						move.runtimes,
 						move.updated_at,
 						move.id,
 					);
@@ -463,6 +499,7 @@ export class NotebookMoveService {
 					await this.assertNoActiveRuns(source, new Set([nid, ...move.runtimes]));
 					// A cancelled or taken-over move must not reach the catalog.
 					await save({});
+					await this.assertSourceMetaUnchanged(move);
 					await this.publish(move, input.actor);
 					move = await save({ phase: 'published' });
 				}
@@ -472,6 +509,7 @@ export class NotebookMoveService {
 				for (const notebookId of [nid, ...move.runtimes]) {
 					await pools.finishNotebookMove(source, destination, notebookId);
 					await this.owners.sessions.finishNotebookMove(source, notebookId);
+					await this.owners.jobRuns.finishMove(source, notebookId);
 				}
 				await new EventService(this.bucket).append(
 					{
@@ -495,7 +533,7 @@ export class NotebookMoveService {
 				await this.owners.proposals.finishMove(source, nid);
 				for (const snapshot of move.snapshots) await input.reclaimSnapshot!(snapshot);
 				move = await save({ phase: 'complete', lease: null });
-				return await this.finishCompleted(move);
+				return movedNotebookMeta(move);
 			} catch (error) {
 				// Drop the lease so a retry can resume at once instead of waiting for expiry.
 				await save({ lease: null }).catch(() => {});
@@ -507,16 +545,36 @@ export class NotebookMoveService {
 	/**
 	 * Abandons a move that has not been published: destination copies are removed and the
 	 * source notebook becomes readable again. A running executor must finish or expire first.
+	 * `authorize` sees the source project and the source notebook metadata (fenced or not)
+	 * before anything is written.
 	 */
-	async cancel(input: { source: ProjectId; notebookId: NotebookId }): Promise<void> {
+	async cancel(
+		input: { source: ProjectId; notebookId: NotebookId },
+		authorize: (context: { sourceProject: Project; notebook: NotebookMeta }) => Promise<void>,
+	): Promise<void> {
 		const key = paths.notebookMove(input.notebookId);
 		const existing = (await readNotebookMove(this.bucket, key))?.move;
-		if (!existing || existing.phase === 'complete' || existing.source !== input.source) {
-			// A fence without a record cannot belong to a live move; clearing it is the repair.
-			const stored = await this.readMeta(input.source, input.notebookId);
-			if (!stored?.meta.move_id || stored.meta.move_id === existing?.id)
-				throw new NotFoundError('No pending move for this notebook');
-			await this.unfence(input.source, stored.meta.move_id, input.notebookId);
+		const pending =
+			existing && existing.phase !== 'complete' && existing.source === input.source
+				? existing
+				: null;
+		const stored = await this.readMeta(input.source, input.notebookId);
+		// A fence without a record cannot belong to a live move; clearing it is the repair.
+		const orphanedFence =
+			!pending && stored?.meta.move_id && stored.meta.move_id !== existing?.id
+				? stored.meta.move_id
+				: null;
+		if (!pending && !orphanedFence) throw new NotFoundError('No pending move for this notebook');
+		const projectObject = await this.bucket.get(paths.project(input.source).meta);
+		if (!projectObject) throw new NotFoundError('Project not found');
+		await authorize({
+			sourceProject: await readStored(ProjectSchema, projectObject, projectObject.key),
+			// Source metadata is removed only after publication, which cancel refuses anyway.
+			notebook: stored?.meta ?? pending!.meta,
+		});
+		if (orphanedFence) {
+			await this.unfence(input.source, orphanedFence, input.notebookId);
+			await this.stampCatalog(input.source, input.notebookId, orphanedFence, null, SYSTEM_ACTOR);
 			return;
 		}
 		const executor = crypto.randomUUID();
@@ -567,7 +625,31 @@ export class NotebookMoveService {
 	private async release(move: NotebookMove): Promise<void> {
 		for (const id of [move.notebook_id, ...move.runtimes])
 			await this.unfence(move.source, move.id, id);
+		// Cleared before the record goes, so a crash leaves a stamp only beside a cancellable record.
+		await this.stampCatalog(move.source, move.notebook_id, move.id, null, move.actor);
 		await this.bucket.delete([paths.notebookMove(move.notebook_id)]);
+	}
+
+	/**
+	 * Proves no writer slipped past the fence before the captured copy is published. `source.json`
+	 * carries no fence, so a writer that checked the metadata just before fencing can still land.
+	 */
+	private async assertSourceMetaUnchanged(move: NotebookMove): Promise<void> {
+		const stored = await this.readMeta(move.source, move.notebook_id);
+		const { move_id: fencedBy, ...current } = stored?.meta ?? {};
+		const sourceObject = await this.bucket.get(
+			paths.project(move.source).notebook(move.notebook_id).source,
+		);
+		const sourceRecord = sourceObject
+			? await readStored(SourceSchema, sourceObject, sourceObject.key)
+			: null;
+		if (
+			!stored ||
+			fencedBy !== move.id ||
+			JSON.stringify(current) !== JSON.stringify(move.meta) ||
+			JSON.stringify(sourceRecord) !== JSON.stringify(move.source_record)
+		)
+			throw new ConflictError('Notebook changed. Start a new move.');
 	}
 
 	private async assertNoActiveRuns(source: ProjectId, ids: ReadonlySet<NotebookId>) {
@@ -609,6 +691,7 @@ export class NotebookMoveService {
 					),
 					jobs: movedJobs,
 					security_labels_pending: undefined,
+					moving: undefined,
 					move_id: id,
 				};
 				return {
@@ -623,6 +706,7 @@ export class NotebookMoveService {
 								: [...project.notebooks, movedEntry],
 							notebook_count: project.notebook_count + (leaving ? -1 : 1),
 							updated_at: move.updated_at,
+							search_refresh: id,
 						};
 					}),
 				};

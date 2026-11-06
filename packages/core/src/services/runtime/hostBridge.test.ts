@@ -74,7 +74,7 @@ with tempfile.TemporaryDirectory() as directory:
     request.write_text(json.dumps({"method": "GET", "path": "/events", "notebookPath": "/workspace/notebook.py"}))
     source = shlex.split(sys.argv[1])[2].replace(
         json.dumps("/tmp/host-bridge-test-request.json"), json.dumps(str(request)))
-    prefix, marker, body = source.partition("\ntry:\n    for args in commands(5, bridge_launcher):")
+    prefix, marker, body = source.partition("\ntry:\n    for args, runtime in discover_runtimes(")
     assert marker
     exec(prefix)
     options = json.loads(sys.argv[2])

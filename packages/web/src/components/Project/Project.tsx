@@ -2,11 +2,13 @@ import { MoveNotebookDialog } from '@/components/Notebook/MoveNotebookDialog';
 import { TagFieldValue } from '@/lib/tagFieldValue';
 import { isPathTag } from '@marimo-hub/core/tag-paths';
 import { hasNotebookPreviews } from '@/api/previews';
+import { cachedProjectName, useCancelNotebookMove, useMoveNotebook } from '@/api/notebookMoves';
 import { useProjectThumbnails } from '@/api/thumbnails';
 import { Thumbnail } from '@/components/Notebook/Thumbnail';
 import { ThumbnailDialog } from '@/components/Notebook/ThumbnailDialog';
 import { lazy, Suspense, useMemo, useState, useTransition } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { FileTrigger } from 'react-aria-components';
 import { toast } from 'sonner';
 import { z } from 'zod';
@@ -23,6 +25,7 @@ import {
 	FileDown,
 	FileText,
 	FolderArchive,
+	FolderInput,
 	FolderSearch,
 	GitBranch,
 	History,
@@ -177,6 +180,7 @@ const NEW_NOTEBOOK_CODE = (name: string) => {
 function useProjectContent() {
 	const { pid } = useParams<{ pid: string }>();
 	const navigate = useNavigate();
+	const queryClient = useQueryClient();
 	const {
 		filters,
 		setFilters: updateFilters,
@@ -231,6 +235,8 @@ function useProjectContent() {
 	const createNotebook = useCreateNotebook(pid!);
 	const duplicateNotebook = useDuplicateNotebook(pid!);
 	const deleteNotebook = useDeleteNotebook(pid!);
+	const resumeMove = useMoveNotebook(pid!);
+	const cancelMove = useCancelNotebookMove(pid!);
 	const downloadNotebookFile = useDownloadNotebookFile(pid!);
 	const downloadOutputsHtml = useDownloadOutputsHtml(pid!);
 	const downloadWorkspace = useDownloadWorkspace(pid!);
@@ -417,6 +423,23 @@ function useProjectContent() {
 		);
 	};
 
+	const handleResumeMove = (nb: NotebookEntry, destination: string) => {
+		resumeMove.mutate(
+			{ notebookId: nb.id, destination, updatedAt: nb.updated_at },
+			{
+				onSuccess: () => toast.success(`Moved "${nb.title}"`),
+				onError: (error) => toast.error(error.message),
+			},
+		);
+	};
+
+	const handleCancelMove = (nb: NotebookEntry, destination: string) => {
+		cancelMove.mutate(
+			{ notebookId: nb.id, destination },
+			{ onSuccess: () => toast.success(`Cancelled the move of "${nb.title}"`) },
+		);
+	};
+
 	const handleDownloadFile = (nb: NotebookEntry) => {
 		downloadNotebookFile.mutate({ notebookId: nb.id, title: nb.title });
 	};
@@ -498,6 +521,10 @@ function useProjectContent() {
 		if (key === 'thumbnail') thumbnailModal.open(nb);
 		else if (key === 'rename') renameModal.open(nb);
 		else if (key === 'move') moveModal.open(nb);
+		else if (key === 'resume-move' && nb.moving)
+			handleResumeMove(nb, nb.moving.destination_project_id);
+		else if (key === 'cancel-move' && nb.moving)
+			handleCancelMove(nb, nb.moving.destination_project_id);
 		else if (key === 'duplicate') handleDuplicate(nb);
 		else if (key === 'stop-kernel' && stoppableEdit)
 			stopModal.open({ notebook: nb, session: stoppableEdit });
@@ -570,9 +597,26 @@ function useProjectContent() {
 					? [{ id: 'thumbnail', label: 'Edit thumbnail', icon: <FileText className="size-4" /> }]
 					: []),
 				{ id: 'duplicate', label: 'Duplicate', icon: <Copy className="size-4" /> },
-				...(canManage
-					? [{ id: 'move', label: 'Move to project…', icon: <FolderArchive className="size-4" /> }]
-					: []),
+				...(!canManage
+					? []
+					: nb.moving
+						? [
+								{
+									id: 'resume-move',
+									label: 'Resume move',
+									icon: <FolderInput className="size-4" />,
+									// A second resume while the first holds the lease fails with a misleading 409.
+									isDisabled: resumeMove.isPending && resumeMove.variables?.notebookId === nb.id,
+								},
+								{ id: 'cancel-move', label: 'Cancel move', icon: <X className="size-4" /> },
+							]
+						: [
+								{
+									id: 'move',
+									label: 'Move to project…',
+									icon: <FolderInput className="size-4" />,
+								},
+							]),
 			],
 			runtimeActions,
 			[
@@ -767,6 +811,10 @@ function useProjectContent() {
 							user: users?.[nb.author],
 							usersLoading,
 							to: openNotebooksAsApps ? notebookAppUrl(pid!, nb.id) : notebookPath,
+							movingTo: nb.moving
+								? (cachedProjectName(queryClient, nb.moving.destination_project_id) ??
+									nb.moving.destination_project_id)
+								: undefined,
 							leading:
 								nb.status === 'deleted' ? undefined : nb.source_type === 'git' ? (
 									<GitSourcePopover
@@ -844,7 +892,7 @@ function useProjectContent() {
 									/>
 								) : (
 									<>
-										{openNotebooksAsApps && canEdit && (
+										{openNotebooksAsApps && canEdit && !nb.moving && (
 											<LinkButton
 												to={notebookPath}
 												state={{ title: nb.title }}

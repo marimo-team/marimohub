@@ -126,6 +126,7 @@ Pooling is optional on `SandboxProvider`. Built-in compute wiring advertises it 
 External compute libraries can provide the same contract without changes to the pool service:
 
 - Implement `connectExisting(id, options)`. Readiness and execution must fail if the sandbox is missing or stopped; reconnect must never create a replacement.
+- Optionally expose `reconnectReference` on ready instances: an opaque, credential-free locator that stays stable for the sandbox's lifetime. `connectExisting(id, { reconnectReference })` must resolve exactly that sandbox or fail, never discover or create one. See [reconnect references](./warm_pools.md#reconnect-references).
 - Preserve sandbox IDs across provider instances. `create(id).destroy()` must reclaim an existing sandbox without booting a new one and tolerate an absent sandbox.
 - Provide `warmPool.maxLifetimeMs`: a guaranteed lifetime measured from before creation, or `null` for no provider lifetime cap.
 - Include serializable creation inputs that do not come from environment variables in `warmPool.configuration`. Loaded templates and external deployment revisions belong here.

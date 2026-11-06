@@ -17,6 +17,7 @@ import { NotebookPage } from '@/components/NotebookPage/NotebookPage';
 import { NotebookFrame } from '@/components/NotebookPage/NotebookFrame';
 import { ShareUrlMenu } from '@/components/NotebookPage/ShareMenu';
 import { Button } from '@/components/ui';
+import { Callout } from '@/components/ui/Callout';
 import { useTheme } from '@/context/ThemeContext';
 import { useNotebookSession } from '@/hooks/useNotebookSession';
 import { useNotebookFrameLocation } from '@/hooks/useNotebookFrameLocation';
@@ -33,7 +34,10 @@ export function AppEntryPage({
 	const pid = target?.projectId ?? params.pid ?? '';
 	const nid = target?.notebookId ?? params.nid ?? '';
 	const location = useLocation();
-	const query = useAppQuery(pid, nid);
+	// A moving notebook reopens without a reload once a manager cancels the move.
+	const query = useAppQuery(pid, nid, {
+		refetchIntervalMs: (error) => (isMoveInProgress(error) ? 30_000 : undefined),
+	});
 	const user = useUserQuery();
 	const prefetchProject = !!user.data && !user.data.app_only;
 	const queryClient = useQueryClient();
@@ -41,6 +45,7 @@ export function AppEntryPage({
 		if (prefetchProject) void queryClient.prefetchQuery(projectQueryOptions(pid));
 		void queryClient.prefetchQuery(capabilitiesQueryOptions());
 	}, [queryClient, pid, prefetchProject]);
+	if (isMoveInProgress(query.error)) return <NotebookMovingNotice pid={pid} />;
 	if (query.isError)
 		return (
 			<NotebookFallback
@@ -64,6 +69,27 @@ export function AppEntryPage({
 			title={query.data.title}
 			canRun={query.data.can.run}
 		/>
+	);
+}
+
+function isMoveInProgress(error: Error | null): boolean {
+	return error instanceof ApiRequestError && error.code === 'MOVE_IN_PROGRESS';
+}
+
+function NotebookMovingNotice({ pid }: { pid: string }) {
+	return (
+		<div className="flex flex-1 items-center justify-center p-6">
+			<Callout variant="info" className="flex max-w-md flex-col gap-2">
+				<p className="font-medium">This notebook is being moved</p>
+				<p className="text-muted-foreground">
+					It opens in its new project once the move finishes, or here if a project manager cancels
+					it.
+				</p>
+				<Link to={`/projects/${pid}`} className="text-primary underline-offset-4 hover:underline">
+					Back to project
+				</Link>
+			</Callout>
+		</div>
 	);
 }
 

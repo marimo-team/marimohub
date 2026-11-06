@@ -26,6 +26,31 @@ CoreWeave and Kubernetes are the initial built-ins. Shared lifecycle code has no
 Jobs, diagnostics, non-default images, home mounts, and snapshot restores bypass pooling. Empty or unhealthy pools fall back to cold creation.
 For [app pools](./app_pools.md), `bindWarmSandbox()` changes the unstarted reservation under its existing operation token.
 
+## Reconnect references
+
+`SandboxInstance.reconnectReference` is an optional, credential-free provider locator.
+Core treats it as an opaque string of 1–4096 UTF-16 code units.
+After readiness and a successful command probe, `WarmPoolService` stores it on the `ready` member through CAS.
+Health checks backfill it for members without one.
+References come only from the stored member, never from a session request.
+They are server-owned mappings, not authorization tokens.
+
+Claims and health checks pass the stored reference to `connectExisting(id, { reconnectReference })`.
+That call resolves exactly the referenced sandbox or fails. It never discovers or creates a sandbox.
+A failed lookup or probe retires the member. A claim then falls back to cold creation, and a health check schedules a replacement.
+Members without a reference use the adapter's discovery path.
+
+Upgrades and rollbacks:
+
+- The reference does not change the configuration fingerprint, so adding it needs no pool reset.
+- During a rolling upgrade, older writers can drop the field. Claims then use discovery until a health check restores it.
+- If the adapter rejects a reference kind, each member with that kind retires once. The result is one wave of cold starts within a health-check interval, with no leaked sandboxes.
+- A new reference kind must keep accepting older kinds, so that upgrades and rollbacks do not churn the pool.
+
+After a claim, the service drains optional adapter timings and counters, so provisioning does not count the lookup and probe twice.
+`warm_pool.claim_ms` records the claim cost.
+The CoreWeave reference format is in its [adapter README](../packages/compute-coreweave/README.md#warm-pool-references).
+
 ## Code
 
 - [Store](../packages/core/src/services/runtime/WarmPoolStore.ts) and [service](../packages/core/src/services/runtime/WarmPoolService.ts): durable ownership and lifecycle. Tests are colocated.

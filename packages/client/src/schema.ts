@@ -2679,6 +2679,7 @@ export interface components {
 					| 'EDIT_SESSION_RETIRING'
 					| 'EDIT_SESSION_CHANGED'
 					| 'TAKEOVER_IN_PROGRESS'
+					| 'MOVE_IN_PROGRESS'
 					| 'FORBIDDEN'
 					| 'VALIDATION_ERROR'
 					| 'SYNC_NOT_CONFIGURED'
@@ -3772,6 +3773,9 @@ export interface components {
 			last_run_at: string | null;
 			compute_profile?: string;
 			app_compute_profile?: string;
+			moving?: {
+				destination_project_id: string;
+			};
 		};
 		NotebookMeta: {
 			id: string;
@@ -4560,6 +4564,13 @@ export interface components {
 				}[];
 			};
 			requirements: string[];
+			shared_environment?: {
+				/** @example google */
+				group: string;
+				/** @example Google Cloud */
+				title: string;
+				variables: string;
+			};
 		};
 		IntegrationPage: {
 			items: components['schemas']['IntegrationEntry'][];
@@ -4579,6 +4590,7 @@ export interface components {
 			/** @enum {string} */
 			scope: 'project' | 'org';
 			shadowed?: boolean;
+			ambient_env?: boolean;
 		};
 		IntegrationDetail: components['schemas']['IntegrationEntry'] & {
 			config: {
@@ -11602,6 +11614,15 @@ export interface operations {
 					'application/json': components['schemas']['ErrorResponse'];
 				};
 			};
+			/** @description Conflict */
+			409: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
 			/** @description Request body too large */
 			413: {
 				headers: {
@@ -12776,6 +12797,7 @@ export interface operations {
 		requestBody: {
 			content: {
 				'application/json': {
+					/** @example proj-7h2k9qm4xz7rp3w8 */
 					destination_project_id: string;
 				};
 			};
@@ -12853,6 +12875,17 @@ export interface operations {
 			/** @description Validation error */
 			422: {
 				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['ErrorResponse'];
+				};
+			};
+			/** @description Resource limit reached */
+			429: {
+				headers: {
+					/** @description Seconds to wait before retrying. */
+					'Retry-After': string;
 					[name: string]: unknown;
 				};
 				content: {
@@ -21981,9 +22014,7 @@ export interface operations {
 		requestBody: {
 			content: {
 				'application/json': {
-					/** @example analytics-lake */
 					bucket: string;
-					/** @example events/2026/part-001.jsonl */
 					key: string;
 					version_id?: string;
 					/** @default 20 */

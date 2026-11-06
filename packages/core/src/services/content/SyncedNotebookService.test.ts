@@ -202,6 +202,31 @@ describe('SyncedNotebookService', () => {
 			).rejects.toThrow('repo must be owner/repo');
 		});
 
+		it('leaves the source unchanged when the notebook is fenced by a move', async () => {
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+			const key = paths.project(projectId).notebook(meta.id).meta;
+			const stored = await bucket.get(key);
+			const current = (await stored!.json()) as Record<string, unknown>;
+			await bucket.put(key, JSON.stringify({ ...current, move_id: 'mv_test' }));
+			const sourceKey = paths.project(projectId).notebook(meta.id).source;
+			const before = await (await bucket.get(sourceKey))!.text();
+
+			await expect(
+				notebooks.synced.updateSource(
+					projectId,
+					meta.id,
+					{
+						repo: 'new/repo',
+						branch: 'release',
+						root_path: 'apps',
+						entry_notebook: 'dashboard.py',
+					},
+					ACTOR,
+				),
+			).rejects.toThrow('is being moved');
+			expect(await (await bucket.get(sourceKey))!.text()).toBe(before);
+		});
+
 		it('updates an unsynced draft immediately', async () => {
 			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
 
@@ -504,6 +529,29 @@ describe('SyncedNotebookService', () => {
 
 			const e = await entry(meta.id);
 			expect(e?.status).toBe('active');
+		});
+
+		it('does not advance the source when a move fences the notebook mid-sync', async () => {
+			const { meta } = await notebooks.synced.create(projectId, CREATE_INPUT, ACTOR);
+			const nb = paths.project(projectId).notebook(meta.id);
+			const before = await (await bucket.get(nb.source))!.text();
+			const realPut = bucket.put.bind(bucket);
+			let fenced = false;
+			const put = vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+				if (!fenced && key.includes('/versions/')) {
+					fenced = true;
+					const current = (await (await bucket.get(nb.meta))!.json()) as Record<string, unknown>;
+					await realPut(nb.meta, JSON.stringify({ ...current, move_id: 'mv_test' }));
+				}
+				return realPut(key, value, options);
+			});
+
+			await expect(
+				notebooks.synced.sync(projectId, meta.id, syncInput('commit-aaaa')),
+			).rejects.toThrow('is being moved');
+			put.mockRestore();
+			expect(fenced).toBe(true);
+			expect(await (await bucket.get(nb.source))!.text()).toBe(before);
 		});
 
 		it('stores pull-source Git metadata beside the immutable workspace', async () => {

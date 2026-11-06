@@ -190,7 +190,11 @@ export function errorResponse(error: unknown, statusOf?: ErrorStatus): Response 
 	};
 	const detail =
 		status >= 500 ? 'The host could not complete the request' : (error as Error).message;
-	return factories[status]?.(detail).toResponse() ?? problem(status, 'internal', detail);
+	const factory = factories[status];
+	if (factory) return factory(detail).toResponse();
+	// The protocol has no rate-limit type; `unavailable` tells clients to retry later.
+	if (status === 429) return problem(status, 'unavailable', detail);
+	return problem(status, status >= 400 && status < 500 ? 'invalid-request' : 'internal', detail);
 }
 
 // Runtime-supplied names and IDs must not be able to open a new SSE field.

@@ -241,4 +241,22 @@ describe('app pool deletion fences', () => {
 			}),
 		).rejects.toMatchObject({ status: 404 });
 	});
+
+	it('reopens a frozen source pool on a cancelled move without dropping members', async () => {
+		const bucket = new MemoryBucket();
+		const store = new AppPoolStore(bucket);
+		const member = reservation();
+		await bucket.put(
+			paths.appPool(pid, nid),
+			JSON.stringify({
+				schema_version: 1,
+				deleted_at: 500,
+				members: [member],
+				assignments: [],
+			} satisfies AppPool),
+		);
+		await store.cancelNotebookMove(pid, nid);
+		const pool = await store.read(pid, nid);
+		expect(pool).toEqual({ schema_version: 1, members: [member], assignments: [] });
+	});
 });

@@ -14,7 +14,8 @@ Databricks SQL, Athena), PyIceberg catalogs, object storage (S3, GCS, Azure
 Blob), remote DuckDB databases and DuckLake catalogs, ML platforms (Weights &
 Biases, Hugging Face), [Python package registries](#package-registries) for uv
 (any simple index, JFrog Artifactory, Azure Artifacts, GitLab, AWS
-CodeArtifact), and environment variables.
+CodeArtifact), [remote logging](#remote-logging) (OTLP endpoints, such as
+Grafana Cloud and Better Stack), and environment variables.
 
 Each new, non-ephemeral session receives integration configuration through environment variables and files.
 Notebook code reads it locally. Add each connection's listed Python requirements to the notebook dependencies.
@@ -38,7 +39,7 @@ Disabling or deleting an integration removes its contributions from subsequent l
 | --------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | Environment variables and configuration files | Outside the notebook workspace          | New sandboxes omit them. Snapshots can retain old values and files unless the integration provides cleanup. |
 | Runtime packages                              | Separate layer for the notebook process | Launches omit the layer, including after snapshot restores. Caches can remain.                              |
-| Remote logging                                | Python server, kernels, and job exports | New launches stop exporting, including snapshot restores. Old configuration files can remain.               |
+| Remote logging                                | Python server, kernels, and job exports | New launches stop exporting, including snapshot restores. Snapshots can retain the last configuration file. |
 | Startup scripts                               | Before dependency setup                 | Launches stop running the script. Files and other script side effects can remain.                           |
 | Custom CSS and HTML head                      | Marimo pages and HTML exports           | New launches omit them, including snapshot restores. Existing sessions and exports retain them.             |
 | Agent context                                 | Outside the notebook workspace          | Restored sandboxes remove obsolete hub-managed home files.                                                  |
@@ -57,8 +58,10 @@ yields silently when integrations or the probe are off; an explicit `metadata`
 or `full` setting fails at startup instead.
 
 Editors and higher roles can use the Data page at `/projects/{pid}/data`.
-They do not need a notebook session. The URL stores the selected integration,
-surface, item, and search scope. A shared link restores the same view.
+They do not need a notebook session. Project chat and the
+[MCP data discovery tools](./mcp.md#discover-data) offer the same browsing.
+The URL stores the selected integration, surface, item, and search scope.
+A shared link restores the same view.
 
 For catalog integrations, the Data page lists namespaces, tables, and schemas.
 The schema view shows columns, partition fields, and available snapshot
@@ -529,20 +532,23 @@ the `ambient_env` switch. There are two reasons to do that:
 | Iceberg catalogs | the rendered `.pyiceberg.yaml`, found through `PYICEBERG_HOME`. Always set                        |
 
 For database discovery variables, the first integration by name claims each set
-of shared names. Other connections remain available through namespaced variables
-and notebook snippets. The session manifest and provisioning log name the selected
-and skipped integrations.
+of shared names. The other connections stay available through namespaced
+variables and notebook snippets. The session manifest and provisioning log name
+the selected and skipped integrations.
 
-For object stores, conflicting shared variables prevent notebook startup.
-For multiple connections, disable `ambient_env` on all but one connection.
-Namespaced settings remain available for every connection.
+For S3, Google Cloud (GCS, BigQuery), Azure, and the ML platforms, conflicting
+shared variables prevent notebook startup. To use more than one storage or
+BigQuery connection, disable `ambient_env` on all but one. Namespaced settings
+stay available for every connection. Weights & Biases and Hugging Face have no
+`ambient_env` switch. Enable only one of each, or give them the same settings.
 
 The integrations page warns about possible shared-variable conflicts between S3,
-Google Cloud, or Azure connections. These warnings do not compare credentials.
-Connection tests check connectivity, not conflicts between integrations.
-Unavailable integration kinds appear as errors. Restore those kinds or disable
-the affected integrations before starting notebooks. Disabled and overridden
-integrations do not contribute findings.
+Google Cloud, Azure, Weights & Biases, and Hugging Face connections. The warnings
+ignore disabled integrations, overridden integrations, and connections with
+`ambient_env` disabled. They do not compare credentials. Unavailable integration
+kinds appear as errors. Restore those kinds or disable the affected integrations
+before you start notebooks. Connection tests check connectivity, not conflicts
+between integrations.
 
 [Workload identity federation](./workload-identity-federation.md) injects `AWS_*`
 for the session's own bucket. Hub-injected variables take precedence over integrations.
@@ -1147,30 +1153,33 @@ The hub does not fall back to public PyPI. To opt a project out, create a disabl
 
 ## Remote logging
 
-Logging integrations export Python `logging` records from notebook code and marimo to remote destinations.
-They apply to new editor sessions, app sessions, and job runs.
-Hub injects a Python standard-library handler that sends OTLP/HTTP JSON, without installing packages or changing sandbox images.
-Changes take effect on subsequent launches, including snapshot restores.
+Logging integrations export Python `logging` records from notebook code and marimo to an OTLP/HTTP JSON endpoint.
+They apply to new editor sessions, app sessions, and job runs, including snapshot restores.
+The hub injects a handler that uses only the Python standard library. It does not install packages or change sandbox images.
 
-Create an `otlp_logs` integration with a full logs URL that accepts OTLP/HTTP JSON and any required headers:
+Create an `otlp_logs` integration with the full logs URL. Set `auth.method` to `none`, `bearer`, `basic`, or `headers`.
+Use `headers` for an API key header or a tenant header, such as `X-Scope-OrgID`.
+The [configuration reference](#configuration-reference) lists the fields for each method.
 
 ```json
 {
 	"url": "https://collector.example.com/v1/logs",
-	"headers": [{ "name": "Authorization", "value": "Bearer YOUR_TOKEN" }],
+	"auth": { "method": "bearer", "token": "YOUR_TOKEN" },
 	"level": "INFO",
 	"service_name": "analytics-notebooks"
 }
 ```
 
-Hub sends the URL unchanged and rejects redirects. Use HTTPS for remote destinations, or HTTP for collectors on trusted networks.
-The exporter uses `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables for proxy configuration, including their lowercase forms. It does not discover operating-system proxy settings.
-Header names must be unique, regardless of case. HTTP framing headers, such as `Host`, `Content-Type`, and `Content-Length`, are reserved.
-All header values use the integration secret store and remain hidden after save.
-This includes tenant identifiers such as `X-Scope-OrgID`. Use `otlp_logs` for endpoints that require these headers.
+The hub sends the URL unchanged and rejects redirects.
+Each `auth.method` except `none` requires HTTPS. Use plain HTTP only for unauthenticated collectors on trusted networks.
+Header names must be unique, ignoring case.
+Saving fails if a header sets `Host`, `Content-Type`, `Content-Length`, `Connection`, or `Transfer-Encoding`.
+The token, the password, and all header values are [secret fields](#secret-fields). They stay hidden after save.
+The exporter reads proxy settings only from `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`, in upper or lower case.
+It ignores operating-system proxy settings.
 
-Use **Test connection** to send an empty OTLP request with the configured credentials. This test sends no log records.
-The request runs from the hub. A successful result does not verify network access from each sandbox.
+**Test connection** sends an empty OTLP request with the configured credentials and no log records.
+The request comes from the hub, so a success does not prove that each sandbox can reach the endpoint.
 
 Use the standard Python logging API in notebook code:
 
@@ -1180,31 +1189,39 @@ import logging
 logging.getLogger(__name__).info("Loaded dataset", extra={"rows": 1200})
 ```
 
-Each destination has separate credentials and a minimum `level` (default: `INFO`). The default `service_name` is `marimohub-notebook`.
-Records include project, notebook, workload, sandbox, integration, mode, and process identifiers.
+Each record includes project, notebook, workload, sandbox, integration, mode, and process identifiers.
 Logger levels, filters, or disabled propagation in notebook code can prevent export.
+Export includes `logging.exception()` records. It excludes `print()`, rich cell output, unlogged cell errors, existing log files, and exporter diagnostics.
 
-Delivery is best effort. Each destination has a background exporter and a queue of 2,048 records per process.
-Records larger than 64 KiB are dropped. Installed OpenTelemetry packages remain unchanged and are not required.
-Full queues discard new records. Failed deliveries report dropped records to stderr. Shutdown allows three seconds to drain all destinations.
-Network failures, forced termination, and sandbox destruction can lose logs.
+Delivery is best effort. Network failures, forced termination, and sandbox destruction can lose logs.
+Each destination queues up to 2,048 records per process. A full queue discards new records.
+Records larger than 64 KiB are dropped. The exporter reports dropped-record counts on stderr.
+Shutdown allows three seconds to drain all destinations.
+The exporter does not require OpenTelemetry packages and does not change installed ones.
 
-The integrations capture `logging.exception()` but exclude `print()`, rich cell output, unlogged cell errors, existing log files, and exporter diagnostics.
+Fresh Python interpreters and spawned multiprocessing children run the bootstrap, which imports marimo.
+This adds startup time, even in processes that do not use marimo.
+Forked children do not import marimo again. They start new exporters and do not resend records queued in the parent.
 
-Fresh Python interpreters and spawned multiprocessing children run the bootstrap and import marimo.
-This adds startup time even when they do not use marimo.
-Forked children inherit the marimo hooks and start new exporters without importing marimo again. Parent queues stay with the parent and are not replayed.
+### Grafana Cloud
+
+Open your stack's **OpenTelemetry** details in the Grafana Cloud portal, then set these values:
+
+- `url`: the OTLP endpoint plus `/v1/logs`, for example `https://otlp-gateway-prod-us-east-0.grafana.net/otlp/v1/logs`. The host differs per region.
+- `auth.method`: `basic`, with the instance ID as `auth.username`.
+- `auth.password`: an access policy token with the `logs:write` scope.
+
+### Better Stack
+
+Create an OpenTelemetry source in Better Stack Telemetry, then set these values:
+
+- `url`: `https://YOUR_INGESTING_HOST/v1/logs`, with the source's ingesting host.
+- `auth.method`: `bearer`.
+- `auth.token`: the source token.
 
 ### Configuration reference
 
-For Grafana Cloud, use the full OTLP logs URL, instance ID as `username`, and access policy `token`.
-For Better Stack, use the full OTLP logs URL and `source_token`.
-
 <!--@include: ./partials/integrations/otlp_logs.md-->
-
-<!--@include: ./partials/integrations/grafana_cloud_logs.md-->
-
-<!--@include: ./partials/integrations/better_stack_logs.md-->
 
 ## marimo Studio (experimental)
 
@@ -1395,6 +1412,9 @@ Automatic data-source discovery is best effort. An incompatible discovery
 contract or a second integration claiming the same standard variables falls
 back to namespaced variables and a notebook snippet instead of failing the
 session. The session manifest and provisioning log record the fallback.
+Only discovery variables fall back.
+[Shared-variable conflicts](#vendor-standard-variables-and-one-click-connections)
+stop session creation.
 
 Saving a reference does not fetch its value. **Test connection** resolves the
 current draft for supported kinds. **Environment variables** has no connection

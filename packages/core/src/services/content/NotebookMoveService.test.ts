@@ -1,4 +1,6 @@
-import { ForbiddenError } from '../../errors';
+import { ForbiddenError, ResourceExhaustedError, UnavailableError } from '../../errors';
+import { PreviewRecordSchema } from './notebookPreviews';
+import { PREVIEW_LIMITS, previewProjectKey } from './PreviewStore';
 import { thumbnailPng } from '../../testing/thumbnail';
 import { NotebookMoveSchema } from './notebookMoveRecord';
 import { describe, expect, it, vi } from 'vitest';
@@ -6,10 +8,10 @@ import { createServices } from '../index';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { ACTOR } from '../../testing';
 import { paths } from '../../paths';
-import { searchPaths } from '../../search/paths';
 import type { Bucket } from '../../ports/bucket';
-import { ProjectId, SandboxId, SessionId } from '../../ids';
+import { createNotebookId, createPreviewId, ProjectId, SandboxId, SessionId } from '../../ids';
 import type { NotebookId } from '../../ids';
+import type { NotebookMeta } from '../../schema';
 
 async function setup() {
 	const bucket = new MemoryBucket();
@@ -40,6 +42,8 @@ async function setup() {
 	return { bucket, services, from, to, notebook, input };
 }
 
+const allowCancel = async () => {};
+
 async function moveRecord(bucket: Bucket, nid: NotebookId) {
 	const object = await bucket.get(paths.notebookMove(nid));
 	return object ? NotebookMoveSchema.parse(await object.json()) : null;
@@ -58,56 +62,330 @@ function interruptCopy(bucket: MemoryBucket, key: string, error = new Error('cop
 	});
 }
 
+type Services = Awaited<ReturnType<typeof setup>>['services'];
+
+/** Catalog projects without the source entry's `moving` stamp, which a pending move keeps. */
+async function unstampedProjects(services: Services) {
+	return (await services.catalog.getCurrentSnapshot()).projects.map((project) => ({
+		...project,
+		notebooks: project.notebooks.map(({ moving: _moving, ...entry }) => entry),
+	}));
+}
+
+/** Parks a move inside its copying phase, after the source has been fenced. */
+function pauseCopy(services: Services) {
+	const entered = Promise.withResolvers<void>();
+	const resume = Promise.withResolvers<void>();
+	const copy = services.notebooks.thumbnails.copyForMove.bind(services.notebooks.thumbnails);
+	vi.spyOn(services.notebooks.thumbnails, 'copyForMove').mockImplementationOnce(async (...args) => {
+		entered.resolve();
+		await resume.promise;
+		return copy(...args);
+	});
+	return { entered: entered.promise, resume: () => resume.resolve() };
+}
+
+function previewIntent(pid: ProjectId, nid: NotebookId) {
+	return PreviewRecordSchema.parse({
+		schema_version: 1,
+		id: createPreviewId(),
+		project_id: pid,
+		notebook_id: nid,
+		name: 'Preview',
+		source: { type: 'branch', branch: 'feature' },
+		repository: 'owner/repo',
+		root_path: '',
+		entry_notebook: 'app.py',
+		created_by: ACTOR,
+		created_at: new Date().toISOString(),
+		expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+		request_fingerprint: 'request',
+		state: 'active',
+		preparation: 'ready',
+		revisions: [],
+	});
+}
+
 describe('NotebookMoveService', () => {
-	it('retries both search refreshes after a completion-side refresh failure', async () => {
+	it.each([
+		{
+			name: 'a rename',
+			write: (services: Services, pid: ProjectId, nid: NotebookId) =>
+				services.notebooks.updateNotebook(pid, nid, { title: 'Renamed' }, ACTOR),
+			marker: '"Renamed"',
+		},
+		{
+			name: 'a label change',
+			write: (services: Services, pid: ProjectId, nid: NotebookId) =>
+				services.notebooks.setSecurityLabels(
+					pid,
+					nid,
+					{ classification: 'SECRET', compartments: [] },
+					ACTOR,
+				),
+			marker: '"SECRET"',
+		},
+	])('refuses $name that read the metadata before the fence', async ({ write, marker }) => {
 		const { bucket, services, from, to, notebook, input } = await setup();
+		const paused = pauseCopy(services);
+		const metaKey = paths.project(from.id).notebook(notebook.id).meta;
 		const put = bucket.put.bind(bucket);
-		let fail = true;
+		let moving: Promise<NotebookMeta> | undefined;
 		vi.spyOn(bucket, 'put').mockImplementation(async (key, bytes, options) => {
-			if (key === searchPaths.refresh(to.id) && fail) {
-				fail = false;
-				throw new Error('refresh interrupted');
+			if (!moving && key === metaKey && typeof bytes === 'string' && bytes.includes(marker)) {
+				moving = services.moves.move(input);
+				await paused.entered;
 			}
 			return put(key, bytes, options);
 		});
-		await expect(services.moves.move(input)).rejects.toThrow('refresh interrupted');
-		expect(await services.notebooks.getNotebookContent(to.id, notebook.id)).toBe('print(1)');
-		expect(await moveRecord(bucket, notebook.id)).toMatchObject({
-			phase: 'complete',
-			search_refreshed: false,
+		await expect(write(services, from.id, notebook.id)).rejects.toMatchObject({
+			code: 'MOVE_IN_PROGRESS',
 		});
-		await services.moves.move(input);
-		expect(await moveRecord(bucket, notebook.id)).toMatchObject({
-			phase: 'complete',
-			search_refreshed: true,
+		paused.resume();
+		await moving;
+		const moved = await services.notebooks.getNotebook(to.id, notebook.id);
+		expect(moved.meta).toMatchObject({ title: 'Analysis' });
+		expect(moved.meta).not.toHaveProperty('security_labels');
+		expect(await services.notebooks.listNotebooks(to.id)).toMatchObject([{ title: 'Analysis' }]);
+	});
+
+	it('refuses to publish when the fenced source metadata changed during the copy', async () => {
+		const { bucket, services, from, to, notebook, input } = await setup();
+		const before = await services.catalog.getCurrentSnapshot();
+		const paused = pauseCopy(services);
+		const moving = services.moves.move(input);
+		await paused.entered;
+		const key = paths.project(from.id).notebook(notebook.id).meta;
+		const fenced = await (await bucket.get(key))!.json<Record<string, unknown>>();
+		await bucket.put(key, JSON.stringify({ ...fenced, title: 'Bypassed' }));
+		paused.resume();
+		await expect(moving).rejects.toThrow('Notebook changed');
+		const [fencedEntry] = (await services.catalog.getCurrentSnapshot()).projects.find(
+			(project) => project.id === from.id,
+		)!.notebooks;
+		expect(fencedEntry).toEqual({
+			...before.projects.find((project) => project.id === from.id)!.notebooks[0],
+			moving: {
+				move_id: (await moveRecord(bucket, notebook.id))!.id,
+				destination_project_id: to.id,
+			},
 		});
-		expect(await (await bucket.get(searchPaths.refresh(from.id)))!.text()).toBe(
-			await (await bucket.get(searchPaths.refresh(to.id)))!.text(),
+		await services.moves.cancel({ source: from.id, notebookId: notebook.id }, allowCancel);
+		expect((await services.catalog.getCurrentSnapshot()).projects).toEqual(before.projects);
+		expect((await services.notebooks.getNotebook(from.id, notebook.id)).meta).toMatchObject({
+			title: 'Bypassed',
+		});
+		expect(await services.notebooks.listNotebooks(to.id)).toEqual([]);
+	});
+
+	it('refuses to publish when the source record changed during the copy', async () => {
+		const { bucket, services, from, to, notebook, input } = await setup();
+		const paused = pauseCopy(services);
+		const moving = services.moves.move(input);
+		await paused.entered;
+		const key = paths.project(from.id).notebook(notebook.id).source;
+		const source = await (await bucket.get(key))!.json<Record<string, unknown>>();
+		await bucket.put(key, JSON.stringify({ ...source, entry_notebook: 'other.py' }));
+		paused.resume();
+		await expect(moving).rejects.toThrow('Notebook changed');
+		expect(await services.notebooks.listNotebooks(to.id)).toEqual([]);
+	});
+
+	it('releases the notebook when an admitted job operation cannot be drained', async () => {
+		const { bucket, services, from, notebook, input } = await setup();
+		const job = await services.jobs.createJob(
+			from.id,
+			notebook.id,
+			{ name: 'Daily', enabled: true },
+			ACTOR,
+		);
+		await services.jobRuns.withJobMutation(job, async () => {});
+		const wait = vi.spyOn(services.jobRuns, 'waitForJobMutations');
+		vi.spyOn(services.jobRuns, 'withJobMutation').mockRejectedValue(
+			new UnavailableError('Job is busy; retry the operation'),
+		);
+		await expect(services.moves.move(input)).rejects.toThrow('Job is busy');
+		expect(wait).toHaveBeenCalledWith(from.id, notebook.id, { strict: true });
+		expect(await moveRecord(bucket, notebook.id)).toBeNull();
+		expect((await services.notebooks.getNotebook(from.id, notebook.id)).meta).not.toHaveProperty(
+			'move_id',
 		);
 	});
 
-	it('does not request new crawls when a completed move is replayed', async () => {
-		const { bucket, services, from, to, input } = await setup();
-		await services.moves.move(input);
-		const before = await Promise.all(
-			[from, to].map(async (project) =>
-				(await bucket.get(searchPaths.refresh(project.id)))!.text(),
-			),
+	it('releases the notebook when a preview reserves a runtime before the fence', async () => {
+		const { bucket, services, from, notebook, input } = await setup();
+		const own = previewIntent(from.id, notebook.id);
+		await bucket.put(
+			previewProjectKey(from.id),
+			JSON.stringify({ entries: [{ intent: own, artifacts: [] }] }),
 		);
+		await bucket.put(paths.preview(from.id, notebook.id, own.id), JSON.stringify(own));
+		const capacity = services.previews.store.assertMoveCapacity.bind(services.previews.store);
+		vi.spyOn(services.previews.store, 'assertMoveCapacity').mockImplementationOnce(
+			async (...args) => {
+				await services.previews.store.reserveArtifact(own, createNotebookId(), 1);
+				return capacity(...args);
+			},
+		);
+		await expect(services.moves.move(input)).rejects.toThrow('Wait for preview preparation');
+		expect(await moveRecord(bucket, notebook.id)).toBeNull();
+		expect((await services.notebooks.getNotebook(from.id, notebook.id)).meta).not.toHaveProperty(
+			'move_id',
+		);
+	});
+
+	it('refuses a destination at its preview limit before fencing the source', async () => {
+		const { bucket, services, from, to, notebook, input } = await setup();
+		const own = previewIntent(from.id, notebook.id);
+		await bucket.put(
+			previewProjectKey(from.id),
+			JSON.stringify({ entries: [{ intent: own, artifacts: [] }] }),
+		);
+		await bucket.put(paths.preview(from.id, notebook.id, own.id), JSON.stringify(own));
+		await bucket.put(
+			previewProjectKey(to.id),
+			JSON.stringify({
+				entries: Array.from({ length: PREVIEW_LIMITS.perProject }, () => ({
+					intent: previewIntent(to.id, createNotebookId()),
+					artifacts: [],
+				})),
+			}),
+		);
+		const metaKey = paths.project(from.id).notebook(notebook.id).meta;
 		const put = vi.spyOn(bucket, 'put');
-		await services.moves.move(input);
+		await expect(services.moves.move(input)).rejects.toBeInstanceOf(ResourceExhaustedError);
+		expect(put.mock.calls.filter(([key]) => key === metaKey)).toEqual([]);
+		expect(await moveRecord(bucket, notebook.id)).toBeNull();
+		expect(await services.notebooks.getNotebookContent(from.id, notebook.id)).toBe('print(1)');
+	});
+
+	it('refuses a session admitted between preflight and the fence, then releases the notebook', async () => {
+		const { bucket, services, from, notebook, input } = await setup();
+		const ready = services.sessions.assertReadyForMove.bind(services.sessions);
+		vi.spyOn(services.sessions, 'assertReadyForMove').mockImplementationOnce(async (pid, ids) => {
+			await ready(pid, ids);
+			await services.sessions.createSession({
+				project_id: from.id,
+				notebook_id: notebook.id,
+				user_id: ACTOR,
+			});
+		});
+		await expect(services.moves.move(input)).rejects.toThrow('Stop notebook');
+		expect(await moveRecord(bucket, notebook.id)).toBeNull();
+		expect((await services.notebooks.getNotebook(from.id, notebook.id)).meta).not.toHaveProperty(
+			'move_id',
+		);
+		expect((await services.notebooks.listNotebooks(from.id))[0].moving).toBeUndefined();
+	});
+
+	it('stamps the source catalog entry once across a takeover', async () => {
+		const { bucket, services, to, notebook, input } = await setup();
+		const stamps = vi.spyOn(services.catalog, 'updateNotebookEntry');
+		const entered = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		const ready = services.sessions.assertReadyForMove.bind(services.sessions);
+		vi.spyOn(services.sessions, 'assertReadyForMove')
+			.mockImplementationOnce(ready)
+			.mockImplementationOnce(async (...args) => {
+				entered.resolve();
+				await resume.promise;
+				return ready(...args);
+			});
+		const paused = services.moves.move(input);
+		await entered.promise;
+		const record = (await moveRecord(bucket, notebook.id))!;
+		await bucket.put(
+			paths.notebookMove(notebook.id),
+			JSON.stringify({ ...record, lease: { ...record.lease, expires_at: Date.now() - 1 } }),
+		);
+		await expect(services.moves.move(input)).resolves.toMatchObject({ project_id: to.id });
+		resume.resolve();
+		await expect(paused).rejects.toMatchObject({ code: 'CONFLICT' });
 		expect(
-			put.mock.calls.filter(
-				([key]) => key === searchPaths.refresh(from.id) || key === searchPaths.refresh(to.id),
-			),
+			stamps.mock.calls.filter(([operation]) => operation === 'notebook.move.fence'),
+		).toHaveLength(1);
+	});
+
+	it('waits for an admitted job operation and drops the source operation claims', async () => {
+		const { bucket, services, from, to, notebook, input } = await setup();
+		const job = await services.jobs.createJob(
+			from.id,
+			notebook.id,
+			{ name: 'Daily', enabled: true },
+			ACTOR,
+		);
+		const entered = Promise.withResolvers<void>();
+		const finish = Promise.withResolvers<void>();
+		const operation = services.jobRuns.withJobMutation(job, async () => {
+			entered.resolve();
+			await finish.promise;
+		});
+		await entered.promise;
+		let moved = false;
+		const moving = services.moves.move(input).finally(() => {
+			moved = true;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(moved).toBe(false);
+		finish.resolve();
+		await operation;
+		await expect(moving).resolves.toMatchObject({ project_id: to.id });
+		expect(
+			(await bucket.list({ prefix: paths.jobOperationClaimsForNotebook(from.id, notebook.id) }))
+				.objects,
 		).toEqual([]);
-		expect(
-			await Promise.all(
-				[from, to].map(async (project) =>
-					(await bucket.get(searchPaths.refresh(project.id)))!.text(),
-				),
-			),
-		).toEqual(before);
+	});
+
+	it('authorizes cancellation against the fenced notebook before changing anything', async () => {
+		const { bucket, services, from, to, notebook, input } = await setup();
+		interruptCopy(bucket, paths.project(to.id).notebook(notebook.id).workspaceFile('data.bin'));
+		await expect(services.moves.move(input)).rejects.toThrow('copy interrupted');
+		const record = (await moveRecord(bucket, notebook.id))!;
+		const deny = vi.fn(async () => {
+			throw new ForbiddenError('denied');
+		});
+		await expect(
+			services.moves.cancel({ source: from.id, notebookId: notebook.id }, deny),
+		).rejects.toThrow('denied');
+		expect(deny).toHaveBeenCalledWith({
+			sourceProject: expect.objectContaining({ id: from.id }),
+			notebook: expect.objectContaining({ id: notebook.id, move_id: record.id }),
+		});
+		expect(await moveRecord(bucket, notebook.id)).toEqual(record);
+		await expect(services.notebooks.getNotebook(from.id, notebook.id)).rejects.toMatchObject({
+			code: 'MOVE_IN_PROGRESS',
+		});
+
+		await bucket.delete([paths.notebookMove(notebook.id)]);
+		await expect(
+			services.moves.cancel({ source: from.id, notebookId: notebook.id }, deny),
+		).rejects.toThrow('denied');
+		await expect(services.notebooks.getNotebook(from.id, notebook.id)).rejects.toMatchObject({
+			code: 'MOVE_IN_PROGRESS',
+		});
+	});
+
+	it('deletes a completed move record when the moved notebook is hard-deleted', async () => {
+		const { bucket, services, to, notebook, input } = await setup();
+		const moved = await services.moves.move(input);
+		await services.notebooks.deleteNotebook(to.id, notebook.id, ACTOR, moved.updated_at);
+		await services.notebooks.hardDeleteNotebook(to.id, notebook.id);
+		expect(await moveRecord(bucket, notebook.id)).toBeNull();
+	});
+
+	it('requests fresh crawls for both projects in the publishing snapshot write', async () => {
+		const { services, from, to, input } = await setup();
+		await services.moves.move(input);
+		const snapshot = await services.catalog.getCurrentSnapshot();
+		const tokens = [from, to].map(
+			(project) => snapshot.projects.find((entry) => entry.id === project.id)?.search_refresh,
+		);
+		expect(tokens[0]).toBeDefined();
+		expect(tokens[1]).toBe(tokens[0]);
+		// A replayed completed move rewrites nothing.
+		await services.moves.move(input);
+		const replayed = await services.catalog.getCurrentSnapshot();
+		expect(JSON.stringify(replayed.projects)).toBe(JSON.stringify(snapshot.projects));
 	});
 
 	it.each(['committed', 'pending'] as const)(
@@ -183,19 +461,25 @@ describe('NotebookMoveService', () => {
 			await expect(services.moves.move(input)).rejects.toThrow('already running');
 			for (const project of [from, to]) {
 				await expect(services.notebooks.getNotebook(project.id, notebook.id)).rejects.toMatchObject(
-					{ code: 'NOT_FOUND' },
+					{ code: 'MOVE_IN_PROGRESS' },
 				);
 				await expect(
 					services.notebooks.updateNotebook(project.id, notebook.id, { code: 'print(9)' }, ACTOR),
-				).rejects.toMatchObject({ code: 'NOT_FOUND' });
+				).rejects.toMatchObject({ code: 'MOVE_IN_PROGRESS' });
 			}
 			// Project settings stay editable; only the notebook in transit is fenced.
 			await services.projects.updateProject(from.id, { description: 'Edited' }, ACTOR);
+			const [listed] = await services.notebooks.listNotebooks(from.id);
+			expect(listed).toMatchObject({ moving: { destination_project_id: to.id } });
+			expect(listed).not.toHaveProperty('moving.move_id');
+			expect(await services.notebooks.listNotebooks(to.id)).toEqual([]);
 		} finally {
 			resume.resolve();
 			await moving;
 		}
-		expect(await services.notebooks.listNotebooks(to.id)).toHaveLength(1);
+		const [arrived] = await services.notebooks.listNotebooks(to.id);
+		expect(arrived).toMatchObject({ id: notebook.id });
+		expect(arrived.moving).toBeUndefined();
 		expect(await services.notebooks.getNotebookContent(to.id, notebook.id)).toBe('print(1)');
 	});
 
@@ -207,10 +491,10 @@ describe('NotebookMoveService', () => {
 			.mockResolvedValueOnce()
 			.mockRejectedValueOnce(new ForbiddenError('Access revoked'));
 		await expect(services.moves.move(input)).rejects.toThrow('Access revoked');
-		expect(await services.catalog.getCurrentSnapshot()).toEqual(before);
+		expect(await unstampedProjects(services)).toEqual(before.projects);
 		for (const project of [from, to]) {
 			await expect(services.notebooks.getNotebook(project.id, notebook.id)).rejects.toMatchObject({
-				code: 'NOT_FOUND',
+				code: 'MOVE_IN_PROGRESS',
 			});
 		}
 		input.authorize.mockRejectedValueOnce(new ForbiddenError('Access still revoked'));
@@ -419,11 +703,13 @@ describe('NotebookMoveService', () => {
 		const { bucket, services, from, to, notebook, input } = await setup();
 		interruptCopy(bucket, paths.project(to.id).notebook(notebook.id).workspaceFile('data.bin'));
 		await expect(services.moves.move(input)).rejects.toThrow('copy interrupted');
-		for (const project of [from, to]) {
-			await expect(services.notebooks.getNotebook(project.id, notebook.id)).rejects.toMatchObject({
-				code: 'NOT_FOUND',
-			});
-		}
+		await expect(services.notebooks.getNotebook(from.id, notebook.id)).rejects.toMatchObject({
+			code: 'MOVE_IN_PROGRESS',
+		});
+		// The destination metadata is copied last, so the partial copy is not found at all.
+		await expect(services.notebooks.getNotebook(to.id, notebook.id)).rejects.toMatchObject({
+			code: 'NOT_FOUND',
+		});
 		await expect(services.moves.move(input)).resolves.toMatchObject({
 			id: notebook.id,
 			project_id: to.id,
@@ -433,10 +719,13 @@ describe('NotebookMoveService', () => {
 	it('does not double-count a catalog commit whose response was lost', async () => {
 		const { bucket, services, to, notebook, input } = await setup();
 		const put = bucket.put.bind(bucket);
+		let publishing = false;
 		let failed = false;
 		vi.spyOn(bucket, 'put').mockImplementation(async (key, bytes, options) => {
 			const result = await put(key, bytes, options);
-			if (!failed && key === paths.catalog) {
+			if (typeof bytes === 'string' && bytes.includes('"operation":"notebook.move"'))
+				publishing = true;
+			if (publishing && !failed && key === paths.catalog) {
 				failed = true;
 				throw new Error('lost response');
 			}
@@ -479,7 +768,7 @@ describe('NotebookMoveService', () => {
 		const { bucket, services, from, to, notebook, input } = await setup();
 		const before = await services.catalog.getCurrentSnapshot();
 		await expect(
-			services.moves.cancel({ source: from.id, notebookId: notebook.id }),
+			services.moves.cancel({ source: from.id, notebookId: notebook.id }, allowCancel),
 		).rejects.toMatchObject({ code: 'NOT_FOUND' });
 		interruptCopy(bucket, paths.project(to.id).notebook(notebook.id).workspaceFile('data.bin'));
 		await expect(services.moves.move(input)).rejects.toThrow('copy interrupted');
@@ -492,12 +781,12 @@ describe('NotebookMoveService', () => {
 			}),
 		);
 		await expect(
-			services.moves.cancel({ source: from.id, notebookId: notebook.id }),
+			services.moves.cancel({ source: from.id, notebookId: notebook.id }, allowCancel),
 		).rejects.toThrow('already running');
 		await bucket.put(paths.notebookMove(notebook.id), JSON.stringify(record));
-		await services.moves.cancel({ source: from.id, notebookId: notebook.id });
+		await services.moves.cancel({ source: from.id, notebookId: notebook.id }, allowCancel);
 		expect(await moveRecord(bucket, notebook.id)).toBeNull();
-		expect(await services.catalog.getCurrentSnapshot()).toEqual(before);
+		expect((await services.catalog.getCurrentSnapshot()).projects).toEqual(before.projects);
 		expect(await services.notebooks.getNotebookContent(from.id, notebook.id)).toBe('print(1)');
 		expect(
 			(await bucket.list({ prefix: `${paths.project(to.id).notebook(notebook.id).base}/` }))
@@ -524,7 +813,7 @@ describe('NotebookMoveService', () => {
 			'cleanup unavailable',
 		);
 		await expect(
-			services.moves.cancel({ source: from.id, notebookId: notebook.id }),
+			services.moves.cancel({ source: from.id, notebookId: notebook.id }, allowCancel),
 		).rejects.toThrow('published');
 		expect(await services.notebooks.getNotebookContent(to.id, notebook.id)).toBe('print(1)');
 	});
@@ -660,10 +949,10 @@ describe('NotebookMoveService', () => {
 			paths.notebookMove(notebook.id),
 			JSON.stringify({ ...record, lease: { ...record.lease, expires_at: Date.now() - 1 } }),
 		);
-		await services.moves.cancel({ source: from.id, notebookId: notebook.id });
+		await services.moves.cancel({ source: from.id, notebookId: notebook.id }, allowCancel);
 		resume.resolve();
 		await expect(stale).rejects.toThrow('ownership changed');
-		expect(await services.catalog.getCurrentSnapshot()).toEqual(before);
+		expect((await services.catalog.getCurrentSnapshot()).projects).toEqual(before.projects);
 		expect(await services.notebooks.getNotebookContent(from.id, notebook.id)).toBe('print(1)');
 		await expect(services.notebooks.getNotebook(to.id, notebook.id)).rejects.toMatchObject({
 			code: 'NOT_FOUND',
@@ -673,10 +962,13 @@ describe('NotebookMoveService', () => {
 	it('refuses to cancel once the catalog shows the publication, even with a lost response', async () => {
 		const { bucket, services, from, to, notebook, input } = await setup();
 		const put = bucket.put.bind(bucket);
+		let publishing = false;
 		let failed = false;
 		vi.spyOn(bucket, 'put').mockImplementation(async (key, bytes, options) => {
 			const result = await put(key, bytes, options);
-			if (!failed && key === paths.catalog) {
+			if (typeof bytes === 'string' && bytes.includes('"operation":"notebook.move"'))
+				publishing = true;
+			if (publishing && !failed && key === paths.catalog) {
 				failed = true;
 				throw new Error('lost response');
 			}
@@ -685,7 +977,7 @@ describe('NotebookMoveService', () => {
 		await expect(services.moves.move(input)).rejects.toThrow('lost response');
 		expect(await moveRecord(bucket, notebook.id)).toMatchObject({ phase: 'copying' });
 		await expect(
-			services.moves.cancel({ source: from.id, notebookId: notebook.id }),
+			services.moves.cancel({ source: from.id, notebookId: notebook.id }, allowCancel),
 		).rejects.toThrow('published');
 		await services.moves.move(input);
 		expect(await services.notebooks.getNotebookContent(to.id, notebook.id)).toBe('print(1)');
@@ -752,7 +1044,7 @@ describe('NotebookMoveService', () => {
 		await expect(services.moves.move(input)).rejects.toMatchObject({ code: 'NOT_FOUND' });
 		expect(await moveRecord(bucket, notebook.id)).toMatchObject({ phase: 'copying', lease: null });
 		await expect(services.moves.move(input)).rejects.toMatchObject({ code: 'NOT_FOUND' });
-		await services.moves.cancel({ source: from.id, notebookId: notebook.id });
+		await services.moves.cancel({ source: from.id, notebookId: notebook.id }, allowCancel);
 		expect(await services.notebooks.getNotebookContent(from.id, notebook.id)).toBe('print(1)');
 		const after = await services.catalog.getCurrentSnapshot();
 		expect(after.projects.find((p) => p.id === from.id)).toEqual(
@@ -828,16 +1120,16 @@ describe('NotebookMoveService', () => {
 	it('refuses cancellation from a non-source project and repairs an orphaned fence', async () => {
 		const { bucket, services, from, to, notebook, input } = await setup();
 		await expect(
-			services.moves.cancel({ source: to.id, notebookId: notebook.id }),
+			services.moves.cancel({ source: to.id, notebookId: notebook.id }, allowCancel),
 		).rejects.toMatchObject({ code: 'NOT_FOUND' });
 		const key = paths.project(from.id).notebook(notebook.id).meta;
 		const meta = await (await bucket.get(key))!.json<Record<string, unknown>>();
 		await bucket.put(key, JSON.stringify({ ...meta, move_id: 'lost-move' }));
 		await expect(services.notebooks.getNotebook(from.id, notebook.id)).rejects.toMatchObject({
-			code: 'NOT_FOUND',
+			code: 'MOVE_IN_PROGRESS',
 		});
 		await expect(services.moves.move(input)).rejects.toThrow('lost move');
-		await services.moves.cancel({ source: from.id, notebookId: notebook.id });
+		await services.moves.cancel({ source: from.id, notebookId: notebook.id }, allowCancel);
 		expect((await services.notebooks.getNotebook(from.id, notebook.id)).meta).not.toHaveProperty(
 			'move_id',
 		);
@@ -881,7 +1173,7 @@ describe('NotebookMoveService', () => {
 		await expect(
 			services.moves.move({ ...input, expectedVersion: current.meta.updated_at }),
 		).rejects.toThrow('copy interrupted');
-		await services.moves.cancel({ source: from.id, notebookId: notebook.id });
+		await services.moves.cancel({ source: from.id, notebookId: notebook.id }, allowCancel);
 		expect((await services.deepLinks.resolve('analysis')).target.project_id).toBe(from.id);
 		expect(await services.notebooks.thumbnails.metadata(from.id, notebook.id)).toEqual(thumbnail);
 		expect(
@@ -922,7 +1214,7 @@ describe('NotebookMoveService', () => {
 		);
 		resume.resolve();
 		await expect(stale).rejects.toThrow('ownership changed');
-		expect(await services.catalog.getCurrentSnapshot()).toEqual(before);
+		expect(await unstampedProjects(services)).toEqual(before.projects);
 		expect(await moveRecord(bucket, notebook.id)).toMatchObject({
 			lease: { executor: 'other' },
 		});

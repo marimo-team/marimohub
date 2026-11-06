@@ -150,6 +150,8 @@ describe('host problem responses', () => {
 	it.each([
 		[new PlatformError(412, 'Stale version'), 409, 'conflict', 'Stale version'],
 		[new HTTPException(422, { message: 'Invalid field' }), 400, 'invalid-request', 'Invalid field'],
+		[new PlatformError(429, 'Rate limit exceeded'), 429, 'unavailable', 'Rate limit exceeded'],
+		[new PlatformError(410, 'Upload expired'), 410, 'invalid-request', 'Upload expired'],
 		[
 			new PlatformError(503, 'private upstream details'),
 			503,

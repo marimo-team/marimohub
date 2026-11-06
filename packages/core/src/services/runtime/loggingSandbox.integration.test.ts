@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -9,10 +10,19 @@ import { loggingFiles } from './logging';
 import { buildMarimoLaunch } from './marimoLaunch';
 
 const python = process.env.MARIMO_INTEGRATION_PYTHON;
+// CI downloads marimo plus these requirements into a local wheelhouse so `uv run --with` and
+// marimo's own `--sandbox` resolve without reaching PyPI.
+const wheelhouse = process.env.MARIMOHUB_TEST_LOGGING_SANDBOX_WHEELS;
+const runtimeRequirements = readFileSync(
+	new URL('./fixtures/logging_sandbox_requirements.txt', import.meta.url),
+	'utf8',
+)
+	.split('\n')
+	.filter(Boolean);
 const exec = promisify(execFile);
 
 describe.runIf(Boolean(python))('uv-sandbox logging runtime', () => {
-	it.each([{ runtimePackages: [] }, { runtimePackages: ['rich==13.9.4'] }])(
+	it.each([{ runtimePackages: [] }, { runtimePackages: runtimeRequirements }])(
 		'provisions marimo outside an empty base environment with runtime packages $runtimePackages',
 		async ({ runtimePackages }) => {
 			const root = await mkdtemp(join(tmpdir(), 'mhub-sandbox-logging-'));
@@ -81,6 +91,7 @@ if __name__ == "__main__":
 					PATH: `${dirname(python!)}:${process.env.PATH}`,
 					UV_PROJECT_ENVIRONMENT: join(root, '.venv'),
 					UV_PYTHON: python!,
+					...(wheelhouse && { UV_OFFLINE: '1', UV_NO_INDEX: '1', UV_FIND_LINKS: wheelhouse }),
 				};
 				await exec('uv', ['venv', '--python', python!, env.UV_PROJECT_ENVIRONMENT], {
 					cwd: root,

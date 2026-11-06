@@ -164,8 +164,32 @@ const PROCESS_CANCEL_TIMEOUT_MS = 1_000;
 /** Backoff before each retry of a file write the gateway answered with UNAVAILABLE. */
 const WRITE_RETRY_DELAYS_MS = [250, 1_000, 3_000];
 const FILE_WRITE_CONCURRENCY = 4;
-// Bound fan-out across workspace, integration, and bridge uploads from all sessions.
-const FILE_WRITE_SLOTS = new Semaphore(16);
+// Per sandbox, so concurrent workspace, integration, and bridge uploads stay bounded
+// without one session's transfers queueing behind another's.
+const FILE_WRITE_SLOTS_PER_SANDBOX = 8;
+// Workspace files can be several MiB; the bound exists so a hung RPC releases its slot.
+const FILE_WRITE_TIMEOUT_MS = 60_000;
+
+/**
+ * Keyed by provider sandbox ID so every handle to one sandbox (`create` and
+ * `connectExisting` alike) shares the cap. Idle entries are dropped.
+ */
+class SandboxFileWriteSlots {
+	private readonly bySandbox = new Map<string, Semaphore>();
+
+	async run<T>(sandboxId: string, fn: () => Promise<T>): Promise<T> {
+		let slots = this.bySandbox.get(sandboxId);
+		if (!slots) {
+			slots = new Semaphore(FILE_WRITE_SLOTS_PER_SANDBOX);
+			this.bySandbox.set(sandboxId, slots);
+		}
+		try {
+			return await slots.run(fn);
+		} finally {
+			if (slots.available === FILE_WRITE_SLOTS_PER_SANDBOX) this.bySandbox.delete(sandboxId);
+		}
+	}
+}
 
 async function cancelLaunchProcess(proc: CommandProcess): Promise<void> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -390,7 +414,7 @@ export interface CoreWeaveSandbox {
 	readonly files: {
 		readText(path: string): Promise<string>;
 		/** Multi-file form only — `writeFiles` is the port's single write path. */
-		write(files: FileWrites): Promise<void>;
+		write(files: FileWrites, options?: { timeoutMs?: number }): Promise<void>;
 	};
 	delete(): Promise<void>;
 }
@@ -402,7 +426,7 @@ function isDeadStatus(status: SandboxInfo['status']): boolean {
 
 let PROC_SEQ = 0;
 
-function reconnectSandboxId(reference: string, hubId: SandboxId): string {
+function reconnectSandboxId(reference: string, hubId: SandboxId): string | undefined {
 	try {
 		if (reference.length > 4096) throw new Error('Reference exceeds size limit');
 		const value: unknown = JSON.parse(reference);
@@ -424,7 +448,7 @@ function reconnectSandboxId(reference: string, hubId: SandboxId): string {
 	} catch {
 		// Never include the opaque record in errors or logs.
 	}
-	throw new CWSandboxConfigurationError('Invalid CoreWeave sandbox reconnect reference');
+	return undefined;
 }
 
 class CoreWeaveSandboxInstance implements SandboxInstance {
@@ -433,6 +457,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	private readonly kernelPort: number;
 	private sandbox?: CoreWeaveSandbox;
 	private readonly reconnectId?: string;
+	private readonly invalidReference: boolean = false;
 	private lastEnsureTimings?: Timings;
 	/** Shell snippet to splice onto the next command; see `takeBootstrap`. */
 	private pendingBootstrap?: string;
@@ -448,9 +473,13 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		private readonly userHome?: SandboxUserHome,
 		private readonly existingOnly = false,
 		reference?: string,
+		private readonly fileWriteSlots = new SandboxFileWriteSlots(),
 	) {
 		this.idTag = ID_TAG_PREFIX + id;
-		if (reference !== undefined) this.reconnectId = reconnectSandboxId(reference, id);
+		if (reference !== undefined) {
+			this.reconnectId = reconnectSandboxId(reference, id);
+			this.invalidReference = this.reconnectId === undefined;
+		}
 		this.kernelPort = config.kernelPort ?? DEFAULT_KERNEL_PORT;
 	}
 
@@ -470,6 +499,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	 * sandbox, e.g. to read notebook files back before destroy.
 	 */
 	private async ensure(): Promise<CoreWeaveSandbox> {
+		// Thrown on first use, not at attach, so warm-pool readiness reports it as reconnect_failed.
+		this.assertValidReference();
 		if (this.sandbox) return this.sandbox;
 		this.environment.invalidate();
 		// find = the reconnect lookup, create = the API accepting the start request,
@@ -540,6 +571,12 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			{ channel: 'warn' },
 		);
 		return this.sandbox;
+	}
+
+	private assertValidReference(): void {
+		if (this.invalidReference) {
+			throw new CWSandboxConfigurationError('Invalid CoreWeave sandbox reconnect reference');
+		}
 	}
 
 	/** Resolve the sandbox without spending a command round-trip to prove it is up. */
@@ -806,11 +843,13 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	): Promise<void> {
 		// Whole-file writes are idempotent; retry only the file that saw UNAVAILABLE.
 		for (let attempt = 0; ; attempt++) {
-			const retry = await FILE_WRITE_SLOTS.run(async () => {
+			const retry = await this.fileWriteSlots.run(sandbox.sandboxId, async () => {
 				// Already-started uploads finish their retries after a sibling fails.
 				if (batchState.failed && attempt === 0) return;
 				try {
-					await sandbox.files.write([{ path: file.path, content: file.content }]);
+					await sandbox.files.write([{ path: file.path, content: file.content }], {
+						timeoutMs: FILE_WRITE_TIMEOUT_MS,
+					});
 				} catch (err) {
 					if (
 						!(err instanceof CWSandboxUnavailableError) ||
@@ -1133,6 +1172,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			this.sandbox = undefined;
 			return;
 		}
+		// A bad reference must never fall through to tag discovery.
+		this.assertValidReference();
 		const reconnectId = this.reconnectId;
 		if (reconnectId) {
 			await this.removeIngress(reconnectId);
@@ -1182,6 +1223,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 	 */
 	readonly capabilities: { multiPort: boolean };
 	private client?: CoreWeaveClient;
+	private readonly fileWriteSlots = new SandboxFileWriteSlots();
 
 	constructor(
 		private readonly config: CoreWeaveConfig,
@@ -1254,6 +1296,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 			options?.userHome,
 			existingOnly,
 			reference,
+			this.fileWriteSlots,
 		);
 	}
 

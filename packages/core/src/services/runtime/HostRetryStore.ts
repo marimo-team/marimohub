@@ -1,16 +1,20 @@
 import {
+	decideHostRetryAcquire,
 	HOST_CLAIM_LEASE_MS,
 	HOST_RETRY_REFRESH_MS,
 	HOST_RETRY_WINDOW_MS,
+	settleHostRetryClaim,
 } from '@marimo-hub/host-protocol/retry-store';
 import type {
 	HostRetryAcquisition,
 	HostRetryClaim,
+	HostRetryRecord,
 	HostRetryReply,
 	HostRetryStore as HostRetryStorePort,
 } from '@marimo-hub/host-protocol/retry-store';
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
+import { Millis } from '../../duration';
 import { ConflictError, PreconditionFailedError, UnavailableError } from '../../errors';
 import { sha256Hex } from '../../internal/sha256';
 import { paths } from '../../paths';
@@ -19,12 +23,14 @@ import { readStored, StoredObjectError } from '../../schema';
 import { withCasRetry } from '../catalog/cas';
 
 export { HOST_CLAIM_LEASE_MS, HOST_RETRY_REFRESH_MS, HOST_RETRY_WINDOW_MS };
+/** Matches `IdempotencyService`'s retention; far beyond any lease or retry window. */
+export const HOST_RETRY_TOMBSTONE_GRACE_MS = Millis.days(1);
 const ReplySchema = z.object({ status: z.number().int().min(100).max(599), body: z.unknown() });
 const RecordFields = z.object({
 	schema_version: z.literal(1),
 	fingerprint: z.string().min(1),
 	owner: z.uuid().optional(),
-	claimed_at: z.number().nonnegative().optional(),
+	claimed_at: z.number().nonnegative(),
 	session_id: z.string().min(1).optional(),
 	dispatched: z.boolean(),
 	expires: z.number().nonnegative().optional(),
@@ -34,11 +40,41 @@ const RecordFields = z.object({
 // keeps that invariant in the generated JSON Schema.
 export const HostRetryRecordSchema = z.union([
 	RecordFields.extend({ owner: z.uuid() }),
-	RecordFields.extend({ expires: z.number().nonnegative() }),
+	// Compaction tombstones written by pre-release builds omit `claimed_at`; they hold no
+	// claim or receipt, so an epoch default changes nothing about how they settle.
+	RecordFields.extend({
+		expires: z.number().nonnegative(),
+		claimed_at: z.number().nonnegative().default(0),
+	}),
 ]);
 export const HostRetryCleanupSchema = z.object({ after: z.string().optional() });
 type Record = z.infer<typeof HostRetryRecordSchema>;
 export type { HostRetryClaim, HostRetryReply };
+
+function fromStored(record: Record): HostRetryRecord {
+	return {
+		fingerprint: record.fingerprint,
+		owner: record.owner,
+		claimedAt: record.claimed_at,
+		sessionId: record.session_id,
+		dispatched: record.dispatched,
+		expires: record.expires,
+		reply: record.reply,
+	};
+}
+
+function toStored(record: HostRetryRecord): string {
+	return JSON.stringify({
+		schema_version: 1,
+		fingerprint: record.fingerprint,
+		owner: record.owner,
+		claimed_at: record.claimedAt,
+		session_id: record.sessionId,
+		dispatched: record.dispatched,
+		expires: record.expires,
+		reply: record.reply,
+	} satisfies z.input<typeof RecordFields>);
+}
 
 /** The library's retry contract, kept in the bucket so every API instance shares one view. */
 export class HostRetryStore implements HostRetryStorePort {
@@ -54,65 +90,40 @@ export class HostRetryStore implements HostRetryStorePort {
 		return withCasRetry(this.bucket, async (writer) => {
 			const object = await this.bucket.get(objectKey);
 			const previous = object ? await readStored(HostRetryRecordSchema, object, objectKey) : null;
-			const now = Date.now();
-			// Records written before leases exist carry no claimed_at and stay held, as they did then.
-			const held =
-				!!previous?.owner &&
-				!(
-					!previous.dispatched &&
-					previous.claimed_at !== undefined &&
-					previous.claimed_at + HOST_CLAIM_LEASE_MS <= now
-				);
-			const retained = !!previous && (previous.expires ?? 0) > now;
-			if (previous && (held || retained) && previous.fingerprint !== fingerprint)
-				throw new ConflictError('Idempotency-Key was used for a different request');
-			if (held) return { kind: 'pending' };
-			if (previous && retained && previous.reply) {
-				const age = HOST_RETRY_WINDOW_MS - ((previous.expires ?? 0) - now);
-				if (!refresh || age >= HOST_RETRY_REFRESH_MS)
-					return { kind: 'reply', reply: previous.reply };
-			}
 			const owner = crypto.randomUUID();
-			const record: Record = {
-				schema_version: 1,
+			const decision = decideHostRetryAcquire(
+				previous && fromStored(previous),
 				fingerprint,
+				refresh,
 				owner,
-				claimed_at: now,
-				dispatched: false,
-				...(previous && retained
-					? { session_id: previous.session_id, expires: previous.expires }
-					: {}),
-			};
+				Date.now(),
+			);
+			if (decision.kind === 'conflict')
+				throw new ConflictError('Idempotency-Key was used for a different request');
+			if (decision.kind !== 'claim') return decision;
 			await writer.put(
 				objectKey,
-				JSON.stringify(record),
+				toStored(decision.record),
 				object ? { onlyIfEtagMatches: object.etag } : { onlyIfNotExists: true },
 			);
-			return { kind: 'claimed', claim: { key: objectKey, owner, sessionId: record.session_id } };
+			return {
+				kind: 'claimed',
+				claim: { key: objectKey, owner, sessionId: decision.record.sessionId },
+			};
 		});
 	}
 
 	async dispatch(claim: HostRetryClaim, sessionId?: string): Promise<void> {
 		await this.update(claim, (record) => {
-			if (record.session_id && sessionId !== record.session_id)
+			if (record.sessionId && sessionId !== record.sessionId)
 				throw new ConflictError('The request is bound to another runtime');
-			return { ...record, dispatched: true, session_id: sessionId };
+			return { ...record, dispatched: true, sessionId };
 		});
 		claim.sessionId = sessionId;
 	}
 
 	async finish(claim: HostRetryClaim, reply?: HostRetryReply): Promise<void> {
-		await this.update(claim, (record) => {
-			// An unacknowledged Hub mutation cannot be safely re-executed after a crash or lost reply.
-			if (!reply && record.dispatched && !record.session_id) return record;
-			const keep = record.session_id || (reply && reply.status < 400);
-			return {
-				...record,
-				owner: undefined,
-				expires: keep ? (record.expires ?? Date.now() + HOST_RETRY_WINDOW_MS) : 0,
-				reply: reply && reply.status < 400 ? reply : undefined,
-			};
-		});
+		await this.update(claim, (record) => settleHostRetryClaim(record, reply, Date.now()));
 	}
 
 	async compactExpired(): Promise<number> {
@@ -127,7 +138,8 @@ export class HostRetryStore implements HostRetryStorePort {
 			startAfter: cursor.after,
 		});
 		for (const { key, uploaded } of page.objects) {
-			if (uploaded.getTime() + HOST_RETRY_WINDOW_MS > Date.now()) continue;
+			const age = Date.now() - uploaded.getTime();
+			if (age < HOST_RETRY_WINDOW_MS) continue;
 			const object = await this.bucket.get(key);
 			if (!object) continue;
 			let record: Record;
@@ -142,14 +154,25 @@ export class HostRetryStore implements HostRetryStorePort {
 				);
 				continue;
 			}
-			if (record.owner || !record.expires || record.expires > Date.now()) continue;
+			if (record.owner || (record.expires ?? 0) > Date.now()) continue;
+			if (age >= HOST_RETRY_TOMBSTONE_GRACE_MS) {
+				// The port has no conditional delete. A request reusing this key between the read and
+				// the delete loses its claim and fails its owner check; only one that also dispatches
+				// in that window can repeat, after a day without use. IdempotencyService accepts the
+				// same race.
+				await this.bucket.delete(key);
+				compacted++;
+				continue;
+			}
+			if (!record.expires) continue;
 			try {
-				// Retain the CAS head so a delayed writer cannot resurrect a removed claim.
+				// Retain the CAS head through the grace so a delayed writer cannot resurrect a removed claim.
 				await this.bucket.put(
 					key,
 					JSON.stringify({
 						schema_version: 1,
 						fingerprint: record.fingerprint,
+						claimed_at: record.claimed_at,
 						dispatched: false,
 						expires: 0,
 					}),
@@ -174,14 +197,17 @@ export class HostRetryStore implements HostRetryStorePort {
 		return compacted;
 	}
 
-	private async update(claim: HostRetryClaim, change: (record: Record) => Record): Promise<void> {
+	private async update(
+		claim: HostRetryClaim,
+		change: (record: HostRetryRecord) => HostRetryRecord,
+	): Promise<void> {
 		await withCasRetry(this.bucket, async (writer) => {
 			const object = await this.bucket.get(claim.key);
 			const record = object ? await readStored(HostRetryRecordSchema, object, claim.key) : null;
-			if (!record || record.owner !== claim.owner)
+			if (!object || !record || record.owner !== claim.owner)
 				throw new UnavailableError('Host retry claim is no longer owned by this request');
-			await writer.put(claim.key, JSON.stringify(change(record)), {
-				onlyIfEtagMatches: object!.etag,
+			await writer.put(claim.key, toStored(change(fromStored(record))), {
+				onlyIfEtagMatches: object.etag,
 			});
 		});
 	}

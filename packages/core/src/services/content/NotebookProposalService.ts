@@ -105,7 +105,7 @@ interface PublishedChangeRequestTarget {
 
 export class NotebookProposalService {
 	async finishMove(source: ProjectId, nid: NotebookId): Promise<void> {
-		await deleteByPrefix(this.bucket, `_system/proposal-payloads/${source}/${nid}/`);
+		await deleteByPrefix(this.bucket, paths.proposalPayloadMarkersForNotebook(source, nid));
 	}
 
 	async copyForMove(source: ProjectId, destination: ProjectId, nid: NotebookId): Promise<void> {
@@ -116,8 +116,8 @@ export class NotebookProposalService {
 		);
 		await copyMovePrefix(
 			this.bucket,
-			`_system/proposal-payloads/${source}/${nid}/`,
-			`_system/proposal-payloads/${destination}/${nid}/`,
+			paths.proposalPayloadMarkersForNotebook(source, nid),
+			paths.proposalPayloadMarkersForNotebook(destination, nid),
 			{
 				transform: (_key, bytes) =>
 					moveJson(bytes, (marker) => ({ ...marker, project_id: destination })),

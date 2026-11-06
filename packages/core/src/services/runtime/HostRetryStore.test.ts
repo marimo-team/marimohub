@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryBucket } from '../../testing/MemoryBucket';
 import {
 	HostRetryStore,
-	HOST_CLAIM_LEASE_MS,
 	HOST_RETRY_REFRESH_MS,
+	HOST_RETRY_TOMBSTONE_GRACE_MS,
 	HOST_RETRY_WINDOW_MS,
 } from './HostRetryStore';
 import type { HostRetryClaim } from './HostRetryStore';
@@ -69,21 +69,6 @@ describe('shared host retry receipts', () => {
 		});
 	});
 
-	it('reclaims an undispatched claim after its lease and fences the stale owner', async () => {
-		vi.useFakeTimers();
-		const bucket = new MemoryBucket();
-		const store = new HostRetryStore(bucket);
-		const stale = await claim(store);
-		vi.advanceTimersByTime(HOST_CLAIM_LEASE_MS - 1);
-		expect((await store.acquire('user', 'key', 'create', false)).kind).toBe('pending');
-		vi.advanceTimersByTime(1);
-		await expect(store.acquire('user', 'key', 'other', false)).resolves.toMatchObject({
-			kind: 'claimed',
-		});
-		await expect(store.dispatch(stale)).rejects.toThrow('no longer owned');
-		await expect(store.finish(stale, reply)).rejects.toThrow('no longer owned');
-	});
-
 	it('retains claims after a receipt write failure, even when the side effect succeeded', async () => {
 		const bucket = new MemoryBucket();
 		const store = new HostRetryStore(bucket);
@@ -147,14 +132,21 @@ describe('shared host retry receipts', () => {
 		const store = new HostRetryStore(bucket);
 		const acquired = await claim(store, '../unsafe/\n?token');
 		expect(acquired.key).toMatch(/^_system\/host-retries\/[a-f0-9]{64}\.json$/);
+		const held = { schema_version: 1, fingerprint: 'create', claimed_at: 0, dispatched: true };
 		for (const record of [
 			{ schema_version: 1 },
-			{ schema_version: 1, fingerprint: 'create', dispatched: true },
-			{ schema_version: 1, fingerprint: 'create', dispatched: true, owner: '' },
+			{ ...held, claimed_at: undefined, owner: crypto.randomUUID() },
+			held,
+			{ ...held, owner: '' },
+			{ ...held, owner: crypto.randomUUID(), expires: -1 },
 		]) {
 			await bucket.put(acquired.key, JSON.stringify(record));
 			await expect(store.acquire('user', '../unsafe/\n?token', 'create', false)).rejects.toThrow();
 		}
+		await bucket.put(acquired.key, JSON.stringify({ ...held, owner: crypto.randomUUID() }));
+		expect(await store.acquire('user', '../unsafe/\n?token', 'create', false)).toEqual({
+			kind: 'pending',
+		});
 	});
 
 	it('compacts expired replies without deleting heads or accepting a stale writer', async () => {
@@ -173,6 +165,30 @@ describe('shared host retry receipts', () => {
 		await store.dispatch(next);
 		expect(await store.compactExpired()).toBe(0);
 		expect((await bucket.list({ prefix: paths.hostRetriesPrefix })).objects).toHaveLength(1);
+	});
+
+	it('deletes tombstones after the grace without touching unresolved claims', async () => {
+		vi.useFakeTimers();
+		const bucket = new MemoryBucket();
+		const store = new HostRetryStore(bucket);
+		const settled = await claim(store);
+		await store.finish(settled, reply);
+		const unresolved = await claim(store, 'unresolved');
+		await store.dispatch(unresolved);
+		vi.advanceTimersByTime(HOST_RETRY_WINDOW_MS + 1);
+		expect(await store.compactExpired()).toBe(1);
+		vi.advanceTimersByTime(HOST_RETRY_TOMBSTONE_GRACE_MS - 1);
+		expect(await store.compactExpired()).toBe(0);
+		expect(await bucket.get(settled.key)).not.toBeNull();
+		vi.advanceTimersByTime(1);
+		// An accepted race, as in IdempotencyService.prune: the Bucket port has no conditional delete,
+		// so an acquire of this key between the compactor's read and this delete loses its claim.
+		expect(await store.compactExpired()).toBe(1);
+		expect(await bucket.get(settled.key)).toBeNull();
+		expect(await store.acquire('user', 'unresolved', 'create', false)).toEqual({
+			kind: 'pending',
+		});
+		expect((await store.acquire('user', 'key', 'another-create', false)).kind).toBe('claimed');
 	});
 
 	it('does not let expiry cleanup overwrite a concurrently renewed claim', async () => {

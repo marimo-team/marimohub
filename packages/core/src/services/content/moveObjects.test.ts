@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
-import { copyMoveObject } from './moveObjects';
+import { copyMoveObject, copyMovePrefix } from './moveObjects';
 
 describe('copyMoveObject', () => {
 	it('preserves HTTP and custom metadata through copy and replay', async () => {
@@ -52,5 +52,36 @@ describe('copyMoveObject', () => {
 		});
 		await expect(copyMoveObject(bucket, 'source', 'destination')).rejects.toThrow('source changed');
 		expect(await bucket.get('destination')).toBeNull();
+	});
+});
+
+describe('copyMovePrefix', () => {
+	it('starts no copy after a failure and settles in-flight copies before rejecting', async () => {
+		const bucket = new MemoryBucket();
+		for (let i = 0; i < 20; i++) await bucket.put(`src/${String(i).padStart(2, '0')}`, `${i}`);
+		const put = bucket.put.bind(bucket);
+		const started: string[] = [];
+		let inFlight = 0;
+		let peak = 0;
+		vi.spyOn(bucket, 'put').mockImplementation(async (key, value, options) => {
+			if (!key.startsWith('dst/')) return put(key, value, options);
+			started.push(key);
+			peak = Math.max(peak, ++inFlight);
+			try {
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				if (key === 'dst/00') throw new Error('write failed');
+				return await put(key, value, options);
+			} finally {
+				inFlight--;
+			}
+		});
+
+		await expect(copyMovePrefix(bucket, 'src/', 'dst/')).rejects.toThrow('write failed');
+		expect(inFlight).toBe(0);
+		const attempted = started.length;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(started).toHaveLength(attempted);
+		expect(attempted).toBeLessThan(20);
+		expect(peak).toBeLessThanOrEqual(4);
 	});
 });

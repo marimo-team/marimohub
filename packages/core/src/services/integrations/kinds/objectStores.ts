@@ -15,6 +15,7 @@ import {
 	AWS_REGION_REGEX,
 	awsStaticCredentials,
 	GCS_BUCKET_REGEX,
+	GOOGLE_SHARED_ENVIRONMENT,
 	httpUrlField,
 	isInsecureHttpUrl,
 	isIpAddressHost,
@@ -101,6 +102,7 @@ export const s3 = defineIntegration({
 		'AWS_ENDPOINT_URL_S3',
 		'AWS_CONFIG_FILE',
 	],
+	sharedEnvironment: { group: 's3', title: 'S3', variables: 'AWS_* variables' },
 	requirements: ['boto3>=1.35', 's3fs>=2024.6'],
 	uiHints: {
 		allow_write: { group: 'Uploads', order: 20, widget: 'toggle' },
@@ -395,6 +397,7 @@ export const gcs = defineIntegration({
 	schemaVersion: 1,
 	configSchema: gcsConfig,
 	environmentVariables: ['GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT'],
+	sharedEnvironment: GOOGLE_SHARED_ENVIRONMENT,
 	requirements: ['gcsfs>=2024.6', 'google-cloud-storage>=2.18'],
 	uiHints: {
 		allow_write: { group: 'Uploads', order: 20, widget: 'toggle' },
@@ -539,6 +542,11 @@ export const azureBlob = defineIntegration({
 		'AZURE_CLIENT_ID',
 		'AZURE_CLIENT_SECRET',
 	],
+	sharedEnvironment: {
+		group: 'azure',
+		title: 'Azure Blob',
+		variables: 'AZURE_* variables',
+	},
 	requirements: ['adlfs>=2024.7', 'azure-storage-blob>=12.22', 'azure-identity>=1.17'],
 	uiHints: {
 		allow_write: { group: 'Uploads', order: 20, widget: 'toggle' },

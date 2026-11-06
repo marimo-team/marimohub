@@ -31,6 +31,7 @@ import {
 	Skeleton,
 	TextField,
 } from '@/components/ui';
+import { Callout } from '@/components/ui/Callout';
 import {
 	SchemaForm,
 	buildDefaults,
@@ -137,6 +138,11 @@ function getKindPresentation(kind: IntegrationKind | undefined) {
 	// A brand hex can't be a Tailwind class, so vendor logos are tinted inline.
 	const iconStyle = brandIcon && kind ? { color: kind.brand.color } : undefined;
 	return { ...presentation, Icon, iconStyle };
+}
+
+function exportsAmbientEnv(schema: JsonSchemaNode, config: Record<string, unknown>): boolean {
+	const property = schema.properties?.ambient_env;
+	return property !== undefined && (config.ambient_env ?? property.default) === true;
 }
 
 type View =
@@ -400,14 +406,16 @@ function ListView({
 			</div>
 
 			{validationResults.map((result) => (
-				<div
+				<Callout
 					key={`${result.ruleId}:${result.integrationIds.join(',')}`}
-					role={result.severity === 'error' ? 'alert' : 'note'}
-					className={`rounded-lg border p-3 ${result.severity === 'error' ? 'border-destructive/30 bg-destructive/5' : 'border-amber-500/30 bg-amber-500/5'}`}
+					variant={result.severity}
 				>
 					<p className="font-medium">{result.title}</p>
-					<p className="mt-1 text-muted-foreground">{result.message}</p>
-				</div>
+					<p className="mt-1 text-muted-foreground">
+						{result.message}
+						{canManage && result.remedy ? ` ${result.remedy}` : null}
+					</p>
+				</Callout>
 			))}
 
 			{entries.length === 0 ? (
@@ -994,9 +1002,10 @@ function EditorForm({
 				editing={editing}
 				secretSources={kind.secret_sources}
 			/>
-			{kind.kind === 's3' && config.ambient_env !== false && (
+			{exportsAmbientEnv(schema, config) && (
 				<p className="text-sm text-muted-foreground">
-					For multiple S3 connections: {AMBIENT_ENV_CONFLICT_HELP} {INTEGRATION_TEST_HELP}
+					If other connections export the same variables: {AMBIENT_ENV_CONFLICT_HELP}{' '}
+					{INTEGRATION_TEST_HELP}
 				</p>
 			)}
 			<div className="flex justify-end gap-2 border-t pt-4">

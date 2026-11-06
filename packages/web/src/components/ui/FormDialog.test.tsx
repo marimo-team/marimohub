@@ -63,6 +63,23 @@ describe('FormDialog', () => {
 		expect(screen.getByRole('button', { name: 'Creating...' })).toBeDisabled();
 	});
 
+	it('blocks Escape and the close button while pending', async () => {
+		const user = userEvent.setup();
+		const { onClose } = setup({ isPending: true });
+		await user.keyboard('{Escape}');
+		expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+		expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+		expect(onClose).not.toHaveBeenCalled();
+		expect(screen.getByRole('dialog')).toBeInTheDocument();
+	});
+
+	it('closes on Escape when idle', async () => {
+		const user = userEvent.setup();
+		const { onClose } = setup();
+		await user.keyboard('{Escape}');
+		expect(onClose).toHaveBeenCalledTimes(1);
+	});
+
 	it('disables submit when submitDisabled is set', () => {
 		setup({ submitDisabled: true });
 		expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();

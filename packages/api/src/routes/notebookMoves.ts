@@ -7,6 +7,7 @@ import {
 	toPublicNotebookMeta,
 	asFilesystemSnapshots,
 } from '@marimo-hub/core';
+import type { AuthorizationSubject, NotebookMeta, Project } from '@marimo-hub/core';
 import {
 	assertProjectActionOn,
 	assertProjectRole,
@@ -23,6 +24,7 @@ import {
 	RequiredIfMatchHeader,
 	SuccessResponseSchema,
 } from '../shared';
+import type { ApiDeps } from '../context';
 import { assertPullSourceSupported } from './sourcePullSync';
 
 const app = createApp();
@@ -37,7 +39,15 @@ const moveNotebook = createRoute({
 	request: {
 		params: NotebookIdParam,
 		headers: RequiredIfMatchHeader,
-		body: jsonBody(z.object({ destination_project_id: z.string().refine(ProjectId.is) })),
+		body: jsonBody(
+			z.object({
+				destination_project_id: z
+					.string()
+					.regex(ProjectId.regex)
+					.refine(ProjectId.is)
+					.openapi({ example: 'proj-7h2k9qm4xz7rp3w8' }),
+			}),
+		),
 	},
 	responses: {
 		200: jsonContent(
@@ -46,7 +56,7 @@ const moveNotebook = createRoute({
 			EtagResponseHeader,
 		),
 		...commonErrors(),
-		...errorResponses(403, 404, 409, 412),
+		...errorResponses(403, 404, 409, 412, 429),
 	},
 });
 
@@ -66,12 +76,27 @@ const cancelMove = createRoute({
 	},
 });
 
+/** Cancel requires managing the notebook in the source, labels included. */
+function authorizeSourceManager(deps: ApiDeps, user: AuthorizationSubject) {
+	return async ({
+		sourceProject,
+		notebook,
+	}: {
+		sourceProject: Project;
+		notebook: NotebookMeta;
+	}) => {
+		for (const action of ['project.read', 'notebook.manage'] as const)
+			await assertProjectActionOn(sourceProject, user, action, deps, notebook.security_labels);
+	};
+}
+
 app.openapi(cancelMove, async (c) => {
 	const deps = c.get('deps');
-	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
-	await assertProjectRole(deps.services.projects, pid, user, 'notebook.manage', deps);
-	await deps.services.moves.cancel({ source: pid, notebookId: nid });
+	await deps.services.moves.cancel(
+		{ source: pid, notebookId: nid },
+		authorizeSourceManager(deps, c.get('user')),
+	);
 	return c.json({ success: true }, 200);
 });
 
@@ -79,7 +104,7 @@ app.openapi(moveNotebook, async (c) => {
 	const deps = c.get('deps');
 	const user = c.get('user');
 	const { pid, nid } = c.req.valid('param');
-	const destination = ProjectId.parse(c.req.valid('json').destination_project_id);
+	const destination = c.req.valid('json').destination_project_id;
 	await assertProjectRole(deps.services.projects, pid, user, 'notebook.manage', deps);
 	await assertProjectRole(deps.services.projects, destination, user, 'notebook.manage', deps);
 	const snapshotCompute = asFilesystemSnapshots(deps.compute);

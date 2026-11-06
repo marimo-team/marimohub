@@ -15,6 +15,16 @@ import {
 	listIntegrationObjects,
 	getIntegrationObjectMetadata,
 	previewIntegrationObject,
+	CATALOG_PAGE_LIMIT,
+	OBJECT_PAGE_LIMIT,
+	PreviewRowLimit,
+	NAMESPACE_JOINER,
+	NamespaceParts,
+	NamespaceValue,
+	ObjectBucketValue,
+	ObjectPrefixValue,
+	ObjectKeyValue,
+	ObjectVersionIdValue,
 } from '../integrations/browse';
 import type { IntegrationBrowseContext } from '../integrations/browse';
 import type { Context } from 'hono';
@@ -50,9 +60,9 @@ import {
 import type { ApiDeps } from '../shared';
 import { appendAudit, logEvent } from '../log';
 import { objectContentDisposition } from '../contentDisposition';
+import { runObjectBrowse } from '../integrations/objectBrowseContext';
 import {
 	acquireDownload,
-	runObjectBrowse,
 	safeObjectContentType,
 	streamObjectBody,
 	validRangeHeader,
@@ -68,36 +78,20 @@ const IntegrationIdParam = ProjectIdParam.extend({ iid: IidParam });
 
 // --- Data browser (read-only catalog metadata over an integration) ---
 
-/**
- * Multi-part namespaces ride in one query param, parts joined by U+001F — the
- * Iceberg REST unit separator, which cannot appear in an identifier — so parts
- * containing dots round-trip.
- */
-const NAMESPACE_JOINER = '\u001f';
-
-const NamespaceQueryValue = z
-	.string()
-	.min(1)
-	// A leading/trailing/doubled joiner splits into empty identifier parts,
-	// which no catalog can hold — refuse here (422) instead of spending a probe
-	// call on a guaranteed upstream 404.
-	.refine((value) => value.split(NAMESPACE_JOINER).every((part) => part !== ''), {
-		message: 'Namespace parts must be non-empty.',
-	})
-	.openapi({
-		param: { name: 'namespace', in: 'query' },
-		description: 'Namespace parts joined by U+001F (percent-encoded as %1F).',
-		example: 'sales',
-	});
+const NamespaceQueryValue = NamespaceValue.openapi({
+	param: { name: 'namespace', in: 'query' },
+	description: 'Namespace parts joined by U+001F (percent-encoded as %1F).',
+	example: 'sales',
+});
 
 const BrowsePageQuery = z.object({
 	limit: z.coerce
 		.number()
 		.int()
 		.positive()
-		.max(500)
-		.default(100)
-		.openapi({ param: { name: 'limit', in: 'query' }, example: 100 }),
+		.max(CATALOG_PAGE_LIMIT.max)
+		.default(CATALOG_PAGE_LIMIT.default)
+		.openapi({ param: { name: 'limit', in: 'query' }, example: CATALOG_PAGE_LIMIT.default }),
 	/** Opaque upstream pagination token from the previous page's `next_cursor`. */
 	cursor: z
 		.string()
@@ -200,9 +194,9 @@ const BrowsePreviewSchema = z
 	.openapi('IntegrationTablePreview');
 
 const BrowsePreviewBody = z.object({
-	namespace: z.array(z.string().min(1)).min(1),
+	namespace: NamespaceParts,
 	table: z.string().min(1),
-	limit: z.number().int().positive().max(100).default(20),
+	limit: PreviewRowLimit,
 });
 
 const DataQueryBody = z
@@ -427,25 +421,18 @@ const generateDataQuerySql = createRoute({
 	},
 });
 
-const ObjectBucketValue = z
-	.string()
-	.min(1)
-	.max(255)
-	.openapi({ param: { name: 'bucket', in: 'query' }, example: 'analytics-lake' });
-const ObjectPrefixValue = z
-	.string()
-	.refine((value) => utf8ByteLength(value) <= 1024, {
-		message: "Prefix exceeds S3's 1,024-byte UTF-8 limit.",
-	})
-	.openapi({ param: { name: 'prefix', in: 'query' }, example: 'events/2026/' });
-const ObjectKeyValue = z
-	.string()
-	.min(1)
-	.refine((value) => utf8ByteLength(value) <= 1024, {
-		message: "Key exceeds S3's 1,024-byte UTF-8 limit.",
-	})
-	.openapi({ param: { name: 'key', in: 'query' }, example: 'events/2026/part-001.jsonl' });
-const ObjectVersionIdValue = z.string().min(1).max(2048);
+const ObjectBucketQuery = ObjectBucketValue.openapi({
+	param: { name: 'bucket', in: 'query' },
+	example: 'analytics-lake',
+});
+const ObjectPrefixQuery = ObjectPrefixValue.openapi({
+	param: { name: 'prefix', in: 'query' },
+	example: 'events/2026/',
+});
+const ObjectKeyQuery = ObjectKeyValue.openapi({
+	param: { name: 'key', in: 'query' },
+	example: 'events/2026/part-001.jsonl',
+});
 const ObjectVersionValue = ObjectVersionIdValue.optional().openapi({
 	param: { name: 'version_id', in: 'query' },
 });
@@ -454,15 +441,15 @@ const ObjectPageQuery = z.object({
 		.number()
 		.int()
 		.positive()
-		.max(100)
-		.default(50)
-		.openapi({ param: { name: 'limit', in: 'query' }, example: 50 }),
+		.max(OBJECT_PAGE_LIMIT.max)
+		.default(OBJECT_PAGE_LIMIT.default)
+		.openapi({ param: { name: 'limit', in: 'query' }, example: OBJECT_PAGE_LIMIT.default }),
 	cursor: BrowsePageQuery.shape.cursor,
 	fresh: BrowsePageQuery.shape.fresh,
 });
 const ObjectIdentityQuery = z.object({
-	bucket: ObjectBucketValue,
-	key: ObjectKeyValue,
+	bucket: ObjectBucketQuery,
+	key: ObjectKeyQuery,
 	version_id: ObjectVersionValue,
 });
 
@@ -586,8 +573,8 @@ const browseObjects = createRoute({
 	request: {
 		params: IntegrationIdParam,
 		query: ObjectPageQuery.extend({
-			bucket: ObjectBucketValue,
-			prefix: ObjectPrefixValue.optional(),
+			bucket: ObjectBucketQuery,
+			prefix: ObjectPrefixQuery.optional(),
 		}),
 	},
 	responses: {
@@ -612,8 +599,8 @@ const searchObjects = createRoute({
 	request: {
 		params: IntegrationIdParam,
 		query: ObjectPageQuery.omit({ fresh: true }).extend({
-			bucket: ObjectBucketValue,
-			prefix: ObjectPrefixValue.optional(),
+			bucket: ObjectBucketQuery,
+			prefix: ObjectPrefixQuery.optional(),
 			query: z.string().trim().min(2).max(1024),
 			formats: z.string().optional(),
 			modified_after: utcTimestamp().optional(),
@@ -696,7 +683,7 @@ const browseObjectPreview = createRoute({
 				bucket: ObjectBucketValue,
 				key: ObjectKeyValue,
 				version_id: ObjectVersionIdValue.optional(),
-				limit: z.number().int().positive().max(100).default(20),
+				limit: PreviewRowLimit,
 			}),
 		),
 	},

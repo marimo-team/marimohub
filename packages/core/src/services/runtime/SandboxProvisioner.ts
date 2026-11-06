@@ -11,7 +11,7 @@ import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { withDeadline } from '../../async';
 import { ByteBudget } from './byteBudget';
 import type { NotebookBridgeRuntime } from '../../ports/notebookBridge';
-import { notebookBridgePaths } from './notebookBridgePaths';
+import { notebookBridgePaths, resolveBridgeLauncher } from './notebookBridgePaths';
 import type { Bucket } from '../../ports/bucket';
 import { MARIMO_PORT } from '../../constants';
 import { Millis } from '../../duration';
@@ -24,7 +24,7 @@ import {
 } from '../../integrations/remoteWorkspace';
 
 import { logEvent } from '../../logs';
-import { loggingDirectory, loggingFiles } from './logging';
+import { LOGGING_DIR, loggingFiles } from './logging';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
 import type {
@@ -902,7 +902,7 @@ export class SandboxProvisioner {
 			launchStrategy === 'uv-sandbox'
 		)
 			return;
-		const { directory, launcher } = notebookBridgePaths(options.sandboxId, payload.launcher);
+		const { directory } = notebookBridgePaths(options.sandboxId, payload.launcher);
 		try {
 			await withSandboxSpan(sw, 'bridge_prepare', (time) =>
 				time(() =>
@@ -917,7 +917,10 @@ export class SandboxProvisioner {
 					),
 				),
 			);
-			return sandbox.resolveProcessPath?.(launcher) ?? launcher;
+			return resolveBridgeLauncher(sandbox, {
+				sandboxId: options.sandboxId,
+				launcher: payload.launcher,
+			});
 		} catch {
 			logEvent(
 				{
@@ -1337,9 +1340,7 @@ export class SandboxProvisioner {
 		launchStrategy: MarimoLaunchStrategyName,
 	): Promise<MarimoStartup> {
 		const sessionEnv = await options.sessionEnv;
-		const loggingPath = sessionEnv?.logging?.length
-			? loggingDirectory(options.sandboxId)
-			: undefined;
+		const loggingPath = sessionEnv?.logging?.length ? LOGGING_DIR : undefined;
 		const startup: MarimoStartup = {
 			plan: buildMarimoLaunch(
 				{

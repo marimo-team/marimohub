@@ -30,6 +30,22 @@ with TemporaryDirectory() as directory:
     assert client.headers == client.auth
 `);
 	});
+	it('labels an unmapped request path as the client stage instead of failing the request', async () => {
+		await python(String.raw`
+from unittest.mock import MagicMock
+client = object.__new__(MarimoClient)
+client.diagnostics = {}
+client.base = "http://127.0.0.1:2718"
+client.headers = {}
+client.remaining = lambda: 1
+client.opener = MagicMock()
+client.opener.open.return_value.__enter__.return_value.read.return_value = b"{}"
+assert client.request("/api/unlisted") == "{}"
+assert client.diagnostics == {"stage": "client"}
+client.request("/api/sessions")
+assert client.diagnostics == {"stage": "sessions"}
+`);
+	});
 	it('normalizes session maps, arrays, and envelopes without accepting missing identifiers', async () => {
 		await python(String.raw`
 from unittest.mock import Mock

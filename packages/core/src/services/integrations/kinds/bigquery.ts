@@ -2,7 +2,13 @@ import { z } from 'zod';
 import { defineIntegration, envSegment, HOSTNAME_REGEX } from '../sdk';
 import { ValidationError } from '../../../errors';
 import { zSecret } from '../secretFields';
-import { AMBIENT_ENV_DESCRIPTION, connectionUrl, renderConnection, renderFile } from './common';
+import {
+	AMBIENT_ENV_DESCRIPTION,
+	connectionUrl,
+	GOOGLE_SHARED_ENVIRONMENT,
+	renderConnection,
+	renderFile,
+} from './common';
 
 const bigQueryConfig = z.strictObject({
 	// Sits in the authority position of the rendered URL, so it carries the same
@@ -39,6 +45,7 @@ export const bigquery = defineIntegration({
 	schemaVersion: 1,
 	configSchema: bigQueryConfig,
 	environmentVariables: ['GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT'],
+	sharedEnvironment: GOOGLE_SHARED_ENVIRONMENT,
 	requirements: ['google-cloud-bigquery>=3.25', 'sqlalchemy-bigquery>=1.11'],
 	uiHints: {
 		project_id: { group: 'Connection', order: 1 },

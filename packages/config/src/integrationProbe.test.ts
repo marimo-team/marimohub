@@ -618,10 +618,13 @@ describe('createGuardedProbe node transport (real local server)', () => {
 		const definition = defaultRegistry().get('otlp_logs');
 		const config = definition.configSchema.parse({
 			url: `${base}/otlp/v1/logs`,
-			headers: [
-				{ name: 'Authorization', value: 'Bearer test-token' },
-				{ name: 'X-Scope-OrgID', value: 'tenant-a' },
-			],
+			auth: {
+				method: 'headers',
+				headers: [
+					{ name: 'Authorization', value: 'Bearer test-token' },
+					{ name: 'X-Scope-OrgID', value: 'tenant-a' },
+				],
+			},
 		});
 		const result = await definition.testConnection!(
 			config,

@@ -6,6 +6,7 @@ import {
 	createTestApi,
 	expectOk,
 	expectError,
+	expectPage,
 	stubSourceControl,
 } from '../testing';
 
@@ -319,11 +320,17 @@ describe('POST notebook move', () => {
 		).toBe(500);
 		await expectError(
 			await api.request('GET', `/projects/${source.id}/notebooks/${notebook.id}`),
-			404,
-			'NOT_FOUND',
+			409,
+			'MOVE_IN_PROGRESS',
 		);
+		const [listed] = await expectPage(await api.request('GET', `/projects/${source.id}/notebooks`));
+		expect(listed.moving).toEqual({ destination_project_id: destination.id });
 		await expectOk(await api.request('DELETE', path));
 		await expectOk(await api.request('GET', `/projects/${source.id}/notebooks/${notebook.id}`));
+		const [restored] = await expectPage(
+			await api.request('GET', `/projects/${source.id}/notebooks`),
+		);
+		expect(restored).not.toHaveProperty('moving');
 		await expectError(await api.request('DELETE', path), 404, 'NOT_FOUND');
 		expect(await api.deps.services.notebooks.listNotebooks(destination.id)).toEqual([]);
 	});
@@ -379,6 +386,54 @@ describe('POST notebook move', () => {
 		);
 		await expectOk(await api.request('DELETE', path));
 		await expectOk(await api.request('GET', `/projects/${source.id}/notebooks/${notebook.id}`));
+	});
+
+	it('rejects cancellation from a source manager without clearance for the notebook', async () => {
+		const { api, bucket, source, destination, notebook, path } = await setup();
+		const labeled = await api.deps.services.notebooks.setSecurityLabels(
+			source.id,
+			notebook.id,
+			{ classification: 'SECRET', compartments: ['element-a'] },
+			ACTOR,
+		);
+		const cleared = createTestApi({
+			bucket,
+			deps: {
+				resourceSecurity: localResourceSecurity(['UNCLASSIFIED', 'SECRET'], makeSubjectContext()),
+			},
+		});
+		const restricted = createTestApi({
+			bucket,
+			deps: {
+				resourceSecurity: localResourceSecurity(
+					['UNCLASSIFIED', 'SECRET'],
+					makeSubjectContext({ classification: 'UNCLASSIFIED', compartments: [] }),
+				),
+			},
+		});
+		const key = paths.project(destination.id).notebook(notebook.id).code;
+		const put = bucket.put.bind(bucket);
+		let interrupted = false;
+		vi.spyOn(bucket, 'put').mockImplementation(async (target, bytes, options) => {
+			if (!interrupted && target === key) {
+				interrupted = true;
+				throw new Error('copy interrupted');
+			}
+			return put(target, bytes, options);
+		});
+		expect(
+			(
+				await cleared.request(
+					'POST',
+					path,
+					{ destination_project_id: destination.id },
+					{ 'If-Match': `"${labeled.updated_at}"` },
+				)
+			).status,
+		).toBe(500);
+		await expectError(await restricted.request('DELETE', path), 404, 'NOT_FOUND');
+		await expectOk(await cleared.request('DELETE', path));
+		await expectOk(await cleared.request('GET', `/projects/${source.id}/notebooks/${notebook.id}`));
 	});
 
 	it('requires the notebook precondition', async () => {

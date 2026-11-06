@@ -6,7 +6,8 @@ import { UnavailableError } from '../../errors';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { KERNEL_AUTH_TOKEN_FILE } from './kernelAuth';
 import { KERNEL_BOOTSTRAP_LAUNCHER } from './kernelBootstrap/command';
-import { notebookBridgePaths } from './notebookBridgePaths';
+import { resolveBridgeLauncher, sandboxKernelPort } from './notebookBridgePaths';
+import type { NotebookBridgeTarget } from './notebookBridgePaths';
 import { shellQuote } from './shell';
 
 export { HOST_BRIDGE_CLIENT };
@@ -20,10 +21,7 @@ export function hostBridgeCommand(
 	const source = `${KERNEL_BOOTSTRAP_LAUNCHER}
 bridge_launcher = ${bridgeLauncher ? JSON.stringify(bridgeLauncher) : 'None'}
 try:
-    for args in commands(5, bridge_launcher):
-        runtime = server_runtime(args, ${JSON.stringify(KERNEL_AUTH_TOKEN_FILE)}, ${port}, bridge_launcher)
-        if runtime is None:
-            continue
+    for args, runtime in discover_runtimes(${JSON.stringify(KERNEL_AUTH_TOKEN_FILE)}, ${port}, bridge_launcher):
         executable, port, base_url, authenticated = runtime
         config = {"port": port, "base_url": base_url, "server_args": args,
                   "request": json.loads(Path(${JSON.stringify(requestPath)}).read_text())}
@@ -49,7 +47,7 @@ export async function requestRuntimeHost(
 	sandbox: SandboxInstance,
 	request: HostRequest,
 	signal?: AbortSignal,
-	bridge?: { sandboxId: string; launcher: string },
+	bridge?: NotebookBridgeTarget,
 ): Promise<HostReply> {
 	const unavailable = () => new UnavailableError('The runtime host API is unavailable');
 	const requestPath = `/tmp/.marimohub-host-${crypto.randomUUID()}.json`;
@@ -61,17 +59,11 @@ export async function requestRuntimeHost(
 				await sandbox.writeFiles([{ path: requestPath, content: JSON.stringify(request) }]);
 				written = true;
 				activeSignal.throwIfAborted();
-				const kernelUrl = `http://127.0.0.1:${MARIMO_PORT}`;
-				const processUrl = new URL(sandbox.resolveProcessUrl?.(kernelUrl) ?? kernelUrl);
-				const port = Number(processUrl.port || (processUrl.protocol === 'https:' ? 443 : 80));
-				const launcherPath = bridge
-					? notebookBridgePaths(bridge.sandboxId, bridge.launcher).launcher
-					: undefined;
 				return sandbox.exec(
 					hostBridgeCommand(
 						processPath,
-						port,
-						launcherPath ? (sandbox.resolveProcessPath?.(launcherPath) ?? launcherPath) : undefined,
+						sandboxKernelPort(sandbox),
+						resolveBridgeLauncher(sandbox, bridge),
 					),
 					{
 						timeout: 32_000,

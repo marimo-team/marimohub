@@ -85,6 +85,15 @@ export class IntegrationRegistry {
 			browse_surfaces,
 			secret_sources: { inline: false, references: [] },
 			requirements: def.requirements ?? [],
+			...(def.sharedEnvironment
+				? {
+						shared_environment: {
+							group: def.sharedEnvironment.group,
+							title: def.sharedEnvironment.title ?? def.title,
+							variables: def.sharedEnvironment.variables,
+						},
+					}
+				: {}),
 		};
 		this.descriptors.set(kind, descriptor);
 		return descriptor;

@@ -76,60 +76,90 @@ export const previewWorkKey = paths.previewWork;
 export const previewCleanupCursorKey = paths.previewCleanupCursor;
 export const PreviewCursorSchema = z.object({ cursor: z.string().optional() });
 
+type PreviewProject = z.infer<typeof PreviewProjectSchema>;
+type PreviewReceipts = z.infer<typeof PreviewReceiptsSchema>;
+
+function admitMovedEntries(
+	project: PreviewProject,
+	entries: PreviewProject['entries'],
+	destination: ProjectId,
+	nid: NotebookId,
+): void {
+	for (const entry of entries) {
+		const existing = project.entries.find((current) => current.intent.id === entry.intent.id);
+		if (existing) {
+			if (existing.intent.notebook_id !== nid)
+				throw new ConflictError('Destination already contains this preview');
+			continue;
+		}
+		if (project.entries.length >= PREVIEW_LIMITS.perProject)
+			throw new ResourceExhaustedError('Destination preview limit reached');
+		project.entries.push({ ...entry, intent: { ...entry.intent, project_id: destination } });
+	}
+	const bytes = project.entries
+		.flatMap((entry) => entry.artifacts)
+		.reduce((sum, item) => sum + item.bytes, 0);
+	if (bytes > PREVIEW_LIMITS.bytesPerProject)
+		throw new ResourceExhaustedError('Destination preview storage limit reached');
+}
+
+function admitMovedReceipts(record: PreviewReceipts, receipts: PreviewReceipts['entries']): void {
+	record.entries = record.entries.filter((entry) => entry.expires_at > Date.now());
+	for (const receipt of receipts) {
+		const existing = record.entries.find((entry) => entry.key === receipt.key);
+		if (existing && (existing.id !== receipt.id || existing.fingerprint !== receipt.fingerprint))
+			throw new ConflictError('Destination already contains this preview request');
+		record.entries = record.entries.filter((entry) => entry.key !== receipt.key);
+		record.entries.push(receipt);
+	}
+	if (record.entries.length > PREVIEW_LIMITS.receiptsPerProject)
+		throw new ResourceExhaustedError('Destination preview request limit reached');
+}
+
 export class PreviewStore {
-	async copyForMove(source: ProjectId, destination: ProjectId, nid: NotebookId): Promise<void> {
+	private async movedRecords(source: ProjectId, nid: NotebookId) {
 		const entries = (await this.project(source)).entries.filter(
 			(entry) => entry.intent.notebook_id === nid,
 		);
+		const receiptObject = await this.bucket.get(previewReceiptsKey(source));
+		const ids = new Set(entries.map((entry) => entry.intent.id));
+		const receipts = receiptObject
+			? (await readStored(PreviewReceiptsSchema, receiptObject, receiptObject.key)).entries.filter(
+					(entry) => ids.has(entry.id) && entry.expires_at > Date.now(),
+				)
+			: null;
+		return { entries, receipts };
+	}
+
+	/**
+	 * Runs the destination admission checks of `copyForMove` without writing, so a move can
+	 * refuse before it fences the source.
+	 */
+	async assertMoveCapacity(source: ProjectId, destination: ProjectId, nid: NotebookId) {
+		const { entries, receipts } = await this.movedRecords(source, nid);
+		admitMovedEntries(await this.project(destination), entries, destination, nid);
+		if (!receipts) return;
+		const object = await this.bucket.get(previewReceiptsKey(destination));
+		admitMovedReceipts(
+			object ? await readStored(PreviewReceiptsSchema, object, object.key) : { entries: [] },
+			receipts,
+		);
+	}
+
+	async copyForMove(source: ProjectId, destination: ProjectId, nid: NotebookId): Promise<void> {
+		const { entries, receipts } = await this.movedRecords(source, nid);
 		await this.changeProject(
 			destination,
-			(project) => {
-				for (const entry of entries) {
-					const existing = project.entries.find((current) => current.intent.id === entry.intent.id);
-					if (existing) {
-						if (existing.intent.notebook_id !== nid)
-							throw new ConflictError('Destination already contains this preview');
-						continue;
-					}
-					if (project.entries.length >= PREVIEW_LIMITS.perProject)
-						throw new ResourceExhaustedError('Destination preview limit reached');
-					project.entries.push({ ...entry, intent: { ...entry.intent, project_id: destination } });
-				}
-				const bytes = project.entries
-					.flatMap((entry) => entry.artifacts)
-					.reduce((sum, item) => sum + item.bytes, 0);
-				if (bytes > PREVIEW_LIMITS.bytesPerProject)
-					throw new ResourceExhaustedError('Destination preview storage limit reached');
-			},
+			(project) => admitMovedEntries(project, entries, destination, nid),
 			{ fence: true },
 		);
-		const receiptObject = await this.bucket.get(previewReceiptsKey(source));
-		if (receiptObject) {
-			const ids = new Set(entries.map((entry) => entry.intent.id));
-			const receipts = (
-				await readStored(PreviewReceiptsSchema, receiptObject, receiptObject.key)
-			).entries.filter((entry) => ids.has(entry.id) && entry.expires_at > Date.now());
+		if (receipts)
 			await this.change(
 				previewReceiptsKey(destination),
 				PreviewReceiptsSchema,
 				{ entries: [] },
-				(record) => {
-					record.entries = record.entries.filter((entry) => entry.expires_at > Date.now());
-					for (const receipt of receipts) {
-						const existing = record.entries.find((entry) => entry.key === receipt.key);
-						if (
-							existing &&
-							(existing.id !== receipt.id || existing.fingerprint !== receipt.fingerprint)
-						)
-							throw new ConflictError('Destination already contains this preview request');
-						record.entries = record.entries.filter((entry) => entry.key !== receipt.key);
-						record.entries.push(receipt);
-					}
-					if (record.entries.length > PREVIEW_LIMITS.receiptsPerProject)
-						throw new ResourceExhaustedError('Destination preview request limit reached');
-				},
+				(record) => admitMovedReceipts(record, receipts),
 			);
-		}
 	}
 
 	async finishMove(source: ProjectId, nid: NotebookId): Promise<void> {

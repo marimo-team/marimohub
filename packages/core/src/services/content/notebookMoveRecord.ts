@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Bucket } from '../../ports/bucket';
-import { ConflictError } from '../../errors';
+import { ConflictError, MoveInProgressError } from '../../errors';
 import { paths } from '../../paths';
 import {
 	FsSnapshotSchema,
@@ -9,6 +9,7 @@ import {
 	ProjectIdSchema,
 	SourceSchema,
 	UserIdSchema,
+	readStored,
 } from '../../schema';
 import { listAllObjects } from '../catalog/storage';
 
@@ -29,18 +30,22 @@ export const NotebookMoveSchema = z.object({
 	lease: z.object({ executor: z.string(), expires_at: z.number() }).nullable(),
 	/** Hidden preview runtime notebooks that travel with the parent. */
 	runtimes: z.array(NotebookIdSchema),
-	snapshots: z.array(FsSnapshotSchema).default([]),
-	search_refreshed: z.boolean().default(false),
+	snapshots: z.array(FsSnapshotSchema),
 	/** Source metadata captured before fencing; the published entry derives from it. */
 	meta: NotebookMetaSchema,
 	source_record: SourceSchema,
 });
 export type NotebookMove = z.infer<typeof NotebookMoveSchema>;
 
+/** Writers that read `meta.json` before a move fenced it must stop at the stamp, not overwrite it. */
+export function assertNotMoving(meta: { move_id?: string | undefined }, notebookId: string): void {
+	if (meta.move_id) throw new MoveInProgressError(`Notebook ${notebookId} is being moved`);
+}
+
 export async function readNotebookMove(bucket: Bucket, key: string) {
 	const object = await bucket.get(key);
 	if (!object) return null;
-	return { etag: object.etag, move: NotebookMoveSchema.parse(await object.json()) };
+	return { etag: object.etag, move: await readStored(NotebookMoveSchema, object, key) };
 }
 
 /** Catalog recovery rebuilds project indexes and must not race an unpublished move. */

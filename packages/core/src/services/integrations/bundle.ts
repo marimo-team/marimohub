@@ -9,7 +9,7 @@ import { hasControlCharacter, isRecord } from '../../internal/validation';
 import type { IntegrationVersionPin, SessionRender, WorkloadRef } from '../../ports/integrations';
 import type { RenderOutput } from './sdk';
 import { CODE_EXECUTION_ENV, SHELL_BASICS_ENV } from './environmentName';
-import { AMBIENT_ENV_CONFLICT_HELP } from './environmentHelp';
+import { sharedEnvironmentConflictHelp } from './environmentHelp';
 import { stringify } from 'yaml';
 import {
 	AGENT_CONTEXT_DIR,
@@ -54,6 +54,8 @@ export interface RenderedIntegration extends IntegrationVersionPin {
 	scope?: 'org' | 'project';
 	/** Requirements copied into the integration manifest. */
 	requirements?: string[];
+	/** From the kind's `sharedEnvironment` declaration; selects conflict guidance. */
+	sharedEnvironment?: { title: string; ambientEnvToggle: boolean };
 	output: RenderOutput;
 }
 
@@ -136,11 +138,11 @@ export function bundleIntegrations(
 					// S3 instances render separate paths for the same addressing-style config.
 					if (previous && next && previous.content === next.content) continue;
 				}
-				const help =
-					key.startsWith('AWS_') &&
-					(item.kind === 's3' || rendered.some(({ name, kind }) => name === owner && kind === 's3'))
-						? `For S3 connections: ${AMBIENT_ENV_CONFLICT_HELP}`
-						: "Align the values or disable one integration's export of this variable.";
+				const shared = (item.sharedEnvironment ? item : rendered.find(({ name }) => name === owner))
+					?.sharedEnvironment;
+				const help = shared
+					? `For ${shared.title} connections: ${sharedEnvironmentConflictHelp(shared.ambientEnvToggle)}`
+					: "Align the values or disable one integration's export of this variable.";
 				throw new ValidationError(
 					`Integrations "${owner}" and "${item.name}" set the same environment variable "${key}" to different values. ${help}`,
 				);

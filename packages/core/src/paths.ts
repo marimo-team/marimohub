@@ -357,6 +357,8 @@ export const paths = {
 	idempotencyPrefix: '_system/idempotency/',
 	idempotencyKey: (digest: string) => `_system/idempotency/${digest}.json`,
 	proposalPayloadMarkersPrefix: '_system/proposal-payloads/',
+	proposalPayloadMarkersForNotebook: (projectId: ProjectId, notebookId: NotebookId) =>
+		`_system/proposal-payloads/${projectId}/${notebookId}/`,
 	proposalPayloadMarker: (projectId: ProjectId, notebookId: NotebookId, proposalId: ProposalId) =>
 		`_system/proposal-payloads/${projectId}/${notebookId}/${proposalId}.json`,
 	/**
@@ -389,6 +391,8 @@ export const paths = {
 		`_system/job-deletions/${projectId}/${notebookId}/`,
 	jobDeletionClaim: (projectId: ProjectId, notebookId: NotebookId, jobId: JobId) =>
 		`_system/job-deletions/${projectId}/${notebookId}/${jobId}.json`,
+	previewRecords: (projectId: ProjectId, notebookId: NotebookId) =>
+		`_system/previews/${projectId}/${notebookId}/`,
 	preview: (projectId: ProjectId, notebookId: NotebookId, previewId: string) =>
 		`_system/previews/${projectId}/${notebookId}/${previewId}.json`,
 	previewProjectsPrefix: '_system/preview-projects/',

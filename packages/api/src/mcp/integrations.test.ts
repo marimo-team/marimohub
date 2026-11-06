@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { UserId } from '@marimo-hub/core';
-import type { AuthenticatedPrincipal } from '@marimo-hub/core';
+import type { AuthenticatedPrincipal, Project } from '@marimo-hub/core';
+import { ChatPermissionStore } from '@marimo-hub/core/chat';
 import { makeTestWif } from '../testing';
 import { discoveryToolNames, setupDiscovery } from '../testing/integrationDiscovery';
 import { createApp } from '../shared';
 import integrationBrowseRoutes from '../routes/integrationBrowse';
 import { connectMcpClient, mcpPrincipal, mcpRequest } from '../testing/mcp';
 import { openToolSession } from '../chat/tools';
+import type { ApiDeps } from '../context';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -18,6 +20,9 @@ describe('MCP data discovery', () => {
 		);
 		expect(listed.map((tool) => tool.name)).toEqual(discoveryToolNames);
 		expect(listed.every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
+		expect(
+			listed.filter((tool) => tool.annotations?.openWorldHint).map((tool) => tool.name),
+		).toEqual(discoveryToolNames.slice(1));
 		for (const [overrides, expected] of [
 			[{ integrations: undefined }, []],
 			[{ dataBrowser: undefined }, ['list_integrations']],
@@ -56,17 +61,25 @@ describe('MCP data discovery', () => {
 			cursor = page.next_cursor;
 		} while (cursor);
 		expect(items).toHaveLength(4);
-		expect(items).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({ id: inherited.id, scope: 'org', shadowed: false }),
-				expect.objectContaining({ id: shadowed.id, scope: 'org', shadowed: true }),
-			]),
+		expect(items.find((item) => item.id === inherited.id)).toEqual({
+			id: inherited.id,
+			kind: 'test_catalog',
+			name: 'inherited',
+			enabled: true,
+			current_version: 1,
+			created_by: mcpPrincipal.id,
+			created_at: inherited.created_at,
+			updated_at: inherited.updated_at,
+			scope: 'org',
+		});
+		expect(items).toContainEqual(
+			expect.objectContaining({ id: shadowed.id, scope: 'org', shadowed: true }),
 		);
 		expect(JSON.stringify(items)).not.toMatch(/private-|config|token|access_key/);
-		expect(await call('list_namespaces', { integration_id: inherited.id })).toMatchObject({
+		expect(await call('list_namespaces', { integration: inherited.id })).toMatchObject({
 			structuredContent: { items: [['sales', 'eu.central']] },
 		});
-		expect(await call('list_namespaces', { integration_id: shadowed.id })).toMatchObject({
+		expect(await call('list_namespaces', { integration: shadowed.id })).toMatchObject({
 			isError: true,
 			structuredContent: { code: 'NOT_FOUND' },
 		});
@@ -139,13 +152,13 @@ describe('MCP data discovery', () => {
 		const { call, objects, objectBrowser, deps, project } = await setupDiscovery();
 		const audit = vi.spyOn(deps.services.events, 'append');
 		const target = {
-			integration_id: objects.id,
+			integration: objects.id,
 			bucket: 'lake',
 			key: 'daily/file.txt',
 			version_id: 'v1',
 		};
 		expect(
-			await call('list_object_buckets', { integration_id: objects.id, limit: 4, cursor: 'bc' }),
+			await call('list_object_buckets', { integration: objects.id, limit: 4, cursor: 'bc' }),
 		).toMatchObject({ structuredContent: { items: [{ name: 'lake' }], next_cursor: 'b-next' } });
 		expect(
 			await call('list_objects', { ...target, prefix: 'daily/', cursor: 'oc', limit: 3 }),
@@ -193,33 +206,45 @@ describe('MCP data discovery', () => {
 		expect(objectBrowser.openObject).not.toHaveBeenCalled();
 	});
 
-	it('returns an authenticated image URL with the deployment prefix and encoded object identity', async () => {
-		const { deps, objects, project } = await setupDiscovery();
-		const client = await connectMcpClient(deps, mcpPrincipal, {
-			...mcpRequest,
-			appBaseUrl: 'https://hub.example.com/hub/',
-		});
-		const response = await client.callTool({
-			name: 'preview_object',
-			arguments: {
-				project: project.id,
-				integration_id: objects.id,
-				bucket: 'lake',
-				key: 'a b/#file.png',
-				version_id: 'v+1',
-			},
-		});
-		const data = response.structuredContent as { kind: string; content_url: string };
-		expect(data.kind).toBe('image');
-		const url = new URL(data.content_url);
-		expect(url.pathname).toBe(
-			`/hub/api/v1/projects/${project.id}/integrations/${objects.id}/browse/objects/content`,
-		);
-		expect(Object.fromEntries(url.searchParams)).toEqual({
+	it('describes image previews without a content URL that MCP tokens cannot fetch', async () => {
+		const { call, objects } = await setupDiscovery();
+		const response = await call('preview_object', {
+			integration: objects.id,
 			bucket: 'lake',
 			key: 'a b/#file.png',
-			inline: 'true',
-			version_id: 'v+1',
+		});
+		expect(response.structuredContent).toEqual({
+			kind: 'image',
+			content_type: 'image/png',
+			size: 5,
+		});
+	});
+
+	it('resolves an integration by exact name and prefers the unshadowed entry', async () => {
+		const { call, orgIntegrations, listNamespaces } = await setupDiscovery();
+		await orgIntegrations.create(
+			{ kind: 'test_catalog', name: 'warehouse', config: { token: 'private-shadow-fixture' } },
+			mcpPrincipal.id,
+		);
+		expect(await call('list_namespaces', { integration: 'warehouse' })).toMatchObject({
+			structuredContent: { items: [['sales', 'eu.central']] },
+		});
+		expect(listNamespaces).toHaveBeenCalledOnce();
+		// Browse receives only the resolved config, so its secret identifies the integration used.
+		expect(listNamespaces.mock.calls[0]).toEqual([
+			{ token: 'private-catalog-fixture' },
+			expect.anything(),
+			expect.anything(),
+		]);
+		expect(
+			await call('get_table_schema', {
+				integration: 'Warehouse',
+				namespace: ['sales'],
+				table: 'orders',
+			}),
+		).toMatchObject({
+			isError: true,
+			structuredContent: { code: 'NOT_FOUND', message: "Integration 'Warehouse' not found" },
 		});
 	});
 
@@ -235,7 +260,7 @@ describe('MCP data discovery', () => {
 			{ kind: 's3', name: 'ambient', config: { bucket: 'lake', auth: { method: 'ambient' } } },
 			mcpPrincipal.id,
 		);
-		expect(await call('list_object_buckets', { integration_id: ambient.id })).toMatchObject({
+		expect(await call('list_object_buckets', { integration: ambient.id })).toMatchObject({
 			structuredContent: { items: [{ name: 'lake' }] },
 		});
 		expect(exchange).toHaveBeenCalledOnce();
@@ -269,7 +294,7 @@ describe('MCP data discovery', () => {
 				name,
 				arguments: {
 					project: project.id,
-					integration_id: name.includes('object') ? objects.id : catalog.id,
+					integration: name.includes('object') ? objects.id : catalog.id,
 					namespace: ['sales'],
 					table: 'orders',
 					bucket: 'lake',
@@ -299,7 +324,7 @@ describe('MCP data discovery', () => {
 		expect(
 			await restricted.callTool({
 				name: 'list_namespaces',
-				arguments: { project: project.id, integration_id: catalog.id },
+				arguments: { project: project.id, integration: catalog.id },
 			}),
 		).toMatchObject({ isError: true, structuredContent: { code: 'FORBIDDEN' } });
 		const other = await deps.services.projects.createProject(
@@ -333,7 +358,7 @@ describe('MCP data discovery', () => {
 			expect(
 				await client.callTool({
 					name: 'list_namespaces',
-					arguments: { project: selected, integration_id: catalog.id },
+					arguments: { project: selected, integration: catalog.id },
 				}),
 			).toMatchObject({
 				structuredContent: { items: [['sales', 'eu.central']] },
@@ -367,7 +392,7 @@ describe('MCP data discovery', () => {
 			},
 			mcpPrincipal.id,
 		);
-		expect(await call('list_namespaces', { integration_id: foreign.id })).toMatchObject({
+		expect(await call('list_namespaces', { integration: foreign.id })).toMatchObject({
 			isError: true,
 			structuredContent: { code: 'NOT_FOUND' },
 		});
@@ -399,7 +424,7 @@ describe('MCP data discovery', () => {
 			name: 'preview_table',
 			arguments: {
 				project: project.id,
-				integration_id: catalog.id,
+				integration: catalog.id,
 				namespace: ['sales'],
 				table: 'orders',
 			},
@@ -422,21 +447,21 @@ describe('MCP data discovery', () => {
 			await next();
 		});
 		api.route('/', integrationBrowseRoutes);
-		const path = `/projects/${project.id}/integrations/${catalog.id}/browse/namespaces?limit=50`;
+		const path = `/projects/${project.id}/integrations/${catalog.id}/browse/namespaces`;
 		expect((await api.request(path)).status).toBe(200);
 		await call('list_namespaces');
 		expect(listNamespaces).toHaveBeenCalledOnce();
 		for (let index = 0; index < 19; index++) {
-			expect((await call('list_namespaces', { fresh: true })).isError).not.toBe(true);
+			expect((await call('list_namespaces', { cursor: `c${index}` })).isError).not.toBe(true);
 		}
-		expect(await call('list_namespaces', { fresh: true })).toMatchObject({
+		expect(await call('list_namespaces', { cursor: 'over-budget' })).toMatchObject({
 			isError: true,
 			structuredContent: { code: 'RESOURCE_EXHAUSTED' },
 		});
 	});
 
 	it.each([
-		['list_namespaces', { limit: 101 }],
+		['list_namespaces', { limit: 501 }],
 		['list_tables', { namespace: [] }],
 		['get_table_schema', { namespace: [''], table: 'orders' }],
 		['preview_table', { namespace: ['sales'], table: 'orders', limit: 101 }],
@@ -450,8 +475,7 @@ describe('MCP data discovery', () => {
 		expect(objectBrowser.listObjects).not.toHaveBeenCalled();
 	});
 
-	it('makes discovery available to chat without consent and pins it to the current project', async () => {
-		const { deps, project, catalog, listNamespaces } = await setupDiscovery();
+	async function chatTools(deps: ApiDeps, project: Project) {
 		const session = await openToolSession(deps, mcpPrincipal, project, mcpRequest);
 		onTestFinished(() => session.close());
 		const emit = vi.fn();
@@ -467,17 +491,82 @@ describe('MCP data discovery', () => {
 			signal: new AbortController().signal,
 			emit,
 		});
+		const call = (name: string, input: Record<string, unknown>) =>
+			tools[name].execute!(input, {
+				toolCallId: `call-${name}`,
+				messages: [],
+				context: undefined,
+			}) as Promise<Record<string, unknown>>;
+		return { session, emit, call };
+	}
+
+	it('makes discovery available to chat without consent and pins it to the current project', async () => {
+		const { deps, project, catalog, listNamespaces } = await setupDiscovery();
+		const { session, emit, call } = await chatTools(deps, project);
 		for (const name of discoveryToolNames) {
 			const definition = session.definitions.find((entry) => entry.name === name)!;
 			expect(definition.readOnly).toBe(true);
 			expect(definition.inputSchema.properties).not.toHaveProperty('project');
+			expect(definition.inputSchema.properties).not.toHaveProperty('fresh');
 		}
-		const options = { toolCallId: 'call', messages: [], context: undefined };
-		await tools.list_namespaces.execute!({ integration_id: catalog.id }, options);
+		await call('list_namespaces', { integration: catalog.id });
 		expect(listNamespaces).toHaveBeenCalledOnce();
 		expect(emit).not.toHaveBeenCalled();
-		await expect(
-			tools.list_integrations.execute!({ project: 'another-project' }, options),
-		).rejects.toThrow(/scoped to the current project/);
+		await expect(call('list_integrations', { project: 'another-project' })).rejects.toThrow(
+			/scoped to the current project/,
+		);
+	});
+
+	it('asks for consent before chat previews rows or objects, and honours a remembered grant', async () => {
+		const { deps, project, catalog, objects, previewRows, objectBrowser } = await setupDiscovery();
+		const { emit, call } = await chatTools(deps, project);
+		const table = { integration: catalog.id, namespace: ['sales'], table: 'orders' };
+		expect(await call('preview_table', table)).toMatchObject({ permission: 'unavailable' });
+		expect(
+			await call('preview_object', { integration: objects.id, bucket: 'lake', key: 'file.txt' }),
+		).toMatchObject({ permission: 'unavailable' });
+		expect(previewRows).not.toHaveBeenCalled();
+		expect(objectBrowser.previewObject).not.toHaveBeenCalled();
+		expect(emit.mock.calls.map(([chunk]) => chunk.data)).toEqual([
+			expect.objectContaining({
+				action: 'Preview table rows',
+				status: 'unavailable',
+				can_remember: true,
+				scope: expect.objectContaining({ key: 'tool:preview_table' }),
+			}),
+			expect.objectContaining({ action: 'Preview object content', status: 'unavailable' }),
+		]);
+		await new ChatPermissionStore(deps.bucket).grant(project.id, mcpPrincipal.id, {
+			kind: 'tool',
+			scope_key: 'tool:preview_table',
+			scope_label: 'previewing table rows in this project',
+			action: 'Preview table rows',
+		});
+		expect(await call('preview_table', table)).toMatchObject({ columns: ['id'], rows: [[1]] });
+		expect(previewRows).toHaveBeenCalledOnce();
+	});
+
+	it('passes a full 50-item page to the chat model so next_cursor stays consistent', async () => {
+		const { deps, project, catalog, listTables } = await setupDiscovery();
+		const names = Array.from({ length: 50 }, (_, index) => `table_${index}`);
+		listTables.mockResolvedValue({ items: names, next_cursor: 'after-50' });
+		const { session, call } = await chatTools(deps, project);
+		const definition = session.definitions.find((entry) => entry.name === 'list_tables')!;
+		expect(definition.inputSchema.properties).toMatchObject({
+			limit: { default: 100, maximum: 100 },
+		});
+		const output = await call('list_tables', {
+			integration: catalog.id,
+			namespace: ['sales'],
+			limit: 50,
+		});
+		expect(output).toEqual({ items: names, next_cursor: 'after-50' });
+		await call('list_tables', { integration: catalog.id, namespace: ['sales'], limit: 500 });
+		expect(listTables).toHaveBeenLastCalledWith(
+			expect.anything(),
+			expect.anything(),
+			['sales'],
+			expect.objectContaining({ limit: 100 }),
+		);
 	});
 });

@@ -170,7 +170,7 @@ describe('warm sandbox pools', () => {
 		w.advance(30_001);
 		await w.replica().sweep();
 		expect((await w.members())[0].reconnect_reference).toBe('new-reference');
-		expect(connect).toHaveBeenCalledWith(member.sandbox_id);
+		expect(connect).toHaveBeenCalledWith(member.sandbox_id, {});
 		connect.mockClear();
 		w.advance(30_001);
 		await w.replica().sweep();
@@ -1121,6 +1121,7 @@ describe('warm pool failure boundaries', () => {
 				]);
 				expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
 					event: 'warm_pool_health_failed',
+					sandbox_id: id,
 					readiness_reason: reason,
 					error:
 						reason === 'reconnect_timeout'

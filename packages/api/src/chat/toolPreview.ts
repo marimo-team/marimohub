@@ -175,11 +175,26 @@ export function toolPreview(value: unknown): string {
 }
 
 /**
+ * Widest array or object the model receives. Paged tools are clamped to this `limit`; a page
+ * cut by the character budget loses its `next_cursor`.
+ */
+export const MODEL_OUTPUT_ITEMS = 100;
+const MODEL_OUTPUT_CHARACTERS = 20000;
+const SMALL_SCALAR_CHARACTERS = 256;
+
+function isSmallScalar(key: string, value: unknown): boolean {
+	if (typeof value === 'string')
+		return key === 'next_cursor' || value.length <= SMALL_SCALAR_CHARACTERS;
+	return value === null || typeof value === 'number' || typeof value === 'boolean';
+}
+
+/**
  * Cap what the model receives from a tool: long strings, deep nesting, and wide
  * arrays are trimmed and the trimmed paths are listed so the model knows.
  */
 export function boundedOutput(data: Record<string, unknown>): Record<string, unknown> {
-	let remaining = 20000;
+	let remaining = MODEL_OUTPUT_CHARACTERS;
+	let pageCut = false;
 	const truncated: string[] = [];
 	const visit = (value: unknown, path: string, depth: number): unknown => {
 		if (remaining <= 0 || depth > 12) {
@@ -196,14 +211,16 @@ export function boundedOutput(data: Record<string, unknown>): Record<string, unk
 			return value;
 		}
 		if (Array.isArray(value)) {
-			if (value.length > 20) truncated.push(path);
-			return value.slice(0, 20).map((entry, index) => visit(entry, `${path}[${index}]`, depth + 1));
+			if (value.length > MODEL_OUTPUT_ITEMS) truncated.push(path);
+			return value
+				.slice(0, MODEL_OUTPUT_ITEMS)
+				.map((entry, index) => visit(entry, `${path}[${index}]`, depth + 1));
 		}
 		if (value !== null && typeof value === 'object') {
-			if (Object.keys(value).length > 100) truncated.push(path);
+			if (Object.keys(value).length > MODEL_OUTPUT_ITEMS) truncated.push(path);
 			return Object.fromEntries(
 				Object.entries(value)
-					.slice(0, 100)
+					.slice(0, MODEL_OUTPUT_ITEMS)
 					.map(([key, child]) => {
 						remaining -= key.length;
 						return [key, visit(child, `${path}.${key}`, depth + 1)];
@@ -213,7 +230,34 @@ export function boundedOutput(data: Record<string, unknown>): Record<string, unk
 		remaining -= String(value).length;
 		return value;
 	};
-	const output = visit(data, '$', 0) as Record<string, unknown>;
+	// Upstream cursors are opaque, so a page cut by the budget keeps only its whole items and
+	// drops `next_cursor`, which would otherwise skip the cut items.
+	const page = (items: unknown[], path: string): unknown[] => {
+		const kept: unknown[] = [];
+		for (const [index, entry] of items.slice(0, MODEL_OUTPUT_ITEMS).entries()) {
+			const before = truncated.length;
+			const item = visit(entry, `${path}[${index}]`, 2);
+			if (remaining <= 0 && truncated.length > before) {
+				truncated.length = before;
+				pageCut = true;
+				break;
+			}
+			kept.push(item);
+		}
+		if (pageCut || items.length > MODEL_OUTPUT_ITEMS) truncated.push(path);
+		return kept;
+	};
+	// A cut cursor or count is unusable, so small top-level scalars bypass the budget.
+	const output: Record<string, unknown> = {};
+	const entries = Object.entries(data);
+	if (entries.length > MODEL_OUTPUT_ITEMS) truncated.push('$');
+	for (const [key, child] of entries.slice(0, MODEL_OUTPUT_ITEMS)) {
+		remaining -= key.length;
+		if (isSmallScalar(key, child)) output[key] = child;
+		else if (Array.isArray(child) && 'next_cursor' in data) output[key] = page(child, `$.${key}`);
+		else output[key] = visit(child, `$.${key}`, 1);
+	}
+	if (pageCut) delete output.next_cursor;
 	if (truncated.length > 0) output.truncated_paths = truncated.slice(0, 30);
 	return output;
 }

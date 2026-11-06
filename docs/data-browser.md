@@ -9,6 +9,8 @@ Uploads require `integration.use` and `integration.write` (project manager by de
 Ambient server credentials are read-only. WIF credentials require explicit write scope from their broker.
 The built-in AWS and CoreWeave brokers do not attest write scope, so federated S3 uploads remain disabled.
 The **Upload** button appears only with write access.
+MCP clients and project chat cannot upload.
+They can browse and preview the same integrations with the [data discovery tools](./mcp.md#discover-data).
 
 Select a bucket or container, open the target prefix, then click **Upload**.
 Each file keeps its local name and replaces any object at that key.

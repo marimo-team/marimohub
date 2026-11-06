@@ -21,7 +21,7 @@ import { refreshIdentityFor } from '../identity';
 import { authorizeMcpSession, sessionAuthorizationDeadline } from '../mcp/sessionActivity';
 import {
 	assertProjectActionOn,
-	authMethodFor,
+	bearerPrincipalFailure,
 	initializeForSubject,
 	loadVisibleProject,
 	parseIfMatch,
@@ -116,19 +116,12 @@ export function createHubHostPlatform(deps: ApiDeps): HubHostPlatform {
 
 		async authenticate(request) {
 			const user = bearerToken(request) ? await deps.authenticator.authenticate(request) : null;
-			if (!user || authMethodFor(user.credential.kind) !== 'pat')
+			const failure = user ? await bearerPrincipalFailure(deps, user) : 'unauthenticated';
+			if (!user || failure === 'unauthenticated')
 				throw HostProblemError.unauthorized('A hub bearer token is required');
-			if (await deps.services.identities.isSuspended(user.id))
-				throw HostProblemError.forbidden('User account is suspended');
-			const deadlines = [user.credential.expiresAt, user.entitlementsExpiresAt].filter(
-				(value) => value !== undefined,
-			);
-			if (
-				deadlines.some(
-					(value) => !Number.isFinite(Date.parse(value)) || Date.parse(value) <= Date.now(),
-				)
-			)
+			if (failure === 'expired')
 				throw HostProblemError.unauthorized('Bearer authorization has expired');
+			if (failure === 'suspended') throw HostProblemError.forbidden('User account is suspended');
 			return user;
 		},
 

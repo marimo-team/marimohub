@@ -99,15 +99,39 @@ describe('toolPreview', () => {
 	it('caps what the model receives and lists the trimmed paths', () => {
 		const output = boundedOutput({
 			long: 'x'.repeat(13_000),
-			many: Array.from({ length: 25 }, (_, i) => i),
+			many: Array.from({ length: 120 }, (_, i) => i),
 		});
 		expect(String(output.long)).toContain('[Remaining content omitted]');
-		expect((output.many as unknown[]).length).toBe(20);
+		expect((output.many as unknown[]).length).toBe(100);
 		expect(output.truncated_paths).toEqual(['$.long', '$.many']);
 		const wide = boundedOutput({
 			rows: Object.fromEntries(Array.from({ length: 120 }, (_, i) => [`k${i}`, i])),
 		});
 		expect(Object.keys(wide.rows as object)).toHaveLength(100);
 		expect(wide.truncated_paths).toEqual(['$.rows']);
+	});
+
+	it('drops the cursor when the budget cuts a page and keeps other top-level values', () => {
+		const items = Array.from({ length: 100 }, (_, i) => ({
+			name: `item-${i}`,
+			doc: 'x'.repeat(500),
+		}));
+		const output = boundedOutput({
+			items,
+			next_cursor: 'opaque-cursor',
+			total: 250,
+			truncated: false,
+		});
+		const kept = output.items as unknown[];
+		expect(kept.length).toBeGreaterThan(0);
+		expect(kept.length).toBeLessThan(100);
+		expect(kept).toEqual(items.slice(0, kept.length));
+		expect(output).not.toHaveProperty('next_cursor');
+		expect(output).toMatchObject({ total: 250, truncated: false, truncated_paths: ['$.items'] });
+	});
+
+	it('never truncates a long cursor', () => {
+		const output = boundedOutput({ items: [1, 2], next_cursor: 'c'.repeat(30_000) });
+		expect(output).toEqual({ items: [1, 2], next_cursor: 'c'.repeat(30_000) });
 	});
 });

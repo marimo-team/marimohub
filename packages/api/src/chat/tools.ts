@@ -17,7 +17,7 @@ import { assertChatPrincipalCurrent } from './access';
 import { checkPermission } from './permissions/gate';
 import { oversizedDetail } from './permissions/policies';
 import type { GatedTool } from './permissions/policies';
-import { boundedOutput, redactSecrets } from './toolPreview';
+import { boundedOutput, MODEL_OUTPUT_ITEMS, redactSecrets } from './toolPreview';
 
 const TOOL_LIMIT_MESSAGE = 'The tool call budget for this turn is exhausted. Stop and summarize.';
 
@@ -25,6 +25,8 @@ export interface ToolDefinition extends GatedTool {
 	description: string;
 	inputSchema: Record<string, unknown>;
 	readOnly: boolean;
+	/** Page size the session sends when the tool pages with `limit` and `cursor`. */
+	pageLimit?: { default: number; max: number };
 }
 
 export interface ToolSessionState {
@@ -60,12 +62,35 @@ function scopeFieldsOf(schema: Record<string, unknown>): string[] {
 	return SCOPE_FIELDS.filter((field) => names.includes(field));
 }
 
+const LimitSchema = z.looseObject({
+	default: z.number().optional(),
+	maximum: z.number().optional(),
+});
+
+/**
+ * Clamp a paged tool's `limit` so boundedOutput never caps the item count; a page cut by the
+ * character budget comes back without `next_cursor` instead.
+ */
+function pageLimitOf(schema: Record<string, unknown>): ToolDefinition['pageLimit'] {
+	const properties = z.record(z.string(), z.unknown()).safeParse(schema.properties);
+	if (!properties.success || !('cursor' in properties.data)) return undefined;
+	const limit = LimitSchema.safeParse(properties.data.limit);
+	if (!limit.success) return undefined;
+	const max = Math.min(limit.data.maximum ?? MODEL_OUTPUT_ITEMS, MODEL_OUTPUT_ITEMS);
+	return { default: Math.min(limit.data.default ?? max, max), max };
+}
+
 function modelSchema(schema: Record<string, unknown>): Record<string, unknown> {
 	const properties = z.record(z.string(), z.unknown()).safeParse(schema.properties);
+	const pageLimit = pageLimitOf(schema);
 	const visible = Object.fromEntries(
-		Object.entries(properties.success ? properties.data : {}).filter(
-			([name]) => !SCOPE_FIELDS.includes(name),
-		),
+		Object.entries(properties.success ? properties.data : {})
+			.filter(([name]) => !SCOPE_FIELDS.includes(name))
+			.map(([name, value]) =>
+				name === 'limit' && pageLimit && typeof value === 'object' && value !== null
+					? [name, { ...value, default: pageLimit.default, maximum: pageLimit.max }]
+					: [name, value],
+			),
 	);
 	return {
 		...schema,
@@ -113,6 +138,7 @@ export async function openToolSession(
 			inputSchema: modelSchema(tool.inputSchema as Record<string, unknown>),
 			annotations: tool.annotations,
 			readOnly: tool.annotations?.readOnlyHint === true,
+			pageLimit: pageLimitOf(tool.inputSchema as Record<string, unknown>),
 		}));
 		const scopeFields = new Map(
 			exposed.map((tool) => [
@@ -162,6 +188,10 @@ export async function openToolSession(
 							throw new ForbiddenError('Chat tools are scoped to the current project');
 						scoped[field] = project.id;
 					}
+					const { pageLimit } = definition;
+					if (pageLimit && scoped.limit === undefined) scoped.limit = pageLimit.default;
+					else if (pageLimit && typeof scoped.limit === 'number')
+						scoped.limit = Math.min(scoped.limit, pageLimit.max);
 					const oversized = oversizedDetail(definition, args);
 					if (oversized) {
 						state.calls--;

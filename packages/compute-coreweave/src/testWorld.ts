@@ -15,6 +15,7 @@ import type {
 	Service,
 	ServiceUrl,
 } from '@coreweave/cwsandbox';
+import { CWSandboxTimeoutError } from '@coreweave/cwsandbox';
 import { scriptContractLaunch } from '@marimo-hub/core/testing/compute-contract';
 import type { CoreWeaveClient } from './index';
 
@@ -107,11 +108,31 @@ export interface FakeSandbox {
 	waitCalls: number;
 }
 
+type WriteImpl = (files: FileWrites, options?: { timeoutMs?: number }) => Promise<void>;
+
 // `FileWrites` also admits a path→content record, but the adapter only ever
 // sends the array form; normalize so the fake satisfies the SDK type.
-function recordWrite(fake: FakeSandbox, writeImpl?: (files: FileWrites) => Promise<void>) {
-	return async (files: FileWrites): Promise<void> => {
-		await writeImpl?.(files);
+function recordWrite(fake: FakeSandbox, writeImpl?: WriteImpl) {
+	return async (files: FileWrites, options?: { timeoutMs?: number }): Promise<void> => {
+		const write = writeImpl?.(files, options);
+		const timeoutMs = options?.timeoutMs;
+		// Mirror the SDK's per-RPC deadline so a hung fake write fails like a real one.
+		if (write && timeoutMs !== undefined) {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
+				await Promise.race([
+					write,
+					new Promise<never>((_resolve, reject) => {
+						timer = setTimeout(
+							() => reject(new CWSandboxTimeoutError('file write deadline exceeded')),
+							timeoutMs,
+						);
+					}),
+				]);
+			} finally {
+				clearTimeout(timer);
+			}
+		} else await write;
 		const list = Array.isArray(files)
 			? (files as readonly { path: string; content: unknown }[]).map((f) => ({ ...f }))
 			: Object.entries(files).map(([path, content]) => ({ path, content }));
@@ -125,7 +146,7 @@ export function makeWorld(opts?: {
 	/** Runs inside the boot `wait()`; use it to simulate a slow boot. */
 	waitImpl?: () => Promise<void>;
 	/** Runs before each `files.write`; throw to fail that write. */
-	writeImpl?: (files: FileWrites) => Promise<void>;
+	writeImpl?: WriteImpl;
 	/** State for started processes; omit to leave them running. */
 	proc?: FakeProcessState;
 }) {

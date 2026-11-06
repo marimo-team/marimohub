@@ -2,20 +2,19 @@ import type { LoggingDestination } from '../../ports/integrations';
 import { shellQuote } from './shell';
 import { LOGGING_BOOTSTRAP, LOGGING_SITE_CUSTOMIZE } from './loggingBootstrap';
 
-export function loggingDirectory(sandboxId: string): string {
-	return `/tmp/marimohub-logging/${sandboxId}`;
-}
+// Fixed rather than per sandbox, so each launch overwrites the previous credentials and a
+// filesystem-snapshot restore does not accumulate stale tokens.
+export const LOGGING_DIR = '/tmp/marimohub-logging';
 
 export function loggingFiles(
 	destinations: LoggingDestination[],
 	context: { sandboxId: string; notebookId: string; mode: string },
 ): { path: string; content: string }[] {
-	const directory = loggingDirectory(context.sandboxId);
 	return [
-		{ path: `${directory}/sitecustomize.py`, content: LOGGING_SITE_CUSTOMIZE },
-		{ path: `${directory}/marimohub_logging.py`, content: LOGGING_BOOTSTRAP },
+		{ path: `${LOGGING_DIR}/sitecustomize.py`, content: LOGGING_SITE_CUSTOMIZE },
+		{ path: `${LOGGING_DIR}/marimohub_logging.py`, content: LOGGING_BOOTSTRAP },
 		{
-			path: `${directory}/logging.json`,
+			path: `${LOGGING_DIR}/logging.json`,
 			content: JSON.stringify(
 				destinations.map((destination) => ({
 					...destination,

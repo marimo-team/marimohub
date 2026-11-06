@@ -20,6 +20,7 @@ import type { ApiDeps } from '../context';
 import { errorMetadataChain, logEvent } from '../log';
 import { assertSessionNotebookVisible, sessionGrantsFor } from '../shared';
 import { startNotebookSession, toSessionResponse } from '../routes/sessionStart';
+import { notebookBridgeFor } from './bridge';
 import { sessionAuthorizationDeadline, withMcpSessionActivity } from './sessionActivity';
 import type { StartRequestContext } from './server';
 
@@ -177,12 +178,7 @@ export async function startMcpSession(input: {
 										timeoutMs,
 										inspectOnly: waitSeconds === 0,
 										signal,
-										bridge: deps.sandbox.notebookBridge
-											? {
-													sandboxId: session.sandbox_id,
-													launcher: deps.sandbox.notebookBridge.launcher,
-												}
-											: undefined,
+										bridge: notebookBridgeFor(deps, session.sandbox_id),
 									},
 								)
 							: { status: 'unavailable' as const };

@@ -39,27 +39,29 @@ export class NotebookPreviewService {
 	readonly store: PreviewStore;
 	async finishMove(source: ProjectId, nid: NotebookId): Promise<void> {
 		await this.store.finishMove(source, nid);
-		await deleteByPrefix(this.bucket, `_system/previews/${source}/${nid}/`);
+		await deleteByPrefix(this.bucket, paths.previewRecords(source, nid));
+	}
+
+	/** Runtime notebooks the source's preview membership reserves for `nid`. */
+	async runtimesForMove(source: ProjectId, nid: NotebookId): Promise<NotebookId[]> {
+		return (await this.store.project(source)).entries
+			.filter((entry) => entry.intent.notebook_id === nid)
+			.flatMap((entry) => entry.artifacts.map((artifact) => artifact.notebook_id));
 	}
 
 	async copyForMove(
 		source: ProjectId,
 		destination: ProjectId,
 		nid: NotebookId,
+		runtimes: readonly NotebookId[],
 		updatedAt: string,
 		moveId: string,
-	): Promise<NotebookId[]> {
-		const entries = (await this.store.project(source)).entries.filter(
-			(entry) => entry.intent.notebook_id === nid,
-		);
-		const runtimes = entries.flatMap((entry) =>
-			entry.artifacts.map((artifact) => artifact.notebook_id),
-		);
+	): Promise<void> {
 		await this.store.copyForMove(source, destination, nid);
 		await copyMovePrefix(
 			this.bucket,
-			`_system/previews/${source}/${nid}/`,
-			`_system/previews/${destination}/${nid}/`,
+			paths.previewRecords(source, nid),
+			paths.previewRecords(destination, nid),
 			{
 				transform: (_key, bytes) =>
 					moveJson(bytes, (record) => ({ ...record, project_id: destination })),
@@ -69,7 +71,6 @@ export class NotebookPreviewService {
 			await this.notebooks.copyForMove(source, destination, id, updatedAt, moveId);
 			await this.notebooks.thumbnails.copyForMove(source, destination, id);
 		}
-		return runtimes;
 	}
 
 	constructor(

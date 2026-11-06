@@ -171,6 +171,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 			'member_groups',
 			'security_labels',
 			'security_labels_pending',
+			'search_refresh',
 		];
 		expect(coreKeys.filter((k) => !internal.includes(k))).toEqual(apiKeys);
 		expect(coreKeys).toEqual(expect.arrayContaining(internal));

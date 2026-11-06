@@ -8,12 +8,11 @@ A break here means already-stored bucket objects stop parsing or readers lose
 required fields — allowlist one only with a migration or upgrade seam in place
 (see development_docs/migrations.md).
 
-The reserved `chat` search kind never had a source, so no stored page or snapshot
-contains it; removing it before the first search release needs no migration.
+Pre-release pass over the unreleased v0.6.2 records (notebook moves, host retries, search refresh). Remove after merge.
 
 ```text
-PUT /_system/search/projects/{pid}/{source}/pages/{page}.json removed the enum value `chat` of the request property `documents/items/kind`
-PUT /_system/search/projects/{pid}/{source}/pages/{page}.json removed `subschema #3` from the `documents/items/resource` request property `oneOf` list
-PUT /_system/search/projects/{pid}/{source}/snapshots/{generation}.json removed the enum value `chat` of the request property `documents/items/kind`
-PUT /_system/search/projects/{pid}/{source}/snapshots/{generation}.json removed `subschema #3` from the `documents/items/resource` request property `oneOf` list
+PUT /_system/host-retries/{digest}.json removed `subschema #1, subschema #2` from the request body `anyOf` list
+GET /_system/search/refresh/{pid}.json api path removed without deprecation
+PUT /_system/search/refresh/{pid}.json api path removed without deprecation
+PUT /_system/notebook-moves/{nid}.json the request property `snapshots` became required
 ```

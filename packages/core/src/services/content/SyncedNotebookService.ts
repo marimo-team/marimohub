@@ -30,6 +30,7 @@ import { compensableWrite, metricsObserver, saga } from '../../saga';
 import { NotebookMetaSchema, parseStored, readStored, SourceSchema } from '../../schema';
 import type { CatalogService } from '../catalog/CatalogService';
 import { mutateObject } from '../catalog/cas';
+import { assertNotMoving } from './notebookMoveRecord';
 import { buildNotebookEntry, buildNotebookMeta, buildVersion } from './notebookMeta';
 import { listAllKeys } from '../catalog/storage';
 import type { GitSource, NotebookMeta, Source } from '../../schema';
@@ -128,6 +129,15 @@ export class SyncedNotebookService {
 		return { meta, ...(syncToken ? { sync_token: syncToken } : {}) };
 	}
 
+	/**
+	 * `source.json` carries no fence, so writers check the metadata stamp before changing it. A
+	 * fence landing after this read is caught by the move, which revalidates the source record.
+	 */
+	private async assertNotFenced(metaKey: string, notebookId: NotebookId): Promise<void> {
+		const object = await this.bucket.get(metaKey);
+		if (object) assertNotMoving(await readStored(NotebookMetaSchema, object, metaKey), notebookId);
+	}
+
 	private async deleteVersion(versionPaths: VersionPaths): Promise<void> {
 		const [workspaceKeys, gitKeys] = await Promise.all([
 			listAllKeys(this.bucket, versionPaths.workspacePrefix),
@@ -163,6 +173,7 @@ export class SyncedNotebookService {
 		actor: UserId,
 	): Promise<GitSource> {
 		const nb = paths.project(projectId).notebook(notebookId);
+		await this.assertNotFenced(nb.meta, notebookId);
 		const source = await mutateObject(
 			this.bucket,
 			nb.source,
@@ -174,7 +185,10 @@ export class SyncedNotebookService {
 			this.bucket,
 			nb.meta,
 			(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
-			(current) => ({ ...current, updated_at: now }),
+			(current) => {
+				assertNotMoving(current, notebookId);
+				return { ...current, updated_at: now };
+			},
 		);
 		await this.catalog.updateNotebookEntry(
 			'notebook.synced.source.update',
@@ -338,6 +352,7 @@ export class SyncedNotebookService {
 			// `mutateObject` returns the concurrent winner when this commit already won.
 			// Pruning must protect that pointer rather than this request's orphan.
 			.step('advance_source', async () => {
+				await this.assertNotFenced(nb.meta, notebookId);
 				const advancedSource = await mutateObject(
 					this.bucket,
 					nb.source,
@@ -376,6 +391,7 @@ export class SyncedNotebookService {
 			nb.meta,
 			(raw) => parseStored(NotebookMetaSchema, raw, nb.meta),
 			(current) => {
+				assertNotMoving(current, notebookId);
 				if (current.status === 'deleted') {
 					throw new NotFoundError(`Notebook ${notebookId} not found`);
 				}

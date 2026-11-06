@@ -2200,10 +2200,12 @@ it('fences hidden runtimes during a move and restores them when the move is canc
 	const { notebooks } = api.deps.services;
 	await expectError(
 		await api.request('GET', `/projects/${pid}/notebooks/${nid}`),
-		404,
-		'NOT_FOUND',
+		409,
+		'MOVE_IN_PROGRESS',
 	);
-	await expect(notebooks.getNotebook(pid, runtime)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+	await expect(notebooks.getNotebook(pid, runtime)).rejects.toMatchObject({
+		code: 'MOVE_IN_PROGRESS',
+	});
 	await expectOk(await api.request('DELETE', movePath));
 	await expectOk(await api.request('GET', `/projects/${pid}/notebooks/${nid}`));
 	expect(await notebooks.getNotebookContent(pid, runtime)).toContain('import marimo');

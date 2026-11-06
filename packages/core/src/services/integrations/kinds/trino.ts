@@ -14,7 +14,7 @@ import {
 	probeEndpoint,
 } from '../sdk';
 import { zSecret } from '../secretFields';
-import { discoveryEnvField, HTTP_HEADER_NAME_REGEX } from './common';
+import { discoveryEnvField, HTTP_HEADER_NAME_REGEX, secretHeadersField } from './common';
 
 const IDENTIFIER_REGEX = /^[A-Za-z0-9_.-]+$/;
 const TIMEZONE_REGEX = /^[A-Za-z0-9_+.-]+(?:\/[A-Za-z0-9_+.-]+)*$/;
@@ -93,13 +93,7 @@ const trinoConfig = z.strictObject({
 		})
 		.meta({ 'x-unique-by': 'value' })
 		.default([]),
-	http_headers: z
-		.array(z.strictObject({ name: z.string().regex(HTTP_HEADER_NAME_REGEX), value: zSecret() }))
-		.refine((items) => new Set(items.map(({ name }) => name.toLowerCase())).size === items.length, {
-			message: 'Duplicate HTTP header name (case-insensitive)',
-		})
-		.meta({ 'x-unique-by': 'name', 'x-unique-case-insensitive': true })
-		.default([]),
+	http_headers: secretHeadersField().default([]),
 	extra_credentials: z
 		.array(z.strictObject({ name: z.string().regex(IDENTIFIER_REGEX), value: zSecret() }))
 		.refine((items) => new Set(items.map(({ name }) => name)).size === items.length, {

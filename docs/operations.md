@@ -240,6 +240,9 @@ The offline `catalog-recovery` command in the container image writes a new catal
 `--rebuild` discovers projects, notebooks, and jobs from records. `--snapshot SNAPSHOT_ID` restores a surviving snapshot's membership with current metadata.
 It supports the `s3`, `gcs`, `azure`, and `fs` backends. Run it with `--help` for the flags.
 
+Recovery refuses to run while any [notebook move](./organizing-projects.md#move-a-notebook-to-another-project) is not `complete`.
+Before you stop the writers, finish each pending move: repeat it, or cancel it if it has not published.
+
 1. [Back up](#backups-restore) the bucket.
 2. Stop all writers until step 6: API replicas, maintenance processes, scheduled triggers, and notebook sandboxes.
 3. Run a dry-run (the default) with the deployment's `MARIMOHUB_STORAGE_*` variables and `--rebuild` or `--snapshot SNAPSHOT_ID`. Prefer a `current` or `previous` snapshot candidate; an `unverified` snapshot can be an uncommitted write.
@@ -361,7 +364,16 @@ Phase timings such as `provision_files_ms` overlap. When the workspace is copied
 into the sandbox, bounded workspace reads start while the sandbox boots, so
 `provision_files_ms` includes the readiness wait as well as the copy. Mounted
 workspaces, and reads over the prefetch budget, wait for readiness first. Do not
-sum phase timings.
+sum phase timings; use `provision_total_ms` for the total.
+
+On every compute backend, these fields split the file and injection phases:
+
+| Field                            | Measures                                                                             |
+| -------------------------------- | ------------------------------------------------------------------------------------ |
+| `provision_files_waitready_ms`   | The one readiness wait that workspace and Git restores share.                        |
+| `provision_files_non_waiting_ms` | Workspace time without that wait: storage reads, queueing, uploads, and preparation. |
+| `provision_inject_files_ms`      | Session file preparation, upload, and installation.                                  |
+| `provision_inject_env_ms`        | Environment configuration calls. They run at the same time as session file uploads.  |
 
 ### Tracing (OpenTelemetry)
 

@@ -24,8 +24,8 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `client_tags` | object[] |  |  |  |
 | `client_tags[].value` | string | Yes |  |  |
 | `http_headers` | object[] |  |  |  |
-| `http_headers[].name` | string | Yes |  |  |
-| `http_headers[].value` 🔒 | string | Yes |  |  |
+| `http_headers[].name` | string | Yes |  | HTTP header name |
+| `http_headers[].value` 🔒 | string | Yes |  | Header value, stored as a secret |
 | `extra_credentials` | object[] |  |  |  |
 | `extra_credentials[].name` | string | Yes |  |  |
 | `extra_credentials[].value` 🔒 | string | Yes |  |  |

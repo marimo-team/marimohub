@@ -58,7 +58,22 @@ const customEnvKind: IntegrationKind = {
 	secret_sources: { inline: false, references: [] },
 };
 
-const s3Kind: IntegrationKind = { ...postgresKind, kind: 's3', title: 'S3' };
+const s3Kind = {
+	...postgresKind,
+	kind: 's3',
+	title: 'S3',
+	shared_environment: { group: 's3', title: 'S3', variables: 'shared AWS variables' },
+};
+
+const gcsKind = {
+	...postgresKind,
+	kind: 'gcs',
+	shared_environment: {
+		group: 'google',
+		title: 'Google Cloud',
+		variables: 'GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_CLOUD_PROJECT',
+	},
+};
 
 const secretKind: IntegrationKind = {
 	...postgresKind,
@@ -139,8 +154,10 @@ const entry = (over: Partial<IntegrationEntry> = {}): IntegrationEntry => ({
 	scope: over.scope ?? 'project',
 });
 
-const s3Entry = (name: string, overrides: Partial<IntegrationEntry> = {}) =>
-	entry({ id: name, kind: 's3', name, ...overrides });
+const s3Entry = (name: string, overrides: Partial<IntegrationEntry> = {}) => ({
+	...entry({ id: name, kind: 's3', name, ...overrides }),
+	ambient_env: true,
+});
 
 function ok(data: unknown, status = 200, headers: Record<string, string> = {}) {
 	return new Response(JSON.stringify({ success: true, data }), {
@@ -411,7 +428,7 @@ describe('integration validation findings', () => {
 					patchError,
 				},
 			);
-			await screen.findByRole('note');
+			await screen.findByRole('status');
 			const row = screen.getByText('metrics').closest('li')!;
 			await user.click(within(row).getByRole('button', { name: 'Disable' }));
 			await waitFor(() =>
@@ -424,10 +441,10 @@ describe('integration validation findings', () => {
 			);
 			if (patchError) {
 				await screen.findByText('boom');
-				expect(screen.getByRole('note')).toHaveTextContent('notebooks, metrics');
+				expect(screen.getByRole('status')).toHaveTextContent('notebooks, metrics');
 				expect(within(row).getByRole('button', { name: 'Disable' })).toBeEnabled();
 			} else {
-				await waitFor(() => expect(screen.queryByRole('note')).not.toBeInTheDocument());
+				await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
 				expect(within(row).getByRole('button', { name: 'Enable' })).toBeEnabled();
 			}
 		},
@@ -446,7 +463,7 @@ describe('integration validation findings', () => {
 		setup(
 			{},
 			{
-				kinds: [{ ...postgresKind, kind: 'gcs' }],
+				kinds: [gcsKind],
 				entries: [
 					entry({ id: 'gcs_1', kind: 'gcs', name: 'lake' }),
 					entry({ id: 'gcs_2', kind: 'gcs', name: 'archive' }),
@@ -454,7 +471,9 @@ describe('integration validation findings', () => {
 				],
 			},
 		);
-		expect(await screen.findByRole('note')).toHaveTextContent('Multiple Google Cloud connections');
+		expect(await screen.findByRole('status')).toHaveTextContent(
+			'Multiple Google Cloud connections',
+		);
 		expect(screen.getByRole('alert')).toHaveTextContent('legacy (custom)');
 		expect(screen.getByRole('button', { name: 'Add integration' })).toBeEnabled();
 		const row = screen.getByText('legacy').closest('li')!;
@@ -470,12 +489,22 @@ describe('integration validation findings', () => {
 				entries: [s3Entry('notebooks'), s3Entry('metrics', { scope: 'org' })],
 			},
 		);
-		const note = await screen.findByRole('note');
+		const note = await screen.findByRole('status');
 		expect(note).toHaveTextContent('notebooks, metrics');
-		expect(note).toHaveTextContent('Connection tests do not check conflicts between integrations.');
+		expect(note).toHaveTextContent('Disable "Ambient env"');
 		await user.type(screen.getByRole('searchbox'), 'notebooks');
 		expect(screen.getAllByTestId('integration-row')).toHaveLength(1);
 		expect(note).toBeVisible();
+	});
+
+	it('shows the ambient-env remedy only to managers', async () => {
+		setup(
+			{ project: project({ your_role: 'viewer' }) },
+			{ kinds: [s3Kind], entries: [s3Entry('notebooks'), s3Entry('metrics')] },
+		);
+		const note = await screen.findByRole('status');
+		expect(note).toHaveTextContent('notebooks, metrics');
+		expect(note).not.toHaveTextContent('Disable "Ambient env"');
 	});
 
 	it.each([{ enabled: false }, { scope: 'org' as const, shadowed: true }])(
@@ -489,7 +518,7 @@ describe('integration validation findings', () => {
 				},
 			);
 			await screen.findByText('notebooks');
-			expect(screen.queryByRole('note')).not.toBeInTheDocument();
+			expect(screen.queryByRole('status')).not.toBeInTheDocument();
 		},
 	);
 });
@@ -517,6 +546,46 @@ describe('Project integrations page editor', () => {
 	});
 });
 
+describe('ambient env editor hint', () => {
+	const ambientKind = (kind: string, ambientDefault: boolean): IntegrationKind => ({
+		...postgresKind,
+		kind,
+		title: kind.toUpperCase(),
+		json_schema: {
+			type: 'object',
+			required: ['host'],
+			properties: {
+				host: { type: 'string' },
+				ambient_env: { type: 'boolean', default: ambientDefault },
+			},
+		},
+	});
+
+	it.each([
+		['gcs', true, true],
+		['bigquery', false, false],
+		['postgres', null, false],
+	] as const)(
+		'for %s (ambient_env default %s) shows the hint: %s',
+		async (kind, ambient, shown) => {
+			const user = userEvent.setup();
+			setup(
+				{},
+				{
+					kinds: [ambient === null ? { ...postgresKind, kind } : ambientKind(kind, ambient)],
+					entries: [],
+				},
+			);
+			await user.click(await screen.findByRole('button', { name: 'Add integration' }));
+			await user.click(await screen.findByText(ambient === null ? 'Postgres' : kind.toUpperCase()));
+			await screen.findByLabelText('Name');
+			const hint = screen.queryByText(/If other connections export the same variables/);
+			if (shown) expect(hint).toHaveTextContent('Disable "Ambient env"');
+			else expect(hint).not.toBeInTheDocument();
+		},
+	);
+});
+
 describe('ProjectIntegrationsPanel — disabled deployment', () => {
 	it('shows a disabled message when the kinds/list routes 404', async () => {
 		setup({}, { kinds: null, entries: null });
@@ -531,7 +600,7 @@ describe('ProjectIntegrationsPanel — query failures', () => {
 		setup({}, { kinds: 'error', entries: [entry({ kind: 'custom' })] });
 		expect(await screen.findByText(/Could not load integrations/)).toBeInTheDocument();
 		expect(screen.queryByText('Integration kinds unavailable')).not.toBeInTheDocument();
-		expect(screen.queryByRole('note')).not.toBeInTheDocument();
+		expect(screen.queryByRole('status')).not.toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Retry integrations' })).toBeEnabled();
 	});
 

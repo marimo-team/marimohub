@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { FileText, GitBranch } from 'lucide-react';
 import type { NotebookEntry, ResolvedUser } from '@/types';
-import { Chip, RowLink, UserLabel } from '@/components/ui';
+import { Chip, RowLink, Tooltip, UserLabel } from '@/components/ui';
 import { DataTable } from '@/components/ui/DataTable';
 import type { DataTableColumn } from '@/components/ui/DataTable';
 import { formatRelative } from '@/lib/time';
@@ -19,6 +19,27 @@ export interface NotebookCollectionItem {
 	showSessions: boolean;
 	sessions: ReactNode;
 	actions: ReactNode;
+	/** Destination project name (or ID) while a move is pending. */
+	movingTo?: string;
+}
+
+function MovingBadge({ destination }: { destination: string }) {
+	return (
+		<Tooltip content={`Moving to ${destination}`}>
+			<button
+				type="button"
+				aria-label={`Moving to ${destination}`}
+				className="flex shrink-0 cursor-help items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-300"
+			>
+				Moving
+			</button>
+		</Tooltip>
+	);
+}
+
+// A moving notebook cannot be opened until the move publishes or is cancelled.
+function isOpenable(item: NotebookCollectionItem): boolean {
+	return item.notebook.status !== 'deleted' && item.movingTo === undefined;
 }
 
 function NotebookName({
@@ -83,13 +104,13 @@ function notebookColumns(compact: boolean): DataTableColumn<NotebookCollectionIt
 			id: 'name',
 			header: 'Notebook',
 			cell: (item) => {
-				const { notebook } = item;
+				const { notebook, movingTo } = item;
 				const tags = tagsFor(notebook);
 				return (
 					<div className="flex min-w-0 items-center gap-3 max-sm:gap-2">
 						{item.leading ?? <NotebookIcon notebook={notebook} />}
 						<div className="min-w-0 flex-1">
-							{notebook.status === 'deleted' ? (
+							{!isOpenable(item) ? (
 								<NotebookName notebook={notebook} showStatus={false} />
 							) : (
 								<Link
@@ -101,8 +122,9 @@ function notebookColumns(compact: boolean): DataTableColumn<NotebookCollectionIt
 									<NotebookName notebook={notebook} showStatus={false} />
 								</Link>
 							)}
-							{(notebook.status !== 'active' || tags.length > 0) && (
+							{(notebook.status !== 'active' || movingTo !== undefined || tags.length > 0) && (
 								<div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
+									{movingTo !== undefined && <MovingBadge destination={movingTo} />}
 									{notebook.status !== 'active' && <Chip>{notebook.status}</Chip>}
 									{tags.length > 0 && (
 										<NotebookTags
@@ -173,7 +195,7 @@ export function NotebookCollection({
 				}
 				getRowKey={(item) => item.notebook.id}
 				rowTestId="notebook-row"
-				rowClassName={(item) => (item.notebook.status === 'deleted' ? 'bg-muted/20' : undefined)}
+				rowClassName={(item) => (isOpenable(item) ? undefined : 'bg-muted/20')}
 			/>
 		);
 	}
@@ -183,7 +205,7 @@ export function NotebookCollection({
 		<>
 			{items.map((item) => {
 				const { notebook } = item;
-				if (notebook.status === 'deleted') {
+				if (!isOpenable(item)) {
 					return (
 						<div
 							key={notebook.id}
@@ -191,8 +213,9 @@ export function NotebookCollection({
 							className="col-span-full flex items-center gap-3 rounded-lg border bg-muted/20 p-4"
 						>
 							<NotebookIcon notebook={notebook} />
-							<div className="min-w-0 flex-1">
+							<div className="flex min-w-0 flex-1 items-center gap-2">
 								<NotebookName notebook={notebook} />
+								{item.movingTo !== undefined && <MovingBadge destination={item.movingTo} />}
 							</div>
 							<NotebookTags tags={tagsFor(notebook)} title={notebook.title} />
 							<div className="hidden min-w-0 max-w-32 items-center gap-1 text-xs text-muted-foreground sm:flex">

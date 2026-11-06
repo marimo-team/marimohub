@@ -18,11 +18,55 @@ import type {
 	ObjectListRequest,
 	ObjectPageRequest,
 } from '@marimo-hub/core';
+import { z } from '@hono/zod-openapi';
 import type { ApiDeps } from '../context';
 import { assertProjectRole, authorizationService } from '../shared';
 import { federationFor } from '../federation';
 import { appendAudit } from '../log';
-import { makeObjectBrowseContext, runObjectBrowse } from '../routes/objectBrowse';
+import { makeObjectBrowseContext, runObjectBrowse } from './objectBrowseContext';
+
+// Input values shared by the REST routes (which add OpenAPI param metadata) and
+// the MCP tools (which add descriptions). Limits must match across surfaces:
+// `limit` is part of the browse cache key, so a drift stops REST and MCP sharing hits.
+export const CATALOG_PAGE_LIMIT = { default: 100, max: 500 } as const;
+export const OBJECT_PAGE_LIMIT = { default: 50, max: 100 } as const;
+export const PreviewRowLimit = z.number().int().positive().max(100).default(20);
+
+/**
+ * Multi-part namespaces ride in one query param, parts joined by U+001F — the
+ * Iceberg REST unit separator, which cannot appear in an identifier — so parts
+ * containing dots round-trip.
+ */
+export const NAMESPACE_JOINER = '\u001f';
+const NamespacePart = z
+	.string()
+	.min(1)
+	.refine((part) => !part.includes(NAMESPACE_JOINER), {
+		message: 'Namespace parts must not contain U+001F.',
+	});
+export const NamespaceParts = z.array(NamespacePart).min(1);
+export const NamespaceValue = z
+	.string()
+	.min(1)
+	// A leading/trailing/doubled joiner splits into empty identifier parts,
+	// which no catalog can hold — refuse here (422) instead of spending a probe
+	// call on a guaranteed upstream 404.
+	.refine((value) => value.split(NAMESPACE_JOINER).every((part) => part !== ''), {
+		message: 'Namespace parts must be non-empty.',
+	});
+
+const utf8ByteLength = (value: string): number => new TextEncoder().encode(value).byteLength;
+export const ObjectBucketValue = z.string().min(1).max(255);
+export const ObjectPrefixValue = z.string().refine((value) => utf8ByteLength(value) <= 1024, {
+	message: "Prefix exceeds S3's 1,024-byte UTF-8 limit.",
+});
+export const ObjectKeyValue = z
+	.string()
+	.min(1)
+	.refine((value) => utf8ByteLength(value) <= 1024, {
+		message: "Key exceeds S3's 1,024-byte UTF-8 limit.",
+	});
+export const ObjectVersionIdValue = z.string().min(1).max(2048);
 
 export function requireIntegrations(deps: ApiDeps): ProjectIntegrationsService {
 	if (!deps.integrations) {

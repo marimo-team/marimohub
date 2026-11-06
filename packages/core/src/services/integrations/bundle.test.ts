@@ -237,21 +237,46 @@ describe('bundler-owned env', () => {
 });
 
 describe('environment conflict guidance', () => {
+	const shared: Record<string, RenderedIntegration['sharedEnvironment']> = {
+		s3: { title: 'S3', ambientEnvToggle: true },
+		wandb: { title: 'Weights & Biases', ambientEnvToggle: false },
+	};
+	const item = (name: string, kind: string, env: Record<string, string> = {}) => ({
+		...rendered(name, { env }),
+		kind,
+		...(shared[kind] ? { sharedEnvironment: shared[kind] } : {}),
+	});
+	const s3Help =
+		'For S3 connections: Disable "Ambient env" in advanced settings on all but one connection. Namespaced settings remain available.';
+
 	it.each([
-		['custom_env', 'custom_env', 'AWS_DEFAULT_REGION', false],
-		['s3', 'custom_env', 'AWS_DEFAULT_REGION', true],
-		['custom_env', 's3', 'AWS_DEFAULT_REGION', true],
-		['s3', 's3', 'AWS_DEFAULT_REGION', true],
-		['custom_env', 'custom_env', 'APP_REGION', false],
-	])('selects guidance for %s / %s conflicting on %s', (firstKind, secondKind, key, s3Help) => {
+		[
+			'custom_env',
+			'custom_env',
+			'AWS_DEFAULT_REGION',
+			"Align the values or disable one integration's export of this variable.",
+		],
+		['s3', 'custom_env', 'AWS_DEFAULT_REGION', s3Help],
+		['custom_env', 's3', 'AWS_DEFAULT_REGION', s3Help],
+		['s3', 's3', 'AWS_DEFAULT_REGION', s3Help],
+		[
+			'custom_env',
+			'custom_env',
+			'APP_REGION',
+			"Align the values or disable one integration's export of this variable.",
+		],
+		[
+			'wandb',
+			'wandb',
+			'WANDB_API_KEY',
+			'For Weights & Biases connections: Give them the same settings or enable only one of them.',
+		],
+	])('selects guidance for %s / %s conflicting on %s', (firstKind, secondKind, key, help) => {
 		const items = [
-			{ ...rendered('unrelated-s3', {}), kind: 's3' },
-			{ ...rendered('first', { env: { [key]: 'one' } }), kind: firstKind },
-			{ ...rendered('second', { env: { [key]: 'two' } }), kind: secondKind },
+			item('unrelated-s3', 's3'),
+			item('first', firstKind, { [key]: 'one' }),
+			item('second', secondKind, { [key]: 'two' }),
 		];
-		const help = s3Help
-			? 'For S3 connections: Disable "Ambient env" in advanced settings on all but one connection. Namespaced settings remain available.'
-			: "Align the values or disable one integration's export of this variable.";
 		expect(() => bundle(items)).toThrow(
 			new ValidationError(
 				`Integrations "first" and "second" set the same environment variable "${key}" to different values. ${help}`,

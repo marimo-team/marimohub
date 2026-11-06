@@ -48,6 +48,7 @@ export const wandb = defineIntegration({
 		'WANDB_MODE',
 		'WANDB_DIR',
 	],
+	sharedEnvironment: { group: 'wandb', variables: 'WANDB_* variables' },
 	requirements: ['wandb>=0.18'],
 	uiHints: {
 		api_key: { group: 'Authentication', order: 1, widget: 'password' },
@@ -127,6 +128,7 @@ export const huggingFace = defineIntegration({
 	schemaVersion: 1,
 	configSchema: huggingFaceConfig,
 	environmentVariables: ['HF_TOKEN', 'HF_ENDPOINT', 'HF_HOME', 'HF_HUB_ENABLE_HF_TRANSFER'],
+	sharedEnvironment: { group: 'huggingface', variables: 'HF_* variables' },
 	requirements: ['huggingface-hub>=0.25'],
 	uiHints: {
 		token: { group: 'Authentication', order: 1, widget: 'password' },
