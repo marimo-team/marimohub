@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BucketGetOptions } from '@marimo-hub/core/ports/bucket';
 import {
 	AppPoolService,
 	createServices,
@@ -450,14 +451,16 @@ describe('project-scoped app listing', () => {
 	async function recordGets(run: () => Response | Promise<Response>) {
 		// Settle the auto-init middleware so only the handler's reads are recorded.
 		await expectOk(await api.request('GET', '/me'));
+		const catalogEtag = (await api.bucket.head(paths.catalog))?.etag;
+		expect(catalogEtag).toBeTruthy();
 		const get = api.bucket.get.bind(api.bucket);
-		const keys: string[] = [];
+		const reads: { key: string; options?: BucketGetOptions }[] = [];
 		const spy = vi.spyOn(api.bucket, 'get').mockImplementation(async (key, options) => {
-			keys.push(key);
+			reads.push({ key, options });
 			return get(key, options);
 		});
 		try {
-			return { response: await run(), keys };
+			return { response: await run(), keys: reads.map(({ key }) => key), reads, catalogEtag };
 		} finally {
 			spy.mockRestore();
 		}
@@ -472,7 +475,7 @@ describe('project-scoped app listing', () => {
 			}),
 		);
 		const unscoped = await expectPage<{ project_id: string }>(await api.request('GET', '/apps'));
-		const { response, keys } = await recordGets(() =>
+		const { response, keys, reads, catalogEtag } = await recordGets(() =>
 			api.request('GET', `/apps?project_id=${pid}`),
 		);
 		const page = await expectOk<{ items: unknown[]; project: unknown }>(response);
@@ -480,7 +483,9 @@ describe('project-scoped app listing', () => {
 		expect(page.project).toEqual({ id: pid, name: 'Analytics', your_role: 'app-user' });
 		for (const other of others) expect(keys).not.toContain(paths.project(other.id).meta);
 		expect(keys.filter((key) => key === paths.project(pid).meta)).toHaveLength(1);
-		expect(keys.filter((key) => key === paths.catalog)).toHaveLength(1);
+		expect(reads.filter(({ key }) => key === paths.catalog)).toEqual([
+			{ key: paths.catalog, options: { ifNoneMatch: catalogEtag } },
+		]);
 		expect(keys.filter((key) => key.startsWith('_system/snapshots/'))).toHaveLength(0);
 	});
 
@@ -491,10 +496,15 @@ describe('project-scoped app listing', () => {
 			'app-user',
 			ACTOR,
 		);
-		const { response, keys } = await recordGets(() => api.request('GET', '/apps'));
+		const { response, keys, reads, catalogEtag } = await recordGets(() =>
+			api.request('GET', '/apps'),
+		);
 		await expectPage(response);
 		// listProjects validates once; the notebook lists share the second validation.
-		expect(keys.filter((key) => key === paths.catalog)).toHaveLength(2);
+		expect(reads.filter(({ key }) => key === paths.catalog)).toEqual([
+			{ key: paths.catalog, options: { ifNoneMatch: catalogEtag } },
+			{ key: paths.catalog, options: { ifNoneMatch: catalogEtag } },
+		]);
 		expect(keys.filter((key) => key.startsWith('_system/snapshots/'))).toHaveLength(0);
 	});
 
