@@ -16,14 +16,20 @@ export function configuration(input) {
 		return value;
 	};
 	const hub = new URL(required('hub-url'));
+	const loopback =
+		hub.hostname === 'localhost' ||
+		hub.hostname === '[::1]' ||
+		/^127(?:\.\d{1,3}){3}$/.test(hub.hostname);
 	if (
-		!['https:', 'http:'].includes(hub.protocol) ||
+		!(hub.protocol === 'https:' || (hub.protocol === 'http:' && loopback)) ||
 		hub.username ||
 		hub.password ||
 		hub.search ||
 		hub.hash
 	)
-		throw new Error('hub-url must be an HTTP(S) URL without credentials, query, or fragment');
+		throw new Error(
+			'hub-url must use HTTPS (HTTP is allowed only on loopback), without credentials, query, or fragment',
+		);
 	const mode = input('mode') || 'sticky';
 	const eager = input('eager') || 'true';
 	if (!['sticky', 'commits'].includes(mode)) throw new Error('mode must be sticky or commits');

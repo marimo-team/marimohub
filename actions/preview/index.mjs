@@ -8,9 +8,15 @@ for (const secret of [input('hub-token'), input('github-token')]) {
 	if (secret) process.stdout.write(`::add-mask::${escape(secret)}\n`);
 }
 try {
+	let event;
+	try {
+		event = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, 'utf8'));
+	} catch {
+		throw new Error('Unable to read GitHub event file');
+	}
 	await runPreview({
 		input,
-		event: JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, 'utf8')),
+		event,
 		env: process.env,
 		summary: (text) => appendFile(process.env.GITHUB_STEP_SUMMARY, text),
 		output: (name, value) => appendFile(process.env.GITHUB_OUTPUT, `${name}=${value}\n`),

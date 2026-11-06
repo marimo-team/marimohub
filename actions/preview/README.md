@@ -7,7 +7,8 @@ It does not check out or execute repository code on the runner.
 ## Install
 
 The Hub needs a Git-synced notebook, a GitHub App connection for its repository, and preview maintenance.
-The token owner must be a notebook manager or admin. The runner must be able to reach the Hub.
+The token owner must be a notebook manager or admin. The runner must be able to reach the Hub over HTTPS.
+HTTP is allowed only for loopback addresses or `localhost`, for local use.
 Previews use the notebook's access rules, integrations, and secrets.
 
 1. Open **Previews → Set up GitHub Action** on the notebook.

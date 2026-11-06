@@ -1,3 +1,9 @@
+import { execFile as execFileCallback } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { configuration, renderComment, runPreview } from './preview.mjs';
@@ -293,4 +299,164 @@ await test('reports capacity waiting without inventing a preview link', async ()
 	await runPreview(options);
 	assert.equal(outputs.previews, '[]');
 	assert.match(summaries[0], /waiting for project capacity/);
+});
+
+await test('requires HTTPS except for explicit loopback hosts', () => {
+	for (const url of [
+		'https://hub.example.com/prefix',
+		'http://localhost:8080/prefix',
+		'http://127.0.0.1:8080',
+		'http://127.1.2.3:8080',
+		'http://[::1]:8080',
+	]) {
+		const { options } = fixture({ 'hub-url': url });
+		assert.equal(configuration(options.input).hub, url);
+	}
+	for (const url of [
+		'http://hub.example.com',
+		'http://10.0.0.1',
+		'http://0.0.0.0',
+		'http://127.evil.example.com',
+		'http://127.0.0.1.evil.example.com',
+		'http://localhost.evil.example.com',
+		'http://localhost@evil.example.com',
+		'http://[::2]',
+		'ftp://localhost',
+	])
+		assert.throws(() => fixture({ 'hub-url': url }), /hub-url must use HTTPS/);
+});
+
+await test('rejects insecure Hub URLs before sending either token', async () => {
+	const { options, calls, outputs } = fixture();
+	const input = options.input;
+	options.input = (name) => (name === 'hub-url' ? 'http://hub.example.com' : input(name));
+	await assert.rejects(runPreview(options), /hub-url must use HTTPS/);
+	assert.equal(calls.length, 0);
+	assert.deepEqual(outputs, {});
+});
+
+const execFile = promisify(execFileCallback);
+async function entrypoint({
+	event = JSON.stringify(fixture().options.event),
+	env = {},
+	preload,
+} = {}) {
+	const directory = await mkdtemp(join(tmpdir(), 'preview-action-'));
+	try {
+		const eventPath = join(directory, 'event.json');
+		const outputPath = join(directory, 'output');
+		const summaryPath = join(directory, 'summary');
+		const preloadPath = join(directory, 'fetch.mjs');
+		await Promise.all([
+			writeFile(eventPath, event),
+			writeFile(outputPath, ''),
+			writeFile(summaryPath, ''),
+			writeFile(
+				preloadPath,
+				preload ?? "globalThis.fetch = () => { throw new Error('Unexpected request'); };",
+			),
+		]);
+		const result = await execFile(
+			process.execPath,
+			['--import', preloadPath, fileURLToPath(new URL('./index.mjs', import.meta.url))],
+			{
+				timeout: 10_000,
+				env: {
+					...fixture().options.env,
+					GITHUB_EVENT_PATH: eventPath,
+					GITHUB_OUTPUT: outputPath,
+					GITHUB_STEP_SUMMARY: summaryPath,
+					'INPUT_HUB-URL': 'https://hub.example.com',
+					'INPUT_HUB-TOKEN': 'hub-secret',
+					'INPUT_GITHUB-TOKEN': 'github-secret',
+					'INPUT_PROJECT-ID': 'proj',
+					'INPUT_NOTEBOOK-ID': 'nb',
+					...env,
+				},
+			},
+		).then(
+			(result) => ({ ...result, status: 0 }),
+			(error) => ({ stdout: error.stdout, stderr: error.stderr, status: error.code }),
+		);
+		return {
+			...result,
+			output: await readFile(outputPath, 'utf8'),
+			summary: await readFile(summaryPath, 'utf8'),
+		};
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+}
+
+await test('entrypoint masks escaped secrets before reading a fork event and exits successfully', async () => {
+	const event = fixture().options.event;
+	event.pull_request.head.repo.full_name = 'fork/repo';
+	const result = await entrypoint({
+		event: JSON.stringify(event),
+		env: { 'INPUT_HUB-TOKEN': 'hub%\r\nsecret', 'INPUT_GITHUB-TOKEN': 'github%\nsecret' },
+	});
+	assert.equal(result.status, 0);
+	assert.equal(result.stdout, '::add-mask::hub%25%0D%0Asecret\n::add-mask::github%25%0Asecret\n');
+	assert.equal(result.stderr, '');
+	assert.equal(result.output, '');
+	assert.match(result.summary, /skipped for fork pull requests/);
+});
+
+await test('entrypoint reports invalid or missing event files without leaking their contents', async () => {
+	for (const overrides of [
+		{ event: 'private diagnostic: not JSON' },
+		{ env: { GITHUB_EVENT_PATH: '/missing-preview-event.json' } },
+	]) {
+		const result = await entrypoint(overrides);
+		assert.equal(result.status, 1);
+		assert.equal(
+			result.stdout,
+			'::add-mask::hub-secret\n::add-mask::github-secret\n::error::Unable to read GitHub event file\n',
+		);
+		assert.equal(result.stderr, '');
+		assert.equal(result.output, '');
+		assert.equal(result.summary, '');
+	}
+});
+
+await test('entrypoint escapes workflow errors and returns a failing exit code', async () => {
+	const result = await entrypoint({
+		preload: `globalThis.fetch = () => { throw new Error(${JSON.stringify('network%\r\nfailed')}); };`,
+	});
+	assert.equal(result.status, 1);
+	assert.equal(
+		result.stdout,
+		'::add-mask::hub-secret\n::add-mask::github-secret\n::error::network%25%0D%0Afailed\n',
+	);
+	assert.equal(result.stderr, '');
+	assert.equal(result.output, '');
+	assert.equal(result.summary, '');
+});
+
+await test('entrypoint writes outputs and summary when comment permissions fail', async () => {
+	const { result: previews } = fixture();
+	const result = await entrypoint({
+		preload: `globalThis.fetch = async (url) => {
+			if (url.includes('/actions/runs/')) return Response.json({ id: 123, workflow_id: 4, run_number: 5, created_at: '2026-01-01T00:00:00Z' });
+			if (url.endsWith('/reconcile')) return Response.json(${JSON.stringify({ success: true, data: previews })});
+			return new Response('', { status: 403 });
+		};`,
+	});
+	assert.equal(result.status, 0);
+	assert.match(result.stdout, /^::add-mask::hub-secret\n::add-mask::github-secret\n::warning::/);
+	assert.equal(result.stderr, '');
+	assert.match(result.summary, /feature\/chart/);
+	const outputs = Object.fromEntries(
+		result.output
+			.trim()
+			.split('\n')
+			.map((line) => {
+				const separator = line.indexOf('=');
+				return [line.slice(0, separator), JSON.parse(line.slice(separator + 1))];
+			}),
+	);
+	assert.deepEqual(outputs['preview-ids'], ['prev-1']);
+	assert.deepEqual(outputs['preview-urls'], [previews.items[0].url]);
+	assert.deepEqual(outputs.commits, [previews.items[0].target_commit]);
+	assert.equal(outputs.previews[0].preparation, 'deferred');
 });
