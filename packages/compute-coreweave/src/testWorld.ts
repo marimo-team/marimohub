@@ -11,6 +11,7 @@ import type {
 	FileWrites,
 	ProcessResult,
 	SandboxInfo,
+	SandboxStatus,
 	Service,
 	ServiceUrl,
 } from '@coreweave/cwsandbox';
@@ -93,6 +94,7 @@ export function contractLaunchProcess(command: readonly string[]): CommandProces
 
 export interface FakeSandbox {
 	sandboxId: string;
+	status: SandboxStatus;
 	serviceUrls: ServiceUrl[];
 	runCalls: string[][];
 	startCalls: string[][];
@@ -142,6 +144,7 @@ export function makeWorld(opts?: {
 	function build(sandboxId: string, services: readonly Service[] = []) {
 		const fake: FakeSandbox = {
 			sandboxId,
+			status: 'running',
 			serviceUrls: services.map((service) => ({
 				name: service.name ?? `port-${service.port}`,
 				port: service.port,
@@ -157,6 +160,9 @@ export function makeWorld(opts?: {
 		};
 		const sandbox = {
 			sandboxId,
+			get status() {
+				return fake.status;
+			},
 			get serviceUrls() {
 				return fake.serviceUrls;
 			},
@@ -226,7 +232,7 @@ export function makeWorld(opts?: {
 			const sandboxes: SandboxInfo[] = [];
 			for (const [cwId, entry] of registry) {
 				if (tags.every((t) => entry.tags.includes(t))) {
-					sandboxes.push({ sandboxId: cwId, status: 'running' });
+					sandboxes.push({ sandboxId: cwId, status: entry.fake.status });
 				}
 			}
 			return { sandboxes };
@@ -241,6 +247,9 @@ export function makeWorld(opts?: {
 	function reconnect(entry: { fake: FakeSandbox }, cwId: string) {
 		return {
 			sandboxId: cwId,
+			get status() {
+				return entry.fake.status;
+			},
 			get serviceUrls() {
 				return entry.fake.serviceUrls;
 			},

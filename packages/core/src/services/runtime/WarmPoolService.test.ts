@@ -19,7 +19,7 @@ import { WarmPoolStore } from './WarmPoolStore';
 import { WarmPoolService, WARM_POOL_MAX_IDLE_MS } from './WarmPoolService';
 import type { WarmPoolConfig } from './WarmPoolService';
 
-function setup(overrides: Partial<WarmPoolConfig> = {}) {
+function setup(overrides: Partial<WarmPoolConfig> = {}, referenceFor?: (id: SandboxId) => string) {
 	const bucket = new MemoryBucket();
 	const sessions = new SessionService(bucket);
 	const live = new Map<SandboxId, SandboxInstance>();
@@ -27,7 +27,10 @@ function setup(overrides: Partial<WarmPoolConfig> = {}) {
 	const destroyed: SandboxId[] = [];
 	const compute: SandboxProvider = {
 		create(id) {
-			const instance = makeFakeSandbox().instance;
+			const instance = {
+				...makeFakeSandbox().instance,
+				...(referenceFor ? { reconnectReference: referenceFor(id) } : {}),
+			};
 			return {
 				...instance,
 				ready: async () => {
@@ -97,6 +100,201 @@ function setup(overrides: Partial<WarmPoolConfig> = {}) {
 afterEach(() => vi.restoreAllMocks());
 
 describe('warm sandbox pools', () => {
+	it('publishes provider references and claims them from another replica', async () => {
+		const w = setup({}, (id) => `provider-reference:${id}`);
+		await w.service.sweep();
+		const member = (await w.members())[0];
+		expect(member.reconnect_reference).toBe(`provider-reference:${member.sandbox_id}`);
+		const connect = vi.spyOn(w.compute, 'connectExisting');
+		const request = { ...w.request(), reconnectReference: 'untrusted-request-reference' };
+		const claim = await w.replica().claim(request);
+		expect(claim?.member.sandbox_id).toBe(member.sandbox_id);
+		expect(connect).toHaveBeenCalledWith(member.sandbox_id, {
+			...w.config.profiles[0],
+			reconnectReference: member.reconnect_reference,
+		});
+		expect(w.created).toHaveLength(1);
+	});
+
+	it('drains claim diagnostics before handing the sandbox to provisioning', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const sandbox = w.live.get((await w.members())[0].sandbox_id)!;
+		let timings = { get_ms: 125 };
+		let counters = { execs: 1 };
+		sandbox.drainTimings = vi.fn(function (this: SandboxInstance) {
+			expect(this).toBe(sandbox);
+			const result = timings;
+			timings = { get_ms: 0 };
+			return result;
+		});
+		sandbox.drainCounters = vi.fn(function (this: SandboxInstance) {
+			expect(this).toBe(sandbox);
+			const result = counters;
+			counters = { execs: 0 };
+			return result;
+		});
+		const claim = await w.service.claim(w.request());
+		expect(claim?.sandbox).toBe(sandbox);
+		expect(sandbox.drainTimings).toHaveBeenCalledTimes(1);
+		expect(sandbox.drainCounters).toHaveBeenCalledTimes(1);
+		expect(claim!.sandbox.drainTimings!()).toEqual({ get_ms: 0 });
+		expect(claim!.sandbox.drainCounters!()).toEqual({ execs: 0 });
+	});
+
+	it('keeps healthy claims when optional diagnostic drains fail', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const sandbox = w.live.get((await w.members())[0].sandbox_id)!;
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		sandbox.drainTimings = vi.fn(() => {
+			throw new Error('secret-provider-request');
+		});
+		sandbox.drainCounters = vi.fn(() => ({}));
+		expect((await w.service.claim(w.request()))?.sandbox).toBe(sandbox);
+		expect(sandbox.drainCounters).toHaveBeenCalledTimes(1);
+		expect((await w.members())[0].state).toBe('claimed');
+		expect(log.mock.calls.flat().join('')).toContain('warm_pool_diagnostics_failed');
+		expect(log.mock.calls.flat().join('')).not.toContain('secret-provider-request');
+	});
+
+	it('backfills legacy entries during successful health checks without replacing their container', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const member = (await w.members())[0];
+		expect(member.reconnect_reference).toBeUndefined();
+		Object.defineProperty(w.live.get(member.sandbox_id)!, 'reconnectReference', {
+			value: 'new-reference',
+		});
+		const connect = vi.spyOn(w.compute, 'connectExisting');
+		w.advance(30_001);
+		await w.replica().sweep();
+		expect((await w.members())[0].reconnect_reference).toBe('new-reference');
+		expect(connect).toHaveBeenCalledWith(member.sandbox_id);
+		connect.mockClear();
+		w.advance(30_001);
+		await w.replica().sweep();
+		expect(connect).toHaveBeenCalledWith(member.sandbox_id, {
+			reconnectReference: 'new-reference',
+		});
+		expect(w.created).toHaveLength(1);
+	});
+
+	it('ignores a request reference when the stored member has no reference', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const connect = vi.spyOn(w.compute, 'connectExisting');
+		const request = { ...w.request(), reconnectReference: 'untrusted-reference' };
+		const claim = await w.replica().claim(request);
+		expect(claim).toBeDefined();
+		expect(connect).toHaveBeenCalledExactlyOnceWith(claim!.member.sandbox_id, w.config.profiles[0]);
+		expect(claim!.member.reconnect_reference).toBeUndefined();
+	});
+
+	it('does not let a stale successful health check backfill a concurrently claimed member', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const member = (await w.members())[0];
+		const sandbox = w.live.get(member.sandbox_id)!;
+		Object.defineProperty(sandbox, 'reconnectReference', { value: 'discovered-reference' });
+		let finishHealth!: () => void;
+		vi.spyOn(sandbox, 'exec').mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finishHealth = () => resolve(execResult(true, '', ''));
+				}),
+		);
+		w.advance(30_001);
+		const sweep = w.service.sweep();
+		await vi.waitFor(() => expect(finishHealth).toBeDefined());
+		const claim = (await w.replica().claim(w.request()))!;
+		finishHealth();
+		await sweep;
+		const current = (await w.members()).find((item) => item.sandbox_id === member.sandbox_id)!;
+		expect(current).toMatchObject({ state: 'claimed', token: claim.member.token });
+		expect(current.reconnect_reference).toBeUndefined();
+		expect(w.destroyed).not.toContain(member.sandbox_id);
+	});
+
+	it('retires a missing referenced sandbox rather than replacing it inside the claim', async () => {
+		const w = setup({}, () => 'saved-reference');
+		await w.service.sweep();
+		w.live.clear();
+		expect(await w.service.claim(w.request())).toBeUndefined();
+		expect((await w.members())[0].state).toBe('retiring');
+		expect(w.created).toHaveLength(1);
+	});
+
+	it.each(['', 'x'.repeat(4097)])(
+		'does not publish invalid provider references (%#)',
+		async (reference) => {
+			const w = setup({}, () => reference);
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			await w.service.sweep();
+			expect(await w.members()).toEqual([]);
+			expect(w.destroyed).toEqual(w.created);
+			expect(log.mock.calls.flat().join('')).not.toContain('x'.repeat(4097));
+		},
+	);
+
+	it('preserves a maximum-length reference when a later handle omits it', async () => {
+		const reference = 'x'.repeat(4096);
+		const w = setup({}, () => reference);
+		await w.service.sweep();
+		const member = (await w.members())[0];
+		expect(member.reconnect_reference).toBe(reference);
+		Object.defineProperty(w.live.get(member.sandbox_id)!, 'reconnectReference', {
+			value: undefined,
+		});
+		w.advance(30_001);
+		await w.replica().sweep();
+		expect((await w.members())[0]).toMatchObject({
+			sandbox_id: member.sandbox_id,
+			state: 'ready',
+			checked_at: w.now(),
+			reconnect_reference: reference,
+		});
+		expect(w.created).toHaveLength(1);
+		expect(w.destroyed).toEqual([]);
+	});
+
+	it('retires an invalid backfill without publishing it, even when cleanup fails', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const member = (await w.members())[0];
+		Object.defineProperty(w.live.get(member.sandbox_id)!, 'reconnectReference', { value: '' });
+		const create = w.compute.create.bind(w.compute);
+		vi.spyOn(w.compute, 'create').mockImplementation((id, options) => ({
+			...create(id, options),
+			destroy: async () => {
+				throw new Error('delete unavailable');
+			},
+		}));
+		w.advance(30_001);
+		await w.replica().sweep();
+		const current = (await w.members()).find((item) => item.sandbox_id === member.sandbox_id)!;
+		expect(current).toMatchObject({ state: 'retiring', checked_at: member.checked_at });
+		expect(current.reconnect_reference).toBeUndefined();
+		const claim = await w.service.claim(w.request());
+		expect(claim).toBeDefined();
+		expect(claim!.member.sandbox_id).not.toBe(member.sandbox_id);
+	});
+
+	it('does not read or publish a backfill reference after a failed health probe', async () => {
+		const w = setup();
+		await w.service.sweep();
+		const member = (await w.members())[0];
+		const sandbox = w.live.get(member.sandbox_id)!;
+		const reference = vi.fn(() => 'unproven-reference');
+		Object.defineProperty(sandbox, 'reconnectReference', { get: reference });
+		vi.spyOn(sandbox, 'exec').mockRejectedValue(new Error('probe unavailable'));
+		w.advance(30_001);
+		await w.replica().sweep();
+		expect(reference).not.toHaveBeenCalled();
+		expect(w.destroyed).toContain(member.sandbox_id);
+		expect((await w.members()).some((item) => item.sandbox_id === member.sandbox_id)).toBe(false);
+	});
+
 	it('claims the resources requested when two profiles share a name', async () => {
 		const w = setup({
 			profiles: [
@@ -290,18 +488,21 @@ describe('warm sandbox pools', () => {
 		expect((await w.members())[0].state).toBe('ready');
 	});
 
-	it('falls back after a missing sandbox or failed command probe', async () => {
-		const w = setup();
-		await w.service.sweep();
-		w.live.clear();
-		expect(await w.service.claim(w.request())).toBeUndefined();
-		await w.service.sweep();
-		vi.spyOn(w.live.values().next().value!, 'exec').mockResolvedValue(
-			execResult(false, '', 'failed'),
-		);
-		expect(await w.service.claim(w.request())).toBeUndefined();
-		expect((await w.members())[0].state).toBe('retiring');
-	});
+	it.each([undefined, 'saved-reference'])(
+		'falls back after a missing sandbox or failed command probe (%#)',
+		async (reference) => {
+			const w = setup({}, reference === undefined ? undefined : () => reference);
+			await w.service.sweep();
+			w.live.clear();
+			expect(await w.service.claim(w.request())).toBeUndefined();
+			await w.service.sweep();
+			vi.spyOn(w.live.values().next().value!, 'exec').mockResolvedValue(
+				execResult(false, '', 'failed'),
+			);
+			expect(await w.service.claim(w.request())).toBeUndefined();
+			expect((await w.members())[0].state).toBe('retiring');
+		},
+	);
 
 	it('falls back on unavailable pool storage', async () => {
 		const w = setup();
@@ -1101,11 +1302,16 @@ describe('warm pool failure boundaries', () => {
 	it('rejects a booted sandbox whose command probe fails', async () => {
 		const w = setup();
 		const create = w.compute.create.bind(w.compute);
+		const reference = vi.fn(() => 'unproven-reference');
 		vi.spyOn(w.compute, 'create').mockImplementation((id, options) => ({
 			...create(id, options),
+			get reconnectReference() {
+				return reference();
+			},
 			exec: async () => execResult(false, '', 'bootstrap failed'),
 		}));
 		await w.service.sweep();
+		expect(reference).not.toHaveBeenCalled();
 		expect(w.created).toHaveLength(1);
 		expect(w.destroyed).toEqual(w.created);
 		expect(await w.members()).toEqual([]);
