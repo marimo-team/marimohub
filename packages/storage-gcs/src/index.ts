@@ -254,8 +254,10 @@ export class GcsStorage implements Bucket {
 		let bodyText: string | undefined;
 		const decode = () => (bodyText ??= new TextDecoder().decode(bodyBytes));
 		// A later metadata lookup could label these bytes with a newer generation.
-		// Backends that omit the generation header must leave this body uncacheable.
-		const generation = res.headers.get('x-goog-generation') ?? '';
+		const generation = res.headers.get('x-goog-generation');
+		if (!generation) {
+			throw new Error(`GCS get failed for "${key}": missing x-goog-generation header`);
+		}
 		const uploaded = res.headers.get('last-modified');
 		const size = Number(res.headers.get('content-length') ?? bodyBytes.length);
 		return {
