@@ -222,6 +222,8 @@ function makeFakeGcsFetch(): typeof fetch {
 
 		if (method === 'GET') {
 			if (!obj) return new Response('not found', { status: 404 });
+			if (q.get('ifGenerationNotMatch') === String(obj.generation))
+				return new Response(null, { status: 304 });
 			if (q.get('alt') === 'media') {
 				return new Response(new Uint8Array(obj.content), {
 					status: 200,
@@ -422,36 +424,32 @@ describe('GcsStorage auth and request mapping', () => {
 		expect(bodyText).toContain('print(1)');
 	});
 
-	it('falls back to metadata lookup when media get omits the generation header', async () => {
-		const urls: string[] = [];
+	it.each([
+		{ generation: undefined, ifNoneMatch: undefined },
+		{ generation: '', ifNoneMatch: undefined },
+		{ generation: undefined, ifNoneMatch: '123' },
+		{ generation: '', ifNoneMatch: '123' },
+	])('rejects a media body without a CAS token ($generation, $ifNoneMatch)', async (test) => {
+		const urls: URL[] = [];
 		const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
 			const url = new URL(String(input));
-			urls.push(url.toString());
+			urls.push(url);
 			if (url.searchParams.get('alt') === 'media') {
 				return new Response('payload', {
 					status: 200,
-					headers: {
-						'content-length': '7',
-						'last-modified': 'Wed, 05 Mar 2025 14:00:00 GMT',
-					},
+					headers: test.generation === undefined ? {} : { 'x-goog-generation': test.generation },
 				});
 			}
-			return json({
-				generation: '456',
-				size: '7',
-				updated: '2025-03-05T14:00:00.000Z',
-			});
+			return json({ generation: '456', size: '7' });
 		});
 		const bucket = new GcsStorage({ bucket: 'test', accessToken: 'token', fetchImpl });
 
-		const body = await bucket.get('dir/notebook.py');
-
-		expect(body?.etag).toBe('456');
-		expect(await body?.text()).toBe('payload');
-		expect(urls[0]).toContain('alt=media');
-		expect(new URL(urls[1]).searchParams.get('fields')).toBe(
-			'generation,size,updated,contentType,metadata',
+		await expect(bucket.get('dir/notebook.py', { ifNoneMatch: test.ifNoneMatch })).rejects.toThrow(
+			'GCS get failed for "dir/notebook.py": missing x-goog-generation header',
 		);
+		expect(urls).toHaveLength(1);
+		expect(urls[0].searchParams.get('alt')).toBe('media');
+		expect(urls[0].searchParams.get('ifGenerationNotMatch')).toBe(test.ifNoneMatch ?? null);
 	});
 
 	it('maps list pagination and delimiter parameters', async () => {
@@ -944,4 +942,18 @@ describe('GCS streaming failure recovery', () => {
 		expect(new Headers(requests[1].init!.headers).get('content-range')).toBe('bytes */0');
 		expect((requests[1].init!.body as Uint8Array).byteLength).toBe(0);
 	});
+});
+
+it.each([403, 412, 500])('propagates HTTP %s during a conditional GET', async (status) => {
+	const fetchImpl = vi.fn(async () => new Response('read failed', { status }));
+	const bucket = new GcsStorage({ bucket: 'test', accessToken: 'token', fetchImpl });
+	await expect(bucket.get('key', { ifNoneMatch: '123' })).rejects.toThrow(
+		`GCS get failed for "key": ${status}`,
+	);
+});
+
+it('does not accept an unsolicited 304 for an unconditional GET', async () => {
+	const fetchImpl = vi.fn(async () => new Response(null, { status: 304 }));
+	const bucket = new GcsStorage({ bucket: 'test', accessToken: 'token', fetchImpl });
+	await expect(bucket.get('key')).rejects.toThrow('GCS get failed for "key": 304');
 });

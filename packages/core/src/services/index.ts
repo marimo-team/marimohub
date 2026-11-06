@@ -538,9 +538,13 @@ export function createServices(
 		append: (event) => ({ 'marimohub.event': event.event, ...user(event.actor) }),
 		getEvents: (date) => ({ 'marimohub.date': date }),
 	});
-	const catalog = wrap('CatalogService', new CatalogService(bucket, metrics, events), {
-		initialize: user,
-	});
+	const catalog = wrap(
+		'CatalogService',
+		new CatalogService(bucket, metrics, events, undefined, undefined, rawBucket),
+		{
+			initialize: user,
+		},
+	);
 	const identities = wrap('IdentityService', new IdentityService(bucket), {
 		get: user,
 		isSuspended: user,

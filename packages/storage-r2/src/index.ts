@@ -7,6 +7,8 @@ import type {
 	BucketListResult,
 	BucketObject,
 	BucketObjectBody,
+	BucketGetOptions,
+	BucketGetResult,
 	BucketPutOptions,
 } from '@marimo-hub/core/ports/bucket';
 
@@ -58,9 +60,17 @@ export class R2BucketAdapter implements Bucket {
 		},
 	};
 
-	async get(key: string): Promise<BucketObjectBody | null> {
-		const obj = await this.r2.get(key);
-		return obj ? toObjectBody(obj) : null;
+	get(key: string): Promise<BucketObjectBody | null>;
+	get(key: string, options?: BucketGetOptions): Promise<BucketGetResult>;
+	async get(key: string, options?: BucketGetOptions): Promise<BucketGetResult> {
+		const obj = await this.r2.get(
+			key,
+			options?.ifNoneMatch ? { onlyIf: { etagDoesNotMatch: options.ifNoneMatch } } : {},
+		);
+		if (!obj) return null;
+		if (!('body' in obj) || obj.body === undefined)
+			return { key, etag: obj.etag, notModified: true };
+		return toObjectBody(obj);
 	}
 
 	async head(key: string): Promise<BucketObject | null> {

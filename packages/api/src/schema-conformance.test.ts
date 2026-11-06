@@ -166,6 +166,7 @@ describe('schema conformance: api response shapes vs core public shapes', () => 
 		const apiKeys = shapeKeys(SnapshotProjectEntrySchema);
 		const internal = [
 			'notebooks',
+			'default_role',
 			'member_ids',
 			'member_emails',
 			'member_groups',

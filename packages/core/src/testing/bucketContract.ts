@@ -11,6 +11,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { PreconditionFailedError } from '../errors';
+import { isNotModified } from '../ports/bucket';
 import type { Bucket } from '../ports/bucket';
 
 export function bucketContract(
@@ -98,6 +99,35 @@ export function bucketContract(
 			expect(got).not.toBeNull();
 			expect(await got!.json()).toEqual({ x: 1 });
 			expect(got!.etag).toBe(put.etag);
+		});
+
+		it('conditionally reads unchanged, changed, and missing objects', async () => {
+			const key = 'conditional/object';
+			const first = await bucket.put(key, 'first');
+			const unchanged = await bucket.get(key, { ifNoneMatch: first.etag });
+			expect(unchanged).toEqual({ key, etag: first.etag, notModified: true });
+			expect(isNotModified(unchanged)).toBe(true);
+			expect(unchanged?.etag).toBe((await bucket.head(key))?.etag);
+			const second = await bucket.put(key, 'second');
+			const changed = await bucket.get(key, { ifNoneMatch: first.etag });
+			expect(changed?.etag).toBe(second.etag);
+			if (!changed || isNotModified(changed)) throw new Error('Expected changed body');
+			expect(await changed.text()).toBe('second');
+			await bucket.delete(key);
+			expect(await bucket.get(key, { ifNoneMatch: second.etag })).toBeNull();
+		});
+
+		it('returns bodies for empty validators and for a recreated object with different content', async () => {
+			const key = 'conditional/recreated';
+			const first = await bucket.put(key, 'old');
+			const unvalidated = await bucket.get(key, { ifNoneMatch: '' });
+			if (!unvalidated || isNotModified(unvalidated)) throw new Error('Expected body');
+			expect(await unvalidated.text()).toBe('old');
+			await bucket.delete(key);
+			await bucket.put(key, 'replacement');
+			const recreated = await bucket.get(key, { ifNoneMatch: first.etag });
+			if (!recreated || isNotModified(recreated)) throw new Error('Expected replacement body');
+			expect(await recreated.text()).toBe('replacement');
 		});
 
 		it('list reports the same etag as get for an unchanged object', async () => {

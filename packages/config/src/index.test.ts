@@ -1078,7 +1078,7 @@ describe('createFromEnv sandbox-host isolation guard', () => {
 		expect(deps.sandbox.hostname).toBe('sandboxes.example.net');
 	});
 
-	it('allows sibling app and sandbox subdomains', () => {
+	it('allows app and sandbox sibling subdomains', () => {
 		const deps = createFromEnv({
 			...env,
 			MARIMOHUB_AUTH_OIDC_REDIRECT_URI: 'https://app.example.com/api/auth/callback',

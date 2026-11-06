@@ -135,6 +135,8 @@ function installFakeS3(opts: { ignoreIfMatch?: boolean } = {}) {
 				case 'GetObjectCommand': {
 					const s = store.map.get(input.Key);
 					if (!s) throw namedError('NoSuchKey');
+					if (input.IfNoneMatch === `"${s.etag}"`)
+						throw Object.assign(new Error('NotModified'), { $metadata: { httpStatusCode: 304 } });
 					return {
 						Body: {
 							transformToString: async () => new TextDecoder().decode(s.body),
@@ -254,6 +256,22 @@ describe('S3Storage command mapping', () => {
 		fake = installFakeS3();
 	});
 	afterEach(() => vi.restoreAllMocks());
+
+	it.each([403, 412, 500])('propagates HTTP %s during a conditional GET', async (status) => {
+		const failure = Object.assign(new Error('read failed'), {
+			$metadata: { httpStatusCode: status },
+		});
+		vi.spyOn(S3Client.prototype, 'send').mockRejectedValueOnce(failure);
+		await expect(new S3Storage(CFG).get('key', { ifNoneMatch: 'etag' })).rejects.toBe(failure);
+	});
+
+	it('does not accept an unsolicited 304 for an unconditional GET', async () => {
+		const failure = Object.assign(new Error('unexpected 304'), {
+			$metadata: { httpStatusCode: 304 },
+		});
+		vi.spyOn(S3Client.prototype, 'send').mockRejectedValueOnce(failure);
+		await expect(new S3Storage(CFG).get('key')).rejects.toBe(failure);
+	});
 
 	const puts = () => fake.calls.filter((c) => c.name === 'PutObjectCommand');
 

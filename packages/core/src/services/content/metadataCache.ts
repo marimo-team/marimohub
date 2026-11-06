@@ -1,5 +1,6 @@
 import { METADATA_CACHE_MAX_ENTRIES } from '../../constants';
 import { EtagRecordCache } from '../../etagRecordCache';
+import { isNotModified } from '../../ports/bucket';
 import type { Bucket, BucketObjectBody } from '../../ports/bucket';
 
 export type ReadConsistency = 'fresh' | 'validated';
@@ -14,8 +15,9 @@ export class MetadataCache<T> {
 	constructor(
 		private readonly bucket: Bucket,
 		maxSize = METADATA_CACHE_MAX_ENTRIES,
+		entries?: EtagRecordCache<T>,
 	) {
-		this.entries = new EtagRecordCache(maxSize);
+		this.entries = entries ?? new EtagRecordCache(maxSize);
 	}
 
 	async read(
@@ -23,32 +25,26 @@ export class MetadataCache<T> {
 		parse: (object: BucketObjectBody) => Promise<T>,
 		consistency: ReadConsistency = 'fresh',
 	): Promise<T | null> {
-		if (consistency === 'validated' && keys.some((key) => this.entries.has(key))) {
-			const head = await firstExisting(keys, (key) => this.bucket.head(key));
-			if (!head) {
-				for (const key of keys) this.entries.delete(key);
-				return null;
+		for (const key of keys) {
+			const cached = consistency === 'validated' ? this.entries.peek(key) : undefined;
+			const object = cached
+				? await this.bucket.get(key, { ifNoneMatch: cached.etag })
+				: await this.bucket.get(key);
+			if (!object) {
+				this.entries.delete(key);
+				continue;
 			}
-			const cached = this.entries.get(head.key, head.etag);
-			if (cached !== undefined) return structuredClone(cached);
+			if (isNotModified(object)) {
+				if (!cached || cached.etag !== object.etag)
+					throw new Error('Invalid conditional read response');
+				this.entries.get(key, cached.etag);
+				return structuredClone(cached.value);
+			}
+			const value = await parse(object);
+			if (consistency !== 'validated') return value;
+			this.entries.set(key, object.etag, value);
+			return structuredClone(value);
 		}
-		const object = await firstExisting(keys, (key) => this.bucket.get(key));
-		if (!object) return null;
-		const value = await parse(object);
-		// A write can occur between HEAD and GET, so use the fetched ETag.
-		if (consistency !== 'validated') return value;
-		this.entries.set(object.key, object.etag, value);
-		return structuredClone(value);
+		return null;
 	}
-}
-
-async function firstExisting<T>(
-	keys: readonly string[],
-	read: (key: string) => Promise<T | null>,
-): Promise<T | null> {
-	for (const key of keys) {
-		const object = await read(key);
-		if (object !== null) return object;
-	}
-	return null;
 }

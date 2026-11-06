@@ -30,6 +30,10 @@ export class EtagRecordCache<T> {
 		return this.entries.get(key)?.value;
 	}
 
+	peek(key: string): { etag: string; value: T } | undefined {
+		return this.entries.peek(key);
+	}
+
 	set(key: string, etag: string, value: T): void {
 		if (!etag) {
 			this.entries.delete(key);

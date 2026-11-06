@@ -78,14 +78,15 @@ export async function loadProjectCatalogPatch(
 
 export function projectCatalogPatch(
 	project: Project,
-	entry: SnapshotProjectEntry,
+	entry: Pick<SnapshotProjectEntry, 'updated_at' | 'security_labels_pending'>,
 	options?: SecurityLabelProjectionOptions,
-): Partial<SnapshotProjectEntry> {
+) {
 	return {
 		name: project.name,
 		description: project.description,
 		status: project.status,
 		tags: project.tags,
+		default_role: project.default_role ?? 'inherit',
 		updated_at: entry.updated_at >= project.updated_at ? entry.updated_at : project.updated_at,
 		member_ids: project.members.flatMap((member) =>
 			member.user_id !== undefined ? [member.user_id] : [],

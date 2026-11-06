@@ -616,13 +616,18 @@ describe('authorizeProxyRequest', () => {
 		const app = await runningApp(d.services);
 		sessionId = app.sessionId;
 		recorded.calls.get.length = 0;
+		const get = vi.spyOn(recorded, 'get');
 		for (let i = 0; i < 2; i++) {
 			expect(await authorizeProxyRequest(app.request(), d)).toMatchObject({ kind: 'forward' });
 		}
-		expect(recorded.calls.get.filter((key) => key === paths.project(pid).meta)).toHaveLength(1);
+		expect(recorded.calls.get.filter((key) => key === paths.project(pid).meta)).toHaveLength(2);
 		expect(
 			recorded.calls.get.filter((key) => key === paths.project(pid).notebook(app.notebookId).meta),
-		).toHaveLength(1);
+		).toHaveLength(2);
+		expect(get).toHaveBeenCalledWith(paths.project(pid).meta, { ifNoneMatch: expect.any(String) });
+		expect(get).toHaveBeenCalledWith(paths.project(pid).notebook(app.notebookId).meta, {
+			ifNoneMatch: expect.any(String),
+		});
 		expect(sessionReads()).toBe(2);
 	});
 
@@ -636,11 +641,13 @@ describe('authorizeProxyRequest', () => {
 				resource === 'project'
 					? paths.project(pid).meta
 					: paths.project(pid).notebook(app.notebookId).meta;
-			const head = d.bucket.head.bind(d.bucket);
-			const failure = vi.spyOn(d.bucket, 'head').mockImplementation(async (requestedKey) => {
-				if (requestedKey === key) throw new UnavailableError('Storage unavailable');
-				return head(requestedKey);
-			});
+			const get = d.bucket.get.bind(d.bucket);
+			const failure = vi
+				.spyOn(d.bucket, 'get')
+				.mockImplementation(async (requestedKey, options) => {
+					if (requestedKey === key) throw new UnavailableError('Storage unavailable');
+					return get(requestedKey, options);
+				});
 			try {
 				for (let attempt = 0; attempt < 2; attempt++) {
 					expect(await authorizeProxyRequest(app.request(), d)).toMatchObject({

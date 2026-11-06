@@ -3356,13 +3356,15 @@ describe('Session routes', () => {
 	it('reuses project metadata across heartbeats', async () => {
 		const sid = await startSession();
 		const recording = new RecordingBucket(bucket);
+		const get = vi.spyOn(recording, 'get');
 		const api = createTestApi({
 			bucket,
 			deps: { bucket: recording, services: createServices(recording) },
 		});
 		await expectOk(await api.request('POST', sessionsPath(`/${sid}/heartbeat`)));
 		await expectOk(await api.request('POST', sessionsPath(`/${sid}/heartbeat`)));
-		expect(recording.calls.get.filter((key) => key === paths.project(pid).meta)).toHaveLength(1);
+		expect(recording.calls.get.filter((key) => key === paths.project(pid).meta)).toHaveLength(2);
+		expect(get).toHaveBeenCalledWith(paths.project(pid).meta, { ifNoneMatch: expect.any(String) });
 	});
 
 	it.each(['local', 'replica'] as const)(
