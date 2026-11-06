@@ -114,6 +114,44 @@ describe('CatalogService', () => {
 			expect(after.projects[0].notebooks).toEqual([]);
 		});
 
+		it.each(['read', 'commit', 'noop'] as const)(
+			'protects snapshots and indexes exposed by %s in production',
+			async (source) => {
+				vi.stubEnv('NODE_ENV', 'production');
+				try {
+					await catalog.initialize(ACTOR);
+					const project = makeSnapshotProjectEntry({ name: 'Stored' });
+					const committed = await catalog.mutateSnapshot('test', ACTOR, (snapshot) => ({
+						...snapshot,
+						projects: [project],
+					}));
+					const entry = await catalog.getCurrentSnapshotEntry();
+					const subject = { id: project.owner, email: 'owner@example.com' };
+					expect(entry.candidatesFor(subject)).toContain(project.id);
+					const exposed =
+						source === 'commit'
+							? committed
+							: source === 'noop'
+								? await catalog.mutateSnapshot('noop', ACTOR, (snapshot) => snapshot)
+								: await new CatalogService(bucket).getCurrentSnapshot();
+					expect(() => exposed.projects.splice(0)).toThrow(TypeError);
+					expect(() => {
+						exposed.projects[0].name = 'Corrupted';
+					}).toThrow(TypeError);
+					expect(() => {
+						exposed.projects[0].owner = uid('outsider');
+					}).toThrow(TypeError);
+					expect(entry.byProjectId.get(project.id)?.name).toBe('Stored');
+					expect(entry.candidatesFor(subject)).toContain(project.id);
+					expect(await catalog.getCurrentSnapshot()).toEqual(
+						await (await bucket.get(paths.snapshot(committed.snapshot_id)))!.json(),
+					);
+				} finally {
+					vi.unstubAllEnvs();
+				}
+			},
+		);
+
 		it('detaches callback-owned entries before publishing in production', async () => {
 			vi.stubEnv('NODE_ENV', 'production');
 			try {

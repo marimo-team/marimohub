@@ -121,6 +121,27 @@ describe('ProjectService', () => {
 		expect(await projects.listProjects({ subject })).toEqual([]);
 	});
 
+	it.each(['viewer', 'manager', 'app-user'] as const)(
+		'discovers a new %s default after repairing a failed projection',
+		async (role) => {
+			const project = await projects.createProject({ name: 'Private', description: '' }, ACTOR);
+			await projects.updateProject(project.id, { default_role: 'none' }, ACTOR);
+			const subject = { id: uid('unprojected'), email: 'unprojected@example.com' };
+			vi.spyOn(catalog, 'updateProjectEntry').mockRejectedValueOnce(new Error('projection failed'));
+			await expect(
+				projects.updateProject(project.id, { default_role: role }, ACTOR),
+			).rejects.toThrow('projection failed');
+			expect((await projects.getProject(project.id)).default_role).toBe(role);
+			expect(await projects.listProjects({ subject, action: 'app.read' })).toEqual([]);
+			expect(await projects.isAppOnly(subject)).toBe(role === 'app-user');
+
+			await projects.updateProject(project.id, { default_role: role }, ACTOR);
+			expect(await projects.listProjects({ subject, action: 'app.read' })).toMatchObject([
+				{ id: project.id },
+			]);
+		},
+	);
+
 	it('uses committed default access even when catalog projection fails', async () => {
 		const project = await projects.createProject({ name: 'Private', description: '' }, ACTOR);
 		const subject = { id: uid('user_out'), email: 'out@example.com' };

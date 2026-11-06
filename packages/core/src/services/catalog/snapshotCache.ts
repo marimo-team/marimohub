@@ -37,8 +37,7 @@ export class SnapshotCacheEntry {
 	private involvement?: ProjectInvolvement;
 
 	constructor(readonly snapshot: Snapshot) {
-		const runtime = globalThis as { process?: { env?: { NODE_ENV?: string } } };
-		if (runtime.process?.env?.NODE_ENV !== 'production') freeze(snapshot);
+		freeze(snapshot);
 		this.byProjectId = projectsById(snapshot);
 	}
 

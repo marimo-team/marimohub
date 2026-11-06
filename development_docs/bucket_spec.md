@@ -79,13 +79,15 @@ Every catalog read validates `catalog.json`. Each bucket instance shares two
 parsed immutable snapshots, keyed by path, with project and involvement indexes.
 Only immutable snapshot loads share concurrent requests. Mutators receive a deep
 clone. Their results are cloned before publication. Successful commits populate
-the cache. Non-production runtimes freeze cached snapshots.
+the cache. All runtimes freeze cached snapshots.
 
 Project lists filter candidates when the subject has no default grant. App-only
 checks use candidates when the subject default is absent or `app-user`.
 Candidates include owners, projected members, incomplete legacy entries, and
 projects with a default grant. Candidate roles use validated `project.json`
 reads. Stale projections can deny new access but cannot preserve revoked access.
+If publication fails after a metadata write, listings can omit new grants until
+a retry or recovery repairs the projection.
 
 If neither the subject default nor the candidates supply a role, app-only checks
 read the remaining projects. This prevents an unprojected app membership from
