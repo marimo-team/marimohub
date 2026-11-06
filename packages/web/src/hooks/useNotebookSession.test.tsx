@@ -55,7 +55,11 @@ async function setupAppHeartbeat(
 	return { ...hook, fetchMock };
 }
 
-/** Offsets from the start of startup at which the backoff schedule polls, up to `untilMs`. */
+/**
+ * Offsets from the start of startup at which the backoff schedule polls, up to `untilMs`.
+ * Each delay runs from the previous response; mocked responses settle without advancing
+ * the clock, so these are also the request offsets.
+ */
 function startPollOffsets(untilMs: number): number[] {
 	const offsets: number[] = [];
 	for (let attempt = 0, at = 0; ; attempt++) {
@@ -335,6 +339,86 @@ describe('useNotebookSession', () => {
 			expect(pollTimes).toHaveLength(settled);
 		},
 	);
+
+	it('keeps a newer running poll when an earlier slow starting poll answers late', async () => {
+		vi.useFakeTimers();
+		const slowStarting = deferred<Response>();
+		let polls = 0;
+		const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+			if (init?.method === 'POST') {
+				return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
+			}
+			if (String(url).endsWith('/sessions/sess-1')) {
+				polls += 1;
+				return polls === 1 ? slowStarting.promise : jsonOk(makeSession());
+			}
+			throw new Error(`unexpected fetch: ${String(url)}`);
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const { result } = renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		await settleHook();
+
+		await act(() => vi.advanceTimersByTimeAsync(5_000));
+		await act(async () => {
+			slowStarting.resolve(jsonOk(makeSession({ status: 'starting', sandbox_url: undefined })));
+			await vi.advanceTimersByTimeAsync(1_000);
+		});
+		expect(result.current.isRunning).toBe(true);
+		const settled = polls;
+		await act(() => vi.advanceTimersByTimeAsync(10_000));
+		expect(polls).toBe(settled);
+		expect(result.current.session?.status).toBe('running');
+	});
+
+	it('ignores a startup poll that answers after an app heartbeat reports running', async () => {
+		const slowStarting = deferred<Response>();
+		let polls = 0;
+		const { result, fetchMock } = await setupAppHeartbeat(() =>
+			jsonOk(makeSession({ mode: 'app' })),
+		);
+		fetchMock.mockImplementation(async (url: RequestInfo | URL) => {
+			if (String(url).endsWith('/heartbeat')) return jsonOk(makeSession({ mode: 'app' }));
+			polls += 1;
+			return slowStarting.promise;
+		});
+		await act(() => vi.advanceTimersByTimeAsync(1_000));
+		expect(polls).toBe(1);
+		expect(result.current.isRunning).toBe(true);
+		await act(async () => {
+			slowStarting.resolve(
+				jsonOk(makeSession({ mode: 'app', status: 'starting', sandbox_url: undefined })),
+			);
+			await vi.advanceTimersByTimeAsync(5_000);
+		});
+		expect(result.current.session?.status).toBe('running');
+		expect(polls).toBe(1);
+	});
+
+	it('never has more than one startup poll in flight', async () => {
+		vi.useFakeTimers();
+		let inFlight = 0;
+		let maxInFlight = 0;
+		let polls = 0;
+		const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+			if (init?.method === 'POST') {
+				return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
+			}
+			polls += 1;
+			inFlight += 1;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			// Slower than every early backoff delay.
+			await new Promise((resolve) => setTimeout(resolve, 1_500));
+			inFlight -= 1;
+			return jsonOk(makeSession({ status: 'starting', sandbox_url: undefined }));
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		renderHookWithClient(() => useNotebookSession(PID, NID), { toaster: false });
+		await settleHook();
+
+		await act(() => vi.advanceTimersByTimeAsync(20_000));
+		expect(polls).toBeGreaterThan(3);
+		expect(maxInFlight).toBe(1);
+	});
 
 	it('captures the error message when start fails', async () => {
 		vi.stubGlobal(

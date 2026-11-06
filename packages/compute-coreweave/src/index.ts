@@ -499,7 +499,8 @@ async function waitUntilRunning(sandbox: CoreWeaveSandbox): Promise<SandboxStatu
 					sandboxId,
 				});
 			}
-			if (status === 'terminated') {
+			// The SDK's wait() keeps polling through terminating; it cannot come back, so fail fast.
+			if (status === 'terminated' || status === 'terminating') {
 				throw new CWSandboxTerminatedError(`Sandbox '${sandboxId}' was terminated`, {
 					operation: READY_WAIT_OPERATION,
 					sandboxId,

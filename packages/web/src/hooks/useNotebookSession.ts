@@ -24,6 +24,21 @@ const DEFAULT_APP_HEARTBEAT_INTERVAL_SECONDS = APP_HEARTBEAT_INTERVAL_MS / 1000;
 /** Startup-timeout fallback when capabilities are unavailable (server default). */
 const DEFAULT_STARTUP_TIMEOUT_S = 120;
 
+/** Resolves after `ms`, or as soon as `signal` aborts. */
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+	return new Promise((resolve) => {
+		const onAbort = () => {
+			clearTimeout(timer);
+			resolve();
+		};
+		const timer = setTimeout(() => {
+			signal.removeEventListener('abort', onAbort);
+			resolve();
+		}, ms);
+		signal.addEventListener('abort', onAbort, { once: true });
+	});
+}
+
 export interface SessionError {
 	message: string;
 	/** The API error code (e.g. `FORBIDDEN`), when the failure was an API error. */
@@ -286,10 +301,17 @@ export function useNotebookSession(
 	);
 
 	// Ignore stale responses. Retry request failures except 404 on the next tick.
+	// The promise settles once the response has been handled and never rejects.
 	const pollSession = useCallback(
-		(sessionId: string, onNext: (next: Session) => void, onGone: () => void) => {
+		(
+			sessionId: string,
+			onNext: (next: Session) => void,
+			onGone: () => void,
+			isLive: () => boolean = () => true,
+		): Promise<void> => {
 			const gen = generation.current();
-			apiData(
+			const current = () => generation.isCurrent(gen) && isLive();
+			return apiData(
 				apiClient.GET('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}', {
 					params: {
 						path: { pid: projectId, nid: notebookId, sid: sessionId },
@@ -297,65 +319,94 @@ export function useNotebookSession(
 				}),
 			)
 				.then((next) => {
-					if (generation.isCurrent(gen)) onNext(next);
+					if (current()) onNext(next);
 				})
 				.catch((err: unknown) => {
-					if (generation.isCurrent(gen) && isNotFoundError(err)) onGone();
+					if (current() && isNotFoundError(err)) onGone();
 				});
 		},
 		[projectId, notebookId, generation],
 	);
 
-	// Reused sessions can return before provisioning finishes, so watch them until ready.
-	const pollStartingSession = useEffectEvent(() => {
-		if (session?.status !== 'starting') return;
-		const elapsed =
-			startingSinceRef.current === null ? null : Date.now() - startingSinceRef.current;
-		// A lost provisioning request can leave the record starting indefinitely.
+	// A lost provisioning request can leave the record starting indefinitely. Returns the
+	// ms left before the deadline, or null once startup is over or has been failed.
+	const enforceStartupDeadline = useEffectEvent((): number | null => {
+		// These timers can fire after a commit but before its re-render, so read the ref.
+		const session = sessionRef.current;
+		if (session?.status !== 'starting' || startingSinceRef.current === null) return null;
 		// Match the server's timeout message, which excludes the grace period.
 		const timeoutSeconds = startupTimeoutSeconds ?? DEFAULT_STARTUP_TIMEOUT_S;
-		const deadlineMs = sessionStartupDeadlineMs(timeoutSeconds);
-		if (elapsed !== null && elapsed > deadlineMs) {
-			failStart(
-				{
-					code: 'STARTUP_TIMEOUT',
-					message: `${mode === 'app' ? 'The app' : 'The kernel'} did not start within ${timeoutSeconds}s.`,
-				},
-				undefined,
-				session,
-			);
-			return;
-		}
-		pollSession(
-			session.session_id,
-			(next) => {
-				if (next.status === 'running' && !next.sandbox_url) {
-					concludeAccessLost(next.can?.attach ?? false);
-				} else if (next.status === 'running' || next.status === 'starting') {
-					commitSession(next);
-				} else if (next.status !== 'terminating') {
-					failStart(next.error, undefined, next.status === 'failed' ? next : undefined);
-				}
+		const remaining =
+			sessionStartupDeadlineMs(timeoutSeconds) - (Date.now() - startingSinceRef.current);
+		if (remaining >= 0) return remaining;
+		failStart(
+			{
+				code: 'STARTUP_TIMEOUT',
+				message: `${mode === 'app' ? 'The app' : 'The kernel'} did not start within ${timeoutSeconds}s.`,
 			},
-			// The record vanished mid-start (reaped, or the notebook deleted).
-			() => failStart(undefined, 'NOT_FOUND'),
+			undefined,
+			session,
 		);
+		return null;
 	});
+
+	// Reused sessions can return before provisioning finishes, so watch them until ready.
+	const pollStartingSession = useEffectEvent(
+		(sessionId: string, isLive: () => boolean): Promise<void> => {
+			const current = sessionRef.current;
+			if (current?.session_id !== sessionId || current.status !== 'starting')
+				return Promise.resolve();
+			return pollSession(
+				sessionId,
+				(next) => {
+					if (next.status === 'running' && !next.sandbox_url) {
+						concludeAccessLost(next.can?.attach ?? false);
+					} else if (next.status === 'running' || next.status === 'starting') {
+						commitSession(next);
+					} else if (next.status !== 'terminating') {
+						failStart(next.error, undefined, next.status === 'failed' ? next : undefined);
+					}
+				},
+				// The record vanished mid-start (reaped, or the notebook deleted).
+				() => failStart(undefined, 'NOT_FOUND'),
+				isLive,
+			);
+		},
+	);
 	const startingSessionId = session?.status === 'starting' ? session.session_id : null;
 	useEffect(() => {
 		if (startingSessionId === null) return;
-		let attempt = 0;
-		const nextDelay = () => {
-			const since = startingSinceRef.current;
-			return sessionStartPollDelayMs(attempt, since === null ? 0 : Date.now() - since);
+		const controller = new AbortController();
+		const { signal } = controller;
+		// Drops responses after cleanup too, e.g. once an app heartbeat reports `running`.
+		const isLive = () => !signal.aborted;
+		// Each delay starts when the previous response is handled: overlapping polls can
+		// answer out of order, and a late `starting` would undo a newer `running`.
+		const pollWhileStarting = async () => {
+			for (let attempt = 0; ; attempt += 1) {
+				const since = startingSinceRef.current;
+				await abortableDelay(
+					sessionStartPollDelayMs(attempt, since === null ? 0 : Date.now() - since),
+					signal,
+				);
+				if (!isLive()) return;
+				await pollStartingSession(startingSessionId, isLive);
+			}
 		};
-		const tick = () => {
-			attempt += 1;
-			pollStartingSession();
-			timer = setTimeout(tick, nextDelay());
+		// Timed separately from polling so a hung poll cannot postpone the deadline.
+		// Re-armed rather than set once because the timeout can change while starting.
+		const watchDeadline = async () => {
+			for (let wait = 0; ; ) {
+				await abortableDelay(wait, signal);
+				if (!isLive()) return;
+				const remaining = enforceStartupDeadline();
+				if (remaining === null) return;
+				wait = remaining + 1;
+			}
 		};
-		let timer = setTimeout(tick, nextDelay());
-		return () => clearTimeout(timer);
+		void pollWhileStarting();
+		void watchDeadline();
+		return () => controller.abort();
 	}, [startingSessionId]);
 
 	const concludeSession = useCallback(
@@ -388,7 +439,7 @@ export function useNotebookSession(
 		() => {
 			const sid = session?.session_id;
 			if (!sid) return;
-			pollSession(sid, updateRunningSession, () => concludeSession('gone'));
+			void pollSession(sid, updateRunningSession, () => concludeSession('gone'));
 		},
 		mode !== 'app' && session?.status === 'running' ? SESSION_STATUS_INTERVAL_MS : null,
 	);

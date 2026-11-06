@@ -2153,6 +2153,8 @@ export async function startNotebookSession(input: {
 					({ clientUrl, originUrl } = await sandboxExposure.finalize(url, exposureCtx));
 				},
 				compensate: async () => {
+					// Never destroy the sandbox under an in-flight context write.
+					await contextPublication;
 					if (warmClaim) return;
 					await compute.create(sandboxId, { owner: { projectId: pid, userId: user.id } }).destroy();
 					await recordSandboxCleanup();
@@ -2247,6 +2249,7 @@ export async function startNotebookSession(input: {
 			})
 			.run();
 	} catch (err) {
+		await contextPublication;
 		if (warmClaim) {
 			await deps.warmPool!.abandon(warmClaim).catch(() => {});
 		}

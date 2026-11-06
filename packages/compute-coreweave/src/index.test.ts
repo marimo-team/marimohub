@@ -1322,12 +1322,37 @@ describe('CoreWeaveCompute', () => {
 		it.each([
 			['failed', CWSandboxFailedError],
 			['terminated', CWSandboxTerminatedError],
+			['terminating', CWSandboxTerminatedError],
 		] as const)('rejects a sandbox that is %s during boot', async (status, ErrorType) => {
 			const world = makeWorld({ bootStatus: status });
 			await expect(
 				makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!(),
 			).rejects.toBeInstanceOf(ErrorType);
 			expect(world.registry.get('cw-1')!.fake.statusPolls).toBe(1);
+		});
+
+		it('fails fast when a booting sandbox starts terminating', async () => {
+			vi.useFakeTimers();
+			try {
+				const world = makeWorld({ bootStatus: 'creating' });
+				let error: unknown;
+				const waiting = makeCompute(world).create(SANDBOX_ID, { reuse: false }).ready!().catch(
+					(caught: unknown) => {
+						error = caught;
+					},
+				);
+				await vi.advanceTimersByTimeAsync(0);
+				const fake = world.registry.get('cw-1')!.fake;
+				expect(fake.statusPolls).toBe(1);
+				fake.status = 'terminating';
+				await vi.advanceTimersByTimeAsync(250);
+				await waiting;
+				expect(error).toBeInstanceOf(CWSandboxTerminatedError);
+				expect(fake.statusPolls).toBe(2);
+				expect(vi.getTimerCount()).toBe(0);
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		it('retries transient status errors with backoff', async () => {

@@ -229,6 +229,35 @@ describe('ensureInitialized', () => {
 		expect(bucket.calls.get.filter((key) => key.startsWith('_system/snapshots/'))).toHaveLength(1);
 	});
 
+	it('creates one default project for concurrent first-contact callers', async () => {
+		const bucket = new MemoryBucket();
+
+		await Promise.all(Array.from({ length: 8 }, () => ensureInitialized(bucket, ACTOR)));
+
+		expect(await createServices(bucket).projects.listProjects()).toHaveLength(1);
+	});
+
+	it('creates one default project when concurrent authorizations resolve at different times', async () => {
+		const bucket = new MemoryBucket();
+		const denied = vi.fn<() => Promise<boolean>>().mockResolvedValue(false);
+		let releaseSlow!: () => void;
+		const slow = new Promise<boolean>((resolve) => {
+			releaseSlow = () => resolve(true);
+		});
+
+		const callers = [
+			ensureInitialized(bucket, ACTOR, { createDefaultProject: async () => true }),
+			ensureInitialized(bucket, ACTOR, { createDefaultProject: () => slow }),
+			ensureInitialized(bucket, ACTOR, { createDefaultProject: denied }),
+		];
+		await Promise.all([callers[0], callers[2]]);
+		releaseSlow();
+		await callers[1];
+
+		expect(denied).toHaveBeenCalledTimes(1);
+		expect(await createServices(bucket).projects.listProjects()).toHaveLength(1);
+	});
+
 	it("lets a later authorized user seed an app-only user's empty catalog", async () => {
 		const bucket = new MemoryBucket();
 		const appUser = UserId.parse('user_app_only');

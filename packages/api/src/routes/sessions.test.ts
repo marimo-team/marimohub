@@ -2878,6 +2878,67 @@ describe('Session routes', () => {
 		}
 	});
 
+	it('destroys a failed start only after its context write settles', async () => {
+		const now = Date.parse('2026-08-04T12:00:00.000Z');
+		const deadline = now + Millis.minutes(1);
+		const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+		const { instance } = makeFakeSandbox();
+		const events: string[] = [];
+		const exposePort = instance.exposePort.bind(instance);
+		instance.exposePort = async (...args) => {
+			const exposed = await exposePort(...args);
+			nowSpy.mockReturnValue(deadline);
+			return exposed;
+		};
+		const publishing = Promise.withResolvers<void>();
+		const published = Promise.withResolvers<void>();
+		const exec = instance.exec.bind(instance);
+		vi.spyOn(instance, 'exec').mockImplementation(async (...args) => {
+			if (!isSandboxContextCommand(args[0])) return exec(...args);
+			events.push('context_started');
+			publishing.resolve();
+			await published.promise;
+			events.push('context_settled');
+			throw new Error('transport unavailable');
+		});
+		const destroy = instance.destroy.bind(instance);
+		instance.destroy = async () => {
+			events.push('destroy');
+			return destroy();
+		};
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+		const groupEditor = createTestApi({
+			bucket,
+			userId: STRANGER,
+			compute: fakeComputeFrom(instance),
+			deps: {
+				authenticator: {
+					authenticate: async () => ({
+						credential: { kind: 'development' },
+						id: STRANGER,
+						email: `${STRANGER}@example.com`,
+						entitlements: ['default-role:editor'],
+						entitlementsExpiresAt: new Date(deadline).toISOString(),
+					}),
+				},
+			},
+		}).request;
+
+		try {
+			const pending = Promise.resolve(groupEditor('POST', sessionsPath()));
+			await publishing.promise;
+			// Give the failed saga time to reach its sandbox compensation.
+			for (let turn = 0; turn < 20; turn++) await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(events).toEqual(['context_started']);
+			published.resolve();
+			await expectError(await pending, 403, 'FORBIDDEN');
+			expect(events).toEqual(['context_started', 'context_settled', 'destroy']);
+		} finally {
+			published.resolve();
+			nowSpy.mockRestore();
+		}
+	});
+
 	it('POST /sessions as a non-member returns 403', async () => {
 		await expectError(await stranger('POST', sessionsPath()), 403, 'FORBIDDEN');
 	});

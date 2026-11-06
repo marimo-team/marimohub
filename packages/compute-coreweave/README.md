@@ -29,11 +29,17 @@ hub cannot reach the runner direct endpoints, and `direct` once it can.
 
 ## Sandbox resolution
 
-A new sandbox is ready when a status poll reports `running`. Polls run every 250 ms, for up
-to 60 s.
+A new sandbox is polled every 250 ms, for up to 60 s. The wait ends on the first poll that
+reports one of these statuses:
 
-Each process remembers the provider sandbox it last saw running for a hub sandbox id, for
-up to 4,096 ids. A new instance for that id gets the sandbox by id, which skips the tag List.
+- `running` or `paused`: the sandbox is ready.
+- `completed` (or `unspecified`): the main process exited during boot, so the create fails.
+- `failed`, `terminated`, or `terminating`: the create fails at once, without waiting for
+  the deadline.
+
+Each `CoreWeaveCompute` instance remembers the provider sandbox it last saw running for a
+hub sandbox id, for up to 4,096 ids. Other provider instances do not share these entries.
+A new sandbox instance for that id gets the sandbox by id, which skips the tag List.
 If that sandbox is not running, is missing, or has a different id, the adapter drops the
 entry and uses the tag lookup. Destroy also drops the entry.
 

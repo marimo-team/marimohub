@@ -10,6 +10,7 @@ const theme = vi.hoisted(() => ({
 }));
 const render = vi.hoisted(() => vi.fn());
 const fetch = vi.hoisted(() => vi.fn<(input: RequestInfo | URL) => Promise<Response>>());
+const pendingFetches: ((response: Response) => void)[] = [];
 
 vi.mock('@/lib/theme', () => theme);
 vi.mock('react-dom/client', () => ({ createRoot: () => ({ render }) }));
@@ -34,11 +35,17 @@ beforeEach(() => {
 	theme.loadThemeConfig.mockResolvedValue(DEFAULT_THEME_CONFIG);
 	document.body.innerHTML = '<div id="root"></div>';
 	vi.spyOn(console, 'warn').mockImplementation(() => {});
-	fetch.mockReturnValue(new Promise(() => {}));
+	fetch.mockImplementation(() => new Promise((resolve) => pendingFetches.push(resolve)));
 	vi.stubGlobal('fetch', fetch);
 });
 
-afterEach(() => {
+afterEach(async () => {
+	// Bootstrap prefetches into the module's client; stop it before the next test resets modules.
+	const { queryClient } = await import('./api/queryClient');
+	await queryClient.cancelQueries();
+	for (const resolve of pendingFetches.splice(0))
+		resolve(Response.json({ success: true, data: null }));
+	queryClient.clear();
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
 	document.body.innerHTML = '';

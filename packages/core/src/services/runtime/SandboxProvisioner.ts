@@ -352,9 +352,10 @@ type SandboxLaunchFailure = Extract<SandboxLaunchResult, { success: false }>;
 async function readWorkspacePythonPath(
 	sandbox: SandboxInstance,
 	mountPath: string,
+	timeoutMs: number,
 ): Promise<string> {
 	const result = await sandbox.exec('printf \'%s\' "${PYTHONPATH-}"', {
-		timeout: 10_000,
+		timeout: timeoutMs,
 		maxOutputBytes: 64 * 1024,
 	});
 	if (!result.success || new TextEncoder().encode(result.stdout).byteLength >= 64 * 1024)
@@ -894,8 +895,15 @@ export class SandboxProvisioner {
 				await injectSessionEnv();
 				if (options.entryNotebook?.includes('/')) {
 					// Reading the inherited path overlaps the workspace restore instead of delaying
-					// setup; setup bounds the wait and reports failures.
-					pythonPath = readWorkspacePythonPath(sandbox, mountPath);
+					// setup; setup bounds the wait and reports failures. The startup clock has not
+					// started yet, so the whole budget is the tightest bound for the exec.
+					const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_SANDBOX_STARTUP_TIMEOUT_MS;
+					pythonPath = readWorkspacePythonPath(
+						sandbox,
+						mountPath,
+						startupTimeoutMs === 0 ? 10_000 : Math.min(10_000, startupTimeoutMs),
+					);
+					// Setup may fail before awaiting this read.
 					pythonPath.catch(() => {});
 				}
 			},

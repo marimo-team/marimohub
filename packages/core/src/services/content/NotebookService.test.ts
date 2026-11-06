@@ -2395,16 +2395,19 @@ describe('NotebookService', () => {
 				ACTOR,
 			);
 			const put = vi.spyOn(bucket, 'put');
-			const catalogWrites = () =>
-				put.mock.calls.filter(
-					([key]) => key === paths.catalog || key.startsWith(paths.snapshotsPrefix),
-				).length;
+			const writes = () => {
+				const keys = put.mock.calls.map(([key]) => key);
+				return {
+					pointer: keys.filter((key) => key === paths.catalog).length,
+					snapshots: keys.filter((key) => key.startsWith(paths.snapshotsPrefix)).length,
+				};
+			};
 
 			await notebooks.commitSession(projectId, created.id, { code: 'v1', html: '<p>1</p>' }, ACTOR);
-			expect(catalogWrites()).toBe(0);
+			expect(writes()).toEqual({ pointer: 0, snapshots: 0 });
 
 			await notebooks.commitSession(projectId, created.id, { code: 'v2' }, ACTOR);
-			expect(catalogWrites()).toBe(2);
+			expect(writes()).toEqual({ pointer: 1, snapshots: 1 });
 		});
 
 		it('chains parent_id across consecutive session commits', async () => {

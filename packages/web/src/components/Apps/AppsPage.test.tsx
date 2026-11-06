@@ -412,29 +412,54 @@ describe('stakeholder apps', () => {
 		expect(sessionPosts(existing)).toHaveLength(1);
 	});
 
-	it('requests the exclusive editor lease alongside app details', async () => {
-		const appGate = deferred();
-		const projectGate = deferred();
-		const { fetch } = setup(`/projects/${PID}/notebooks/${NID}`, [app], {
-			role: 'editor',
-			editorSharing: 'exclusive',
-			appReady: appGate.promise,
-			projectReady: projectGate.promise,
-		});
-		try {
-			await waitFor(() =>
-				expect(fetch.mock.calls.map(([input]) => String(input))).toContain(
-					`/api/v1/projects/${PID}/notebooks/${NID}/editor-session`,
-				),
-			);
-			expect(screen.getByText('Opening app…')).toBeVisible();
-		} finally {
-			await act(async () => {
-				appGate.resolve();
-				projectGate.resolve();
+	it.each([
+		['viewer', false],
+		['editor', true],
+	] as const)(
+		'prefetches the exclusive editor lease only once the project role is %s',
+		async (role, prefetches) => {
+			const appGate = deferred();
+			const projectGate = deferred();
+			const { fetch } = setup(`/projects/${PID}/notebooks/${NID}`, [app], {
+				role,
+				editorSharing: 'exclusive',
+				appReady: appGate.promise,
+				projectReady: projectGate.promise,
 			});
-		}
-	});
+			const paths = () =>
+				fetch.mock.calls.map(
+					([input]) =>
+						new URL(input instanceof Request ? input.url : String(input), 'http://localhost')
+							.pathname,
+				);
+			const editorSession = `/api/v1/projects/${PID}/notebooks/${NID}/editor-session`;
+			try {
+				await waitFor(() => {
+					expect(paths()).toContain(`/api/v1/projects/${PID}`);
+					expect(paths()).toContain('/api/v1/capabilities');
+				});
+				await act(async () => {
+					await new Promise((resolve) => setTimeout(resolve, 20));
+				});
+				expect(paths()).not.toContain(editorSession);
+				await act(async () => projectGate.resolve());
+				if (prefetches) {
+					await waitFor(() => expect(paths()).toContain(editorSession));
+				} else {
+					await waitFor(() => expect(screen.queryByText('Opening notebook…')).toBeNull());
+					await act(async () => {
+						await new Promise((resolve) => setTimeout(resolve, 20));
+					});
+					expect(paths()).not.toContain(editorSession);
+				}
+			} finally {
+				await act(async () => {
+					appGate.resolve();
+					projectGate.resolve();
+				});
+			}
+		},
+	);
 
 	it('opens an authorized app when project prefetch is forbidden without an error toast', async () => {
 		const errorToast = vi.spyOn(toast, 'error');

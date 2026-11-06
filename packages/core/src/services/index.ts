@@ -728,6 +728,7 @@ const CATALOG_POPULATED_TTL_MS = 30_000;
 const populatedCatalogCheckedAt = new WeakMap<Bucket, number>();
 const catalogHeads = new WeakMap<Bucket, Promise<BucketObject | null>>();
 const catalogPopulatedReads = new WeakMap<Bucket, Promise<boolean>>();
+const defaultProjectCreations = new WeakMap<Bucket, Promise<void>>();
 
 function singleFlight<T>(
 	inFlight: WeakMap<Bucket, Promise<T>>,
@@ -783,10 +784,16 @@ export async function ensureInitialized(
 	) {
 		return;
 	}
-	await services.projects.createProject(
-		{ name: 'My Project', description: 'Default project' },
-		actor,
-	);
+	// A concurrent caller may have seeded the catalog while this caller was authorized.
+	if (populatedCatalogCheckedAt.has(bucket)) return;
+	// Shares one creation in-process; separate processes can still each seed a project.
+	await singleFlight(defaultProjectCreations, bucket, async () => {
+		await services.projects.createProject(
+			{ name: 'My Project', description: 'Default project' },
+			actor,
+		);
+	});
+	populatedCatalogCheckedAt.set(bucket, checkedAt);
 }
 
 export {

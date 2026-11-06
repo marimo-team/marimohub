@@ -654,6 +654,38 @@ describe('SandboxProvisioner', () => {
 		}
 	});
 
+	it('bounds the prefetched Python path read by a short startup timeout', async () => {
+		vi.useFakeTimers();
+		try {
+			const { instance, calls } = makeFakeSandbox();
+			const exec = instance.exec.bind(instance);
+			const read = vi.fn<(timeout: number | undefined) => void>();
+			vi.spyOn(instance, 'exec').mockImplementation((command, options) => {
+				if (!command.includes('PYTHONPATH')) return exec(command, options);
+				read(options?.timeout);
+				return new Promise((_resolve, reject) =>
+					setTimeout(() => reject(new Error('exec timed out')), (options?.timeout ?? 0) + 1),
+				);
+			});
+			const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				sandboxId,
+				projectId,
+				notebookId,
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				entryNotebook: 'reports/revenue.py',
+				startupTimeoutMs: Millis.of(50),
+			});
+			const failed = expect(provision).rejects.toThrow('configuring the workspace Python path');
+			await vi.advanceTimersByTimeAsync(100);
+			await failed;
+			expect(read).toHaveBeenCalledExactlyOnceWith(50);
+			expect(calls.startProcess).toEqual([]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('leaves the Python path unchanged for a root entry notebook', async () => {
 		const { instance, calls } = makeFakeSandbox();
 		await new SandboxProvisioner(fakeComputeFrom(instance)).provision({

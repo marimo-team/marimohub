@@ -43,16 +43,6 @@ export function AppEntryPage({
 	const project = useQuery({ ...projectQueryOptions(pid), enabled: canLoadProject });
 	const { data: capabilities } = useCapabilitiesQuery();
 	const projectRole = project.data?.your_role;
-	const prefetchEditorSession =
-		variant === 'edit' &&
-		canLoadProject &&
-		capabilities?.editor_sandbox_sharing === 'exclusive' &&
-		projectRole !== 'viewer' &&
-		projectRole !== 'app-user';
-	const queryClient = useQueryClient();
-	useEffect(() => {
-		if (prefetchEditorSession) void queryClient.prefetchQuery(editorSessionQueryOptions(pid, nid));
-	}, [queryClient, pid, nid, prefetchEditorSession]);
 	// The project's `your_role` and the app's come from the same server-side role
 	// resolution, so a fresh non-app-user project role opens the editor without
 	// waiting for `/app`, which still reroutes an app-user when it answers.
@@ -62,6 +52,16 @@ export function AppEntryPage({
 		!project.isStale &&
 		!!projectRole &&
 		projectRole !== 'app-user';
+	// Viewers never take the editor lease, so wait for a role that does.
+	const prefetchEditorSession =
+		variant === 'edit' &&
+		projectGrantsEditor &&
+		projectRole !== 'viewer' &&
+		capabilities?.editor_sandbox_sharing === 'exclusive';
+	const queryClient = useQueryClient();
+	useEffect(() => {
+		if (prefetchEditorSession) void queryClient.prefetchQuery(editorSessionQueryOptions(pid, nid));
+	}, [queryClient, pid, nid, prefetchEditorSession]);
 	const entryKey = `${pid}/${nid}`;
 	const [projectGateKey, setProjectGateKey] = useState<string | null>(null);
 	// Latched: moving to the direct NotebookPage branch later would remount the editor
