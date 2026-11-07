@@ -712,9 +712,8 @@ async function writeSessionFiles(
 }
 
 /**
- * Process-wide cap on workspace bytes fetched before the sandbox is ready. Each
- * provisioner is per request, so the default is shared; 64 MiB keeps several
- * concurrent cold starts well inside a small API pod's memory limit.
+ * Share the budget across requests for reads ahead of readiness or the current
+ * write batch. Restores fall back to serial reads when the budget is exhausted.
  */
 const DEFAULT_PREFETCH_BUDGET = new ByteBudget(64 * 1024 * 1024);
 

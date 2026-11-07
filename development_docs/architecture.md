@@ -191,9 +191,12 @@ preview commit, and editor claim run concurrently, with cap errors taking preced
 Workspace writes and credential injection wait for admission and [warm handoff](./warm_pools.md#ownership-and-lifecycle).
 Rejected starts await boot before cleanup. `provision_boot_overlap_ms` records the boot duration.
 
-Prefetch starts at warm reservation for immutable workspaces. Mutable workspace reads
-wait for session publication. A shared byte budget bounds prefetch memory, and failed starts
-cancel prefetch before cleanup.
+Cold starts prefetch after session publication, overlapping admission and boot. Warm starts
+can prefetch immutable workspaces at reservation; mutable reads wait for publication.
+Object restores fetch one batch ahead while writing the current batch. The shared byte
+budget bounds early reads and lookahead; a full budget falls back to sequential reads.
+Restore failures drain outstanding reads and writes. Cold-start cleanup cancels prefetch
+before destroying the sandbox. Packed archives and mounts do not use batch lookahead.
 
 Persistent editors publish under the source lease and heartbeat it before proceeding.
 Heartbeat and release reuse the acquired ETag. Node session starts defer release through

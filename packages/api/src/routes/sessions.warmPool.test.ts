@@ -638,11 +638,14 @@ describe('session warm sandbox assignment', () => {
 		},
 	);
 
-	it.each(['edit', 'app'] as const)(
-		'does not prefetch a mutable %s workspace before session publication',
-		async (mode) => {
+	it.each(
+		['edit', 'app'].flatMap((mode) => ['warm', 'cold'].map((runtime) => ({ mode, runtime }))),
+	)(
+		'does not prefetch a mutable $mode workspace before publication ($runtime)',
+		async ({ mode, runtime }) => {
 			const w = await setup();
-			await w.warmPool.sweep();
+			if (runtime === 'warm') await w.warmPool.sweep();
+			else w.api.deps.warmPool = undefined;
 			w.api.deps.sandbox.bucket.mountable = false;
 			const publishing = Promise.withResolvers<void>();
 			const publish = Promise.withResolvers<void>();
