@@ -12,7 +12,7 @@ import { batchByWeight } from '../../batching';
 import type { ByteBudget } from './byteBudget';
 import type { Bucket } from '../../ports/bucket';
 import { NotFoundError } from '../../errors';
-import { mapWithConcurrency } from '../../concurrency';
+import { mapWithConcurrency, Semaphore } from '../../concurrency';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
@@ -73,10 +73,8 @@ function supportsBoundedReads(sandbox: SandboxInstance): boolean {
 const SANDBOX_WRITE_ATTEMPTS = 3;
 
 /**
- * Bytes of workspace held in memory at once. `writeFiles` keeps its whole set
- * resident, so restore streams in batches of about this size: the per-file cap
- * doesn't bound the TOTAL, and a large enough workspace would otherwise buffer
- * entirely and OOM the API pod (256Mi limit).
+ * Bound each write batch; one additional batch can load while it writes.
+ * A file above this size occupies its own batch, subject to workspace limits.
  */
 const RESTORE_BATCH_BYTES = 8 * 1024 * 1024;
 
@@ -188,7 +186,7 @@ export async function loadWorkspaceOverlay(
 	workingDir: string,
 	overlay: WorkspaceOverlay = [],
 ) {
-	return Promise.all(
+	return settleRestoreWork(
 		overlay.map(async ({ path, key }) => {
 			const object = await bucket.get(key);
 			if (!object) throw new NotFoundError(`Workspace source ${key} not found`);
@@ -204,7 +202,7 @@ export interface WorkspaceRestoreOptions {
 	requireComplete?: boolean;
 	/** Bucket reads can precede readiness. Sandbox writes must wait. */
 	waitUntilReady?: () => Promise<void>;
-	/** Limits prefetch for listed workspace files. Over-budget batches wait for readiness. */
+	/** Bounds early reads and the next batch fetched during a write. */
 	prefetchBudget?: ByteBudget;
 	/** Relative path roots owned by another restore and therefore skipped. */
 	excludeRelativeRoots?: readonly string[];
@@ -323,9 +321,6 @@ export async function restoreWorkspace(
 		return { objectCount: 0, bytes: 0 };
 	}
 
-	// Fetch + write in byte-bounded batches, so only a slice of the workspace is
-	// ever resident. Raw bytes go straight to the port — nothing is base64-armored
-	// through a shell, and there is no temp file to decode.
 	let objectCount = 0;
 	let bytes = 0;
 	let ready = !options.waitUntilReady;
@@ -333,36 +328,75 @@ export async function restoreWorkspace(
 		wanted.length > 0
 			? batchByWeight(wanted, { weight: (item) => item.size, maxWeight: RESTORE_BATCH_BYTES })
 			: [[]];
-	for (const batch of batches) {
-		using prefetched =
-			ready || !options.prefetchBudget
-				? undefined
-				: options.prefetchBudget.tryReserve(batch.reduce((sum, f) => sum + f.size, 0));
-		if (!ready && options.prefetchBudget && !prefetched) {
+	const fetchBatch = (batch: (typeof batches)[number]) => {
+		const reads = new Semaphore(RESTORE_FETCH_CONCURRENCY);
+		return settleRestoreWork(
+			batch.map((f) =>
+				reads.run(async () => {
+					const body = await bucket.get(f.key);
+					if (!body) {
+						if (options.requireComplete) {
+							throw new Error(`restoreWorkspace: listed object is missing: ${f.key}`);
+						}
+						return;
+					}
+					return { path: f.dest, content: await body.bytes() };
+				}),
+			),
+		);
+	};
+	const startBatch = (batch: (typeof batches)[number], reserve: boolean) => {
+		const reservation = reserve
+			? options.prefetchBudget?.tryReserve(batch.reduce((sum, f) => sum + f.size, 0))
+			: undefined;
+		if (reserve && options.prefetchBudget && !reservation) return;
+		const loaded = fetchBatch(batch);
+		loaded.catch(() => {});
+		return { loaded, reservation };
+	};
+	let pending: ReturnType<typeof startBatch>;
+	try {
+		for (let index = 0; index < batches.length; index++) {
+			let current = pending ?? startBatch(batches[index], !ready);
+			pending = undefined;
+			if (!current) {
+				await options.waitUntilReady?.();
+				ready = true;
+				current = startBatch(batches[index], false)!;
+			}
+			using _reservation = current.reservation;
+			const fetched = await current.loaded;
+			const hasOverlay = overlayFiles.length > 0;
+			const files = [...overlayFiles.splice(0), ...fetched.filter((f) => f !== undefined)];
 			await options.waitUntilReady?.();
 			ready = true;
-		}
-		const fetched = await mapWithConcurrency(batch, RESTORE_FETCH_CONCURRENCY, async (f) => {
-			const body = await bucket.get(f.key);
-			if (!body) {
-				if (options.requireComplete) {
-					throw new Error(`restoreWorkspace: listed object is missing: ${f.key}`);
-				}
-				return;
+			// Overlay buffers are outside the prefetch budget; do not add lookahead while they are live.
+			if (!hasOverlay && index + 1 < batches.length) {
+				pending = startBatch(batches[index + 1], true);
 			}
-			return { path: f.dest, content: await body.bytes() };
-		});
-		const files = [...overlayFiles.splice(0), ...fetched.filter((f) => f !== undefined)];
-		await options.waitUntilReady?.();
-		ready = true;
-		await Promise.all([
-			directories.length > 0 ? createSandboxDirectories(sandbox, directories.splice(0)) : undefined,
-			files.length > 0 ? withRetry(() => sandbox.writeFiles(files)) : undefined,
-		]);
-		objectCount += files.length;
-		for (const f of files) bytes += f.content.byteLength;
+			await settleRestoreWork([
+				createSandboxDirectories(sandbox, directories.splice(0)),
+				files.length > 0 ? withRetry(() => sandbox.writeFiles(files)) : Promise.resolve(),
+			]);
+			objectCount += files.length;
+			for (const f of files) bytes += f.content.byteLength;
+		}
+	} finally {
+		// A failed write must not leave lookahead reads or their reservation behind.
+		if (pending) {
+			await pending.loaded.catch(() => {});
+			pending.reservation?.[Symbol.dispose]();
+		}
 	}
 	return { objectCount, bytes };
+}
+
+async function settleRestoreWork<T>(work: readonly Promise<T>[]): Promise<T[]> {
+	const results = await Promise.allSettled(work);
+	return results.map((result) => {
+		if (result.status === 'rejected') throw result.reason;
+		return result.value;
+	});
 }
 
 /** Files under a directory holding a regular `CACHEDIR.TAG`, by presence, not contents. */

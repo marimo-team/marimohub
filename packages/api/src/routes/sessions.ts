@@ -1970,9 +1970,9 @@ export async function startNotebookSession(input: {
 				);
 			}
 		};
-		const prefetchWarmWorkspace = () => {
-			if (warmClaim)
-				workspacePrefetch ??= provisioner.prefetchWorkspace(warmClaim.sandbox, provisionOptions());
+		const prefetchWorkspace = () => {
+			const sandbox = warmClaim?.sandbox ?? bootedSandbox?.sandbox;
+			if (sandbox) workspacePrefetch ??= provisioner.prefetchWorkspace(sandbox, provisionOptions());
 		};
 
 		let coldCleanup: Promise<void> | undefined;
@@ -1980,6 +1980,7 @@ export async function startNotebookSession(input: {
 			const boot = bootedSandbox;
 			if (warmClaim || !boot || !sandboxMayExist) return;
 			return (coldCleanup ??= (async () => {
+				await workspacePrefetch?.cancel();
 				await boot.ready.catch(() => {});
 				await boot.sandbox.destroy();
 				sandboxMayExist = false;
@@ -2026,7 +2027,7 @@ export async function startNotebookSession(input: {
 				observer.tag('sandbox_id', sandboxId);
 				observer.tag('warm_pool_hit', true);
 				// Mutable workspace reads must follow publication under the source lease.
-				if (workspacePrefix) prefetchWarmWorkspace();
+				if (workspacePrefix) prefetchWorkspace();
 				await bindAppSandbox();
 			})
 			.step('sandbox_boot', {
@@ -2083,7 +2084,7 @@ export async function startNotebookSession(input: {
 							)
 						: await create();
 				observer.tag('session_id', session.session_id);
-				prefetchWarmWorkspace();
+				prefetchWorkspace();
 			})
 			.step('admission', {
 				do: async () => {
@@ -2170,6 +2171,7 @@ export async function startNotebookSession(input: {
 							observer.tag('warm_pool_hit', false);
 							observer.tag('warm_pool_fallback', reason);
 							bootSandbox();
+							prefetchWorkspace();
 						};
 						if (warmClaim) {
 							try {

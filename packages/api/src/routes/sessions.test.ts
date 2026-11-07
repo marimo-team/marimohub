@@ -730,6 +730,132 @@ describe('Session routes', () => {
 		expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
 	});
 
+	async function coldWorkspaceFixture() {
+		const fake = makeFakeSandbox();
+		const api = createTestApi({ bucket, compute: fakeComputeFrom(fake.instance) });
+		api.deps.sandbox.bucket.mountable = false;
+		const key = paths.project(pid).notebook(nid).workspaceFile('data.txt');
+		await bucket.put(key, 'workspace data');
+		return { fake, api, key, sessions: api.deps.services.sessions };
+	}
+
+	it.each(['boot', 'admission'] as const)(
+		'prefetches a cold workspace during admission and boot, waiting for both before writes (%s first)',
+		async (first) => {
+			const { fake, api, key, sessions } = await coldWorkspaceFixture();
+			const boot = Promise.withResolvers<void>();
+			const admitted = Promise.withResolvers<void>();
+			fake.instance.ready = () => boot.promise;
+			expect(api.deps.warmPool).toBeUndefined();
+			const claim = sessions.claimEditor.bind(sessions);
+			const claiming = vi.spyOn(sessions, 'claimEditor').mockImplementationOnce(async (...args) => {
+				await admitted.promise;
+				return claim(...args);
+			});
+			const get = vi.spyOn(bucket, 'get');
+			const request = api.request('POST', sessionsPath());
+			try {
+				await vi.waitFor(() => expect(get).toHaveBeenCalledWith(key));
+				expect(claiming).toHaveBeenCalledOnce();
+				expect(await sessions.listSessions(nid)).toMatchObject([{ status: 'starting' }]);
+				expect(fake.calls.writeFiles).toEqual([]);
+				expect(fake.calls.setEnvVars).toEqual([]);
+				(first === 'boot' ? boot : admitted).resolve();
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				expect(fake.calls.writeFiles).toEqual([]);
+				expect(fake.calls.setEnvVars).toEqual([]);
+			} finally {
+				boot.resolve();
+				admitted.resolve();
+			}
+			await expectOk(await request);
+			expect(get.mock.calls.filter(([fetched]) => fetched === key)).toHaveLength(1);
+			expect(fake.calls.writeFiles.flat()).toContainEqual({
+				path: '/workspace/data.txt',
+				content: new TextEncoder().encode('workspace data'),
+			});
+		},
+	);
+
+	it.each(['get', 'bytes'] as const)(
+		'reclaims a cold sandbox after early workspace %s fails without restarting the read',
+		async (failure) => {
+			const { fake, api, key, sessions } = await coldWorkspaceFixture();
+			const boot = Promise.withResolvers<void>();
+			const reading = Promise.withResolvers<void>();
+			fake.instance.ready = () => boot.promise;
+			const get = bucket.get.bind(bucket);
+			const reads = vi.spyOn(bucket, 'get').mockImplementation(async (fetched, options) => {
+				if (fetched !== key) return get(fetched, options);
+				reading.resolve();
+				if (failure === 'get') throw new Error('workspace read failed');
+				const object = await get(fetched);
+				return {
+					...object!,
+					bytes: async () => {
+						throw new Error('workspace read failed');
+					},
+				};
+			});
+			const request = api.request('POST', sessionsPath());
+			try {
+				await reading.promise;
+				expect(fake.calls.destroy).toBe(0);
+				expect(fake.calls.writeFiles).toEqual([]);
+				expect(fake.calls.setEnvVars).toEqual([]);
+			} finally {
+				boot.resolve();
+			}
+			await expectError(await request, 503, 'SERVICE_UNAVAILABLE');
+			expect(reads.mock.calls.filter(([fetched]) => fetched === key)).toHaveLength(1);
+			expect(fake.calls.destroy).toBe(1);
+			expect(fake.calls.startProcess).toEqual([]);
+			expect(await sessions.listSessions(nid)).toMatchObject([
+				{ status: 'failed', sandbox_reclaimed_at: expect.any(String) },
+			]);
+			expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
+		},
+	);
+
+	it('cancels and drains cold prefetch before destroying a rejected startup', async () => {
+		const { fake, api, key, sessions } = await coldWorkspaceFixture();
+		const read = Promise.withResolvers<void>();
+		const reading = Promise.withResolvers<void>();
+		const get = bucket.get.bind(bucket);
+		vi.spyOn(bucket, 'get').mockImplementation(async (fetched, options) => {
+			const object = await get(fetched, options);
+			if (fetched === key && object && 'bytes' in object) {
+				const bytes = object.bytes.bind(object);
+				vi.spyOn(object, 'bytes').mockImplementation(async () => {
+					reading.resolve();
+					await read.promise;
+					return bytes();
+				});
+			}
+			return object;
+		});
+		vi.spyOn(sessions, 'claimEditor').mockImplementationOnce(async () => {
+			await reading.promise;
+			throw new ResourceExhaustedError('admission rejected');
+		});
+		const request = api.request('POST', sessionsPath());
+		try {
+			await reading.promise;
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(fake.calls.destroy).toBe(0);
+			expect(fake.calls.writeFiles).toEqual([]);
+		} finally {
+			read.resolve();
+		}
+		await expectError(await request, 429, 'RESOURCE_EXHAUSTED');
+		expect(fake.calls.destroy).toBe(1);
+		expect(fake.calls.writeFiles).toEqual([]);
+		expect(fake.calls.setEnvVars).toEqual([]);
+		expect(await sessions.listSessions(nid)).toMatchObject([
+			{ status: 'failed', sandbox_reclaimed_at: expect.any(String) },
+		]);
+	});
+
 	it('settles concurrent admission and preserves cap precedence before reclaiming a speculative boot', async () => {
 		const fake = makeFakeSandbox();
 		const ready = Promise.withResolvers<void>();

@@ -22,6 +22,8 @@ import {
 	workspaceDirectoryMarkerPath,
 } from '../../integrations/remoteWorkspace';
 import { captureWorkspace, readSessionArtifacts, restoreWorkspace } from './sandboxFiles';
+import type { WorkspaceRestoreOptions } from './sandboxFiles';
+import { ByteBudget } from './byteBudget';
 
 // `makeFsSandbox`'s default root — every test mounts the notebook here.
 const MOUNT = '/workspace';
@@ -295,6 +297,63 @@ describe('restoreWorkspace', () => {
 		},
 	);
 
+	it('waits for an in-flight write after directory creation exhausts retries', async () => {
+		const { nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		await bucket.put(nb.workspaceFile('data.txt'), 'workspace data');
+		await bucket.put(nb.workspaceFile(workspaceDirectoryMarkerPath('empty')), '');
+		const { instance } = makeFakeSandbox();
+		const written = Promise.withResolvers<void>();
+		const write = vi.spyOn(instance, 'writeFiles').mockImplementationOnce(() => written.promise);
+		const mkdir = vi
+			.spyOn(instance, 'exec')
+			.mockResolvedValue(execResult(false, '', 'mkdir denied'));
+		let settled = false;
+		const pending = restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT).finally(() => {
+			settled = true;
+		});
+		const rejected = expect(pending).rejects.toThrow('mkdir denied');
+		try {
+			await vi.waitFor(() => expect(mkdir).toHaveBeenCalledTimes(3));
+			expect(write).toHaveBeenCalledOnce();
+			expect(settled).toBe(false);
+		} finally {
+			written.resolve();
+		}
+		await rejected;
+	});
+
+	it('drains overlay reads when another overlay fails', async () => {
+		const w = await overlayFixture();
+		const read = Promise.withResolvers<void>();
+		const reading = Promise.withResolvers<void>();
+		const get = w.bucket.get.bind(w.bucket);
+		vi.spyOn(w.bucket, 'get').mockImplementation(async (key, options) => {
+			if (key === 'version/code.py') throw new Error('overlay read failed');
+			if (key === 'version/deps.toml') {
+				reading.resolve();
+				await read.promise;
+			}
+			return get(key, options);
+		});
+		let settled = false;
+		const pending = restoreWorkspace(w.instance, w.bucket, w.nb.workspacePrefix, MOUNT, {
+			overlay: w.overlay,
+		}).finally(() => {
+			settled = true;
+		});
+		const rejected = expect(pending).rejects.toThrow('overlay read failed');
+		try {
+			await reading.promise;
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(settled).toBe(false);
+			expect(w.calls.writeFiles).toEqual([]);
+		} finally {
+			read.resolve();
+		}
+		await rejected;
+	});
+
 	it('prefetches only one byte-bounded batch and gates directories and writes on readiness', async () => {
 		const { nb } = nbCtx();
 		const bucket = new MemoryBucket();
@@ -319,6 +378,253 @@ describe('restoreWorkspace', () => {
 		await expect(restore).resolves.toEqual({ objectCount: 2, bytes: 10 * 1024 * 1024 });
 		expect(calls.exec).toHaveLength(1);
 		expect(calls.writeFiles).toHaveLength(2);
+	});
+
+	async function pipelineFixture(capacity = 10 * 1024 * 1024) {
+		const { nb } = nbCtx();
+		const bucket = new MemoryBucket();
+		const batchBytes = 5 * 1024 * 1024;
+		for (const name of ['a.bin', 'b.bin', 'c.bin']) {
+			await bucket.put(nb.workspaceFile(name), bytesOfSize(batchBytes));
+		}
+		const { instance, calls } = makeFakeSandbox();
+		const budget = new ByteBudget(capacity);
+		const readObject = bucket.get.bind(bucket);
+		const get = vi.spyOn(bucket, 'get');
+		const write = vi.spyOn(instance, 'writeFiles');
+		const restore = (options: WorkspaceRestoreOptions = {}) =>
+			restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
+				prefetchBudget: budget,
+				...options,
+			});
+		return { nb, bucket, instance, calls, budget, get, write, readObject, restore, batchBytes };
+	}
+
+	it('keeps an overlay batch sequential and resumes lookahead after its write', async () => {
+		const w = await pipelineFixture();
+		const overlay = [{ path: 'overlay.bin', key: 'version/overlay.bin' }];
+		await w.bucket.put(overlay[0].key, bytesOfSize(w.batchBytes));
+		const firstWritten = Promise.withResolvers<void>();
+		const secondWritten = Promise.withResolvers<void>();
+		w.write
+			.mockImplementationOnce(() => firstWritten.promise)
+			.mockImplementationOnce(() => secondWritten.promise);
+		const pending = w.restore({ overlay, waitUntilReady: async () => {} });
+		try {
+			await vi.waitFor(() => expect(w.write).toHaveBeenCalledOnce());
+			expect(w.get.mock.calls.map(([key]) => key)).toEqual([
+				overlay[0].key,
+				w.nb.workspaceFile('a.bin'),
+			]);
+			expect(w.budget.available).toBe(w.budget.capacity - w.batchBytes);
+			expect(w.write.mock.calls[0][0].map(({ path }) => path)).toEqual([
+				`${MOUNT}/overlay.bin`,
+				`${MOUNT}/a.bin`,
+			]);
+			firstWritten.resolve();
+			await vi.waitFor(() => expect(w.write).toHaveBeenCalledTimes(2));
+			expect(w.get).toHaveBeenCalledWith(w.nb.workspaceFile('c.bin'));
+			expect(w.budget.available).toBe(w.budget.capacity - w.batchBytes);
+		} finally {
+			firstWritten.resolve();
+			secondWritten.resolve();
+		}
+		await expect(pending).resolves.toEqual({ objectCount: 4, bytes: 4 * w.batchBytes });
+		expect(w.get.mock.calls.filter(([key]) => key === overlay[0].key)).toHaveLength(1);
+		expect(w.write.mock.calls.slice(1).flatMap(([files]) => files.map(({ path }) => path))).toEqual(
+			[`${MOUNT}/b.bin`, `${MOUNT}/c.bin`],
+		);
+		expect(w.budget.available).toBe(w.budget.capacity);
+	});
+
+	it('does not fetch lookahead when the overlay write fails', async () => {
+		const w = await pipelineFixture();
+		const overlay = [{ path: 'overlay.bin', key: 'version/overlay.bin' }];
+		await w.bucket.put(overlay[0].key, bytesOfSize(w.batchBytes));
+		w.write.mockRejectedValue(new Error('overlay write failed'));
+		await expect(w.restore({ overlay, waitUntilReady: async () => {} })).rejects.toThrow(
+			'overlay write failed',
+		);
+		expect(w.write).toHaveBeenCalledTimes(3);
+		expect(w.get.mock.calls.map(([key]) => key)).toEqual([
+			overlay[0].key,
+			w.nb.workspaceFile('a.bin'),
+		]);
+		expect(w.budget.available).toBe(w.budget.capacity);
+	});
+
+	it.each([0, 5 * 1024 * 1024, 10 * 1024 * 1024])(
+		'pipelines at most one batch within the shared budget (%s bytes)',
+		async (capacity) => {
+			const w = await pipelineFixture(capacity);
+			const written = Promise.withResolvers<void>();
+			const write = w.write.mockImplementationOnce(() => written.promise);
+			const pending = w.restore();
+			try {
+				await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+				expect(w.get.mock.calls.map(([key]) => key)).toEqual(
+					(capacity > 0 ? ['a.bin', 'b.bin'] : ['a.bin']).map(w.nb.workspaceFile),
+				);
+				expect(w.budget.available).toBe(capacity > 0 ? capacity - w.batchBytes : 0);
+			} finally {
+				written.resolve();
+			}
+			await expect(pending).resolves.toEqual({ objectCount: 3, bytes: 3 * w.batchBytes });
+			expect(write.mock.calls.map(([files]) => files.map(({ path }) => path))).toEqual(
+				['a.bin', 'b.bin', 'c.bin'].map((name) => [`${MOUNT}/${name}`]),
+			);
+			expect(w.get.mock.calls.map(([key]) => key)).toEqual(
+				['a.bin', 'b.bin', 'c.bin'].map(w.nb.workspaceFile),
+			);
+			expect(w.budget.available).toBe(capacity);
+		},
+	);
+
+	it('reuses fetched batches through a transient write failure without double-counting files', async () => {
+		const w = await pipelineFixture();
+		const written = Promise.withResolvers<void>();
+		const write = w.write
+			.mockRejectedValueOnce(new Error('transient write failure'))
+			.mockImplementationOnce(() => written.promise);
+		const pending = w.restore();
+		try {
+			await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(2));
+			expect(write.mock.calls[0]).toEqual(write.mock.calls[1]);
+			expect(w.get.mock.calls.map(([key]) => key)).toEqual(
+				['a.bin', 'b.bin'].map(w.nb.workspaceFile),
+			);
+			expect(w.budget.available).toBe(w.budget.capacity - w.batchBytes);
+		} finally {
+			written.resolve();
+		}
+		await expect(pending).resolves.toEqual({ objectCount: 3, bytes: 3 * w.batchBytes });
+		expect(write).toHaveBeenCalledTimes(4);
+		expect(w.get.mock.calls.map(([key]) => key)).toEqual(
+			['a.bin', 'b.bin', 'c.bin'].map(w.nb.workspaceFile),
+		);
+		expect(w.budget.available).toBe(w.budget.capacity);
+	});
+
+	it('shares lookahead capacity across concurrent restores and falls back without blocking writes', async () => {
+		const first = await pipelineFixture(5 * 1024 * 1024);
+		const second = await pipelineFixture();
+		const firstWritten = Promise.withResolvers<void>();
+		const secondWritten = Promise.withResolvers<void>();
+		const firstWrite = first.write.mockImplementationOnce(() => firstWritten.promise);
+		const secondWrite = second.write.mockImplementationOnce(() => secondWritten.promise);
+		const firstRestore = first.restore();
+		let secondRestore: ReturnType<typeof second.restore> | undefined;
+		try {
+			await vi.waitFor(() => expect(firstWrite).toHaveBeenCalledOnce());
+			expect(first.budget.available).toBe(0);
+			secondRestore = second.restore({ prefetchBudget: first.budget });
+			await vi.waitFor(() => expect(secondWrite).toHaveBeenCalledOnce());
+			expect(second.get).toHaveBeenCalledExactlyOnceWith(second.nb.workspaceFile('a.bin'));
+			expect(first.budget.available).toBe(0);
+			firstWritten.resolve();
+			await firstRestore;
+			expect(first.budget.available).toBe(first.budget.capacity);
+		} finally {
+			firstWritten.resolve();
+			secondWritten.resolve();
+		}
+		await expect(firstRestore).resolves.toMatchObject({ objectCount: 3 });
+		await expect(secondRestore).resolves.toMatchObject({ objectCount: 3 });
+		expect(first.budget.available).toBe(first.budget.capacity);
+	});
+
+	it.each([false, true])(
+		'handles a vanished lookahead object without leaking its reservation (complete: %s)',
+		async (requireComplete) => {
+			const w = await pipelineFixture();
+			w.get.mockImplementation((key, options) =>
+				key === w.nb.workspaceFile('b.bin') ? Promise.resolve(null) : w.readObject(key, options),
+			);
+			const pending = w.restore({ requireComplete });
+			if (requireComplete) {
+				await expect(pending).rejects.toThrow('listed object is missing');
+				expect(w.get).not.toHaveBeenCalledWith(w.nb.workspaceFile('c.bin'));
+			} else {
+				await expect(pending).resolves.toEqual({ objectCount: 2, bytes: 2 * w.batchBytes });
+			}
+			expect(w.calls.writeFiles.flat().map(({ path }) => path)).toEqual(
+				(requireComplete ? ['a.bin'] : ['a.bin', 'c.bin']).map((name) => `${MOUNT}/${name}`),
+			);
+			expect(w.budget.available).toBe(w.budget.capacity);
+		},
+	);
+
+	it('preserves the write failure when lookahead also fails', async () => {
+		const w = await pipelineFixture();
+		w.get.mockImplementation((key, options) =>
+			key === w.nb.workspaceFile('b.bin')
+				? Promise.reject(new Error('lookahead failed'))
+				: w.readObject(key, options),
+		);
+		const writeError = new Error('write failed');
+		const write = w.write.mockRejectedValue(writeError);
+		await expect(w.restore()).rejects.toBe(writeError);
+		expect(write).toHaveBeenCalledTimes(3);
+		expect(w.get).not.toHaveBeenCalledWith(w.nb.workspaceFile('c.bin'));
+		expect(w.budget.available).toBe(w.budget.capacity);
+	});
+
+	it('drains lookahead reads before rejecting a failed write and returns their budget', async () => {
+		const w = await pipelineFixture();
+		const read = Promise.withResolvers<void>();
+		const reads = w.get.mockImplementation(async (key, options) => {
+			if (key === w.nb.workspaceFile('b.bin')) await read.promise;
+			return w.readObject(key, options);
+		});
+		const write = w.write.mockRejectedValue(new Error('write failed'));
+		let settled = false;
+		const pending = w.restore().finally(() => {
+			settled = true;
+		});
+		const rejected = expect(pending).rejects.toThrow('write failed');
+		try {
+			await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(3));
+			expect(settled).toBe(false);
+			expect(w.budget.available).toBe(w.budget.capacity - w.batchBytes);
+			expect(reads).not.toHaveBeenCalledWith(w.nb.workspaceFile('c.bin'));
+		} finally {
+			read.resolve();
+		}
+		await rejected;
+		expect(write).toHaveBeenCalledTimes(3);
+		expect(w.budget.available).toBe(w.budget.capacity);
+	});
+
+	it('settles a failed lookahead batch and the current write without starting another batch', async () => {
+		const w = await pipelineFixture();
+		await w.bucket.put(w.nb.workspaceFile('b2.bin'), 'pending read');
+		const read = Promise.withResolvers<void>();
+		const written = Promise.withResolvers<void>();
+		const reads = w.get.mockImplementation(async (key, options) => {
+			if (key === w.nb.workspaceFile('b.bin')) throw new Error('read failed');
+			if (key === w.nb.workspaceFile('b2.bin')) await read.promise;
+			return w.readObject(key, options);
+		});
+		const write = w.write.mockImplementationOnce(() => written.promise);
+		let settled = false;
+		const pending = w.restore().finally(() => {
+			settled = true;
+		});
+		const rejected = expect(pending).rejects.toThrow('read failed');
+		try {
+			await vi.waitFor(() => expect(reads).toHaveBeenCalledWith(w.nb.workspaceFile('b2.bin')));
+			expect(settled).toBe(false);
+			written.resolve();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(settled).toBe(false);
+			expect(write).toHaveBeenCalledOnce();
+			expect(reads).not.toHaveBeenCalledWith(w.nb.workspaceFile('c.bin'));
+		} finally {
+			written.resolve();
+			read.resolve();
+		}
+		await rejected;
+		expect(w.budget.available).toBe(w.budget.capacity);
 	});
 
 	it.each([false, true])(
