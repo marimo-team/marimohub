@@ -391,12 +391,13 @@ describe('restoreWorkspace', () => {
 		const budget = new ByteBudget(capacity);
 		const readObject = bucket.get.bind(bucket);
 		const get = vi.spyOn(bucket, 'get');
+		const write = vi.spyOn(instance, 'writeFiles');
 		const restore = (options: WorkspaceRestoreOptions = {}) =>
 			restoreWorkspace(instance, bucket, nb.workspacePrefix, MOUNT, {
 				prefetchBudget: budget,
 				...options,
 			});
-		return { nb, bucket, instance, calls, budget, get, readObject, restore, batchBytes };
+		return { nb, bucket, instance, calls, budget, get, write, readObject, restore, batchBytes };
 	}
 
 	it.each([0, 5 * 1024 * 1024, 10 * 1024 * 1024])(
@@ -404,9 +405,7 @@ describe('restoreWorkspace', () => {
 		async (capacity) => {
 			const w = await pipelineFixture(capacity);
 			const written = Promise.withResolvers<void>();
-			const write = vi
-				.spyOn(w.instance, 'writeFiles')
-				.mockImplementationOnce(() => written.promise);
+			const write = w.write.mockImplementationOnce(() => written.promise);
 			const pending = w.restore();
 			try {
 				await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
@@ -431,8 +430,7 @@ describe('restoreWorkspace', () => {
 	it('reuses fetched batches through a transient write failure without double-counting files', async () => {
 		const w = await pipelineFixture();
 		const written = Promise.withResolvers<void>();
-		const write = vi
-			.spyOn(w.instance, 'writeFiles')
+		const write = w.write
 			.mockRejectedValueOnce(new Error('transient write failure'))
 			.mockImplementationOnce(() => written.promise);
 		const pending = w.restore();
@@ -459,12 +457,8 @@ describe('restoreWorkspace', () => {
 		const second = await pipelineFixture();
 		const firstWritten = Promise.withResolvers<void>();
 		const secondWritten = Promise.withResolvers<void>();
-		const firstWrite = vi
-			.spyOn(first.instance, 'writeFiles')
-			.mockImplementationOnce(() => firstWritten.promise);
-		const secondWrite = vi
-			.spyOn(second.instance, 'writeFiles')
-			.mockImplementationOnce(() => secondWritten.promise);
+		const firstWrite = first.write.mockImplementationOnce(() => firstWritten.promise);
+		const secondWrite = second.write.mockImplementationOnce(() => secondWritten.promise);
 		const firstRestore = first.restore();
 		let secondRestore: ReturnType<typeof second.restore> | undefined;
 		try {
@@ -515,7 +509,7 @@ describe('restoreWorkspace', () => {
 				: w.readObject(key, options),
 		);
 		const writeError = new Error('write failed');
-		const write = vi.spyOn(w.instance, 'writeFiles').mockRejectedValue(writeError);
+		const write = w.write.mockRejectedValue(writeError);
 		await expect(w.restore()).rejects.toBe(writeError);
 		expect(write).toHaveBeenCalledTimes(3);
 		expect(w.get).not.toHaveBeenCalledWith(w.nb.workspaceFile('c.bin'));
@@ -529,7 +523,7 @@ describe('restoreWorkspace', () => {
 			if (key === w.nb.workspaceFile('b.bin')) await read.promise;
 			return w.readObject(key, options);
 		});
-		const write = vi.spyOn(w.instance, 'writeFiles').mockRejectedValue(new Error('write failed'));
+		const write = w.write.mockRejectedValue(new Error('write failed'));
 		let settled = false;
 		const pending = w.restore().finally(() => {
 			settled = true;
@@ -558,7 +552,7 @@ describe('restoreWorkspace', () => {
 			if (key === w.nb.workspaceFile('b2.bin')) await read.promise;
 			return w.readObject(key, options);
 		});
-		const write = vi.spyOn(w.instance, 'writeFiles').mockImplementationOnce(() => written.promise);
+		const write = w.write.mockImplementationOnce(() => written.promise);
 		let settled = false;
 		const pending = w.restore().finally(() => {
 			settled = true;

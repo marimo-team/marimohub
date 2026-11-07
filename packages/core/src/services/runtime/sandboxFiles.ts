@@ -364,24 +364,19 @@ export async function restoreWorkspace(
 				ready = true;
 				current = startBatch(batches[index], false)!;
 			}
-			try {
-				const fetched = await current.loaded;
-				const files = [...overlayFiles.splice(0), ...fetched.filter((f) => f !== undefined)];
-				await options.waitUntilReady?.();
-				ready = true;
-				// Keep only one batch ahead, and fall back to serial reads if the budget is full.
-				if (index + 1 < batches.length) pending = startBatch(batches[index + 1], true);
-				await settleRestoreWork([
-					directories.length > 0
-						? createSandboxDirectories(sandbox, directories.splice(0))
-						: Promise.resolve(),
-					files.length > 0 ? withRetry(() => sandbox.writeFiles(files)) : Promise.resolve(),
-				]);
-				objectCount += files.length;
-				for (const f of files) bytes += f.content.byteLength;
-			} finally {
-				current.reservation?.[Symbol.dispose]();
-			}
+			using _reservation = current.reservation;
+			const fetched = await current.loaded;
+			const files = [...overlayFiles.splice(0), ...fetched.filter((f) => f !== undefined)];
+			await options.waitUntilReady?.();
+			ready = true;
+			// Keep only one batch ahead, and fall back to serial reads if the budget is full.
+			if (index + 1 < batches.length) pending = startBatch(batches[index + 1], true);
+			await settleRestoreWork([
+				createSandboxDirectories(sandbox, directories.splice(0)),
+				files.length > 0 ? withRetry(() => sandbox.writeFiles(files)) : Promise.resolve(),
+			]);
+			objectCount += files.length;
+			for (const f of files) bytes += f.content.byteLength;
 		}
 	} finally {
 		// A failed write must not leave lookahead reads or their reservation behind.

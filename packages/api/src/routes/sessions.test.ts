@@ -730,24 +730,28 @@ describe('Session routes', () => {
 		expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
 	});
 
+	async function coldWorkspaceFixture() {
+		const fake = makeFakeSandbox();
+		const api = createTestApi({ bucket, compute: fakeComputeFrom(fake.instance) });
+		api.deps.sandbox.bucket.mountable = false;
+		const key = paths.project(pid).notebook(nid).workspaceFile('data.txt');
+		await bucket.put(key, 'workspace data');
+		return { fake, api, key, sessions: api.deps.services.sessions };
+	}
+
 	it.each(['boot', 'admission'] as const)(
 		'prefetches a cold workspace during admission and boot, waiting for both before writes (%s first)',
 		async (first) => {
-			const fake = makeFakeSandbox();
+			const { fake, api, key, sessions } = await coldWorkspaceFixture();
 			const boot = Promise.withResolvers<void>();
 			const admitted = Promise.withResolvers<void>();
 			fake.instance.ready = () => boot.promise;
-			const api = createTestApi({ bucket, compute: fakeComputeFrom(fake.instance) });
-			api.deps.sandbox.bucket.mountable = false;
 			expect(api.deps.warmPool).toBeUndefined();
-			const sessions = api.deps.services.sessions;
 			const claim = sessions.claimEditor.bind(sessions);
 			const claiming = vi.spyOn(sessions, 'claimEditor').mockImplementationOnce(async (...args) => {
 				await admitted.promise;
 				return claim(...args);
 			});
-			const key = paths.project(pid).notebook(nid).workspaceFile('data.txt');
-			await bucket.put(key, 'workspace data');
 			const get = vi.spyOn(bucket, 'get');
 			const request = api.request('POST', sessionsPath());
 			try {
@@ -776,14 +780,10 @@ describe('Session routes', () => {
 	it.each(['get', 'bytes'] as const)(
 		'reclaims a cold sandbox after early workspace %s fails without restarting the read',
 		async (failure) => {
-			const fake = makeFakeSandbox();
+			const { fake, api, key, sessions } = await coldWorkspaceFixture();
 			const boot = Promise.withResolvers<void>();
 			const reading = Promise.withResolvers<void>();
 			fake.instance.ready = () => boot.promise;
-			const api = createTestApi({ bucket, compute: fakeComputeFrom(fake.instance) });
-			api.deps.sandbox.bucket.mountable = false;
-			const key = paths.project(pid).notebook(nid).workspaceFile('data.txt');
-			await bucket.put(key, 'workspace data');
 			const get = bucket.get.bind(bucket);
 			const reads = vi.spyOn(bucket, 'get').mockImplementation(async (fetched, options) => {
 				if (fetched !== key) return get(fetched, options);
@@ -810,7 +810,6 @@ describe('Session routes', () => {
 			expect(reads.mock.calls.filter(([fetched]) => fetched === key)).toHaveLength(1);
 			expect(fake.calls.destroy).toBe(1);
 			expect(fake.calls.startProcess).toEqual([]);
-			const sessions = api.deps.services.sessions;
 			expect(await sessions.listSessions(nid)).toMatchObject([
 				{ status: 'failed', sandbox_reclaimed_at: expect.any(String) },
 			]);
@@ -819,14 +818,9 @@ describe('Session routes', () => {
 	);
 
 	it('cancels and drains cold prefetch before destroying a rejected startup', async () => {
-		const fake = makeFakeSandbox();
-		const api = createTestApi({ bucket, compute: fakeComputeFrom(fake.instance) });
-		api.deps.sandbox.bucket.mountable = false;
-		const sessions = api.deps.services.sessions;
+		const { fake, api, key, sessions } = await coldWorkspaceFixture();
 		const read = Promise.withResolvers<void>();
 		const reading = Promise.withResolvers<void>();
-		const key = paths.project(pid).notebook(nid).workspaceFile('data.txt');
-		await bucket.put(key, 'workspace data');
 		const get = bucket.get.bind(bucket);
 		vi.spyOn(bucket, 'get').mockImplementation(async (fetched, options) => {
 			const object = await get(fetched, options);
