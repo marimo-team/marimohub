@@ -773,6 +773,51 @@ describe('Session routes', () => {
 		},
 	);
 
+	it.each(['get', 'bytes'] as const)(
+		'reclaims a cold sandbox after early workspace %s fails without restarting the read',
+		async (failure) => {
+			const fake = makeFakeSandbox();
+			const boot = Promise.withResolvers<void>();
+			const reading = Promise.withResolvers<void>();
+			fake.instance.ready = () => boot.promise;
+			const api = createTestApi({ bucket, compute: fakeComputeFrom(fake.instance) });
+			api.deps.sandbox.bucket.mountable = false;
+			const key = paths.project(pid).notebook(nid).workspaceFile('data.txt');
+			await bucket.put(key, 'workspace data');
+			const get = bucket.get.bind(bucket);
+			const reads = vi.spyOn(bucket, 'get').mockImplementation(async (fetched, options) => {
+				if (fetched !== key) return get(fetched, options);
+				reading.resolve();
+				if (failure === 'get') throw new Error('workspace read failed');
+				const object = await get(fetched);
+				return {
+					...object!,
+					bytes: async () => {
+						throw new Error('workspace read failed');
+					},
+				};
+			});
+			const request = api.request('POST', sessionsPath());
+			try {
+				await reading.promise;
+				expect(fake.calls.destroy).toBe(0);
+				expect(fake.calls.writeFiles).toEqual([]);
+				expect(fake.calls.setEnvVars).toEqual([]);
+			} finally {
+				boot.resolve();
+			}
+			await expectError(await request, 503, 'SERVICE_UNAVAILABLE');
+			expect(reads.mock.calls.filter(([fetched]) => fetched === key)).toHaveLength(1);
+			expect(fake.calls.destroy).toBe(1);
+			expect(fake.calls.startProcess).toEqual([]);
+			const sessions = api.deps.services.sessions;
+			expect(await sessions.listSessions(nid)).toMatchObject([
+				{ status: 'failed', sandbox_reclaimed_at: expect.any(String) },
+			]);
+			expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
+		},
+	);
+
 	it('cancels and drains cold prefetch before destroying a rejected startup', async () => {
 		const fake = makeFakeSandbox();
 		const api = createTestApi({ bucket, compute: fakeComputeFrom(fake.instance) });
