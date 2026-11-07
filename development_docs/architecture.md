@@ -195,7 +195,8 @@ Cold starts prefetch after session publication. Warm starts can prefetch immutab
 at reservation. Mutable reads always wait for publication.
 
 Object restores prefetch one batch during each write, within the shared byte budget.
-If the budget is full, reads run sequentially. Packed archives and mounts do not use batch prefetch.
+Writes containing overlays stay sequential. If the budget is full, reads run sequentially.
+Packed archives and mounts do not use batch prefetch.
 Failed restores drain pending reads and writes. Cold cleanup cancels prefetch before sandbox destruction.
 
 Persistent editors publish under the source lease and heartbeat it before proceeding.

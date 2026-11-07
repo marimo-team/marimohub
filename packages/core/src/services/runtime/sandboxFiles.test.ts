@@ -400,6 +400,59 @@ describe('restoreWorkspace', () => {
 		return { nb, bucket, instance, calls, budget, get, write, readObject, restore, batchBytes };
 	}
 
+	it('keeps an overlay batch sequential and resumes lookahead after its write', async () => {
+		const w = await pipelineFixture();
+		const overlay = [{ path: 'overlay.bin', key: 'version/overlay.bin' }];
+		await w.bucket.put(overlay[0].key, bytesOfSize(w.batchBytes));
+		const firstWritten = Promise.withResolvers<void>();
+		const secondWritten = Promise.withResolvers<void>();
+		w.write
+			.mockImplementationOnce(() => firstWritten.promise)
+			.mockImplementationOnce(() => secondWritten.promise);
+		const pending = w.restore({ overlay, waitUntilReady: async () => {} });
+		try {
+			await vi.waitFor(() => expect(w.write).toHaveBeenCalledOnce());
+			expect(w.get.mock.calls.map(([key]) => key)).toEqual([
+				overlay[0].key,
+				w.nb.workspaceFile('a.bin'),
+			]);
+			expect(w.budget.available).toBe(w.budget.capacity - w.batchBytes);
+			expect(w.write.mock.calls[0][0].map(({ path }) => path)).toEqual([
+				`${MOUNT}/overlay.bin`,
+				`${MOUNT}/a.bin`,
+			]);
+			firstWritten.resolve();
+			await vi.waitFor(() => expect(w.write).toHaveBeenCalledTimes(2));
+			expect(w.get).toHaveBeenCalledWith(w.nb.workspaceFile('c.bin'));
+			expect(w.budget.available).toBe(w.budget.capacity - w.batchBytes);
+		} finally {
+			firstWritten.resolve();
+			secondWritten.resolve();
+		}
+		await expect(pending).resolves.toEqual({ objectCount: 4, bytes: 4 * w.batchBytes });
+		expect(w.get.mock.calls.filter(([key]) => key === overlay[0].key)).toHaveLength(1);
+		expect(w.write.mock.calls.slice(1).flatMap(([files]) => files.map(({ path }) => path))).toEqual(
+			[`${MOUNT}/b.bin`, `${MOUNT}/c.bin`],
+		);
+		expect(w.budget.available).toBe(w.budget.capacity);
+	});
+
+	it('does not fetch lookahead when the overlay write fails', async () => {
+		const w = await pipelineFixture();
+		const overlay = [{ path: 'overlay.bin', key: 'version/overlay.bin' }];
+		await w.bucket.put(overlay[0].key, bytesOfSize(w.batchBytes));
+		w.write.mockRejectedValue(new Error('overlay write failed'));
+		await expect(w.restore({ overlay, waitUntilReady: async () => {} })).rejects.toThrow(
+			'overlay write failed',
+		);
+		expect(w.write).toHaveBeenCalledTimes(3);
+		expect(w.get.mock.calls.map(([key]) => key)).toEqual([
+			overlay[0].key,
+			w.nb.workspaceFile('a.bin'),
+		]);
+		expect(w.budget.available).toBe(w.budget.capacity);
+	});
+
 	it.each([0, 5 * 1024 * 1024, 10 * 1024 * 1024])(
 		'pipelines at most one batch within the shared budget (%s bytes)',
 		async (capacity) => {

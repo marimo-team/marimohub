@@ -366,11 +366,14 @@ export async function restoreWorkspace(
 			}
 			using _reservation = current.reservation;
 			const fetched = await current.loaded;
+			const hasOverlay = overlayFiles.length > 0;
 			const files = [...overlayFiles.splice(0), ...fetched.filter((f) => f !== undefined)];
 			await options.waitUntilReady?.();
 			ready = true;
-			// Keep only one batch ahead, and fall back to serial reads if the budget is full.
-			if (index + 1 < batches.length) pending = startBatch(batches[index + 1], true);
+			// Overlay buffers are outside the prefetch budget; do not add lookahead while they are live.
+			if (!hasOverlay && index + 1 < batches.length) {
+				pending = startBatch(batches[index + 1], true);
+			}
 			await settleRestoreWork([
 				createSandboxDirectories(sandbox, directories.splice(0)),
 				files.length > 0 ? withRetry(() => sandbox.writeFiles(files)) : Promise.resolve(),
