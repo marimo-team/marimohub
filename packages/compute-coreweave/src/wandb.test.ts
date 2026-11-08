@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
 import { Seconds } from '@marimo-hub/core/duration';
 import type { SandboxId } from '@marimo-hub/core/ids';
@@ -60,6 +60,37 @@ describe('createWandbCompute', () => {
 		expectExecResult(result, { success: true, stdout: '', stderr: '' });
 		expect(world.created).toHaveLength(1);
 		expect(world.created[0].containerImage).toBe('my-image');
+	});
+
+	it('keeps the eight-wide Gateway upload budget for the W&B file adapter', async () => {
+		vi.useFakeTimers();
+		try {
+			let active = 0;
+			let peak = 0;
+			let started = 0;
+			const world = makeWorld({
+				writeImpl: async () => {
+					started++;
+					peak = Math.max(peak, ++active);
+					await new Promise<void>((resolve) => setTimeout(resolve, 100));
+					active--;
+				},
+			});
+			const instance = createWandbCompute(baseConfig, world.client).create(SANDBOX_ID, {
+				reuse: false,
+			});
+			const write = instance.writeFiles(
+				Array.from({ length: 16 }, (_, i) => ({ path: `/w/${i}`, content: 'x' })),
+			);
+			await vi.advanceTimersByTimeAsync(99);
+			expect(started).toBe(8);
+			await vi.runAllTimersAsync();
+			await write;
+			expect(peak).toBe(8);
+			expect(started).toBe(16);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('uses the assigned HTTPS URL with an injected client', async () => {

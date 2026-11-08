@@ -10,13 +10,22 @@ Part of [marimohub](../../README.md). See [docs/compute.md](../../docs/compute.m
 Gateway batches allow up to eight active write RPCs per sandbox. Direct and
 `auto` modes allow two across workspace, injection, bridge uploads, and all
 handles to that sandbox, leaving runner admission headroom for commands.
-Other sandboxes have independent slots.
-Each write has a 60 s deadline. A write that waits to retry releases its RPC slot.
+Other sandboxes have independent slots. This is a provider-local bound
+(normally one server process), not a distributed quota; the runner still
+controls admission across clients.
+W&B's Gateway-only file adapter also keeps eight slots.
+Each file has a 60 s budget starting at its first RPC; retries and later queue
+waits consume that same budget. Initial queueing does not. A retry releases its
+RPC slot while waiting.
 All destinations must be unique absolute paths.
 The adapter validates and copies the destinations before it waits for sandbox readiness.
 
-`UNAVAILABLE` and `RESOURCE_EXHAUSTED` file writes retry after 250, 1,000, and
-3,000 ms. Persistent admission/quota failures still fail after those bounded retries.
+`UNAVAILABLE` and `RESOURCE_EXHAUSTED` file writes retry at most three times,
+using 250, 1,000, and 3,000 ms backoff or a longer server-suggested delay.
+Server delays above 10 s fail without retrying early. A retry is not dispatched
+after the file's budget expires. Each SDK call receives its remaining time and
+an abort signal, and the adapter also enforces that deadline.
+Persistent admission/quota failures still fail after the bounded retries.
 Any other error, or a write that runs out of retries, stops new uploads in that batch, including uploads that wait for a slot.
 Active uploads finish their retries, and then the batch rejects.
 Other batches continue. Completed writes stay in the sandbox.

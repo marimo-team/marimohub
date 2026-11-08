@@ -108,12 +108,13 @@ export interface FakeSandbox {
 	statusPolls: number;
 }
 
-type WriteImpl = (files: FileWrites, options?: { timeoutMs?: number }) => Promise<void>;
+type WriteOptions = { timeoutMs?: number; signal?: AbortSignal };
+type WriteImpl = (files: FileWrites, options?: WriteOptions) => Promise<void>;
 
 // `FileWrites` also admits a path→content record, but the adapter only ever
 // sends the array form; normalize so the fake satisfies the SDK type.
 function recordWrite(fake: FakeSandbox, writeImpl?: WriteImpl) {
-	return async (files: FileWrites, options?: { timeoutMs?: number }): Promise<void> => {
+	return async (files: FileWrites, options?: WriteOptions): Promise<void> => {
 		const write = writeImpl?.(files, options);
 		const timeoutMs = options?.timeoutMs;
 		// Mirror the SDK's per-RPC deadline so a hung fake write fails like a real one.

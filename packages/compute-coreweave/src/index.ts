@@ -74,7 +74,7 @@ import type {
 	Service,
 	ServiceUrl,
 } from '@coreweave/cwsandbox';
-import { forEachConcurrentUntilFailure } from '@marimo-hub/core/async';
+import { forEachConcurrentUntilFailure, withDeadline } from '@marimo-hub/core/async';
 import { BoundedLruMap } from '@marimo-hub/core/cache';
 import { Semaphore } from '@marimo-hub/core/concurrency';
 import {
@@ -169,6 +169,8 @@ const SLOW_BOOT_HINT =
 const PROCESS_CANCEL_TIMEOUT_MS = 1_000;
 /** Backoff for transient file transport or admission failures. */
 const WRITE_RETRY_DELAYS_MS = [250, 1_000, 3_000];
+const MAX_FILE_WRITE_RETRY_DELAY_MS = 10_000;
+
 // Gateway batches can use eight slots; shared sandbox admission bounds direct/auto.
 const FILE_WRITE_CONCURRENCY = 8;
 const GATEWAY_FILE_WRITE_SLOTS = 8;
@@ -181,9 +183,33 @@ function fileWriteLimit(mode: DataPlaneMode | undefined): number {
 // Workspace files can be several MiB; the bound exists so a hung RPC releases its slot.
 const FILE_WRITE_TIMEOUT_MS = 60_000;
 
+function fileWriteRetryDelay(error: unknown, attempt: number): number | undefined {
+	if (
+		(!(error instanceof CWSandboxUnavailableError) &&
+			!(error instanceof CWSandboxResourceExhaustedError)) ||
+		attempt >= WRITE_RETRY_DELAYS_MS.length
+	)
+		return;
+	const suggested = error.retryDelayMs;
+	if (suggested === undefined || !Number.isFinite(suggested) || suggested < 0)
+		return WRITE_RETRY_DELAYS_MS[attempt];
+	// Do not ignore a long server cooldown or turn it into an unbounded sleep.
+	if (suggested > MAX_FILE_WRITE_RETRY_DELAY_MS) return;
+	return Math.max(WRITE_RETRY_DELAYS_MS[attempt], Math.ceil(suggested));
+}
+
+function fileWriteTimeout(sandboxId: string, filepath: string, cause?: unknown) {
+	return new CWSandboxTimeoutError('File write retry budget expired', {
+		operation: 'Write sandbox file',
+		sandboxId,
+		filepath,
+		cause,
+	});
+}
+
 /**
- * Keyed by provider sandbox ID so every handle to one sandbox (`create` and
- * `connectExisting` alike) shares the cap. Idle entries are dropped.
+ * Keyed by provider sandbox ID so handles within one provider share the cap.
+ * Other server processes still rely on runner admission and bounded retries.
  */
 class SandboxFileWriteSlots {
 	private readonly bySandbox = new Map<string, Semaphore>();
@@ -442,7 +468,7 @@ export interface CoreWeaveSandbox {
 	readonly files: {
 		readText(path: string): Promise<string>;
 		/** Multi-file form only — `writeFiles` is the port's single write path. */
-		write(files: FileWrites, options?: { timeoutMs?: number }): Promise<void>;
+		write(files: FileWrites, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<void>;
 	};
 	delete(): Promise<void>;
 }
@@ -960,31 +986,47 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		file: SandboxFileWrite,
 		batchState: { failed: boolean },
 	): Promise<void> {
-		// Whole-file writes are idempotent; retry only the failed file.
+		// Initial queueing is outside the budget; retries share the first RPC's deadline.
+		let deadline: number | undefined;
 		for (let attempt = 0; ; attempt++) {
-			const retry = await this.fileWriteSlots.run(sandbox.sandboxId, async () => {
+			const retryDelay = await this.fileWriteSlots.run(sandbox.sandboxId, async () => {
 				// Already-started uploads finish their retries after a sibling fails.
 				if (batchState.failed && attempt === 0) return;
+				deadline ??= Date.now() + FILE_WRITE_TIMEOUT_MS;
+				const remaining = deadline - Date.now();
+				if (remaining <= 0) {
+					batchState.failed = true;
+					throw fileWriteTimeout(sandbox.sandboxId, file.path);
+				}
 				try {
-					await sandbox.files.write([{ path: file.path, content: file.content }], {
-						timeoutMs: FILE_WRITE_TIMEOUT_MS,
-					});
-				} catch (err) {
-					if (
-						(!(err instanceof CWSandboxUnavailableError) &&
-							!(err instanceof CWSandboxResourceExhaustedError)) ||
-						attempt >= WRITE_RETRY_DELAYS_MS.length
-					) {
+					await withDeadline(
+						(signal) =>
+							sandbox.files.write([{ path: file.path, content: file.content }], {
+								timeoutMs: remaining,
+								signal,
+							}),
+						{
+							timeoutMs: remaining,
+							timeoutError: () => fileWriteTimeout(sandbox.sandboxId, file.path),
+						},
+					);
+				} catch (error) {
+					const delay = fileWriteRetryDelay(error, attempt);
+					if (delay === undefined) {
 						// Fence queued uploads before releasing this slot to another waiter.
 						batchState.failed = true;
-						throw err;
+						throw error;
 					}
-					return true;
+					if (delay >= deadline - Date.now()) {
+						batchState.failed = true;
+						throw fileWriteTimeout(sandbox.sandboxId, file.path, error);
+					}
+					return delay;
 				}
 			});
-			if (!retry) return;
+			if (retryDelay === undefined) return;
 			await new Promise<void>((resolve) => {
-				setTimeout(resolve, WRITE_RETRY_DELAYS_MS[attempt]);
+				setTimeout(resolve, retryDelay);
 			});
 		}
 	}
