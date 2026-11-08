@@ -7,13 +7,16 @@ Part of [marimohub](../../README.md). See [docs/compute.md](../../docs/compute.m
 
 ## File uploads
 
-A batch runs up to eight SDK writes at the same time.
-Each sandbox allows eight active write RPCs across all its phases, so sessions never queue behind each other.
+Gateway batches allow up to eight active write RPCs per sandbox. Direct and
+`auto` modes allow two across workspace, injection, bridge uploads, and all
+handles to that sandbox, leaving runner admission headroom for commands.
+Other sandboxes have independent slots.
 Each write has a 60 s deadline. A write that waits to retry releases its RPC slot.
 All destinations must be unique absolute paths.
 The adapter validates and copies the destinations before it waits for sandbox readiness.
 
-Only `UNAVAILABLE` causes a retry, after 250, 1,000, and 3,000 ms.
+`UNAVAILABLE` and `RESOURCE_EXHAUSTED` file writes retry after 250, 1,000, and
+3,000 ms. Persistent admission/quota failures still fail after those bounded retries.
 Any other error, or a write that runs out of retries, stops new uploads in that batch, including uploads that wait for a slot.
 Active uploads finish their retries, and then the batch rejects.
 Other batches continue. Completed writes stay in the sandbox.

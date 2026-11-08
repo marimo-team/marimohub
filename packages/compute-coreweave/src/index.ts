@@ -167,14 +167,17 @@ const SLOW_BOOT_HINT =
 	'boot > 10 s usually means the node cold-pulled the sandbox image; pre-pull the configured image tags on the sandbox node pool';
 
 const PROCESS_CANCEL_TIMEOUT_MS = 1_000;
-/** Backoff before each retry of a file write the gateway answered with UNAVAILABLE. */
+/** Backoff for transient file transport or admission failures. */
 const WRITE_RETRY_DELAYS_MS = [250, 1_000, 3_000];
-// Each file is one unary RPC, so a batch costs ceil(n / this) round trips; matching the
-// per-sandbox slot cap lets one batch use every slot its sandbox has.
+// Gateway batches can use eight slots; shared sandbox admission bounds direct/auto.
 const FILE_WRITE_CONCURRENCY = 8;
-// Per sandbox, so concurrent workspace, integration, and bridge uploads stay bounded
-// without one session's transfers queueing behind another's.
-const FILE_WRITE_SLOTS_PER_SANDBOX = 8;
+const GATEWAY_FILE_WRITE_SLOTS = 8;
+// Leave direct admission headroom for commands alongside workspace/injection/bridge writes.
+const DIRECT_FILE_WRITE_SLOTS = 2;
+
+function fileWriteLimit(mode: DataPlaneMode | undefined): number {
+	return mode === 'gateway' ? GATEWAY_FILE_WRITE_SLOTS : DIRECT_FILE_WRITE_SLOTS;
+}
 // Workspace files can be several MiB; the bound exists so a hung RPC releases its slot.
 const FILE_WRITE_TIMEOUT_MS = 60_000;
 
@@ -185,16 +188,18 @@ const FILE_WRITE_TIMEOUT_MS = 60_000;
 class SandboxFileWriteSlots {
 	private readonly bySandbox = new Map<string, Semaphore>();
 
+	constructor(private readonly limit: number) {}
+
 	async run<T>(sandboxId: string, fn: () => Promise<T>): Promise<T> {
 		let slots = this.bySandbox.get(sandboxId);
 		if (!slots) {
-			slots = new Semaphore(FILE_WRITE_SLOTS_PER_SANDBOX);
+			slots = new Semaphore(this.limit);
 			this.bySandbox.set(sandboxId, slots);
 		}
 		try {
 			return await slots.run(fn);
 		} finally {
-			if (slots.available === FILE_WRITE_SLOTS_PER_SANDBOX) this.bySandbox.delete(sandboxId);
+			if (slots.available === this.limit) this.bySandbox.delete(sandboxId);
 		}
 	}
 }
@@ -567,7 +572,9 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		private readonly userHome?: SandboxUserHome,
 		private readonly existingOnly = false,
 		reference?: string,
-		private readonly fileWriteSlots = new SandboxFileWriteSlots(),
+		private readonly fileWriteSlots = new SandboxFileWriteSlots(
+			fileWriteLimit(config.dataPlaneMode),
+		),
 	) {
 		this.idTag = ID_TAG_PREFIX + id;
 		if (reference !== undefined) {
@@ -953,7 +960,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		file: SandboxFileWrite,
 		batchState: { failed: boolean },
 	): Promise<void> {
-		// Whole-file writes are idempotent; retry only the file that saw UNAVAILABLE.
+		// Whole-file writes are idempotent; retry only the failed file.
 		for (let attempt = 0; ; attempt++) {
 			const retry = await this.fileWriteSlots.run(sandbox.sandboxId, async () => {
 				// Already-started uploads finish their retries after a sibling fails.
@@ -964,7 +971,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 					});
 				} catch (err) {
 					if (
-						!(err instanceof CWSandboxUnavailableError) ||
+						(!(err instanceof CWSandboxUnavailableError) &&
+							!(err instanceof CWSandboxResourceExhaustedError)) ||
 						attempt >= WRITE_RETRY_DELAYS_MS.length
 					) {
 						// Fence queued uploads before releasing this slot to another waiter.
@@ -1336,7 +1344,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 	 */
 	readonly capabilities: { multiPort: boolean };
 	private client?: CoreWeaveClient;
-	private readonly fileWriteSlots = new SandboxFileWriteSlots();
+	private readonly fileWriteSlots: SandboxFileWriteSlots;
 	/**
 	 * Provider sandbox ids this process has seen running for a hub id, so a re-resolved instance
 	 * can Get by id instead of paying the tag List. Entries are hints: every hit is validated, and
@@ -1349,6 +1357,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 		client?: CoreWeaveClient,
 	) {
 		this.client = client;
+		this.fileWriteSlots = new SandboxFileWriteSlots(fileWriteLimit(config.dataPlaneMode));
 		this.capabilities = { multiPort: (config.extraPorts?.length ?? 0) > 0 };
 	}
 
