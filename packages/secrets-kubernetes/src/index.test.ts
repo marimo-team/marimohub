@@ -384,3 +384,90 @@ describe('KubernetesSecretResolver API errors', () => {
 		expect(String(error)).not.toContain('sensitive-key');
 	});
 });
+
+describe('session read deduplication', () => {
+	it('shares a backend failure across integrations and retries within the same render', async () => {
+		const pending = Promise.withResolvers<KubernetesSecretSnapshot>();
+		const fetch = vi
+			.fn<KubernetesSecretFetcher>()
+			.mockReturnValueOnce(pending.promise)
+			.mockResolvedValue(secret());
+		const r = resolver(fetch);
+		const operation = {};
+		const context = () => ({ ...projectContext(), operation });
+		const results = Promise.allSettled([
+			r.resolve(ref('connections/provider#token'), context()),
+			r.resolve(ref('connections/provider#token'), context()),
+		]);
+		pending.reject(new Error('sensitive backend response'));
+		expect(await results).toEqual([
+			{ status: 'rejected', reason: expect.objectContaining({ reason: 'unavailable' }) },
+			{ status: 'rejected', reason: expect.objectContaining({ reason: 'unavailable' }) },
+		]);
+		expect(fetch).toHaveBeenCalledOnce();
+		expect(await r.resolve(ref('connections/provider#token'), context())).toBe('resolved');
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it.each(['missing key', 'invalid encoding'] as const)(
+		'%s for one integration does not poison another field in the shared snapshot',
+		async (failure) => {
+			const fetch = vi.fn(async () =>
+				secret({
+					good: encoded('valid'),
+					...(failure === 'invalid encoding' ? { bad: 'not-base64' } : {}),
+				}),
+			);
+			const r = resolver(fetch);
+			const operation = {};
+			await expect(
+				r.resolve(ref('connections/provider#bad'), { ...projectContext(), operation }),
+			).rejects.toMatchObject({ reason: 'invalid_value' });
+			expect(
+				await r.resolve(ref('connections/provider#good'), { ...projectContext(), operation }),
+			).toBe('valid');
+			expect(fetch).toHaveBeenCalledOnce();
+		},
+	);
+
+	it('does not retain a snapshot missing the opt-in label across integrations', async () => {
+		const fetch = vi
+			.fn<KubernetesSecretFetcher>()
+			.mockResolvedValueOnce({ data: { token: encoded('forbidden') } })
+			.mockResolvedValue(secret());
+		const r = resolver(fetch);
+		const operation = {};
+		await expect(
+			r.resolve(ref('connections/provider#token'), { ...projectContext(), operation }),
+		).rejects.toMatchObject({ reason: 'forbidden' });
+		expect(
+			await r.resolve(ref('connections/provider#token'), { ...projectContext(), operation }),
+		).toBe('resolved');
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it('coalesces integration reads and checks each owner before using a cached secret', async () => {
+		const fetch = vi.fn(async () => secret());
+		const r = resolver(fetch, 0, undefined, [
+			{ namespace: 'connections', name: 'provider', projects: [PROJECT_A] },
+		]);
+		const operation = {};
+		const allowed = () => ({ ...projectContext(), operation });
+		expect(
+			await Promise.all([
+				r.resolve(ref('connections/provider#token'), allowed()),
+				r.resolve(ref('connections/provider#token'), allowed()),
+			]),
+		).toEqual(['resolved', 'resolved']);
+		await expect(
+			r.resolve(ref('connections/provider#token'), { ...orgContext(), operation }),
+		).rejects.toMatchObject({ reason: 'forbidden' });
+		await expect(
+			r.resolve(ref('connections/provider#token'), { ...projectContext(PROJECT_B), operation }),
+		).rejects.toMatchObject({ reason: 'forbidden' });
+		expect(await r.resolve(ref('connections/provider#token'), allowed())).toBe('resolved');
+		expect(fetch).toHaveBeenCalledOnce();
+		await r.resolve(ref('connections/provider#token'), { ...projectContext(), operation: {} });
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+});

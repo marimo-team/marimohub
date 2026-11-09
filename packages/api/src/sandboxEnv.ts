@@ -71,8 +71,7 @@ export function composeSessionEnv(layers: {
 export type FederatedCredentials = () => Promise<TempS3Creds>;
 
 /**
- * One lazy, memoized WIF exchange per workload so the storage env and package
- * registry token minting share a single JWT and STS round trip.
+ * The WIF config fixes the issuer and target; project and workload kind bound credential reuse.
  */
 export function federatedCredentialsFor(
 	deps: Partial<Pick<ApiDeps, 'wif'>>,
@@ -84,12 +83,16 @@ export function federatedCredentialsFor(
 	if (!wif) return;
 	let exchange: Promise<TempS3Creds> | undefined;
 	return () =>
-		(exchange ??= exchangeFederatedStorageCredentials(
-			wif.issuer,
-			wif.issuerUrl,
-			wif.target,
-			project.id,
-			workload,
+		(exchange ??= wifCredentialCacheFor(wif).getShared(
+			JSON.stringify([project.id, workload.kind]),
+			() =>
+				exchangeFederatedStorageCredentials(
+					wif.issuer,
+					wif.issuerUrl,
+					wif.target,
+					project.id,
+					workload,
+				),
 		));
 }
 

@@ -67,7 +67,7 @@ export class KubernetesSecretResolver implements SecretResolver {
 	private readonly now: () => number;
 	private readonly cache = new Map<string, CacheEntry>();
 	private readonly operationCache = new WeakMap<
-		SecretResolutionContext,
+		object,
 		Map<string, Promise<KubernetesSecretSnapshot>>
 	>();
 
@@ -106,7 +106,7 @@ export class KubernetesSecretResolver implements SecretResolver {
 			assertOptedIn(secret);
 		} catch (error) {
 			this.cache.delete(cacheKey);
-			this.operationCache.get(context)?.delete(cacheKey);
+			this.operationCache.get(context.operation ?? context)?.delete(cacheKey);
 			throw error;
 		}
 		const encoded = secret.data?.[locator.key];
@@ -124,10 +124,11 @@ export class KubernetesSecretResolver implements SecretResolver {
 		namespace: string,
 		name: string,
 	): Promise<KubernetesSecretSnapshot> {
-		let operation = this.operationCache.get(context);
+		const identity = context.operation ?? context;
+		let operation = this.operationCache.get(identity);
 		if (!operation) {
 			operation = new Map();
-			this.operationCache.set(context, operation);
+			this.operationCache.set(identity, operation);
 		}
 		const cacheKey = secretCacheKey(namespace, name);
 		const hit = operation.get(cacheKey);

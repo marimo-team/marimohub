@@ -20,16 +20,19 @@ const source: CodeArtifactSource = {
 	},
 };
 
-function makeProbe() {
-	const fetch = vi.fn<IntegrationProbe['fetch']>(async () => ({
+function tokenResponse(authorizationToken = 'registry-token', lifetimeSeconds = 43_200) {
+	return {
 		ok: true,
 		status: 200,
-		json: async () => ({
-			authorizationToken: 'registry-token',
-			expiration: Date.now() / 1000 + 3600,
-		}),
-	}));
-	return { fetch, connect: vi.fn() } satisfies IntegrationProbe;
+		json: async () => ({ authorizationToken, expiration: Date.now() / 1000 + lifetimeSeconds }),
+	};
+}
+
+function makeProbe() {
+	return {
+		fetch: vi.fn<IntegrationProbe['fetch']>(async () => tokenResponse()),
+		connect: vi.fn(),
+	} satisfies IntegrationProbe;
 }
 
 describe('AWS CodeArtifact credentials', () => {
@@ -37,6 +40,174 @@ describe('AWS CodeArtifact credentials', () => {
 		vi.restoreAllMocks();
 		vi.useRealTimers();
 	});
+	it('coalesces mints, returns independent values, and refreshes below ten hours remaining', async () => {
+		vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00Z'), toFake: ['Date'] });
+		const probe = makeProbe();
+		const adapter = new AwsCodeArtifactCredentials();
+		const [first, second] = await Promise.all([
+			adapter.resolve(source, { probe }),
+			adapter.resolve(source, { probe }),
+		]);
+		expect(first).toEqual(second);
+		first.password = 'mutated';
+		vi.setSystemTime(new Date('2026-01-01T02:00:00Z'));
+		expect((await adapter.resolve(source, { probe })).password).toBe('registry-token');
+		expect(probe.fetch).toHaveBeenCalledOnce();
+		vi.setSystemTime(new Date('2026-01-01T02:00:00.001Z'));
+		await adapter.resolve(source, { probe });
+		expect(probe.fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it('retries rejected mints without caching the failure', async () => {
+		const probe = makeProbe();
+		probe.fetch.mockRejectedValueOnce(new Error('unavailable'));
+		const adapter = new AwsCodeArtifactCredentials();
+		await expect(adapter.resolve(source, { probe })).rejects.toThrow(authenticationError);
+		await adapter.resolve(source, { probe });
+		expect(probe.fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it('separates domains, owners, regions, auth methods, and rotated credentials', async () => {
+		const probe = makeProbe();
+		const adapter = new AwsCodeArtifactCredentials();
+		const auth = {
+			method: 'static' as const,
+			access_key_id: 'AKIDEXAMPLE',
+			secret_access_key: 'aws-secret',
+			session_token: 'aws-session',
+		};
+		for (const variant of [
+			source,
+			{ ...source, domain: 'another' },
+			{ ...source, domain_owner: '999999999999' },
+			{ ...source, region: 'us-east-1' },
+			{ ...source, auth: { ...auth, access_key_id: 'rotated' } },
+			{ ...source, auth: { ...auth, secret_access_key: 'rotated' } },
+			{ ...source, auth: { method: 'ambient' as const } },
+		]) {
+			await adapter.resolve(variant, {
+				probe,
+				federatedCredentials: {
+					accessKeyId: auth.access_key_id,
+					secretAccessKey: auth.secret_access_key,
+					sessionToken: auth.session_token,
+				},
+			});
+		}
+		expect(probe.fetch).toHaveBeenCalledTimes(7);
+	});
+
+	it('evicts tokens at the configured bound', async () => {
+		const probe = makeProbe();
+		const adapter = new AwsCodeArtifactCredentials(2);
+		for (const domain of ['one', 'two', 'one', 'three', 'one', 'two']) {
+			await adapter.resolve({ ...source, domain }, { probe });
+		}
+		expect(probe.fetch).toHaveBeenCalledTimes(4);
+	});
+
+	it('shares a failed mint across concurrent starts and retries afterward', async () => {
+		const probe = makeProbe();
+		const response = Promise.withResolvers<Awaited<ReturnType<IntegrationProbe['fetch']>>>();
+		probe.fetch.mockReturnValueOnce(response.promise);
+		const adapter = new AwsCodeArtifactCredentials();
+		const first = adapter.resolve(source, { probe });
+		const second = adapter.resolve(source, { probe });
+		const results = Promise.allSettled([first, second]);
+		await vi.waitFor(() => expect(probe.fetch).toHaveBeenCalledOnce());
+		response.reject(new Error('aws-secret registry-token'));
+		expect(await results).toEqual([
+			{ status: 'rejected', reason: expect.objectContaining({ message: authenticationError }) },
+			{ status: 'rejected', reason: expect.objectContaining({ message: authenticationError }) },
+		]);
+		await adapter.resolve(source, { probe });
+		expect(probe.fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it.each(['failure', 'success'] as const)(
+		'an evicted mint settling with %s cannot remove or replace its successor',
+		async (outcome) => {
+			const probe = makeProbe();
+			const response = Promise.withResolvers<Awaited<ReturnType<IntegrationProbe['fetch']>>>();
+			probe.fetch.mockReturnValueOnce(response.promise);
+			const adapter = new AwsCodeArtifactCredentials(1);
+			const pending = adapter.resolve(source, { probe });
+			const settled = Promise.allSettled([pending]);
+			await vi.waitFor(() => expect(probe.fetch).toHaveBeenCalledOnce());
+			await adapter.resolve({ ...source, domain: 'other' }, { probe });
+			const replacement = await adapter.resolve(source, { probe });
+			if (outcome === 'failure') response.reject(new Error('failed'));
+			else response.resolve(tokenResponse('old-token'));
+			expect((await settled)[0].status).toBe(outcome === 'failure' ? 'rejected' : 'fulfilled');
+			expect(await adapter.resolve(source, { probe })).toEqual(replacement);
+			expect(probe.fetch).toHaveBeenCalledTimes(3);
+		},
+	);
+
+	it('does not return the old token when refresh fails', async () => {
+		vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00Z'), toFake: ['Date'] });
+		const probe = makeProbe();
+		const adapter = new AwsCodeArtifactCredentials();
+		await adapter.resolve(source, { probe });
+		vi.setSystemTime(new Date('2026-01-01T02:00:00.001Z'));
+		probe.fetch.mockRejectedValueOnce(new Error('failed refresh'));
+		await expect(adapter.resolve(source, { probe })).rejects.toThrow(authenticationError);
+		await adapter.resolve(source, { probe });
+		expect(probe.fetch).toHaveBeenCalledTimes(3);
+	});
+
+	it.each(['short-lived', 'malformed'] as const)(
+		'does not reuse a %s mint result',
+		async (kind) => {
+			const probe = makeProbe();
+			probe.fetch.mockResolvedValueOnce(
+				tokenResponse(kind === 'malformed' ? '' : 'short-token', 3600),
+			);
+			const adapter = new AwsCodeArtifactCredentials();
+			const first = adapter.resolve(source, { probe });
+			if (kind === 'malformed') await expect(first).rejects.toThrow(authenticationError);
+			else expect((await first).password).toBe('short-token');
+			expect((await adapter.resolve(source, { probe })).password).toBe('registry-token');
+			expect(probe.fetch).toHaveBeenCalledTimes(2);
+		},
+	);
+
+	it('keeps caller cancellation separate from a concurrent shared mint', async () => {
+		const probe = makeProbe();
+		const sharedResponse = Promise.withResolvers<Awaited<ReturnType<IntegrationProbe['fetch']>>>();
+		probe.fetch.mockReturnValueOnce(sharedResponse.promise);
+		const adapter = new AwsCodeArtifactCredentials();
+		const shared = adapter.resolve(source, { probe });
+		await vi.waitFor(() => expect(probe.fetch).toHaveBeenCalledOnce());
+		const cancelledStarted = Promise.withResolvers<void>();
+		probe.fetch.mockImplementationOnce(
+			async (_url, init) =>
+				new Promise((_resolve, reject) => {
+					init!.signal!.addEventListener('abort', () => reject(new Error('sensitive')), {
+						once: true,
+					});
+					cancelledStarted.resolve();
+				}),
+		);
+		const caller = new AbortController();
+		const cancelled = adapter.resolve(source, { probe, signal: caller.signal });
+		const failure = expect(cancelled).rejects.toMatchObject({
+			name: 'AbortError',
+			message: 'CodeArtifact authentication cancelled.',
+		});
+		await cancelledStarted.promise;
+		caller.abort();
+		await failure;
+		expect(probe.fetch.mock.calls[0][1]?.signal?.aborted).toBe(false);
+		sharedResponse.resolve(tokenResponse('shared-token'));
+		expect((await shared).password).toBe('shared-token');
+		expect((await adapter.resolve(source, { probe })).password).toBe('shared-token');
+		await expect(
+			adapter.resolve(source, { probe, signal: AbortSignal.abort() }),
+		).rejects.toMatchObject({ name: 'AbortError' });
+		expect(probe.fetch).toHaveBeenCalledTimes(2);
+	});
+
 	it('signs the token request with explicit credentials through the guarded probe', async () => {
 		const probe = makeProbe();
 		const token = await new AwsCodeArtifactCredentials().resolve(source, { probe });
