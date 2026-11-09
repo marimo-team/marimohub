@@ -58,7 +58,7 @@ Ordinary workspaces use bounded file batches. Existing synced archives, snapshot
 
 | Counter            | Meaning                                                                         |
 | ------------------ | ------------------------------------------------------------------------------- |
-| `execs`            | Blocking `exec` calls                                                           |
+| `execs`            | Blocking `exec` and `execInput` calls                                           |
 | `file_writes`      | SDK file writes, including retries                                              |
 | `file_write_waves` | Unary waves or packed batches, including packed retries                         |
 | `env_writes`       | Private environment-file writes                                                 |

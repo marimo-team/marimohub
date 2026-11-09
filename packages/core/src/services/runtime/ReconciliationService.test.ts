@@ -730,7 +730,7 @@ describe('ReconciliationService', () => {
 	});
 
 	it('Rule 2: leaves a fresh starting record alone while its provision is in flight', async () => {
-		// The saga writes the record before creating the sandbox, so a fresh
+		// The record is published while the cold boot is still in flight, so a fresh
 		// `starting` record with no live sandbox is a provision, not a corpse.
 		const session = await createSession(goneId);
 		compute.active = [];
@@ -862,7 +862,7 @@ describe('ReconciliationService', () => {
 	});
 
 	it('Rule 3: applies the grace window to an orphan with no createdAt', async () => {
-		// Provisioning writes the record before creating the sandbox, so a brand-new
+		// A cold boot starts before its session record is published, so a brand-new
 		// sandbox the provider has not yet timestamped is an in-flight provision, not
 		// a leak. With unknown age we cannot prove it is older than the grace window,
 		// so it must be left alone — not reaped on sight.

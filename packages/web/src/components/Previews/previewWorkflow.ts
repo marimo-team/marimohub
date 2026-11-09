@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   preview:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: marimo-team/marimohub/actions/preview@${PREVIEW_ACTION_REF} # preview Action

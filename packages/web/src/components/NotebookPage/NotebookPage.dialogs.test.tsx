@@ -4,9 +4,12 @@ import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { makeFetch, renderPage } from './NotebookPage.testWorld';
 
-vi.mock('@/components/Notebook/RenameNotebookDialog', () => {
-	throw new TypeError('Failed to fetch dynamically imported module');
-});
+// Vitest wraps errors thrown by a mock factory, so throw from the export read to reach lazyDialog unwrapped.
+vi.mock('@/components/Notebook/RenameNotebookDialog', () => ({
+	get RenameNotebookDialog() {
+		throw new TypeError('Failed to fetch dynamically imported module');
+	},
+}));
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -19,7 +22,12 @@ it('keeps the kernel iframe mounted when a dialog chunk fails to load', async ()
 	const iframe = await screen.findByTitle('Forecast');
 	await user.click(screen.getByRole('button', { name: 'Forecast — notebook menu' }));
 	await user.click(screen.getByRole('menuitem', { name: 'Rename notebook…' }));
-	await waitFor(() => expect(errorToast).toHaveBeenCalledWith('Unable to open dialog.', undefined));
+	await waitFor(() =>
+		expect(errorToast).toHaveBeenCalledWith(
+			'Unable to open dialog.',
+			expect.objectContaining({ action: expect.objectContaining({ label: 'Reload page' }) }),
+		),
+	);
 	expect(screen.getByTitle('Forecast')).toBe(iframe);
 	expect(screen.queryByRole('dialog', { name: 'Rename Notebook' })).not.toBeInTheDocument();
 });

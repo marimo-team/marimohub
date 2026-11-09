@@ -11,11 +11,11 @@
  * single filesystem).
  *
  * ETags use device, inode, size, and nanosecond mtime, so they survive restarts (the catalog
- * compare-and-swap depends on that). An overwrite always gets a later mtime than the version it
- * replaces, so a reused inode cannot repeat an ETag. `onlyIfNotExists` (hard link) is atomic
- * even across processes; `onlyIfEtagMatches` is only atomic within one process,
- * advertised via `casScope: 'process'` and surfaced by preflight as a startup
- * warning — never point two hub replicas at the same root.
+ * compare-and-swap depends on that). Every write stamps an mtime later than the version it
+ * replaces and than every earlier write in this process, so a reused inode cannot repeat an ETag.
+ * `onlyIfNotExists` (hard link) is atomic even across processes; `onlyIfEtagMatches` is only
+ * atomic within one process, advertised via `casScope: 'process'` and surfaced by preflight as a
+ * startup warning — never point two hub replicas at the same root.
  *
  * `httpMetadata`/`customMetadata` are accepted and ignored. A key cannot be
  * both an object and a prefix of another
@@ -83,19 +83,52 @@ async function lstatIfPresent(filePath: string): Promise<BigIntStats | null> {
 	}
 }
 
+/** Highest mtime stamped by this process; see `stampMtime`. */
+let lastIssuedMtimeNs = 0n;
+
+const MTIME_STEP_NS = 1_000n;
+/** Doubling from 1 µs, this covers filesystems with timestamp granularity up to about an hour. */
+const MAX_MTIME_ATTEMPTS = 32;
+
+function wallClockNs(): bigint {
+	return BigInt(Math.floor((performance.timeOrigin + performance.now()) * 1000)) * 1000n;
+}
+
 /**
- * The rename can reuse the inode freed by an earlier version within one coarse mtime tick, so
- * a same-size write could repeat an old ETag and pass a stale CAS. Each version must postdate
- * the one it replaces. The 1 µs step exceeds the float error of `utimes` seconds.
+ * A new file can reuse the inode freed by an earlier version of the same key (overwritten or
+ * deleted) within one coarse kernel mtime tick, so a same-size write could repeat an old ETag and
+ * pass a stale CAS. The staged file therefore gets an explicit mtime later than the version it
+ * replaces and than every mtime this process issued before. `utimes` takes float seconds and the
+ * filesystem may quantize further, so re-stat and step forward until the mtime really advanced.
+ * Residual: two processes recreating one key with the same reused inode and size in the same
+ * microsecond can still collide.
  */
-async function advanceMtime(
+async function stampMtime(
 	tmp: string,
 	staged: BigIntStats,
-	previous: BigIntStats,
+	previousMtimeNs?: bigint,
 ): Promise<BigIntStats> {
-	if (staged.mtimeNs > previous.mtimeNs) return staged;
-	await fsp.utimes(tmp, staged.atime, Number(previous.mtimeNs + 1_000n) / 1e9);
-	return fsp.stat(tmp, { bigint: true });
+	const floor =
+		previousMtimeNs !== undefined && previousMtimeNs > lastIssuedMtimeNs
+			? previousMtimeNs
+			: lastIssuedMtimeNs;
+	const wall = wallClockNs();
+	let target = wall > floor + MTIME_STEP_NS ? wall : floor + MTIME_STEP_NS;
+	// Reserve before awaiting so concurrent writes to other keys stay strictly ordered.
+	lastIssuedMtimeNs = target;
+	let step = MTIME_STEP_NS;
+	for (let attempt = 0; attempt < MAX_MTIME_ATTEMPTS; attempt++) {
+		await fsp.utimes(tmp, staged.atime, Number(target) / 1e9);
+		const stat = await fsp.stat(tmp, { bigint: true });
+		if (stat.mtimeNs > floor) {
+			if (stat.mtimeNs > lastIssuedMtimeNs) lastIssuedMtimeNs = stat.mtimeNs;
+			return stat;
+		}
+		target += step;
+		step *= 2n;
+		if (target > lastIssuedMtimeNs) lastIssuedMtimeNs = target;
+	}
+	throw new Error('Filesystem storage could not advance a staged file mtime past its predecessor');
 }
 
 function assertValidKey(key: string): void {
@@ -279,10 +312,12 @@ export class FsStorage implements Bucket {
 				} finally {
 					await handle.close();
 				}
-				// rename/link preserve mtime, so stat the staged file for `uploaded`.
-				let stat = await fsp.stat(tmp, { bigint: true });
+				// rename/link preserve mtime, so the stamped stat is the published one.
+				const staged = await fsp.stat(tmp, { bigint: true });
+				let stat: BigIntStats;
 				await fsp.mkdir(path.dirname(filePath), { recursive: true });
 				if (options?.onlyIfNotExists) {
+					stat = await stampMtime(tmp, staged);
 					try {
 						await fsp.link(tmp, filePath);
 					} catch (err) {
@@ -302,7 +337,7 @@ export class FsStorage implements Bucket {
 					) {
 						throw new PreconditionFailedError(`ETag mismatch for key "${key}"`);
 					}
-					if (previous) stat = await advanceMtime(tmp, stat, previous);
+					stat = await stampMtime(tmp, staged, previous?.mtimeNs);
 					await fsp.rename(tmp, filePath);
 				}
 				return { key, etag: statEtag(stat), size, uploaded: stat.mtime };

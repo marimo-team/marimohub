@@ -39,7 +39,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   preview:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: marimo-team/marimohub/actions/preview@a3dd178fde69fe04611882c0c5b2c753e2125cd1 # preview Action
@@ -55,7 +55,7 @@ jobs:
 ```
 
 The workflow grants `actions: read` for run metadata and `pull-requests: write` for the PR comment.
-It supports same-repository PRs, including drafts, and skips forks.
+It supports same-repository PRs, including drafts, and skips forks and Dependabot runs.
 If `hub-token` is empty, the Action writes a note to the workflow summary and skips the PR.
 GitHub gives no Actions secrets to Dependabot `pull_request` runs, so the Action skips Dependabot PRs.
 All workflows that update the shared comment must use this same PR concurrency group.

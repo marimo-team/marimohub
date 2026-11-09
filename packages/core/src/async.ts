@@ -1,3 +1,4 @@
+import { errorFromAbortReason } from './internal/abort';
 import { assertPositiveInteger } from './internal/validation';
 
 export { PromiseMemo } from './cache';
@@ -89,11 +90,6 @@ function callErrorFactory(factory: () => Error): Error {
 	} catch (error) {
 		return error instanceof Error ? error : new Error(String(error));
 	}
-}
-
-export function errorFromAbortReason(reason: unknown): Error {
-	if (reason instanceof Error) return reason;
-	return new DOMException('The operation was aborted.', 'AbortError');
 }
 
 /**

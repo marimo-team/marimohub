@@ -943,6 +943,7 @@ describe('CoreWeaveCompute', () => {
 					).rejects.toBe(error);
 					await vi.runAllTimersAsync();
 					await rejected;
+					expect(error).toHaveProperty('retryable', false);
 					expect(attempts).toHaveLength(4 * limit);
 					for (let i = 0; i < limit; i++) {
 						expect(attempts.filter((attempt) => attempt === `/w/${i}`)).toHaveLength(4);
@@ -1031,16 +1032,21 @@ describe('CoreWeaveCompute', () => {
 		it('retries a write the gateway answers with UNAVAILABLE', async () => {
 			vi.useFakeTimers();
 			try {
-				let failures = 2;
+				const errors: CWSandboxUnavailableError[] = [];
 				const world = makeWorld({
 					writeImpl: async () => {
-						if (failures-- > 0) throw new CWSandboxUnavailableError('W&B server error: 503');
+						if (errors.length < 2) {
+							const error = new CWSandboxUnavailableError('W&B server error: 503');
+							errors.push(error);
+							throw error;
+						}
 					},
 				});
 				const inst = makeCompute(world).create(SANDBOX_ID, { reuse: false });
 				const write = inst.writeFiles([{ path: '/tmp/token', content: 'x' }]);
 				await vi.runAllTimersAsync();
 				await write;
+				for (const error of errors) expect(error).not.toHaveProperty('retryable');
 				expect([...world.registry.values()][0].fake.batchWrites).toEqual([
 					[{ path: '/tmp/token', content: 'x' }],
 				]);
@@ -1222,11 +1228,13 @@ describe('CoreWeaveCompute', () => {
 				await instance.ready!();
 				const alias = compute.connectExisting(SANDBOX_ID);
 				let rejected = false;
-				const retry = expect(instance.writeFiles([{ path: '/retry', content: 'x' }]))
-					.rejects.toMatchObject({ message: 'File write retry budget expired', retryable: false })
-					.then(() => {
+				const retry = instance.writeFiles([{ path: '/retry', content: 'x' }]).then(
+					() => {},
+					(error: unknown) => {
 						rejected = true;
-					});
+						return error;
+					},
+				);
 				await vi.advanceTimersByTimeAsync(0);
 				const blockers = Array.from({ length: 4 }, (_, i) =>
 					alias.writeFiles([{ path: `/blocker/${i}`, content: 'x' }]),
@@ -1243,7 +1251,9 @@ describe('CoreWeaveCompute', () => {
 					})),
 				);
 				await vi.runAllTimersAsync();
-				await Promise.all([retry, ...blockers, following]);
+				const [retryError] = await Promise.all([retry, ...blockers, following]);
+				expect(retryError).toBeInstanceOf(CWSandboxTimeoutError);
+				expect(retryError).toHaveProperty('retryable', false);
 				expect(retryAttempts).toBe(1);
 				expect(peak).toBe(2);
 				expect(active).toBe(0);
@@ -2947,16 +2957,18 @@ it('stops packed batches after a failed stream and can resend the full transfer'
 it('retries an unavailable packed stream with identical bytes', async () => {
 	vi.useFakeTimers();
 	try {
+		const unavailable = new CWSandboxUnavailableError('unavailable');
 		let failures = 1;
 		const world = makeWorld({
 			inputImpl: async () => {
-				if (failures-- > 0) throw new CWSandboxUnavailableError('unavailable');
+				if (failures-- > 0) throw unavailable;
 			},
 		});
 		const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
 		const writing = instance.writeFiles(packedFiles());
 		await vi.runAllTimersAsync();
 		await writing;
+		expect(unavailable).not.toHaveProperty('retryable');
 		const fake = world.registry.get('cw-1')!.fake;
 		expect(fake.stdinWrites).toHaveLength(2);
 		expect(fake.stdinWrites[0]).toEqual(fake.stdinWrites[1]);
@@ -3229,6 +3241,7 @@ it('stops after the packed retry budget is exhausted', async () => {
 		const rejected = expect(instance.writeFiles(packedFiles(129))).rejects.toBe(unavailable);
 		await vi.runAllTimersAsync();
 		await rejected;
+		expect(unavailable).toHaveProperty('retryable', false);
 		const writes = world.registry.get('cw-1')!.fake.stdinWrites;
 		expect(writes).toHaveLength(4);
 		for (const bytes of writes)

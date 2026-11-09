@@ -195,6 +195,10 @@ export async function runPreview({
 	// GitHub gives Dependabot pull_request runs no Actions secrets; a red check would block every such PR.
 	if (!input('hub-token').trim()) {
 		await summary('PR previews are skipped because hub-token is empty.\n');
+		// A summary alone hides a misnamed secret behind a green check.
+		warning(
+			'PR previews are skipped because hub-token is empty. Check the secret name if this is not a Dependabot PR.',
+		);
 		return;
 	}
 	const config = configuration(input);

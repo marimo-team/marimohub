@@ -36,7 +36,7 @@ const resolve = createRoute({
 				data: z
 					.strictObject({ ...LinkSchema.shape, app: AppSummarySchema })
 					.describe(
-						'The app link. `app` is the app summary for the link target. The server authorizes it like GET /projects/{pid}/notebooks/{nid}/app.',
+						'The app link. `app` is the app summary for the link target. App users and callers whose token grants `app.read` need `app.read` on the project and notebook; other callers need `project.read`.',
 					),
 			}),
 			'Authorized app link',

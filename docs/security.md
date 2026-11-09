@@ -136,8 +136,8 @@ command. The marimo image must support this variable.
 support, and no marimo release includes it yet. Marimo versions without the
 support ignore the variable. After you update the image, restart existing sessions.
 
-Marimo sets `HttpOnly; SameSite=None; Secure; Partitioned`. To authenticate in a
-separate kernel tab, open the URL with its access token. TLS proxies must preserve
+With an HTTPS kernel URL, marimo sets `HttpOnly; SameSite=None; Secure; Partitioned`.
+To authenticate in a separate kernel tab, open the URL with its access token. TLS proxies must preserve
 the public kernel `Host`, including the port. Before marimo starts, the Hub reserves
 the public URL and passes its exact origin through `--allow-origins`. Proxy sessions
 use the Hub origin instead. Tunnel readiness checks run after the kernel starts.
@@ -443,8 +443,9 @@ Configuring the [GitHub App](configuration.md#github-app) enables previews.
   notebook's repository resolves the SHA, so review the commit before you pin it.
 - With pull request tracking, preparation fails if the PR's head branch is not in
   the notebook's repository. Fork PRs are not supported.
-- With [PR automation](notebook-previews.md#automatic-pr-previews), every
-  same-repository PR runs with the notebook's credentials.
+- With [PR automation](notebook-previews.md#automatic-pr-previews), same-repository
+  PRs run with the notebook's credentials. The Action skips a run with an empty
+  `hub-token`. The generated workflow also skips Dependabot PRs.
 - Any repository writer can edit the workflow in a PR and read `MARIMOHUB_TOKEN`.
   Limit the [API token](api-tokens.md) to `preview.manage` on the previewed
   projects. Store it as a protected secret, for example in a GitHub environment

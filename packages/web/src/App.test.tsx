@@ -319,3 +319,32 @@ describe('App routes', () => {
 		expect(window.location.pathname).toBe('/admin/debug');
 	});
 });
+
+// Last: resetModules makes later lazy chunks resolve against a fresh registry, splitting contexts.
+describe('App module load', () => {
+	it('skips the layout chunk on a full-screen route', async () => {
+		loadedChunks.length = 0;
+		installMatchMedia(false);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = String(input);
+				if (url === '/api/v1/me')
+					return jsonOk({
+						id: 'user-one',
+						email: 'user@example.com',
+						logout_url: null,
+						is_super_admin: false,
+						groups: [],
+					});
+				throw new Error(`unexpected fetch: ${url}`);
+			}),
+		);
+		window.history.replaceState({}, '', '/cli/login');
+		vi.resetModules();
+		const { default: FreshApp } = await import('./App');
+		renderWithClient(<FreshApp />, { toaster: false });
+		expect(await screen.findByRole('heading', { name: 'Invalid CLI login request' })).toBeVisible();
+		expect(loadedChunks).toEqual([]);
+	});
+});

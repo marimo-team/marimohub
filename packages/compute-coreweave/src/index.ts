@@ -210,17 +210,27 @@ function fileWriteRetryDelay(error: unknown, attempt: number): number | undefine
 	return Math.max(WRITE_RETRY_DELAYS_MS[attempt], Math.ceil(suggested));
 }
 
+// The budget already covers retries; `retryable: false` stops core from spending it again.
+function markRetryBudgetSpent<E extends Error>(error: E): E & { retryable: false } {
+	return Object.assign(error, { retryable: false as const });
+}
+
 function fileWriteTimeout(sandboxId: string, filepath: string, cause?: unknown) {
-	// The budget already covers retries; `retryable: false` stops core from spending it again.
-	return Object.assign(
+	return markRetryBudgetSpent(
 		new CWSandboxTimeoutError('File write retry budget expired', {
 			operation: 'Write sandbox file',
 			sandboxId,
 			filepath,
 			cause,
 		}),
-		{ retryable: false },
 	);
+}
+
+function exhaustedFileWriteError(error: unknown): unknown {
+	return error instanceof CWSandboxUnavailableError ||
+		error instanceof CWSandboxResourceExhaustedError
+		? markRetryBudgetSpent(error)
+		: error;
 }
 
 /**
@@ -1107,7 +1117,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 							break;
 						} catch (error) {
 							const delay = fileWriteRetryDelay(error, attempt);
-							if (delay === undefined) throw error;
+							if (delay === undefined) throw exhaustedFileWriteError(error);
 							await sleep(delay);
 						}
 					}
@@ -1238,7 +1248,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 						if (delay === undefined) {
 							// Fence queued uploads before releasing this slot to another waiter.
 							batchState.failed = true;
-							throw error;
+							throw exhaustedFileWriteError(error);
 						}
 						if (delay >= deadline - Date.now()) {
 							batchState.failed = true;

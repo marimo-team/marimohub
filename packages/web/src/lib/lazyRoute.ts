@@ -39,7 +39,12 @@ export function lazyRoute<Props extends object>(
 	load: () => Promise<{ default: FunctionComponent<Props> }>,
 ) {
 	let pending: ReturnType<typeof load> | undefined;
-	const loadOnce = () => (pending ??= load());
+	const loadOnce = () =>
+		(pending ??= load().catch((error: unknown) => {
+			// Drop a rejected import so the render retries a transient failure instead of replaying it.
+			pending = undefined;
+			throw error;
+		}));
 	return Object.assign(
 		lazy(() => loadRoute(loadOnce)),
 		{

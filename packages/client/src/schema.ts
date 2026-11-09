@@ -13573,7 +13573,7 @@ export interface operations {
 					'application/json': {
 						/** @enum {boolean} */
 						success: true;
-						/** @description The app link. `app` is the app summary for the link target. The server authorizes it like GET /projects/{pid}/notebooks/{nid}/app. */
+						/** @description The app link. `app` is the app summary for the link target. App users and callers whose token grants `app.read` need `app.read` on the project and notebook; other callers need `project.read`. */
 						data: {
 							/** @enum {number} */
 							schema_version: 1;

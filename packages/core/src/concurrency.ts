@@ -1,4 +1,4 @@
-import { errorFromAbortReason } from './async';
+import { errorFromAbortReason } from './internal/abort';
 import { assertPositiveInteger } from './internal/validation';
 
 /**

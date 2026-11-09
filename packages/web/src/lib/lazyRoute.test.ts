@@ -61,6 +61,21 @@ describe('route chunk preload', () => {
 		expect(load).toHaveBeenCalledTimes(1);
 	});
 
+	it('retries the import on render after a failed preload', async () => {
+		const load = vi
+			.fn()
+			.mockRejectedValueOnce(new TypeError('Failed to fetch dynamically imported module'))
+			.mockResolvedValue({ default: () => createElement('p', null, 'Route ready') });
+		const Route = lazyRoute(load);
+		Route.preload();
+		await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+		await Promise.resolve();
+		render(createElement(Suspense, { fallback: null }, createElement(Route)));
+		expect(await screen.findByText('Route ready')).toBeVisible();
+		expect(load).toHaveBeenCalledTimes(2);
+		expect(sessionStorage.getItem('marimohub:chunk-reload')).toBeNull();
+	});
+
 	it('leaves chunk recovery of a failed preload to the render', async () => {
 		const load = vi
 			.fn()

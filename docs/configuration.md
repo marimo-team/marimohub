@@ -347,7 +347,7 @@ How running kernels are surfaced to the browser, agnostic of the compute backend
 
 `MARIMOHUB_SANDBOX_EXPOSURE=subdomain`
 
-Uses the public kernel URL directly. Set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` to a sibling subdomain or separate domain.
+Uses the public kernel URL directly. This mode reads `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` from the shared Compute settings. Set that variable to a sibling subdomain or separate domain.
 
 _No environment variables to set here._
 

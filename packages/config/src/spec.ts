@@ -1258,7 +1258,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				name: 'Subdomain (direct, isolated domain)',
 				selectorValue: 'subdomain',
 				description:
-					'Uses the public kernel URL directly. Set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` to a sibling subdomain or separate domain.',
+					'Uses the public kernel URL directly. This mode reads `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` from the shared Compute settings. Set that variable to a sibling subdomain or separate domain.',
 				vars: [],
 			},
 			{

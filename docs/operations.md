@@ -116,7 +116,8 @@ With the defaults, this is 50 seconds for API replicas and 140 seconds for maint
 | systemd           | `TimeoutStopSec` (90 s)                                              | Set `TimeoutStopSec=140` on a maintenance unit, or lower the budget.                                     |
 
 With Helm, set the maintenance budget through `maintenance.shutdownTimeoutSeconds`.
-The chart rejects `MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` in `extraEnv`, `config`, and `secrets`.
+The chart rejects `MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` in `extraEnv`, `config`, and `secrets.data`.
+Helm cannot read the Secret that `secrets.existingSecret` names, so do not put the variable there.
 This keeps each drain budget within its pod termination grace.
 
 ## Session stop and recovery

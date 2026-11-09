@@ -6,7 +6,7 @@ Managers and admins can create and delete previews. Sharing a URL does not grant
 ::: warning Previews run branch code with the notebook's credentials
 A preview runs the code at the chosen branch or commit with the parent notebook's integrations and secrets.
 Anyone who can push to a previewed branch can supply code that uses these credentials.
-PR automation previews every same-repository PR branch.
+PR automation previews same-repository PR branches, except Dependabot PRs and runs with an empty `hub-token`.
 Protect previewed branches, or pin a reviewed commit. See [Security model → Previews](security.md#previews).
 :::
 

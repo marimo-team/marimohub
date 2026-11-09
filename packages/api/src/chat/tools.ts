@@ -261,18 +261,22 @@ export async function openToolSession(
 					const callDeps = withRequestMemo(deps);
 					await assertChatPrincipalCurrent(callDeps, principal, signal);
 					await loadVisibleProject(callDeps.services.projects, project.id, principal, callDeps);
+					let connection: Awaited<ReturnType<typeof connect>>;
+					try {
+						connection = await connect(callDeps);
+					} catch (error) {
+						if (signal.aborted) throw error;
+						// Nothing was sent to the server, so the call is known not to have run.
+						await complete('The tool server could not be started.', 'known');
+						throw new Error('TOOL_FAILED: The tool could not start. Nothing changed.');
+					}
 					let reply: Awaited<ReturnType<Client['callTool']>>;
 					try {
-						const { client, disconnect } = await connect(callDeps);
-						try {
-							reply = await client.callTool(
-								{ name: definition.name, arguments: scoped },
-								undefined,
-								{ signal, timeout: timeoutMs },
-							);
-						} finally {
-							await disconnect();
-						}
+						reply = await connection.client.callTool(
+							{ name: definition.name, arguments: scoped },
+							undefined,
+							{ signal, timeout: timeoutMs },
+						);
 					} catch (error) {
 						if (signal.aborted) throw error;
 						// The call may have reached the server; only the server's answer is known.
@@ -283,6 +287,9 @@ export async function openToolSession(
 						throw new Error(
 							'TOOL_FAILED: The tool did not return a result. Inspect the resource before retrying.',
 						);
+					} finally {
+						// The outcome is already settled; a failed teardown must not replace it.
+						await connection.disconnect().catch(() => {});
 					}
 					const content = z.array(z.looseObject({ type: z.string() })).parse(reply.content ?? []);
 					const structured = z.record(z.string(), z.unknown()).safeParse(reply.structuredContent);

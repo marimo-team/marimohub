@@ -136,7 +136,7 @@ describe.skipIf(spawnSync('sh', ['-c', 'python3 -V']).status !== 0)('file batch 
 		for (const file of files) {
 			const expected =
 				typeof file.content === 'string' ? new TextEncoder().encode(file.content) : file.content;
-			expect(readFileSync(resolve(directory, file.path)).equals(expected)).toBe(true);
+			expect(readFileSync(resolve(directory, file.path)).equals(expected), file.path).toBe(true);
 		}
 		expect(existsSync(join(directory, 'injected'))).toBe(false);
 	});
@@ -230,7 +230,7 @@ describe.skipIf(spawnSync('sh', ['-c', 'python3 -V']).status !== 0)('file batch 
 		const retried = receive(input);
 		expect(retried.status).toBe(0);
 		expect(readFileSync(first.path, 'utf8')).toBe(first.content);
-		expect(readFileSync(last.path).equals(last.content)).toBe(true);
+		expect(readFileSync(last.path).equals(last.content), last.path).toBe(true);
 	}, 25_000);
 
 	it('propagates filesystem failures', () => {
