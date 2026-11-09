@@ -1,3 +1,6 @@
+import type { NotebookBridgeRuntime } from '../../ports/notebookBridge';
+import { notebookBridgePaths } from './notebookBridgePaths';
+import { shellQuote } from './shell';
 import { withDeadline } from '../../async';
 import { mapWithConcurrency } from '../../concurrency';
 import { ConflictError, NotFoundError } from '../../errors';
@@ -83,6 +86,7 @@ export class WarmPoolService {
 		private readonly metrics: Metrics = noopMetrics,
 		private readonly now: () => number = Date.now,
 		private readonly appPools?: Pick<AppPoolStore, 'read'>,
+		private readonly notebookBridge?: NotebookBridgeRuntime,
 	) {}
 
 	async claim(request: ClaimRequest): Promise<WarmPoolClaim | undefined> {
@@ -350,6 +354,26 @@ export class WarmPoolService {
 				try {
 					await instance.ready?.();
 					await this.probeCommand(instance);
+					if (this.notebookBridge) {
+						const { directory, launcher } = notebookBridgePaths(
+							member.sandbox_id,
+							this.notebookBridge.launcher,
+						);
+						try {
+							await instance.writeFiles(
+								this.notebookBridge.files.map(({ name, content }) => ({
+									path: `${directory}/${name}`,
+									content,
+								})),
+							);
+							await instance.exec(`python ${shellQuote(launcher)} --install-only`, {
+								timeout: 10_000,
+								maxOutputBytes: 4096,
+							});
+						} catch {
+							// The kernel launcher retries optional bridge installation.
+						}
+					}
 				} finally {
 					// A provider create may finish after our local deadline; reclaim its late result.
 					if (abandoned)

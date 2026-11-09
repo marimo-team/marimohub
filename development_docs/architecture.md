@@ -215,6 +215,14 @@ A new compute backend only has to satisfy the `SandboxProvider` /
 unchanged whether the kernel runs in a Cloudflare Container, a Modal sandbox, or
 a local host subprocess.
 
+With `supportsLaunchSetupOutput`, the provisioner combines file transfers and runs setup inside the launch supervisor.
+It requires separate setup stdout and stderr. CoreWeave supports this capability.
+Other adapters retain standalone setup, and headless `prepare()` completes setup before it returns.
+
+`execInput` sends internal requests through stdin without session environment injection.
+Without `execInput`, agent requests use temporary files. Combined launch includes requests in the shared file transfer.
+`prepareExposure` starts routing publication before the kernel opens its port. `exposePort` awaits the same publication.
+
 **Editor sessions.** `MARIMOHUB_EDITOR_SANDBOX_SHARING` selects shared or
 exclusive access to one persistent sandbox per notebook. In exclusive mode,
 other editors can start a temporary sandbox or confirm a takeover. A CAS claim

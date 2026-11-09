@@ -1487,3 +1487,27 @@ describe('warm pool failure boundaries', () => {
 		expect(w.destroyed).toEqual([claim.member.sandbox_id, claim.member.sandbox_id]);
 	});
 });
+
+it('preinstalls the bridge before publishing a warm member', async () => {
+	const w = setup();
+	const created = w.compute.create.bind(w.compute);
+	const writes = vi.fn(async () => {});
+	const exec = vi.fn(async (_command: string) => execResult(true, '', ''));
+	w.compute.create = (id, options) => ({ ...created(id, options), writeFiles: writes, exec });
+	const service = new WarmPoolService(
+		w.service.store,
+		w.compute,
+		w.sessions,
+		w.config,
+		undefined,
+		undefined,
+		undefined,
+		{ launcher: 'bridge.py', files: [{ name: 'bridge.py', content: 'launcher' }] },
+	);
+	await service.sweep();
+	expect(writes).toHaveBeenCalledOnce();
+	expect(exec.mock.calls.some(([command]) => String(command).includes('--install-only'))).toBe(
+		true,
+	);
+	expect((await w.members())[0].state).toBe('ready');
+});

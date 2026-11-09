@@ -137,6 +137,14 @@ function instrumentSandbox(sandbox: CoreWeaveSandbox, endpoint: Attributes): Cor
 				),
 		},
 		files: {
+			...(sandbox.files.writeStream
+				? {
+						writeStream: (path: string, source: Uint8Array, options?: { timeoutMs?: number }) =>
+							opRequest(op('writeFileStream'), attributes, () =>
+								sandbox.files.writeStream!(path, source, options),
+							),
+					}
+				: {}),
 			readText: (path) => opRequest(op('readFile'), attributes, () => sandbox.files.readText(path)),
 			write: (files, options) =>
 				opRequest(op('writeFiles'), attributes, () => sandbox.files.write(files, options)),

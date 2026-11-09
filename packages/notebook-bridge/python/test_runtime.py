@@ -114,6 +114,12 @@ class LauncherTests(unittest.TestCase):
         self.cli.assert_called_once_with()
         self.assertEqual(json.loads(output.getvalue()), {'event': 'notebook_bridge_unavailable', 'reason': 'install_failed'})
 
+    def test_install_only_does_not_start_marimo(self):
+        with patch.object(sys, 'argv', ['launcher.py', '--install-only']), patch.object(launcher, 'install') as install:
+            launcher.main()
+            install.assert_called_once_with()
+        self.cli.assert_not_called()
+
     def test_offline_install_targets_actual_interpreter(self):
         with patch.object(launcher.importlib.resources, 'files', side_effect=ModuleNotFoundError), patch.object(launcher.subprocess, 'run') as run, patch.object(sys, 'executable', '/custom/python'):
             launcher.install()

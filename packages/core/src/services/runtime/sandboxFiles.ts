@@ -1,3 +1,5 @@
+import { Zip, ZipPassThrough } from 'fflate';
+import { restorePackedWorkspaceBytes } from './packedWorkspaceRestore';
 import {
 	WORKSPACE_LIMITS,
 	validateWorkspaceLimits,
@@ -196,6 +198,8 @@ export async function loadWorkspaceOverlay(
 }
 
 export interface WorkspaceRestoreOptions {
+	/** Fresh workspaces only; extraction rejects a nonempty destination. */
+	packLargeWorkspace?: boolean;
 	limits?: WorkspaceLimits;
 	/** Replaces matching workspace files in the first write batch. */
 	overlay?: WorkspaceOverlay;
@@ -354,6 +358,50 @@ export async function restoreWorkspace(
 		loaded.catch(() => {});
 		return { loaded, reservation };
 	};
+	if (
+		options.packLargeWorkspace &&
+		wanted.length + overlayFiles.length > 256 &&
+		workingDir !== '/'
+	) {
+		await options.waitUntilReady?.();
+		ready = true;
+		const chunks: Uint8Array[] = [];
+		let archiveBytes = 0;
+		const archive = new Zip((error, chunk) => {
+			if (error) throw error;
+			archiveBytes += chunk.byteLength;
+			if (archiveBytes > 256 * 1024 * 1024)
+				throw new Error('Packed workspace archive exceeds the transport limit');
+			chunks.push(chunk);
+		});
+		const add = (file: { path: string; content: Uint8Array }) => {
+			const entry = new ZipPassThrough(file.path.slice(workingDir.length + 1));
+			archive.add(entry);
+			entry.push(file.content, true);
+			objectCount++;
+			bytes += file.content.byteLength;
+		};
+		for (const file of overlayFiles) add(file);
+		for (const batch of batches) {
+			for (const file of await fetchBatch(batch)) if (file) add(file);
+		}
+		archive.end();
+		const packed = new Uint8Array(archiveBytes);
+		let offset = 0;
+		for (const chunk of chunks) {
+			packed.set(chunk, offset);
+			offset += chunk.byteLength;
+		}
+		chunks.length = 0;
+		const restored = await restorePackedWorkspaceBytes(sandbox, packed, workingDir);
+		if (restored.status === 'restored') {
+			await createSandboxDirectories(sandbox, directories);
+			return { objectCount, bytes };
+		}
+		// Custom images can ship workspace files; retain the ordinary overwrite semantics there.
+		objectCount = 0;
+		bytes = 0;
+	}
 	let pending: ReturnType<typeof startBatch>;
 	try {
 		for (let index = 0; index < batches.length; index++) {

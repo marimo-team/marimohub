@@ -652,7 +652,8 @@ describe('SandboxProvisioner', () => {
 			}),
 			new SandboxProvisioner(fakeComputeFrom(baseline.instance)).provision(options),
 		]);
-		expect(calls.exec).toEqual(baseline.calls.exec);
+		expect(calls.exec).toHaveLength(baseline.calls.exec.length);
+		expect(calls.exec.at(-1)).toContain('--install-only');
 		expect(calls.writeFiles).toEqual(baseline.calls.writeFiles);
 		expect(calls.setEnvVars).toHaveLength(baseline.calls.setEnvVars.length);
 		expect(calls.startProcess).toHaveLength(baseline.calls.startProcess.length);
@@ -4740,4 +4741,252 @@ describe('registry credentials before dependency installation', () => {
 			expect(calls.destroy).toBe(1);
 		},
 	);
+});
+
+describe('combined sandbox preparation', () => {
+	const options = () => ({
+		sandboxId: createSandboxId(),
+		projectId: createProjectId(),
+		notebookId: createNotebookId(),
+		hostname: 'localhost',
+		bucket: bucketConfig,
+		workspaceLoadMode: 'copy-only' as const,
+	});
+
+	it.each([false, true])(
+		'writes workspace, credentials, bridge, and agent request together (prefetch: %s)',
+		async (prefetch) => {
+			const { instance, calls } = makeFakeSandbox();
+			Object.assign(instance, { supportsLaunchSetupOutput: true, supportsBucketMount: false });
+			instance.ready = async () => {};
+			const exposure = vi.fn(async () => {});
+			instance.prepareExposure = exposure;
+			instance.launchProcess = vi.fn(async (command, launch) => ({
+				success: true as const,
+				process: await instance.startProcess(command, launch),
+				timings: { setup: 4, start: 2, waitport: 3 },
+				setupOutput: {
+					stdout: '',
+					stderr:
+						'__MARIMOHUB_SETUP__ step pyproject_layer 1000000\n__MARIMOHUB_SETUP__ complete 5000000\n',
+				},
+			}));
+			const bucketHandle = new MemoryBucket();
+			const input = options();
+			const nb = paths.project(input.projectId).notebook(input.notebookId);
+			await bucketHandle.put(nb.workspaceFile('notebook.py'), 'import marimo');
+			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+			const configured = {
+				...input,
+				bucketHandle,
+				kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
+				sessionEnv: {
+					vars: { TOKEN: 'private-env' },
+					files: [
+						{ path: '/tmp/integration', content: 'private-config' },
+						{
+							path: '.claude/CLAUDE.md',
+							content: 'private-instructions',
+							relativeTo: 'home' as const,
+						},
+					],
+				},
+				notebookBridge: {
+					launcher: 'bridge.py',
+					files: [{ name: 'bridge.py', content: 'bridge-code' }],
+				},
+				bridgeParentOrigin: 'https://hub.example',
+			};
+			const result = await provisioner.provision({
+				...configured,
+				...(prefetch
+					? { workspacePrefetch: provisioner.prefetchWorkspace(instance, configured) }
+					: {}),
+			});
+			expect(calls.writeFiles).toHaveLength(1);
+			const files = calls.writeFiles[0];
+			expect(files).toEqual(
+				expect.arrayContaining([
+					{ path: '/workspace/notebook.py', content: new TextEncoder().encode('import marimo') },
+					{ path: '/tmp/integration', content: 'private-config' },
+					{ path: KERNEL_AUTH_TOKEN_FILE, content: TEST_KERNEL_AUTH_TOKEN },
+					{ path: `/tmp/marimohub-bridge/${input.sandboxId}/bridge.py`, content: 'bridge-code' },
+				]),
+			);
+			expect(files.some((file) => file.path.startsWith('/tmp/.marimohub-agent-context-'))).toBe(
+				true,
+			);
+			expect(calls.exec).toEqual([]);
+			const setup = vi.mocked(instance.launchProcess).mock.calls[0][1].setup!;
+			expect(setup).toContain('uv sync');
+			expect(setup).toContain('agent_context');
+			expect(setup).toContain('--install-only');
+			expect(setup).not.toContain('private-instructions');
+			expect(setup).not.toContain('private-env');
+			expect(exposure).toHaveBeenCalledOnce();
+			expect(result.timings).toMatchObject({
+				setup: 4,
+				setup_pyproject_layer: 4,
+				start: 2,
+				waitport: 3,
+			});
+		},
+	);
+
+	it.each(['setup_exit', 'setup_timeout'] as const)(
+		'preserves setup error classification for %s',
+		async (reason) => {
+			const { instance, calls } = makeFakeSandbox();
+			Object.assign(instance, { supportsLaunchSetupOutput: true });
+			instance.ready = async () => {};
+			instance.launchProcess = async () => ({
+				success: false,
+				reason,
+				stdout: '',
+				stderr: '__MARIMOHUB_SETUP__ step startup_script_2 1000000\nprivate failure',
+				timings: { setup: 10, start: 1, waitport: 0 },
+			});
+			await expect(
+				new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+					...options(),
+					workspaceLoadMode: undefined,
+				}),
+			).rejects.toMatchObject({
+				name: 'PythonEnvironmentSetupError',
+				message: expect.stringContaining(
+					reason === 'setup_exit' ? 'Startup script 2 failed' : 'startup timeout',
+				),
+			});
+			expect(calls.destroy).toBe(1);
+		},
+	);
+
+	it('logs slow setup diagnostics from a successful supervisor result', async () => {
+		const { instance } = makeFakeSandbox();
+		Object.assign(instance, { supportsLaunchSetupOutput: true });
+		instance.ready = async () => {};
+		instance.launchProcess = async (command, launch) => ({
+			success: true,
+			process: await instance.startProcess(command, launch),
+			timings: { setup: 3000, start: 2, waitport: 3 },
+			setupOutput: {
+				stdout: '',
+				stderr:
+					'__MARIMOHUB_SETUP__ step pyproject_layer 1000000000\nresolved dependencies\n__MARIMOHUB_SETUP__ complete 4000000000\n',
+			},
+		});
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...options(),
+				workspaceLoadMode: undefined,
+			});
+			expect(warn.mock.calls.flat().join(' ')).toContain('sandbox_setup_slow');
+			expect(warn.mock.calls.flat().join(' ')).toContain('resolved dependencies');
+		} finally {
+			warn.mockRestore();
+		}
+	});
+});
+
+it('keeps a combined provision usable when the optional bridge upload fails', async () => {
+	const { instance, calls } = makeFakeSandbox();
+	Object.assign(instance, { supportsLaunchSetupOutput: true });
+	instance.ready = async () => {};
+	const writeFiles = instance.writeFiles.bind(instance);
+	instance.writeFiles = async (files) => {
+		if (files.some(({ path }) => path.includes('/marimohub-bridge/')))
+			throw new Error('optional write failed');
+		await writeFiles(files);
+	};
+	instance.launchProcess = async (command, options) => ({
+		success: true,
+		process: await instance.startProcess(command, options),
+		timings: { setup: 0, start: 0, waitport: 0 },
+	});
+	await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+		sandboxId: createSandboxId(),
+		projectId: createProjectId(),
+		notebookId: createNotebookId(),
+		hostname: 'localhost',
+		bucket: bucketConfig,
+		kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
+		notebookBridge: { launcher: 'bridge.py', files: [{ name: 'bridge.py', content: 'optional' }] },
+		bridgeParentOrigin: 'https://hub.test',
+	});
+	expect(calls.startProcess[0].cmd).toContain('marimo --quiet edit');
+	expect(calls.startProcess[0].cmd).not.toContain('bridge.py');
+	expect(calls.writeFiles.flat()).toContainEqual({
+		path: KERNEL_AUTH_TOKEN_FILE,
+		content: TEST_KERNEL_AUTH_TOKEN,
+	});
+});
+
+describe('combined preparation failure cleanup', () => {
+	it.each(['readiness', 'credentials', 'files', 'exposure'] as const)(
+		'settles dependencies and destroys the sandbox after %s fails',
+		async (failure) => {
+			const { instance, calls } = makeFakeSandbox();
+			Object.assign(instance, { supportsLaunchSetupOutput: true, supportsBucketMount: false });
+			const fail = async () => {
+				throw new Error('private-provider-detail');
+			};
+			instance.ready = failure === 'readiness' ? fail : async () => {};
+			instance.prepareExposure = failure === 'exposure' ? fail : async () => {};
+			if (failure === 'credentials') instance.setEnvVars = fail;
+			if (failure === 'files') instance.writeFiles = fail;
+			const launch = vi.fn();
+			instance.launchProcess = launch;
+			const input = {
+				sandboxId: createSandboxId(),
+				projectId: createProjectId(),
+				notebookId: createNotebookId(),
+				hostname: 'localhost',
+				bucket: bucketConfig,
+				bucketHandle: new MemoryBucket(),
+				workspaceLoadMode: 'copy-only' as const,
+				sessionEnv: {
+					vars: { TOKEN: 'private' },
+					files: [{ path: '/tmp/required', content: 'required' }],
+				},
+			};
+			await input.bucketHandle.put(
+				paths.project(input.projectId).notebook(input.notebookId).workspaceFile('notebook.py'),
+				'notebook',
+			);
+			const result = new SandboxProvisioner(fakeComputeFrom(instance)).provision(input);
+			await expect(result).rejects.toBeInstanceOf(UnavailableError);
+			await expect(result).rejects.not.toThrow('private-provider-detail');
+			expect(launch).not.toHaveBeenCalled();
+			expect(calls.destroy).toBe(1);
+		},
+	);
+
+	it('waits for in-flight exposure before destroying a failed provision', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		Object.assign(instance, { supportsLaunchSetupOutput: true });
+		instance.ready = async () => {};
+		const exposure = deferred<void>();
+		const uploading = deferred<void>();
+		instance.prepareExposure = () => exposure.promise;
+		instance.writeFiles = async () => {
+			uploading.resolve();
+			throw new Error('upload failed');
+		};
+		const provision = new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+			sandboxId: createSandboxId(),
+			projectId: createProjectId(),
+			notebookId: createNotebookId(),
+			hostname: 'localhost',
+			bucket: bucketConfig,
+			kernelAuthToken: TEST_KERNEL_AUTH_TOKEN,
+		});
+		const rejection = expect(provision).rejects.toBeInstanceOf(UnavailableError);
+		await uploading.promise;
+		expect(calls.destroy).toBe(0);
+		exposure.resolve();
+		await rejection;
+		expect(calls.destroy).toBe(1);
+		expect(calls.startProcess).toEqual([]);
+	});
 });

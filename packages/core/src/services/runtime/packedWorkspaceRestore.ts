@@ -2,7 +2,7 @@ import type { ByteBudget } from './byteBudget';
 import { MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_FILES } from '../../constants';
 import { isSafeWorkspaceRootPath } from '../../integrations/remoteWorkspace';
 import { MAX_DECOMPRESSED_ARCHIVE_BYTES } from '../../integrations/workspaceArchive';
-import type { Bucket } from '../../ports/bucket';
+import type { Bucket, BucketObjectBody } from '../../ports/bucket';
 import { MAX_GIT_DIRECTORY_BYTES, MAX_GIT_DIRECTORY_FILES } from '../../ports/sourceControl';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { shellQuote } from './shell';
@@ -177,6 +177,44 @@ export async function restorePackedWorkspace(
 	waitUntilReady?: () => Promise<void>,
 	prefetchBudget?: ByteBudget,
 ): Promise<PackedWorkspaceRestoreResult> {
+	return restorePackedSource(
+		sandbox,
+		() => bucket.get(archiveKey),
+		workingDir,
+		requireGit,
+		workspaceSubdirectory,
+		waitUntilReady,
+		prefetchBudget,
+	);
+}
+
+export function restorePackedWorkspaceBytes(
+	sandbox: SandboxInstance,
+	archive: Uint8Array,
+	workingDir: string,
+): Promise<PackedWorkspaceRestoreResult> {
+	return restorePackedSource(
+		sandbox,
+		async () => ({ size: archive.byteLength, bytes: async () => archive }),
+		workingDir,
+		false,
+		'',
+		undefined,
+		undefined,
+		`.marimohub-packed-restore-${crypto.randomUUID()}`,
+	);
+}
+
+async function restorePackedSource(
+	sandbox: SandboxInstance,
+	load: () => Promise<Pick<BucketObjectBody, 'size' | 'bytes'> | null>,
+	workingDir: string,
+	requireGit: boolean,
+	workspaceSubdirectory = '',
+	waitUntilReady?: () => Promise<void>,
+	prefetchBudget?: ByteBudget,
+	temporaryName = '.marimohub-packed-restore',
+): Promise<PackedWorkspaceRestoreResult> {
 	let cleanup: (() => Promise<unknown>) | undefined;
 	let prefetched: Disposable | undefined;
 	try {
@@ -184,10 +222,10 @@ export async function restorePackedWorkspace(
 		if (!isSafeWorkspaceRootPath(workspaceSubdirectory)) {
 			throw new Error('Packed workspace restore requires a safe workspace subdirectory');
 		}
-		const temporaryRoot = `${normalizedWorkingDir}/.marimohub-packed-restore`;
+		const temporaryRoot = `${normalizedWorkingDir}/${temporaryName}`;
 		const archivePath = `${temporaryRoot}/workspace.zip`;
 		const scriptPath = `${temporaryRoot}/extract.py`;
-		const object = await bucket.get(archiveKey);
+		const object = await load();
 		if (!object) return { status: 'missing' };
 		if (object.size > MAX_PACKED_ARCHIVE_BYTES) {
 			throw new Error('Packed workspace archive exceeds the transport limit');

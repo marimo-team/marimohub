@@ -1,3 +1,5 @@
+import { execResult } from '../../ports/sandbox';
+import { restoreWorkspace } from './sandboxFiles';
 import {
 	chmodSync,
 	existsSync,
@@ -91,11 +93,12 @@ function runExtractor(
 	requireGit: boolean,
 	readOnlyParent = false,
 	workspaceSubdirectory = '',
+	temporaryName = '.marimohub-packed-restore',
 ) {
 	const root = mkdtempSync(join(tmpdir(), 'marimohub-packed-'));
 	temporaryDirectories.push(root);
 	const destination = join(root, 'workspace');
-	const temporaryRoot = join(destination, '.marimohub-packed-restore');
+	const temporaryRoot = join(destination, temporaryName);
 	const script = join(temporaryRoot, 'extract.py');
 	const archivePath = join(temporaryRoot, 'workspace.zip');
 	mkdirSync(temporaryRoot, { recursive: true });
@@ -730,4 +733,44 @@ describe('restorePackedWorkspace', () => {
 			error: new Error('sandbox write unavailable'),
 		});
 	});
+});
+
+it('packs a large ordinary workspace into one archive that the extractor restores verbatim', async () => {
+	const bucket = new MemoryBucket();
+	const content = Uint8Array.from([0, 255, 10, 128]);
+	for (let i = 0; i < 257; i++) await bucket.put(`objects/data/${i}.bin`, content);
+	await bucket.put('objects/.marimohub-packed-restore/existing', content);
+	const { instance, calls } = makeFakeSandbox();
+	const stats = await restoreWorkspace(instance, bucket, 'objects/', '/workspace', {
+		packLargeWorkspace: true,
+		requireComplete: true,
+	});
+	expect(stats).toEqual({ objectCount: 258, bytes: 258 * content.byteLength });
+	expect(calls.writeFiles).toHaveLength(1);
+	const archive = calls.writeFiles[0].find(({ path }) => path.endsWith('/workspace.zip'))!
+		.content as Uint8Array;
+	const extracted = runExtractor(archive, false, false, '', '.marimohub-packed-restore-unique');
+	expect(extracted.result.status).toBe(0);
+	expect(calls.writeFiles[0][0].path).toMatch(/\/\.marimohub-packed-restore-[a-f0-9-]+\//);
+	expect(readFileSync(join(extracted.destination, '.marimohub-packed-restore/existing'))).toEqual(
+		Buffer.from(content),
+	);
+	expect(readFileSync(join(extracted.destination, 'data/0.bin'))).toEqual(Buffer.from(content));
+	expect(readFileSync(join(extracted.destination, 'data/256.bin'))).toEqual(Buffer.from(content));
+	expect(calls.exec.join(' ')).not.toContain(Buffer.from(content).toString('base64'));
+});
+
+it('falls back to ordinary writes when a custom image workspace rejects extraction', async () => {
+	const bucket = new MemoryBucket();
+	for (let i = 0; i < 257; i++) await bucket.put(`objects/${i}.txt`, 'data');
+	const { instance, calls } = makeFakeSandbox();
+	instance.exec = async (command) =>
+		execResult(!command.startsWith('python3'), '', 'workspace is not empty');
+	const stats = await restoreWorkspace(instance, bucket, 'objects/', '/workspace', {
+		packLargeWorkspace: true,
+		requireComplete: true,
+	});
+	expect(stats.objectCount).toBe(257);
+	expect(calls.writeFiles).toHaveLength(2);
+	expect(calls.writeFiles[1]).toHaveLength(257);
 });

@@ -7,7 +7,7 @@
  * garbage-collects it with the sandbox.
  */
 import { readFile } from 'node:fs/promises';
-import { request as httpsRequest } from 'node:https';
+import { Agent, request as httpsRequest } from 'node:https';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 export interface KernelIngressTarget {
@@ -38,6 +38,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
 
 /** In-cluster client: the pod's ServiceAccount token against the API server. */
 export function inClusterKubernetesApi(): KubernetesApi {
+	const agent = new Agent({ keepAlive: true });
 	let cached: Promise<{ ca: string; host: string; port: string }> | undefined;
 	const load = () => {
 		cached ??= (async () => {
@@ -61,6 +62,7 @@ export function inClusterKubernetesApi(): KubernetesApi {
 			return new Promise((resolve, reject) => {
 				const req = httpsRequest(
 					{
+						agent,
 						method,
 						host,
 						port,

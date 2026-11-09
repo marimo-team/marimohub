@@ -17,7 +17,12 @@ export async function prepareAgentHomeFiles(
 	files: SessionRender['files'],
 	workdir: string,
 	restored = false,
-): Promise<{ files: { path: string; content: string }[]; install?: () => Promise<void> }> {
+): Promise<{
+	files: { path: string; content: string }[];
+	input?: Uint8Array;
+	command?: string;
+	install?: () => Promise<void>;
+}> {
 	const homeFiles = files.filter((file) => file.relativeTo === 'home');
 	if (
 		workdir === '/' &&
@@ -38,22 +43,25 @@ export async function prepareAgentHomeFiles(
 		restored,
 	};
 	const content = JSON.stringify(request);
-	// Local compute rewrites literal sandbox paths in command text, but these must stay logical.
-	const argument =
-		homeFiles.length > 0
-			? shellQuote(sandbox.resolveProcessPath?.(payload) ?? payload)
-			: `--inline ${shellQuote(content.replaceAll('/', '\\u002f'))}`;
+	const input = new TextEncoder().encode(content);
+	const command = `python3 -I -c ${shellQuote(INSTALL_AGENT_CONTEXT)} -`;
 	return {
-		files: [
-			...files.filter((file) => file.relativeTo !== 'home'),
-			...(homeFiles.length > 0 ? [{ path: payload, content }] : []),
-		],
+		files: files.filter((file) => file.relativeTo !== 'home'),
+		input,
+		command,
 		async install() {
-			// Discover HOME and install through no-follow directory handles in the same request.
-			const result = await sandbox.exec(
-				`python3 -I -c ${shellQuote(INSTALL_AGENT_CONTEXT)} ${argument}`,
-				{ timeout: 10_000, maxOutputBytes: 4096 },
-			);
+			const options = { timeout: 10_000, maxOutputBytes: 4096 };
+			let result;
+			if (sandbox.execInput) {
+				result = await sandbox.execInput(command, input, options);
+			} else {
+				await sandbox.writeFiles([{ path: payload, content }]);
+				const path = shellQuote(sandbox.resolveProcessPath?.(payload) ?? payload);
+				result = await sandbox.exec(
+					`python3 -I -c ${shellQuote(INSTALL_AGENT_CONTEXT)} ${path}`,
+					options,
+				);
+			}
 			if (!result.success)
 				throw new ValidationError(
 					Object.hasOwn(INSTALL_ERRORS, result.stdout.trim())

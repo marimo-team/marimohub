@@ -830,6 +830,7 @@ describe('createFromEnv external adapter libraries', () => {
 		).warmPool!;
 		await active.sweep();
 		expect((await active.store.read()).pools[0].members).toHaveLength(1);
+		const commandsBeforeDrain = [...sandbox.calls.exec];
 		const disabled = createFromEnv(
 			{
 				...poolEnv,
@@ -843,7 +844,7 @@ describe('createFromEnv external adapter libraries', () => {
 		await disabled.sweep();
 		expect((await disabled.store.read()).pools[0].members).toEqual([]);
 		expect(sandbox.calls.destroy).toBe(1);
-		expect(sandbox.calls.exec).toEqual(['true']);
+		expect(sandbox.calls.exec).toEqual(commandsBeforeDrain);
 	});
 
 	it('loads and wires an adapter end to end through the async API', async () => {

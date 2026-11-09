@@ -13,12 +13,17 @@ import {
 	CWSandboxValidationError,
 } from '@coreweave/cwsandbox';
 import type { SandboxInfo } from '@coreweave/cwsandbox';
-import { NOT_A_DIRECTORY_EXIT_CODE, NOT_A_DIRECTORY_MARKER } from '@marimo-hub/compute-commons';
+import {
+	encodeFileWriteBatch,
+	NOT_A_DIRECTORY_EXIT_CODE,
+	NOT_A_DIRECTORY_MARKER,
+} from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import { withDeadline } from '@marimo-hub/core/async';
 import type { SandboxProvider } from '@marimo-hub/core/ports/sandbox';
 import {
 	computeContract,
+	CONTRACT_LAUNCH_READY_COMMAND,
 	isContractNonDirectoryFindCommand,
 } from '@marimo-hub/core/testing/compute-contract';
 import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
@@ -602,7 +607,7 @@ describe('CoreWeaveCompute', () => {
 			const fake = [...world.registry.values()][0].fake;
 			// No mkdir round-trip: AddFile creates parents.
 			expect(fake.runCalls).toHaveLength(0);
-			expect(inst.drainCounters!()).toEqual({ execs: 0 });
+			expect(inst.drainCounters!()).toMatchObject({ execs: 0 });
 			// Bytes pass through verbatim; no base64 or file contents in exec argv.
 			expect(fake.batchWrites).toHaveLength(3);
 			expect(fake.batchWrites.flat()).toEqual([
@@ -630,9 +635,10 @@ describe('CoreWeaveCompute', () => {
 					path: `/w/${i}`,
 					content: `${i}`,
 				}));
-				const write = makeCompute(world, gatewayConfig)
-					.create(SANDBOX_ID, { reuse: false })
-					.writeFiles(files);
+				const instance = makeCompute(world, gatewayConfig).create(SANDBOX_ID, { reuse: false });
+				const write = instance
+					.writeFiles(files.slice(0, WRITE_WAVE))
+					.then(() => instance.writeFiles(files.slice(WRITE_WAVE)));
 				await vi.advanceTimersByTimeAsync(99);
 				expect(started).toBe(WRITE_WAVE);
 				await vi.advanceTimersByTimeAsync(1);
@@ -805,7 +811,7 @@ describe('CoreWeaveCompute', () => {
 			]);
 		});
 
-		it('drains active writes after failure and does not dispatch the remaining files', async () => {
+		it('drains active unary writes after failure', async () => {
 			let started = 0;
 			const releases: (() => void)[] = [];
 			const world = makeWorld({
@@ -815,7 +821,7 @@ describe('CoreWeaveCompute', () => {
 					await new Promise<void>((resolve) => releases.push(resolve));
 				},
 			});
-			const files = Array.from({ length: 2 * WRITE_WAVE }, (_, i) => ({
+			const files = Array.from({ length: WRITE_WAVE }, (_, i) => ({
 				path: `/w/${i}`,
 				content: 'x',
 			}));
@@ -906,7 +912,7 @@ describe('CoreWeaveCompute', () => {
 					);
 					const rejected = expect(
 						instance.writeFiles(
-							Array.from({ length: 2 * WRITE_WAVE }, (_, i) => ({ path: `/w/${i}`, content: 'x' })),
+							Array.from({ length: WRITE_WAVE }, (_, i) => ({ path: `/w/${i}`, content: 'x' })),
 						),
 					).rejects.toBe(error);
 					await vi.runAllTimersAsync();
@@ -953,7 +959,7 @@ describe('CoreWeaveCompute', () => {
 					const write = makeCompute(world, gatewayConfig)
 						.create(SANDBOX_ID, { reuse: false })
 						.writeFiles(
-							Array.from({ length: 2 * WRITE_WAVE }, (_, i) => ({ path: `/w/${i}`, content: 'x' })),
+							Array.from({ length: WRITE_WAVE }, (_, i) => ({ path: `/w/${i}`, content: 'x' })),
 						);
 					let rejected = false;
 					const checked = expect(write)
@@ -1660,8 +1666,8 @@ describe('CoreWeaveCompute', () => {
 			const inst = makeCompute(world).create(SANDBOX_ID, { reuse: false });
 			await inst.exec('true');
 			await inst.exec('true');
-			expect(inst.drainCounters!()).toEqual({ execs: 2 });
-			expect(inst.drainCounters!()).toEqual({ execs: 0 });
+			expect(inst.drainCounters!()).toMatchObject({ execs: 2 });
+			expect(inst.drainCounters!()).toMatchObject({ execs: 0 });
 		});
 	});
 
@@ -2860,3 +2866,305 @@ describe('bounded file transport', () => {
 		expect(cancel).toHaveBeenCalledOnce();
 	});
 });
+
+function packedFiles(count = 9) {
+	return Array.from({ length: count }, (_, i) => ({
+		path: `/workspace/${i}.bin`,
+		content: Uint8Array.from({ length: 32 * 1024 }, (_, j) => j % 256),
+	}));
+}
+
+it('transfers a binary batch on stdin without flushing the session environment', async () => {
+	const world = makeWorld();
+	const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+	await instance.setEnvVars({ SECRET: 'not-in-argv' });
+	const files = packedFiles();
+	await instance.writeFiles(files);
+	const fake = world.registry.get('cw-1')!.fake;
+	expect(fake.batchWrites).toEqual([]);
+	expect(fake.stdinWrites).toEqual([encodeFileWriteBatch(files)]);
+	expect(fake.startCalls).toHaveLength(1);
+	expect(fake.startCalls[0].slice(0, 2)).toEqual(['sh', '-c']);
+	expect(fake.startCalls[0][2]).not.toContain('not-in-argv');
+	expect(instance.drainCounters!()).toEqual({
+		execs: 0,
+		file_writes: 0,
+		file_write_waves: 1,
+		env_writes: 0,
+		stream_execs: 1,
+		status_polls: 1,
+	});
+	expect(instance.drainTimings!()).toHaveProperty('first_dataplane');
+	expect(instance.drainTimings!()).toEqual({});
+});
+
+it('stops packed batches after a failed stream and can resend the full transfer', async () => {
+	let failing = true;
+	const world = makeWorld({
+		inputImpl: async () => {
+			if (failing) throw new Error('disk full');
+		},
+	});
+	const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+	const files = packedFiles(129);
+	await expect(instance.writeFiles(files)).rejects.toThrow('disk full');
+	const fake = world.registry.get('cw-1')!.fake;
+	expect(fake.stdinWrites).toHaveLength(1);
+	failing = false;
+	await instance.writeFiles(files);
+	expect(fake.stdinWrites).toHaveLength(3);
+	expect(Buffer.from(fake.stdinWrites[1]).equals(Buffer.from(fake.stdinWrites[0]))).toBe(true);
+});
+
+it('retries an unavailable packed stream with identical bytes', async () => {
+	vi.useFakeTimers();
+	try {
+		let failures = 1;
+		const world = makeWorld({
+			inputImpl: async () => {
+				if (failures-- > 0) throw new CWSandboxUnavailableError('unavailable');
+			},
+		});
+		const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+		const writing = instance.writeFiles(packedFiles());
+		await vi.runAllTimersAsync();
+		await writing;
+		const fake = world.registry.get('cw-1')!.fake;
+		expect(fake.stdinWrites).toHaveLength(2);
+		expect(fake.stdinWrites[0]).toEqual(fake.stdinWrites[1]);
+		expect(instance.drainCounters!()).toMatchObject({ file_write_waves: 2, stream_execs: 2 });
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it('shares early ingress publication with exposePort', async () => {
+	const world = makeWorld();
+	const publish = vi.fn(async () => {});
+	const instance = makeCompute(world, {
+		...baseConfig,
+		kernelIngress: { publish, remove: async () => {} },
+	}).create(SANDBOX_ID, { reuse: false });
+	await instance.ready!();
+	await instance.prepareExposure!(2718, { hostname: 'example.test', token: 'token' });
+	await instance.exposePort(2718, { hostname: 'example.test', token: 'token' });
+	expect(publish).toHaveBeenCalledOnce();
+	expect(publish).toHaveBeenCalledWith({
+		sandboxId: 'cw-1',
+		host: 'cw-1-2718.example.test',
+		port: 2718,
+	});
+	expect(world.registry.get('cw-1')!.fake.startCalls).toEqual([]);
+});
+
+it('counts environment and launch streams once on a cold start and drains a warm claim', async () => {
+	const world = makeWorld({
+		startImpl: async (command) => contractLaunchProcess(command) ?? fakeProcess(),
+	});
+	const compute = makeCompute(world);
+	const instance = compute.create(SANDBOX_ID, { reuse: false });
+	await instance.ready!();
+	await instance.setEnvVars({ TOKEN: 'private' });
+	await instance.writeFiles([{ path: '/workspace/notebook.py', content: 'hello' }]);
+	await instance.exec('true');
+	await instance.launchProcess!(CONTRACT_LAUNCH_READY_COMMAND, {
+		setup: 'true',
+		port: 2718,
+		startupTimeout: 1_000,
+	});
+	expect(instance.drainCounters!()).toEqual({
+		execs: 1,
+		file_writes: 1,
+		file_write_waves: 1,
+		env_writes: 1,
+		stream_execs: 2,
+		status_polls: 1,
+	});
+	expect(instance.drainCounters!()).toEqual({
+		execs: 0,
+		file_writes: 0,
+		file_write_waves: 0,
+		env_writes: 0,
+		stream_execs: 0,
+		status_polls: 0,
+	});
+	const warm = compute.connectExisting(SANDBOX_ID);
+	await warm.ready!();
+	await warm.exec('true');
+	expect(warm.drainCounters!()).toMatchObject({ execs: 1, status_polls: 0, file_writes: 0 });
+});
+
+it('prepends the home bootstrap to a packed writer without a separate exec', async () => {
+	const world = makeWorld();
+	const instance = makeCompute(world, { ...baseConfig, userHomeTemplateId: 'tmpl-home' }).create(
+		SANDBOX_ID,
+		{ reuse: false, userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' } },
+	);
+	await instance.writeFiles(
+		packedFiles().map((file, i) => ({ ...file, path: `/mnt/ada@example.com/${i}` })),
+	);
+	const fake = world.registry.get('cw-1')!.fake;
+	expect(fake.runCalls).toEqual([]);
+	expect(fake.startCalls).toHaveLength(1);
+	const command = fake.startCalls[0][2];
+	expect(command.indexOf("ln -s '/var/run/marimohub/user-home'")).toBeLessThan(
+		command.indexOf('python3 -I -c'),
+	);
+	expect(command).toContain("ln -s '/var/run/marimohub/user-home' '/mnt/ada@example.com'");
+});
+
+it('forwards large file streams through the tracing client', async () => {
+	const world = makeWorld();
+	const create = world.client.create.bind(world.client);
+	const writeStream = vi.fn(
+		async (_path: string, _source: Uint8Array, _options?: { timeoutMs?: number }) => {},
+	);
+	world.client.create = async (options) => {
+		const sandbox = await create(options);
+		return { ...sandbox, files: { ...sandbox.files, writeStream } };
+	};
+	const content = new Uint8Array(4 * 1024 * 1024);
+	const instance = new CoreWeaveCompute(
+		baseConfig,
+		instrumentCoreWeaveClient(world.client, 'https://gateway.example'),
+	).create(SANDBOX_ID, { reuse: false });
+	await instance.writeFiles([{ path: '/workspace/large.bin', content }]);
+	expect(writeStream).toHaveBeenCalledOnce();
+	expect(writeStream.mock.calls[0][0]).toBe('/workspace/large.bin');
+	expect(writeStream.mock.calls[0][1]).toBe(content);
+	expect(writeStream.mock.calls[0][2]).toEqual({ timeoutMs: 60_000 });
+	expect(world.registry.get('cw-1')!.fake.batchWrites).toEqual([]);
+});
+
+it.each([0, 8, 9, 128, 129])('handles the %i-file transfer boundary', async (count) => {
+	const world = makeWorld();
+	const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+	await instance.ready!();
+	const files = Array.from({ length: count }, (_, i) => ({
+		path: `/workspace/données/${i}.bin`,
+		content: i % 2 ? new Uint8Array([0, 255, 10]) : new Uint8Array(),
+	}));
+	await instance.writeFiles(files);
+	const fake = world.registry.get('cw-1')!.fake;
+	if (count <= 8) {
+		expect(fake.batchWrites.flat()).toEqual(files);
+		expect(fake.startCalls).toHaveLength(0);
+	} else {
+		expect(fake.batchWrites).toEqual([]);
+		expect(fake.stdinWrites).toEqual(
+			count <= 128
+				? [encodeFileWriteBatch(files)]
+				: [encodeFileWriteBatch(files.slice(0, 128)), encodeFileWriteBatch(files.slice(128))],
+		);
+	}
+});
+
+it.each(['missing stdin', 'write', 'close', 'exit'] as const)(
+	'cancels a packed writer after %s failure and fences later batches',
+	async (failure) => {
+		const world = makeWorld();
+		const create = world.client.create.bind(world.client);
+		const cancel = vi.fn(async () => {});
+		const start = vi.fn(async () => ({
+			...fakeProcess({ exitCode: failure === 'exit' ? 1 : 0 }),
+			cancel,
+			...(failure === 'missing stdin'
+				? {}
+				: {
+						stdin: {
+							async write() {
+								if (failure === 'write') throw new Error('write failed');
+							},
+							async close() {
+								if (failure === 'close') throw new Error('close failed');
+							},
+						},
+					}),
+		}));
+		world.client.create = async (options) => {
+			const sandbox = await create(options);
+			return { ...sandbox, commands: { ...sandbox.commands, start } };
+		};
+		const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+		await expect(instance.writeFiles(packedFiles(129))).rejects.toThrow();
+		expect(start).toHaveBeenCalledOnce();
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(instance.drainCounters!()).toMatchObject({ file_write_waves: 1, stream_execs: 1 });
+	},
+);
+
+it('stops after the packed retry budget is exhausted', async () => {
+	vi.useFakeTimers();
+	try {
+		const unavailable = new CWSandboxUnavailableError('unavailable');
+		const world = makeWorld({
+			inputImpl: async () => {
+				throw unavailable;
+			},
+		});
+		const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+		const rejected = expect(instance.writeFiles(packedFiles(129))).rejects.toBe(unavailable);
+		await vi.runAllTimersAsync();
+		await rejected;
+		const writes = world.registry.get('cw-1')!.fake.stdinWrites;
+		expect(writes).toHaveLength(4);
+		for (const bytes of writes)
+			expect(Buffer.from(bytes).equals(Buffer.from(writes[0]))).toBe(true);
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it.each(['ready', 'setup_exit', 'setup_timeout'] as const)(
+	'waits for delayed setup stdout when stderr reports %s',
+	async (event) => {
+		const releaseStdout = Promise.withResolvers<void>();
+		const readyReported = Promise.withResolvers<void>();
+		const world = makeWorld({
+			startImpl: async (command) => {
+				const nonce = command.join(' ').match(/'([a-f0-9]{32})'/)?.[1];
+				if (!nonce) throw new Error('launch nonce missing');
+				const marker = `__MARIMOHUB_LAUNCH_${nonce}__`;
+				const complete = `${marker}{"event":"${event === 'ready' ? 'setup_complete' : event}","setupMs":1,"waitportMs":0}\n`;
+				return {
+					...fakeProcess(),
+					stdout: (async function* () {
+						await releaseStdout.promise;
+						yield `delayed setup stdout\n${complete}kernel stdout`;
+					})(),
+					stderr: (async function* () {
+						yield `setup stderr\n${complete}${marker}{"event":"${event}","setupMs":1,"waitportMs":2}\n`;
+						readyReported.resolve();
+					})(),
+				};
+			},
+		});
+		const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+		let settled = false;
+		const launching = instance.launchProcess!('kernel', {
+			setup: 'setup',
+			port: 2718,
+			startupTimeout: 2000,
+		}).then((result) => {
+			settled = true;
+			return result;
+		});
+		await readyReported.promise;
+		expect(settled).toBe(false);
+		releaseStdout.resolve();
+		const result = await launching;
+		if (event === 'ready') {
+			expect(result).toMatchObject({
+				success: true,
+				setupOutput: { stdout: 'delayed setup stdout\n', stderr: 'setup stderr\n' },
+			});
+		} else {
+			expect(result).toMatchObject({
+				success: false,
+				reason: event,
+				stdout: expect.stringContaining('delayed setup stdout'),
+				stderr: expect.stringContaining('setup stderr'),
+			});
+		}
+	},
+);

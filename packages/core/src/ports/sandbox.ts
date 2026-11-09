@@ -95,6 +95,7 @@ export type SandboxLaunchResult =
 	| {
 			success: true;
 			process: SandboxProcess;
+			setupOutput?: { stdout: string; stderr: string };
 			timings: SandboxLaunchTimings;
 	  }
 	| {
@@ -210,6 +211,8 @@ export interface SandboxInstance {
 	 */
 	ready?(): Promise<void>;
 	exec(cmd: string, options?: ExecOptions): Promise<ExecResult>;
+	/** Internal commands with stdin, without session environment injection. */
+	execInput?(cmd: string, input: Uint8Array, options?: ExecOptions): Promise<ExecResult>;
 	execStream(cmd: string, options?: ExecStreamOptions): Promise<ReadableStream>;
 	readFile(path: string): Promise<ReadFileResult>;
 	/** Reject symlinks/nonregular files; cap transport bytes and cancel on deadline/overflow. */
@@ -240,11 +243,15 @@ export interface SandboxInstance {
 	mountBucket(options: MountBucketOptions): Promise<void>;
 	unmountBucket(mountPath: string): Promise<void>;
 	startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess>;
+	/** Opt in only when launch results preserve separate setup stdout and stderr. */
+	readonly supportsLaunchSetupOutput?: boolean;
 	/**
 	 * Start a checked setup + long-running process and wait for readiness as one
 	 * adapter-owned operation. Optional for compatibility with external adapters.
 	 */
 	launchProcess?(cmd: string, options: LaunchProcessOptions): Promise<SandboxLaunchResult>;
+	/** Publish routing before the kernel opens its port; exposePort awaits the same work. */
+	prepareExposure?(port: number, options: ExposePortOptions): Promise<void>;
 	exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult>;
 	destroy(): Promise<void>;
 	/**

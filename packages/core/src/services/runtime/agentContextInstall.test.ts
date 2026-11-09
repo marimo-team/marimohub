@@ -42,9 +42,10 @@ function read(path: string) {
 	return readFileSync(join(root, path), 'utf8');
 }
 
-function run(arguments_: string[], environmentHome = home, prefix = '') {
+function run(arguments_: string[], environmentHome = home, prefix = '', input?: string) {
 	const result = spawnSync('python3', ['-I', '-c', prefix + INSTALL_AGENT_CONTEXT, ...arguments_], {
 		encoding: 'utf8',
+		input,
 		cwd: root,
 		env: { ...process.env, HOME: environmentHome },
 	});
@@ -238,20 +239,20 @@ it('allows a restored sandbox without a previous manifest', () => {
 	});
 });
 
-it('cleans up restored files from an inline payload without deleting its argument marker', () => {
+it('cleans up restored files from an stdin payload without deleting its argument marker', () => {
 	manifest([instruction]);
 	write(`${home}/${instruction}`, 'old');
-	write('--inline', 'unrelated');
+	write('-', 'unrelated');
 	const payload = { root, workdir: '/workspace', files: [], restored: true };
-	expect(run(['--inline', JSON.stringify(payload)])).toEqual({ status: 0, stdout: '' });
+	expect(run(['-'], home, '', JSON.stringify(payload))).toEqual({ status: 0, stdout: '' });
 	expect(existsSync(join(root, home, instruction))).toBe(false);
 	expect(existsSync(join(root, AGENT_HOME_FILES_MANIFEST))).toBe(false);
-	expect(read('--inline')).toBe('unrelated');
+	expect(read('-')).toBe('unrelated');
 });
 
-it('accepts inline cleanup without a previous manifest or a payload upload', () => {
+it('accepts stdin cleanup without a previous manifest or a payload upload', () => {
 	const payload = { root, workdir: '/workspace', files: [], restored: true };
-	expect(run(['--inline', JSON.stringify(payload).replaceAll('/', '\\u002f')])).toEqual({
+	expect(run(['-'], home, '', JSON.stringify(payload))).toEqual({
 		status: 0,
 		stdout: '',
 	});
@@ -259,26 +260,26 @@ it('accepts inline cleanup without a previous manifest or a payload upload', () 
 });
 
 it.each(['{private', 'null', '{}'])(
-	'reports malformed inline data %s with a fixed error code',
+	'reports malformed stdin data %s with a fixed error code',
 	(payload) => {
-		write('--inline', 'unrelated');
-		const result = run(['--inline', payload]);
+		write('-', 'unrelated');
+		const result = run(['-'], home, '', payload);
 		expect(result.status).toBe(1);
 		expect(result.stdout).toMatch(/^(io_error|unsafe_path)\n$/);
-		expect(read('--inline')).toBe('unrelated');
+		expect(read('-')).toBe('unrelated');
 	},
 );
 
-it('rejects file content in inline cleanup mode', () => {
+it('installs file content from stdin', () => {
 	const payload = {
 		root,
 		workdir: '/workspace',
 		files: [{ path: instruction, content: 'use a file payload' }],
 		restored: true,
 	};
-	expect(run(['--inline', JSON.stringify(payload)])).toEqual({
-		status: 1,
-		stdout: 'unsafe_path\n',
+	expect(run(['-'], home, '', JSON.stringify(payload))).toEqual({
+		status: 0,
+		stdout: '',
 	});
 });
 

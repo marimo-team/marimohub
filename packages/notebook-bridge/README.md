@@ -233,6 +233,17 @@ base prefix, the request carries only the viewer's own sandbox credentials, and
 marimo's state-changing endpoints use POST or WebSocket. The bridge does not keep
 a route denylist, because it would duplicate marimo's routing and add no boundary.
 
+## Installation and sandbox images
+
+`--install-only` installs the bridge wheel without starting marimo.
+The provisioner runs it after dependency setup, which can replace the interpreter.
+The launcher skips installation when the installed wheel identity matches. Otherwise, it uses the offline installer.
+
+Warm-pool creation attempts installation before it publishes a ready member.
+Published sandbox images include the wheel.
+Changes to the Python extension, browser script, or launcher change the wheel identity.
+Image rebuilds preserve the installation cache hit. Older images use the launcher fallback.
+
 ## Generation and tests
 
 Generate the browser bundle, deterministic wheel, and embedded payload together:

@@ -5,19 +5,18 @@ import { prepareAgentHomeFiles } from './agentContextFiles';
 
 const files = [{ path: '.claude/CLAUDE.md', content: 'instructions', relativeTo: 'home' as const }];
 
-it('batches home content into an upload without querying HOME first', async () => {
+it('prepares home content as bytes without querying HOME first', async () => {
 	const { instance, calls } = makeFakeSandbox();
 	const prepared = await prepareAgentHomeFiles(instance, files, '/workspace');
 	expect(calls.exec).toEqual([]);
 	expect(calls.readFile).toEqual([]);
-	expect(prepared.files).toHaveLength(1);
-	expect(JSON.parse(prepared.files[0].content)).toEqual({
+	expect(prepared.files).toHaveLength(0);
+	expect(JSON.parse(new TextDecoder().decode(prepared.input))).toEqual({
 		root: '/',
 		workdir: '/workspace',
 		restored: false,
 		files: [{ path: '.claude/CLAUDE.md', content: 'instructions' }],
 	});
-	await instance.writeFiles(prepared.files);
 	await prepared.install!();
 	expect(calls.writeFiles).toHaveLength(1);
 	expect(calls.exec).toHaveLength(1);
@@ -30,13 +29,13 @@ it('uses adapter file coordinates and maps the installer payload to process coor
 	instance.getHomeDirectory = async () => '/home/isolated';
 	instance.resolveProcessPath = (path) => `/sandbox${path}`;
 	const prepared = await prepareAgentHomeFiles(instance, files, '/workspace');
-	expect(JSON.parse(prepared.files[0].content)).toMatchObject({
+	expect(JSON.parse(new TextDecoder().decode(prepared.input))).toMatchObject({
 		root: '/sandbox/',
 		home: '/home/isolated',
 		workdir: '/workspace',
 	});
 	await prepared.install!();
-	expect(calls.exec[0]).toContain(`'/sandbox${prepared.files[0].path}'`);
+	expect(calls.exec[0]).toContain(`'/sandbox${calls.writeFiles[0][0].path}'`);
 });
 
 it.each(['.ssh/config', '.claude/../other', '.agents/skills/marimo-pair/SKILL.md'])(
@@ -63,11 +62,11 @@ it('does not add requests or uploads for ordinary integration files', async () =
 	expect(calls.readFile).toEqual([]);
 });
 
-it('keeps ordinary files in the same batch as the home payload', async () => {
+it('returns ordinary files separately from the home request', async () => {
 	const { instance } = makeFakeSandbox();
 	const ordinary = { path: '/tmp/marimohub-integrations/file', content: 'config' };
 	const prepared = await prepareAgentHomeFiles(instance, [ordinary, ...files], '/workspace');
-	expect(prepared.files).toHaveLength(2);
+	expect(prepared.files).toHaveLength(1);
 	expect(prepared.files[0]).toEqual(ordinary);
 });
 
@@ -77,9 +76,12 @@ it('requests restore cleanup even after the integration was removed', async () =
 	expect(prepared.files).toEqual([]);
 	await prepared.install!();
 	expect(calls.exec).toHaveLength(1);
-	expect(calls.exec[0]).toContain('--inline');
-	expect(calls.exec[0]).toContain('\\u002fworkspace');
-	expect(calls.exec[0]).toContain('"files":[],"restored":true');
+	expect(calls.exec[0]).not.toContain('--inline');
+	expect(calls.exec[0]).not.toContain('"restored"');
+	expect(JSON.parse(new TextDecoder().decode(prepared.input))).toMatchObject({
+		files: [],
+		restored: true,
+	});
 	expect(calls.readFile).toEqual([]);
 });
 
@@ -121,6 +123,20 @@ it('propagates adapter HOME lookup failures before preparing uploads', async () 
 	await expect(prepareAgentHomeFiles(instance, files, '/workspace')).rejects.toThrow(
 		'sandbox offline',
 	);
+	expect(calls.exec).toEqual([]);
+	expect(calls.writeFiles).toEqual([]);
+});
+
+it('sends home content on stdin without an environment or payload-file write', async () => {
+	const { instance, calls } = makeFakeSandbox();
+	instance.execInput = vi.fn(async () => ({ success: true as const, stdout: '', stderr: '' }));
+	const prepared = await prepareAgentHomeFiles(instance, files, '/workspace');
+	await prepared.install!();
+	expect(instance.execInput).toHaveBeenCalledWith(prepared.command, prepared.input, {
+		timeout: 10_000,
+		maxOutputBytes: 4096,
+	});
+	expect(prepared.command).not.toContain('instructions');
 	expect(calls.exec).toEqual([]);
 	expect(calls.writeFiles).toEqual([]);
 });

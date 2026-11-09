@@ -271,6 +271,9 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	private resolved = false;
 	private ensuring?: Promise<void>;
 	private execCount = 0;
+	private counters = { file_write_waves: 0, env_writes: 0, stream_execs: 0, status_polls: 0 };
+	private firstDataplaneStarted = false;
+	private dataplaneTimings: Timings = {};
 	private lastEnsureTimings?: Timings;
 	/** Latest Pod snapshot from the boot poll (uid + condition timestamps). */
 	private bootInfo?: K8sPodPhaseInfo;
@@ -455,13 +458,16 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	}
 
 	drainTimings(): Timings {
-		const t = this.lastEnsureTimings ?? {};
+		const t = { ...this.lastEnsureTimings, ...this.dataplaneTimings };
+		this.dataplaneTimings = {};
 		this.lastEnsureTimings = undefined;
 		return t;
 	}
 
 	drainCounters(): Record<string, number> {
-		const counters = { execs: this.execCount };
+		const counters = { execs: this.execCount, ...this.counters };
+		for (const key of Object.keys(this.counters) as (keyof typeof this.counters)[])
+			this.counters[key] = 0;
 		this.execCount = 0;
 		return counters;
 	}
@@ -474,6 +480,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		const timeout = this.config.podReadyTimeout ?? Millis.minutes(2);
 		await pollUntilReady(
 			async () => {
+				this.counters.status_polls++;
 				const info = await this.client.getPhase(this.name);
 				// Keep the snapshot: the boot breakdown (uid, schedule/ready times)
 				// comes from this poll, so no extra read holds up readiness later.
@@ -499,6 +506,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	}
 
 	private readonly environment = new ShellEnvironment(async (path, content) => {
+		this.counters.env_writes++;
 		const result = await this.execInPod(privateEnvironmentWriteCommand(path), {
 			stdin: content,
 			timeout: 10_000,
@@ -518,7 +526,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 	 * the result — and they only use shell builtins/coreutils, so they need no
 	 * profile PATH.
 	 */
-	private execInPod(
+	private async execInPod(
 		cmd: string,
 		opts?: {
 			login?: boolean;
@@ -528,15 +536,33 @@ class KubernetesSandboxInstance implements SandboxInstance {
 		},
 	): Promise<K8sExecResult> {
 		this.execCount++;
-		return this.client.exec(
-			this.name,
-			execCommand(cmd, opts?.login ?? false, opts?.timeout),
-			opts?.stdin,
-			{
-				timeout: opts?.timeout,
-				maxOutputBytes: opts?.maxOutputBytes,
-			},
-		);
+		this.counters.stream_execs++;
+		const first = !this.firstDataplaneStarted;
+		this.firstDataplaneStarted = true;
+		const started = Date.now();
+		try {
+			return await this.client.exec(
+				this.name,
+				execCommand(cmd, opts?.login ?? false, opts?.timeout),
+				opts?.stdin,
+				{
+					timeout: opts?.timeout,
+					maxOutputBytes: opts?.maxOutputBytes,
+				},
+			);
+		} finally {
+			if (first) this.dataplaneTimings.first_dataplane = Date.now() - started;
+		}
+	}
+
+	async execInput(cmd: string, input: Uint8Array, options?: ExecOptions): Promise<ExecResult> {
+		await this.ensure();
+		const result = await this.execInPod(cmd, {
+			stdin: input,
+			timeout: options?.timeout,
+			maxOutputBytes: options?.maxOutputBytes,
+		});
+		return execResult(result.exitCode === 0, result.stdout, result.stderr);
 	}
 
 	async exec(cmd: string, options?: ExecOptions): Promise<ExecResult> {
@@ -585,6 +611,7 @@ class KubernetesSandboxInstance implements SandboxInstance {
 			items: batchFileWrites(files),
 			concurrency: WRITE_BATCH_CONCURRENCY,
 			run: async (batch) => {
+				this.counters.file_write_waves++;
 				const single = batch.length === 1;
 				const file = batch[0];
 				const dir = file.path.slice(0, file.path.lastIndexOf('/')) || '/';

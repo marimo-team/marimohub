@@ -1275,8 +1275,20 @@ describe('KubernetesCompute', () => {
 			const inst = makeCompute(world).create(SANDBOX_ID);
 			await inst.exec('a');
 			await inst.exec('b');
-			expect(inst.drainCounters!()).toEqual({ execs: 2 });
-			expect(inst.drainCounters!()).toEqual({ execs: 0 });
+			expect(inst.drainCounters!()).toEqual({
+				execs: 2,
+				file_write_waves: 0,
+				env_writes: 0,
+				stream_execs: 2,
+				status_polls: 1,
+			});
+			expect(inst.drainCounters!()).toEqual({
+				execs: 0,
+				file_write_waves: 0,
+				env_writes: 0,
+				stream_execs: 0,
+				status_polls: 0,
+			});
 		});
 
 		it('emits one structured k8s_ensure log line per boot', async () => {
