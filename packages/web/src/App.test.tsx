@@ -41,7 +41,8 @@ describe('App routes', () => {
 			await screen.findByRole('heading', { name: appOnly ? 'Apps' : 'Projects' }),
 		).toBeVisible();
 		expect(window.location.pathname).toBe(appOnly ? '/apps' : '/projects');
-		if (appOnly) expect(requests).not.toContain('/api/v1/projects');
+		if (appOnly)
+			expect(requests.some((url) => url.split('?')[0] === '/api/v1/projects')).toBe(false);
 		else expect(screen.getByRole('link', { name: 'Apps' })).toHaveAttribute('href', '/apps');
 	});
 

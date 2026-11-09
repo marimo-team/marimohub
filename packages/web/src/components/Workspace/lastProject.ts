@@ -17,3 +17,9 @@ export function rememberProject(userId: string, projectId: string) {
 		localStorage.setItem(lastProjectKey(userId), projectId);
 	} catch {}
 }
+
+export function forgetProject(userId: string, projectId: string) {
+	try {
+		if (readLastProject(userId) === projectId) localStorage.removeItem(lastProjectKey(userId));
+	} catch {}
+}

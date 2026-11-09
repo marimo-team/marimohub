@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazyDialog } from '@/components/ui/lazyDialog';
 import { HelpMenu } from './HelpMenu';
 import { shellLinkTarget, useShellLinks } from '@/components/Shell/useShellLinks';
 import type { ReactNode } from 'react';
@@ -26,19 +26,18 @@ import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import { useDisclosure } from '@/hooks/useDisclosure';
 import { useCapabilitiesQuery } from '@/api/hooks';
 
-const McpDialog = lazy(() =>
-	import('@/components/Account/McpDialog').then((module) => ({ default: module.McpDialog })),
-);
-const ApiTokensDialog = lazy(() =>
-	import('@/components/Account/ApiTokensDialog').then((module) => ({
-		default: module.ApiTokensDialog,
-	})),
-);
-const OrgIntegrationsDialog = lazy(() =>
-	import('@/components/Project/ProjectIntegrationsDialog').then((module) => ({
-		default: module.OrgIntegrationsDialog,
-	})),
-);
+const McpDialog = lazyDialog(async () => {
+	const module = await import('@/components/Account/McpDialog');
+	return { default: module.McpDialog };
+});
+const ApiTokensDialog = lazyDialog(async () => {
+	const module = await import('@/components/Account/ApiTokensDialog');
+	return { default: module.ApiTokensDialog };
+});
+const OrgIntegrationsDialog = lazyDialog(async () => {
+	const module = await import('@/components/Project/ProjectIntegrationsDialog');
+	return { default: module.OrgIntegrationsDialog };
+});
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
 	cn(
@@ -204,24 +203,12 @@ export function Header({ navigationTrigger }: { navigationTrigger?: ReactNode })
 				) : null}
 			</div>
 
-			{tokensDialog.isOpen && (
-				<Suspense fallback={null}>
-					<ApiTokensDialog isOpen={tokensDialog.isOpen} onClose={tokensDialog.close} />
-				</Suspense>
-			)}
-			{mcpDialog.isOpen && (
-				<Suspense fallback={null}>
-					<McpDialog isOpen={mcpDialog.isOpen} onClose={mcpDialog.close} />
-				</Suspense>
-			)}
-			{orgIntegrationsDialog.isOpen && (
-				<Suspense fallback={null}>
-					<OrgIntegrationsDialog
-						isOpen={orgIntegrationsDialog.isOpen}
-						onClose={orgIntegrationsDialog.close}
-					/>
-				</Suspense>
-			)}
+			<ApiTokensDialog isOpen={tokensDialog.isOpen} onClose={tokensDialog.close} />
+			<McpDialog isOpen={mcpDialog.isOpen} onClose={mcpDialog.close} />
+			<OrgIntegrationsDialog
+				isOpen={orgIntegrationsDialog.isOpen}
+				onClose={orgIntegrationsDialog.close}
+			/>
 		</header>
 	);
 }

@@ -99,13 +99,13 @@ describe('Workspace home', () => {
 		);
 		expect(requests.some((url) => url.startsWith('/api/v1/projects'))).toBe(false);
 	});
-	it.each([{ items: [], next_cursor: null }, jsonError('UNAVAILABLE', 'Unavailable', 503)])(
-		'opens the project index when the first-visit roster is empty or unavailable',
-		async (projects) => {
-			setup({ projects });
-			expect(await screen.findByRole('status', { name: 'Destination' })).toHaveTextContent(
-				'/projects',
-			);
-		},
-	);
+	it.each([
+		{ state: 'empty', projects: { items: [], next_cursor: null } },
+		{ state: 'unavailable', projects: jsonError('UNAVAILABLE', 'Unavailable', 503) },
+	])('opens the project index when the first-visit roster is $state', async ({ projects }) => {
+		setup({ projects });
+		expect(await screen.findByRole('status', { name: 'Destination' })).toHaveTextContent(
+			/^\/projects$/,
+		);
+	});
 });

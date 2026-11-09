@@ -323,7 +323,7 @@ describe('stakeholder apps', () => {
 			});
 			await waitFor(() => expect(container.querySelector('iframe')).not.toBeNull());
 			expect(sessionPosts(existing)).toHaveLength(1);
-			expect(screen.queryByText('Unable to open apps')).toBeNull();
+			expect(screen.queryByText('Unable to open')).toBeNull();
 		},
 	);
 

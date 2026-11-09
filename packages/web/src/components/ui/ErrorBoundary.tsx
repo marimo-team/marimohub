@@ -1,12 +1,14 @@
 import { ReportProblemAction } from '@/components/Support/ReportProblemDialog';
 import { Component } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
+import { isChunkLoadError } from '@/lib/lazyRoute';
 import { Button } from './Button';
 
 interface ErrorBoundaryProps {
 	children: ReactNode;
 	fallback?: ReactNode;
 	onRetry?: () => void;
+	onError?: (error: Error) => void;
 }
 
 interface ErrorBoundaryState {
@@ -26,16 +28,21 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
 	componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
 		console.error('[ErrorBoundary] Caught error:', error, errorInfo.componentStack);
+		this.props.onError?.(error);
 	}
 
 	handleRetry = (): void => {
+		if (isChunkLoadError(this.state.error)) {
+			window.location.reload();
+			return;
+		}
 		this.props.onRetry?.();
 		this.setState({ hasError: false, error: null });
 	};
 
 	render(): ReactNode {
 		if (this.state.hasError) {
-			if (this.props.fallback) {
+			if (this.props.fallback !== undefined) {
 				return this.props.fallback;
 			}
 
@@ -47,7 +54,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 							{this.state.error?.message || 'An unexpected error occurred'}
 						</p>
 						<Button variant="default" className="mt-2" onPress={this.handleRetry}>
-							Try again
+							{isChunkLoadError(this.state.error) ? 'Reload page' : 'Try again'}
 						</Button>
 						<ReportProblemAction error={this.state.error?.message} />
 					</div>

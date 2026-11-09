@@ -12,7 +12,7 @@ export function AppAccessError({
 }) {
 	return (
 		<div role="alert" className="flex flex-1 flex-col items-center justify-center gap-3 p-6">
-			<h1 className="text-lg font-semibold">Unable to open apps</h1>
+			<h1 className="text-lg font-semibold">Unable to open</h1>
 			<p className="text-sm text-muted-foreground">{error.message}</p>
 			{onRetry ? (
 				<Button onPress={onRetry} isDisabled={isRetrying}>

@@ -1,14 +1,6 @@
-import { lazy, Suspense } from 'react';
-import type { ComponentProps } from 'react';
+import { lazyDialog } from '@/components/ui/lazyDialog';
 
-const CreateProjectForm = lazy(() =>
-	import('./CreateProjectForm').then((module) => ({ default: module.CreateProjectForm })),
-);
-
-export function CreateProjectDialog(props: ComponentProps<typeof CreateProjectForm>) {
-	return props.isOpen ? (
-		<Suspense fallback={null}>
-			<CreateProjectForm {...props} />
-		</Suspense>
-	) : null;
-}
+export const CreateProjectDialog = lazyDialog(async () => {
+	const module = await import('./CreateProjectForm');
+	return { default: module.CreateProjectForm };
+});

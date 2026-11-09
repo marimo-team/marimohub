@@ -1,9 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import { jsonError, jsonOk, renderHookWithClient } from '@/test/render';
 import { deferred } from '@/test/deferred';
 import { useDeepLinkQuery } from './deepLinks';
 import { appKeys } from './queryKeys';
+
+afterEach(() => vi.unstubAllGlobals());
 
 const target = { kind: 'app', project_id: 'project', notebook_id: 'notebook' };
 const appKey = appKeys.detail(target.project_id, target.notebook_id);
