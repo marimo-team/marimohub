@@ -186,6 +186,17 @@ describe('createServices tracing option', () => {
 			preview?.spanContext().spanId,
 		);
 	});
+	it('does not record an exception for an optional missing project', async () => {
+		const services = createServices(new MemoryBucket(), undefined, { tracing: true });
+		const pid = createProjectId();
+		await expect(services.projects.findProject(pid)).resolves.toBeNull();
+		const spans = exporter.getFinishedSpans();
+		expect(spans.find((span) => span.name === 'ProjectService.findProject')?.attributes).toEqual({
+			'marimohub.project_id': pid,
+		});
+		expect(spans.every((span) => span.status.code !== 2 && span.events.length === 0)).toBe(true);
+		await expect(services.projects.getProject(pid)).rejects.toThrow(NotFoundError);
+	});
 
 	it('identifies preview worker records without tracing source names or request fingerprints', async () => {
 		const services = createServices(new MemoryBucket(), undefined, { tracing: true });

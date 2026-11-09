@@ -76,7 +76,7 @@ describe('integration search source', () => {
 		const bucket = new MemoryBucket();
 		const index = new MemorySearchIndex();
 		const services = createServices(bucket);
-		vi.spyOn(services.projects, 'getProject').mockResolvedValue(f.project);
+		vi.spyOn(services.projects, 'findProject').mockResolvedValue(f.project);
 		const indexer = new SearchIndexer(
 			bucket,
 			index,

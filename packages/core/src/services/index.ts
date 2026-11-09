@@ -574,6 +574,7 @@ export function createServices(
 		),
 		{
 			getProject: project,
+			findProject: project,
 			updateProject: project,
 			deleteProject: project,
 			hardDeleteProject: project,
