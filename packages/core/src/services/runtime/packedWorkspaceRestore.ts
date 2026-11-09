@@ -2,13 +2,13 @@ import type { ByteBudget } from './byteBudget';
 import { MAX_WORKSPACE_FILE_BYTES, MAX_WORKSPACE_FILES } from '../../constants';
 import { isSafeWorkspaceRootPath } from '../../integrations/remoteWorkspace';
 import { MAX_DECOMPRESSED_ARCHIVE_BYTES } from '../../integrations/workspaceArchive';
-import type { Bucket, BucketObjectBody } from '../../ports/bucket';
+import type { Bucket } from '../../ports/bucket';
 import { MAX_GIT_DIRECTORY_BYTES, MAX_GIT_DIRECTORY_FILES } from '../../ports/sourceControl';
 import type { SandboxInstance } from '../../ports/sandbox';
 import { shellQuote } from './shell';
 
 // Valid workspace and Git trees top out at 200 MiB; the remainder covers ZIP metadata.
-export const MAX_PACKED_ARCHIVE_BYTES = 256 * 1024 * 1024;
+const MAX_PACKED_ARCHIVE_BYTES = 256 * 1024 * 1024;
 
 export const EXTRACT_PACKED_WORKSPACE = String.raw`
 import os
@@ -177,44 +177,6 @@ export async function restorePackedWorkspace(
 	waitUntilReady?: () => Promise<void>,
 	prefetchBudget?: ByteBudget,
 ): Promise<PackedWorkspaceRestoreResult> {
-	return restorePackedSource(
-		sandbox,
-		() => bucket.get(archiveKey),
-		workingDir,
-		requireGit,
-		workspaceSubdirectory,
-		waitUntilReady,
-		prefetchBudget,
-	);
-}
-
-export function restorePackedWorkspaceBytes(
-	sandbox: SandboxInstance,
-	archive: Uint8Array,
-	workingDir: string,
-): Promise<PackedWorkspaceRestoreResult> {
-	return restorePackedSource(
-		sandbox,
-		async () => ({ size: archive.byteLength, bytes: async () => archive }),
-		workingDir,
-		false,
-		'',
-		undefined,
-		undefined,
-		`.marimohub-packed-restore-${crypto.randomUUID()}`,
-	);
-}
-
-async function restorePackedSource(
-	sandbox: SandboxInstance,
-	load: () => Promise<Pick<BucketObjectBody, 'size' | 'bytes'> | null>,
-	workingDir: string,
-	requireGit: boolean,
-	workspaceSubdirectory = '',
-	waitUntilReady?: () => Promise<void>,
-	prefetchBudget?: ByteBudget,
-	temporaryName = '.marimohub-packed-restore',
-): Promise<PackedWorkspaceRestoreResult> {
 	let cleanup: (() => Promise<unknown>) | undefined;
 	let prefetched: Disposable | undefined;
 	try {
@@ -222,10 +184,10 @@ async function restorePackedSource(
 		if (!isSafeWorkspaceRootPath(workspaceSubdirectory)) {
 			throw new Error('Packed workspace restore requires a safe workspace subdirectory');
 		}
-		const temporaryRoot = `${normalizedWorkingDir}/${temporaryName}`;
+		const temporaryRoot = `${normalizedWorkingDir}/.marimohub-packed-restore`;
 		const archivePath = `${temporaryRoot}/workspace.zip`;
 		const scriptPath = `${temporaryRoot}/extract.py`;
-		const object = await load();
+		const object = await bucket.get(archiveKey);
 		if (!object) return { status: 'missing' };
 		if (object.size > MAX_PACKED_ARCHIVE_BYTES) {
 			throw new Error('Packed workspace archive exceeds the transport limit');

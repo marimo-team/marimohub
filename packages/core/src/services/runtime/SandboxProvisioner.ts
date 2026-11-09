@@ -1,5 +1,3 @@
-import { runtimePackageCommand } from './runtimePackageCommand';
-import { withSandboxFileWriter } from './sandboxFileWriter';
 import { mergeRuntimeContributions } from './runtimeContributions';
 import { AGENT_CONTEXT_DIR_ENV } from './sandboxEnvironment';
 import type { SessionEnv } from './sandboxEnvironment';
@@ -228,7 +226,7 @@ export interface BootedSandbox {
 export interface WorkspacePrefetch {
 	consume(
 		waitUntilReady: () => Promise<void>,
-		target?: SandboxInstance,
+		writeFiles?: SandboxInstance['writeFiles'],
 	): Promise<WorkspaceLoadResult>;
 	cancel(): Promise<void>;
 }
@@ -558,7 +556,7 @@ async function withSandboxSpan<T>(
 }
 
 export interface WorkspaceLoadContext {
-	packLargeWorkspace?: boolean;
+	writeFiles?: SandboxInstance['writeFiles'];
 	workspaceLimits?: WorkspaceLimits;
 	overlay?: WorkspaceOverlay;
 	sandbox: SandboxInstance;
@@ -608,7 +606,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		prefetchBudget,
 		overlay,
 		workspaceLimits,
-		packLargeWorkspace,
+		writeFiles,
 	}: WorkspaceLoadContext): Promise<WorkspaceLoadResult> {
 		if (!bucketHandle) {
 			throw provisionFailure(
@@ -619,7 +617,7 @@ class CopyWorkspaceLoadStrategy implements WorkspaceLoadStrategy {
 		try {
 			const stats = await restoreWorkspace(sandbox, bucketHandle, workspacePrefix, mountPath, {
 				limits: workspaceLimits,
-				packLargeWorkspace,
+				writeFiles,
 				// Capture treats absent files as deletions, so a session must restore every file.
 				requireComplete: true,
 				overlay,
@@ -709,7 +707,7 @@ function normalizeAbsoluteSandboxPath(value: string): string {
 }
 
 async function writeSessionFiles(
-	sandbox: SandboxInstance,
+	writeFiles: SandboxInstance['writeFiles'],
 	files: NonNullable<SessionEnv['files']>,
 	kernelAuthToken?: string,
 ): Promise<void> {
@@ -723,7 +721,7 @@ async function writeSessionFiles(
 	const batch = [...files];
 	if (kernelAuthToken !== undefined)
 		batch.push({ path: KERNEL_AUTH_TOKEN_FILE, content: kernelAuthToken });
-	if (batch.length > 0) await sandbox.writeFiles(batch);
+	if (batch.length > 0) await writeFiles(batch);
 }
 
 /**
@@ -756,17 +754,23 @@ export class SandboxProvisioner {
 	}
 
 	prefetchWorkspace(sandbox: SandboxInstance, options: ProvisionOptions): WorkspacePrefetch {
-		const gate = Promise.withResolvers<void>();
+		const gate = Promise.withResolvers<SandboxInstance['writeFiles']>();
 		gate.promise.catch(() => {});
 		const { layout, prefix } = workspaceLocation(options);
-		let target = sandbox;
-		const writer = withSandboxFileWriter(sandbox, (files) => target.writeFiles(files));
-		const loaded = this.loadWorkspace(writer, options, layout, prefix, () => gate.promise);
+		const loaded = this.loadWorkspace(
+			sandbox,
+			options,
+			layout,
+			prefix,
+			async () => {
+				await gate.promise;
+			},
+			async (files) => (await gate.promise)(files),
+		);
 		loaded.catch(() => {});
 		return {
-			consume(waitUntilReady, destination) {
-				target = destination ?? sandbox;
-				gate.resolve(waitUntilReady());
+			consume(waitUntilReady, writeFiles = sandbox.writeFiles.bind(sandbox)) {
+				gate.resolve(waitUntilReady().then(() => writeFiles));
 				return loaded;
 			},
 			async cancel() {
@@ -905,25 +909,25 @@ export class SandboxProvisioner {
 		let bridgeUnavailable = false;
 		const setupPrefix: MarimoLaunchPlan['setup'] = [];
 		const installers: (() => Promise<void>)[] = [];
-		const extrasReady = Promise.withResolvers<void>();
-		extrasReady.promise.catch(() => {});
-		const staged = combineWrites
-			? withSandboxFileWriter(sandbox, async (files) => {
+		let extrasReady = false;
+		const writeFiles = sandbox.writeFiles.bind(sandbox);
+		const stageFiles: SandboxInstance['writeFiles'] = combineWrites
+			? async (files) => {
 					extraFiles.push(...files);
-				})
-			: sandbox;
-		const stagedBridge = combineWrites
-			? withSandboxFileWriter(sandbox, async (files) => {
+				}
+			: writeFiles;
+		const stageBridge: SandboxInstance['writeFiles'] = combineWrites
+			? async (files) => {
 					bridgeFiles.push(...files);
-				})
-			: sandbox;
+				}
+			: writeFiles;
 		let sharedWrite: Promise<void> | undefined;
 		const flush = async (files: readonly SandboxFileWrite[]) => {
-			if (files.some(({ path }) => /\/\.marimohub-packed-restore(?:-[a-f0-9-]+)?\//.test(path))) {
-				await sandbox.writeFiles(files);
+			// Slow credential resolution must not hold up an otherwise-ready workspace transfer.
+			if (!extrasReady) {
+				if (files.length > 0) await writeFiles(files);
 				return;
 			}
-			await extrasReady.promise;
 			if (sharedWrite) {
 				await sharedWrite;
 				if (files.length > 0) await sandbox.writeFiles(files);
@@ -938,7 +942,7 @@ export class SandboxProvisioner {
 					await sandbox.writeFiles([...batch, ...bridgeFiles]);
 				} catch (error) {
 					if (bridgeFiles.length === 0) throw error;
-					if (batch.length > 0) await sandbox.writeFiles(batch);
+					if (batch.length > 0) await writeFiles(batch);
 					bridgeUnavailable = true;
 					logEvent(
 						{
@@ -960,15 +964,11 @@ export class SandboxProvisioner {
 			}
 			extraFiles.length = 0;
 			bridgeFiles.length = 0;
-			// These fields overlap: credentials and bridge bytes share the workspace transfer.
+			// Credential and bridge timings overlap; files overlaps only when this flush includes workspace files.
 			sw.timings.inject_files = Date.now() - started;
 			if (options.notebookBridge) sw.timings.bridge_prepare = sw.timings.inject_files;
 		};
-		// Packed restores require an empty destination until extraction finishes.
-		const workspaceSandbox =
-			!combineWrites || options.workspaceArchive || options.gitPrefix
-				? sandbox
-				: withSandboxFileWriter(sandbox, flush);
+		const workspaceWriter = combineWrites && !options.gitPrefix ? flush : undefined;
 
 		const ensureReachable = async () => {
 			if (options.bootedSandbox) {
@@ -984,8 +984,9 @@ export class SandboxProvisioner {
 				const loaded = await time(async () => {
 					const loaded = await (options.workspacePrefetch?.consume(
 						waitUntilReady,
-						workspaceSandbox,
-					) ?? this.loadWorkspace(workspaceSandbox, options, layout, prefix, waitUntilReady));
+						workspaceWriter,
+					) ??
+						this.loadWorkspace(sandbox, options, layout, prefix, waitUntilReady, workspaceWriter));
 					if (!loaded.overlayApplied) {
 						await this.applyWorkspaceOverlay(sandbox, options, mountPath);
 					}
@@ -1007,7 +1008,8 @@ export class SandboxProvisioner {
 		const injectSessionEnv = () =>
 			withSandboxSpan(sw, 'inject', async (time, span) => {
 				await this.injectSessionEnv(sandbox, options, time, mountPath, sw, {
-					staged,
+					writeFiles: stageFiles,
+					deferInstall: combineWrites,
 					setupPrefix,
 					installers,
 					deferSetup,
@@ -1027,7 +1029,7 @@ export class SandboxProvisioner {
 			});
 		const uploadBridge = () =>
 			launchStrategy.then(
-				(strategy) => this.uploadNotebookBridge(stagedBridge, options, sw, strategy),
+				(strategy) => this.uploadNotebookBridge(sandbox, options, sw, strategy, stageBridge),
 				// Setup reports strategy failures after workspace loading and injection finish.
 				(): undefined => {},
 			);
@@ -1084,17 +1086,12 @@ export class SandboxProvisioner {
 					});
 			},
 			async upload(): Promise<void> {
-				try {
-					await this.$.inject;
-					await this.$.bridge;
-					extrasReady.resolve();
-					await this.$.load;
-					if (combineWrites) await flush([]);
-					for (const install of installers) await install();
-				} catch (error) {
-					extrasReady.reject(error);
-					throw error;
-				}
+				await this.$.inject;
+				await this.$.bridge;
+				extrasReady = true;
+				await this.$.load;
+				if (combineWrites) await flush([]);
+				for (const install of installers) await install();
 			},
 			async setup(): Promise<MarimoStartup> {
 				await this.$.upload;
@@ -1120,6 +1117,7 @@ export class SandboxProvisioner {
 		options: ProvisionOptions,
 		sw: Stopwatch,
 		launchStrategy: MarimoLaunchStrategyName,
+		writeFiles = sandbox.writeFiles.bind(sandbox),
 	): Promise<string | undefined> {
 		const payload = options.notebookBridge;
 		if (
@@ -1134,7 +1132,7 @@ export class SandboxProvisioner {
 			await withSandboxSpan(sw, 'bridge_prepare', (time) =>
 				time(() =>
 					withDeadline(
-						sandbox.writeFiles(
+						writeFiles(
 							payload.files.map(({ name, content }) => ({ path: `${directory}/${name}`, content })),
 						),
 						{
@@ -1193,13 +1191,6 @@ export class SandboxProvisioner {
 				/(?:python -m )?marimo --quiet /,
 				`python ${shellQuote(launcher)} --quiet `,
 			);
-			startup.plan.setup.push({
-				name: 'notebook_bridge',
-				command: runtimePackageCommand(
-					mergeRuntimeContributions(await options.sessionEnv).runtimePackages ?? [],
-					`python ${shellQuote(launcher)} --install-only`,
-				),
-			});
 		} catch {
 			logEvent(
 				{
@@ -1250,6 +1241,7 @@ export class SandboxProvisioner {
 		layout: SandboxWorkspaceLayout,
 		workspacePrefix: string,
 		waitUntilReady: () => Promise<void>,
+		writeFiles?: SandboxInstance['writeFiles'],
 	): Promise<WorkspaceLoadResult> {
 		// Only a possible mount needs the integration result. Copy prefetch still overlaps resolution.
 		let workspaceOptions = options;
@@ -1274,6 +1266,7 @@ export class SandboxProvisioner {
 			layout,
 			workspacePrefix,
 			waitUntilReady,
+			writeFiles,
 		);
 		await waitUntilReady();
 		return loaded;
@@ -1285,6 +1278,7 @@ export class SandboxProvisioner {
 		layout: SandboxWorkspaceLayout,
 		workspacePrefix: string,
 		waitUntilReady: () => Promise<void>,
+		writeFiles?: SandboxInstance['writeFiles'],
 	): Promise<WorkspaceLoadResult> {
 		if (
 			options.workspaceLoadMode === 'copy-only' &&
@@ -1328,13 +1322,21 @@ export class SandboxProvisioner {
 				layout,
 				workspacePrefix,
 				waitUntilReady,
+				writeFiles,
 			);
 			return {
 				...fallback,
 				archiveStatus: packed.status === 'missing' ? 'missing' : 'failed',
 			};
 		}
-		return this.loadWorkspaceObjects(sandbox, options, layout, workspacePrefix, waitUntilReady);
+		return this.loadWorkspaceObjects(
+			sandbox,
+			options,
+			layout,
+			workspacePrefix,
+			waitUntilReady,
+			writeFiles,
+		);
 	}
 
 	private gitWorkdirCommand(layout: SandboxWorkspaceLayout): string {
@@ -1380,6 +1382,7 @@ export class SandboxProvisioner {
 		layout: SandboxWorkspaceLayout,
 		workspacePrefix: string,
 		waitUntilReady: () => Promise<void>,
+		writeFiles?: SandboxInstance['writeFiles'],
 	): Promise<WorkspaceLoadResult> {
 		const mountPath = layout.workdir;
 		const strategy =
@@ -1388,11 +1391,7 @@ export class SandboxProvisioner {
 				: this.workspaceLoadStrategies.mountOrCopy;
 		if (!strategy.supportsPrefetch) await waitUntilReady();
 		const load = strategy.load({
-			packLargeWorkspace: Boolean(
-				sandbox.supportsLaunchSetupOutput &&
-				!options.restoreFilesystemSnapshotId &&
-				!options.gitPrefix,
-			),
+			writeFiles,
 			overlay: options.workspaceOverlay,
 			workspaceLimits: options.workspaceLimits,
 			sandbox,
@@ -1475,7 +1474,8 @@ export class SandboxProvisioner {
 		workdir: string,
 		sw: Stopwatch,
 		batch: {
-			staged: SandboxInstance;
+			writeFiles: SandboxInstance['writeFiles'];
+			deferInstall: boolean;
 			setupPrefix: MarimoLaunchPlan['setup'];
 			installers: (() => Promise<void>)[];
 			deferSetup: boolean;
@@ -1525,7 +1525,7 @@ export class SandboxProvisioner {
 						normalizeAbsoluteSandboxPath(workdir) !== '/' &&
 						!files.some((file) => file.relativeTo === 'home')
 					)
-						return writeSessionFiles(batch.staged, files, kernelAuthToken);
+						return writeSessionFiles(batch.writeFiles, files, kernelAuthToken);
 					const prepared = await prepareAgentHomeFiles(
 						sandbox,
 						files,
@@ -1535,17 +1535,16 @@ export class SandboxProvisioner {
 					if (batch.deferSetup && prepared.input && prepared.command) {
 						const path =
 							prepared.payloadPath ?? `/tmp/.marimohub-agent-context-${crypto.randomUUID()}.json`;
-						if (!prepared.payloadPath)
-							await batch.staged.writeFiles([{ path, content: prepared.input }]);
+						if (!prepared.payloadPath) await batch.writeFiles([{ path, content: prepared.input }]);
 						const processPath = shellQuote(sandbox.resolveProcessPath?.(path) ?? path);
 						batch.setupPrefix.push({
 							name: 'agent_context',
 							command: `(${prepared.command} < ${processPath}; status=$?; rm -f ${processPath}; exit "$status")`,
 						});
-					} else if (prepared.install && batch.staged !== sandbox)
+					} else if (prepared.install && batch.deferInstall)
 						batch.installers.push(prepared.install);
-					await writeSessionFiles(batch.staged, prepared.files, kernelAuthToken);
-					if (batch.staged === sandbox) await prepared.install?.();
+					await writeSessionFiles(batch.writeFiles, prepared.files, kernelAuthToken);
+					if (!batch.deferInstall) await prepared.install?.();
 				};
 				await Promise.all([
 					sw.time('inject_files', writeFiles),

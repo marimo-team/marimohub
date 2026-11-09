@@ -29,7 +29,7 @@ import {
 import { listFilesFailure } from '@marimo-hub/core/ports/sandbox';
 import { expectExecResult, expectFileResult } from '@marimo-hub/core/testing/result-assertions';
 import { coreWeaveProfileResources, CoreWeaveCompute } from './index';
-import type { CoreWeaveClient, CoreWeaveConfig } from './index';
+import type { CoreWeaveClient, CoreWeaveConfig, CoreWeaveSandbox } from './index';
 import { contractLaunchProcess, fakeProcess, makeWorld, procResult } from './testWorld';
 import { instrumentCoreWeaveClient } from './tracing';
 
@@ -3063,7 +3063,10 @@ it('forwards large file streams through the tracing client', async () => {
 	expect(writeStream).toHaveBeenCalledOnce();
 	expect(writeStream.mock.calls[0][0]).toBe('/workspace/large.bin');
 	expect(writeStream.mock.calls[0][1]).toBe(content);
-	expect(writeStream.mock.calls[0][2]).toEqual({ timeoutMs: 60_000 });
+	expect(writeStream.mock.calls[0][2]).toEqual({
+		timeoutMs: 60_000,
+		signal: expect.any(AbortSignal),
+	});
 	expect(world.registry.get('cw-1')!.fake.batchWrites).toEqual([]);
 });
 
@@ -3197,5 +3200,146 @@ it.each(['ready', 'setup_exit', 'setup_timeout'] as const)(
 				stderr: expect.stringContaining('setup stderr'),
 			});
 		}
+	},
+);
+
+function packedWriterExits(exitCodes: number[], rejectClosedStdin = false) {
+	const world = makeWorld();
+	const create = world.client.create.bind(world.client);
+	const runFromTemplate = world.client.runFromTemplate.bind(world.client);
+	const commands: string[][] = [];
+	const wrap = (sandbox: CoreWeaveSandbox): CoreWeaveSandbox => {
+		return {
+			...sandbox,
+			commands: {
+				...sandbox.commands,
+				async start(command) {
+					commands.push([...command]);
+					const exitCode = exitCodes.shift() ?? 0;
+					return {
+						...fakeProcess({ exitCode }),
+						stdin: {
+							async write() {
+								if (rejectClosedStdin && exitCode === 127)
+									throw new CWSandboxValidationError('Cannot write stdin after process exited');
+							},
+							async close() {},
+						},
+					};
+				},
+			},
+		};
+	};
+	world.client.create = async (options) => wrap(await create(options));
+	world.client.runFromTemplate = async (templateId, options) =>
+		wrap(await runFromTemplate(templateId, options));
+	return { world, commands };
+}
+
+it.each([
+	{ completedBatches: 0, rejectClosedStdin: false },
+	{ completedBatches: 0, rejectClosedStdin: true },
+	{ completedBatches: 1, rejectClosedStdin: false },
+	{ completedBatches: 1, rejectClosedStdin: true },
+])(
+	'falls back only for remaining files when python3 is missing (%j)',
+	async ({ completedBatches, rejectClosedStdin }) => {
+		const { world, commands } = packedWriterExits(
+			[...Array(completedBatches).fill(0), 127],
+			rejectClosedStdin,
+		);
+		const instance = makeCompute(world, { ...baseConfig, image: 'custom-without-python' }).create(
+			SANDBOX_ID,
+			{ reuse: false },
+		);
+		const files = Array.from({ length: 129 }, (_, i) => ({
+			path: `/workspace/${i}`,
+			content: 'data',
+		}));
+		await instance.writeFiles(files);
+		const fake = world.registry.get('cw-1')!.fake;
+		expect(commands).toHaveLength(completedBatches + 1);
+		expect(fake.batchWrites.flat()).toEqual(files.slice(completedBatches * 128));
+		await instance.writeFiles(files.slice(0, 9));
+		expect(commands).toHaveLength(completedBatches + 1);
+		expect(fake.batchWrites.flat()).toEqual([
+			...files.slice(completedBatches * 128),
+			...files.slice(0, 9),
+		]);
+	},
+);
+
+it.each([1, 126])(
+	'does not hide packed receiver failures with unary fallback (exit %i)',
+	async (exitCode) => {
+		const { world, commands } = packedWriterExits([exitCode]);
+		const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+		await expect(instance.writeFiles(packedFiles(129))).rejects.toThrow(
+			'Could not write sandbox file batch',
+		);
+		expect(commands).toHaveLength(1);
+		expect(world.registry.get('cw-1')!.fake.batchWrites).toEqual([]);
+	},
+);
+
+it('does not rearm a confirmed bootstrap when a later packed batch fails', async () => {
+	const { world, commands } = packedWriterExits([0, 1]);
+	const instance = makeCompute(world, { ...baseConfig, userHomeTemplateId: 'tmpl-home' }).create(
+		SANDBOX_ID,
+		{
+			reuse: false,
+			userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
+		},
+	);
+	const files = Array.from({ length: 129 }, (_, i) => ({
+		path: `/mnt/ada@example.com/${i}`,
+		content: 'data',
+	}));
+	await expect(instance.writeFiles(files)).rejects.toThrow('Could not write sandbox file batch');
+	expect(commands[0][2]).toContain("ln -s '/var/run/marimohub/user-home'");
+	expect(commands[1][2]).not.toContain('ln -s');
+	await instance.exec('true');
+	expect(world.registry.get('cw-1')!.fake.runCalls.at(-1)).toEqual(['sh', '-lc', 'true']);
+});
+
+it('rearms an unconfirmed bootstrap for a retry after the first packed batch fails', async () => {
+	const { world, commands } = packedWriterExits([1, 0]);
+	const instance = makeCompute(world, { ...baseConfig, userHomeTemplateId: 'tmpl-home' }).create(
+		SANDBOX_ID,
+		{
+			reuse: false,
+			userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
+		},
+	);
+	await expect(instance.writeFiles(packedFiles())).rejects.toThrow(
+		'Could not write sandbox file batch',
+	);
+	await instance.writeFiles(packedFiles());
+	expect(commands[1]).toEqual(commands[0]);
+	expect(commands[1][2]).toContain("ln -s '/var/run/marimohub/user-home'");
+});
+
+it.each([0, 1])(
+	'only rearms an unconfirmed home bootstrap on exit 127 (%i completed batches)',
+	async (completedBatches) => {
+		const { world } = packedWriterExits([...Array(completedBatches).fill(0), 127]);
+		const instance = makeCompute(world, { ...baseConfig, userHomeTemplateId: 'tmpl-home' }).create(
+			SANDBOX_ID,
+			{
+				reuse: false,
+				userHome: { key: 'ada@example.com', path: '/mnt/ada@example.com' },
+			},
+		);
+		const files = Array.from({ length: 129 }, (_, i) => ({
+			path: `/mnt/ada@example.com/${i}`,
+			content: 'data',
+		}));
+		await instance.writeFiles(files);
+		const fake = world.registry.get('cw-1')!.fake;
+		expect(fake.runCalls).toHaveLength(completedBatches === 0 ? 1 : 0);
+		if (completedBatches === 0) {
+			expect(fake.runCalls[0][2]).toContain("ln -s '/var/run/marimohub/user-home'");
+		}
+		expect(fake.batchWrites.flat()).toEqual(files.slice(completedBatches * 128));
 	},
 );

@@ -244,8 +244,8 @@ export interface SandboxInstance {
 	unmountBucket(mountPath: string): Promise<void>;
 	startProcess(cmd: string, options?: StartProcessOptions): Promise<SandboxProcess>;
 	/**
-	 * Opt into shared workspace/session/bridge writes, setup inside launchProcess,
-	 * and ZIP restore for large fresh workspaces. Requires binary-safe writeFiles,
+	 * Opt into opportunistic workspace/session/bridge writes and setup inside launchProcess.
+	 * Requires binary-safe writeFiles,
 	 * python3 on PATH for the command transport, and launchProcess results with
 	 * separate setup stdout/stderr on success and failure. Headless prepare()
 	 * still completes setup before it returns.

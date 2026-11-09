@@ -653,7 +653,6 @@ describe('SandboxProvisioner', () => {
 			new SandboxProvisioner(fakeComputeFrom(baseline.instance)).provision(options),
 		]);
 		expect(calls.exec).toHaveLength(baseline.calls.exec.length);
-		expect(calls.exec.at(-1)).toContain('--install-only');
 		expect(calls.writeFiles).toEqual(baseline.calls.writeFiles);
 		expect(calls.setEnvVars).toHaveLength(baseline.calls.setEnvVars.length);
 		expect(calls.startProcess).toHaveLength(baseline.calls.startProcess.length);
@@ -4775,6 +4774,15 @@ describe('combined sandbox preparation', () => {
 			const input = options();
 			const nb = paths.project(input.projectId).notebook(input.notebookId);
 			await bucketHandle.put(nb.workspaceFile('notebook.py'), 'import marimo');
+			await bucketHandle.put(nb.workspaceFile('.marimohub-packed-restore/user-file'), 'ordinary');
+			const readGate = deferred<void>();
+			const reading = deferred<void>();
+			const get = bucketHandle.get.bind(bucketHandle);
+			bucketHandle.get = async (key: string) => {
+				reading.resolve();
+				await readGate.promise;
+				return get(key);
+			};
 			const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
 			const configured = {
 				...input,
@@ -4797,12 +4805,16 @@ describe('combined sandbox preparation', () => {
 				},
 				bridgeParentOrigin: 'https://hub.example',
 			};
-			const result = await provisioner.provision({
+			const provision = provisioner.provision({
 				...configured,
 				...(prefetch
 					? { workspacePrefetch: provisioner.prefetchWorkspace(instance, configured) }
 					: {}),
 			});
+			await reading.promise;
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			readGate.resolve();
+			const result = await provision;
 			expect(calls.writeFiles).toHaveLength(1);
 			const files = calls.writeFiles[0];
 			expect(files).toEqual(
@@ -4820,7 +4832,7 @@ describe('combined sandbox preparation', () => {
 			const setup = vi.mocked(instance.launchProcess).mock.calls[0][1].setup!;
 			expect(setup).toContain('uv sync');
 			expect(setup).toContain('agent_context');
-			expect(setup).toContain('--install-only');
+			expect(setup).not.toContain('--install-only');
 			expect(setup).not.toContain('private-instructions');
 			expect(setup).not.toContain('private-env');
 			expect(exposure).toHaveBeenCalledOnce();
@@ -5057,3 +5069,50 @@ it.each([
 	).rejects.toMatchObject({ name: 'PythonEnvironmentSetupError', message });
 	expect(calls.destroy).toBe(1);
 });
+
+it.each([false, true])(
+	'uploads workspace files before slow credentials resolve (prefetch: %s)',
+	async (prefetch) => {
+		const { instance, calls } = makeFakeSandbox();
+		Object.assign(instance, { supportsLaunchSetupOutput: true, supportsBucketMount: false });
+		instance.ready = async () => {};
+		instance.launchProcess = async (command, launch) => ({
+			success: true,
+			process: await instance.startProcess(command, launch),
+			timings: { setup: 0, start: 0, waitport: 0 },
+		});
+		const credentials = deferred<{ files: { path: string; content: string }[] }>();
+		const bucketHandle = new MemoryBucket();
+		const input = {
+			sandboxId: createSandboxId(),
+			projectId: createProjectId(),
+			notebookId: createNotebookId(),
+			hostname: 'localhost',
+			bucket: bucketConfig,
+			bucketHandle,
+			workspaceLoadMode: 'copy-only' as const,
+			sessionEnv: credentials.promise,
+		};
+		await bucketHandle.put(
+			paths.project(input.projectId).notebook(input.notebookId).workspaceFile('notebook.py'),
+			'notebook',
+		);
+		const provisioner = new SandboxProvisioner(fakeComputeFrom(instance));
+		const provision = provisioner.provision({
+			...input,
+			...(prefetch ? { workspacePrefetch: provisioner.prefetchWorkspace(instance, input) } : {}),
+		});
+		try {
+			await vi.waitFor(() => expect(calls.writeFiles).toHaveLength(1));
+			expect(calls.writeFiles[0]).toEqual([
+				{ path: '/workspace/notebook.py', content: new TextEncoder().encode('notebook') },
+			]);
+			expect(calls.startProcess).toEqual([]);
+		} finally {
+			credentials.resolve({ files: [{ path: '/tmp/credentials', content: 'private' }] });
+		}
+		await provision;
+		expect(calls.writeFiles).toHaveLength(2);
+		expect(calls.writeFiles[1]).toEqual([{ path: '/tmp/credentials', content: 'private' }]);
+	},
+);

@@ -79,9 +79,10 @@ describe('createWandbCompute', () => {
 			const instance = createWandbCompute(baseConfig, world.client).create(SANDBOX_ID, {
 				reuse: false,
 			});
-			const write = instance.writeFiles(
-				Array.from({ length: 16 }, (_, i) => ({ path: `/w/${i}`, content: 'x' })),
-			);
+			const files = Array.from({ length: 16 }, (_, i) => ({ path: `/w/${i}`, content: 'x' }));
+			const write = instance
+				.writeFiles(files.slice(0, 8))
+				.then(() => instance.writeFiles(files.slice(8)));
 			await vi.advanceTimersByTimeAsync(99);
 			expect(started).toBe(8);
 			await vi.runAllTimersAsync();

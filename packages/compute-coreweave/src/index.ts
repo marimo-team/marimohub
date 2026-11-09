@@ -620,6 +620,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	private lastEnsureTimings?: Timings;
 	/** Shell snippet to splice onto the next command; see `takeBootstrap`. */
 	private pendingBootstrap?: string;
+	private packedWritesAvailable = true;
 	/** Blocking commands sent to this sandbox — one wide-event field per provision. */
 	private execCount = 0;
 	private counters = {
@@ -951,7 +952,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		cmd: string,
 		input: string | Uint8Array,
 		options?: ExecOptions,
-	): Promise<ExecResult> {
+	): Promise<{ result: ExecResult; exitCode: number | undefined }> {
 		const sandbox = await this.ensure();
 		this.counters.stream_execs++;
 		const process = await this.dataplane(() =>
@@ -977,8 +978,17 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 				await stdin.write(input, { timeoutMs: options?.timeout ?? 10_000 });
 				await stdin.close({ timeoutMs: options?.timeout ?? 10_000 });
 			})();
-			const [, { stdout, stderr, result }] = await Promise.all([sending, output]);
-			return execResult(result.exitCode === 0, stdout, stderr);
+			const [, { stdout, stderr, result }] = await Promise.all([
+				sending.catch((error) => {
+					// A missing receiver can exit before the SDK accepts stdin.
+					if (process.poll() !== 127) throw error;
+				}),
+				output,
+			]);
+			return {
+				result: execResult(result.exitCode === 0, stdout, stderr),
+				exitCode: result.exitCode,
+			};
 		} finally {
 			await cancelLaunchProcess(process);
 		}
@@ -987,12 +997,13 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 	async execInput(cmd: string, input: Uint8Array, options?: ExecOptions): Promise<ExecResult> {
 		await this.ensure();
 		this.execCount++;
-		return this.runRaw(this.takeBootstrap(cmd), input, options);
+		const { result } = await this.runRaw(this.takeBootstrap(cmd), input, options);
+		return result;
 	}
 
 	private readonly environment = new ShellEnvironment(async (path, content) => {
 		this.counters.env_writes++;
-		const result = await this.runRaw(privateEnvironmentWriteCommand(path), content);
+		const { result } = await this.runRaw(privateEnvironmentWriteCommand(path), content);
 		if (!result.success) throw new Error('Could not prepare sandbox environment');
 	});
 
@@ -1069,21 +1080,28 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			paths.add(file.path);
 		}
 		const sandbox = await this.ensure();
-		if (batch.length > 8) {
+		if (batch.length > 8 && this.packedWritesAvailable) {
 			// Serial batches fence later writes and keep the bootstrap ahead of every home write.
-			const bootstrap = this.pendingBootstrap;
-			const command = this.takeBootstrap(WRITE_BATCH_COMMAND);
+			let bootstrap = this.pendingBootstrap;
+			let command = this.takeBootstrap(WRITE_BATCH_COMMAND);
+			let written = 0;
 			try {
 				for (const packed of batchFileWrites(batch)) {
+					let missingReceiver = false;
 					for (let attempt = 0; ; attempt++) {
 						try {
-							await this.fileWriteSlots.run(sandbox.sandboxId, async () => {
-								this.counters.file_write_waves++;
-								const result = await this.runRaw(command, encodeFileWriteBatch(packed), {
-									timeout: FILE_WRITE_TIMEOUT_MS,
-								});
-								if (!result.success) throw new Error('Could not write sandbox file batch');
-							});
+							const { result, exitCode } = await this.fileWriteSlots.run(
+								sandbox.sandboxId,
+								async () => {
+									this.counters.file_write_waves++;
+									return this.runRaw(command, encodeFileWriteBatch(packed), {
+										timeout: FILE_WRITE_TIMEOUT_MS,
+									});
+								},
+							);
+							missingReceiver = exitCode === 127;
+							if (!result.success && !missingReceiver)
+								throw new Error('Could not write sandbox file batch');
 							break;
 						} catch (error) {
 							if (
@@ -1096,6 +1114,15 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 							});
 						}
 					}
+					if (missingReceiver) {
+						this.packedWritesAvailable = false;
+						this.pendingBootstrap ??= bootstrap;
+						await this.writeUnaryFiles(sandbox, batch.slice(written));
+						return;
+					}
+					bootstrap = undefined;
+					command = WRITE_BATCH_COMMAND;
+					written += packed.length;
 				}
 			} catch (error) {
 				this.pendingBootstrap ??= bootstrap;
@@ -1103,6 +1130,13 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			}
 			return;
 		}
+		await this.writeUnaryFiles(sandbox, batch);
+	}
+
+	private async writeUnaryFiles(
+		sandbox: CoreWeaveSandbox,
+		batch: readonly SandboxFileWrite[],
+	): Promise<void> {
 		// AddFile creates parent directories itself. The bootstrap links the user
 		// home into place, so a write beneath it must not race ahead of that.
 		if (this.pendingBootstrap && this.writesUnderUserHome(batch)) {

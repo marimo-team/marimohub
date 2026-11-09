@@ -215,8 +215,9 @@ A new compute backend only has to satisfy the `SandboxProvider` /
 unchanged whether the kernel runs in a Cloudflare Container, a Modal sandbox, or
 a local host subprocess.
 
-With `supportsLaunchSetupOutput`, the provisioner combines file transfers and runs setup inside the launch supervisor.
+With `supportsLaunchSetupOutput`, the provisioner combines ready file transfers and runs setup inside the launch supervisor.
 It requires separate setup stdout and stderr. CoreWeave supports this capability.
+Ordinary workspace loading accepts an explicit write callback. Slow credential resolution does not delay workspace uploads.
 Other adapters retain standalone setup, and headless `prepare()` completes setup before it returns.
 
 `execInput` sends internal requests through stdin without session environment injection.

@@ -41,16 +41,14 @@ The event omits file paths, contents, and server messages.
 Destinations must be unique absolute paths. The adapter checks and copies them before sandbox readiness.
 The SDK handles parent directories, file-size limits, streaming fallback, and transport routing.
 
-The packed receiver requires `python3` on PATH for `sh -c`, as provided by `images/marimo-sandbox/Dockerfile`.
+The packed receiver uses `python3` on PATH for `sh -c`, as provided by `images/marimo-sandbox/Dockerfile`.
+If the receiver exits 127, the adapter uses unary writes for the remaining files and subsequent transfers.
 User-home bootstrap precedes the receiver in the same command, without session environment injection.
 For SDK writes, files of at least 4 MiB use `writeStream` when available.
 
-CoreWeave combines workspace files, credentials, bridge files, and agent requests before launch.
-Fresh workspaces with more than 256 files can use ZIP restore within extractor limits and the shared memory budget.
-The hub reserves peak archive memory before reads and waits for readiness only before transfer.
-Archive transfers retain the 256 MiB cap and require an empty workspace.
-Otherwise, restoration uses ordinary file batches. Archive failures produce an operational log before fallback.
-Snapshot restores and mounted workspaces keep their existing paths.
+CoreWeave combines workspace files, credentials, bridge files, and agent requests when they are ready together.
+Slow credential resolution does not delay workspace uploads. Remaining files transfer before setup.
+Ordinary workspaces use bounded file batches. Existing synced archives, snapshot restores, and mounted workspaces keep their existing paths.
 
 ## Provision telemetry
 
@@ -69,7 +67,7 @@ Snapshot restores and mounted workspaces keep their existing paths.
 The session event uses `provision_first_dataplane_ms`.
 Kubernetes reports applicable counters but omits `file_writes` because it uses exec for file transfers.
 
-`files`, `inject_files`, and `bridge_prepare` include the shared transfer, so their durations overlap.
+When files share a transfer, `files`, `inject_files`, and `bridge_prepare` durations overlap.
 One packed transfer, one environment write, and one launch count as three command streams.
 
 `prepareExposure` publishes the kernel Ingress while files load. `exposePort` awaits the same publication.
