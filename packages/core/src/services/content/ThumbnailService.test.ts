@@ -386,7 +386,7 @@ describe('thumbnails', () => {
 			if (scope === 'project') {
 				await env.projects.deleteProject(pid, ACTOR);
 				await env.projects.hardDeleteProject(pid);
-				expect(await env.projects.sweepDeletedProjects(0)).toBe(1);
+				expect(await env.projects.sweepDeletedProjects(0)).toBe(0);
 			} else {
 				await env.notebooks.deleteNotebook(pid, nid, ACTOR);
 				await env.notebooks.hardDeleteNotebook(pid, nid);

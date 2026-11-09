@@ -377,14 +377,21 @@ export class ProjectService {
 		id: ProjectId,
 		options: { consistency?: ReadConsistency } = {},
 	): Promise<Project> {
+		const project = await this.findProject(id, options);
+		if (!project) throw new NotFoundError(`Project ${id} not found`);
+		return project;
+	}
+
+	async findProject(
+		id: ProjectId,
+		options: { consistency?: ReadConsistency } = {},
+	): Promise<Project | null> {
 		const key = paths.project(id).meta;
-		const project = await this.projectCache.read(
+		return this.projectCache.read(
 			[key],
 			(object) => readStored(ProjectSchema, object, key),
 			options.consistency,
 		);
-		if (!project) throw new NotFoundError(`Project ${id} not found`);
-		return project;
 	}
 
 	async createProject(input: CreateProjectInput, actor: UserId): Promise<Project> {
@@ -925,8 +932,8 @@ export class ProjectService {
 	 * Hard-delete a project's entire object subtree (`projects/{id}/`), reclaiming
 	 * every notebook file, version, README, and dep. Refuses unless the project is
 	 * soft-deleted (`status === 'deleted'`) so a live project can never be purged by
-	 * mistake. The destructive half of the soft-delete lifecycle; callers (the GC
-	 * sweep) own removing the snapshot entry.
+	 * mistake. Remove the snapshot entry only after cleanup succeeds so failures
+	 * remain discoverable by the GC sweep.
 	 */
 	async hardDeleteProject(id: ProjectId): Promise<void> {
 		const key = paths.project(id).meta;
@@ -954,39 +961,43 @@ export class ProjectService {
 		await new ResumableUploads(this.bucket, paths.project(id).objectUploadsPrefix).cancelAll();
 		const prefix = paths.project(id).meta.replace(/project\.json$/, '');
 		await deleteByPrefix(this.bucket, prefix);
+		await this.catalog.mutateSnapshot(
+			'project.gc',
+			SYSTEM_ACTOR,
+			(snap) => {
+				snap.projects = snap.projects.filter((p) => p.id !== id);
+				return snap;
+			},
+			{ project_ids: [id] },
+		);
 	}
 
 	/**
-	 * GC sweep: hard-delete soft-deleted projects whose grace period has elapsed
-	 * (deletion time = `updated_at`), then drop them from the snapshot. Returns the
-	 * number purged. Files are deleted first and the snapshot mutated LAST, so a
-	 * mid-sweep failure leaves the catalog pointing at a (possibly partially
-	 * deleted) project that is safe to retry. Idempotent.
+	 * Purge projects past their deletion grace period and finish interrupted deletions.
+	 * Read metadata because a failed catalog write can leave the entry marked active.
 	 */
 	async sweepDeletedProjects(
 		retentionMs: number = DEFAULT_DELETED_PROJECT_RETENTION_MS,
 	): Promise<number> {
 		const snapshot = await this.catalog.getCurrentSnapshot();
 		const now = Date.now();
-		const stale = snapshot.projects.filter(
-			(p) => p.status === 'deleted' && now - Date.parse(p.updated_at) >= retentionMs,
+		const candidates = await mapWithConcurrency(
+			snapshot.projects,
+			BUCKET_SCAN_CONCURRENCY,
+			async (entry) => {
+				const project = await this.findProject(entry.id);
+				return !project ||
+					(project.status === 'deleted' && now - Date.parse(project.updated_at) >= retentionMs)
+					? entry
+					: null;
+			},
 		);
+		const stale = candidates.filter((entry) => entry !== null);
 		if (stale.length === 0) return 0;
 
 		for (const p of stale) {
 			await this.hardDeleteProject(p.id);
 		}
-
-		const staleIds = new Set(stale.map((p) => p.id));
-		await this.catalog.mutateSnapshot(
-			'project.gc',
-			SYSTEM_ACTOR,
-			(snap: Snapshot) => ({
-				...snap,
-				projects: snap.projects.filter((p) => !staleIds.has(p.id)),
-			}),
-			{ project_ids: stale.map((p) => p.id) },
-		);
 
 		return stale.length;
 	}

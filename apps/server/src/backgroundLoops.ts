@@ -76,12 +76,30 @@ class LoopStoppedError extends Error {
 	override name = 'LoopStoppedError';
 }
 
+function errorCode(error: unknown): string | number | undefined {
+	if (!(error instanceof Error) || !('code' in error)) return undefined;
+	const code = error.code;
+	return typeof code === 'string' || (typeof code === 'number' && Number.isFinite(code))
+		? code
+		: undefined;
+}
+
 function logFailure(event: string, error: unknown, fields: Record<string, unknown> = {}) {
+	const name = error instanceof Error ? error.name : undefined;
+	const cause = error instanceof Error && error.cause instanceof Error ? error.cause : undefined;
+	const code = errorCode(error) ?? errorCode(cause);
+	// Some clients rename socket failures to TimeoutError without changing their code.
+	const renamedConnectionError =
+		name === 'TimeoutError' && (code === 'ECONNRESET' || code === 'EPIPE');
 	logEvent({
 		level: 'error',
 		event,
 		error: error instanceof Error ? error.message : String(error),
-		name: error instanceof Error ? error.name : undefined,
+		name: renamedConnectionError ? code : name,
+		code,
+		original_name: renamedConnectionError ? name : undefined,
+		cause_name: cause?.name,
+		cause_code: errorCode(cause),
 		...fields,
 	});
 }

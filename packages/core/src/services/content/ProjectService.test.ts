@@ -1158,7 +1158,7 @@ describe('ProjectService', () => {
 
 			const snapshot = await catalog.getCurrentSnapshot();
 			expect(updated.name).toBe('Delayed');
-			expect(snapshot.projects[0].status).toBe('deleted');
+			expect(snapshot.projects).toEqual([]);
 		});
 
 		it('returns 412 when If-Match becomes stale during the CAS', async () => {
@@ -1341,7 +1341,7 @@ describe('ProjectService', () => {
 			}
 		});
 
-		it('projects its tombstone when hard deletion wins before the catalog write', async () => {
+		it('does not restore an entry when hard deletion wins before the catalog write', async () => {
 			const created = await projects.createProject({ name: 'Doomed', description: 'D' }, ACTOR);
 			const realUpdateEntry = catalog.updateProjectEntry.bind(catalog);
 			let purged = false;
@@ -1357,7 +1357,7 @@ describe('ProjectService', () => {
 
 			const snapshot = await catalog.getCurrentSnapshot();
 			expect(purged).toBe(true);
-			expect(snapshot.projects[0].status).toBe('deleted');
+			expect(snapshot.projects).toEqual([]);
 		});
 
 		it('marks the project deleted but retains its bytes', async () => {
@@ -1406,6 +1406,27 @@ describe('ProjectService', () => {
 	});
 
 	describe('hardDeleteProject', () => {
+		it('removes the catalog entry and is idempotent', async () => {
+			const project = await projects.createProject({ name: 'Doomed', description: '' }, ACTOR);
+			await projects.deleteProject(project.id, ACTOR);
+			await projects.hardDeleteProject(project.id);
+			const snapshot = await catalog.getCurrentSnapshot();
+			expect(snapshot.projects).toEqual([]);
+			await projects.hardDeleteProject(project.id);
+			expect((await catalog.getCurrentSnapshot()).snapshot_id).toBe(snapshot.snapshot_id);
+		});
+
+		it('leaves failed cleanup discoverable for the next sweep', async () => {
+			const project = await projects.createProject({ name: 'Doomed', description: '' }, ACTOR);
+			await projects.deleteProject(project.id, ACTOR);
+			vi.spyOn(catalog, 'mutateSnapshot').mockRejectedValueOnce(new Error('catalog unavailable'));
+			await expect(projects.hardDeleteProject(project.id)).rejects.toThrow('catalog unavailable');
+			expect(await bucket.get(paths.project(project.id).meta)).toBeNull();
+			expect((await catalog.getCurrentSnapshot()).projects.map((p) => p.id)).toContain(project.id);
+			expect(await projects.sweepDeletedProjects()).toBe(1);
+			expect((await catalog.getCurrentSnapshot()).projects).toEqual([]);
+		});
+
 		it('preserves retiring sandboxes and deletion fences after their project files are purged', async () => {
 			const project = await projects.createProject({ name: 'App project', description: '' }, ACTOR);
 			const notebook = await notebooks.createNotebook(
@@ -1601,6 +1622,30 @@ describe('ProjectService', () => {
 	});
 
 	describe('sweepDeletedProjects', () => {
+		it('repairs missing metadata and stale active projections', async () => {
+			const missing = await projects.createProject({ name: 'Missing', description: '' }, ACTOR);
+			const deleted = await projects.createProject({ name: 'Deleted', description: '' }, ACTOR);
+			await bucket.delete(paths.project(missing.id).meta);
+			await bucket.put(
+				paths.project(deleted.id).meta,
+				JSON.stringify({ ...deleted, status: 'deleted' }),
+			);
+			expect(await projects.sweepDeletedProjects(0)).toBe(2);
+			expect((await catalog.getCurrentSnapshot()).projects).toEqual([]);
+			expect(await projects.sweepDeletedProjects(0)).toBe(0);
+		});
+
+		it('preserves catalog entries when a metadata read fails', async () => {
+			const project = await projects.createProject({ name: 'Live', description: '' }, ACTOR);
+			const get = bucket.get.bind(bucket);
+			vi.spyOn(bucket, 'get').mockImplementation((key, options) => {
+				if (key === paths.project(project.id).meta) throw new Error('storage unavailable');
+				return get(key, options);
+			});
+			await expect(projects.sweepDeletedProjects(0)).rejects.toThrow('storage unavailable');
+			expect((await catalog.getCurrentSnapshot()).projects.map((p) => p.id)).toEqual([project.id]);
+		});
+
 		it('purges only soft-deleted projects past the grace period', async () => {
 			// Project to be deleted, with a notebook and an extra version.
 			const doomed = await projects.createProject({ name: 'Doomed', description: 'D' }, ACTOR);
