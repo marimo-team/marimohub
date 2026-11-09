@@ -21,7 +21,7 @@ import type { AppPoolStore } from './AppPoolStore';
 import { getOrCreateWarmPool, WarmPoolMemberSchema } from './WarmPoolStore';
 import type { WarmPoolStore, WarmPoolMember } from './WarmPoolStore';
 
-export const WARM_POOL_MAX_IDLE_MS = 30 * 60_000;
+export const WARM_POOL_MAX_IDLE_MS = 6 * 60 * 60_000;
 const CLAIM_TIMEOUT_MS = 60_000;
 const RECONNECT_TIMEOUT_MS = 5_000;
 const PROBE_TIMEOUT_MS = 2_000;

@@ -20,7 +20,7 @@ Notebook files, credentials, and kernels load after assignment.
 If the probe fails or the claim expires, the route replaces the starting session's sandbox ID and repeats URL preparation.
 The old member remains owned until cleanup succeeds.
 
-Maintenance runs every five seconds under its own lease. Idle members rotate after at most 30 minutes, sooner for limited provider lifetimes.
+Maintenance runs every five seconds under its own lease. Healthy idle members rotate after at most six hours, sooner for limited provider lifetimes. Health checks do not extend this limit.
 Disabling pooling drains unassigned members. Unreadable ownership blocks orphan deletion.
 
 ## Provider boundary

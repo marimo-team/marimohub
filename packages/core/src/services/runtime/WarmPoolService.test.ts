@@ -787,19 +787,54 @@ describe('warm sandbox pools', () => {
 		expect(w.destroyed).toHaveLength(2);
 	});
 
+	it.each([undefined, 8 * 60 * 60_000])(
+		'keeps a healthy sandbox claimable after several idle hours with provider lifetime %s',
+		async (providerLifetimeMs) => {
+			const w = setup({ providerLifetimeMs, minimumRemainingMs: (4 * 60 + 12) * 60_000 });
+			await w.service.sweep();
+			const original = (await w.members())[0];
+			for (let interval = 0; interval < 6; interval++) {
+				w.advance(30 * 60_000);
+				await w.service.sweep();
+			}
+			expect(w.created).toEqual([original.sandbox_id]);
+			expect(w.destroyed).toEqual([]);
+			expect((await w.members())[0]).toMatchObject({
+				sandbox_id: original.sandbox_id,
+				ready_until: original.ready_until,
+				checked_at: w.now(),
+			});
+			expect((await claimWarm(w.service, w.request()))?.member.sandbox_id).toBe(
+				original.sandbox_id,
+			);
+		},
+	);
+
 	it.each([
-		{ providerLifetimeMs: undefined, age: WARM_POOL_MAX_IDLE_MS },
-		{ providerLifetimeMs: 90_000, age: 30_000 },
-	])('rotates before idle/provider lifetime expires: %j', async ({ providerLifetimeMs, age }) => {
-		const w = setup({ providerLifetimeMs });
-		await w.service.sweep();
-		const original = w.created[0];
-		w.advance(age);
-		expect(await claimWarm(w.service, w.request())).toBeUndefined();
-		await w.service.sweep();
-		expect(w.destroyed).toContain(original);
-		expect(w.created).toHaveLength(2);
-	});
+		{ providerLifetimeMs: undefined, minimumRemainingMs: 60_000, age: 6 * 60 * 60_000 },
+		{ providerLifetimeMs: 90_000, minimumRemainingMs: 60_000, age: 30_000 },
+		{
+			providerLifetimeMs: 8 * 60 * 60_000,
+			minimumRemainingMs: (4 * 60 + 12) * 60_000,
+			age: (3 * 60 + 48) * 60_000,
+		},
+	])(
+		'rotates before idle/provider lifetime expires: %j',
+		async ({ providerLifetimeMs, minimumRemainingMs, age }) => {
+			const w = setup({ providerLifetimeMs, minimumRemainingMs });
+			await w.service.sweep();
+			const original = w.created[0];
+			w.advance(age - 1);
+			await w.service.sweep();
+			expect(w.created).toEqual([original]);
+			expect(w.destroyed).toEqual([]);
+			w.advance(1);
+			expect(await claimWarm(w.service, w.request())).toBeUndefined();
+			await w.service.sweep();
+			expect(w.destroyed).toContain(original);
+			expect(w.created).toHaveLength(2);
+		},
+	);
 
 	it('rejects unreadable pool ownership rather than reporting an empty set', async () => {
 		const w = setup();
