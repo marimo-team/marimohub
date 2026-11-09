@@ -2130,10 +2130,18 @@ function startSessionRequest(
 
 // An abort surfaces as a failed stop, which halts a restart half-done (app
 // stopped, never restarted) while the server tears down anyway.
-function stopSessionRequest(projectId: string, notebookId: string, sessionId: string) {
+function stopSessionRequest(
+	projectId: string,
+	notebookId: string,
+	sessionId: string,
+	wait = false,
+) {
 	return apiData(
 		apiClient.DELETE('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}', {
-			params: { path: { pid: projectId, nid: notebookId, sid: sessionId } },
+			params: {
+				path: { pid: projectId, nid: notebookId, sid: sessionId },
+				...(wait ? { query: { wait: 'true' as const } } : {}),
+			},
 			timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
 		}),
 	);
@@ -2185,7 +2193,7 @@ async function restartEditorSessionRequest(
 	sessionId: string,
 ) {
 	try {
-		await stopSessionRequest(projectId, notebookId, sessionId);
+		await stopSessionRequest(projectId, notebookId, sessionId, true);
 	} catch (err) {
 		// A reaped session is already stopped, so the requested restart can continue.
 		if (!isNotFoundError(err)) throw err;

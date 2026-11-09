@@ -563,6 +563,7 @@ app.openapi(reclaimRuntimeSession, async (c) => {
 	} finally {
 		deps.services.runtimeInspection.invalidate();
 		await appendAudit(
+			deps,
 			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: actor.id },
 			'session.reclaim',
 			() =>
@@ -636,6 +637,7 @@ app.openapi(suspendUser, async (c) => {
 
 	const identity = await deps.services.identities.setSuspension(targetId, true);
 	await appendAudit(
+		deps,
 		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: actor.id },
 		'user.suspended',
 		() =>
@@ -657,6 +659,7 @@ app.openapi(unsuspendUser, async (c) => {
 
 	const identity = await deps.services.identities.setSuspension(targetId, false);
 	await appendAudit(
+		deps,
 		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: actor.id },
 		'user.unsuspended',
 		() =>

@@ -607,7 +607,7 @@ describe('edit session restart', () => {
 	function restartFetch(stop: () => Promise<Response>) {
 		return stubFetch(async (url, init) => {
 			const method = init?.method ?? 'GET';
-			if (method === 'DELETE' && String(url) === `${sessionsPath}/sess-1`) return stop();
+			if (method === 'DELETE' && String(url) === `${sessionsPath}/sess-1?wait=true`) return stop();
 			if (method === 'POST' && String(url) === sessionsPath) {
 				return jsonOk({ session_id: 'sess-2', mode: 'app' });
 			}
@@ -628,7 +628,7 @@ describe('edit session restart', () => {
 		});
 
 		const methods = fetchMock.mock.calls.map(([url, init]) => `${init?.method} ${requestUrl(url)}`);
-		expect(methods).toEqual([`DELETE ${sessionsPath}/sess-1`, `POST ${sessionsPath}`]);
+		expect(methods).toEqual([`DELETE ${sessionsPath}/sess-1?wait=true`, `POST ${sessionsPath}`]);
 		expect(await requestOf(fetchMock, 1).clone().text()).toBe(expectedBody);
 		expect(invalidatedKeys(spy)).toEqual([sessionKeys.listByProject(PID)]);
 	});

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { bestEffort, describeError, errorMetadataChain, logEvent } from './log';
+import { appendAudit, bestEffort, describeError, errorMetadataChain, logEvent } from './log';
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -169,5 +169,59 @@ describe('bestEffort', () => {
 			safe: true,
 			error: { error_name: 'Error' },
 		});
+	});
+});
+
+describe('appendAudit', () => {
+	it('awaits the existing audit if its scheduler rejects, without writing twice', async () => {
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+		const gate = Promise.withResolvers<void>();
+		const action = vi.fn(() => gate.promise);
+		const deps = {
+			backgroundTasks: {
+				defer() {
+					throw new Error('scheduler unavailable');
+				},
+			},
+		};
+		let settled = false;
+		const pending = Promise.resolve().then(() =>
+			appendAudit(deps, { method: 'POST', path: '/test', userId: 'test' }, 'test', action),
+		);
+		const completion = pending.then(() => {
+			settled = true;
+		});
+		const assertion = expect(completion).resolves.toBeUndefined();
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		gate.resolve();
+		await assertion;
+		expect(action).toHaveBeenCalledOnce();
+		expect(console.log).toHaveBeenCalledWith(expect.stringContaining('audit_schedule'));
+	});
+
+	it('defers audit completion through the host scheduler', async () => {
+		const gate = Promise.withResolvers<void>();
+		const tasks: Promise<unknown>[] = [];
+		let completed = false;
+		await appendAudit(
+			{
+				backgroundTasks: {
+					defer: (task) => {
+						tasks.push(task);
+					},
+				},
+			},
+			{ method: 'POST', path: '/test', userId: 'test' },
+			'test',
+			async () => {
+				await gate.promise;
+				completed = true;
+			},
+		);
+		expect(completed).toBe(false);
+		gate.resolve();
+		await Promise.all(tasks);
+		expect(completed).toBe(true);
 	});
 });

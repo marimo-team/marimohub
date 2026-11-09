@@ -1,10 +1,5 @@
-import { SessionLinkSchema } from '@marimo-hub/core/session-links';
-import { SEARCH_KINDS } from '@marimo-hub/core/search';
-import { OpenAPIHono, z } from '@hono/zod-openapi';
-import type { Context, TypedResponse } from 'hono';
-import { all } from 'better-all';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
+	deferOrAwait,
 	previewAvailable,
 	ASSIGNABLE_ROLES,
 	AuthorizationService,
@@ -41,8 +36,8 @@ import {
 	VIEWER_MODES,
 	SurfaceForbiddenError,
 } from '@marimo-hub/core';
-import { appendJobRunFinishEvent, isTerminalRunStatus } from '@marimo-hub/core/jobs';
 import type {
+	BackgroundWork,
 	AuthorizationDecision,
 	AuthorizationPolicy,
 	AuthorizationSubject,
@@ -65,6 +60,13 @@ import type {
 	UserId,
 	AuthenticatedPrincipal,
 } from '@marimo-hub/core';
+import { SessionLinkSchema } from '@marimo-hub/core/session-links';
+import { SEARCH_KINDS } from '@marimo-hub/core/search';
+import { OpenAPIHono, z } from '@hono/zod-openapi';
+import type { Context, TypedResponse } from 'hono';
+import { all } from 'better-all';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { appendJobRunFinishEvent, isTerminalRunStatus } from '@marimo-hub/core/jobs';
 import type { ApiDeps, HonoEnv } from './context';
 import { describeError, logEvent } from './log';
 
@@ -556,9 +558,32 @@ export async function assertSessionSurfaceAccess(
 	);
 }
 
+export function backgroundWorkFor(deps: ApiDeps): BackgroundWork | undefined {
+	return (
+		deps.backgroundWork ??
+		(deps.backgroundTasks
+			? {
+					defer: (_label, task) => deps.backgroundTasks!.defer(Promise.resolve().then(task)),
+				}
+			: undefined)
+	);
+}
+
+export async function deferTeardown(
+	deps: ApiDeps,
+	label: string,
+	task: () => Promise<unknown>,
+): Promise<void> {
+	const work = deps.teardownInline ? undefined : backgroundWorkFor(deps);
+	if (work) await deferOrAwait(work, label, task, deps.metrics);
+	else await task();
+}
+
 /** The retire seam (save + destroy + terminal mark + claim release) over this request's deps. */
 export function sessionRetirer(deps: ApiDeps): SessionRetirer {
 	return new SessionRetirer({
+		backgroundWork: backgroundWorkFor(deps),
+		metrics: deps.metrics,
 		sessions: deps.services.sessions,
 		notebooks: deps.services.notebooks,
 		compute: deps.compute,
@@ -603,7 +628,7 @@ export async function retireLiveApps(
 		return;
 	}
 	// Per-app, so one failure cannot strand the apps behind it.
-	for (const s of apps) {
+	await mapWithConcurrency(apps, BUCKET_SCAN_CONCURRENCY, async (s) => {
 		try {
 			const { session, transitioned } = await deps.services.sessions.beginTerminating(
 				pid,
@@ -619,7 +644,7 @@ export async function retireLiveApps(
 				error: describeError(err),
 			});
 		}
-	}
+	});
 }
 
 /**

@@ -17383,7 +17383,10 @@ export interface operations {
 	};
 	'sessions.terminate': {
 		parameters: {
-			query?: never;
+			query?: {
+				/** @description Wait for teardown to finish before responding. Use for restart. */
+				wait?: 'true' | 'false';
+			};
 			header?: never;
 			path: {
 				pid: string;
@@ -17394,7 +17397,7 @@ export interface operations {
 		};
 		requestBody?: never;
 		responses: {
-			/** @description Session terminated */
+			/** @description Session termination accepted (complete when wait=true) */
 			200: {
 				headers: {
 					[name: string]: unknown;

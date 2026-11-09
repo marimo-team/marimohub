@@ -915,6 +915,83 @@ describe('NotebookService', () => {
 		});
 	});
 
+	it('preserves committed content when deferred pruning fails and prunes on a later save', async () => {
+		const tasks: (() => Promise<unknown>)[] = [];
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		const service = new NotebookService(
+			bucket,
+			catalog,
+			metrics,
+			sessions,
+			undefined,
+			undefined,
+			undefined,
+			{
+				defer: (_label, task) => {
+					tasks.push(task);
+				},
+			},
+		);
+		const created = await service.createNotebook(
+			projectId,
+			{ title: 'N', description: '', code: 'initial' },
+			ACTOR,
+		);
+		for (let i = 0; i < MAX_VERSIONS; i++)
+			await service.updateNotebook(projectId, created.id, { code: `v${i}` }, ACTOR);
+		const remove = vi.spyOn(bucket, 'delete').mockRejectedValue(new Error('storage unavailable'));
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			await expect(Promise.all(tasks.splice(0).map((task) => task()))).resolves.toBeDefined();
+			expect(remove).toHaveBeenCalled();
+			expect(metrics.increment).toHaveBeenCalledWith('background.failed', 1, {
+				label: 'notebook.version_prune',
+			});
+			expect(await service.getNotebookContent(projectId, created.id)).toBe(`v${MAX_VERSIONS - 1}`);
+			expect(await countVersionFolders(bucket, projectId, created.id)).toBe(MAX_VERSIONS + 1);
+		} finally {
+			remove.mockRestore();
+			log.mockRestore();
+		}
+		await service.updateNotebook(projectId, created.id, { code: 'retry' }, ACTOR);
+		await Promise.all(tasks.map((task) => task()));
+		expect(await countVersionFolders(bucket, projectId, created.id)).toBe(MAX_VERSIONS);
+		expect(await service.getNotebookContent(projectId, created.id)).toBe('retry');
+	});
+
+	it('defers pruning until after saves return and preserves the newest versions', async () => {
+		const tasks: (() => Promise<unknown>)[] = [];
+		const service = new NotebookService(
+			bucket,
+			catalog,
+			undefined,
+			sessions,
+			undefined,
+			undefined,
+			undefined,
+			{
+				defer: (_label, task) => {
+					tasks.push(task);
+				},
+			},
+		);
+		const created = await service.createNotebook(
+			projectId,
+			{ title: 'N', description: 'd', code: 'initial' },
+			ACTOR,
+		);
+		const oldest = (await service.listVersions(projectId, created.id))[0].version_id;
+		for (let i = 0; i < MAX_VERSIONS + 2; i++)
+			await service.updateNotebook(projectId, created.id, { code: `v${i}` }, ACTOR);
+		expect(await countVersionFolders(bucket, projectId, created.id)).toBe(MAX_VERSIONS + 3);
+		await Promise.all(tasks.map((task) => task()));
+		expect(await countVersionFolders(bucket, projectId, created.id)).toBe(MAX_VERSIONS);
+		expect(
+			await bucket.head(paths.project(projectId).notebook(created.id).version(oldest).code),
+		).toBeNull();
+		expect(await service.getNotebookContent(projectId, created.id)).toBe(`v${MAX_VERSIONS + 1}`);
+	});
+
 	describe('updateNotebook', () => {
 		it('projects the latest metadata when catalog updates finish out of order', async () => {
 			const created = await notebooks.createNotebook(

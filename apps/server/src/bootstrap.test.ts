@@ -1,9 +1,16 @@
+import { ACTOR } from '@marimo-hub/core/testing';
 import type { ServerType } from '@hono/node-server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiDeps } from '@marimo-hub/api';
 import { createInitializedBucket, makeTestDeps } from '@marimo-hub/api/testing';
 import { ConfigError } from '@marimo-hub/config';
-import { InFlightWork, ProxyExposure, SubdomainExposure } from '@marimo-hub/core';
+import {
+	createServices,
+	deferOrAwait,
+	InFlightWork,
+	ProxyExposure,
+	SubdomainExposure,
+} from '@marimo-hub/core';
 import { bootstrap } from './bootstrap';
 import type { BootstrapOverrides } from './bootstrap';
 import {
@@ -34,7 +41,7 @@ vi.mock('./sandboxProxyWs', async (importOriginal) => {
 type Signal = 'SIGTERM' | 'SIGINT';
 type PreflightReport = Awaited<ReturnType<NonNullable<ApiDeps['preflight']>>>;
 
-const BASE_ENV = { MARIMOHUB_STATIC_ROOT: './public' };
+const BASE_ENV = { MARIMOHUB_STATIC_ROOT: './public', MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS: '10' };
 
 function fakeServer(closeImmediately = true) {
 	let finishClose: (() => void) | undefined;
@@ -141,7 +148,11 @@ describe('bootstrap', () => {
 		);
 		const harness = makeHarness(deps);
 		const handle = await bootstrap(
-			{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' },
+			{
+				...BASE_ENV,
+				MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS: undefined,
+				MARIMOHUB_RUN_MAINTENANCE: 'true',
+			},
 			harness.overrides,
 		);
 		vi.spyOn(deps.authenticator, 'authenticate').mockImplementation(() => {
@@ -383,7 +394,14 @@ describe('bootstrap', () => {
 			...deps,
 			compute: { ...deps.compute, [Symbol.asyncDispose]: dispose },
 		});
-		await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
+		await bootstrap(
+			{
+				...BASE_ENV,
+				MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS: undefined,
+				MARIMOHUB_RUN_MAINTENANCE: 'true',
+			},
+			harness.overrides,
+		);
 
 		harness.signals.get('SIGTERM')?.();
 		await vi.advanceTimersByTimeAsync(9_999);
@@ -404,7 +422,14 @@ describe('bootstrap', () => {
 		const harness = makeHarness(deps, { closeImmediately: false });
 		const destroyAll = vi.fn(() => harness.finishClose());
 		vi.mocked(attachSandboxProxyUpgrade).mockReturnValueOnce({ destroyAll, size: 1 });
-		await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
+		await bootstrap(
+			{
+				...BASE_ENV,
+				MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS: undefined,
+				MARIMOHUB_RUN_MAINTENANCE: 'true',
+			},
+			harness.overrides,
+		);
 
 		harness.signals.get('SIGTERM')?.();
 		await vi.advanceTimersByTimeAsync(9_999);
@@ -434,7 +459,14 @@ describe('bootstrap', () => {
 			throw new Error('stop failed');
 		});
 		const harness = makeHarness(deps);
-		await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
+		await bootstrap(
+			{
+				...BASE_ENV,
+				MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS: undefined,
+				MARIMOHUB_RUN_MAINTENANCE: 'true',
+			},
+			harness.overrides,
+		);
 
 		harness.signals.get('SIGTERM')?.();
 		await vi.advanceTimersByTimeAsync(0);
@@ -469,7 +501,14 @@ describe('bootstrap', () => {
 					otel: { tracing: false, metrics: false, logs: false, shutdown },
 				},
 			);
-			await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
+			await bootstrap(
+				{
+					...BASE_ENV,
+					MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS: undefined,
+					MARIMOHUB_RUN_MAINTENANCE: 'true',
+				},
+				harness.overrides,
+			);
 			await vi.advanceTimersByTimeAsync(0);
 			harness.signals.get('SIGTERM')?.();
 			await vi.advanceTimersByTimeAsync(60_000);
@@ -549,7 +588,14 @@ describe('bootstrap', () => {
 				...deps,
 				compute: { ...deps.compute, [Symbol.asyncDispose]: dispose },
 			});
-			await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
+			await bootstrap(
+				{
+					...BASE_ENV,
+					MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS: undefined,
+					MARIMOHUB_RUN_MAINTENANCE: 'true',
+				},
+				harness.overrides,
+			);
 			harness.signals.get('SIGTERM')?.();
 			await vi.advanceTimersByTimeAsync(60_000);
 			expect(harness.exit).not.toHaveBeenCalled();
@@ -707,7 +753,14 @@ describe('bootstrap', () => {
 				...deps,
 				compute: { ...deps.compute, [Symbol.asyncDispose]: dispose },
 			});
-			await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
+			await bootstrap(
+				{
+					...BASE_ENV,
+					MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS: undefined,
+					MARIMOHUB_RUN_MAINTENANCE: 'true',
+				},
+				harness.overrides,
+			);
 			await vi.advanceTimersByTimeAsync(1000);
 			harness.signals.get('SIGTERM')?.();
 			await vi.advanceTimersByTimeAsync(0);
@@ -740,7 +793,11 @@ describe('bootstrap', () => {
 		const compute = { ...deps.compute, [Symbol.asyncDispose]: dispose };
 		const harness = makeHarness({ ...deps, compute });
 		const handle = await bootstrap(
-			{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' },
+			{
+				...BASE_ENV,
+				MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS: undefined,
+				MARIMOHUB_RUN_MAINTENANCE: 'true',
+			},
 			harness.overrides,
 		);
 
@@ -754,6 +811,51 @@ describe('bootstrap', () => {
 		expect(dispose).not.toHaveBeenCalled();
 
 		finishSchedulerDrain();
+		await draining;
+		expect(dispose).toHaveBeenCalledOnce();
+	});
+
+	it('defaults API shutdown to a 30 second drain budget', async () => {
+		const harness = makeHarness(deps);
+		const handle = await bootstrap({ MARIMOHUB_STATIC_ROOT: './public' }, harness.overrides);
+		deps.backgroundTasks!.defer(new Promise(() => {}));
+		const draining = handle!.drain();
+		await vi.advanceTimersByTimeAsync(29_999);
+		expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('drain_timeout'));
+		await vi.advanceTimersByTimeAsync(1);
+		expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"timeoutMs":30000'));
+		await vi.advanceTimersByTimeAsync(10_000);
+		await draining;
+	});
+
+	it('drains core work, including nested tasks, before disposing compute', async () => {
+		const gate = Promise.withResolvers<void>();
+		const entered = Promise.withResolvers<void>();
+		const dispose = vi.fn(async () => {});
+		deps.compute = { ...deps.compute, [Symbol.asyncDispose]: dispose };
+		const harness = makeHarness(deps);
+		harness.createDeps.mockImplementation((_env, metrics, options) => {
+			deps.services = createServices(deps.bucket, metrics, {
+				backgroundWork: options?.backgroundWork,
+			});
+			const append = deps.services.events.append.bind(deps.services.events);
+			vi.spyOn(deps.services.events, 'append').mockImplementation(async (event) => {
+				entered.resolve();
+				await gate.promise;
+				await deferOrAwait(options?.backgroundWork, 'test.nested', async () => {
+					expect(dispose).not.toHaveBeenCalled();
+				});
+				return append(event);
+			});
+			return deps;
+		});
+		const handle = await bootstrap(BASE_ENV, harness.overrides);
+		await deps.services.projects.createProject({ name: 'Background', description: '' }, ACTOR);
+		await entered.promise;
+		const draining = handle!.drain();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(dispose).not.toHaveBeenCalled();
+		gate.resolve();
 		await draining;
 		expect(dispose).toHaveBeenCalledOnce();
 	});
@@ -833,14 +935,22 @@ describe('bootstrap', () => {
 		expect(startJobScheduler).not.toHaveBeenCalled();
 
 		await bootstrap(
-			{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' },
+			{
+				...BASE_ENV,
+				MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS: undefined,
+				MARIMOHUB_RUN_MAINTENANCE: 'true',
+			},
 			makeHarness(deps).overrides,
 		);
 		expect(startJobScheduler).toHaveBeenCalledOnce();
 
 		vi.mocked(startJobScheduler).mockClear();
 		await bootstrap(
-			{ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' },
+			{
+				...BASE_ENV,
+				MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS: undefined,
+				MARIMOHUB_RUN_MAINTENANCE: 'true',
+			},
 			makeHarness({ ...deps, jobs: undefined }).overrides,
 		);
 		expect(startJobScheduler).not.toHaveBeenCalled();
@@ -854,7 +964,14 @@ describe('bootstrap', () => {
 		vi.mocked(startSessionLifecycle).mockReturnValueOnce(stopLifecycle);
 		vi.mocked(startPreviewPreparation).mockReturnValueOnce(stopPreviews);
 		const harness = makeHarness(deps);
-		await bootstrap({ ...BASE_ENV, MARIMOHUB_RUN_MAINTENANCE: 'true' }, harness.overrides);
+		await bootstrap(
+			{
+				...BASE_ENV,
+				MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS: undefined,
+				MARIMOHUB_RUN_MAINTENANCE: 'true',
+			},
+			harness.overrides,
+		);
 
 		harness.signals.get('SIGTERM')?.();
 

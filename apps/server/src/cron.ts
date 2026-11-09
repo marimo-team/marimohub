@@ -117,6 +117,8 @@ export function startMaintenance(
 		{
 			automaticThumbnails: deps.sandbox.automaticThumbnails,
 			thumbnailDeadline: deps.sandbox.thumbnailDeadline,
+			backgroundWork: deps.backgroundWork,
+			metrics,
 		},
 	);
 	const jobs = deps.jobs ? createJobScheduler(deps, metrics, deps.jobs) : undefined;
@@ -219,6 +221,8 @@ export function startSessionLifecycle(
 		persistWorkspace: deps.sandbox.persistWorkspace,
 		automaticThumbnails: deps.sandbox.automaticThumbnails,
 		thumbnailDeadline: deps.sandbox.thumbnailDeadline,
+		backgroundWork: deps.backgroundWork,
+		metrics: deps.metrics,
 		workdir: deps.sandbox.workdir,
 	});
 	const lock = maintenanceLock(deps, paths.sessionLifecycleLock);

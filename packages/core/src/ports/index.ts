@@ -1,3 +1,4 @@
+export * from './backgroundWork';
 export * from './bucket';
 export * from './sandbox';
 export * from './sandboxExposure';

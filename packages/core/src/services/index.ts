@@ -1,3 +1,4 @@
+import type { BackgroundWork } from '../ports/backgroundWork';
 import { NotebookMoveService } from './content/NotebookMoveService';
 export { NotebookMoveService } from './content/NotebookMoveService';
 export type { NotebookMoveContext } from './content/NotebookMoveService';
@@ -451,6 +452,7 @@ export {
 	SessionService,
 	sessionWorkspaceDir,
 } from './runtime/SessionService';
+export { captureThumbnail } from './runtime/captureThumbnail';
 export {
 	RECLAIM_BLOCKED_REASONS,
 	SessionRetirer,
@@ -508,6 +510,7 @@ const bucketAttrs: AttrExtractors<Bucket> = {
 };
 
 export interface CreateServicesOptions {
+	backgroundWork?: BackgroundWork;
 	workspaceLimits?: WorkspaceLimits;
 	repositoryHosts?: GitProviderHosts;
 	/**
@@ -540,7 +543,15 @@ export function createServices(
 	});
 	const catalog = wrap(
 		'CatalogService',
-		new CatalogService(bucket, metrics, events, undefined, undefined, rawBucket),
+		new CatalogService(
+			bucket,
+			metrics,
+			events,
+			undefined,
+			undefined,
+			rawBucket,
+			options?.backgroundWork,
+		),
 		{
 			initialize: user,
 		},
@@ -608,6 +619,7 @@ export function createServices(
 			deepLinks,
 			options?.repositoryHosts,
 			options?.workspaceLimits,
+			options?.backgroundWork,
 		),
 		{
 			listNotebooks: project,

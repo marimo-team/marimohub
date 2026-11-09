@@ -1,3 +1,4 @@
+import type { ApiDeps } from './context';
 // `logEvent` lives in core (next to the OTEL logs bridge it mirrors into) so
 // core services and adapters can emit the same wide events; re-exported here
 // for the API's existing call sites.
@@ -64,21 +65,30 @@ export async function bestEffort(
 }
 
 export function appendAudit(
+	deps: Pick<ApiDeps, 'backgroundTasks'>,
 	request: { requestId?: string; method: string; path: string; userId: string },
 	event: string,
 	action: () => Promise<void>,
 ): Promise<void> {
-	return bestEffort(
-		'audit_append',
-		{
-			request_id: request.requestId ?? null,
-			method: request.method,
-			path: request.path,
-			user: request.userId,
-			audit_event: event,
-		},
-		action,
-	);
+	const fields = {
+		request_id: request.requestId ?? null,
+		method: request.method,
+		path: request.path,
+		user: request.userId,
+		audit_event: event,
+	};
+	const task = bestEffort('audit_append', fields, action);
+	const scheduler = deps.backgroundTasks;
+	if (!scheduler) return task;
+	return bestEffort('audit_schedule', fields, async () => {
+		try {
+			scheduler.defer(task);
+		} catch (error) {
+			// The write already started; retain it in the request if the host cannot.
+			await task;
+			throw error;
+		}
+	});
 }
 
 /**

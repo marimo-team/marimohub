@@ -8,6 +8,7 @@ import type { ApiDeps } from '@marimo-hub/api';
 import { createApi, SANDBOX_PROXY_PREFIXES } from '@marimo-hub/api';
 import { createFromEnvAsync, isConfigError } from '@marimo-hub/config';
 import { disposeNotifier, InFlightWork } from '@marimo-hub/core';
+import type { BackgroundWork } from '@marimo-hub/core';
 import {
 	startPreviewPreparation,
 	startJobScheduler,
@@ -61,6 +62,12 @@ export async function bootstrap(
 			return () => process.off(signal, handler);
 		});
 
+	const backgroundTasks = new InFlightWork();
+	const backgroundWork: BackgroundWork = {
+		defer(_label, task) {
+			void backgroundTasks.track(Promise.resolve().then(task)).catch(() => {});
+		},
+	};
 	let thumbnailDeadline: number | undefined;
 	// Telemetry sink: services emit CAS/reaper/snapshot signals here; the maintenance
 	// loop flushes them as one wide event per cycle (and request-path CAS contention
@@ -83,7 +90,10 @@ export async function bootstrap(
 	let deps: ApiDeps;
 	try {
 		validatedEnv = validateServerEnv(env);
-		deps = await createDeps(validatedEnv, metrics, { tracing: otel?.tracing ?? false });
+		deps = await createDeps(validatedEnv, metrics, {
+			tracing: otel?.tracing ?? false,
+			backgroundWork,
+		});
 		await prepareDeps?.(deps);
 	} catch (err) {
 		if (isConfigError(err)) {
@@ -96,10 +106,10 @@ export async function bootstrap(
 	const drainTimeoutMs =
 		Number(
 			validatedEnv.MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS ??
-				(validatedEnv.MARIMOHUB_RUN_MAINTENANCE === 'true' ? 120 : 10),
+				(validatedEnv.MARIMOHUB_RUN_MAINTENANCE === 'true' ? 120 : 30),
 		) * 1000;
 	deps.sandbox.thumbnailDeadline = () => thumbnailDeadline;
-	const backgroundTasks = new InFlightWork();
+	deps.backgroundWork = backgroundWork;
 	deps.backgroundTasks = {
 		drainsOnShutdown: true,
 		defer(task) {
@@ -278,8 +288,8 @@ export async function bootstrap(
 			const runtimeDrained = Promise.allSettled([
 				// Timed-out ticks can still dispatch jobs until their actual work settles.
 				loops.drain().then(() => settleEach(runtimeDrains)),
-				closed.then(waitForBackgroundTasks),
-			]);
+				closed,
+			]).then(waitForBackgroundTasks);
 			const resourcesClosed = Promise.allSettled([
 				closed.then(closeDataBrowser),
 				runtimeDrained.then(closeNotifier),

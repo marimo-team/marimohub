@@ -37,6 +37,7 @@
 		"./package.json": "./package.json",
 		"./ports": "./src/ports/index.ts",
 		"./ports/adapter-shape": "./src/ports/adapterShape.ts",
+		"./ports/background-work": "./src/ports/backgroundWork.ts",
 		"./ports/auth": "./src/ports/auth.ts",
 		"./ports/bucket": "./src/ports/bucket.ts",
 		"./ports/credential-broker": "./src/ports/credentialBroker.ts",

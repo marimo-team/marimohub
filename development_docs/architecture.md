@@ -444,6 +444,24 @@ business logic and depend only on interfaces:
 
 `createServices(bucket)` composes them; nothing here imports a vendor SDK.
 
+#### Background work
+
+Inject `BackgroundWork` through `CreateServicesOptions` for best-effort side effects.
+Tasks must use their existing owner, tolerate repeats, and produce nothing a later request step reads.
+`deferOrAwait` awaits work without a scheduler. It logs failures and increments `background.failed{label}`.
+Node drains core and API tasks before disposing compute clients.
+Workers use `waitUntil` for short tasks and keep teardown inline with `teardownInline: true`.
+
+Stop marks the session `terminating` and invalidates any app-pool entry before deferring teardown.
+`wait=true` keeps teardown synchronous for restart clients.
+Content and filesystem capture stay synchronous during restart, replacement, and takeover.
+Editor claims are released only after confirmed destruction.
+Interactive teardown skips thumbnails. Plain stops and new-session renders have a three-second budget, with freshness checks in `ThumbnailService`.
+
+Notebook and project deletion commit before scheduling concurrent app retirement.
+Version pruning, audits, and deletion of old filesystem snapshots also use the host scheduler.
+See [stop and recovery](../docs/operations.md#session-stop-and-recovery) for client behavior and crash recovery.
+
 ### 3.8 External Data and Notifications
 
 The external-data ports keep provider SDKs out of core and API:
@@ -808,8 +826,9 @@ Tracing one user action through every component:
                  → start marimo → wait for port → expose URL
 8. API           returns sandbox URL; SPA embeds the live kernel
 9. Compute       proxy(request) forwards subsequent kernel traffic to the sandbox
-10. Teardown     DELETE …/{sid} → save files back → destroy sandbox
-                 → mark session terminated in Storage
+10. Teardown     DELETE …/{sid} → mark terminating → save files → destroy sandbox
+                 → mark terminated → release claims
+                 response may precede teardown; wait=true awaits completion
 ```
 
 Every numbered hop crosses a port. Replace any single adapter — S3 for R2, Modal

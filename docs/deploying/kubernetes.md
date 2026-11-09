@@ -227,6 +227,12 @@ with the
   URL can 404/502 briefly after a session starts. If the window is long, check
   your ingress controller's sync latency.
 
+## Shutdown
+
+API pods use a 30-second drain budget and a 50-second termination grace period.
+This lets background teardown finish before compute clients close.
+See [shutdown budgets](../operations.md#shutdown-budgets) and [session stop and recovery](../operations.md#session-stop-and-recovery).
+
 ## Troubleshooting
 
 See [Troubleshooting](../troubleshooting.md), especially kernel reachability and

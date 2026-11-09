@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createNotebookId, createProjectId, createSandboxId } from '../../ids';
 import { Millis } from '../../duration';
 import type {
@@ -223,6 +223,62 @@ describe('filesystemSnapshots', () => {
 			).toBeUndefined();
 		});
 	});
+
+	it.each([false, true])(
+		'commits the new snapshot before scheduling GC (failure=%s)',
+		async (failDelete) => {
+			const env = await setupTestEnv();
+			const project = await env.projects.createProject({ name: 'P', description: 'd' }, ACTOR);
+			const nb = await env.notebooks.createNotebook(
+				project.id,
+				{ title: 'N', description: 'd', code: 'c' },
+				ACTOR,
+			);
+			await env.notebooks.setFsSnapshot(project.id, nb.id, {
+				snapshot_id: 'snap_old',
+				captured_at: new Date().toISOString(),
+			});
+			const { instance } = makeFakeSandbox();
+			const provider = snapshotProvider(instance);
+			const tasks: (() => Promise<unknown>)[] = [];
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const metrics = { increment: vi.fn(), gauge: vi.fn() };
+			try {
+				await captureFilesystemSnapshot(
+					provider,
+					env.notebooks,
+					instance,
+					project.id,
+					nb.id,
+					undefined,
+					{
+						async defer(_label, task) {
+							expect((await env.notebooks.getFsSnapshot(project.id, nb.id))?.snapshot_id).toBe(
+								'snap_new',
+							);
+							tasks.push(task);
+						},
+					},
+					metrics,
+				);
+				expect(provider.deleted).toEqual([]);
+				expect(tasks).toHaveLength(1);
+				if (failDelete)
+					provider.deleteSnapshot = async () => {
+						throw new Error('unavailable');
+					};
+				await tasks[0]();
+				if (failDelete) {
+					expect(log).toHaveBeenCalledOnce();
+					expect(metrics.increment).toHaveBeenCalledWith('background.failed', 1, {
+						label: 'filesystem_snapshot.delete',
+					});
+				} else expect(provider.deleted).toEqual(['snap_old']);
+			} finally {
+				log.mockRestore();
+			}
+		},
+	);
 
 	describe('captureFilesystemSnapshot', () => {
 		it('captures, persists the pointer, and GCs the previous snapshot', async () => {

@@ -1,3 +1,4 @@
+import { createApi } from '@marimo-hub/api';
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 vi.mock('@marimo-hub/compute-cloudflare', () => ({
@@ -20,7 +21,7 @@ vi.mock('@marimo-hub/storage-r2', () => ({
 	},
 }));
 
-import { createServices, MaintenanceLock, SessionService } from '@marimo-hub/core';
+import { createServices, MaintenanceLock, SessionService, SessionRetirer } from '@marimo-hub/core';
 import { ASSIGNABLE_ROLES } from '@marimo-hub/core/constants';
 import type { AssignableRole } from '@marimo-hub/core/constants';
 import { JobScheduler } from '@marimo-hub/core/jobs';
@@ -29,6 +30,72 @@ import worker, { buildDeps } from './index';
 
 afterEach(() => {
 	vi.restoreAllMocks();
+});
+
+it('registers core audits with waitUntil while awaiting session teardown', async () => {
+	const tasks: Promise<unknown>[] = [];
+	const bucket = new MemoryBucket();
+	const deps = buildDeps(
+		new Request('https://hub.example.com'),
+		{
+			AUTH_MODE: 'dev',
+			USER_ID: ACTOR,
+			USER_EMAIL: `${ACTOR}@example.com`,
+			NOTEBOOKS_BUCKET: bucket,
+			SANDBOX: {},
+		} as unknown as Env,
+		{
+			waitUntil: (task) => {
+				tasks.push(task);
+			},
+		},
+	);
+	expect(deps.teardownInline).toBe(true);
+	await deps.services.catalog.initialize(ACTOR);
+	const project = await deps.services.projects.createProject({ name: 'P', description: '' }, ACTOR);
+	const notebook = await deps.services.notebooks.createNotebook(
+		project.id,
+		{ title: 'N', description: '', code: '' },
+		ACTOR,
+	);
+	await Promise.all(tasks);
+	expect(tasks.length).toBeGreaterThan(0);
+	const session = await deps.services.sessions.createSession({
+		project_id: project.id,
+		notebook_id: notebook.id,
+		user_id: ACTOR,
+		mode: 'edit',
+	});
+	const gate = Promise.withResolvers<void>();
+	const entered = Promise.withResolvers<void>();
+	const original = SessionRetirer.prototype.retire;
+	vi.spyOn(SessionRetirer.prototype, 'retire').mockImplementation(
+		async function (this: SessionRetirer, value, options) {
+			entered.resolve();
+			await gate.promise;
+			return original.call(this, value, options);
+		},
+	);
+	let responded = false;
+	const response = Promise.resolve(
+		createApi(deps).request(
+			`https://hub.example.com/api/v1/projects/${project.id}/notebooks/${notebook.id}/sessions/${session.session_id}`,
+			{ method: 'DELETE' },
+		),
+	).then((res) => {
+		responded = true;
+		return res;
+	});
+	await entered.promise;
+	expect(responded).toBe(false);
+	expect((await deps.services.sessions.getSession(project.id, session.session_id)).status).toBe(
+		'terminating',
+	);
+	gate.resolve();
+	expect((await response).status).toBe(200);
+	expect((await deps.services.sessions.getSession(project.id, session.session_id)).status).toBe(
+		'terminated',
+	);
 });
 
 describe('Cloudflare Worker configuration', () => {

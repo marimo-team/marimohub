@@ -1176,6 +1176,7 @@ app.openapi(
 					),
 				);
 				await appendAudit(
+					deps,
 					{
 						requestId: c.get('requestId'),
 						method: c.req.method,
@@ -1343,6 +1344,7 @@ app.openapi(runDataQuery, async (c) => {
 		c.req.raw.signal,
 	);
 	await appendAudit(
+		deps,
 		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 		'integration.query',
 		() =>
@@ -1453,6 +1455,7 @@ app.openapi(generateDataQuerySql, async (c) => {
 		throw new ValidationError('Managed AI returned invalid SQL.');
 	}
 	await appendAudit(
+		deps,
 		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 		'integration.query.generate',
 		() =>
@@ -1642,6 +1645,7 @@ app.openapi(browseObjectContent, async (c) => {
 		);
 		const event = inline === 'true' ? 'integration.object.preview' : 'integration.object.download';
 		await appendAudit(
+			deps,
 			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 			event,
 			() =>

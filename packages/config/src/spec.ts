@@ -1650,7 +1650,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS',
 						name: 'Shutdown timeout',
 						description:
-							'Shutdown drain budget in seconds (1–86400). Defaults to 120 on maintenance and 10 on API replicas. Allow another 20 seconds in the container termination grace period.',
+							'Shutdown drain budget (1–86400 seconds): 30 for API replicas, 120 for maintenance. Set the termination grace at least 20 seconds longer.',
 						example: '120',
 						optIn: true,
 					},
@@ -1704,7 +1704,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTOMATIC_THUMBNAILS',
 						name: 'Automatic notebook thumbnails',
 						description:
-							'Capture saved HTML once at editor shutdown when Playwright and Chromium are already installed. Never executes notebook code. Set false to disable.',
+							'Render saved HTML on stop and after session start. Requires installed Playwright and Chromium. Never runs notebook code. Set false to disable.',
 						default: 'true',
 					},
 					{

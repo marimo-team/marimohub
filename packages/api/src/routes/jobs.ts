@@ -484,6 +484,7 @@ app.openapi(cancelRun, async (c) => {
 			});
 		}
 		await appendAudit(
+			deps,
 			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 			'job.run.cancel',
 			() =>
@@ -497,6 +498,7 @@ app.openapi(cancelRun, async (c) => {
 				}),
 		);
 		await appendAudit(
+			deps,
 			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 			'job.run.finish',
 			() => appendJobRunFinishEvent(deps.services.events, run),

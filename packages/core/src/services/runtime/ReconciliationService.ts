@@ -1,3 +1,4 @@
+import type { SessionRetirerDeps, ReclaimOutcome } from './SessionRetirer';
 import { WarmPoolStore } from './WarmPoolStore';
 import { THUMBNAIL_MAINTENANCE_BUDGET_MS } from './captureThumbnail';
 import { z } from 'zod';
@@ -14,7 +15,6 @@ import type { RunStatus, Session } from '../../schema';
 import type { NotebookService } from '../content/NotebookService';
 import { isTerminalRunStatus } from '../jobs/runState';
 import { RECLAIM_PROVISION_GRACE_MS, SessionRetirer } from './SessionRetirer';
-import type { ReclaimOutcome } from './SessionRetirer';
 import { AppPoolStore } from './AppPoolStore';
 import { SandboxDiagnosticLease } from './SandboxDiagnosticLease';
 import { isTerminal } from './sessionState';
@@ -90,10 +90,10 @@ export class ReconciliationService {
 		 * so without this Rule 3 would reap every run longer than the grace window.
 		 */
 		private jobRuns?: ActiveSandboxSource,
-		thumbnailOptions?: {
-			automaticThumbnails?: boolean;
-			thumbnailDeadline?: () => number | undefined;
-		},
+		retirementOptions?: Pick<
+			SessionRetirerDeps,
+			'automaticThumbnails' | 'thumbnailDeadline' | 'backgroundWork' | 'metrics'
+		>,
 	) {
 		this.diagnosticLeases = new SandboxDiagnosticLease(bucket);
 		this.retirer = new SessionRetirer({
@@ -103,7 +103,7 @@ export class ReconciliationService {
 			bucket,
 			persistWorkspace,
 			workdir,
-			...thumbnailOptions,
+			...retirementOptions,
 		});
 	}
 

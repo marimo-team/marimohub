@@ -112,6 +112,33 @@ describe('SessionRetirer', () => {
 		});
 	}
 
+	it.each(['skip', 'bounded', 'full'] as const)(
+		'applies the %s thumbnail policy before destruction',
+		async (thumbnail) => {
+			const { instance } = makeFakeSandbox();
+			vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(true);
+			const capture = vi.spyOn(thumbnailCapture, 'captureThumbnail').mockResolvedValue();
+			const destroy = vi.spyOn(instance, 'destroy');
+			const session = await persistentSession();
+			await sessions.beginTerminating(projectId, session.session_id);
+			const started = Date.now();
+			await retirer(fakeComputeFrom(instance)).retire(session, { thumbnail });
+			if (thumbnail === 'skip') expect(capture).not.toHaveBeenCalled();
+			else {
+				expect(capture).toHaveBeenCalledOnce();
+				const deadline = capture.mock.calls[0][6]!;
+				if (thumbnail === 'bounded') {
+					expect(deadline).toBeGreaterThanOrEqual(started + 3_000);
+					expect(deadline).toBeLessThanOrEqual(Date.now() + 3_000);
+				} else expect(deadline).toBe(Infinity);
+				expect(capture.mock.invocationCallOrder[0]).toBeLessThan(
+					destroy.mock.invocationCallOrder[0],
+				);
+			}
+			expect(destroy).toHaveBeenCalledOnce();
+		},
+	);
+
 	it.each([true, false])(
 		'captures a thumbnail only after save and before destruction (enabled=%s)',
 		async (enabled) => {
@@ -271,6 +298,27 @@ describe('SessionRetirer', () => {
 			session_id: session.session_id,
 		});
 	});
+
+	it.each(['skip', 'bounded'] as const)(
+		'applies the %s thumbnail policy when reclaiming an expired editor',
+		async (thumbnail) => {
+			const { instance } = makeFakeSandbox();
+			vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(true);
+			const capture = vi.spyOn(thumbnailCapture, 'captureThumbnail').mockResolvedValue();
+			const session = await expiredEditor();
+			const started = Date.now();
+			expect(await retirer(fakeComputeFrom(instance)).reclaim(session, { thumbnail })).toEqual({
+				reclaimed: true,
+				saved: true,
+			});
+			if (thumbnail === 'skip') expect(capture).not.toHaveBeenCalled();
+			else {
+				expect(capture).toHaveBeenCalledOnce();
+				expect(capture.mock.calls[0][6]).toBeGreaterThanOrEqual(started + 3_000);
+				expect(capture.mock.calls[0][6]).toBeLessThanOrEqual(Date.now() + 3_000);
+			}
+		},
+	);
 
 	it('retains the editor claim until a failed destroy is later confirmed', async () => {
 		const { instance } = makeFakeSandbox();
@@ -985,12 +1033,14 @@ describe('SessionRetirer', () => {
 	});
 
 	it('captures an owner-scoped filesystem snapshot during takeover', async () => {
+		const thumbnail = vi.spyOn(thumbnailCapture, 'captureThumbnail');
 		const { instance, calls } = makeFakeSandbox();
 		const compute = snapshotProvider(instance);
 		const session = await persistentSession();
 		const nextOwner = uid('user_01HXY00000000000000000001');
 
 		await retirer(compute).retireForTakeover(session, nextOwner);
+		expect(thumbnail).not.toHaveBeenCalled();
 
 		const snapshot = await notebooks.getFsSnapshot(projectId, notebookId);
 		expect(snapshot).toMatchObject({

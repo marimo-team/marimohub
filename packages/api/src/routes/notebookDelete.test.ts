@@ -1,9 +1,84 @@
+import { SessionRetirer } from '@marimo-hub/core';
 import { describe, expect, it, vi } from 'vitest';
 import { ACTOR } from '@marimo-hub/core/testing';
 import { connectMcpClient } from '../testing/mcp';
 import { assertNotificationMutationAllowed } from '../notifications';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
 import { deleteNotebookAndRetire } from './notebookDelete';
+
+it.each([
+	{ scope: 'notebook', fail: false },
+	{ scope: 'project', fail: false },
+	{ scope: 'notebook', fail: true },
+	{ scope: 'project', fail: true },
+])(
+	'defers app retirement after $scope deletion and isolates failures (fail=$fail)',
+	async ({ scope, fail }) => {
+		const tasks: (() => Promise<unknown>)[] = [];
+		const api = createTestApi({
+			bucket: await createInitializedBucket(),
+			deps: {
+				backgroundWork: {
+					defer: (_label, task) => {
+						tasks.push(task);
+					},
+				},
+			},
+		});
+		const { projects, notebooks, sessions } = api.deps.services;
+		const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
+		const notebook = await notebooks.createNotebook(
+			project.id,
+			{ title: 'N', description: '', code: '' },
+			ACTOR,
+		);
+		const apps = await Promise.all(
+			[1, 2].map(() =>
+				sessions.createSession({
+					project_id: project.id,
+					notebook_id: notebook.id,
+					user_id: ACTOR,
+					mode: 'app',
+				}),
+			),
+		);
+		const gate = Promise.withResolvers<void>();
+		const entered = Promise.withResolvers<void>();
+		let active = 0;
+		const original = SessionRetirer.prototype.retire;
+		const retire = vi
+			.spyOn(SessionRetirer.prototype, 'retire')
+			.mockImplementation(async function (this: SessionRetirer, session, options) {
+				active++;
+				if (active === 2) entered.resolve();
+				await gate.promise;
+				if (fail && session.session_id === apps[0].session_id) throw new Error('retirement failed');
+				return original.call(this, session, options);
+			});
+		try {
+			const path = `/projects/${project.id}${scope === 'notebook' ? `/notebooks/${notebook.id}` : ''}`;
+			await expectOk(await api.request('DELETE', path));
+			expect(retire).not.toHaveBeenCalled();
+			if (scope === 'notebook')
+				expect((await notebooks.getNotebook(project.id, notebook.id)).meta.status).toBe('deleted');
+			else expect((await projects.getProject(project.id)).status).toBe('deleted');
+			expect(tasks).toHaveLength(1);
+			const completion = tasks[0]();
+			await entered.promise;
+			for (const app of apps)
+				expect((await sessions.getSession(project.id, app.session_id)).status).toBe('terminating');
+			gate.resolve();
+			await completion;
+			for (const app of apps)
+				expect((await sessions.getSession(project.id, app.session_id)).status).toBe(
+					fail && app.session_id === apps[0].session_id ? 'terminating' : 'terminated',
+				);
+		} finally {
+			gate.resolve();
+			retire.mockRestore();
+		}
+	},
+);
 
 async function setupAlerts() {
 	const deliver = vi.fn(async () => 'delivered' as const);
@@ -82,7 +157,7 @@ describe('notebook deletion notification budget', () => {
 			expect(await notebooks.getNotebook(project.id, notebook.id)).toMatchObject({
 				meta: { status: 'active' },
 			});
-			expect(deferred).toHaveLength(20);
+			expect(deferred).toHaveLength(40);
 			expect(deliver).toHaveBeenCalledTimes(20);
 		},
 	);
@@ -104,7 +179,7 @@ describe('notebook deletion notification budget', () => {
 			'notebook.deleted',
 			expect.objectContaining({ kind: 'notebook.deleted' }),
 		);
-		expect(deferred).toHaveLength(1);
+		expect(deferred).toHaveLength(3);
 	});
 
 	it('allows deletion when only personal notifications have exhausted the budget', async () => {

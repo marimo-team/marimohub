@@ -21,7 +21,7 @@ import type { ApiDeps } from '../context';
 import { appendAudit } from '../log';
 import { loadAuthorizedNotebook } from '../shared';
 
-type PullSyncDeps = Pick<ApiDeps, 'services' | 'sourceControl' | 'policy'>;
+type PullSyncDeps = Pick<ApiDeps, 'services' | 'sourceControl' | 'policy' | 'backgroundTasks'>;
 
 export interface SyncTarget {
 	git: GitSource;
@@ -91,7 +91,7 @@ export async function syncSourceManually(
 ): Promise<PullSyncOutcome> {
 	const outcome = await pullSourceToHead(deps, project, notebookId, subject.id, subject, signal);
 	if (outcome.synced) {
-		await appendAudit({ ...request, userId: subject.id }, 'notebook.source.sync', () =>
+		await appendAudit(deps, { ...request, userId: subject.id }, 'notebook.source.sync', () =>
 			deps.services.events.append({
 				event: 'notebook.source.sync',
 				actor: subject.id,

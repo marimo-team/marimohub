@@ -1,3 +1,30 @@
+import {
+	deferTeardown,
+	assertDeploymentAction,
+	assertProjectActionOn,
+	assertProjectRole,
+	assertSessionAuthenticated,
+	commonErrors,
+	createApp,
+	errorResponses,
+	etagFor,
+	EtagResponseHeader,
+	ifMatchToken,
+	IfMatchHeader,
+	IdempotencyKeyHeader,
+	jsonBody,
+	jsonContent,
+	loadVisibleProject,
+	ProjectIdParam,
+	ProjectMemberResponseSchema,
+	ProjectResponseSchema,
+	retireLiveApps,
+	cancelJobRuns,
+	SecurityLabelsBodySchema,
+	SESSION_ONLY_SECURITY,
+	SnapshotProjectEntrySchema,
+	SuccessResponseSchema,
+} from '../shared';
 import { retireNotebookPreviews } from '../previews';
 import { TagsBodySchema } from '../tagNamespace';
 import { createRoute, z } from '@hono/zod-openapi';
@@ -26,32 +53,6 @@ import type {
 	ProjectMember,
 	Role,
 } from '@marimo-hub/core';
-import {
-	assertDeploymentAction,
-	assertProjectActionOn,
-	assertProjectRole,
-	assertSessionAuthenticated,
-	commonErrors,
-	createApp,
-	errorResponses,
-	etagFor,
-	EtagResponseHeader,
-	ifMatchToken,
-	IfMatchHeader,
-	IdempotencyKeyHeader,
-	jsonBody,
-	jsonContent,
-	loadVisibleProject,
-	ProjectIdParam,
-	ProjectMemberResponseSchema,
-	ProjectResponseSchema,
-	retireLiveApps,
-	cancelJobRuns,
-	SecurityLabelsBodySchema,
-	SESSION_ONLY_SECURITY,
-	SnapshotProjectEntrySchema,
-	SuccessResponseSchema,
-} from '../shared';
 import type { ApiDeps } from '../context';
 import { idempotentCreate } from '../idempotency';
 import { effectiveFederation } from '../federation';
@@ -595,7 +596,7 @@ app.openapi(deleteProject, async (c) => {
 		);
 	}
 	await retireNotebookPreviews(deps, pid);
-	await retireLiveApps(deps, pid);
+	await deferTeardown(deps, 'project.retire_apps', () => retireLiveApps(deps, pid));
 	await cancelJobRuns(deps, pid, user.id);
 	return c.json({ success: true }, 200);
 });

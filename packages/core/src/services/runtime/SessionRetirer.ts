@@ -1,3 +1,5 @@
+import type { BackgroundWork } from '../../ports/backgroundWork';
+import type { Metrics } from '../../ports/metrics';
 import { kernelActiveConnections } from './kernelActiveConnections';
 import type { ConnectionProbe } from './kernelActiveConnections';
 import { localKernelBasePath } from './sandboxExposure';
@@ -123,6 +125,14 @@ export function reclaimBlockedReason(
 	return null;
 }
 
+type ThumbnailPolicy = 'skip' | 'bounded' | 'full';
+
+function thumbnailDeadline(policy: ThumbnailPolicy = 'full'): number {
+	if (policy === 'skip') return 0;
+	if (policy === 'bounded') return Date.now() + 3_000;
+	return Infinity;
+}
+
 const DEFAULT_WORKDIR = '/workspace';
 const TAKEOVER_DRAIN_LEASE_RENEW_INTERVAL_MS = Millis.minutes(1);
 
@@ -131,6 +141,8 @@ class SecondarySurfaceStopError extends Error {
 }
 
 export interface SessionRetirerDeps {
+	backgroundWork?: BackgroundWork;
+	metrics?: Metrics;
 	sessions: SessionService;
 	notebooks: NotebookService;
 	compute: SandboxProvider;
@@ -180,6 +192,7 @@ export class SessionRetirer {
 			markTerminated?: boolean;
 			captureBeforeDestroy?: boolean;
 			thumbnailDeadlineAt?: number;
+			thumbnail?: ThumbnailPolicy;
 		} = {},
 	): Promise<void> {
 		if (opts.teardown === false && session.status === 'terminating') return;
@@ -190,7 +203,7 @@ export class SessionRetirer {
 						await this.teardownSandbox(
 							session,
 							opts.captureBeforeDestroy ?? true,
-							opts.thumbnailDeadlineAt,
+							Math.min(opts.thumbnailDeadlineAt ?? Infinity, thumbnailDeadline(opts.thumbnail)),
 						)
 					).destroyed;
 		if (opts.markTerminated !== false) {
@@ -326,6 +339,7 @@ export class SessionRetirer {
 			assertLease: () => Promise<void>;
 			advanceLease: (stage: TakeoverDrainStage) => Promise<void>;
 		} = { assertLease: async () => {}, advanceLease: async () => {} },
+		thumbnail: ThumbnailPolicy = 'skip',
 	): Promise<void> {
 		if (!session.sandbox_id || session.sandbox_reclaimed_at) return;
 		const sandbox = this.deps.compute.create(session.sandbox_id, { owner: sessionOwner(session) });
@@ -345,7 +359,7 @@ export class SessionRetirer {
 			await lease.assertLease();
 			if (persisted) {
 				await lease.advanceLease('snapshotting');
-				await this.captureSavedArtifacts(sandbox, session);
+				await this.captureSavedArtifacts(sandbox, session, thumbnailDeadline(thumbnail));
 				await lease.assertLease();
 			}
 			await this.deps.sessions.markTakeoverCaptureCompleted(
@@ -378,10 +392,12 @@ export class SessionRetirer {
 		{
 			save,
 			thumbnailDeadlineAt,
+			thumbnail,
 			requireIdle = false,
 		}: {
 			save?: boolean;
 			thumbnailDeadlineAt?: number;
+			thumbnail?: ThumbnailPolicy;
 			requireIdle?: boolean;
 		} = {},
 	): Promise<ReclaimOutcome> {
@@ -449,7 +465,12 @@ export class SessionRetirer {
 		}
 		const { destroyed, saved } =
 			capture && existing
-				? await this.teardownSandbox(session, true, thumbnailDeadlineAt, existing)
+				? await this.teardownSandbox(
+						session,
+						true,
+						Math.min(thumbnailDeadlineAt ?? Infinity, thumbnailDeadline(thumbnail)),
+						existing,
+					)
 				: { destroyed: await this.destroySandbox(session, existing), saved: false };
 		if (!destroyed) return { reclaimed: false, reason: 'destroy_failed' };
 		await this.finishReclaim(session);
@@ -574,7 +595,11 @@ export class SessionRetirer {
 		session: Session,
 		thumbnailDeadlineAt?: number,
 	): Promise<void> {
-		if (this.deps.automaticThumbnails !== false && session.sandbox_id) {
+		if (
+			thumbnailDeadlineAt !== 0 &&
+			this.deps.automaticThumbnails !== false &&
+			session.sandbox_id
+		) {
 			await captureThumbnail(
 				sandbox,
 				this.deps.notebooks,
@@ -596,6 +621,8 @@ export class SessionRetirer {
 				compute_resources: session.compute_resources,
 				owner_user_id: session.user_id,
 			},
+			this.deps.backgroundWork,
+			this.deps.metrics,
 		);
 	}
 

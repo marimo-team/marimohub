@@ -1,9 +1,9 @@
+import { deferTeardown, cancelJobRuns, retireLiveApps } from '../shared';
 import { retireNotebookPreviews } from '../previews';
 import { notificationRouter } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, NotebookId, Project } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
 import { assertNotificationMutationAllowed, scheduleProjectAlert } from '../notifications';
-import { cancelJobRuns, retireLiveApps } from '../shared';
 
 export async function deleteNotebookAndRetire(
 	deps: ApiDeps,
@@ -38,6 +38,8 @@ export async function deleteNotebookAndRetire(
 		);
 	}
 	await retireNotebookPreviews(deps, project.id, notebookId);
-	await retireLiveApps(deps, project.id, (session) => session.notebook_id === notebookId);
+	await deferTeardown(deps, 'notebook.retire_apps', () =>
+		retireLiveApps(deps, project.id, (session) => session.notebook_id === notebookId),
+	);
 	await cancelJobRuns(deps, project.id, user.id, notebookId);
 }

@@ -153,7 +153,7 @@ export async function triggerJobRun(
 				sourceVersionId: notebook.source.current_version_id ?? undefined,
 				timeoutSeconds: Math.floor(Math.min(requestedMs, config.maxTimeoutMs) / 1000),
 			});
-			await appendAudit({ ...request, userId: user.id }, 'job.run.trigger', () =>
+			await appendAudit(deps, { ...request, userId: user.id }, 'job.run.trigger', () =>
 				deps.services.events.append({
 					event: 'job.run.trigger',
 					actor: user.id,

@@ -1,10 +1,5 @@
-import type { SearchService, SearchIndexer } from '@marimo-hub/core/search';
-import type { WorkspaceLimits } from '@marimo-hub/core/remote-workspace';
-import type { DeploymentThemeConfig } from '@marimo-hub/core/theme';
-import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-bridge';
-import type { Hono, MiddlewareHandler } from 'hono';
-import type { LanguageModel, ToolLoopAgentSettings } from 'ai';
 import type {
+	BackgroundWork,
 	AppPoolPolicy,
 	WarmPoolService,
 	ResourceSecurityPolicy,
@@ -38,6 +33,12 @@ import type {
 	WorkloadIdentityIssuer,
 	UserId,
 } from '@marimo-hub/core';
+import type { SearchService, SearchIndexer } from '@marimo-hub/core/search';
+import type { WorkspaceLimits } from '@marimo-hub/core/remote-workspace';
+import type { DeploymentThemeConfig } from '@marimo-hub/core/theme';
+import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-bridge';
+import type { Hono, MiddlewareHandler } from 'hono';
+import type { LanguageModel, ToolLoopAgentSettings } from 'ai';
 
 /** The service bundle produced by `createServices(bucket)` in @marimo-hub/core. */
 export type Services = ReturnType<typeof createServices>;
@@ -469,6 +470,9 @@ export interface ApiDeps {
 	};
 	/** Keep non-critical work alive after the response, for example with Workers `waitUntil`. */
 	backgroundTasks?: BackgroundTaskScheduler;
+	backgroundWork?: BackgroundWork;
+	/** Request-limited hosts must finish teardown before responding. */
+	teardownInline?: boolean;
 	/**
 	 * Probe a reused `running` session's kernel on reconnect. A `dead` result (the
 	 * sandbox is alive but marimo exited) retires the wedged session and provisions
