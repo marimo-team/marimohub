@@ -1,3 +1,9 @@
+import type { SearchService, SearchIndexer } from '@marimo-hub/core/search';
+import type { WorkspaceLimits } from '@marimo-hub/core/remote-workspace';
+import type { DeploymentThemeConfig } from '@marimo-hub/core/theme';
+import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-bridge';
+import type { Hono, MiddlewareHandler } from 'hono';
+import type { LanguageModel, ToolLoopAgentSettings } from 'ai';
 import type {
 	BackgroundWork,
 	AppPoolPolicy,
@@ -33,12 +39,6 @@ import type {
 	WorkloadIdentityIssuer,
 	UserId,
 } from '@marimo-hub/core';
-import type { SearchService, SearchIndexer } from '@marimo-hub/core/search';
-import type { WorkspaceLimits } from '@marimo-hub/core/remote-workspace';
-import type { DeploymentThemeConfig } from '@marimo-hub/core/theme';
-import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-bridge';
-import type { Hono, MiddlewareHandler } from 'hono';
-import type { LanguageModel, ToolLoopAgentSettings } from 'ai';
 
 /** The service bundle produced by `createServices(bucket)` in @marimo-hub/core. */
 export type Services = ReturnType<typeof createServices>;

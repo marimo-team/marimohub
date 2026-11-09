@@ -39,21 +39,20 @@ image or, if none exists, a placeholder.
 
 ## Automatic previews
 
-For local notebooks, the hub attempts a preview from saved HTML after a new
-session starts and when an editor stops. Restarts, takeovers, and MCP stops skip capture during
-teardown. The new session can capture the preview instead.
+For local notebooks, the hub attempts a preview from saved HTML when an editor
+stops. Restarts, takeovers, and MCP stops skip capture during teardown.
 The hub skips unchanged HTML and custom thumbnails, and never runs notebook code.
-Each sandbox permits at most one render attempt. Periodic saves and gallery visits
-never generate previews.
+Each sandbox permits at most one render attempt. Session starts, periodic saves,
+and gallery visits never generate previews.
 
 Capture requires preinstalled Python Playwright and Chromium in the Linux or
 macOS sandbox. The environment must support Chromium's sandbox.
 On Linux, Chromium needs a non-root user and compatible user-namespace and seccomp policies.
 If Chromium cannot start with its sandbox, capture fails without a fallback to unsandboxed rendering.
-Post-start capture and ordinary API stops have a three-second budget.
+Capture during ordinary API stops has a three-second budget.
 Maintenance capture shares a three-second budget across the sweep.
 Missing dependencies, missing HTML, or failures preserve the previous image or
-placeholder without preventing the session from starting or stopping.
+placeholder without preventing the session from stopping.
 
 External images and embeds can be absent from previews. For exact app views or
 Git-backed notebooks, use a custom screenshot.

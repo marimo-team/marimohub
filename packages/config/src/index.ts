@@ -1,12 +1,3 @@
-import type {
-	BackgroundWork,
-	EditorSandboxSharing,
-	Metrics,
-	AssignableRole,
-	SandboxExposure,
-	SandboxProvider,
-	ViewerMode,
-} from '@marimo-hub/core';
 import { makeSearch } from './search';
 import { parseWorkspaceLimits } from './workspaceLimits';
 import { parseTheme } from './theme';
@@ -66,6 +57,15 @@ import type {
 	DuckDBWasmRuntimeMode,
 } from '@marimo-hub/duckdb-wasm-runtime/node';
 import { createPostgresDataQueryExecutorFactory } from '@marimo-hub/postgres-runtime/node';
+import type {
+	BackgroundWork,
+	EditorSandboxSharing,
+	Metrics,
+	AssignableRole,
+	SandboxExposure,
+	SandboxProvider,
+	ViewerMode,
+} from '@marimo-hub/core';
 import type { ApiDeps, JobsConfig, McpConfig, SessionLifetimeConfig } from '@marimo-hub/api';
 import { evaluateLoginPolicy } from '@marimo-hub/auth-oidc';
 import { makeAi } from './ai';

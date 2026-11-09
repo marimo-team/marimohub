@@ -1704,7 +1704,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 						id: 'MARIMOHUB_AUTOMATIC_THUMBNAILS',
 						name: 'Automatic notebook thumbnails',
 						description:
-							'Render saved HTML on stop and after session start. Requires installed Playwright and Chromium. Never runs notebook code. Set false to disable.',
+							'Render saved HTML on editor stop. Requires installed Playwright and Chromium. Never runs notebook code. Set false to disable.',
 						default: 'true',
 					},
 					{

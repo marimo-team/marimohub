@@ -17,6 +17,22 @@ export const inlineBackgroundWork: BackgroundWork = {
 	},
 };
 
+const inFlight = new WeakMap<Metrics, Map<string, number>>();
+
+function recordInFlight(metrics: Metrics, label: string, delta: 1 | -1): void {
+	let counts = inFlight.get(metrics);
+	if (!counts) {
+		counts = new Map();
+		inFlight.set(metrics, counts);
+	}
+	const count = (counts.get(label) ?? 0) + delta;
+	if (count === 0) counts.delete(label);
+	else counts.set(label, count);
+	try {
+		metrics.gauge('background.in_flight', count, { label });
+	} catch {}
+}
+
 /** Await in library mode; otherwise hand the guarded task to the host. */
 export async function deferOrAwait(
 	work: BackgroundWork | undefined,
@@ -38,10 +54,17 @@ export async function deferOrAwait(
 		}
 	};
 	const guarded = async () => {
+		const started = performance.now();
+		recordInFlight(metrics, label, 1);
 		try {
 			await task();
 		} catch (error) {
 			failed(error);
+		} finally {
+			recordInFlight(metrics, label, -1);
+			try {
+				metrics.histogram?.('background.duration_ms', performance.now() - started, { label });
+			} catch {}
 		}
 	};
 	try {

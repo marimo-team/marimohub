@@ -1,6 +1,34 @@
+import { notebookCssCacheFor, notebookCssUrl } from '../notebookCss';
+import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
+import { resolveSessionLinks } from '@marimo-hub/core/session-links';
+import type { SessionLinkTemplate } from '@marimo-hub/core/session-links';
+import { createRoute, z } from '@hono/zod-openapi';
+import { all, allSettled } from 'better-all';
+import type {
+	Millis,
+	ProvisionResult,
+	SecondarySurfaceId,
+	WarmPoolClaim,
+	ResourceSecurityLabels,
+	Role,
+	AuthenticatedPrincipal,
+	AuthUser,
+	EditorClaim,
+	EditorSandboxSharing,
+	NotebookId,
+	PreviewId,
+	Project,
+	ProjectId,
+	MarimoConfigContributor,
+	Session,
+	SessionAdmissionRecord,
+	SessionMode,
+	SandboxInstance,
+	SessionRender,
+	UserId,
+	WorkloadRef,
+} from '@marimo-hub/core';
 import {
-	deferOrAwait,
-	captureThumbnail,
 	previewAvailable,
 	AppPoolService,
 	sessionResourceNotebookId,
@@ -68,8 +96,26 @@ import {
 	validateWifCredentialsUrl,
 	wifCredentialsDeadline,
 } from '@marimo-hub/core';
+import { previewAppPoolPolicy, previewIdleTimeout, PREVIEW_MAX_SESSIONS } from '../previewPolicy';
+import { checkComputeProfile } from '../computeProfile';
+import { logObserver } from '../saga';
+import { appendAudit, errorMetadata, logEvent } from '../log';
+import { sessionClientFor } from '../sessionClient';
 import {
-	backgroundWorkFor,
+	assertNotificationMutationAllowed,
+	scheduleNotification,
+	scheduleProjectAlert,
+} from '../notifications';
+import type { ApiDeps, SandboxConfig } from '../context';
+import {
+	composeSessionEnv,
+	federatedCredentialsFor,
+	resolveFederatedVars,
+	resolveIntegrationRender,
+} from '../sandboxEnv';
+import { federationFor } from '../federation';
+import { WIF_CREDENTIALS_PATH } from './wifCredentials';
+import {
 	deferTeardown,
 	assertProjectRole,
 	assertSessionAccess,
@@ -96,55 +142,6 @@ import {
 	SuccessResponseSchema,
 	toComputeResourcesResponse,
 } from '../shared';
-import { notebookCssCacheFor, notebookCssUrl } from '../notebookCss';
-import { DEFAULT_THEME_CONFIG } from '@marimo-hub/core/theme';
-import { resolveSessionLinks } from '@marimo-hub/core/session-links';
-import type { SessionLinkTemplate } from '@marimo-hub/core/session-links';
-import { createRoute, z } from '@hono/zod-openapi';
-import { all, allSettled } from 'better-all';
-import type {
-	Millis,
-	ProvisionResult,
-	SecondarySurfaceId,
-	WarmPoolClaim,
-	ResourceSecurityLabels,
-	Role,
-	AuthenticatedPrincipal,
-	AuthUser,
-	EditorClaim,
-	EditorSandboxSharing,
-	NotebookId,
-	PreviewId,
-	Project,
-	ProjectId,
-	MarimoConfigContributor,
-	Session,
-	SessionAdmissionRecord,
-	SessionMode,
-	SandboxInstance,
-	SessionRender,
-	UserId,
-	WorkloadRef,
-} from '@marimo-hub/core';
-import { previewAppPoolPolicy, previewIdleTimeout, PREVIEW_MAX_SESSIONS } from '../previewPolicy';
-import { checkComputeProfile } from '../computeProfile';
-import { logObserver } from '../saga';
-import { appendAudit, errorMetadata, logEvent } from '../log';
-import { sessionClientFor } from '../sessionClient';
-import {
-	assertNotificationMutationAllowed,
-	scheduleNotification,
-	scheduleProjectAlert,
-} from '../notifications';
-import type { ApiDeps, SandboxConfig } from '../context';
-import {
-	composeSessionEnv,
-	federatedCredentialsFor,
-	resolveFederatedVars,
-	resolveIntegrationRender,
-} from '../sandboxEnv';
-import { federationFor } from '../federation';
-import { WIF_CREDENTIALS_PATH } from './wifCredentials';
 import type { AuthzDeps } from '../shared';
 import { pageSchema, paginate, PaginationQuery } from '../pagination';
 import {
@@ -846,7 +843,7 @@ async function retireSelectedSession(
 	const { project_id: pid, notebook_id: nid, session_id: sid } = selected;
 	// Only the winner of the terminating transition performs teardown.
 	const { session, transitioned } = await sessions.beginTerminating(pid, sid);
-	let reclaimFailed = false;
+	let reclaimed = true;
 	try {
 		if (sessionMode(session) === 'app')
 			await new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics).invalidate(
@@ -866,21 +863,23 @@ async function retireSelectedSession(
 				const outcome = await sessionRetirer(deps)
 					.reclaim(session, { thumbnail: options.thumbnail })
 					.catch(() => null);
-				reclaimFailed = !outcome?.reclaimed;
-			} else {
-				await sessionRetirer(deps).retire(session, {
-					teardown: transitioned,
-					thumbnail: options.thumbnail,
-				});
+				return outcome?.reclaimed ?? false;
 			}
-			if (reclaimFailed && !options.wait && !deps.teardownInline && backgroundWorkFor(deps)) {
-				throw new UnavailableError('The session is still shutting down. Retry shortly.');
-			}
+			await sessionRetirer(deps).retire(session, {
+				teardown: transitioned,
+				thumbnail: options.thumbnail,
+			});
+			return true;
 		};
-		if (options.wait) await retire();
-		else await deferTeardown(deps, 'session.stop', retire);
+		if (options.wait) reclaimed = await retire();
+		else
+			await deferTeardown(deps, 'session.stop', async () => {
+				if (!(await retire())) {
+					throw new UnavailableError('The session is still shutting down. Retry shortly.');
+				}
+			});
 	}
-	if (reclaimFailed || (options.wait && !transitioned && session.status === 'terminating')) {
+	if (options.wait && (!reclaimed || (!transitioned && session.status === 'terminating'))) {
 		throw new UnavailableError('The session is still shutting down. Retry shortly.');
 	}
 }
@@ -1363,8 +1362,41 @@ export async function startNotebookSession(input: {
 		hostname: string;
 		appBaseUrl: string;
 		via?: 'mcp' | 'rest';
+		signal?: AbortSignal;
 	};
 }): Promise<SessionCreateResult> {
+	try {
+		return await startNotebookSessionOnce(input);
+	} catch (error) {
+		if (!(error instanceof EditSessionRetiringError)) throw error;
+		const { sessions } = input.deps.services;
+		const { pid, nid, user, request } = input;
+		const claim = await sessions.getEditorClaim(pid, nid);
+		if (!claim?.session_id || claim.transfer) throw error;
+		const holder = await sessions.getSession(pid, claim.session_id);
+		if (holder.user_id !== user.id || holder.status !== 'terminating') throw error;
+
+		const deadline = Date.now() + 10_000;
+		while (Date.now() < deadline) {
+			await sleep(Math.min(500, deadline - Date.now()), request.signal);
+			const current = await sessions.getEditorClaim(pid, nid);
+			if (
+				current?.transfer ||
+				current?.session_id !== claim.session_id ||
+				!(await sessions.isClaimRetiring(pid, nid, user.id, { claim: current }))
+			) {
+				// Capture can publish new content and snapshots while Start waits.
+				return startNotebookSessionOnce(input);
+			}
+		}
+		throw error;
+	}
+}
+
+async function startNotebookSessionOnce(
+	input: Parameters<typeof startNotebookSession>[0],
+): Promise<SessionCreateResult> {
+	input.request.signal?.throwIfAborted();
 	const { deps, user, pid, nid, body, request } = input;
 	const { sessions, projects, notebooks } = deps.services;
 	const mode: SessionMode = body?.mode ?? 'edit';
@@ -2460,25 +2492,6 @@ export async function startNotebookSession(input: {
 		);
 	}
 
-	// A restart is two requests; freshness is checked by ThumbnailService.prepare.
-	if (sandbox.automaticThumbnails !== false && !isPreview) {
-		await deferOrAwait(
-			backgroundWorkFor(deps),
-			'session.thumbnail',
-			() =>
-				captureThumbnail(
-					provisionedSandbox,
-					notebooks,
-					pid,
-					nid,
-					sandboxId,
-					workspaceDir,
-					Math.min(Date.now() + 3_000, sandbox.thumbnailDeadline?.() ?? Infinity),
-				),
-			deps.metrics,
-		);
-	}
-
 	const eagerSurfaces = SECONDARY_SURFACE_IDS.filter((id) => {
 		const config = sandbox.surfaces?.[id];
 		return config && (config.start === 'eager' || requestedSurfaces.includes(id));
@@ -2553,6 +2566,7 @@ app.openapi(createSession, async (c) => {
 			path: c.req.path,
 			hostname: resolveSandboxHostname(c, deps.sandbox),
 			appBaseUrl: resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl),
+			signal: c.req.raw.signal,
 		},
 	});
 	return c.json({ success: true as const, data }, 200);

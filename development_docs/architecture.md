@@ -449,6 +449,7 @@ business logic and depend only on interfaces:
 Inject `BackgroundWork` through `CreateServicesOptions` for best-effort side effects.
 Tasks must use their existing owner, tolerate repeats, and produce nothing a later request step reads.
 `deferOrAwait` awaits work without a scheduler. It logs failures and increments `background.failed` with a `label` tag.
+`background.in_flight` counts running tasks by label. `background.duration_ms` records execution time, excluding time waiting in the scheduler.
 Node drains core and API tasks before disposing compute clients.
 Workers use `waitUntil` for short tasks and keep teardown inline with `teardownInline: true`.
 
@@ -456,7 +457,8 @@ Stop marks the session `terminating` and invalidates any app-pool entry before d
 `wait=true` keeps teardown synchronous for restart clients.
 Content and filesystem capture stay synchronous during restart, replacement, and takeover.
 Editor claims are released only after confirmed destruction.
-Interactive teardown skips thumbnails. Plain stops and new-session renders have a three-second budget, with freshness checks in `ThumbnailService`.
+Interactive teardown skips thumbnails. Plain stops have a three-second budget, with freshness checks in `ThumbnailService`.
+Session starts do not render thumbnails.
 
 Notebook and project deletion commit before scheduling concurrent app retirement.
 Version pruning, audits, and deletion of old filesystem snapshots also use the host scheduler.

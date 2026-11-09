@@ -123,6 +123,9 @@ Workers and library callers without a scheduler await teardown.
 For an immediate restart, use `DELETE …/sessions/{sid}?wait=true`. The web restart flow does this.
 If another request owns teardown, `wait=true` returns a retryable `503`.
 
+Start waits up to 10 seconds for your previous editor to finish stopping, then reads the latest saved state.
+If cleanup takes longer, Start returns `EDIT_SESSION_RETIRING`. Retry after cleanup finishes.
+
 A crashed teardown can leave the editor claim held.
 Maintenance can reclaim it after the 15-minute grace period. New starts remain blocked until sandbox destruction is confirmed.
 
