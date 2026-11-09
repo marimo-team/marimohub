@@ -8,7 +8,7 @@ import { readStoredJson } from '../../schema';
 // the catalog pointer and session records.
 
 const DEFAULT_RETRIES = 5;
-/** Exponential backoff: 50ms, 100ms, 150ms, … */
+/** Linear backoff: 50ms, 100ms, 150ms, … */
 const DEFAULT_BACKOFF = (attempt: number) => 50 * (attempt + 1);
 
 export interface CasRetryOptions {
@@ -220,28 +220,43 @@ export async function putIfAbsent(
 	}
 }
 
+export interface KnownObject<T> {
+	value: T;
+	etag: string;
+}
+
 export interface ObjectMutationOutcome<T> {
 	value: T;
 	written: boolean;
 }
 
-/** Use when a caller must distinguish a committed write from an unchanged value. */
+/**
+ * A known snapshot must pair the value and ETag from the same object read.
+ * It skips the first read. A write conflict rereads the object before retry.
+ * A no-op returns the snapshot without revalidation, even after a concurrent deletion.
+ */
 export async function mutateObjectWithOutcome<T>(
 	bucket: Bucket,
 	key: string,
 	parse: (raw: unknown) => T,
 	apply: (current: T) => T | null,
-	options: CasRetryOptions & { notFound?: () => Error } = {},
+	options: CasRetryOptions & { notFound?: () => Error; known?: KnownObject<T> } = {},
 ): Promise<ObjectMutationOutcome<T>> {
+	let known = options.known;
 	return withCasRetry(
 		bucket,
 		async (cas) => {
-			const obj = await bucket.get(key);
-			if (!obj) throw options.notFound?.() ?? new NotFoundError(`Object ${key} not found`);
-			const current = parse(await readStoredJson(obj, key));
+			let record = known;
+			known = undefined;
+			if (!record) {
+				const obj = await bucket.get(key);
+				if (!obj) throw options.notFound?.() ?? new NotFoundError(`Object ${key} not found`);
+				record = { value: parse(await readStoredJson(obj, key)), etag: obj.etag };
+			}
+			const current = record.value;
 			const next = apply(current);
 			if (next === null) return { value: current, written: false };
-			await cas.put(key, JSON.stringify(next), { onlyIfEtagMatches: obj.etag });
+			await cas.put(key, JSON.stringify(next), { onlyIfEtagMatches: record.etag });
 			return { value: next, written: true };
 		},
 		options,
@@ -257,7 +272,7 @@ export async function mutateObject<T>(
 	key: string,
 	parse: (raw: unknown) => T,
 	apply: (current: T) => T | null,
-	options: CasRetryOptions & { notFound?: () => Error } = {},
+	options: CasRetryOptions & { notFound?: () => Error; known?: KnownObject<T> } = {},
 ): Promise<T> {
 	return (await mutateObjectWithOutcome(bucket, key, parse, apply, options)).value;
 }

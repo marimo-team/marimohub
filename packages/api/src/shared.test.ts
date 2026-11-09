@@ -2,6 +2,7 @@ import {
 	NotebookId,
 	ProjectId,
 	createProjectId,
+	createPreviewId,
 	createServices,
 	ForbiddenError,
 	NotFoundError,
@@ -20,6 +21,8 @@ import {
 	createApp,
 	initializeForSubject,
 	loadVisibleProject,
+	loadAuthorizedNotebook,
+	loadAuthorizedNotebookMeta,
 	ErrorResponseSchema,
 	extensibleResponseEnum,
 	jsonBody,
@@ -504,4 +507,40 @@ describe('retireLiveApps lifecycle filter', () => {
 			'terminated',
 		);
 	});
+});
+
+describe('notebook metadata authorization', () => {
+	it.each(['allowed', 'labels', 'deleted', 'preview'] as const)(
+		'matches the full gate for %s notebooks without reading source or README',
+		async (state) => {
+			const bucket = new MemoryBucket();
+			const services = createServices(bucket);
+			await services.catalog.initialize(ACTOR);
+			const project = await services.projects.createProject({ name: 'P', description: '' }, ACTOR);
+			const notebook = await services.notebooks.createNotebook(
+				project.id,
+				{ title: 'N', description: '', code: 'x = 1' },
+				ACTOR,
+			);
+			const detail = await services.notebooks.getNotebook(project.id, notebook.id);
+			if (state === 'labels')
+				detail.meta.security_labels = { classification: 'SECRET', compartments: [] };
+			if (state === 'deleted') detail.meta.status = 'deleted';
+			if (state === 'preview')
+				detail.meta.preview = { notebook_id: notebook.id, preview_id: createPreviewId() };
+			const full = vi.spyOn(services.notebooks, 'getNotebook').mockResolvedValue(detail);
+			const meta = vi.spyOn(services.notebooks, 'getNotebookMeta').mockResolvedValue(detail.meta);
+			const get = vi.spyOn(bucket, 'get');
+			const deps = { services, policy: {} };
+			const user = { id: ACTOR, email: 'actor@example.com' };
+			for (const gate of [loadAuthorizedNotebook, loadAuthorizedNotebookMeta]) {
+				const result = gate(deps, project, notebook.id, user, 'notebook.write');
+				if (state === 'allowed') await expect(result).resolves.toBeDefined();
+				else await expect(result).rejects.toBeInstanceOf(NotFoundError);
+			}
+			expect(full).toHaveBeenCalledTimes(1);
+			expect(meta).toHaveBeenCalledWith(project.id, notebook.id, { consistency: 'validated' });
+			expect(get).not.toHaveBeenCalled();
+		},
+	);
 });

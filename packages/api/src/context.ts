@@ -1,3 +1,4 @@
+import type { PromiseMemo } from '@marimo-hub/core/async';
 import type { SearchService, SearchIndexer } from '@marimo-hub/core/search';
 import type { WorkspaceLimits } from '@marimo-hub/core/remote-workspace';
 import type { DeploymentThemeConfig } from '@marimo-hub/core/theme';
@@ -445,6 +446,8 @@ export interface LoopHealthReport {
  * context (`c.get('deps')`) instead of instantiating adapters from `c.env`.
  */
 export interface ApiDeps {
+	/** Owned by one request or explicit operation. */
+	readMemo?: PromiseMemo;
 	search?: { service: SearchService; indexer: SearchIndexer };
 	workspaceLimits?: WorkspaceLimits;
 	warmPool?: WarmPoolService;
@@ -591,6 +594,7 @@ export interface ApiDeps {
 
 export type HonoEnv = {
 	Variables: {
+		readMemo: PromiseMemo;
 		deps: ApiDeps;
 		user: AuthenticatedPrincipal;
 		/**

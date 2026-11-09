@@ -269,10 +269,10 @@ describe('MCP source replacement and editor admission', () => {
 			return get(key);
 		});
 		const admission = vi.spyOn(starter.services.notebooks.workspace, 'withMutation');
-		const create = starter.services.sessions.createSession.bind(starter.services.sessions);
+		const create = starter.services.sessions.createSessionWithEtag.bind(starter.services.sessions);
 		let codeAtAdmission: string | undefined;
 		const createSession = vi
-			.spyOn(starter.services.sessions, 'createSession')
+			.spyOn(starter.services.sessions, 'createSessionWithEtag')
 			.mockImplementation(async (input) => {
 				codeAtAdmission = await starter.services.notebooks.getNotebookContent(
 					project.id,
@@ -300,12 +300,14 @@ describe('MCP source replacement and editor admission', () => {
 		const { writer, starter, project, notebook } = fixture;
 		const enteredCreate = Promise.withResolvers<void>();
 		const releaseCreate = Promise.withResolvers<void>();
-		const create = starter.services.sessions.createSession.bind(starter.services.sessions);
-		vi.spyOn(starter.services.sessions, 'createSession').mockImplementation(async (input) => {
-			enteredCreate.resolve();
-			await releaseCreate.promise;
-			return create(input);
-		});
+		const create = starter.services.sessions.createSessionWithEtag.bind(starter.services.sessions);
+		vi.spyOn(starter.services.sessions, 'createSessionWithEtag').mockImplementation(
+			async (input) => {
+				enteredCreate.resolve();
+				await releaseCreate.promise;
+				return create(input);
+			},
+		);
 		const mutation = vi.spyOn(writer.services.notebooks.workspace, 'withMutation');
 		const starting = fixture.start();
 		await enteredCreate.promise;

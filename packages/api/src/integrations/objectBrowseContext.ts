@@ -1,3 +1,4 @@
+import { unscopedDeps } from '../requestMemo';
 import { HTTPException } from 'hono/http-exception';
 import {
 	createSessionId,
@@ -37,10 +38,10 @@ function createCredentialCache(): CredentialCache {
 let credentialCaches = new WeakMap<ApiDeps, CredentialCache>();
 
 function credentialCache(deps: ApiDeps): CredentialCache {
-	let cache = credentialCaches.get(deps);
+	let cache = credentialCaches.get(unscopedDeps(deps));
 	if (!cache) {
 		cache = createCredentialCache();
-		credentialCaches.set(deps, cache);
+		credentialCaches.set(unscopedDeps(deps), cache);
 	}
 	return cache;
 }

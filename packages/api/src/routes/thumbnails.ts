@@ -19,7 +19,7 @@ import {
 	etagFor,
 	fail,
 	jsonContent,
-	loadAuthorizedNotebook,
+	loadAuthorizedNotebookMeta,
 	loadVisibleProject,
 	NotebookIdParam,
 	ProjectIdParam,
@@ -93,7 +93,13 @@ async function authorizeThumbnail(
 	const project = write
 		? await assertProjectRole(deps.services.projects, pid, user, 'notebook.write', deps)
 		: await loadVisibleProject(deps.services.projects, pid, user, deps);
-	await loadAuthorizedNotebook(deps, project, nid, user, write ? 'notebook.write' : 'project.read');
+	await loadAuthorizedNotebookMeta(
+		deps,
+		project,
+		nid,
+		user,
+		write ? 'notebook.write' : 'project.read',
+	);
 	return deps.services.notebooks.thumbnails;
 }
 
@@ -133,10 +139,14 @@ app.openapi(
 	async (c) => {
 		const { pid, nid } = c.req.valid('param');
 		const thumbnails = await authorizeThumbnail(c, pid, nid);
-		const image = await thumbnails.image(pid, nid);
-		if (!image) throw new NotFoundError('No thumbnail');
+		const selected = await thumbnails.imageWithRevision(pid, nid);
+		if (!selected) throw new NotFoundError('No thumbnail');
+		const { image, revision } = selected;
 		const etag = etagFor(image.etag);
-		c.header('Cache-Control', 'private, no-cache');
+		c.header(
+			'Cache-Control',
+			c.req.query('r') === revision ? 'private, max-age=86400' : 'private, no-cache',
+		);
 		c.header('ETag', etag);
 		c.header('X-Content-Type-Options', 'nosniff');
 		const validators = c.req.header('If-None-Match');

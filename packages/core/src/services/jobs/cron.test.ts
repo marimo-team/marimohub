@@ -96,6 +96,16 @@ describe('isValidTimeZone', () => {
 describe('previousOccurrence', () => {
 	const daily6 = parseCron('0 6 * * *');
 
+	it('keeps cached zones separate and supports out-of-order evaluations', () => {
+		const instant = at('2026-09-02T06:30:00Z');
+		expect(previousOccurrence(daily6, 'UTC', instant, DAY)).toBe(at('2026-09-02T06:00:00Z'));
+		expect(previousOccurrence(daily6, 'Europe/Berlin', instant, DAY)).toBe(
+			at('2026-09-02T04:00:00Z'),
+		);
+		expect(previousOccurrence(daily6, 'UTC', instant - DAY, DAY)).toBe(at('2026-09-01T06:00:00Z'));
+		expect(previousOccurrence(daily6, 'UTC', instant, DAY)).toBe(at('2026-09-02T06:00:00Z'));
+	});
+
 	it('finds the latest occurrence at or before `at` within the window', () => {
 		expect(previousOccurrence(daily6, 'Europe/Berlin', at('2026-09-02T04:30:00Z'), HOUR)).toBe(
 			at('2026-09-02T04:00:00Z'),

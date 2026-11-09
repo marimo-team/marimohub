@@ -823,7 +823,7 @@ describe('hub host protocol', () => {
 			bridge.mockResolvedValue(
 				runtimeReply({ status: 202, body: { id: 'second-run', notebook_id: 'local' } }),
 			);
-			const create = vi.spyOn(deps.services.sessions, 'createSession');
+			const create = vi.spyOn(deps.services.sessions, 'createSessionWithEtag');
 			for (let index = 0; index < 2; index++) {
 				const response = await run();
 				expect(response.status).toBe(409);
@@ -837,7 +837,7 @@ describe('hub host protocol', () => {
 	it('retries a lost run reply against the original runtime and upstream key', async () => {
 		const { request, deps, id, runtime } = await setup();
 		const session = await runtime();
-		const create = vi.spyOn(deps.services.sessions, 'createSession');
+		const create = vi.spyOn(deps.services.sessions, 'createSessionWithEtag');
 		const connect = vi.spyOn(deps.compute, 'create');
 		const bridge = vi.mocked(requestRuntimeHost);
 		bridge.mockRejectedValueOnce(new UnavailableError('Reply lost')).mockResolvedValueOnce(
@@ -1130,7 +1130,7 @@ describe('host protocol conformance', () => {
 	it('answers no-runtime for interrupts and input replies without starting a sandbox', async () => {
 		const { request, id, deps, runtime } = await setup();
 		const create = vi.spyOn(deps.compute, 'create');
-		const sessions = vi.spyOn(deps.services.sessions, 'createSession');
+		const sessions = vi.spyOn(deps.services.sessions, 'createSessionWithEtag');
 		const interrupt = () =>
 			request('DELETE', `/notebooks/${id}/runtime/runs/run-1`, undefined, 'interrupt');
 		for (const response of [
@@ -1250,7 +1250,7 @@ describe('host editor ownership', () => {
 		fixture.deps.policy.editorSandboxSharing = 'exclusive';
 		fixture.setUser(otherUser);
 		mockStartedRuntime();
-		const create = vi.spyOn(fixture.deps.services.sessions, 'createSession');
+		const create = vi.spyOn(fixture.deps.services.sessions, 'createSessionWithEtag');
 		const response = await fixture.request('PUT', `/notebooks/${fixture.id}/runtime`, {}, 'shared');
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({
@@ -1267,7 +1267,7 @@ describe('host editor ownership', () => {
 			'takeover',
 			'temporary',
 		]);
-		const create = vi.spyOn(fixture.deps.services.sessions, 'createSession');
+		const create = vi.spyOn(fixture.deps.services.sessions, 'createSessionWithEtag');
 		const retire = vi.spyOn(SessionRetirer.prototype, 'retireForTakeover');
 		const response = await fixture.choose('cancel');
 		expect(response.status).toBe(409);
@@ -1456,7 +1456,7 @@ describe('host editor ownership', () => {
 		vi.spyOn(SessionRetirer.prototype, 'retireForTakeover').mockRejectedValue(
 			new Error('Cannot save'),
 		);
-		const create = vi.spyOn(fixture.deps.services.sessions, 'createSession');
+		const create = vi.spyOn(fixture.deps.services.sessions, 'createSessionWithEtag');
 		expect((await fixture.choose('takeover')).status).toBe(503);
 		expect(create).not.toHaveBeenCalled();
 		expect(requestRuntimeHost).not.toHaveBeenCalled();
@@ -1505,7 +1505,7 @@ describe('host editor ownership', () => {
 		const parsed = HostNotebookId.parse(result.notebook_id);
 		await fixture.deps.services.sessions.markTerminated(fixture.project.id, parsed.sessionId!);
 		fixture.setUser(user);
-		const create = vi.spyOn(fixture.deps.services.sessions, 'createSession');
+		const create = vi.spyOn(fixture.deps.services.sessions, 'createSessionWithEtag');
 		vi.mocked(requestRuntimeHost).mockClear();
 		for (const id of [
 			result.notebook_id,
@@ -1572,7 +1572,7 @@ describe('host editor ownership', () => {
 			expectedHolder: fixture.holder.session_id,
 			expectedActivity: 'unknown',
 		});
-		const create = vi.spyOn(fixture.deps.services.sessions, 'createSession');
+		const create = vi.spyOn(fixture.deps.services.sessions, 'createSessionWithEtag');
 		for (const response of [
 			await fixture.request('PUT', `/notebooks/${fixture.id}/runtime`, {}, 'during-takeover'),
 			await fixture.choose('takeover'),

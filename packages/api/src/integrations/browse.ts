@@ -1,3 +1,4 @@
+import { unscopedDeps } from '../requestMemo';
 import {
 	LazyMap,
 	NotFoundError,
@@ -329,10 +330,10 @@ function createIntegrationBrowseState(): IntegrationBrowseState {
 let integrationBrowseStates = new WeakMap<ApiDeps, IntegrationBrowseState>();
 
 function integrationBrowseState(deps: ApiDeps): IntegrationBrowseState {
-	let state = integrationBrowseStates.get(deps);
+	let state = integrationBrowseStates.get(unscopedDeps(deps));
 	if (!state) {
 		state = createIntegrationBrowseState();
-		integrationBrowseStates.set(deps, state);
+		integrationBrowseStates.set(unscopedDeps(deps), state);
 	}
 	return state;
 }

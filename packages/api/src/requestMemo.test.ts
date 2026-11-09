@@ -1,0 +1,66 @@
+import { consumeIntegrationBudget } from './integrations/browse';
+import { Hono } from 'hono';
+import { describe, expect, it, vi } from 'vitest';
+import type { HonoEnv } from './context';
+import { requestMemoMiddleware, unscopedDeps, withRequestMemo } from './requestMemo';
+import { makeTestDeps } from './testing';
+import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
+
+describe('request memo middleware', () => {
+	it('shares across middleware and handlers but isolates concurrent and later requests', async () => {
+		const deps = makeTestDeps(new MemoryBucket());
+		const app = new Hono<HonoEnv>();
+		const load = vi.fn(async () => 42);
+		app.use('*', requestMemoMiddleware(deps));
+		app.use('*', async (c, next) => {
+			expect(c.get('deps').readMemo).toBe(c.get('readMemo'));
+			await c.get('readMemo').read(['value'], load);
+			await next();
+		});
+		app.get('/', async (c) => c.json(await c.get('readMemo').read(['value'], load)));
+		const responses = await Promise.all([app.request('/'), app.request('/')]);
+		for (const response of responses) expect(await response.json()).toBe(42);
+		expect(load).toHaveBeenCalledTimes(2);
+		expect(await (await app.request('/')).json()).toBe(42);
+		expect(load).toHaveBeenCalledTimes(3);
+		expect(deps.readMemo).toBeUndefined();
+	});
+
+	it('reads updated state after a write within the same request', async () => {
+		const app = new Hono<HonoEnv>();
+		let value = 1;
+		app.use('*', requestMemoMiddleware(makeTestDeps(new MemoryBucket())));
+		app.post('/', async (c) => {
+			const memo = c.get('readMemo');
+			const before = await memo.read(['value'], () => value);
+			await memo.mutate(() => {
+				value = 2;
+			});
+			return c.json([before, await memo.read(['value'], () => value)]);
+		});
+		expect(await (await app.request('/', { method: 'POST' })).json()).toEqual([1, 2]);
+	});
+
+	it('preserves shared rate limits across requests and nested operation scopes', () => {
+		const deps = makeTestDeps(new MemoryBucket());
+		for (let i = 0; i < 5; i++) {
+			const scoped = withRequestMemo(withRequestMemo(deps));
+			expect(unscopedDeps(scoped)).toBe(deps);
+			expect(consumeIntegrationBudget(scoped, 'objectSearch', 'user')).toBe(true);
+		}
+		expect(consumeIntegrationBudget(withRequestMemo(deps), 'objectSearch', 'user')).toBe(false);
+		expect(consumeIntegrationBudget(makeTestDeps(new MemoryBucket()), 'objectSearch', 'user')).toBe(
+			true,
+		);
+	});
+
+	it('explicit operation refreshes replace an existing scope without changing shared services', async () => {
+		const deps = withRequestMemo(makeTestDeps(new MemoryBucket()));
+		await deps.readMemo.read(['value'], () => 1);
+		const refreshed = withRequestMemo(deps);
+		expect(refreshed.services).toBe(deps.services);
+		expect(refreshed.readMemo).not.toBe(deps.readMemo);
+		expect(await refreshed.readMemo.read(['value'], () => 2)).toBe(2);
+		expect(await deps.readMemo.read(['value'], () => 3)).toBe(1);
+	});
+});

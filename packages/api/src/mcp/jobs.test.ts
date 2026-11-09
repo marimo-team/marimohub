@@ -843,7 +843,7 @@ describe('MCP waiting', () => {
 			const read =
 				resource === 'notebook'
 					? vi
-							.spyOn(deps.services.notebooks, 'getNotebook')
+							.spyOn(deps.services.notebooks, 'getNotebookMeta')
 							.mockImplementation(() => new Promise(() => {}))
 					: vi.spyOn(deps.services.jobs, 'getJob').mockImplementation(() => new Promise(() => {}));
 			await vi.advanceTimersByTimeAsync(1000);

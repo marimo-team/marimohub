@@ -128,7 +128,7 @@ import {
 	errorResponses,
 	IdempotencyKeyHeader,
 	jsonContent,
-	loadAuthorizedNotebook,
+	loadAuthorizedNotebookMeta,
 	loadVisibleProject,
 	loadSessionProject,
 	NotebookIdParam,
@@ -838,11 +838,12 @@ async function retireSelectedSession(
 	deps: ApiDeps,
 	selected: Session,
 	options: { wait: boolean; thumbnail: 'skip' | 'bounded' } = { wait: true, thumbnail: 'skip' },
+	known?: { value: Session; etag: string },
 ): Promise<void> {
 	const { sessions } = deps.services;
 	const { project_id: pid, notebook_id: nid, session_id: sid } = selected;
 	// Only the winner of the terminating transition performs teardown.
-	const { session, transitioned } = await sessions.beginTerminating(pid, sid);
+	const { session, transitioned } = await sessions.beginTerminating(pid, sid, undefined, known);
 	let reclaimed = true;
 	try {
 		if (sessionMode(session) === 'app')
@@ -1095,7 +1096,7 @@ export async function getEditorSessionState(
 		'notebook.write',
 		deps,
 	);
-	await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
+	await loadAuthorizedNotebookMeta(deps, project, nid, user, 'notebook.write');
 	const claim = await deps.services.sessions.getEditorClaim(pid, nid);
 	const sharing = effectiveEditorSharing(claim, deps.policy.editorSandboxSharing);
 	const claimedSession = claim?.session_id
@@ -1175,7 +1176,7 @@ export async function takeOverNotebookEditor(input: {
 			'notebook.write',
 			deps,
 		);
-		const notebook = await loadAuthorizedNotebook(deps, project, nid, user, 'notebook.write');
+		const notebook = await loadAuthorizedNotebookMeta(deps, project, nid, user, 'notebook.write');
 		return { project, notebook };
 	};
 	try {
@@ -1210,7 +1211,7 @@ export async function takeOverNotebookEditor(input: {
 				return notificationRouter.render({
 					kind: 'session.takeover',
 					project: subject.project,
-					notebookTitle: subject.notebook.meta.title,
+					notebookTitle: subject.notebook.title,
 					projectId: pid,
 					notebookId: nid,
 					takeoverId: body.takeover_id,
@@ -1795,6 +1796,7 @@ async function startNotebookSessionOnce(
 	const kernelAuthToken = sandbox.auth === 'on' ? createKernelAuthToken() : undefined;
 
 	let session: Session | undefined;
+	let createdSession: { value: Session; etag: string } | undefined;
 	let sessionRecordAttempted = false;
 	let sandboxMayExist = false;
 	const recordSandboxCleanup = async () => {
@@ -2105,9 +2107,9 @@ async function startNotebookSessionOnce(
 				compensate: cleanupColdSandbox,
 			})
 			.step('session_record', async () => {
-				const create = () => {
+				const create = async () => {
 					sessionRecordAttempted = true;
-					return sessions.createSession({
+					createdSession = await sessions.createSessionWithEtag({
 						session_id: sessionId,
 						...(admission ? { app_pool: true as const } : {}),
 						notebook_id: nid,
@@ -2130,6 +2132,7 @@ async function startNotebookSessionOnce(
 							credentialsEndpoint?.expiresAt,
 						),
 					});
+					return createdSession.value;
 				};
 				// Publish the starting record under the source-mutation lease. Once visible,
 				// the session itself blocks source replacement through sandbox reclamation.
@@ -2349,6 +2352,7 @@ async function startNotebookSessionOnce(
 					ttlMs ? new Date(Date.now() + ttlMs).toISOString() : undefined,
 					integrationAttachments,
 					providerDeadline === undefined ? undefined : new Date(providerDeadline).toISOString(),
+					createdSession?.value === session ? createdSession : undefined,
 				);
 			})
 			// Deletion can miss a starting sandbox. Rechecks after mark_running close that race.
@@ -2595,7 +2599,8 @@ app.openapi(deleteSession, async (c) => {
 
 	// Scope-check: the project-scoped key 404s a cross-project id; the notebook
 	// check keeps a same-project/other-notebook id out of scope.
-	const existing = await sessions.getSession(pid, sid);
+	const known = await sessions.getSessionWithEtag(pid, sid);
+	const existing = known.value;
 	if (sessionResourceNotebookId(existing) !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
@@ -2607,7 +2612,7 @@ app.openapi(deleteSession, async (c) => {
 	await assertSessionControl(project, existing, user, deps, labels);
 
 	const wait = c.req.valid('query').wait === 'true';
-	await retireSelectedSession(deps, existing, { wait, thumbnail: wait ? 'skip' : 'bounded' });
+	await retireSelectedSession(deps, existing, { wait, thumbnail: wait ? 'skip' : 'bounded' }, known);
 
 	return c.json({ success: true }, 200);
 });
@@ -2619,7 +2624,7 @@ app.openapi(heartbeatSession, async (c) => {
 	const { pid, nid, sid } = c.req.valid('param');
 
 	// Preserve project-denial precedence without waiting for speculative session I/O.
-	const sessionRead = sessions.getSession(pid, sid).then(
+	const sessionRead = sessions.getSessionWithEtag(pid, sid).then(
 		(value) => ({ status: 'fulfilled' as const, value }),
 		(reason: unknown) => ({ status: 'rejected' as const, reason }),
 	);
@@ -2629,7 +2634,8 @@ app.openapi(heartbeatSession, async (c) => {
 	// check keeps a same-project/other-notebook id out of scope.
 	const sessionResult = await sessionRead;
 	if (sessionResult.status === 'rejected') throw sessionResult.reason;
-	const existing = sessionResult.value;
+	const known = sessionResult.value;
+	const existing = known.value;
 	if (sessionResourceNotebookId(existing) !== nid) {
 		throw new NotFoundError(`Session ${sid} not found`);
 	}
@@ -2660,7 +2666,7 @@ app.openapi(heartbeatSession, async (c) => {
 		}
 	}
 
-	const updated = await sessions.heartbeat(pid, sid);
+	const updated = await sessions.heartbeat(pid, sid, known);
 	const grants = await sessionGrantsFor(project, user, updated, deps, labels);
 	const response: ReturnType<typeof toSessionResponse> &
 		Pick<z.infer<typeof SessionResponseSchema>, 'head_version_id' | 'edit_active'> =

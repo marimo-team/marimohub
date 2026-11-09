@@ -13,7 +13,7 @@ import { DEFAULT_CHAT_CONFIG } from '../context';
 import type { ApiDeps } from '../context';
 import { logEvent } from '../log';
 import type { StartRequestContext } from '../mcp/server';
-import { authorizationService, loadAuthorizedNotebook } from '../shared';
+import { authorizationService, loadAuthorizedNotebookMeta } from '../shared';
 import { authorizeConversation, chatPrincipalDeadline } from './access';
 import type { ConversationOperationContext } from './access';
 import { registerLiveTurn, stopLiveTurn, subscribeLiveTurn } from './liveTurns';
@@ -66,7 +66,7 @@ export async function updateConversation(
 ) {
 	const project = await authorizeConversation(input);
 	if (input.working_notebook !== null)
-		await loadAuthorizedNotebook(
+		await loadAuthorizedNotebookMeta(
 			input.deps,
 			project,
 			input.working_notebook,

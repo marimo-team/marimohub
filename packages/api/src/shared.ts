@@ -1,3 +1,4 @@
+import type { PromiseMemo } from '@marimo-hub/core/async';
 import { SessionLinkSchema } from '@marimo-hub/core/session-links';
 import { SEARCH_KINDS } from '@marimo-hub/core/search';
 import { OpenAPIHono, z } from '@hono/zod-openapi';
@@ -53,6 +54,7 @@ import type {
 	Role,
 	ResourceSecurityPolicy,
 	NotebookDetail,
+	NotebookMeta,
 	ComputeResources,
 	DeploymentAction,
 	Project,
@@ -143,6 +145,7 @@ export function extensibleResponseEnum<const Values extends readonly [string, ..
  * route handlers pass `deps` straight through.
  */
 export interface AuthzDeps {
+	readMemo?: PromiseMemo;
 	services?: Pick<ApiDeps['services'], 'projects'>;
 	policy?: AuthorizationPolicy;
 	resourceSecurity?: ResourceSecurityPolicy;
@@ -157,17 +160,13 @@ export async function initializeForSubject(
 	});
 }
 
-/**
- * The one `AuthorizationService` per dep bundle. `deps` is stable for a
- * server's lifetime, so every guard shares one instance; the WeakMap only
- * matters for tests that build many bundles.
- */
+/** Guards share an authorization service within the same dependency bundle. */
 const AUTHZ_SERVICES = new WeakMap<AuthzDeps, AuthorizationService>();
 
 export function authorizationService(deps: AuthzDeps): AuthorizationService {
 	let service = AUTHZ_SERVICES.get(deps);
 	if (!service) {
-		service = new AuthorizationService(deps.policy, deps.resourceSecurity);
+		service = new AuthorizationService(deps.policy, deps.resourceSecurity, deps.readMemo);
 		AUTHZ_SERVICES.set(deps, service);
 	}
 	return service;
@@ -254,7 +253,6 @@ export async function assertTokenGrantProjectsVisible(
 	}
 }
 
-/** Notebook overrides must constrain the requested action as well as read visibility. */
 export async function loadAuthorizedNotebook(
 	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity'>,
 	project: Project,
@@ -263,11 +261,38 @@ export async function loadAuthorizedNotebook(
 	action: ProjectAction,
 ): Promise<NotebookDetail> {
 	const detail = await deps.services.notebooks.getNotebook(project.id, nid);
-	if (detail.meta.preview) throw new NotFoundError('Notebook not found');
-	if (detail.meta.status === 'deleted') {
+	await authorizeNotebookMeta(deps, project, detail.meta, subject, action);
+	return detail;
+}
+
+export async function loadAuthorizedNotebookMeta(
+	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity'>,
+	project: Project,
+	nid: NotebookId,
+	subject: AuthSubject,
+	action: ProjectAction,
+): Promise<NotebookMeta> {
+	const meta = await deps.services.notebooks.getNotebookMeta(project.id, nid, {
+		consistency: 'validated',
+	});
+	await authorizeNotebookMeta(deps, project, meta, subject, action);
+	return meta;
+}
+
+/** Notebook overrides constrain both the requested action and read visibility. */
+async function authorizeNotebookMeta(
+	deps: Pick<ApiDeps, 'services' | 'policy' | 'resourceSecurity'>,
+	project: Project,
+	meta: NotebookMeta,
+	subject: AuthSubject,
+	action: ProjectAction,
+): Promise<void> {
+	const nid = meta.id;
+	if (meta.preview) throw new NotFoundError('Notebook not found');
+	if (meta.status === 'deleted') {
 		throw new NotFoundError(`Notebook ${nid} not found`);
 	}
-	if (detail.meta.security_labels !== undefined) {
+	if (meta.security_labels !== undefined) {
 		const actions: ProjectAction[] =
 			action === 'project.read' || action === 'app.read' || action === 'preview.manage'
 				? [action]
@@ -276,14 +301,13 @@ export async function loadAuthorizedNotebook(
 			const decision = await authorizationService(deps).authorize(subject, requestedAction, {
 				kind: 'project',
 				project,
-				notebookLabels: detail.meta.security_labels,
+				notebookLabels: meta.security_labels,
 			});
 			if (!decision.allowed) {
 				throw new NotFoundError(`Notebook ${nid} not found`);
 			}
 		}
 	}
-	return detail;
 }
 
 export async function assertSessionPreviewActive(

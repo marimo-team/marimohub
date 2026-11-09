@@ -1,3 +1,4 @@
+import { unscopedDeps } from './requestMemo';
 import {
 	createSlidingWindowBudget,
 	noopNotifier,
@@ -52,13 +53,13 @@ export function assertNotificationMutationAllowed(
 				? projectAlertsEnabled
 				: notifierEnabled || projectAlertsEnabled;
 	if (!deliveryEnabled) return;
-	let budgets = mutationBudgets.get(deps);
+	let budgets = mutationBudgets.get(unscopedDeps(deps));
 	if (!budgets) {
 		budgets = {
 			actor: createSlidingWindowBudget({ limit: 20, windowMs: 60_000 }),
 			recipient: createSlidingWindowBudget({ limit: 5, windowMs: 10 * 60_000 }),
 		};
-		mutationBudgets.set(deps, budgets);
+		mutationBudgets.set(unscopedDeps(deps), budgets);
 	}
 	if (options.consumeActor !== false && !budgets.actor.consume(actor)) {
 		throw new ResourceExhaustedError('Too many notification-triggering changes; try again later.');

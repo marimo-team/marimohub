@@ -111,6 +111,95 @@ describe('JobScheduler', () => {
 		await s.drain();
 	};
 
+	it('does no job-level I/O for 50 idle indexed jobs', async () => {
+		for (let i = 0; i < 50; i++)
+			await createJob({ name: `idle-${i}`, schedule: { cron: '0 0 * * *', timezone: 'UTC' } });
+		await env.catalog.mutateSnapshot('test.index-lag', ACTOR, (snapshot) => {
+			for (const project of snapshot.projects)
+				for (const notebook of project.notebooks) {
+					for (const entry of notebook.jobs ?? [])
+						entry.updated_at = new Date(T0 - DAY).toISOString();
+				}
+			return snapshot;
+		});
+		const get = vi.spyOn(env.bucket, 'get');
+		const put = vi.spyOn(env.bucket, 'put');
+		const head = vi.spyOn(env.bucket, 'head');
+		const runner = fakeRunner(env);
+		expect(await scheduler(runner).tick()).toMatchObject({ fired: 0, errors: 0 });
+		for (const spy of [get, put, head])
+			expect(
+				spy.mock.calls.filter(([key]) => /\/jobs\/|job-operations|job-deletions/.test(key)),
+			).toEqual([]);
+	});
+
+	it('checks a recent disabled index entry against the authoritative due job', async () => {
+		const job = await createJob();
+		await env.catalog.mutateSnapshot('test.index-lag', ACTOR, (snapshot) => {
+			const entry = snapshot.projects
+				.find((project) => project.id === pid)!
+				.notebooks.find((notebook) => notebook.id === nid)!
+				.jobs!.find((entry) => entry.id === job.id)!;
+			entry.enabled = false;
+			entry.schedule = undefined;
+			entry.updated_at = new Date(T0).toISOString();
+			return snapshot;
+		});
+		const runner = fakeRunner(env);
+		const clock = scheduler(runner);
+		expect((await clock.tick()).fired).toBe(1);
+		await clock.drain();
+		expect((await clock.tick()).fired).toBe(0);
+		await clock.drain();
+	});
+
+	it.each(['cron', 'timezone', 'storage'] as const)(
+		'continues firing healthy jobs after a %s failure and retries on the next tick',
+		async (failure) => {
+			const broken = await createJob({ name: 'broken' });
+			const healthy = await createJob({ name: 'healthy' });
+			const getJob = env.jobs.getJob.bind(env.jobs);
+			const read = vi.spyOn(env.jobs, 'getJob').mockImplementation(async (...args) => {
+				const job = await getJob(...args);
+				if (job.id !== broken.id) return job;
+				if (failure === 'storage') throw new Error('storage unavailable');
+				return {
+					...job,
+					schedule: {
+						cron: failure === 'cron' ? 'bad cron' : '* * * * *',
+						timezone: failure === 'timezone' ? 'Mars/Olympus_Mons' : 'UTC',
+					},
+				};
+			});
+			const clock = scheduler(fakeRunner(env), { config: { ...CONFIG, maxConcurrentRuns: 0 } });
+			expect(await clock.tick()).toMatchObject({ fired: 1, errors: failure === 'cron' ? 0 : 1 });
+			expect(await env.jobRuns.listRuns(pid, nid, healthy.id)).toHaveLength(1);
+			expect(await env.jobRuns.listRuns(pid, nid, broken.id)).toHaveLength(0);
+			read.mockRestore();
+			expect(await clock.tick()).toMatchObject({ fired: 1, errors: 0 });
+			expect(await env.jobRuns.listRuns(pid, nid, healthy.id)).toHaveLength(1);
+			expect(await env.jobRuns.listRuns(pid, nid, broken.id)).toHaveLength(1);
+		},
+	);
+
+	it.each([0, 1])(
+		'checks index lag at the catch-up boundary plus %i milliseconds',
+		async (offset) => {
+			const job = await createJob();
+			await env.catalog.updateNotebookEntry('test.jobs.boundary', ACTOR, pid, nid, (notebook) => ({
+				jobs: (notebook.jobs ?? []).map((entry) => ({
+					...entry,
+					enabled: false,
+					schedule: undefined,
+					updated_at: new Date(now - CONFIG.catchupWindowMs - offset).toISOString(),
+				})),
+			}));
+			const clock = scheduler(fakeRunner(env), { config: { ...CONFIG, maxConcurrentRuns: 0 } });
+			expect(await clock.tick()).toMatchObject({ fired: offset === 0 ? 1 : 0, errors: 0 });
+			expect(await env.jobRuns.listRuns(pid, nid, job.id)).toHaveLength(offset === 0 ? 1 : 0);
+		},
+	);
+
 	it('reads source metadata once and does not load the readme when firing', async () => {
 		await createJob();
 		const get = vi.spyOn(env.bucket, 'get');
@@ -262,9 +351,9 @@ describe('JobScheduler', () => {
 
 		expect((await s.tick()).dispatched).toBe(0);
 
-		// Fire checks each job once; admission shares one read per parent and job.
-		expect(projectReads).toHaveBeenCalledTimes(jobs.length + 1);
-		expect(notebookReads).toHaveBeenCalledTimes(jobs.length + 1);
+		// Fire and admission each share parent reads; admission rechecks after firing.
+		expect(projectReads).toHaveBeenCalledTimes(2);
+		expect(notebookReads).toHaveBeenCalledTimes(2);
 		expect(jobReads).toHaveBeenCalledTimes(jobs.length * 2);
 		await env.notebooks.deleteNotebook(pid, nid, ACTOR);
 		expect((await s.tick()).dispatched).toBe(0);

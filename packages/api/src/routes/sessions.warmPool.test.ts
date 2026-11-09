@@ -519,7 +519,7 @@ describe('session warm sandbox assignment', () => {
 			const { oldId, cold } = w;
 			const probe = Promise.withResolvers<void>();
 			vi.spyOn(w.warmPool, 'probe').mockImplementationOnce(() => probe.promise);
-			const published = vi.spyOn(w.api.deps.services.sessions, 'createSession');
+			const published = vi.spyOn(w.api.deps.services.sessions, 'createSessionWithEtag');
 			const replace = vi.spyOn(w.api.deps.services.sessions, 'replaceStartingSandbox');
 			const request = w.api.request('POST', w.path, { mode });
 			await vi.waitFor(() => expect(published).toHaveBeenCalledOnce());
@@ -657,8 +657,8 @@ describe('session warm sandbox assignment', () => {
 			const publishing = Promise.withResolvers<void>();
 			const publish = Promise.withResolvers<void>();
 			const sessions = w.api.deps.services.sessions;
-			const create = sessions.createSession.bind(sessions);
-			vi.spyOn(sessions, 'createSession').mockImplementationOnce(async (input) => {
+			const create = sessions.createSessionWithEtag.bind(sessions);
+			vi.spyOn(sessions, 'createSessionWithEtag').mockImplementationOnce(async (input) => {
 				publishing.resolve();
 				await publish.promise;
 				return create(input);
@@ -711,8 +711,8 @@ describe('session warm sandbox assignment', () => {
 		const publishing = Promise.withResolvers<void>();
 		const publish = Promise.withResolvers<void>();
 		const sessions = w.api.deps.services.sessions;
-		const create = sessions.createSession.bind(sessions);
-		vi.spyOn(sessions, 'createSession').mockImplementationOnce(async (input) => {
+		const create = sessions.createSessionWithEtag.bind(sessions);
+		vi.spyOn(sessions, 'createSessionWithEtag').mockImplementationOnce(async (input) => {
 			publishing.resolve();
 			await publish.promise;
 			return create(input);

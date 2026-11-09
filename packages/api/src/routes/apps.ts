@@ -13,7 +13,7 @@ import {
 	errorResponses,
 	jsonContent,
 	loadAppProject,
-	loadAuthorizedNotebook,
+	loadAuthorizedNotebookMeta,
 	NotebookIdParam,
 } from '../shared';
 import { PaginationQuery, paginate, pageSchema } from '../pagination';
@@ -209,7 +209,7 @@ app.openapi(
 		const user = c.get('user');
 		const { pid, nid } = c.req.valid('param');
 		const project = await loadAppProject(deps.services.projects, pid, user, deps);
-		const { meta } = await loadAuthorizedNotebook(deps, project, nid, user, 'app.read');
+		const meta = await loadAuthorizedNotebookMeta(deps, project, nid, user, 'app.read');
 		return c.json(
 			{
 				success: true as const,

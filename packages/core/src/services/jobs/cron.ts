@@ -8,7 +8,10 @@
  * field as seconds — and nicknames such as `@daily` are rejected with it.
  */
 import { Cron } from 'croner';
+import { BoundedLruMap } from '../../cache';
 import { ValidationError } from '../../errors';
+
+const compiledCrons = new BoundedLruMap<string, Cron>(1000);
 
 /** A validated five-field expression. */
 export interface CronSchedule {
@@ -30,7 +33,7 @@ export function parseCron(expression: string): CronSchedule {
 	}
 	const normalized = fields.join(' ');
 	try {
-		new Cron(normalized, { timezone: 'UTC' });
+		cronFor({ expression: normalized }, 'UTC');
 	} catch (err) {
 		throw invalid(
 			expression,
@@ -60,7 +63,13 @@ export function isValidTimeZone(timeZone: string): boolean {
 }
 
 function cronFor(schedule: CronSchedule, timeZone: string): Cron {
-	return new Cron(schedule.expression, { timezone: timeZone });
+	const key = `${schedule.expression}\0${timeZone}`;
+	let cron = compiledCrons.get(key);
+	if (!cron) {
+		cron = new Cron(schedule.expression, { timezone: timeZone });
+		compiledCrons.set(key, cron);
+	}
+	return cron;
 }
 
 /**

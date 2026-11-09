@@ -562,7 +562,7 @@ describe('Session routes', () => {
 				deps: { integrations: { resolveForSession } as never },
 			});
 			if (phase === 'record') {
-				vi.spyOn(api.deps.services.sessions, 'createSession').mockRejectedValue(
+				vi.spyOn(api.deps.services.sessions, 'createSessionWithEtag').mockRejectedValue(
 					new Error('record failed'),
 				);
 			} else if (phase === 'handle') {
@@ -976,8 +976,8 @@ describe('Session routes', () => {
 			fake.instance.ready = () => boot.promise;
 			const api = createTestApi({ bucket, compute: fakeComputeFrom(fake.instance) });
 			const sessions = api.deps.services.sessions;
-			const create = sessions.createSession.bind(sessions);
-			vi.spyOn(sessions, 'createSession').mockImplementationOnce(async (input) => {
+			const create = sessions.createSessionWithEtag.bind(sessions);
+			vi.spyOn(sessions, 'createSessionWithEtag').mockImplementationOnce(async (input) => {
 				if (committed) await create(input);
 				publication.resolve();
 				throw new Error('publication response lost');
@@ -1020,8 +1020,8 @@ describe('Session routes', () => {
 		const create = vi.spyOn(compute, 'create');
 		const api = createTestApi({ bucket, compute });
 		const { sessions } = api.deps.services;
-		const createSession = sessions.createSession.bind(sessions);
-		vi.spyOn(sessions, 'createSession').mockImplementationOnce(async (input) => {
+		const createSession = sessions.createSessionWithEtag.bind(sessions);
+		vi.spyOn(sessions, 'createSessionWithEtag').mockImplementationOnce(async (input) => {
 			const session = await createSession(input);
 			await bucket.put(
 				paths.project(pid).notebook(nid).workspaceMutationClaim,

@@ -1,3 +1,4 @@
+import { requestMemoMiddleware } from './requestMemo';
 import notebookMovesApp from './routes/notebookMoves';
 import searchApp from './routes/search';
 import conversationsApp from './routes/conversations';
@@ -191,11 +192,7 @@ export function createApi(rawDeps: ApiDeps) {
 		},
 	};
 
-	// Inject deps into every request context.
-	app.use('*', (c, next) => {
-		c.set('deps', deps);
-		return next();
-	});
+	app.use('*', requestMemoMiddleware(deps));
 
 	// Tracing wraps everything below it, including the proxy short-circuits.
 	if (deps.tracingMiddleware) app.use('*', deps.tracingMiddleware);

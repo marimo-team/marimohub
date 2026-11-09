@@ -14,6 +14,7 @@ import { logEvent } from '../../logs';
 import { AppPoolStore } from './AppPoolStore';
 import {
 	DEFAULT_APP_POOL_POLICY,
+	emptyAppPool,
 	appOccupancyBySession,
 	expireAppPresence,
 	renewAppVisit,
@@ -89,7 +90,21 @@ export class AppPoolService {
 			decision: T | { kind: 'busy' };
 		},
 	): Promise<T> {
-		await this.synchronize(input.projectId, input.notebookId);
+		const { known, ...observations } = await this.observePool(input.projectId, input.notebookId);
+		const reconciled = structuredClone(known?.value ?? emptyAppPool());
+		this.reconcileMembers(reconciled, observations);
+		const needsPrune = reconciled.members.some((member) => member.state === 'retiring');
+		if (needsPrune) {
+			await this.store.mutate(
+				input.projectId,
+				input.notebookId,
+				(pool) => {
+					this.reconcileMembers(pool, observations);
+					return { pool, value: undefined };
+				},
+				known,
+			);
+		}
 		const now = this.now();
 		const reservation: AppPoolMember = {
 			session_id: createSessionId(),
@@ -106,6 +121,7 @@ export class AppPoolService {
 			input.notebookId,
 			async (pool) => {
 				if (pool.deleted_at !== undefined) throw new NotFoundError('App pool was deleted');
+				this.reconcileMembers(pool, observations);
 				// Reading the head after the pool snapshot fences stale requests on CAS retries.
 				await this.assertCommittedVersion(input);
 				const routed = decide(pool, reservation, this.now());
@@ -125,6 +141,7 @@ export class AppPoolService {
 					},
 				};
 			},
+			needsPrune ? undefined : known,
 		);
 		const ownsAdmission = decision.kind === 'reserve' || newGeneration !== undefined;
 		if (ownsAdmission || (operation === 'replace' && decision.kind === 'reuse')) {
@@ -396,81 +413,97 @@ export class AppPoolService {
 		};
 	}
 
+	private async observePool(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+		observedSessions?: readonly Session[],
+	) {
+		const known = await this.store.readWithEtag(projectId, notebookId);
+		const pool = known?.value ?? emptyAppPool();
+		const absent = new Set<SessionId>();
+		// Only an empty pool needs discovery of sessions from legacy writers.
+		const candidates =
+			observedSessions ??
+			(pool.members.length === 0 && pool.assignments.length === 0 && pool.deleted_at === undefined
+				? await this.sessions.listActiveByProject(projectId)
+				: await mapWithConcurrency(pool.members, BUCKET_SCAN_CONCURRENCY, async (member) => {
+						try {
+							return await this.sessions.getSession(projectId, member.session_id);
+						} catch (error) {
+							if (!(error instanceof NotFoundError)) throw error;
+							// A starting reservation may publish its session before a CAS retry.
+							if (member.state !== 'starting') absent.add(member.session_id);
+							return null;
+						}
+					}));
+		const sessions = candidates.filter(
+			(session): session is Session =>
+				!!session &&
+				session.project_id === projectId &&
+				session.notebook_id === notebookId &&
+				sessionMode(session) === 'app',
+		);
+		return { known, sessions, absent };
+	}
+
+	private reconcileMembers(
+		pool: AppPool,
+		{ sessions, absent }: { sessions: readonly Session[]; absent: ReadonlySet<SessionId> },
+	) {
+		for (const member of pool.members) {
+			const missing = member.state !== 'starting' && absent.has(member.session_id);
+			const expired = member.state === 'starting' && member.operation_expires_at <= this.now();
+			if (missing || expired) member.state = 'retiring';
+		}
+		for (const session of sessions) {
+			const member = pool.members.find((item) => item.session_id === session.session_id);
+			if (member) {
+				if (
+					isTerminal(session.status) ||
+					session.status === 'terminating' ||
+					isPastAuthorizationDeadline(session, this.now())
+				)
+					member.state = 'retiring';
+			} else if (
+				(session.status === 'running' || session.status === 'starting') &&
+				session.sandbox_id &&
+				!session.app_pool
+			) {
+				pool.members.push({
+					session_id: session.session_id,
+					sandbox_id: session.sandbox_id,
+					user_id: session.user_id,
+					source_version_id: session.source_version_id,
+					state: pool.deleted_at === undefined ? 'draining' : 'retiring',
+					legacy: true,
+					created_at: Date.parse(session.started_at),
+					operation_token: 'legacy',
+					operation_expires_at: 0,
+				});
+			}
+		}
+		expireAppPresence(pool, this.now());
+	}
+
 	async synchronize(
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		observedSessions?: readonly Session[],
 	): Promise<AppPool> {
-		let sessions: Session[] | undefined;
-		const absent = new Set<SessionId>();
-		return this.store.mutate(projectId, notebookId, async (pool) => {
-			if (
-				pool.deleted_at !== undefined &&
-				pool.members.length === 0 &&
-				(observedSessions?.length ?? 0) === 0
-			)
+		const { known, ...observations } = await this.observePool(
+			projectId,
+			notebookId,
+			observedSessions,
+		);
+		return this.store.mutate(
+			projectId,
+			notebookId,
+			(pool) => {
+				this.reconcileMembers(pool, observations);
 				return { pool, value: pool };
-			if (!sessions) {
-				// Legacy writers stop before rollout. Only an empty pool needs discovery.
-				const candidates =
-					observedSessions ??
-					(pool.members.length === 0 &&
-					pool.assignments.length === 0 &&
-					pool.deleted_at === undefined
-						? await this.sessions.listActiveByProject(projectId)
-						: await mapWithConcurrency(pool.members, BUCKET_SCAN_CONCURRENCY, async (member) => {
-								try {
-									return await this.sessions.getSession(projectId, member.session_id);
-								} catch (error) {
-									if (!(error instanceof NotFoundError)) throw error;
-									// A starting reservation can publish its session before a CAS retry.
-									if (member.state !== 'starting') absent.add(member.session_id);
-									return null;
-								}
-							}));
-				sessions = candidates.filter(
-					(session): session is Session =>
-						!!session &&
-						session.project_id === projectId &&
-						session.notebook_id === notebookId &&
-						sessionMode(session) === 'app',
-				);
-			}
-			for (const member of pool.members) {
-				const missing = member.state !== 'starting' && absent.has(member.session_id);
-				const expired = member.state === 'starting' && member.operation_expires_at <= this.now();
-				if (missing || expired) member.state = 'retiring';
-			}
-			for (const session of sessions) {
-				const member = pool.members.find((item) => item.session_id === session.session_id);
-				if (member) {
-					if (
-						isTerminal(session.status) ||
-						session.status === 'terminating' ||
-						isPastAuthorizationDeadline(session, this.now())
-					)
-						member.state = 'retiring';
-				} else if (
-					(session.status === 'running' || session.status === 'starting') &&
-					session.sandbox_id &&
-					!session.app_pool
-				) {
-					pool.members.push({
-						session_id: session.session_id,
-						sandbox_id: session.sandbox_id,
-						user_id: session.user_id,
-						source_version_id: session.source_version_id,
-						state: pool.deleted_at === undefined ? 'draining' : 'retiring',
-						legacy: true,
-						created_at: Date.parse(session.started_at),
-						operation_token: 'legacy',
-						operation_expires_at: 0,
-					});
-				}
-			}
-			expireAppPresence(pool, this.now());
-			return { pool, value: pool };
-		});
+			},
+			known,
+		);
 	}
 
 	async reconcile(

@@ -1,3 +1,4 @@
+import { withRequestMemo } from '../requestMemo';
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import type { ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
@@ -156,7 +157,13 @@ export async function observeJobRun({
 	let authorized = target;
 	const authorize = async (checkSignal: AbortSignal) => {
 		const current = await withAbortSignal(
-			authorizeJobNotebook(deps, target.user, job.project_id, job.notebook_id, action),
+			authorizeJobNotebook(
+				withRequestMemo(deps),
+				target.user,
+				job.project_id,
+				job.notebook_id,
+				action,
+			),
 			checkSignal,
 		);
 		await withAbortSignal(
@@ -196,7 +203,7 @@ export async function observeJobRun({
 				authorizationService(deps).authorize(authorized.user, 'notebook.write', {
 					kind: 'project',
 					project: authorized.project,
-					notebookLabels: authorized.notebook.meta.security_labels ?? null,
+					notebookLabels: authorized.notebook.security_labels ?? null,
 				}),
 				signal,
 			)

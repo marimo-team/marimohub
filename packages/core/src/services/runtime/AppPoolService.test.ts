@@ -147,49 +147,61 @@ describe('app pool admission and lifecycle', () => {
 		const second = await admit('bob');
 		expect(second.kind).toBe('reuse');
 		expect(second.member.session_id).toBe(first.member.session_id);
-		expect(get.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(2);
+		expect(get.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(1);
+		expect(
+			get.mock.calls.filter(([key]) => key === paths.session(pid, first.member.session_id)),
+		).toHaveLength(1);
 	});
 
-	it('caches session reads across a sync CAS retry without overwriting a concurrent ready member', async () => {
-		const first = await ready(await admit());
-		const concurrent = {
-			...first.member,
-			session_id: createSessionId(),
-			sandbox_id: createSandboxId(),
-			state: 'ready' as const,
-		};
-		await sessions.createSession({
-			project_id: pid,
-			notebook_id: nid,
-			user_id: concurrent.user_id,
-			mode: 'app',
-			app_pool: true,
-			session_id: concurrent.session_id,
-			sandbox_id: concurrent.sandbox_id,
-			source_version_id: concurrent.source_version_id,
-		});
-		await sessions.setRunning(pid, concurrent.session_id, 'https://concurrent.example');
-		now += policy.userLeaseMs + policy.reconnectGraceMs + 1;
-		const getSession = sessions.getSession.bind(sessions);
-		const read = vi.spyOn(sessions, 'getSession').mockImplementationOnce(async (...args) => {
-			const session = await getSession(...args);
-			await pool.store.mutate(pid, nid, (snapshot) => {
-				snapshot.members[0].state = 'retiring';
-				snapshot.members.push(concurrent);
-				return { pool: snapshot, value: undefined };
+	it.each(['synchronize', 'admit'] as const)(
+		'reuses observations across a %s CAS retry without overwriting a concurrent ready member',
+		async (operation) => {
+			const first = await ready(await admit());
+			const concurrent = {
+				...first.member,
+				session_id: createSessionId(),
+				sandbox_id: createSandboxId(),
+				state: 'ready' as const,
+			};
+			await sessions.createSession({
+				project_id: pid,
+				notebook_id: nid,
+				user_id: concurrent.user_id,
+				mode: 'app',
+				app_pool: true,
+				session_id: concurrent.session_id,
+				sandbox_id: concurrent.sandbox_id,
+				source_version_id: concurrent.source_version_id,
 			});
-			return session;
-		});
-		const put = vi.spyOn(bucket, 'put');
-		const synchronized = await pool.synchronize(pid, nid);
-		expect(read.mock.calls).toEqual([[pid, first.member.session_id]]);
-		expect(put.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(3);
-		expect(synchronized.members).toMatchObject([
-			{ session_id: first.member.session_id, state: 'retiring' },
-			{ session_id: concurrent.session_id, state: 'ready' },
-		]);
-		expect(await pool.store.read(pid, nid)).toEqual(synchronized);
-	});
+			await sessions.setRunning(pid, concurrent.session_id, 'https://concurrent.example');
+			now += policy.userLeaseMs + policy.reconnectGraceMs + 1;
+			const getSession = sessions.getSession.bind(sessions);
+			const read = vi.spyOn(sessions, 'getSession').mockImplementationOnce(async (...args) => {
+				const session = await getSession(...args);
+				await pool.store.mutate(pid, nid, (snapshot) => {
+					snapshot.members[0].state = 'retiring';
+					snapshot.members.push(concurrent);
+					return { pool: snapshot, value: undefined };
+				});
+				return session;
+			});
+			const put = vi.spyOn(bucket, 'put');
+			if (operation === 'synchronize') {
+				await pool.synchronize(pid, nid);
+			} else {
+				const admission = await admit('bob');
+				expect(admission.kind).toBe('reuse');
+				expect(admission.member.session_id).toBe(concurrent.session_id);
+			}
+			const synchronized = await pool.store.read(pid, nid);
+			expect(read.mock.calls).toEqual([[pid, first.member.session_id]]);
+			expect(put.mock.calls.filter(([key]) => key === paths.appPool(pid, nid))).toHaveLength(3);
+			expect(synchronized!.members).toMatchObject([
+				{ session_id: first.member.session_id, state: 'retiring' },
+				{ session_id: concurrent.session_id, state: 'ready' },
+			]);
+		},
+	);
 
 	it('fails admission without changing the pool when a member read is unavailable', async () => {
 		const first = await ready(await admit());
@@ -300,7 +312,6 @@ describe('app pool admission and lifecycle', () => {
 		expect(get.mock.calls.map(([key]) => key)).toEqual([
 			poolKey,
 			sessionKey,
-			poolKey,
 			paths.project(pid).notebook(nid).source,
 			paths.project(pid).notebook(nid).source,
 		]);

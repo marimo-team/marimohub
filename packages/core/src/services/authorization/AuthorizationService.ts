@@ -11,6 +11,7 @@ import {
 } from '../../authz';
 import type { AuthSubject, AuthzPolicy } from '../../authz';
 import { withDeadline } from '../../async';
+import type { PromiseMemo } from '../../async';
 import { logEvent } from '../../logs';
 import type { AuthenticatedPrincipal } from '../../ports/auth';
 import type {
@@ -284,6 +285,7 @@ export class AuthorizationService {
 	constructor(
 		private readonly policy: AuthorizationPolicy | undefined,
 		private readonly security?: ResourceSecurityPolicy,
+		private readonly reads?: PromiseMemo,
 	) {}
 
 	async authorize(
@@ -791,17 +793,20 @@ export class AuthorizationService {
 		}
 	}
 
-	/**
-	 * Lazy, per-call-memoized subject-context resolution: resolved at most once
-	 * per authorize/authorizeMany invocation and only when a labeled resource
-	 * actually needs it. Operational failures and timeouts yield null — a
-	 * labeled resource then fails closed, never open.
-	 */
 	private contextResolver(
 		subject: AuthorizationSubject,
 	): () => Promise<SubjectSecurityContext | null> {
 		let resolved: Promise<SubjectSecurityContext | null> | undefined;
-		return () => (resolved ??= this.resolveSubjectContext(subject));
+		return () =>
+			(resolved ??= this.reads
+				? this.reads.read(
+						[this.resolveSubjectContext, this.security, subject],
+						() => this.resolveSubjectContext(subject),
+						{
+							isValid: (context) => context !== null && Date.parse(context.expiresAt) > Date.now(),
+						},
+					)
+				: this.resolveSubjectContext(subject));
 	}
 
 	private async resolveSubjectContext(

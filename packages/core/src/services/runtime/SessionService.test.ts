@@ -46,6 +46,97 @@ describe('SessionService', () => {
 		sessions = new SessionService(bucket);
 	});
 
+	it('uses the creation ETag for promotion and a single read for a fresh heartbeat', async () => {
+		const created = await sessions.createSessionWithEtag({
+			project_id: projectId,
+			notebook_id: notebookId,
+			user_id: ACTOR,
+		});
+		const get = vi.spyOn(bucket, 'get');
+		await sessions.setRunning(
+			projectId,
+			created.value.session_id,
+			'https://kernel.test',
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			created,
+		);
+		expect(get).not.toHaveBeenCalled();
+		const known = await sessions.getSessionWithEtag(projectId, created.value.session_id);
+		const put = vi.spyOn(bucket, 'put');
+		expect(await sessions.heartbeat(projectId, created.value.session_id, known)).toEqual(
+			known.value,
+		);
+		expect(get).toHaveBeenCalledTimes(1);
+		expect(put).not.toHaveBeenCalled();
+	});
+
+	it.each(['terminating', 'terminated'] as const)(
+		'does not promote a %s session using its stale creation snapshot',
+		async (status) => {
+			const known = await sessions.createSessionWithEtag({
+				project_id: projectId,
+				notebook_id: notebookId,
+				user_id: ACTOR,
+			});
+			const sid = known.value.session_id;
+			await sessions.beginTerminating(projectId, sid);
+			if (status === 'terminated') await sessions.markTerminated(projectId, sid);
+			const result = await sessions.setRunning(
+				projectId,
+				sid,
+				'https://late.test',
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				known,
+			);
+			expect(result.status).toBe(status);
+			expect(result.sandbox_url).toBeUndefined();
+			expect((await sessions.getSession(projectId, sid)).status).toBe(status);
+		},
+	);
+
+	it('gives only one stop caller teardown ownership when both use the same snapshot', async () => {
+		const known = await sessions.createSessionWithEtag({
+			project_id: projectId,
+			notebook_id: notebookId,
+			user_id: ACTOR,
+		});
+		const results = await Promise.all(
+			Array.from({ length: 2 }, () =>
+				sessions.beginTerminating(projectId, known.value.session_id, undefined, known),
+			),
+		);
+		expect(results.filter((result) => result.transitioned)).toHaveLength(1);
+		expect(results.map((result) => result.session.status)).toEqual(['terminating', 'terminating']);
+	});
+
+	it('does not resurrect a stopped session with a stale heartbeat snapshot', async () => {
+		const created = await sessions.createSession({
+			project_id: projectId,
+			notebook_id: notebookId,
+			user_id: ACTOR,
+		});
+		await sessions.setRunning(projectId, created.session_id, 'https://kernel.test');
+		const known = await sessions.getSessionWithEtag(projectId, created.session_id);
+		await sessions.beginTerminating(projectId, created.session_id);
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(Date.now() + 61_000);
+		try {
+			expect((await sessions.heartbeat(projectId, created.session_id, known)).status).toBe(
+				'terminating',
+			);
+		} finally {
+			restoreClock();
+		}
+	});
+
 	describe('replaceStartingSandbox', () => {
 		it('clears old reclamation and fences delayed cleanup against the replacement ID', async () => {
 			const oldId = createSandboxId();
@@ -617,7 +708,8 @@ describe('SessionService', () => {
 				created.session_id,
 				'https://sandbox.example',
 			);
-			advanceTime(61_000);
+			vi.useFakeTimers({ toFake: ['Date'] });
+			vi.setSystemTime(Date.now() + 61_000);
 			try {
 				const result = await sessions.heartbeat(projectId, created.session_id);
 				expect(result.last_heartbeat).toBe(running.last_heartbeat);

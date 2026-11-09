@@ -1,3 +1,4 @@
+import { unscopedDeps, withRequestMemo } from './requestMemo';
 /**
  * HTTP and WebSocket proxies share admission checks. Each request keeps its own
  * path and query. The Node relay closes sockets at the returned authorization deadline.
@@ -68,7 +69,7 @@ class AdmissionRejectedError extends Error {
 }
 
 function admissionCache(deps: ApiDeps): AdmissionCache {
-	let cache = ADMISSION_CACHES.get(deps);
+	let cache = ADMISSION_CACHES.get(unscopedDeps(deps));
 	if (!cache) {
 		cache = new LazyMap(
 			async () => {
@@ -76,7 +77,7 @@ function admissionCache(deps: ApiDeps): AdmissionCache {
 			},
 			{ maxSize: 10_000 },
 		);
-		ADMISSION_CACHES.set(deps, cache);
+		ADMISSION_CACHES.set(unscopedDeps(deps), cache);
 	}
 	return cache;
 }
@@ -121,8 +122,9 @@ function trimTrailingSlash(s: string): string {
  */
 export async function authorizeProxyRequest(
 	request: Request,
-	deps: ApiDeps,
+	rawDeps: ApiDeps,
 ): Promise<ProxyDecision> {
+	const deps = withRequestMemo(rawDeps);
 	const url = new URL(request.url);
 	const kernelMatch = PROXY_PREFIX.exec(url.pathname);
 	const surfaceMatch = SURFACE_PROXY_PREFIX.exec(url.pathname);

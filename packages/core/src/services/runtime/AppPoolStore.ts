@@ -11,6 +11,7 @@ import { ConflictError, NotFoundError } from '../../errors';
 import { paths } from '../../paths';
 import { readStored } from '../../schema';
 import { withCasRetry } from '../catalog/cas';
+import type { KnownObject } from '../catalog/cas';
 import { AppPoolSchema, emptyAppPool } from './AppPoolRouter';
 import type { AppPool } from './AppPoolRouter';
 
@@ -88,9 +89,18 @@ export class AppPoolStore {
 	) {}
 
 	async read(projectId: ProjectId, notebookId: NotebookId): Promise<AppPool | null> {
+		return (await this.readWithEtag(projectId, notebookId))?.value ?? null;
+	}
+
+	async readWithEtag(
+		projectId: ProjectId,
+		notebookId: NotebookId,
+	): Promise<KnownObject<AppPool> | null> {
 		const key = paths.appPool(projectId, notebookId);
 		const object = await this.bucket.get(key);
-		return object ? readStored(AppPoolSchema, object, key) : null;
+		return object
+			? { value: await readStored(AppPoolSchema, object, key), etag: object.etag }
+			: null;
 	}
 
 	async inspectAll() {
@@ -132,13 +142,17 @@ export class AppPoolStore {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		update: (pool: AppPool) => { pool: AppPool; value: T } | Promise<{ pool: AppPool; value: T }>,
+		known?: KnownObject<AppPool> | null,
 	): Promise<T> {
 		const key = paths.appPool(projectId, notebookId);
+		let initial = known;
 		return withCasRetry(
 			this.bucket,
 			async (writer) => {
-				const object = await this.bucket.get(key);
-				const pool = object ? await readStored(AppPoolSchema, object, key) : emptyAppPool();
+				const record =
+					initial === undefined ? await this.readWithEtag(projectId, notebookId) : initial;
+				initial = undefined;
+				const pool = record ? structuredClone(record.value) : emptyAppPool();
 				const before = JSON.stringify(pool);
 				const deletedAt = pool.deleted_at;
 				const { pool: next, value } = await update(pool);
@@ -155,7 +169,7 @@ export class AppPoolStore {
 				await writer.put(
 					key,
 					serialized,
-					object ? { onlyIfEtagMatches: object.etag } : { onlyIfNotExists: true },
+					record ? { onlyIfEtagMatches: record.etag } : { onlyIfNotExists: true },
 				);
 				return value;
 			},

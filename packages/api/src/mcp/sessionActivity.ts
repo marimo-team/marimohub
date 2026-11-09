@@ -1,3 +1,4 @@
+import { withRequestMemo } from '../requestMemo';
 import { BadRequestError, withAbortSignal } from '@marimo-hub/core';
 import type { AuthenticatedPrincipal, Project, Session } from '@marimo-hub/core';
 import type { ApiDeps } from '../context';
@@ -53,10 +54,11 @@ function activeDeadline(
 }
 
 export async function authorizeMcpSession(
-	deps: ApiDeps,
+	rawDeps: ApiDeps,
 	principal: AuthenticatedPrincipal,
 	session: Session,
 ) {
+	const deps = withRequestMemo(rawDeps);
 	const project = await loadVisibleProject(
 		deps.services.projects,
 		session.project_id,

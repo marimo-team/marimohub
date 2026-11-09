@@ -24,6 +24,51 @@ async function setup() {
 	};
 }
 describe('thumbnail API', () => {
+	it('caches matching revisions for a day and revalidates unversioned or stale URLs', async () => {
+		const { app, deps, path, project, notebook, bucket } = await setup();
+		const metadata = await deps.services.notebooks.thumbnails.setCustom(
+			project.id,
+			notebook.id,
+			thumbnailPng(),
+		);
+		const get = vi.spyOn(bucket, 'get');
+		const response = await app.request(`${path}/image?r=${metadata.revision}`);
+		expect(response.status).toBe(200);
+		expect(response.headers.get('cache-control')).toBe('private, max-age=86400');
+		const nb = paths.project(project.id).notebook(notebook.id);
+		expect(get.mock.calls.some(([key]) => key === nb.source || key === nb.readme)).toBe(false);
+		const revalidated = await app.request(`${path}/image?r=${metadata.revision}`, {
+			headers: { 'If-None-Match': response.headers.get('etag')! },
+		});
+		expect(revalidated.status).toBe(304);
+		expect(revalidated.headers.get('cache-control')).toBe('private, max-age=86400');
+		for (const url of [`${path}/image`, `${path}/image?r=stale`]) {
+			expect((await app.request(url)).headers.get('cache-control')).toBe('private, no-cache');
+		}
+	});
+
+	it('does not give a replaced revision long-lived caching even when its bytes still match', async () => {
+		const { app, deps, path, project, notebook } = await setup();
+		const thumbnails = deps.services.notebooks.thumbnails;
+		const original = await thumbnails.setCustom(project.id, notebook.id, thumbnailPng());
+		const response = await app.request(`${path}/image?r=${original.revision}`);
+		await thumbnails.removeCustom(project.id, notebook.id);
+		const replacement = await thumbnails.setCustom(project.id, notebook.id, thumbnailPng());
+		expect(replacement.revision).not.toBe(original.revision);
+		const current = await app.request(`${path}/image?r=${replacement.revision}`);
+		expect(current.headers.get('cache-control')).toBe('private, max-age=86400');
+		for (const [etag, status] of [
+			[response.headers.get('etag')!, 200],
+			[current.headers.get('etag')!, 304],
+		] as const) {
+			const stale = await app.request(`${path}/image?r=${original.revision}`, {
+				headers: { 'If-None-Match': etag },
+			});
+			expect(stale.status).toBe(status);
+			expect(stale.headers.get('cache-control')).toBe('private, no-cache');
+		}
+	});
+
 	it('uploads, serves, revalidates, and removes a thumbnail', async () => {
 		const { app, path } = await setup();
 		expect(await expectOk(await app.request(path))).toMatchObject({ source: null });
@@ -53,9 +98,13 @@ describe('thumbnail API', () => {
 	it('revalidates wildcard, weak, and list validators without reading image bytes', async () => {
 		const { app, deps, path, project, notebook } = await setup();
 		await deps.services.notebooks.thumbnails.setCustom(project.id, notebook.id, thumbnailPng());
-		const image = (await deps.services.notebooks.thumbnails.image(project.id, notebook.id))!;
+		const selected = (await deps.services.notebooks.thumbnails.imageWithRevision(
+			project.id,
+			notebook.id,
+		))!;
+		const { image } = selected;
 		const bytes = vi.spyOn(image, 'bytes');
-		vi.spyOn(deps.services.notebooks.thumbnails, 'image').mockResolvedValue(image);
+		vi.spyOn(deps.services.notebooks.thumbnails, 'imageWithRevision').mockResolvedValue(selected);
 		const etag = `"${image.etag}"`;
 		for (const validator of [
 			'*',
