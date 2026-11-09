@@ -74,7 +74,8 @@ import type {
 	Service,
 	ServiceUrl,
 } from '@coreweave/cwsandbox';
-import { forEachConcurrentUntilFailure } from '@marimo-hub/core/async';
+import { forEachConcurrentUntilFailure, withDeadline } from '@marimo-hub/core/async';
+import type { DeadlineOptions } from '@marimo-hub/core/async';
 import { BoundedLruMap } from '@marimo-hub/core/cache';
 import { Semaphore } from '@marimo-hub/core/concurrency';
 import {
@@ -167,34 +168,79 @@ const SLOW_BOOT_HINT =
 	'boot > 10 s usually means the node cold-pulled the sandbox image; pre-pull the configured image tags on the sandbox node pool';
 
 const PROCESS_CANCEL_TIMEOUT_MS = 1_000;
-/** Backoff before each retry of a file write the gateway answered with UNAVAILABLE. */
+/** Backoff for transient file transport or admission failures. */
 const WRITE_RETRY_DELAYS_MS = [250, 1_000, 3_000];
-// Each file is one unary RPC, so a batch costs ceil(n / this) round trips; matching the
-// per-sandbox slot cap lets one batch use every slot its sandbox has.
-const FILE_WRITE_CONCURRENCY = 8;
-// Per sandbox, so concurrent workspace, integration, and bridge uploads stay bounded
-// without one session's transfers queueing behind another's.
-const FILE_WRITE_SLOTS_PER_SANDBOX = 8;
+const MAX_FILE_WRITE_RETRY_DELAY_MS = 10_000;
+
+const GATEWAY_FILE_WRITE_SLOTS = 8;
+// Leave direct admission headroom for commands alongside workspace/injection/bridge writes.
+const DIRECT_FILE_WRITE_SLOTS = 2;
+
+function fileWriteLimit(mode: DataPlaneMode | undefined): number {
+	return mode === 'gateway' ? GATEWAY_FILE_WRITE_SLOTS : DIRECT_FILE_WRITE_SLOTS;
+}
 // Workspace files can be several MiB; the bound exists so a hung RPC releases its slot.
 const FILE_WRITE_TIMEOUT_MS = 60_000;
 
+interface FileWriteBatchState {
+	failed: boolean;
+	retryCount: number;
+	backoffMs: number;
+	directAdmissionLimited: boolean;
+}
+
+function fileWriteRetryDelay(error: unknown, attempt: number): number | undefined {
+	if (
+		(!(error instanceof CWSandboxUnavailableError) &&
+			!(error instanceof CWSandboxResourceExhaustedError)) ||
+		attempt >= WRITE_RETRY_DELAYS_MS.length
+	)
+		return;
+	const suggested = error.retryDelayMs;
+	if (suggested === undefined || !Number.isFinite(suggested) || suggested < 0)
+		return WRITE_RETRY_DELAYS_MS[attempt];
+	// Do not ignore a long server cooldown or turn it into an unbounded sleep.
+	if (suggested > MAX_FILE_WRITE_RETRY_DELAY_MS) return;
+	return Math.max(WRITE_RETRY_DELAYS_MS[attempt], Math.ceil(suggested));
+}
+
+function fileWriteTimeout(sandboxId: string, filepath: string, cause?: unknown) {
+	return new CWSandboxTimeoutError('File write retry budget expired', {
+		operation: 'Write sandbox file',
+		sandboxId,
+		filepath,
+		cause,
+	});
+}
+
 /**
- * Keyed by provider sandbox ID so every handle to one sandbox (`create` and
- * `connectExisting` alike) shares the cap. Idle entries are dropped.
+ * Keyed by provider sandbox ID so handles within one provider share the cap.
+ * Other server processes still rely on runner admission and bounded retries.
  */
 class SandboxFileWriteSlots {
 	private readonly bySandbox = new Map<string, Semaphore>();
 
-	async run<T>(sandboxId: string, fn: () => Promise<T>): Promise<T> {
-		let slots = this.bySandbox.get(sandboxId);
-		if (!slots) {
-			slots = new Semaphore(FILE_WRITE_SLOTS_PER_SANDBOX);
-			this.bySandbox.set(sandboxId, slots);
-		}
+	constructor(private readonly limit: number) {}
+
+	async run<T>(
+		sandboxId: string,
+		fn: () => Promise<T>,
+		deadline?: Pick<DeadlineOptions, 'timeoutMs' | 'timeoutError'>,
+	): Promise<T> {
+		const slots = this.bySandbox.get(sandboxId) ?? new Semaphore(this.limit);
+		this.bySandbox.set(sandboxId, slots);
+		const controller = new AbortController();
+		const timer = deadline
+			? setTimeout(() => controller.abort(deadline.timeoutError()), deadline.timeoutMs)
+			: undefined;
 		try {
-			return await slots.run(fn);
+			return await slots.run(() => {
+				clearTimeout(timer);
+				return fn();
+			}, controller.signal);
 		} finally {
-			if (slots.available === FILE_WRITE_SLOTS_PER_SANDBOX) this.bySandbox.delete(sandboxId);
+			clearTimeout(timer);
+			if (slots.available === this.limit) this.bySandbox.delete(sandboxId);
 		}
 	}
 }
@@ -437,7 +483,7 @@ export interface CoreWeaveSandbox {
 	readonly files: {
 		readText(path: string): Promise<string>;
 		/** Multi-file form only — `writeFiles` is the port's single write path. */
-		write(files: FileWrites, options?: { timeoutMs?: number }): Promise<void>;
+		write(files: FileWrites, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<void>;
 	};
 	delete(): Promise<void>;
 }
@@ -567,7 +613,9 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		private readonly userHome?: SandboxUserHome,
 		private readonly existingOnly = false,
 		reference?: string,
-		private readonly fileWriteSlots = new SandboxFileWriteSlots(),
+		private readonly fileWriteSlots = new SandboxFileWriteSlots(
+			fileWriteLimit(config.dataPlaneMode),
+		),
 	) {
 		this.idTag = ID_TAG_PREFIX + id;
 		if (reference !== undefined) {
@@ -940,43 +988,108 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 		}
 		// The SDK's array form serializes files in two-wide waves. Own concurrency
 		// here, draining started uploads before a caller can retry or destroy the pod.
-		const batchState = { failed: false };
-		await forEachConcurrentUntilFailure({
-			items: batch,
-			concurrency: FILE_WRITE_CONCURRENCY,
-			run: (file) => this.writeFile(sandbox, file, batchState),
-		});
+		const batchState: FileWriteBatchState = {
+			failed: false,
+			retryCount: 0,
+			backoffMs: 0,
+			directAdmissionLimited: false,
+		};
+		try {
+			await forEachConcurrentUntilFailure({
+				items: batch,
+				concurrency: fileWriteLimit(this.config.dataPlaneMode),
+				run: (file) => this.writeFile(sandbox, file, batchState),
+			});
+		} finally {
+			if (batchState.backoffMs > 0) {
+				const mode = this.config.dataPlaneMode ?? 'auto';
+				logEvent(
+					{
+						level: 'warn',
+						event: 'coreweave_file_upload_backoff',
+						message: 'File uploads required backoff.',
+						sandbox_id: this.id,
+						data_plane_mode: mode,
+						file_count: batch.length,
+						retry_count: batchState.retryCount,
+						total_backoff_ms: batchState.backoffMs,
+						outcome: batchState.failed ? 'error' : 'success',
+						direct_admission_limited: batchState.directAdmissionLimited,
+						...(batchState.directAdmissionLimited && mode !== 'gateway'
+							? {
+									hint: 'If direct admission errors persist, consider MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE=gateway.',
+								}
+							: {}),
+					},
+					{ channel: 'warn' },
+				);
+			}
+		}
 	}
 
 	private async writeFile(
 		sandbox: CoreWeaveSandbox,
 		file: SandboxFileWrite,
-		batchState: { failed: boolean },
+		batchState: FileWriteBatchState,
 	): Promise<void> {
-		// Whole-file writes are idempotent; retry only the file that saw UNAVAILABLE.
+		// Initial queueing is outside the budget; retries share the first RPC's deadline.
+		let deadline: number | undefined;
 		for (let attempt = 0; ; attempt++) {
-			const retry = await this.fileWriteSlots.run(sandbox.sandboxId, async () => {
-				// Already-started uploads finish their retries after a sibling fails.
-				if (batchState.failed && attempt === 0) return;
-				try {
-					await sandbox.files.write([{ path: file.path, content: file.content }], {
-						timeoutMs: FILE_WRITE_TIMEOUT_MS,
-					});
-				} catch (err) {
-					if (
-						!(err instanceof CWSandboxUnavailableError) ||
-						attempt >= WRITE_RETRY_DELAYS_MS.length
-					) {
-						// Fence queued uploads before releasing this slot to another waiter.
+			const retryDelay = await this.fileWriteSlots.run(
+				sandbox.sandboxId,
+				async () => {
+					// Already-started uploads finish their retries after a sibling fails.
+					if (batchState.failed && attempt === 0) return;
+					deadline ??= Date.now() + FILE_WRITE_TIMEOUT_MS;
+					const remaining = deadline - Date.now();
+					if (remaining <= 0) {
 						batchState.failed = true;
-						throw err;
+						throw fileWriteTimeout(sandbox.sandboxId, file.path);
 					}
-					return true;
-				}
-			});
-			if (!retry) return;
+					if (attempt > 0) batchState.retryCount++;
+					try {
+						await withDeadline(
+							(signal) =>
+								sandbox.files.write([{ path: file.path, content: file.content }], {
+									timeoutMs: remaining,
+									signal,
+								}),
+							{
+								timeoutMs: remaining,
+								timeoutError: () => fileWriteTimeout(sandbox.sandboxId, file.path),
+							},
+						);
+					} catch (error) {
+						batchState.directAdmissionLimited ||=
+							error instanceof CWSandboxResourceExhaustedError &&
+							error.message.includes('Runner direct data-plane request limit reached');
+						const delay = fileWriteRetryDelay(error, attempt);
+						if (delay === undefined) {
+							// Fence queued uploads before releasing this slot to another waiter.
+							batchState.failed = true;
+							throw error;
+						}
+						if (delay >= deadline - Date.now()) {
+							batchState.failed = true;
+							throw fileWriteTimeout(sandbox.sandboxId, file.path, error);
+						}
+						return delay;
+					}
+				},
+				deadline === undefined
+					? undefined
+					: {
+							timeoutMs: Math.max(0, deadline - Date.now()),
+							timeoutError: () => {
+								batchState.failed = true;
+								return fileWriteTimeout(sandbox.sandboxId, file.path);
+							},
+						},
+			);
+			if (retryDelay === undefined) return;
+			batchState.backoffMs += retryDelay;
 			await new Promise<void>((resolve) => {
-				setTimeout(resolve, WRITE_RETRY_DELAYS_MS[attempt]);
+				setTimeout(resolve, retryDelay);
 			});
 		}
 	}
@@ -1336,7 +1449,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 	 */
 	readonly capabilities: { multiPort: boolean };
 	private client?: CoreWeaveClient;
-	private readonly fileWriteSlots = new SandboxFileWriteSlots();
+	private readonly fileWriteSlots: SandboxFileWriteSlots;
 	/**
 	 * Provider sandbox ids this process has seen running for a hub id, so a re-resolved instance
 	 * can Get by id instead of paying the tag List. Entries are hints: every hit is validated, and
@@ -1349,6 +1462,7 @@ export class CoreWeaveCompute implements SandboxProvider {
 		client?: CoreWeaveClient,
 	) {
 		this.client = client;
+		this.fileWriteSlots = new SandboxFileWriteSlots(fileWriteLimit(config.dataPlaneMode));
 		this.capabilities = { multiPort: (config.extraPorts?.length ?? 0) > 0 };
 	}
 

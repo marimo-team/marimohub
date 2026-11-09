@@ -7,19 +7,30 @@ Part of [marimohub](../../README.md). See [docs/compute.md](../../docs/compute.m
 
 ## File uploads
 
-A batch runs up to eight SDK writes at the same time.
-Each sandbox allows eight active write RPCs across all its phases, so sessions never queue behind each other.
-Each write has a 60 s deadline. A write that waits to retry releases its RPC slot.
-All destinations must be unique absolute paths.
-The adapter validates and copies the destinations before it waits for sandbox readiness.
+Upload concurrency is limited per batch and per sandbox:
 
-Only `UNAVAILABLE` causes a retry, after 250, 1,000, and 3,000 ms.
-Any other error, or a write that runs out of retries, stops new uploads in that batch, including uploads that wait for a slot.
-Active uploads finish their retries, and then the batch rejects.
-Other batches continue. Completed writes stay in the sandbox.
+- `direct` and `auto` (default): two active writes.
+- `gateway` and W&B: eight active writes.
 
-The SDK creates parent directories and handles file-size limits, streaming fallback, and direct mTLS or Gateway routing.
-File contents go directly to the SDK.
+Handles and upload phases share the sandbox limit within one provider instance.
+Other sandboxes and server processes have independent limits. The runner controls admission across clients.
+Batch limits let bridge and credential uploads proceed between workspace upload waves.
+
+Each file has a 60 s budget from its first RPC, including retries and subsequent queue waits.
+Initial queue time is excluded. Expired retries leave the queue without dispatch.
+SDK calls receive the remaining time and an abort signal. The adapter also enforces the deadline.
+
+`UNAVAILABLE` and `RESOURCE_EXHAUSTED` retry at most three times, after 250, 1,000, and 3,000 ms.
+A longer server delay takes precedence. Delays over 10 s fail immediately. Retries release their slots during backoff.
+A final error stops new writes in that batch. Active writes finish their retries before the batch rejects.
+Other batches continue. Completed writes remain in the sandbox.
+
+`coreweave_file_upload_backoff` reports retries, cumulative backoff time, and the outcome once per affected batch.
+For repeated direct admission failures, its hint suggests `MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE=gateway`.
+The event omits file paths, contents, and server messages.
+
+Destinations must be unique absolute paths. The adapter checks and copies them before sandbox readiness.
+The SDK handles parent directories, file-size limits, streaming fallback, and transport routing.
 
 ## Data-plane mode
 

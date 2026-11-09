@@ -82,6 +82,8 @@ export function createWandbCompute(
 	const { apiKey, entity, project, baseUrl, ...rest } = config;
 	const coreweave = {
 		...rest,
+		// The W&B SDK's file adapter is Gateway-only, even with its default client mode.
+		dataPlaneMode: 'gateway',
 		// The managed runner requires an HTTPS endpoint. Omission/0 uses a 15s
 		// HTTP request timeout; 900s is the supported maximum, not a sandbox TTL.
 		kernelEndpoint: { kind: 'https', auth: 'open', requestTimeoutSeconds: 900 },
