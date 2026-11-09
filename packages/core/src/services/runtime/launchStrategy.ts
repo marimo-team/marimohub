@@ -4,7 +4,10 @@ import { DEFAULT_LAUNCH_STRATEGY } from './marimoLaunch';
 import type { MarimoLaunchStrategyName } from './marimoLaunch';
 import { hasInlineScriptMetadata } from './pep723';
 
-const versionMetadata = new WeakMap<Bucket, BoundedLruMap<string, MarimoLaunchStrategyName>>();
+const versionMetadata = new WeakMap<
+	Bucket,
+	BoundedLruMap<string, Promise<MarimoLaunchStrategyName | undefined>>
+>();
 
 export interface ResolvedLaunchStrategy {
 	strategy: MarimoLaunchStrategyName;
@@ -32,18 +35,31 @@ export async function resolveLaunchStrategyForSession(opts: {
 		cache = new BoundedLruMap(10_000);
 		versionMetadata.set(opts.bucket, cache);
 	}
+	let pending = cache?.get(opts.entryNotebookKey);
+	if (pending === undefined) {
+		pending = detectLaunchStrategy(opts.bucket, opts.entryNotebookKey).then((strategy) => {
+			if (strategy === undefined && cache?.peek(opts.entryNotebookKey) === pending) {
+				cache?.delete(opts.entryNotebookKey);
+			}
+			return strategy;
+		});
+		cache?.set(opts.entryNotebookKey, pending);
+	}
+	const strategy = await pending;
+	return { strategy: strategy ?? DEFAULT_LAUNCH_STRATEGY, detectionFailed: strategy === undefined };
+}
+
+async function detectLaunchStrategy(
+	bucket: Bucket,
+	key: string,
+): Promise<MarimoLaunchStrategyName | undefined> {
 	try {
-		let strategy = cache?.get(opts.entryNotebookKey);
-		if (strategy === undefined) {
-			const object = await opts.bucket.get(opts.entryNotebookKey);
-			if (!object) return { strategy: DEFAULT_LAUNCH_STRATEGY, detectionFailed: true };
-			strategy = hasInlineScriptMetadata(await object.text())
-				? 'uv-script-pins'
-				: DEFAULT_LAUNCH_STRATEGY;
-			cache?.set(opts.entryNotebookKey, strategy);
-		}
-		return { strategy, detectionFailed: false };
+		const object = await bucket.get(key);
+		if (!object) return undefined;
+		return hasInlineScriptMetadata(await object.text())
+			? 'uv-script-pins'
+			: DEFAULT_LAUNCH_STRATEGY;
 	} catch {
-		return { strategy: DEFAULT_LAUNCH_STRATEGY, detectionFailed: true };
+		return undefined;
 	}
 }

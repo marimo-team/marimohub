@@ -72,13 +72,14 @@ export const marimoSharingDisabled: MarimoConfigContributor = () => ({
 
 const BRAND_CSS_PATH = `${XDG_CONFIG_HOME}/marimo/brand.css`;
 
-const brandCssCache = new WeakMap<ThemeConfig, string>();
+const brandCssCache = new WeakMap<ThemeConfig, { key: string; css: string }>();
 
 export function renderMarimoBrandCss(theme: ThemeConfig): string {
+	const key = JSON.stringify([theme.notebook_palette, theme.primary_color, theme.secondary_color]);
 	const cached = brandCssCache.get(theme);
-	if (cached !== undefined) return cached;
+	if (cached?.key === key) return cached.css;
 	const css = computeMarimoBrandCss(theme);
-	brandCssCache.set(theme, css);
+	brandCssCache.set(theme, { key, css });
 	return css;
 }
 

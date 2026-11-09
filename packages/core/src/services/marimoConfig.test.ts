@@ -1,5 +1,4 @@
 import { DEFAULT_THEME_CONFIG } from '../theme';
-import { generateThemePalette } from '../themePalette';
 import * as themePalette from '../themePalette';
 import { describe, expect, it, vi } from 'vitest';
 import { parse } from 'smol-toml';
@@ -10,6 +9,7 @@ import {
 	marimoNotebookDefaults,
 	marimoSharingDisabled,
 	prepareMarimoPresentation,
+	renderMarimoBrandCss,
 	serializeMarimoToml,
 } from './marimoConfig';
 import type { MarimoConfigContributor } from './marimoConfig';
@@ -259,7 +259,7 @@ describe('deployment brand CSS', () => {
 			'sidebar-primary-foreground',
 			'sidebar-ring',
 		]);
-		const palette = generateThemePalette(brandedTheme)!;
+		const palette = themePalette.generateThemePalette(brandedTheme)!;
 		expect(css).toContain(
 			`--primary: light-dark(${palette.light.primary}, ${palette.dark.primary});`,
 		);
@@ -267,7 +267,7 @@ describe('deployment brand CSS', () => {
 
 	it('uses the shared light and dark palette and appends operator CSS', () => {
 		const theme = { ...brandedTheme, notebook_palette: 'full' as const };
-		const palette = generateThemePalette(theme)!;
+		const palette = themePalette.generateThemePalette(theme)!;
 		const env = marimoBrandDisplay(theme, ':root { --primary: red; }');
 		const css = env.files![0].content;
 		expect(css).toContain(
@@ -307,7 +307,7 @@ describe('deployment brand CSS', () => {
 	});
 });
 
-it('computes the brand palette once per theme object', () => {
+it('reuses brand CSS when the CSS inputs are unchanged', () => {
 	const theme = {
 		...DEFAULT_THEME_CONFIG,
 		primary_color: '#7c3aed',
@@ -317,8 +317,56 @@ it('computes the brand palette once per theme object', () => {
 	try {
 		const first = marimoBrandDisplay(theme);
 		expect(marimoBrandDisplay(theme)).toEqual(first);
+		theme.name = 'Renamed hub';
+		expect(marimoBrandDisplay(theme)).toEqual(first);
 		expect(generate).toHaveBeenCalledOnce();
 		marimoBrandDisplay({ ...theme, primary_color: '#2563eb' });
+		expect(generate).toHaveBeenCalledTimes(2);
+	} finally {
+		generate.mockRestore();
+	}
+});
+
+it.each([
+	{ notebook_palette: 'accents' as const },
+	{ notebook_palette: 'off' as const },
+	{ primary_color: '#2563eb' },
+	{ secondary_color: '#dc2626' },
+	{ primary_color: null, secondary_color: null },
+])('refreshes brand CSS after mutating the theme: %j', (changes) => {
+	const theme = {
+		...DEFAULT_THEME_CONFIG,
+		notebook_palette: 'full' as const,
+		primary_color: '#7c3aed',
+		secondary_color: '#16a34a',
+	};
+	const original = { ...theme };
+	const first = renderMarimoBrandCss(theme);
+	Object.assign(theme, changes);
+	const updated = renderMarimoBrandCss(theme);
+	expect(updated).not.toBe(first);
+	expect(updated).toBe(renderMarimoBrandCss({ ...theme }));
+	Object.assign(theme, original);
+	expect(renderMarimoBrandCss(theme)).toBe(first);
+});
+
+it('retries brand CSS generation after a failed refresh', () => {
+	const theme = {
+		...DEFAULT_THEME_CONFIG,
+		notebook_palette: 'full' as const,
+		primary_color: '#7c3aed',
+	};
+	const first = renderMarimoBrandCss(theme);
+	theme.primary_color = '#2563eb';
+	const generate = vi.spyOn(themePalette, 'generateThemePalette');
+	try {
+		generate.mockImplementationOnce(() => {
+			throw new Error('palette failed');
+		});
+		expect(() => renderMarimoBrandCss(theme)).toThrow('palette failed');
+		const updated = renderMarimoBrandCss(theme);
+		expect(updated).not.toBe(first);
+		expect(renderMarimoBrandCss(theme)).toBe(updated);
 		expect(generate).toHaveBeenCalledTimes(2);
 	} finally {
 		generate.mockRestore();

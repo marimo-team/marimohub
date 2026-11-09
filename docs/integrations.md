@@ -1419,7 +1419,7 @@ Each process caches up to 4,096 encrypted integration versions per store.
 Heads stay fresh on each start. Decrypted configurations and rendered environments are not cached.
 
 Kubernetes integrations share one Secret fetch per render, with separate authorization checks.
-Later renders read secrets again unless a deployment cache is enabled.
+Later renders read secrets again unless `MARIMOHUB_SECRETS_KUBERNETES_CACHE_TTL_SECONDS` is set above `0`.
 AWS Secrets Manager caching defaults to off. For a 60-second cache, set
 `MARIMOHUB_SECRETS_AWS_CACHE_TTL_SECONDS=60`. Secret rotation can take that long to reach new sessions.
 
