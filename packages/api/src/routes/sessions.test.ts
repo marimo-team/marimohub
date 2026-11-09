@@ -210,6 +210,7 @@ describe('Session routes', () => {
 			const path = sandboxContextPath(stored.sandbox_id!);
 			const publicUrl = new URL(data.sandbox_url!);
 			publicUrl.search = '';
+			expect(calls.startProcess[0].cmd).toContain(`--allow-origins='${publicUrl.origin}'`);
 			expect(calls.setEnvVars).toContainEqual(
 				expect.objectContaining({ MARIMOHUB_CONTEXT_FILE: path }),
 			);

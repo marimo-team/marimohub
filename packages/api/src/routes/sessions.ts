@@ -2271,6 +2271,7 @@ async function startNotebookSessionOnce(
 										workspacePrefetch,
 										beforePrepare: this.$.handoff,
 										baseUrl,
+										publicUrl,
 										cookiePartitioned,
 										contextFile: preparedContextFile ?? { path: sandboxContextPath(sandboxId) },
 									});

@@ -38,6 +38,7 @@ export interface MarimoLaunchParams extends RuntimeContributions {
 	 */
 	baseUrl?: string;
 	cookiePartitioned?: boolean;
+	allowedOrigin?: string;
 	watch?: boolean;
 }
 
@@ -56,15 +57,23 @@ export interface MarimoSetupStep {
 export type MarimoLaunchStrategy = (params: MarimoLaunchParams) => MarimoLaunchPlan;
 
 /** Flags both subcommands accept, spelled identically. */
-const commonFlags = ({ host, port, assetUrl, baseUrl, tokenPasswordFile }: MarimoLaunchParams) => {
+const commonFlags = ({
+	host,
+	port,
+	assetUrl,
+	baseUrl,
+	tokenPasswordFile,
+	allowedOrigin,
+}: MarimoLaunchParams) => {
 	const assetUrlArg = assetUrl ? ` --asset-url=${shellQuote(assetUrl)}` : '';
 	const baseUrlArg = baseUrl ? ` --base-url=${shellQuote(baseUrl)}` : '';
+	const originArg = allowedOrigin ? ` --allow-origins=${shellQuote(allowedOrigin)}` : '';
 	if (tokenPasswordFile === '') throw new Error('Token password file path cannot be empty');
 	const tokenArg =
 		tokenPasswordFile !== undefined
 			? `--token --token-password-file ${shellQuote(tokenPasswordFile)}`
 			: '--no-token';
-	return `--headless ${tokenArg} --host ${host} --port ${port}${assetUrlArg}${baseUrlArg}`;
+	return `--headless ${tokenArg} --host ${host} --port ${port}${assetUrlArg}${baseUrlArg}${originArg}`;
 };
 
 interface ModeLaunch {

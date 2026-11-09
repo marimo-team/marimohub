@@ -131,39 +131,38 @@ export interface PortRange {
 	end: number;
 }
 
-/** True if a TCP port can be bound on `host` (i.e. it is currently free). */
-function portIsFree(port: number, host: string): Promise<boolean> {
-	return new Promise((resolve) => {
-		const srv = net.createServer();
-		srv.unref();
-		srv.once('error', () => resolve(false));
-		srv.listen(port, host, () => srv.close(() => resolve(true)));
-	});
+interface ReservedPort {
+	port: number;
+	release(): Promise<void>;
 }
 
-/** Reserve an ephemeral TCP port by briefly binding it, then return the number. */
-function allocateEphemeral(host: string): Promise<number> {
+function bindPort(port: number, host: string): Promise<ReservedPort> {
 	return new Promise((resolve, reject) => {
-		const srv = net.createServer();
-		srv.unref();
-		srv.once('error', reject);
-		srv.listen(0, host, () => {
-			const addr = srv.address();
-			const port = typeof addr === 'object' && addr ? addr.port : 0;
-			srv.close(() => resolve(port));
+		const server = net.createServer((socket) => socket.destroy());
+		server.unref();
+		server.once('error', reject);
+		server.listen(port, host, () => {
+			const address = server.address() as net.AddressInfo;
+			let releasing: Promise<void> | undefined;
+			resolve({
+				port: address.port,
+				release: () =>
+					(releasing ??= new Promise<void>((done) => {
+						server.close(() => done());
+					})),
+			});
 		});
 	});
 }
 
-/**
- * Pick a free port. With no range, use an ephemeral OS-assigned port (host
- * mode). With a range, scan it — required in Docker, where only a fixed,
- * published set of ports is reachable from the browser.
- */
-async function allocatePort(host: string, range?: PortRange): Promise<number> {
-	if (!range) return allocateEphemeral(host);
-	for (let p = range.start; p <= range.end; p++) {
-		if (await portIsFree(p, host)) return p;
+async function allocatePort(host: string, range?: PortRange): Promise<ReservedPort> {
+	if (!range) return bindPort(0, host);
+	for (let port = range.start; port <= range.end; port++) {
+		try {
+			return await bindPort(port, host);
+		} catch {
+			continue;
+		}
 	}
 	throw new Error(`no free port in range ${range.start}-${range.end}`);
 }
@@ -276,6 +275,8 @@ class LocalSandboxInstance implements SandboxInstance {
 	private readonly children = new Set<ChildProcess>();
 	/** Logical port (as named in core, e.g. 2718) → real allocated host port. */
 	private readonly portMap = new Map<number, number>();
+	// Hold listeners until launch so concurrently prepared sandboxes cannot claim the same port.
+	private readonly portReservations = new Map<number, Promise<ReservedPort>>();
 	private readonly pendingWrites = new Set<Promise<unknown>>();
 	private env: Record<string, string> = {};
 	private envDefaults: Record<string, string> = {};
@@ -607,8 +608,7 @@ class LocalSandboxInstance implements SandboxInstance {
 				: undefined;
 		let command = this.prepareMarimoCmd(this.rewriteCmd(cmd));
 		if (logical !== undefined) {
-			const real = await allocatePort(this.bindHost, this.ports);
-			this.portMap.set(logical, real);
+			const { port: real } = await this.reservePort(logical);
 			if (portMatch) {
 				command = command.replace(
 					PORT_OPTION,
@@ -629,6 +629,8 @@ class LocalSandboxInstance implements SandboxInstance {
 
 		const cwd = options?.cwd ? this.mapPath(options.cwd) : this.root;
 		await mkdir(cwd, { recursive: true });
+		this.assertActive();
+		if (logical !== undefined) await (await this.reservePort(logical)).release();
 		this.assertActive();
 
 		const child = this.trackChild(
@@ -701,6 +703,32 @@ class LocalSandboxInstance implements SandboxInstance {
 		});
 	}
 
+	private reservePort(port: number): Promise<ReservedPort> {
+		const cached = this.portReservations.get(port);
+		if (cached) return cached;
+		const pending = allocatePort(this.bindHost, this.ports).then(async (reserved) => {
+			try {
+				this.assertActive();
+				this.portMap.set(port, reserved.port);
+				return reserved;
+			} catch (error) {
+				await reserved.release();
+				throw error;
+			}
+		});
+		this.portReservations.set(port, pending);
+		void pending.catch(() => {
+			if (this.portReservations.get(port) === pending) this.portReservations.delete(port);
+		});
+		return pending;
+	}
+
+	async prepareExposure(port: number, _options: ExposePortOptions): Promise<ExposePortResult> {
+		await this.ensureRoot();
+		const reserved = await this.reservePort(port);
+		return { url: `http://${this.host}:${reserved.port}` };
+	}
+
 	async exposePort(port: number, _options: ExposePortOptions): Promise<ExposePortResult> {
 		const real = this.portMap.get(port) ?? port;
 		return { url: `http://${this.host}:${real}` };
@@ -717,6 +745,10 @@ class LocalSandboxInstance implements SandboxInstance {
 			}
 			await waitForChildren(children, 500);
 			this.children.clear();
+			await Promise.allSettled(
+				[...this.portReservations.values()].map(async (pending) => (await pending).release()),
+			);
+			this.portReservations.clear();
 			this.portMap.clear();
 			await Promise.allSettled(this.pendingWrites);
 			await rm(this.root, { recursive: true, force: true });

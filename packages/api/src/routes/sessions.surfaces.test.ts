@@ -287,7 +287,7 @@ describe('Session surface routes', () => {
 		});
 
 		const hostnames = calls.exposePort.map((call) => call.options?.hostname);
-		expect(hostnames).toEqual(['localhost', 'localhost']);
+		expect(hostnames).toEqual(['localhost', 'localhost', 'localhost']);
 	});
 
 	it('runs marimo with --watch only when a secondary surface is enabled', async () => {

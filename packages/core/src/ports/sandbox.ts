@@ -257,8 +257,12 @@ export interface SandboxInstance {
 	 * adapter-owned operation. Optional for compatibility with external adapters.
 	 */
 	launchProcess?(cmd: string, options: LaunchProcessOptions): Promise<SandboxLaunchResult>;
-	/** Publish routing before the kernel opens its port; exposePort awaits the same work. */
-	prepareExposure?(port: number, options: ExposePortOptions): Promise<void>;
+	/**
+	 * Reserve routing before the kernel opens its port. Return the stable URL when
+	 * exposePort needs a running kernel; exposePort completes readiness afterward.
+	 */
+	prepareExposure?(port: number, options: ExposePortOptions): Promise<ExposePortResult | void>;
+	/** Called before launch if prepareExposure does not return a URL, then after readiness. */
 	exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult>;
 	destroy(): Promise<void>;
 	/**

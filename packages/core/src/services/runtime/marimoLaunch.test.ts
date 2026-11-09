@@ -112,6 +112,20 @@ describe('buildMarimoLaunch', () => {
 		}
 	});
 
+	it.each(['uv-sync-edit', 'uv-script-pins', 'uv-sandbox'] as const)(
+		'%s passes the exact public origin to browser sessions only',
+		(strategy) => {
+			for (const mode of ['edit', 'app', 'job'] as const) {
+				const { start } = buildMarimoLaunch(
+					{ ...BASE, mode, allowedOrigin: 'https://kernel.example:8443' },
+					strategy,
+				);
+				if (mode === 'job') expect(start).not.toContain('--allow-origins');
+				else expect(start).toContain("--allow-origins='https://kernel.example:8443'");
+			}
+		},
+	);
+
 	it('defaults to edit mode', () => {
 		const { start } = buildMarimoLaunch(BASE);
 		expect(start).toContain('marimo --quiet edit');

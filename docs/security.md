@@ -128,8 +128,9 @@ image or configuration.
 Marimo sets `HttpOnly; SameSite=None; Secure; Partitioned`. Browsers with CHIPS
 support store the cookie separately for each top-level site. To authenticate in a
 separate kernel tab, open the URL with its access token. TLS proxies must preserve
-the public kernel `Host`, including the port. Marimo's WebSocket policy also requires
-the public kernel origin in `--allow-origins` for tunnels.
+the public kernel `Host`, including the port. Before marimo starts, Hub reserves the
+public URL and passes its exact origin through `--allow-origins`. Proxy sessions use
+the Hub origin instead. Tunnel readiness checks run after the kernel starts.
 
 Browsers without CHIPS support can treat the cookie as an ordinary cross-site
 cookie. Marimo's Origin check still applies. Blocking all cookies prevents cookie

@@ -143,6 +143,7 @@ class CloudflareSandboxInstance implements SandboxInstance {
 	private sandbox: SandboxType;
 	private useTunnel: boolean;
 	private envDefaults: Record<string, string> = {};
+	private readonly exposures = new Map<number, Promise<ExposePortResult>>();
 
 	constructor(sandbox: SandboxType, useTunnel = false) {
 		this.sandbox = sandbox;
@@ -301,21 +302,31 @@ class CloudflareSandboxInstance implements SandboxInstance {
 		});
 	}
 
+	prepareExposure(port: number, options: ExposePortOptions): Promise<ExposePortResult> {
+		const cached = this.exposures.get(port);
+		if (cached) return cached;
+		const pending = (async () => {
+			const result = this.useTunnel
+				? await this.sandbox.tunnels.get(port)
+				: await this.sandbox.exposePort(port, options);
+			return { url: result.url };
+		})();
+		this.exposures.set(port, pending);
+		void pending.catch(() => {
+			if (this.exposures.get(port) === pending) this.exposures.delete(port);
+		});
+		return pending;
+	}
+
 	async exposePort(port: number, options: ExposePortOptions): Promise<ExposePortResult> {
-		if (this.useTunnel) {
-			// `options.hostname` is unused — Cloudflare assigns the tunnel host. Tunnels
-			// are RPC-only, which getSandbox() provides.
-			const tunnel = await this.sandbox.tunnels.get(port);
-			// Don't return the URL until it's actually resolvable (see waitForTunnelReady).
-			await waitForTunnelReady(tunnel.url);
-			return { url: tunnel.url };
-		}
-		const result = await this.sandbox.exposePort(port, options);
-		return { url: result.url };
+		const result = await this.prepareExposure(port, options);
+		if (this.useTunnel) await waitForTunnelReady(result.url);
+		return result;
 	}
 
 	async destroy(): Promise<void> {
 		await this.sandbox.destroy();
+		this.exposures.clear();
 	}
 }
 
