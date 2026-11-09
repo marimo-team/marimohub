@@ -208,10 +208,11 @@ describe('exported operational errors', () => {
 	});
 
 	it('preserves console output when the log pipeline throws', () => {
-		vi.spyOn(provider.getLogger('@marimo-hub/core'), 'emit').mockImplementation(() => {
+		const emit = vi.spyOn(provider.getLogger('@marimo-hub/core'), 'emit').mockImplementation(() => {
 			throw new Error('logger unavailable');
 		});
 		expect(() => logOperationalError('work_failed', {}, new Error('hidden'))).not.toThrow();
+		expect(emit).toHaveBeenCalledOnce();
 		expect(console.error).toHaveBeenCalledOnce();
 	});
 });
