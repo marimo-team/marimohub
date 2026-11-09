@@ -161,6 +161,64 @@ describe('BackgroundLoops', () => {
 		]);
 	});
 
+	it('omits the legacy numeric code from a genuine DOM timeout', async () => {
+		start(async () => {
+			throw new DOMException('request timed out', 'TimeoutError');
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(events()[0]).toMatchObject({ event: 'test_failed', name: 'TimeoutError' });
+		expect(events()[0]).not.toHaveProperty('code');
+		expect(events()[0]).not.toHaveProperty('original_name');
+	});
+
+	it.each(['ECONNRESET', 'EPIPE'])(
+		'uses the %s cause instead of a DOM timeout code',
+		async (code) => {
+			const cause = Object.assign(new Error('connection failed'), { code });
+			start(async () => {
+				throw Object.assign(new DOMException('request failed', 'TimeoutError'), { cause });
+			});
+			await vi.advanceTimersByTimeAsync(0);
+			expect(events()[0]).toMatchObject({
+				name: code,
+				code,
+				original_name: 'TimeoutError',
+				cause_name: 'Error',
+				cause_code: code,
+			});
+		},
+	);
+
+	it.each(['ECONNRESET', 'EPIPE'])('preserves %s from a plain error-shaped cause', async (code) => {
+		start(async () => {
+			throw Object.assign(new Error('request failed', { cause: { code } }), {
+				name: 'TimeoutError',
+			});
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(events()[0]).toMatchObject({
+			name: code,
+			code,
+			original_name: 'TimeoutError',
+			cause_code: code,
+		});
+	});
+
+	it.each([64, 65])('bounds direct and cause codes of length %s', async (length) => {
+		const code = 'x'.repeat(length);
+		start(async () => {
+			throw Object.assign(new Error('request failed', { cause: { code } }), { code });
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		if (length === 64) {
+			expect(events()[0]).toMatchObject({ code, cause_code: code });
+		} else {
+			expect(events()[0]).not.toHaveProperty('code');
+			expect(events()[0]).not.toHaveProperty('cause_code');
+			expect(JSON.stringify(events())).not.toContain(code);
+		}
+	});
+
 	it.each([
 		{ name: 'Error', code: 'ECONNRESET' },
 		{ name: 'TimeoutError', code: 'ETIMEDOUT' },

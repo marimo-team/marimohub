@@ -77,16 +77,23 @@ class LoopStoppedError extends Error {
 }
 
 function errorCode(error: unknown): string | number | undefined {
-	if (!(error instanceof Error) || !('code' in error)) return undefined;
+	if (
+		typeof error !== 'object' ||
+		error === null ||
+		error instanceof DOMException ||
+		!('code' in error)
+	)
+		return undefined;
 	const code = error.code;
-	return typeof code === 'string' || (typeof code === 'number' && Number.isFinite(code))
+	return (typeof code === 'string' && code.length <= 64) ||
+		(typeof code === 'number' && Number.isFinite(code))
 		? code
 		: undefined;
 }
 
 function logFailure(event: string, error: unknown, fields: Record<string, unknown> = {}) {
 	const name = error instanceof Error ? error.name : undefined;
-	const cause = error instanceof Error && error.cause instanceof Error ? error.cause : undefined;
+	const cause = error instanceof Error ? error.cause : undefined;
 	const code = errorCode(error) ?? errorCode(cause);
 	// Some clients rename socket failures to TimeoutError without changing their code.
 	const renamedConnectionError =
@@ -98,7 +105,7 @@ function logFailure(event: string, error: unknown, fields: Record<string, unknow
 		name: renamedConnectionError ? code : name,
 		code,
 		original_name: renamedConnectionError ? name : undefined,
-		cause_name: cause?.name,
+		cause_name: cause instanceof Error ? cause.name : undefined,
 		cause_code: errorCode(cause),
 		...fields,
 	});
