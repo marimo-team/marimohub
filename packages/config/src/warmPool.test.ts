@@ -204,6 +204,26 @@ describe('warm pool configuration', () => {
 		);
 	});
 
+	it('preserves the deployed profile key when the idle retirement policy changes', () => {
+		const sandbox = makeFakeSandbox().instance;
+		const compute: SandboxProvider = {
+			create: () => sandbox,
+			connectExisting: () => sandbox,
+			proxy: async () => null,
+			warmPool: { maxLifetimeMs: null, configuration: { revision: 1 } },
+		};
+		const parsed = parseWarmPoolConfig(enabled, {
+			...options,
+			backend: 'external',
+			compute,
+			profiles: { profiles: [], defaultProfile: undefined },
+		})!;
+		// Golden key from the deployed 30-minute policy, including its original JSON field order.
+		expect(parsed.config.profiles[0].key).toBe(
+			'5cddeedd53b5ad60ab88500169554fe23e928d88f3eff948d6c06422f1ade356',
+		);
+	});
+
 	it('keeps fingerprints stable across replicas and size changes, and changes them with creation configuration', () => {
 		const cw = coreWeaveOptions();
 		const key = (env: Record<string, string>) =>

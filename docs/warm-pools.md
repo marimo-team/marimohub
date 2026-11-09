@@ -49,7 +49,8 @@ Each claim has one owner. A claimed sandbox never returns to the pool, even if s
 
 Maintenance starts immediately and checks every five seconds. It creates at most two sandboxes concurrently and retries failed creation with increasing delays, capped at five minutes.
 
-Idle sandboxes retire after 30 minutes at most. CoreWeave sandboxes retire earlier if their remaining provider lifetime cannot cover the session and startup allowances.
+Healthy idle sandboxes remain available for up to six hours to reduce replacement churn. Health checks do not extend this limit.
+Sandboxes retire earlier if their remaining provider lifetime cannot cover the session, startup, and teardown allowances.
 
 CoreWeave requires a finite startup timeout. Its provider lifetime must exceed the session lifetime plus startup, ten minutes for teardown, and five minutes for creation.
 

@@ -21,7 +21,8 @@ import type { AppPoolStore } from './AppPoolStore';
 import { getOrCreateWarmPool, WarmPoolMemberSchema } from './WarmPoolStore';
 import type { WarmPoolStore, WarmPoolMember } from './WarmPoolStore';
 
-export const WARM_POOL_MAX_IDLE_MS = 30 * 60_000;
+export const WARM_POOL_MAX_IDLE_MS = 6 * 60 * 60_000;
+const LEGACY_WARM_POOL_MAX_IDLE_MS = 30 * 60_000;
 const CLAIM_TIMEOUT_MS = 60_000;
 const RECONNECT_TIMEOUT_MS = 5_000;
 const PROBE_TIMEOUT_MS = 2_000;
@@ -194,6 +195,12 @@ export class WarmPoolService {
 					if (excess > 0 && (member.state === 'ready' || member.state === 'creating')) {
 						member.state = 'retiring';
 						excess--;
+					} else if (
+						target > 0 &&
+						member.state === 'ready' &&
+						member.ready_until === member.created_at + LEGACY_WARM_POOL_MAX_IDLE_MS
+					) {
+						member.ready_until = Math.max(member.ready_until, this.readyUntil(member.created_at));
 					}
 				}
 			}
@@ -311,14 +318,7 @@ export class WarmPoolService {
 						checked_at: 0,
 						assigned: false,
 						operation_until: now + this.config.creationTimeoutMs,
-						ready_until:
-							now +
-							Math.min(
-								WARM_POOL_MAX_IDLE_MS,
-								this.config.providerLifetimeMs === undefined
-									? Infinity
-									: this.config.providerLifetimeMs - this.config.minimumRemainingMs,
-							),
+						ready_until: this.readyUntil(now),
 					};
 					pool.members.push(member);
 					reservations.push({ profile, member });
@@ -326,6 +326,18 @@ export class WarmPoolService {
 			}
 			return reservations;
 		});
+	}
+
+	private readyUntil(createdAt: number): number {
+		return (
+			createdAt +
+			Math.min(
+				WARM_POOL_MAX_IDLE_MS,
+				this.config.providerLifetimeMs === undefined
+					? Infinity
+					: this.config.providerLifetimeMs - this.config.minimumRemainingMs,
+			)
+		);
 	}
 
 	private async fill(profile: WarmPoolProfile, member: WarmPoolMember): Promise<void> {
