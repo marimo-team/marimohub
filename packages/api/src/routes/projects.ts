@@ -27,6 +27,7 @@ import type {
 	Role,
 } from '@marimo-hub/core';
 import {
+	deferTeardown,
 	assertDeploymentAction,
 	assertProjectActionOn,
 	assertProjectRole,
@@ -595,7 +596,9 @@ app.openapi(deleteProject, async (c) => {
 		);
 	}
 	await retireNotebookPreviews(deps, pid);
-	await retireLiveApps(deps, pid);
+	await deferTeardown(deps, 'project.retire_apps', () => retireLiveApps(deps, pid), {
+		project_id: pid,
+	});
 	await cancelJobRuns(deps, pid, user.id);
 	return c.json({ success: true }, 200);
 });

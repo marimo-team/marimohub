@@ -196,6 +196,7 @@ changeRequestRoutes.openapi(openChangeRequest, async (c) => {
 			? 'notebook.change_request.update'
 			: 'notebook.change_request.open';
 		await appendAudit(
+			deps,
 			{
 				requestId: c.get('requestId'),
 				method: c.req.method,

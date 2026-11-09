@@ -19706,9 +19706,19 @@ paths:
           required: true
           name: sid
           in: path
+        - schema:
+            type: string
+            enum:
+              - 'true'
+              - 'false'
+            description: Wait for teardown to finish before responding. Use for restart.
+          required: false
+          description: Wait for teardown to finish before responding. Use for restart.
+          name: wait
+          in: query
       responses:
         '200':
-          description: Session terminated
+          description: Session termination accepted (complete when wait=true)
           content:
             application/json:
               schema:

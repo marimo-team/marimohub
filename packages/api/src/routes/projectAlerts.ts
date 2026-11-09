@@ -233,11 +233,11 @@ async function alertTestDeliveryId(
 
 function audit(
 	deps: ApiDeps,
-	c: Omit<Parameters<typeof appendAudit>[0], 'userId'> & { userId: UserId },
+	c: Omit<Parameters<typeof appendAudit>[1], 'userId'> & { userId: UserId },
 	event: string,
 	data: Record<string, unknown>,
 ) {
-	return appendAudit(c, event, () =>
+	return appendAudit(deps, c, event, () =>
 		deps.services.events.append({ event, actor: c.userId, ...data }),
 	);
 }

@@ -148,6 +148,7 @@ app.openapi(
 		if (delivery === 'skipped')
 			throw new UnavailableError('No support destination accepted the report');
 		await appendAudit(
+			deps,
 			{
 				requestId: c.get('requestId'),
 				method: c.req.method,

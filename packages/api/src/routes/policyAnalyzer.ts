@@ -697,6 +697,7 @@ app.openapi(evaluateSuite, async (c) => {
 		cases,
 	};
 	await appendAudit(
+		deps,
 		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 		'policy.analysis.run',
 		() =>

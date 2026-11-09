@@ -490,7 +490,7 @@ export async function previewIntegrationTable(
 					})
 			: undefined,
 	);
-	await appendAudit({ ...request, userId: user.id }, 'integration.preview', () =>
+	await appendAudit(deps, { ...request, userId: user.id }, 'integration.preview', () =>
 		deps.services.events.append({
 			event: 'integration.preview',
 			actor: user.id,
@@ -580,7 +580,7 @@ export async function previewIntegrationObject(
 		}),
 	);
 	if (data.kind !== 'image') {
-		await appendAudit({ ...request, userId: user.id }, 'integration.object.preview', () =>
+		await appendAudit(deps, { ...request, userId: user.id }, 'integration.object.preview', () =>
 			deps.services.events.append({
 				event: 'integration.object.preview',
 				actor: user.id,

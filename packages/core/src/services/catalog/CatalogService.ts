@@ -1,3 +1,5 @@
+import { deferOrAwait } from '../../ports/backgroundWork';
+import type { BackgroundWork } from '../../ports/backgroundWork';
 import type { Bucket, BucketListResult } from '../../ports/bucket';
 import { noopMetrics } from '../../ports/metrics';
 import type { Metrics } from '../../ports/metrics';
@@ -72,6 +74,7 @@ export class CatalogService {
 		private casRetry?: Pick<CasRetryOptions, 'retries' | 'backoffMs'>,
 		private initializeRecheckMs = INITIALIZE_RECHECK_MS,
 		cacheBucket: Bucket = bucket,
+		private backgroundWork?: BackgroundWork,
 	) {
 		this.cache = snapshotCache(cacheBucket);
 		this.pointer = new MetadataCache(bucket, 1, this.cache.pointer);
@@ -339,11 +342,19 @@ export class CatalogService {
 	private async appendAudit(operation: string, actor: UserId, context?: Record<string, unknown>) {
 		// Never let a failed append break the committed mutation.
 		if (!this.events) return;
-		try {
-			await this.events.append({ event: operation, actor, ...context });
-		} catch {
-			this.metrics.increment('events.append_failed');
-		}
+		await deferOrAwait(
+			this.backgroundWork,
+			'catalog.audit',
+			async () => {
+				try {
+					await this.events!.append({ event: operation, actor, ...context });
+				} catch (error) {
+					this.metrics.increment('events.append_failed');
+					throw error;
+				}
+			},
+			this.metrics,
+		);
 	}
 
 	/**

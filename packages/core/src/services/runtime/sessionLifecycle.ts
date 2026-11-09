@@ -1,3 +1,5 @@
+import type { BackgroundWork } from '../../ports/backgroundWork';
+import type { Metrics } from '../../ports/metrics';
 import { NotFoundError } from '../../errors';
 import { logOperationalError } from '../../operationalLog';
 import { AppPoolStore } from './AppPoolStore';
@@ -27,6 +29,8 @@ const SESSION_SWEEP_CONCURRENCY = 8;
 const CONNECTION_COUNT_REFRESH_MS = Millis.minutes(5);
 
 export interface SessionLifecycleConfig {
+	backgroundWork?: BackgroundWork;
+	metrics?: Metrics;
 	/** Reap after a stale heartbeat and no connections. */
 	idleTimeoutMsByMode: Record<SessionMode, number>;
 	/** Periodic save cadence for live sessions; 0 disables snapshots. */
@@ -87,6 +91,8 @@ export class SessionLifecycleService {
 			compute,
 			bucket,
 			persistWorkspace: cfg.persistWorkspace,
+			backgroundWork: cfg.backgroundWork,
+			metrics: cfg.metrics,
 			automaticThumbnails: cfg.automaticThumbnails,
 			thumbnailDeadline: cfg.thumbnailDeadline,
 			workdir: cfg.workdir,

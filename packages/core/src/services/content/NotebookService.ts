@@ -1,3 +1,5 @@
+import { deferOrAwait } from '../../ports/backgroundWork';
+import type { BackgroundWork } from '../../ports/backgroundWork';
 import { copyMoveObject, copyMovePrefix, moveJson } from './moveObjects';
 import { assertNotMoving, readNotebookMove } from './notebookMoveRecord';
 import { ResumableUploads } from './ResumableUploads';
@@ -180,6 +182,10 @@ export class NotebookService {
 		await deleteByPrefix(this.bucket, `${nb.base}/`);
 	}
 
+	async pruneVersionsAfterMove(projectId: ProjectId, notebookId: NotebookId): Promise<void> {
+		await this.pruneVersions(projectId, notebookId, MAX_VERSIONS);
+	}
+
 	/**
 	 * Copies notebook files, versions, and source into the destination. The metadata record is
 	 * written last and still fenced by `moveId`, so the copy never resolves before publication.
@@ -221,6 +227,7 @@ export class NotebookService {
 		private deepLinks = new DeepLinkService(bucket, metrics),
 		repositoryHosts?: GitProviderHosts,
 		workspaceLimits?: WorkspaceLimits,
+		private backgroundWork?: BackgroundWork,
 	) {
 		this.metaCache = new MetadataCache(bucket, NOTEBOOK_META_CACHE_MAX_ENTRIES);
 		this.thumbnails = new ThumbnailService(bucket, this);
@@ -1406,52 +1413,49 @@ export class NotebookService {
 		projectId: ProjectId,
 		notebookId: NotebookId,
 		max: number,
-		keep: VersionId,
+		keep?: VersionId,
 	): Promise<void> {
-		try {
-			const nb = paths.project(projectId).notebook(notebookId);
-			const versionsRoot = `${nb.base}/versions/`;
+		await deferOrAwait(
+			this.backgroundWork,
+			'notebook.version_prune',
+			async () => {
+				const nb = paths.project(projectId).notebook(notebookId);
+				const versionsRoot = `${nb.base}/versions/`;
 
-			// Each delimited prefix is `.../versions/{vid}/`; sort ascending so the
-			// newest (largest ULID) sort last.
-			const versionPrefixes = await listAllPrefixes(this.bucket, versionsRoot);
-			if (versionPrefixes.length <= max) {
-				return;
-			}
+				// Each delimited prefix is `.../versions/{vid}/`; sort ascending so the
+				// newest (largest ULID) sort last.
+				const versionPrefixes = await listAllPrefixes(this.bucket, versionsRoot);
+				if (versionPrefixes.length <= max) {
+					return;
+				}
 
-			// Keep the newest `max`; the rest are prune candidates.
-			const prunable = versionPrefixes.slice(0, versionPrefixes.length - max);
-			const cutoff = VersionId.parse(prunable.at(-1)!.slice(versionsRoot.length, -1));
-			await this.sessions.advanceVersionPruneCutoff(projectId, notebookId, cutoff);
-			const protectedVersionIds = new Set(
-				await this.sessions.listProtectedVersionIds(projectId, notebookId),
-			);
-			protectedVersionIds.add(keep);
-			const protectedPrefixes = new Set(
-				[...protectedVersionIds].map((versionId) => `${versionsRoot}${versionId}/`),
-			);
+				// Keep the newest `max`; the rest are prune candidates.
+				const prunable = versionPrefixes.slice(0, versionPrefixes.length - max);
+				const cutoff = VersionId.parse(prunable.at(-1)!.slice(versionsRoot.length, -1));
+				await this.sessions.advanceVersionPruneCutoff(projectId, notebookId, cutoff);
+				const protectedVersionIds = new Set(
+					await this.sessions.listProtectedVersionIds(projectId, notebookId),
+				);
+				const current =
+					keep ?? (await this.getNotebookSource(projectId, notebookId)).current_version_id;
+				if (current) protectedVersionIds.add(current);
+				const protectedPrefixes = new Set(
+					[...protectedVersionIds].map((versionId) => `${versionsRoot}${versionId}/`),
+				);
 
-			const targets = prunable.filter((prefix) => !protectedPrefixes.has(prefix));
-			const keyLists = await mapWithConcurrency(targets, BUCKET_SCAN_CONCURRENCY, (vpfx) =>
-				listAllKeys(this.bucket, vpfx),
-			);
-			const keysToDelete = keyLists.flat();
+				const targets = prunable.filter((prefix) => !protectedPrefixes.has(prefix));
+				const keyLists = await mapWithConcurrency(targets, BUCKET_SCAN_CONCURRENCY, (vpfx) =>
+					listAllKeys(this.bucket, vpfx),
+				);
+				const keysToDelete = keyLists.flat();
 
-			if (keysToDelete.length > 0) {
-				await this.bucket.delete(keysToDelete);
-			}
-		} catch (err) {
-			// Non-fatal: the save already committed. Log and move on.
-			logOperationalError(
-				'notebook_version_prune_failed',
-				{
-					operation: 'notebook.version_prune',
-					project_id: projectId,
-					notebook_id: notebookId,
-				},
-				err,
-			);
-		}
+				if (keysToDelete.length > 0) {
+					await this.bucket.delete(keysToDelete);
+				}
+			},
+			this.metrics,
+			{ project_id: projectId, notebook_id: notebookId },
+		);
 	}
 
 	/**

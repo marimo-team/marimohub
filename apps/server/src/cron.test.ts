@@ -13,13 +13,21 @@ import {
 	reapFilesystemSnapshots,
 	ReconciliationService,
 	SessionLifecycleService,
+	SandboxProvisioner,
 } from '@marimo-hub/core';
 import { JobScheduler } from '@marimo-hub/core/jobs';
 import { SearchIndexer, SearchService } from '@marimo-hub/core/search';
 import { searchPaths } from '@marimo-hub/core/search/paths';
 import { MemorySearchIndex } from '@marimo-hub/core/testing/search';
 import type { SweepResult } from '@marimo-hub/core';
-import { ACTOR, makeNotebookMeta, makeProject, makeSession } from '@marimo-hub/core/testing';
+import {
+	ACTOR,
+	fakeComputeFrom,
+	makeFakeSandbox,
+	makeNotebookMeta,
+	makeProject,
+	makeSession,
+} from '@marimo-hub/core/testing';
 import {
 	startPreviewPreparation,
 	startSearchIndexing,
@@ -161,6 +169,67 @@ describe('startMaintenance', () => {
 			'gauge.sessions.unreclaimed_terminal.oldest_age_ms': 0,
 		});
 	});
+
+	it.each([true, false])(
+		'reports deferred snapshot cleanup failures with a configured metrics sink: %s',
+		async (configured) => {
+			vi.spyOn(console, 'error').mockImplementation(() => {});
+			const increment = vi.fn();
+			if (configured) deps.metrics = fanoutMetrics(metrics, { increment, gauge: vi.fn() });
+			const tasks: (() => Promise<unknown>)[] = [];
+			deps.backgroundWork = { defer: (_label, task) => void tasks.push(task) };
+			deps.sandbox.automaticThumbnails = false;
+			const { instance, calls } = makeFakeSandbox();
+			const compute = {
+				...fakeComputeFrom(instance),
+				filesystemSnapshotsEnabled: true,
+				createFromSnapshot: () => instance,
+				captureSnapshot: async () => ({ snapshotId: 'replacement' }),
+				deleteSnapshot: vi.fn(async () => {
+					throw new Error('snapshot deletion unavailable');
+				}),
+			};
+			deps.compute = compute;
+			vi.spyOn(SandboxProvisioner.prototype, 'captureSession').mockResolvedValue(true);
+			const session = makeSession({
+				status: 'terminating',
+				terminating_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+				last_heartbeat: new Date().toISOString(),
+				sandbox_id: createSandboxId(),
+				sandbox_url: 'https://kernel.example',
+			});
+			const pid = session.project_id;
+			const nid = session.notebook_id;
+			await bucket.put(paths.session(pid, session.session_id), JSON.stringify(session));
+			await bucket.put(
+				paths.project(pid).notebook(nid).meta,
+				JSON.stringify(makeNotebookMeta({ id: nid, project_id: pid })),
+			);
+			await deps.services.notebooks.setFsSnapshot(pid, nid, {
+				snapshot_id: 'previous',
+				captured_at: new Date().toISOString(),
+			});
+
+			h.track(startMaintenance(deps, metrics));
+			await flushRun();
+			expect(calls.destroy).toBe(1);
+			expect(await deps.services.notebooks.getFsSnapshot(pid, nid)).toMatchObject({
+				snapshot_id: 'replacement',
+			});
+			expect(compute.deleteSnapshot).not.toHaveBeenCalled();
+			expect(tasks).toHaveLength(1);
+			await expect(tasks[0]()).resolves.toBeUndefined();
+			expect(compute.deleteSnapshot).toHaveBeenCalledWith('previous');
+			expect(metrics.collect()).toMatchObject({ 'counter.background.failed': 1 });
+			if (configured) {
+				expect(increment).toHaveBeenCalledExactlyOnceWith('background.failed', 1, {
+					label: 'filesystem_snapshot.delete',
+				});
+			} else {
+				expect(increment).not.toHaveBeenCalled();
+			}
+		},
+	);
 
 	it('keeps the last observed gauges when reconciliation fails, then resets them on recovery', async () => {
 		metrics.gauge('sessions.unreclaimed_terminal.count', 2);

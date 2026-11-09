@@ -241,6 +241,7 @@ app.openapi(revokeToken, async (c) => {
 
 	await deps.services.tokens.revoke(user.id, tokenId);
 	await appendAudit(
+		deps,
 		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 		'token.revoke',
 		() =>

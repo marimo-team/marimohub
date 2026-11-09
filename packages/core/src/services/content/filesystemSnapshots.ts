@@ -1,3 +1,6 @@
+import { deferOrAwait } from '../../ports/backgroundWork';
+import type { BackgroundWork } from '../../ports/backgroundWork';
+import type { Metrics } from '../../ports/metrics';
 import type { NotebookId, ProjectId, SandboxId, UserId } from '../../ids';
 import { asFilesystemSnapshots } from '../../ports/sandbox';
 import type {
@@ -116,6 +119,8 @@ export async function captureFilesystemSnapshot(
 	projectId: ProjectId,
 	notebookId: NotebookId,
 	compute?: Pick<FsSnapshot, 'compute_profile' | 'compute_resources' | 'owner_user_id'>,
+	backgroundWork?: BackgroundWork,
+	metrics?: Metrics,
 ): Promise<void> {
 	const fs = asFilesystemSnapshots(provider);
 	if (!fs) return;
@@ -128,7 +133,12 @@ export async function captureFilesystemSnapshot(
 			...compute,
 		});
 		if (previous && previous.snapshot_id !== snapshotId) {
-			await fs.deleteSnapshot(previous.snapshot_id); // latest-wins GC
+			await deferOrAwait(
+				backgroundWork,
+				'filesystem_snapshot.delete',
+				() => fs.deleteSnapshot(previous.snapshot_id),
+				metrics,
+			);
 		}
 	} catch (err) {
 		logOperationalError(

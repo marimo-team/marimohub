@@ -37,6 +37,75 @@ describe('CatalogService', () => {
 		catalog = new CatalogService(bucket, noopMetrics, undefined, ZERO_BACKOFF);
 	});
 
+	it('keeps committed catalog changes when a deferred audit fails and drains subsequent audits', async () => {
+		await catalog.initialize(ACTOR);
+		const tasks: (() => Promise<unknown>)[] = [];
+		const metrics = { increment: vi.fn(), gauge: vi.fn() };
+		const events = new EventService(bucket);
+		const append = vi
+			.spyOn(events, 'append')
+			.mockRejectedValueOnce(new Error('audit storage unavailable'));
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const service = new CatalogService(bucket, metrics, events, ZERO_BACKOFF, undefined, bucket, {
+				defer: (_label, task) => {
+					tasks.push(task);
+				},
+			});
+			for (const operation of ['first', 'second']) {
+				await service.mutateSnapshot(operation, ACTOR, (snapshot) => ({
+					...snapshot,
+					projects: [...snapshot.projects, makeSnapshotProjectEntry()],
+				}));
+			}
+			expect((await service.getCurrentSnapshot()).projects).toHaveLength(2);
+			expect(append).not.toHaveBeenCalled();
+			for (const task of tasks) await expect(task()).resolves.toBeUndefined();
+			expect(metrics.increment).toHaveBeenCalledWith('events.append_failed');
+			expect(metrics.increment).toHaveBeenCalledWith('background.failed', 1, {
+				label: 'catalog.audit',
+			});
+			expect(append).toHaveBeenCalledTimes(2);
+			expect((await service.getCurrentSnapshot()).projects).toHaveLength(2);
+		} finally {
+			log.mockRestore();
+			append.mockRestore();
+		}
+	});
+
+	it('schedules one audit per winning concurrent commit', async () => {
+		await catalog.initialize(ACTOR);
+		const tasks: (() => Promise<unknown>)[] = [];
+		const events = new EventService(bucket);
+		const append = vi.spyOn(events, 'append');
+		const service = new CatalogService(
+			bucket,
+			noopMetrics,
+			events,
+			ZERO_BACKOFF,
+			undefined,
+			bucket,
+			{
+				defer: (_label, task) => {
+					tasks.push(task);
+				},
+			},
+		);
+		await Promise.all(
+			['first', 'second'].map((operation) =>
+				service.mutateSnapshot(operation, ACTOR, (snapshot) => ({
+					...snapshot,
+					projects: [...snapshot.projects, makeSnapshotProjectEntry()],
+				})),
+			),
+		);
+		expect((await service.getCurrentSnapshot()).projects).toHaveLength(2);
+		expect(append).not.toHaveBeenCalled();
+		expect(tasks).toHaveLength(2);
+		await Promise.all(tasks.map((task) => task()));
+		expect(append.mock.calls.map(([event]) => event.event).sort()).toEqual(['first', 'second']);
+	});
+
 	describe('snapshot cache', () => {
 		it('shares immutable loads while validating the pointer independently', async () => {
 			await catalog.initialize(ACTOR);

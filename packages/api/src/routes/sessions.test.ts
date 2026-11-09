@@ -10,6 +10,7 @@ import {
 	ConflictError,
 	NotFoundError,
 	SessionRetirer,
+	SandboxProvisioner,
 	createNotebookId,
 	createProjectId,
 	createSandboxId,
@@ -679,14 +680,13 @@ describe('Session routes', () => {
 				last_heartbeat: startedAt,
 			});
 			await bucket.put(paths.session(pid, holder.session_id), JSON.stringify(holder));
-			return {
-				claimed: false,
-				claim: {
-					session_id: holder.session_id,
-					sharing: 'shared',
-					claimed_at: holder.started_at,
-				},
+			const claim = {
+				session_id: holder.session_id,
+				sharing: 'shared' as const,
+				claimed_at: holder.started_at,
 			};
+			await bucket.put(paths.editorClaim(pid, nid), JSON.stringify(claim));
+			return { claimed: false, claim };
 		});
 		try {
 			await expectError(await api.request('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
@@ -1181,7 +1181,6 @@ describe('Session routes', () => {
 		try {
 			if (deferred) await vi.waitFor(() => expect(responded).toBe(true));
 			else expect(responded).toBe(false);
-			// The app audit and the sandbox context publication.
 			expect(tasks).toHaveLength(deferred ? 2 : 0);
 		} finally {
 			releaseAudit.resolve();
@@ -1946,6 +1945,43 @@ describe('Session routes', () => {
 			}
 		},
 	);
+
+	it('returns a takeover replacement before retiring the temporary sandbox', async () => {
+		const tasks: { label: string; run: () => Promise<unknown> }[] = [];
+		const exclusiveOwner = exclusiveApi(ACTOR);
+		const exclusiveOther = exclusiveApi(STRANGER, makeFakeCompute(), {
+			backgroundWork: {
+				defer: (label, run) => {
+					tasks.push({ label, run });
+				},
+			},
+		});
+		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
+		const temporary = await expectOk<ApiSession>(
+			await exclusiveOther('POST', sessionsPath(), { edit_intent: 'temporary' }),
+		);
+		const state = await expectOk<EditorState>(await exclusiveOther('GET', editorSessionPath()));
+		await expectOk(
+			await exclusiveOther('POST', editorSessionPath('/takeover'), {
+				takeover_id: 'deferred-temporary',
+				expected_holder_session_id: persistent.session_id,
+				expected_activity: state.holder!.activity.state,
+				acknowledge_disruption: true,
+			}),
+		);
+		const replacement = await expectOk<ApiSession>(await exclusiveOther('POST', sessionsPath()));
+		const sessions = createServices(bucket).sessions;
+		expect((await sessions.getSession(pid, temporary.session_id)).status).toBe('terminating');
+		expect(
+			await sessions.ownsEditorClaim(await sessions.getSession(pid, replacement.session_id)),
+		).toBe(true);
+		expect(tasks.filter((task) => task.label === 'session.retire_temporary')).toHaveLength(1);
+		for (const task of tasks) await task.run();
+		expect((await sessions.getSession(pid, temporary.session_id)).status).toBe('terminated');
+		expect(
+			await sessions.ownsEditorClaim(await sessions.getSession(pid, replacement.session_id)),
+		).toBe(true);
+	});
 
 	it('reports exclusive ownership and completes a warned takeover before replacement', async () => {
 		const ownerCompute = makeFakeCompute();
@@ -3524,6 +3560,272 @@ describe('Session routes', () => {
 		expect(data.status).toBe('running');
 	});
 
+	it.each([
+		{ wait: false, teardownInline: false },
+		{ wait: true, teardownInline: false },
+		{ wait: false, teardownInline: true },
+	])(
+		'DELETE honors completion policy $wait / inline=$teardownInline',
+		async ({ wait, teardownInline }) => {
+			const gate = Promise.withResolvers<void>();
+			const entered = Promise.withResolvers<void>();
+			const tasks: Promise<unknown>[] = [];
+			const { instance } = makeFakeSandbox();
+			vi.spyOn(instance, 'destroy').mockImplementation(async () => {
+				entered.resolve();
+				await gate.promise;
+			});
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: fakeComputeFrom(instance),
+				deps: {
+					backgroundTasks: {
+						defer: (task) => {
+							tasks.push(task);
+						},
+					},
+					teardownInline,
+				},
+			});
+			const started = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			let responded = false;
+			const response = Promise.resolve(
+				api.request('DELETE', sessionsPath(`/${started.session_id}${wait ? '?wait=true' : ''}`)),
+			).then((res) => {
+				responded = true;
+				return res;
+			});
+			await entered.promise;
+			if (!wait && !teardownInline) await expectOk((await response).clone());
+			else expect(responded).toBe(false);
+			const stopping = await api.deps.services.sessions.getSession(pid, started.session_id);
+			expect(stopping.status).toBe('terminating');
+			expect(stopping.sandbox_reclaimed_at).toBeUndefined();
+			expect(await api.deps.services.sessions.ownsEditorClaim(stopping)).toBe(true);
+			gate.resolve();
+			await expectOk(await response);
+			await Promise.all(tasks);
+			const stopped = await api.deps.services.sessions.getSession(pid, started.session_id);
+			expect(stopped.status).toBe('terminated');
+			expect(stopped.sandbox_reclaimed_at).toBeDefined();
+			expect(await api.deps.services.sessions.ownsEditorClaim(stopped)).toBe(false);
+		},
+	);
+
+	it.each([
+		{ teardownInline: false, wait: false },
+		{ teardownInline: true, wait: false },
+		{ teardownInline: true, wait: true },
+	])(
+		'isolates committed stop failures except explicit wait: %j',
+		async ({ teardownInline, wait }) => {
+			const metrics = { increment: vi.fn(), gauge: vi.fn() };
+			const defer = vi.fn();
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: makeFakeCompute(),
+				deps: { metrics, teardownInline, ...(teardownInline ? { backgroundWork: { defer } } : {}) },
+			});
+			const started = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			defer.mockClear();
+			const release = vi
+				.spyOn(api.deps.services.sessions, 'releaseEditorFor')
+				.mockRejectedValueOnce(new Error('storage unavailable'));
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			try {
+				const response = await api.request(
+					'DELETE',
+					sessionsPath(`/${started.session_id}${wait ? '?wait=true' : ''}`),
+				);
+				if (wait) expect(response.status).toBe(500);
+				else {
+					await expectOk(response);
+					expect(metrics.increment).toHaveBeenCalledWith('background.failed', 1, {
+						label: 'session.stop',
+					});
+				}
+				expect(release).toHaveBeenCalledOnce();
+				expect(defer).not.toHaveBeenCalled();
+				const session = await api.deps.services.sessions.getSession(pid, started.session_id);
+				expect(session.status).toBe('terminated');
+				expect((await api.deps.services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(
+					started.session_id,
+				);
+			} finally {
+				release.mockRestore();
+				log.mockRestore();
+			}
+		},
+	);
+
+	it('runs teardown once when two deferred stops race', async () => {
+		const tasks: (() => Promise<unknown>)[] = [];
+		const { instance } = makeFakeSandbox();
+		const destroy = vi.spyOn(instance, 'destroy');
+		try {
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: fakeComputeFrom(instance),
+				deps: {
+					backgroundWork: {
+						defer: (_label, task) => {
+							tasks.push(task);
+						},
+					},
+				},
+			});
+			const started = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			for (const task of tasks.splice(0)) await task();
+			const replies = await Promise.all(
+				[1, 2].map(() =>
+					Promise.resolve(api.request('DELETE', sessionsPath(`/${started.session_id}`))),
+				),
+			);
+			for (const reply of replies) await expectOk(reply);
+			expect((await api.deps.services.sessions.getSession(pid, started.session_id)).status).toBe(
+				'terminating',
+			);
+			expect(destroy).not.toHaveBeenCalled();
+			await expectError(
+				await api.request('DELETE', sessionsPath(`/${started.session_id}?wait=true`)),
+				503,
+				'SERVICE_UNAVAILABLE',
+			);
+			await Promise.all(tasks.map((task) => task()));
+			expect(destroy).toHaveBeenCalledOnce();
+			expect((await api.deps.services.sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
+		} finally {
+			destroy.mockRestore();
+		}
+	});
+
+	it('retains the editor claim after a deferred destroy fails and releases it only after retry', async () => {
+		const tasks: (() => Promise<unknown>)[] = [];
+		const { instance } = makeFakeSandbox();
+		const destroy = vi
+			.spyOn(instance, 'destroy')
+			.mockRejectedValueOnce(new Error('provider unavailable'));
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: fakeComputeFrom(instance),
+				deps: {
+					backgroundWork: {
+						defer: (_label, task) => {
+							tasks.push(task);
+						},
+					},
+				},
+			});
+			const started = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			for (const task of tasks.splice(0)) await task();
+			await expectOk(await api.request('DELETE', sessionsPath(`/${started.session_id}`)));
+			for (const task of tasks.splice(0)) await task();
+			const { sessions } = api.deps.services;
+			const failed = await sessions.getSession(pid, started.session_id);
+			expect(failed.status).toBe('terminated');
+			expect(failed.sandbox_reclaimed_at).toBeUndefined();
+			expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBe(started.session_id);
+			expect(destroy).toHaveBeenCalledOnce();
+			await expectOk(await api.request('DELETE', sessionsPath(`/${started.session_id}?wait=true`)));
+			expect(destroy).toHaveBeenCalledTimes(2);
+			expect(
+				(await sessions.getSession(pid, started.session_id)).sandbox_reclaimed_at,
+			).toBeDefined();
+			expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
+		} finally {
+			destroy.mockRestore();
+			log.mockRestore();
+		}
+	});
+
+	it('skips thumbnail capture when wait=true reclaims an expired editor', async () => {
+		const compute = makeFakeCompute();
+		const api = createTestApi({ bucket, userId: ACTOR, compute });
+		const stale = makeSession({
+			project_id: pid,
+			notebook_id: nid,
+			user_id: ACTOR,
+			status: 'expired',
+			sandbox_id: createSandboxId(),
+			sandbox_url: 'https://kernel.example',
+			started_at: new Date(Date.now() - Millis.hours(1)).toISOString(),
+		});
+		await bucket.put(paths.session(pid, stale.session_id), JSON.stringify(stale));
+		await api.deps.services.sessions.claimEditor(pid, nid, stale.session_id, 'shared');
+		const capture = vi
+			.spyOn(SandboxProvisioner.prototype, 'captureSession')
+			.mockResolvedValue(true);
+		const prepare = vi.spyOn(api.deps.services.notebooks.thumbnails, 'prepare');
+		try {
+			await expectOk(await api.request('DELETE', sessionsPath(`/${stale.session_id}?wait=true`)));
+			expect(capture).toHaveBeenCalledOnce();
+			expect(prepare).not.toHaveBeenCalled();
+		} finally {
+			capture.mockRestore();
+			prepare.mockRestore();
+		}
+	});
+
+	it('rejects wait=true while another request still owns teardown', async () => {
+		const sid = await startSession();
+		await createServices(bucket).sessions.beginTerminating(pid, sid as SessionId);
+		await expectError(
+			await owner('DELETE', sessionsPath(`/${sid}?wait=true`)),
+			503,
+			'SERVICE_UNAVAILABLE',
+		);
+	});
+
+	it.each([true, false])(
+		'skips thumbnail rendering on start and restart (deferred=%s)',
+		async (deferred) => {
+			const tasks: (() => Promise<unknown>)[] = [];
+			const { instance, calls } = makeFakeSandbox({
+				files: {
+					'/workspace/notebook.py': 'import marimo as mo # saved',
+					'/workspace/__marimo__/notebook.html': '<html>saved output</html>',
+				},
+			});
+			const api = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute: fakeComputeFrom(instance),
+				deps: {
+					backgroundWork: deferred
+						? {
+								defer: (_label, task) => {
+									tasks.push(task);
+								},
+							}
+						: undefined,
+				},
+			});
+			const prepare = vi.spyOn(api.deps.services.notebooks.thumbnails, 'prepare');
+			const claim = vi.spyOn(api.deps.services.notebooks.thumbnails, 'claimAttempt');
+			const first = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			for (const task of tasks.splice(0)) await task();
+			expect(prepare).not.toHaveBeenCalled();
+			await expectOk(await api.request('DELETE', sessionsPath(`/${first.session_id}?wait=true`)));
+			expect(prepare).not.toHaveBeenCalled();
+			expect(await api.deps.services.notebooks.getNotebookContent(pid, nid)).toBe(
+				'import marimo as mo # saved',
+			);
+			const replacement = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			expect(replacement.status).toBe('running');
+			expect(prepare).not.toHaveBeenCalled();
+			for (const task of tasks) await task();
+			expect(prepare).not.toHaveBeenCalled();
+			expect(claim).not.toHaveBeenCalled();
+			expect(calls.exec.some((command) => command.includes('playwright'))).toBe(false);
+		},
+	);
+
 	it('DELETE /sessions/{sid} happy path as the owner returns 200', async () => {
 		const sid = await startSession();
 		await expectOk(await owner('DELETE', sessionsPath(`/${sid}`)));
@@ -3951,7 +4253,14 @@ describe('Session routes', () => {
 				});
 			}
 
-			await expectError(await api.request('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
+			vi.useFakeTimers();
+			try {
+				const pending = api.request('POST', sessionsPath());
+				await vi.advanceTimersByTimeAsync(10_000);
+				await expectError(await pending, 409, 'EDIT_SESSION_RETIRING');
+			} finally {
+				vi.useRealTimers();
+			}
 			expect((await sessions.getSession(pid, first.session_id)).status).toBe('terminating');
 			expect((await sessions.getEditorClaim(pid, nid))?.session_id).toBe(first.session_id);
 		},
@@ -3978,6 +4287,263 @@ describe('Session routes', () => {
 		);
 		return holder;
 	};
+
+	it('waits for a deferred stop and restores the snapshot published during the wait', async () => {
+		const tasks: (() => Promise<unknown>)[] = [];
+		const capture = Promise.withResolvers<{ snapshotId: string }>();
+		const capturing = Promise.withResolvers<void>();
+		const compute = makeFakeSnapshotCompute();
+		compute.captureSnapshot.mockImplementationOnce(() => {
+			capturing.resolve();
+			return capture.promise;
+		});
+		const api = createTestApi({
+			bucket,
+			compute,
+			deps: {
+				backgroundWork: {
+					defer: (_label, task) => {
+						tasks.push(task);
+					},
+				},
+			},
+		});
+		await api.deps.services.notebooks.setFsSnapshot(pid, nid, {
+			snapshot_id: 'before-stop',
+			captured_at: new Date().toISOString(),
+		});
+		const first = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+		for (const task of tasks.splice(0)) await task();
+		compute.createFromSnapshot.mockClear();
+		await expectOk(await api.request('DELETE', sessionsPath(`/${first.session_id}`)));
+
+		vi.useFakeTimers();
+		try {
+			let responded = false;
+			const pending = Promise.resolve(api.request('POST', sessionsPath())).then((response) => {
+				responded = true;
+				return response;
+			});
+			await vi.advanceTimersByTimeAsync(0);
+			const teardown = Promise.all(tasks.splice(0).map((task) => task()));
+			await capturing.promise;
+			await vi.advanceTimersByTimeAsync(500);
+			expect(responded).toBe(false);
+			expect(compute.createFromSnapshot).not.toHaveBeenCalled();
+			expect((await api.deps.services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(
+				first.session_id,
+			);
+			capture.resolve({ snapshotId: 'captured-during-stop' });
+			await teardown;
+			await vi.advanceTimersByTimeAsync(500);
+			const replacement = await expectOk<ApiSession>(await pending);
+			expect(replacement.session_id).not.toBe(first.session_id);
+			expect(compute.createFromSnapshot).toHaveBeenCalledExactlyOnceWith(
+				expect.any(String),
+				'captured-during-stop',
+				expect.anything(),
+			);
+			for (const task of tasks.splice(0)) await task();
+		} finally {
+			capture.resolve({ snapshotId: 'captured-during-stop' });
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(['absent', 'cleared'] as const)(
+		'retries fresh admission when the stopped editor claim becomes %s before waiting',
+		async (state) => {
+			const holder = await seedEditorHolder({ user_id: ACTOR, status: 'terminating' });
+			const compute = makeFakeSnapshotCompute();
+			const api = createTestApi({ bucket, compute });
+			const { sessions, notebooks } = api.deps.services;
+			await notebooks.setFsSnapshot(pid, nid, {
+				snapshot_id: 'before-stop',
+				captured_at: new Date().toISOString(),
+			});
+			const isClaimRetiring = sessions.isClaimRetiring.bind(sessions);
+			const retiring = vi
+				.spyOn(sessions, 'isClaimRetiring')
+				.mockImplementationOnce(async (...args) => {
+					const result = await isClaimRetiring(...args);
+					await notebooks.setFsSnapshot(pid, nid, {
+						snapshot_id: 'after-stop',
+						captured_at: new Date().toISOString(),
+					});
+					await sessions.markTerminated(pid, holder.session_id);
+					await sessions.markSandboxReclaimed(pid, holder.session_id, new Date().toISOString());
+					await sessions.releaseEditorFor(holder);
+					if (state === 'absent') await bucket.delete(paths.editorClaim(pid, nid));
+					return result;
+				});
+			try {
+				const replacement = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+				expect(replacement.session_id).not.toBe(holder.session_id);
+				expect(retiring).toHaveBeenCalledTimes(2);
+				expect(compute.createFromSnapshot).toHaveBeenCalledExactlyOnceWith(
+					expect.any(String),
+					'after-stop',
+					expect.anything(),
+				);
+			} finally {
+				retiring.mockRestore();
+			}
+		},
+	);
+
+	it.each([false, true])(
+		'does not retry through a transfer (cleared holder=%s)',
+		async (cleared) => {
+			const holder = await seedEditorHolder({
+				user_id: ACTOR,
+				status: 'terminating',
+				editor_sandbox_sharing: 'exclusive',
+			});
+			const compute = makeFakeCompute();
+			const create = vi.spyOn(compute, 'create');
+			const api = createTestApi({ bucket, compute });
+			const { sessions } = api.deps.services;
+			const isClaimRetiring = sessions.isClaimRetiring.bind(sessions);
+			const retiring = vi
+				.spyOn(sessions, 'isClaimRetiring')
+				.mockImplementationOnce(async (...args) => {
+					const result = await isClaimRetiring(...args);
+					const claim = await sessions.reserveTakeover(pid, nid, {
+						takeoverId: 'stop-start-race',
+						requestedBy: STRANGER,
+						expectedHolder: holder.session_id,
+						expectedActivity: 'idle',
+					});
+					if (cleared)
+						await bucket.put(
+							paths.editorClaim(pid, nid),
+							JSON.stringify({ ...claim, session_id: null }),
+						);
+					return result;
+				});
+			try {
+				await expectError(await api.request('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
+				expect(retiring).toHaveBeenCalledOnce();
+				expect(create).not.toHaveBeenCalled();
+				expect((await sessions.getEditorClaim(pid, nid))?.transfer?.takeover_id).toBe(
+					'stop-start-race',
+				);
+			} finally {
+				retiring.mockRestore();
+				create.mockRestore();
+			}
+		},
+	);
+
+	it('does not recursively retry if fresh admission also sees a retiring editor', async () => {
+		const compute = makeFakeCompute();
+		const create = vi.spyOn(compute, 'create');
+		const api = createTestApi({ bucket, compute });
+		const retiring = vi
+			.spyOn(api.deps.services.sessions, 'isClaimRetiring')
+			.mockResolvedValue(true);
+		try {
+			await expectError(await api.request('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
+			expect(retiring).toHaveBeenCalledTimes(2);
+			expect(create).not.toHaveBeenCalled();
+		} finally {
+			retiring.mockRestore();
+			create.mockRestore();
+		}
+	});
+
+	it('bounds the same-user stop wait without stealing the claim or provisioning', async () => {
+		const holder = await seedEditorHolder({ user_id: ACTOR, status: 'terminating' });
+		const compute = makeFakeCompute();
+		const create = vi.spyOn(compute, 'create');
+		const api = createTestApi({ bucket, compute });
+		vi.useFakeTimers();
+		try {
+			let responded = false;
+			const pending = Promise.resolve(api.request('POST', sessionsPath())).then((response) => {
+				responded = true;
+				return response;
+			});
+			await vi.advanceTimersByTimeAsync(9_999);
+			expect(responded).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			await expectError(await pending, 409, 'EDIT_SESSION_RETIRING');
+			expect(create).not.toHaveBeenCalled();
+			expect((await api.deps.services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(
+				holder.session_id,
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each([
+		{ user_id: STRANGER, status: 'terminating' },
+		{ user_id: ACTOR, status: 'terminated' },
+	] as const)(
+		'does not wait for a holder that is not this user stopping: %j',
+		async (overrides) => {
+			await seedEditorHolder(overrides);
+			vi.useFakeTimers();
+			try {
+				const api = createTestApi({ bucket, compute: makeFakeCompute() });
+				await expectError(await api.request('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it.each(['deleted', 'owner-changed', 'aborted'] as const)(
+		'rechecks admission after waiting for a stop: %s',
+		async (change) => {
+			const holder = await seedEditorHolder({
+				user_id: ACTOR,
+				status: 'terminating',
+				editor_sandbox_sharing: 'exclusive',
+			});
+			const compute = makeFakeCompute();
+			const create = vi.spyOn(compute, 'create');
+			const api = createTestApi({ bucket, compute });
+			const abort = new AbortController();
+			vi.useFakeTimers();
+			try {
+				const pending = api.app.request(`/api/v1${sessionsPath()}`, {
+					method: 'POST',
+					signal: abort.signal,
+				});
+				await vi.advanceTimersByTimeAsync(0);
+				if (change === 'aborted') abort.abort();
+				else if (change === 'owner-changed') {
+					await seedEditorHolder({
+						user_id: STRANGER,
+						status: 'running',
+						editor_sandbox_sharing: 'exclusive',
+					});
+				} else {
+					await api.deps.services.notebooks.deleteNotebook(pid, nid, ACTOR);
+					await api.deps.services.sessions.markTerminated(pid, holder.session_id);
+					await api.deps.services.sessions.markSandboxReclaimed(
+						pid,
+						holder.session_id,
+						new Date().toISOString(),
+					);
+					await api.deps.services.sessions.releaseEditorFor(holder);
+				}
+				await vi.advanceTimersByTimeAsync(500);
+				if (change === 'aborted') expect((await pending).status).not.toBe(200);
+				else
+					await expectError(
+						await pending,
+						change === 'deleted' ? 404 : 409,
+						change === 'deleted' ? 'NOT_FOUND' : 'EDIT_SESSION_OWNED',
+					);
+				expect(create).not.toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
 
 	it('does not reuse a wedged starting holder after losing the editor claim', async () => {
 		const startedAt = new Date(Date.now() - Millis.minutes(6)).toISOString();
@@ -4126,27 +4692,36 @@ describe('Session routes', () => {
 		expect((await services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(started.session_id);
 	});
 
-	it.each([false, true])(
-		'Stop contains reclaim exceptions (invalidation failed=%s)',
-		async (invalidationFailed) => {
-			const stale = makeSession({
-				project_id: pid,
-				notebook_id: nid,
-				user_id: ACTOR,
-				mode: 'app',
-				status: 'expired',
-				sandbox_id: createSandboxId(),
-			});
-			await bucket.put(paths.session(pid, stale.session_id), JSON.stringify(stale));
-			const reclaim = vi
-				.spyOn(SessionRetirer.prototype, 'reclaim')
-				.mockRejectedValueOnce(new NotFoundError('Session was reaped'));
-			const invalidate = vi.spyOn(AppPoolService.prototype, 'invalidate');
-			if (invalidationFailed)
-				invalidate.mockRejectedValueOnce(new ConflictError('Pool changed concurrently'));
-			try {
+	it.each([
+		{ invalidationFailed: false, wait: false },
+		{ invalidationFailed: false, wait: true },
+		{ invalidationFailed: true, wait: false },
+		{ invalidationFailed: true, wait: true },
+	])('Stop contains reclaim exceptions: %j', async ({ invalidationFailed, wait }) => {
+		const stale = makeSession({
+			project_id: pid,
+			notebook_id: nid,
+			user_id: ACTOR,
+			mode: 'app',
+			status: 'expired',
+			sandbox_id: createSandboxId(),
+		});
+		await bucket.put(paths.session(pid, stale.session_id), JSON.stringify(stale));
+		const reclaim = vi
+			.spyOn(SessionRetirer.prototype, 'reclaim')
+			.mockRejectedValueOnce(new NotFoundError('Session was reaped'));
+		const invalidate = vi.spyOn(AppPoolService.prototype, 'invalidate');
+		if (invalidationFailed)
+			invalidate.mockRejectedValueOnce(new ConflictError('Pool changed concurrently'));
+		try {
+			const response = await owner(
+				'DELETE',
+				sessionsPath(`/${stale.session_id}${wait ? '?wait=true' : ''}`),
+			);
+			if (!wait && !invalidationFailed) await expectOk(response);
+			else {
 				const error = await expectError(
-					await owner('DELETE', sessionsPath(`/${stale.session_id}`)),
+					response,
 					invalidationFailed ? 409 : 503,
 					invalidationFailed ? 'CONFLICT' : 'SERVICE_UNAVAILABLE',
 				);
@@ -4155,13 +4730,13 @@ describe('Session routes', () => {
 						? 'Pool changed concurrently'
 						: 'The session is still shutting down. Retry shortly.',
 				);
-				expect(reclaim).toHaveBeenCalledOnce();
-			} finally {
-				reclaim.mockRestore();
-				invalidate.mockRestore();
 			}
-		},
-	);
+			expect(reclaim).toHaveBeenCalledOnce();
+		} finally {
+			reclaim.mockRestore();
+			invalidate.mockRestore();
+		}
+	});
 
 	it('Stop keeps an expired claim on destruction failure and retries successfully', async () => {
 		const { instance } = makeFakeSandbox();
@@ -4185,7 +4760,7 @@ describe('Session routes', () => {
 			compute: fakeComputeFrom(instance),
 		}).request;
 		await expectError(
-			await api('DELETE', sessionsPath(`/${stale.session_id}`)),
+			await api('DELETE', sessionsPath(`/${stale.session_id}?wait=true`)),
 			503,
 			'SERVICE_UNAVAILABLE',
 		);
@@ -4193,7 +4768,7 @@ describe('Session routes', () => {
 		expect(
 			(await services.sessions.getSession(pid, stale.session_id)).sandbox_reclaimed_at,
 		).toBeUndefined();
-		await expectOk(await api('DELETE', sessionsPath(`/${stale.session_id}`)));
+		await expectOk(await api('DELETE', sessionsPath(`/${stale.session_id}?wait=true`)));
 		expect(destroy).toHaveBeenCalledTimes(2);
 		expect((await services.sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
 	});

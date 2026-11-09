@@ -1417,6 +1417,7 @@ app.openapi(createGitNotebook, async (c) => {
 			const outcome = await pullSourceToHead(deps, project, meta.id, user.id, user);
 			if (outcome.synced) {
 				await appendAudit(
+					deps,
 					{
 						requestId: c.get('requestId'),
 						method: c.req.method,

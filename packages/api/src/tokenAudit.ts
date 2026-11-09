@@ -9,6 +9,7 @@ export async function auditTokenCreation(
 ): Promise<void> {
 	const { record } = credential;
 	await appendAudit(
+		c.get('deps'),
 		{
 			requestId: c.get('requestId'),
 			method: c.req.method,

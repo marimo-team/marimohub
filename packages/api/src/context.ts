@@ -5,6 +5,7 @@ import type { NotebookBridgeRuntime } from '@marimo-hub/core/ports/notebook-brid
 import type { Hono, MiddlewareHandler } from 'hono';
 import type { LanguageModel, ToolLoopAgentSettings } from 'ai';
 import type {
+	BackgroundWork,
 	AppPoolPolicy,
 	WarmPoolService,
 	ResourceSecurityPolicy,
@@ -469,6 +470,9 @@ export interface ApiDeps {
 	};
 	/** Keep non-critical work alive after the response, for example with Workers `waitUntil`. */
 	backgroundTasks?: BackgroundTaskScheduler;
+	backgroundWork?: BackgroundWork;
+	/** Request-limited hosts must finish teardown before responding. */
+	teardownInline?: boolean;
 	/**
 	 * Probe a reused `running` session's kernel on reconnect. A `dead` result (the
 	 * sandbox is alive but marimo exited) retires the wedged session and provisions

@@ -408,8 +408,13 @@ describe('session MCP tools', () => {
 		},
 	);
 
-	it('starts and idempotently stops a session', async () => {
-		const { instance, calls } = makeFakeSandbox();
+	it('starts, saves, and idempotently stops a session without thumbnail work', async () => {
+		const { instance, calls } = makeFakeSandbox({
+			files: {
+				'/workspace/notebook.py': 'import marimo as mo # saved',
+				'/workspace/__marimo__/notebook.html': '<html>saved output</html>',
+			},
+		});
 		const { deps, project } = await setup({
 			compute: { ...fakeComputeFrom(instance), proxy: async () => Response.json([]) },
 		});
@@ -420,6 +425,7 @@ describe('session MCP tools', () => {
 		);
 		const client = await connect(deps);
 
+		const prepare = vi.spyOn(deps.services.notebooks.thumbnails, 'prepare');
 		const started = await client.callTool({
 			name: 'start_session',
 			arguments: { project: project.name, notebook: notebook.title, wait_seconds: 0 },
@@ -428,6 +434,7 @@ describe('session MCP tools', () => {
 			(started.structuredContent as { session_id: string }).session_id,
 		);
 		expect(started).toMatchObject({ structuredContent: { status: 'running', mode: 'edit' } });
+		expect(prepare).not.toHaveBeenCalled();
 
 		const stopped = await client.callTool({
 			name: 'stop_session',
@@ -451,6 +458,13 @@ describe('session MCP tools', () => {
 			structuredContent: { session_id: sessionId, status: 'terminated' },
 		});
 		expect(calls.destroy).toBe(1);
+		expect(prepare).not.toHaveBeenCalled();
+		expect(await deps.services.notebooks.getNotebookContent(project.id, notebook.id)).toBe(
+			'import marimo as mo # saved',
+		);
+		expect(
+			(await deps.services.sessions.getEditorClaim(project.id, notebook.id))?.session_id,
+		).toBeNull();
 	});
 
 	it('does not stop a session when the token omits session.stop', async () => {

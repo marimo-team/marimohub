@@ -18,7 +18,10 @@ import type { ApiDeps } from './context';
 import { previewAppPoolPolicy } from './previewPolicy';
 
 export async function sweepAppPools(
-	deps: Pick<ApiDeps, 'bucket' | 'services' | 'compute' | 'policy' | 'metrics'> & {
+	deps: Pick<
+		ApiDeps,
+		'bucket' | 'services' | 'compute' | 'policy' | 'metrics' | 'backgroundWork'
+	> & {
 		sandbox: Pick<ApiDeps['sandbox'], 'persistWorkspace' | 'workdir' | 'sessionLifetime'>;
 	},
 ): Promise<void> {

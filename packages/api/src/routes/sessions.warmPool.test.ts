@@ -195,7 +195,14 @@ describe('session warm sandbox assignment', () => {
 			const claim = vi.spyOn(w.warmPool, 'reserve');
 			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 			w.create.mockClear();
-			await expectError(await api.request('POST', w.path), 409, 'EDIT_SESSION_RETIRING');
+			vi.useFakeTimers();
+			try {
+				const response = api.request('POST', w.path);
+				await vi.advanceTimersByTimeAsync(10_000);
+				await expectError(await response, 409, 'EDIT_SESSION_RETIRING');
+			} finally {
+				vi.useRealTimers();
+			}
 			expect(claim).not.toHaveBeenCalled();
 			expect(w.create).not.toHaveBeenCalled();
 			expect(await w.warmPool.store.read()).toEqual(poolBefore);

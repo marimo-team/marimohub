@@ -95,26 +95,40 @@ classes behave differently on purpose:
 On SIGTERM or SIGINT, the Node server:
 
 1. Stops loop ticks and closes its HTTP listener.
-2. Gives in-flight requests 10 seconds or half the drain budget, whichever is shorter. It then closes idle and upgraded connections, including proxied kernel WebSockets, so open notebook tabs do not hold the drain.
-3. Waits for background tasks, maintenance work, and runtime work, including captures and destroys that outlive their deadlines. A running maintenance cycle finishes its current step, skips the rest, and releases its lease, so a replacement replica can take over at once.
+2. Gives requests 10 seconds or half the drain budget, whichever is shorter. It then closes idle connections and WebSockets so open tabs do not hold the drain.
+3. Drains background, maintenance, and runtime work, including captures and destroys that outlive their deadlines. Maintenance finishes its current step, skips the rest, and releases its lease.
 4. Disposes compute clients and flushes telemetry.
 
-`MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` sets the drain budget: 120 seconds for maintenance or 10 seconds for API replicas by default.
+`MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` sets the drain budget: 120 seconds for maintenance or 30 seconds for API replicas by default.
 On expiry, the server logs `drain_timeout` and allows up to 10 seconds for final cleanup. A forced exit can interrupt unfinished captures.
 A second signal during the drain exits immediately, without cleanup.
 
 Set the platform's kill window to at least the budget plus 20 seconds (140 seconds for maintenance with the default budget):
 
-| Platform          | Setting (default)                            | Guidance                                                                                   |
-| ----------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Kubernetes / Helm | `terminationGracePeriodSeconds` (30 s)       | The chart derives it from `maintenance.shutdownTimeoutSeconds`. API pods fit the default.  |
-| Docker / Compose  | `stop_grace_period`, `docker stop -t` (10 s) | `140s` when `MARIMOHUB_RUN_MAINTENANCE=true`. The compose examples set it.                 |
-| Cloud Run         | Fixed (10 s)                                 | Set the budget to 10 or less and expect a forced drain, or run maintenance on GKE or a VM. |
-| Amazon ECS        | `stopTimeout` (30 s, maximum 120 s)          | `stopTimeout: 120` with a budget of 100 or less.                                           |
-| systemd           | `TimeoutStopSec` (90 s)                      | `TimeoutStopSec=140` for a maintenance unit, or lower the budget.                          |
+| Platform          | Setting (default)                                                    | Guidance                                                                                   |
+| ----------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Kubernetes / Helm | `terminationGracePeriodSeconds` (chart: API 50 s, maintenance 140 s) | Maintenance: configured drain budget + 20 s.                                               |
+| Docker / Compose  | `stop_grace_period`, `docker stop -t` (10 s)                         | `140s` when `MARIMOHUB_RUN_MAINTENANCE=true`. The compose examples set it.                 |
+| Cloud Run         | Fixed (10 s)                                                         | Set the budget to 10 or less and expect a forced drain, or run maintenance on GKE or a VM. |
+| Amazon ECS        | `stopTimeout` (30 s, maximum 120 s)                                  | `stopTimeout: 120` with a budget of 100 or less.                                           |
+| systemd           | `TimeoutStopSec` (90 s)                                              | `TimeoutStopSec=140` for a maintenance unit, or lower the budget.                          |
 
-With Helm, set the budget only through `maintenance.shutdownTimeoutSeconds`.
-The chart rejects `MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` in `extraEnv`, `config`, and `secrets`, because API pods would get a budget longer than their termination grace.
+With Helm, set the maintenance budget through `maintenance.shutdownTimeoutSeconds`.
+The chart rejects direct shutdown-timeout overrides to keep drain budgets within pod termination limits.
+
+## Session stop and recovery
+
+On Node, stop with `wait=false` (the default) marks the session `terminating` and invalidates any app-pool entry.
+It returns while teardown runs in the background.
+Workers and library callers without a scheduler await teardown.
+Use `DELETE …/sessions/{sid}?wait=true` to await teardown before a restart. The web restart flow does this.
+If another request owns teardown, `wait=true` returns a retryable `503`.
+
+Start waits up to 10 seconds for your previous editor to finish stopping, then reads the latest saved state.
+If cleanup takes longer, Start returns `EDIT_SESSION_RETIRING`. Retry after cleanup finishes.
+
+A crashed teardown can leave the editor claim held.
+Maintenance can reclaim it after the 15-minute grace period. New starts remain blocked until sandbox destruction is confirmed.
 
 ## Background loops
 

@@ -1,7 +1,9 @@
+import type { ApiDeps } from './context';
 // `logEvent` lives in core (next to the OTEL logs bridge it mirrors into) so
 // core services and adapters can emit the same wide events; re-exported here
 // for the API's existing call sites.
-import { logEvent } from '@marimo-hub/core';
+import { deferOrAwait, logEvent } from '@marimo-hub/core';
+import { backgroundWorkFor, withInlineFallback } from './backgroundWork';
 
 export { logEvent };
 
@@ -64,20 +66,37 @@ export async function bestEffort(
 }
 
 export function appendAudit(
+	deps: Pick<ApiDeps, 'backgroundTasks' | 'backgroundWork' | 'metrics'>,
 	request: { requestId?: string; method: string; path: string; userId: string },
 	event: string,
 	action: () => Promise<void>,
 ): Promise<void> {
-	return bestEffort(
+	const fields = {
+		request_id: request.requestId ?? null,
+		method: request.method,
+		path: request.path,
+		user: request.userId,
+		audit_event: event,
+	};
+	return deferOrAwait(
+		withInlineFallback(backgroundWorkFor(deps)),
 		'audit_append',
-		{
-			request_id: request.requestId ?? null,
-			method: request.method,
-			path: request.path,
-			user: request.userId,
-			audit_event: event,
+		async () => {
+			try {
+				await action();
+			} catch (error) {
+				// Audit providers can attach credential material outside the error message.
+				const metadata = errorMetadata(error);
+				throw Object.assign(new Error('Audit append failed'), {
+					name: metadata.error_name,
+					code: metadata.error_code,
+					status: metadata.error_status,
+					operation: metadata.error_operation,
+				});
+			}
 		},
-		action,
+		deps.metrics,
+		fields,
 	);
 }
 

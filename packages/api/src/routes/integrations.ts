@@ -633,6 +633,7 @@ app.openapi(createIntegration, async (c) => {
 	const detail = await integrations.create(pid, body, user.id);
 	// Audit trail (kind/name only — never config). Best-effort; never fail the write.
 	await appendAudit(
+		deps,
 		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 		'integration.create',
 		() =>
@@ -670,6 +671,7 @@ app.openapi(updateIntegration, async (c) => {
 	const detail = await integrations.update(pid, iid, body, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(detail.updated_at));
 	await appendAudit(
+		deps,
 		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 		'integration.update',
 		() =>
@@ -699,6 +701,7 @@ app.openapi(deleteIntegration, async (c) => {
 	const deleted = await integrations.delete(pid, iid, ifMatchToken(c));
 	if (deleted) {
 		await appendAudit(
+			deps,
 			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 			'integration.delete',
 			() =>
@@ -780,6 +783,7 @@ app.openapi(copyIntegration, async (c) => {
 		user.id,
 	);
 	await appendAudit(
+		deps,
 		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 		'integration.copy',
 		() =>
@@ -869,6 +873,7 @@ app.openapi(createOrgIntegration, async (c) => {
 	const body = c.req.valid('json');
 	const detail = await integrations.create(body, user.id);
 	await appendAudit(
+		deps,
 		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 		'integration.create',
 		() =>
@@ -914,6 +919,7 @@ app.openapi(updateOrgIntegration, async (c) => {
 	const detail = await integrations.update(iid, body, user.id, ifMatchToken(c));
 	c.header('ETag', etagFor(detail.updated_at));
 	await appendAudit(
+		deps,
 		{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 		'integration.update',
 		() =>
@@ -945,6 +951,7 @@ app.openapi(deleteOrgIntegration, async (c) => {
 	const deleted = await integrations.delete(iid, ifMatchToken(c));
 	if (deleted) {
 		await appendAudit(
+			deps,
 			{ requestId: c.get('requestId'), method: c.req.method, path: c.req.path, userId: user.id },
 			'integration.delete',
 			() =>

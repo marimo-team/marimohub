@@ -6536,6 +6536,15 @@
 					"required": true,
 					"value_type": "string",
 					"repeatable": false
+				},
+				{
+					"name": "wait",
+					"cli_name": "wait",
+					"in": "query",
+					"required": false,
+					"description": "Wait for teardown to finish before responding. Use for restart.",
+					"value_type": "string",
+					"repeatable": false
 				}
 			],
 			"destructive": true,

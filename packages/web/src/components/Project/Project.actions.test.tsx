@@ -426,7 +426,9 @@ describe('Project — Notebook Actions: configuration', () => {
 
 		await waitFor(() =>
 			expect(
-				calls.some((call) => call.method === 'DELETE' && call.url.endsWith('/sessions/sess-edit')),
+				calls.some(
+					(call) => call.method === 'DELETE' && call.url.endsWith('/sessions/sess-edit?wait=true'),
+				),
 			).toBe(true),
 		);
 		expect(calls.some((call) => call.url.endsWith('/sessions/sess-app'))).toBe(false);
@@ -641,7 +643,9 @@ describe('Project — Notebook Actions: configuration', () => {
 
 		await waitFor(() => {
 			expect(
-				calls.some((call) => call.method === 'DELETE' && call.url.endsWith('/sessions/sess-1')),
+				calls.some(
+					(call) => call.method === 'DELETE' && call.url.endsWith('/sessions/sess-1?wait=true'),
+				),
 			).toBe(true);
 			expect(toastError).toHaveBeenCalledWith('restart failed');
 		});

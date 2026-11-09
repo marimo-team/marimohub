@@ -58,6 +58,7 @@ import type {
 } from '@marimo-hub/duckdb-wasm-runtime/node';
 import { createPostgresDataQueryExecutorFactory } from '@marimo-hub/postgres-runtime/node';
 import type {
+	BackgroundWork,
 	EditorSandboxSharing,
 	Metrics,
 	AssignableRole,
@@ -617,6 +618,7 @@ function parseSandboxExposure(env: Env): SandboxExposure {
 }
 
 export interface CreateFromEnvOptions {
+	backgroundWork?: BackgroundWork;
 	/** Wrap the bucket and services in OTEL spans (see `createServices`). */
 	tracing?: boolean;
 	libraries?: LoadedAdapterLibraries;
@@ -714,6 +716,7 @@ export function createFromEnv(
 	const workspaceLimits = parseWorkspaceLimits(env);
 	const services = createServices(bucket, metrics, {
 		workspaceLimits,
+		backgroundWork: options?.backgroundWork,
 		tracing: options?.tracing,
 		repositoryHosts: sourceControlConfig.sourceControl?.repositoryHosts,
 	});
@@ -879,6 +882,7 @@ export function createFromEnv(
 		...makeAi(env),
 		...sourceControlConfig,
 		...makeIntegrations(env, bucket, metrics, dataPreview, dataQuery),
+		backgroundWork: options?.backgroundWork,
 		// Deployment metadata surfaced read-only via GET /api/v1/version (UI footer).
 		// MARIMOHUB_VERSION / MARIMOHUB_IMAGE are baked into the image at build time
 		// (Dockerfile ARG → ENV); everything else is inferred from the live config +

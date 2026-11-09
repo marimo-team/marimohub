@@ -130,6 +130,8 @@ spec:
   {{- fail "maintenance.shutdownTimeoutSeconds must be between 1 and 86400" }}
   {{- end }}
   terminationGracePeriodSeconds: {{ add $shutdown 20 }}
+  {{- else }}
+  terminationGracePeriodSeconds: 50
   {{- end }}
   serviceAccountName: {{ include "marimohub.serviceAccountName" $root }}
   automountServiceAccountToken: {{ $v.serviceAccount.automountServiceAccountToken }}
@@ -199,6 +201,9 @@ spec:
         {{- if .maintenance }}
         - name: MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS
           value: {{ $v.maintenance.shutdownTimeoutSeconds | quote }}
+        {{- else }}
+        - name: MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS
+          value: "30"
         {{- end }}
         {{- /* API pods only: the Service/ServiceMonitor never scrape the
         maintenance pod, so a listener there would just be an unscraped open

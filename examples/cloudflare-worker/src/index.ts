@@ -162,9 +162,17 @@ export function buildDeps(
 				}
 			: undefined;
 
-	const services = createServices(bucket);
+	const backgroundWork = ctx
+		? {
+				defer: (_label: string, task: () => Promise<unknown>) =>
+					ctx.waitUntil(Promise.resolve().then(task)),
+			}
+		: undefined;
+	const services = createServices(bucket, undefined, { backgroundWork });
 	return {
 		theme: deploymentTheme(env),
+		backgroundWork,
+		teardownInline: true,
 		services,
 		bucket,
 		compute: new CloudflareSandboxProvider(env.SANDBOX, { useTunnel }),

@@ -116,6 +116,7 @@ import {
 import { federationFor } from '../federation';
 import { WIF_CREDENTIALS_PATH } from './wifCredentials';
 import {
+	deferTeardown,
 	assertProjectRole,
 	assertSessionAccess,
 	assertSessionControl,
@@ -264,9 +265,20 @@ const deleteSession = createRoute({
 	operationId: 'sessions.terminate',
 	tags: ['Sessions'],
 	summary: 'Terminate a session and destroy sandbox',
-	request: { params: SessionIdParam },
+	request: {
+		params: SessionIdParam,
+		query: z.object({
+			wait: z
+				.enum(['true', 'false'])
+				.optional()
+				.describe('Wait for teardown to finish before responding. Use for restart.'),
+		}),
+	},
 	responses: {
-		200: jsonContent(SuccessResponseSchema, 'Session terminated'),
+		200: jsonContent(
+			SuccessResponseSchema,
+			'Session termination accepted (complete when wait=true)',
+		),
 		...commonErrors(),
 		...errorResponses(403, 404),
 	},
@@ -822,12 +834,16 @@ async function admittedSessionNotebooks(
 	return admitted;
 }
 
-async function retireSelectedSession(deps: ApiDeps, selected: Session): Promise<void> {
+async function retireSelectedSession(
+	deps: ApiDeps,
+	selected: Session,
+	options: { wait: boolean; thumbnail: 'skip' | 'bounded' } = { wait: true, thumbnail: 'skip' },
+): Promise<void> {
 	const { sessions } = deps.services;
 	const { project_id: pid, notebook_id: nid, session_id: sid } = selected;
 	// Only the winner of the terminating transition performs teardown.
 	const { session, transitioned } = await sessions.beginTerminating(pid, sid);
-	let reclaimFailed = false;
+	let reclaimed = true;
 	try {
 		if (sessionMode(session) === 'app')
 			await new AppPoolService(deps.bucket, sessions, deps.policy.appPool, deps.metrics).invalidate(
@@ -837,21 +853,38 @@ async function retireSelectedSession(deps: ApiDeps, selected: Session): Promise<
 			);
 	} finally {
 		// Reconciliation can recover the pool from the terminal session if invalidation fails.
-		if (
-			!transitioned &&
-			isTerminal(session.status) &&
-			session.sandbox_id &&
-			!session.sandbox_reclaimed_at
-		) {
-			const outcome = await sessionRetirer(deps)
-				.reclaim(session)
-				.catch(() => null);
-			reclaimFailed = !outcome?.reclaimed;
-		} else {
-			await sessionRetirer(deps).retire(session, { teardown: transitioned });
-		}
+		const retire = async () => {
+			if (
+				!transitioned &&
+				isTerminal(session.status) &&
+				session.sandbox_id &&
+				!session.sandbox_reclaimed_at
+			) {
+				const outcome = await sessionRetirer(deps)
+					.reclaim(session, { thumbnail: options.thumbnail })
+					.catch(() => null);
+				return outcome?.reclaimed ?? false;
+			}
+			await sessionRetirer(deps).retire(session, {
+				teardown: transitioned,
+				thumbnail: options.thumbnail,
+			});
+			return true;
+		};
+		if (options.wait) reclaimed = await retire();
+		else
+			await deferTeardown(
+				deps,
+				'session.stop',
+				async () => {
+					if (!(await retire())) {
+						throw new UnavailableError('The session is still shutting down. Retry shortly.');
+					}
+				},
+				{ project_id: pid, notebook_id: nid, session_id: sid },
+			);
 	}
-	if (reclaimFailed) {
+	if (options.wait && (!reclaimed || (!transitioned && session.status === 'terminating'))) {
 		throw new UnavailableError('The session is still shutting down. Retry shortly.');
 	}
 }
@@ -1124,7 +1157,7 @@ export async function takeOverNotebookEditor(input: {
 	});
 	let failed = false;
 	const audit = (event: string) =>
-		appendAudit({ ...request, userId: user.id }, event, () =>
+		appendAudit(deps, { ...request, userId: user.id }, event, () =>
 			deps.services.events.append({
 				event,
 				actor: user.id,
@@ -1334,8 +1367,42 @@ export async function startNotebookSession(input: {
 		hostname: string;
 		appBaseUrl: string;
 		via?: 'mcp' | 'rest';
+		signal?: AbortSignal;
 	};
 }): Promise<SessionCreateResult> {
+	try {
+		return await startNotebookSessionOnce(input);
+	} catch (error) {
+		if (!(error instanceof EditSessionRetiringError)) throw error;
+		const { sessions } = input.deps.services;
+		const { pid, nid, user, request } = input;
+		const claim = await sessions.getEditorClaim(pid, nid);
+		if (claim?.transfer) throw error;
+		if (!claim?.session_id) return startNotebookSessionOnce(input);
+		const holder = await sessions.getSession(pid, claim.session_id);
+		if (holder.user_id !== user.id || holder.status !== 'terminating') throw error;
+
+		const deadline = Date.now() + 10_000;
+		while (Date.now() < deadline) {
+			await sleep(Math.min(500, deadline - Date.now()), request.signal);
+			const current = await sessions.getEditorClaim(pid, nid);
+			if (
+				current?.transfer ||
+				current?.session_id !== claim.session_id ||
+				!(await sessions.isClaimRetiring(pid, nid, user.id, { claim: current }))
+			) {
+				// Capture can publish new content and snapshots while Start waits.
+				return startNotebookSessionOnce(input);
+			}
+		}
+		throw error;
+	}
+}
+
+async function startNotebookSessionOnce(
+	input: Parameters<typeof startNotebookSession>[0],
+): Promise<SessionCreateResult> {
+	input.request.signal?.throwIfAborted();
 	const { deps, user, pid, nid, body, request } = input;
 	const { sessions, projects, notebooks } = deps.services;
 	const mode: SessionMode = body?.mode ?? 'edit';
@@ -2423,9 +2490,16 @@ export async function startNotebookSession(input: {
 
 	if (replacingAfterTakeover && temporaryToRetire) {
 		const claimed = await sessions.beginTerminating(pid, temporaryToRetire.session_id);
-		await sessionRetirer(deps).retire(temporaryToRetire, {
-			teardown: claimed.transitioned,
-		});
+		await deferTeardown(
+			deps,
+			'session.retire_temporary',
+			() =>
+				sessionRetirer(deps).retire(claimed.session, {
+					teardown: claimed.transitioned,
+					thumbnail: 'skip',
+				}),
+			{ project_id: pid, notebook_id: nid, session_id: claimed.session.session_id },
+		);
 	}
 
 	const eagerSurfaces = SECONDARY_SURFACE_IDS.filter((id) => {
@@ -2448,10 +2522,9 @@ export async function startNotebookSession(input: {
 	}
 
 	// App sessions can expose integration secrets and WIF credentials to their audience.
-	// The audit records who started the session. Best-effort like every audit append; deferred
-	// so it adds no response latency, and graceful drain still flushes it.
+	// The audit records who started the session.
 	if (MODE_POLICY[mode].sharedApp) {
-		const audit = appendAudit({ ...request, userId: user.id }, 'app.start', () =>
+		await appendAudit(deps, { ...request, userId: user.id }, 'app.start', () =>
 			deps.services.events.append({
 				event: 'app.start',
 				actor: user.id,
@@ -2461,8 +2534,6 @@ export async function startNotebookSession(input: {
 				session_id: session!.session_id,
 			}),
 		);
-		if (deps.backgroundTasks) deps.backgroundTasks.defer(audit);
-		else await audit;
 	}
 
 	if (contextPublication) {
@@ -2505,6 +2576,7 @@ app.openapi(createSession, async (c) => {
 			path: c.req.path,
 			hostname: resolveSandboxHostname(c, deps.sandbox),
 			appBaseUrl: resolvePublicBaseUrl(c, deps.sandbox.appBaseUrl),
+			signal: c.req.raw.signal,
 		},
 	});
 	return c.json({ success: true as const, data }, 200);
@@ -2534,7 +2606,8 @@ app.openapi(deleteSession, async (c) => {
 	// their own ephemeral session (role re-checked; see assertSessionControl).
 	await assertSessionControl(project, existing, user, deps, labels);
 
-	await retireSelectedSession(deps, existing);
+	const wait = c.req.valid('query').wait === 'true';
+	await retireSelectedSession(deps, existing, { wait, thumbnail: wait ? 'skip' : 'bounded' });
 
 	return c.json({ success: true }, 200);
 });

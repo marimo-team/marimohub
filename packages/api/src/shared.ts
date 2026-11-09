@@ -5,6 +5,7 @@ import type { Context, TypedResponse } from 'hono';
 import { all } from 'better-all';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import {
+	deferOrAwait,
 	previewAvailable,
 	ASSIGNABLE_ROLES,
 	AuthorizationService,
@@ -67,6 +68,9 @@ import type {
 } from '@marimo-hub/core';
 import type { ApiDeps, HonoEnv } from './context';
 import { describeError, logEvent } from './log';
+import { backgroundWorkFor, withInlineFallback } from './backgroundWork';
+
+export { backgroundWorkFor } from './backgroundWork';
 
 // Re-export the injected-context types for route modules that import from './shared'.
 export type { ApiDeps, HonoEnv } from './context';
@@ -556,9 +560,21 @@ export async function assertSessionSurfaceAccess(
 	);
 }
 
+export async function deferTeardown(
+	deps: ApiDeps,
+	label: string,
+	task: () => Promise<unknown>,
+	context: { project_id: ProjectId; notebook_id?: NotebookId; session_id?: SessionId },
+): Promise<void> {
+	const work = deps.teardownInline ? undefined : backgroundWorkFor(deps);
+	await deferOrAwait(withInlineFallback(work), label, task, deps.metrics, context);
+}
+
 /** The retire seam (save + destroy + terminal mark + claim release) over this request's deps. */
 export function sessionRetirer(deps: ApiDeps): SessionRetirer {
 	return new SessionRetirer({
+		backgroundWork: backgroundWorkFor(deps),
+		metrics: deps.metrics,
 		sessions: deps.services.sessions,
 		notebooks: deps.services.notebooks,
 		compute: deps.compute,
@@ -603,7 +619,7 @@ export async function retireLiveApps(
 		return;
 	}
 	// Per-app, so one failure cannot strand the apps behind it.
-	for (const s of apps) {
+	await mapWithConcurrency(apps, BUCKET_SCAN_CONCURRENCY, async (s) => {
 		try {
 			const { session, transitioned } = await deps.services.sessions.beginTerminating(
 				pid,
@@ -619,7 +635,7 @@ export async function retireLiveApps(
 				error: describeError(err),
 			});
 		}
-	}
+	});
 }
 
 /**
