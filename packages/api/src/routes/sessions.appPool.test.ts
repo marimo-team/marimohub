@@ -943,7 +943,7 @@ describe('app pool HTTP integration', () => {
 		} finally {
 			release();
 		}
-		await expectOk(await stopping);
+		await expectOk(await stopping, 202);
 		await sweepAppPools(client.deps);
 		expect(destroy).toHaveBeenCalledTimes(1);
 		expect(
@@ -954,7 +954,7 @@ describe('app pool HTTP integration', () => {
 	it('removes a reclaimed pool member without redundant session reads or teardown', async () => {
 		const selected = await start();
 		const client = api();
-		await expectOk(await client.request('DELETE', path(`/${selected.session_id}`)));
+		await expectOk(await client.request('DELETE', path(`/${selected.session_id}`)), 202);
 		const get = vi.spyOn(bucket, 'get');
 		const create = vi.spyOn(client.deps.compute, 'create');
 		await sweepAppPools(client.deps);

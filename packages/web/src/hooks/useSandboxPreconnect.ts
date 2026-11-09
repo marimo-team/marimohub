@@ -11,7 +11,7 @@ export function useSandboxPreconnect(sandboxUrl: string | undefined) {
 			const link = document.createElement('link');
 			link.rel = 'preconnect';
 			link.href = origin;
-			link.crossOrigin = 'anonymous';
+			// No crossorigin: the iframe navigation is credentialed and only reuses a credentialed socket.
 			document.head.append(link);
 			connection = { link, users: 0 };
 			connections.set(origin, connection);

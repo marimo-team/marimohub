@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { backgroundWorkFrom } from '@marimo-hub/core';
+import { queuedBackgroundWork } from '@marimo-hub/core/testing/background-work';
 import { appendAudit, bestEffort, describeError, errorMetadataChain, logEvent } from './log';
 
 afterEach(() => {
@@ -173,26 +175,25 @@ describe('bestEffort', () => {
 });
 
 describe('appendAudit', () => {
+	const auditLine = () =>
+		vi
+			.mocked(console.log)
+			.mock.calls.map(([line]) => String(line))
+			.find((line) => line.includes('background_work_failed'));
+
 	it.each([false, true])('records running audit metrics and failures (fail=%s)', async (fail) => {
-		vi.spyOn(console, 'error').mockImplementation(() => {});
+		vi.spyOn(console, 'log').mockImplementation(() => {});
 		const metrics = { increment: vi.fn(), gauge: vi.fn(), histogram: vi.fn() };
 		const gate = Promise.withResolvers<void>();
-		const tasks: (() => Promise<unknown>)[] = [];
+		const host = queuedBackgroundWork();
 		await appendAudit(
-			{
-				metrics,
-				backgroundWork: {
-					defer: (_label, task) => {
-						tasks.push(task);
-					},
-				},
-			},
+			{ metrics, backgroundWork: host.work },
 			{ method: 'POST', path: '/test', userId: 'test' },
 			'test.event',
 			() => gate.promise,
 		);
 		expect(metrics.gauge).not.toHaveBeenCalled();
-		const pending = tasks[0]();
+		const pending = host.runAll();
 		await Promise.resolve();
 		expect(metrics.gauge).toHaveBeenCalledExactlyOnceWith('background.in_flight', 1, {
 			label: 'audit_append',
@@ -218,59 +219,35 @@ describe('appendAudit', () => {
 			expect(metrics.increment).toHaveBeenCalledExactlyOnceWith('background.failed', 1, {
 				label: 'audit_append',
 			});
-			expect(console.error).toHaveBeenCalledWith(expect.stringContaining('test.event'));
-			expect(vi.mocked(console.error).mock.calls[0][0]).not.toContain('secret audit credential');
+			expect(JSON.parse(auditLine()!)).toMatchObject({
+				level: 'error',
+				event: 'background_work_failed',
+				operation: 'audit_append',
+				audit_event: 'test.event',
+			});
+			expect(auditLine()).not.toContain('secret audit credential');
 		} else expect(metrics.increment).not.toHaveBeenCalled();
 	});
 
 	it('hands an unstarted audit to the lazy scheduler', async () => {
-		const tasks: (() => Promise<unknown>)[] = [];
+		const host = queuedBackgroundWork();
 		const action = vi.fn(async () => {});
-		const legacy = vi.fn();
 		await appendAudit(
-			{
-				backgroundWork: {
-					defer: (_label, task) => {
-						tasks.push(task);
-					},
-				},
-				backgroundTasks: { defer: legacy },
-			},
+			{ backgroundWork: host.work },
 			{ method: 'POST', path: '/test', userId: 'test' },
 			'test',
 			action,
 		);
 		expect(action).not.toHaveBeenCalled();
-		expect(legacy).not.toHaveBeenCalled();
-		expect(tasks).toHaveLength(1);
-		await tasks[0]();
-		expect(action).toHaveBeenCalledOnce();
-	});
-
-	it('registers legacy work before starting the audit', async () => {
-		const action = vi.fn(async () => {});
-		const tasks: Promise<unknown>[] = [];
-		await appendAudit(
-			{
-				backgroundTasks: {
-					defer: (task) => {
-						expect(action).not.toHaveBeenCalled();
-						tasks.push(task);
-					},
-				},
-			},
-			{ method: 'POST', path: '/test', userId: 'test' },
-			'test',
-			action,
-		);
-		await Promise.all(tasks);
+		expect(host.labels).toEqual(['audit_append']);
+		await host.runAll();
 		expect(action).toHaveBeenCalledOnce();
 	});
 
 	it.each(['reject', 'queue-then-reject', 'start-then-reject'] as const)(
 		'awaits fallback exactly once when the lazy scheduler does %s',
 		async (mode) => {
-			vi.spyOn(console, 'error').mockImplementation(() => {});
+			vi.spyOn(console, 'log').mockImplementation(() => {});
 			const gate = Promise.withResolvers<void>();
 			const entered = Promise.withResolvers<void>();
 			const action = vi.fn(() => {
@@ -301,12 +278,12 @@ describe('appendAudit', () => {
 			await pending;
 			for (const task of queued) await task();
 			expect(action).toHaveBeenCalledOnce();
-			expect(console.error).toHaveBeenCalledWith(expect.stringContaining('audit_append'));
+			expect(auditLine()).toContain('audit_append');
 		},
 	);
 
 	it('awaits and contains audit failure without a scheduler', async () => {
-		vi.spyOn(console, 'error').mockImplementation(() => {});
+		vi.spyOn(console, 'log').mockImplementation(() => {});
 		const gate = Promise.withResolvers<void>();
 		let settled = false;
 		const pending = appendAudit(
@@ -321,48 +298,15 @@ describe('appendAudit', () => {
 		expect(settled).toBe(false);
 		gate.reject(new Error('storage unavailable'));
 		await expect(pending).resolves.toBeUndefined();
-		expect(console.error).toHaveBeenCalledWith(expect.stringContaining('audit_append'));
+		expect(auditLine()).toContain('audit_append');
 	});
 
-	it('awaits the existing audit if its scheduler rejects, without writing twice', async () => {
-		vi.spyOn(console, 'error').mockImplementation(() => {});
+	it('defers audit completion through a promise sink', async () => {
 		const gate = Promise.withResolvers<void>();
-		const action = vi.fn(() => gate.promise);
-		const deps = {
-			backgroundTasks: {
-				defer() {
-					throw new Error('scheduler unavailable');
-				},
-			},
-		};
-		let settled = false;
-		const pending = Promise.resolve().then(() =>
-			appendAudit(deps, { method: 'POST', path: '/test', userId: 'test' }, 'test', action),
-		);
-		const completion = pending.then(() => {
-			settled = true;
-		});
-		const assertion = expect(completion).resolves.toBeUndefined();
-		await Promise.resolve();
-		expect(settled).toBe(false);
-		gate.resolve();
-		await assertion;
-		expect(action).toHaveBeenCalledOnce();
-		expect(console.error).toHaveBeenCalledWith(expect.stringContaining('audit_append'));
-	});
-
-	it('defers audit completion through the host scheduler', async () => {
-		const gate = Promise.withResolvers<void>();
-		const tasks: Promise<unknown>[] = [];
+		const kept: Promise<unknown>[] = [];
 		let completed = false;
 		await appendAudit(
-			{
-				backgroundTasks: {
-					defer: (task) => {
-						tasks.push(task);
-					},
-				},
-			},
+			{ backgroundWork: backgroundWorkFrom((work) => kept.push(work)) },
 			{ method: 'POST', path: '/test', userId: 'test' },
 			'test',
 			async () => {
@@ -372,7 +316,7 @@ describe('appendAudit', () => {
 		);
 		expect(completed).toBe(false);
 		gate.resolve();
-		await Promise.all(tasks);
+		await Promise.all(kept);
 		expect(completed).toBe(true);
 	});
 });

@@ -4249,9 +4249,9 @@ export interface components {
 			/** @enum {string} */
 			mode: 'edit' | 'app';
 			source_version_id?: string;
-			/** @description Current notebook head, included in ordinary app heartbeats. */
+			/** @description Current head version of the notebook source. Sent only in heartbeat responses for running or starting app sessions. Omitted for app users, credentials without project.read, preview runtimes, and edit sessions. Start, get, and list responses never include it. */
 			head_version_id?: string | null;
-			/** @description A persistent editor claim is active, included in ordinary app heartbeats. */
+			/** @description True when a persistent editor holds the notebook editor claim. Sent and omitted under the same rules as head_version_id. */
 			edit_active?: boolean;
 			can: {
 				attach: boolean;
@@ -13573,6 +13573,7 @@ export interface operations {
 					'application/json': {
 						/** @enum {boolean} */
 						success: true;
+						/** @description The app link. `app` is the app summary for the link target. App users and callers whose token grants `app.read` need `app.read` on the project and notebook; other callers need `project.read`. */
 						data: {
 							/** @enum {number} */
 							schema_version: 1;
@@ -16177,8 +16178,12 @@ export interface operations {
 						/** @enum {boolean} */
 						success: true;
 						data: {
-							/** @enum {string} */
-							state: 'active' | 'closed' | 'expired';
+							/**
+							 * @description Known values: active, closed, expired. Unrecognized values normalize to unknown.
+							 * @example active
+							 * @enum {string}
+							 */
+							state: 'active' | 'closed' | 'expired' | 'unknown';
 							pending: boolean;
 							items: components['schemas']['NotebookPreview'][];
 						};
@@ -17424,8 +17429,17 @@ export interface operations {
 		};
 		requestBody?: never;
 		responses: {
-			/** @description Session termination accepted (complete when wait=true) */
+			/** @description Session terminated */
 			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['SuccessResponse'];
+				};
+			};
+			/** @description Session termination accepted; teardown continues in the background */
+			202: {
 				headers: {
 					[name: string]: unknown;
 				};

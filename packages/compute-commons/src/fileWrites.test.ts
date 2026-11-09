@@ -136,7 +136,7 @@ describe.skipIf(spawnSync('sh', ['-c', 'python3 -V']).status !== 0)('file batch 
 		for (const file of files) {
 			const expected =
 				typeof file.content === 'string' ? new TextEncoder().encode(file.content) : file.content;
-			expect(readFileSync(resolve(directory, file.path))).toEqual(Buffer.from(expected));
+			expect(readFileSync(resolve(directory, file.path)).equals(expected), file.path).toBe(true);
 		}
 		expect(existsSync(join(directory, 'injected'))).toBe(false);
 	});
@@ -215,6 +215,7 @@ describe.skipIf(spawnSync('sh', ['-c', 'python3 -V']).status !== 0)('file batch 
 		expect(trailing.stderr).toContain('Unexpected data');
 	});
 
+	// Two receiver processes each have a 10-second deadline.
 	it('restores the full batch when retrying a transfer interrupted mid-file', () => {
 		const first = { path: join(directory, 'first'), content: 'already complete' };
 		const last = {
@@ -229,8 +230,8 @@ describe.skipIf(spawnSync('sh', ['-c', 'python3 -V']).status !== 0)('file batch 
 		const retried = receive(input);
 		expect(retried.status).toBe(0);
 		expect(readFileSync(first.path, 'utf8')).toBe(first.content);
-		expect(readFileSync(last.path)).toEqual(Buffer.from(last.content));
-	});
+		expect(readFileSync(last.path).equals(last.content), last.path).toBe(true);
+	}, 25_000);
 
 	it('propagates filesystem failures', () => {
 		writeFileSync(join(directory, 'parent'), 'not a directory');

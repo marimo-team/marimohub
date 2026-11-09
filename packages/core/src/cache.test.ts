@@ -123,6 +123,18 @@ describe('LazyMap', () => {
 		await expect(map.get('a')).rejects.toThrow('synchronous failure');
 	});
 
+	it('requires a per-call loader when constructed without one', async () => {
+		expect(() => new LazyMap({ maxSize: 0 })).toThrow(RangeError);
+		const map = new LazyMap<string, number>({ maxSize: 2 });
+		await expect(map.get('a')).rejects.toThrow('load function is required');
+		expect(map.hasPending('a')).toBe(false);
+		await expect(map.getOrLoad('a', async () => 1)).resolves.toBe(1);
+		await expect(map.get('a')).resolves.toBe(1);
+		await expect(map.reload('a', { load: async () => 2 })).resolves.toBe(2);
+		await expect(map.reload('a')).rejects.toThrow('load function is required');
+		expect(map.getIfPresent('a')).toBe(2);
+	});
+
 	it('caches undefined values', async () => {
 		const load = vi.fn(async () => {});
 		const map = new LazyMap(load, { maxSize: 2 });
@@ -327,6 +339,18 @@ describe('StaleWhileRevalidateCache', () => {
 			).toThrow(RangeError);
 		},
 	);
+
+	it('requires a per-call loader when built without a default one', async () => {
+		const cache = new StaleWhileRevalidateCache<string, string>({
+			maxSize: 2,
+			ttl: () => ({ freshForMs: 10, staleForMs: 0 }),
+		});
+		await expect(cache.get('k')).rejects.toThrow('LazyMap load function is required');
+		const load = vi.fn(async (key: string) => `${key}!`);
+		await expect(cache.get('k', load)).resolves.toBe('k!');
+		await expect(cache.get('k', load)).resolves.toBe('k!');
+		expect(load).toHaveBeenCalledTimes(1);
+	});
 
 	it('caches a fresh value without reloading it', async () => {
 		let now = 0;

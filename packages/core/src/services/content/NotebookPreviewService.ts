@@ -8,6 +8,7 @@ import type { NotebookId, PreviewId, ProjectId, SessionId, UserId } from '../../
 import { BUCKET_SCAN_CONCURRENCY, MAX_WORKSPACE_BYTES } from '../../constants';
 import { mapWithConcurrency } from '../../concurrency';
 import { PreviewStore, PREVIEW_LIMITS } from './PreviewStore';
+import type { PreviewProject } from './PreviewStore';
 import { createNotebookId, createPreviewId, createVersionId } from '../../ids';
 import {
 	BadRequestError,
@@ -39,9 +40,14 @@ import {
 	previewKey,
 } from './notebookPreviews';
 import type { NotebookPreview, PreviewCreate, PreviewIntent } from './notebookPreviews';
-import type { PreviewReconcile } from './previewAutomation';
+import type { PreviewAutomationGroup, PreviewReconcile } from './previewAutomation';
 
 type RetireRuntime = (pid: ProjectId, nid: NotebookId) => Promise<boolean>;
+
+// A successful PR check is persisted at most this often, so polling does not rewrite the project head.
+const AUTOMATION_CHECK_STAMP_MS = 3_600_000;
+// Managed groups may have no expiry; this closes them once GitHub access has failed for a week.
+const AUTOMATION_UNVERIFIED_MS = 7 * 86_400_000;
 
 function retirePreviewRecord(current: NotebookPreview): NotebookPreview | null {
 	return current.state === 'active'
@@ -89,6 +95,8 @@ function applyAutomationIntent(
 
 export class NotebookPreviewService {
 	readonly store: PreviewStore;
+	// Maintenance runs on one replica, so a restart only repeats one check per group.
+	private readonly automationChecks = new Map<ProjectId, Map<string, number>>();
 	async finishMove(source: ProjectId, nid: NotebookId): Promise<void> {
 		await this.store.finishMove(source, nid);
 		await deleteByPrefix(this.bucket, paths.previewRecords(source, nid));
@@ -170,8 +178,12 @@ export class NotebookPreviewService {
 		return this.mutate(intent, (current) => applyAutomationIntent(current, intent));
 	}
 
-	async projectRecords(pid: ProjectId, nid?: NotebookId): Promise<NotebookPreview[]> {
-		const entries = (await this.store.project(pid)).entries.filter(
+	async projectRecords(
+		pid: ProjectId,
+		nid?: NotebookId,
+		read?: PreviewProject,
+	): Promise<NotebookPreview[]> {
+		const entries = (read ?? (await this.store.project(pid))).entries.filter(
 			(entry) => !nid || entry.intent.notebook_id === nid,
 		);
 		const records = await mapWithConcurrency(entries, BUCKET_SCAN_CONCURRENCY, async (entry) => {
@@ -381,9 +393,16 @@ export class NotebookPreviewService {
 			const current = applied ?? persisted;
 			if (!previewAvailable(current)) throw new NotFoundError('Preview not found');
 			if (current.eager !== false) return applied;
+			// Page views request preparation on mount, so they must not skip the failure backoff.
+			const backoff =
+				current.preparation === 'failed' && (current.next_attempt_at ?? 0) > Date.now();
+			const nextAttemptAt = backoff ? current.next_attempt_at : 0;
 			if (current.automation) {
 				const generation = previewGeneration(current)!;
-				if (requestedPreviewGeneration(current) === generation && current.preparation !== 'failed')
+				if (
+					requestedPreviewGeneration(current) === generation &&
+					(current.preparation !== 'failed' || backoff)
+				)
 					return applied;
 				return {
 					...current,
@@ -391,7 +410,7 @@ export class NotebookPreviewService {
 					demand: undefined,
 					requested_commit: undefined,
 					observed_commit: undefined,
-					next_attempt_at: 0,
+					next_attempt_at: nextAttemptAt,
 					preparation: current.preparation === 'deferred' ? 'pending' : current.preparation,
 				};
 			}
@@ -406,41 +425,64 @@ export class NotebookPreviewService {
 				...current,
 				demand: true,
 				requested_commit: undefined,
-				next_attempt_at: 0,
+				next_attempt_at: nextAttemptAt,
 				preparation: current.preparation === 'deferred' ? 'pending' : current.preparation,
 			};
 		});
 	}
 
+	/** Returns `project` when it is still current, so callers can skip another read. */
 	private async reconcileAutomations(
 		pid: ProjectId,
+		project: PreviewProject,
 		registry: SourceControlRegistry,
 		signal?: AbortSignal,
-	) {
-		const groups = ((await this.store.project(pid)).automations ?? [])
-			.filter(
-				(group) =>
-					group.state === 'active' && (group.checked_at ?? 0) + PREVIEW_POLL_MS <= Date.now(),
+	): Promise<PreviewProject | undefined> {
+		const active = (project.automations ?? []).filter((group) => group.state === 'active');
+		const previous = this.automationChecks.get(pid);
+		const attempts = new Map<string, number>();
+		for (const group of active) {
+			const at = previous?.get(group.key);
+			if (at !== undefined) attempts.set(group.key, at);
+		}
+		if (attempts.size > 0) this.automationChecks.set(pid, attempts);
+		else this.automationChecks.delete(pid);
+		if (!project.automations?.length) return project;
+		const now = Date.now();
+		const groups = active
+			.filter((group) => (attempts.get(group.key) ?? 0) + PREVIEW_POLL_MS <= now)
+			.sort(
+				(a, b) =>
+					(attempts.get(a.key) ?? 0) - (attempts.get(b.key) ?? 0) ||
+					(a.checked_at ?? 0) - (b.checked_at ?? 0),
 			)
-			.sort((a, b) => (a.checked_at ?? 0) - (b.checked_at ?? 0))
 			.slice(0, 1);
 		const boundedSignal = AbortSignal.any([
 			AbortSignal.timeout(30_000),
 			...(signal ? [signal] : []),
 		]);
+		let changed = false;
+		const close = async (group: PreviewAutomationGroup) => {
+			changed = true;
+			await this.store.closeAutomation(pid, group.key, group.revision);
+		};
 		for (const group of groups) {
+			attempts.set(group.key, now);
+			this.automationChecks.set(pid, attempts);
 			try {
 				const { source, reader } = await this.source(pid, group.notebook_id, registry);
 				if (source.repo !== group.repository) {
-					await this.store.closeAutomation(pid, group.key, group.revision);
+					await close(group);
 					continue;
 				}
 				const pr = await reader.getPullRequest!(group.repository, group.pull_request, {
 					signal: boundedSignal,
 				});
-				if (pr.state === 'closed' || !pr.sameRepository)
-					await this.store.closeAutomation(pid, group.key, group.revision);
-				else await this.store.checkedAutomation(pid, group.key, group.revision);
+				if (pr.state === 'closed' || !pr.sameRepository) await close(group);
+				else if ((group.checked_at ?? 0) + AUTOMATION_CHECK_STAMP_MS <= Date.now()) {
+					changed = true;
+					await this.store.checkedAutomation(pid, group.key, group.revision);
+				}
 			} catch (error) {
 				if (error instanceof NotFoundError) {
 					const parent = await this.notebooks
@@ -450,11 +492,12 @@ export class NotebookPreviewService {
 							throw failure;
 						});
 					if (!parent || parent.status === 'deleted') {
-						await this.store.closeAutomation(pid, group.key, group.revision);
+						await close(group);
 						continue;
 					}
 				}
-				await this.store.checkedAutomation(pid, group.key, group.revision);
+				const verifiedAt = Math.max(group.checked_at ?? 0, Date.parse(group.last_commit_at));
+				if (verifiedAt + AUTOMATION_UNVERIFIED_MS <= Date.now()) await close(group);
 				logOperationalError(
 					'preview_automation_check_failed',
 					{ project_id: pid, notebook_id: group.notebook_id },
@@ -462,7 +505,11 @@ export class NotebookPreviewService {
 				);
 			}
 		}
-		await this.store.planAutomations(pid);
+		// Each store write above already planned the head in its CAS.
+		if (changed) return undefined;
+		const planned = await this.store.planAutomations(pid, project);
+		// Membership can change during a GitHub call; materializing a stale entry would recreate it.
+		return planned || groups.length > 0 ? undefined : project;
 	}
 
 	async prepare(
@@ -989,8 +1036,13 @@ export class NotebookPreviewService {
 			await Promise.allSettled(
 				projects.slice(offset, offset + PREVIEW_LIMITS.concurrency).map(async (pid) => {
 					try {
-						await this.reconcileAutomations(pid, registry, signal);
-						const records = (await this.projectRecords(pid)).filter(
+						const project = await this.reconcileAutomations(
+							pid,
+							await this.store.project(pid),
+							registry,
+							signal,
+						);
+						const records = (await this.projectRecords(pid, undefined, project)).filter(
 							(record) =>
 								record.state === 'active' &&
 								(record.next_attempt_at ?? 0) <= Date.now() &&

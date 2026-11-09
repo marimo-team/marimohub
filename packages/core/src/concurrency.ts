@@ -1,10 +1,5 @@
+import { errorFromAbortReason } from './internal/abort';
 import { assertPositiveInteger } from './internal/validation';
-
-function abortError(signal?: AbortSignal): Error {
-	return signal?.reason instanceof Error
-		? signal.reason
-		: new DOMException('The operation was aborted.', 'AbortError');
-}
 
 /**
  * Counting semaphore that gates async work to at most `permits` in-flight
@@ -34,7 +29,7 @@ export class Semaphore {
 	}
 
 	acquire(signal?: AbortSignal): Promise<void> {
-		if (signal?.aborted) return Promise.reject(abortError(signal));
+		if (signal?.aborted) return Promise.reject(errorFromAbortReason(signal.reason));
 		if (this.permits > 0) {
 			this.permits--;
 			return Promise.resolve();
@@ -46,7 +41,7 @@ export class Semaphore {
 			};
 			const onAbort = () => {
 				this.waiters.splice(this.waiters.indexOf(grant), 1);
-				reject(abortError(signal));
+				reject(errorFromAbortReason(signal?.reason));
 			};
 			this.waiters.push(grant);
 			signal?.addEventListener('abort', onAbort, { once: true });
@@ -71,7 +66,7 @@ export class Semaphore {
 	async run<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
 		await this.acquire(signal);
 		try {
-			if (signal?.aborted) throw abortError(signal);
+			if (signal?.aborted) throw errorFromAbortReason(signal.reason);
 			return await fn();
 		} finally {
 			this.release();
@@ -98,6 +93,18 @@ export function mapWithConcurrency<T, R>(
 		return Promise.resolve([]);
 	}
 	return Promise.all(items.map((item, index) => sem.run(() => fn(item, index))));
+}
+
+/**
+ * Like `Promise.all`, but rejects only after every item settles, with the first rejection in
+ * input order. Callers use it before cleanup that must not race their own in-flight work.
+ */
+export async function settleAllOrThrow<T>(work: readonly PromiseLike<T>[]): Promise<T[]> {
+	const results = await Promise.allSettled(work);
+	return results.map((result) => {
+		if (result.status === 'rejected') throw result.reason;
+		return result.value;
+	});
 }
 
 export class KeyedAdmission<K> {

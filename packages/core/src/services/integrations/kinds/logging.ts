@@ -59,6 +59,9 @@ function authHeaders(auth: Auth): Record<string, string> {
 	}
 }
 
+// A name that cannot match a Python logger would silently export nothing.
+const LOGGER_NAME_REGEX = /^[^.\s]+(?:\.[^.\s]+)*$/;
+
 // Header values are only known after secret resolution, so they are checked here as well as
 // at save time.
 function validateEndpoint(endpoint: string, headers: Record<string, string>): void {
@@ -91,11 +94,25 @@ export const otlpLogs = defineIntegration({
 		logger_names: z
 			.array(
 				z.strictObject({
-					name: z.string().min(1).describe('Logger name, including its dotted descendants'),
+					name: z
+						.string()
+						.min(1)
+						.max(256)
+						.regex(LOGGER_NAME_REGEX)
+						.describe(
+							'Logger name, including its dotted descendants. Up to 256 characters, with no whitespace or empty dot-separated parts.',
+						),
 				}),
 			)
+			.max(32)
+			.refine((items) => new Set(items.map(({ name }) => name)).size === items.length, {
+				message: 'Duplicate logger name',
+			})
+			.meta({ 'x-unique-by': 'name' })
 			.optional()
-			.describe('Export only these logger namespaces. Leave empty to export all eligible loggers.'),
+			.describe(
+				'Export only these logger namespaces, up to 32 unique names. Leave empty to export all eligible loggers.',
+			),
 		service_name: z
 			.string()
 			.min(1)

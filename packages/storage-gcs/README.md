@@ -9,6 +9,7 @@ Part of [marimohub](../../README.md). See [docs/storage.md](../../docs/storage.m
 The adapter uses GCS generations as ETags and sends `ifGenerationNotMatch` for
 [conditional reads](../../development_docs/bucket_spec.md#conditional-reads).
 
-If a body response has no `x-goog-generation`, the read fails. CAS writes require
-a generation tied to those bytes. A later metadata lookup can return a newer
-generation and cannot safely supply the missing token.
+A body response without `x-goog-generation` fails the read.
+CAS writes need the generation of those exact bytes.
+A later metadata lookup can return a newer generation, so it cannot supply the missing value.
+An emulator must return `x-goog-generation` on media downloads.

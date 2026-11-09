@@ -14,6 +14,7 @@ import type { Env } from './env';
 import { parseComputeProfiles, profilesForBackend } from './computeProfiles';
 import { parseWarmPoolConfig } from './warmPool';
 import { DEFAULT_SESSION_MAX_LIFETIME_S } from './sessionDefaults';
+import { claimWarm } from '@marimo-hub/core/testing';
 
 it.runIf(process.env.MARIMOHUB_WARM_POOL_LIVE_TEST === 'true')(
 	'claims and replenishes real warm sandboxes across provider instances',
@@ -48,7 +49,7 @@ it.runIf(process.env.MARIMOHUB_WARM_POOL_LIVE_TEST === 'true')(
 			const ready = (await store.read()).pools[0].members[0];
 			expect(ready.state).toBe('ready');
 			const claimStart = performance.now();
-			const claim = await other.claim({
+			const claim = await claimWarm(other, {
 				profile: parsed.config.profiles[0].name,
 				image: parsed.config.profiles[0].image,
 				destination: {

@@ -258,11 +258,13 @@ separate components:
   them in the session cookie. Set
   `MARIMOHUB_AUTHZ_SUBJECT_CONTEXT_BACKEND=library` to load a trusted provider.
   Decisions share a context for the same principal object within a request.
-  Expired contexts require resolution again. Concurrent calls share failures,
-  but later decisions retry null, invalid, or failed results.
-  Hono requests own separate promise memos, even if the authenticator reuses a principal.
-  Explicit MCP authorization refreshes start a new memo. Unscoped authorization
-  calls resolve context independently.
+  An expired context is resolved again. Concurrent calls share a failure.
+  Later decisions retry a null, invalid, or failed result.
+  Each Hono request owns its memo, even if the authenticator reuses a principal.
+  Long-running operations, such as chat turns and MCP streams, re-authorize in a
+  fresh `withRequestMemo` scope. See
+  [request and operation reads](./architecture.md#request-and-operation-reads).
+  Unscoped authorization calls resolve context independently.
 - `AuthorizationService` requires both `roleAllowed` and
   `constraintsSatisfied`. Project labels and notebook overrides can only reduce
   access. `LocalResourceConstraintPolicy` applies

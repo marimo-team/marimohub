@@ -1,7 +1,11 @@
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { PreconditionFailedError, SANDBOX_INSTANCE_OPTIONAL_METHODS } from '@marimo-hub/core';
+import {
+	PreconditionFailedError,
+	SANDBOX_INSTANCE_CAPABILITY_FLAGS,
+	SANDBOX_INSTANCE_OPTIONAL_METHODS,
+} from '@marimo-hub/core';
 import type { ExternalStorageAdapter, SandboxId } from '@marimo-hub/core';
 import { isConfigError } from './errors';
 import { loadAdapterLibraries, resolveAdapterSpecifier } from './library';
@@ -234,15 +238,18 @@ describe('external adapter library loading', () => {
 		},
 	);
 
-	it('rejects a non-boolean supportsBucketMount capability', async () => {
-		const loaded = await loadAdapterLibraries({
-			...computeEnv(fixture('valid-compute.mjs')),
-			MARIMOHUB_COMPUTE_LIBRARY_INVALID_CAPABILITY: 'supportsBucketMount',
-		});
-		expect(() => loaded.compute?.create('sb-aaaaaaaaaaaaaaaa' as SandboxId)).toThrow(
-			/non-boolean supportsBucketMount/,
-		);
-	});
+	it.each(SANDBOX_INSTANCE_CAPABILITY_FLAGS)(
+		'rejects a non-boolean %s capability',
+		async (capability) => {
+			const loaded = await loadAdapterLibraries({
+				...computeEnv(fixture('valid-compute.mjs')),
+				MARIMOHUB_COMPUTE_LIBRARY_INVALID_CAPABILITY: capability,
+			});
+			expect(() => loaded.compute?.create('sb-aaaaaaaaaaaaaaaa' as SandboxId)).toThrow(
+				new RegExp(`non-boolean ${capability}`),
+			);
+		},
+	);
 
 	it.each([
 		[{ multiPort: false, computeProfiles: 'true' }, /non-boolean capabilities: computeProfiles$/],

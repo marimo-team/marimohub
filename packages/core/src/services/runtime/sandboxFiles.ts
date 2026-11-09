@@ -12,7 +12,7 @@ import { batchByWeight } from '../../batching';
 import type { ByteBudget } from './byteBudget';
 import type { Bucket } from '../../ports/bucket';
 import { NotFoundError } from '../../errors';
-import { mapWithConcurrency, Semaphore } from '../../concurrency';
+import { mapWithConcurrency, Semaphore, settleAllOrThrow } from '../../concurrency';
 import type { NotebookId, ProjectId } from '../../ids';
 import { paths } from '../../paths';
 import { logOperationalError } from '../../operationalLog';
@@ -78,13 +78,26 @@ const SANDBOX_WRITE_ATTEMPTS = 3;
  */
 const RESTORE_BATCH_BYTES = 8 * 1024 * 1024;
 
+/**
+ * An adapter that already spent its own retry budget marks the final error `retryable: false`,
+ * so this layer does not multiply that budget.
+ */
+function isRetryable(error: unknown): boolean {
+	return !(
+		typeof error === 'object' &&
+		error !== null &&
+		'retryable' in error &&
+		error.retryable === false
+	);
+}
+
 /** Retry an idempotent op through transient backend faults, with linear backoff. */
 async function withRetry<T>(op: () => Promise<T>, attempts = SANDBOX_WRITE_ATTEMPTS): Promise<T> {
 	for (let attempt = 1; ; attempt++) {
 		try {
 			return await op();
 		} catch (err) {
-			if (attempt >= attempts) throw err;
+			if (attempt >= attempts || !isRetryable(err)) throw err;
 			await new Promise((resolve) => {
 				setTimeout(resolve, 100 * attempt);
 			});
@@ -186,7 +199,7 @@ export async function loadWorkspaceOverlay(
 	workingDir: string,
 	overlay: WorkspaceOverlay = [],
 ) {
-	return settleRestoreWork(
+	return settleAllOrThrow(
 		overlay.map(async ({ path, key }) => {
 			const object = await bucket.get(key);
 			if (!object) throw new NotFoundError(`Workspace source ${key} not found`);
@@ -333,7 +346,7 @@ export async function restoreWorkspace(
 			: [[]];
 	const fetchBatch = (batch: (typeof batches)[number]) => {
 		const reads = new Semaphore(RESTORE_FETCH_CONCURRENCY);
-		return settleRestoreWork(
+		return settleAllOrThrow(
 			batch.map((f) =>
 				reads.run(async () => {
 					const body = await bucket.get(f.key);
@@ -377,7 +390,7 @@ export async function restoreWorkspace(
 			if (!hasOverlay && index + 1 < batches.length) {
 				pending = startBatch(batches[index + 1], true);
 			}
-			await settleRestoreWork([
+			await settleAllOrThrow([
 				createSandboxDirectories(sandbox, directories.splice(0)),
 				files.length > 0 ? withRetry(() => writeFiles(files)) : Promise.resolve(),
 			]);
@@ -392,14 +405,6 @@ export async function restoreWorkspace(
 		}
 	}
 	return { objectCount, bytes };
-}
-
-async function settleRestoreWork<T>(work: readonly Promise<T>[]): Promise<T[]> {
-	const results = await Promise.allSettled(work);
-	return results.map((result) => {
-		if (result.status === 'rejected') throw result.reason;
-		return result.value;
-	});
 }
 
 /** Files under a directory holding a regular `CACHEDIR.TAG`, by presence, not contents. */

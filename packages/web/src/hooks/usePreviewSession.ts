@@ -105,7 +105,10 @@ export function usePreviewSession(pid: string, nid: string, previewId: string, u
 			if (runtime?.mode === 'edit')
 				await apiData(
 					apiClient.DELETE('/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}', {
-						params: { path: { pid, nid: runtime.nid, sid: runtime.sid } },
+						params: {
+							path: { pid, nid: runtime.nid, sid: runtime.sid },
+							query: { wait: 'true' },
+						},
 						timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
 					}),
 				).catch((error: unknown) => {

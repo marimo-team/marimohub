@@ -1,6 +1,11 @@
 import { createSandboxId, SessionRetirer } from '@marimo-hub/core';
 import { describe, expect, it, vi } from 'vitest';
-import { ACTOR, fakeComputeFrom, makeFakeSandbox } from '@marimo-hub/core/testing';
+import {
+	ACTOR,
+	fakeComputeFrom,
+	makeFakeSandbox,
+	queuedBackgroundWork,
+} from '@marimo-hub/core/testing';
 import { connectMcpClient } from '../testing/mcp';
 import { assertNotificationMutationAllowed } from '../notifications';
 import { createInitializedBucket, createTestApi, expectError, expectOk } from '../testing';
@@ -14,16 +19,10 @@ it.each([
 ])(
 	'defers app retirement after $scope deletion and isolates failures (fail=$fail)',
 	async ({ scope, fail }) => {
-		const tasks: (() => Promise<unknown>)[] = [];
+		const host = queuedBackgroundWork();
 		const api = createTestApi({
 			bucket: await createInitializedBucket(),
-			deps: {
-				backgroundWork: {
-					defer: (_label, task) => {
-						tasks.push(task);
-					},
-				},
-			},
+			deps: { backgroundWork: host.work },
 		});
 		const { projects, notebooks, sessions } = api.deps.services;
 		const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
@@ -62,8 +61,8 @@ it.each([
 			if (scope === 'notebook')
 				expect((await notebooks.getNotebook(project.id, notebook.id)).meta.status).toBe('deleted');
 			else expect((await projects.getProject(project.id)).status).toBe('deleted');
-			expect(tasks).toHaveLength(1);
-			const completion = tasks[0]();
+			expect(host.labels).toEqual([`${scope}.retire_apps`]);
+			const completion = host.runAll();
 			await entered.promise;
 			for (const app of apps)
 				expect((await sessions.getSession(project.id, app.session_id)).status).toBe('terminating');
@@ -97,7 +96,7 @@ it.each(['notebook', 'project'] as const)(
 				},
 			},
 		});
-		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 		try {
 			const { projects, notebooks, sessions } = api.deps.services;
 			const project = await projects.createProject({ name: 'P', description: '' }, ACTOR);
@@ -127,7 +126,7 @@ it.each(['notebook', 'project'] as const)(
 			expect(calls.destroy).toBe(2);
 			const failure = log.mock.calls
 				.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
-				.find((event) => event.label === `${scope}.retire_apps`);
+				.find((event) => event.operation === `${scope}.retire_apps`);
 			expect(failure).toMatchObject({
 				event: 'background_work_failed',
 				project_id: project.id,
@@ -141,7 +140,7 @@ it.each(['notebook', 'project'] as const)(
 
 async function setupAlerts() {
 	const deliver = vi.fn(async () => 'delivered' as const);
-	const deferred: Promise<unknown>[] = [];
+	const host = queuedBackgroundWork();
 	const api = createTestApi({
 		bucket: await createInitializedBucket(),
 		deps: {
@@ -150,7 +149,7 @@ async function setupAlerts() {
 				dispatcher: { deliver, test: vi.fn() },
 				maxDestinations: 10,
 			},
-			backgroundTasks: { defer: (task) => deferred.push(task) },
+			backgroundWork: host.work,
 		},
 	});
 	const { notebooks, projects } = api.deps.services;
@@ -161,14 +160,15 @@ async function setupAlerts() {
 			{ title: 'Notebook', description: '', code: 'import marimo' },
 			ACTOR,
 		);
-	return { api, project, notebooks, create, deliver, deferred };
+	const deliveries = () => host.labels.filter((label) => label === 'notification.delivery').length;
+	return { api, project, notebooks, create, deliver, host, deliveries };
 }
 
 describe('notebook deletion notification budget', () => {
 	it.each(['API', 'MCP'])(
 		'limits %s deletion before deleting or broadcasting',
 		async (transport) => {
-			const { api, project, notebooks, create, deliver, deferred } = await setupAlerts();
+			const { api, project, notebooks, create, deliver, host, deliveries } = await setupAlerts();
 			const client = await connectMcpClient(
 				api.deps,
 				{ id: ACTOR, email: `${ACTOR}@example.com`, credential: { kind: 'development' } },
@@ -198,7 +198,7 @@ describe('notebook deletion notification budget', () => {
 					});
 				}
 			}
-			await Promise.all(deferred);
+			await host.runAll();
 			expect(deliver).toHaveBeenCalledTimes(20);
 			const notebook = await create();
 			if (transport === 'API') {
@@ -216,13 +216,14 @@ describe('notebook deletion notification budget', () => {
 			expect(await notebooks.getNotebook(project.id, notebook.id)).toMatchObject({
 				meta: { status: 'active' },
 			});
-			expect(deferred).toHaveLength(40);
+			expect(host.labels).toHaveLength(40);
+			expect(deliveries()).toBe(20);
 			expect(deliver).toHaveBeenCalledTimes(20);
 		},
 	);
 
 	it('does not rebroadcast an already-deleted notebook', async () => {
-		const { api, project, create, deliver, deferred } = await setupAlerts();
+		const { api, project, create, deliver, host } = await setupAlerts();
 		const notebook = await create();
 		const user = {
 			id: ACTOR,
@@ -231,14 +232,18 @@ describe('notebook deletion notification budget', () => {
 		};
 		await deleteNotebookAndRetire(api.deps, project, notebook.id, user);
 		await deleteNotebookAndRetire(api.deps, project, notebook.id, user);
-		await Promise.all(deferred);
+		await host.runAll();
 		expect(deliver).toHaveBeenCalledOnce();
 		expect(deliver).toHaveBeenCalledWith(
 			project.id,
 			'notebook.deleted',
 			expect.objectContaining({ kind: 'notebook.deleted' }),
 		);
-		expect(deferred).toHaveLength(3);
+		expect(host.labels).toEqual([
+			'notification.delivery',
+			'notebook.retire_apps',
+			'notebook.retire_apps',
+		]);
 	});
 
 	it('allows deletion when only personal notifications have exhausted the budget', async () => {

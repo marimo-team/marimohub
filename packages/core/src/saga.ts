@@ -1,4 +1,4 @@
-import { Semaphore } from './concurrency';
+import { Semaphore, settleAllOrThrow } from './concurrency';
 import { BUCKET_WRITE_CONCURRENCY } from './constants';
 import type { Metrics } from './ports/metrics';
 
@@ -102,7 +102,7 @@ export function saga(observer: SagaObserver): Saga {
  * A saga step that runs a batch of blob `writes` with bounded parallelism and,
  * on any failure, runs `cleanup` before rethrowing.
  *
- * `allSettled` semantics are deliberate: it waits for EVERY write to settle
+ * `settleAllOrThrow` semantics are deliberate: it waits for EVERY write to settle
  * before cleaning up, so a straggler put can't land *after* the compensating
  * delete and leak an orphan — the trap with `Promise.all`, which rejects on the
  * first failure while the rest are still in flight (and drops their rejections
@@ -125,11 +125,11 @@ export function compensableWrite(
 	return {
 		do: async () => {
 			const sem = new Semaphore(concurrency);
-			const results = await Promise.allSettled(writes.map((w) => sem.run(w)));
-			const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
-			if (failed) {
+			try {
+				await settleAllOrThrow(writes.map((w) => sem.run(w)));
+			} catch (error) {
 				await cleanup().catch(() => {});
-				throw failed.reason;
+				throw error;
 			}
 		},
 		compensate: cleanup,

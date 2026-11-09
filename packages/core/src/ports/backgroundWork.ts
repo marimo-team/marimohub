@@ -1,4 +1,5 @@
-import { logOperationalError } from '../operationalLog';
+import { logEvent } from '../logs';
+import { safeError } from '../operationalLog';
 import { noopMetrics } from './metrics';
 import type { Metrics } from './metrics';
 
@@ -16,6 +17,11 @@ export const inlineBackgroundWork: BackgroundWork = {
 		await task();
 	},
 };
+
+/** Adapt a host primitive that keeps a started promise alive, such as Workers `waitUntil`. */
+export function backgroundWorkFrom(keep: (work: Promise<unknown>) => void): BackgroundWork {
+	return { defer: (_label, task) => keep(Promise.resolve().then(task)) };
+}
 
 const inFlight = new WeakMap<Metrics, Map<string, number>>();
 
@@ -42,11 +48,15 @@ export async function deferOrAwait(
 	failureContext: Record<string, unknown> = {},
 ): Promise<void> {
 	const failed = (error: unknown) => {
-		logOperationalError(
-			'background_work_failed',
-			{ ...failureContext, operation: label, label },
-			error,
-		);
+		try {
+			logEvent({
+				...failureContext,
+				level: 'error',
+				event: 'background_work_failed',
+				operation: label,
+				error: safeError(error),
+			});
+		} catch {}
 		try {
 			metrics.increment('background.failed', 1, { label });
 		} catch {

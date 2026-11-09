@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { InFlightWork, KeyedAdmission, mapWithConcurrency, Semaphore } from './concurrency';
+import { withAbortSignal } from './async';
+import {
+	InFlightWork,
+	KeyedAdmission,
+	mapWithConcurrency,
+	Semaphore,
+	settleAllOrThrow,
+} from './concurrency';
 
 describe('Semaphore', () => {
 	it.each([0, -1, 1.5, Number.NaN])('rejects an invalid permit count: %s', (permits) => {
@@ -114,6 +121,52 @@ describe('mapWithConcurrency', () => {
 			}),
 		).rejects.toThrow('item failed');
 		await vi.waitFor(() => expect(started).toEqual([1, 2, 3]));
+	});
+});
+
+describe('settleAllOrThrow', () => {
+	it('resolves an empty input', async () => {
+		await expect(settleAllOrThrow([])).resolves.toEqual([]);
+	});
+
+	it('returns every value in input order', async () => {
+		const late = Promise.withResolvers<string>();
+		const result = settleAllOrThrow([late.promise, Promise.resolve('b')]);
+		late.resolve('a');
+		await expect(result).resolves.toEqual(['a', 'b']);
+	});
+
+	it('waits for every item and rejects with the first rejection in input order', async () => {
+		const first = new Error('first');
+		const slow = Promise.withResolvers<void>();
+		const pending = Promise.withResolvers<void>();
+		let settled = false;
+		const result = settleAllOrThrow([
+			slow.promise,
+			Promise.reject(new Error('second')),
+			pending.promise,
+		])
+			.catch((error: unknown) => error)
+			.finally(() => {
+				settled = true;
+			});
+		await Promise.resolve();
+		slow.reject(first);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(settled).toBe(false);
+		pending.resolve();
+		await expect(result).resolves.toBe(first);
+	});
+
+	it('propagates the abort reason of aborted work', async () => {
+		const controller = new AbortController();
+		const reason = new Error('cancelled');
+		const result = settleAllOrThrow([
+			Promise.resolve('done'),
+			withAbortSignal(new Promise<string>(() => {}), controller.signal),
+		]);
+		controller.abort(reason);
+		await expect(result).rejects.toBe(reason);
 	});
 });
 

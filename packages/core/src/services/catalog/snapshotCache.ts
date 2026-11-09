@@ -26,6 +26,18 @@ export function projectsById(snapshot: Snapshot): ReadonlyMap<ProjectId, Snapsho
 	return index;
 }
 
+const serializations = new WeakMap<Snapshot, string>();
+
+/** Memoized only for frozen (cached) snapshots, whose serialization cannot change. */
+export function snapshotJson(snapshot: Snapshot): string {
+	let json = serializations.get(snapshot);
+	if (json === undefined) {
+		json = JSON.stringify(snapshot);
+		if (Object.isFrozen(snapshot)) serializations.set(snapshot, json);
+	}
+	return json;
+}
+
 function freeze(value: unknown): void {
 	if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return;
 	for (const child of Object.values(value)) freeze(child);
@@ -36,8 +48,13 @@ export class SnapshotCacheEntry {
 	readonly byProjectId: ReadonlyMap<ProjectId, SnapshotProjectEntry>;
 	private involvement?: ProjectInvolvement;
 
-	constructor(readonly snapshot: Snapshot) {
+	/** `json` must be the snapshot's exact serialization. */
+	constructor(
+		readonly snapshot: Snapshot,
+		json?: string,
+	) {
 		freeze(snapshot);
+		if (json !== undefined) serializations.set(snapshot, json);
 		this.byProjectId = projectsById(snapshot);
 	}
 
@@ -88,20 +105,15 @@ export class SnapshotCacheEntry {
 
 class SnapshotCache {
 	readonly pointer = new EtagRecordCache<Catalog>(1);
-	private readonly entries = new LazyMap<string, SnapshotCacheEntry>(
-		() => {
-			throw new Error('Snapshot loader required');
-		},
-		{ maxSize: 2 },
-	);
+	private readonly entries = new LazyMap<string, SnapshotCacheEntry>({ maxSize: 2 });
 
 	read(key: string, load: () => Promise<Snapshot>): Promise<SnapshotCacheEntry> {
 		// Only immutable objects share in-flight loads; every pointer read reaches storage.
 		return this.entries.getOrLoad(key, async () => new SnapshotCacheEntry(await load()));
 	}
 
-	set(key: string, snapshot: Snapshot): void {
-		this.entries.set(key, new SnapshotCacheEntry(snapshot));
+	set(key: string, snapshot: Snapshot, json?: string): void {
+		this.entries.set(key, new SnapshotCacheEntry(snapshot, json));
 	}
 }
 

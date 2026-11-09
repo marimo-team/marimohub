@@ -3,11 +3,12 @@ import { SEARCH_ROUTE, PROJECT_SEARCH_ROUTE } from '@/lib/workspaceSearch';
 import { useWorkspaceSearchShortcut } from '@/hooks/useWorkspaceSearchShortcut';
 import { Suspense } from 'react';
 import { lazyRoute } from '@/lib/lazyRoute';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, matchRoutes } from 'react-router-dom';
 import { QueryErrorResetBoundary } from '@tanstack/react-query';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { ProjectSourceGate } from '@/components/Workspace/ProjectSourceGate';
+import { ProjectRoute } from '@/components/Project/projectRoute';
 import { AppEntryPage } from '@/components/Apps/AppEntryPage';
 import { AppLinkPage } from '@/components/NotebookPage/AppLinkPage';
 import { SignIn } from '@/components/SignIn/SignIn';
@@ -54,10 +55,6 @@ const AppsPage = lazyRoute(async () => {
 	const module = await import('@/components/Apps/AppsPage');
 	return { default: module.AppsPage };
 });
-const Project = lazyRoute(async () => {
-	const module = await import('@/components/Project/Project');
-	return { default: module.Project };
-});
 const SnapshotPage = lazyRoute(async () => {
 	const module = await import('@/components/NotebookPage/SnapshotPage');
 	return { default: module.SnapshotPage };
@@ -94,6 +91,26 @@ const OAuthConsentPage = lazyRoute(async () => {
 	const module = await import('@/components/Account/OAuthConsentPage');
 	return { default: module.OAuthConsentPage };
 });
+
+// Pages rendered outside StandardLayout; every other path renders inside WorkspaceLayout.
+const fullScreenRoutes = [
+	{ path: '/app/*', element: <AppLinkPage /> },
+	{ path: '/cli/login', element: <CliLoginPage /> },
+	{ path: '/cli/device', element: <CliDeviceLoginPage /> },
+	{ path: '/oauth/consent', element: <OAuthConsentPage /> },
+	{ path: '/projects/:pid/notebooks/:nid', element: <AppEntryPage variant="edit" /> },
+	// The shared app, full-screen like the editor.
+	{ path: '/projects/:pid/notebooks/:nid/app', element: <AppEntryPage /> },
+	// The last HTML snapshot, sandbox-free (no session is ever started).
+	{ path: '/projects/:pid/notebooks/:nid/snapshot', element: <SnapshotPage /> },
+	{ path: '/projects/:pid/notebooks/:nid/previews', element: <PreviewsPage /> },
+	{ path: '/projects/:pid/notebooks/:nid/previews/:previewId', element: <PreviewPage /> },
+];
+
+// Every workspace page renders inside the layout, so fetch it alongside `/me` instead of after it.
+if (!matchRoutes(fullScreenRoutes, window.location.pathname, appBasePath())) {
+	WorkspaceLayout.preload();
+}
 
 function AppErrorBoundary({ children }: { children: React.ReactNode }) {
 	return (
@@ -202,7 +219,7 @@ function StandardLayout() {
 							}
 						/>
 						<Route path="/projects/:pid" element={<ProjectSourceGate />}>
-							<Route index element={<Project />} />
+							<Route index element={<ProjectRoute />} />
 							<Route path="members" element={<ProjectSettingsPage section="members" />} />
 							<Route path="integrations" element={<ProjectSettingsPage section="integrations" />} />
 							<Route path="alerts" element={<ProjectAlertsPage />} />
@@ -238,20 +255,9 @@ function AppContent() {
 			<AppErrorBoundary>
 				<Suspense fallback={<PageFallback />}>
 					<Routes>
-						<Route path="/app/*" element={<AppLinkPage />} />
-						<Route path="/cli/login" element={<CliLoginPage />} />
-						<Route path="/cli/device" element={<CliDeviceLoginPage />} />
-						<Route path="/oauth/consent" element={<OAuthConsentPage />} />
-						<Route path="/projects/:pid/notebooks/:nid" element={<AppEntryPage variant="edit" />} />
-						{/* The shared app, full-screen like the editor (outside StandardLayout). */}
-						<Route path="/projects/:pid/notebooks/:nid/app" element={<AppEntryPage />} />
-						{/* The last HTML snapshot, sandbox-free (no session is ever started). */}
-						<Route path="/projects/:pid/notebooks/:nid/snapshot" element={<SnapshotPage />} />
-						<Route path="/projects/:pid/notebooks/:nid/previews" element={<PreviewsPage />} />
-						<Route
-							path="/projects/:pid/notebooks/:nid/previews/:previewId"
-							element={<PreviewPage />}
-						/>
+						{fullScreenRoutes.map(({ path, element }) => (
+							<Route key={path} path={path} element={element} />
+						))}
 						<Route path="*" element={<StandardLayout />} />
 					</Routes>
 				</Suspense>

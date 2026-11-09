@@ -887,6 +887,73 @@ describe('Notebook previews', () => {
 });
 
 describe('Preview failure recovery and boundaries', () => {
+	describe('deferred preparation requests', () => {
+		async function managedLazy() {
+			const result = await expectOk<{ items: { id: string }[] }>(
+				await api.request('POST', `${base}/reconcile`, {
+					repository: 'owner/repo',
+					pull_request: 1,
+					event: 'opened',
+					commit: SHA,
+					workflow_id: '10',
+					run_id: '1',
+					run_number: 1,
+					event_at: new Date().toISOString(),
+					policy: { mode: 'sticky', keep: 5, eager: false },
+				}),
+				202,
+			);
+			return result.items[0];
+		}
+
+		it('lets app-users request a managed lazy preview', async () => {
+			const preview = await managedLazy();
+			const appUser = await userApi('app-user');
+			expect(
+				await expectOk<{ preparation: string }>(
+					await appUser.request('POST', `${base}/${preview.id}/prepare`),
+					202,
+				),
+			).toMatchObject({ preparation: 'pending' });
+		});
+
+		it('denies viewers without app access and non-members', async () => {
+			const preview = await managedLazy();
+			await userApi('viewer');
+			const viewer = createTestApi({
+				bucket: api.bucket,
+				userId: uid('viewer'),
+				compute: api.deps.compute,
+				deps: { sourceControl: api.deps.sourceControl, policy: { viewerMode: 'static' } },
+			});
+			await expectError(await viewer.request('POST', `${base}/${preview.id}/prepare`), 403);
+			const outsider = createTestApi({
+				bucket: api.bucket,
+				userId: uid('outsider'),
+				deps: { sourceControl: api.deps.sourceControl },
+			});
+			await expectError(await outsider.request('POST', `${base}/${preview.id}/prepare`), 404);
+			expect(
+				(await api.deps.services.previews.get(pid, nid, PreviewId.parse(preview.id))).preparation,
+			).toBe('deferred');
+		});
+
+		it.each(['expired', 'deleted'] as const)(
+			'returns 404 for a %s manual lazy preview',
+			async (reason) => {
+				const preview = await expectOk<{ id: string; expires_at: string }>(
+					await api.request('POST', base, { ...body, eager: false }),
+					202,
+				);
+				if (reason === 'expired')
+					vi.spyOn(Date, 'now').mockReturnValue(Date.parse(preview.expires_at) + 1);
+				else await expectOk(await api.request('DELETE', `${base}/${preview.id}`), 202);
+				await expectError(await api.request('POST', `${base}/${preview.id}/prepare`), 404);
+				expect(reader.fetchWorkspace).not.toHaveBeenCalled();
+			},
+		);
+	});
+
 	it.each([
 		{ viewerMode: 'static', mode: 'app' },
 		{ viewerMode: 'static', mode: 'edit' },
@@ -1242,7 +1309,7 @@ describe('Preview failure recovery and boundaries', () => {
 		);
 		expect(stillRunning.status).toBe('running');
 		expect(stillRunning.origin!.revision_id).toBe(record.current!.version_id);
-		await expectOk(await api.request('DELETE', sessionPath));
+		await expectOk(await api.request('DELETE', sessionPath), 202);
 		await sweepPreviews(api.deps);
 		expect(
 			(await api.deps.services.previews.get(pid, nid, record.id)).revisions.map(
@@ -1277,6 +1344,7 @@ describe('Preview admission fencing', () => {
 				'DELETE',
 				`/projects/${pid}/notebooks/${first.notebook_id}/sessions/${first.session_id}`,
 			),
+			202,
 		);
 		await expectOk(await api.request('POST', `${base}/${record.id}/sessions`, { mode: 'edit' }));
 		expect((await api.deps.services.previews.get(pid, nid, record.id)).admissions).toHaveLength(10);
@@ -1957,7 +2025,7 @@ describe('preview session resource identity', () => {
 				),
 				404,
 			);
-			await expectOk(await api.request('DELETE', path));
+			await expectOk(await api.request('DELETE', path), 202);
 		},
 	);
 

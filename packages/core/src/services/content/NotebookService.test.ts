@@ -21,6 +21,7 @@ import { AppPoolStore } from '../runtime/AppPoolStore';
 import { AppPoolService } from '../runtime/AppPoolService';
 import { DEFAULT_APP_POOL_POLICY } from '../runtime/AppPoolRouter';
 import { listAllKeys, listAllPrefixes } from '../catalog/storage';
+import { queuedBackgroundWork } from '../../testing/backgroundWork';
 import { makeFsSandbox } from '../../testing/fakes';
 import { readSessionArtifacts } from '../runtime/sandboxFiles';
 
@@ -916,7 +917,7 @@ describe('NotebookService', () => {
 	});
 
 	it('preserves committed content when deferred pruning fails and prunes on a later save', async () => {
-		const tasks: (() => Promise<unknown>)[] = [];
+		const background = queuedBackgroundWork();
 		const metrics = { increment: vi.fn(), gauge: vi.fn() };
 		const service = new NotebookService(
 			bucket,
@@ -926,11 +927,7 @@ describe('NotebookService', () => {
 			undefined,
 			undefined,
 			undefined,
-			{
-				defer: (_label, task) => {
-					tasks.push(task);
-				},
-			},
+			background.work,
 		);
 		const created = await service.createNotebook(
 			projectId,
@@ -940,9 +937,9 @@ describe('NotebookService', () => {
 		for (let i = 0; i < MAX_VERSIONS; i++)
 			await service.updateNotebook(projectId, created.id, { code: `v${i}` }, ACTOR);
 		const remove = vi.spyOn(bucket, 'delete').mockRejectedValue(new Error('storage unavailable'));
-		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 		try {
-			await expect(Promise.all(tasks.splice(0).map((task) => task()))).resolves.toBeDefined();
+			await expect(background.runAll()).resolves.toBeUndefined();
 			expect(remove).toHaveBeenCalled();
 			expect(metrics.increment).toHaveBeenCalledWith('background.failed', 1, {
 				label: 'notebook.version_prune',
@@ -963,13 +960,13 @@ describe('NotebookService', () => {
 			log.mockRestore();
 		}
 		await service.updateNotebook(projectId, created.id, { code: 'retry' }, ACTOR);
-		await Promise.all(tasks.map((task) => task()));
+		await background.runAll();
 		expect(await countVersionFolders(bucket, projectId, created.id)).toBe(MAX_VERSIONS);
 		expect(await service.getNotebookContent(projectId, created.id)).toBe('retry');
 	});
 
 	it('defers pruning until after saves return and preserves the newest versions', async () => {
-		const tasks: (() => Promise<unknown>)[] = [];
+		const background = queuedBackgroundWork();
 		const service = new NotebookService(
 			bucket,
 			catalog,
@@ -978,11 +975,7 @@ describe('NotebookService', () => {
 			undefined,
 			undefined,
 			undefined,
-			{
-				defer: (_label, task) => {
-					tasks.push(task);
-				},
-			},
+			background.work,
 		);
 		const created = await service.createNotebook(
 			projectId,
@@ -993,7 +986,7 @@ describe('NotebookService', () => {
 		for (let i = 0; i < MAX_VERSIONS + 2; i++)
 			await service.updateNotebook(projectId, created.id, { code: `v${i}` }, ACTOR);
 		expect(await countVersionFolders(bucket, projectId, created.id)).toBe(MAX_VERSIONS + 3);
-		await Promise.all(tasks.map((task) => task()));
+		await background.runAll();
 		expect(await countVersionFolders(bucket, projectId, created.id)).toBe(MAX_VERSIONS);
 		expect(
 			await bucket.head(paths.project(projectId).notebook(created.id).version(oldest).code),

@@ -99,10 +99,10 @@ pod is pinned to one replica with the `Recreate` strategy — don't scale it.
 
 ### Shutdown
 
-API pods allow 30 seconds to drain background work and 50 seconds before termination.
-Maintenance uses `maintenance.shutdownTimeoutSeconds` (default 120), plus 20 seconds for cleanup and exit.
+API pods use a 30-second drain budget and a 50-second termination grace period.
+`maintenance.shutdownTimeoutSeconds` sets the maintenance drain budget. The default is 120 seconds.
+The maintenance grace period adds 20 seconds for cleanup and exit.
 
-Set the maintenance budget through that chart value.
 The chart rejects `MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` in `extraEnv`, `config`, and `secrets.data`, even with maintenance disabled.
 See [shutdown budgets](../../docs/operations.md#shutdown-budgets).
 

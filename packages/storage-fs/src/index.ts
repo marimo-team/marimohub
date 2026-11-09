@@ -11,10 +11,11 @@
  * single filesystem).
  *
  * ETags use device, inode, size, and nanosecond mtime, so they survive restarts (the catalog
- * compare-and-swap depends on that). `onlyIfNotExists` (hard link) is atomic
- * even across processes; `onlyIfEtagMatches` is only atomic within one process,
- * advertised via `casScope: 'process'` and surfaced by preflight as a startup
- * warning — never point two hub replicas at the same root.
+ * compare-and-swap depends on that). Every write stamps an mtime later than the version it
+ * replaces and than every earlier write in this process, so a reused inode cannot repeat an ETag.
+ * `onlyIfNotExists` (hard link) is atomic even across processes; `onlyIfEtagMatches` is only
+ * atomic within one process, advertised via `casScope: 'process'` and surfaced by preflight as a
+ * startup warning — never point two hub replicas at the same root.
  *
  * `httpMetadata`/`customMetadata` are accepted and ignored. A key cannot be
  * both an object and a prefix of another
@@ -71,6 +72,63 @@ function errCode(err: unknown): string | undefined {
 
 function statEtag(stat: BigIntStats): string {
 	return `${stat.dev}-${stat.ino}-${stat.size}-${stat.mtimeNs}`;
+}
+
+async function lstatIfPresent(filePath: string): Promise<BigIntStats | null> {
+	try {
+		return await fsp.lstat(filePath, { bigint: true });
+	} catch (err) {
+		if (NOT_FOUND_CODES.has(errCode(err) ?? '')) return null;
+		throw err;
+	}
+}
+
+/** Highest mtime stamped by this process; see `stampMtime`. */
+let lastIssuedMtimeNs = 0n;
+
+const MTIME_STEP_NS = 1_000n;
+/** Doubling from 1 µs, this covers filesystems with timestamp granularity up to about an hour. */
+const MAX_MTIME_ATTEMPTS = 32;
+
+function wallClockNs(): bigint {
+	return BigInt(Math.floor((performance.timeOrigin + performance.now()) * 1000)) * 1000n;
+}
+
+/**
+ * A new file can reuse the inode freed by an earlier version of the same key (overwritten or
+ * deleted) within one coarse kernel mtime tick, so a same-size write could repeat an old ETag and
+ * pass a stale CAS. The staged file therefore gets an explicit mtime later than the version it
+ * replaces and than every mtime this process issued before. `utimes` takes float seconds and the
+ * filesystem may quantize further, so re-stat and step forward until the mtime really advanced.
+ * Residual: two processes recreating one key with the same reused inode and size in the same
+ * microsecond can still collide.
+ */
+async function stampMtime(
+	tmp: string,
+	staged: BigIntStats,
+	previousMtimeNs?: bigint,
+): Promise<BigIntStats> {
+	const floor =
+		previousMtimeNs !== undefined && previousMtimeNs > lastIssuedMtimeNs
+			? previousMtimeNs
+			: lastIssuedMtimeNs;
+	const wall = wallClockNs();
+	let target = wall > floor + MTIME_STEP_NS ? wall : floor + MTIME_STEP_NS;
+	// Reserve before awaiting so concurrent writes to other keys stay strictly ordered.
+	lastIssuedMtimeNs = target;
+	let step = MTIME_STEP_NS;
+	for (let attempt = 0; attempt < MAX_MTIME_ATTEMPTS; attempt++) {
+		await fsp.utimes(tmp, staged.atime, Number(target) / 1e9);
+		const stat = await fsp.stat(tmp, { bigint: true });
+		if (stat.mtimeNs > floor) {
+			if (stat.mtimeNs > lastIssuedMtimeNs) lastIssuedMtimeNs = stat.mtimeNs;
+			return stat;
+		}
+		target += step;
+		step *= 2n;
+		if (target > lastIssuedMtimeNs) lastIssuedMtimeNs = target;
+	}
+	throw new Error('Filesystem storage could not advance a staged file mtime past its predecessor');
 }
 
 function assertValidKey(key: string): void {
@@ -254,10 +312,12 @@ export class FsStorage implements Bucket {
 				} finally {
 					await handle.close();
 				}
-				// rename/link preserve mtime, so stat the staged file for `uploaded`.
-				const stat = await fsp.stat(tmp, { bigint: true });
+				// rename/link preserve mtime, so the stamped stat is the published one.
+				const staged = await fsp.stat(tmp, { bigint: true });
+				let stat: BigIntStats;
 				await fsp.mkdir(path.dirname(filePath), { recursive: true });
 				if (options?.onlyIfNotExists) {
+					stat = await stampMtime(tmp, staged);
 					try {
 						await fsp.link(tmp, filePath);
 					} catch (err) {
@@ -266,13 +326,18 @@ export class FsStorage implements Bucket {
 						}
 						throw err;
 					}
-				} else if (options?.onlyIfEtagMatches !== undefined) {
-					const current = await this.head(key);
-					if (!current || current.etag !== options.onlyIfEtagMatches) {
+				} else {
+					const previous =
+						options?.onlyIfEtagMatches === undefined
+							? await lstatIfPresent(filePath)
+							: await this.withObject(key, async (_handle, current) => current);
+					if (
+						options?.onlyIfEtagMatches !== undefined &&
+						(!previous || statEtag(previous) !== options.onlyIfEtagMatches)
+					) {
 						throw new PreconditionFailedError(`ETag mismatch for key "${key}"`);
 					}
-					await fsp.rename(tmp, filePath);
-				} else {
+					stat = await stampMtime(tmp, staged, previous?.mtimeNs);
 					await fsp.rename(tmp, filePath);
 				}
 				return { key, etag: statEtag(stat), size, uploaded: stat.mtime };

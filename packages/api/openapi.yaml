@@ -3644,11 +3644,14 @@ components:
           type:
             - string
             - 'null'
-          description: Current notebook head, included in ordinary app heartbeats.
+          description: Current head version of the notebook source. Sent only in heartbeat
+            responses for running or starting app sessions. Omitted for app
+            users, credentials without project.read, preview runtimes, and edit
+            sessions. Start, get, and list responses never include it.
         edit_active:
           type: boolean
-          description: A persistent editor claim is active, included in ordinary app
-            heartbeats.
+          description: True when a persistent editor holds the notebook editor claim. Sent
+            and omitted under the same rules as head_version_id.
         can:
           type: object
           properties:
@@ -14670,6 +14673,10 @@ paths:
                       - created_at
                       - app
                     additionalProperties: false
+                    description: The app link. `app` is the app summary for the link target. App
+                      users and callers whose token grants `app.read` need
+                      `app.read` on the project and notebook; other callers need
+                      `project.read`.
                 required:
                   - success
                   - data
@@ -18373,6 +18380,7 @@ paths:
   /api/v1/projects/{pid}/notebooks/{nid}/previews/reconcile:
     post:
       operationId: notebooks.previews.reconcile
+      x-cli-hidden: true
       tags:
         - Previews
       summary: Reconcile previews for a GitHub pull request
@@ -18416,16 +18424,17 @@ paths:
                     - closed
                 commit:
                   type: string
-                  pattern: ^[a-f0-9]{40}$
+                  pattern: ^[a-fA-F0-9]{40}$
                 workflow_id:
                   type: string
                   pattern: ^\d+$
                 run_id:
                   type: string
-                  pattern: ^\d+$
+                  pattern: ^\d{1,20}$
                 run_number:
                   type: integer
                   exclusiveMinimum: 0
+                  maximum: 1000000000
                 event_at:
                   type: string
                   format: date-time
@@ -18483,6 +18492,10 @@ paths:
                           - active
                           - closed
                           - expired
+                          - unknown
+                        description: 'Known values: active, closed, expired. Unrecognized values
+                          normalize to unknown.'
+                        example: active
                       pending:
                         type: boolean
                       items:
@@ -19790,7 +19803,13 @@ paths:
           in: query
       responses:
         '200':
-          description: Session termination accepted (complete when wait=true)
+          description: Session terminated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '202':
+          description: Session termination accepted; teardown continues in the background
           content:
             application/json:
               schema:

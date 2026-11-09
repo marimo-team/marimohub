@@ -99,36 +99,41 @@ On SIGTERM or SIGINT, the Node server:
 3. Drains background, maintenance, and runtime work, including captures and destroys that outlive their deadlines. Maintenance finishes its current step, skips the rest, and releases its lease.
 4. Disposes compute clients and flushes telemetry.
 
-`MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` sets the drain budget: 120 seconds for maintenance or 30 seconds for API replicas by default.
+`MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` sets the drain budget.
+The default is 30 seconds on API replicas and 120 seconds on maintenance.
 On expiry, the server logs `drain_timeout` and allows up to 10 seconds for final cleanup. A forced exit can interrupt unfinished captures.
 A second signal during the drain exits immediately, without cleanup.
 
-Set the platform's kill window to at least the budget plus 20 seconds (140 seconds for maintenance with the default budget):
+Set the platform's kill window to the drain budget plus 20 seconds or more.
+With the defaults, this is 50 seconds for API replicas and 140 seconds for maintenance.
 
-| Platform          | Setting (default)                                                    | Guidance                                                                                   |
-| ----------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Kubernetes / Helm | `terminationGracePeriodSeconds` (chart: API 50 s, maintenance 140 s) | Maintenance: configured drain budget + 20 s.                                               |
-| Docker / Compose  | `stop_grace_period`, `docker stop -t` (10 s)                         | `140s` when `MARIMOHUB_RUN_MAINTENANCE=true`. The compose examples set it.                 |
-| Cloud Run         | Fixed (10 s)                                                         | Set the budget to 10 or less and expect a forced drain, or run maintenance on GKE or a VM. |
-| Amazon ECS        | `stopTimeout` (30 s, maximum 120 s)                                  | `stopTimeout: 120` with a budget of 100 or less.                                           |
-| systemd           | `TimeoutStopSec` (90 s)                                              | `TimeoutStopSec=140` for a maintenance unit, or lower the budget.                          |
+| Platform          | Setting (default)                                                    | Guidance                                                                                                 |
+| ----------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Kubernetes / Helm | `terminationGracePeriodSeconds` (chart: API 50 s, maintenance 140 s) | The chart derives it from the drain budget.                                                              |
+| Docker / Compose  | `stop_grace_period`, `docker stop -t` (10 s)                         | Set `50s` on API replicas and `140s` on maintenance. The compose examples set `140s`.                    |
+| Cloud Run         | Fixed (10 s)                                                         | Set the budget to 10 or less on every service. Expect a forced drain, or run maintenance on GKE or a VM. |
+| Amazon ECS        | `stopTimeout` (30 s, maximum 120 s)                                  | Set `stopTimeout: 50` on API tasks. On maintenance, set `stopTimeout: 120` and a budget of 100 or less.  |
+| systemd           | `TimeoutStopSec` (90 s)                                              | Set `TimeoutStopSec=140` on a maintenance unit, or lower the budget.                                     |
 
 With Helm, set the maintenance budget through `maintenance.shutdownTimeoutSeconds`.
-The chart rejects direct shutdown-timeout overrides to keep drain budgets within pod termination limits.
+The chart rejects `MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS` in `extraEnv`, `config`, and `secrets.data`.
+Helm cannot read the Secret that `secrets.existingSecret` names, so do not put the variable there.
+This keeps each drain budget within its pod termination grace.
 
 ## Session stop and recovery
 
-On Node, stop with `wait=false` (the default) marks the session `terminating` and invalidates any app-pool entry.
-It returns while teardown runs in the background.
-Workers and library callers without a scheduler await teardown.
-Use `DELETE …/sessions/{sid}?wait=true` to await teardown before a restart. The web restart flow does this.
-If another request owns teardown, `wait=true` returns a retryable `503`.
+A stop request marks the session `terminating` and invalidates any app-pool entry.
+[The API reference](./api.md#endpoints) defines the stop status codes and `wait=true`.
+On Node, teardown continues in the background after the `202` response, and the drain waits for it.
+Workers and library hosts await teardown before they send the `202`.
+The web restart flow uses `wait=true`, so teardown finishes before the new start.
 
 Start waits up to 10 seconds for your previous editor to finish stopping, then reads the latest saved state.
 If cleanup takes longer, Start returns `EDIT_SESSION_RETIRING`. Retry after cleanup finishes.
 
 A crashed teardown can leave the editor claim held.
-Maintenance can reclaim it after the 15-minute grace period. New starts remain blocked until sandbox destruction is confirmed.
+After the 15-minute grace period, maintenance can reclaim the claim.
+New starts stay blocked until the compute backend confirms that the sandbox is destroyed.
 
 ## Background loops
 
@@ -447,7 +452,10 @@ histogram (labelled by route, method, and status code) and the
 contention (`catalog.cas.*`), session and reaper activity (`sessions.*`),
 snapshot growth (`snapshots.*`, `maintenance.*`), and notebook job activity
 (`jobs.*`: fires, dispatches, transitions, CAS conflicts, watchdog timeouts,
-retries, and the active-run gauge). Object browsing adds operation
+retries, and the active-run gauge). Work that runs after the response records
+three metrics, each tagged by `label`. They are the `background.in_flight` gauge,
+the `background.failed` counter, and the `background.duration_ms` histogram.
+Object browsing adds operation
 counts and latency (`object_browser.s3.*`), bytes read, keys scanned, metadata
 cache outcomes, and active/rejected download signals (`object_browser.download.*`).
 Runtime-backed data previews emit
@@ -508,6 +516,7 @@ OTLP/HTTP whenever an OTLP endpoint is set, so log history survives a pod
 restart or redeploy instead of living only in `kubectl logs`. This covers both
 the server's own events (`boot_failed`, `otel_started`, maintenance cycles) and
 the request-path events from the API layer (rejections, best-effort failures).
+Work that fails after the response logs `background_work_failed`.
 Each record carries the wide event's `level` as its severity, its `event` (or
 `message`) as the body, and every field as an attribute; while tracing is on it
 also joins its trace via `trace_id` / `span_id`.

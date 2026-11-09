@@ -1196,7 +1196,7 @@ To limit a destination's exports, set `logger_names`:
 ```
 
 `my_app` matches itself and dotted descendants such as `my_app.worker`, but not `my_application`.
-Matching is case-sensitive, with no wildcards. An omitted or empty list exports all eligible loggers.
+Matching is case-sensitive and does not support wildcards. An omitted or empty list exports all eligible loggers.
 Level thresholds still apply. The exporter excludes `opentelemetry`, `urllib3`, `requests`, and their descendants.
 
 Each record includes project, notebook, workload, sandbox, integration, mode, and process identifiers.

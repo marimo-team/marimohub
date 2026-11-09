@@ -6,6 +6,7 @@ import {
 	fakeComputeFrom,
 	makeFakeCompute,
 	makeFakeSandbox,
+	queuedBackgroundWork,
 	uid,
 } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
@@ -132,13 +133,13 @@ describe('Session surface routes', () => {
 		const readiness = new Promise<void>((resolve) => {
 			finishReadiness = resolve;
 		});
-		const deferred: Promise<unknown>[] = [];
+		const host = queuedBackgroundWork();
 		const request = createTestApi({
 			bucket,
 			userId: ACTOR,
 			compute: fakeComputeFrom(instance, multiPort),
 			deps: {
-				backgroundTasks: { defer: (task) => deferred.push(task) },
+				backgroundWork: host.work,
 				sandbox: sandboxConfig({
 					surfaces: {
 						vscode: vscodeSurfaceConfig(),
@@ -148,7 +149,7 @@ describe('Session surface routes', () => {
 		}).request;
 		const session = await expectOk<ApiSession>(await request('POST', sessionsPath()));
 		// Session start defers its sandbox context publication.
-		await Promise.all(deferred.splice(0));
+		await host.runAll();
 		instance.startProcess = vi.fn(async () => ({
 			id: 'surface-vscode',
 			command: 'code-server',
@@ -161,22 +162,22 @@ describe('Session surface routes', () => {
 		const starting = await expectOk<{ status: string }>(await request('POST', path), 202);
 
 		expect(starting.status).toBe('starting');
-		expect(deferred).toHaveLength(1);
+		expect(host.pending()).toBe(1);
 		expect(await expectOk(await request('GET', path))).toMatchObject({ status: 'starting' });
 		finishReadiness();
-		await Promise.all(deferred);
+		await host.runAll();
 		expect(await expectOk(await request('GET', path))).toMatchObject({ status: 'ready' });
 	});
 
 	it('reports a deferred startup failure through the surface status', async () => {
 		const { instance } = makeFakeSandbox();
-		const deferred: Promise<unknown>[] = [];
+		const host = queuedBackgroundWork();
 		const request = createTestApi({
 			bucket,
 			userId: ACTOR,
 			compute: fakeComputeFrom(instance, multiPort),
 			deps: {
-				backgroundTasks: { defer: (task) => deferred.push(task) },
+				backgroundWork: host.work,
 				sandbox: sandboxConfig({
 					surfaces: {
 						vscode: vscodeSurfaceConfig(),
@@ -197,7 +198,7 @@ describe('Session surface routes', () => {
 		const path = sessionsPath(`/${session.session_id}/surfaces/vscode`);
 
 		await expectOk(await request('POST', path), 202);
-		await Promise.all(deferred);
+		await host.runAll();
 
 		expect(await expectOk(await request('GET', path))).toMatchObject({
 			status: 'failed',

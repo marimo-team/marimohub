@@ -3,12 +3,11 @@ import { fileURLToPath } from 'node:url';
 import {
 	BadRequestError,
 	createNotebookId,
-	createSandboxId,
 	createProjectId,
 	createSessionId,
 } from '@marimo-hub/core';
 import type { CreateSandboxOptions, ProxyExposure, SandboxProvider } from '@marimo-hub/core';
-import { ACTOR, makeFakeSandbox } from '@marimo-hub/core/testing';
+import { ACTOR, makeFakeSandbox, claimWarm } from '@marimo-hub/core/testing';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { createFromEnv, createFromEnvAsync } from './index';
 import { libraryProfileCases } from './testdata/computeProfileCapabilities';
@@ -795,7 +794,7 @@ describe('createFromEnv external adapter libraries', () => {
 			const ready = stored.pools[0].members[0];
 			expect(deps.sandbox?.computeProfile).toBeUndefined();
 			expect(deps.sandbox?.computeProfiles).toEqual([]);
-			const claim = await pool.claim({
+			const claim = await claimWarm(pool, {
 				profile: deps.sandbox?.computeProfile,
 				destination: {
 					project_id: createProjectId(),
@@ -1136,31 +1135,6 @@ describe('createFromEnv sandbox exposure mode', () => {
 	it('defaults to subdomain mode when unset', () => {
 		const deps = createFromEnv({ ...baseEnv });
 		expect(deps.sandbox.exposure?.mode).toBe('subdomain');
-	});
-
-	it.each([
-		['true', true],
-		['false', false],
-		[' TRUE ', true],
-		['', true],
-	] as const)('applies partitioned cookie policy %s', async (value, expected) => {
-		const deps = createFromEnv({ ...baseEnv, MARIMOHUB_SANDBOX_COOKIE_PARTITIONED: value });
-		expect(
-			await deps.sandbox.exposure!.prepare({
-				projectId: createProjectId(),
-				sessionId: createSessionId(),
-				notebookId: createNotebookId(),
-				sandboxId: createSandboxId(),
-				kernelAuthToken: 'test-token',
-				appBaseUrl: 'https://hub.example',
-			}),
-		).toEqual({ cookiePartitioned: expected });
-	});
-
-	it('rejects an invalid partitioned cookie policy', () => {
-		expect(() =>
-			createFromEnv({ ...baseEnv, MARIMOHUB_SANDBOX_COOKIE_PARTITIONED: 'yes' }),
-		).toThrow(/MARIMOHUB_SANDBOX_COOKIE_PARTITIONED/);
 	});
 
 	it('throws on an invalid exposure mode', () => {

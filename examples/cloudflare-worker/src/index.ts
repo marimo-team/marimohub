@@ -7,6 +7,7 @@ import { parseTheme } from '@marimo-hub/config/theme';
  * adapter works, since it needs the Workers runtime + DO binding.
  */
 import { hostsOverlap, normalizeHostname } from '@marimo-hub/core/host-isolation';
+import { backgroundWorkFrom } from '@marimo-hub/core/ports/background-work';
 import { parseAppPoolPolicy } from '@marimo-hub/config/app-pool';
 import {
 	createApi,
@@ -162,12 +163,7 @@ export function buildDeps(
 				}
 			: undefined;
 
-	const backgroundWork = ctx
-		? {
-				defer: (_label: string, task: () => Promise<unknown>) =>
-					ctx.waitUntil(Promise.resolve().then(task)),
-			}
-		: undefined;
+	const backgroundWork = ctx ? backgroundWorkFrom((task) => ctx.waitUntil(task)) : undefined;
 	const services = createServices(bucket, undefined, { backgroundWork });
 	return {
 		theme: deploymentTheme(env),
@@ -176,7 +172,6 @@ export function buildDeps(
 		services,
 		bucket,
 		compute: new CloudflareSandboxProvider(env.SANDBOX, { useTunnel }),
-		...(ctx ? { backgroundTasks: { defer: (task: Promise<unknown>) => ctx.waitUntil(task) } } : {}),
 		// Personal access tokens (`Authorization: Bearer mhub_pat_…`) work on every
 		// deployment; other requests resolve through the adapter selected above.
 		authenticator: composeAuthenticators(services.tokens, authenticator),

@@ -89,17 +89,6 @@ export class WarmPoolService {
 		private readonly notebookBridge?: NotebookBridgeRuntime,
 	) {}
 
-	async claim(request: ClaimRequest): Promise<WarmPoolClaim | undefined> {
-		const claim = await this.reserve(request);
-		if (!claim) return;
-		try {
-			await this.probe(claim);
-			return claim;
-		} catch {
-			return;
-		}
-	}
-
 	async reserve(request: ClaimRequest): Promise<WarmPoolClaim | undefined> {
 		if (!this.config.enabled) return;
 		const started = this.now();

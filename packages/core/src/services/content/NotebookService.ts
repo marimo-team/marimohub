@@ -1426,8 +1426,8 @@ export class NotebookService {
 				const nb = paths.project(projectId).notebook(notebookId);
 				const versionsRoot = `${nb.base}/versions/`;
 
-				// Each delimited prefix is `.../versions/{vid}/`; sort ascending so the
-				// newest (largest ULID) sort last.
+				// `listAllPrefixes` returns sorted `.../versions/{vid}/` prefixes, so the
+				// newest (largest ULID) come last.
 				const versionPrefixes = await listAllPrefixes(this.bucket, versionsRoot);
 				if (versionPrefixes.length <= max) {
 					return;

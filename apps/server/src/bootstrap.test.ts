@@ -818,7 +818,7 @@ describe('bootstrap', () => {
 	it('defaults API shutdown to a 30 second drain budget', async () => {
 		const harness = makeHarness(deps);
 		const handle = await bootstrap({ MARIMOHUB_STATIC_ROOT: './public' }, harness.overrides);
-		deps.backgroundTasks!.defer(new Promise(() => {}));
+		void deps.backgroundWork!.defer('test', () => new Promise(() => {}));
 		const draining = handle!.drain();
 		await vi.advanceTimersByTimeAsync(29_999);
 		expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('drain_timeout'));
@@ -872,7 +872,7 @@ describe('bootstrap', () => {
 		};
 		const harness = makeHarness(deps);
 		const handle = await bootstrap(BASE_ENV, harness.overrides);
-		deps.backgroundTasks?.defer(delivery);
+		void deps.backgroundWork!.defer('test', () => delivery);
 
 		let drained = false;
 		const draining = handle?.drain().then(() => {
@@ -892,7 +892,7 @@ describe('bootstrap', () => {
 		deps.notifier = { deliver: vi.fn(async () => 'delivered' as const), close: closeNotifier };
 		const harness = makeHarness(deps, { closeImmediately: false });
 		const handle = await bootstrap(BASE_ENV, harness.overrides);
-		deps.backgroundTasks?.defer(new Promise<void>(() => {}));
+		void deps.backgroundWork!.defer('test', () => new Promise<void>(() => {}));
 
 		const draining = handle?.drain();
 		await vi.advanceTimersByTimeAsync(9_999);

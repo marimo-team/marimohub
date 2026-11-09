@@ -278,7 +278,13 @@ describe('PreviewPage', () => {
 		);
 		expect(remove).toHaveBeenCalledWith(
 			'/api/v1/projects/{pid}/notebooks/{nid}/sessions/{sid}',
-			expect.objectContaining({ timeout: SESSION_LIFECYCLE_TIMEOUT_MS }),
+			expect.objectContaining({
+				timeout: SESSION_LIFECYCLE_TIMEOUT_MS,
+				params: {
+					path: { pid: 'project', nid: savedEditor.nid, sid: savedEditor.sid },
+					query: { wait: 'true' },
+				},
+			}),
 		);
 		const deletion = calls.findIndex((call) => call.method === 'DELETE');
 		expect(calls[deletion].url).toContain('/alice-session');

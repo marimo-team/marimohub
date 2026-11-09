@@ -177,19 +177,21 @@ client uses root-relative paths.
 **Lifecycle (provider-independent):**
 
 ```
-provision: capacity → warm reservation → start boot or probe
+provision: capacity → warm reservation + probe, or per-user cap + cold boot
            → publish session → concurrent admission checks
            → await boot or probe + warm handoff → restore workspace + inject credentials
-           → start marimo → wait for port → expose URL
+           → reserve URL → start marimo → wait for port → confirm URL
 teardown:  read notebook back → cut a new version (if code changed)
            → copy __marimo__ snapshots (notebook.html / session.json, if present)
            into that version → destroy sandbox
 ```
 
-Boot or a warm probe overlaps session publication and admission. The cap recheck,
-preview commit, and editor claim run concurrently, with cap errors taking precedence.
+Boot or a warm probe overlaps session publication and admission.
+A start at the per-user cap is rejected before any cold boot.
+The cap recheck, preview commit, and editor claim run concurrently. Cap errors take precedence.
 Workspace writes and credential injection wait for admission and [warm handoff](./warm_pools.md#ownership-and-lifecycle).
-Rejected starts await boot before cleanup. `provision_boot_overlap_ms` records the boot duration.
+On Node, a rejected cold start returns at once and destroys the speculative sandbox in background work.
+Workers destroy it inline. `provision_boot_overlap_ms` records the time until the booted sandbox is reachable.
 
 Cold starts prefetch after session publication. Warm starts can prefetch immutable workspaces
 at reservation. Mutable reads always wait for publication.
@@ -199,9 +201,9 @@ Writes containing overlays stay sequential. If the budget is full, reads run seq
 Packed archives and mounts do not use batch prefetch.
 Failed restores drain pending reads and writes. Cold cleanup cancels prefetch before sandbox destruction.
 
-Persistent editors publish under the source lease and heartbeat it before proceeding.
-Heartbeat and release reuse the acquired ETag. Node session starts defer release through
-a scheduler that drains on shutdown. Workers and other mutation callers await release.
+Persistent editors publish under the source lease and heartbeat it before they proceed.
+Heartbeat and release reuse the acquired ETag. On Node, session starts defer release to background work.
+Workers and other mutation callers await release.
 
 > **Teardown versions the session's edits.** Interactive kernel edits land on the
 > live `notebook.py` without going through the API write path, so teardown reads
@@ -220,7 +222,7 @@ The adapter must support binary-safe `writeFiles` and provide `python3` on PATH 
 Launch results must include separate setup stdout and stderr on success and failure.
 Missing setup output on success fails provisioning. CoreWeave supports this capability.
 Ordinary workspace loading accepts an explicit write callback. Slow credential resolution does not delay workspace uploads.
-Other adapters retain standalone setup, and headless `prepare()` completes setup before it returns.
+Other adapters run setup as a separate step. Headless `prepare()` completes setup before it returns.
 
 `execInput` sends internal requests through stdin without session environment injection.
 Without `execInput`, agent requests use temporary files. Combined launch includes requests in the shared file transfer.
@@ -356,10 +358,9 @@ Metadata-only notebook authorization uses validated reads without source or READ
 Session and proxy authorization also use `consistency: 'validated'`.
 Fresh reads use GET. Validated reads follow these rules:
 
-- A cold cache uses GET. A warm cache uses HEAD and reuses parsed metadata only
-  when the ETag matches.
-- A changed ETag requires GET before the read completes. The cache stores the
-  GET response's ETag because another write can occur after HEAD.
+- A cold cache uses GET. A warm cache sends a conditional GET with the cached ETag.
+- An unchanged response reuses parsed metadata. A changed response supplies both the new bytes and their ETag.
+- Adapters without conditional-read support can return the full object for every GET.
 - Missing records, storage errors, and invalid metadata never return cached data.
 - An empty ETag from the backend is never cached.
 
@@ -370,45 +371,29 @@ These caches are per Node process, bounded by entry count, and have no TTL.
 They reduce downloads and parsing without adding a revocation delay.
 Subject contexts are shared only within a request and expire at `expiresAt`.
 App-only decisions, preview validity, expiry, and parent authorization remain live checks.
-Detail reads, list reads, and provisioning rechecks use fresh reads. The Cloudflare Workers example builds its services
-per request, so its caches are always cold.
+Detail reads and provisioning rechecks use fresh reads. Project lists validate cached metadata against storage before authorization.
+The Cloudflare Workers example builds its services per request, so these caches do not persist across requests.
 
 #### Request and operation reads
 
-`PromiseMemo` in `core/async` shares concurrent and sequential reads within an explicit scope.
-It has no TTL. Rejected reads are evicted so later calls can retry.
-Tuple keys use JavaScript `Map` equality (SameValueZero) for each element.
-Primitives compare by value, with `NaN` equal to `NaN` and `0` equal to `-0`.
+`PromiseMemo` in `core/cache` shares concurrent and sequential reads within an explicit scope.
+It has no TTL and no invalidation API. A rejected read is evicted, so a later call can retry.
+Tuple keys compare each element with JavaScript `Map` equality, SameValueZero.
+Primitives compare by value. `NaN` equals `NaN`, and `0` equals `-0`.
 Objects and functions compare by identity. Each key must identify one value type and loader policy.
 
-The API's `requestMemoMiddleware` creates a memo for each request, available through
-`c.get('readMemo')` and `c.get('deps').readMemo`. Authorization guards share subject
-context through this memo and enforce its `expiresAt`. Explicit MCP refreshes
-use `withRequestMemo(deps)` to start a new scope.
-Deployment-wide caches and rate limits use `deploymentState` to retain their original lifetime across request scopes.
+`requestMemoMiddleware` creates one memo per request at `c.get('deps').readMemo`.
+Authorization guards share subject context through this memo and enforce its `expiresAt`.
+Long-running operations, such as chat turns and MCP streams, re-authorize in a fresh `withRequestMemo(deps)` scope.
+The fresh scope observes revocation before the cached context expires.
+Deployment-wide caches and rate limits use `deploymentState` to keep their deployment lifetime.
 
-The scheduler uses separate memos for firing and admission. Checks after writes
-use fresh scopes. CAS retry loops never read through a memo.
-
-For a read followed by a write in the same operation:
-
-```ts
-const memo = c.get('readMemo');
-const key = ['notebook', pid, nid];
-const read = () => notebooks.getNotebookMeta(pid, nid, { consistency: 'validated' });
-await memo.read(key, read);
-await memo.mutate(() => notebooks.updateNotebook(pid, nid, input, actor));
-await memo.read(key, read);
-```
-
-`mutate` clears the memo before and after the write, including failures.
-Reads bypass the memo until all concurrent mutations finish. `clear()` invalidates
-all entries without cancelling existing callers. An old promise cannot repopulate the cleared memo.
-Invalidation is explicit: writes outside `mutate` must call `clear()` or start a new scope.
+The scheduler uses separate memos for firing and admission. Checks after writes use fresh scopes.
+CAS retry loops never read through a memo.
+To read after a write in the same request, use a fresh read or start a new scope.
 
 `KnownObject` still carries the value and ETag for the first mutation attempt.
 A no-op can return that snapshot without revalidation. A write conflict requires a fresh read.
-Shared rate limits and credential caches use `unscopedDeps(deps)` to retain their deployment lifetime.
 
 #### Proxy admission cache
 
@@ -424,11 +409,11 @@ project, or changing labels can take up to five seconds to block the next
 request or WebSocket upgrade from an editor that was already admitted; an
 established WebSocket closes only at its authorization deadline.
 
-> **Scaling note.** The global catalog snapshot lists projects by `owner` only;
-> per-project `members` live in `project.json`. Authorized listing for a
-> non-owner therefore costs more than the 2-GET "list everything" path — it must
-> consult membership. This trade-off (and options like denormalizing membership
-> into the snapshot) is tracked in [`bucket_spec.md`](./bucket_spec.md).
+The catalog snapshot includes owner, membership, and default-role projections to select candidate projects.
+Authorization still reads each candidate's `project.json`, because projections can lag membership changes.
+Missing projections keep legacy projects eligible for these checks.
+An entry without `default_role` stays a default-access candidate until the entry is next written or [`catalog recover`](../docs/operations.md#catalog-recovery) rebuilds it.
+See [snapshot cache and authorization](./bucket_spec.md#snapshot-cache-and-authorization).
 
 ### 3.5 API Layer (OpenAPI)
 
@@ -496,27 +481,38 @@ business logic and depend only on interfaces:
   that never enter the catalog.
 - **PreviewStore** — owns the bounded per-project preview membership, artifact
   reservations, idempotency receipts, and deployment-wide preparation leases.
+  Its project head holds the active PR automation groups. Retired groups move
+  to permanent automation tombstones. Removable active-project markers let
+  maintenance find projects with preview work.
 
 `createServices(bucket)` composes them; nothing here imports a vendor SDK.
 
 #### Background work
 
 Inject `BackgroundWork` through `CreateServicesOptions` for best-effort side effects.
+The API reads the same port from `ApiDeps.backgroundWork`.
 Tasks must use their existing owner, tolerate repeats, and produce nothing a later request step reads.
-`deferOrAwait` awaits work without a scheduler. It logs failures and increments `background.failed` with a `label` tag.
-`background.in_flight` counts running tasks by label. `background.duration_ms` records execution time, excluding time waiting in the scheduler.
-Node drains core and API tasks before disposing compute clients.
-Workers use `waitUntil` for short tasks and keep teardown inline with `teardownInline: true`.
-Audits and teardown fall back to inline execution if the host rejects scheduling, without repeating work it already started.
+Without a scheduler, `deferOrAwait` awaits the work inline.
+Failures log `background_work_failed` through `logEvent`, so they carry the request's trace IDs to OTLP log export.
+Three metrics carry a `label` tag:
 
-Stop marks the session `terminating` and invalidates any app-pool entry before deferring teardown.
-`wait=true` keeps teardown synchronous for restart clients.
+- `background.failed` counts failed tasks.
+- `background.in_flight` counts running tasks.
+- `background.duration_ms` records execution time, excluding time queued in the scheduler.
+
+Node drains core and API tasks before it disposes compute clients.
+Workers use `waitUntil` for short tasks. `teardownInline: true` keeps teardown inline.
+If the host rejects scheduling, audits and teardown run inline without repeating started work.
+
+Stop marks the session `terminating` and invalidates any app-pool entry.
+It then defers teardown and returns `202`.
+Restart clients send `wait=true`, which keeps teardown synchronous and returns `200`.
 Content and filesystem capture stay synchronous during restart, replacement, and takeover.
 Editor claims are released only after confirmed destruction.
-Interactive teardown skips thumbnails. Plain stops have a three-second budget, with freshness checks in `ThumbnailService`.
-Session starts do not render thumbnails.
+Interactive teardown skips thumbnails. Plain stops render thumbnails within a three-second budget.
+`ThumbnailService` checks thumbnail freshness. Session starts do not render thumbnails.
 
-Notebook and project deletion commit before scheduling concurrent app retirement.
+Notebook and project deletion commit first, then schedule app retirement concurrently.
 Version pruning, audits, and deletion of old filesystem snapshots also use the host scheduler.
 See [stop and recovery](../docs/operations.md#session-stop-and-recovery) for client behavior and crash recovery.
 
@@ -879,14 +875,16 @@ Tracing one user action through every component:
 4. Service       NotebookService reads meta.json + source.json from Storage
                  (local → workspace bytes; git → the last workspace pushed to the store)
 5. SPA           POST …/{nid}/sessions      (user clicks "Run")
-6. Service       SessionService writes a session record to Storage
-7. Compute       SandboxProvisioner.create → mount bucket / copy files
-                 → start marimo → wait for port → expose URL
+6. Service ∥     per-user cap → cold boot, or warm probe ∥ SessionService publishes
+   Compute       the session record → admission checks: cap recheck, preview, editor claim
+                 rejected on Node: respond at once → destroy sandbox in background work
+7. Compute       SandboxProvisioner → mount bucket / copy files → reserve URL
+                 → start marimo → wait for port → confirm URL
 8. API           returns sandbox URL; SPA embeds the live kernel
 9. Compute       proxy(request) forwards subsequent kernel traffic to the sandbox
-10. Teardown     DELETE …/{sid} → mark terminating → save files → destroy sandbox
-                 → mark terminated → release claims
-                 response may precede teardown; wait=true awaits completion
+10. Teardown     DELETE …/{sid} → mark terminating → 202 → save files
+                 → destroy sandbox → mark terminated → release claims
+                 wait=true awaits completion and returns 200
 ```
 
 Every numbered hop crosses a port. Replace any single adapter — S3 for R2, Modal

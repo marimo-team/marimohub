@@ -7,13 +7,15 @@ Part of [marimohub](../../README.md). See [docs/compute.md](../../docs/compute.m
 
 ## File uploads
 
-Transfers of up to eight files use concurrent SDK writes.
-Larger transfers use sequential binary stdin batches of up to 128 files or 4 MiB.
+If unary SDK writes would need more than one wave, the adapter uses a packed stream.
+That threshold is more than 2 files on `direct` and `auto`, and more than 8 on `gateway` and W&B.
+A packed stream sends sequential binary stdin batches of up to 128 files or 4 MiB.
 Oversized files occupy their own batch.
 Destinations must be unique absolute paths, and payloads never enter command arguments.
 Packed writes create mode `0600` files and remove group and other permissions from existing files.
 
-Packed batches have a 60 s deadline per attempt and retry `UNAVAILABLE` up to three times.
+Packed batches have a 60 s deadline per attempt.
+They use the same retry delays and server cooldown policy as SDK writes for `UNAVAILABLE` and `RESOURCE_EXHAUSTED`.
 Retries release the upload slot during backoff. A failed packed batch stops later batches.
 
 For SDK writes, upload concurrency is limited per batch and per sandbox:
@@ -38,7 +40,7 @@ Other batches continue. Completed writes remain in the sandbox.
 For repeated direct admission failures, its hint suggests `MARIMOHUB_COMPUTE_COREWEAVE_DATA_PLANE_MODE=gateway`.
 The event omits file paths, contents, and server messages.
 
-Destinations must be unique absolute paths. The adapter checks and copies them before sandbox readiness.
+The adapter checks and copies destinations before sandbox readiness.
 The SDK handles parent directories, file-size limits, streaming fallback, and transport routing.
 
 The packed receiver uses `python3` on PATH for `sh -c`, as provided by `images/marimo-sandbox/Dockerfile`.

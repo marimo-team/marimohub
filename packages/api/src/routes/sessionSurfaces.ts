@@ -10,6 +10,7 @@ import type {
 	SurfaceSpec,
 } from '@marimo-hub/core';
 import {
+	deferOrAwait,
 	joinUrlPath,
 	sessionResourceNotebookId,
 	marimoSurface,
@@ -210,8 +211,12 @@ function deferSurfaceCompletion(
 ): void {
 	if (!completion) return;
 	const task = completion.catch((error) => logSurfaceStartFailure(context, error));
-	if (deps.backgroundTasks) deps.backgroundTasks.defer(task);
-	else void task;
+	void deferOrAwait(deps.backgroundWork, 'surface.start', () => task, deps.metrics, {
+		project_id: context.projectId,
+		notebook_id: context.notebookId,
+		session_id: context.sessionId,
+		surface: context.surface,
+	});
 }
 
 interface BeginSurfaceInput {

@@ -99,9 +99,15 @@ export async function sweepPreviews(deps: ApiDeps): Promise<void> {
 						if (error instanceof NotFoundError) return null;
 						throw error;
 					});
-				if (!project || project.status === 'deleted' || !parent || parent.status === 'deleted')
+				if (!project || project.status === 'deleted' || !parent || parent.status === 'deleted') {
+					// Otherwise maintenance keeps polling GitHub for the deleted parent's PR.
+					if (record.automation)
+						await deps.services.previews.store.closeAutomation(
+							record.project_id,
+							record.automation.key,
+						);
 					record = await deps.services.previews.retire(record);
-				else if (previewExpired(record))
+				} else if (previewExpired(record))
 					record = await deps.services.previews.retireExpired(record);
 			}
 			if (record.state !== 'active') await cleanupPreview(deps, record);

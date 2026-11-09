@@ -588,14 +588,7 @@ function parseSandboxExposure(env: Env): SandboxExposure {
 	const raw = env.MARIMOHUB_SANDBOX_EXPOSURE?.trim().toLowerCase();
 	const mode = raw === undefined || raw === '' ? 'subdomain' : raw;
 	if (mode === 'subdomain') {
-		const partitioned = env.MARIMOHUB_SANDBOX_COOKIE_PARTITIONED?.trim().toLowerCase();
-		if (partitioned && partitioned !== 'true' && partitioned !== 'false') {
-			throw new ConfigError(
-				'Invalid MARIMOHUB_SANDBOX_COOKIE_PARTITIONED (expected true or false)',
-				{ variable: 'MARIMOHUB_SANDBOX_COOKIE_PARTITIONED', docs: 'docs/security.md' },
-			);
-		}
-		return new SubdomainExposure(partitioned ? partitioned === 'true' : undefined);
+		return new SubdomainExposure();
 	}
 	if (mode === 'proxy') {
 		if (env.MARIMOHUB_SANDBOX_PROXY_ACK_UNTRUSTED !== 'true') {

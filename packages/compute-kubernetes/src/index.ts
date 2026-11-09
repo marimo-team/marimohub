@@ -52,18 +52,16 @@ import {
 	shellQuote,
 	ShellEnvironment,
 	privateEnvironmentWriteCommand,
+	batchFileWrites,
+	encodeFileWriteBatch,
+	WRITE_BATCH_COMMAND,
+	WRITE_BATCH_CONCURRENCY,
 } from '@marimo-hub/compute-commons';
 import { forEachConcurrentUntilFailure } from '@marimo-hub/core/async';
 import { Millis } from '@marimo-hub/core/duration';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import type { Timings } from '@marimo-hub/core/timing';
 import { createK8sClient } from './client';
-import {
-	batchFileWrites,
-	encodeFileWriteBatch,
-	WRITE_BATCH_COMMAND,
-	WRITE_BATCH_CONCURRENCY,
-} from './fileWrites';
 import { validatePodTemplate } from './podTemplate';
 import { MANAGED_BY_VALUE, resolveIngressTlsMode, validateIngressHostnameTemplate } from './shared';
 import type {

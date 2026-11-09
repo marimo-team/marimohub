@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PromiseMemo } from './async';
+import { PromiseMemo } from './cache';
 
 describe('PromiseMemo', () => {
 	it('shares concurrent and sequential reads without a TTL, but never across scopes', async () => {
@@ -101,59 +101,5 @@ describe('PromiseMemo', () => {
 		await expect(memo.read(['key'], load, { isValid })).rejects.toBe(failure);
 		await expect(memo.read(['key'], load, { isValid })).resolves.toBe(1);
 		expect(load).toHaveBeenCalledTimes(2);
-	});
-
-	it.each(['resolve', 'reject'] as const)(
-		'an invalidated read cannot replace a newer entry when it later %ss',
-		async (settlement) => {
-			const memo = new PromiseMemo();
-			const pending = Promise.withResolvers<number>();
-			const first = memo.read(['key'], () => pending.promise);
-			const outcome = Promise.allSettled([first]);
-			memo.clear();
-			const replacement = memo.read(['key'], () => 2);
-			await replacement;
-			if (settlement === 'resolve') pending.resolve(1);
-			else pending.reject(new Error('old read failed'));
-			await outcome;
-			expect(memo.read(['key'], () => 3)).toBe(replacement);
-		},
-	);
-
-	it.each([false, true])('invalidates before and after a mutation (failure: %s)', async (fails) => {
-		const memo = new PromiseMemo();
-		let stored = 1;
-		const load = vi.fn(() => stored);
-		await memo.read(['key'], load);
-		const failure = new Error('write response lost');
-		const mutation = memo.mutate(async () => {
-			expect(await memo.read(['key'], load)).toBe(1);
-			stored = 2;
-			expect(await memo.read(['key'], load)).toBe(2);
-			if (fails) throw failure;
-		});
-		if (fails) await expect(mutation).rejects.toBe(failure);
-		else await mutation;
-		await expect(memo.read(['key'], load)).resolves.toBe(2);
-		await expect(memo.read(['key'], load)).resolves.toBe(2);
-		expect(load).toHaveBeenCalledTimes(4);
-	});
-
-	it('bypasses caching until all overlapping mutations settle', async () => {
-		const memo = new PromiseMemo();
-		const first = Promise.withResolvers<void>();
-		const second = Promise.withResolvers<void>();
-		const writes = [memo.mutate(() => first.promise), memo.mutate(() => second.promise)];
-		first.resolve();
-		await writes[0];
-		const load = vi.fn(() => 1);
-		await memo.read(['key'], load);
-		await memo.read(['key'], load);
-		expect(load).toHaveBeenCalledTimes(2);
-		second.resolve();
-		await writes[1];
-		await memo.read(['key'], load);
-		await memo.read(['key'], load);
-		expect(load).toHaveBeenCalledTimes(3);
 	});
 });

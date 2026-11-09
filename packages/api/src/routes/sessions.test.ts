@@ -21,6 +21,8 @@ import {
 	ProxyExposure,
 	sandboxContextPath,
 	paths,
+	WarmPoolService,
+	WarmPoolStore,
 } from '@marimo-hub/core';
 import type {
 	NotebookId,
@@ -41,6 +43,7 @@ import {
 	uid,
 } from '@marimo-hub/core/testing';
 import type { MemoryBucket } from '@marimo-hub/core/testing';
+import { queuedBackgroundWork } from '@marimo-hub/core/testing/background-work';
 import type { ApiDeps } from '../context';
 import {
 	failSandboxContextPublication,
@@ -257,9 +260,9 @@ describe('Session routes', () => {
 				}
 				return exec(...args);
 			});
-			const tasks: Promise<unknown>[] = [];
+			const background = queuedBackgroundWork();
 			const request = exclusiveApi(ACTOR, fakeComputeFrom(instance), {
-				backgroundTasks: deferred ? { defer: (task) => tasks.push(task) } : undefined,
+				backgroundWork: deferred ? background.work : undefined,
 			});
 			let responded = false;
 			const pending = Promise.resolve(request('POST', sessionsPath())).then((response) => {
@@ -286,7 +289,7 @@ describe('Session routes', () => {
 				);
 				if (deferred) {
 					await vi.waitFor(() => expect(responded).toBe(true));
-					expect(tasks).toHaveLength(1);
+					expect(background.labels).toContain('session.context_publication');
 				} else {
 					expect(responded).toBe(false);
 				}
@@ -294,7 +297,7 @@ describe('Session routes', () => {
 				exposed.resolve();
 				published.resolve();
 				await pending;
-				await Promise.all(tasks);
+				await background.runAll();
 			}
 			const response = await expectOk<ApiSession>(await pending);
 			expect(response.status).toBe('running');
@@ -317,16 +320,16 @@ describe('Session routes', () => {
 			throw new Error('transport unavailable');
 		});
 		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-		const tasks: Promise<unknown>[] = [];
+		const background = queuedBackgroundWork();
 		try {
 			const request = exclusiveApi(ACTOR, fakeComputeFrom(instance), {
-				backgroundTasks: { defer: (task) => tasks.push(task) },
+				backgroundWork: background.work,
 			});
 			const response = await expectOk<ApiSession>(await request('POST', sessionsPath()));
 			expect(response.status).toBe('running');
-			expect(tasks).toHaveLength(1);
+			expect(background.labels).toContain('session.context_publication');
 			published.resolve();
-			await Promise.all(tasks);
+			await background.runAll();
 			const stored = await createServices(bucket).sessions.getSession(pid, response.session_id);
 			expect(stored).toMatchObject({ status: 'running' });
 			expect(stored.sandbox_reclaimed_at).toBeUndefined();
@@ -582,7 +585,8 @@ describe('Session routes', () => {
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			expect(resolveForSession).toHaveBeenCalledOnce();
 			expect(calls.startProcess).toEqual([]);
-			if (phase === 'boot') expect(calls.destroy).toBeGreaterThan(0);
+			// Record and boot failures both follow a speculative cold boot.
+			if (phase !== 'handle') expect(calls.destroy).toBeGreaterThan(0);
 		},
 	);
 
@@ -868,9 +872,9 @@ describe('Session routes', () => {
 			deps: { policy: { maxConcurrentSessionsPerUser: 1 } },
 		});
 		const sessions = api.deps.services.sessions;
-		vi.spyOn(sessions, 'listActiveForUser').mockRejectedValueOnce(
-			new ResourceExhaustedError('cap wins'),
-		);
+		vi.spyOn(sessions, 'listActiveForUser')
+			.mockResolvedValueOnce([])
+			.mockRejectedValueOnce(new ResourceExhaustedError('cap wins'));
 		const claim = vi.spyOn(sessions, 'claimEditor').mockImplementationOnce(async () => {
 			await editor.promise;
 			return {
@@ -899,6 +903,40 @@ describe('Session routes', () => {
 		]);
 	});
 
+	it('returns a rejected start before its speculative boot is ready when cleanup can be deferred', async () => {
+		const fake = makeFakeSandbox();
+		const ready = Promise.withResolvers<void>();
+		fake.instance.ready = () => ready.promise;
+		const background = queuedBackgroundWork();
+		const api = createTestApi({
+			bucket,
+			compute: fakeComputeFrom(fake.instance),
+			deps: {
+				backgroundWork: background.work,
+				policy: { maxConcurrentSessionsPerUser: 1 },
+			},
+		});
+		const sessions = api.deps.services.sessions;
+		vi.spyOn(sessions, 'listActiveForUser')
+			.mockResolvedValueOnce([])
+			.mockRejectedValueOnce(new ResourceExhaustedError('cap wins'));
+		try {
+			await expectError(await api.request('POST', sessionsPath()), 429, 'RESOURCE_EXHAUSTED');
+			expect(fake.calls.destroy).toBe(0);
+			expect(background.labels).toContain('session.cold_boot_cleanup');
+			const [rejected] = await sessions.listSessions(nid);
+			expect(rejected.status).toBe('failed');
+			expect(rejected.sandbox_reclaimed_at).toBeUndefined();
+		} finally {
+			ready.resolve();
+		}
+		await background.runAll();
+		expect(fake.calls.destroy).toBe(1);
+		expect(await sessions.listSessions(nid)).toMatchObject([
+			{ status: 'failed', sandbox_reclaimed_at: expect.any(String) },
+		]);
+	});
+
 	it.each([false, true])(
 		'defers lease release only for a draining scheduler (%s)',
 		async (drainsOnShutdown) => {
@@ -913,18 +951,11 @@ describe('Session routes', () => {
 				}
 				return put(key, value, options);
 			});
-			const pending: Promise<unknown>[] = [];
+			const background = queuedBackgroundWork();
 			const api = createTestApi({
 				bucket,
 				compute: makeFakeCompute(),
-				deps: {
-					backgroundTasks: {
-						drainsOnShutdown,
-						defer: (task) => {
-							pending.push(task);
-						},
-					},
-				},
+				deps: { backgroundWork: background.work, teardownInline: !drainsOnShutdown },
 			});
 			let finished = false;
 			const request = Promise.resolve(api.request('POST', sessionsPath())).then((response) => {
@@ -942,7 +973,7 @@ describe('Session routes', () => {
 				release.resolve();
 			}
 			if (!drainsOnShutdown) await expectOk(await request);
-			await Promise.all(pending);
+			await background.runAll();
 		},
 	);
 
@@ -1150,12 +1181,20 @@ describe('Session routes', () => {
 		{ deferred: false, fails: false },
 		{ deferred: false, fails: true },
 	])('handles a slow app audit store (%j)', async ({ deferred, fails }) => {
+		const labels: string[] = [];
 		const tasks: Promise<unknown>[] = [];
 		const api = createTestApi({
 			bucket,
 			compute: makeFakeCompute(),
 			deps: {
-				backgroundTasks: deferred ? { defer: (task) => tasks.push(task) } : undefined,
+				backgroundWork: deferred
+					? {
+							defer: (label, task) => {
+								labels.push(label);
+								tasks.push(task());
+							},
+						}
+					: undefined,
 			},
 		});
 		const { events } = api.deps.services;
@@ -1182,7 +1221,7 @@ describe('Session routes', () => {
 		try {
 			if (deferred) await vi.waitFor(() => expect(responded).toBe(true));
 			else expect(responded).toBe(false);
-			expect(tasks).toHaveLength(deferred ? 2 : 0);
+			expect(labels).toEqual(deferred ? ['audit_append', 'session.context_publication'] : []);
 		} finally {
 			releaseAudit.resolve();
 			await Promise.all(tasks);
@@ -1689,7 +1728,7 @@ describe('Session routes', () => {
 			const services = createServices(bucket);
 			const oldSession = await services.sessions.getSession(pid, original.session_id as SessionId);
 			const request = requestFor(after);
-			await expectOk(await request('DELETE', sessionsPath(`/${original.session_id}`)));
+			await expectOk(await request('DELETE', sessionsPath(`/${original.session_id}`)), 202);
 			const next = await expectOk<ApiSession>(await request('POST', sessionsPath(), { mode }));
 			expect(next.session_id).not.toBe(original.session_id);
 			expect(next.reused).toBe(false);
@@ -1785,7 +1824,7 @@ describe('Session routes', () => {
 
 	it('uses the configured sharing mode after the previous claim is released', async () => {
 		const shared = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
-		await expectOk(await owner('DELETE', sessionsPath(`/${shared.session_id}`)));
+		await expectOk(await owner('DELETE', sessionsPath(`/${shared.session_id}`)), 202);
 
 		const services = createServices(bucket);
 		expect(await services.sessions.getEditorClaim(pid, nid)).toMatchObject({
@@ -1952,14 +1991,10 @@ describe('Session routes', () => {
 	);
 
 	it('returns a takeover replacement before retiring the temporary sandbox', async () => {
-		const tasks: { label: string; run: () => Promise<unknown> }[] = [];
+		const background = queuedBackgroundWork();
 		const exclusiveOwner = exclusiveApi(ACTOR);
 		const exclusiveOther = exclusiveApi(STRANGER, makeFakeCompute(), {
-			backgroundWork: {
-				defer: (label, run) => {
-					tasks.push({ label, run });
-				},
-			},
+			backgroundWork: background.work,
 		});
 		const persistent = await expectOk<ApiSession>(await exclusiveOwner('POST', sessionsPath()));
 		const temporary = await expectOk<ApiSession>(
@@ -1980,8 +2015,10 @@ describe('Session routes', () => {
 		expect(
 			await sessions.ownsEditorClaim(await sessions.getSession(pid, replacement.session_id)),
 		).toBe(true);
-		expect(tasks.filter((task) => task.label === 'session.retire_temporary')).toHaveLength(1);
-		for (const task of tasks) await task.run();
+		expect(background.labels.filter((label) => label === 'session.retire_temporary')).toHaveLength(
+			1,
+		);
+		await background.runAll();
 		expect((await sessions.getSession(pid, temporary.session_id)).status).toBe('terminated');
 		expect(
 			await sessions.ownsEditorClaim(await sessions.getSession(pid, replacement.session_id)),
@@ -3308,7 +3345,7 @@ describe('Session routes', () => {
 			surfaces: { vscode: true, opencode: true },
 		});
 		await expectOk(await god('POST', sessionsPath(`/${sid}/heartbeat`)));
-		await expectOk(await god('DELETE', sessionsPath(`/${sid}`)));
+		await expectOk(await god('DELETE', sessionsPath(`/${sid}`)), 202);
 	});
 
 	it("a manager can stop another user's exclusive session without attaching", async () => {
@@ -3325,7 +3362,7 @@ describe('Session routes', () => {
 			stop: true,
 			surfaces: { vscode: false, opencode: false },
 		});
-		await expectOk(await manager('DELETE', sessionsPath(`/${session.session_id}`)));
+		await expectOk(await manager('DELETE', sessionsPath(`/${session.session_id}`)), 202);
 	});
 
 	it('derives session capabilities from the PAT action grant', async () => {
@@ -3405,7 +3442,7 @@ describe('Session routes', () => {
 		await expectError(await stranger('DELETE', sessionsPath(`/${sid}`)), 404, 'NOT_FOUND');
 
 		// The session must still be terminable by the owner — the denial did not act.
-		await expectOk(await owner('DELETE', sessionsPath(`/${sid}`)));
+		await expectOk(await owner('DELETE', sessionsPath(`/${sid}`)), 202);
 	});
 
 	it('DELETE /sessions/{sid} for a session in a different notebook/project returns 404 (scoping fix)', async () => {
@@ -3585,9 +3622,9 @@ describe('Session routes', () => {
 				userId: ACTOR,
 				compute: fakeComputeFrom(instance),
 				deps: {
-					backgroundTasks: {
-						defer: (task) => {
-							tasks.push(task);
+					backgroundWork: {
+						defer: (_label, task) => {
+							tasks.push(task());
 						},
 					},
 					teardownInline,
@@ -3602,14 +3639,14 @@ describe('Session routes', () => {
 				return res;
 			});
 			await entered.promise;
-			if (!wait && !teardownInline) await expectOk((await response).clone());
+			if (!wait && !teardownInline) await expectOk((await response).clone(), 202);
 			else expect(responded).toBe(false);
 			const stopping = await api.deps.services.sessions.getSession(pid, started.session_id);
 			expect(stopping.status).toBe('terminating');
 			expect(stopping.sandbox_reclaimed_at).toBeUndefined();
 			expect(await api.deps.services.sessions.ownsEditorClaim(stopping)).toBe(true);
 			gate.resolve();
-			await expectOk(await response);
+			await expectOk(await response, wait ? 200 : 202);
 			await Promise.all(tasks);
 			const stopped = await api.deps.services.sessions.getSession(pid, started.session_id);
 			expect(stopped.status).toBe('terminated');
@@ -3646,7 +3683,7 @@ describe('Session routes', () => {
 				);
 				if (wait) expect(response.status).toBe(500);
 				else {
-					await expectOk(response);
+					await expectOk(response, 202);
 					expect(metrics.increment).toHaveBeenCalledWith('background.failed', 1, {
 						label: 'session.stop',
 					});
@@ -3666,7 +3703,7 @@ describe('Session routes', () => {
 	);
 
 	it('runs teardown once when two deferred stops race', async () => {
-		const tasks: (() => Promise<unknown>)[] = [];
+		const background = queuedBackgroundWork();
 		const { instance } = makeFakeSandbox();
 		const destroy = vi.spyOn(instance, 'destroy');
 		try {
@@ -3675,21 +3712,17 @@ describe('Session routes', () => {
 				userId: ACTOR,
 				compute: fakeComputeFrom(instance),
 				deps: {
-					backgroundWork: {
-						defer: (_label, task) => {
-							tasks.push(task);
-						},
-					},
+					backgroundWork: background.work,
 				},
 			});
 			const started = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
-			for (const task of tasks.splice(0)) await task();
+			await background.runAll();
 			const replies = await Promise.all(
 				[1, 2].map(() =>
 					Promise.resolve(api.request('DELETE', sessionsPath(`/${started.session_id}`))),
 				),
 			);
-			for (const reply of replies) await expectOk(reply);
+			for (const reply of replies) await expectOk(reply, 202);
 			expect((await api.deps.services.sessions.getSession(pid, started.session_id)).status).toBe(
 				'terminating',
 			);
@@ -3699,7 +3732,7 @@ describe('Session routes', () => {
 				503,
 				'SERVICE_UNAVAILABLE',
 			);
-			await Promise.all(tasks.map((task) => task()));
+			await background.runAll();
 			expect(destroy).toHaveBeenCalledOnce();
 			expect((await api.deps.services.sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
 		} finally {
@@ -3708,7 +3741,7 @@ describe('Session routes', () => {
 	});
 
 	it('retains the editor claim after a deferred destroy fails and releases it only after retry', async () => {
-		const tasks: (() => Promise<unknown>)[] = [];
+		const background = queuedBackgroundWork();
 		const { instance } = makeFakeSandbox();
 		const destroy = vi
 			.spyOn(instance, 'destroy')
@@ -3720,17 +3753,13 @@ describe('Session routes', () => {
 				userId: ACTOR,
 				compute: fakeComputeFrom(instance),
 				deps: {
-					backgroundWork: {
-						defer: (_label, task) => {
-							tasks.push(task);
-						},
-					},
+					backgroundWork: background.work,
 				},
 			});
 			const started = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
-			for (const task of tasks.splice(0)) await task();
-			await expectOk(await api.request('DELETE', sessionsPath(`/${started.session_id}`)));
-			for (const task of tasks.splice(0)) await task();
+			await background.runAll();
+			await expectOk(await api.request('DELETE', sessionsPath(`/${started.session_id}`)), 202);
+			await background.runAll();
 			const { sessions } = api.deps.services;
 			const failed = await sessions.getSession(pid, started.session_id);
 			expect(failed.status).toBe('terminated');
@@ -3790,7 +3819,7 @@ describe('Session routes', () => {
 	it.each([true, false])(
 		'skips thumbnail rendering on start and restart (deferred=%s)',
 		async (deferred) => {
-			const tasks: (() => Promise<unknown>)[] = [];
+			const background = queuedBackgroundWork();
 			const { instance, calls } = makeFakeSandbox({
 				files: {
 					'/workspace/notebook.py': 'import marimo as mo # saved',
@@ -3802,19 +3831,13 @@ describe('Session routes', () => {
 				userId: ACTOR,
 				compute: fakeComputeFrom(instance),
 				deps: {
-					backgroundWork: deferred
-						? {
-								defer: (_label, task) => {
-									tasks.push(task);
-								},
-							}
-						: undefined,
+					backgroundWork: deferred ? background.work : undefined,
 				},
 			});
 			const prepare = vi.spyOn(api.deps.services.notebooks.thumbnails, 'prepare');
 			const claim = vi.spyOn(api.deps.services.notebooks.thumbnails, 'claimAttempt');
 			const first = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
-			for (const task of tasks.splice(0)) await task();
+			await background.runAll();
 			expect(prepare).not.toHaveBeenCalled();
 			await expectOk(await api.request('DELETE', sessionsPath(`/${first.session_id}?wait=true`)));
 			expect(prepare).not.toHaveBeenCalled();
@@ -3824,16 +3847,16 @@ describe('Session routes', () => {
 			const replacement = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
 			expect(replacement.status).toBe('running');
 			expect(prepare).not.toHaveBeenCalled();
-			for (const task of tasks) await task();
+			await background.runAll();
 			expect(prepare).not.toHaveBeenCalled();
 			expect(claim).not.toHaveBeenCalled();
 			expect(calls.exec.some((command) => command.includes('playwright'))).toBe(false);
 		},
 	);
 
-	it('DELETE /sessions/{sid} happy path as the owner returns 200', async () => {
+	it('DELETE /sessions/{sid} happy path as the owner returns 202', async () => {
 		const sid = await startSession();
-		await expectOk(await owner('DELETE', sessionsPath(`/${sid}`)));
+		await expectOk(await owner('DELETE', sessionsPath(`/${sid}`)), 202);
 	});
 
 	it('DELETE /sessions/{sid} cuts a version from the sandbox edits and captures snapshots', async () => {
@@ -3852,7 +3875,7 @@ describe('Session routes', () => {
 		}).request;
 
 		const start = await expectOk<ApiSession>(await editing('POST', sessionsPath()));
-		await expectOk(await editing('DELETE', sessionsPath(`/${start.session_id}`)));
+		await expectOk(await editing('DELETE', sessionsPath(`/${start.session_id}`)), 202);
 
 		// Teardown cut a new version carrying the edit, plus the HTML + session snapshots.
 		const services = createServices(bucket);
@@ -3880,16 +3903,18 @@ describe('Session routes', () => {
 		expect(active[0].status).toBe('running');
 
 		// After shutdown the session is terminal and excluded from the active list.
-		await expectOk(await owner('DELETE', sessionsPath(`/${sid}`)));
+		await expectOk(await owner('DELETE', sessionsPath(`/${sid}`)), 202);
 		expect(await expectPage<any>(await owner('GET', `/projects/${pid}/sessions`))).toEqual([]);
 	});
 
 	it('POST /sessions enforces the per-user concurrent-session cap (429)', async () => {
 		// Cap the owner at 1 concurrent session.
+		const compute = makeFakeCompute();
+		const create = vi.spyOn(compute, 'create');
 		const capped = createTestApi({
 			bucket,
 			userId: ACTOR,
-			compute: makeFakeCompute(),
+			compute,
 			maxConcurrentSessionsPerUser: 1,
 		}).request;
 
@@ -3909,15 +3934,12 @@ describe('Session routes', () => {
 		// A 429 carries a backoff hint so the client doesn't have to guess.
 		expect(capRes.headers.get('Retry-After')).toBe('5');
 
-		// The authoritative cap check runs after record creation but before provisioning,
-		// and records the rejection for polling clients.
+		// A cold start at the cap is rejected before it creates a sandbox or a record.
+		expect(create).toHaveBeenCalledOnce();
 		expect(await createServices(bucket).sessions.listSessions(nid)).toHaveLength(1);
-		const rejected = await createServices(bucket).sessions.listSessions(otherNb.id as NotebookId);
-		expect(rejected).toHaveLength(1);
-		expect(rejected[0]).toMatchObject({
-			status: 'failed',
-			error: { code: 'RESOURCE_EXHAUSTED' },
-		});
+		expect(
+			await createServices(bucket).sessions.listSessions(otherNb.id as NotebookId),
+		).toHaveLength(0);
 	});
 
 	it.each(['full', 'rejected', 'thrown'] as const)(
@@ -3945,6 +3967,7 @@ describe('Session routes', () => {
 				});
 			const userQueue = vi
 				.spyOn(sessions, 'listActiveForUser')
+				.mockResolvedValueOnce([])
 				.mockImplementationOnce((...args) => {
 					userQueueStarted.resolve();
 					if (userResult === 'rejected') return Promise.reject(new Error('User scan failed'));
@@ -3961,7 +3984,7 @@ describe('Session routes', () => {
 				'Concurrent app limit reached for this project (1). Stop an app before starting another.',
 			);
 			expect(projectQueue).toHaveBeenCalledTimes(2);
-			expect(userQueue).toHaveBeenCalledTimes(1);
+			expect(userQueue).toHaveBeenCalledTimes(2);
 		},
 	);
 
@@ -3975,10 +3998,12 @@ describe('Session routes', () => {
 				await userQueueStarted.promise;
 				throw new ConflictError('Project scan failed');
 			});
-		vi.spyOn(sessions, 'listActiveForUser').mockImplementationOnce(async () => {
-			userQueueStarted.resolve();
-			throw new Error('User scan failed');
-		});
+		vi.spyOn(sessions, 'listActiveForUser')
+			.mockResolvedValueOnce([])
+			.mockImplementationOnce(async () => {
+				userQueueStarted.resolve();
+				throw new Error('User scan failed');
+			});
 
 		const error = await expectError(
 			await api.request('POST', sessionsPath(), { mode: 'app' }),
@@ -4001,7 +4026,9 @@ describe('Session routes', () => {
 					.mockResolvedValueOnce([])
 					.mockRejectedValueOnce(error);
 			} else {
-				vi.spyOn(sessions, 'listActiveForUser').mockRejectedValueOnce(error);
+				vi.spyOn(sessions, 'listActiveForUser')
+					.mockResolvedValueOnce([])
+					.mockRejectedValueOnce(error);
 			}
 
 			await expectError(await api.request('POST', sessionsPath(), { mode: 'app' }), 500);
@@ -4033,34 +4060,60 @@ describe('Session routes', () => {
 		expect(userQueue).not.toHaveBeenCalled();
 	});
 
-	it('scans deployment-wide sessions once when enforcing the per-user cap', async () => {
-		const services = createServices(bucket);
-		const unrelatedProject = createProjectId();
-		const unrelated = await services.sessions.createSession({
-			project_id: unrelatedProject,
-			notebook_id: createNotebookId(),
-			user_id: STRANGER,
-		});
-		const listSpy = vi.spyOn(bucket, 'list');
-		const getSpy = vi.spyOn(bucket, 'get');
-		const capped = createTestApi({
-			bucket,
-			userId: ACTOR,
-			compute: makeFakeCompute(),
-			maxConcurrentSessionsPerUser: 5,
-		}).request;
+	it.each([
+		{ start: 'cold', scans: 2 },
+		{ start: 'warm', scans: 1 },
+	] as const)(
+		'scans deployment-wide sessions $scans time(s) for the per-user cap on a $start start',
+		async ({ start, scans }) => {
+			const services = createServices(bucket);
+			const unrelatedProject = createProjectId();
+			const unrelated = await services.sessions.createSession({
+				project_id: unrelatedProject,
+				notebook_id: createNotebookId(),
+				user_id: STRANGER,
+			});
+			const compute = makeFakeCompute();
+			let warmPool: WarmPoolService | undefined;
+			if (start === 'warm') {
+				warmPool = new WarmPoolService(
+					new WarmPoolStore(bucket, 'kubernetes'),
+					compute,
+					services.sessions,
+					{
+						enabled: true,
+						size: 1,
+						profiles: [{ key: 'default', resources: {} }],
+						creationTimeoutMs: 300_000,
+						minimumRemainingMs: 60_000,
+					},
+				);
+				await warmPool.sweep();
+			}
+			const reserve = warmPool && vi.spyOn(warmPool, 'reserve');
+			const listSpy = vi.spyOn(bucket, 'list');
+			const getSpy = vi.spyOn(bucket, 'get');
+			const capped = createTestApi({
+				bucket,
+				userId: ACTOR,
+				compute,
+				maxConcurrentSessionsPerUser: 5,
+				deps: { warmPool },
+			}).request;
 
-		await expectOk(await capped('POST', sessionsPath()));
+			await expectOk(await capped('POST', sessionsPath()));
 
-		expect(
-			listSpy.mock.calls.filter(([options]) => options?.prefix === paths.sessionsPrefix),
-		).toHaveLength(1);
-		expect(
-			getSpy.mock.calls.filter(
-				([key]) => key === paths.session(unrelatedProject, unrelated.session_id),
-			),
-		).toHaveLength(1);
-	});
+			if (reserve) expect(await reserve.mock.results[0].value).toBeDefined();
+			expect(
+				listSpy.mock.calls.filter(([options]) => options?.prefix === paths.sessionsPrefix),
+			).toHaveLength(scans);
+			expect(
+				getSpy.mock.calls.filter(
+					([key]) => key === paths.session(unrelatedProject, unrelated.session_id),
+				),
+			).toHaveLength(1);
+		},
+	);
 
 	it('POST /sessions reuses an existing running session instead of provisioning anew', async () => {
 		const first = await expectOk<ApiSession>(await owner('POST', sessionsPath()));
@@ -4294,7 +4347,7 @@ describe('Session routes', () => {
 	};
 
 	it('waits for a deferred stop and restores the snapshot published during the wait', async () => {
-		const tasks: (() => Promise<unknown>)[] = [];
+		const background = queuedBackgroundWork();
 		const capture = Promise.withResolvers<{ snapshotId: string }>();
 		const capturing = Promise.withResolvers<void>();
 		const compute = makeFakeSnapshotCompute();
@@ -4306,11 +4359,7 @@ describe('Session routes', () => {
 			bucket,
 			compute,
 			deps: {
-				backgroundWork: {
-					defer: (_label, task) => {
-						tasks.push(task);
-					},
-				},
+				backgroundWork: background.work,
 			},
 		});
 		await api.deps.services.notebooks.setFsSnapshot(pid, nid, {
@@ -4318,9 +4367,9 @@ describe('Session routes', () => {
 			captured_at: new Date().toISOString(),
 		});
 		const first = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
-		for (const task of tasks.splice(0)) await task();
+		await background.runAll();
 		compute.createFromSnapshot.mockClear();
-		await expectOk(await api.request('DELETE', sessionsPath(`/${first.session_id}`)));
+		await expectOk(await api.request('DELETE', sessionsPath(`/${first.session_id}`)), 202);
 
 		vi.useFakeTimers();
 		try {
@@ -4330,7 +4379,7 @@ describe('Session routes', () => {
 				return response;
 			});
 			await vi.advanceTimersByTimeAsync(0);
-			const teardown = Promise.all(tasks.splice(0).map((task) => task()));
+			const teardown = background.runAll();
 			await capturing.promise;
 			await vi.advanceTimersByTimeAsync(500);
 			expect(responded).toBe(false);
@@ -4348,7 +4397,7 @@ describe('Session routes', () => {
 				'captured-during-stop',
 				expect.anything(),
 			);
-			for (const task of tasks.splice(0)) await task();
+			await background.runAll();
 		} finally {
 			capture.resolve({ snapshotId: 'captured-during-stop' });
 			vi.useRealTimers();
@@ -4395,6 +4444,27 @@ describe('Session routes', () => {
 			}
 		},
 	);
+
+	it('retries fresh admission when the stopping holder record disappears before the wait', async () => {
+		const holder = await seedEditorHolder({ user_id: ACTOR, status: 'terminating' });
+		const api = createTestApi({ bucket, compute: makeFakeCompute() });
+		const { sessions } = api.deps.services;
+		const isClaimRetiring = sessions.isClaimRetiring.bind(sessions);
+		const retiring = vi
+			.spyOn(sessions, 'isClaimRetiring')
+			.mockImplementationOnce(async (...args) => {
+				const result = await isClaimRetiring(...args);
+				await bucket.delete(paths.session(pid, holder.session_id));
+				return result;
+			});
+		try {
+			const replacement = await expectOk<ApiSession>(await api.request('POST', sessionsPath()));
+			expect(replacement.session_id).not.toBe(holder.session_id);
+			expect(retiring).toHaveBeenCalledTimes(2);
+		} finally {
+			retiring.mockRestore();
+		}
+	});
 
 	it.each([false, true])(
 		'does not retry through a transfer (cleared holder=%s)',
@@ -4684,12 +4754,12 @@ describe('Session routes', () => {
 		await expectError(await post('POST', sessionsPath()), 409, 'EDIT_SESSION_RETIRING');
 		expect((await services.sessions.getEditorClaim(pid, nid))?.session_id).toBe(stale.session_id);
 
-		await expectOk(await post('DELETE', sessionsPath(`/${stale.session_id}`)));
+		await expectOk(await post('DELETE', sessionsPath(`/${stale.session_id}`)), 202);
 		expect(
 			(await services.sessions.getSession(pid, stale.session_id)).sandbox_reclaimed_at,
 		).toBeDefined();
 		expect((await services.sessions.getEditorClaim(pid, nid))?.session_id).toBeNull();
-		await expectOk(await post('DELETE', sessionsPath(`/${stale.session_id}`)));
+		await expectOk(await post('DELETE', sessionsPath(`/${stale.session_id}`)), 202);
 
 		const started = await expectOk<ApiSession>(await post('POST', sessionsPath()));
 		expect(started.session_id).not.toBe(stale.session_id);
@@ -4723,7 +4793,7 @@ describe('Session routes', () => {
 				'DELETE',
 				sessionsPath(`/${stale.session_id}${wait ? '?wait=true' : ''}`),
 			);
-			if (!wait && !invalidationFailed) await expectOk(response);
+			if (!wait && !invalidationFailed) await expectOk(response, 202);
 			else {
 				const error = await expectError(
 					response,
@@ -4909,7 +4979,7 @@ describe('Session routes', () => {
 		const running = await expectOk<ApiSession>(await owner('GET', sessionsPath(`/${sid}`)));
 		expect(running.status).toBe('running');
 
-		await expectOk(await owner('DELETE', sessionsPath(`/${sid}`)));
+		await expectOk(await owner('DELETE', sessionsPath(`/${sid}`)), 202);
 
 		// Teardown finished → terminal, reflected by both the service and GET.
 		expect((await createServices(bucket).sessions.getSession(pid, sid as never)).status).toBe(
@@ -5067,7 +5137,7 @@ describe('Session routes', () => {
 			await expectError(await other('POST', sessionsPath(`/${sid}/heartbeat`)), 403, 'FORBIDDEN');
 			await expectError(await other('DELETE', sessionsPath(`/${sid}`)), 403, 'FORBIDDEN');
 
-			await expectOk(await viewer('DELETE', sessionsPath(`/${sid}`)));
+			await expectOk(await viewer('DELETE', sessionsPath(`/${sid}`)), 202);
 			const stored = await createServices(bucket).sessions.getSession(pid, sid);
 			expect(stored.status).toBe('terminated');
 		});
@@ -5140,7 +5210,7 @@ describe('Session routes', () => {
 			const viewer = viewerModeApi(VIEWER, 'ephemeral-sandbox', compute);
 			const { session_id: sid } = await expectOk<ApiSession>(await viewer('POST', sessionsPath()));
 
-			await expectOk(await viewer('DELETE', sessionsPath(`/${sid}`)));
+			await expectOk(await viewer('DELETE', sessionsPath(`/${sid}`)), 202);
 
 			expect(await createServices(bucket).notebooks.listVersions(pid, nid)).toHaveLength(1);
 		});
@@ -5559,7 +5629,7 @@ describe('Session routes', () => {
 			it('stops serving once the session ends', async () => {
 				const { request, fetchCreds, session } = await endpointApi();
 				expect((await fetchCreds()).status).toBe(200);
-				await expectOk(await request('DELETE', sessionsPath(`/${session.session_id}`)));
+				await expectOk(await request('DELETE', sessionsPath(`/${session.session_id}`)), 202);
 				expect((await fetchCreds()).status).toBe(403);
 			});
 
