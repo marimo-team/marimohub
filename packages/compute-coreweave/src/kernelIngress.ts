@@ -6,6 +6,7 @@
  * the Ingress itself, owner-referenced to the runner's Service so Kubernetes
  * garbage-collects it with the sandbox.
  */
+import { validateIngressAnnotations } from '@marimo-hub/compute-commons';
 import { readFile } from 'node:fs/promises';
 import { Agent, request as httpsRequest } from 'node:https';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -104,6 +105,7 @@ export interface KernelIngressOptions {
 	/** Namespace the runner creates sandbox pods and Services in. */
 	namespace: string;
 	ingressClassName: string;
+	ingressAnnotations?: Record<string, string>;
 	api?: KubernetesApi;
 	/** Service lookup retries: the runner creates it moments after `running`. */
 	retries?: number;
@@ -125,6 +127,7 @@ function assertSandboxId(sandboxId: string): void {
 export function createKernelIngressPublisher(
 	options: KernelIngressOptions,
 ): KernelIngressPublisher {
+	const annotations = validateIngressAnnotations(options.ingressAnnotations);
 	const api = options.api ?? inClusterKubernetesApi();
 	const ns = options.namespace;
 	const retries = options.retries ?? 10;
@@ -172,6 +175,7 @@ export function createKernelIngressPublisher(
 					metadata: {
 						name: ingressName(sandboxId, port),
 						namespace: ns,
+						...(annotations ? { annotations } : {}),
 						labels: { 'app.kubernetes.io/managed-by': 'marimohub', [SANDBOX_ID_LABEL]: sandboxId },
 						ownerReferences: [{ apiVersion: 'v1', kind: 'Service', name: svc.name, uid: svc.uid }],
 					},

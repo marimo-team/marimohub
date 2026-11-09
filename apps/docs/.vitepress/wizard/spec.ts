@@ -206,6 +206,7 @@ export const STORAGE_WIRING: Record<string, BackendWiring> = {
 				`\tendpoint: ${lit('MARIMOHUB_STORAGE_S3_ENDPOINT', r)},`,
 				`\tregion: ${lit('MARIMOHUB_STORAGE_S3_REGION', r)},`,
 				`\tforcePathStyle: ${r('MARIMOHUB_STORAGE_S3_FORCE_PATH_STYLE') === 'true'},`,
+				`\tmaxSockets: Number(${lit('MARIMOHUB_STORAGE_S3_MAX_SOCKETS', r)}),`,
 				`})`,
 			].join('\n'),
 	},

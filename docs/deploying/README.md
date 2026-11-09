@@ -105,3 +105,5 @@ After deploy, validate the same core flow on every platform:
 See [Configuration](../configuration.md) for every variable and
 [Troubleshooting](../troubleshooting.md) for common startup, login, and kernel
 failures.
+
+See [asset caching](./asset-caching.md) to reuse marimo frontend assets across sessions.

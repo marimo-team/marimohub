@@ -3,10 +3,12 @@ import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, lazyPlugins } from 'vite-plus';
+import { precompress } from './precompress';
 import { devApiTarget, envPort, waitForDevApi } from './devProxy';
 
 // Opt in only files whose imports do not require browser globals.
 const nodeTests = [
+	'src/precompress.test.ts',
 	'src/devProxy.test.ts',
 	'src/lib/{integrationBrowse,integrationNotebook,jobs,sessions,search,roles,git,time,listFilters}.test.ts',
 	'src/components/WorkspaceBrowser/{workspacePreview,workspacePolicy}.test.ts',
@@ -25,6 +27,7 @@ export default defineConfig({
 	plugins: lazyPlugins(() => [
 		react({ compiler: true }),
 		tailwindcss(),
+		precompress(),
 		{
 			name: 'wait-for-dev-api',
 			apply: (_, { command, mode }) => command === 'serve' && mode !== 'test',

@@ -343,10 +343,11 @@ describe('Node proxy compression', () => {
 		expect(upstreamRequests).toBe(0);
 	});
 
-	it('leaves non-proxy responses uncompressed', async () => {
+	it('compresses API health responses outside the proxy routes', async () => {
 		const response = await rawRequest(`${origin}/api/health`, 'gzip');
 		expect(response.status).toBe(200);
-		expect(response.headers['content-encoding']).toBeUndefined();
-		expect(response.headers.vary).toBeUndefined();
+		expect(response.headers['content-encoding']).toBe('gzip');
+		expect(response.headers.vary).toContain('Accept-Encoding');
+		expect(JSON.parse(gunzipSync(response.body).toString())).toMatchObject({ status: 'ok' });
 	});
 });

@@ -30,6 +30,8 @@ serviceAccount:
 # and Services in. When set, the hub gets a Role there to publish each kernel's
 # Ingress (pair with MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE).
 sandboxIngress:
+  compression:
+    enabled: false
   namespace: ''
 
 # Enabling requires images and a nodeSelector for the sandbox node pool.
@@ -167,8 +169,8 @@ ingress:
     secretName: marimohub-tls
 
 resources:
-  requests: { cpu: 100m, memory: 256Mi }
-  limits: { cpu: 500m, memory: 512Mi }
+  requests: { cpu: 250m, memory: 512Mi }
+  limits: { cpu: 2, memory: 1Gi }
 
 # Hardened defaults: non-root (uid/gid 1000), read-only rootfs, no caps.
 podSecurityContext:

@@ -444,6 +444,16 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 					},
 				);
 			}
+			const ingressAnnotations = kubernetesIngressAnnotations(
+				env,
+				'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS',
+			);
+			if (ingressAnnotations && !env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE?.trim()) {
+				throw new ConfigError(
+					'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS requires MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE',
+					{ variable: 'MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_ANNOTATIONS' },
+				);
+			}
 			const maxLifetimeSeconds = resolveLifetimeBackstop(
 				env,
 				'MARIMOHUB_COMPUTE_COREWEAVE_MAX_LIFETIME_SECONDS',
@@ -475,6 +485,7 @@ export function makeCompute(env: Env, opts?: ComputeOptions): SandboxProvider {
 							kernelVisibility: 'custom' as const,
 							kernelIngress: createKernelIngressPublisher({
 								namespace: env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_NAMESPACE.trim(),
+								ingressAnnotations,
 								ingressClassName:
 									env.MARIMOHUB_COMPUTE_COREWEAVE_INGRESS_CLASS?.trim() || 'traefik',
 							}),

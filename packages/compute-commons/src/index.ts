@@ -1,3 +1,9 @@
+export {
+	ANNOTATION_NAME,
+	validateAnnotationKey,
+	validateIngressAnnotations,
+	parseIngressAnnotations,
+} from './ingressAnnotations';
 export * from './fileWrites';
 import { shellQuote } from './shell';
 export { shellQuote, withEnvPrefix } from './shell';

@@ -211,3 +211,5 @@ can't lazily `import()` it), so `src/e2b.ts` injects a static import into
 
 [Auth](../auth.md) · [Storage](../storage.md) · [Compute](../compute.md) ·
 [Managed AI](../ai.md) · [Configuration](../configuration.md)
+
+See [asset caching](./asset-caching.md) to reuse marimo frontend assets across sessions.
