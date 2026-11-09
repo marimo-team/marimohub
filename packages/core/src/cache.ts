@@ -119,15 +119,77 @@ export class SingleFlight<K, V> {
 	}
 }
 
+interface MemoEntry<T = unknown> {
+	promise: Promise<T>;
+	settled: boolean;
+	value?: T;
+}
+
+interface MemoNode {
+	children: Map<unknown, MemoNode>;
+	entry?: MemoEntry;
+}
+
+/** One request or operation owns a memo. Key elements use Map equality (SameValueZero). */
+export class PromiseMemo {
+	private readonly root: MemoNode = { children: new Map() };
+
+	read<T>(
+		key: readonly unknown[],
+		load: () => T | PromiseLike<T>,
+		options: { isValid?: (value: T) => boolean } = {},
+	): Promise<T> {
+		let node = this.root;
+		for (const part of key) {
+			let child = node.children.get(part);
+			if (!child) {
+				child = { children: new Map() };
+				node.children.set(part, child);
+			}
+			node = child;
+		}
+		const existing = node.entry;
+		try {
+			if (
+				existing &&
+				(!existing.settled || !options.isValid || options.isValid(existing.value as T))
+			) {
+				return existing.promise as Promise<T>;
+			}
+		} catch (error) {
+			if (node.entry === existing) delete node.entry;
+			return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+		}
+		const entry: MemoEntry<T> = { promise: Promise.resolve().then(load), settled: false };
+		entry.promise = entry.promise
+			.then((value) => {
+				entry.value = value;
+				entry.settled = true;
+				if (options.isValid && !options.isValid(value) && node.entry === entry) delete node.entry;
+				return value;
+			})
+			.catch((error: unknown) => {
+				if (node.entry === entry) delete node.entry;
+				throw error;
+			});
+		node.entry = entry;
+		return entry.promise;
+	}
+}
+
 export class LazyMap<K, V> {
 	private readonly values: BoundedLruMap<K, V>;
 	private readonly pending = new Map<K, Pending<V>>();
+	private readonly loadValue?: (key: K) => Promise<V>;
 
-	constructor(
-		private readonly loadValue: (key: K) => Promise<V>,
-		options: LazyMapOptions,
-	) {
-		this.values = new BoundedLruMap(options.maxSize);
+	/** Without a default loader, every load must pass one (`getOrLoad`, `reload({ load })`). */
+	constructor(options: LazyMapOptions);
+	constructor(loadValue: (key: K) => Promise<V>, options: LazyMapOptions);
+	constructor(loadOrOptions: ((key: K) => Promise<V>) | LazyMapOptions, options?: LazyMapOptions) {
+		const resolved = typeof loadOrOptions === 'function' ? options : loadOrOptions;
+		if (!resolved) throw new TypeError('LazyMap options are required');
+		if (typeof loadOrOptions === 'function') this.loadValue = loadOrOptions;
+		this.values = new BoundedLruMap(resolved.maxSize);
 	}
 
 	get size(): number {
@@ -150,7 +212,11 @@ export class LazyMap<K, V> {
 
 		const state = { superseded: false };
 		const promise = Promise.resolve()
-			.then(() => (options.load ?? this.loadValue)(key))
+			.then(() => {
+				const load = options.load ?? this.loadValue;
+				if (!load) throw new Error('LazyMap load function is required');
+				return load(key);
+			})
 			.then((loaded) => {
 				if (!state.superseded) {
 					this.values.set(key, loaded);
@@ -200,7 +266,8 @@ interface TimedValue<V> {
 }
 
 export interface StaleWhileRevalidateCacheOptions<K, V> {
-	load: (key: K) => Promise<V>;
+	/** Without a default loader, every `get` must pass one. */
+	load?: (key: K) => Promise<V>;
 	ttl: (value: V, key: K) => TtlPolicy;
 	maxSize: number;
 	backgroundRetryMs?: number;
@@ -218,9 +285,10 @@ export class StaleWhileRevalidateCache<K, V> {
 		this.now = options.now ?? (() => Date.now());
 		this.backgroundRetryMs = options.backgroundRetryMs ?? 5_000;
 		assertDuration(this.backgroundRetryMs, 'backgroundRetryMs');
-		this.entries = new LazyMap((key) => this.timed(options.load, key), {
-			maxSize: options.maxSize,
-		});
+		const { load } = options;
+		this.entries = load
+			? new LazyMap((key) => this.timed(load, key), { maxSize: options.maxSize })
+			: new LazyMap({ maxSize: options.maxSize });
 	}
 
 	private async timed(load: (key: K) => Promise<V>, key: K): Promise<TimedValue<V>> {

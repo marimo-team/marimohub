@@ -5,17 +5,19 @@ import { utcTimestamp } from '../../stringFormats';
 import { NotebookIdSchema, UserIdSchema } from '../../schema';
 import { createPreviewId } from '../../ids';
 import { ConflictError } from '../../errors';
-import { PreviewIntentSchema } from './notebookPreviews';
+import { CommitShaSchema, PreviewIntentSchema } from './notebookPreviews';
 import type { PreviewIntent } from './notebookPreviews';
 
 export const PreviewReconcileSchema = z.strictObject({
 	repository: z.string().min(1).max(500),
 	pull_request: z.number().int().positive(),
 	event: z.enum(['opened', 'reopened', 'synchronize', 'closed']),
-	commit: z.string().regex(/^[a-f0-9]{40}$/),
+	// Group heads compare commits by string, so normalize case once here.
+	commit: CommitShaSchema.toLowerCase(),
 	workflow_id: z.string().regex(/^\d+$/),
-	run_id: z.string().regex(/^\d+$/),
-	run_number: z.number().int().positive(),
+	run_id: z.string().regex(/^\d{1,20}$/),
+	// Bounds the replay fence; GitHub run numbers stay far below this.
+	run_number: z.number().int().positive().max(1_000_000_000),
 	event_at: utcTimestamp(),
 	policy: PreviewAutomationPolicySchema,
 });

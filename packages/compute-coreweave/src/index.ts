@@ -115,6 +115,7 @@ import {
 import type { LaunchProtocolOutcome } from '@marimo-hub/compute-commons';
 import type { SandboxId } from '@marimo-hub/core/ids';
 import { logOperationalError } from '@marimo-hub/core/operational-log';
+import { sleep } from '@marimo-hub/core/duration';
 import type { Seconds } from '@marimo-hub/core/duration';
 import type { Timings } from '@marimo-hub/core/timing';
 import { logEvent } from '@marimo-hub/core/logs';
@@ -210,12 +211,16 @@ function fileWriteRetryDelay(error: unknown, attempt: number): number | undefine
 }
 
 function fileWriteTimeout(sandboxId: string, filepath: string, cause?: unknown) {
-	return new CWSandboxTimeoutError('File write retry budget expired', {
-		operation: 'Write sandbox file',
-		sandboxId,
-		filepath,
-		cause,
-	});
+	// The budget already covers retries; `retryable: false` stops core from spending it again.
+	return Object.assign(
+		new CWSandboxTimeoutError('File write retry budget expired', {
+			operation: 'Write sandbox file',
+			sandboxId,
+			filepath,
+			cause,
+		}),
+		{ retryable: false },
+	);
 }
 
 /**
@@ -574,11 +579,7 @@ async function waitUntilRunning(
 			}
 		}
 		const wait = Math.min(delay, deadline - Date.now());
-		if (wait > 0) {
-			await new Promise<void>((resolve) => {
-				setTimeout(resolve, wait);
-			});
-		}
+		if (wait > 0) await sleep(wait);
 	}
 }
 
@@ -1080,7 +1081,8 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			paths.add(file.path);
 		}
 		const sandbox = await this.ensure();
-		if (batch.length > 8 && this.packedWritesAvailable) {
+		// Use one stream when unary writes would need more than one wave.
+		if (batch.length > fileWriteLimit(this.config.dataPlaneMode) && this.packedWritesAvailable) {
 			// Serial batches fence later writes and keep the bootstrap ahead of every home write.
 			let bootstrap = this.pendingBootstrap;
 			let command = this.takeBootstrap(WRITE_BATCH_COMMAND);
@@ -1104,14 +1106,9 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 								throw new Error('Could not write sandbox file batch');
 							break;
 						} catch (error) {
-							if (
-								!(error instanceof CWSandboxUnavailableError) ||
-								attempt >= WRITE_RETRY_DELAYS_MS.length
-							)
-								throw error;
-							await new Promise<void>((resolve) => {
-								setTimeout(resolve, WRITE_RETRY_DELAYS_MS[attempt]);
-							});
+							const delay = fileWriteRetryDelay(error, attempt);
+							if (delay === undefined) throw error;
+							await sleep(delay);
 						}
 					}
 					if (missingReceiver) {
@@ -1262,9 +1259,7 @@ class CoreWeaveSandboxInstance implements SandboxInstance {
 			);
 			if (retryDelay === undefined) return;
 			batchState.backoffMs += retryDelay;
-			await new Promise<void>((resolve) => {
-				setTimeout(resolve, retryDelay);
-			});
+			await sleep(retryDelay);
 		}
 	}
 

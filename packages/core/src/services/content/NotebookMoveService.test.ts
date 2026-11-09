@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createServices } from '../index';
 import { MemoryBucket } from '@marimo-hub/core/testing/memory-bucket';
 import { ACTOR } from '../../testing';
+import { queuedBackgroundWork } from '../../testing/backgroundWork';
 import { paths } from '../../paths';
 import type { Bucket } from '../../ports/bucket';
 import { createNotebookId, createPreviewId, ProjectId, SandboxId, SessionId } from '../../ids';
@@ -112,12 +113,8 @@ describe('NotebookMoveService', () => {
 	it.each([false, true])(
 		'prunes copied history after queued source work, including chained moves (%s)',
 		async (chained) => {
-			const tasks: (() => Promise<unknown>)[] = [];
-			const { bucket, services, from, to, notebook, input } = await setup({
-				defer: (_label, task) => {
-					tasks.push(task);
-				},
-			});
+			const background = queuedBackgroundWork();
+			const { bucket, services, from, to, notebook, input } = await setup(background.work);
 			const oldest = (await services.notebooks.listVersions(from.id, notebook.id))[0].version_id;
 			let updated = notebook;
 			for (let i = 0; i < MAX_VERSIONS + 2; i++) {
@@ -156,7 +153,7 @@ describe('NotebookMoveService', () => {
 				mode: 'app',
 				source_version_id: oldest,
 			});
-			for (const task of tasks.splice(0)) await task();
+			await background.runAll();
 			expect(await services.notebooks.listVersions(destination, notebook.id)).toHaveLength(
 				MAX_VERSIONS + 1,
 			);
@@ -175,7 +172,7 @@ describe('NotebookMoveService', () => {
 			}
 			await services.sessions.markFailed(destination, liveSession.session_id);
 			await services.moves.move(moveInput);
-			for (const task of tasks.splice(0)) await task();
+			await background.runAll();
 			expect(await services.notebooks.listVersions(destination, notebook.id)).toHaveLength(
 				MAX_VERSIONS,
 			);

@@ -22,10 +22,9 @@ import { listAllKeys } from '../catalog/storage';
 import type { SessionService } from './SessionService';
 
 /**
- * Default age below which a recordless sandbox is left alone. Provisioning
- * writes the session record BEFORE creating the sandbox, so a live sandbox
- * always has a record unless that record was already reaped — but this window
- * is a belt-and-suspenders guard against reaping an in-flight provision.
+ * Default age below which a recordless sandbox is left alone. A cold boot starts
+ * before the session record is published, so an in-flight start has a live
+ * sandbox and no record yet. This window must cover the boot plus publication.
  */
 const DEFAULT_ORPHAN_GRACE_MS = Millis.minutes(15);
 

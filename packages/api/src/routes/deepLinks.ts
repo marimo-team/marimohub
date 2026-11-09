@@ -32,7 +32,12 @@ const resolve = createRoute({
 		200: jsonContent(
 			z.object({
 				success: z.literal(true),
-				data: z.strictObject({ ...LinkSchema.shape, app: AppSummarySchema }),
+				// NotebookApp is a shared component, so the `app` note lives on this inline object.
+				data: z
+					.strictObject({ ...LinkSchema.shape, app: AppSummarySchema })
+					.describe(
+						'The app link. `app` is the app summary for the link target. The server authorizes it like GET /projects/{pid}/notebooks/{nid}/app.',
+					),
 			}),
 			'Authorized app link',
 		),

@@ -1,4 +1,4 @@
-import { PromiseMemo } from '@marimo-hub/core/async';
+import { PromiseMemo } from '@marimo-hub/core/cache';
 import type { MiddlewareHandler } from 'hono';
 import type { ApiDeps, HonoEnv } from './context';
 
@@ -31,9 +31,7 @@ export function withRequestMemo(deps: ApiDeps): ApiDeps & { readMemo: PromiseMem
 
 export function requestMemoMiddleware(deps: ApiDeps): MiddlewareHandler<HonoEnv> {
 	return async (c, next) => {
-		const scoped = withRequestMemo(deps);
-		c.set('readMemo', scoped.readMemo);
-		c.set('deps', scoped);
+		c.set('deps', withRequestMemo(deps));
 		await next();
 	};
 }

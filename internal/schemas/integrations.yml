@@ -5504,8 +5504,9 @@ components:
             - ERROR
             - CRITICAL
         logger_names:
-          description: Export only these logger namespaces. Leave empty to export all
-            eligible loggers.
+          description: Export only these logger namespaces, up to 32 unique names. Leave
+            empty to export all eligible loggers.
+          maxItems: 32
           type: array
           items:
             type: object
@@ -5513,10 +5514,14 @@ components:
               name:
                 type: string
                 minLength: 1
-                description: Logger name, including its dotted descendants
+                maxLength: 256
+                pattern: ^[^.\s]+(?:\.[^.\s]+)*$
+                description: Logger name, including its dotted descendants. Up to 256
+                  characters, with no whitespace or empty dot-separated parts.
             required:
               - name
             additionalProperties: false
+          x-unique-by: name
         service_name:
           default: marimohub-notebook
           description: OpenTelemetry `service.name` resource attribute
@@ -5633,8 +5638,9 @@ components:
             - ERROR
             - CRITICAL
         logger_names:
-          description: Export only these logger namespaces. Leave empty to export all
-            eligible loggers.
+          description: Export only these logger namespaces, up to 32 unique names. Leave
+            empty to export all eligible loggers.
+          maxItems: 32
           type: array
           items:
             type: object
@@ -5642,10 +5648,14 @@ components:
               name:
                 type: string
                 minLength: 1
-                description: Logger name, including its dotted descendants
+                maxLength: 256
+                pattern: ^[^.\s]+(?:\.[^.\s]+)*$
+                description: Logger name, including its dotted descendants. Up to 256
+                  characters, with no whitespace or empty dot-separated parts.
             required:
               - name
             additionalProperties: false
+          x-unique-by: name
         service_name:
           default: marimohub-notebook
           description: OpenTelemetry `service.name` resource attribute

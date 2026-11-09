@@ -70,29 +70,31 @@ only file ever mutated in place
 - `null` if the object is missing.
 
 `MetadataCache` validates cached records against storage and returns a clone.
-Storage errors propagate. Cached records never replace failed reads. CAS
-operations read records directly from storage.
+Storage errors propagate. Cached records never replace failed reads.
+CAS operations read records directly from storage.
 
 ### Snapshot cache and authorization
 
-Every catalog read validates `catalog.json`. Each bucket instance shares two
-parsed immutable snapshots, keyed by path, with project and involvement indexes.
-Only immutable snapshot loads share concurrent requests. Mutators receive a deep
-clone. Their results are cloned before publication. Successful commits populate
-the cache. All runtimes freeze cached snapshots.
+Every catalog read revalidates the `catalog.json` pointer with a conditional GET.
+Each bucket instance caches two parsed snapshots by path, with project and involvement indexes.
+Concurrent requests share only immutable snapshot loads. All runtimes deep-freeze cached snapshots.
+Mutators receive a deep clone, and their results are cloned before publication.
+A successful commit populates the cache.
 
-Project lists filter candidates when the subject has no default grant. App-only
-checks use candidates when the subject default is absent or `app-user`.
-Candidates include owners, projected members, incomplete legacy entries, and
-projects with a default grant. Candidate roles use validated `project.json`
-reads. Stale projections can deny new access but cannot preserve revoked access.
-If publication fails after a metadata write, listings can omit new grants until
-a retry or recovery repairs the projection.
+The involvement index selects candidate projects for authorization:
 
-If neither the subject default nor the candidates supply a role, app-only checks
-read the remaining projects. This prevents an unprojected app membership from
-granting project creation. Subject defaults of viewer or higher require all
-project records because explicit roles can restrict access.
+- Project lists filter to candidates when the subject has no default grant.
+- App-only checks use candidates when the subject default is absent or `app-user`.
+- Candidates are owners, projected members, incomplete legacy entries, and projects with a default grant.
+
+Candidate roles come from validated `project.json` reads.
+Stale projections can deny new access but cannot preserve revoked access.
+If publication fails after a metadata write, listings can omit new grants.
+A retry or catalog recovery repairs the projection.
+
+If neither the subject default nor the candidates supply a role, app-only checks read the remaining projects.
+This stops an unprojected app membership from granting project creation.
+A subject default of viewer or higher requires all project records, because explicit roles can restrict access.
 
 A single GET on the current snapshot returns the complete project and notebook listing — all metadata, no code. At 10 projects × 100 notebooks with ~200 bytes of metadata per notebook, the snapshot is roughly 200KB. That's the entire index in one fast GET.
 
@@ -664,7 +666,7 @@ Every event carries a `schema_version` field so the log stays parseable as the e
 }
 ```
 
-**Event types (emitted today):** every catalog mutation is appended by `CatalogService` after its winning CAS commit (best-effort: a failed append never fails the mutation, it bumps the `events.append_failed` metric). The `event` field is the operation name: `project.create` · `project.update` · `project.members` · `project.delete` · `project.gc` · `notebook.create` · `notebook.update` · `notebook.delete` · `notebook.gc` · `notebook.synced.create` · `notebook.synced.sync`. Context fields (`project_id`, `notebook_id`, …) ride along per operation. Project managers read one day with `GET /api/v1/projects/{pid}/events?date=`. Super admins read a paginated deployment stream with `GET /api/v1/events`. Each deployment query covers at most 30 UTC days.
+**Event types (emitted today):** every catalog mutation is appended by `CatalogService` after its winning CAS commit (best-effort: a failed append never fails the mutation, it bumps the `events.append_failed` metric). With background work, the append runs after the response. A process crash before the append drops the event. A failed deferred append logs `background_work_failed` and increments `background.failed{label="catalog.audit"}`. The `event` field is the operation name: `project.create` · `project.update` · `project.members` · `project.delete` · `project.gc` · `notebook.create` · `notebook.update` · `notebook.delete` · `notebook.gc` · `notebook.synced.create` · `notebook.synced.sync`. Context fields (`project_id`, `notebook_id`, …) ride along per operation. Project managers read one day with `GET /api/v1/projects/{pid}/events?date=`. Super admins read a paginated deployment stream with `GET /api/v1/events`. Each deployment query covers at most 30 UTC days.
 
 **Planned, not yet emitted:** session lifecycle (`session.create` · `session.terminate` · `session.expired`), `notebook.run`, `notebook.snapshot` (snapshot capture on teardown, §8), and `migration.run`.
 

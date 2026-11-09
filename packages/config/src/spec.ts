@@ -1259,15 +1259,7 @@ export const CONFIG_SPEC: ConfigGroup[] = [
 				selectorValue: 'subdomain',
 				description:
 					'Uses the public kernel URL directly. Set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` to a sibling subdomain or separate domain.',
-				vars: [
-					{
-						id: 'MARIMOHUB_SANDBOX_COOKIE_PARTITIONED',
-						name: 'Partitioned kernel cookies',
-						description:
-							'Enable CHIPS for authenticated subdomain sessions. Defaults to true for HTTPS Hub URLs, otherwise false. Requires HTTPS kernels and marimo support for MARIMO_SERVER_SESSION_COOKIE_PARTITIONED.',
-						example: 'true',
-					},
-				],
+				vars: [],
 			},
 			{
 				name: 'Proxy (through the app)',

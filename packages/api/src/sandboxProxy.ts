@@ -72,13 +72,7 @@ function admissionCache(deps: ApiDeps): AdmissionCache {
 	return deploymentState(
 		deps,
 		ADMISSION_CACHES,
-		() =>
-			new LazyMap(
-				async () => {
-					throw new Error('An admission load function is required.');
-				},
-				{ maxSize: 10_000 },
-			),
+		() => new LazyMap<string, CachedAdmission>({ maxSize: 10_000 }),
 	);
 }
 

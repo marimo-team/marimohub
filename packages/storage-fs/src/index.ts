@@ -11,7 +11,8 @@
  * single filesystem).
  *
  * ETags use device, inode, size, and nanosecond mtime, so they survive restarts (the catalog
- * compare-and-swap depends on that). `onlyIfNotExists` (hard link) is atomic
+ * compare-and-swap depends on that). An overwrite always gets a later mtime than the version it
+ * replaces, so a reused inode cannot repeat an ETag. `onlyIfNotExists` (hard link) is atomic
  * even across processes; `onlyIfEtagMatches` is only atomic within one process,
  * advertised via `casScope: 'process'` and surfaced by preflight as a startup
  * warning — never point two hub replicas at the same root.
@@ -71,6 +72,30 @@ function errCode(err: unknown): string | undefined {
 
 function statEtag(stat: BigIntStats): string {
 	return `${stat.dev}-${stat.ino}-${stat.size}-${stat.mtimeNs}`;
+}
+
+async function lstatIfPresent(filePath: string): Promise<BigIntStats | null> {
+	try {
+		return await fsp.lstat(filePath, { bigint: true });
+	} catch (err) {
+		if (NOT_FOUND_CODES.has(errCode(err) ?? '')) return null;
+		throw err;
+	}
+}
+
+/**
+ * The rename can reuse the inode freed by an earlier version within one coarse mtime tick, so
+ * a same-size write could repeat an old ETag and pass a stale CAS. Each version must postdate
+ * the one it replaces. The 1 µs step exceeds the float error of `utimes` seconds.
+ */
+async function advanceMtime(
+	tmp: string,
+	staged: BigIntStats,
+	previous: BigIntStats,
+): Promise<BigIntStats> {
+	if (staged.mtimeNs > previous.mtimeNs) return staged;
+	await fsp.utimes(tmp, staged.atime, Number(previous.mtimeNs + 1_000n) / 1e9);
+	return fsp.stat(tmp, { bigint: true });
 }
 
 function assertValidKey(key: string): void {
@@ -255,7 +280,7 @@ export class FsStorage implements Bucket {
 					await handle.close();
 				}
 				// rename/link preserve mtime, so stat the staged file for `uploaded`.
-				const stat = await fsp.stat(tmp, { bigint: true });
+				let stat = await fsp.stat(tmp, { bigint: true });
 				await fsp.mkdir(path.dirname(filePath), { recursive: true });
 				if (options?.onlyIfNotExists) {
 					try {
@@ -266,13 +291,18 @@ export class FsStorage implements Bucket {
 						}
 						throw err;
 					}
-				} else if (options?.onlyIfEtagMatches !== undefined) {
-					const current = await this.head(key);
-					if (!current || current.etag !== options.onlyIfEtagMatches) {
+				} else {
+					const previous =
+						options?.onlyIfEtagMatches === undefined
+							? await lstatIfPresent(filePath)
+							: await this.withObject(key, async (_handle, current) => current);
+					if (
+						options?.onlyIfEtagMatches !== undefined &&
+						(!previous || statEtag(previous) !== options.onlyIfEtagMatches)
+					) {
 						throw new PreconditionFailedError(`ETag mismatch for key "${key}"`);
 					}
-					await fsp.rename(tmp, filePath);
-				} else {
+					if (previous) stat = await advanceMtime(tmp, stat, previous);
 					await fsp.rename(tmp, filePath);
 				}
 				return { key, etag: statEtag(stat), size, uploaded: stat.mtime };

@@ -1,4 +1,4 @@
-import type { PromiseMemo } from '@marimo-hub/core/async';
+import type { PromiseMemo } from '@marimo-hub/core/cache';
 import type { SearchService, SearchIndexer } from '@marimo-hub/core/search';
 import type { WorkspaceLimits } from '@marimo-hub/core/remote-workspace';
 import type { DeploymentThemeConfig } from '@marimo-hub/core/theme';
@@ -406,12 +406,6 @@ export interface PolicyAnalyzerCapability {
 	classificationOrder: readonly string[];
 }
 
-export interface BackgroundTaskScheduler {
-	/** The host drains pending tasks on shutdown, without a request-lifetime deadline. */
-	drainsOnShutdown?: boolean;
-	defer(task: Promise<unknown>): void;
-}
-
 export interface McpConfig {
 	publicBaseUrl: string;
 	manualTokens?: boolean;
@@ -472,9 +466,11 @@ export interface ApiDeps {
 		maxDestinations: number;
 	};
 	/** Keep non-critical work alive after the response, for example with Workers `waitUntil`. */
-	backgroundTasks?: BackgroundTaskScheduler;
 	backgroundWork?: BackgroundWork;
-	/** Request-limited hosts must finish teardown before responding. */
+	/**
+	 * The host does not drain deferred work on shutdown (its lifetime is bounded by the
+	 * request), so session teardown must finish before the response.
+	 */
 	teardownInline?: boolean;
 	/**
 	 * Probe a reused `running` session's kernel on reconnect. A `dead` result (the
@@ -594,7 +590,6 @@ export interface ApiDeps {
 
 export type HonoEnv = {
 	Variables: {
-		readMemo: PromiseMemo;
 		deps: ApiDeps;
 		user: AuthenticatedPrincipal;
 		/**

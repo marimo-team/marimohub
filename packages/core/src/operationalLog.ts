@@ -1,4 +1,4 @@
-function safeError(err: unknown): Record<string, unknown> {
+export function safeError(err: unknown): Record<string, unknown> {
 	if (!(err instanceof Error)) return { name: `non-error(${typeof err})` };
 	const value = err as Error & {
 		code?: unknown;

@@ -1,14 +1,18 @@
-import { lazy, Suspense } from 'react';
-const ThumbnailEditor = lazy(() => import('./ThumbnailEditor'));
-export function ThumbnailDialog(props: {
+import { lazyDialog } from '@/components/ui/lazyDialog';
+
+interface ThumbnailDialogProps {
 	projectId: string;
 	notebookId: string;
 	isOpen: boolean;
 	onClose: () => void;
-}) {
-	return props.isOpen ? (
-		<Suspense fallback={null}>
-			<ThumbnailEditor {...props} />
-		</Suspense>
-	) : null;
 }
+
+export const ThumbnailDialog = lazyDialog<ThumbnailDialogProps>(async () => {
+	const { default: ThumbnailEditor } = await import('./ThumbnailEditor');
+	// Unmount on close so the next open starts without the previous image and crop.
+	return {
+		default: function ThumbnailDialogContent(props) {
+			return props.isOpen ? <ThumbnailEditor {...props} /> : null;
+		},
+	};
+});

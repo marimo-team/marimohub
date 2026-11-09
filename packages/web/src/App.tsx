@@ -8,6 +8,7 @@ import { QueryErrorResetBoundary } from '@tanstack/react-query';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { ProjectSourceGate } from '@/components/Workspace/ProjectSourceGate';
+import { ProjectRoute } from '@/components/Project/projectRoute';
 import { AppEntryPage } from '@/components/Apps/AppEntryPage';
 import { AppLinkPage } from '@/components/NotebookPage/AppLinkPage';
 import { SignIn } from '@/components/SignIn/SignIn';
@@ -21,6 +22,8 @@ const WorkspaceLayout = lazyRoute(async () => {
 	const module = await import('@/components/Workspace/WorkspaceLayout');
 	return { default: module.WorkspaceLayout };
 });
+// Every workspace page renders inside the layout, so fetch it alongside `/me` instead of after it.
+WorkspaceLayout.preload();
 
 const PreviewsPage = lazyRoute(async () => {
 	const module = await import('@/components/Previews/PreviewsPage');
@@ -53,10 +56,6 @@ const ProjectList = lazyRoute(async () => {
 const AppsPage = lazyRoute(async () => {
 	const module = await import('@/components/Apps/AppsPage');
 	return { default: module.AppsPage };
-});
-const Project = lazyRoute(async () => {
-	const module = await import('@/components/Project/Project');
-	return { default: module.Project };
 });
 const SnapshotPage = lazyRoute(async () => {
 	const module = await import('@/components/NotebookPage/SnapshotPage');
@@ -202,7 +201,7 @@ function StandardLayout() {
 							}
 						/>
 						<Route path="/projects/:pid" element={<ProjectSourceGate />}>
-							<Route index element={<Project />} />
+							<Route index element={<ProjectRoute />} />
 							<Route path="members" element={<ProjectSettingsPage section="members" />} />
 							<Route path="integrations" element={<ProjectSettingsPage section="integrations" />} />
 							<Route path="alerts" element={<ProjectAlertsPage />} />

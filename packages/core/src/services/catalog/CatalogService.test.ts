@@ -6,6 +6,7 @@ import {
 	makeSnapshot,
 	makeSnapshotProjectEntry,
 	MemoryBucket,
+	queuedBackgroundWork,
 	RecordingBucket,
 	setupTestEnv,
 	uid,
@@ -39,19 +40,23 @@ describe('CatalogService', () => {
 
 	it('keeps committed catalog changes when a deferred audit fails and drains subsequent audits', async () => {
 		await catalog.initialize(ACTOR);
-		const tasks: (() => Promise<unknown>)[] = [];
+		const host = queuedBackgroundWork();
 		const metrics = { increment: vi.fn(), gauge: vi.fn() };
 		const events = new EventService(bucket);
 		const append = vi
 			.spyOn(events, 'append')
 			.mockRejectedValueOnce(new Error('audit storage unavailable'));
-		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 		try {
-			const service = new CatalogService(bucket, metrics, events, ZERO_BACKOFF, undefined, bucket, {
-				defer: (_label, task) => {
-					tasks.push(task);
-				},
-			});
+			const service = new CatalogService(
+				bucket,
+				metrics,
+				events,
+				ZERO_BACKOFF,
+				undefined,
+				bucket,
+				host.work,
+			);
 			for (const operation of ['first', 'second']) {
 				await service.mutateSnapshot(operation, ACTOR, (snapshot) => ({
 					...snapshot,
@@ -60,8 +65,15 @@ describe('CatalogService', () => {
 			}
 			expect((await service.getCurrentSnapshot()).projects).toHaveLength(2);
 			expect(append).not.toHaveBeenCalled();
-			for (const task of tasks) await expect(task()).resolves.toBeUndefined();
+			expect(host.labels).toEqual(['catalog.audit', 'catalog.audit']);
+			await expect(host.runAll()).resolves.toBeUndefined();
 			expect(metrics.increment).toHaveBeenCalledWith('events.append_failed');
+			expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
+				event: 'background_work_failed',
+				operation: 'catalog.audit',
+				audit_event: 'first',
+				actor: ACTOR,
+			});
 			expect(metrics.increment).toHaveBeenCalledWith('background.failed', 1, {
 				label: 'catalog.audit',
 			});
@@ -73,9 +85,41 @@ describe('CatalogService', () => {
 		}
 	});
 
+	it.each([false, true])('redacts audit provider failures (deferred=%s)', async (deferred) => {
+		await catalog.initialize(ACTOR);
+		const host = queuedBackgroundWork();
+		const events = new EventService(bucket);
+		vi.spyOn(events, 'append').mockRejectedValue(
+			Object.assign(new Error('secret credential'), {
+				reason: 'secret credential',
+				object: 'secret credential',
+			}),
+		);
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			const service = new CatalogService(
+				bucket,
+				noopMetrics,
+				events,
+				ZERO_BACKOFF,
+				undefined,
+				bucket,
+				deferred ? host.work : undefined,
+			);
+			await expect(
+				service.mutateSnapshot('project.update', ACTOR, (s) => ({ ...s })),
+			).resolves.toMatchObject({ operation: 'project.update' });
+			await host.runAll();
+			expect(log).toHaveBeenCalledWith(expect.stringContaining('catalog.audit'));
+			expect(JSON.stringify(log.mock.calls)).not.toContain('secret credential');
+		} finally {
+			log.mockRestore();
+		}
+	});
+
 	it('schedules one audit per winning concurrent commit', async () => {
 		await catalog.initialize(ACTOR);
-		const tasks: (() => Promise<unknown>)[] = [];
+		const host = queuedBackgroundWork();
 		const events = new EventService(bucket);
 		const append = vi.spyOn(events, 'append');
 		const service = new CatalogService(
@@ -85,11 +129,7 @@ describe('CatalogService', () => {
 			ZERO_BACKOFF,
 			undefined,
 			bucket,
-			{
-				defer: (_label, task) => {
-					tasks.push(task);
-				},
-			},
+			host.work,
 		);
 		await Promise.all(
 			['first', 'second'].map((operation) =>
@@ -101,8 +141,8 @@ describe('CatalogService', () => {
 		);
 		expect((await service.getCurrentSnapshot()).projects).toHaveLength(2);
 		expect(append).not.toHaveBeenCalled();
-		expect(tasks).toHaveLength(2);
-		await Promise.all(tasks.map((task) => task()));
+		expect(host.pending()).toBe(2);
+		await host.runAll();
 		expect(append.mock.calls.map(([event]) => event.event).sort()).toEqual(['first', 'second']);
 	});
 
@@ -156,6 +196,58 @@ describe('CatalogService', () => {
 			expect(await service.mutateSnapshot('noop', ACTOR, (snapshot) => snapshot)).toBe(before);
 			expect(put).not.toHaveBeenCalled();
 			expect(append).not.toHaveBeenCalled();
+		});
+
+		it('reuses the cached serialization for an unchanged in-place mutator', async () => {
+			await catalog.initialize(ACTOR);
+			const committed = await catalog.mutateSnapshot('test', ACTOR, (snapshot) => ({
+				...snapshot,
+				projects: [makeSnapshotProjectEntry()],
+			}));
+			const stringify = vi.spyOn(JSON, 'stringify');
+			try {
+				const result = await catalog.mutateSnapshot('noop', ACTOR, (snapshot) => snapshot);
+				expect(result).toBe(committed);
+				expect(stringify.mock.calls.filter(([value]) => value === committed)).toEqual([]);
+			} finally {
+				stringify.mockRestore();
+			}
+		});
+
+		it('observes a commit made through an independent cache over the same storage', async () => {
+			await catalog.initialize(ACTOR);
+			const a = new CatalogService(
+				new RecordingBucket(bucket),
+				noopMetrics,
+				undefined,
+				ZERO_BACKOFF,
+			);
+			const b = new CatalogService(
+				new RecordingBucket(bucket),
+				noopMetrics,
+				undefined,
+				ZERO_BACKOFF,
+			);
+			const stale = await a.getCurrentSnapshot();
+			expect(await a.getCurrentSnapshot()).toBe(stale);
+			const first = makeSnapshotProjectEntry({ name: 'From B' });
+			const committed = await b.mutateSnapshot('test', ACTOR, (snapshot) => ({
+				...snapshot,
+				projects: [first],
+			}));
+			const observed = await a.getCurrentSnapshot();
+			expect(observed).not.toBe(committed);
+			expect(observed).toEqual(committed);
+			expect(stale.projects).toEqual([]);
+			const second = makeSnapshotProjectEntry({ name: 'From A' });
+			await a.mutateSnapshot('test', ACTOR, (snapshot) => {
+				snapshot.projects.push(second);
+				return snapshot;
+			});
+			expect((await b.getCurrentSnapshot()).projects.map((project) => project.id)).toEqual([
+				first.id,
+				second.id,
+			]);
 		});
 
 		it('clones in-place mutators and warms the committed snapshot', async () => {

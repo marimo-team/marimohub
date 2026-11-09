@@ -6,7 +6,7 @@ export type PreviewWorkflowOptions = PreviewAutomationPolicy & {
 	notebookId: string;
 };
 
-export const PREVIEW_ACTION_REF = '9eaf45e8d4bbc2b90b7f7a5bb75d2c3df78eda32';
+export const PREVIEW_ACTION_REF = 'a3dd178fde69fe04611882c0c5b2c753e2125cd1';
 
 const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
 

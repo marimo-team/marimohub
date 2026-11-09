@@ -27,6 +27,7 @@ import {
 	makeNotebookMeta,
 	makeProject,
 	makeSession,
+	queuedBackgroundWork,
 } from '@marimo-hub/core/testing';
 import {
 	startPreviewPreparation,
@@ -176,8 +177,8 @@ describe('startMaintenance', () => {
 			vi.spyOn(console, 'error').mockImplementation(() => {});
 			const increment = vi.fn();
 			if (configured) deps.metrics = fanoutMetrics(metrics, { increment, gauge: vi.fn() });
-			const tasks: (() => Promise<unknown>)[] = [];
-			deps.backgroundWork = { defer: (_label, task) => void tasks.push(task) };
+			const background = queuedBackgroundWork();
+			deps.backgroundWork = background.work;
 			deps.sandbox.automaticThumbnails = false;
 			const { instance, calls } = makeFakeSandbox();
 			const compute = {
@@ -217,8 +218,8 @@ describe('startMaintenance', () => {
 				snapshot_id: 'replacement',
 			});
 			expect(compute.deleteSnapshot).not.toHaveBeenCalled();
-			expect(tasks).toHaveLength(1);
-			await expect(tasks[0]()).resolves.toBeUndefined();
+			expect(background.pending()).toBe(1);
+			await expect(background.runAll()).resolves.toBeUndefined();
 			expect(compute.deleteSnapshot).toHaveBeenCalledWith('previous');
 			expect(metrics.collect()).toMatchObject({ 'counter.background.failed': 1 });
 			if (configured) {

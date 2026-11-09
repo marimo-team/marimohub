@@ -4,6 +4,16 @@ import userEvent from '@testing-library/user-event';
 import { installMatchMedia, jsonError, jsonOk, renderWithClient } from '@/test/render';
 import App from './App';
 
+const loadedChunks = vi.hoisted((): string[] => []);
+vi.mock('@/components/Workspace/WorkspaceLayout', async (importOriginal) => {
+	loadedChunks.push('layout');
+	return importOriginal();
+});
+vi.mock('@/components/Project/Project', async (importOriginal) => {
+	loadedChunks.push('project');
+	return importOriginal();
+});
+
 afterEach(() => {
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
@@ -12,6 +22,33 @@ afterEach(() => {
 });
 
 describe('App routes', () => {
+	it('loads the layout and project chunks without waiting for the access check', async () => {
+		expect(loadedChunks).toEqual(['layout']);
+		installMatchMedia(false);
+		const pending: string[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = String(input);
+				if (url === '/api/v1/me')
+					return jsonOk({
+						id: 'user-one',
+						email: 'user@example.com',
+						logout_url: null,
+						is_super_admin: false,
+						groups: [],
+					});
+				if (url === '/api/v1/version') return jsonOk({ version: 'test' });
+				pending.push(url);
+				return new Promise<Response>(() => {});
+			}),
+		);
+		window.history.replaceState({}, '', '/projects/p1');
+		renderWithClient(<App />, { toaster: false });
+		await vi.waitFor(() => expect(loadedChunks).toEqual(['layout', 'project']));
+		expect(pending.some((url) => url.startsWith('/api/v1/apps?'))).toBe(true);
+	});
+
 	it.each([true, false])('selects the landing page from app_only=%s', async (appOnly) => {
 		installMatchMedia(false);
 		const requests: string[] = [];

@@ -115,22 +115,32 @@ the frame. A separate window makes the kernel a first-party page. The prompt is
 dismissible and can also appear for healthy frames because browsers hide
 cross-origin load failures.
 
-For authenticated `subdomain` sessions, HTTPS Hub URLs enable partitioned cookies
-(CHIPS) by default. HTTP Hub URLs default to `false`.
-`MARIMOHUB_SANDBOX_COOKIE_PARTITIONED=true` or `false` overrides this default.
-Hub rejects HTTP kernel URLs when CHIPS is enabled. Proxy mode, tokenless sessions,
-and jobs do not request CHIPS.
+### Partitioned kernel cookies
 
-The sandbox image must support `MARIMO_SERVER_SESSION_COOKIE_PARTITIONED` in marimo.
-Older images ignore this variable. Restart existing sessions after you update the
-image or configuration.
+Partitioned cookies apply to `subdomain` sessions with `MARIMOHUB_SANDBOX_AUTH=on`.
+Proxy mode, tokenless sessions, and jobs do not use them.
 
-Marimo sets `HttpOnly; SameSite=None; Secure; Partitioned`. Browsers with CHIPS
-support store the cookie separately for each top-level site. To authenticate in a
+The kernel domain is usually a different site from the Hub. The browser then
+treats the kernel session cookie in the iframe as a third-party cookie. Many
+browsers block third-party cookies. With Cookies Having Independent Partitioned
+State (CHIPS), the browser keeps a separate copy of the cookie for each top-level
+site. The browser then sends the cookie in the iframe.
+
+The Hub turns on partitioned cookies exactly when the kernel URL uses HTTPS. No
+setting changes this rule. With an HTTP kernel URL, marimo sets its usual session
+cookie. Browsers do not store `Secure` cookies over HTTP.
+
+The Hub sets `MARIMO_SERVER_SESSION_COOKIE_PARTITIONED` in the marimo launch
+command. The marimo image must support this variable.
+[marimo PR #11785](https://github.com/marimo-team/marimo/pull/11785) adds the
+support, and no marimo release includes it yet. Marimo versions without the
+support ignore the variable. After you update the image, restart existing sessions.
+
+Marimo sets `HttpOnly; SameSite=None; Secure; Partitioned`. To authenticate in a
 separate kernel tab, open the URL with its access token. TLS proxies must preserve
-the public kernel `Host`, including the port. Before marimo starts, Hub reserves the
-public URL and passes its exact origin through `--allow-origins`. Proxy sessions use
-the Hub origin instead. Tunnel readiness checks run after the kernel starts.
+the public kernel `Host`, including the port. Before marimo starts, the Hub reserves
+the public URL and passes its exact origin through `--allow-origins`. Proxy sessions
+use the Hub origin instead. Tunnel readiness checks run after the kernel starts.
 
 Browsers without CHIPS support can treat the cookie as an ordinary cross-site
 cookie. Marimo's Origin check still applies. Blocking all cookies prevents cookie
@@ -433,6 +443,12 @@ Configuring the [GitHub App](configuration.md#github-app) enables previews.
   notebook's repository resolves the SHA, so review the commit before you pin it.
 - With pull request tracking, preparation fails if the PR's head branch is not in
   the notebook's repository. Fork PRs are not supported.
+- With [PR automation](notebook-previews.md#automatic-pr-previews), every
+  same-repository PR runs with the notebook's credentials.
+- Any repository writer can edit the workflow in a PR and read `MARIMOHUB_TOKEN`.
+  Limit the [API token](api-tokens.md) to `preview.manage` on the previewed
+  projects. Store it as a protected secret, for example in a GitHub environment
+  with required reviewers.
 
 Protect previewed branches with GitHub branch protection or rulesets, so that only
 trusted people can push to them. Restrict the App's repositories with

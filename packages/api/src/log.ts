@@ -3,7 +3,7 @@ import type { ApiDeps } from './context';
 // core services and adapters can emit the same wide events; re-exported here
 // for the API's existing call sites.
 import { deferOrAwait, logEvent } from '@marimo-hub/core';
-import { backgroundWorkFor, withInlineFallback } from './backgroundWork';
+import { withInlineFallback } from './backgroundWork';
 
 export { logEvent };
 
@@ -66,7 +66,7 @@ export async function bestEffort(
 }
 
 export function appendAudit(
-	deps: Pick<ApiDeps, 'backgroundTasks' | 'backgroundWork' | 'metrics'>,
+	deps: Pick<ApiDeps, 'backgroundWork' | 'metrics'>,
 	request: { requestId?: string; method: string; path: string; userId: string },
 	event: string,
 	action: () => Promise<void>,
@@ -79,7 +79,7 @@ export function appendAudit(
 		audit_event: event,
 	};
 	return deferOrAwait(
-		withInlineFallback(backgroundWorkFor(deps)),
+		withInlineFallback(deps.backgroundWork),
 		'audit_append',
 		async () => {
 			try {

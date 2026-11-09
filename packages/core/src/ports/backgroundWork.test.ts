@@ -1,6 +1,13 @@
+import { logs } from '@opentelemetry/api-logs';
+import {
+	InMemoryLogRecordExporter,
+	LoggerProvider,
+	SimpleLogRecordProcessor,
+} from '@opentelemetry/sdk-logs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { deferOrAwait, inlineBackgroundWork } from './backgroundWork';
+import { backgroundWorkFrom, deferOrAwait, inlineBackgroundWork } from './backgroundWork';
 import type { BackgroundWork } from './backgroundWork';
+import { queuedBackgroundWork } from '../testing/backgroundWork';
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -22,37 +29,39 @@ describe('deferOrAwait', () => {
 	});
 
 	it('hands a lazy task to the host without waiting for execution', async () => {
-		const queue: (() => Promise<unknown>)[] = [];
+		const host = queuedBackgroundWork();
 		const task = vi.fn(async () => {});
+		await deferOrAwait(host.work, 'test', task);
+		expect(task).not.toHaveBeenCalled();
+		expect(host.labels).toEqual(['test']);
+		await host.runAll();
+		expect(task).toHaveBeenCalledOnce();
+		expect(host.pending()).toBe(0);
+	});
+
+	it('adapts a promise sink without starting the task synchronously', async () => {
+		const kept: Promise<unknown>[] = [];
+		const task = vi.fn(async () => 'done');
 		await deferOrAwait(
-			{
-				defer: (_label, run) => {
-					queue.push(run);
-				},
-			},
+			backgroundWorkFrom((work) => kept.push(work)),
 			'test',
 			task,
 		);
-		expect(task).not.toHaveBeenCalled();
-		await queue[0]();
+		expect(kept).toHaveLength(1);
+		await Promise.all(kept);
 		expect(task).toHaveBeenCalledOnce();
 	});
 
 	it('records execution time without including time in the host queue', async () => {
 		vi.useFakeTimers();
-		const tasks: (() => Promise<unknown>)[] = [];
+		const host = queuedBackgroundWork();
 		const metrics = { increment: vi.fn(), gauge: vi.fn(), histogram: vi.fn() };
 		const gate = Promise.withResolvers<void>();
-		await deferOrAwait(
-			{ defer: (_label, task) => void tasks.push(task) },
-			'test.queued',
-			() => gate.promise,
-			metrics,
-		);
+		await deferOrAwait(host.work, 'test.queued', () => gate.promise, metrics);
 		vi.advanceTimersByTime(1_000);
 		expect(metrics.gauge).not.toHaveBeenCalled();
 		expect(metrics.histogram).not.toHaveBeenCalled();
-		const pending = tasks[0]();
+		const pending = host.runAll();
 		expect(metrics.gauge).toHaveBeenCalledExactlyOnceWith('background.in_flight', 1, {
 			label: 'test.queued',
 		});
@@ -115,7 +124,7 @@ describe('deferOrAwait', () => {
 
 	it('records duration and clears the running count when a task rejects', async () => {
 		vi.useFakeTimers();
-		vi.spyOn(console, 'error').mockImplementation(() => {});
+		vi.spyOn(console, 'log').mockImplementation(() => {});
 		const metrics = { increment: vi.fn(), gauge: vi.fn(), histogram: vi.fn() };
 		const gate = Promise.withResolvers<void>();
 		const pending = deferOrAwait(undefined, 'test.failure', () => gate.promise, metrics);
@@ -135,7 +144,7 @@ describe('deferOrAwait', () => {
 	});
 
 	it('contains an asynchronous scheduler rejection without running the task', async () => {
-		vi.spyOn(console, 'error').mockImplementation(() => {});
+		vi.spyOn(console, 'log').mockImplementation(() => {});
 		const metrics = { increment: vi.fn(), gauge: vi.fn(), histogram: vi.fn() };
 		const task = vi.fn(async () => {});
 		await expect(
@@ -159,7 +168,7 @@ describe('deferOrAwait', () => {
 	});
 
 	it('contains synchronous task failures even when logging and metrics fail', async () => {
-		vi.spyOn(console, 'error').mockImplementation(() => {
+		vi.spyOn(console, 'log').mockImplementation(() => {
 			throw new Error('log sink unavailable');
 		});
 		const increment = vi.fn(() => {
@@ -195,26 +204,21 @@ describe('deferOrAwait', () => {
 	});
 
 	it('continues draining after one deferred task rejects', async () => {
-		vi.spyOn(console, 'error').mockImplementation(() => {});
-		const tasks: (() => Promise<unknown>)[] = [];
-		const work: BackgroundWork = {
-			defer: (_label, task) => {
-				tasks.push(task);
-			},
-		};
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+		const host = queuedBackgroundWork();
 		const succeeded = vi.fn(async () => {});
-		await deferOrAwait(work, 'test.bad', async () => {
+		await deferOrAwait(host.work, 'test.bad', async () => {
 			throw new Error('failed');
 		});
-		await deferOrAwait(work, 'test.good', succeeded);
-		await expect(Promise.all(tasks.map((task) => task()))).resolves.toEqual([undefined, undefined]);
+		await deferOrAwait(host.work, 'test.good', succeeded);
+		await expect(host.runAll()).resolves.toBeUndefined();
 		expect(succeeded).toHaveBeenCalledOnce();
 	});
 
 	it.each(['inline', 'deferred', 'scheduler'] as const)(
 		'logs and counts %s failures without throwing',
 		async (mode) => {
-			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 			const metrics = { increment: vi.fn(), gauge: vi.fn() };
 			const queue: (() => Promise<unknown>)[] = [];
 			const work: BackgroundWork | undefined =
@@ -234,7 +238,7 @@ describe('deferOrAwait', () => {
 						throw new Error('secret');
 					},
 					metrics,
-					{ project_id: 'p1', notebook_id: 'n1', operation: 'overridden', label: 'overridden' },
+					{ project_id: 'p1', notebook_id: 'n1', operation: 'overridden' },
 				),
 			).resolves.toBeUndefined();
 			for (const task of queue) await expect(task()).resolves.toBeUndefined();
@@ -244,12 +248,44 @@ describe('deferOrAwait', () => {
 			expect(log).toHaveBeenCalledOnce();
 			expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
 				event: 'background_work_failed',
+				level: 'error',
 				operation: 'test.failure',
-				label: 'test.failure',
 				project_id: 'p1',
 				notebook_id: 'n1',
 			});
+			expect(JSON.parse(log.mock.calls[0][0])).not.toHaveProperty('label');
 			expect(log.mock.calls[0][0]).not.toContain('secret');
 		},
 	);
+
+	it('exports failures to the OTEL logs pipeline', async () => {
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+		const exporter = new InMemoryLogRecordExporter();
+		const provider = new LoggerProvider({
+			processors: [new SimpleLogRecordProcessor({ exporter })],
+		});
+		logs.setGlobalLoggerProvider(provider);
+		try {
+			await deferOrAwait(
+				undefined,
+				'test.export',
+				async () => {
+					throw new Error('secret');
+				},
+				undefined,
+				{ project_id: 'p1' },
+			);
+			const [record] = exporter.getFinishedLogRecords();
+			expect(record.body).toBe('background_work_failed');
+			expect(record.attributes).toMatchObject({
+				operation: 'test.export',
+				project_id: 'p1',
+				error: { name: 'Error' },
+			});
+			expect(JSON.stringify(record.attributes)).not.toContain('secret');
+		} finally {
+			logs.disable();
+			await provider.shutdown();
+		}
+	});
 });

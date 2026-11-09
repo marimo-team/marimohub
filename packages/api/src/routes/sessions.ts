@@ -43,6 +43,7 @@ import {
 	createKernelAuthToken,
 	createSandboxId,
 	createSessionId,
+	deferOrAwait,
 	DomainError,
 	marimoAiContributor,
 	marimoConfigToSessionEnv,
@@ -276,9 +277,10 @@ const deleteSession = createRoute({
 		}),
 	},
 	responses: {
-		200: jsonContent(
+		200: jsonContent(SuccessResponseSchema, 'Session terminated'),
+		202: jsonContent(
 			SuccessResponseSchema,
-			'Session termination accepted (complete when wait=true)',
+			'Session termination accepted; teardown continues in the background',
 		),
 		...commonErrors(),
 		...errorResponses(403, 404),
@@ -754,17 +756,18 @@ async function checkCapQueues(
 }
 
 /**
- * Reuse bypasses cap checks. Only the project cap runs before record creation
- * because user queues require a deployment-wide scan.
+ * Reuse bypasses cap checks. User queues require a deployment-wide scan, so they
+ * run before record creation only when a cold boot would otherwise be spent.
  */
 async function enforceSessionCap(
 	deps: ApiDeps,
 	mode: SessionMode,
 	pid: ProjectId,
 	userId: UserId,
-	excludedSessionId?: SessionId,
+	excludedSessionId: SessionId | undefined,
+	preflight: boolean,
 ): Promise<void> {
-	const caps = capsFor(deps, mode, pid, userId).filter((cap) => cap.preflight);
+	const caps = capsFor(deps, mode, pid, userId).filter((cap) => cap.preflight === preflight);
 	await checkCapQueues(caps, excludedSessionId, (cap) => {
 		if (cap.sessions.length >= cap.max) throw new ResourceExhaustedError(cap.message);
 	});
@@ -791,6 +794,10 @@ async function assertCapAfterCreate(
 }
 
 const app = createApp();
+
+function drainsDeferredWork(deps: ApiDeps): boolean {
+	return deps.backgroundWork !== undefined && !deps.teardownInline;
+}
 
 /**
  * Notebook-override enforcement for session read paths: sessions of a notebook
@@ -1355,6 +1362,8 @@ app.openapi(takeoverEditorSession, async (c) => {
 export type SessionCreateBody = z.infer<typeof SessionCreateBodySchema>;
 export type SessionCreateResult = z.infer<typeof SessionCreateResponseSchema>;
 
+const EDITOR_STOP_WAIT_MS = 10_000;
+
 export async function startNotebookSession(input: {
 	deps: ApiDeps;
 	user: AuthenticatedPrincipal;
@@ -1381,10 +1390,14 @@ export async function startNotebookSession(input: {
 		const claim = await sessions.getEditorClaim(pid, nid);
 		if (claim?.transfer) throw error;
 		if (!claim?.session_id) return startNotebookSessionOnce(input);
-		const holder = await sessions.getSession(pid, claim.session_id);
+		const holder = await sessions.getSession(pid, claim.session_id).catch((readError: unknown) => {
+			if (readError instanceof NotFoundError) return null;
+			throw readError;
+		});
+		if (!holder) return startNotebookSessionOnce(input);
 		if (holder.user_id !== user.id || holder.status !== 'terminating') throw error;
 
-		const deadline = Date.now() + 10_000;
+		const deadline = Date.now() + EDITOR_STOP_WAIT_MS;
 		while (Date.now() < deadline) {
 			await sleep(Math.min(500, deadline - Date.now()), request.signal);
 			const current = await sessions.getEditorClaim(pid, nid);
@@ -1942,8 +1955,8 @@ async function startNotebookSessionOnce(
 
 		// Credential exchange and secret reads wait for the preflight (per-project app) cap so
 		// callers it rejects cannot drive STS or secret-store traffic; they still overlap the
-		// record phase. Per-user caps need a deployment-wide scan and are enforced only at
-		// cap_recheck, after resolution has started.
+		// record phase. Per-user caps need a deployment-wide scan and are enforced before a
+		// cold boot and at cap_recheck, after resolution has started.
 		const startEnvResolution = () => {
 			const sessionEnv = all({
 				wifVars: resolveWifVars,
@@ -2051,10 +2064,25 @@ async function startNotebookSessionOnce(
 			if (warmClaim || !boot || !sandboxMayExist) return;
 			return (coldCleanup ??= (async () => {
 				await workspacePrefetch?.cancel();
-				await boot.ready.catch(() => {});
-				await boot.sandbox.destroy();
-				sandboxMayExist = false;
-				await recordSandboxCleanup();
+				const reclaim = async () => {
+					await boot.ready.catch(() => {});
+					await boot.sandbox.destroy();
+					sandboxMayExist = false;
+					await recordSandboxCleanup();
+				};
+				// Losing starts must not wait for the speculative boot; request-limited hosts reclaim inline.
+				if (!drainsDeferredWork(deps)) return reclaim();
+				await deferOrAwait(
+					deps.backgroundWork,
+					'session.cold_boot_cleanup',
+					reclaim,
+					deps.metrics,
+					{
+						project_id: pid,
+						notebook_id: nid,
+						sandbox_id: sandboxId,
+					},
+				);
 			})());
 		};
 
@@ -2077,7 +2105,7 @@ async function startNotebookSessionOnce(
 				await deps.services.previews.reserveAdmission(reaped, nid, sessionId, PREVIEW_MAX_SESSIONS);
 			})
 			.step('capacity', async () => {
-				await enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id);
+				await enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id, true);
 				envResolution = startEnvResolution();
 			})
 			.step('warm_sandbox', async () => {
@@ -2101,8 +2129,11 @@ async function startNotebookSessionOnce(
 				await bindAppSandbox();
 			})
 			.step('sandbox_boot', {
-				do: () => {
+				do: async () => {
 					if (warmClaim) return;
+					// A rejected start must not create and destroy a sandbox; cap_recheck still
+					// covers concurrent starts.
+					await enforceSessionCap(deps, mode, pid, user.id, temporaryToRetire?.session_id, false);
 					bootSandbox();
 				},
 				compensate: cleanupColdSandbox,
@@ -2143,8 +2174,15 @@ async function startNotebookSessionOnce(
 								pid,
 								nid,
 								{
-									deferRelease: deps.backgroundTasks?.drainsOnShutdown
-										? (release) => deps.backgroundTasks!.defer(release)
+									deferRelease: drainsDeferredWork(deps)
+										? (release) =>
+												void deferOrAwait(
+													deps.backgroundWork,
+													'notebook.workspace_lease_release',
+													() => release,
+													deps.metrics,
+													{ project_id: pid, notebook_id: nid, session_id: sessionId },
+												)
 										: undefined,
 								},
 								async (lease) => {
@@ -2545,8 +2583,14 @@ async function startNotebookSessionOnce(
 	}
 
 	if (contextPublication) {
-		if (deps.backgroundTasks) deps.backgroundTasks.defer(contextPublication);
-		else await contextPublication;
+		const publication = contextPublication;
+		await deferOrAwait(
+			deps.backgroundWork,
+			'session.context_publication',
+			() => publication,
+			deps.metrics,
+			{ project_id: pid, notebook_id: nid, session_id: session!.session_id, sandbox_id: sandboxId },
+		);
 	}
 
 	const response = toSessionResponse(updated!, await grants(updated!), deps.theme?.session_links);
@@ -2623,7 +2667,7 @@ app.openapi(deleteSession, async (c) => {
 		known,
 	);
 
-	return c.json({ success: true }, 200);
+	return wait ? c.json({ success: true }, 200) : c.json({ success: true }, 202);
 });
 
 app.openapi(heartbeatSession, async (c) => {

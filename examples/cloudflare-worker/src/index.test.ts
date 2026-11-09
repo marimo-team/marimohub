@@ -92,7 +92,7 @@ it('registers core audits with waitUntil while awaiting session teardown', async
 		'terminating',
 	);
 	gate.resolve();
-	expect((await response).status).toBe(200);
+	expect((await response).status).toBe(202);
 	expect((await deps.services.sessions.getSession(project.id, session.session_id)).status).toBe(
 		'terminated',
 	);
@@ -284,16 +284,18 @@ describe('Cloudflare Worker configuration', () => {
 		expect(deps.policy.superAdmins).toBeUndefined();
 	});
 
-	it('adapts request background tasks to the Workers execution context', () => {
+	it('adapts request background tasks to the Workers execution context', async () => {
 		const waitUntil = vi.fn();
 		const deps = buildDeps(new Request('https://hub.example.com'), baseEnv as unknown as Env, {
 			waitUntil,
 		});
-		const task = Promise.resolve();
+		const task = vi.fn(async () => {});
 
-		deps.backgroundTasks?.defer(task);
+		void deps.backgroundWork?.defer('test', task);
 
-		expect(waitUntil).toHaveBeenCalledWith(task);
+		expect(waitUntil).toHaveBeenCalledOnce();
+		await waitUntil.mock.calls[0][0];
+		expect(task).toHaveBeenCalledOnce();
 	});
 
 	it('defaults and canonicalizes editor sandbox sharing', () => {

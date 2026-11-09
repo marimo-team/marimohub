@@ -31,11 +31,18 @@ export const SANDBOX_INSTANCE_REQUIRED_METHODS = [
 
 export const SANDBOX_INSTANCE_OPTIONAL_METHODS = [
 	'getHomeDirectory',
+	'execInput',
+	'prepareExposure',
 	'readFileBounded',
 	'ready',
 	'launchProcess',
 	'drainTimings',
 	'drainCounters',
+] as const satisfies readonly (keyof SandboxInstance)[];
+
+export const SANDBOX_INSTANCE_CAPABILITY_FLAGS = [
+	'supportsBucketMount',
+	'supportsLaunchSetupOutput',
 ] as const satisfies readonly (keyof SandboxInstance)[];
 
 function missingMethods(value: unknown, required: readonly string[]): string[] {

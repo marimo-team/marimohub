@@ -53,6 +53,28 @@ function makeCompute(world: ReturnType<typeof makeWorld>, config: CoreWeaveConfi
 	return new CoreWeaveCompute(config, world.client);
 }
 
+/** A packed receiver that exits 127 moves the instance to unary writes for every later batch. */
+function withoutPackedReceiver(world: ReturnType<typeof makeWorld>) {
+	const create = world.client.create.bind(world.client);
+	world.client.create = async (options) => {
+		const sandbox = await create(options);
+		return {
+			...sandbox,
+			commands: {
+				...sandbox.commands,
+				start: async (command, startOptions) =>
+					startOptions?.stdin
+						? {
+								...fakeProcess({ exitCode: 127 }),
+								stdin: { write: async () => {}, close: async () => {} },
+							}
+						: sandbox.commands.start(command, startOptions),
+			},
+		};
+	};
+	return world;
+}
+
 describe('CoreWeaveCompute', () => {
 	describe('exec()', () => {
 		it('maps exitCode 0 to success and shapes the command as sh -lc', async () => {
@@ -596,7 +618,7 @@ describe('CoreWeaveCompute', () => {
 	describe('writeFiles()', () => {
 		it('writes the set with bounded single-file calls and no exec in front of it', async () => {
 			const world = makeWorld();
-			const inst = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+			const inst = makeCompute(world, gatewayConfig).create(SANDBOX_ID, { reuse: false });
 
 			await inst.writeFiles([
 				{ path: '/w/notebook.py', content: 'import marimo' },
@@ -690,7 +712,7 @@ describe('CoreWeaveCompute', () => {
 					writes = [created, alias].flatMap((instance, handle) =>
 						['workspace', 'credentials', 'bridge'].map((phase) =>
 							instance.writeFiles(
-								Array.from({ length: 4 }, (_, i) => ({
+								Array.from({ length: limit }, (_, i) => ({
 									path: `/a/${handle}/${phase}/${i}`,
 									content: 'x',
 								})),
@@ -702,7 +724,7 @@ describe('CoreWeaveCompute', () => {
 					let otherFinished = false;
 					const independent = other
 						.writeFiles(
-							Array.from({ length: 8 }, (_, i) => ({
+							Array.from({ length: limit }, (_, i) => ({
 								path: `/b/${i}`,
 								content: 'x',
 							})),
@@ -716,7 +738,7 @@ describe('CoreWeaveCompute', () => {
 					expect(peak).toEqual({ a: limit, b: limit });
 					release();
 					await Promise.all(writes);
-					expect(world.registry.get('cw-1')!.fake.batchWrites).toHaveLength(24);
+					expect(world.registry.get('cw-1')!.fake.batchWrites).toHaveLength(6 * limit);
 				} finally {
 					release();
 					try {
@@ -814,13 +836,15 @@ describe('CoreWeaveCompute', () => {
 		it('drains active unary writes after failure', async () => {
 			let started = 0;
 			const releases: (() => void)[] = [];
-			const world = makeWorld({
-				writeImpl: async () => {
-					const index = started++;
-					if (index === 0) throw new Error('permission denied');
-					await new Promise<void>((resolve) => releases.push(resolve));
-				},
-			});
+			const world = withoutPackedReceiver(
+				makeWorld({
+					writeImpl: async () => {
+						const index = started++;
+						if (index === 0) throw new Error('permission denied');
+						await new Promise<void>((resolve) => releases.push(resolve));
+					},
+				}),
+			);
 			const files = Array.from({ length: WRITE_WAVE }, (_, i) => ({
 				path: `/w/${i}`,
 				content: 'x',
@@ -860,16 +884,16 @@ describe('CoreWeaveCompute', () => {
 					if (file.path === '/w/0') throw error;
 				},
 			});
-			const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+			const instance = makeCompute(world, gatewayConfig).create(SANDBOX_ID, { reuse: false });
 			await instance.ready!();
 			const blockers = Promise.all(
-				Array.from({ length: 1 }, (_, i) =>
+				Array.from({ length: WRITE_WAVE - 1 }, (_, i) =>
 					instance.writeFiles([{ path: `/blocker/${i}`, content: 'x' }]),
 				),
 			);
 			try {
 				await vi.advanceTimersByTimeAsync(0);
-				expect(blockersStarted).toBe(1);
+				expect(blockersStarted).toBe(WRITE_WAVE - 1);
 				const rejected = expect(
 					instance.writeFiles(
 						Array.from({ length: 8 }, (_, i) => ({ path: `/w/${i}`, content: 'x' })),
@@ -898,14 +922,16 @@ describe('CoreWeaveCompute', () => {
 				try {
 					const error = new CWSandboxUnavailableError('unavailable');
 					const attempts: string[] = [];
-					const world = makeWorld({
-						writeImpl: async (files) => {
-							const [file] = files as readonly { path: string }[];
-							if (file.path === '/healthy') return;
-							attempts.push(file.path);
-							throw error;
-						},
-					});
+					const world = withoutPackedReceiver(
+						makeWorld({
+							writeImpl: async (files) => {
+								const [file] = files as readonly { path: string }[];
+								if (file.path === '/healthy') return;
+								attempts.push(file.path);
+								throw error;
+							},
+						}),
+					);
 					const instance = makeCompute(world, { ...baseConfig, dataPlaneMode: mode }).create(
 						SANDBOX_ID,
 						{ reuse: false },
@@ -1197,7 +1223,7 @@ describe('CoreWeaveCompute', () => {
 				const alias = compute.connectExisting(SANDBOX_ID);
 				let rejected = false;
 				const retry = expect(instance.writeFiles([{ path: '/retry', content: 'x' }]))
-					.rejects.toBeInstanceOf(CWSandboxTimeoutError)
+					.rejects.toMatchObject({ message: 'File write retry budget expired', retryable: false })
 					.then(() => {
 						rejected = true;
 					});
@@ -1271,19 +1297,21 @@ describe('CoreWeaveCompute', () => {
 			const sibling = Promise.withResolvers<void>();
 			try {
 				const attempted: string[] = [];
-				const world = makeWorld({
-					writeImpl: async (files) => {
-						const [file] = files as readonly { path: string }[];
-						attempted.push(file.path);
-						if (file.path === '/blocker/one') await firstBlocker.promise;
-						if (file.path === '/blocker/two') await secondBlocker.promise;
-						if (file.path === '/sibling') await sibling.promise;
-						if (file.path === '/retry') {
-							await new Promise<void>((resolve) => setTimeout(resolve, 500));
-							throw new CWSandboxResourceExhaustedError('busy');
-						}
-					},
-				});
+				const world = withoutPackedReceiver(
+					makeWorld({
+						writeImpl: async (files) => {
+							const [file] = files as readonly { path: string }[];
+							attempted.push(file.path);
+							if (file.path === '/blocker/one') await firstBlocker.promise;
+							if (file.path === '/blocker/two') await secondBlocker.promise;
+							if (file.path === '/sibling') await sibling.promise;
+							if (file.path === '/retry') {
+								await new Promise<void>((resolve) => setTimeout(resolve, 500));
+								throw new CWSandboxResourceExhaustedError('busy');
+							}
+						},
+					}),
+				);
 				const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
 				await instance.ready!();
 				const first = instance.writeFiles([{ path: '/blocker/one', content: 'x' }]);
@@ -2938,6 +2966,54 @@ it('retries an unavailable packed stream with identical bytes', async () => {
 	}
 });
 
+it.each([CWSandboxUnavailableError, CWSandboxResourceExhaustedError])(
+	'respects the server retry delay for a packed %s failure',
+	async (ErrorType) => {
+		vi.useFakeTimers();
+		try {
+			const attempts: number[] = [];
+			const world = makeWorld({
+				inputImpl: async () => {
+					attempts.push(Date.now());
+					if (attempts.length === 1) throw new ErrorType('busy', { retryDelayMs: 2_000 });
+				},
+			});
+			const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+			const writing = instance.writeFiles(packedFiles());
+			await vi.runAllTimersAsync();
+			await writing;
+			expect(attempts).toHaveLength(2);
+			expect(attempts[1] - attempts[0]).toBe(2_000);
+			const writes = world.registry.get('cw-1')!.fake.stdinWrites;
+			expect(writes[0]).toEqual(writes[1]);
+		} finally {
+			vi.useRealTimers();
+		}
+	},
+);
+
+it.each([CWSandboxUnavailableError, CWSandboxResourceExhaustedError])(
+	'does not retry a packed %s failure before a long server cooldown',
+	async (ErrorType) => {
+		vi.useFakeTimers();
+		try {
+			const error = new ErrorType('busy', { retryDelayMs: 60_000 });
+			const inputImpl = vi.fn<() => Promise<void>>().mockRejectedValue(error);
+			const world = makeWorld({ inputImpl });
+			const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+			await instance.ready!();
+			const started = Date.now();
+			const rejected = expect(instance.writeFiles(packedFiles(129))).rejects.toBe(error);
+			await vi.runAllTimersAsync();
+			await rejected;
+			expect(inputImpl).toHaveBeenCalledOnce();
+			expect(Date.now() - started).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	},
+);
+
 it('shares in-flight ingress publication with exposePort', async () => {
 	const world = makeWorld();
 	const pending = Promise.withResolvers<void>();
@@ -3070,9 +3146,22 @@ it('forwards large file streams through the tracing client', async () => {
 	expect(world.registry.get('cw-1')!.fake.batchWrites).toEqual([]);
 });
 
-it.each([0, 8, 9, 128, 129])('handles the %i-file transfer boundary', async (count) => {
+it.each(
+	(
+		[
+			{ mode: undefined, limit: 2 },
+			{ mode: 'auto', limit: 2 },
+			{ mode: 'direct', limit: 2 },
+			{ mode: 'gateway', limit: 8 },
+		] as const
+	).flatMap(({ mode, limit }) =>
+		[0, limit, limit + 1, 128, 129].map((count) => ({ mode, limit, count })),
+	),
+)('handles the $count-file transfer boundary on $mode', async ({ mode, limit, count }) => {
 	const world = makeWorld();
-	const instance = makeCompute(world).create(SANDBOX_ID, { reuse: false });
+	const instance = makeCompute(world, { ...baseConfig, dataPlaneMode: mode }).create(SANDBOX_ID, {
+		reuse: false,
+	});
 	await instance.ready!();
 	const files = Array.from({ length: count }, (_, i) => ({
 		path: `/workspace/données/${i}.bin`,
@@ -3080,7 +3169,7 @@ it.each([0, 8, 9, 128, 129])('handles the %i-file transfer boundary', async (cou
 	}));
 	await instance.writeFiles(files);
 	const fake = world.registry.get('cw-1')!.fake;
-	if (count <= 8) {
+	if (count <= limit) {
 		expect(fake.batchWrites.flat()).toEqual(files);
 		expect(fake.startCalls).toHaveLength(0);
 	} else {

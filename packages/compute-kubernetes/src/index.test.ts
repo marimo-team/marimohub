@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	NOT_A_DIRECTORY_EXIT_CODE,
 	NOT_A_DIRECTORY_MARKER,
+	MAX_WRITE_BATCH_FILES,
 	shellQuote,
+	WRITE_BATCH_COMMAND,
 } from '@marimo-hub/compute-commons';
 import { Millis } from '@marimo-hub/core/duration';
 import type { SandboxId } from '@marimo-hub/core/ids';
@@ -33,7 +35,6 @@ import type {
 	KubernetesConfig,
 } from './index';
 import { MANAGED_BY_VALUE } from './shared';
-import { MAX_WRITE_BATCH_FILES, WRITE_BATCH_COMMAND } from './fileWrites';
 
 /**
  * Tests for the native Kubernetes compute adapter.

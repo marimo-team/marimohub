@@ -107,6 +107,15 @@ await test('skips forks before reading secrets or calling APIs', async () => {
 	assert.match(summaries[0], /skipped/);
 });
 
+await test('skips a same-repository PR without a hub-token before calling APIs', async () => {
+	const { options, calls, summaries } = fixture();
+	const input = options.input;
+	options.input = (key) => (key === 'hub-token' ? '' : input(key));
+	await runPreview(options);
+	assert.equal(calls.length, 0);
+	assert.match(summaries[0], /skipped because hub-token is empty/);
+});
+
 await test('comment failures preserve successful outputs and summary', async () => {
 	const { options, outputs, summaries, warnings } = fixture();
 	const fetch = options.fetch;

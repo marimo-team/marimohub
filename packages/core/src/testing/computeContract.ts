@@ -16,6 +16,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SandboxId } from '../ids';
 import type { SandboxInstance, SandboxProvider } from '../ports/sandbox';
 import {
+	SANDBOX_INSTANCE_CAPABILITY_FLAGS,
 	SANDBOX_INSTANCE_OPTIONAL_METHODS,
 	SANDBOX_INSTANCE_REQUIRED_METHODS,
 } from '../ports/adapterShape';
@@ -224,10 +225,12 @@ export function computeContract(
 					`${method} must be a function when present`,
 				).toBe(true);
 			}
-			expect(
-				inst.supportsBucketMount === undefined || typeof inst.supportsBucketMount === 'boolean',
-				'supportsBucketMount must be a boolean when present',
-			).toBe(true);
+			for (const flag of SANDBOX_INSTANCE_CAPABILITY_FLAGS) {
+				expect(
+					inst[flag] === undefined || typeof inst[flag] === 'boolean',
+					`${flag} must be a boolean when present`,
+				).toBe(true);
+			}
 		});
 
 		it('home directory capability returns an absolute path', async () => {
@@ -412,6 +415,23 @@ export function computeContract(
 					expectLaunchResult(result, { success: true });
 					if (!result.success) throw new Error(`launch failed: ${JSON.stringify(result)}`);
 					await result.process.kill().catch(() => {});
+				}, 20_000);
+
+				// The provisioner passes the pre-launch origin to marimo's `--allow-origins` and
+				// rejects a session whose origin changes after readiness.
+				it('keeps the pre-launch exposure origin after readiness', async () => {
+					const inst = provider.create(CONTRACT_ID);
+					const exposeOptions = { hostname, token: CONTRACT_ID };
+					const reserved = await inst.prepareExposure?.(port, exposeOptions);
+					const before = reserved ? reserved.url : (await inst.exposePort(port, exposeOptions)).url;
+					const result = await inst.launchProcess!(commands.ready, { port, startupTimeout });
+					if (!result.success) throw new Error(`launch failed: ${JSON.stringify(result)}`);
+					try {
+						const after = await inst.exposePort(port, exposeOptions);
+						expect(new URL(after.url).origin).toBe(new URL(before).origin);
+					} finally {
+						await result.process.kill().catch(() => {});
+					}
 				}, 20_000);
 
 				it('maps a non-zero setup exit to setup_exit with its output and exit code', async () => {

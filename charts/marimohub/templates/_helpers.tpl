@@ -106,6 +106,8 @@ Call with: (dict "root" $ "maintenance" true|false)
 {{- end -}}
 {{- $hasConfigMap := or $v.config $v.compute.profiles (ne $v.compute.profileOverride "none") $v.surfaces.vscode.enabled $v.surfaces.opencode.enabled -}}
 {{- $res := $v.resources -}}
+{{- /* API pods: the 20 s of grace beyond the drain budget covers final cleanup. */ -}}
+{{- $apiShutdown := 30 -}}
 {{- if .maintenance -}}{{- $res = $v.maintenance.resources -}}{{- end }}
 metadata:
   labels:
@@ -131,7 +133,7 @@ spec:
   {{- end }}
   terminationGracePeriodSeconds: {{ add $shutdown 20 }}
   {{- else }}
-  terminationGracePeriodSeconds: 50
+  terminationGracePeriodSeconds: {{ add $apiShutdown 20 }}
   {{- end }}
   serviceAccountName: {{ include "marimohub.serviceAccountName" $root }}
   automountServiceAccountToken: {{ $v.serviceAccount.automountServiceAccountToken }}
@@ -203,7 +205,7 @@ spec:
           value: {{ $v.maintenance.shutdownTimeoutSeconds | quote }}
         {{- else }}
         - name: MARIMOHUB_SHUTDOWN_TIMEOUT_SECONDS
-          value: "30"
+          value: {{ $apiShutdown | quote }}
         {{- end }}
         {{- /* API pods only: the Service/ServiceMonitor never scrape the
         maintenance pod, so a listener there would just be an unscraped open

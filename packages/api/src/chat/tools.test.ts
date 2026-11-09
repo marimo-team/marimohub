@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { UIMessageChunk } from 'ai';
-import { ACTOR } from '@marimo-hub/core/testing';
+import { ACTOR, localResourceSecurity, makeSubjectContext } from '@marimo-hub/core/testing';
 import type { AuthenticatedPrincipal } from '@marimo-hub/core';
 import { CHAT_LIMITS } from '@marimo-hub/core/chat';
 import type { TurnCheckpoint, TurnContext } from '@marimo-hub/core/chat';
 import type { SearchIndexer, SearchService } from '@marimo-hub/core/search';
 import type { ApiDeps } from '../context';
+import { withRequestMemo } from '../requestMemo';
 import { createInitializedBucket, createTestApi, expectOk } from '../testing';
 import { openToolSession } from './tools';
 
@@ -15,7 +16,7 @@ const principal: AuthenticatedPrincipal = {
 	credential: { kind: 'development' },
 };
 
-async function session(overrides: Partial<ApiDeps> = {}) {
+async function session(overrides: Partial<ApiDeps> = {}, scope = (deps: ApiDeps) => deps) {
 	const bucket = await createInitializedBucket();
 	const api = createTestApi({ bucket, deps: overrides });
 	const created = await expectOk<{ id: string }>(
@@ -23,7 +24,7 @@ async function session(overrides: Partial<ApiDeps> = {}) {
 		201,
 	);
 	const project = await api.deps.services.projects.getProject(created.id as never);
-	const tools = await openToolSession(api.deps, principal, project, {
+	const tools = await openToolSession(scope(api.deps), principal, project, {
 		method: 'POST',
 		path: '/test',
 		hostname: 'localhost',
@@ -136,6 +137,28 @@ describe('chat tool session', () => {
 		tools.state.calls = 24;
 		expect(await call('list_catalog', {})).toMatchObject({ code: 'TOOL_LIMIT' });
 		expect(tools.state.toolLimit).toBe(true);
+		await tools.close();
+	});
+
+	it('resolves the subject context once per call so each call observes revocation', async () => {
+		const security = localResourceSecurity(['UNCLASSIFIED', 'SECRET'], makeSubjectContext());
+		const resolve = vi.spyOn(security.subjectContext!, 'resolve');
+		const { api, call, project, tools } = await session(
+			{ resourceSecurity: security },
+			withRequestMemo,
+		);
+		await api.deps.services.projects.setSecurityLabels(
+			project.id,
+			{ classification: 'SECRET', compartments: [] },
+			ACTOR,
+		);
+		resolve.mockClear();
+		await expect(call('list_catalog', {})).resolves.toHaveProperty('projects');
+		expect(resolve).toHaveBeenCalledTimes(1);
+		await expect(call('list_catalog', {})).resolves.toHaveProperty('projects');
+		expect(resolve).toHaveBeenCalledTimes(2);
+		resolve.mockResolvedValue(makeSubjectContext({ classification: 'UNCLASSIFIED' }));
+		await expect(call('list_catalog', {})).rejects.toThrow(/not found/i);
 		await tools.close();
 	});
 });

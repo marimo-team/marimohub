@@ -13,7 +13,8 @@ import { DEFAULT_CHAT_CONFIG } from '../context';
 import type { ApiDeps } from '../context';
 import { logEvent } from '../log';
 import type { StartRequestContext } from '../mcp/server';
-import { authorizationService, loadAuthorizedNotebookMeta } from '../shared';
+import { withRequestMemo } from '../requestMemo';
+import { loadAuthorizedNotebookMeta } from '../shared';
 import { authorizeConversation, chatPrincipalDeadline } from './access';
 import type { ConversationOperationContext } from './access';
 import { registerLiveTurn, stopLiveTurn, subscribeLiveTurn } from './liveTurns';
@@ -289,12 +290,8 @@ export async function executeTurn(input: TurnInput): Promise<{ conversation: Con
 					throw new UnavailableError(STREAM_FAILURE);
 				}
 				// Access may have changed during a long turn; never publish an answer the
-				// caller could no longer have asked for.
-				await authorizeConversation({ ...input, signal: undefined });
-				await authorizationService(deps).authorize(principal, 'project.read', {
-					kind: 'project',
-					project,
-				});
+				// caller could no longer have asked for. A fresh scope skips the turn-start context.
+				await authorizeConversation({ ...input, deps: withRequestMemo(deps), signal: undefined });
 				return parts;
 			} catch (error) {
 				live.publish({ type: 'error', errorText: streamErrorText(error) });

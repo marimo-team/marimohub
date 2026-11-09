@@ -24,7 +24,7 @@ import {
 } from '../../schema';
 import type { Catalog, Snapshot, SnapshotNotebookEntry, SnapshotProjectEntry } from '../../schema';
 import { MetadataCache } from '../content/metadataCache';
-import { projectsById, snapshotCache } from './snapshotCache';
+import { projectsById, snapshotCache, snapshotJson } from './snapshotCache';
 import { withCasRetry } from './cas';
 import { planCatalogRecovery } from './recovery';
 import type { CatalogRecoverySource } from './recovery';
@@ -348,12 +348,14 @@ export class CatalogService {
 			async () => {
 				try {
 					await this.events!.append({ event: operation, actor, ...context });
-				} catch (error) {
+				} catch {
 					this.metrics.increment('events.append_failed');
-					throw error;
+					// Storage errors can carry credentials in fields beyond their message.
+					throw new Error('Catalog audit append failed');
 				}
 			},
 			this.metrics,
+			{ audit_event: operation, actor },
 		);
 	}
 
@@ -382,16 +384,14 @@ export class CatalogService {
 
 				const draft = structuredClone(currentSnapshot);
 				const result = await mutateFn(draft);
-				if (result === draft && JSON.stringify(result) === JSON.stringify(currentSnapshot)) {
+				if (result === draft && JSON.stringify(result) === snapshotJson(currentSnapshot)) {
 					return { snapshot: currentSnapshot, committed: false };
 				}
-				// Callback-owned entries must not change while publication yields to storage.
-				const mutated = structuredClone(result);
 
 				const newSnapshotId = createSnapshotId();
 				const now = new Date().toISOString();
 				const newSnapshot: Snapshot = {
-					...mutated,
+					...result,
 					snapshot_id: newSnapshotId,
 					// Downgrade-guard: never stamp a version lower than what we read. During
 					// a rolling deploy an old replica (CURRENT_SNAPSHOT_VERSION = 1) may read
@@ -405,9 +405,9 @@ export class CatalogService {
 					actor,
 				};
 
-				await this.bucket.put(paths.snapshot(newSnapshotId), JSON.stringify(newSnapshot), {
-					onlyIfNotExists: true,
-				});
+				// Serialize before the first yield: callback-owned entries may change during publication.
+				const body = JSON.stringify(newSnapshot);
+				await this.bucket.put(paths.snapshot(newSnapshotId), body, { onlyIfNotExists: true });
 
 				const newCatalog: Catalog = {
 					version: 1,
@@ -421,8 +421,9 @@ export class CatalogService {
 					await cas.put(paths.catalog, JSON.stringify(newCatalog), {
 						onlyIfEtagMatches: catalogObj.etag,
 					});
-					this.cache.set(newCatalog.current_snapshot_key, newSnapshot);
-					return { snapshot: newSnapshot, committed: true };
+					const published = JSON.parse(body) as Snapshot;
+					this.cache.set(newCatalog.current_snapshot_key, published, body);
+					return { snapshot: published, committed: true };
 				} catch (err) {
 					// Only a lost CAS proves the pointer never moved; any other error may follow a
 					// commit whose response was lost, so the snapshot is kept (see initialize()).

@@ -38,5 +38,13 @@ export async function loadRoute<T>(
 export function lazyRoute<Props extends object>(
 	load: () => Promise<{ default: FunctionComponent<Props> }>,
 ) {
-	return lazy(() => loadRoute(load));
+	let pending: ReturnType<typeof load> | undefined;
+	const loadOnce = () => (pending ??= load());
+	return Object.assign(
+		lazy(() => loadRoute(loadOnce)),
+		{
+			// A failed preload is reported (and recovered) when the route renders.
+			preload: () => void loadOnce().catch(() => {}),
+		},
+	);
 }

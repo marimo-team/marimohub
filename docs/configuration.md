@@ -349,9 +349,7 @@ How running kernels are surfaced to the browser, agnostic of the compute backend
 
 Uses the public kernel URL directly. Set `MARIMOHUB_COMPUTE_SANDBOX_HOSTNAME` to a sibling subdomain or separate domain.
 
-| Variable | Description | Required | Default | Example |
-| --- | --- | --- | --- | --- |
-| `MARIMOHUB_SANDBOX_COOKIE_PARTITIONED` | Enable CHIPS for authenticated subdomain sessions. Defaults to true for HTTPS Hub URLs, otherwise false. Requires HTTPS kernels and marimo support for MARIMO_SERVER_SESSION_COOKIE_PARTITIONED. | — | — | `true` |
+_No environment variables to set here._
 
 ### Proxy (through the app)
 

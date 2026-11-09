@@ -192,6 +192,11 @@ export async function runPreview({
 		await summary('PR previews are skipped for fork pull requests.\n');
 		return;
 	}
+	// GitHub gives Dependabot pull_request runs no Actions secrets; a red check would block every such PR.
+	if (!input('hub-token').trim()) {
+		await summary('PR previews are skipped because hub-token is empty.\n');
+		return;
+	}
 	const config = configuration(input);
 	const repo = event.repository.full_name;
 	if (repo !== env.GITHUB_REPOSITORY)

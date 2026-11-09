@@ -231,6 +231,9 @@ export interface SandboxInstance {
 	 * `content` may be raw bytes, written verbatim; a backend whose write channel
 	 * carries only text armors them itself. Callers must bound how much they pass
 	 * at once — the whole set is resident in memory.
+	 *
+	 * An adapter that retries internally sets `retryable: false` on the error it
+	 * throws once its retry budget expires; the hub does not retry that error.
 	 */
 	writeFiles(files: readonly SandboxFileWrite[]): Promise<void>;
 	gitCheckout(repo: string, options?: GitCheckoutOptions): Promise<void>;

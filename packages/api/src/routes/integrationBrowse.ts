@@ -946,9 +946,6 @@ const QUERY_SCHEMA_CACHE_TTL_MS = 300_000;
 const QUERY_SCHEMA_CACHE_MAX_ENTRIES = 128;
 
 const querySchemaCache = new StaleWhileRevalidateCache<string, unknown>({
-	load: () => {
-		throw new Error('cachedQuerySchema always supplies a loader');
-	},
 	ttl: () => ({ freshForMs: QUERY_SCHEMA_CACHE_TTL_MS, staleForMs: 0 }),
 	maxSize: QUERY_SCHEMA_CACHE_MAX_ENTRIES,
 });

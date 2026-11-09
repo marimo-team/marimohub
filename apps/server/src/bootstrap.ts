@@ -8,7 +8,7 @@ import type { ApiDeps } from '@marimo-hub/api';
 import { createApi, SANDBOX_PROXY_PREFIXES } from '@marimo-hub/api';
 import { createFromEnvAsync, isConfigError } from '@marimo-hub/config';
 import { disposeNotifier, InFlightWork } from '@marimo-hub/core';
-import type { BackgroundWork } from '@marimo-hub/core';
+import { backgroundWorkFrom } from '@marimo-hub/core/ports/background-work';
 import {
 	startPreviewPreparation,
 	startJobScheduler,
@@ -63,11 +63,9 @@ export async function bootstrap(
 		});
 
 	const backgroundTasks = new InFlightWork();
-	const backgroundWork: BackgroundWork = {
-		defer(_label, task) {
-			void backgroundTasks.track(Promise.resolve().then(task)).catch(() => {});
-		},
-	};
+	const backgroundWork = backgroundWorkFrom((task) => {
+		void backgroundTasks.track(task).catch(() => {});
+	});
 	let thumbnailDeadline: number | undefined;
 	// Telemetry sink: services emit CAS/reaper/snapshot signals here; the maintenance
 	// loop flushes them as one wide event per cycle (and request-path CAS contention
@@ -110,12 +108,6 @@ export async function bootstrap(
 		) * 1000;
 	deps.sandbox.thumbnailDeadline = () => thumbnailDeadline;
 	deps.backgroundWork = backgroundWork;
-	deps.backgroundTasks = {
-		drainsOnShutdown: true,
-		defer(task) {
-			void backgroundTasks.track(task).catch(() => {});
-		},
-	};
 	// Installed for metrics-only mode too: RED metrics still record, spans don't.
 	if (otel)
 		deps.tracingMiddleware = httpInstrumentationMiddleware({ disableTracing: !otel.tracing });

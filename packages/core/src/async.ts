@@ -1,5 +1,7 @@
 import { assertPositiveInteger } from './internal/validation';
 
+export { PromiseMemo } from './cache';
+
 export interface DeadlineOptions {
 	timeoutMs: number;
 	timeoutError: () => Error;
@@ -89,7 +91,7 @@ function callErrorFactory(factory: () => Error): Error {
 	}
 }
 
-function errorFromAbortReason(reason: unknown): Error {
+export function errorFromAbortReason(reason: unknown): Error {
 	if (reason instanceof Error) return reason;
 	return new DOMException('The operation was aborted.', 'AbortError');
 }
@@ -126,7 +128,10 @@ export async function forEachConcurrentUntilFailure<T>({
 	if (failure) throw failure.error;
 }
 
-/** Cache promises, including rejections, for the lifetime of the caller-owned map. */
+/**
+ * Cache promises, including rejections, for the lifetime of the caller-owned map. Use
+ * `PromiseMemo` instead when a failed read must be retried within the same scope.
+ */
 export function cachedRead<K, V>(
 	cache: Map<K, Promise<V>> | undefined,
 	key: K,
@@ -139,81 +144,4 @@ export function cachedRead<K, V>(
 		cache.set(key, value);
 	}
 	return value;
-}
-
-interface MemoEntry<T = unknown> {
-	promise: Promise<T>;
-	settled: boolean;
-	value?: T;
-}
-
-interface MemoNode {
-	children: Map<unknown, MemoNode>;
-	entry?: MemoEntry;
-}
-
-/** One request or operation owns a memo. Key elements use Map equality (SameValueZero). */
-export class PromiseMemo {
-	private root: MemoNode = { children: new Map() };
-	private mutations = 0;
-
-	read<T>(
-		key: readonly unknown[],
-		load: () => T | PromiseLike<T>,
-		options: { isValid?: (value: T) => boolean } = {},
-	): Promise<T> {
-		if (this.mutations > 0) return Promise.resolve().then(load);
-		let node = this.root;
-		for (const part of key) {
-			let child = node.children.get(part);
-			if (!child) {
-				child = { children: new Map() };
-				node.children.set(part, child);
-			}
-			node = child;
-		}
-		const existing = node.entry;
-		try {
-			if (
-				existing &&
-				(!existing.settled || !options.isValid || options.isValid(existing.value as T))
-			) {
-				return existing.promise as Promise<T>;
-			}
-		} catch (error) {
-			if (node.entry === existing) delete node.entry;
-			return Promise.reject(error instanceof Error ? error : new Error(String(error)));
-		}
-		const entry: MemoEntry<T> = { promise: Promise.resolve().then(load), settled: false };
-		entry.promise = entry.promise
-			.then((value) => {
-				entry.value = value;
-				entry.settled = true;
-				if (options.isValid && !options.isValid(value) && node.entry === entry) delete node.entry;
-				return value;
-			})
-			.catch((error: unknown) => {
-				if (node.entry === entry) delete node.entry;
-				throw error;
-			});
-		node.entry = entry;
-		return entry.promise;
-	}
-
-	/** In-flight callers keep their promise. Later reads cannot reuse it. */
-	clear(): void {
-		this.root = { children: new Map() };
-	}
-
-	/** Reads bypass the memo until all concurrent mutations finish, including failed writes. */
-	async mutate<T>(write: () => T | PromiseLike<T>): Promise<T> {
-		this.clear();
-		this.mutations++;
-		try {
-			return await write();
-		} finally {
-			this.mutations--;
-			this.clear();
-		}
-	}
 }

@@ -262,6 +262,39 @@ describe('FsStorage', () => {
 			).rejects.toBeInstanceOf(PreconditionFailedError);
 		});
 
+		it.each(['plain', 'conditional'] as const)(
+			'advances mtime past the replaced version so %s same-size writes never repeat an etag',
+			async (mode) => {
+				const root = makeRoot();
+				const bucket = new FsStorage({ root });
+				const file = path.join(root, 'catalog.json');
+				await bucket.put('catalog.json', '{"v":1}');
+				// A clock tick that has not advanced since the previous write.
+				const tick = Math.floor(Date.now() / 1000) + 3600;
+				await fsp.utimes(file, tick, tick);
+				const first = (await bucket.head('catalog.json'))!.etag;
+				const mtimes = [(await fsp.stat(file, { bigint: true })).mtimeNs];
+				const etags = [first];
+				for (const value of ['{"v":2}', '{"v":3}']) {
+					const written = await bucket.put(
+						'catalog.json',
+						value,
+						mode === 'conditional' ? { onlyIfEtagMatches: etags.at(-1) } : undefined,
+					);
+					etags.push(written.etag);
+					expect((await bucket.head('catalog.json'))!.etag).toBe(written.etag);
+					mtimes.push((await fsp.stat(file, { bigint: true })).mtimeNs);
+				}
+				expect(new Set(etags).size).toBe(3);
+				expect(mtimes[1]).toBeGreaterThan(mtimes[0]);
+				expect(mtimes[2]).toBeGreaterThan(mtimes[1]);
+				await expect(
+					bucket.put('catalog.json', '{"v":4}', { onlyIfEtagMatches: first }),
+				).rejects.toBeInstanceOf(PreconditionFailedError);
+				expect(await (await bucket.get('catalog.json'))!.text()).toBe('{"v":3}');
+			},
+		);
+
 		it('CAS race across two instances in one process has exactly one winner', async () => {
 			const root = makeRoot();
 			const a = new FsStorage({ root });
