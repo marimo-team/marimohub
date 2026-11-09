@@ -131,6 +131,74 @@ describe('logging integrations', () => {
 		expect(Object.keys(result.vars)).not.toContain('PYTHONPATH');
 	});
 
+	it('renders optional logger selection without changing the legacy destination', () => {
+		const legacy = otlpLogs.render({
+			...context,
+			config: parse({ url: 'https://example.test/v1/logs' }),
+		}).logging![0];
+		expect(legacy).not.toHaveProperty('loggerNames');
+		const config = parse({
+			url: legacy.url,
+			logger_names: [{ name: 'approved_app' }, { name: 'other.worker' }],
+		});
+		expect(otlpLogs.render({ ...context, config }).logging![0].loggerNames).toEqual([
+			'approved_app',
+			'other.worker',
+		]);
+	});
+
+	it.each([
+		null,
+		[],
+		[''],
+		[' '],
+		['root'],
+		['approved_app.*'],
+		['approved_app?'],
+		['[app]'],
+		['.approved_app'],
+		['approved_app.'],
+		['approved..app'],
+		['approved\napp'],
+		['approved\0app'],
+		['approved\u0080app'],
+		['a'.repeat(129)],
+		Array.from({ length: 33 }, (_, index) => `app${index}`),
+	])('rejects invalid logger selection: %j', (logger_names) => {
+		expect(
+			otlpLogs.configSchema.safeParse({
+				url: 'https://example.test/v1/logs',
+				logger_names: Array.isArray(logger_names)
+					? logger_names.map((name) => ({ name }))
+					: logger_names,
+			}).success,
+		).toBe(false);
+	});
+
+	it.each([
+		{ logger_names: ['approved_app'] },
+		{ logger_names: [{}] },
+		{ logger_names: [{ name: 'approved_app', typo: true }] },
+	])('rejects malformed logger entries: %j', ({ logger_names }) => {
+		expect(
+			otlpLogs.configSchema.safeParse({ url: 'https://example.test/v1/logs', logger_names })
+				.success,
+		).toBe(false);
+	});
+
+	it('accepts logger selection bounds', () => {
+		expect(
+			parse({
+				url: 'https://example.test/v1/logs',
+				logger_names: Array.from({ length: 32 }, (_, index) => ({ name: `app${index}` })),
+			}).logger_names,
+		).toHaveLength(32);
+		expect(
+			parse({ url: 'https://example.test/v1/logs', logger_names: [{ name: 'a'.repeat(128) }] })
+				.logger_names![0].name,
+		).toHaveLength(128);
+	});
+
 	it.each([
 		{ url: 'file:///logs' },
 		{ url: 'https://user:password@example.test/v1/logs' },

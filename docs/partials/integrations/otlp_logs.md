@@ -11,6 +11,8 @@ Fields marked 🔒 use an encrypted value or an external reference. API response
 | `url` | string | Yes |  | Full OTLP/HTTP JSON logs URL, including /v1/logs |
 | `auth.method` | `none`, `bearer`, `basic`, `headers` |  | `none` | How export requests authenticate |
 | `level` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |  | `INFO` | Lowest Python log level to export |
+| `logger_names` | object[] |  |  | Export only these logger namespaces; omit to export all eligible loggers |
+| `logger_names[].name` | string | Yes |  | Exact logger name and its dotted descendants |
 | `service_name` | string |  | `marimohub-notebook` | OpenTelemetry `service.name` resource attribute |
 
 **`auth.method: bearer`**

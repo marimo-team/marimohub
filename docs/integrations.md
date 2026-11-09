@@ -1189,6 +1189,19 @@ import logging
 logging.getLogger(__name__).info("Loaded dataset", extra={"rows": 1200})
 ```
 
+To export only selected logger namespaces, set `logger_names`, for example
+`"logger_names": [{"name": "approved_app"}]`. This matches `approved_app` and
+`approved_app.worker`, but not `approved_application`. Each destination selects
+independently. Omit the field to keep exporting all eligible Python and marimo logs.
+The list accepts 1–32 entries, each at most 128 characters. Names cannot contain
+whitespace, control characters, wildcard characters (`*`, `?`, `[` or `]`),
+empty dotted components, or the special name `root`. Selection happens before
+record encoding and queueing; an invalid runtime selection disables that destination
+without preventing notebook execution. Existing exporter-internal logger exclusions
+still apply. This selects whole records; it does not redact messages, extras, or exceptions.
+Ordinary `LogRecord` extras, including dot-keyed trace fields, remain OTLP attributes;
+the exporter does not replace application formatters or configure an OpenTelemetry provider.
+
 Each record includes project, notebook, workload, sandbox, integration, mode, and process identifiers.
 Logger levels, filters, or disabled propagation in notebook code can prevent export.
 Export includes `logging.exception()` records. It excludes `print()`, rich cell output, unlogged cell errors, existing log files, and exporter diagnostics.

@@ -243,14 +243,32 @@ class Processor:
 EXCLUDED_LOGGERS = ("opentelemetry", "urllib3", "requests")
 
 
+def selected_logger_names(destination):
+    if "loggerNames" not in destination:
+        return None
+    names = destination["loggerNames"]
+    if not isinstance(names, list) or not 1 <= len(names) <= 32:
+        raise ValueError("Invalid logger selection")
+    for name in names:
+        if (not isinstance(name, str) or not 1 <= len(name) <= 128
+                or name == "root" or any(not part for part in name.split("."))
+                or any(char.isspace() or ord(char) < 32 or 127 <= ord(char) <= 159
+                       or char in "*?[]" for char in name)):
+            raise ValueError("Invalid logger selection")
+    return tuple(names)
+
+
 class Handler(logging.Handler):
-    def __init__(self, level, processor):
+    def __init__(self, level, processor, names=None):
         super().__init__(level)
         self.processor = processor
+        self.names = names
         self.seen = weakref.WeakSet()
 
     def filter(self, record):
         name = record.name
+        if self.names is not None and not any(name == prefix or name.startswith(prefix + ".") for prefix in self.names):
+            return False
         return not any(name == prefix or name.startswith(prefix + ".") for prefix in EXCLUDED_LOGGERS) and super().filter(record)
 
     def emit(self, record):
@@ -323,12 +341,21 @@ def install():
 
 def _install(install_hooks=True):
     destinations = json.loads(Path(__file__).with_name("logging.json").read_text())
-    minimum = min(getattr(logging, d["level"]) for d in destinations)
+    validated = []
+    for destination in destinations:
+        try:
+            validated.append((destination, selected_logger_names(destination)))
+        except (ValueError, TypeError):
+            # Never widen capture when a stale or edited policy is malformed.
+            diagnostic("invalid_logger_selection")
+    if not validated:
+        return
+    minimum = min(getattr(logging, d["level"]) for d, _ in validated)
     prepared = []
     try:
-        for destination in destinations:
+        for destination, names in validated:
             processor = Processor(destination)
-            prepared.append((processor, Handler(getattr(logging, destination["level"]), processor)))
+            prepared.append((processor, Handler(getattr(logging, destination["level"]), processor, names)))
         for processor, _ in prepared:
             processor.worker.start()
     except Exception:

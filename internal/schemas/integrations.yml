@@ -5503,6 +5503,25 @@ components:
             - WARNING
             - ERROR
             - CRITICAL
+        logger_names:
+          description: Export only these logger namespaces; omit to export all eligible
+            loggers
+          minItems: 1
+          maxItems: 32
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                minLength: 1
+                maxLength: 128
+                pattern: ^[^\s.*?[\]\x00-\x1f\x7f-\x9f]+(?:\.[^\s.*?[\]\x00-\x1f\x7f-\x9f]+)*$
+                x-marimohub-refinement: The special root logger cannot be selected
+                description: Exact logger name and its dotted descendants
+            required:
+              - name
+            additionalProperties: false
         service_name:
           default: marimohub-notebook
           description: OpenTelemetry `service.name` resource attribute
@@ -5618,6 +5637,25 @@ components:
             - WARNING
             - ERROR
             - CRITICAL
+        logger_names:
+          description: Export only these logger namespaces; omit to export all eligible
+            loggers
+          minItems: 1
+          maxItems: 32
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                minLength: 1
+                maxLength: 128
+                pattern: ^[^\s.*?[\]\x00-\x1f\x7f-\x9f]+(?:\.[^\s.*?[\]\x00-\x1f\x7f-\x9f]+)*$
+                x-marimohub-refinement: The special root logger cannot be selected
+                description: Exact logger name and its dotted descendants
+            required:
+              - name
+            additionalProperties: false
         service_name:
           default: marimohub-notebook
           description: OpenTelemetry `service.name` resource attribute
