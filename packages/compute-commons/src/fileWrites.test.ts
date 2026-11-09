@@ -3,10 +3,13 @@ import { spawnSync } from 'node:child_process';
 import {
 	chmodSync,
 	existsSync,
+	lstatSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
 	statSync,
+	symlinkSync,
 	writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -143,6 +146,24 @@ describe.skipIf(spawnSync('sh', ['-c', 'python3 -V']).status !== 0)('file batch 
 		const result = receive(encodeFileWriteBatch([{ path, content: 'private' }]));
 		expect(result.status).toBe(0);
 		expect(statSync(path).mode & 0o777).toBe(0o600);
+	});
+
+	it('writes through an adapter-managed user-home directory symlink', () => {
+		const mount = join(directory, 'mount');
+		const home = join(directory, 'home');
+		mkdirSync(mount);
+		symlinkSync(mount, home);
+		const result = receive(
+			encodeFileWriteBatch([
+				{ path: join(home, 'nested/config'), content: 'personal configuration' },
+				{ path: join(home, 'data.bin'), content: new Uint8Array([0, 255]) },
+			]),
+		);
+		expect(result.stderr).toBe('');
+		expect(result.status).toBe(0);
+		expect(lstatSync(home).isSymbolicLink()).toBe(true);
+		expect(readFileSync(join(mount, 'nested/config'), 'utf8')).toBe('personal configuration');
+		expect(readFileSync(join(mount, 'data.bin'))).toEqual(Buffer.from([0, 255]));
 	});
 
 	it.each([0o600, 0o644, 0o755])(

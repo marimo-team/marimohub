@@ -216,7 +216,9 @@ unchanged whether the kernel runs in a Cloudflare Container, a Modal sandbox, or
 a local host subprocess.
 
 With `supportsLaunchSetupOutput`, the provisioner combines ready file transfers and runs setup inside the launch supervisor.
-It requires separate setup stdout and stderr. CoreWeave supports this capability.
+The adapter must support binary-safe `writeFiles` and provide `python3` on PATH for the command transport.
+Launch results must include separate setup stdout and stderr on success and failure.
+Missing setup output on success fails provisioning. CoreWeave supports this capability.
 Ordinary workspace loading accepts an explicit write callback. Slow credential resolution does not delay workspace uploads.
 Other adapters retain standalone setup, and headless `prepare()` completes setup before it returns.
 

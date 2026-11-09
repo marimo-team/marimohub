@@ -240,7 +240,8 @@ Warm-pool creation uses this mode before the member becomes ready.
 Session startup leaves installation to the launcher, avoiding a separate interpreter start during setup.
 The launcher skips installation when the installed wheel identity matches. Otherwise, it uses the offline installer.
 
-Preinstallation failures emit `warm_pool_bridge_install_failed` and do not discard the member.
+Bridge staging or command failures emit `warm_pool_bridge_install_failed` and do not discard the member.
+In install-only mode, the launcher reports installation failures as `notebook_bridge_unavailable` on stderr and exits successfully.
 Published sandbox images include the wheel.
 Changes to the Python extension, browser script, or launcher change the wheel identity.
 Image rebuilds preserve the installation cache hit. Older images use the launcher fallback.

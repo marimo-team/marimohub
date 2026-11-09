@@ -95,6 +95,7 @@ export type SandboxLaunchResult =
 	| {
 			success: true;
 			process: SandboxProcess;
+			/** Required when supportsLaunchSetupOutput is true and setup was supplied. */
 			setupOutput?: { stdout: string; stderr: string };
 			timings: SandboxLaunchTimings;
 	  }

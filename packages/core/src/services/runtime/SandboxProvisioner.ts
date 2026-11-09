@@ -1724,11 +1724,15 @@ export class SandboxProvisioner {
 			throw provisionFailure('starting the marimo kernel', error);
 		}
 		if (startup.onSetup) {
+			const output = result.success ? result.setupOutput : result;
+			if (output === undefined) {
+				throw provisionFailure(
+					'collecting setup output',
+					new Error('Adapter with supportsLaunchSetupOutput omitted setupOutput'),
+				);
+			}
 			sw.timings.setup = result.timings.setup;
-			startup.onSetup(
-				result.success ? (result.setupOutput ?? { stdout: '', stderr: '' }) : result,
-				result.timings.setup,
-			);
+			startup.onSetup(output, result.timings.setup);
 		}
 		sw.timings.start = result.timings.start;
 		sw.timings.waitport = result.timings.waitport;

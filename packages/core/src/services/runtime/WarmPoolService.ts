@@ -360,16 +360,26 @@ export class WarmPoolService {
 							this.notebookBridge.launcher,
 						);
 						try {
-							await instance.writeFiles(
-								this.notebookBridge.files.map(({ name, content }) => ({
-									path: `${directory}/${name}`,
-									content,
-								})),
+							await withDeadline(
+								instance.writeFiles(
+									this.notebookBridge.files.map(({ name, content }) => ({
+										path: `${directory}/${name}`,
+										content,
+									})),
+								),
+								{
+									timeoutMs: 10_000,
+									timeoutError: () => new Error('Bridge preparation timed out'),
+								},
 							);
-							const result = await instance.exec(`python ${shellQuote(launcher)} --install-only`, {
-								timeout: 10_000,
-								maxOutputBytes: 4096,
-							});
+							const processLauncher = instance.resolveProcessPath?.(launcher) ?? launcher;
+							const result = await instance.exec(
+								`python ${shellQuote(processLauncher)} --install-only`,
+								{
+									timeout: 10_000,
+									maxOutputBytes: 4096,
+								},
+							);
 							if (!result.success) throw new Error('Notebook bridge preinstallation failed');
 						} catch (error) {
 							// The kernel launcher retries optional bridge installation.

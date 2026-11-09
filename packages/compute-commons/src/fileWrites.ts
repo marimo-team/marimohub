@@ -80,6 +80,7 @@ while True:
     path, remaining = entry["path"], entry["size"]
     if type(remaining) is not int or remaining < 0:
         raise ValueError("Invalid file length")
+    # Parent symlinks include adapter-managed user-home mounts; this transport has no workspace root.
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(descriptor, "wb") as target:

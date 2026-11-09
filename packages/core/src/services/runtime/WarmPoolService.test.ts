@@ -1488,40 +1488,48 @@ describe('warm pool failure boundaries', () => {
 	});
 });
 
-it('preinstalls the bridge before publishing a warm member', async () => {
-	const w = setup();
-	const created = w.compute.create.bind(w.compute);
-	const states: string[] = [];
-	const writes = vi.fn(async (_files: Parameters<SandboxInstance['writeFiles']>[0]) => {
-		states.push((await w.members())[0].state);
-	});
-	const exec = vi.fn(async (command: string) => {
-		if (command.includes('--install-only')) states.push((await w.members())[0].state);
-		return execResult(true, '', '');
-	});
-	w.compute.create = (id, options) => ({ ...created(id, options), writeFiles: writes, exec });
-	const service = new WarmPoolService(
-		w.service.store,
-		w.compute,
-		w.sessions,
-		w.config,
-		undefined,
-		undefined,
-		undefined,
-		{ launcher: 'bridge.py', files: [{ name: 'bridge.py', content: 'launcher' }] },
-	);
-	await service.sweep();
-	expect(writes).toHaveBeenCalledOnce();
-	const member = (await w.members())[0];
-	const path = `/tmp/marimohub-bridge/${member.sandbox_id}/bridge.py`;
-	expect(writes).toHaveBeenCalledWith([{ path, content: 'launcher' }]);
-	expect(exec).toHaveBeenCalledWith(`python '${path}' --install-only`, {
-		timeout: 10_000,
-		maxOutputBytes: 4096,
-	});
-	expect(states).toEqual(['creating', 'creating']);
-	expect(member.state).toBe('ready');
-});
+it.each([false, true])(
+	'preinstalls the bridge before publishing a warm member (mapped=%s)',
+	async (mapped) => {
+		const w = setup();
+		const created = w.compute.create.bind(w.compute);
+		const states: string[] = [];
+		const writes = vi.fn(async (_files: Parameters<SandboxInstance['writeFiles']>[0]) => {
+			states.push((await w.members())[0].state);
+		});
+		const exec = vi.fn(async (command: string) => {
+			if (command.includes('--install-only')) states.push((await w.members())[0].state);
+			return execResult(true, '', '');
+		});
+		w.compute.create = (id, options) => ({
+			...created(id, options),
+			writeFiles: writes,
+			exec,
+			...(mapped ? { resolveProcessPath: (path: string) => `/mapped${path}` } : {}),
+		});
+		const service = new WarmPoolService(
+			w.service.store,
+			w.compute,
+			w.sessions,
+			w.config,
+			undefined,
+			undefined,
+			undefined,
+			{ launcher: 'bridge.py', files: [{ name: 'bridge.py', content: 'launcher' }] },
+		);
+		await service.sweep();
+		expect(writes).toHaveBeenCalledOnce();
+		const member = (await w.members())[0];
+		const path = `/tmp/marimohub-bridge/${member.sandbox_id}/bridge.py`;
+		expect(writes).toHaveBeenCalledWith([{ path, content: 'launcher' }]);
+		expect(exec).toHaveBeenCalledWith(`python '${mapped ? '/mapped' : ''}${path}' --install-only`, {
+			timeout: 10_000,
+			maxOutputBytes: 4096,
+		});
+		expect(states).toEqual(['creating', 'creating']);
+		expect(member.state).toBe('ready');
+	},
+);
 
 it.each(['write', 'throw', 'exit'] as const)(
 	'reports a bridge preinstall %s failure without discarding the warm member',
@@ -1565,5 +1573,49 @@ it.each(['write', 'throw', 'exit'] as const)(
 		);
 		expect(log.mock.calls.flat().join(' ')).not.toContain('private-');
 		expect(w.destroyed).toEqual([]);
+	},
+);
+
+it.each(['resolve', 'reject'] as const)(
+	'keeps a warm member after a timed-out bridge write and late %s',
+	async (settlement) => {
+		vi.useFakeTimers();
+		const pending = Promise.withResolvers<void>();
+		try {
+			const w = setup();
+			const create = w.compute.create.bind(w.compute);
+			const writes = vi.fn(() => pending.promise);
+			const exec = vi.fn(async () => execResult(true, '', ''));
+			w.compute.create = (id, options) => ({ ...create(id, options), writeFiles: writes, exec });
+			const metrics = { increment: vi.fn(), gauge: vi.fn() };
+			vi.spyOn(console, 'error').mockImplementation(() => {});
+			const service = new WarmPoolService(
+				w.service.store,
+				w.compute,
+				w.sessions,
+				w.config,
+				metrics,
+				w.now,
+				undefined,
+				{ launcher: 'bridge.py', files: [{ name: 'bridge.py', content: 'launcher' }] },
+			);
+			const sweep = service.sweep();
+			await vi.advanceTimersByTimeAsync(9_999);
+			expect(writes).toHaveBeenCalledOnce();
+			expect((await w.members())[0].state).toBe('creating');
+			await vi.advanceTimersByTimeAsync(1);
+			await sweep;
+			expect((await w.members())[0].state).toBe('ready');
+			expect(metrics.increment).toHaveBeenCalledWith('warm_pool.bridge_install_failed');
+			expect(w.destroyed).toEqual([]);
+			if (settlement === 'resolve') pending.resolve();
+			else pending.reject(new Error('late write failure'));
+			await vi.advanceTimersByTimeAsync(0);
+			expect(exec).toHaveBeenCalledOnce();
+			expect((await w.members())[0].state).toBe('ready');
+		} finally {
+			pending.resolve();
+			vi.useRealTimers();
+		}
 	},
 );

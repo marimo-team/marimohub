@@ -299,6 +299,7 @@ it('drains data-plane timings and counters after combined preparation finishes',
 	instance.launchProcess = async (command, options) => ({
 		success: true,
 		process: await instance.startProcess(command, options),
+		setupOutput: { stdout: '', stderr: '' },
 		timings: { setup: 5, start: 2, waitport: 1 },
 	});
 	const result = await new SandboxProvisioner(fakeComputeFrom(instance)).provision({

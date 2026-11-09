@@ -652,7 +652,7 @@ describe('SandboxProvisioner', () => {
 			}),
 			new SandboxProvisioner(fakeComputeFrom(baseline.instance)).provision(options),
 		]);
-		expect(calls.exec).toHaveLength(baseline.calls.exec.length);
+		expect(calls.exec).toEqual(baseline.calls.exec);
 		expect(calls.writeFiles).toEqual(baseline.calls.writeFiles);
 		expect(calls.setEnvVars).toHaveLength(baseline.calls.setEnvVars.length);
 		expect(calls.startProcess).toHaveLength(baseline.calls.startProcess.length);
@@ -4845,6 +4845,30 @@ describe('combined sandbox preparation', () => {
 		},
 	);
 
+	it('rejects an opted-in adapter that omits setup output and cleans up the sandbox', async () => {
+		const { instance, calls } = makeFakeSandbox();
+		Object.assign(instance, { supportsLaunchSetupOutput: true });
+		instance.launchProcess = async (command, launch) => ({
+			success: true,
+			process: await instance.startProcess(command, launch),
+			timings: { setup: 1, start: 2, waitport: 3 },
+		});
+		await expect(
+			new SandboxProvisioner(fakeComputeFrom(instance)).provision({
+				...options(),
+				workspaceLoadMode: undefined,
+			}),
+		).rejects.toMatchObject({
+			name: 'UnavailableError',
+			message: expect.stringContaining('collecting setup output'),
+			cause: expect.objectContaining({
+				message: 'Adapter with supportsLaunchSetupOutput omitted setupOutput',
+			}),
+		});
+		expect(calls.destroy).toBe(1);
+		expect(calls.exposePort).toEqual([]);
+	});
+
 	it.each(['setup_exit', 'setup_timeout'] as const)(
 		'preserves setup error classification for %s',
 		async (reason) => {
@@ -4914,6 +4938,7 @@ it('keeps a combined provision usable when the optional bridge upload fails', as
 	instance.launchProcess = async (command, options) => ({
 		success: true,
 		process: await instance.startProcess(command, options),
+		setupOutput: { stdout: '', stderr: '' },
 		timings: { setup: 0, start: 0, waitport: 0 },
 	});
 	await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
@@ -5014,6 +5039,7 @@ it.each([false, true])(
 		instance.launchProcess = vi.fn(async (command, options) => ({
 			success: true as const,
 			process: await instance.startProcess(command, options),
+			setupOutput: { stdout: '', stderr: '' },
 			timings: { setup: 0, start: 0, waitport: 0 },
 		}));
 		await new SandboxProvisioner(fakeComputeFrom(instance)).provision({
@@ -5079,6 +5105,7 @@ it.each([false, true])(
 		instance.launchProcess = async (command, launch) => ({
 			success: true,
 			process: await instance.startProcess(command, launch),
+			setupOutput: { stdout: '', stderr: '' },
 			timings: { setup: 0, start: 0, waitport: 0 },
 		});
 		const credentials = deferred<{ files: { path: string; content: string }[] }>();
