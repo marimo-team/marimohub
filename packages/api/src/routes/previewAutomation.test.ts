@@ -152,6 +152,38 @@ async function createLazyBranch() {
 }
 
 describe('PR preview automation', () => {
+	it('resumes exhausted preparation only when the target generation changes', async () => {
+		const first = (await reconcile(1)).items[0];
+		const preview = await record(first.id);
+		await api.bucket.put(
+			paths.preview(pid, nid, preview.id),
+			JSON.stringify({
+				...preview,
+				preparation: 'failed',
+				preparation_failures: 5,
+				error: 'Unable to prepare the preview.',
+				next_attempt_at: Date.now() + 3_600_000,
+			}),
+		);
+		await reconcile(2, SHA, { keep: 3 });
+		await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+		expect(reader.fetchWorkspace).not.toHaveBeenCalled();
+		expect((await record(first.id)).preparation_failures).toBe(5);
+		head = NEXT;
+		await reconcile(3, NEXT);
+		expect(await record(first.id)).toMatchObject({
+			preparation: 'pending',
+			preparation_failures: 0,
+		});
+		expect((await record(first.id)).error).toBeUndefined();
+		await api.deps.services.previews.preparePending(api.deps.sourceControl!);
+		expect(await record(first.id)).toMatchObject({
+			preparation: 'ready',
+			preparation_failures: 0,
+			current: { commit: NEXT },
+		});
+	});
+
 	it('reuses the sticky ID across commits and retries, with no finite expiry', async () => {
 		const first = await reconcile(1);
 		expect(first.items[0]).toMatchObject({ name: 'feature/chart', expires_at: null, eager: true });
